@@ -77,11 +77,47 @@ local ROLE_ICON: { [string]: string } = {
 
 -- marker: the raid target marker's size; rise: how far it stands over the
 -- top edge (less on sm, whose frames sit a few px apart in a raid grid)
-type Size = { height: string, width: string, name: string, role: number, pad: number, gap: number, marker: number, rise: number }
+type Size = {
+    height: string,
+    width: string,
+    name: string,
+    role: number,
+    pad: number,
+    gap: number,
+    marker: number,
+    rise: number,
+}
 local SIZES: { [string]: Size } = {
-    lg = { height = "unit-lg", width = "bar-lg", name = "unit-name-lg", role = 14, pad = S["space-4"], gap = S["space-3"], marker = 18, rise = 8 },
-    md = { height = "unit-md", width = "bar-md", name = "unit-name", role = 12, pad = S["space-4"], gap = S["space-3"], marker = 16, rise = 7 },
-    sm = { height = "unit-sm", width = "bar-sm", name = "unit-name-sm", role = 10, pad = S["space-3"], gap = S["space-2"], marker = 14, rise = 4 },
+    lg = {
+        height = "unit-lg",
+        width = "bar-lg",
+        name = "unit-name-lg",
+        role = 14,
+        pad = S["space-4"],
+        gap = S["space-3"],
+        marker = 18,
+        rise = 8,
+    },
+    md = {
+        height = "unit-md",
+        width = "bar-md",
+        name = "unit-name",
+        role = 12,
+        pad = S["space-4"],
+        gap = S["space-3"],
+        marker = 16,
+        rise = 7,
+    },
+    sm = {
+        height = "unit-sm",
+        width = "bar-sm",
+        name = "unit-name-sm",
+        role = 10,
+        pad = S["space-3"],
+        gap = S["space-2"],
+        marker = 14,
+        rise = 4,
+    },
 }
 
 -- The game's raid target markers: eight 64px cells, four to a row.
@@ -147,12 +183,18 @@ export type GroupApi = {
 
 -- The game's functions, looked up when called (so a function replaced later,
 -- as tests do, is the one used).
-local gameProxy: unknown = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end })
+local gameProxy: unknown = setmetatable({}, {
+    __index = function(_: unknown, k: string): unknown
+        return _G[k]
+    end,
+})
 local GAME = gameProxy :: UnitApi
 local GROUP = gameProxy :: GroupApi
 
 -- The game's unit functions as a UnitApi (looked up when called).
-export function gameUnits(): UnitApi return GAME end
+export function gameUnits(): UnitApi
+    return GAME
+end
 
 -- CurveConstants.ScaleTo100 (declared as a plain table), nil where the
 -- client has none.
@@ -193,7 +235,9 @@ local function lowTintCurve(): CurveObject?
         if C_CurveUtil and linear then
             local c = C_CurveUtil.CreateCurve()
             c:SetType(linear)
-            for _, pt in ipairs(TINT_POINTS) do c:AddPoint(pt[1], pt[2]) end
+            for _, pt in ipairs(TINT_POINTS) do
+                c:AddPoint(pt[1], pt[2])
+            end
             tintCurve = c
         end
     end
@@ -204,7 +248,9 @@ end
 -- or the secret it is. A colour (never, with these curves) is 0.
 type CurveResult = LuaCurveEvaluatedResult | Secret<LuaCurveEvaluatedResult> | nil
 export function curveAmount(r: CurveResult): number | Secret<number>
-    if secret.isSecret(r) then return r :: Secret<number> end
+    if secret.isSecret(r) then
+        return r :: Secret<number>
+    end
     return type(r) == "number" and r or 0
 end
 
@@ -218,16 +264,30 @@ local function shortNumber(v: number | Secret<number> | nil, abbreviate: Abbrevi
     if secret.isSecret(v) then
         -- the answer is secret too: never tested, only returned
         local ok, text = pcall(abbreviate, v)
-        if ok then return text end
+        if ok then
+            return text
+        end
         local ok2, plain = pcall(string.format, "%d", v)
-        if ok2 then return plain end
+        if ok2 then
+            return plain
+        end
         return v
     end
-    if v == nil then return nil end
-    if v >= 1e6 then return ("%.1fm"):format(v / 1e6) end
-    if v >= 1e5 then return ("%dk"):format(v / 1e3 + 0.5) end
-    if v >= 1e4 then return ("%.0fk"):format(v / 1e3) end
-    if v >= 1e3 then return ("%.1fk"):format(v / 1e3) end
+    if v == nil then
+        return nil
+    end
+    if v >= 1e6 then
+        return ("%.1fm"):format(v / 1e6)
+    end
+    if v >= 1e5 then
+        return ("%dk"):format(v / 1e3 + 0.5)
+    end
+    if v >= 1e4 then
+        return ("%.0fk"):format(v / 1e3)
+    end
+    if v >= 1e3 then
+        return ("%.1fk"):format(v / 1e3)
+    end
     return ("%d"):format(v + 0.5)
 end
 
@@ -235,7 +295,9 @@ end
 -- members; a secret one counts as connected.
 local function isOffline(A: UnitApi, unit: string): boolean
     local connectedFn = A.UnitIsConnected
-    if not connectedFn or not uiText.flag(A.UnitIsPlayer(unit)) then return false end
+    if not connectedFn or not uiText.flag(A.UnitIsPlayer(unit)) then
+        return false
+    end
     local connected = connectedFn(unit)
     return not secret.isSecret(connected) and connected == false
 end
@@ -253,12 +315,16 @@ end
 -- stand-ins (previews) that evaluate curves themselves.
 export function unitFrameCurveValue(curve: unknown, x: number): number?
     for at, c in pairs(curves) do
-        if c == curve then return x < at and 1 or 0 end
+        if c == curve then
+            return x < at and 1 or 0
+        end
     end
     if curve and curve == tintCurve then
         for i = 2, #TINT_POINTS do
             local a, b = TINT_POINTS[i - 1], TINT_POINTS[i]
-            if x <= b[1] then return a[2] + (b[2] - a[2]) * (x - a[1]) / (b[1] - a[1]) end
+            if x <= b[1] then
+                return a[2] + (b[2] - a[2]) * (x - a[1]) / (b[1] - a[1])
+            end
         end
         return 0
     end
@@ -276,7 +342,9 @@ local function bar(f: UnitFrame, level: number, color: string?): StatusBar
     b:SetFrameLevel(f:GetFrameLevel() + level)
     b:SetMinMaxValues(0, 1)
     b:SetValue(0)
-    if color then draw.paint(b, color) end
+    if color then
+        draw.paint(b, color)
+    end
     return b
 end
 
@@ -288,28 +356,44 @@ end
 -- Drawing
 --------------------------------------------------------------------------------
 
-local CLASSIFICATION: { [string]: string } = { worldboss = "Boss", elite = "Elite", rareelite = "Rare Elite", rare = "Rare" }
+local CLASSIFICATION: { [string]: string } = {
+    worldboss = "Boss",
+    elite = "Elite",
+    rareelite = "Rare Elite",
+    rare = "Rare",
+}
 
 -- 0.17: a level's colour token by how hard it is for you (asked 2026-10-18:
 -- green, yellow, orange, red, grey as the game rates it): the game's own
 -- difficulty (its colour's font names it), drawn in the design's quest
 -- colours. A level unknown (secret, "??") is impossible.
 local DIFFICULTY_FONTS: string[][] = {
-    { "VeryDifficult", "quest-very-difficult" }, { "Impossible", "quest-impossible" },
-    { "Difficult", "quest-difficult" }, { "Standard", "quest-standard" }, { "Trivial", "quest-trivial" },
+    { "VeryDifficult", "quest-very-difficult" },
+    { "Impossible", "quest-impossible" },
+    { "Difficult", "quest-difficult" },
+    { "Standard", "quest-standard" },
+    { "Trivial", "quest-trivial" },
 }
 -- getColor: the game's GetQuestDifficultyColor (a parameter for tests; nil
 -- where the client has none). Its fonts are named "QuestDifficulty_<word>",
 -- so the word is matched at the end (the prefix holds "Difficult" too).
 type DifficultyColor = (level: number) -> unknown
 local function difficultyColor(level: unknown, getColor: DifficultyColor?): string
-    if level == nil or secret.isSecret(level) or type(level) ~= "number" or level <= 0 then return "quest-impossible" end
-    if not getColor then return "quest-standard" end
+    if level == nil or secret.isSecret(level) or type(level) ~= "number" or level <= 0 then
+        return "quest-impossible"
+    end
+    if not getColor then
+        return "quest-standard"
+    end
     local ok, c = pcall(getColor, level)
     local font = ok and type(c) == "table" and (c :: { font?: unknown }).font
-    if type(font) ~= "string" then return "quest-standard" end
+    if type(font) ~= "string" then
+        return "quest-standard"
+    end
     for _, d in ipairs(DIFFICULTY_FONTS) do
-        if font:sub(-#d[1]) == d[1] then return d[2] end
+        if font:sub(-#d[1]) == d[1] then
+            return d[2]
+        end
     end
     return "quest-standard"
 end
@@ -322,9 +406,13 @@ local function metaText(A: UnitApi, u: string): string
     local level = A.UnitLevel(u)
     local classify = A.UnitClassification
     local c = classify and classify(u)
-    if secret.isSecret(level) or secret.isSecret(c) then return "" end
+    if secret.isSecret(level) or secret.isSecret(c) then
+        return ""
+    end
     local lv = (level and level > 0) and tostring(level) or "??"
-    if c == "worldboss" then return "?? Boss" end
+    if c == "worldboss" then
+        return "?? Boss"
+    end
     local word = c and CLASSIFICATION[c]
     return word and (lv .. " " .. word) or lv
 end
@@ -367,8 +455,13 @@ end
 -- A state border and its badge: "danger", "warning", "magic", "curse",
 -- "poison", "disease", "ward" or nil.
 local STATE_BORDER: { [string]: string } = {
-    danger = "ember", warning = "amber", ward = "ward",
-    magic = "dispel-magic", curse = "dispel-curse", poison = "dispel-poison", disease = "dispel-disease",
+    danger = "ember",
+    warning = "amber",
+    ward = "ward",
+    magic = "dispel-magic",
+    curse = "dispel-curse",
+    poison = "dispel-poison",
+    disease = "dispel-disease",
 }
 
 -- The row (name, badges) stops where the health text begins; how much room
@@ -411,7 +504,17 @@ export type Indicator = {
     sizes?: { [string]: boolean },
 }
 
-export const INDICATOR_POINTS: FramePoint[] = { "TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER", "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT" }
+export const INDICATOR_POINTS: FramePoint[] = {
+    "TOPLEFT",
+    "TOP",
+    "TOPRIGHT",
+    "LEFT",
+    "CENTER",
+    "RIGHT",
+    "BOTTOMLEFT",
+    "BOTTOM",
+    "BOTTOMRIGHT",
+}
 
 -- the indicator each live indicator container shows
 local indicatorOf: { [UnitAuras]: Indicator } = setmetatable({}, { __mode = "k" })
@@ -457,7 +560,9 @@ local function indicatorLook(f: UnitFrame, parent: Frame, ind: Indicator, previe
             local icon = iconModule.icon(look, size)
             icon:SetAllPoints()
             icon:SetArt(previewArt)
-            if missing then icon:SetState("dim") end
+            if missing then
+                icon:SetState("dim")
+            end
         end
         look:SetFrameLevel(f.over:GetFrameLevel() + 7 + bias)
     end
@@ -466,8 +571,17 @@ end
 
 -- One indicator's identity: everything its container and look are built from.
 local function indicatorKey(ind: Indicator): string
-    return table.concat({ ind.kind or "icon", ind.point or "", ind.size or 10, ind.color or "", ind.source or "mine",
-                          table.concat(ind.ids or {}, ",") }, "|")
+    return table.concat(
+        {
+            ind.kind or "icon",
+            ind.point or "",
+            ind.size or 10,
+            ind.color or "",
+            ind.source or "mine",
+            table.concat(ind.ids or {}, ","),
+        },
+        "|"
+    )
 end
 
 -- An indicator's first spell's art (a preview's icon), if it has one.
@@ -480,14 +594,20 @@ end
 -- party token in a raid: yes). Read out of combat; an unreadable answer is yes.
 -- (A: where the group is read from, the game's functions; a parameter for tests)
 local function inYourGroup(unit: string, A: GroupApi = GROUP): boolean
-    if not A.IsInRaid() then return true end
+    if not A.IsInRaid() then
+        return true
+    end
     local idx = tonumber(unit:match("^raid(%d+)$"))
-    if not idx then return true end
+    if not idx then
+        return true
+    end
     local _, _, sub = A.GetRaidRosterInfo(idx)
     local count = A.GetNumGroupMembers and A.GetNumGroupMembers() or 0
     for i = 1, count do
         local me = A.UnitIsUnit("raid" .. i, "player")
-        if secret.isSecret(me) then return true end
+        if secret.isSecret(me) then
+            return true
+        end
         if me then
             local _, _, mine = A.GetRaidRosterInfo(i)
             return sub == nil or mine == nil or sub == mine
@@ -502,11 +622,19 @@ end
 export const GROUP_TIERS: string[] = { "5", "10", "20", "40" }
 -- (A: where the group is read from, the game's functions; a parameter for tests)
 local function groupTierIn(count: number?, A: GroupApi): string
-    if not count and not A.IsInRaid() then return "5" end
+    if not count and not A.IsInRaid() then
+        return "5"
+    end
     local n = count or (A.GetNumGroupMembers and A.GetNumGroupMembers() or 0)
-    if n <= 5 and not A.IsInRaid() then return "5" end
-    if n <= 10 then return "10" end
-    if n <= 20 then return "20" end
+    if n <= 5 and not A.IsInRaid() then
+        return "5"
+    end
+    if n <= 10 then
+        return "10"
+    end
+    if n <= 20 then
+        return "20"
+    end
     return "40"
 end
 export function groupTier(count: number?): string
@@ -518,7 +646,9 @@ export function indicatorsFor(list: Indicator[]?, tier: string): Indicator[]
     local out: Indicator[] = {}
     for _, ind in ipairs(list or {}) do
         local sizes = ind.sizes
-        if not sizes or next(sizes) == nil or sizes[tier] then out[#out + 1] = ind end
+        if not sizes or next(sizes) == nil or sizes[tier] then
+            out[#out + 1] = ind
+        end
     end
     return out
 end
@@ -526,7 +656,9 @@ end
 -- The indicators SuuUI shows on group frames (set by the Buff indicators
 -- module; empty while it is off), and a counter that changes with them.
 local indicators: Indicator[], indicatorsVersion = {}, 0
-export function groupIndicators(): (Indicator[], number) return indicators, indicatorsVersion end
+export function groupIndicators(): (Indicator[], number)
+    return indicators, indicatorsVersion
+end
 export function setGroupIndicators(list: Indicator[]?)
     indicators = list or {}
     indicatorsVersion = indicatorsVersion + 1
@@ -540,7 +672,9 @@ end
 export type GroupDefensives = { external: number[], defensive: number[], warded: number[], all: number[] }
 local EMPTY_DEFENSIVES: GroupDefensives = { external = {}, defensive = {}, warded = {}, all = {} }
 local defensives, defensivesVersion = EMPTY_DEFENSIVES, 0
-export function groupDefensives(): (GroupDefensives, number) return defensives, defensivesVersion end
+export function groupDefensives(): (GroupDefensives, number)
+    return defensives, defensivesVersion
+end
 export function setGroupDefensives(d: GroupDefensives?)
     defensives = d or EMPTY_DEFENSIVES
     defensivesVersion = defensivesVersion + 1
@@ -571,57 +705,98 @@ export type StandInPerson = {
 }
 
 local STAND_IN_POWER: { [string]: { kind: number, token: string } } = {
-    WARRIOR = { kind = 1, token = "RAGE" }, ROGUE = { kind = 3, token = "ENERGY" },
+    WARRIOR = { kind = 1, token = "RAGE" },
+    ROGUE = { kind = 3, token = "ENERGY" },
 }
 local MANA = { kind = 0, token = "MANA" }
 
 export function unitStandIn(person: (unit: string) -> StandInPerson): UnitApi
     local function curveValue(curve: CurveObjectBase?, fraction: number): number
-        if curve ~= nil and curve == scaleTo100() then return fraction * 100 end
+        if curve ~= nil and curve == scaleTo100() then
+            return fraction * 100
+        end
         return unitFrameCurveValue(curve, fraction) or 0
     end
     local function healthOf(u: string, part: number): number
         return part * (person(u).max or 4200)
     end
     return {
-        UnitExists = function(_: string?): boolean return true end,
-        UnitIsDeadOrGhost = function(u: string): boolean return person(u).dead == true end,
-        UnitIsGhost = function(_: string): boolean return false end,
-        UnitHealthMax = function(u: string): number return person(u).max or 4200 end,
-        UnitHealth = function(u: string, _: boolean?): number return healthOf(u, person(u).health) end,
+        UnitExists = function(_: string?): boolean
+            return true
+        end,
+        UnitIsDeadOrGhost = function(u: string): boolean
+            return person(u).dead == true
+        end,
+        UnitIsGhost = function(_: string): boolean
+            return false
+        end,
+        UnitHealthMax = function(u: string): number
+            return person(u).max or 4200
+        end,
+        UnitHealth = function(u: string, _: boolean?): number
+            return healthOf(u, person(u).health)
+        end,
         UnitHealthPercent = function(u: string, _: boolean?, curve: CurveObjectBase?): number
             return curveValue(curve, person(u).health)
         end,
-        UnitGetIncomingHeals = function(u: string, _: string?): number? return healthOf(u, person(u).incoming or 0) end,
-        UnitGetTotalAbsorbs = function(u: string): number return healthOf(u, person(u).absorb or 0) end,
+        UnitGetIncomingHeals = function(u: string, _: string?): number?
+            return healthOf(u, person(u).incoming or 0)
+        end,
+        UnitGetTotalAbsorbs = function(u: string): number
+            return healthOf(u, person(u).absorb or 0)
+        end,
         UnitPowerType = function(u: string, _: number?): (number?, string?)
             local class = person(u).class
             local p = class and STAND_IN_POWER[class] or MANA
             return p.kind, p.token
         end,
-        UnitPowerMax = function(_: string, _: number?, _: boolean?): number return 100 end,
-        UnitPower = function(u: string, _: number?, _: boolean?): number return (person(u).power or 0.6) * 100 end,
+        UnitPowerMax = function(_: string, _: number?, _: boolean?): number
+            return 100
+        end,
+        UnitPower = function(u: string, _: number?, _: boolean?): number
+            return (person(u).power or 0.6) * 100
+        end,
         UnitPowerPercent = function(u: string, _: number?, _: boolean?, curve: CurveObjectBase?): number
             return curveValue(curve, person(u).power or 0.6)
         end,
-        UnitLevel = function(_: string): number return 60 end,
-        UnitClassification = function(_: string): string return "normal" end,
-        UnitGroupRolesAssigned = function(u: string?): string return u and person(u).role or "NONE" end,
-        UnitIsPlayer = function(_: string?, _: number?): boolean return true end,
+        UnitLevel = function(_: string): number
+            return 60
+        end,
+        UnitClassification = function(_: string): string
+            return "normal"
+        end,
+        UnitGroupRolesAssigned = function(u: string?): string
+            return u and person(u).role or "NONE"
+        end,
+        UnitIsPlayer = function(_: string?, _: number?): boolean
+            return true
+        end,
         UnitClass = function(u: string): (string?, string?)
             local c = person(u).class
             return c, c
         end,
         UnitName = function(u: string | Secret<string>): (string?, string?)
-            if secret.isSecret(u) then return nil, nil end
+            if secret.isSecret(u) then
+                return nil, nil
+            end
             return person(u).name, nil
         end,
-        UnitReaction = function(_: string, _: string): number? return 5 end,
+        UnitReaction = function(_: string, _: string): number?
+            return 5
+        end,
         -- (no family: shown as none)
-        UnitCreatureFamily = function(_: string): (string, number) return "", 0 end,
-        UnitIsUnit = function(u: string, other: string): boolean return other == "player" and person(u).you == true end,
-        UnitIsConnected = function(u: string): boolean return not person(u).offline end,
-        GetRaidTargetIndex = function(u: string): number? return person(u).marker end,
+        UnitCreatureFamily = function(_: string): (string, number)
+            return "", 0
+        end,
+        UnitIsUnit = function(u: string, other: string): boolean
+            return other == "player" and person(u).you == true
+        end,
+        UnitIsConnected = function(u: string): boolean
+            return not person(u).offline
+        end,
+        GetRaidTargetIndex = function(u: string): number?
+            return person(u).marker
+        end,
     }
 end
 
@@ -653,8 +828,11 @@ local function buildDispelSet(f: UnitFrame, set: string): UnitAuras[]
             quietButton(button)
             f:DispelDecoration(button, kind)
         end
-        local c = auraContainer(f, f.unit or "none", { size = 1, anchor = "TOPLEFT",
-            groups = { { key = kind, filter = filter, max = 1, dispelTypes = { kind }, initialize = init } } })
+        local c = auraContainer(f, f.unit or "none", {
+            size = 1,
+            anchor = "TOPLEFT",
+            groups = { { key = kind, filter = filter, max = 1, dispelTypes = { kind }, initialize = init } },
+        })
         if c then
             c.container:SetPoint("TOPLEFT", f, "TOPLEFT")
             c.container:SetFrameLevel(f.over:GetFrameLevel() + 1)
@@ -709,14 +887,21 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
-local HEALTH_EVENTS: EventName[] = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_HEAL_PREDICTION", "UNIT_ABSORB_AMOUNT_CHANGED" }
+local HEALTH_EVENTS: EventName[] = {
+    "UNIT_HEALTH",
+    "UNIT_MAXHEALTH",
+    "UNIT_HEAL_PREDICTION",
+    "UNIT_ABSORB_AMOUNT_CHANGED",
+}
 local POWER_EVENTS: EventName[] = { "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER" }
 local IDENTITY_EVENTS: EventName[] = { "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_FACTION", "UNIT_CLASSIFICATION_CHANGED" }
 
 -- Registers a unit event if this client has it (a few retail events may not).
 local function onUnit(f: UnitFrame, unit: string, event: EventName, fn: () -> ())
     local ok = pcall(events.onUnit, event, unit, fn, f)
-    if not ok then debug("UnitFrame: no event", event) end
+    if not ok then
+        debug("UnitFrame: no event", event)
+    end
 end
 
 -- What unitFrame takes (see the header).
@@ -818,7 +1003,9 @@ export class UnitFrame extends Button
         self.unit, self.opts, self.size = unit, opts, size
         self.api = opts.api or GAME
         local w, h = draw.size(opts.width or size.width), draw.size(opts.height or size.height)
-        if not (opts.frame and InCombatLockdown()) then self:SetSize(w, h) end
+        if not (opts.frame and InCombatLockdown()) then
+            self:SetSize(w, h)
+        end
 
         if opts.secure ~= false and not opts.frame then
             self:SetAttribute("unit", unit)
@@ -828,15 +1015,21 @@ export class UnitFrame extends Button
         end
         self:SetScript("OnEnter", function()
             local shown = self.unit
-            if not shown then return end
+            if not shown then
+                return
+            end
             GameTooltip_SetDefaultAnchor(GameTooltip, self)
             GameTooltip:SetUnit(shown)
             -- 0.17: a module's own lines after the unit's (the player frame's rested lines)
             local more = self.onTooltip
-            if more then more(self, GameTooltip) end
+            if more then
+                more(self, GameTooltip)
+            end
             GameTooltip:Show()
         end)
-        self:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
 
         -- The ground and, clipped inside the 1px border, the bars.
         self.ground = draw.fill(self, "surface-sunk")
@@ -963,13 +1156,19 @@ export class UnitFrame extends Button
         self.marker = raidMarker(self.markerLayer, size.marker)
         self.marker:SetPoint("TOP", self, "TOP", 0, size.rise)
         self:FitRow() -- the row ends where the health text (and reserved room) begins
-        extend.add(extend.Kind.UnitFrame, self, { unit = unit, name = self:GetName(), preview = opts.api ~= nil or nil })
+        extend.add(extend.Kind.UnitFrame, self, {
+            unit = unit,
+            name = self:GetName(),
+            preview = opts.api ~= nil or nil,
+        })
     end
 
     function UpdateHealth(instant: boolean?)
         local A = self.api
         local u = self.unit
-        if not u then return end
+        if not u then
+            return
+        end
         local dead = uiText.flag(A.UnitIsDeadOrGhost(u))
         local offline = isOffline(A, u)
         -- dead or offline: an empty bar
@@ -990,13 +1189,18 @@ export class UnitFrame extends Button
         local tint = self.opts.lowTint and not gone and lowTintCurve()
         -- (plain ifs: `x and secret or 0` would test the secret)
         local tintAlpha: number | Secret<number> = 0
-        if tint and percent then tintAlpha = curveAmount(percent(u, true, tint)) end
+        if tint and percent then
+            tintAlpha = curveAmount(percent(u, true, tint))
+        end
         self.tint:SetAlpha(tintAlpha)
 
         -- The ghost trails the fill: after a hold, the engine eases it down.
         if instant or not INTERPOLATE then
             local held = self.ghostTimer
-            if held then held:Cancel(); self.ghostTimer = nil end
+            if held then
+                held:Cancel()
+                self.ghostTimer = nil
+            end
             self.ghost:SetValue(cur)
         else
             self.ghostValue = cur
@@ -1010,8 +1214,12 @@ export class UnitFrame extends Button
 
         local noIncoming = gone or self.opts.incoming == false
         local heals: (number | Secret<number>)?, absorbs: (number | Secret<number>)? = nil, nil
-        if not noIncoming and UnitGetIncomingHeals then heals = A.UnitGetIncomingHeals(u) end
-        if not noIncoming and UnitGetTotalAbsorbs then absorbs = A.UnitGetTotalAbsorbs(u) end
+        if not noIncoming and UnitGetIncomingHeals then
+            heals = A.UnitGetIncomingHeals(u)
+        end
+        if not noIncoming and UnitGetTotalAbsorbs then
+            absorbs = A.UnitGetTotalAbsorbs(u)
+        end
         self.incoming:SetValue(amount(heals))
         self.absorb:SetValue(amount(absorbs))
 
@@ -1026,15 +1234,27 @@ export class UnitFrame extends Button
             -- plain ifs: `x and secret or nil` would test the secret
             local pct: number | Secret<number> | nil = nil
             local value: ShortNumber? = nil
-            if mode ~= "value" then pct = healthPercent(A, u) end
-            if mode ~= "percent" then value = shortNumber(cur) end
+            if mode ~= "value" then
+                pct = healthPercent(A, u)
+            end
+            if mode ~= "percent" then
+                value = shortNumber(cur)
+            end
             -- secret parts go to the engine's own formatting, never through Lua
             if secret.isSecret(pct) or secret.isSecret(value) then
                 -- (a part that is missing: empty, 0)
                 local shownValue: ShortNumber = ""
-                if secret.isSecret(value) then shownValue = value elseif value then shownValue = value end
+                if secret.isSecret(value) then
+                    shownValue = value
+                elseif value then
+                    shownValue = value
+                end
                 local shownPct: number | Secret<number> = 0
-                if secret.isSecret(pct) then shownPct = pct elseif pct then shownPct = pct end
+                if secret.isSecret(pct) then
+                    shownPct = pct
+                elseif pct then
+                    shownPct = pct
+                end
                 if mode == "value" then
                     self.right:SetFormattedText("%s", shownValue)
                 elseif mode == "both" then
@@ -1057,10 +1277,14 @@ export class UnitFrame extends Button
             local power = self.offline ~= offline
             self.dead, self.offline = dead, offline
             self:UpdateIdentity()
-            if power then self:UpdatePower() end -- an offline unit has none
+            if power then
+                self:UpdatePower()
+            end -- an offline unit has none
         end
         local after = self.onHealth
-        if after then after(self) end
+        if after then
+            after(self)
+        end
     end
 
     function UpdatePower()
@@ -1077,7 +1301,9 @@ export class UnitFrame extends Button
         local shown = secret.isSecret(max) or (max or 0) > 0
         self.power:SetShown(shown)
         self.powerLow:SetShown(shown and token == "MANA")
-        if not shown then return end
+        if not shown then
+            return
+        end
         draw.paint(self.power, token and POWER_TOKEN[token] or "mana")
         self.power:SetMinMaxValues(0, amount(max))
         self.power:SetValue(amount(A.UnitPower(u, pType)))
@@ -1090,13 +1316,17 @@ export class UnitFrame extends Button
 
     function ShowDragon(art: crest.DragonArt | false | nil)
         local dragon = self.dragon
-        if dragon then crest.placeDragon(dragon, art, self, self:GetHeight()) end
+        if dragon then
+            crest.placeDragon(dragon, art, self, self:GetHeight())
+        end
     end
 
     function UpdateIdentity()
         local A = self.api
         local u = self.unit
-        if not u or not A.UnitExists(u) then return end
+        if not u or not A.UnitExists(u) then
+            return
+        end
 
         -- The marker before the name: a role icon, else the class diamond.
         local role = UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(u)
@@ -1106,7 +1336,9 @@ export class UnitFrame extends Button
         if isPlayer and not secret.isSecret(class) and class then
             classColor = "class-" .. class:lower()
             local colors: { [string]: unknown } = T.color
-            if not colors[classColor] then classColor = nil end
+            if not colors[classColor] then
+                classColor = nil
+            end
         end
         self.role:Hide()
         self.classDot:Hide()
@@ -1160,7 +1392,9 @@ export class UnitFrame extends Button
             -- the level in its difficulty's colour (a secret one: as it is)
             if meta then
                 local level = A.UnitLevel(u)
-                if not secret.isSecret(level) then self.meta:SetColor(levelColor(level)) end
+                if not secret.isSecret(level) then
+                    self.meta:SetColor(levelColor(level))
+                end
             end
         end
         if self.opts.youWhenPlayer then
@@ -1188,7 +1422,9 @@ export class UnitFrame extends Button
     function LayoutRow(marker: Texture?)
         local size = self.size
         local x = 0
-        for _, m in ipairs({ self.role, self.classDot }) do m:ClearAllPoints() end
+        for _, m in ipairs({ self.role, self.classDot }) do
+            m:ClearAllPoints()
+        end
         if marker then
             marker:SetPoint("LEFT", self.row, "LEFT", marker == self.classDot and 2 or 0, 0)
             x = (marker == self.role and size.role or 5) + size.gap
@@ -1197,14 +1433,20 @@ export class UnitFrame extends Button
         -- the state badge has its own spot at the row's end (the name leaves
         -- room for it); "you" follows the name
         local badges: controls.StateBadge[] = {}
-        if self.you:IsShown() then badges[#badges + 1] = self.you end
+        if self.you:IsShown() then
+            badges[#badges + 1] = self.you
+        end
         local endW = self.badge:IsShown() and (self.badge.knownWidth + size.gap) or 0
         -- Never read sizes back from the meta or the badges: they are anchored
         -- after the name, and a secret name makes their geometry secret too.
         local metaValue = tostring(self.meta.value or "")
         local tailW = 0
-        if metaValue ~= "" then tailW = tailW + size.gap + uiText.measureText("caption", metaValue) end
-        for _, b in ipairs(badges) do tailW = tailW + size.gap + b.knownWidth end
+        if metaValue ~= "" then
+            tailW = tailW + size.gap + uiText.measureText("caption", metaValue)
+        end
+        for _, b in ipairs(badges) do
+            tailW = tailW + size.gap + b.knownWidth
+        end
 
         -- A readable name sizes itself to its text and the meta and badges follow
         -- it, as the design draws it; a name that would crowd them out gets a
@@ -1230,15 +1472,24 @@ export class UnitFrame extends Button
             local after: Region? = self.badge:IsShown() and self.badge or nil
             local function place(region: Region)
                 region:ClearAllPoints()
-                if after then region:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
-                else region:SetPoint("RIGHT", self.row, "RIGHT", 0, 0) end
+                if after then
+                    region:SetPoint("RIGHT", after, "LEFT", -size.gap, 0)
+                else
+                    region:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+                end
                 after = region
             end
-            for i = #badges, 1, -1 do place(badges[i]) end
-            if metaValue ~= "" and self.opts.size ~= "sm" then place(self.meta) end
+            for i = #badges, 1, -1 do
+                place(badges[i])
+            end
+            if metaValue ~= "" and self.opts.size ~= "sm" then
+                place(self.meta)
+            end
             if self.opts.size == "sm" then
                 self.meta:ClearAllPoints()
-                if metaValue ~= "" then self.meta:SetPoint("LEFT", self.name, "RIGHT", size.gap, 0) end
+                if metaValue ~= "" then
+                    self.meta:SetPoint("LEFT", self.name, "RIGHT", size.gap, 0)
+                end
             end
             return
         end
@@ -1258,13 +1509,19 @@ export class UnitFrame extends Button
 
     -- The marker the row starts with: the role icon or the class diamond.
     function RowMarker(): Texture?
-        if self.role:IsShown() then return self.role end
-        if self.classDot:IsShown() then return self.classDot end
+        if self.role:IsShown() then
+            return self.role
+        end
+        if self.classDot:IsShown() then
+            return self.classDot
+        end
         return nil
     end
 
     function SetState(tone: string?, word: string?)
-        if tone == self.stateTone and word == self.stateWord then return end
+        if tone == self.stateTone and word == self.stateWord then
+            return
+        end
         self.stateTone, self.stateWord = tone, word
         self.border:SetColor(tone and STATE_BORDER[tone] or (self.opts.anchor and "gilt-line" or "gilt-hairline"))
         self.glow:SetShown(tone == "danger")
@@ -1290,7 +1547,9 @@ export class UnitFrame extends Button
         self:SetSize(w, h)
         self.incoming:SetWidth(w - 2)
         self.absorb:SetWidth(w - 2)
-        if self.active then self:Refresh() end
+        if self.active then
+            self:Refresh()
+        end
     end
 
     -- Live indicators: out of combat (containers are made here). The engine
@@ -1305,11 +1564,15 @@ export class UnitFrame extends Button
         end
         self.indicatorContainers = {}
         -- the missing looks: plain frames, kept by identity too
-        for _, m in ipairs(self.missingLooks) do m.look:Hide() end
+        for _, m in ipairs(self.missingLooks) do
+            m.look:Hide()
+        end
         self.missingLooks = {}
         for _, ind in ipairs(list or {}) do
             local show = ind.show or "up"
-            if ind.kind == "fill" and show == "both" then show = "up" end
+            if ind.kind == "fill" and show == "both" then
+                show = "up"
+            end
             if show ~= "up" then
                 local mkey = indicatorKey(ind) .. "|" .. show .. "|" .. (ind.missingColor or "ember")
                 local look = self.missingCache[mkey]
@@ -1380,8 +1643,12 @@ export class UnitFrame extends Button
         local mine: boolean? = nil
         -- whether an indicator shows here: everywhere, or in your own group
         local function inScope(ind: Indicator): boolean
-            if not (u and exists) or (ind.on or ind.missingOn) ~= "group" then return true end
-            if mine == nil then mine = inYourGroup(u) end
+            if not (u and exists) or (ind.on or ind.missingOn) ~= "group" then
+                return true
+            end
+            if mine == nil then
+                mine = inYourGroup(u)
+            end
             return mine == true
         end
         for _, m in ipairs(self.missingLooks) do
@@ -1393,14 +1660,21 @@ export class UnitFrame extends Button
             elseif u and exists and m.mode == "missing" and not fight then
                 local ind = m.ind
                 local set: { [number]: boolean } = {}
-                for _, id in ipairs(ind.ids or {}) do set[id] = true end
+                for _, id in ipairs(ind.ids or {}) do
+                    set[id] = true
+                end
                 local filter = ind.source == "any" and "HELPFUL" or "HELPFUL|PLAYER"
                 local up = false
                 for i = 1, 40 do
                     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, u, i, filter)
-                    if not ok or secret.isSecret(a) or not a then break end
+                    if not ok or secret.isSecret(a) or not a then
+                        break
+                    end
                     local id = a.spellId
-                    if not secret.isSecret(id) and id and set[id] then up = true break end
+                    if not secret.isSecret(id) and id and set[id] then
+                        up = true
+                        break
+                    end
                 end
                 show = not up
             end
@@ -1420,7 +1694,9 @@ export class UnitFrame extends Button
     -- (a "missing" one as missing, so its look can be judged). Frames are never
     -- freed either, so the looks are kept by identity, as the missing looks are.
     function SetPreviewIndicators(list: Indicator[]?)
-        for _, look in ipairs(self.previewLooks) do look:Hide() end
+        for _, look in ipairs(self.previewLooks) do
+            look:Hide()
+        end
         self.previewLooks = {}
         for _, ind in ipairs(list or {}) do
             local missing = ind.show == "missing"
@@ -1437,19 +1713,33 @@ export class UnitFrame extends Button
 
     -- keepAttribute: the unit attribute is already set (a group header did it)
     function SetUnit(unit: string?, keepAttribute: boolean?)
-        if unit == self.unit then return end
-        local wasActive = self.active
-        if wasActive then self:Deactivate() end
-        self.unit = unit
-        if self.opts.secure ~= false and not keepAttribute then self:SetAttribute("unit", unit) end
-        for _, list in pairs(self.dispelSets) do
-            for _, c in ipairs(list) do c:SetUnit(unit or "none") end
+        if unit == self.unit then
+            return
         end
-        for _, c in ipairs(self.indicatorContainers) do c:SetUnit(unit or "none") end
+        local wasActive = self.active
+        if wasActive then
+            self:Deactivate()
+        end
+        self.unit = unit
+        if self.opts.secure ~= false and not keepAttribute then
+            self:SetAttribute("unit", unit)
+        end
+        for _, list in pairs(self.dispelSets) do
+            for _, c in ipairs(list) do
+                c:SetUnit(unit or "none")
+            end
+        end
+        for _, c in ipairs(self.indicatorContainers) do
+            c:SetUnit(unit or "none")
+        end
         local ward = self.wardSlot
-        if ward then ward:SetUnit(unit or "none") end
+        if ward then
+            ward:SetUnit(unit or "none")
+        end
         self:UpdateIndicatorPresence()
-        if wasActive and unit then self:Activate() end
+        if wasActive and unit then
+            self:Activate()
+        end
     end
 
     -- The type's border and badge over this frame, on `parent` (a slot's button,
@@ -1467,7 +1757,11 @@ export class UnitFrame extends Button
         -- over the frame's own border and text and over Warded; Magic on top,
         -- then down the list
         local rank = 1
-        for i, k in ipairs(DEBUFF_TYPES) do if k == kind then rank = i end end
+        for i, k in ipairs(DEBUFF_TYPES) do
+            if k == kind then
+                rank = i
+            end
+        end
         deco:SetFrameLevel(self.over:GetFrameLevel() + 3 + (#DEBUFF_TYPES - rank))
         return deco
     end
@@ -1479,7 +1773,9 @@ export class UnitFrame extends Button
             self.dispelSets[mode] = buildDispelSet(self, mode)
         end
         for set, list in pairs(self.dispelSets) do
-            for _, c in ipairs(list) do c.container:SetShown(set == mode) end
+            for _, c in ipairs(list) do
+                c.container:SetShown(set == mode)
+            end
         end
     end
 
@@ -1498,13 +1794,18 @@ export class UnitFrame extends Button
             slot:SetGroupSpells("ward", ids)
             return
         end
-        if #ids == 0 then return end
+        if #ids == 0 then
+            return
+        end
         local init = function(button: AuraButton)
             quietButton(button)
             self:WardDecoration(button)
         end
-        local c = auraContainer(self, self.unit or "none", { size = 1, anchor = "TOPLEFT",
-            groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } } })
+        local c = auraContainer(self, self.unit or "none", {
+            size = 1,
+            anchor = "TOPLEFT",
+            groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } },
+        })
         if c then
             c.container:SetPoint("TOPLEFT", self, "TOPLEFT")
             c.container:SetFrameLevel(self.over:GetFrameLevel() + 1)
@@ -1516,7 +1817,9 @@ export class UnitFrame extends Button
         local A = self.api
         local u = self.unit
         self:FitRow()
-        if not u or not A.UnitExists(u) then return end
+        if not u or not A.UnitExists(u) then
+            return
+        end
         self.dead = uiText.flag(A.UnitIsDeadOrGhost(u))
         self.offline = isOffline(A, u)
         self:UpdateIdentity()
@@ -1527,36 +1830,118 @@ export class UnitFrame extends Button
 
     function Activate()
         local u = self.unit
-        if self.active or not u then return end
+        if self.active or not u then
+            return
+        end
         self.active = true
-        for _, e in ipairs(HEALTH_EVENTS) do onUnit(self, u, e, function() self:UpdateHealth() end) end
-        for _, e in ipairs(POWER_EVENTS) do onUnit(self, u, e, function() self:UpdatePower() end) end
-        for _, e in ipairs(IDENTITY_EVENTS) do onUnit(self, u, e, function() self:UpdateIdentity() end) end
+        for _, e in ipairs(HEALTH_EVENTS) do
+            onUnit(self, u, e, function()
+                self:UpdateHealth()
+            end)
+        end
+        for _, e in ipairs(POWER_EVENTS) do
+            onUnit(self, u, e, function()
+                self:UpdatePower()
+            end)
+        end
+        for _, e in ipairs(IDENTITY_EVENTS) do
+            onUnit(self, u, e, function()
+                self:UpdateIdentity()
+            end)
+        end
         -- going offline or coming back: the bar, the text, the name and the power line
-        onUnit(self, u, "UNIT_CONNECTION", function() self:Refresh() end)
-        events.onGame("RAID_TARGET_UPDATE", function() self:UpdateRaidMarker() end, self)
-        events.onGame("PLAYER_ENTERING_WORLD", function() self:Refresh() end, self)
+        onUnit(self, u, "UNIT_CONNECTION", function()
+            self:Refresh()
+        end)
+        events.onGame(
+            "RAID_TARGET_UPDATE",
+            function()
+                self:UpdateRaidMarker()
+            end,
+            self
+        )
+        events.onGame(
+            "PLAYER_ENTERING_WORLD",
+            function()
+                self:Refresh()
+            end,
+            self
+        )
         -- a group unit can become another person: redraw everything
         local grouped = u:find("^party") or u:find("^raid")
         -- a role change moves the marker and may turn the power line on or off
         -- (powerFor: tanks and healers)
-        events.onGame("GROUP_ROSTER_UPDATE", function()
-            if grouped then self:Refresh() else self:UpdateIdentity(); self:UpdatePower() end
-        end, self)
-        events.onGame("PLAYER_ROLES_ASSIGNED", function() self:UpdateIdentity(); self:UpdatePower() end, self)
+        events.onGame(
+            "GROUP_ROSTER_UPDATE",
+            function()
+                if grouped then
+                    self:Refresh()
+                else
+                    self:UpdateIdentity()
+                    self:UpdatePower()
+                end
+            end,
+            self
+        )
+        events.onGame(
+            "PLAYER_ROLES_ASSIGNED",
+            function()
+                self:UpdateIdentity()
+                self:UpdatePower()
+            end,
+            self
+        )
         if u == "target" then
-            events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+            events.onGame(
+                "PLAYER_TARGET_CHANGED",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif u == "focus" then
-            events.onGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
+            events.onGame(
+                "PLAYER_FOCUS_CHANGED",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif u == "targettarget" then
-            events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+            events.onGame(
+                "PLAYER_TARGET_CHANGED",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
             -- your target picks another target: UNIT_TARGET fires for "target"
             -- (never for "targettarget"), and the poll only redraws health
-            events.onUnit("UNIT_TARGET", "target", function() self:Refresh() end, self)
+            events.onUnit(
+                "UNIT_TARGET",
+                "target",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif u == "pet" then
-            events.onUnit("UNIT_PET", "player", function() self:Refresh() end, self)
+            events.onUnit(
+                "UNIT_PET",
+                "player",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif u:find("^boss") then
-            events.onGame("INSTANCE_ENCOUNTER_ENGAGE_UNIT", function() self:Refresh() end, self)
+            events.onGame(
+                "INSTANCE_ENCOUNTER_ENGAGE_UNIT",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         end
         local poll = self.opts.poll
         if poll then
@@ -1573,11 +1958,16 @@ export class UnitFrame extends Button
     end
 
     function Deactivate()
-        if not self.active then return end
+        if not self.active then
+            return
+        end
         self.active = false
         events.offAll(self)
         local ticker = self.ticker
-        if ticker then ticker:Cancel(); self.ticker = nil end
+        if ticker then
+            ticker:Cancel()
+            self.ticker = nil
+        end
     end
 end
 mixins.UnitFrame = UnitFrame
@@ -1587,6 +1977,8 @@ mixins.UnitFrame = UnitFrame
 export function unitFrame(parent: Frame?, unit: string?, opts: UnitFrameOptions?): UnitFrame
     local o: UnitFrameOptions = opts or {}
     local frame = o.frame
-    if frame then return UnitFrame.adopt(frame, parent, unit, o) end
+    if frame then
+        return UnitFrame.adopt(frame, parent, unit, o)
+    end
     return UnitFrame.new(parent, unit, o)
 end

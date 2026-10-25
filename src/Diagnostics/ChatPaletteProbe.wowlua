@@ -58,49 +58,99 @@ type Record = { [string]: unknown }
 
 -- The chat input at one moment: its text, chat type, and its values
 -- written by addon code.
-type State = { at: string, what: string, box: string, text: string, chatType: string, stickyType: string,
-               taintedCount: number, tainted: string[] }
+type State = {
+    at: string,
+    what: string,
+    box: string,
+    text: string,
+    chatType: string,
+    stickyType: string,
+    taintedCount: number,
+    tainted: string[],
+}
 -- The armed write of this session.
 type Write = { variant: string, label: string, text: string, reopened: State[], done?: boolean, at?: number }
 -- A write's record, kept per variant across /reloads.
-type WriteRecord = { label: string, text: string, armedAt: string, reopened: State[], before?: State, after?: State,
-                     later?: State, emptyBefore?: boolean, call?: string, blocked?: string[], result?: string }
+type WriteRecord = {
+    label: string,
+    text: string,
+    armedAt: string,
+    reopened: State[],
+    before?: State,
+    after?: State,
+    later?: State,
+    emptyBefore?: boolean,
+    call?: string,
+    blocked?: string[],
+    result?: string,
+}
 -- The keys test: what saw each key while the input had focus.
-type Keys = { at: string, start: number, counts: { [string]: number }, log: string[], customTab: string,
-              frame?: string, result?: string }
+type Keys = {
+    at: string,
+    start: number,
+    counts: { [string]: number },
+    log: string[],
+    customTab: string,
+    frame?: string,
+    result?: string,
+}
 -- What the probe saves in SuuUIProbe.chatpalette.
 type Out = {
-    now?: Record, registry?: { log?: string[], [string]: unknown }, registryHooked?: string, autoComplete?: string[],
-    blocked?: string[], keys?: Keys, write?: unknown, writes?: { [string]: WriteRecord },
+    now?: Record,
+    registry?: { log?: string[], [string]: unknown },
+    registryHooked?: string,
+    autoComplete?: string[],
+    blocked?: string[],
+    keys?: Keys,
+    write?: unknown,
+    writes?: { [string]: WriteRecord },
 }
 
 local function show(v: unknown): string
-    if isSecret(v) then return "SECRET" end
+    if isSecret(v) then
+        return "SECRET"
+    end
     return tostring(v)
 end
 
 -- A function that may not exist, may error or may answer secret.
 local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
-    if type(fn) ~= "function" then return "missing", nil, nil, nil end
+    if type(fn) ~= "function" then
+        return "missing", nil, nil, nil
+    end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120), nil, nil, nil end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 120), nil, nil, nil
+    end
     return a, b, c, d
 end
 
 local function out(): Out
-    return DB.probeData("chatpalette", function(): Out return {} end)
+    return DB.probeData("chatpalette", function(): Out
+        return {}
+    end)
 end
 
 local function push<T>(list: T[], line: T, cap: number?)
-    if #list < (cap or 60) then list[#list + 1] = line end
+    if #list < (cap or 60) then
+        list[#list + 1] = line
+    end
 end
 
 -- "secure" or "tainted by <addon>"; the key may be a global's name
 local function secureText(t: unknown, key: unknown): string
-    if type(t) ~= "table" and type(t) ~= "string" then return "error" end
+    if type(t) ~= "table" and type(t) ~= "string" then
+        return "error"
+    end
     local ok, secure, by
-    if key == nil then ok, secure, by = pcall(issecurevariable, t) else ok, secure, by = pcall(issecurevariable, t, tostring(key)) end
-    if not ok then return "error" end
+    if key == nil then
+        ok, secure, by = pcall(issecurevariable, t)
+    else
+        ok, secure, by = pcall(issecurevariable, t, tostring(key))
+    end
+    if not ok then
+        return "error"
+    end
     return secure and "secure" or ("tainted by " .. tostring(by))
 end
 
@@ -110,8 +160,14 @@ end
 
 local function sortedKeys(t: unknown): string[]
     local list: string[] = {}
-    if type(t) ~= "table" then return list end
-    for k in pairs(t) do if type(k) == "string" then list[#list + 1] = k end end
+    if type(t) ~= "table" then
+        return list
+    end
+    for k in pairs(t) do
+        if type(k) == "string" then
+            list[#list + 1] = k
+        end
+    end
     table.sort(list)
     return list
 end
@@ -120,7 +176,9 @@ local function aliases(key: string): string[]
     local list: string[], i = {}, 1
     while i <= 30 do
         local s = tbl.field(_G, "SLASH_" .. key .. i)
-        if s == nil then break end
+        if s == nil then
+            break
+        end
         list[#list + 1] = show(s)
         i = i + 1
     end
@@ -131,7 +189,9 @@ local function inputs(): EditBox[]
     local list: EditBox[] = {}
     for i = 1, asNumber(tbl.field(_G, "NUM_CHAT_WINDOWS")) or 10 do
         local eb = wf.asEditBox(wf.find("ChatFrame" .. i .. "EditBox"))
-        if eb then list[#list + 1] = eb end
+        if eb then
+            list[#list + 1] = eb
+        end
     end
     return list
 end
@@ -159,12 +219,19 @@ local function enumerate(): (Record, number)
     local keys: string[], seen: { [string]: boolean } = {}, {}
     for _, t in ipairs({ raw, proxy }) do
         for _, k in ipairs(sortedKeys(t)) do
-            if not seen[k] then seen[k] = true; keys[#keys + 1] = k end
+            if not seen[k] then
+                seen[k] = true
+                keys[#keys + 1] = k
+            end
         end
     end
     table.sort(keys)
-    e.slashCmdList = ("%d in SlashCmdList itself, %d in its proxy (%s), %d keys together"):format(count(raw),
-        count(proxy), proxy and "metatable __index" or "none", #keys)
+    e.slashCmdList = ("%d in SlashCmdList itself, %d in its proxy (%s), %d keys together"):format(
+        count(raw),
+        count(proxy),
+        proxy and "metatable __index" or "none",
+        #keys
+    )
     local hash = tbl.field(_G, "hash_SlashCmdList")
     local total: number, byAddon: { [string]: number } = 0, {}
     local sample: string[] = {}
@@ -176,16 +243,22 @@ local function enumerate(): (Record, number)
         byAddon[who] = (byAddon[who] or 0) + 1
         if i <= 30 then
             local first = list[1] and list[1]:upper()
-            sample[#sample + 1] = ("%s: %s | SLASH_%s1 %s; SlashCmdList %s; proxy %s; hash %s"):format(k,
-                #list > 0 and table.concat(list, " ") or "no SLASH_ globals", k, who,
+            sample[#sample + 1] = ("%s: %s | SLASH_%s1 %s; SlashCmdList %s; proxy %s; hash %s"):format(
+                k,
+                #list > 0 and table.concat(list, " ") or "no SLASH_ globals",
+                k,
+                who,
                 tbl.field(raw, k) ~= nil and secureText(raw, k) or "absent",
                 tbl.field(proxy, k) ~= nil and secureText(proxy, k) or "absent",
-                first and tbl.field(hash, first) ~= nil and secureText(hash, first) or "absent")
+                first and tbl.field(hash, first) ~= nil and secureText(hash, first) or "absent"
+            )
         end
     end
     e.aliases = total
     local byRegistrar: string[] = {}
-    for who, n in pairs(byAddon) do byRegistrar[#byRegistrar + 1] = ("%s: %d"):format(who, n) end
+    for who, n in pairs(byAddon) do
+        byRegistrar[#byRegistrar + 1] = ("%s: %d"):format(who, n)
+    end
     table.sort(byRegistrar)
     e.keysByRegisteredBy = byRegistrar
     -- the hashes the game reads when a line is sent
@@ -193,7 +266,9 @@ local function enumerate(): (Record, number)
     local hashSample: string[] = {}
     e.hashSample = hashSample
     for i, k in ipairs(sortedKeys(hash)) do
-        if i > 10 then break end
+        if i > 10 then
+            break
+        end
         hashSample[#hashSample + 1] = k .. " " .. secureText(hash, k)
     end
     -- every command and chat type the game has (secure ones too)
@@ -211,11 +286,15 @@ local function enumerate(): (Record, number)
     end
     e.secureCommands = #secureList
     local secureSample: string[] = {}
-    for i = 1, math.min(30, #secureList) do secureSample[i] = secureList[i] end
+    for i = 1, math.min(30, #secureList) do
+        secureSample[i] = secureList[i]
+    end
     e.secureSample = secureSample
     e.chatTypes = #chatTypes
     local chatTypeSample: string[] = {}
-    for i = 1, math.min(20, #chatTypes) do chatTypeSample[i] = chatTypes[i] end
+    for i = 1, math.min(20, #chatTypes) do
+        chatTypeSample[i] = chatTypes[i]
+    end
     e.chatTypeSample = chatTypeSample
     -- emotes: EMOTE<n>_TOKEN and EMOTE<n>_CMD<m>, up to MAXEMOTEINDEX (or
     -- until 50 numbers in a row have neither)
@@ -230,40 +309,74 @@ local function enumerate(): (Record, number)
             names[#names + 1] = show(tbl.field(_G, "EMOTE" .. n .. "_CMD" .. m))
             m = m + 1
         end
-        if token ~= nil then tokens = tokens + 1 end
+        if token ~= nil then
+            tokens = tokens + 1
+        end
         cmds = cmds + #names
-        if token == nil and #names == 0 then misses = misses + 1 else
+        if token == nil and #names == 0 then
+            misses = misses + 1
+        else
             misses = 0
             push(emoteSample, ("%d %s: %s"):format(n, show(token), table.concat(names, " ")), 20)
         end
         n = n + 1
-        if n > 5000 then break end
+        if n > 5000 then
+            break
+        end
     end
     e.emotes = ("%d tokens, %d commands, numbers 1-%d, MAXEMOTEINDEX %s"):format(tokens, cmds, n - 1, show(max))
     e.hashEmoteTokenList = count(hash_EmoteTokenList)
     -- what the game offers around the input
     local functions: string[] = {}
     e.functions = functions
-    for _, name in ipairs({ "IsSecureCmd", "ChatEdit_CustomTabPressed", "ChatFrame_OpenChat", "ChatEdit_InsertLink",
-                            "ChatEdit_GetActiveWindow", "GetCurrentKeyBoardFocus", "AutoComplete_Update",
-                            "AutoCompleteEditBox_SetAutoCompleteSource", "MAXEMOTEINDEX", "ACTIVE_CHAT_EDIT_BOX",
-                            "LAST_ACTIVE_CHAT_EDIT_BOX", "CHAT_FOCUS_OVERRIDE" }) do
+    for _, name in ipairs({
+        "IsSecureCmd",
+        "ChatEdit_CustomTabPressed",
+        "ChatFrame_OpenChat",
+        "ChatEdit_InsertLink",
+        "ChatEdit_GetActiveWindow",
+        "GetCurrentKeyBoardFocus",
+        "AutoComplete_Update",
+        "AutoCompleteEditBox_SetAutoCompleteSource",
+        "MAXEMOTEINDEX",
+        "ACTIVE_CHAT_EDIT_BOX",
+        "LAST_ACTIVE_CHAT_EDIT_BOX",
+        "CHAT_FOCUS_OVERRIDE",
+    }) do
         functions[#functions + 1] = ("%s: %s, %s"):format(name, type(tbl.field(_G, name)), secureText(name))
     end
-    for _, name in ipairs({ "OpenChat", "InsertLink", "GetActiveWindow", "GetLastActiveWindow", "ActivateChat",
-                            "ImportAllListsToHash", "ChooseBoxForSend" }) do
+    for _, name in ipairs({
+        "OpenChat",
+        "InsertLink",
+        "GetActiveWindow",
+        "GetLastActiveWindow",
+        "ActivateChat",
+        "ImportAllListsToHash",
+        "ChooseBoxForSend",
+    }) do
         functions[#functions + 1] = ("ChatFrameUtil.%s: %s"):format(name, type(tbl.field(ChatFrameUtil, name)))
     end
     e.autoComplete = ("AutoCompleteBox %s, C_AutoComplete.GetAutoCompleteResults %s, AUTOCOMPLETE_LIST.WHISPER %s"):format(
-        type(tbl.field(_G, "AutoCompleteBox")), type(tbl.field(_G, "C_AutoComplete", "GetAutoCompleteResults")),
-        type(AUTOCOMPLETE_LIST) == "table" and type(tbl.field(AUTOCOMPLETE_LIST, "WHISPER")) or "missing")
+        type(tbl.field(_G, "AutoCompleteBox")),
+        type(tbl.field(_G, "C_AutoComplete", "GetAutoCompleteResults")),
+        type(AUTOCOMPLETE_LIST) == "table" and type(tbl.field(AUTOCOMPLETE_LIST, "WHISPER")) or "missing"
+    )
     -- the input's own scripts (which a palette would sit beside)
     local eb = wf.asEditBox(wf.find("ChatFrame1EditBox"))
     local inputScripts: string[] = {}
     e.inputScripts = inputScripts
     if eb then
-        for _, sc in ipairs({ "OnKeyDown", "OnKeyUp", "OnChar", "OnTabPressed", "OnArrowPressed", "OnEscapePressed",
-                              "OnEnterPressed", "OnTextChanged", "OnTextSet" }) do
+        for _, sc in ipairs({
+            "OnKeyDown",
+            "OnKeyUp",
+            "OnChar",
+            "OnTabPressed",
+            "OnArrowPressed",
+            "OnEscapePressed",
+            "OnEnterPressed",
+            "OnTextChanged",
+            "OnTextSet",
+        }) do
             local ok, has = pcall(eb.HasScript, eb, sc)
             local fn = ok and has and eb:GetScript(sc)
             inputScripts[#inputScripts + 1] = sc .. ": " .. (fn and "set" or (ok and has and "none" or "unsupported"))
@@ -278,8 +391,17 @@ end
 -- /suu probe taint, over the input instead of the Escape path)
 --------------------------------------------------------------------------------
 
-local GLOBALS = { "ACTIVE_CHAT_EDIT_BOX", "LAST_ACTIVE_CHAT_EDIT_BOX", "CHAT_FOCUS_OVERRIDE", "ChatEdit_CustomTabPressed",
-                  "SlashCmdList", "hash_SlashCmdList", "hash_ChatTypeInfoList", "hash_EmoteTokenList", "AutoCompleteBox" }
+local GLOBALS = {
+    "ACTIVE_CHAT_EDIT_BOX",
+    "LAST_ACTIVE_CHAT_EDIT_BOX",
+    "CHAT_FOCUS_OVERRIDE",
+    "ChatEdit_CustomTabPressed",
+    "SlashCmdList",
+    "hash_SlashCmdList",
+    "hash_ChatTypeInfoList",
+    "hash_EmoteTokenList",
+    "AutoCompleteBox",
+}
 
 local function boxTaint(eb: EditBox?): string[]
     local tainted: string[] = {}
@@ -288,19 +410,25 @@ local function boxTaint(eb: EditBox?): string[]
         for k in pairs(fields) do
             if type(k) == "string" then
                 local s = secureText(fields, k)
-                if s ~= "secure" then tainted[#tainted + 1] = boxName(eb) .. "." .. k .. " (" .. s .. ")" end
+                if s ~= "secure" then
+                    tainted[#tainted + 1] = boxName(eb) .. "." .. k .. " (" .. s .. ")"
+                end
             end
         end
     end
     for _, name in ipairs(GLOBALS) do
         local s = secureText(name)
-        if s ~= "secure" then tainted[#tainted + 1] = name .. " (" .. s .. ")" end
+        if s ~= "secure" then
+            tainted[#tainted + 1] = name .. " (" .. s .. ")"
+        end
     end
     local box = tbl.field(_G, "AutoCompleteBox")
     if type(box) == "table" then
         for _, k in ipairs({ "parent", "attachPoint" }) do
             local s = secureText(box, k)
-            if s ~= "secure" then tainted[#tainted + 1] = "AutoCompleteBox." .. k .. " (" .. s .. ")" end
+            if s ~= "secure" then
+                tainted[#tainted + 1] = "AutoCompleteBox." .. k .. " (" .. s .. ")"
+            end
         end
     end
     table.sort(tainted)
@@ -311,46 +439,73 @@ local function state(eb: EditBox?, label: string): State
     local chatType: unknown = eb and eb:GetAttribute("chatType")
     local sticky: unknown = eb and eb:GetAttribute("stickyType")
     local tainted = boxTaint(eb)
-    return { at = date("%H:%M:%S"), what = label, box = boxName(eb), text = text(eb), chatType = show(chatType),
-             stickyType = show(sticky), taintedCount = #tainted, tainted = tainted }
+    return {
+        at = date("%H:%M:%S"),
+        what = label,
+        box = boxName(eb),
+        text = text(eb),
+        chatType = show(chatType),
+        stickyType = show(sticky),
+        taintedCount = #tainted,
+        tainted = tainted,
+    }
 end
 
 --------------------------------------------------------------------------------
 -- Session listening: EventRegistry callbacks, AutoCompleteBox, blocked actions
 --------------------------------------------------------------------------------
 
-local write: Write? = nil           -- the armed write: { variant, at, ... }
-local keysUntil: number? = nil      -- GetTime() the keys test ends
+local write: Write? = nil -- the armed write: { variant, at, ... }
+local keysUntil: number? = nil -- GetTime() the keys test ends
 local onFocus: ((eb: EditBox) -> ())? = nil -- what the next focus does (the armed write)
 local acTicker: TickerHandle? = nil
 
 local function autoCompleteState(): string?
     local box = wf.asFrame(tbl.field(_G, "AutoCompleteBox"))
-    if not box then return "no AutoCompleteBox" end
-    if not box:IsShown() then return nil end
+    if not box then
+        return "no AutoCompleteBox"
+    end
+    if not box:IsShown() then
+        return nil
+    end
     local names: string[] = {}
     for i = 1, AUTOCOMPLETE_MAX_BUTTONS or 5 do
         local b = wf.asButton(wf.find("AutoCompleteButton" .. i))
-        if b and b:IsShown() then names[#names + 1] = show(b:GetText()) end
+        if b and b:IsShown() then
+            names[#names + 1] = show(b:GetText())
+        end
     end
     local parent = tbl.field(box, "parent")
-    return ("shown on %s (input text %s): %s"):format(boxName(parent), text(wf.asEditBox(parent)), table.concat(names, ", "))
+    return ("shown on %s (input text %s): %s"):format(
+        boxName(parent),
+        text(wf.asEditBox(parent)),
+        table.concat(names, ", ")
+    )
 end
 
 local function watchAutoComplete(on: boolean)
-    if acTicker then acTicker:Cancel(); acTicker = nil end
-    if not on then return end
+    if acTicker then
+        acTicker:Cancel()
+        acTicker = nil
+    end
+    if not on then
+        return
+    end
     local last: string? = nil
-    acTicker = every(0.25, function()
-        local s = autoCompleteState()
-        if s and s ~= last then
-            local o = out()
-            local list = o.autoComplete or {}
-            o.autoComplete = list
-            push(list, date("%H:%M:%S") .. " " .. s, 30)
-        end
-        last = s
-    end, 240)
+    acTicker = every(
+        0.25,
+        function()
+            local s = autoCompleteState()
+            if s and s ~= last then
+                local o = out()
+                local list = o.autoComplete or {}
+                o.autoComplete = list
+                push(list, date("%H:%M:%S") .. " " .. s, 30)
+            end
+            last = s
+        end,
+        240
+    )
 end
 
 -- The writes' records, by variant.
@@ -363,9 +518,13 @@ end
 
 local function doWrite(input: EditBox)
     local w = write
-    if not w or w.done then return end
+    if not w or w.done then
+        return
+    end
     local r = writes()[w.variant]
-    if not r then return end
+    if not r then
+        return
+    end
     local eb = input
     w.done = true
     local at = GetTime()
@@ -380,7 +539,9 @@ local function doWrite(input: EditBox)
         ok, err = pcall(eb.Insert, eb, w.text)
     else
         local open = tbl.field(ChatFrameUtil, "OpenChat") or tbl.field(_G, "ChatFrame_OpenChat")
-        if type(open) ~= "function" then ok, err = false, "no ChatFrameUtil.OpenChat or ChatFrame_OpenChat" else
+        if type(open) ~= "function" then
+            ok, err = false, "no ChatFrameUtil.OpenChat or ChatFrame_OpenChat"
+        else
             local box: unknown
             ok, box = pcall(open, w.text)
             if ok then
@@ -392,15 +553,28 @@ local function doWrite(input: EditBox)
     end
     local result = ok and "ran" or ("error: " .. tostring(err))
     r.call = result
-    after(0.1, function() r.after = state(eb, "0.1 s after the write") end)
-    print(("Chat palette probe: %s put %q into the input (%s). Press Enter to send it, then open the input and type /camp yourself (Cancel the logout if it starts); then /suu probe taint. Wait for the result line (60 s) before you /reload."):format(
-        w.label, w.text, result))
+    after(0.1, function()
+        r.after = state(eb, "0.1 s after the write")
+    end)
+    print(
+        ("Chat palette probe: %s put %q into the input (%s). Press Enter to send it, then open the input and type /camp yourself (Cancel the logout if it starts); then /suu probe taint. Wait for the result line (60 s) before you /reload."):format(
+            w.label,
+            w.text,
+            result
+        )
+    )
     after(60, function()
         local later = state(eb, "60 s after the write")
         r.later = later
         local blocked = r.blocked or {}
         local verdict = ("write %s (%s): %d blocked/forbidden in 60 s%s; input values written by addon code: %d before, %d now"):format(
-            w.variant, w.label, #blocked, #blocked > 0 and (" (" .. blocked[1] .. ")") or "", before.taintedCount, later.taintedCount)
+            w.variant,
+            w.label,
+            #blocked,
+            #blocked > 0 and (" (" .. blocked[1] .. ")") or "",
+            before.taintedCount,
+            later.taintedCount
+        )
         r.result = verdict
         print("Chat palette probe: " .. verdict .. ". /reload to save it, and tell Claude whether /camp worked.")
     end)
@@ -408,14 +582,21 @@ end
 
 local listening = false
 local function listen()
-    if listening then return end
+    if listening then
+        return
+    end
     listening = true
     local o = out()
     local registry = o.registry or {}
     o.registry = registry
     o.autoComplete = o.autoComplete or {}
-    for _, name in ipairs({ "ChatFrame.OnEditBoxShow", "ChatFrame.OnEditBoxHide", "ChatFrame.OnEditBoxFocusGained",
-                            "ChatFrame.OnEditBoxFocusLost", "ChatFrame.OnEditBoxPreSendText" }) do
+    for _, name in ipairs({
+        "ChatFrame.OnEditBoxShow",
+        "ChatFrame.OnEditBoxHide",
+        "ChatFrame.OnEditBoxFocusGained",
+        "ChatFrame.OnEditBoxFocusLost",
+        "ChatFrame.OnEditBoxPreSendText",
+    }) do
         onRegistry(name, function(value: unknown)
             local eb = wf.asEditBox(value)
             registry[name] = (asNumber(registry[name]) or 0) + 1
@@ -429,7 +610,9 @@ local function listen()
                     local f = onFocus
                     onFocus = nil
                     -- a moment later, outside Blizzard's focus handling
-                    after(0.2, function() f(eb) end)
+                    after(0.2, function()
+                        f(eb)
+                    end)
                 elseif w and w.done and #w.reopened < 10 then
                     after(0.2, function()
                         w.reopened[#w.reopened + 1] = state(eb, "the input opened again")
@@ -451,8 +634,14 @@ local function listen()
         local w = write
         local at = w and w.at
         local since = at and ("%.1f s after the write"):format(GetTime() - at) or "no write yet"
-        local line = ("%s %s %s %s (%s, combat %s)"):format(date("%H:%M:%S"), event, show(addon), show(func), since,
-            tostring(InCombatLockdown()))
+        local line = ("%s %s %s %s (%s, combat %s)"):format(
+            date("%H:%M:%S"),
+            event,
+            show(addon),
+            show(func),
+            since,
+            tostring(InCombatLockdown())
+        )
         push(blocked, line, 40)
         local r = w and p.writes and p.writes[w.variant]
         if r and at and GetTime() - at <= 60 then
@@ -472,13 +661,16 @@ local keyFrame: Frame? = nil
 local tabOriginal: typeof(ChatEdit_CustomTabPressed)? = nil
 
 local function keyName(key: unknown): string
-    local mods = (IsControlKeyDown() and "CTRL-" or "") .. (IsAltKeyDown() and "ALT-" or "") .. (IsShiftKeyDown() and "SHIFT-" or "")
+    local mods = (IsControlKeyDown() and "CTRL-" or "") ..
+        (IsAltKeyDown() and "ALT-" or "") .. (IsShiftKeyDown() and "SHIFT-" or "")
     return mods .. tostring(key)
 end
 
 local function noteKey(source: string, line: string)
     local k = out().keys
-    if not k then return end
+    if not k then
+        return
+    end
     k.counts[source] = (k.counts[source] or 0) + 1
     push(k.log, ("%.1fs %s %s"):format(GetTime() - k.start, source, line), 150)
 end
@@ -488,21 +680,33 @@ local function hookInputs()
         if not hooked[eb] then
             hooked[eb] = true
             hookScript(eb, "OnKeyDown", function(box: EditBox, key: string)
-                if not (keysUntil and GetTime() < keysUntil) then return end
+                if not (keysUntil and GetTime() < keysUntil) then
+                    return
+                end
                 local name = keyName(key)
                 local before = text(box)
                 if key == "TAB" or key == "ESCAPE" then
                     -- after the game's own handling: the text and the focus
                     after(0, function()
-                        noteKey("OnKeyDown", ("%s on %s: text %s → %s, focus %s"):format(name, boxName(box), before,
-                            text(box), show(box:HasFocus())))
+                        noteKey(
+                            "OnKeyDown",
+                            ("%s on %s: text %s → %s, focus %s"):format(
+                                name,
+                                boxName(box),
+                                before,
+                                text(box),
+                                show(box:HasFocus())
+                            )
+                        )
                     end)
                 else
                     noteKey("OnKeyDown", ("%s on %s, text %s"):format(name, boxName(box), before))
                 end
             end)
             hookScript(eb, "OnArrowPressed", function(box: EditBox, key: string)
-                if not (keysUntil and GetTime() < keysUntil) then return end
+                if not (keysUntil and GetTime() < keysUntil) then
+                    return
+                end
                 noteKey("OnArrowPressed", ("%s on %s, text %s"):format(keyName(key), boxName(box), text(box)))
             end)
         end
@@ -511,8 +715,16 @@ end
 
 local function startKeys()
     local o = out()
-    local k: Keys = { at = date("%H:%M:%S"), start = GetTime(), counts = {}, log = {},
-        customTab = ("ChatEdit_CustomTabPressed: %s, %s"):format(type(ChatEdit_CustomTabPressed), secureText("ChatEdit_CustomTabPressed")) }
+    local k: Keys = {
+        at = date("%H:%M:%S"),
+        start = GetTime(),
+        counts = {},
+        log = {},
+        customTab = ("ChatEdit_CustomTabPressed: %s, %s"):format(
+            type(ChatEdit_CustomTabPressed),
+            secureText("ChatEdit_CustomTabPressed")
+        ),
+    }
     o.keys = k
     keysUntil = GetTime() + 60
     hookInputs()
@@ -539,9 +751,14 @@ local function startKeys()
         if ok then
             kf:EnableKeyboard(true)
             kf:SetScript("OnKeyDown", function(_, key)
-                if not (keysUntil and GetTime() < keysUntil) then return end
+                if not (keysUntil and GetTime() < keysUntil) then
+                    return
+                end
                 local focus: EditBox? = GetCurrentKeyBoardFocus()
-                noteKey("keyboardFrame", ("%s, keyboard focus %s"):format(keyName(key), focus and boxName(focus) or "none"))
+                noteKey(
+                    "keyboardFrame",
+                    ("%s, keyboard focus %s"):format(keyName(key), focus and boxName(focus) or "none")
+                )
             end)
             kf:Show()
             k.frame = "listening, propagating"
@@ -552,7 +769,10 @@ local function startKeys()
     after(60, function()
         keysUntil = nil
         local saved = tabOriginal
-        if saved then ChatEdit_CustomTabPressed = saved; tabOriginal = nil end
+        if saved then
+            ChatEdit_CustomTabPressed = saved
+            tabOriginal = nil
+        end
         local kf = keyFrame
         if kf then
             kf:SetScript("OnKeyDown", nil)
@@ -560,12 +780,22 @@ local function startKeys()
             kf:Hide()
         end
         local c = k.counts
-        local result = ("OnKeyDown %d, OnArrowPressed %d, CustomTabPressed %d, keyboard frame %d"):format(c.OnKeyDown or 0,
-            c.OnArrowPressed or 0, c.CustomTabPressed or 0, c.keyboardFrame or 0)
+        local result = ("OnKeyDown %d, OnArrowPressed %d, CustomTabPressed %d, keyboard frame %d"):format(
+            c.OnKeyDown or 0,
+            c.OnArrowPressed or 0,
+            c.CustomTabPressed or 0,
+            c.keyboardFrame or 0
+        )
         k.result = result
-        print("Chat palette keys: " .. result .. ". Did Tab completion, Escape and the arrows still do what they did before? Tell Claude, then /reload to save it.")
+        print(
+            "Chat palette keys: " ..
+                result ..
+                    ". Did Tab completion, Escape and the arrows still do what they did before? Tell Claude, then /reload to save it."
+        )
     end)
-    print("Chat palette keys: for 60 s, open the chat input and type /pla, press Tab twice, Up and Down, Ctrl+Left and Ctrl+Right, then Escape. Again with \"/w \" and the first letters of a friend's name (Tab, Down). Notice whether each still does what it did before.")
+    print(
+        "Chat palette keys: for 60 s, open the chat input and type /pla, press Tab twice, Up and Down, Ctrl+Left and Ctrl+Right, then Escape. Again with \"/w \" and the first letters of a friend's name (Tab, Down). Notice whether each still does what it did before."
+    )
 end
 
 --------------------------------------------------------------------------------
@@ -606,16 +836,27 @@ export function command(arg: string?)
         writes()[variant] = { label = label, text = w.text, armedAt = date("%H:%M:%S"), reopened = w.reopened }
         if variant == "c" then
             after(2, function()
-                local box = wf.asEditBox((call(tbl.field(ChatFrameUtil, "GetLastActiveWindow")))) or wf.asEditBox(wf.find("ChatFrame1EditBox"))
-                if box then doWrite(box) end
+                local box = wf.asEditBox((call(tbl.field(ChatFrameUtil, "GetLastActiveWindow")))) or
+                    wf.asEditBox(wf.find("ChatFrame1EditBox"))
+                if box then
+                    doWrite(box)
+                end
             end)
-            print("Chat palette probe: in 2 s SuuUI opens the input with /played in it (don't press Up or Down this session: recall taints by itself).")
+            print(
+                "Chat palette probe: in 2 s SuuUI opens the input with /played in it (don't press Up or Down this session: recall taints by itself)."
+            )
         else
             onFocus = doWrite
-            print("Chat palette probe: now press Enter to open the chat input; SuuUI puts /played into it (don't press Up or Down this session: recall taints by itself).")
+            print(
+                "Chat palette probe: now press Enter to open the chat input; SuuUI puts /played into it (don't press Up or Down this session: recall taints by itself)."
+            )
         end
         return
     end
-    print(("Chat palette probe: %d commands, %s aliases recorded. Now open the chat input a few times, type \"/w \" and a friend's first letters; then /reload to save it. Next: /reload, then /suu probe chatpalette write a (b, c after a /reload each), and /suu probe chatpalette keys."):format(
-        n, show(e.aliases)))
+    print(
+        ("Chat palette probe: %d commands, %s aliases recorded. Now open the chat input a few times, type \"/w \" and a friend's first letters; then /reload to save it. Next: /reload, then /suu probe chatpalette write a (b, c after a /reload each), and /suu probe chatpalette keys."):format(
+            n,
+            show(e.aliases)
+        )
+    )
 end

@@ -38,23 +38,35 @@ import * as tbl from "wowlua:table"
 type Map = { [unknown]: unknown }
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
         local parts: string[] = {}
         for k, x in pairs(v) do
             local val: string
-            if isSecret(x) then val = "secret"
+            if isSecret(x) then
+                val = "secret"
             elseif type(x) == "table" then
                 local inner: string[] = {}
                 for k2, y in pairs(x) do
-                    inner[#inner + 1] = tostring(k2) .. ":" .. (isSecret(y) and "secret" or type(y) == "table" and "{…}" or tostring(y))
-                    if #inner > 8 then break end
+                    inner[#inner + 1] = tostring(k2) ..
+                        ":" .. (isSecret(y) and "secret" or type(y) == "table" and "{…}" or tostring(y))
+                    if #inner > 8 then
+                        break
+                    end
                 end
                 val = "{" .. table.concat(inner, " ") .. "}"
-            else val = tostring(x) end
+            else
+                val = tostring(x)
+            end
             parts[#parts + 1] = tostring(k) .. "=" .. val
-            if #parts > 24 then break end
+            if #parts > 24 then
+                break
+            end
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -64,27 +76,36 @@ end
 
 -- every return as text ("missing" for no function, "error: …")
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 160)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 -- the first return itself, or nil
 local function get(fn: unknown, ...: unknown): (unknown, unknown)
-    if type(fn) ~= "function" then return nil, nil end
+    if type(fn) ~= "function" then
+        return nil, nil
+    end
     local ok, a, b = pcall(fn, ...)
-    if ok then return a, b end
+    if ok then
+        return a, b
+    end
     return nil, nil
 end
 
-
-
-
 local function push<T>(list: T[], line: T, most: number?)
-    if #list < (most or 60) then list[#list + 1] = line end
+    if #list < (most or 60) then
+        list[#list + 1] = line
+    end
 end
 
 -- A step's record: what the game said meanwhile, and what the step did.
@@ -94,7 +115,9 @@ type Step = { at: string, events: string[], blocked: string[], steps: string[], 
 type Out = { now?: Map, otherClasses?: Map[], [string]: unknown }
 
 local function out(): Out
-    return DB.probeData("talentbuilds", function(): Out return {} end)
+    return DB.probeData("talentbuilds", function(): Out
+        return {}
+    end)
 end
 
 local CT: unknown = C_ClassTalents
@@ -107,10 +130,21 @@ local VIEW_ID: unknown = tbl.field(_G, "Constants", "TraitConsts", "VIEW_TRAIT_C
 --------------------------------------------------------------------------------
 
 local EVENTS = {
-    "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "TRAIT_CONFIG_CREATED",
-    "TRAIT_CONFIG_DELETED", "TRAIT_CONFIG_UPDATED", "TRAIT_CONFIG_LIST_UPDATED", "TRAIT_TREE_CHANGED",
-    "ACTIVE_COMBAT_CONFIG_CHANGED", "CONFIG_COMMIT_FAILED", "PLAYER_TALENT_UPDATE", "ACTIVE_TALENT_GROUP_CHANGED",
-    "PLAYER_SPECIALIZATION_CHANGED", "SELECTED_LOADOUT_CHANGED", "STARTER_BUILD_ACTIVATION_FAILED",
+    "ADDON_ACTION_BLOCKED",
+    "ADDON_ACTION_FORBIDDEN",
+    "UI_ERROR_MESSAGE",
+    "TRAIT_CONFIG_CREATED",
+    "TRAIT_CONFIG_DELETED",
+    "TRAIT_CONFIG_UPDATED",
+    "TRAIT_CONFIG_LIST_UPDATED",
+    "TRAIT_TREE_CHANGED",
+    "ACTIVE_COMBAT_CONFIG_CHANGED",
+    "CONFIG_COMMIT_FAILED",
+    "PLAYER_TALENT_UPDATE",
+    "ACTIVE_TALENT_GROUP_CHANGED",
+    "PLAYER_SPECIALIZATION_CHANGED",
+    "SELECTED_LOADOUT_CHANGED",
+    "STARTER_BUILD_ACTIVATION_FAILED",
 }
 
 local watcher: Frame? = nil
@@ -128,12 +162,14 @@ local function watch(name: string): Step
     if not watcher then
         local w = CreateFrame("Frame")
         watcher = w
-        for _, e in ipairs(EVENTS) do pcall(w.RegisterEvent, w, e) end
+        for _, e in ipairs(EVENTS) do
+            pcall(w.RegisterEvent, w, e)
+        end
         w:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
             local line = ("%.2fs %s %s %s"):format(GetTime() - t0, event, show(a), show(b))
             push(step.events, line, 80)
-            if event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE"
-                or event == "CONFIG_COMMIT_FAILED" then
+            if event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE" or
+                event == "CONFIG_COMMIT_FAILED" then
                 push(step.blocked, line, 20)
             end
             local id = tbl.field(a, "ID")
@@ -145,7 +181,9 @@ local function watch(name: string): Step
     return s
 end
 
-local function note(text: string) push(step.steps, ("%.2fs %s"):format(GetTime() - t0, text), 60) end
+local function note(text: string)
+    push(step.steps, ("%.2fs %s"):format(GetTime() - t0, text), 60)
+end
 
 local function refuseCombat(): boolean
     if InCombatLockdown() then
@@ -165,19 +203,27 @@ local function mySpecID(): unknown
     local SI: unknown = C_SpecializationInfo
     local index = get(tbl.field(SI, "GetSpecialization")) or get(GetSpecialization) or 1
     local id = get(tbl.field(SI, "GetSpecializationInfo"), index) or get(GetSpecializationInfo, index)
-    if secret.isNumber(id) then return id end
+    if secret.isNumber(id) then
+        return id
+    end
     local _, _, classID = UnitClass("player")
     id = get(GetSpecializationInfoForClassID, classID, 1)
-    if secret.readable(id) then return id end
+    if secret.readable(id) then
+        return id
+    end
     return nil
 end
 
 local function classSpecID(classID: number): (unknown, string?)
     local id = get(GetSpecializationInfoForClassID, classID, 1)
-    if secret.isNumber(id) then return id, "GetSpecializationInfoForClassID" end
+    if secret.isNumber(id) then
+        return id, "GetSpecializationInfoForClassID"
+    end
     local SI: unknown = C_SpecializationInfo
     local first = tbl.list((get(tbl.field(SI, "GetSpecIDs"), classID)))[1]
-    if first ~= nil and secret.readable(first) then return first, "C_SpecializationInfo.GetSpecIDs" end
+    if first ~= nil and secret.readable(first) then
+        return first, "C_SpecializationInfo.GetSpecIDs"
+    end
     return nil, nil
 end
 
@@ -185,7 +231,11 @@ local function savedConfigs(specID: unknown): unknown[]
     local list = specID and get(tbl.field(CT, "GetConfigIDsBySpecID"), specID)
     local outList: unknown[] = {}
     if type(list) == "table" then
-        for _, id in ipairs(list :: unknown[]) do if secret.readable(id) then outList[#outList + 1] = id end end
+        for _, id in ipairs(list :: unknown[]) do
+            if secret.readable(id) then
+                outList[#outList + 1] = id
+            end
+        end
     end
     return outList
 end
@@ -207,9 +257,13 @@ local function entriesOf(configID: unknown, treeID: unknown): Map[]
         if ranks > 0 then
             local entryID = field(n, "activeEntry", "entryID") or tbl.list(field(n, "entryIDs"))[1]
             -- ranksGranted is required (the first run failed on it: "Current Field: [ranksGranted]")
-            entries[#entries + 1] = { nodeID = nodeID, ranksPurchased = ranks, selectionEntryID = entryID,
-                                      ranksGranted = secret.asNumber(field(n, "ranksGranted")) or 0,
-                                      isChoiceNode = field(n, "type") == field(Enum, "TraitNodeType", "Selection") }
+            entries[#entries + 1] = {
+                nodeID = nodeID,
+                ranksPurchased = ranks,
+                selectionEntryID = entryID,
+                ranksGranted = secret.asNumber(field(n, "ranksGranted")) or 0,
+                isChoiceNode = field(n, "type") == field(Enum, "TraitNodeType", "Selection"),
+            }
         end
     end
     return entries
@@ -231,22 +285,37 @@ end
 -- A node, briefly: what a planner needs.
 local function nodeLine(configID: unknown, nodeID: unknown): string
     local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
-    if type(n) ~= "table" then return show(nodeID) .. ": no info" end
+    if type(n) ~= "table" then
+        return show(nodeID) .. ": no info"
+    end
     local spells: string[] = {}
     for _, entryID in ipairs(tbl.list(field(n, "entryIDs"))) do
         spells[#spells + 1] = ("%s→%s"):format(show(entryID), show(spellOf(configID, entryID)))
     end
-    local function f(name: string): string return show(field(n, name)) end
+    local function f(name: string): string
+        return show(field(n, name))
+    end
     return ("%s: pos %s,%s ranks %s/%s purchased %s, entries %s, edges %d, conditions %s, visible %s, canPurchase %s"):format(
-        show(nodeID), f("posX"), f("posY"), f("currentRank"), f("maxRanks"), f("ranksPurchased"),
-        table.concat(spells, " "), #tbl.list(field(n, "visibleEdges")), f("conditionIDs"), f("isVisible"),
-        f("canPurchaseRank"))
+        show(nodeID),
+        f("posX"),
+        f("posY"),
+        f("currentRank"),
+        f("maxRanks"),
+        f("ranksPurchased"),
+        table.concat(spells, " "),
+        #tbl.list(field(n, "visibleEdges")),
+        f("conditionIDs"),
+        f("isVisible"),
+        f("canPurchaseRank")
+    )
 end
 
 -- How much of a tree reads: node count, positions and spells readable.
 local function treeSummary(configID: unknown, treeID: unknown): Map
     local nodes = get(field(TR, "GetTreeNodes"), treeID)
-    if type(nodes) ~= "table" then return { nodes = "GetTreeNodes: " .. call(field(TR, "GetTreeNodes"), treeID) } end
+    if type(nodes) ~= "table" then
+        return { nodes = "GetTreeNodes: " .. call(field(TR, "GetTreeNodes"), treeID) }
+    end
     local list = tbl.list(nodes)
     local sample: string[] = {}
     local withInfo, withPos, withSpell = 0, 0, 0
@@ -257,19 +326,28 @@ local function treeSummary(configID: unknown, treeID: unknown): Map
         if id and id ~= 0 then
             withInfo = withInfo + 1
             local x = secret.asNumber(field(n, "posX"))
-            if x and x ~= 0 then withPos = withPos + 1 end
+            if x and x ~= 0 then
+                withPos = withPos + 1
+            end
             local entryID = tbl.list(field(n, "entryIDs"))[1]
             local spellID = entryID ~= nil and secret.asNumber(spellOf(configID, entryID))
-            if spellID and spellID ~= 0 then withSpell = withSpell + 1 end
+            if spellID and spellID ~= 0 then
+                withSpell = withSpell + 1
+            end
         end
-        if i <= 3 then sample[#sample + 1] = nodeLine(configID, nodeID) end
+        if i <= 3 then
+            sample[#sample + 1] = nodeLine(configID, nodeID)
+        end
     end
     s.withInfo, s.withPos, s.withSpell = withInfo, withPos, withSpell
     -- a gate ("5 points in …"): the first condition found
     for _, nodeID in ipairs(list) do
         local n = get(field(TR, "GetNodeInfo"), configID, nodeID)
         local cid = tbl.list(field(n, "conditionIDs"))[1]
-        if cid then s.gate = show(cid) .. " " .. call(field(TR, "GetConditionInfo"), configID, cid) break end
+        if cid then
+            s.gate = show(cid) .. " " .. call(field(TR, "GetConditionInfo"), configID, cid)
+            break
+        end
     end
     return s
 end
@@ -280,21 +358,58 @@ end
 
 local function functionList(): string[]
     local names: string[] = {}
-    for _, n in ipairs({ "GetConfigIDsBySpecID", "GetActiveConfigID", "GetLastSelectedSavedConfigID", "CanCreateNewConfig",
-                         "CanChangeTalents", "CanEditTalents", "GetHasStarterBuild", "GetStarterBuildActive",
-                         "ImportLoadout", "ViewLoadout", "InitializeViewLoadout", "RequestNewConfig", "SaveConfig",
-                         "LoadConfig", "DeleteConfig", "RenameConfig", "GetTraitTreeForSpec", "CommitConfig",
-                         "GetLoadoutExportString" }) do
+    for _, n in ipairs({
+        "GetConfigIDsBySpecID",
+        "GetActiveConfigID",
+        "GetLastSelectedSavedConfigID",
+        "CanCreateNewConfig",
+        "CanChangeTalents",
+        "CanEditTalents",
+        "GetHasStarterBuild",
+        "GetStarterBuildActive",
+        "ImportLoadout",
+        "ViewLoadout",
+        "InitializeViewLoadout",
+        "RequestNewConfig",
+        "SaveConfig",
+        "LoadConfig",
+        "DeleteConfig",
+        "RenameConfig",
+        "GetTraitTreeForSpec",
+        "CommitConfig",
+        "GetLoadoutExportString",
+    }) do
         names[#names + 1] = ("C_ClassTalents.%s: %s"):format(n, type(tbl.field(CT, n)))
     end
-    for _, n in ipairs({ "GenerateImportString", "GenerateSearchString", "GetLoadoutSerializationVersion", "GetTreeHash",
-                         "GetConfigsByType", "ResetTree", "ResetTreeByCurrency", "StageConfig", "CanEditConfig",
-                         "TryPurchaseToNode", "PurchaseRank", "RollbackConfig" }) do
+    for _, n in ipairs({
+        "GenerateImportString",
+        "GenerateSearchString",
+        "GetLoadoutSerializationVersion",
+        "GetTreeHash",
+        "GetConfigsByType",
+        "ResetTree",
+        "ResetTreeByCurrency",
+        "StageConfig",
+        "CanEditConfig",
+        "TryPurchaseToNode",
+        "PurchaseRank",
+        "RollbackConfig",
+    }) do
         names[#names + 1] = ("C_Traits.%s: %s"):format(n, type(tbl.field(TR, n)))
     end
-    for _, n in ipairs({ "GetNumTalentGroups", "GetActiveTalentGroup", "GetNumSpecGroups", "GetActiveSpecGroup",
-                         "SetActiveTalentGroup", "LearnDualSpec", "GetTalentResetCost", "GetTalentWipeCost",
-                         "CheckTalentMasterDist", "ConfirmTalentWipe", "GetSpecializationInfoForClassID" }) do
+    for _, n in ipairs({
+        "GetNumTalentGroups",
+        "GetActiveTalentGroup",
+        "GetNumSpecGroups",
+        "GetActiveSpecGroup",
+        "SetActiveTalentGroup",
+        "LearnDualSpec",
+        "GetTalentResetCost",
+        "GetTalentWipeCost",
+        "CheckTalentMasterDist",
+        "ConfirmTalentWipe",
+        "GetSpecializationInfoForClassID",
+    }) do
         names[#names + 1] = ("%s: %s"):format(n, type(tbl.field(_G, n)))
     end
     local SI: unknown = C_SpecializationInfo
@@ -306,8 +421,13 @@ end
 
 local function snapshot(): Map
     local o = out()
-    local now: Map = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
-                  combat = InCombatLockdown(), money = GetMoney() }
+    local now: Map = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        level = UnitLevel("player"),
+        class = select(2, UnitClass("player")),
+        combat = InCombatLockdown(),
+        money = GetMoney(),
+    }
     o.now = now
     now.functions = functionList()
     local specID = mySpecID()
@@ -319,7 +439,10 @@ local function snapshot(): Map
     now.canCreateNew = call(tbl.field(CT, "CanCreateNewConfig"))
     now.canChange = call(tbl.field(CT, "CanChangeTalents"))
     now.canEdit = call(tbl.field(CT, "CanEditTalents"))
-    now.starter = ("has %s, active %s"):format(call(tbl.field(CT, "GetHasStarterBuild")), call(tbl.field(CT, "GetStarterBuildActive")))
+    now.starter = ("has %s, active %s"):format(
+        call(tbl.field(CT, "GetHasStarterBuild")),
+        call(tbl.field(CT, "GetStarterBuildActive"))
+    )
     now.unspent = call(tbl.field(CT, "HasUnspentTalentPoints"))
     now.treeForSpec = specID and call(tbl.field(CT, "GetTraitTreeForSpec"), specID) or "no spec"
     now.serialization = call(tbl.field(TR, "GetLoadoutSerializationVersion"))
@@ -332,8 +455,14 @@ local function snapshot(): Map
     local treeID, info = activeTree(activeID)
     now.activeInfo = show(info)
     if treeID then
-        now.tree = ("%s: %s; hash %s"):format(show(treeID), call(tbl.field(TR, "GetTreeInfo"), activeID, treeID),
-            (function(): string local h = get(tbl.field(TR, "GetTreeHash"), treeID) return type(h) == "table" and (#tbl.list(h) .. " numbers") or show(h) end)())
+        now.tree = ("%s: %s; hash %s"):format(
+            show(treeID),
+            call(tbl.field(TR, "GetTreeInfo"), activeID, treeID),
+            (function(): string
+                local h = get(tbl.field(TR, "GetTreeHash"), treeID)
+                return type(h) == "table" and (#tbl.list(h) .. " numbers") or show(h)
+            end)()
+        )
         now.currency = call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false)
         now.boughtNodes = #entriesOf(activeID, treeID)
     end
@@ -347,8 +476,8 @@ local function snapshot(): Map
     -- the export string, read only
     if activeID then
         local s = get(tbl.field(TR, "GenerateImportString"), activeID)
-        now.exportString = secret.readable(s) and type(s) == "string" and ("%d chars: %s"):format(#s, s:sub(1, 120))
-            or ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
+        now.exportString = secret.readable(s) and type(s) == "string" and ("%d chars: %s"):format(#s, s:sub(1, 120)) or
+            ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
     end
     -- talent groups (dual spec) and respec
     local SI: unknown = C_SpecializationInfo
@@ -425,18 +554,26 @@ local function otherClasses()
     -- no tree from the spec: a short scan around the known warrior tree
     -- (1117) for trees the game answers
     local found = false
-    for _, c in ipairs(list) do if c.treeID ~= "nil" then found = true end end
+    for _, c in ipairs(list) do
+        if c.treeID ~= "nil" then
+            found = true
+        end
+    end
     if not found then
         local scan: string[] = {}
         for treeID = 1100, 1140 do
             local nodes = get(tbl.field(TR, "GetTreeNodes"), treeID)
-            if type(nodes) == "table" and #nodes > 0 then scan[#scan + 1] = ("%d: %d nodes"):format(treeID, #nodes) end
+            if type(nodes) == "table" and #nodes > 0 then
+                scan[#scan + 1] = ("%d: %d nodes"):format(treeID, #nodes)
+            end
         end
         o.treeScan = scan
     end
     -- the view loadout back to your own spec (harmless either way)
     local specID = mySpecID()
-    if specID then get(tbl.field(CT, "InitializeViewLoadout"), specID, UnitLevel("player")) end
+    if specID then
+        get(tbl.field(CT, "InitializeViewLoadout"), specID, UnitLevel("player"))
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -448,9 +585,19 @@ local NAME = "SuuUI probe"
 -- the configs that came since `before` (a list of IDs)
 local function newSince(before: unknown[]): unknown[]
     local had: Map, out_: unknown[] = {}, {}
-    for _, id in ipairs(before) do had[id] = true end
-    for _, id in ipairs(savedConfigs(mySpecID())) do if not had[id] then out_[#out_ + 1] = id end end
-    for _, id in ipairs(createdIDs) do if not had[id] and not tContains(out_, id) then out_[#out_ + 1] = id end end
+    for _, id in ipairs(before) do
+        had[id] = true
+    end
+    for _, id in ipairs(savedConfigs(mySpecID())) do
+        if not had[id] then
+            out_[#out_ + 1] = id
+        end
+    end
+    for _, id in ipairs(createdIDs) do
+        if not had[id] and not tContains(out_, id) then
+            out_[#out_ + 1] = id
+        end
+    end
     return out_
 end
 
@@ -459,17 +606,29 @@ end
 local function leftovers(): unknown[]
     local ids: unknown[], seen: Map = {}, {}
     local function add(id: unknown)
-        if not secret.readable(id) or seen[id] then return end
+        if not secret.readable(id) or seen[id] then
+            return
+        end
         seen[id] = true
         local info = get(tbl.field(TR, "GetConfigInfo"), id)
-        if field(info, "name") == NAME then ids[#ids + 1] = id end
+        if field(info, "name") == NAME then
+            ids[#ids + 1] = id
+        end
     end
-    for _, id in ipairs(savedConfigs(mySpecID())) do add(id) end
+    for _, id in ipairs(savedConfigs(mySpecID())) do
+        add(id)
+    end
     for _, value in pairs(Enum.TraitConfigType) do
         local list = get(tbl.field(TR, "GetConfigsByType"), value)
-        if type(list) == "table" then for _, id in ipairs(list :: unknown[]) do add(id) end end
+        if type(list) == "table" then
+            for _, id in ipairs(list :: unknown[]) do
+                add(id)
+            end
+        end
     end
-    for _, id in ipairs(createdIDs) do add(id) end
+    for _, id in ipairs(createdIDs) do
+        add(id)
+    end
     return ids
 end
 
@@ -483,8 +642,12 @@ local function deleteNew(before: unknown[], label: string)
     after(1, function()
         note(("after delete: saved %s"):format(show(savedConfigs(mySpecID()))))
         step.money = ("%s → %s"):format(show(step.moneyBefore), show(GetMoney()))
-        print(("Talent builds probe: %s done%s. Next step, or /reload to save."):format(label,
-            #step.blocked > 0 and (" (" .. step.blocked[1] .. ")") or ", nothing blocked"))
+        print(
+            ("Talent builds probe: %s done%s. Next step, or /reload to save."):format(
+                label,
+                #step.blocked > 0 and (" (" .. step.blocked[1] .. ")") or ", nothing blocked"
+            )
+        )
     end)
 end
 
@@ -493,10 +656,13 @@ export function export()
     s.moneyBefore = GetMoney()
     local activeID = get(tbl.field(CT, "GetActiveConfigID"))
     local treeID = activeTree(activeID)
-    if not (activeID and treeID) then print("Talent builds probe: no active talent config.") return end
+    if not (activeID and treeID) then
+        print("Talent builds probe: no active talent config.")
+        return
+    end
     local str = get(tbl.field(TR, "GenerateImportString"), activeID)
-    s.string = secret.readable(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200))
-        or ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
+    s.string = secret.readable(str) and type(str) == "string" and ("%d chars: %s"):format(#str, str:sub(1, 200)) or
+        ("GenerateImportString: " .. call(tbl.field(TR, "GenerateImportString"), activeID))
     local entries = entriesOf(activeID, treeID)
     s.entries = #entries
     -- the string as a preview (the view loadout), read only
@@ -504,14 +670,24 @@ export function export()
     local can = get(tbl.field(CT, "CanCreateNewConfig"))
     s.canCreateNew = show(can)
     if not can then
-        print("Talent builds probe: export recorded. The game won't make a new loadout here (CanCreateNewConfig), so no import. /reload to save.")
+        print(
+            "Talent builds probe: export recorded. The game won't make a new loadout here (CanCreateNewConfig), so no import. /reload to save."
+        )
         return
     end
-    print("Talent builds probe: importing that string as a new saved loadout \"" .. NAME .. "\", then deleting it again (your talents stay).")
+    print(
+        "Talent builds probe: importing that string as a new saved loadout \"" ..
+            NAME .. "\", then deleting it again (your talents stay)."
+    )
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
-    note("ImportLoadout(active, entries, name, string): " .. call(tbl.field(CT, "ImportLoadout"), activeID, entries, NAME, secret.readable(str) and str or ""))
-    after(2, function() deleteNew(before, "import") end)
+    note(
+        "ImportLoadout(active, entries, name, string): " ..
+            call(tbl.field(CT, "ImportLoadout"), activeID, entries, NAME, secret.readable(str) and str or "")
+    )
+    after(2, function()
+        deleteNew(before, "import")
+    end)
 end
 
 export function save()
@@ -520,10 +696,15 @@ export function save()
     local can = get(tbl.field(CT, "CanCreateNewConfig"))
     s.canCreateNew = show(can)
     if not can then
-        print("Talent builds probe: the game won't make a new loadout here (CanCreateNewConfig false). /reload to save.")
+        print(
+            "Talent builds probe: the game won't make a new loadout here (CanCreateNewConfig false). /reload to save."
+        )
         return
     end
-    print("Talent builds probe: making a new saved loadout \"" .. NAME .. "\" from your talents, then deleting it again (your talents stay).")
+    print(
+        "Talent builds probe: making a new saved loadout \"" ..
+            NAME .. "\" from your talents, then deleting it again (your talents stay)."
+    )
     local before = savedConfigs(mySpecID())
     wipe(createdIDs)
     note("RequestNewConfig(name): " .. call(tbl.field(CT, "RequestNewConfig"), NAME))
@@ -549,7 +730,12 @@ export function switch()
     local saved = savedConfigs(specID)
     local last = specID and get(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)
     local other
-    for _, id in ipairs(saved) do if id ~= last then other = id break end end
+    for _, id in ipairs(saved) do
+        if id ~= last then
+            other = id
+            break
+        end
+    end
     if #saved < 2 or not other then
         local s = watch("switch")
         s.skipped = ("%d saved loadouts (last selected %s): needs two"):format(#saved, show(last))
@@ -558,8 +744,12 @@ export function switch()
     end
     if not armedSwitch or GetTime() - armedSwitch > 20 then
         armedSwitch = GetTime()
-        print(("Talent builds probe: this loads your saved loadout %s and then %s again: it changes your talents and may cost gold. Run /suu probe talentbuilds switch again within 20 s to do it."):format(
-            show(other), show(last or "your current one")))
+        print(
+            ("Talent builds probe: this loads your saved loadout %s and then %s again: it changes your talents and may cost gold. Run /suu probe talentbuilds switch again within 20 s to do it."):format(
+                show(other),
+                show(last or "your current one")
+            )
+        )
         return
     end
     armedSwitch = nil
@@ -568,13 +758,28 @@ export function switch()
     s.from, s.to = show(last), show(other)
     note(("LoadConfig(%s, true): %s"):format(show(other), call(tbl.field(CT, "LoadConfig"), other, true)))
     after(3, function()
-        note(("active now %s, last selected %s"):format(call(tbl.field(CT, "GetActiveConfigID")), call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)))
-        if last then note(("LoadConfig(%s, true) back: %s"):format(show(last), call(tbl.field(CT, "LoadConfig"), last, true))) end
+        note(
+            ("active now %s, last selected %s"):format(
+                call(tbl.field(CT, "GetActiveConfigID")),
+                call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)
+            )
+        )
+        if last then
+            note(("LoadConfig(%s, true) back: %s"):format(show(last), call(tbl.field(CT, "LoadConfig"), last, true)))
+        end
         after(3, function()
-            note(("active now %s, last selected %s"):format(call(tbl.field(CT, "GetActiveConfigID")), call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)))
+            note(
+                ("active now %s, last selected %s"):format(
+                    call(tbl.field(CT, "GetActiveConfigID")),
+                    call(tbl.field(CT, "GetLastSelectedSavedConfigID"), specID)
+                )
+            )
             s.money = ("%s → %s"):format(show(s.moneyBefore), show(GetMoney()))
-            print(("Talent builds probe: switch done%s. /reload to save."):format(
-                #s.blocked > 0 and (" (" .. s.blocked[1] .. ")") or ", nothing blocked"))
+            print(
+                ("Talent builds probe: switch done%s. /reload to save."):format(
+                    #s.blocked > 0 and (" (" .. s.blocked[1] .. ")") or ", nothing blocked"
+                )
+            )
         end)
     end)
 end
@@ -584,9 +789,19 @@ end
 --------------------------------------------------------------------------------
 
 local TRAINER_EVENTS = {
-    "CONFIRM_TALENT_WIPE", "GOSSIP_SHOW", "GOSSIP_CLOSED", "GOSSIP_CONFIRM", "GOSSIP_CONFIRM_CANCEL",
-    "TRAINER_SHOW", "TRAINER_CLOSED", "PLAYER_MONEY", "CHARACTER_POINTS_CHANGED", "TRAIT_NODE_CHANGED",
-    "TRAIT_TREE_CURRENCY_INFO_UPDATED", "SPELLS_CHANGED", "LEARNED_SPELL_IN_SKILL_LINE",
+    "CONFIRM_TALENT_WIPE",
+    "GOSSIP_SHOW",
+    "GOSSIP_CLOSED",
+    "GOSSIP_CONFIRM",
+    "GOSSIP_CONFIRM_CANCEL",
+    "TRAINER_SHOW",
+    "TRAINER_CLOSED",
+    "PLAYER_MONEY",
+    "CHARACTER_POINTS_CHANGED",
+    "TRAIT_NODE_CHANGED",
+    "TRAIT_TREE_CURRENCY_INFO_UPDATED",
+    "SPELLS_CHANGED",
+    "LEARNED_SPELL_IN_SKILL_LINE",
 }
 local trainerFrame: Frame? = nil
 local trainerUntil: number? = nil
@@ -606,20 +821,31 @@ local function talentState(): string
         end
     end
     return ("%d ranks in %d talents · points %s · money %s · staged %s · wipe cost %s · reset cost %s · master %s"):format(
-        ranks, nodes, activeID and treeID and call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false) or "no config",
-        show(GetMoney()), activeID and call(tbl.field(TR, "ConfigHasStagedChanges"), activeID) or "?",
-        call(field(_G, "GetTalentWipeCost")), call(field(_G, "GetTalentResetCost")), call(field(_G, "CheckTalentMasterDist")))
+        ranks,
+        nodes,
+        activeID and treeID and call(tbl.field(TR, "GetTreeCurrencyInfo"), activeID, treeID, false) or "no config",
+        show(GetMoney()),
+        activeID and call(tbl.field(TR, "ConfigHasStagedChanges"), activeID) or "?",
+        call(field(_G, "GetTalentWipeCost")),
+        call(field(_G, "GetTalentResetCost")),
+        call(field(_G, "CheckTalentMasterDist"))
+    )
 end
 
 local function gossipOptions(): string
     local G: unknown = C_GossipInfo
     local opts = get(tbl.field(G, "GetOptions"))
-    if type(opts) ~= "table" then return call(tbl.field(G, "GetOptions")) end
+    if type(opts) ~= "table" then
+        return call(tbl.field(G, "GetOptions"))
+    end
     local parts: string[] = {}
     for _, o in ipairs(tbl.list(opts)) do
         local status = field(o, "status")
-        parts[#parts + 1] = ("%s:%s%s"):format(show(field(o, "gossipOptionID")), show(field(o, "name")),
-            status and (" status " .. show(status)) or "")
+        parts[#parts + 1] = ("%s:%s%s"):format(
+            show(field(o, "gossipOptionID")),
+            show(field(o, "name")),
+            status and (" status " .. show(status)) or ""
+        )
     end
     return table.concat(parts, " / ")
 end
@@ -631,15 +857,21 @@ export function trainer()
     local timeline: string[] = {}
     s.timeline = timeline
     trainerUntil = GetTime() + 180
-    local function mark(line: string) push(timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120) end
+    local function mark(line: string)
+        push(timeline, ("%.2fs %s"):format(GetTime() - t0, line), 120)
+    end
     local tf = trainerFrame
     if not tf then
         tf = CreateFrame("Frame")
         trainerFrame = tf
         tf:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown, c: unknown)
-            if not trainerUntil or GetTime() > trainerUntil then return end
+            if not trainerUntil or GetTime() > trainerUntil then
+                return
+            end
             local line = ("%s %s %s %s"):format(event, show(a), show(b), show(c))
-            if event == "GOSSIP_SHOW" then line = line .. " · options " .. gossipOptions() end
+            if event == "GOSSIP_SHOW" then
+                line = line .. " · options " .. gossipOptions()
+            end
             mark(line)
             -- the state right after anything that may change it
             if event ~= "GOSSIP_SHOW" and event ~= "GOSSIP_CLOSED" then
@@ -652,7 +884,9 @@ export function trainer()
             end
         end)
     end
-    for _, e in ipairs(TRAINER_EVENTS) do pcall(tf.RegisterEvent, tf, e) end
+    for _, e in ipairs(TRAINER_EVENTS) do
+        pcall(tf.RegisterEvent, tf, e)
+    end
     -- which popup the game shows (its name and text), without touching it
     if not popupHooked and type(StaticPopup_Show) == "function" then
         popupHooked = true
@@ -665,7 +899,9 @@ export function trainer()
     after(180, function()
         local frame = trainerFrame
         if frame then
-            for _, e in ipairs(TRAINER_EVENTS) do pcall(frame.UnregisterEvent, frame, e) end
+            for _, e in ipairs(TRAINER_EVENTS) do
+                pcall(frame.UnregisterEvent, frame, e)
+            end
         end
         trainerUntil = nil
         -- say done first: an error reading the state must not swallow it
@@ -673,24 +909,40 @@ export function trainer()
         local okState, state = pcall(talentState)
         s.after = okState and state or ("error: " .. tostring(state):sub(1, 160))
     end)
-    print("Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload.")
+    print(
+        "Talent builds probe: watching for 3 minutes. Talk to your class trainer, pick the talent reset, and confirm or cancel it yourself; nothing is clicked for you. Then wait for \"done\" and /reload."
+    )
 end
 
 export function command(arg: string?)
-    if refuseCombat() then return end
+    if refuseCombat() then
+        return
+    end
     arg = (arg or ""):lower()
-    if arg == "export" then return export() end
-    if arg == "save" then return save() end
-    if arg == "switch" then return switch() end
-    if arg == "trainer" then return trainer() end
+    if arg == "export" then
+        return export()
+    end
+    if arg == "save" then
+        return save()
+    end
+    if arg == "switch" then
+        return switch()
+    end
+    if arg == "trainer" then
+        return trainer()
+    end
     if arg == "cleanup" then
         local s = watch("cleanup")
         local ids = leftovers()
         s.found = show(ids)
-        for _, id in ipairs(ids) do note(("DeleteConfig(%s): %s"):format(show(id), call(tbl.field(CT, "DeleteConfig"), id))) end
+        for _, id in ipairs(ids) do
+            note(("DeleteConfig(%s): %s"):format(show(id), call(tbl.field(CT, "DeleteConfig"), id)))
+        end
         after(1, function()
             note(("left: %s"):format(show(leftovers())))
-            print(("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME))
+            print(
+                ("Talent builds probe: cleanup deleted %d loadout(s) named \"%s\". /reload to save."):format(#ids, NAME)
+            )
         end)
         return
     end
@@ -702,8 +954,17 @@ export function command(arg: string?)
     local now = snapshotNow or {}
     now.leftovers = show(left)
     if #left > 0 then
-        print(("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(NAME))
+        print(
+            ("Talent builds probe: a loadout named \"%s\" is left from an earlier run; /suu probe talentbuilds cleanup deletes it."):format(
+                NAME
+            )
+        )
     end
-    print(("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
-        show(now.specID), #tbl.list(now.saved), #(o.otherClasses or {})))
+    print(
+        ("Talent builds probe: recorded (spec %s, %d saved loadouts, %d classes). Next: /suu probe talentbuilds export, then save, then switch; /reload to save."):format(
+            show(now.specID),
+            #tbl.list(now.saved),
+            #(o.otherClasses or {})
+        )
+    )
 end

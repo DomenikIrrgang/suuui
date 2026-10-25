@@ -37,22 +37,38 @@ local MODEL_W, MODEL_H, SIZE_REF = 760, 470, 470
 local FEET_K, FEET_BELOW, FEET_DROP = 2.739 * 440 / SIZE_REF, 165, 40
 local CAM_SCALE = math.max(MODEL_W, MODEL_H) / SIZE_REF
 
-local function dot(a: number[], b: number[]): number return a[1] * b[1] + a[2] * b[2] + a[3] * b[3] end
+local function dot(a: number[], b: number[]): number
+    return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+end
 local function norm(x: number, y: number, z: number): number[]?
     local l = math.sqrt(x * x + y * y + z * z)
-    if l == 0 then return nil end
+    if l == 0 then
+        return nil
+    end
     return { x / l, y / l, z / l }
 end
 local function groundBelow(P: number[], T: number[], lift: number): number?
     local f = norm(T[1] - P[1], T[2] - P[2], T[3] - P[3])
-    if not f then return nil end
+    if not f then
+        return nil
+    end
     local right = norm(f[2], -f[1], 0)
-    if not right then return nil end
-    local u = { right[2] * f[3] - right[3] * f[2], right[3] * f[1] - right[1] * f[3], right[1] * f[2] - right[2] * f[1] }
-    if u[3] < 0 then u = { -u[1], -u[2], -u[3] } end
+    if not right then
+        return nil
+    end
+    local u = {
+        right[2] * f[3] - right[3] * f[2],
+        right[3] * f[1] - right[1] * f[3],
+        right[1] * f[2] - right[2] * f[1],
+    }
+    if u[3] < 0 then
+        u = { -u[1], -u[2], -u[3] }
+    end
     local r = { -P[1], -P[2], lift - P[3] }
     local depth = dot(r, f)
-    if depth <= 0 then return nil end
+    if depth <= 0 then
+        return nil
+    end
     return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
 end
 
@@ -61,12 +77,19 @@ export function command()
     local list: { name: string, display: unknown }[] = {}
     for _, id in ipairs(MJ.GetMountIDs() or {}) do
         local name, _, _, _, _, _, _, _, _, hidden = MJ.GetMountInfoByID(id)
-        if name and not hidden then list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) } end
+        if name and not hidden then
+            list[#list + 1] = { name = name, display = (MJ.GetMountInfoExtraByID(id)) }
+        end
     end
-    table.sort(list, function(a, b) return a.name < b.name end)
+    table.sort(list, function(a, b)
+        return a.name < b.name
+    end)
     -- each model's drop by its file, kept across runs
-    local saved = DB.probeData("mountFeet", function(): { [number]: { drop: number, name: string } } return {} end)
-    local p = probePanel or panel(UIParent, { title = "Mount feet", width = 800, height = 640, solid = true }) :: FeetPanel
+    local saved = DB.probeData("mountFeet", function(): { [number]: { drop: number, name: string } }
+        return {}
+    end)
+    local p = probePanel or
+        panel(UIParent, { title = "Mount feet", width = 800, height = 640, solid = true }) :: FeetPanel
     probePanel = p
     p:SetFrameStrata("DIALOG")
     p:SetPoint("CENTER")
@@ -91,8 +114,15 @@ export function command()
         m:ClearAllPoints()
         -- the frame where the stage has it relative to the line, moved by the nudge
         m:SetPoint("TOP", p.body, "TOP", 0, nudge)
-        label:SetValue(("%s  (model %s)  drop %d px   %d of %d mounts"):format(current and current.name or "?",
-            tostring(current and current.file or "?"), FEET_DROP - nudge, i, #list))
+        label:SetValue(
+            ("%s  (model %s)  drop %d px   %d of %d mounts"):format(
+                current and current.name or "?",
+                tostring(current and current.file or "?"),
+                FEET_DROP - nudge,
+                i,
+                #list
+            )
+        )
     end
     local function nextMount()
         i = i + 1
@@ -109,9 +139,13 @@ export function command()
             after(0.1, function()
                 local file = m:GetModelFileID()
                 local c = current
-                if not c then return end -- set before the model loads
+                if not c then
+                    return
+                end -- set before the model loads
                 c.file = file
-                if file and saved[file] then return nextMount() end
+                if file and saved[file] then
+                    return nextMount()
+                end
                 local px, py, pz = m:GetCameraPosition()
                 local tx, ty, tz = m:GetCameraTarget()
                 local P, T = { px, py, pz }, { tx, ty, tz }
@@ -119,8 +153,14 @@ export function command()
                 for _ = 1, 40 do
                     local mid = (lo + hi) / 2
                     local b = groundBelow(P, T, mid)
-                    if not b then break end
-                    if b > FEET_BELOW then lo = mid else hi = mid end
+                    if not b then
+                        break
+                    end
+                    if b > FEET_BELOW then
+                        lo = mid
+                    else
+                        hi = mid
+                    end
                 end
                 pcall(m.SetPosition, m, 0, 0, (lo + hi) / 2)
                 place()
@@ -133,25 +173,60 @@ export function command()
     -- go through p.run, replaced each run (they used to keep the first run's
     -- mount list and state)
     p.run = {
-        up = function() nudge = nudge + 2; place() end,
-        down = function() nudge = nudge - 2; place() end,
-        skip = function() nextMount() end,
+        up = function()
+            nudge = nudge + 2
+            place()
+        end,
+        down = function()
+            nudge = nudge - 2
+            place()
+        end,
+        skip = function()
+            nextMount()
+        end,
         next = function()
-            if current and current.file then saved[current.file] = { drop = FEET_DROP - nudge, name = current.name } end
+            if current and current.file then
+                saved[current.file] = { drop = FEET_DROP - nudge, name = current.name }
+            end
             nextMount()
         end,
     }
     if not p.up then
-        local up = button(p.body, { text = "Up", width = 90, onClick = function() assert(p.run).up() end })
+        local up = button(p.body, {
+            text = "Up",
+            width = 90,
+            onClick = function()
+                assert(p.run).up()
+            end,
+        })
         p.up = up
         up:SetPoint("BOTTOMLEFT")
-        local down = button(p.body, { text = "Down", width = 90, onClick = function() assert(p.run).down() end })
+        local down = button(p.body, {
+            text = "Down",
+            width = 90,
+            onClick = function()
+                assert(p.run).down()
+            end,
+        })
         p.down = down
         down:SetPoint("LEFT", up, "RIGHT", 8, 0)
-        local skip = button(p.body, { text = "Skip", width = 90, onClick = function() assert(p.run).skip() end })
+        local skip = button(p.body, {
+            text = "Skip",
+            width = 90,
+            onClick = function()
+                assert(p.run).skip()
+            end,
+        })
         p.skip = skip
         skip:SetPoint("BOTTOM")
-        local nextButton = button(p.body, { text = "Next", variant = "primary", width = 120, onClick = function() assert(p.run).next() end })
+        local nextButton = button(p.body, {
+            text = "Next",
+            variant = "primary",
+            width = 120,
+            onClick = function()
+                assert(p.run).next()
+            end,
+        })
         p.next = nextButton
         nextButton:SetPoint("BOTTOMRIGHT")
     end

@@ -23,11 +23,17 @@ import * as secret from "wowlua:secret"
 
 local function show(v: unknown, depth: number?): string
     depth = depth or 0
-    if isSecret(v) then return "secret" end
+    if isSecret(v) then
+        return "secret"
+    end
     if type(v) == "table" then
-        if depth > 1 then return "{…}" end
+        if depth > 1 then
+            return "{…}"
+        end
         local parts: string[] = {}
-        for k, x in pairs(v) do parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1) end
+        for k, x in pairs(v) do
+            parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
+        end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
     end
@@ -44,14 +50,22 @@ local function after(event: string, fn: (why: string) -> ())
     local done = false
     local f = CreateFrame("Frame")
     local function go(why: string)
-        if done then return end
+        if done then
+            return
+        end
         done = true
         f:UnregisterAllEvents()
         fn(why)
     end
     pcall(f.RegisterEvent, f, event)
-    f:SetScript("OnEvent", function() timerAfter(0.3, function() go("event") end) end)
-    timerAfter(3, function() go("timeout") end)
+    f:SetScript("OnEvent", function()
+        timerAfter(0.3, function()
+            go("event")
+        end)
+    end)
+    timerAfter(3, function()
+        go("timeout")
+    end)
 end
 
 local function keyInfo(key: ItemKey): ItemKeyInfo?
@@ -63,9 +77,14 @@ local function stepBids()
     pcall(C_AuctionHouse.QueryBids, {}, {})
     after("BIDS_UPDATED", function(why)
         local ok, bids = pcall(C_AuctionHouse.GetBids)
-        line("bids", ("(%s) %s bids"):format(why, ok and type(bids) == "table" and #bids or ("error " .. tostring(bids))))
+        line(
+            "bids",
+            ("(%s) %s bids"):format(why, ok and type(bids) == "table" and #bids or ("error " .. tostring(bids)))
+        )
         if ok and type(bids) == "table" then
-            for i = 1, math.min(2, #bids) do line("bids", show(bids[i])) end
+            for i = 1, math.min(2, #bids) do
+                line("bids", show(bids[i]))
+            end
         end
         DB.probe.ahData = out
         print("AH data probe: done. /reload to save.")
@@ -82,14 +101,30 @@ local function stepCategories()
             local subList = tbl.list(tbl.field(c, "subCategories"))
             local subs = #subList
             local filters: string[] = {}
-            for _, f in ipairs(tbl.list(tbl.field(c, "filters"))) do filters[#filters + 1] = show(f) end
-            line("categories", ("%d %s: %d sub, flags %s, filters %s"):format(i, tostring(tbl.field(c, "name")), subs, show(tbl.field(c, "flags")),
-                table.concat(filters, "; "):sub(1, 200)))
+            for _, f in ipairs(tbl.list(tbl.field(c, "filters"))) do
+                filters[#filters + 1] = show(f)
+            end
+            line(
+                "categories",
+                ("%d %s: %d sub, flags %s, filters %s"):format(
+                    i,
+                    tostring(tbl.field(c, "name")),
+                    subs,
+                    show(tbl.field(c, "flags")),
+                    table.concat(filters, "; "):sub(1, 200)
+                )
+            )
             if i == 1 then
                 for k = 1, math.min(3, subs) do
                     local sub = subList[k]
-                    line("categories", ("  %s: %d sub, filters %d"):format(tostring(tbl.field(sub, "name")),
-                        #tbl.list(tbl.field(sub, "subCategories")), #tbl.list(tbl.field(sub, "filters"))))
+                    line(
+                        "categories",
+                        ("  %s: %d sub, filters %d"):format(
+                            tostring(tbl.field(sub, "name")),
+                            #tbl.list(tbl.field(sub, "subCategories")),
+                            #tbl.list(tbl.field(sub, "filters"))
+                        )
+                    )
                 end
             end
         end
@@ -104,7 +139,11 @@ local function nameOf(key: ItemKey): string
 end
 
 local function stepCommodity(key: ItemKey?)
-    if not key then line("commodity", "no commodity among the results") stepCategories() return end
+    if not key then
+        line("commodity", "no commodity among the results")
+        stepCategories()
+        return
+    end
     pcall(C_AuctionHouse.SendSearchQuery, key, {}, true)
     after("COMMODITY_SEARCH_RESULTS_UPDATED", function(why)
         local n = secret.asNumber(C_AuctionHouse.GetNumCommoditySearchResults(key.itemID)) or 0
@@ -118,7 +157,11 @@ local function stepCommodity(key: ItemKey?)
 end
 
 local function stepItem(key: ItemKey?, commodityKey: ItemKey?)
-    if not key then line("item", "no non-commodity among the results") stepCommodity(commodityKey) return end
+    if not key then
+        line("item", "no non-commodity among the results")
+        stepCommodity(commodityKey)
+        return
+    end
     pcall(C_AuctionHouse.SendSearchQuery, key, {}, true)
     after("ITEM_SEARCH_RESULTS_UPDATED", function(why)
         local n = secret.asNumber(C_AuctionHouse.GetNumItemSearchResults(key)) or 0
@@ -142,7 +185,9 @@ export function command(rest: string?)
     print(("AH data probe: searching %q, then reading; about 15 seconds."):format(text))
     local query = { searchString = text, sorts = {}, filters = {}, itemClassFilters = {} }
     local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, query)
-    if not ok then line("browse", "SendBrowseQuery error " .. tostring(err)) end
+    if not ok then
+        line("browse", "SendBrowseQuery error " .. tostring(err))
+    end
     after("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function(why)
         local okR, found = pcall(C_AuctionHouse.GetBrowseResults)
         local results = okR and found or {}
@@ -151,12 +196,25 @@ export function command(rest: string?)
         for i, r in ipairs(results) do
             local info = keyInfo(r.itemKey)
             if i <= 6 then
-                line("browse", ("%s | key %s | min %s | qty %s | commodity %s | equipment %s | yours %s"):format(
-                    show(info and info.itemName), show(r.itemKey), show(r.minPrice), show(r.totalQuantity), show(info and info.isCommodity),
-                    show(info and info.isEquipment), show(r.containsOwnerItem)))
+                line(
+                    "browse",
+                    ("%s | key %s | min %s | qty %s | commodity %s | equipment %s | yours %s"):format(
+                        show(info and info.itemName),
+                        show(r.itemKey),
+                        show(r.minPrice),
+                        show(r.totalQuantity),
+                        show(info and info.isCommodity),
+                        show(info and info.isEquipment),
+                        show(r.containsOwnerItem)
+                    )
+                )
             end
-            if info and info.isCommodity and not commodityKey then commodityKey = r.itemKey end
-            if info and info.isCommodity == false and not itemKey then itemKey = r.itemKey end
+            if info and info.isCommodity and not commodityKey then
+                commodityKey = r.itemKey
+            end
+            if info and info.isCommodity == false and not itemKey then
+                itemKey = r.itemKey
+            end
         end
         stepItem(itemKey, commodityKey)
     end)

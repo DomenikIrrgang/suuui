@@ -24,21 +24,30 @@ import * as tbl from "wowlua:table"
 type Map = { [unknown]: unknown }
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
         local parts: string[] = {}
         for k, x in pairs(v) do
             local val: string
-            if isSecret(x) then val = "secret"
+            if isSecret(x) then
+                val = "secret"
             elseif type(x) == "table" then
                 local inner: string[] = {}
                 for k2, y in pairs(x) do
                     inner[#inner + 1] = tostring(k2) .. ":" .. (type(y) == "table" and "{…}" or tostring(y))
-                    if #inner > 8 then break end
+                    if #inner > 8 then
+                        break
+                    end
                 end
                 val = "{" .. table.concat(inner, " ") .. "}"
-            else val = tostring(x) end
+            else
+                val = tostring(x)
+            end
             parts[#parts + 1] = tostring(k) .. "=" .. val
         end
         table.sort(parts)
@@ -48,18 +57,30 @@ local function show(v: unknown): string
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 140)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 local function namesIn(t: unknown): string[]
     local out: string[] = {}
-    if type(t) ~= "table" then return { "missing" } end
-    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    if type(t) ~= "table" then
+        return { "missing" }
+    end
+    for k, v in pairs(t) do
+        if type(k) == "string" and type(v) == "function" then
+            out[#out + 1] = k
+        end
+    end
     table.sort(out)
     return out
 end
@@ -82,9 +103,14 @@ export function sample(): Map
         specInfo1 = call(C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo, 1),
         activeTalentGroup = call(GetActiveTalentGroup),
         numTalentGroups = call(_G.GetNumTalentGroups),
-        classSpecs = call(C_SpecializationInfo and C_SpecializationInfo.GetNumSpecializationsForClassID, select(3, UnitClass("player"))),
+        classSpecs = call(
+            C_SpecializationInfo and C_SpecializationInfo.GetNumSpecializationsForClassID,
+            select(3, UnitClass("player"))
+        ),
     }
-    if not configID or isSecret(configID) then return store end
+    if not configID or isSecret(configID) then
+        return store
+    end
     local info = C_Traits.GetConfigInfo(configID)
     store.configInfo = show(info)
     store.canEdit = call(C_Traits.CanEditConfig, configID)
@@ -101,17 +127,32 @@ export function sample(): Map
         local nodeLines: Map[] = {}
         t.nodes = nodeLines
         for i, nodeID in ipairs(nodes) do
-            if i > 120 then break end
+            if i > 120 then
+                break
+            end
             local n = C_Traits.GetNodeInfo(configID, nodeID)
             local line: Map = { id = nodeID }
             if n then
                 line.pos = ("%s,%s"):format(show(n.posX), show(n.posY))
-                line.ranks = ("%s/%s (purchased %s) active=%s"):format(show(n.currentRank), show(n.maxRanks), show(n.ranksPurchased), show(n.activeRank))
+                line.ranks = ("%s/%s (purchased %s) active=%s"):format(
+                    show(n.currentRank),
+                    show(n.maxRanks),
+                    show(n.ranksPurchased),
+                    show(n.activeRank)
+                )
                 line.state = ("available=%s canPurchase=%s meetsEdges=%s visible=%s type=%s flags=%s subTree=%s"):format(
-                    show(n.isAvailable), show(n.canPurchaseRank), show(n.meetsEdgeRequirements), show(n.isVisible),
-                    show(n.type), show(n.flags), show(n.subTreeID))
+                    show(n.isAvailable),
+                    show(n.canPurchaseRank),
+                    show(n.meetsEdgeRequirements),
+                    show(n.isVisible),
+                    show(n.type),
+                    show(n.flags),
+                    show(n.subTreeID)
+                )
                 local edges: string[] = {}
-                for _, e in ipairs(n.visibleEdges or {}) do edges[#edges + 1] = show(e) end
+                for _, e in ipairs(n.visibleEdges or {}) do
+                    edges[#edges + 1] = show(e)
+                end
                 line.edges = table.concat(edges, " ")
                 line.conditions = show(n.conditionIDs)
                 local entries: string[] = {}
@@ -119,8 +160,13 @@ export function sample(): Map
                     local entry = C_Traits.GetEntryInfo(configID, entryID)
                     local def = entry and entry.definitionID and C_Traits.GetDefinitionInfo(entry.definitionID)
                     local spellID = def and def.spellID
-                    entries[#entries + 1] = ("%s def=%s spell=%s name=%s maxRanks=%s"):format(show(entryID), show(entry and entry.definitionID),
-                        show(spellID), show(spellID and C_Spell.GetSpellName(spellID)), show(entry and entry.maxRanks))
+                    entries[#entries + 1] = ("%s def=%s spell=%s name=%s maxRanks=%s"):format(
+                        show(entryID),
+                        show(entry and entry.definitionID),
+                        show(spellID),
+                        show(spellID and C_Spell.GetSpellName(spellID)),
+                        show(entry and entry.maxRanks)
+                    )
                 end
                 line.entries = entries
             end
@@ -130,10 +176,14 @@ export function sample(): Map
         local gates: string[] = {}
         t.gates = gates
         for i, nodeID in ipairs(nodes) do
-            if i > 120 then break end
+            if i > 120 then
+                break
+            end
             local n = C_Traits.GetNodeInfo(configID, nodeID)
             for _, cid in ipairs(n and n.conditionIDs or {}) do
-                if #gates < 20 then table.insert(gates, show(cid) .. " " .. call(C_Traits.GetConditionInfo, configID, cid)) end
+                if #gates < 20 then
+                    table.insert(gates, show(cid) .. " " .. call(C_Traits.GetConditionInfo, configID, cid))
+                end
             end
         end
         table.insert(treeList, t)
@@ -143,7 +193,10 @@ end
 
 -- Plan one point on a node you can take, then undo it: may an addon?
 export function plan()
-    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    if InCombatLockdown() then
+        print("Talent probe: out of combat, please.")
+        return
+    end
     local store = tbl.recordAt(DB.probe, "talents")
     local configID = C_ClassTalents.GetActiveConfigID()
     local r: Map = { at = date("%H:%M:%S") }
@@ -152,7 +205,9 @@ export function plan()
     local f = CreateFrame("Frame")
     f:RegisterEvent("ADDON_ACTION_BLOCKED")
     f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
-    f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown) blocked[#blocked + 1] = e .. " " .. show(a) .. " " .. show(b) end)
+    f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown)
+        blocked[#blocked + 1] = e .. " " .. show(a) .. " " .. show(b)
+    end)
     if not configID then
         r.node = "no active config"
         print("Talent probe: no active talent config.")
@@ -164,9 +219,14 @@ export function plan()
     for _, treeID in ipairs(info and info.treeIDs or {}) do
         for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
             local n = C_Traits.GetNodeInfo(configID, nodeID)
-            if n and n.canPurchaseRank then target = nodeID break end
+            if n and n.canPurchaseRank then
+                target = nodeID
+                break
+            end
         end
-        if target then break end
+        if target then
+            break
+        end
     end
     r.node = show(target)
     if not target then
@@ -183,14 +243,29 @@ export function plan()
     after(0.5, function()
         r.blocked = blocked
         f:UnregisterAllEvents()
-        print(("Talent probe: plan %s, undone %s%s. /reload to save."):format(tostring(r.purchase), tostring(r.rollback),
-            #blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked"))
+        print(
+            ("Talent probe: plan %s, undone %s%s. /reload to save."):format(
+                tostring(r.purchase),
+                tostring(r.rollback),
+                #blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked"
+            )
+        )
     end)
 end
 
 export function command(arg: string?)
-    if arg == "plan" then return plan() end
-    if InCombatLockdown() then print("Talent probe: out of combat, please.") return end
+    if arg == "plan" then
+        return plan()
+    end
+    if InCombatLockdown() then
+        print("Talent probe: out of combat, please.")
+        return
+    end
     local store = sample()
-    print(("Talent probe: config %s, %d trees. /reload to save."):format(tostring(store.activeConfig), #tbl.list(store.trees)))
+    print(
+        ("Talent probe: config %s, %d trees. /reload to save."):format(
+            tostring(store.activeConfig),
+            #tbl.list(store.trees)
+        )
+    )
 end

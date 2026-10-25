@@ -29,7 +29,9 @@ local field = tbl.field
 type ClassRecord = { [string]: unknown }
 
 local function store(): (ClassRecord, string)
-    local all = DB.probeData("classData", function(): { [string]: ClassRecord } return {} end)
+    local all = DB.probeData("classData", function(): { [string]: ClassRecord }
+        return {}
+    end)
     local _, playerClass = UnitClass("player")
     local class = asString(playerClass) or "?"
     local d = all[class] or {}
@@ -41,9 +43,13 @@ local function store(): (ClassRecord, string)
 end
 
 local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
-    if type(fn) ~= "function" then return nil, nil, nil, nil end
+    if type(fn) ~= "function" then
+        return nil, nil, nil, nil
+    end
     local ok, a, b, c, d = pcall(fn, ...)
-    if ok then return a, b, c, d end
+    if ok then
+        return a, b, c, d
+    end
     return nil, nil, nil, nil
 end
 
@@ -51,26 +57,45 @@ end
 -- Talents
 --------------------------------------------------------------------------------
 
-local CT: unknown, TR: unknown, SI: unknown = field(_G, "C_ClassTalents"), field(_G, "C_Traits"), field(_G, "C_SpecializationInfo")
+local CT: unknown, TR: unknown, SI: unknown = field(_G, "C_ClassTalents"),
+    field(_G, "C_Traits"),
+    field(_G, "C_SpecializationInfo")
 
 -- The config to read the trees from: the active one, else the spec's.
 local function configID(): unknown
     local id = call(field(CT, "GetActiveConfigID"))
-    if id then return id end
+    if id then
+        return id
+    end
     local spec = call(field(SI, "GetSpecialization")) or 1
     local specID = call(field(SI, "GetSpecializationInfo"), spec)
     if specID then
         local first = tbl.list((call(field(CT, "GetConfigIDsBySpecID"), specID)))[1]
-        if first then return first end
+        if first then
+            return first
+        end
         local treeID = call(field(CT, "GetTraitTreeForSpec"), specID)
-        if treeID then return (call(field(TR, "GetConfigIDByTreeID"), treeID)) end
+        if treeID then
+            return (call(field(TR, "GetConfigIDByTreeID"), treeID))
+        end
     end
     return nil
 end
 
 -- A talent as the probe saves it (spell, tree position, ranks; described later).
-export type Talent = { spellID: number, name?: string, tree: unknown, node: unknown, subTree?: unknown, x?: unknown, y?: unknown,
-                       maxRanks?: unknown, passive?: unknown, description?: string, cooldown?: number }
+export type Talent = {
+    spellID: number,
+    name?: string,
+    tree: unknown,
+    node: unknown,
+    subTree?: unknown,
+    x?: unknown,
+    y?: unknown,
+    maxRanks?: unknown,
+    passive?: unknown,
+    description?: string,
+    cooldown?: number,
+}
 
 export function readTalents(): number
     local d = store()
@@ -94,9 +119,13 @@ export function readTalents(): number
                     talents[#talents + 1] = {
                         spellID = spellID,
                         name = C_Spell.GetSpellName(spellID),
-                        tree = treeID, node = nodeID,
-                        subTree = field(ni, "subTreeID"), x = field(ni, "posX"), y = field(ni, "posY"),
-                        maxRanks = field(ni, "maxRanks"), passive = (call(field(C_Spell, "IsSpellPassive"), spellID)),
+                        tree = treeID,
+                        node = nodeID,
+                        subTree = field(ni, "subTreeID"),
+                        x = field(ni, "posX"),
+                        y = field(ni, "posY"),
+                        maxRanks = field(ni, "maxRanks"),
+                        passive = (call(field(C_Spell, "IsSpellPassive"), spellID)),
                     }
                 end
             end
@@ -123,7 +152,9 @@ export function describe(talents: Talent[])
                 n = n + 1
             end
             local cd = asNumber((call(field(_G, "GetSpellBaseCooldown"), t.spellID)))
-            if cd and cd > 0 then t.cooldown = cd end
+            if cd and cd > 0 then
+                t.cooldown = cd
+            end
         end
         print(("Class data: %d of %d talent descriptions read. /reload to save."):format(n, #talents))
     end)
@@ -134,9 +165,21 @@ end
 --------------------------------------------------------------------------------
 
 -- A trainer service as the probe saves it.
-type TrainerSpell = { index: number, name: unknown, rank?: unknown, kind: unknown, icon?: unknown, level?: number, link?: unknown,
-                      skill?: unknown, description?: string, cost?: number, spellID?: number, levelFrom?: string,
-                      descriptionFrom?: string }
+type TrainerSpell = {
+    index: number,
+    name: unknown,
+    rank?: unknown,
+    kind: unknown,
+    icon?: unknown,
+    level?: number,
+    link?: unknown,
+    skill?: unknown,
+    description?: string,
+    cost?: number,
+    spellID?: number,
+    levelFrom?: string,
+    descriptionFrom?: string,
+}
 
 -- A trainer function by name (nil on a client without it).
 local function trainerFn(name: string): unknown
@@ -166,24 +209,40 @@ export function readTrainer(): (number, number)
         end
         if name and kind ~= "header" then
             local level = asNumber((call(trainerFn("GetTrainerServiceLevelReq"), i)))
-            if level and level > maxLevel then maxLevel = level end
+            if level and level > maxLevel then
+                maxLevel = level
+            end
             local link = call(trainerFn("GetTrainerServiceItemLink"), i)
             local desc = asString((call(trainerFn("GetTrainerServiceDescription"), i)))
             local cost = asNumber((call(trainerFn("GetTrainerServiceCost"), i)))
-            spells[#spells + 1] = { index = i, name = name, rank = rank ~= "" and rank or nil, kind = kind, icon = icon, level = level, link = link,
+            spells[#spells + 1] = {
+                index = i,
+                name = name,
+                rank = rank ~= "" and rank or nil,
+                kind = kind,
+                icon = icon,
+                level = level,
+                link = link,
                 skill = (call(trainerFn("GetTrainerServiceSkillLine"), i)),
                 description = desc ~= "" and desc or nil,
-                cost = cost }
+                cost = cost,
+            }
         end
     end
     -- C_Trainer, if this client has it (names only, for later)
     local api: string[] = {}
     local trainerApi = field(_G, "C_Trainer")
     if type(trainerApi) == "table" then
-        for k in pairs(trainerApi) do api[#api + 1] = tostring(k) end
+        for k in pairs(trainerApi) do
+            api[#api + 1] = tostring(k)
+        end
     end
     table.sort(api)
-    d.trainer, d.trainerAt, d.trainerMaxLevel, d.trainerAPI, d.trainerError = spells, date("%Y-%m-%d %H:%M"), maxLevel, api, nil
+    d.trainer, d.trainerAt, d.trainerMaxLevel, d.trainerAPI, d.trainerError = spells,
+        date("%Y-%m-%d %H:%M"),
+        maxLevel,
+        api,
+        nil
     -- the game loads a description on demand: the ones still missing once
     -- more, a moment later (a spell new today came back without one); and
     -- each service's spell ID, from its tooltip (a new spell has none in
@@ -194,7 +253,9 @@ export function readTrainer(): (number, number)
             if tooltipOf then
                 local data = call(tooltipOf, sp.index)
                 local id = asNumber(field(data, "id"))
-                if id then sp.spellID = id end
+                if id then
+                    sp.spellID = id
+                end
                 -- a spell you know comes with no level from the trainer: the
                 -- game knows it from the spell
                 local spellID = sp.spellID
@@ -208,7 +269,9 @@ export function readTrainer(): (number, number)
             end
             if not sp.description then
                 local desc = asString((call(trainerFn("GetTrainerServiceDescription"), sp.index)))
-                if desc and desc ~= "" then sp.description = desc end
+                if desc and desc ~= "" then
+                    sp.description = desc
+                end
             end
             -- some have none in the trainer's data (Salvation, new on
             -- 2026-10-16) but show one in their tooltip: its last long line
@@ -227,10 +290,20 @@ export function readTrainer(): (number, number)
         end
         local ids, noLevel = 0, 0
         for _, sp in ipairs(spells) do
-            if sp.spellID then ids = ids + 1 end
-            if (sp.level or 0) == 0 then noLevel = noLevel + 1 end
+            if sp.spellID then
+                ids = ids + 1
+            end
+            if (sp.level or 0) == 0 then
+                noLevel = noLevel + 1
+            end
         end
-        print(("Class data: done, %d of %d with their spell ID, %d without a level. /reload to save."):format(ids, #spells, noLevel))
+        print(
+            ("Class data: done, %d of %d with their spell ID, %d without a level. /reload to save."):format(
+                ids,
+                #spells,
+                noLevel
+            )
+        )
     end)
     d.trainerNPC = UnitName("npc")
     return #spells, maxLevel
@@ -244,7 +317,9 @@ local function allFilters(): boolean
     local set, get = trainerFn("SetTrainerServiceTypeFilter"), trainerFn("GetTrainerServiceTypeFilter")
     if set then
         for _, kind in ipairs({ "available", "unavailable", "used" }) do
-            if get and not call(get, kind) then changed = true end
+            if get and not call(get, kind) then
+                changed = true
+            end
             call(set, kind, true)
         end
     end
@@ -252,20 +327,35 @@ local function allFilters(): boolean
 end
 
 local function onTrainer()
-    if not listening then return end
+    if not listening then
+        return
+    end
     local waited = false
     local function read()
-        if waited then return end
+        if waited then
+            return
+        end
         waited = true
         local count, maxLevel = readTrainer()
-        print(("Class data: the trainer lists %d spells, up to level %d. Reading their IDs and descriptions…"):format(count, maxLevel))
+        print(
+            ("Class data: the trainer lists %d spells, up to level %d. Reading their IDs and descriptions…"):format(
+                count,
+                maxLevel
+            )
+        )
         if count > 0 and maxLevel < 50 then
             print("Class data: this trainer stops early; a city trainer may list the rest.")
         end
     end
     after(0.2, function()
         if allFilters() then
-            events.onGame("TRAINER_UPDATE", function() after(0.2, read) end, OWNER)
+            events.onGame(
+                "TRAINER_UPDATE",
+                function()
+                    after(0.2, read)
+                end,
+                OWNER
+            )
             after(2, read)
         else
             read()

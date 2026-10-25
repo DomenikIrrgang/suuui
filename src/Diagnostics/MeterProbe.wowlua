@@ -31,7 +31,9 @@ type Meter = { samples: Map[], [string]: unknown }
 local field = tbl.field
 
 local function store(): Meter
-    return DB.probeData("meter", function(): Meter return { samples = {} } end)
+    return DB.probeData("meter", function(): Meter
+        return { samples = {} }
+    end)
 end
 local MAX_SAMPLES = 10
 local armed = false
@@ -46,17 +48,32 @@ local OWNER = {}
 -- tables as tables of shapes (lists: the count and the first two items).
 local function shape(v: unknown, depth: number?): unknown
     depth = depth or 0
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
-    if type(v) ~= "table" then return type(v) .. ": " .. tostring(v):sub(1, 60) end
-    if isSecretTable(v) then return "secret table" end
-    if depth >= 4 then return "table (deeper)" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    if type(v) ~= "table" then
+        return type(v) .. ": " .. tostring(v):sub(1, 60)
+    end
+    if isSecretTable(v) then
+        return "secret table"
+    end
+    if depth >= 4 then
+        return "table (deeper)"
+    end
     local out: Map, n = {}, 0
     local count = #v
-    if count > 0 then out["#"] = count end
+    if count > 0 then
+        out["#"] = count
+    end
     for k, x in pairs(v) do
         n = n + 1
-        if n > 40 then out["…"] = "more fields" break end
+        if n > 40 then
+            out["…"] = "more fields"
+            break
+        end
         if not (type(k) == "number" and k > 2) then
             out[tostring(k)] = shape(x, depth + 1)
         end
@@ -65,16 +82,24 @@ local function shape(v: unknown, depth: number?): unknown
 end
 
 local function call(fn: unknown, ...: unknown): unknown
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local ok, a, b = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 160) end
-    if b ~= nil or isSecret(b) then return { shape(a), shape(b) } end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 160)
+    end
+    if b ~= nil or isSecret(b) then
+        return { shape(a), shape(b) }
+    end
     return shape(a)
 end
 
 -- `fn(...)`'s first result as it is (false and the error when it raises).
 local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
-    if type(fn) ~= "function" then return false, "missing" end
+    if type(fn) ~= "function" then
+        return false, "missing"
+    end
     return pcall(fn, ...)
 end
 
@@ -90,7 +115,8 @@ local function eventNames(): string[]
     for _, sys in ipairs(tbl.list(field(_G, "APIDocumentation", "systems"))) do
         for _, e in ipairs(tbl.list(field(sys, "Events"))) do
             local n = field(e, "LiteralName")
-            if type(n) == "string" and (n:find("DAMAGE_METER") or n:find("DEATH_RECAP") or n:find("COMBAT_SESSION")) then
+            if type(n) == "string" and
+                (n:find("DAMAGE_METER") or n:find("DEATH_RECAP") or n:find("COMBAT_SESSION")) then
                 names[#names + 1] = n
             end
         end
@@ -99,18 +125,24 @@ local function eventNames(): string[]
 end
 
 local function watchEvents(): string[]?
-    if eventFrame then return nil end
+    if eventFrame then
+        return nil
+    end
     local f = CreateFrame("Frame")
     eventFrame = f
     local counts: { [string]: number }, payloads: Map = {}, {}
     eventCounts, eventPayloads = counts, payloads
     local registered: string[] = {}
     for _, n in ipairs(eventNames()) do
-        if pcall(f.RegisterEvent, f, n) then registered[#registered + 1] = n end
+        if pcall(f.RegisterEvent, f, n) then
+            registered[#registered + 1] = n
+        end
     end
     f:SetScript("OnEvent", function(_, event: string, ...: unknown)
         counts[event] = (counts[event] or 0) + 1
-        if not payloads[event] then payloads[event] = shape({ ... }) end
+        if not payloads[event] then
+            payloads[event] = shape({ ... })
+        end
     end)
     return registered
 end
@@ -125,7 +157,9 @@ local function globals(): { [string]: string }
                 local ok, ot = attempt(field(v, "GetObjectType"), v)
                 t = ok and ("frame " .. tostring(ot)) or "frame?"
                 local okShown, shown = attempt(field(v, "IsShown"), v)
-                if okShown then t = t .. (shown and ", shown" or ", hidden") end
+                if okShown then
+                    t = t .. (shown and ", shown" or ", hidden")
+                end
             end
             out[k] = t
         end
@@ -137,8 +171,12 @@ type MeterType = { name: string, value: number }
 
 local function meterTypes(): MeterType[]
     local list: MeterType[] = {}
-    for name, value in pairs(Enum.DamageMeterType) do list[#list + 1] = { name = name, value = value } end
-    table.sort(list, function(a: MeterType, b: MeterType): boolean return a.value < b.value end)
+    for name, value in pairs(Enum.DamageMeterType) do
+        list[#list + 1] = { name = name, value = value }
+    end
+    table.sort(list, function(a: MeterType, b: MeterType): boolean
+        return a.value < b.value
+    end)
     return list
 end
 
@@ -148,7 +186,8 @@ export function sample(label: string?): Map
     local current, overall = field(ST, "Current"), field(ST, "Overall")
     local damageDone, deathsType = Enum.DamageMeterType.DamageDone, Enum.DamageMeterType.Deaths
     local s: Map = {
-        at = date("%H:%M:%S"), label = label,
+        at = date("%H:%M:%S"),
+        label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
@@ -161,14 +200,18 @@ export function sample(label: string?): Map
         local duration: { [unknown]: unknown } = {}
         s.duration = duration
         if type(ST) == "table" then
-            for name, v in pairs(ST) do duration[name] = call(field(DM, "GetSessionDurationSeconds"), v) end
+            for name, v in pairs(ST) do
+                duration[name] = call(field(DM, "GetSessionDurationSeconds"), v)
+            end
         end
         -- every meter type of the current and the overall session
         local currentTypes: { [string]: unknown }, overallTypes: { [string]: unknown } = {}, {}
         s.current, s.overall = currentTypes, overallTypes
         local fromType = field(DM, "GetCombatSessionFromType")
         for _, mt in ipairs(meterTypes()) do
-            if current ~= nil then currentTypes[mt.name] = call(fromType, current, mt.value) end
+            if current ~= nil then
+                currentTypes[mt.name] = call(fromType, current, mt.value)
+            end
             if overall ~= nil and (mt.name == "DamageDone" or mt.name == "Deaths") then
                 overallTypes[mt.name] = call(fromType, overall, mt.value)
             end
@@ -177,12 +220,18 @@ export function sample(label: string?): Map
         local sourceFromType = field(DM, "GetCombatSessionSourceFromType")
         local ok, sess = attempt(fromType, current, damageDone)
         local sources = field(sess, "combatSources")
-        local src = ok and type(sess) == "table" and not isSecretTable(sess) and type(sources) == "table"
-            and not isSecretTable(sources) and tbl.list(sources)[1]
+        local src = ok and type(sess) == "table" and not isSecretTable(sess) and type(sources) == "table" and
+            not isSecretTable(sources) and
+            tbl.list(sources)[1]
         if src then
             s.sourceBreakdown = call(sourceFromType, current, damageDone, field(src, "sourceGUID"))
-            s.sourceBreakdownWithCreature = call(sourceFromType, current, damageDone,
-                field(src, "sourceGUID"), field(src, "sourceCreatureID"))
+            s.sourceBreakdownWithCreature = call(
+                sourceFromType,
+                current,
+                damageDone,
+                field(src, "sourceGUID"),
+                field(src, "sourceCreatureID")
+            )
         else
             s.sourceBreakdown = "no first source (" .. (ok and shape(sess) and "session read" or "session error") .. ")"
         end
@@ -204,12 +253,15 @@ export function sample(label: string?): Map
         -- a death recap, if the deaths list names one
         local okD, deaths = attempt(fromType, overall, deathsType)
         local deathSources = field(deaths, "combatSources")
-        local d = okD and type(deaths) == "table" and not isSecretTable(deaths) and type(deathSources) == "table"
-            and not isSecretTable(deathSources) and tbl.list(deathSources)[1]
+        local d = okD and type(deaths) == "table" and not isSecretTable(deaths) and type(deathSources) == "table" and
+            not isSecretTable(deathSources) and
+            tbl.list(deathSources)[1]
         if d then
             for _, fn in ipairs({ "GetRecapEvents", "GetRecapMaxHealth", "GetRecapLink", "HasRecapEvents" }) do
                 local recapFn = field(C_DeathRecap, fn)
-                if recapFn then s["deathRecap." .. fn] = call(recapFn, field(d, "deathRecapID")) end
+                if recapFn then
+                    s["deathRecap." .. fn] = call(recapFn, field(d, "deathRecapID"))
+                end
             end
         end
     end
@@ -217,13 +269,21 @@ export function sample(label: string?): Map
     s.events = counts and tbl.shallowCopy(counts) or nil
     local samples = store().samples
     table.insert(samples, s)
-    while #samples > MAX_SAMPLES do table.remove(samples, 1) end
+    while #samples > MAX_SAMPLES do
+        table.remove(samples, 1)
+    end
     return s
 end
 
 local function onFight()
-    if not armed then return end
-    after(2, function() if armed then sample("2s into the fight") end end)
+    if not armed then
+        return
+    end
+    after(2, function()
+        if armed then
+            sample("2s into the fight")
+        end
+    end)
     after(6, function()
         if armed then
             sample("6s into the fight")
@@ -233,7 +293,13 @@ local function onFight()
 end
 
 local function afterFight()
-    if armed then after(1, function() if armed then sample("after the fight") end end) end
+    if armed then
+        after(1, function()
+            if armed then
+                sample("after the fight")
+            end
+        end)
+    end
 end
 
 export function command(arg: string?)

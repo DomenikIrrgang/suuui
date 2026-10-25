@@ -20,16 +20,14 @@ import after, every from "wowlua:timer"
 
 local isNumber = secret.isNumber
 
-
 local UI = SuuUI.UI
 
 local DEFAULTS = {
     position = { point = "TOPRIGHT", x = -28, y = -300 } :: Position,
-    shows = "off",      -- "instance" | "group" | "always" | "off"
+    shows = "off", -- "instance" | "group" | "always" | "off"
 }
 
 local M: ReadinessModule
-
 
 -- A number that may be read (not secret).
 local PREFIX = "SuuUI"
@@ -39,11 +37,18 @@ local PREFIX = "SuuUI"
 -- Tests replace them here: a replacement in _G would taint Blizzard's own
 -- code that reads it (docs: Docs/test-notes/units-group.md).
 local game = {
-    UnitClass = UnitClass, IsPlayerSpell = IsPlayerSpell,
-    GetSpellInfo = C_Spell.GetSpellInfo, GetSpellCooldown = C_Spell.GetSpellCooldown, GetSpellName = C_Spell.GetSpellName,
-    IsInRaid = IsInRaid, IsInGroup = IsInGroup, IsInInstance = IsInInstance,
-    UnitExists = UnitExists, UnitIsUnit = UnitIsUnit,
-    UnitIsGroupLeader = UnitIsGroupLeader, UnitIsGroupAssistant = UnitIsGroupAssistant,
+    UnitClass = UnitClass,
+    IsPlayerSpell = IsPlayerSpell,
+    GetSpellInfo = C_Spell.GetSpellInfo,
+    GetSpellCooldown = C_Spell.GetSpellCooldown,
+    GetSpellName = C_Spell.GetSpellName,
+    IsInRaid = IsInRaid,
+    IsInGroup = IsInGroup,
+    IsInInstance = IsInInstance,
+    UnitExists = UnitExists,
+    UnitIsUnit = UnitIsUnit,
+    UnitIsGroupLeader = UnitIsGroupLeader,
+    UnitIsGroupAssistant = UnitIsGroupAssistant,
     SendAddonMessage = C_ChatInfo.SendAddonMessage,
 }
 local HEARTBEAT = 30
@@ -77,8 +82,12 @@ end
 --------------------------------------------------------------------------------
 
 local function channel(): ("RAID" | "PARTY")?
-    if secret.flag(game.IsInRaid()) then return "RAID" end
-    if secret.flag(game.IsInGroup()) then return "PARTY" end
+    if secret.flag(game.IsInRaid()) then
+        return "RAID"
+    end
+    if secret.flag(game.IsInGroup()) then
+        return "PARTY"
+    end
     return nil
 end
 
@@ -95,7 +104,9 @@ export type Sent = { at: string, ok: boolean, result: string, text: string }
 -- (seconds rounded).
 local function encodeShare(own: Cooldown[]): string
     local parts: string[] = {}
-    for _, c in ipairs(own) do parts[#parts + 1] = ("%d:%d"):format(c.id, math.floor(c.left + 0.5)) end
+    for _, c in ipairs(own) do
+        parts[#parts + 1] = ("%d:%d"):format(c.id, math.floor(c.left + 0.5))
+    end
     return "RDY\t" .. table.concat(parts, ",")
 end
 
@@ -103,11 +114,15 @@ end
 -- text isn't one.
 local function decodeShare(text: string, now: number): Shared[]?
     local payload = text:match("^RDY\t(.*)$")
-    if not payload then return nil end
+    if not payload then
+        return nil
+    end
     local spells: Shared[] = {}
     for id, left in payload:gmatch("(%d+):(%d+)") do
         local n = tonumber(id)
-        if n then spells[#spells + 1] = { id = n, endsAt = now + (tonumber(left) or 0) } end
+        if n then
+            spells[#spells + 1] = { id = n, endsAt = now + (tonumber(left) or 0) }
+        end
     end
     return spells
 end
@@ -124,7 +139,9 @@ local function roster(): Member[]
         if game.UnitExists(unit) and not secret.flag(game.UnitIsUnit(unit, "player")) then
             -- the whole name, as their messages carry it (Forever's surnames)
             local name = SuuUI.FullName(unit)
-            if not secret.isSecret(name) and name then name = Ambiguate(name, "short") end
+            if not secret.isSecret(name) and name then
+                name = Ambiguate(name, "short")
+            end
             local _, class = game.UnitClass(unit)
             if not secret.isSecret(name) and name then
                 out[#out + 1] = { name = name, class = (not secret.isSecret(class)) and class or nil }
@@ -132,9 +149,13 @@ local function roster(): Member[]
         end
     end
     if secret.flag(game.IsInRaid()) then
-        for i = 1, 40 do add("raid" .. i) end
+        for i = 1, 40 do
+            add("raid" .. i)
+        end
     else
-        for i = 1, 4 do add("party" .. i) end
+        for i = 1, 4 do
+            add("party" .. i)
+        end
     end
     return out
 end
@@ -145,33 +166,55 @@ type Row = ReadinessEntry & { order: number }
 -- The panel's order: ready first, then the soonest, then group order.
 local function rowBefore(a: Row, b: Row): boolean
     local la, lb = a.endsAt or 0, b.endsAt or 0
-    if (la == 0) ~= (lb == 0) then return la == 0 end
-    if la ~= lb then return la < lb end
+    if (la == 0) ~= (lb == 0) then
+        return la == 0
+    end
+    if la ~= lb then
+        return la < lb
+    end
     return a.order < b.order
 end
 
 -- Whether the "shows" setting wants the panel: in a group, in a dungeon
 -- or raid's instance (`kind`: IsInInstance's), or always.
 local function wanted(shows: string, inGroup: boolean, kind: string?): boolean
-    return shows == "always"
-        or (shows == "group" and inGroup)
-        or (shows == "instance" and inGroup and (kind == "party" or kind == "raid"))
+    return shows == "always" or (shows == "group" and inGroup) or
+        (shows == "instance" and inGroup and (kind == "party" or kind == "raid"))
 end
 
 local function canCheck(): boolean
-    return secret.flag(game.IsInGroup()) and (secret.flag(game.UnitIsGroupLeader("player")) or secret.flag(game.UnitIsGroupAssistant("player")))
+    return secret.flag(game.IsInGroup()) and
+        (secret.flag(game.UnitIsGroupLeader("player")) or secret.flag(game.UnitIsGroupAssistant("player")))
 end
 
 local SECTION: SettingsSection = {
-    id = "readiness", label = "Readiness", category = "Insights", order = 40,
-    preview = function(parent: Frame) return M:PreviewView(parent) end,
+    id = "readiness",
+    label = "Readiness",
+    category = "Insights",
+    order = 40,
+    preview = function(parent: Frame)
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Readiness", description = "Between pulls: the big cooldowns of everyone in your group who runs SuuUI, and a Ready check button for the leader or an assistant. Hidden from the pull until the fight ends.", rows = {
-            { key = "shows", label = "Show", control = "segmented", stacked = true,
-              options = { { value = "instance", label = "In a dungeon or raid" }, { value = "group", label = "In any group" },
-                          { value = "always", label = "Always" }, { value = "off", label = "Off" } },
-              description = "Always: solo too, with your own cooldowns (to see it at work)." },
-        } },
+        {
+            title = "Readiness",
+            description = "Between pulls: the big cooldowns of everyone in your group who runs SuuUI, and a Ready check button for the leader or an assistant. Hidden from the pull until the fight ends.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Show",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "instance", label = "In a dungeon or raid" },
+                        { value = "group", label = "In any group" },
+                        { value = "always", label = "Always" },
+                        { value = "off", label = "Off" },
+                    },
+                    description = "Always: solo too, with your own cooldowns (to see it at work).",
+                },
+            },
+        },
     },
 }
 
@@ -200,7 +243,9 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
 
     -- Yours: { { id, left } } (left in seconds, 0 ready), or nil in combat.
     function ReadOwn(): Cooldown[]?
-        if InCombatLockdown() then return nil end
+        if InCombatLockdown() then
+            return nil
+        end
         local out: Cooldown[] = {}
         for _, name in ipairs(MAJOR[playerClass()] or {}) do
             local info = game.GetSpellInfo(name)
@@ -208,7 +253,8 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
             if isNumber(id) and game.IsPlayerSpell(id) then
                 local cd = game.GetSpellCooldown(id)
                 local left = 0
-                if cd and not secret.isSecret(cd) and isNumber(cd.startTime) and isNumber(cd.duration) and cd.duration > 1.5 then
+                if cd and not secret.isSecret(cd) and isNumber(cd.startTime) and isNumber(cd.duration) and
+                    cd.duration > 1.5 then
                     left = math.max(0, cd.startTime + cd.duration - GetTime())
                 end
                 out[#out + 1] = { id = id, left = left }
@@ -219,40 +265,61 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
 
     function Send(text: string)
         local ch = channel()
-        if not ch or InCombatLockdown() then return end
+        if not ch or InCombatLockdown() then
+            return
+        end
         local ok, result = pcall(game.SendAddonMessage, PREFIX, text, ch)
-        self.lastSend = { at = tostring(date("%H:%M:%S")), ok = ok, result = secret.isSecret(result) and "secret" or tostring(result), text = text:sub(1, 40) }
+        self.lastSend = {
+            at = tostring(date("%H:%M:%S")),
+            ok = ok,
+            result = secret.isSecret(result) and "secret" or tostring(result),
+            text = text:sub(1, 40),
+        }
     end
 
     function Share()
         local own = self:ReadOwn()
-        if not own then return end
+        if not own then
+            return
+        end
         self:Send(encodeShare(own))
     end
 
     -- One share soon (a burst of cooldown events makes one message).
     function ShareSoon()
-        if self.shareQueued then return end
+        if self.shareQueued then
+            return
+        end
         self.shareQueued = true
         after(2, function()
             self.shareQueued = nil
-            if self:IsEnabled() then self:Share() end
+            if self:IsEnabled() then
+                self:Share()
+            end
         end)
     end
 
     function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
-        if prefix ~= PREFIX or secret.isSecret(text) or type(text) ~= "string" then return end
-        if secret.isSecret(sender) or type(sender) ~= "string" then return end
+        if prefix ~= PREFIX or secret.isSecret(text) or type(text) ~= "string" then
+            return
+        end
+        if secret.isSecret(sender) or type(sender) ~= "string" then
+            return
+        end
         local who = Ambiguate(sender, "short")
         -- whole names: Forever's characters have surnames (SuuUI.FullName)
-        if who == playerName() then return end
+        if who == playerName() then
+            return
+        end
         if text == "RDYQ" then
             self:ShareSoon()
             return
         end
         local now = GetTime()
         local spells = decodeShare(text, now)
-        if not spells then return end
+        if not spells then
+            return
+        end
         local heard = self.heard or {}
         self.heard = heard
         heard[who] = { at = now, spells = spells }
@@ -264,7 +331,9 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
         local own = self:ReadOwn()
         if own then
             local mine: Shared[] = {}
-            for _, c in ipairs(own) do mine[#mine + 1] = { id = c.id, endsAt = now + c.left } end
+            for _, c in ipairs(own) do
+                mine[#mine + 1] = { id = c.id, endsAt = now + c.left }
+            end
             self.own = mine
         end
         for order, p in ipairs(roster()) do
@@ -273,8 +342,14 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
             local class = p.class
             for _, c in ipairs(spells or {}) do
                 local name = game.GetSpellName(c.id)
-                rows[#rows + 1] = { icon = (C_Spell.GetSpellTexture(c.id)), spell = not secret.isSecret(name) and name or "?", who = p.name,
-                    class = not secret.isSecret(class) and class or nil, endsAt = c.endsAt > now and c.endsAt or nil, order = order }
+                rows[#rows + 1] = {
+                    icon = (C_Spell.GetSpellTexture(c.id)),
+                    spell = not secret.isSecret(name) and name or "?",
+                    who = p.name,
+                    class = not secret.isSecret(class) and class or nil,
+                    endsAt = c.endsAt > now and c.endsAt or nil,
+                    order = order,
+                }
             end
         end
         table.sort(rows, rowBefore)
@@ -285,14 +360,19 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
     -- InCombatLockdown turns true).
     function Update(fighting: boolean?)
         local panel = self.panel
-        if not panel then return end
+        if not panel then
+            return
+        end
         local _, kind = game.IsInInstance()
         local where = wanted(self:Get("shows"), secret.flag(game.IsInGroup()), kind)
-        local shown = where and not self:Get("position").hidden and not InCombatLockdown() and not fighting and not self.encounter
+        local shown = where and not self:Get("position").hidden and not InCombatLockdown() and not fighting and
+            not self.encounter
         if shown then
             local rows = self:Rows()
             local entries: ReadinessEntry[] = {}
-            for i, r in ipairs(rows) do entries[i] = r end
+            for i, r in ipairs(rows) do
+                entries[i] = r
+            end
             panel:SetRows(entries)
             panel:SetActionShown(canCheck())
             shown = #rows > 0 or canCheck()
@@ -308,7 +388,13 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
                 { icon = C_Spell.GetSpellTexture(20484), spell = "Rebirth", who = "Thessaly", class = "DRUID" },
                 { icon = C_Spell.GetSpellTexture(16190), spell = "Mana Tide Totem", who = "Veyra", class = "SHAMAN" },
                 { icon = C_Spell.GetSpellTexture(871), spell = "Shield Wall", who = "Brannoc", class = "WARRIOR" },
-                { icon = C_Spell.GetSpellTexture(29166), spell = "Innervate", who = "Thessaly", class = "DRUID", endsAt = now + 250 },
+                {
+                    icon = C_Spell.GetSpellTexture(29166),
+                    spell = "Innervate",
+                    who = "Thessaly",
+                    class = "DRUID",
+                    endsAt = now + 250,
+                },
             })
             self.preview:SetActionShown(true)
         end
@@ -318,49 +404,97 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         if not self.panel then
-            self.panel = UI.Readiness(SuuUI.Root, { onReadyCheck = function() DoReadyCheck() end })
+            self.panel = UI.Readiness(SuuUI.Root, {
+                onReadyCheck = function()
+                    DoReadyCheck()
+                end,
+            })
             self.panel:SetFrameStrata("MEDIUM")
             self.panel:Hide()
         end
-        self:RegisterMover(self.panel, { key = "position", label = "Readiness", managedShow = true,
-            enabled = function() return self:Get("shows") ~= "off" end })
+        self:RegisterMover(self.panel, {
+            key = "position",
+            label = "Readiness",
+            managedShow = true,
+            enabled = function()
+                return self:Get("shows") ~= "off"
+            end,
+        })
         self:RegisterSettings(SECTION)
         self:RegisterCommand("ready", "Readiness: who shared cooldowns, and the last message sent.", function()
             local names = {}
-            for name, d in pairs(self.heard or {}) do names[#names + 1] = ("%s (%d)"):format(name, #d.spells) end
+            for name, d in pairs(self.heard or {}) do
+                names[#names + 1] = ("%s (%d)"):format(name, #d.spells)
+            end
             self:Print(#names > 0 and ("heard from " .. table.concat(names, ", ")) or "nobody shared yet")
             local s = self.lastSend
-            self:Print(s and ("last sent %s: %s, %s (%s)"):format(s.at, s.ok and "ok" or "error", s.result, s.text) or "nothing sent yet")
+            self:Print(
+                s and ("last sent %s: %s, %s (%s)"):format(s.at, s.ok and "ok" or "error", s.result, s.text) or
+                    "nothing sent yet"
+            )
         end)
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
+        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
+        end
+        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
+            self:OnMessage(...)
+        end)
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
             self:Update()
-            if channel() then self:Send("RDYQ"); self:ShareSoon() end
+            if channel() then
+                self:Send("RDYQ")
+                self:ShareSoon()
+            end
         end)
-        self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:Update() end)
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            self:Update()
+        end)
         self:OnGameEvent("SPELL_UPDATE_COOLDOWN", function()
-            if not InCombatLockdown() and channel() then self:ShareSoon() end
+            if not InCombatLockdown() and channel() then
+                self:ShareSoon()
+            end
         end)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Update(true) end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:Update(true)
+        end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            after(1, function() if self:IsEnabled() then self:Update(); self:ShareSoon() end end)
+            after(1, function()
+                if self:IsEnabled() then
+                    self:Update()
+                    self:ShareSoon()
+                end
+            end)
         end)
-        self:OnGameEvent("ENCOUNTER_START", function() self.encounter = true; self:Update() end)
-        self:OnGameEvent("ENCOUNTER_END", function() self.encounter = nil; self:Update() end)
-        self:Watch("shows", function() self:Update(); SuuUI.EditMode.Refresh() end)
-        self:Watch("position", function() self:Update() end)
+        self:OnGameEvent("ENCOUNTER_START", function()
+            self.encounter = true
+            self:Update()
+        end)
+        self:OnGameEvent("ENCOUNTER_END", function()
+            self.encounter = nil
+            self:Update()
+        end)
+        self:Watch("shows", function()
+            self:Update()
+            SuuUI.EditMode.Refresh()
+        end)
+        self:Watch("position", function()
+            self:Update()
+        end)
         -- a heartbeat: everyone's view stays fresh
         if not self.ticker then
             self.ticker = every(HEARTBEAT, function()
-                if self:IsEnabled() and channel() and not InCombatLockdown() then self:Share() end
+                if self:IsEnabled() and channel() and not InCombatLockdown() then
+                    self:Share()
+                end
             end)
         end
         self:Update()
     end
 
     override function OnDisable()
-        if self.panel then self.panel:Hide() end
+        if self.panel then
+            self.panel:Hide()
+        end
     end
 end
 

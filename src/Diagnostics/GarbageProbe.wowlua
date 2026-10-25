@@ -27,9 +27,13 @@ end
 -- `obj:name(...)` as a job, when `obj` has the method.
 local function bound(obj: unknown, name: string, ...: unknown): (() -> ())?
     local fn = field(obj, name)
-    if type(fn) ~= "function" then return nil end
+    if type(fn) ~= "function" then
+        return nil
+    end
     local args, n = { ... }, select("#", ...)
-    return function() fn(obj, unpack(args, 1, n)) end
+    return function()
+        fn(obj, unpack(args, 1, n))
+    end
 end
 
 -- The action buttons SuuUI made (bars 1-8).
@@ -38,7 +42,9 @@ local function actionButtons(): unknown[]
     for bar = 1, 8 do
         for i = 1, 12 do
             local b = field(_G, "SuuUIActionBar" .. bar .. "Button" .. i)
-            if b then out[#out + 1] = b end
+            if b then
+                out[#out + 1] = b
+            end
         end
     end
     return out
@@ -48,7 +54,9 @@ local function eachMethod(list: unknown[], method: string): () -> ()
     return function()
         for _, b in ipairs(list) do
             local fn = field(b, method)
-            if type(fn) == "function" then fn(b) end
+            if type(fn) == "function" then
+                fn(b)
+            end
         end
     end
 end
@@ -58,15 +66,30 @@ type Job = { name: string, fn: () -> (), unit: string }
 
 local function jobs(): Job[]
     local out: Job[] = {}
-    local function add(name: string, fn: (() -> ())?, unit: string?) if fn then out[#out + 1] = { name = name, fn = fn, unit = unit or "call" } end end
+    local function add(name: string, fn: (() -> ())?, unit: string?)
+        if fn then
+            out[#out + 1] = { name = name, fn = fn, unit = unit or "call" }
+        end
+    end
     local buttons = actionButtons()
     if #buttons > 0 then
-        for _, method in ipairs({ "UpdateCooldown", "UpdateUsable", "UpdateActive", "UpdateArt", "UpdateEmpty", "UpdateCount", "UpdateHotkey", "Update" }) do
+        for _, method in ipairs({
+            "UpdateCooldown",
+            "UpdateUsable",
+            "UpdateActive",
+            "UpdateArt",
+            "UpdateEmpty",
+            "UpdateCount",
+            "UpdateHotkey",
+            "Update",
+        }) do
             add("ActionButton:" .. method, eachMethod(buttons, method), #buttons .. " buttons")
         end
     end
     local stance = tbl.list(field(_G, "SuuUIStanceBar", "buttons"))
-    if #stance > 0 then add("Stance button Update", eachMethod(stance, "Update"), #stance .. " buttons") end
+    if #stance > 0 then
+        add("Stance button Update", eachMethod(stance, "Update"), #stance .. " buttons")
+    end
     local chat = mod("chat")
     add("Chat:Tick", bound(chat, "Tick"))
     add("Chat:UpdateTabs", bound(chat, "UpdateTabs"))
@@ -83,7 +106,9 @@ local function jobs(): Job[]
         add("CooldownTracker:UpdateCooldowns", bound(cdTracker, "UpdateCooldowns", true))
         local editSpec, lists = field(cds, "EditSpec"), field(cds, "Lists")
         if type(editSpec) == "function" and type(lists) == "function" then
-            add("CooldownManager:Lists", function() lists(cds, editSpec(cds)) end)
+            add("CooldownManager:Lists", function()
+                lists(cds, editSpec(cds))
+            end)
         end
     end
     add("Party:UpdateRange", bound(mod("party"), "UpdateRange"))
@@ -98,8 +123,12 @@ local function jobs(): Job[]
         end
     end
     -- the settings: a position (a table, copied) and a number
-    add("Settings.Get (table)", function() settings.get("unitframes", "playerPosition") end)
-    add("Settings.Get (number)", function() settings.get("cooldowns", "essentialSize") end)
+    add("Settings.Get (table)", function()
+        settings.get("unitframes", "playerPosition")
+    end)
+    add("Settings.Get (number)", function()
+        settings.get("cooldowns", "essentialSize")
+    end)
     return out
 end
 
@@ -107,7 +136,11 @@ type Row = { name: string, line: string, kb: number }
 
 export function command()
     local lines: string[] = {}
-    local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S"), inCombat = InCombatLockdown() and true or false, jobs = lines }
+    local out: { [string]: unknown } = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        inCombat = InCombatLockdown() and true or false,
+        jobs = lines,
+    }
     local rows: Row[] = {}
     collectgarbage("collect")
     collectgarbage("stop")
@@ -118,16 +151,27 @@ export function command()
             rows[#rows + 1] = { name = job.name, line = job.name .. ": error " .. tostring(err):sub(1, 120), kb = -1 }
         else
             local before: number = collectgarbage("count")
-            for _ = 1, RUNS do pcall(job.fn) end
+            for _ = 1, RUNS do
+                pcall(job.fn)
+            end
             local per = (collectgarbage("count") - before) / RUNS
-            rows[#rows + 1] = { name = job.name, kb = per,
-                line = ("%s: %.2f KB a call (%s)"):format(job.name, per, job.unit) }
+            rows[#rows + 1] = {
+                name = job.name,
+                kb = per,
+                line = ("%s: %.2f KB a call (%s)"):format(job.name, per, job.unit),
+            }
         end
     end
     collectgarbage("restart")
-    table.sort(rows, function(a: Row, b: Row): boolean return a.kb > b.kb end)
-    for i, r in ipairs(rows) do lines[i] = r.line end
+    table.sort(rows, function(a: Row, b: Row): boolean
+        return a.kb > b.kb
+    end)
+    for i, r in ipairs(rows) do
+        lines[i] = r.line
+    end
     DB.probe.garbage = out
     print(("Garbage probe: %d jobs measured. /reload to save it."):format(#rows))
-    for i = 1, math.min(6, #rows) do print("  " .. rows[i].line) end
+    for i = 1, math.min(6, #rows) do
+        print("  " .. rows[i].line)
+    end
 end

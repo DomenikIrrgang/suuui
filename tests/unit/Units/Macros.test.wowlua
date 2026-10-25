@@ -25,7 +25,9 @@ const COMBAT = "Macros can't be changed in combat"
 local confirmed: ConfirmOptions?
 local function stubConfirm()
     confirmed = nil
-    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions) confirmed = opts end)
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions)
+        confirmed = opts
+    end)
 end
 
 local function confirmOpts(): ConfirmOptions
@@ -34,26 +36,43 @@ end
 
 local function standard()
     mock.setMacros({
-        account = { { name = "Heal", icon = 136243, body = "/cast Lesser Heal\n/say healing" }, { name = "Wave", icon = 135000, body = "/wave" } },
+        account = {
+            { name = "Heal", icon = 136243, body = "/cast Lesser Heal\n/say healing" },
+            { name = "Wave", icon = 135000, body = "/wave" },
+        },
         character = { { name = "Dance", body = "/dance" } },
     })
 end
 
 local function open()
-    if not assert(M.window):IsShown() then M:Toggle() end
+    if not assert(M.window):IsShown() then
+        M:Toggle()
+    end
 end
 
 -- icon lists the game fills in (the engine's are empty)
 local function fakeIcons()
-    mock.fake("GetLooseMacroIcons", function(t: number[]) t[#t + 1] = 1 end)
-    mock.fake("GetMacroIcons", function(t: number[]) for i = 2, 60 do t[#t + 1] = i end end)
-    mock.fake("GetLooseMacroItemIcons", function(t: number[]) t[#t + 1] = 1001 end)
-    mock.fake("GetMacroItemIcons", function(t: number[]) t[#t + 1] = 1002 end)
+    mock.fake("GetLooseMacroIcons", function(t: number[])
+        t[#t + 1] = 1
+    end)
+    mock.fake("GetMacroIcons", function(t: number[])
+        for i = 2, 60 do
+            t[#t + 1] = i
+        end
+    end)
+    mock.fake("GetLooseMacroItemIcons", function(t: number[])
+        t[#t + 1] = 1001
+    end)
+    mock.fake("GetMacroItemIcons", function(t: number[])
+        t[#t + 1] = 1002
+    end)
 end
 
 @beforeEach
 local function reset()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     assert(M.window):Hide()
     M.tab, M.draft, M.chosen = nil, nil, nil
     standard()
@@ -61,7 +80,9 @@ end
 
 @afterEach
 local function tidy()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     M:ClosePicker()
     assert(M.window):Hide()
 end
@@ -83,11 +104,18 @@ local function lists()
     expect(a).toBe(2)
     expect(b).toBe(1)
     -- a gap and a macro without a body
-    mock.fake("GetMacroInfo", function(i: number) if i == 1 then return nil end return "X", 1, nil end)
+    mock.fake("GetMacroInfo", function(i: number)
+        if i == 1 then
+            return nil
+        end
+        return "X", 1, nil
+    end)
     local listed = M:List("general")
     expect(#listed).toBe(1)
     expect(listed[1].body).toBe("")
-    mock.fake("GetNumMacros", function() return nil, nil end)
+    mock.fake("GetNumMacros", function()
+        return nil, nil
+    end)
     expect(#M:List("general")).toBe(0)
     expect(#M:List("character")).toBe(0)
     local x, y = M:Counts()
@@ -125,7 +153,9 @@ end
 
 @test("Refresh: nothing while hidden")
 local function refreshHidden()
-    local list = mock.stub(M, "List", function() return {} end)
+    local list = mock.stub(M, "List", function()
+        return {}
+    end)
     M:Refresh()
     expect(list).never.toHaveBeenCalled()
 end
@@ -252,7 +282,10 @@ local function bodyTyping()
     open()
     local draw = mock.spy()
     local orig = M.DrawState
-    mock.stub(M, "DrawState", function(self: typeof(M)) draw(); orig(self) end)
+    mock.stub(M, "DrawState", function(self: typeof(M))
+        draw()
+        orig(self)
+    end)
     mock.typeText(M.body, "!")
     expect(draw).toHaveBeenCalled()
     expect(M:Dirty()).toBe(true)
@@ -311,7 +344,9 @@ end
 @test("Save: a failed create leaves nothing chosen")
 local function createFails()
     open()
-    mock.fake("CreateMacro", function() error("no room") end)
+    mock.fake("CreateMacro", function()
+        error("no room")
+    end)
     M:New()
     assert(M.nameField):SetValue("X")
     M:Save()
@@ -329,7 +364,9 @@ local function saveEdit()
     expect(name).toBe("Heals")
     expect(body).toBe("/cast Heal")
     -- EditMacro answering nothing: the same index
-    mock.fake("EditMacro", function() return nil end)
+    mock.fake("EditMacro", function()
+        return nil
+    end)
     assert(M.nameField):SetValue("Heals")
     assert(M.body):SetText("/x")
     M:Save()
@@ -360,13 +397,17 @@ end
 @test("a full tab: New says so")
 local function fullTab()
     open()
-    mock.fake("GetNumMacros", function() return 120, 18 end)
+    mock.fake("GetNumMacros", function()
+        return 120, 18
+    end)
     M:DrawState()
     expect(tooltipOf(M.newButton).title).toBe("This tab is full")
     M.tab = "character"
     M:DrawState()
     expect(tooltipOf(M.newButton).title).toBe("This tab is full")
-    mock.fake("GetNumMacros", function() return 1, 1 end)
+    mock.fake("GetNumMacros", function()
+        return 1, 1
+    end)
     M:DrawState()
     expect(assert(M.newButton).tooltip).toBeNil()
 end
@@ -433,9 +474,13 @@ end
 
 @test("SearchIcons: your spells' and bag items' icons by name, once each")
 local function search()
-    mock.fake("C_SpellBook.GetNumSpellBookSkillLines", function() return 2 end)
+    mock.fake("C_SpellBook.GetNumSpellBookSkillLines", function()
+        return 2
+    end)
     mock.fake("C_SpellBook.GetSpellBookSkillLineInfo", function(i: number)
-        if i == 2 then return nil end
+        if i == 2 then
+            return nil
+        end
         return { itemIndexOffset = 0, numSpellBookItems = 4 }
     end)
     local SPELL = Enum.SpellBookItemType.Spell
@@ -445,13 +490,21 @@ local function search()
         { itemType = 99, name = "Fire Flyout", iconID = 12 },
         { itemType = SPELL, name = mock.secret("Fire secret"), iconID = 13 },
     }
-    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number) return spells[slot] end)
-    mock.fake("C_Container.GetContainerNumSlots", function(bag: number) return bag == 0 and 3 or 0 end)
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number)
+        return spells[slot]
+    end)
+    mock.fake("C_Container.GetContainerNumSlots", function(bag: number)
+        return bag == 0 and 3 or 0
+    end)
     mock.fake("C_Container.GetContainerItemInfo", function(_: number, slot: number)
-        if slot == 3 then return nil end
+        if slot == 3 then
+            return nil
+        end
         return { itemID = slot, iconFileID = 20 + slot }
     end)
-    mock.fake("C_Item.GetItemNameByID", function(id: number) return id == 1 and "Firewater" or "Bread" end)
+    mock.fake("C_Item.GetItemNameByID", function(id: number)
+        return id == 1 and "Firewater" or "Bread"
+    end)
     expect(M:SearchIcons("FIRE")).toEqual({ 11, 21 })
     expect(M:SearchIcons("fire", "spells")).toEqual({ 11 })
     expect(M:SearchIcons("fire", "items")).toEqual({ 21 })
@@ -500,7 +553,9 @@ end
 @test("the picker: the kind and the search")
 local function pickerSearch()
     fakeIcons()
-    mock.stub(M, "SearchIcons", function(_: unknown, text: string): number[] return text == "none" and {} or { 5, 6 } end)
+    mock.stub(M, "SearchIcons", function(_: unknown, text: string): number[]
+        return text == "none" and {} or { 5, 6 }
+    end)
     open()
     M:TogglePicker()
     local p = assert(M.picker)
@@ -534,10 +589,16 @@ local function dropZone()
     M:TogglePicker()
     local drop = assert(M.picker).drop
     local cursor: unknown[] = {}
-    mock.fake("GetCursorInfo", function() return cursor[1], cursor[2], cursor[3], cursor[4] end)
+    mock.fake("GetCursorInfo", function()
+        return cursor[1], cursor[2], cursor[3], cursor[4]
+    end)
     local clear = mock.fake("ClearCursor", function() end)
-    mock.fake("C_Spell.GetSpellTexture", function(id: number) return id == 133 and 135812 or nil end)
-    mock.fake("C_Item.GetItemIconByID", function() return 133964 end)
+    mock.fake("C_Spell.GetSpellTexture", function(id: number)
+        return id == 133 and 135812 or nil
+    end)
+    mock.fake("C_Item.GetItemIconByID", function()
+        return 133964
+    end)
     -- nothing on the cursor
     mock.script(drop, "OnReceiveDrag")
     expect(clear).never.toHaveBeenCalled()
@@ -575,7 +636,9 @@ local function pickerButtons()
     for _, child in ipairs({ assert(M.picker):GetChildren() }) do
         if child:IsObjectType("Button") then
             local b = child :: SuuButton
-            if b.label and b.label:GetText() == "Cancel" then mock.click(b) end
+            if b.label and b.label:GetText() == "Cancel" then
+                mock.click(b)
+            end
         end
     end
     expect(M.picker).never.toBeShown()
@@ -609,7 +672,9 @@ local function gameWindow()
     expect(M.window).toBeShown()
     -- off: the game's own
     assert(M.window):Hide()
-    mock.stub(M, "IsEnabled", function() return false end)
+    mock.stub(M, "IsEnabled", function()
+        return false
+    end)
     f:Show()
     expect(M.window).never.toBeShown()
     f:Hide()

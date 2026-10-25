@@ -10,27 +10,56 @@ import expectNoErrors, newParent from "../../helpers"
 -- The world around the module: the group, the spells you know. Replaced
 -- in the module's `game` table, not in _G (a replacement there taints
 -- Blizzard's code that reads it, for the rest of the file).
-type World = { raid?: boolean, group?: boolean, lead?: boolean, kind?: string, members?: { [string]: { name: string?, class: string? } } }
+type World = {
+    raid?: boolean,
+    group?: boolean,
+    lead?: boolean,
+    kind?: string,
+    members?: { [string]: { name: string?, class: string? } },
+}
 
 local SPELLS: { [string]: number } = { Rebirth = 20484, Innervate = 29166, Tranquility = 740 }
-local NAMES: { [number]: string } = { [20484] = "Rebirth", [29166] = "Innervate", [740] = "Tranquility", [871] = "Shield Wall" }
+local NAMES: { [number]: string } = {
+    [20484] = "Rebirth",
+    [29166] = "Innervate",
+    [740] = "Tranquility",
+    [871] = "Shield Wall",
+}
 
 local function inWorld(w: World)
-    mock.stub(game, "IsInRaid", function(): boolean return w.raid == true end)
-    mock.stub(game, "IsInGroup", function(): boolean return w.group == true or w.raid == true end)
-    mock.stub(game, "UnitIsGroupLeader", function(unit: string): boolean return unit == "player" and w.lead == true end)
-    mock.stub(game, "UnitIsGroupAssistant", function(): boolean return false end)
-    mock.stub(game, "IsInInstance", function(): (boolean, string) return w.kind ~= nil and w.kind ~= "none", w.kind or "none" end)
+    mock.stub(game, "IsInRaid", function(): boolean
+        return w.raid == true
+    end)
+    mock.stub(game, "IsInGroup", function(): boolean
+        return w.group == true or w.raid == true
+    end)
+    mock.stub(game, "UnitIsGroupLeader", function(unit: string): boolean
+        return unit == "player" and w.lead == true
+    end)
+    mock.stub(game, "UnitIsGroupAssistant", function(): boolean
+        return false
+    end)
+    mock.stub(game, "IsInInstance", function(): (boolean, string)
+        return w.kind ~= nil and w.kind ~= "none", w.kind or "none"
+    end)
     local members = w.members or {}
-    mock.stub(game, "UnitExists", function(unit: string): boolean return unit == "player" or members[unit] ~= nil end)
-    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean return a == b end)
+    mock.stub(game, "UnitExists", function(unit: string): boolean
+        return unit == "player" or members[unit] ~= nil
+    end)
+    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean
+        return a == b
+    end)
     mock.stub(SuuUI, "FullName", function(unit: string?): unknown
-        if unit == nil or unit == "player" then return "Ayla Dawnfeather" end
+        if unit == nil or unit == "player" then
+            return "Ayla Dawnfeather"
+        end
         local m = members[unit]
         return m and m.name
     end)
     mock.stub(game, "UnitClass", function(unit: string): (string?, string?)
-        if unit == "player" then return "Druid", "DRUID" end
+        if unit == "player" then
+            return "Druid", "DRUID"
+        end
         local m = members[unit]
         return m and m.class, m and m.class
     end)
@@ -42,9 +71,15 @@ local function knowSpells(known: { [number]: boolean }, cooldowns: { [number]: u
         local id = SPELLS[name]
         return id and { spellID = id, name = name }
     end)
-    mock.stub(game, "IsPlayerSpell", function(id: number): boolean return known[id] == true end)
-    mock.stub(game, "GetSpellCooldown", function(id: number): unknown return cooldowns[id] end)
-    mock.stub(game, "GetSpellName", function(id: number): string? return NAMES[id] end)
+    mock.stub(game, "IsPlayerSpell", function(id: number): boolean
+        return known[id] == true
+    end)
+    mock.stub(game, "GetSpellCooldown", function(id: number): unknown
+        return cooldowns[id]
+    end)
+    mock.stub(game, "GetSpellName", function(id: number): string?
+        return NAMES[id]
+    end)
 end
 
 local sent: { [number]: unknown }[] = {}
@@ -68,7 +103,9 @@ end
 local function undo()
     M:Reset("shows")
     M:Reset("position")
-    if mock.player then mock.player:leaveCombat() end
+    if mock.player then
+        mock.player:leaveCombat()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -148,7 +185,7 @@ local function readOwn()
     local now = GetTime()
     knowSpells({ [20484] = true, [29166] = true }, {
         [20484] = { startTime = now - 10, duration = 600 },
-        [29166] = { startTime = now, duration = 1.5 },   -- the global cooldown
+        [29166] = { startTime = now, duration = 1.5 }, -- the global cooldown
     })
     local own = assert(M:ReadOwn())
     expect(#own).toBe(2)
@@ -169,23 +206,31 @@ local function readOwnEdges()
     })
     local own = assert(M:ReadOwn())
     expect(#own).toBe(3)
-    for _, c in ipairs(own) do expect(c.left).toBe(0) end
+    for _, c in ipairs(own) do
+        expect(c.left).toBe(0)
+    end
     -- a spell whose ID is secret is left out
     mock.stub(game, "GetSpellInfo", function(name: string): unknown
         return { spellID = name == "Rebirth" and mock.secret(20484) or SPELLS[name] }
     end)
     expect(#(assert(M:ReadOwn()))).toBe(2)
     -- an unknown spell (no info)
-    mock.stub(game, "GetSpellInfo", function(): unknown return nil end)
+    mock.stub(game, "GetSpellInfo", function(): unknown
+        return nil
+    end)
     expect(#(assert(M:ReadOwn()))).toBe(0)
 end
 
 @test("ReadOwn: a class without big cooldowns, an unknown class, combat")
 local function readOwnNone()
     inWorld({})
-    mock.stub(game, "UnitClass", function(): (string, string) return "Rogue", "ROGUE" end)
+    mock.stub(game, "UnitClass", function(): (string, string)
+        return "Rogue", "ROGUE"
+    end)
     expect(#(assert(M:ReadOwn()))).toBe(0)
-    mock.stub(game, "UnitClass", function(): (string, string) return "Monk", "MONK" end)
+    mock.stub(game, "UnitClass", function(): (string, string)
+        return "Monk", "MONK"
+    end)
     expect(#(assert(M:ReadOwn()))).toBe(0)
     mock.player:enterCombat()
     expect(M:ReadOwn()).toBe(nil)
@@ -223,11 +268,15 @@ end
 @test("Send: what the game answered, an error or a secret")
 local function sendAnswers()
     inWorld({ group = true })
-    mock.stub(game, "SendAddonMessage", function(): unknown error("throttled") end)
+    mock.stub(game, "SendAddonMessage", function(): unknown
+        error("throttled")
+    end)
     M:Send("RDYQ")
     expect(assert(M.lastSend).ok).toBe(false)
     expect(assert(M.lastSend).result).toContain("throttled")
-    mock.stub(game, "SendAddonMessage", function(): unknown return mock.secret(0) end)
+    mock.stub(game, "SendAddonMessage", function(): unknown
+        return mock.secret(0)
+    end)
     M:Send("RDYQ")
     expect(assert(M.lastSend).ok).toBe(true)
     expect(assert(M.lastSend).result).toBe("secret")
@@ -258,7 +307,9 @@ local function shareSoon()
     expect(s).toHaveBeenCalledTimes(1)
     expect(M.shareQueued).toBe(nil)
     -- turned off meanwhile: no share
-    mock.stub(M, "IsEnabled", function(): boolean return false end)
+    mock.stub(M, "IsEnabled", function(): boolean
+        return false
+    end)
     M:ShareSoon()
     mock.advanceTime(2.1)
     expect(s).toHaveBeenCalledTimes(1)
@@ -320,10 +371,13 @@ end
 
 @test("roster: you first, then the party; secret names left out")
 local function partyRoster()
-    inWorld({ group = true, members = {
-        party1 = { name = "Brannoc Stone", class = "WARRIOR" },
-        party2 = { name = "Veyra-Elsewhere", class = "SHAMAN" },
-    } })
+    inWorld({
+        group = true,
+        members = {
+            party1 = { name = "Brannoc Stone", class = "WARRIOR" },
+            party2 = { name = "Veyra-Elsewhere", class = "SHAMAN" },
+        },
+    })
     local r = roster()
     expect(#r).toBe(3)
     expect(r[1].name).toBe("Ayla Dawnfeather")
@@ -333,15 +387,23 @@ local function partyRoster()
     expect(r[2].class).toBe("WARRIOR")
     expect(r[3].name).toBe("Veyra")
     mock.stub(SuuUI, "FullName", function(unit: string?): unknown
-        if unit == "party1" then return mock.secret("Hidden") end
-        if unit == "party2" then return nil end
+        if unit == "party1" then
+            return mock.secret("Hidden")
+        end
+        if unit == "party2" then
+            return nil
+        end
         return "Ayla Dawnfeather"
     end)
     expect(#roster()).toBe(1)
     -- a secret class: kept, without one
-    mock.stub(SuuUI, "FullName", function(unit: string?): unknown return unit == "party1" and "Brannoc" or "Ayla Dawnfeather" end)
+    mock.stub(SuuUI, "FullName", function(unit: string?): unknown
+        return unit == "party1" and "Brannoc" or "Ayla Dawnfeather"
+    end)
     mock.stub(game, "UnitClass", function(unit: string): (unknown, unknown)
-        if unit == "player" then return "Druid", "DRUID" end
+        if unit == "player" then
+            return "Druid", "DRUID"
+        end
         return "Warrior", mock.secret("WARRIOR")
     end)
     local r2 = roster()
@@ -351,11 +413,16 @@ end
 
 @test("roster: a raid's forty tokens, yourself once")
 local function raidRoster()
-    inWorld({ raid = true, members = {
-        raid1 = { name = "Ayla Dawnfeather", class = "DRUID" },
-        raid7 = { name = "Oren", class = "PRIEST" },
-    } })
-    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean return a == b or (a == "raid1" and b == "player") end)
+    inWorld({
+        raid = true,
+        members = {
+            raid1 = { name = "Ayla Dawnfeather", class = "DRUID" },
+            raid7 = { name = "Oren", class = "PRIEST" },
+        },
+    })
+    mock.stub(game, "UnitIsUnit", function(a: string, b: string): boolean
+        return a == b or (a == "raid1" and b == "player")
+    end)
     local r = roster()
     expect(#r).toBe(2)
     expect(r[2].name).toBe("Oren")
@@ -363,10 +430,15 @@ end
 
 @test("Rows: yours and what others shared, ready first")
 local function rows()
-    inWorld({ group = true, members = { party1 = { name = "Brannoc", class = "WARRIOR" }, party2 = { name = "Quiet", class = "MAGE" } } })
+    inWorld({
+        group = true,
+        members = { party1 = { name = "Brannoc", class = "WARRIOR" }, party2 = { name = "Quiet", class = "MAGE" } },
+    })
     local now = GetTime()
     knowSpells({ [20484] = true, [29166] = true }, { [29166] = { startTime = now - 10, duration = 300 } })
-    M.heard = { Brannoc = { at = now, spells = { { id = 871, endsAt = now + 100 }, { id = 99999, endsAt = now - 5 } } } }
+    M.heard = {
+        Brannoc = { at = now, spells = { { id = 871, endsAt = now + 100 }, { id = 99999, endsAt = now - 5 } } },
+    }
     local rows = M:Rows()
     expect(#rows).toBe(4)
     -- ready: yours (group order 1), then Brannoc's past one (order 2)
@@ -390,7 +462,9 @@ end
 -- The panel
 --------------------------------------------------------------------------------
 
-local function panelShown(): boolean return assert(M.panel):IsShown() and true or false end
+local function panelShown(): boolean
+    return assert(M.panel):IsShown() and true or false
+end
 
 @test("Update: off, always, hidden by edit mode, combat, an encounter")
 local function update()
@@ -444,8 +518,12 @@ local function updateGroup()
     inWorld({ group = true, lead = true, kind = "party" })
     M:Update()
     expect(panelShown()).toBe(true)
-    mock.stub(game, "UnitIsGroupLeader", function(): boolean return false end)
-    mock.stub(game, "UnitIsGroupAssistant", function(): boolean return true end)
+    mock.stub(game, "UnitIsGroupLeader", function(): boolean
+        return false
+    end)
+    mock.stub(game, "UnitIsGroupAssistant", function(): boolean
+        return true
+    end)
     M:Update()
     expect(panelShown()).toBe(true)
 end

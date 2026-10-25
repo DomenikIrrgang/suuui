@@ -7,22 +7,27 @@ import SuuUI from "/Core/API"
 import expectNoErrors from "../../helpers"
 import type ConfirmOptions from "/UI/Panel"
 import type SuuButton from "/UI/Controls"
-import internal M, Service, service, learnable, coins, pickAffordable, arrange, trainAllText, yourProfessions,
-    npcTitle, isPetTrainer, canCategorize from "/Units/Trainer"
+import internal M, Service, service, learnable, coins, pickAffordable, arrange, trainAllText, yourProfessions, npcTitle, isPetTrainer, canCategorize from "/Units/Trainer"
 import * as frames from "wowlua:frames"
 
 const T = SuuUI.Tokens
 const PET = Enum.TrainerType.Pet
 
-local function coin(token: keyof typeof(T.color), text: string): string return "|cff" .. T.color[token].hex .. text .. "|r" end
+local function coin(token: keyof typeof(T.color), text: string): string
+    return "|cff" .. T.color[token].hex .. text .. "|r"
+end
 
 -- the game's trainer frame
-local function game(): Frame return assert(frames.find("ClassTrainerFrame")) end
+local function game(): Frame
+    return assert(frames.find("ClassTrainerFrame"))
+end
 
 -- what a button's tooltip says
 local function tipOf(b: SuuButton): string?
     local tip = b.tooltip
-    if type(tip) == "table" then return tip.description end
+    if type(tip) == "table" then
+        return tip.description
+    end
     return nil
 end
 
@@ -35,12 +40,19 @@ type TrainerService = { spell: number, name: string, icon: number, level: number
 local function openTrainer(services: TrainerService[]?): mock.MockUnit
     local npc = mock.spawnUnit({ name = "Bob", level = 30, reaction = "friendly" })
     nextSpell = nextSpell + 10
-    mock.defineTrainer(npc, { greeting = "hi", services = services or {
-        { spell = nextSpell + 1, name = "Charge", icon = 132337, level = 1, rank = "Rank 1", cost = 100 },
-        { spell = nextSpell + 2, name = "Thunder Clap", icon = 136105, level = 1, rank = "Rank 1", cost = 300 },
-        { spell = nextSpell + 3, name = "Rend", icon = 132155, level = 4, rank = "Rank 1", cost = 50 },
-    } })
-    mock.defineGossip(npc, { text = "hello", options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } } })
+    mock.defineTrainer(npc, {
+        greeting = "hi",
+        services = services or
+            {
+                { spell = nextSpell + 1, name = "Charge", icon = 132337, level = 1, rank = "Rank 1", cost = 100 },
+                { spell = nextSpell + 2, name = "Thunder Clap", icon = 136105, level = 1, rank = "Rank 1", cost = 300 },
+                { spell = nextSpell + 3, name = "Rend", icon = 132155, level = 4, rank = "Rank 1", cost = 50 },
+            },
+    })
+    mock.defineGossip(npc, {
+        text = "hello",
+        options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } },
+    })
     npc:setDistance(3)
     mock.player:interact(npc)
     mock.advanceTime(1)
@@ -50,26 +62,61 @@ local function openTrainer(services: TrainerService[]?): mock.MockUnit
 end
 
 -- A service as the window keeps it.
-type ServiceOptions = { name?: string, kind?: string, texture?: number, sub?: string, category?: string, profession?: boolean }
+type ServiceOptions = {
+    name?: string,
+    kind?: string,
+    texture?: number,
+    sub?: string,
+    category?: string,
+    profession?: boolean,
+}
 local function svc(index: number, cost: number, opts: ServiceOptions?): Service
     local o: ServiceOptions = opts or {}
-    return { index = index, name = o.name or ("S" .. index), kind = o.kind or "available", texture = o.texture, sub = o.sub or "",
-             category = o.category, cost = cost, profession = o.profession == true }
+    return {
+        index = index,
+        name = o.name or ("S" .. index),
+        kind = o.kind or "available",
+        texture = o.texture,
+        sub = o.sub or "",
+        category = o.category,
+        cost = cost,
+        profession = o.profession == true,
+    }
 end
 
 -- The game's service list, faked: each { name, kind, texture, level, rank, category, cost, profession, skill, line }.
 -- (an ability it needs: its name, whether you have it)
-type FakeService = { name: string, kind?: string, texture?: number, level?: number, rank?: string, category?: string, cost?: number,
-                     profession?: boolean, skill?: string, skillRank?: number, abilities?: { [number]: string | boolean }[], line?: string }
+type FakeService = {
+    name: string,
+    kind?: string,
+    texture?: number,
+    level?: number,
+    rank?: string,
+    category?: string,
+    cost?: number,
+    profession?: boolean,
+    skill?: string,
+    skillRank?: number,
+    abilities?: { [number]: string | boolean }[],
+    line?: string,
+}
 local function fakeServices(list: FakeService[])
-    mock.fake("GetNumTrainerServices", function() return #list end)
+    mock.fake("GetNumTrainerServices", function()
+        return #list
+    end)
     mock.fake("GetTrainerServiceInfo", function(i: number)
         local s = list[i]
-        if not s then return nil end
+        if not s then
+            return nil
+        end
         return s.name, s.kind, s.texture, s.level, s.rank, s.category
     end)
-    mock.fake("GetTrainerServiceCost", function(i: number) return list[i].cost, list[i].profession end)
-    mock.fake("GetTrainerServiceSkillReq", function(i: number) return list[i].skill, list[i].skillRank end)
+    mock.fake("GetTrainerServiceCost", function(i: number)
+        return list[i].cost, list[i].profession
+    end)
+    mock.fake("GetTrainerServiceSkillReq", function(i: number)
+        return list[i].skill, list[i].skillRank
+    end)
     mock.fake("GetTrainerServiceNumAbilityReq", function(i: number): number
         local abilities = list[i].abilities
         return abilities and #abilities or 0
@@ -78,19 +125,27 @@ local function fakeServices(list: FakeService[])
         local need = assert(list[i].abilities)[k]
         return need[1], need[2]
     end)
-    mock.fake("GetTrainerServiceSkillLine", function(i: number) return list[i] and list[i].line end)
+    mock.fake("GetTrainerServiceSkillLine", function(i: number)
+        return list[i] and list[i].line
+    end)
 end
 
 local function petTrainer(total: number, used: number)
-    mock.fake("C_Trainer.GetTrainerType", function() return PET end)
-    mock.fake("C_PetInfo.GetPetTrainingPoints", function() return total, used end)
+    mock.fake("C_Trainer.GetTrainerType", function()
+        return PET
+    end)
+    mock.fake("C_PetInfo.GetPetTrainingPoints", function()
+        return total, used
+    end)
 end
 
 -- UI.Confirm's options, not shown.
 local confirmed: ConfirmOptions?
 local function stubConfirm()
     confirmed = nil
-    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions) confirmed = opts end)
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions)
+        confirmed = opts
+    end)
 end
 
 local function confirmOpts(): ConfirmOptions
@@ -106,7 +161,9 @@ end
 
 @afterEach
 local function close()
-    if M.open then CloseTrainer() end
+    if M.open then
+        CloseTrainer()
+    end
     M.open = false
     assert(M.window):Hide()
     mock.advanceTime(1)
@@ -120,7 +177,9 @@ end
 local function coinsText()
     expect(coins(0)).toBe(coin("coin-copper", "0c"))
     expect(coins(5)).toBe(coin("coin-copper", "5c"))
-    expect(coins(12005)).toBe(coin("coin-gold", "1g") .. " " .. coin("coin-silver", "20s") .. " " .. coin("coin-copper", "5c"))
+    expect(coins(12005)).toBe(
+        coin("coin-gold", "1g") .. " " .. coin("coin-silver", "20s") .. " " .. coin("coin-copper", "5c")
+    )
     expect(coins(10000)).toBe(coin("coin-gold", "1g"))
     expect(coins(300)).toBe(coin("coin-silver", "3s"))
 end
@@ -141,8 +200,14 @@ end
 
 @test("arrange: the step first, uncategorized, then categories by name; spellbook lines by name and icon")
 local function arrangeServices()
-    local s = { svc(1, 0, { name = "Charge" }), svc(2, 0, { category = "Zeta" }), svc(3, 0, { name = "Rend", texture = 99 }),
-                svc(4, 0, { category = "Alpha" }), svc(5, 0, { name = "Next rank" }), svc(6, 0, { category = "Alpha" }) }
+    local s = {
+        svc(1, 0, { name = "Charge" }),
+        svc(2, 0, { category = "Zeta" }),
+        svc(3, 0, { name = "Rend", texture = 99 }),
+        svc(4, 0, { category = "Alpha" }),
+        svc(5, 0, { name = "Next rank" }),
+        svc(6, 0, { category = "Alpha" }),
+    }
     local list, groups = arrange(s, 5, true, { Charge = "Arms" }, { [99] = "Fury" })
     expect(#list).toBe(1)
     expect(list[1].index).toBe(5)
@@ -165,15 +230,27 @@ local function trainAllTip()
     expect(trainAllText({})).toBe("Nothing you can learn and afford right now.")
     expect(trainAllText({ svc(1, 0, { name = "A" }), svc(2, 0, { name = "B" }) })).toBe("A, B")
     local many: Service[] = {}
-    for i = 1, 8 do many[i] = svc(i, 0, { name = "N" .. i }) end
+    for i = 1, 8 do
+        many[i] = svc(i, 0, { name = "N" .. i })
+    end
     expect(trainAllText(many)).toBe("N1, N2, N3, N4, N5, N6 and 2 more")
 end
 
 @test("service: what a row says, from the game's answers")
 local function serviceInfo()
     fakeServices({
-        { name = "Strike", kind = "unavailable", texture = 1, level = 10, rank = "Rank 2", category = "", cost = 50,
-          skill = "Swords", skillRank = 50, abilities = { { "Strike (Rank 1)", false }, { "Battle Stance", true } } },
+        {
+            name = "Strike",
+            kind = "unavailable",
+            texture = 1,
+            level = 10,
+            rank = "Rank 2",
+            category = "",
+            cost = 50,
+            skill = "Swords",
+            skillRank = 50,
+            abilities = { { "Strike (Rank 1)", false }, { "Battle Stance", true } },
+        },
         { name = "Known", kind = "used", level = 10, rank = "", cost = 0, skill = "Swords" },
         { name = "Plain", kind = nil, level = 1, category = "Arms" },
     })
@@ -190,7 +267,9 @@ local function serviceInfo()
     expect(c.category).toBe("Arms")
     expect(c.cost).toBe(0)
     -- a skill without a rank
-    mock.fake("GetTrainerServiceSkillReq", function() return "Daggers", nil end)
+    mock.fake("GetTrainerServiceSkillReq", function()
+        return "Daggers", nil
+    end)
     expect(assert(service(3)).sub).toBe("Requires Daggers ")
 end
 
@@ -198,7 +277,9 @@ end
 local function servicePet()
     fakeServices({ { name = "Bite", kind = "available", level = 10, cost = 5 } })
     petTrainer(10, 0)
-    mock.fake("UnitLevel", function(unit: string) return unit == "pet" and 20 or 1 end)
+    mock.fake("UnitLevel", function(unit: string)
+        return unit == "pet" and 20 or 1
+    end)
     expect(assert(service(1)).sub).toBe("")
     expect(isPetTrainer()).toBe(true)
     expect(canCategorize()).toBe(false)
@@ -223,14 +304,20 @@ local function learnableCases()
     ok, why = learnable(svc(1, 5))
     expect(why).toBe("Your pet doesn't have the training points.")
     expect((learnable(svc(1, 4)))).toBe(true)
-    mock.fake("C_PetInfo.GetPetTrainingPoints", function() return nil end)
+    mock.fake("C_PetInfo.GetPetTrainingPoints", function()
+        return nil
+    end)
     expect((learnable(svc(1, 1)))).toBe(false)
 end
 
 @test("yourProfessions: the names of your professions")
 local function professionsYouHave()
-    mock.fake("GetProfessions", function() return 3, nil, 7 end)
-    mock.fake("GetProfessionInfo", function(i: number) return i == 3 and "Mining" or nil end)
+    mock.fake("GetProfessions", function()
+        return 3, nil, 7
+    end)
+    mock.fake("GetProfessionInfo", function(i: number)
+        return i == 3 and "Mining" or nil
+    end)
     local mine = yourProfessions()
     expect(mine).toEqual({ Mining = true })
 end
@@ -238,13 +325,17 @@ end
 @test("npcTitle: the tooltip's second line, not a level line nor a secret")
 local function title()
     local line2: unknown = "Warrior Trainer"
-    mock.fake("C_TooltipInfo.GetUnit", function() return { lines = { { leftText = "Bob" }, { leftText = line2 } } } end)
+    mock.fake("C_TooltipInfo.GetUnit", function()
+        return { lines = { { leftText = "Bob" }, { leftText = line2 } } }
+    end)
     expect(npcTitle()).toBe("Warrior Trainer")
     line2 = "Level 30"
     expect(npcTitle()).toBeNil()
     line2 = mock.secret("Secret")
     expect(npcTitle()).toBeNil()
-    mock.fake("C_TooltipInfo.GetUnit", function() return nil end)
+    mock.fake("C_TooltipInfo.GetUnit", function()
+        return nil
+    end)
     expect(npcTitle()).toBeNil()
 end
 
@@ -267,9 +358,13 @@ end
 
 @test("Train: a profession at a profession trainer asks first")
 local function trainProfession()
-    fakeServices({ { name = "Apprentice Mining", kind = "available", cost = 10, profession = true, line = "Mining" },
-                   { name = "Journeyman", kind = "available", cost = 10, profession = true } })
-    mock.fake("IsTradeskillTrainer", function() return true end)
+    fakeServices({
+        { name = "Apprentice Mining", kind = "available", cost = 10, profession = true, line = "Mining" },
+        { name = "Journeyman", kind = "available", cost = 10, profession = true },
+    })
+    mock.fake("IsTradeskillTrainer", function()
+        return true
+    end)
     local buy = mock.fake("BuyTrainerService", function() end)
     stubConfirm()
     M.selected = 1
@@ -298,11 +393,17 @@ local function trainAllList()
         { name = "D", kind = "available", cost = 600 },
         { name = "E", kind = "available", cost = 2000 },
     })
-    mock.fake("GetProfessions", function() return 1 end)
-    mock.fake("GetProfessionInfo", function() return "Mining" end)
+    mock.fake("GetProfessions", function()
+        return 1
+    end)
+    mock.fake("GetProfessionInfo", function()
+        return "Mining"
+    end)
     local list, total = M:TrainAllList()
     local names: string[] = {}
-    for i, e in ipairs(list) do names[i] = e.name end
+    for i, e in ipairs(list) do
+        names[i] = e.name
+    end
     expect(names).toEqual({ "Mining rank", "C", "A" })
     expect(total).toBe(550)
 end
@@ -314,7 +415,9 @@ local function trainAllPet()
     local list, total = M:TrainAllList()
     expect(#list).toBe(1)
     expect(total).toBe(3)
-    mock.fake("C_PetInfo.GetPetTrainingPoints", function() return nil end)
+    mock.fake("C_PetInfo.GetPetTrainingPoints", function()
+        return nil
+    end)
     expect(#M:TrainAllList()).toBe(0)
 end
 
@@ -322,9 +425,13 @@ end
 local function trainAll()
     openTrainer()
     local bought = 0
-    local buy = mock.fake("BuyTrainerService", function() bought = bought + 1 end)
+    local buy = mock.fake("BuyTrainerService", function()
+        bought = bought + 1
+    end)
     mock.stub(M, "TrainAllList", function()
-        if bought >= 2 then return {}, 0 end
+        if bought >= 2 then
+            return {}, 0
+        end
         return { svc(bought + 1, 1) }, 1
     end)
     M:TrainAll()
@@ -344,7 +451,9 @@ end
 local function trainAllCap()
     openTrainer()
     local buy = mock.fake("BuyTrainerService", function() end)
-    mock.stub(M, "TrainAllList", function() return { svc(1, 1) }, 1 end)
+    mock.stub(M, "TrainAllList", function()
+        return { svc(1, 1) }, 1
+    end)
     M:TrainAll()
     mock.advanceTime(30)
     expect(buy).toHaveBeenCalledTimes(60)
@@ -399,7 +508,9 @@ end
 @test("Refresh: nothing while closed")
 local function refreshClosed()
     M.open = false
-    local n = mock.fake("GetNumTrainerServices", function() return 0 end)
+    local n = mock.fake("GetNumTrainerServices", function()
+        return 0
+    end)
     M:Refresh()
     expect(n).never.toHaveBeenCalled()
 end
@@ -474,9 +585,15 @@ end
 @test("categories: headings fold and unfold; spellbook lines from SuuUI's data")
 local function categories()
     mock.stub(SuuUI, "TrainerSpells", function()
-        return { { name = "Charge", school = "Arms", icon = 132337 }, { name = "Other", school = "Fury", icon = 136105 }, { name = "Nameless" } }
+        return {
+            { name = "Charge", school = "Arms", icon = 132337 },
+            { name = "Other", school = "Fury", icon = 136105 },
+            { name = "Nameless" },
+        }
     end)
-    mock.fake("C_Trainer.GetCategorizeTrainerUI", function() return true end)
+    mock.fake("C_Trainer.GetCategorizeTrainerUI", function()
+        return true
+    end)
     openTrainer()
     -- Charge by name, Thunder Clap by icon; Rend uncategorized first
     expect(M.rows[1].name).toHaveText("Rend")
@@ -496,7 +613,9 @@ local function categories()
     mock.hover(h1)
     mock.hover(nil)
     -- fewer headings later: the rest hidden
-    mock.fake("C_Trainer.GetCategorizeTrainerUI", function() return false end)
+    mock.fake("C_Trainer.GetCategorizeTrainerUI", function()
+        return false
+    end)
     M:Refresh()
     expect(h1).never.toBeShown()
     expectNoErrors()
@@ -523,7 +642,9 @@ local function filters()
     expect(set).toHaveBeenCalledWith("available", true)
     expect(set).toHaveBeenCalledWith("unavailable", false)
     expect(set).toHaveBeenCalledWith("used", false)
-    mock.fake("GetTrainerServiceTypeFilter", function(kind: string) return kind == "used" end)
+    mock.fake("GetTrainerServiceTypeFilter", function(kind: string)
+        return kind == "used"
+    end)
     M:Refresh()
     expect(assert(M.filters):GetValue().show).toEqual({ "used" })
 end
@@ -541,20 +662,32 @@ end
 @test("a profession trainer: the rank row, the next rank first")
 local function professionRank()
     openTrainer()
-    mock.fake("GetTrainerTradeskillRankValues", function() return 60, 150 end)
-    mock.fake("GetTrainerServiceStepIndex", function() return 2 end)
-    mock.fake("GetTrainerServiceSkillLine", function(i: number) return i == 2 and "Mining" or nil end)
-    mock.fake("IsTradeskillTrainer", function() return true end)
+    mock.fake("GetTrainerTradeskillRankValues", function()
+        return 60, 150
+    end)
+    mock.fake("GetTrainerServiceStepIndex", function()
+        return 2
+    end)
+    mock.fake("GetTrainerServiceSkillLine", function(i: number)
+        return i == 2 and "Mining" or nil
+    end)
+    mock.fake("IsTradeskillTrainer", function()
+        return true
+    end)
     M:Refresh()
     expect(M.rank).toBeShown()
     expect(assert(M.rank).label).toHaveText("Mining")
     expect(assert(M.rank).n).toHaveText("60 / 150")
     expect(M.rows[1].name).toHaveText("Thunder Clap")
     -- no step: the first service's line, else "Rank"
-    mock.fake("GetTrainerServiceStepIndex", function() return nil end)
+    mock.fake("GetTrainerServiceStepIndex", function()
+        return nil
+    end)
     M:Refresh()
     expect(assert(M.rank).label).toHaveText("Rank")
-    mock.fake("GetTrainerTradeskillRankValues", function() return 0, 0 end)
+    mock.fake("GetTrainerTradeskillRankValues", function()
+        return 0, 0
+    end)
     M:Refresh()
     expect(M.rank).never.toBeShown()
 end
@@ -573,7 +706,9 @@ local function petWindow()
     expect(M.rows[1].money).never.toBeShown()
     expect(M.rows[2].tp).never.toBeShown()
     expect(M.rows[2]:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
-    mock.fake("C_PetInfo.GetPetTrainingPoints", function() return nil end)
+    mock.fake("C_PetInfo.GetPetTrainingPoints", function()
+        return nil
+    end)
     M:Refresh()
     expect(M.points).toHaveText("Training points: 0")
 end
@@ -582,7 +717,9 @@ end
 local function secretName()
     openTrainer()
     local secret = true
-    mock.fake("UnitName", function() return secret and mock.secret("Bob") or "Bob" end)
+    mock.fake("UnitName", function()
+        return secret and mock.secret("Bob") or "Bob"
+    end)
     M:Refresh()
     secret = false
     expect(assert(M.window).title).toHaveText("Trainer")
@@ -627,7 +764,9 @@ end
 local function awayOff()
     openTrainer()
     local f = game()
-    mock.stub(M, "IsEnabled", function() return false end)
+    mock.stub(M, "IsEnabled", function()
+        return false
+    end)
     f:SetAlpha(1)
     f:SetPoint("CENTER")
     mock.advanceTime(0.1)
@@ -638,8 +777,12 @@ end
 @test("/suu trainall explains each service")
 local function explain()
     openTrainer()
-    mock.fake("GetProfessions", function() return 1 end)
-    mock.fake("GetProfessionInfo", function() return "Mining" end)
+    mock.fake("GetProfessions", function()
+        return 1
+    end)
+    mock.fake("GetProfessionInfo", function()
+        return "Mining"
+    end)
     mock.slash("/suu trainall")
     local printed = table.concat(mock.printed(), "\n")
     expect(printed).toContain("3 services; your professions: Mining; money 500")
@@ -651,7 +794,9 @@ end
 @test("ExplainTrainAll: a missing service is skipped")
 local function explainGap()
     fakeServices({ { name = "A", kind = "available", cost = 1 } })
-    mock.fake("GetNumTrainerServices", function() return 2 end)
+    mock.fake("GetNumTrainerServices", function()
+        return 2
+    end)
     M:ExplainTrainAll()
     local printed = table.concat(mock.printed(), "\n")
     expect(printed).toContain("2 services")

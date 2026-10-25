@@ -58,24 +58,45 @@ local LINE = 13 -- a plate's spell line under the bar
 
 -- Per class, interrupt families in order of preference, each with its ranks.
 local INTERRUPTS: { [string]: number[][] } = {
-    ROGUE = { { 1766, 1767, 1768, 1769 } },                              -- Kick
-    WARRIOR = { { 6552, 6554 }, { 72, 1671, 1672 } },                    -- Pummel, then Shield Bash
-    SHAMAN = { { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } },        -- Earth Shock
-    MAGE = { { 2139 } },                                                 -- Counterspell
-    PRIEST = { { 15487 } },                                              -- Silence
-    PALADIN = { { 853, 5588, 5589, 10308 } },                            -- Hammer of Justice
-    DRUID = { { 5211, 6798, 8983 } },                                    -- Bash
-    HUNTER = { { 19503 } },                                              -- Scatter Shot
+    ROGUE = { { 1766, 1767, 1768, 1769 } }, -- Kick
+    WARRIOR = { { 6552, 6554 }, { 72, 1671, 1672 } }, -- Pummel, then Shield Bash
+    SHAMAN = { { 8042, 8044, 8045, 8046, 10412, 10413, 10414 } }, -- Earth Shock
+    MAGE = { { 2139 } }, -- Counterspell
+    PRIEST = { { 15487 } }, -- Silence
+    PALADIN = { { 853, 5588, 5589, 10308 } }, -- Hammer of Justice
+    DRUID = { { 5211, 6798, 8983 } }, -- Bash
+    HUNTER = { { 19503 } }, -- Scatter Shot
 }
 
 -- Each interrupt's own cooldown in seconds, if the client can't tell us
 -- (GetSpellBaseCooldown): vanilla values.
 local BASE_COOLDOWN: { [number]: number } = {
-    [1766] = 10, [1767] = 10, [1768] = 10, [1769] = 10,
-    [6552] = 10, [6554] = 10, [72] = 12, [1671] = 12, [1672] = 12,
-    [8042] = 6, [8044] = 6, [8045] = 6, [8046] = 6, [10412] = 6, [10413] = 6, [10414] = 6,
-    [2139] = 24, [15487] = 45, [853] = 60, [5588] = 60, [5589] = 60, [10308] = 60,
-    [5211] = 60, [6798] = 60, [8983] = 60, [19503] = 30,
+    [1766] = 10,
+    [1767] = 10,
+    [1768] = 10,
+    [1769] = 10,
+    [6552] = 10,
+    [6554] = 10,
+    [72] = 12,
+    [1671] = 12,
+    [1672] = 12,
+    [8042] = 6,
+    [8044] = 6,
+    [8045] = 6,
+    [8046] = 6,
+    [10412] = 6,
+    [10413] = 6,
+    [10414] = 6,
+    [2139] = 24,
+    [15487] = 45,
+    [853] = 60,
+    [5588] = 60,
+    [5589] = 60,
+    [10308] = 60,
+    [5211] = 60,
+    [6798] = 60,
+    [8983] = 60,
+    [19503] = 30,
 }
 
 export type InterruptState = { spell: number?, bars: { [CastBar]: boolean }, usedAt: number?, cooldown: number }
@@ -91,7 +112,9 @@ local function isInterrupt(id: number, class: string?): boolean
     class = class or playerClass()
     for _, family in ipairs(INTERRUPTS[class] or {}) do
         for _, x in ipairs(family) do
-            if x == id then return true end
+            if x == id then
+                return true
+            end
         end
     end
     return false
@@ -120,7 +143,9 @@ end
 -- your own cast, always readable (after a reload, the cooldown's own start,
 -- see Ready). 0 when it is up.
 export function remaining(): number
-    if not interrupt.usedAt then return 0 end
+    if not interrupt.usedAt then
+        return 0
+    end
     return math.max(0, interrupt.usedAt + interrupt.cooldown - GetTime())
 end
 
@@ -129,10 +154,18 @@ end
 -- interrupt's own cooldown is over, that is all it is, and it counts as ready.
 -- What the interrupt's cooldown (C_Spell.GetSpellCooldown's answer) says.
 -- (what it reads of the game's answer; any part may be secret)
-type CooldownRead = { isActive?: boolean | Secret<boolean>, startTime?: number | Secret<number>, duration?: number | Secret<number> }
+type CooldownRead = {
+    isActive?: boolean | Secret<boolean>,
+    startTime?: number | Secret<number>,
+    duration?: number | Secret<number>,
+}
 local function readyFrom(cd: CooldownRead | Secret<CooldownRead> | nil): boolean?
-    if not cd or secret.isSecret(cd) or secret.isSecret(cd.isActive) then return nil end
-    if not cd.isActive then return true end
+    if not cd or secret.isSecret(cd) or secret.isSecret(cd.isActive) then
+        return nil
+    end
+    if not cd.isActive then
+        return true
+    end
     if not interrupt.usedAt then
         -- used before a reload: SuuUI never saw the cast, so the cooldown's
         -- own start and length stand in, when readable and longer than a
@@ -146,24 +179,50 @@ local function readyFrom(cd: CooldownRead | Secret<CooldownRead> | nil): boolean
 end
 
 export function ready(): boolean?
-    if not interrupt.spell then return nil end
+    if not interrupt.spell then
+        return nil
+    end
     return readyFrom(C_Spell.GetSpellCooldown(interrupt.spell))
 end
 
-events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
-    if secret.isSecret(spellID) or not spellID or not isInterrupt(spellID) then return end
-    local ms = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
-    interrupt.cooldown = (not secret.isSecret(ms) and ms and ms > 0) and ms / 1000 or BASE_COOLDOWN[spellID] or 0
-    interrupt.usedAt = GetTime()
-    for bar in pairs(interrupt.bars) do bar:UpdateKick() end
-end, "Interrupt")
+events.onUnit(
+    "UNIT_SPELLCAST_SUCCEEDED",
+    "player",
+    function(_, _, _, spellID)
+        if secret.isSecret(spellID) or not spellID or not isInterrupt(spellID) then
+            return
+        end
+        local ms = GetSpellBaseCooldown and GetSpellBaseCooldown(spellID)
+        interrupt.cooldown = (not secret.isSecret(ms) and ms and ms > 0) and ms / 1000 or BASE_COOLDOWN[spellID] or 0
+        interrupt.usedAt = GetTime()
+        for bar in pairs(interrupt.bars) do
+            bar:UpdateKick()
+        end
+    end,
+    "Interrupt"
+)
 
 local function refreshKicks()
-    for bar in pairs(interrupt.bars) do bar:UpdateKick() end
+    for bar in pairs(interrupt.bars) do
+        bar:UpdateKick()
+    end
 end
 
-events.onGame("SPELLS_CHANGED", function() find(); refreshKicks() end, "Interrupt")
-events.onGame("PLAYER_LOGIN", function() find() end, "Interrupt")
+events.onGame(
+    "SPELLS_CHANGED",
+    function()
+        find()
+        refreshKicks()
+    end,
+    "Interrupt"
+)
+events.onGame(
+    "PLAYER_LOGIN",
+    function()
+        find()
+    end,
+    "Interrupt"
+)
 events.onGame("SPELL_UPDATE_COOLDOWN", refreshKicks, "Interrupt")
 
 --------------------------------------------------------------------------------
@@ -205,10 +264,16 @@ export type TargetIsYou = (boolean | Secret<boolean>)?
 
 local function spellTarget(unit: string, A: TargetApi = _G :: TargetApi): (Target, TargetClass, TargetIsYou)
     local shows, nameOf = A.UnitShouldDisplaySpellTargetName, A.UnitSpellTargetName
-    if not (shows and nameOf) then return nil, nil, nil end
-    if not shows(unit) then return nil, nil, nil end
+    if not (shows and nameOf) then
+        return nil, nil, nil
+    end
+    if not shows(unit) then
+        return nil, nil, nil
+    end
     local name = nameOf(unit)
-    if type(name) == "nil" then return nil, nil, nil end
+    if type(name) == "nil" then
+        return nil, nil, nil
+    end
     local classOf, isYou = A.UnitSpellTargetClass, A.PlayerIsSpellTarget
     local class = classOf and classOf(unit)
     local you = isYou and isYou(unit)
@@ -217,7 +282,9 @@ end
 
 -- A class's colour object (the class may be secret), or nil.
 local function classColor(class: TargetClass): ColorMixin?
-    if type(class) == "nil" or not C_ClassColor then return nil end
+    if type(class) == "nil" or not C_ClassColor then
+        return nil
+    end
     local ok, c = pcall(C_ClassColor.GetClassColor, class)
     return ok and c or nil
 end
@@ -225,10 +292,18 @@ end
 -- "you" shown or not by the game's answer, the line it stands in for the
 -- other way round
 local function showYou(you: TargetIsYou, badge: Region, line: Region, youLine: Region?)
-    if type(you) == "nil" then you = false end
-    if not pcall(badge.SetAlphaFromBoolean, badge, you, 1, 0) then badge:SetAlpha(0) end
-    if youLine then pcall(youLine.SetAlphaFromBoolean, youLine, you, 1, 0) end
-    if not pcall(line.SetAlphaFromBoolean, line, you, 0, 1) then line:SetAlpha(1) end
+    if type(you) == "nil" then
+        you = false
+    end
+    if not pcall(badge.SetAlphaFromBoolean, badge, you, 1, 0) then
+        badge:SetAlpha(0)
+    end
+    if youLine then
+        pcall(youLine.SetAlphaFromBoolean, youLine, you, 1, 0)
+    end
+    if not pcall(line.SetAlphaFromBoolean, line, you, 0, 1) then
+        line:SetAlpha(1)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -241,13 +316,22 @@ end
 
 local START: string[] = { "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_DELAYED" }
 local CHANNEL: string[] = { "UNIT_SPELLCAST_CHANNEL_START", "UNIT_SPELLCAST_CHANNEL_UPDATE" }
-local STOP: string[] = { "UNIT_SPELLCAST_STOP", "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_CHANNEL_STOP" }
+local STOP: string[] = {
+    "UNIT_SPELLCAST_STOP",
+    "UNIT_SPELLCAST_FAILED",
+    "UNIT_SPELLCAST_INTERRUPTED",
+    "UNIT_SPELLCAST_CHANNEL_STOP",
+}
 
 local function onUnit(self: CastBar, event: string, fn: events.Listener)
     local unit = self.unit
-    if not unit then return end
+    if not unit then
+        return
+    end
     local ok = pcall(events.onUnit, event, unit, fn, self)
-    if not ok then debug("CastBar: no event", event) end
+    if not ok then
+        debug("CastBar: no event", event)
+    end
 end
 
 -- A plate's target line: "› name", or the "you" badge in the name's place.
@@ -498,10 +582,14 @@ export class CastBar extends Frame
             self.kick = k
         end
 
-        self:SetScript("OnUpdate", function() self:Tick() end)
+        self:SetScript("OnUpdate", function()
+            self:Tick()
+        end)
         self.pad, self.h, self.totalW = pad, h, draw.size(opts.width or 300)
         -- off a plate the target goes after the spell name, only when asked for
-        if not plate then self.targetShown = opts.target == true end
+        if not plate then
+            self.targetShown = opts.target == true
+        end
         self.iconShown = self.icon ~= nil
         self.kickShown = self.kick ~= nil
         extend.add(extend.Kind.CastBar, self, { unit = unit, name = self:GetName() })
@@ -511,8 +599,12 @@ export class CastBar extends Frame
     -- to the room the time and the interrupt leave.
     function Arrange()
         local x = (self.icon and self.iconShown) and self.h or 0
-        if self.icon then self.icon:SetShown(self.iconShown) end
-        if self.iconEdge then self.iconEdge:SetShown(self.iconShown) end
+        if self.icon then
+            self.icon:SetShown(self.iconShown)
+        end
+        if self.iconEdge then
+            self.iconEdge:SetShown(self.iconShown)
+        end
         if not self.plate then
             self.bar:ClearAllPoints()
             self.bar:SetPoint("TOPLEFT", x, 0)
@@ -521,7 +613,9 @@ export class CastBar extends Frame
         local reserve = 40 + ((self.kick and self.kickShown) and 30 or 0)
         self.spell:SetWidth(self.totalW - x - self.pad * 2 - (self.lockW or 0) - reserve)
         local target = self.target
-        if target then target.name:SetWidth(self.totalW - (self.lockW or 0) - 12) end
+        if target then
+            target.name:SetWidth(self.totalW - (self.lockW or 0) - 12)
+        end
     end
 
     -- The whole bar's width, live: the spell name keeps the room the time and
@@ -539,36 +633,52 @@ export class CastBar extends Frame
         if self.plate then
             self.bar:SetHeight(h)
             self:SetHeight(h + S["space-1"] + LINE)
-            if self.lock then self.lock:SetSize(math.max(8, h), math.max(8, h)) end
+            if self.lock then
+                self.lock:SetSize(math.max(8, h), math.max(8, h))
+            end
             return
         end
         self:SetHeight(h)
         local icon, kick = self.icon, self.kick
-        if icon then icon:SetSize(h, h) end
-        if kick then kick:SetHeight(h) end
+        if icon then
+            icon:SetSize(h, h)
+        end
+        if kick then
+            kick:SetHeight(h)
+        end
         self:Arrange()
     end
 
     function SetNeutral(on: unknown)
         self.neutral = on ~= nil and on ~= false
-        if self.arcane then self.arcane:SetAlpha(self.neutral and 0 or 1) end
-        if self.lockHost then self.lockHost:SetAlpha(0) end
+        if self.arcane then
+            self.arcane:SetAlpha(self.neutral and 0 or 1)
+        end
+        if self.lockHost then
+            self.lockHost:SetAlpha(0)
+        end
         self:UpdateKick()
     end
 
     function SetTargetShown(on: unknown)
         self.targetShown = on ~= nil and on ~= false
         local target = self.target
-        if target and not self.targetShown then target:Hide() end
+        if target and not self.targetShown then
+            target:Hide()
+        end
         -- changed mid-cast: the target shows (or goes) now, not at the next cast
-        if self.duration then self:UpdateTarget() end
+        if self.duration then
+            self:UpdateTarget()
+        end
     end
 
     -- The cast's target: name, class and "is it you" (any may be secret), or
     -- nothing (a method, so tests can stand in for the game's answer).
     function SpellTarget(): (Target, TargetClass, TargetIsYou)
         local unit = self.unit
-        if not unit then return nil, nil, nil end
+        if not unit then
+            return nil, nil, nil
+        end
         return spellTarget(unit)
     end
 
@@ -577,7 +687,9 @@ export class CastBar extends Frame
             -- "Spell › Target" in the spell name's fixed width, so the engine
             -- shortens it; both may be secret, so they only go to the text
             local spell, spellYou, youBadge = self.spellName, self.spellYou, self.you
-            if type(spell) == "nil" or not (spellYou and youBadge) then return end
+            if type(spell) == "nil" or not (spellYou and youBadge) then
+                return
+            end
             if self.targetShown then
                 local ok, name, class, you = pcall(self.SpellTarget, self)
                 if ok and type(name) ~= "nil" then
@@ -585,8 +697,12 @@ export class CastBar extends Frame
                     showYou(you, youBadge, self.spell, spellYou)
                     -- the target's name in its class colour (asked 2026-10-18)
                     local c = classColor(class)
-                    local okHex, hex = pcall(function() return c and c:GenerateHexColor() end)
-                    if okHex and hex then return self.spell:SetFormattedText("%s › |c%s%s|r", spell, hex, name) end
+                    local okHex, hex = pcall(function()
+                        return c and c:GenerateHexColor()
+                    end)
+                    if okHex and hex then
+                        return self.spell:SetFormattedText("%s › |c%s%s|r", spell, hex, name)
+                    end
                     return self.spell:SetFormattedText("%s › %s", spell, name)
                 end
             end
@@ -594,14 +710,24 @@ export class CastBar extends Frame
             return self.spell:SetText(spell)
         end
         local t = self.target
-        if not t then return end
-        if self.targetShown == false then return t:Hide() end
+        if not t then
+            return
+        end
+        if self.targetShown == false then
+            return t:Hide()
+        end
         local ok, name, class, you = pcall(self.SpellTarget, self)
-        if not ok or type(name) == "nil" then return t:Hide() end
+        if not ok or type(name) == "nil" then
+            return t:Hide()
+        end
         t.name:SetText(name)
         t.name:SetColor("ink")
         local c = classColor(class)
-        if c then pcall(function() t.name:SetTextColor(c:GetRGB()) end) end
+        if c then
+            pcall(function()
+                t.name:SetTextColor(c:GetRGB())
+            end)
+        end
         showYou(you, t.you, t.name)
         t:Show()
     end
@@ -624,24 +750,33 @@ export class CastBar extends Frame
 
     function UpdateKick()
         local k = self.kick
-        if not k then return end
+        if not k then
+            return
+        end
         local isReady = self:KickReady()
         k:SetShown(isReady ~= nil and self.kickShown ~= false and not self.neutral)
         -- unknown (secret in combat): its seconds go too, or every frame of the
         -- cast asked for the cooldown again
-        if isReady == nil then k.secs:Hide() return end
+        if isReady == nil then
+            k.secs:Hide()
+            return
+        end
         draw.paint(k.glyph, isReady and "arcane" or "ink-faint")
         k.secs:SetShown(not isReady)
     end
 
     function Tick()
         local d = self.duration
-        if not d then return end
+        if not d then
+            return
+        end
         -- A missed stop event (a unit that despawns mid-cast) never leaves a bar
         -- standing: a few times a second, check the cast still runs.
         local now = GetTime()
         local unit = self.unit
-        if not unit then return self:Stop() end
+        if not unit then
+            return self:Stop()
+        end
         if now - (self.lastCheck or 0) > 0.25 then
             self.lastCheck = now
             if not (UnitExists(unit) and (UnitCastingDuration(unit) or UnitChannelDuration(unit))) then
@@ -665,14 +800,27 @@ export class CastBar extends Frame
 
     function Start(channel: boolean)
         local u = self.unit
-        if not u then return self:Stop() end
+        if not u then
+            return self:Stop()
+        end
         local name, _, texture, _, _, _, a7, a8 = (channel and UnitChannelInfo or UnitCastingInfo)(u)
         -- UnitCastingInfo: …, castID, notInterruptible; UnitChannelInfo: …, notInterruptible
         local notInterruptible
-        if channel then notInterruptible = a7 else notInterruptible = a8 end
+        if channel then
+            notInterruptible = a7
+        else
+            notInterruptible = a8
+        end
         local d: LuaDurationObject?
-        if channel then d = UnitChannelDuration(u) else d = UnitCastingDuration(u) :: LuaDurationObject? end
-        if not d then self:Stop() return end
+        if channel then
+            d = UnitChannelDuration(u)
+        else
+            d = UnitCastingDuration(u) :: LuaDurationObject?
+        end
+        if not d then
+            self:Stop()
+            return
+        end
         self.duration = d
         self.fill:SetTimerDuration(d, nil, channel and DIR.RemainingTime or DIR.ElapsedTime)
         local arcaneFill = self.arcaneFill
@@ -681,7 +829,9 @@ export class CastBar extends Frame
         end
         self.spellName = name
         self.spell:SetText(name)
-        if self.iconArt then self.iconArt:SetTexture(texture) end
+        if self.iconArt then
+            self.iconArt:SetTexture(texture)
+        end
         self:UpdateTarget()
         if self.enemy and not self.plate then
             -- a unit frame's bar: a friendly unit's cast is neutral (a plate's
@@ -698,27 +848,35 @@ export class CastBar extends Frame
     -- notInterruptible may be a secret boolean: never tested, only handed to the engine.
     function SetInterruptible(given: boolean | Secret<boolean> | nil)
         local arcane, lockHost = self.arcane, self.lockHost
-        if not (arcane and lockHost) then return end
+        if not (arcane and lockHost) then
+            return
+        end
         if self.neutral then
             arcane:SetAlpha(0)
             lockHost:SetAlpha(0)
             return
         end
         local notInterruptible: boolean | Secret<boolean> = false
-        if secret.isSecret(given) or given ~= nil then notInterruptible = given :: boolean | Secret<boolean> end
+        if secret.isSecret(given) or given ~= nil then
+            notInterruptible = given :: boolean | Secret<boolean>
+        end
         arcane:SetAlphaFromBoolean(notInterruptible, 0, 1)
         lockHost:SetAlphaFromBoolean(notInterruptible, 1, 0)
     end
 
     function Stop()
         self.duration, self.spellName = nil, nil
-        if self.target then self.target:Hide() end
+        if self.target then
+            self.target:Hide()
+        end
         self:Hide()
     end
 
     function Refresh()
         local unit = self.unit
-        if not unit or not UnitExists(unit) then return self:Stop() end
+        if not unit or not UnitExists(unit) then
+            return self:Stop()
+        end
         -- Ask for the duration objects, not the spell name: the name may be a
         -- secret string, which can't be tested.
         if UnitCastingDuration(unit) then
@@ -731,26 +889,64 @@ export class CastBar extends Frame
     end
 
     function Activate()
-        if self.active then return end
+        if self.active then
+            return
+        end
         self.active = true
         interrupt.bars[self] = true
-        for _, e in ipairs(START) do onUnit(self, e, function() self:Start(false) end) end
-        for _, e in ipairs(CHANNEL) do onUnit(self, e, function() self:Start(true) end) end
-        for _, e in ipairs(STOP) do onUnit(self, e, function() self:Refresh() end) end
-        onUnit(self, "UNIT_SPELLCAST_INTERRUPTIBLE", function() self:SetInterruptible(false) end)
-        onUnit(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", function() self:SetInterruptible(true) end)
+        for _, e in ipairs(START) do
+            onUnit(self, e, function()
+                self:Start(false)
+            end)
+        end
+        for _, e in ipairs(CHANNEL) do
+            onUnit(self, e, function()
+                self:Start(true)
+            end)
+        end
+        for _, e in ipairs(STOP) do
+            onUnit(self, e, function()
+                self:Refresh()
+            end)
+        end
+        onUnit(self, "UNIT_SPELLCAST_INTERRUPTIBLE", function()
+            self:SetInterruptible(false)
+        end)
+        onUnit(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", function()
+            self:SetInterruptible(true)
+        end)
         if self.unit == "target" then
-            events.onGame("PLAYER_TARGET_CHANGED", function() self:Refresh() end, self)
+            events.onGame(
+                "PLAYER_TARGET_CHANGED",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif self.unit == "focus" then
-            events.onGame("PLAYER_FOCUS_CHANGED", function() self:Refresh() end, self)
+            events.onGame(
+                "PLAYER_FOCUS_CHANGED",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         elseif (self.unit or ""):find("^boss") then
-            events.onGame("INSTANCE_ENCOUNTER_ENGAGE_UNIT", function() self:Refresh() end, self)
+            events.onGame(
+                "INSTANCE_ENCOUNTER_ENGAGE_UNIT",
+                function()
+                    self:Refresh()
+                end,
+                self
+            )
         end
         self:Refresh()
     end
 
     function Deactivate()
-        if not self.active then return end
+        if not self.active then
+            return
+        end
         self.active = false
         interrupt.bars[self] = nil
         events.offAll(self)
@@ -758,11 +954,17 @@ export class CastBar extends Frame
     end
 
     function SetUnit(unit: string?)
-        if unit == self.unit then return self:Refresh() end
+        if unit == self.unit then
+            return self:Refresh()
+        end
         local was = self.active
-        if was then self:Deactivate() end
+        if was then
+            self:Deactivate()
+        end
         self.unit = unit
-        if was and unit then self:Activate() end
+        if was and unit then
+            self:Activate()
+        end
     end
 end
 mixins.CastBar = CastBar
@@ -770,4 +972,3 @@ mixins.CastBar = CastBar
 export function castBar(parent: Frame, unit: string, opts: CastBarOptions?): CastBar
     return CastBar.new(parent, unit, opts)
 end
-

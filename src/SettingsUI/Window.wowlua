@@ -58,12 +58,14 @@ local CONTENT_W = WIDTH - NAV_W - PREVIEW_W - S["space-6"] * 2
 local WIDE_W = math.min(WIDTH - NAV_W - S["space-6"] * 2, 720)
 
 local frame: SettingsWindow? = nil
-export local pages: { [string]: SettingsPage } = {}      -- section id -> page
-local current: string? = nil         -- the open section's id
-local query = ""      -- the search text, lower case
+export local pages: { [string]: SettingsPage } = {} -- section id -> page
+local current: string? = nil -- the open section's id
+local query = "" -- the search text, lower case
 
 -- The window, once built.
-local function win(): SettingsWindow return (assert(frame, "the settings window isn't built")) end
+local function win(): SettingsWindow
+    return (assert(frame, "the settings window isn't built"))
+end
 
 --------------------------------------------------------------------------------
 -- Rows bound to settings
@@ -71,17 +73,27 @@ local function win(): SettingsWindow return (assert(frame, "the settings window 
 
 -- A description given as text or a function.
 local function describe(d: (string | () -> string)?): string?
-    if type(d) == "function" then return d() end
+    if type(d) == "function" then
+        return d()
+    end
     return d
 end
 
 -- A row's choices, given as a list or a function.
 local function optionsOf(o: (registry.Options | () -> registry.Options)?): SelectOption<SelectValue>[]
     local list: registry.Options? = nil
-    if type(o) == "function" then list = o() else list = o end
+    if type(o) == "function" then
+        list = o()
+    else
+        list = o
+    end
     local out: SelectOption<SelectValue>[] = {}
-    if not list then return out end
-    for i = 1, #list do out[#out + 1] = list[i] end
+    if not list then
+        return out
+    end
+    for i = 1, #list do
+        out[#out + 1] = list[i]
+    end
     return out
 end
 
@@ -90,7 +102,9 @@ local function segmentsOf(options: SelectOption<SelectValue>[]): SegmentedOption
     local out: SegmentedOption<SelectValue>[] = {}
     for _, o in ipairs(options) do
         local value = o.value
-        if value ~= nil then out[#out + 1] = { value = value, label = o.label or "", disabled = o.disabled, reason = o.reason } end
+        if value ~= nil then
+            out[#out + 1] = { value = value, label = o.label or "", disabled = o.disabled, reason = o.reason }
+        end
     end
     return out
 end
@@ -101,8 +115,12 @@ local COMBAT_NOTE = "Waits for the end of combat."
 
 local function rowDescription(def: RowDef): string?
     local d = describe(def.description)
-    if not def.combat then return d end
-    if d == nil or d == "" then return COMBAT_NOTE end
+    if not def.combat then
+        return d
+    end
+    if d == nil or d == "" then
+        return COMBAT_NOTE
+    end
     return d .. " " .. COMBAT_NOTE
 end
 
@@ -113,49 +131,124 @@ local function nothing(_: unknown) end
 
 -- A custom control shows a value through its SetValue (when it has one).
 local function customShow(f: Frame): (value: unknown) -> ()
-    return function(value: unknown) errors.tryMethod(f, "SetValue", value) end
+    return function(value: unknown)
+        errors.tryMethod(f, "SetValue", value)
+    end
 end
 
 local function buildControl(parent: Frame, def: RowDef, onChange: (v: unknown) -> ()): Control
     local c = def.control
     if c == "toggle" then
         local t = inputs.toggle(parent, { onChange = onChange })
-        return { frame = t, show = function(v: unknown) t:SetValue(v) end, options = nothing }
+        return {
+            frame = t,
+            show = function(v: unknown)
+                t:SetValue(v)
+            end,
+            options = nothing,
+        }
     end
     if c == "checkbox" then
         local b = inputs.checkbox(parent, { label = def.checkLabel, onChange = onChange })
-        return { frame = b, show = function(v: unknown) b:SetValue(v) end, options = nothing }
+        return {
+            frame = b,
+            show = function(v: unknown)
+                b:SetValue(v)
+            end,
+            options = nothing,
+        }
     end
     if c == "segmented" then
         local seg = inputs.segmented(parent, { options = segmentsOf(optionsOf(def.options)), onChange = onChange })
-        return { frame = seg, show = function(v: unknown) seg:SetValue(v :: SelectValue?) end,
-                 options = nothing }
+        return {
+            frame = seg,
+            show = function(v: unknown)
+                seg:SetValue(v :: SelectValue?)
+            end,
+            options = nothing,
+        }
     end
     if c == "select" then
         -- (a multiple select gives its list)
-        local sel = uiSelect.select(parent, { options = optionsOf(def.options), multiple = def.multiple, width = def.width,
-            placeholder = def.placeholder, maxShown = def.maxShown,
-            onChange = not def.multiple and onChange or nil, onChangeAll = def.multiple and onChange or nil })
-        return { frame = sel, show = function(v: unknown) sel:SetValue(v :: SelectValue?) end,
-                 options = function(o: SelectOption<SelectValue>[]) sel:SetOptions(o) end }
+        local sel = uiSelect.select(parent, {
+            options = optionsOf(def.options),
+            multiple = def.multiple,
+            width = def.width,
+            placeholder = def.placeholder,
+            maxShown = def.maxShown,
+            onChange = not def.multiple and onChange or nil,
+            onChangeAll = def.multiple and onChange or nil,
+        })
+        return {
+            frame = sel,
+            show = function(v: unknown)
+                sel:SetValue(v :: SelectValue?)
+            end,
+            options = function(o: SelectOption<SelectValue>[])
+                sel:SetOptions(o)
+            end,
+        }
     end
     if c == "slider" then
-        local s = inputs.slider(parent, { min = def.min, max = def.max, step = def.step, unit = def.unit,
-            format = def.format, width = def.width, live = def.live, onChange = onChange })
-        return { frame = s, show = function(v: unknown) s:SetValue(secret.asNumber(v) or 0) end, options = nothing }
+        local s = inputs.slider(parent, {
+            min = def.min,
+            max = def.max,
+            step = def.step,
+            unit = def.unit,
+            format = def.format,
+            width = def.width,
+            live = def.live,
+            onChange = onChange,
+        })
+        return {
+            frame = s,
+            show = function(v: unknown)
+                s:SetValue(secret.asNumber(v) or 0)
+            end,
+            options = nothing,
+        }
     end
     if c == "stepper" then
-        local s = inputs.stepper(parent, { min = def.min, max = def.max, step = def.step, unit = def.unit, onChange = onChange })
-        return { frame = s, show = function(v: unknown) s:SetValue(secret.asNumber(v)) end, options = nothing }
+        local s = inputs.stepper(parent, {
+            min = def.min,
+            max = def.max,
+            step = def.step,
+            unit = def.unit,
+            onChange = onChange,
+        })
+        return {
+            frame = s,
+            show = function(v: unknown)
+                s:SetValue(secret.asNumber(v))
+            end,
+            options = nothing,
+        }
     end
     if c == "text" then
-        local f = inputs.textField(parent, { width = def.width or 220, placeholder = def.placeholder, onChange = onChange })
-        return { frame = f, show = function(v: unknown) f:SetValue(secret.asString(v)) end, options = nothing }
+        local f = inputs.textField(parent, {
+            width = def.width or 220,
+            placeholder = def.placeholder,
+            onChange = onChange,
+        })
+        return {
+            frame = f,
+            show = function(v: unknown)
+                f:SetValue(secret.asString(v))
+            end,
+            options = nothing,
+        }
     end
     if c == "button" then
         local onClick = def.onClick
-        local b = controls.button(parent, { text = def.text, variant = def.variant,
-            onClick = onClick and function() onClick() end or nil })
+        local b = controls.button(parent, {
+            text = def.text,
+            variant = def.variant,
+            onClick = onClick and
+                function()
+                    onClick()
+                end or
+                nil,
+        })
         return { frame = b, show = nothing, options = nothing }
     end
     -- a custom control: build(parent, onChange, def); with a key (or get) it is
@@ -163,8 +256,13 @@ local function buildControl(parent: Frame, def: RowDef, onChange: (v: unknown) -
     local build = def.build
     if c == "custom" and build then
         local f = build(parent, onChange, def)
-        return { frame = f, show = customShow(f),
-                 options = function(o: SelectOption<SelectValue>[]) errors.tryMethod(f, "SetOptions", o) end }
+        return {
+            frame = f,
+            show = customShow(f),
+            options = function(o: SelectOption<SelectValue>[])
+                errors.tryMethod(f, "SetOptions", o)
+            end,
+        }
     end
     return { show = nothing, options = nothing }
 end
@@ -186,26 +284,48 @@ class BoundRow extends SettingRow
         local made: { row: BoundRow? } = {}
         local ctl = buildControl(page.frame, def, function(v: unknown)
             local row = made.row
-            if row then row:Change(v) end
+            if row then
+                row:Change(v)
+            end
         end)
-        super(page.frame, { label = def.label, description = rowDescription(def), stacked = def.stacked,
-                            width = page.width, control = ctl.frame, onReset = function()
-                                local row = made.row
-                                if row then row:DoReset() end
-                            end })
+        super(page.frame, {
+            label = def.label,
+            description = rowDescription(def),
+            stacked = def.stacked,
+            width = page.width,
+            control = ctl.frame,
+            onReset = function()
+                local row = made.row
+                if row then
+                    row:DoReset()
+                end
+            end,
+        })
         made.row = self
         self.ctl = ctl
         self.def = def
         local namespace = def.namespace or section.namespace
         self.namespace = namespace
         local key = def.key
-        self.valued = def.control ~= nil and def.control ~= "button"
-            and (def.control ~= "custom" or key ~= nil or def.get ~= nil)
+        self.valued = def.control ~= nil and def.control ~= "button" and
+            (def.control ~= "custom" or key ~= nil or def.get ~= nil)
         if namespace and key then
-            self.get = def.get or function(): unknown return settings.get(namespace, key) end
-            self.set = def.set or function(v: unknown): (boolean, string?) return settings.set(namespace, key, v) end
-            self.isDefault = def.isDefault or function(): boolean return settings.isDefault(namespace, key) end
-            self.resetter = def.reset or function() settings.reset(namespace, key) end
+            self.get = def.get or
+                function(): unknown
+                    return settings.get(namespace, key)
+                end
+            self.set = def.set or
+                function(v: unknown): (boolean, string?)
+                    return settings.set(namespace, key, v)
+                end
+            self.isDefault = def.isDefault or
+                function(): boolean
+                    return settings.isDefault(namespace, key)
+                end
+            self.resetter = def.reset or
+                function()
+                    settings.reset(namespace, key)
+                end
         else
             self.get, self.set, self.isDefault, self.resetter = def.get, def.set, def.isDefault, def.reset
         end
@@ -217,7 +337,9 @@ class BoundRow extends SettingRow
     -- SUUUI_SETTING_CHANGED).
     function Change(v: unknown)
         local set = self.set
-        if not set then return end
+        if not set then
+            return
+        end
         local ok, reason = set(v)
         if ok == false then
             print(("%s wasn't changed: %s"):format(self.def.label or "?", reason or "refused"))
@@ -226,11 +348,15 @@ class BoundRow extends SettingRow
     end
 
     -- Whether the row can be reset (it has a reset).
-    function CanReset(): boolean return self.resetter ~= nil end
+    function CanReset(): boolean
+        return self.resetter ~= nil
+    end
 
     function DoReset()
         local reset = self.resetter
-        if not reset then return end
+        if not reset then
+            return
+        end
         reset()
         self:Refresh()
     end
@@ -243,12 +369,20 @@ class BoundRow extends SettingRow
     function Refresh()
         local def = self.def
         local get = self.get
-        if self.valued and get then self.ctl.show(get()) end
-        if type(def.options) == "function" then self.ctl.options(optionsOf(def.options)) end
-        if type(def.description) == "function" then self:SetDescription(rowDescription(def)) end
+        if self.valued and get then
+            self.ctl.show(get())
+        end
+        if type(def.options) == "function" then
+            self.ctl.options(optionsOf(def.options))
+        end
+        if type(def.description) == "function" then
+            self:SetDescription(rowDescription(def))
+        end
         local disabled: boolean?, reason: string? = false, nil
         local isDisabled = def.disabled
-        if isDisabled then disabled, reason = isDisabled() end
+        if isDisabled then
+            disabled, reason = isDisabled()
+        end
         self:SetDisabled(disabled, reason)
         self:SetModified(self.resetter ~= nil and self:IsModified())
     end
@@ -293,14 +427,20 @@ export class SettingsPage implements registry.Page
         self.title = panel.sectionHeader(f, section.label, nil, width)
         self.title:Hide()
         self.stack:Add(self.title)
-        for _, g in ipairs(section.groups or {}) do self:AddGroup(g) end
+        for _, g in ipairs(section.groups or {}) do
+            self:AddGroup(g)
+        end
         local build = section.build
-        if build then build(self) end
+        if build then
+            build(self)
+        end
         -- then the groups of the sections merged into this one
         local merged: string[] = {}
         for _, m in ipairs(registry.merged(section.id)) do
             merged[#merged + 1] = m.id
-            for _, g in ipairs(m.groups or {}) do self:AddGroup(g, m) end
+            for _, g in ipairs(m.groups or {}) do
+                self:AddGroup(g, m)
+            end
         end
         self.merged = table.concat(merged, ",")
         self:Refresh()
@@ -339,7 +479,9 @@ export class SettingsPage implements registry.Page
             local n = 0
             for _, row in ipairs(g.boundRows) do
                 row:Refresh()
-                if row:IsModified() then n = n + 1 end
+                if row:IsModified() then
+                    n = n + 1
+                end
             end
             g:SetMeta(n > 0 and (n == 1 and "1 changed" or n .. " changed") or "")
             changed = changed + n
@@ -354,16 +496,18 @@ export class SettingsPage implements registry.Page
         local total = 0
         local sectionHit = q == "" or self.section.label:lower():find(q, 1, true) ~= nil
         for _, g in ipairs(self.groups) do
-            local groupHit = sectionHit or g.section.label:lower():find(q, 1, true) ~= nil
-                or (g.def.title or ""):lower():find(q, 1, true) ~= nil
-                or (describe(g.def.description) or ""):lower():find(q, 1, true) ~= nil
+            local groupHit = sectionHit or g.section.label:lower():find(q, 1, true) ~= nil or
+                (g.def.title or ""):lower():find(q, 1, true) ~= nil or
+                (describe(g.def.description) or ""):lower():find(q, 1, true) ~= nil
             local shown = 0
             for _, row in ipairs(g.boundRows) do
                 local d = row.def
-                local hit = groupHit or (d.label or ""):lower():find(q, 1, true) ~= nil
-                    or (rowDescription(d) or ""):lower():find(q, 1, true) ~= nil
+                local hit = groupHit or (d.label or ""):lower():find(q, 1, true) ~= nil or
+                    (rowDescription(d) or ""):lower():find(q, 1, true) ~= nil
                 row:SetShown(hit)
-                if hit then shown = shown + 1 end
+                if hit then
+                    shown = shown + 1
+                end
             end
             g:SetShown(shown > 0)
             total = total + shown
@@ -403,12 +547,19 @@ class NavButton extends Button
         self.heading:SetPoint("BOTTOMLEFT", S["space-4"], S["space-2"])
         self:SetScript("OnEnter", function()
             local section = self.section
-            if section and section.id ~= current then self.label:SetColor("ink"); self.bg:Show() end
+            if section and section.id ~= current then
+                self.label:SetColor("ink")
+                self.bg:Show()
+            end
         end)
-        self:SetScript("OnLeave", function() refreshNav() end)
+        self:SetScript("OnLeave", function()
+            refreshNav()
+        end)
         self:SetScript("OnClick", function()
             local section = self.section
-            if section then show(section.id) end
+            if section then
+                show(section.id)
+            end
         end)
     end
 end
@@ -447,7 +598,9 @@ end
 
 local function profileOptions(): SelectOption<string>[]
     local options: SelectOption<string>[] = {}
-    for _, name in ipairs(profiles.list()) do options[#options + 1] = { value = name, label = name } end
+    for _, name in ipairs(profiles.list()) do
+        options[#options + 1] = { value = name, label = name }
+    end
     return options
 end
 
@@ -456,9 +609,14 @@ local resetTimer: TimerHandle? = nil
 
 local function disarmReset()
     local timer = resetTimer
-    if timer then timer:Cancel(); resetTimer = nil end
+    if timer then
+        timer:Cancel()
+        resetTimer = nil
+    end
     local f = frame
-    if f then f.resetSection:SetLabel("Reset section") end
+    if f then
+        f.resetSection:SetLabel("Reset section")
+    end
 end
 
 -- The settings window: header, nav, pages, preview, footer.
@@ -484,8 +642,12 @@ class SettingsWindow extends Panel
         self:EnableMouse(true)
         self:SetMovable(true)
         self:RegisterForDrag("LeftButton")
-        self:SetScript("OnDragStart", function() self:StartMoving() end)
-        self:SetScript("OnDragStop", function() self:StopMovingOrSizing() end)
+        self:SetScript("OnDragStart", function()
+            self:StartMoving()
+        end)
+        self:SetScript("OnDragStop", function()
+            self:StopMovingOrSizing()
+        end)
         self:SetPoint("CENTER")
         self:Hide()
         tinsert(UISpecialFrames, "SuuUISettings")
@@ -502,20 +664,31 @@ class SettingsWindow extends Panel
         title:SetValue("Settings")
         title:SetPoint("LEFT", word, "RIGHT", S["space-5"], 0)
 
-        self.close = panel.closeButton(self, function() self:Hide() end)
+        self.close = panel.closeButton(self, function()
+            self:Hide()
+        end)
         self.close:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-5"] + 4))
-        self.profile = uiSelect.select(self, { width = 190, options = profileOptions(), value = profiles.current(),
+        self.profile = uiSelect.select(self, {
+            width = 190,
+            options = profileOptions(),
+            value = profiles.current(),
             onChange = function(name: string?)
                 local ok, err = profiles.use(name or "")
                 if not ok then
                     print(err)
                     self.profile:SetValue(profiles.current())
                 end
-            end })
+            end,
+        })
         self.profile:SetPoint("RIGHT", self.close, "LEFT", -S["space-5"], 0)
         -- through the error catcher: an error here was silent before
-        self.search = inputs.textField(self, { width = 280, placeholder = "Search settings",
-            onTextChanged = function(typed: string) fault.call("Settings search", search, typed) end })
+        self.search = inputs.textField(self, {
+            width = 280,
+            placeholder = "Search settings",
+            onTextChanged = function(typed: string)
+                fault.call("Settings search", search, typed)
+            end,
+        })
         self.search:SetPoint("RIGHT", self.profile, "LEFT", -S["space-5"], 0)
 
         -- Body: nav | content | preview
@@ -537,7 +710,11 @@ class SettingsWindow extends Panel
         self.content:SetPoint("TOPLEFT", NAV_W + S["space-6"], -(top + S["space-5"]))
         self.content:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + S["space-6"]), bottom)
         self.content.child:SetWidth(WIDE_W)
-        self.pagesStack = layout.stack(self.content.child, { gap = S["space-7"], autoSize = "height", padding = { 0, 0, 0, S["space-6"] } })
+        self.pagesStack = layout.stack(self.content.child, {
+            gap = S["space-7"],
+            autoSize = "height",
+            padding = { 0, 0, 0, S["space-6"] },
+        })
         self.empty = text(self.content.child, "body", "ink-muted")
         self.empty:SetValue("No setting matches that search.")
         self.empty:SetPoint("TOPLEFT")
@@ -551,13 +728,34 @@ class SettingsWindow extends Panel
         local footRule = draw.hairline(self, "gilt-faint")
         footRule:SetPoint("BOTTOMLEFT", 0, FOOT_H)
         footRule:SetPoint("BOTTOMRIGHT", 0, FOOT_H)
-        local importButton = controls.button(foot, { text = "Import", onClick = function() import() end })
+        local importButton = controls.button(foot, {
+            text = "Import",
+            onClick = function()
+                import()
+            end,
+        })
         importButton:SetPoint("LEFT")
-        local exportButton = controls.button(foot, { text = "Export", onClick = function() export() end })
+        local exportButton = controls.button(foot, {
+            text = "Export",
+            onClick = function()
+                export()
+            end,
+        })
         exportButton:SetPoint("LEFT", importButton, "RIGHT", S["space-3"], 0)
-        self.resetSection = controls.button(foot, { text = "Reset section", onClick = function() self:ResetSection() end })
+        self.resetSection = controls.button(foot, {
+            text = "Reset section",
+            onClick = function()
+                self:ResetSection()
+            end,
+        })
         self.resetSection:SetPoint("LEFT", exportButton, "RIGHT", S["space-3"], 0)
-        local done = controls.button(foot, { text = "Done", variant = "primary", onClick = function() self:Hide() end })
+        local done = controls.button(foot, {
+            text = "Done",
+            variant = "primary",
+            onClick = function()
+                self:Hide()
+            end,
+        })
         done:SetPoint("RIGHT")
         local note = text(foot, "caption", "ink-muted")
         note:SetValue("Changes apply as you make them.")
@@ -567,17 +765,24 @@ class SettingsWindow extends Panel
     -- Reset section asks twice: the first click arms it for a few seconds.
     function ResetSection()
         local page = pages[current or ""]
-        if not page or query ~= "" then return end
+        if not page or query ~= "" then
+            return
+        end
         if not resetTimer then
             self.resetSection:SetLabel("Click again to reset")
-            resetTimer = after(3, function() resetTimer = nil; disarmReset() end)
+            resetTimer = after(3, function()
+                resetTimer = nil
+                disarmReset()
+            end)
             return
         end
         disarmReset()
         for _, row in ipairs(page.rows) do
             -- turning modules on and off is not a setting to reset
             local moduleToggle = row.def.key == "enabled" and modules.get(row.namespace or "")
-            if row:CanReset() and row:IsModified() and not moduleToggle then row:DoReset() end
+            if row:CanReset() and row:IsModified() and not moduleToggle then
+                row:DoReset()
+            end
         end
     end
 end
@@ -585,7 +790,9 @@ end
 local function navButton(i: number): NavButton
     local f = win()
     local b = f.navButtons[i]
-    if b then return b end
+    if b then
+        return b
+    end
     b = NavButton.new(f.nav.child)
     f.navMarker:Track(b)
     f.navButtons[i] = b
@@ -594,7 +801,9 @@ end
 
 export function refreshNav()
     local f = frame
-    if not f then return end
+    if not f then
+        return
+    end
     local chosen: NavButton? = nil
     for _, b in ipairs(f.navButtons) do
         local section = b.section
@@ -604,7 +813,9 @@ export function refreshNav()
             b.label:SetColor(on and "gilt-text" or "ink-muted")
             local page = pages[section.id]
             b.dot:SetShown(page ~= nil and page.changed > 0)
-            if on and b:IsShown() then chosen = b end
+            if on and b:IsShown() then
+                chosen = b
+            end
         end
     end
     f.navMarker:SetChosen(chosen)
@@ -612,7 +823,9 @@ end
 
 local function buildNav()
     local f = win()
-    for _, b in ipairs(f.navButtons) do b:Hide() end
+    for _, b in ipairs(f.navButtons) do
+        b:Hide()
+    end
     local y, i = S["space-5"], 0
     local lastCategory: string? = nil
     for _, section in ipairs(registry.list()) do
@@ -621,7 +834,9 @@ local function buildNav()
             local h = navButton(i)
             h.section = nil
             h:SetHeight(lastCategory and 38 or 22)
-            h.bg:Hide(); h.dot:Hide(); h.label:SetValue("")
+            h.bg:Hide()
+            h.dot:Hide()
+            h.label:SetValue("")
             h.heading:SetValue(section.category)
             h:EnableMouse(false)
             h:ClearAllPoints()
@@ -656,12 +871,16 @@ end
 export function placePreview()
     local p = win().preview
     local view = p.view
-    if not view then return end
+    if not view then
+        return
+    end
     view:ClearAllPoints()
     local wide = view:GetWidth() > p.area:GetWidth()
     local tall = view:GetHeight() > p.area:GetHeight()
     local point = (tall and "TOP" or "") .. (wide and "LEFT" or "")
-    if point == "" then point = "CENTER" end
+    if point == "" then
+        point = "CENTER"
+    end
     view:SetPoint(point :: FramePoint, p.area, point :: FramePoint)
 end
 
@@ -679,7 +898,10 @@ local function showPreview(section: Section?)
     local f = win()
     local p = f.preview
     local old = p.view
-    if old then old:Hide(); p.view = nil end
+    if old then
+        old:Hide()
+        p.view = nil
+    end
     local preview = section and section.preview
     local has = preview ~= nil and query == ""
     p:SetShown(has)
@@ -693,7 +915,10 @@ local function showPreview(section: Section?)
         if not p.hooked[view] then
             p.hooked[view] = true
             view:HookScript("OnSizeChanged", function()
-                if p.view == view then placePreview(); previewNote() end
+                if p.view == view then
+                    placePreview()
+                    previewNote()
+                end
             end)
         end
         placePreview()
@@ -739,7 +964,9 @@ export function show(id: string?)
     local found = registry.get(id or "")
     -- a merged section opens the page it shows on
     local section: Section? = found and (registry.mergedInto(found) or found) or registry.list()[1]
-    if not section then return end
+    if not section then
+        return
+    end
     current = section.id
     getPage(section)
     f.search.edit:ClearFocus()
@@ -757,7 +984,9 @@ export function search(typed: string?)
         -- every page, to search it; one that fails to build is reported and
         -- left out instead of stopping the search
         for _, section in ipairs(registry.list()) do
-            if not pages[section.id] then fault.call("Settings: " .. section.label, getPage, section) end
+            if not pages[section.id] then
+                fault.call("Settings: " .. section.label, getPage, section)
+            end
         end
     end
     showPreview(registry.get(current or ""))
@@ -771,19 +1000,27 @@ local dirty, queued = false, false
 
 local function refreshNow()
     dirty = false
-    for _, page in pairs(pages) do page:Refresh() end
+    for _, page in pairs(pages) do
+        page:Refresh()
+    end
     refreshNav()
 end
 
 export function refreshAll()
     local f = frame
-    if not f then return end
+    if not f then
+        return
+    end
     dirty = true
-    if queued or not f:IsShown() then return end
+    if queued or not f:IsShown() then
+        return
+    end
     queued = true
     after(0, function()
         queued = false
-        if dirty and f:IsShown() then refreshNow() end
+        if dirty and f:IsShown() then
+            refreshNow()
+        end
     end)
 end
 
@@ -799,8 +1036,14 @@ class ProfileDialog extends Panel
     readonly status: Text
 
     constructor()
-        super(root, { name = "SuuUIProfileDialog", title = "Export profile", closable = true,
-            width = 560, height = 330, solid = true })
+        super(root, {
+            name = "SuuUIProfileDialog",
+            title = "Export profile",
+            closable = true,
+            width = 560,
+            height = 330,
+            solid = true,
+        })
         self:SetFrameStrata("DIALOG")
         self:SetToplevel(true)
         self:SetPoint("CENTER")
@@ -824,13 +1067,21 @@ class ProfileDialog extends Panel
         edit:SetAutoFocus(false)
         edit:SetFontObject(fonts.get("caption"))
         edit:SetWidth(490)
-        edit:SetScript("OnEscapePressed", function() self:Hide() end)
+        edit:SetScript("OnEscapePressed", function()
+            self:Hide()
+        end)
         scroll:SetScrollChild(edit)
         self.edit = edit
 
         self.name = inputs.textField(self.body, { width = 260, placeholder = "Name for the new profile" })
         self.name:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -S["space-4"])
-        self.action = controls.button(self.body, { text = "Import", variant = "primary", onClick = function() doImport() end })
+        self.action = controls.button(self.body, {
+            text = "Import",
+            variant = "primary",
+            onClick = function()
+                doImport()
+            end,
+        })
         self.action:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -S["space-4"])
         self.status = text(self.body, "caption", "ember-text")
         self.status:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-3"])
@@ -882,7 +1133,9 @@ export function doImport()
         return
     end
     local name = strtrim(d.name:GetValue() or "")
-    if name == "" then name = (secret.asString(tbl.field(value, "name")) or "Imported") .. " (imported)" end
+    if name == "" then
+        name = (secret.asString(tbl.field(value, "name")) or "Imported") .. " (imported)"
+    end
     local ok, why = profiles.import(name, data)
     if not ok then
         d.status:SetValue(why or "That didn't work.")
@@ -901,11 +1154,19 @@ local function build(): SettingsWindow
     frame = f
     f:SetScript("OnShow", function()
         motion.enter(f, T.duration["dur-fast"])
-        if dirty then refreshNow() end
+        if dirty then
+            refreshNow()
+        end
     end)
 
     -- Live: every settings change refreshes the rows and the nav.
-    events.on("SUUUI_SETTING_CHANGED", function() refreshAll() end, "SettingsWindow")
+    events.on(
+        "SUUUI_SETTING_CHANGED",
+        function()
+            refreshAll()
+        end,
+        "SettingsWindow"
+    )
     -- Profiles switched, created, deleted or mapped to roles: the header's
     -- picker and the Profiles page's lists follow.
     local function profilesChanged()
@@ -913,8 +1174,12 @@ local function build(): SettingsWindow
         f.profile:SetValue(profiles.current())
         refreshAll()
     end
-    local profileMessages: MessageName[] = { "SUUUI_PROFILE_CHANGED", "SUUUI_PROFILES_CHANGED",
-                                             "SUUUI_ROLE_PROFILES_CHANGED", "SUUUI_ROLE_CHANGED" }
+    local profileMessages: MessageName[] = {
+        "SUUUI_PROFILE_CHANGED",
+        "SUUUI_PROFILES_CHANGED",
+        "SUUUI_ROLE_PROFILES_CHANGED",
+        "SUUUI_ROLE_CHANGED",
+    }
     for _, e in ipairs(profileMessages) do
         events.on(e, profilesChanged, "SettingsWindow")
     end
@@ -927,33 +1192,47 @@ local function build(): SettingsWindow
     end
     local function mergedIds(id: string): string
         local ids: string[] = {}
-        for _, m in ipairs(registry.merged(id)) do ids[#ids + 1] = m.id end
+        for _, m in ipairs(registry.merged(id)) do
+            ids[#ids + 1] = m.id
+        end
         return table.concat(ids, ",")
     end
-    events.on("SUUUI_SETTINGS_SECTIONS_CHANGED", function()
-        for id, page in pairs(pages) do
-            if not listed(id) or page.section ~= registry.get(id) or page.merged ~= mergedIds(id) then
-                f.pagesStack:Remove(page.frame)
-                page.frame:Hide()
-                pages[id] = nil
+    events.on(
+        "SUUUI_SETTINGS_SECTIONS_CHANGED",
+        function()
+            for id, page in pairs(pages) do
+                if not listed(id) or page.section ~= registry.get(id) or page.merged ~= mergedIds(id) then
+                    f.pagesStack:Remove(page.frame)
+                    page.frame:Hide()
+                    pages[id] = nil
+                end
             end
-        end
-        buildNav()
-        local opened = registry.get(current or "")
-        if not listed(current or "") or not opened then
-            -- (a merged section opens the page it now shows on)
-            show(current)
-        else
-            getPage(opened)
-            if query ~= "" then
-                for _, section in ipairs(registry.list()) do getPage(section) end
+            buildNav()
+            local opened = registry.get(current or "")
+            if not listed(current or "") or not opened then
+                -- (a merged section opens the page it now shows on)
+                show(current)
+            else
+                getPage(opened)
+                if query ~= "" then
+                    for _, section in ipairs(registry.list()) do
+                        getPage(section)
+                    end
+                end
+                applyView()
             end
-            applyView()
-        end
-    end, "SettingsWindow")
+        end,
+        "SettingsWindow"
+    )
     local moduleMessages: MessageName[] = { "SUUUI_MODULE_ENABLED", "SUUUI_MODULE_DISABLED", "SUUUI_MODULE_ERRORED" }
     for _, e in ipairs(moduleMessages) do
-        events.on(e, function() refreshAll() end, "SettingsWindow")
+        events.on(
+            e,
+            function()
+                refreshAll()
+            end,
+            "SettingsWindow"
+        )
     end
 
     buildNav()
@@ -970,11 +1249,16 @@ end
 
 export function toggle()
     local f = frame
-    if f and f:IsShown() then f:Hide() else open() end
+    if f and f:IsShown() then
+        f:Hide()
+    else
+        open()
+    end
 end
 
 export function close()
     local f = frame
-    if f then f:Hide() end
+    if f then
+        f:Hide()
+    end
 end
-

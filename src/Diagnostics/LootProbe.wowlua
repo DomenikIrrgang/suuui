@@ -24,14 +24,18 @@ type Record = { [string]: unknown }
 -- windows, rolls and loot history as they come, and the event log.
 type Loot = { log: string[], windows: Record[], rolls: Record[], history: Record[], take?: Record, [string]: unknown }
 
-
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
         local parts: string[] = {}
         for k, x in pairs(v) do
-            parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
+            parts[#parts + 1] = tostring(k) ..
+                "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -41,73 +45,172 @@ end
 
 local function namesIn(t: unknown): string[]
     local out: string[] = {}
-    if type(t) ~= "table" then return { "missing" } end
-    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    if type(t) ~= "table" then
+        return { "missing" }
+    end
+    for k, v in pairs(t) do
+        if type(k) == "string" and type(v) == "function" then
+            out[#out + 1] = k
+        end
+    end
     table.sort(out)
     return out
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 160)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 local GLOBALS = {
-    "GetNumLootItems", "GetLootSlotInfo", "GetLootSlotLink", "GetLootSlotType", "LootSlotHasItem", "LootSlot",
-    "CloseLoot", "ConfirmLootSlot", "GetLootSourceInfo", "GetLootInfo", "IsFishingLoot", "GetLootThreshold",
-    "GetLootMethod", "GetOptOutOfLoot", "SetOptOutOfLoot", "GetLootRollItemInfo", "GetLootRollItemLink",
-    "GetLootRollTimeLeft", "RollOnLoot", "ConfirmLootRoll", "GetActiveLootRollIDs", "GetMasterLootCandidate",
-    "GiveMasterLoot", "IsMasterLooter", "LootFrame", "LootFrame_Show", "LootFrame_OnEvent", "LootButton1",
-    "GroupLootFrame1", "GroupLootContainer", "GroupLootHistoryFrame", "MasterLooterFrame", "BonusRollFrame",
-    "LootHistoryFrame", "AlertFrame", "LootAlertSystem", "LootWonAlertSystem", "LootUpgradeAlertSystem",
-    "MoneyWonAlertSystem", "GroupLootFrame_OpenNewFrame", "GroupLootContainer_AddFrame", "LOOT_ROLL_TYPE_NEED",
-    "LOOT_ROLL_TYPE_GREED", "LOOT_ROLL_TYPE_PASS", "LOOT_ROLL_TYPE_DISENCHANT", "LOOT_ROLL_TYPE_TRANSMOG",
-    "LootFrameItemElementMixin", "LootFrameMixin", "GetCVarBool",
+    "GetNumLootItems",
+    "GetLootSlotInfo",
+    "GetLootSlotLink",
+    "GetLootSlotType",
+    "LootSlotHasItem",
+    "LootSlot",
+    "CloseLoot",
+    "ConfirmLootSlot",
+    "GetLootSourceInfo",
+    "GetLootInfo",
+    "IsFishingLoot",
+    "GetLootThreshold",
+    "GetLootMethod",
+    "GetOptOutOfLoot",
+    "SetOptOutOfLoot",
+    "GetLootRollItemInfo",
+    "GetLootRollItemLink",
+    "GetLootRollTimeLeft",
+    "RollOnLoot",
+    "ConfirmLootRoll",
+    "GetActiveLootRollIDs",
+    "GetMasterLootCandidate",
+    "GiveMasterLoot",
+    "IsMasterLooter",
+    "LootFrame",
+    "LootFrame_Show",
+    "LootFrame_OnEvent",
+    "LootButton1",
+    "GroupLootFrame1",
+    "GroupLootContainer",
+    "GroupLootHistoryFrame",
+    "MasterLooterFrame",
+    "BonusRollFrame",
+    "LootHistoryFrame",
+    "AlertFrame",
+    "LootAlertSystem",
+    "LootWonAlertSystem",
+    "LootUpgradeAlertSystem",
+    "MoneyWonAlertSystem",
+    "GroupLootFrame_OpenNewFrame",
+    "GroupLootContainer_AddFrame",
+    "LOOT_ROLL_TYPE_NEED",
+    "LOOT_ROLL_TYPE_GREED",
+    "LOOT_ROLL_TYPE_PASS",
+    "LOOT_ROLL_TYPE_DISENCHANT",
+    "LOOT_ROLL_TYPE_TRANSMOG",
+    "LootFrameItemElementMixin",
+    "LootFrameMixin",
+    "GetCVarBool",
 }
 
 local EVENTS = {
-    "LOOT_READY", "LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_SLOT_CHANGED", "LOOT_CLOSED", "LOOT_BIND_CONFIRM",
-    "START_LOOT_ROLL", "CANCEL_LOOT_ROLL", "CANCEL_ALL_LOOT_ROLLS", "CONFIRM_LOOT_ROLL", "CONFIRM_DISENCHANT_ROLL",
-    "LOOT_ROLLS_COMPLETE", "MAIN_SPEC_NEED_ROLL", "LOOT_ITEM_ROLL_WON", "LOOT_ITEM_AVAILABLE",
-    "LOOT_HISTORY_UPDATE_DRAW", "LOOT_HISTORY_UPDATE_ENCOUNTER", "LOOT_HISTORY_UPDATE_FULL", "LOOT_HISTORY_CLEAR_HISTORY",
-    "LOOT_HISTORY_GO_TO_ENCOUNTER", "LOOT_HISTORY_ROLL_CHANGED", "LOOT_HISTORY_ROLL_COMPLETE", "LOOT_HISTORY_FULL_UPDATE",
-    "OPEN_MASTER_LOOT_LIST", "UPDATE_MASTER_LOOT_LIST", "PARTY_LOOT_METHOD_CHANGED", "ENCOUNTER_LOOT_RECEIVED",
-    "BONUS_ROLL_STARTED", "SHOW_LOOT_TOAST", "CHAT_MSG_LOOT", "CHAT_MSG_MONEY", "CHAT_MSG_CURRENCY",
-    "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN",
+    "LOOT_READY",
+    "LOOT_OPENED",
+    "LOOT_SLOT_CLEARED",
+    "LOOT_SLOT_CHANGED",
+    "LOOT_CLOSED",
+    "LOOT_BIND_CONFIRM",
+    "START_LOOT_ROLL",
+    "CANCEL_LOOT_ROLL",
+    "CANCEL_ALL_LOOT_ROLLS",
+    "CONFIRM_LOOT_ROLL",
+    "CONFIRM_DISENCHANT_ROLL",
+    "LOOT_ROLLS_COMPLETE",
+    "MAIN_SPEC_NEED_ROLL",
+    "LOOT_ITEM_ROLL_WON",
+    "LOOT_ITEM_AVAILABLE",
+    "LOOT_HISTORY_UPDATE_DRAW",
+    "LOOT_HISTORY_UPDATE_ENCOUNTER",
+    "LOOT_HISTORY_UPDATE_FULL",
+    "LOOT_HISTORY_CLEAR_HISTORY",
+    "LOOT_HISTORY_GO_TO_ENCOUNTER",
+    "LOOT_HISTORY_ROLL_CHANGED",
+    "LOOT_HISTORY_ROLL_COMPLETE",
+    "LOOT_HISTORY_FULL_UPDATE",
+    "OPEN_MASTER_LOOT_LIST",
+    "UPDATE_MASTER_LOOT_LIST",
+    "PARTY_LOOT_METHOD_CHANGED",
+    "ENCOUNTER_LOOT_RECEIVED",
+    "BONUS_ROLL_STARTED",
+    "SHOW_LOOT_TOAST",
+    "CHAT_MSG_LOOT",
+    "CHAT_MSG_MONEY",
+    "CHAT_MSG_CURRENCY",
+    "ADDON_ACTION_BLOCKED",
+    "ADDON_ACTION_FORBIDDEN",
 }
 
 local function frameInfo(name: string): string
     local f = wf.find(name)
-    if not f then return "missing" end
+    if not f then
+        return "missing"
+    end
     local kids = tbl.keys(wf.keyed(f))
-    return f:GetObjectType() .. " protected=" .. show((f:IsProtected())) .. " shown=" .. show(f:IsShown())
-        .. " children: " .. table.concat(kids, " ")
+    return f:GetObjectType() ..
+        " protected=" ..
+            show((f:IsProtected())) .. " shown=" .. show(f:IsShown()) .. " children: " .. table.concat(kids, " ")
 end
 
 local store: Loot? = nil
 local function note(s: string)
     local log = store and store.log
-    if not log then return end
+    if not log then
+        return
+    end
     log[#log + 1] = date("%H:%M:%S") .. (InCombatLockdown() and " [combat] " or " ") .. s
-    while #log > 300 do table.remove(log, 1) end
+    while #log > 300 do
+        table.remove(log, 1)
+    end
 end
 
 -- A loot window as the game gives it: every slot's info.
 local function lootWindow(): Record
     local n = GetNumLootItems()
     local slots: string[] = {}
-    local w: Record = { at = date("%H:%M:%S"), count = show(n), fishing = call(IsFishingLoot), slots = slots,
-                autoLoot = call(GetCVarBool, "autoLootDefault"), method = call(tbl.field(C_PartyInfo, "GetLootMethod") or tbl.field(_G, "GetLootMethod")),
-                threshold = call(GetLootThreshold) }
+    local w: Record = {
+        at = date("%H:%M:%S"),
+        count = show(n),
+        fishing = call(IsFishingLoot),
+        slots = slots,
+        autoLoot = call(GetCVarBool, "autoLootDefault"),
+        method = call(tbl.field(C_PartyInfo, "GetLootMethod") or tbl.field(_G, "GetLootMethod")),
+        threshold = call(GetLootThreshold),
+    }
     if type(n) == "number" and not isSecret(n) then
         for i = 1, math.min(n, 12) do
-            table.insert(slots, i .. ": info=" .. call(GetLootSlotInfo, i) .. " type=" .. call(GetLootSlotType, i)
-                .. " link=" .. call(GetLootSlotLink, i) .. " hasItem=" .. call(LootSlotHasItem, i)
-                .. " source=" .. call(GetLootSourceInfo, i))
+            table.insert(
+                slots,
+                i ..
+                    ": info=" ..
+                        call(GetLootSlotInfo, i) ..
+                            " type=" ..
+                                call(GetLootSlotType, i) ..
+                                    " link=" ..
+                                        call(GetLootSlotLink, i) ..
+                                            " hasItem=" ..
+                                                call(LootSlotHasItem, i) .. " source=" .. call(GetLootSourceInfo, i)
+            )
         end
     end
     w.info = call(GetLootInfo)
@@ -117,23 +220,33 @@ end
 local takeNext = false
 local logging = false
 local function startLog()
-    if logging then return end
+    if logging then
+        return
+    end
     logging = true
     local f = CreateFrame("Frame")
     for _, e in ipairs(EVENTS) do
-        if C_EventUtils.IsEventValid(e) then f:RegisterEvent(e) end
+        if C_EventUtils.IsEventValid(e) then
+            f:RegisterEvent(e)
+        end
     end
     f:SetScript("OnEvent", function(_, event: string, ...: unknown)
         local args: string[] = {}
-        for i = 1, math.min(select("#", ...), 6) do args[#args + 1] = show((select(i, ...))) end
+        for i = 1, math.min(select("#", ...), 6) do
+            args[#args + 1] = show((select(i, ...)))
+        end
         note(event .. " " .. table.concat(args, " "))
         local s = store
-        if not s then return end -- sampled before the log starts
+        if not s then
+            return
+        end -- sampled before the log starts
         if event == "LOOT_OPENED" or event == "LOOT_READY" then
             local w = lootWindow()
             w.event = event
             table.insert(s.windows, w)
-            while #s.windows > 6 do table.remove(s.windows, 1) end
+            while #s.windows > 6 do
+                table.remove(s.windows, 1)
+            end
             if event == "LOOT_OPENED" and takeNext then
                 takeNext = false
                 local take: Record = { at = date("%H:%M:%S"), slot1 = call(GetLootSlotInfo, 1) }
@@ -144,11 +257,17 @@ local function startLog()
         elseif event == "START_LOOT_ROLL" then
             local rollID = ...
             table.insert(s.rolls, {
-                at = date("%H:%M:%S"), rollID = show(rollID), time = show(select(2, ...)),
-                info = call(GetLootRollItemInfo, rollID), link = call(GetLootRollItemLink, rollID),
-                left = call(GetLootRollTimeLeft, rollID), active = call(GetActiveLootRollIDs),
+                at = date("%H:%M:%S"),
+                rollID = show(rollID),
+                time = show(select(2, ...)),
+                info = call(GetLootRollItemInfo, rollID),
+                link = call(GetLootRollItemLink, rollID),
+                left = call(GetLootRollTimeLeft, rollID),
+                active = call(GetActiveLootRollIDs),
             })
-            while #s.rolls > 8 do table.remove(s.rolls, 1) end
+            while #s.rolls > 8 do
+                table.remove(s.rolls, 1)
+            end
         elseif event:find("^LOOT_HISTORY") then
             local h: Record = { at = date("%H:%M:%S"), event = event }
             local all = tbl.field(C_LootHistory, "GetAllEncounterInfos")
@@ -173,13 +292,17 @@ local function startLog()
                 end
             end
             table.insert(s.history, h)
-            while #s.history > 10 do table.remove(s.history, 1) end
+            while #s.history > 10 do
+                table.remove(s.history, 1)
+            end
         end
     end)
 end
 
 export function sample(): Loot
-    local s = DB.probeData("loot", function(): Loot return { log = {}, windows = {}, rolls = {}, history = {} } end)
+    local s = DB.probeData("loot", function(): Loot
+        return { log = {}, windows = {}, rolls = {}, history = {} }
+    end)
     s.windows, s.rolls, s.history = s.windows or {}, s.rolls or {}, s.history or {}
     store = s
     s.at = date("%Y-%m-%d %H:%M:%S")
@@ -193,7 +316,9 @@ export function sample(): Loot
     end
     s.globals = globals
     local events: { [string]: string } = {}
-    for _, e in ipairs(EVENTS) do events[e] = show(C_EventUtils.IsEventValid(e)) end
+    for _, e in ipairs(EVENTS) do
+        events[e] = show(C_EventUtils.IsEventValid(e))
+    end
     s.events = events
     local cvars: { [string]: string } = {}
     for _, c in ipairs({ "autoLootDefault", "lootUnderMouse", "autoLootKey", "showLootSpam", "lootLeftmostBag" }) do
@@ -201,14 +326,23 @@ export function sample(): Loot
     end
     s.cvars = cvars
     local frameList: { [string]: string } = {}
-    for _, name in ipairs({ "LootFrame", "GroupLootFrame1", "GroupLootContainer", "GroupLootHistoryFrame",
-                            "MasterLooterFrame", "BonusRollFrame", "LootHistoryFrame" }) do
+    for _, name in ipairs({
+        "LootFrame",
+        "GroupLootFrame1",
+        "GroupLootContainer",
+        "GroupLootHistoryFrame",
+        "MasterLooterFrame",
+        "BonusRollFrame",
+        "LootHistoryFrame",
+    }) do
         frameList[name] = frameInfo(name)
     end
     s.frames = frameList
     s.now = {
         method = call(tbl.field(C_PartyInfo, "GetLootMethod") or tbl.field(_G, "GetLootMethod")),
-        threshold = call(GetLootThreshold), optOut = call(GetOptOutOfLoot), activeRolls = call(GetActiveLootRollIDs),
+        threshold = call(GetLootThreshold),
+        optOut = call(GetOptOutOfLoot),
+        activeRolls = call(GetActiveLootRollIDs),
     }
     s.log = s.log or {}
     startLog()
@@ -219,8 +353,12 @@ export function command(arg: string?)
     sample()
     if arg == "take" then
         takeNext = true
-        print("Loot probe: open a corpse's loot (auto loot off, or hold the auto-loot key so the window stays); SuuUI will take the first slot itself.")
+        print(
+            "Loot probe: open a corpse's loot (auto loot off, or hold the auto-loot key so the window stays); SuuUI will take the first slot itself."
+        )
         return
     end
-    print("Loot probe: sampled. Logging loot windows and rolls until /reload: loot a few corpses (auto loot on and off), roll on something in a group if you can, then /reload.")
+    print(
+        "Loot probe: sampled. Logging loot windows and rolls until /reload: loot a few corpses (auto loot on and off), roll on something in a group if you can, then /reload."
+    )
 end

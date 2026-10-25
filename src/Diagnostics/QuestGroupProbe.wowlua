@@ -15,19 +15,32 @@ import print from "/Core/Init"
 import questStarts from "/Data/QuestStarts"
 import * as tbl from "wowlua:table"
 
-
 local function tagOf(id: number): string
-    if not (C_QuestLog and C_QuestLog.GetQuestTagInfo) then return "missing" end
+    if not (C_QuestLog and C_QuestLog.GetQuestTagInfo) then
+        return "missing"
+    end
     local ok, t = pcall(C_QuestLog.GetQuestTagInfo, id)
-    if not ok then return "error" end
-    if type(t) ~= "table" then return tostring(t) end
-    return ("tagID=%s name=%s worldQuestType=%s"):format(tostring(t.tagID), tostring(t.tagName), tostring(t.worldQuestType))
+    if not ok then
+        return "error"
+    end
+    if type(t) ~= "table" then
+        return tostring(t)
+    end
+    return ("tagID=%s name=%s worldQuestType=%s"):format(
+        tostring(t.tagID),
+        tostring(t.tagName),
+        tostring(t.worldQuestType)
+    )
 end
 
 local function groupOf(id: number): string
-    if not (C_QuestLog and C_QuestLog.GetSuggestedGroupSize) then return "missing" end
+    if not (C_QuestLog and C_QuestLog.GetSuggestedGroupSize) then
+        return "missing"
+    end
     local ok, n = pcall(C_QuestLog.GetSuggestedGroupSize, id)
-    if not ok then return "error" end
+    if not ok then
+        return "error"
+    end
     return isSecret(n) and "SECRET" or tostring(n)
 end
 
@@ -37,14 +50,17 @@ end
 local PASSES = { 0, 2, 6 }
 
 export function command()
-    local mapID = (WorldMapFrame and WorldMapFrame:IsShown() and asNumber(WorldMapFrame:GetMapID())) or C_Map.GetBestMapForUnit("player")
+    local mapID = (WorldMapFrame and WorldMapFrame:IsShown() and asNumber(WorldMapFrame:GetMapID())) or
+        C_Map.GetBestMapForUnit("player")
     local starts = questStarts
     local counts: { [string]: number } = { quests = 0, ours = 0 }
     local out = { at = date("%H:%M:%S"), mapID = mapID, map = {}, log = {}, counts = counts }
     local ids: number[], seen: { [number]: boolean }, inLog: { [number]: boolean } = {}, {}, {}
     for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
         local info = C_QuestLog.GetInfo(i)
-        if info and not info.isHeader and info.questID then inLog[info.questID] = true end
+        if info and not info.isHeader and info.questID then
+            inLog[info.questID] = true
+        end
     end
     for _, row in ipairs(starts.maps and starts.maps[mapID] or {}) do
         for i = 4, #row do
@@ -63,8 +79,12 @@ export function command()
             answers[id] = a
             local tag = tagOf(id)
             a[n] = tag
-            if tag:find("tagID=") then tagged = tagged + 1 end
-            if n == 1 and C_QuestLog.RequestLoadQuestByID then pcall(C_QuestLog.RequestLoadQuestByID, id) end
+            if tag:find("tagID=") then
+                tagged = tagged + 1
+            end
+            if n == 1 and C_QuestLog.RequestLoadQuestByID then
+                pcall(C_QuestLog.RequestLoadQuestByID, id)
+            end
         end
         counts["tagged" .. PASSES[n] .. "s"] = tagged
     end
@@ -72,25 +92,61 @@ export function command()
         for _, id in ipairs(ids) do
             local q = starts.quests and starts.quests[id]
             local ours = starts.group and starts.group[id]
-            if ours then counts.ours = (counts.ours or 0) + 1 end
+            if ours then
+                counts.ours = (counts.ours or 0) + 1
+            end
             local a = answers[id] or {}
-            table.insert(tbl.listAt(out, "map"), ("%d %s: now %s | 2 s %s | 6 s %s · group %s · ours %s"):format(id, tostring(q and q[1]),
-                a[1], a[2], a[3], groupOf(id), tostring(ours)))
+            table.insert(
+                tbl.listAt(out, "map"),
+                ("%d %s: now %s | 2 s %s | 6 s %s · group %s · ours %s"):format(
+                    id,
+                    tostring(q and q[1]),
+                    a[1],
+                    a[2],
+                    a[3],
+                    groupOf(id),
+                    tostring(ours)
+                )
+            )
         end
         counts.quests = #ids
         for i = 1, (C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetNumQuestLogEntries() or 0) do
             local info = C_QuestLog.GetInfo(i)
             if info and not info.isHeader and info.questID then
-                table.insert(tbl.listAt(out, "log"), ("%d %s: %s · group %s · suggestedGroup %s · ours %s"):format(info.questID, tostring(info.title),
-                    tagOf(info.questID), groupOf(info.questID), tostring(info.suggestedGroup), tostring(starts.group and starts.group[info.questID])))
+                table.insert(
+                    tbl.listAt(out, "log"),
+                    ("%d %s: %s · group %s · suggestedGroup %s · ours %s"):format(
+                        info.questID,
+                        tostring(info.title),
+                        tagOf(info.questID),
+                        groupOf(info.questID),
+                        tostring(info.suggestedGroup),
+                        tostring(starts.group and starts.group[info.questID])
+                    )
+                )
             end
         end
         DB.probe.questGroup = out
-        print(("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it.")
-            :format(#ids, tostring(mapID), counts.tagged0s or 0, counts.tagged2s or 0, counts.tagged6s or 0, counts.ours))
+        print(
+            ("Quest group probe done: %d quests on map %s not in your log, tagged %d now, %d after 2 s, %d after 6 s (%d in SuuUI's data). /reload to save it."):format(
+                #ids,
+                tostring(mapID),
+                counts.tagged0s or 0,
+                counts.tagged2s or 0,
+                counts.tagged6s or 0,
+                counts.ours
+            )
+        )
     end
     pass(1)
-    print(("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID)))
-    after(PASSES[2], function() pass(2) end)
-    after(PASSES[3], function() pass(3); finish() end)
+    print(
+        ("Quest group probe: asking about %d quests on map %s, again in 2 and 6 seconds…"):format(#ids, tostring(mapID))
+    )
+    after(PASSES[2], function()
+        pass(2)
+    end)
+    after(PASSES[3], function()
+        pass(3)
+        finish()
+    end)
 end

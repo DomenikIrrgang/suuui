@@ -30,10 +30,7 @@ import tokenOf from "../SettingsUI/UiSettingsHelpers"
 local SOURCES: CollectionSources = {
     npc = { [1] = "Vendor Brom|Elwynn Forest|20|Alliance", [2] = "Kobold Miner|Elwynn Forest|5|", [3] = "Boar|||" },
     obj = { [1] = "Old Chest|Westfall", [2] = "Crate|" },
-    mount = {
-        [101] = { v = { 1, 2 } },
-        [102] = { q = { 10, 11 } },
-    },
+    mount = { [101] = { v = { 1, 2 } }, [102] = { q = { 10, 11 } } },
     toys = { 201, 202, 203 },
     toy = { [201] = { x = "From a holiday" } },
     item = { [56] = { d = { 2 }, dn = 3 } },
@@ -41,10 +38,23 @@ local SOURCES: CollectionSources = {
 
 -- The account's mounts, by mount ID: the game's journal holds them.
 local MOUNTS: { [number]: mock.MountData } = {}
-local function mount(id: number, name: string, opts: { favorite?: boolean, collected?: boolean, hidden?: boolean, usable?: boolean }?)
+local function mount(
+    id: number,
+    name: string,
+    opts: { favorite?: boolean, collected?: boolean, hidden?: boolean, usable?: boolean }?
+)
     local o = opts or {}
-    MOUNTS[id] = { name = name, spellID = id * 10, icon = 132000 + id, sourceType = 1, display = 9000 + id,
-                   favorite = o.favorite, collected = o.collected, hidden = o.hidden, usable = o.usable }
+    MOUNTS[id] = {
+        name = name,
+        spellID = id * 10,
+        icon = 132000 + id,
+        sourceType = 1,
+        display = 9000 + id,
+        favorite = o.favorite,
+        collected = o.collected,
+        hidden = o.hidden,
+        usable = o.usable,
+    }
 end
 
 local mounted = false
@@ -59,27 +69,43 @@ local function start()
     mount(105, "Night Saber", { usable = false })
     mock.setMounts(MOUNTS)
     mounted = false
-    mock.stub(SuuUI, "CollectionSources", function() return SOURCES end)
-    mock.fake("IsMounted", function() return mounted end)
-    mock.stub(C_QuestLog, "GetTitleForQuestID", function(id: number): string? return id == 10 and "The Ram Trial" or nil end)
+    mock.stub(SuuUI, "CollectionSources", function()
+        return SOURCES
+    end)
+    mock.fake("IsMounted", function()
+        return mounted
+    end)
+    mock.stub(C_QuestLog, "GetTitleForQuestID", function(id: number): string?
+        return id == 10 and "The Ram Trial" or nil
+    end)
 end
 
 -- The window's parts (built as the module started).
-local function ui(): Parts return assert(M.ui) end
+local function ui(): Parts
+    return assert(M.ui)
+end
 
 -- An entry with only what a test needs.
-local function entry(fields: { [string]: unknown }): Entry return mock.partial(fields) end
+local function entry(fields: { [string]: unknown }): Entry
+    return mock.partial(fields)
+end
 
 -- What SuuUI.UI.ShowTooltip was asked last.
 local function captureTooltips(): () -> TooltipData
     local shown: TooltipData? = nil
-    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, opts: TooltipData) shown = opts end)
-    return function(): TooltipData return (assert(shown, "no tooltip")) end
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, opts: TooltipData)
+        shown = opts
+    end)
+    return function(): TooltipData
+        return (assert(shown, "no tooltip"))
+    end
 end
 
 @afterEach
 local function cleanup()
-    if ui().window:IsShown() then ui().window:Hide() end
+    if ui().window:IsShown() then
+        ui().window:Hide()
+    end
     mock.advanceTime(0.5)
     M.chosen, M.page, M.slotCounts, M.weaponKind, M.tried = nil, 1, nil, {}, nil
     ui().tools.search:SetValue("")
@@ -96,7 +122,11 @@ end
 
 local function cells(): Cell[]
     local out: Cell[] = {}
-    for _, b in ipairs(ui().strip.cells) do if b:IsShown() then out[#out + 1] = b end end
+    for _, b in ipairs(ui().strip.cells) do
+        if b:IsShown() then
+            out[#out + 1] = b
+        end
+    end
     return out
 end
 
@@ -104,7 +134,9 @@ end
 -- Where it comes from
 --------------------------------------------------------------------------------
 
-@test("a source as one line: vendor, quest, world drop, drop, object, container, crafted, the game's text, the item; else the kind")
+@test(
+    "a source as one line: vendor, quest, world drop, drop, object, container, crafted, the game's text, the item; else the kind"
+)
 local function sourceLines()
     expect(M:SourceLine({ v = { 1, 2 } }, "mount", 1)).toBe("Vendor · Vendor Brom, Elwynn Forest +1")
     expect(M:SourceLine({ v = { 99 }, q = { 10, 11 } }, "mount", 1)).toBe("Quest · The Ram Trial +1")
@@ -114,7 +146,9 @@ local function sourceLines()
     expect(M:SourceLine({ d = { 3, 2 } }, "mount", 1)).toBe("Drop · Boar +1")
     expect(M:SourceLine({ o = { 1 } }, "mount", 1)).toBe("Found in · Old Chest, Westfall")
     expect(M:SourceLine({ o = { 2, 1 } }, "mount", 1)).toBe("Found in · Crate +1")
-    mock.stub(C_Item, "GetItemNameByID", function(id: number): string? return id == 501 and "Locked Box" or nil end)
+    mock.stub(C_Item, "GetItemNameByID", function(id: number): string?
+        return id == 501 and "Locked Box" or nil
+    end)
     expect(M:SourceLine({ c = { 501 } }, "mount", 1)).toBe("Inside · Locked Box")
     expect(M:SourceLine({ c = { 502 } }, "mount", 1)).toBe("Inside · a container")
     expect(M:SourceLine({ p = "Engineering" }, "mount", 1)).toBe("Crafted · Engineering")
@@ -132,10 +166,29 @@ end
 
 @test("a source as a card: every kind with its places, a world drop, more dropping it, the item, the game's kind")
 local function sourceCards()
-    mock.stub(C_Item, "GetItemNameByID", function(id: number): string? return id == 501 and "Locked Box" or nil end)
-    local card = M:SourceCard({ v = { 1, 2, 99 }, q = { 10, 12 }, d = { 2, 3 }, dn = 5, o = { 1, 99 }, c = { 501, 502 }, p = "Engineering", x = "Event" }, "mount", 1)
+    mock.stub(C_Item, "GetItemNameByID", function(id: number): string?
+        return id == 501 and "Locked Box" or nil
+    end)
+    local card = M:SourceCard(
+        {
+            v = { 1, 2, 99 },
+            q = { 10, 12 },
+            d = { 2, 3 },
+            dn = 5,
+            o = { 1, 99 },
+            c = { 501, 502 },
+            p = "Engineering",
+            x = "Event",
+        },
+        "mount",
+        1
+    )
     local function lines(title: string): string[]?
-        for _, s in ipairs(card) do if s.title == title then return s.lines end end
+        for _, s in ipairs(card) do
+            if s.title == title then
+                return s.lines
+            end
+        end
         return nil
     end
     expect(lines("Sold by")).toEqual({ "Vendor Brom, Elwynn Forest (Alliance)", "Kobold Miner, Elwynn Forest" })
@@ -147,11 +200,17 @@ local function sourceCards()
     expect(lines("In the game")).toEqual({ "Event" })
     expect(lines("Taught by")).toBe(nil)
     -- a world drop; the teaching item alone
-    expect(M:SourceCard({ dn = 50 }, "mount", 1)[1]).toEqual({ title = "World drop", lines = { "Dropped by 50 creatures across the world" } })
+    expect(M:SourceCard({ dn = 50 }, "mount", 1)[1]).toEqual({
+        title = "World drop",
+        lines = { "Dropped by 50 creatures across the world" },
+    })
     expect(M:SourceCard({ i = 502 }, "mount", 1)[1]).toEqual({ title = "Taught by", lines = { "Item 502" } })
     expect(M:SourceCard({ i = 501 }, "mount", 1)[1].lines).toEqual({ "Locked Box" })
     -- nothing known: the game's kind, else nothing
-    expect(M:SourceCard(nil, "appearance", 1)[1]).toEqual({ title = TRANSMOG_SOURCE_1, lines = { "Nothing more is known." } })
+    expect(M:SourceCard(nil, "appearance", 1)[1]).toEqual({
+        title = TRANSMOG_SOURCE_1,
+        lines = { "Nothing more is known." },
+    })
     expect(#M:SourceCard({ v = { 99 } }, "mount", -1)).toBe(0)
 end
 
@@ -163,14 +222,18 @@ end
 local function mounts()
     local list = M:Mounts()
     local names: string[] = {}
-    for _, e in ipairs(list) do names[#names + 1] = e.name end
+    for _, e in ipairs(list) do
+        names[#names + 1] = e.name
+    end
     expect(names).toEqual({ "Swift Ram", "Brown Horse", "Night Saber", "Zebra" })
     expect(list[2].source).toBe(SOURCES.mount[101])
     expect(list[1].display).toBe(9102)
     expect(list[4].learned).toBe(nil)
 end
 
-@test("the day SuuUI first saw one of yours: what you had before SuuUI is from before; later ones dated; the last collected")
+@test(
+    "the day SuuUI first saw one of yours: what you had before SuuUI is from before; later ones dated; the last collected"
+)
 local function learned()
     expect(M:Learned("mount", 1, true)).toBe(0)
     expect(M:Learned("mount", 1, false)).toBe(nil)
@@ -200,7 +263,9 @@ local function toys()
     M.namesPending = false
     local list = M:Toys()
     local names: string[] = {}
-    for _, e in ipairs(list) do names[#names + 1] = e.name end
+    for _, e in ipairs(list) do
+        names[#names + 1] = e.name
+    end
     expect(names).toEqual({ "Toy Drum", "Bubble Wand", "Toy 203" })
     expect(list[1].source).toBe(SOURCES.toy[201])
     expect(list[1].icon).toBe(134001)
@@ -247,7 +312,9 @@ local function appearances()
     local list = M:Appearances(4, "CHESTSLOT")
     expect(#list).toBe(CHEST_ALL)
     local ids: number[] = {}
-    for i = 1, 4 do ids[i] = list[i].visualID or 0 end
+    for i = 1, 4 do
+        ids[i] = list[i].visualID or 0
+    end
     expect(ids).toEqual({ 63240, 63239, 63305, 63242 })
     expect(list[1].worn).toBe(true)
     expect(list[1].name).toBe("Worn Tunic")
@@ -275,7 +342,9 @@ local function filters()
     }
     local function names(list: Entry[]): string[]
         local out: string[] = {}
-        for _, e in ipairs(list) do out[#out + 1] = e.name end
+        for _, e in ipairs(list) do
+            out[#out + 1] = e.name
+        end
         return out
     end
     expect(names(filterEntries(all, "a", "all", "all"))).toEqual({ "Alpha", "Beta", "Gamma", "Delta" })
@@ -290,7 +359,10 @@ local function actions()
     expect({ actionLabel(true, nil) }).toEqual({ "Dismiss" })
     expect({ actionLabel(false, nil) }).toEqual({ "Summon", "Choose a mount." })
     expect({ actionLabel(false, entry({ collected = false })) }).toEqual({ "Summon", "You don't have this mount yet." })
-    expect({ actionLabel(false, entry({ collected = true, usable = false })) }).toEqual({ "Summon", "You can't ride this mount here." })
+    expect({ actionLabel(false, entry({ collected = true, usable = false })) }).toEqual({
+        "Summon",
+        "You can't ride this mount here.",
+    })
     expect({ actionLabel(false, entry({ collected = true, usable = true })) }).toEqual({ "Summon" })
     expect(readyIn(100, 3900, 100)).toBe("Ready in 1 h 5 min")
     expect(readyIn(100, 2460, 100)).toBe("Ready in 41 min")
@@ -302,8 +374,12 @@ local function actions()
     expect(toyWhy(entry({ collected = true, usable = true }), 0, 0)).toBe(nil)
     -- a toy's cooldown: the game's, if it lasts beyond the global cooldown
     mock.stub(C_Container, "GetItemCooldown", function(id: number): (unknown, unknown)
-        if id == 1 then return 50, 120 end
-        if id == 2 then return 50, 1 end
+        if id == 1 then
+            return 50, 120
+        end
+        if id == 2 then
+            return 50, 1
+        end
         return mock.secret(1), mock.secret(2)
     end)
     expect({ toyCooldown(1) }).toEqual({ 50, 120 })
@@ -335,7 +411,11 @@ local function mountsTab()
     mock.click(list[2])
     expect(assert(M.chosen).name).toBe("Brown Horse")
     local texts: string[] = {}
-    for _, t in ipairs(ui().card.texts) do if t:IsShown() then texts[#texts + 1] = mock.textOf(t) end end
+    for _, t in ipairs(ui().card.texts) do
+        if t:IsShown() then
+            texts[#texts + 1] = mock.textOf(t)
+        end
+    end
     expect(texts[1]).toBe("Sold by")
     -- a mount without any source: the game's kind
     mock.click(list[4])
@@ -367,7 +447,9 @@ end
 
 @test("paging: 36 a page, the arrows, the wheel; the search and the filters; nothing left: the stage says so")
 local function paging()
-    for i = 1, 40 do mount(1000 + i, ("Test Mount %02d"):format(i)) end
+    for i = 1, 40 do
+        mount(1000 + i, ("Test Mount %02d"):format(i))
+    end
     mock.setMounts(MOUNTS)
     open()
     expect(M.pages).toBe(2)
@@ -409,15 +491,23 @@ local function paging()
     expect(ui().card).never.toBeShown()
 end
 
-@test("the model: the icon while it loads, then placed on the floor and shown; the same one again is left; no answer: shown anyway")
+@test(
+    "the model: the icon while it loads, then placed on the floor and shown; the same one again is left; no answer: shown anyway"
+)
 local function modelLoads()
     open()
     local m = ui().model
     local stage = ui().stage
     expect(stage.loading).toBeShown()
-    mock.stub(m, "GetCameraPosition", function(): ...unknown return 6, 0, 1.2 end)
-    mock.stub(m, "GetCameraTarget", function(): ...unknown return 0, 0, 1 end)
-    mock.stub(m, "GetModelFileID", function() return 123410 end)
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return 6, 0, 1.2
+    end)
+    mock.stub(m, "GetCameraTarget", function(): ...unknown
+        return 0, 0, 1
+    end)
+    mock.stub(m, "GetModelFileID", function()
+        return 123410
+    end)
     local placed = mock.stub(m, "SetPosition", function() end)
     mock.script(m, "OnModelLoaded")
     mock.advanceTime(0.2)
@@ -434,9 +524,13 @@ local function modelLoads()
     expect(stage.loading).never.toBeShown()
     -- a camera that can't be read, or reads nothing useful: not placed
     mock.resetSpies()
-    mock.stub(m, "GetCameraPosition", function(): ...unknown return mock.secret(1), 0, 0 end)
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return mock.secret(1), 0, 0
+    end)
     M:PlaceModel()
-    mock.stub(m, "GetCameraPosition", function(): ...unknown return 0, 0, 1 end)
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return 0, 0, 1
+    end)
     M:PlaceModel()
     expect(placed).never.toHaveBeenCalled()
     M:ModelLoaded()
@@ -460,10 +554,14 @@ local function turnZoom()
     local before = M.camScale
     mock.script(m, "OnMouseWheel", 1)
     expect(M.camScale < before).toBe(true)
-    for _ = 1, 20 do M:Zoom(1) end
+    for _ = 1, 20 do
+        M:Zoom(1)
+    end
     mock.advanceTime(0.1)
     local buttons = ui().stage.buttons
-    for _, b in ipairs(buttons) do mock.click(b) end
+    for _, b in ipairs(buttons) do
+        mock.click(b)
+    end
     expect(facing).toHaveBeenCalled()
     -- their look and tooltips
     mock.hover(buttons[1])
@@ -512,7 +610,9 @@ local function toyData()
     mock.defineItem(203, { name = "Kite", icon = 134203 })
     mock.setToys({ [201] = {}, [202] = { favorite = true, usable = false }, [203] = { collected = false } })
     mock.stub(C_TooltipInfo, "GetToyByItemID", function(id: number): unknown
-        if id == 201 then return { lines = { { leftText = "Toy Drum" }, { leftText = "Use: Plays a drum." } } } end
+        if id == 201 then
+            return { lines = { { leftText = "Toy Drum" }, { leftText = "Use: Plays a drum." } } }
+        end
         return { lines = {} }
     end)
 end
@@ -593,7 +693,9 @@ local function toysTab()
     expect(ui().shelf.empty).toBeShown()
 end
 
-@test("a toy on cooldown: when it's ready, again each second and when the game says; its star; in combat the buttons wait")
+@test(
+    "a toy on cooldown: when it's ready, again each second and when the game says; its star; in combat the buttons wait"
+)
 local function toyCooldowns()
     toyData()
     open("toys")
@@ -626,7 +728,11 @@ end
 --------------------------------------------------------------------------------
 
 local function slotButton(slot: string): SlotButton
-    for _, b in ipairs(ui().wardrobe.slots) do if b.slot == slot then return b end end
+    for _, b in ipairs(ui().wardrobe.slots) do
+        if b.slot == slot then
+            return b
+        end
+    end
     error("no slot " .. slot)
 end
 
@@ -706,9 +812,13 @@ local function wardrobeSlots()
     local facing = mock.stub(d, "SetFacing", function() end)
     M:Turn(1)
     expect(facing).toHaveBeenCalled()
-    for _ = 1, 15 do M:Zoom(1) end
+    for _ = 1, 15 do
+        M:Zoom(1)
+    end
     expect(M.dollScale).toBe(2.5)
-    for _ = 1, 15 do M:Zoom(-1) end
+    for _ = 1, 15 do
+        M:Zoom(-1)
+    end
     expect(M.dollScale).toBe(0.6)
     mock.setCursorPosition(100, 100)
     mock.script(d, "OnMouseDown", "LeftButton")

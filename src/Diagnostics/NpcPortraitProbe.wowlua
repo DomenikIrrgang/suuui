@@ -24,23 +24,34 @@ local panel: PortraitPanel? = nil
 
 -- the game's animation IDs: stand, talk, exclamation, question, bow, point
 local ANIMS: { id: number, name: string }[] = {
-    { id = 0, name = "Idle" }, { id = 60, name = "Talk" }, { id = 64, name = "Exclaim" },
-    { id = 65, name = "Question" }, { id = 66, name = "Bow" }, { id = 84, name = "Point" },
+    { id = 0, name = "Idle" },
+    { id = 60, name = "Talk" },
+    { id = 64, name = "Exclaim" },
+    { id = 65, name = "Question" },
+    { id = 66, name = "Bow" },
+    { id = 84, name = "Point" },
 }
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error " .. tostring(res[2]):sub(1, 100) end
+    if not res[1] then
+        return "error " .. tostring(res[2]):sub(1, 100)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, #res) do parts[#parts + 1] = tostring(res[i]) end
+    for i = 2, math.max(2, #res) do
+        parts[#parts + 1] = tostring(res[i])
+    end
     return table.concat(parts, ", ")
 end
 
 export function command()
     local out = { at = date("%Y-%m-%d %H:%M:%S"), npcs = {} }
     DB.probe.npcPortrait = out
-    local p = panel or makePanel(UIParent, { title = "NPC portrait", width = 420, height = 520, solid = true }) :: PortraitPanel
+    local p = panel or
+        makePanel(UIParent, { title = "NPC portrait", width = 420, height = 520, solid = true }) :: PortraitPanel
     panel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
@@ -57,7 +68,9 @@ export function command()
     local function show(zoom: number)
         p.zoom = zoom
         call(m.SetPortraitZoom, m, zoom)
-        if entry then entry["zoom " .. zoom] = "shown" end
+        if entry then
+            entry["zoom " .. zoom] = "shown"
+        end
     end
     local function talkTo(event: string)
         -- every dialogue event is kept, with whether the game names the NPC
@@ -65,12 +78,22 @@ export function command()
         local unit = UnitExists("npc") and "npc" or (UnitExists("questnpc") and "questnpc") or nil
         if event ~= "now" then
             out.events = out.events or {}
-            table.insert(tbl.listAt(out, "events"), ("%s %s npc=%s questnpc=%s target=%s"):format(date("%H:%M:%S"), event,
-                tostring(UnitExists("npc")), tostring(UnitExists("questnpc")), tostring(UnitExists("target"))))
+            table.insert(
+                tbl.listAt(out, "events"),
+                ("%s %s npc=%s questnpc=%s target=%s"):format(
+                    date("%H:%M:%S"),
+                    event,
+                    tostring(UnitExists("npc")),
+                    tostring(UnitExists("questnpc")),
+                    tostring(UnitExists("target"))
+                )
+            )
         end
         if not unit then
-            label:SetValue(event == "now" and "Waiting: talk to an NPC (a vendor, a trainer, a quest giver)."
-                or ("%s came, but the game names no NPC."):format(event))
+            label:SetValue(
+                event == "now" and "Waiting: talk to an NPC (a vendor, a trainer, a quest giver)." or
+                    ("%s came, but the game names no NPC."):format(event)
+            )
             p:Show()
             return
         end
@@ -80,7 +103,9 @@ export function command()
         m:SetScript("OnModelLoaded", function()
             e.file = call(m.GetModelFileID, m)
             e.display = call(m.GetDisplayInfo, m)
-            for _, a in ipairs(ANIMS) do e["has " .. a.name] = call(m.HasAnimation, m, a.id) end
+            for _, a in ipairs(ANIMS) do
+                e["has " .. a.name] = call(m.HasAnimation, m, a.id)
+            end
             show(p.zoom or 1)
             call(m.SetAnimation, m, 60)
         end)
@@ -89,7 +114,9 @@ export function command()
         local info: unknown = C_TooltipInfo and C_TooltipInfo.GetUnit and C_TooltipInfo.GetUnit(unit)
         local lines: string[] = {}
         for i, line in ipairs(tbl.list(tbl.field(info, "lines"))) do
-            if i <= 4 then lines[#lines + 1] = tostring(tbl.field(line, "leftText")) end
+            if i <= 4 then
+                lines[#lines + 1] = tostring(tbl.field(line, "leftText"))
+            end
         end
         local tooltip = table.concat(lines, " / ")
         e.tooltip = tooltip
@@ -102,27 +129,62 @@ export function command()
         p.buttons = true
         local prev: Button? = nil
         for _, a in ipairs(ANIMS) do
-            local b = button(p.body, { text = a.name, width = 60, onClick = function()
-                if entry then entry["played " .. a.name] = call(m.SetAnimation, m, a.id) end
-            end })
+            local b = button(p.body, {
+                text = a.name,
+                width = 60,
+                onClick = function()
+                    if entry then
+                        entry["played " .. a.name] = call(m.SetAnimation, m, a.id)
+                    end
+                end,
+            })
             b:SetPoint("BOTTOMLEFT", prev or p.body, prev and "BOTTOMRIGHT" or "BOTTOMLEFT", prev and 4 or 0, 0)
             prev = b
         end
-        local head = button(p.body, { text = "Head", width = 90, onClick = function() show(1) end })
+        local head = button(p.body, {
+            text = "Head",
+            width = 90,
+            onClick = function()
+                show(1)
+            end,
+        })
         head:SetPoint("BOTTOMLEFT", p.body, "BOTTOMLEFT", 0, 30)
-        local half = button(p.body, { text = "Half", width = 90, onClick = function() show(0.6) end })
+        local half = button(p.body, {
+            text = "Half",
+            width = 90,
+            onClick = function()
+                show(0.6)
+            end,
+        })
         half:SetPoint("LEFT", head, "RIGHT", 4, 0)
-        local body = button(p.body, { text = "Body", width = 90, onClick = function() show(0) end })
+        local body = button(p.body, {
+            text = "Body",
+            width = 90,
+            onClick = function()
+                show(0)
+            end,
+        })
         body:SetPoint("LEFT", half, "RIGHT", 4, 0)
         local ev = CreateFrame("Frame", nil, p)
-        for _, e in ipairs({ "GOSSIP_SHOW", "QUEST_GREETING", "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE",
-                             "MERCHANT_SHOW", "TRAINER_SHOW" }) do
+        for _, e in ipairs({
+            "GOSSIP_SHOW",
+            "QUEST_GREETING",
+            "QUEST_DETAIL",
+            "QUEST_PROGRESS",
+            "QUEST_COMPLETE",
+            "MERCHANT_SHOW",
+            "TRAINER_SHOW",
+        }) do
             ev:RegisterEvent(e)
         end
-        ev:SetScript("OnEvent", function(_, event) talkTo(event) end)
+        ev:SetScript("OnEvent", function(_, event)
+            talkTo(event)
+        end)
     end
     p:Show()
     talkTo("now")
-    print("NPC portrait: talk to a few NPCs (a trainer, a vendor, a quest giver, one tall or small)."
-        .. " For each, try Head, Half and Body and the animations; screenshots, then /reload.")
+    print(
+        "NPC portrait: talk to a few NPCs (a trainer, a vendor, a quest giver, one tall or small)." ..
+            " For each, try Head, Half and Body and the animations; screenshots, then /reload."
+    )
 end

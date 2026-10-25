@@ -41,14 +41,14 @@ const IMMEDIATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Im
 -- On-next-swing attacks by class.
 local NEXT_SWING: { [string]: number[] } = {
     WARRIOR = { 78, 284, 285, 1608, 11564, 11565, 11566, 11567, 845, 7369, 11608, 11609 }, -- Heroic Strike, Cleave
-    DRUID = { 6807, 6808, 6809, 8972, 9745, 9880, 9881 },                                  -- Maul
-    HUNTER = { 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266 },                    -- Raptor Strike
+    DRUID = { 6807, 6808, 6809, 8972, 9745, 9880, 9881 }, -- Maul
+    HUNTER = { 2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266 }, -- Raptor Strike
 }
 
 const DIGITS_W = 40
 const QUEUE = 16
 const HATCH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga"
-const CAST = 0.5   -- Auto Shot's stand-still cast, seconds
+const CAST = 0.5 -- Auto Shot's stand-still cast, seconds
 const GRACE = 0.35 -- a shot this late still counts as on time
 
 -- The queued on-next-swing attack's icon.
@@ -173,9 +173,13 @@ end
 -- Whether a slot has a weapon that swings; nil when the client won't say.
 -- Only the off hand can lack one (the ranged row shows while you shoot).
 local function canSwing(kind: PlayerSwingType): boolean?
-    if kind ~= SWING.OffHand then return true end
+    if kind ~= SWING.OffHand then
+        return true
+    end
     local _, oh = UnitAttackSpeed("player")
-    if isSecret(oh) then return nil end
+    if isSecret(oh) then
+        return nil
+    end
     return type(oh) == "number" and oh > 0
 end
 
@@ -218,11 +222,7 @@ export class SwingTimer extends Frame
         local mh, oh, gap = draw.size("swing"), draw.size("swing-oh"), S["space-2"]
         self:SetSize(self.barW, mh + gap + oh)
         self.mainHand, self.offHand, self.ranged = buildRow(self, mh), buildRow(self, oh), buildRow(self, mh)
-        self.rows = {
-            [SWING.MainHand] = self.mainHand,
-            [SWING.OffHand] = self.offHand,
-            [SWING.Ranged] = self.ranged,
-        }
+        self.rows = { [SWING.MainHand] = self.mainHand, [SWING.OffHand] = self.offHand, [SWING.Ranged] = self.ranged }
         self.window = buildWindow(self.ranged)
         self.autoShotWindow = opts.autoShotWindow ~= false
         self.onNoAutoShotCast = opts.onNoAutoShotCast
@@ -234,13 +234,17 @@ export class SwingTimer extends Frame
         self.queued = SwingQueued.new(self)
         self.queued:SetPoint("LEFT", self.mainHand, "RIGHT", S["space-2"], 0)
 
-        self:SetScript("OnUpdate", function() self:Tick() end)
+        self:SetScript("OnUpdate", function()
+            self:Tick()
+        end)
     end
 
     function UpdateRows()
         for kind, r in pairs(self.rows) do
             local can = canSwing(kind)
-            if can ~= nil then r.canSwing = can end
+            if can ~= nil then
+                r.canSwing = can
+            end
         end
         local shooting = self.ranged.live
         self.mainHand:SetShown(not shooting)
@@ -253,7 +257,9 @@ export class SwingTimer extends Frame
 
     -- Delayed (moving inside the window) or at rest: colours of the ranged row.
     function SetDelayed(r: SwingRow, delayed: boolean)
-        if r.delayed == delayed then return end
+        if r.delayed == delayed then
+            return
+        end
         r.delayed = delayed
         local token = delayed and "amber" or "ink-muted"
         local w = r.window :: SwingWindow -- (only the ranged row is ever delayed)
@@ -288,14 +294,20 @@ export class SwingTimer extends Frame
     -- A shot just landed: did it come on time although you ran through the whole
     -- window? Twice in a row means this client has no stand-still cast.
     function LearnAutoShot(r: SwingRow, now: number)
-        if not (self.autoShotWindow and r.live and r.endsAt) then return end
+        if not (self.autoShotWindow and r.live and r.endsAt) then
+            return
+        end
         local ranThrough = self.movingSince and self.movingSince <= r.endsAt - CAST
-        if not ranThrough then return end
+        if not ranThrough then
+            return
+        end
         if now <= r.endsAt + GRACE then
             self.onTimeWhileMoving = (self.onTimeWhileMoving or 0) + 1
             if self.onTimeWhileMoving >= 2 then
                 self:SetAutoShotWindow(false)
-                if self.onNoAutoShotCast then self.onNoAutoShotCast() end
+                if self.onNoAutoShotCast then
+                    self.onNoAutoShotCast()
+                end
             end
         else
             self.onTimeWhileMoving = 0 -- the shot waited: the cast is real
@@ -303,9 +315,13 @@ export class SwingTimer extends Frame
     end
 
     function Swing(length: number | Secret<number>, kind: PlayerSwingType | Secret<PlayerSwingType>)
-        if isSecret(length) or isSecret(kind) then return end
+        if isSecret(length) or isSecret(kind) then
+            return
+        end
         local r = self.rows[kind]
-        if not r or type(length) ~= "number" or length <= 0 then return end
+        if not r or type(length) ~= "number" or length <= 0 then
+            return
+        end
         local now = GetTime()
         if kind == SWING.Ranged then
             self:LearnAutoShot(r, now)
@@ -356,7 +372,10 @@ export class SwingTimer extends Frame
                 if left <= 0 then
                     r.live = false
                     local w = r.window
-                    if w then w:Hide(); self:SetDelayed(r, false) end
+                    if w then
+                        w:Hide()
+                        self:SetDelayed(r, false)
+                    end
                     r:SetAlpha(T.opacity["opacity-oor"])
                     r.digits:SetValue("–")
                     r.bar:SetValue(0)
@@ -367,7 +386,10 @@ export class SwingTimer extends Frame
             end
             if r.flashAt then
                 local a = 1 - (now - r.flashAt) / T.duration["dur-fast"]
-                if a <= 0 then r.flashAt = nil a = 0 end
+                if a <= 0 then
+                    r.flashAt = nil
+                    a = 0
+                end
                 r.flash:SetAlpha(a)
             end
         end
@@ -379,12 +401,17 @@ export class SwingTimer extends Frame
         if ids and C_Spell.IsCurrentSpell then
             for _, id in ipairs(ids) do
                 local on = C_Spell.IsCurrentSpell(id)
-                if not isSecret(on) and on then found = id break end
+                if not isSecret(on) and on then
+                    found = id
+                    break
+                end
             end
         end
         if found then
             self.queued.art:SetTexture((C_Spell.GetSpellTexture(found)))
-            if not self.queued:IsShown() then motion.pop(self.queued) end
+            if not self.queued:IsShown() then
+                motion.pop(self.queued)
+            end
         end
         self.queued:SetShown(found ~= nil)
         local digits = self.mainHand.digits
@@ -393,30 +420,90 @@ export class SwingTimer extends Frame
     end
 
     function Activate()
-        if self.active then return end
+        if self.active then
+            return
+        end
         self.active = true
         local _, class = UnitClass("player")
         self.nextSwing = nil
-        if not issecretvalue(class) and class then self.nextSwing = NEXT_SWING[class] end
-        events.onGame("PLAYER_SWING", function(_, length, kind) self:Swing(length, kind) end, self)
-        events.onGame("WEAPON_SLOT_CHANGED", function() self:UpdateRows() end, self)
+        if not issecretvalue(class) and class then
+            self.nextSwing = NEXT_SWING[class]
+        end
+        events.onGame(
+            "PLAYER_SWING",
+            function(_, length, kind)
+                self:Swing(length, kind)
+            end,
+            self
+        )
+        events.onGame(
+            "WEAPON_SLOT_CHANGED",
+            function()
+                self:UpdateRows()
+            end,
+            self
+        )
         -- Auto Shot: whether you shoot, and whether you move.
-        events.onGame("START_AUTOREPEAT_SPELL", function() self.shooting = true end, self)
-        events.onGame("STOP_AUTOREPEAT_SPELL", function() self.shooting = false end, self)
-        events.onGame("PLAYER_STARTED_MOVING", function() self.moving = true; self.movingSince = GetTime() end, self)
-        events.onGame("PLAYER_STOPPED_MOVING", function()
-            self.moving, self.movingSince, self.stoppedAt = false, nil, GetTime()
-        end, self)
-        events.onGame("PLAYER_ENTERING_WORLD", function() self:UpdateRows() end, self)
-        events.onUnit("UNIT_ATTACK_SPEED", "player", function() self:UpdateRows() end, self)
+        events.onGame(
+            "START_AUTOREPEAT_SPELL",
+            function()
+                self.shooting = true
+            end,
+            self
+        )
+        events.onGame(
+            "STOP_AUTOREPEAT_SPELL",
+            function()
+                self.shooting = false
+            end,
+            self
+        )
+        events.onGame(
+            "PLAYER_STARTED_MOVING",
+            function()
+                self.moving = true
+                self.movingSince = GetTime()
+            end,
+            self
+        )
+        events.onGame(
+            "PLAYER_STOPPED_MOVING",
+            function()
+                self.moving, self.movingSince, self.stoppedAt = false, nil, GetTime()
+            end,
+            self
+        )
+        events.onGame(
+            "PLAYER_ENTERING_WORLD",
+            function()
+                self:UpdateRows()
+            end,
+            self
+        )
+        events.onUnit(
+            "UNIT_ATTACK_SPEED",
+            "player",
+            function()
+                self:UpdateRows()
+            end,
+            self
+        )
         if self.nextSwing then
-            events.onGame("ACTIONBAR_UPDATE_STATE", function() self:UpdateQueued() end, self)
+            events.onGame(
+                "ACTIONBAR_UPDATE_STATE",
+                function()
+                    self:UpdateQueued()
+                end,
+                self
+            )
         end
         self:UpdateRows()
     end
 
     function Deactivate()
-        if not self.active then return end
+        if not self.active then
+            return
+        end
         self.active = false
         events.offAll(self)
     end
@@ -425,4 +512,3 @@ end
 export function swingTimer(parent: Frame, options: SwingTimerOptions?): SwingTimer
     return SwingTimer.new(parent, options)
 end
-

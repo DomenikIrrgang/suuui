@@ -23,11 +23,15 @@ local panel: (Panel & { buttons?: boolean })? = nil
 
 local function taintedFields(fname: string): string
     local f: unknown, list: string[] = field(_G, fname), {}
-    if type(f) ~= "table" then return "missing" end
+    if type(f) ~= "table" then
+        return "missing"
+    end
     for k in pairs(f) do
         if type(k) == "string" then
             local ok, by = issecurevariable(f, k)
-            if not ok then list[#list + 1] = k .. " (by " .. tostring(by) .. ")" end
+            if not ok then
+                list[#list + 1] = k .. " (by " .. tostring(by) .. ")"
+            end
         end
     end
     table.sort(list)
@@ -35,20 +39,54 @@ local function taintedFields(fname: string): string
 end
 
 local ENTRIES = {
-    { key = "options", text = "Options", call = function() SettingsPanel:Open() end },
-    { key = "editmode", text = "Edit Mode", call = function() ShowUIPanel(EditModeManagerFrame) end },
-    { key = "macros", text = "Macros", call = function() ShowMacroFrame() end },
-    { key = "addons", text = "AddOns", call = function() ShowUIPanel(AddonList) end },
-    { key = "support", text = "Support", call = function() ToggleHelpFrame() end },
+    {
+        key = "options",
+        text = "Options",
+        call = function()
+            SettingsPanel:Open()
+        end,
+    },
+    {
+        key = "editmode",
+        text = "Edit Mode",
+        call = function()
+            ShowUIPanel(EditModeManagerFrame)
+        end,
+    },
+    {
+        key = "macros",
+        text = "Macros",
+        call = function()
+            ShowMacroFrame()
+        end,
+    },
+    {
+        key = "addons",
+        text = "AddOns",
+        call = function()
+            ShowUIPanel(AddonList)
+        end,
+    },
+    {
+        key = "support",
+        text = "Support",
+        call = function()
+            ToggleHelpFrame()
+        end,
+    },
 }
 
 export function command()
     local calls: string[] = {}
-    local out = { at = date("%Y-%m-%d %H:%M:%S"), calls = calls, start = {
-        settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame"),
-    } }
+    local out = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        calls = calls,
+        start = { settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame") },
+    }
     DB.probe.gameMenu = out
-    local p = panel or makePanel(UIParent, { title = "Game menu probe", width = 240, height = 330, solid = true }) :: Panel & { buttons?: boolean }
+    local p = panel or
+        makePanel(UIParent, { title = "Game menu probe", width = 240, height = 330, solid = true }) :: Panel
+            & { buttons?: boolean }
     panel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
@@ -57,43 +95,77 @@ export function command()
         p.buttons = true
         local prev: Button? = nil
         for _, e in ipairs(ENTRIES) do
-            local b = button(p.body, { text = e.text, width = 200, onClick = function()
-                local ok, err = pcall(e.call)
-                local line = #calls + 1
-                calls[line] = ("%s %s: %s, combat %s"):format(date("%H:%M:%S"), e.key,
-                    ok and "ok" or ("error " .. tostring(err)), tostring(InCombatLockdown()))
-                -- what addon code wrote by opening it, a moment after
-                after(1, function()
-                    calls[line] = calls[line] .. "; written by addon code: SettingsPanel " .. taintedFields("SettingsPanel")
-                        .. "; EditModeManagerFrame " .. taintedFields("EditModeManagerFrame")
-                end)
-            end })
+            local b = button(p.body, {
+                text = e.text,
+                width = 200,
+                onClick = function()
+                    local ok, err = pcall(e.call)
+                    local line = #calls + 1
+                    calls[line] = ("%s %s: %s, combat %s"):format(
+                        date("%H:%M:%S"),
+                        e.key,
+                        ok and "ok" or ("error " .. tostring(err)),
+                        tostring(InCombatLockdown())
+                    )
+                    -- what addon code wrote by opening it, a moment after
+                    after(1, function()
+                        calls[line] = calls[line] ..
+                            "; written by addon code: SettingsPanel " ..
+                                taintedFields("SettingsPanel") ..
+                                    "; EditModeManagerFrame " .. taintedFields("EditModeManagerFrame")
+                    end)
+                end,
+            })
             b:SetPoint("TOP", prev or p.body, prev and "BOTTOM" or "TOP", 0, prev and -8 or 0)
             prev = b
         end
-        local check = button(p.body, { text = "Check", variant = "primary", width = 200, onClick = function()
-            local errors, blocked = DB.list("errors"), DB.list("blocked")
-            local result = { at = date("%H:%M:%S"), errors = {}, blocked = {},
-                settings = taintedFields("SettingsPanel"), editMode = taintedFields("EditModeManagerFrame") }
-            -- both lists keep their last 30, so new entries are told by their time
-            for _, e in ipairs(errors) do
-                local time = tostring(field(e, "time"))
-                if type(e) == "table" and time >= out.at then
-                    table.insert(tbl.listAt(result, "errors"), tostring(field(e, "source")) .. ": " .. tostring(field(e, "message")))
+        local check = button(p.body, {
+            text = "Check",
+            variant = "primary",
+            width = 200,
+            onClick = function()
+                local errors, blocked = DB.list("errors"), DB.list("blocked")
+                local result = {
+                    at = date("%H:%M:%S"),
+                    errors = {},
+                    blocked = {},
+                    settings = taintedFields("SettingsPanel"),
+                    editMode = taintedFields("EditModeManagerFrame"),
+                }
+                -- both lists keep their last 30, so new entries are told by their time
+                for _, e in ipairs(errors) do
+                    local time = tostring(field(e, "time"))
+                    if type(e) == "table" and time >= out.at then
+                        table.insert(
+                            tbl.listAt(result, "errors"),
+                            tostring(field(e, "source")) .. ": " .. tostring(field(e, "message"))
+                        )
+                    end
                 end
-            end
-            for _, e in ipairs(blocked) do
-                if type(e) == "table" and tostring(e.time) >= out.at then
-                    table.insert(tbl.listAt(result, "blocked"), ("%s %s %s"):format(tostring(e.event), tostring(e.addon), tostring(e.func)))
+                for _, e in ipairs(blocked) do
+                    if type(e) == "table" and tostring(e.time) >= out.at then
+                        table.insert(
+                            tbl.listAt(result, "blocked"),
+                            ("%s %s %s"):format(tostring(e.event), tostring(e.addon), tostring(e.func))
+                        )
+                    end
                 end
-            end
-            out.check = result
-            print(("Game menu probe: %d errors, %d blocked since the start; written by addon code: SettingsPanel %s, EditModeManagerFrame %s. /reload to save.")
-                :format(#result.errors, #result.blocked, result.settings, result.editMode))
-        end })
+                out.check = result
+                print(
+                    ("Game menu probe: %d errors, %d blocked since the start; written by addon code: SettingsPanel %s, EditModeManagerFrame %s. /reload to save."):format(
+                        #result.errors,
+                        #result.blocked,
+                        result.settings,
+                        result.editMode
+                    )
+                )
+            end,
+        })
         check:SetPoint("BOTTOM", p.body, "BOTTOM", 0, 0)
     end
     p:Show()
-    print("Game menu probe: open each entry from this panel. In Options change a key binding and a setting, then close it;"
-        .. " in Edit Mode move a frame, save and exit. Then Check, and /reload.")
+    print(
+        "Game menu probe: open each entry from this panel. In Options change a key binding and a setting, then close it;" ..
+            " in Edit Mode move a frame, save and exit. Then Check, and /reload."
+    )
 end

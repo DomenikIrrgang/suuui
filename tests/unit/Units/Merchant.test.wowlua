@@ -24,7 +24,9 @@ import * as frames from "wowlua:frames"
 local UI = SuuUI.UI
 
 -- the game's merchant frame
-local function game(): Frame return assert(frames.find("MerchantFrame")) end
+local function game(): Frame
+    return assert(frames.find("MerchantFrame"))
+end
 
 -- what a button's tooltip shows
 local function tooltipOf(b: SuuButton?): TooltipData
@@ -44,37 +46,58 @@ local confirmed: ConfirmOptions? = nil
 @beforeEach
 local function start()
     confirmed = nil
-    mock.stub(UI, "Confirm", function(opts: ConfirmOptions) confirmed = opts end)
-    mock.player:setMoney(50000000)                 -- 5000g
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions)
+        confirmed = opts
+    end)
+    mock.player:setMoney(50000000) -- 5000g
 end
 
 @afterEach
 local function cleanup()
-    if M.open then mock.closeMerchant() end
+    if M.open then
+        mock.closeMerchant()
+    end
     mock.advanceTime(1)
     expectNoErrors()
 end
 
 local function open(items: mock.MerchantItem[]?, opts: { canRepair?: boolean, repairCost?: number, damaged?: number }?)
     local o = opts or {}
-    mock.openMerchant({ name = "Quartermaster", canRepair = o.canRepair, repairCost = o.repairCost, damaged = o.damaged, items = items or {
-        { id = WATER, price = 25, stack = 5 },
-        { id = ARROW, price = 10, stack = 200, maxStack = 1000 },
-        { id = TOME, price = 2000000 },
-    } })
+    mock.openMerchant({
+        name = "Quartermaster",
+        canRepair = o.canRepair,
+        repairCost = o.repairCost,
+        damaged = o.damaged,
+        items = items or
+            {
+                { id = WATER, price = 25, stack = 5 },
+                { id = ARROW, price = 10, stack = 200, maxStack = 1000 },
+                { id = TOME, price = 2000000 },
+            },
+    })
     mock.advanceTime(0.1)
 end
 
-local function win(): WindowFrame return assert(M.window) end
+local function win(): WindowFrame
+    return assert(M.window)
+end
 
 local function rows(): MerchantRow[]
     local out: MerchantRow[] = {}
-    for _, r in ipairs(M.rows) do if r:IsShown() then out[#out + 1] = r end end
+    for _, r in ipairs(M.rows) do
+        if r:IsShown() then
+            out[#out + 1] = r
+        end
+    end
     return out
 end
 
 local function rowNamed(name: string): MerchantRow
-    for _, r in ipairs(rows()) do if r.name:GetText() == name then return r end end
+    for _, r in ipairs(rows()) do
+        if r.name:GetText() == name then
+            return r
+        end
+    end
     error("no row " .. name)
 end
 
@@ -112,7 +135,7 @@ local function goods()
     expect(#rows()).toBe(3)
     local water = rowNamed("Test Water")
     expect(water.money).toBeShown()
-    expect(water.qty:GetValue()).toBe("5")         -- one purchase: the merchant's stack
+    expect(water.qty:GetValue()).toBe("5") -- one purchase: the merchant's stack
     expect(tokenOf(rowNamed("Test Arrow").name)).toBe("quality-uncommon")
     expect(rows()[3].rule).never.toBeShown()
 end
@@ -146,14 +169,18 @@ end
 
 @test("the quantity in whole purchases: '= 3 purchases, 15 items', '= 200 items', capped by stock or money")
 local function quantities()
-    open({ { id = WATER, price = 25, stack = 5, available = 2 }, { id = ARROW, price = 10, stack = 200 }, { id = TOME, price = 100 } })
+    open({
+        { id = WATER, price = 25, stack = 5, available = 2 },
+        { id = ARROW, price = 10, stack = 200 },
+        { id = TOME, price = 100 },
+    })
     local water, arrow, tome = rowNamed("Test Water"), rowNamed("Test Arrow"), rowNamed("Test Tome")
     typeQty(arrow, 50)
     expect(mock.textOf(arrow.status):find("= 200 items", 1, true) ~= nil).toBe(true)
     typeQty(arrow, 300)
     expect(mock.textOf(arrow.status):find("= 2 purchases, 400 items", 1, true) ~= nil).toBe(true)
     typeQty(tome, 3)
-    expect(mock.textOf(tome.status):find("= 3 purchases", 1, true) ~= nil).toBe(false)   -- stacks of one
+    expect(mock.textOf(tome.status):find("= 3 purchases", 1, true) ~= nil).toBe(false) -- stacks of one
     typeQty(water, 15)
     expect(mock.textOf(water.status):find("Capped at what's left", 1, true) ~= nil).toBe(true)
     mock.player:setMoney(250)
@@ -170,7 +197,9 @@ end
 @test("Buy: in the merchant's chunks, a moment apart; it stops when the vendor closes")
 local function buying()
     local bought: number[] = {}
-    mock.stub(_G, "BuyMerchantItem", function(_: number, n: number) bought[#bought + 1] = n end)
+    mock.stub(_G, "BuyMerchantItem", function(_: number, n: number)
+        bought[#bought + 1] = n
+    end)
     open()
     local arrow = rowNamed("Test Arrow")
     typeQty(arrow, 2400)
@@ -181,13 +210,15 @@ local function buying()
     mock.closeMerchant()
     mock.advanceTime(1)
     expect(bought).toEqual({ 1000, 1000 })
-    M:Buy(M:Item(1) or {}, 0)                      -- nothing to buy
+    M:Buy(M:Item(1) or {}, 0) -- nothing to buy
 end
 
 @test("a dear purchase, or one with other costs, asks first")
 local function asking()
     local bought: number[] = {}
-    mock.stub(_G, "BuyMerchantItem", function(_: number, n: number) bought[#bought + 1] = n end)
+    mock.stub(_G, "BuyMerchantItem", function(_: number, n: number)
+        bought[#bought + 1] = n
+    end)
     open()
     mock.click(rowNamed("Test Tome").buy)
     expect(assert(confirmed).title).toBe("Buy Test Tome?")
@@ -196,15 +227,29 @@ local function asking()
     expect(bought).toEqual({ 1 })
     -- other costs: an item and a currency
     mock.stub(C_MerchantFrame, "GetItemInfo", function(i: number): unknown
-        return { name = "Token Prize", texture = 134400, price = i == 1 and 0 or 100, stackCount = 1, numAvailable = -1,
-                 isUsable = true, isPurchasable = true, hasExtendedCost = true }
+        return {
+            name = "Token Prize",
+            texture = 134400,
+            price = i == 1 and 0 or 100,
+            stackCount = 1,
+            numAvailable = -1,
+            isUsable = true,
+            isPurchasable = true,
+            hasExtendedCost = true,
+        }
     end)
-    mock.stub(_G, "GetMerchantItemCostInfo", function(_: number): number return 2 end)
+    mock.stub(_G, "GetMerchantItemCostInfo", function(_: number): number
+        return 2
+    end)
     mock.stub(_G, "GetMerchantItemCostItem", function(_: number, k: number): ...unknown
-        if k == 1 then return 133784, 3, "item:" .. WATER, nil end
+        if k == 1 then
+            return 133784, 3, "item:" .. WATER, nil
+        end
         return 463446, 2, "currency:1", "Honor"
     end)
-    mock.stub(C_CurrencyInfo, "GetCurrencyInfoFromLink", function(_: string): unknown return { quantity = 5 } end)
+    mock.stub(C_CurrencyInfo, "GetCurrencyInfoFromLink", function(_: string): unknown
+        return { quantity = 5 }
+    end)
     M:Refresh()
     local r = rows()[1]
     expect(r.costs).toBeShown()
@@ -282,34 +327,48 @@ local function repairs()
     local show = mock.stub(_G, "ShowRepairCursor", function() end)
     mock.click(M.repairOne)
     expect(show).toHaveBeenCalledTimes(1)
-    mock.stub(_G, "InRepairMode", function(): boolean return true end)
+    mock.stub(_G, "InRepairMode", function(): boolean
+        return true
+    end)
     local hide = mock.stub(_G, "HideRepairCursor", function() end)
     mock.click(M.repairOne)
     expect(hide).toHaveBeenCalledTimes(1)
-    mock.stub(_G, "CanGuildBankRepair", function(): boolean return true end)
-    mock.stub(_G, "GetGuildBankWithdrawMoney", function(): number return 50000 end)
+    mock.stub(_G, "CanGuildBankRepair", function(): boolean
+        return true
+    end)
+    mock.stub(_G, "GetGuildBankWithdrawMoney", function(): number
+        return 50000
+    end)
     M:RefreshFoot()
     expect(M.guild).toBeShown()
     expect(assert(tooltipOf(M.guild).description):find("still pay", 1, true) ~= nil).toBe(true)
     mock.click(M.guild)
     expect(all).toHaveBeenCalledWith(true)
-    mock.closeMerchant()                           -- in repair mode: the cursor goes
+    mock.closeMerchant() -- in repair mode: the cursor goes
     expect(hide).toHaveBeenCalledTimes(2)
 end
 
 @test("sell junk: the grey items and what they fetch, sold one a moment; none: off, saying why")
 local function junk()
-    mock.setBag(0, { slots = 16, items = { [1] = { id = RAG, count = 2 }, [2] = { id = RAG, count = 1, locked = true },
-                                          [3] = { id = WATER, count = 1 } } })
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = RAG, count = 2 },
+            [2] = { id = RAG, count = 1, locked = true },
+            [3] = { id = WATER, count = 1 },
+        },
+    })
     open()
     expect(mock.textOf(assert(M.junk).label):find("Sell junk", 1, true) ~= nil).toBe(true)
     -- what they fetch: two unlocked rags at 25 copper (the locked one waits)
     expect(mock.textOf(assert(M.junk).label):find("Sell junk  50|", 1, true) ~= nil).toBe(true)
     expect(assert(M.junk):IsEnabled()).toBe(true)
     local used: number[] = {}
-    mock.stub(C_Container, "UseContainerItem", function(bag: number, slot: number) used[#used + 1] = bag * 100 + slot end)
+    mock.stub(C_Container, "UseContainerItem", function(bag: number, slot: number)
+        used[#used + 1] = bag * 100 + slot
+    end)
     mock.click(M.junk)
-    M:SellJunk()                                   -- selling already: once
+    M:SellJunk() -- selling already: once
     mock.advanceTime(0.21)
     expect(used).toEqual({ 1 })
     mock.setBag(0, { slots = 16, items = {} })
@@ -322,14 +381,21 @@ end
 @test("worn gear over the foot at a repairing vendor: broken, damaged, more worn; Repair all primary")
 local function wear()
     local realBuyback = GetNumBuybackItems
-    mock.stub(_G, "GetNumBuybackItems", function(): number return 0 end)   -- (earlier tests sold things)
+    mock.stub(_G, "GetNumBuybackItems", function(): number
+        return 0
+    end) -- (earlier tests sold things)
     mock.stub(SuuUI, "Durability", function(): unknown
-        return { parts = { gear = true }, state = "damaged", bySlot = {}, pieces = {
-            { label = "Chest", state = "broken", percent = 0, current = 0, max = 100 },
-            { label = "Legs", state = "damaged", percent = 9, current = 9, max = 100 },
-            { label = "Feet", state = "fine", percent = 90, current = 90, max = 100 },
-            { label = "Head", state = "fine", percent = 100, current = 100, max = 100 },
-        } }
+        return {
+            parts = { gear = true },
+            state = "damaged",
+            bySlot = {},
+            pieces = {
+                { label = "Chest", state = "broken", percent = 0, current = 0, max = 100 },
+                { label = "Legs", state = "damaged", percent = 9, current = 9, max = 100 },
+                { label = "Feet", state = "fine", percent = 90, current = 90, max = 100 },
+                { label = "Head", state = "fine", percent = 100, current = 100, max = 100 },
+            },
+        }
     end)
     open(nil, { canRepair = true, repairCost = 100, damaged = 2 })
     expect(M.wear).toBeShown()
@@ -340,7 +406,9 @@ local function wear()
     expect(M.repairPrimary).toBeShown()
     expect(M.repair).never.toBeShown()
     -- with the last sold strip, it sits above the wear line
-    mock.stub(_G, "GetNumBuybackItems", function(): number return realBuyback() end)
+    mock.stub(_G, "GetNumBuybackItems", function(): number
+        return realBuyback()
+    end)
     mock.setBag(0, { slots = 16, items = { [1] = { id = TOME, count = 1 } } })
     mock.sell(0, 1)
     mock.advanceTime(0.5)
@@ -352,8 +420,12 @@ end
 
 @test("the merchant's currencies in the header; prices drawn again in a new theme")
 local function header()
-    mock.stub(C_MerchantFrame, "GetMerchantCurrencies", function(): unknown return { 1, 2 } end)
-    mock.stub(C_CurrencyInfo, "GetCurrencyInfo", function(_: number): unknown return { quantity = 12, iconFileID = 463446 } end)
+    mock.stub(C_MerchantFrame, "GetMerchantCurrencies", function(): unknown
+        return { 1, 2 }
+    end)
+    mock.stub(C_CurrencyInfo, "GetCurrencyInfo", function(_: number): unknown
+        return { quantity = 12, iconFileID = 463446 }
+    end)
     open()
     expect(assert(assert(win().meta):GetText()):find("12 ", 1, true) ~= nil).toBe(true)
     themeChanged()
@@ -383,5 +455,5 @@ local function refreshes()
     expect(refresh).toHaveBeenCalledTimes(1)
     assert(M.OnDisable)(M)
     expect(win()).never.toBeShown()
-    M:Refresh()                                    -- closed: nothing
+    M:Refresh() -- closed: nothing
 end

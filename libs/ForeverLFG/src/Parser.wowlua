@@ -46,8 +46,8 @@ export type LangWords = {
 }
 
 export type LangModule = {
-    code?: string,          -- set by LFG.Lang.Register
-    script?: string,        -- "latin" | "hangul" | "han" | "cyrillic"
+    code?: string, -- set by LFG.Lang.Register
+    script?: string, -- "latin" | "hangul" | "han" | "cyrillic"
     words?: LangWords,
     activities?: { [string]: string[] },
     Extract?: (hay: string, r: ParseResult, hits: Hits, norm: string) -> (),
@@ -62,10 +62,7 @@ export type ParserApi = {
     Scripts: (s: string) -> { [string]: number },
 }
 
-export type LangApi = {
-    modules: { [string]: LangModule },
-    Register: (code: string, def: LangModule) -> (),
-}
+export type LangApi = { modules: { [string]: LangModule }, Register: (code: string, def: LangModule) -> () }
 
 export const parser = {} :: ParserApi
 local P = parser
@@ -78,8 +75,8 @@ local Lang = lang
 type Phrase = { text: string, value: string, field: string, ascii: boolean }
 type Compiled = { module: LangModule, activities: Phrase[], words: Phrase[] }
 
-local compiled: { [string]: Compiled } = {}      -- per language: aliases, sorted longest first
-local names: { key: string, text: string }[] = {}  -- the tool's names (client language): { text, key }
+local compiled: { [string]: Compiled } = {} -- per language: aliases, sorted longest first
+local names: { key: string, text: string }[] = {} -- the tool's names (client language): { text, key }
 
 function Lang.Register(code: string, def: LangModule)
     def.code = code
@@ -88,9 +85,13 @@ function Lang.Register(code: string, def: LangModule)
 end
 
 function P.AddName(key: string, name: unknown)
-    if type(name) ~= "string" or name == "" then return end
+    if type(name) ~= "string" or name == "" then
+        return
+    end
     names[#names + 1] = { key = key, text = name }
-    for code in pairs(compiled) do compiled[code] = nil end
+    for code in pairs(compiled) do
+        compiled[code] = nil
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -121,11 +122,20 @@ local function scripts(s: string): { [string]: number }
     while i <= n do
         local c = s:byte(i) or 0
         local cp, len
-        if c < 0x80 then cp, len = c, 1
-        elseif c >= 0xF0 then cp, len = ((c % 0x08) * 0x40000) + (((s:byte(i + 1) or 0) % 0x40) * 0x1000) + (((s:byte(i + 2) or 0) % 0x40) * 0x40) + ((s:byte(i + 3) or 0) % 0x40), 4
-        elseif c >= 0xE0 then cp, len = ((c % 0x10) * 0x1000) + (((s:byte(i + 1) or 0) % 0x40) * 0x40) + ((s:byte(i + 2) or 0) % 0x40), 3
-        elseif c >= 0xC0 then cp, len = ((c % 0x20) * 0x40) + ((s:byte(i + 1) or 0) % 0x40), 2
-        else cp, len = 0, 1 end
+        if c < 0x80 then
+            cp, len = c, 1
+        elseif c >= 0xF0 then
+            cp, len = ((c % 0x08) * 0x40000) + (((s:byte(i + 1) or 0) % 0x40) * 0x1000) +
+                    (((s:byte(i + 2) or 0) % 0x40) * 0x40) +
+                    ((s:byte(i + 3) or 0) % 0x40),
+                4
+        elseif c >= 0xE0 then
+            cp, len = ((c % 0x10) * 0x1000) + (((s:byte(i + 1) or 0) % 0x40) * 0x40) + ((s:byte(i + 2) or 0) % 0x40), 3
+        elseif c >= 0xC0 then
+            cp, len = ((c % 0x20) * 0x40) + ((s:byte(i + 1) or 0) % 0x40), 2
+        else
+            cp, len = 0, 1
+        end
         if (cp >= 0xAC00 and cp <= 0xD7A3) or (cp >= 0x1100 and cp <= 0x11FF) or (cp >= 0x3130 and cp <= 0x318F) then
             out.hangul = out.hangul + 1
         elseif (cp >= 0x4E00 and cp <= 0x9FFF) or (cp >= 0x3400 and cp <= 0x4DBF) then
@@ -141,7 +151,9 @@ local function scripts(s: string): { [string]: number }
 end
 P.Scripts = scripts
 
-local function isAscii(s: string): boolean return not s:find("[\128-\255]") end
+local function isAscii(s: string): boolean
+    return not s:find("[\128-\255]")
+end
 
 --------------------------------------------------------------------------------
 -- A language, compiled: every phrase it knows, longest first
@@ -150,27 +162,45 @@ local function isAscii(s: string): boolean return not s:find("[\128-\255]") end
 local function phrase(list: string[]?, out: Phrase[], value: string, field: string)
     for _, w in ipairs(list or {}) do
         local n = normalize(w):sub(2, -2)
-        if n ~= "" then out[#out + 1] = { text = n, value = value, field = field, ascii = isAscii(n) } end
+        if n ~= "" then
+            out[#out + 1] = { text = n, value = value, field = field, ascii = isAscii(n) }
+        end
     end
 end
 
 local function compile(code: string): Compiled?
     local done = compiled[code]
-    if done then return done end
+    if done then
+        return done
+    end
     local m = Lang.modules[code]
-    if not m then return nil end
+    if not m then
+        return nil
+    end
     local c: Compiled = { module = m, activities = {}, words = {} }
-    for key, list in pairs(m.activities or {}) do phrase(list, c.activities, key, "activity") end
+    for key, list in pairs(m.activities or {}) do
+        phrase(list, c.activities, key, "activity")
+    end
     -- the tool's names count for every language (they're in the client's)
-    for _, nm in ipairs(names) do phrase({ nm.text }, c.activities, nm.key, "activity") end
+    for _, nm in ipairs(names) do
+        phrase({ nm.text }, c.activities, nm.key, "activity")
+    end
     local w: LangWords = m.words or {}
     phrase(w.group, c.words, "group", "group")
     phrase(w.player, c.words, "player", "player")
     phrase(w.noise, c.words, "noise", "noise")
-    for role, list in pairs(w.roles or {}) do phrase(list, c.words, role, "role") end
-    for class, list in pairs(w.classes or {}) do phrase(list, c.words, class, "class") end
-    table.sort(c.activities, function(a: Phrase, b: Phrase) return #a.text > #b.text end)
-    table.sort(c.words, function(a: Phrase, b: Phrase) return #a.text > #b.text end)
+    for role, list in pairs(w.roles or {}) do
+        phrase(list, c.words, role, "role")
+    end
+    for class, list in pairs(w.classes or {}) do
+        phrase(list, c.words, class, "class")
+    end
+    table.sort(c.activities, function(a: Phrase, b: Phrase)
+        return #a.text > #b.text
+    end)
+    table.sort(c.words, function(a: Phrase, b: Phrase)
+        return #a.text > #b.text
+    end)
     compiled[code] = c
     return c
 end
@@ -180,7 +210,9 @@ end
 local function find(hay: string, p: Phrase): (number?, number?)
     if p.ascii then
         local s, e = hay:find(" " .. p.text .. " ", 1, true)
-        if s and e then return s + 1, e - 1 end
+        if s and e then
+            return s + 1, e - 1
+        end
         return nil
     end
     return hay:find(p.text, 1, true)
@@ -200,23 +232,38 @@ local DAMAGE_ONLY: { [string]: boolean } = { ROGUE = true, MAGE = true, WARLOCK 
 
 local function languagesFor(text: string, asked: string[]?): string[]
     local out: string[], seen: { [string]: boolean } = {}, {}
-    local function use(code: string) if Lang.modules[code] and not seen[code] then seen[code] = true; out[#out + 1] = code end end
-    for _, code in ipairs(asked or {}) do use(code) end
+    local function use(code: string)
+        if Lang.modules[code] and not seen[code] then
+            seen[code] = true
+            out[#out + 1] = code
+        end
+    end
+    for _, code in ipairs(asked or {}) do
+        use(code)
+    end
     local sc = scripts(text)
     for code, m in pairs(Lang.modules) do
         local script = m.script
-        if script and script ~= "latin" and (sc[script] or 0) > 0 then use(code) end
+        if script and script ~= "latin" and (sc[script] or 0) > 0 then
+            use(code)
+        end
     end
-    if #out == 0 then use("enUS") end
+    if #out == 0 then
+        use("enUS")
+    end
     return out
 end
 
 function P.Parse(text: unknown, opts: ParseOptions?): (ParseResult?, string?)
-    if type(text) ~= "string" or text == "" then return nil, "nothing" end
+    if type(text) ~= "string" or text == "" then
+        return nil, "nothing"
+    end
     local o: ParseOptions = opts or {}
     local r: ParseResult = { activities = {}, quests = {}, roles = {}, classes = {}, languages = {}, confidence = 0 }
     -- quest links first: the quest for certain
-    for id in text:gmatch("|Hquest:(%d+)") do r.quests[#r.quests + 1] = tonumber(id) :: number end
+    for id in text:gmatch("|Hquest:(%d+)") do
+        r.quests[#r.quests + 1] = tonumber(id) :: number
+    end
     local hay = normalize(text)
     local seenAct: { [string]: boolean } = {}
     local hits: Hits = { group = false, player = false }
@@ -228,7 +275,10 @@ function P.Parse(text: unknown, opts: ParseOptions?): (ParseResult?, string?)
             for _, p in ipairs(c.activities) do
                 local s, e = find(hay, p)
                 while s and e do
-                    if not seenAct[p.value] then seenAct[p.value] = true; r.activities[#r.activities + 1] = p.value end
+                    if not seenAct[p.value] then
+                        seenAct[p.value] = true
+                        r.activities[#r.activities + 1] = p.value
+                    end
                     hay = consume(hay, s, e)
                     s, e = find(hay, p)
                 end
@@ -236,26 +286,41 @@ function P.Parse(text: unknown, opts: ParseOptions?): (ParseResult?, string?)
             for _, p in ipairs(c.words) do
                 local s, e = find(hay, p)
                 if s and e then
-                    if p.field == "noise" then return nil, "noise:" .. p.text end
-                    if p.field == "group" then hits.group = true
-                    elseif p.field == "player" then hits.player = true
-                    elseif p.field == "role" then r.roles[p.value] = true
-                    elseif p.field == "class" then r.classes[p.value] = true end
+                    if p.field == "noise" then
+                        return nil, "noise:" .. p.text
+                    end
+                    if p.field == "group" then
+                        hits.group = true
+                    elseif p.field == "player" then
+                        hits.player = true
+                    elseif p.field == "role" then
+                        r.roles[p.value] = true
+                    elseif p.field == "class" then
+                        r.classes[p.value] = true
+                    end
                     hay = consume(hay, s, e)
                 end
             end
             -- a language's own patterns (counts written its way, ...)
             local extract = c.module.Extract
-            if extract then extract(hay, r, hits, normalize(text)) end
+            if extract then
+                extract(hay, r, hits, normalize(text))
+            end
         end
     end
     -- numbers, the same in every language: "lf2m", "need 2", "4/5", "40+", "35-40", "lvl 28"
     local norm = normalize(text)
     local lfn = norm:match(" lf(%d)m ")
-    if lfn then r.need = tonumber(lfn); hits.group = true end
+    if lfn then
+        r.need = tonumber(lfn)
+        hits.group = true
+    end
     -- "2 spots", "2 more", "need 2": that many open
     local open = norm:match(" (%d) spots? ") or norm:match(" (%d) more ") or norm:match(" need (%d) ")
-    if open then r.need = r.need or tonumber(open); hits.group = true end
+    if open then
+        r.need = r.need or tonumber(open)
+        hits.group = true
+    end
     local haveText, maxText = norm:match(" (%d%d?)/(%d%d?) ")
     local have, max = tonumber(haveText), tonumber(maxText)
     if have and max and max >= 2 and max <= 40 and have < max then
@@ -266,33 +331,62 @@ function P.Parse(text: unknown, opts: ParseOptions?): (ParseResult?, string?)
     local plus = norm:match(" (%d%d?)%+ ")
     local loText, hiText = norm:match(" (%d%d?)%-(%d%d?) ")
     local lo, hi = tonumber(loText), tonumber(hiText)
-    if lo and hi and lo >= 1 and hi <= 70 and lo < hi then r.level = { lo, hi }
-    elseif plus and (tonumber(plus) :: number) <= 70 then r.level = { tonumber(plus), nil } end
+    if lo and hi and lo >= 1 and hi <= 70 and lo < hi then
+        r.level = { lo, hi }
+    elseif plus and (tonumber(plus) :: number) <= 70 then
+        r.level = { tonumber(plus), nil }
+    end
     local lvl = norm:match(" lvl ?(%d%d?) ") or norm:match(" level (%d%d?) ") or norm:match(" lv ?(%d%d?) ")
-    if lvl then r.level = r.level or { tonumber(lvl), tonumber(lvl) } end
+    if lvl then
+        r.level = r.level or { tonumber(lvl), tonumber(lvl) }
+    end
     -- intent: group words win (a group can say "lfg" too, "lfg ... need heal" is rare)
-    if hits.group then r.intent = "group"
-    elseif hits.player then r.intent = "player" end
+    if hits.group then
+        r.intent = "group"
+    elseif hits.player then
+        r.intent = "player"
+    end
     -- a player's own level next to their class ("28 rogue lfg")
     if r.intent == "player" and not r.level then
         local n = norm:match(" (%d%d?) %a")
-        if n and (tonumber(n) :: number) <= 70 and next(r.classes) then r.level = { tonumber(n), tonumber(n) } end
+        if n and (tonumber(n) :: number) <= 70 and next(r.classes) then
+            r.level = { tonumber(n), tonumber(n) }
+        end
     end
     -- a player of a damage-only class offers damage
     if r.intent == "player" and not next(r.roles) then
         local only = true
-        for class in pairs(r.classes) do if not DAMAGE_ONLY[class] then only = false end end
-        if next(r.classes) and only then r.roles.damage = true end
+        for class in pairs(r.classes) do
+            if not DAMAGE_ONLY[class] then
+                only = false
+            end
+        end
+        if next(r.classes) and only then
+            r.roles.damage = true
+        end
     end
     -- how sure: what was found
     local conf = 0
-    if #r.activities > 0 or #r.quests > 0 then conf = conf + 0.45 end
-    if r.intent then conf = conf + 0.35 end
-    if next(r.roles) or next(r.classes) then conf = conf + 0.1 end
-    if r.need or r.members or r.level then conf = conf + 0.1 end
+    if #r.activities > 0 or #r.quests > 0 then
+        conf = conf + 0.45
+    end
+    if r.intent then
+        conf = conf + 0.35
+    end
+    if next(r.roles) or next(r.classes) then
+        conf = conf + 0.1
+    end
+    if r.need or r.members or r.level then
+        conf = conf + 0.1
+    end
     -- an activity with roles but no intent word ("RFK tank") still reads as a group
-    if not r.intent and (#r.activities > 0) and next(r.roles) then r.intent = "group"; conf = conf + 0.1 end
+    if not r.intent and (#r.activities > 0) and next(r.roles) then
+        r.intent = "group"
+        conf = conf + 0.1
+    end
     r.confidence = math.min(1, conf)
-    if #r.activities == 0 and #r.quests == 0 and not r.intent then return nil, "nothing" end
+    if #r.activities == 0 and #r.quests == 0 and not r.intent then
+        return nil, "nothing"
+    end
     return r
 end

@@ -7,7 +7,6 @@ import tokens as T, Color, ShadowLayer from "/Core/Tokens"
 import * as pixel from "/Core/Pixel"
 import * as events from "/Core/Events"
 
-
 local colors = T.color :: { [string]: Color }
 
 local WHITE = "Interface\\Buttons\\WHITE8X8"
@@ -20,12 +19,16 @@ export function hex(name: string): string
 end
 
 -- Whether `name` is a colour token.
-export function isColor(name: string): boolean return colors[name] ~= nil end
+export function isColor(name: string): boolean
+    return colors[name] ~= nil
+end
 
 -- A class's colour token ("class-mage"), or `fallback` for no class or one
 -- without a colour.
 export function classColor(class: string?, fallback: string): string
-    if not class then return fallback end
+    if not class then
+        return fallback
+    end
     local token = "class-" .. class:lower()
     return colors[token] and token or fallback
 end
@@ -70,7 +73,7 @@ type Paint = {
     orientation?: Orientation,
 }
 
-local paints: { [Paintable]: Paint } = setmetatable({}, { __mode = "k" })  -- region -> { kind, token, alpha, ... }
+local paints: { [Paintable]: Paint } = setmetatable({}, { __mode = "k" }) -- region -> { kind, token, alpha, ... }
 local watched: { [Paintable]: { [string]: boolean } } = setmetatable({}, { __mode = "k" }) -- region -> { [setter] = true }
 local painting = false
 
@@ -85,7 +88,9 @@ local LETS_GO: { [PaintKind]: string[] } = {
 }
 
 local function letGo(region: Paintable)
-    if not painting then paints[region] = nil end
+    if not painting then
+        paints[region] = nil
+    end
 end
 
 -- Whether the widget has that method (not every region has every setter).
@@ -127,20 +132,28 @@ local function draw(region: Paintable, p: Paint)
         texture:SetGradient(p.orientation or "HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
     else
         local fn = p.fn
-        if fn then fn(region) end
+        if fn then
+            fn(region)
+        end
     end
 end
 
 local function keep(region: Paintable, kind: PaintKind, token: string, alpha: number?): Paint
     local p = paints[region]
-    if not p then p = {}; paints[region] = p end
+    if not p then
+        p = {}
+        paints[region] = p
+    end
     p.kind, p.token, p.alpha, p.fn = kind, token, alpha, nil
     -- (a hook may paint while repaint runs: keep its flag)
     local was = painting
     painting = true
     local ok: boolean, err: unknown = pcall(draw, region, p)
     painting = was
-    if not ok then paints[region] = nil; error(err, 3) end
+    if not ok then
+        paints[region] = nil
+        error(err, 3)
+    end
     watch(region, kind)
     return p
 end
@@ -157,7 +170,14 @@ export function paintFill(texture: TextureBase, token: string, alpha: number?)
     keep(texture, "fill", token, alpha)
 end
 
-export function paintGradient(texture: Texture, orientation: Orientation, from: string, to: string, fromAlpha: number?, toAlpha: number?)
+export function paintGradient(
+    texture: Texture,
+    orientation: Orientation,
+    from: string,
+    to: string,
+    fromAlpha: number?,
+    toAlpha: number?
+)
     local p: Paint = paints[texture] or {}
     paints[texture] = p
     p.token2, p.alpha2, p.orientation = to, toAlpha, orientation
@@ -166,14 +186,20 @@ end
 
 export function bind<R extends Paintable>(region: R, fn: (region: R) -> ())
     local p = paints[region]
-    if not p then p = {}; paints[region] = p end
+    if not p then
+        p = {}
+        paints[region] = p
+    end
     -- (called with this region only)
     p.kind, p.fn = "fn", fn :: (region: Paintable) -> ()
     local was = painting
     painting = true
     local ok: boolean, err: unknown = pcall(fn, region)
     painting = was
-    if not ok then paints[region] = nil; error(err, 2) end
+    if not ok then
+        paints[region] = nil
+        error(err, 2)
+    end
     watch(region, "fn")
 end
 
@@ -183,18 +209,25 @@ export function repaint()
     painting = true
     -- (a hook painting another region mid-loop adds to the table: walk a copy)
     local list: { region: Paintable, paint: Paint }[] = {}
-    for region, p in pairs(paints) do list[#list + 1] = { region = region, paint = p } end
+    for region, p in pairs(paints) do
+        list[#list + 1] = { region = region, paint = p }
+    end
     for _, e in ipairs(list) do
         local ok: boolean, err: unknown = pcall(draw, e.region, e.paint)
-        if not ok then geterrorhandler()(err) end
+        if not ok then
+            geterrorhandler()(err)
+        end
     end
     painting = false
 end
 
 -- A size token in px, or a number passed through.
 export function size(v: number | string): number
-    if type(v) == "number" then return v end
-    return (T.size :: { [string]: number })[v] or (T.space :: { [string]: number })[v] or error("SuuUI: unknown size token " .. tostring(v), 2)
+    if type(v) == "number" then
+        return v
+    end
+    return (T.size :: { [string]: number })[v] or (T.space :: { [string]: number })[v] or
+        error("SuuUI: unknown size token " .. tostring(v), 2)
 end
 
 local function crisp(tex: Texture): Texture
@@ -231,11 +264,18 @@ export class Border
     readonly right: Texture
     readonly parts: Texture[]
 
-    constructor(readonly frame: Frame, color: ColorArg, opts: BorderOptions = {}, public width: number = opts.width or 1,
-                public inset: number = opts.inset or 0)
+    constructor(
+        readonly frame: Frame,
+        color: ColorArg,
+        opts: BorderOptions = {},
+        public width: number = opts.width or 1,
+        public inset: number = opts.inset or 0
+    )
         local layer: DrawLayer, sub = opts.layer or "BORDER", opts.sublevel
-        self.top, self.bottom = crisp(frame:CreateTexture(nil, layer, nil, sub)), crisp(frame:CreateTexture(nil, layer, nil, sub))
-        self.left, self.right = crisp(frame:CreateTexture(nil, layer, nil, sub)), crisp(frame:CreateTexture(nil, layer, nil, sub))
+        self.top, self.bottom = crisp(frame:CreateTexture(nil, layer, nil, sub)),
+            crisp(frame:CreateTexture(nil, layer, nil, sub))
+        self.left, self.right = crisp(frame:CreateTexture(nil, layer, nil, sub)),
+            crisp(frame:CreateTexture(nil, layer, nil, sub))
         self.parts = { self.top, self.bottom, self.left, self.right }
         self:SetColor(color)
         self:Layout()
@@ -267,16 +307,24 @@ export class Border
     -- A token name (plus an optional alpha multiplier), { r, g, b, a }, or r, g, b, a.
     function SetColor(r: ColorArg, g: number?, b: number?, a: number?)
         if type(r) == "string" then
-            for _, t in ipairs(self.parts) do paintFill(t, r, g) end
+            for _, t in ipairs(self.parts) do
+                paintFill(t, r, g)
+            end
             return
         end
         local cr, cg, cb, ca = r, g, b, a
-        if type(r) == "table" then cr, cg, cb, ca = r[1], r[2], r[3], r[4] end
-        for _, t in ipairs(self.parts) do t:SetColorTexture(cr :: number, cg :: number, cb :: number, ca) end
+        if type(r) == "table" then
+            cr, cg, cb, ca = r[1], r[2], r[3], r[4]
+        end
+        for _, t in ipairs(self.parts) do
+            t:SetColorTexture(cr :: number, cg :: number, cb :: number, ca)
+        end
     end
 
     function SetShown(shown: boolean)
-        for _, t in ipairs(self.parts) do t:SetShown(shown) end
+        for _, t in ipairs(self.parts) do
+            t:SetShown(shown)
+        end
     end
 end
 
@@ -399,22 +447,32 @@ export class SoftEdge
         h:ClearAllPoints()
         h:SetPoint("TOPLEFT", f, "TOPLEFT", -s + dx, s + dy)
         h:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", s + dx, -s + dy)
-        for i = 1, 4 do self.corners[i]:SetSize(s, s) end
+        for i = 1, 4 do
+            self.corners[i]:SetSize(s, s)
+        end
     end
 
     -- A token name (and alpha), a colour table (a shadow layer's, which colour
     -- vision and themes change in place: kept), or r, g, b, a.
     function SetColor(r: ColorArg, g: number?, b: number?, a: number?)
         if type(r) == "string" then
-            for _, t in ipairs(self.parts) do paint(t, r, g) end
+            for _, t in ipairs(self.parts) do
+                paint(t, r, g)
+            end
             return
         end
         if type(r) == "table" then
             local c = r
-            for _, t in ipairs(self.parts) do bind(t, function(tex: Texture) tex:SetVertexColor(c[1], c[2], c[3], c[4]) end) end
+            for _, t in ipairs(self.parts) do
+                bind(t, function(tex: Texture)
+                    tex:SetVertexColor(c[1], c[2], c[3], c[4])
+                end)
+            end
             return
         end
-        for _, t in ipairs(self.parts) do t:SetVertexColor(r, g :: number, b :: number, a) end
+        for _, t in ipairs(self.parts) do
+            t:SetVertexColor(r, g :: number, b :: number, a)
+        end
     end
 
     function SetShown(shown: boolean)
@@ -429,8 +487,13 @@ end
 -- A soft edge from a shadow token's first outer layer, e.g. "glow-arcane".
 export function shadow(frame: Frame, token: string): SoftEdge
     local found: ShadowLayer? = nil
-    for _, l in ipairs((T.shadow :: { [string]: ShadowLayer[] })[token] or error("SuuUI: unknown shadow token " .. tostring(token), 2)) do
-        if not l.inset then found = l break end
+    for _, l in ipairs(
+        (T.shadow :: { [string]: ShadowLayer[] })[token] or error("SuuUI: unknown shadow token " .. tostring(token), 2)
+    ) do
+        if not l.inset then
+            found = l
+            break
+        end
     end
     -- (a token with inset layers only: indexing nil errors, as before)
     local layer = found :: ShadowLayer
@@ -462,7 +525,9 @@ export function cross(parent: Frame, px: number, color: string?): Cross
         holder.strokes[i] = t
     end
     function holder:SetColor(name: string)
-        for _, t in ipairs(self.strokes) do paint(t, name) end
+        for _, t in ipairs(self.strokes) do
+            paint(t, name)
+        end
     end
     holder:SetColor(color or "ink-muted")
     return holder
@@ -472,7 +537,15 @@ end
 -- Keep every pixel-thick line one physical pixel after a rescale.
 --------------------------------------------------------------------------------
 
-events.on("SUUUI_ROOT_SCALED", function()
-    for b in pairs(borders) do b:Layout() end
-    for line in pairs(hairlines) do line:SetHeight(pixel.size(line)) end
-end, "Draw")
+events.on(
+    "SUUUI_ROOT_SCALED",
+    function()
+        for b in pairs(borders) do
+            b:Layout()
+        end
+        for line in pairs(hairlines) do
+            line:SetHeight(pixel.size(line))
+        end
+    end,
+    "Draw"
+)

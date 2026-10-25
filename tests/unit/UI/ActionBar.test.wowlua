@@ -16,14 +16,34 @@ const S1 = T.space["space-1"]
 local parent: Frame? = nil
 local made: ActionBar[] = {}
 
-local function bar(opts: { slot?: number, name?: string, count?: number, columns?: number, gap?: number, size?: number | string,
-                            binding?: string, paging?: string, label?: string, onPage?: (bar: ActionBar, page: number) -> () }?): ActionBar
+local function bar(
+    opts: {
+        slot?: number,
+        name?: string,
+        count?: number,
+        columns?: number,
+        gap?: number,
+        size?: number | string,
+        binding?: string,
+        paging?: string,
+        label?: string,
+        onPage?: (bar: ActionBar, page: number) -> (),
+    }?
+): ActionBar
     local p = parent or newParent(600, 200)
     parent = p
     local o = opts or {}
     local b = actionBar(p, {
-        name = o.name or ("SuuUITestBar" .. (#made + 1)), slot = o.slot or BASE, count = o.count, columns = o.columns,
-        gap = o.gap, size = o.size, binding = o.binding, paging = o.paging, label = o.label, onPage = o.onPage,
+        name = o.name or ("SuuUITestBar" .. (#made + 1)),
+        slot = o.slot or BASE,
+        count = o.count,
+        columns = o.columns,
+        gap = o.gap,
+        size = o.size,
+        binding = o.binding,
+        paging = o.paging,
+        label = o.label,
+        onPage = o.onPage,
     })
     made[#made + 1] = b
     return b
@@ -35,21 +55,35 @@ local function handle(event: EventName, ...: unknown)
 end
 
 local function forget(b: ActionBar)
-    for i = #bars, 1, -1 do if bars[i] == b then table.remove(bars, i) end end
+    for i = #bars, 1, -1 do
+        if bars[i] == b then
+            table.remove(bars, i)
+        end
+    end
     for _, btn in ipairs(b.buttons) do
         btn:SetSlot(nil)
-        for i = #actionButtons, 1, -1 do if actionButtons[i] == btn then table.remove(actionButtons, i) end end
+        for i = #actionButtons, 1, -1 do
+            if actionButtons[i] == btn then
+                table.remove(actionButtons, i)
+            end
+        end
     end
     b.header:Hide()
 end
 
 @afterEach
 local function cleanup()
-    for _, b in ipairs(made) do forget(b) end
+    for _, b in ipairs(made) do
+        forget(b)
+    end
     made = {}
-    if parent then parent:Hide() end
+    if parent then
+        parent:Hide()
+    end
     parent = nil
-    for i = BASE, BASE + 11 do mock.setAction(i, nil) end
+    for i = BASE, BASE + 11 do
+        mock.setAction(i, nil)
+    end
 end
 
 @test("actionBarPaging: override, vehicle, manual pages, bonus bars, else 1")
@@ -171,7 +205,11 @@ local function bindings()
     clicks = {}
     b:UpdateBindings()
     local mine = 0
-    for _, c in ipairs(clicks) do if c:find("=" .. b.name, 1, true) then mine += 1 end end
+    for _, c in ipairs(clicks) do
+        if c:find("=" .. b.name, 1, true) then
+            mine += 1
+        end
+    end
     expect(mine).toBe(3)
     expect(clicks).toContain("F3=" .. b.name .. "Button12")
     local h = b.buttons[1].hotkeyText
@@ -186,7 +224,8 @@ local function bindings()
     SetBinding("F3")
     mock.fireEvent("UPDATE_BINDINGS")
     expect(b.buttons[12].hotkeyText).toBe("")
-    SetBinding("SHIFT-F1"); SetBinding("F2")
+    SetBinding("SHIFT-F1")
+    SetBinding("F2")
 end
 
 @test("a hidden bar gives its keys back; SetShown maps to always/hidden")
@@ -195,7 +234,9 @@ local function hidden()
     local clicks = 0
     local header: Frame? = nil
     mock.fake("SetOverrideBindingClick", function(owner: Frame, _: boolean, _: string, _: string, _: string)
-        if owner == header then clicks = clicks + 1 end
+        if owner == header then
+            clicks = clicks + 1
+        end
     end)
     local cleared = mock.spy(function(_: Frame) end)
     mock.fake("ClearOverrideBindings", cleared)
@@ -249,7 +290,13 @@ end
 @test("paging: the secure driver pages the attributes, the art follows")
 local function pagingBar()
     local pages: { number } = {}
-    local b = bar({ slot = 1, paging = actionBarPaging(), onPage = function(_: ActionBar, page: number) pages[#pages + 1] = page end })
+    local b = bar({
+        slot = 1,
+        paging = actionBarPaging(),
+        onPage = function(_: ActionBar, page: number)
+            pages[#pages + 1] = page
+        end,
+    })
     expect(b.header:GetAttribute("_onstate-page")).never.toBeNil()
     expect(b.page).toBe(1)
     expect(pages).toEqual({ 1 })
@@ -269,7 +316,9 @@ local function pagingBar()
     mock.advanceFrames(2)
     expect(b.buttons[1].slot).toBe(1)
     -- a page the parser can't read is 1
-    mock.fake("SecureCmdOptionParse", function(_: string): string? return nil end)
+    mock.fake("SecureCmdOptionParse", function(_: string): string?
+        return nil
+    end)
     expect(b:Page()).toBe(1)
     expectNoErrors()
 end
@@ -305,7 +354,9 @@ end
 local function range()
     mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
     mock.fake("IsActionInRange", function(slot: number): boolean?
-        if slot == BASE then return false end
+        if slot == BASE then
+            return false
+        end
         return nil
     end)
     local b = bar()
@@ -323,7 +374,9 @@ local function range()
     handle("ACTION_RANGE_CHECK_UPDATE", BASE, false, mock.secret(true))
     expect(first.outOfRange).toBe(false)
     -- a new target reads it again
-    mock.fake("IsActionInRange", function(_: number): Secret<boolean> return mock.secret(false) end)
+    mock.fake("IsActionInRange", function(_: number): Secret<boolean>
+        return mock.secret(false)
+    end)
     first:SetOutOfRange(true)
     local hogger = mock.spawnUnit({ name = "Hogger", reaction = "hostile" })
     mock.player:target(hogger)
@@ -367,7 +420,9 @@ local function passes()
     local reads = 0
     -- (other bars read their own slots too: count this bar's first)
     mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): unknown
-        if slot == BASE then reads = reads + 1 end
+        if slot == BASE then
+            reads = reads + 1
+        end
         return nil
     end)
     mock.advanceFrames(1)
@@ -381,24 +436,37 @@ local function passes()
     mock.advanceFrames(2)
     expect(reads).toBe(before + 1)
     -- usable
-    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean) return false, false end)
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean)
+        return false, false
+    end)
     mock.fireEvent("ACTIONBAR_UPDATE_USABLE")
     expect(first.unusable).toBe(false)
     mock.advanceFrames(1)
     expect(first.unusable).toBe(true)
     -- active
-    mock.fake("IsCurrentAction", function(_: number): boolean return true end)
+    mock.fake("IsCurrentAction", function(_: number): boolean
+        return true
+    end)
     mock.fireEvent("ACTIONBAR_UPDATE_STATE")
     mock.advanceFrames(1)
     expect(first.active).toBe(true)
-    mock.fake("IsCurrentAction", function(_: number): boolean return false end)
-    for _, e in ipairs({ "PLAYER_ENTER_COMBAT", "PLAYER_LEAVE_COMBAT", "START_AUTOREPEAT_SPELL", "STOP_AUTOREPEAT_SPELL" }) do
+    mock.fake("IsCurrentAction", function(_: number): boolean
+        return false
+    end)
+    for _, e in ipairs({
+        "PLAYER_ENTER_COMBAT",
+        "PLAYER_LEAVE_COMBAT",
+        "START_AUTOREPEAT_SPELL",
+        "STOP_AUTOREPEAT_SPELL",
+    }) do
         first.active = true
         mock.fireEvent(e)
         expect(first.active).toBe(false)
     end
     -- a form change: usable and active at once
-    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean) return true, false end)
+    mock.fake("C_ActionBar.IsUsableAction", function(_: number): (boolean, boolean)
+        return true, false
+    end)
     mock.fireEvent("UPDATE_SHAPESHIFT_FORM")
     expect(first.unusable).toBe(false)
     expectNoErrors()
@@ -421,7 +489,9 @@ end
 local function grid()
     local b = bar()
     local kind: string? = "spell"
-    mock.fake("GetCursorInfo", function(): string? return kind end)
+    mock.fake("GetCursorInfo", function(): string?
+        return kind
+    end)
     mock.fireEvent("ACTIONBAR_SHOWGRID")
     expect(b.buttons[1].grid).toBe(true)
     expect(b.buttons[1].face:GetAlpha()).toBe(1)
@@ -451,12 +521,21 @@ end
 @test("paging events update every paged bar")
 local function pageEvents()
     local b = bar({ slot = 1, paging = actionBarPaging() })
-    for _, e in ipairs({ "UPDATE_BONUS_ACTIONBAR", "UPDATE_SHAPESHIFT_FORMS", "UPDATE_OVERRIDE_ACTIONBAR",
-                         "UPDATE_VEHICLE_ACTIONBAR", "UPDATE_POSSESS_BAR" }) do
-        mock.fake("SecureCmdOptionParse", function(_: string): string? return "2" end)
+    for _, e in ipairs({
+        "UPDATE_BONUS_ACTIONBAR",
+        "UPDATE_SHAPESHIFT_FORMS",
+        "UPDATE_OVERRIDE_ACTIONBAR",
+        "UPDATE_VEHICLE_ACTIONBAR",
+        "UPDATE_POSSESS_BAR",
+    }) do
+        mock.fake("SecureCmdOptionParse", function(_: string): string?
+            return "2"
+        end)
         mock.fireEvent(e)
         expect(b.page).toBe(2)
-        mock.fake("SecureCmdOptionParse", function(_: string): string? return "1" end)
+        mock.fake("SecureCmdOptionParse", function(_: string): string?
+            return "1"
+        end)
         handle("ACTIONBAR_PAGE_CHANGED")
         expect(b.page).toBe(1)
     end
@@ -465,11 +544,17 @@ end
 @test("without any bar the dispatcher does nothing")
 local function noBars()
     local saved: ActionBar[] = {}
-    for i, b in ipairs(bars) do saved[i] = b end
-    for i = #bars, 1, -1 do table.remove(bars, i) end
+    for i, b in ipairs(bars) do
+        saved[i] = b
+    end
+    for i = #bars, 1, -1 do
+        table.remove(bars, i)
+    end
     mock.fireEvent("ACTIONBAR_SLOT_CHANGED", 0)
     mock.fireEvent("UPDATE_BINDINGS")
-    for i, b in ipairs(saved) do bars[i] = b end
+    for i, b in ipairs(saved) do
+        bars[i] = b
+    end
     expectNoErrors()
 end
 
@@ -478,7 +563,9 @@ local function poll()
     local b = bar()
     mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
     local out = false
-    mock.fake("IsActionInRange", function(_: number): boolean return not out end)
+    mock.fake("IsActionInRange", function(_: number): boolean
+        return not out
+    end)
     out = true
     pollRange(0.1)
     expect(b.buttons[1].outOfRange).never.toBe(true)

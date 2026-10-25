@@ -26,16 +26,29 @@ local DEFAULTS = {}
 
 local M: DeathRecapModule
 
-
-local function text(v: unknown): v is string return type(v) == "string" and not isSecret(v) and v ~= "" end
+local function text(v: unknown): v is string
+    return type(v) == "string" and not isSecret(v) and v ~= ""
+end
 
 -- One of the game's recap events (C_DeathRecap.GetRecapEvents, newest
 -- first): undocumented on Forever, and any field may be secret, so each is
 -- read with care.
 export type DeathEvent = {
-    event?: unknown, environmentalType?: unknown, spellId?: unknown, spellName?: unknown, timestamp?: unknown,
-    currentHP?: unknown, amount?: unknown, school?: unknown, critical?: unknown, overkill?: unknown,
-    sourceName?: unknown, hideCaster?: unknown, absorbed?: unknown, resisted?: unknown, blocked?: unknown,
+    event?: unknown,
+    environmentalType?: unknown,
+    spellId?: unknown,
+    spellName?: unknown,
+    timestamp?: unknown,
+    currentHP?: unknown,
+    amount?: unknown,
+    school?: unknown,
+    critical?: unknown,
+    overkill?: unknown,
+    sourceName?: unknown,
+    hideCaster?: unknown,
+    absorbed?: unknown,
+    resisted?: unknown,
+    blocked?: unknown,
 }
 
 local WIDTH, HEIGHT = 440, 470
@@ -45,9 +58,23 @@ local ICON = 20
 local TIME_W = 44
 local HEALTH_W = 64
 local AMOUNT_W = 84
-local SCHOOL: { [number]: string } = { [1] = "Physical", [2] = "Holy", [4] = "Fire", [8] = "Nature", [16] = "Frost", [32] = "Shadow", [64] = "Arcane" }
-local ENVIRONMENT: { [string]: string } = { DROWNING = "spell_shadow_demonbreath", FALLING = "ability_rogue_quickrecovery", FIRE = "spell_fire_fire",
-                      LAVA = "spell_fire_fire", SLIME = "inv_misc_slime_01", FATIGUE = "ability_creature_cursed_05" }
+local SCHOOL: { [number]: string } = {
+    [1] = "Physical",
+    [2] = "Holy",
+    [4] = "Fire",
+    [8] = "Nature",
+    [16] = "Frost",
+    [32] = "Shadow",
+    [64] = "Arcane",
+}
+local ENVIRONMENT: { [string]: string } = {
+    DROWNING = "spell_shadow_demonbreath",
+    FALLING = "ability_rogue_quickrecovery",
+    FIRE = "spell_fire_fire",
+    LAVA = "spell_fire_fire",
+    SLIME = "inv_misc_slime_01",
+    FATIGUE = "ability_creature_cursed_05",
+}
 
 -- "1,956"
 local function group3(n: number): string
@@ -85,7 +112,9 @@ end
 local function extras(e: DeathEvent): string[]
     local out: string[] = {}
     local function add(v: unknown, word: string)
-        if isNumber(v) and v > 0 then out[#out + 1] = group3(v) .. " " .. word end
+        if isNumber(v) and v > 0 then
+            out[#out + 1] = group3(v) .. " " .. word
+        end
     end
     add(e.absorbed, "absorbed")
     add(e.resisted, "resisted")
@@ -157,7 +186,10 @@ class HitRow extends Frame
             local by = self.by:GetText()
             UI.ShowTooltip(self, { title = self.name:GetText(), subtitle = by ~= "" and by or nil })
         end)
-        self:SetScript("OnLeave", function() GameTooltip:Hide(); UI.HideTooltip() end)
+        self:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+            UI.HideTooltip()
+        end)
     end
 end
 
@@ -191,7 +223,10 @@ class RecapHead extends Frame
 
     -- As tall as its three lines (again when a theme changes them).
     function Size()
-        self:SetSize(WIDTH - S["space-5"] * 2, T.type.caption.lineHeight + T.type.label.lineHeight + T.type.caption.lineHeight)
+        self:SetSize(
+            WIDTH - S["space-5"] * 2,
+            T.type.caption.lineHeight + T.type.label.lineHeight + T.type.caption.lineHeight
+        )
     end
 end
 
@@ -211,8 +246,12 @@ class HealthLine extends Frame
 
     -- Its steps and marks dropped before it's drawn again.
     function Clear()
-        for _, t in ipairs(self.steps) do t:Hide() end
-        for _, t in ipairs(self.marks) do t:Hide() end
+        for _, t in ipairs(self.steps) do
+            t:Hide()
+        end
+        for _, t in ipairs(self.marks) do
+            t:Hide()
+        end
     end
 end
 
@@ -232,14 +271,14 @@ end
 
 -- One hit as its row shows it.
 export type RecapRow = {
-    time: string,       -- "−2.4 s", "0 s", "" (no time)
+    time: string, -- "−2.4 s", "0 s", "" (no time)
     spell: string,
     icon?: Art,
-    spellID?: number,   -- for the spell's own tooltip (not a melee swing)
-    by: string,         -- caster · absorbed · resisted · blocked
-    amount: string,     -- "−1,956"
-    flag: string,       -- critical · overkill
-    hp?: number,        -- health after it
+    spellID?: number, -- for the spell's own tooltip (not a melee swing)
+    by: string, -- caster · absorbed · resisted · blocked
+    amount: string, -- "−1,956"
+    flag: string, -- critical · overkill
+    hp?: number, -- health after it
     killing: boolean,
 }
 
@@ -251,7 +290,7 @@ export type RecapStep = { from: number, to: number, hp: number }
 -- as C_DeathRecap gives them) and the maximum health (nil: unknown).
 export type Recap = {
     count: number,
-    span?: number,      -- seconds from the first hit to death
+    span?: number, -- seconds from the first hit to death
     head: { spell: string, by: string, detail: string, health: string, span: string },
     rows: RecapRow[],
     -- the health line, when the maximum and a time span are known
@@ -262,10 +301,14 @@ export type Recap = {
 export function recapOf(events: DeathEvent[], maxHP: number?): Recap
     -- newest first: the hits oldest first, and the time each came before death
     local list: DeathEvent[], deathAt: number? = {}, nil
-    for i = #events, 1, -1 do list[#list + 1] = events[i] end
+    for i = #events, 1, -1 do
+        list[#list + 1] = events[i]
+    end
     for _, e in ipairs(list) do
         local at = e.timestamp
-        if isNumber(at) and (not deathAt or at > deathAt) then deathAt = at end
+        if isNumber(at) and (not deathAt or at > deathAt) then
+            deathAt = at
+        end
     end
     local function before(e: DeathEvent): number?
         local at = e.timestamp
@@ -284,7 +327,9 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
         if isNumber(hp) and not (isNumber(prevHP) and prevHP == hp and running) then
             running = hp
         end
-        if running and isNumber(amount) then running = math.max(0, running - amount) end
+        if running and isNumber(amount) then
+            running = math.max(0, running - amount)
+        end
         after[i] = running
     end
     local firstHP = first.currentHP
@@ -297,8 +342,12 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
         local school = isNumber(lastSchool) and SCHOOL[lastSchool] or nil
         bits[#bits + 1] = group3(lastAmount) .. (school and (" " .. school) or "")
     end
-    if last.critical == true then bits[#bits + 1] = "critical" end
-    if isNumber(lastOverkill) and lastOverkill > 0 then bits[#bits + 1] = group3(lastOverkill) .. " overkill" end
+    if last.critical == true then
+        bits[#bits + 1] = "critical"
+    end
+    if isNumber(lastOverkill) and lastOverkill > 0 then
+        bits[#bits + 1] = group3(lastOverkill) .. " overkill"
+    end
     local span = before(first)
     local r: Recap = {
         count = #list,
@@ -318,7 +367,9 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
     if maxHP and span and span > 0 then
         local steps: RecapStep[] = {}
         local function step(fromT: number, toT: number, hp: number?)
-            if hp then steps[#steps + 1] = { from = fromT, to = toT, hp = hp } end
+            if hp then
+                steps[#steps + 1] = { from = fromT, to = toT, hp = hp }
+            end
         end
         -- before the first hit, a sliver at full
         step(span, span * 0.98, startHP or maxHP)
@@ -341,11 +392,19 @@ export function recapOf(events: DeathEvent[], maxHP: number?): Recap
         local t = before(e)
         local by: string[] = {}
         local source, overkill, amount, id = e.sourceName, e.overkill, e.amount, e.spellId
-        if text(source) and not e.hideCaster then by[1] = source end
-        for _, x in ipairs(extras(e)) do by[#by + 1] = x end
+        if text(source) and not e.hideCaster then
+            by[1] = source
+        end
+        for _, x in ipairs(extras(e)) do
+            by[#by + 1] = x
+        end
         local flag: string[] = {}
-        if e.critical == true then flag[#flag + 1] = "critical" end
-        if isNumber(overkill) and overkill > 0 then flag[#flag + 1] = group3(overkill) .. " overkill" end
+        if e.critical == true then
+            flag[#flag + 1] = "critical"
+        end
+        if isNumber(overkill) and overkill > 0 then
+            flag[#flag + 1] = group3(overkill) .. " overkill"
+        end
         r.rows[i] = {
             time = t and (t < 0.05 and "0 s" or ("−%.1f s"):format(t)) or "",
             spell = spell,
@@ -381,9 +440,18 @@ class DeathRecapModule extends Module<typeof(DEFAULTS)>
     -- The window (made the first time).
     function Window(): RecapWindow
         local parts = self.parts
-        if parts then return parts end
-        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIDeathRecap", title = "Death recap", width = WIDTH, height = HEIGHT,
-            onClose = function(win: Frame) win:Hide() end })
+        if parts then
+            return parts
+        end
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUIDeathRecap",
+            title = "Death recap",
+            width = WIDTH,
+            height = HEIGHT,
+            onClose = function(win: Frame)
+                win:Hide()
+            end,
+        })
         w:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
         w:Hide()
         local c = w.content
@@ -403,13 +471,18 @@ class DeathRecapModule extends Module<typeof(DEFAULTS)>
         local w, head, line = parts.window, parts.head, parts.line
         local api = C_DeathRecap
         local ok, events = pcall(api.GetRecapEvents, id)
-        for _, r in ipairs(parts.rows) do r:Hide() end
+        for _, r in ipairs(parts.rows) do
+            r:Hide()
+        end
         line:Clear()
         local secret = ok and issecrettable ~= nil and issecrettable(events)
         if secret or not ok or type(events) ~= "table" or #events == 0 then
             head:Hide()
             line:Hide()
-            parts.empty:SetValue(secret and "The recap is secret until combat ends." or "No recap for this death. The game recorded no hits for it.")
+            parts.empty:SetValue(
+                secret and "The recap is secret until combat ends." or
+                    "No recap for this death. The game recorded no hits for it."
+            )
             parts.empty:Show()
             self:Fit(T.type.body.lineHeight * 2)
             w:Show()
@@ -432,19 +505,27 @@ class DeathRecapModule extends Module<typeof(DEFAULTS)>
         local lineW = line:GetWidth() - 2
         local steps, marks, span = recap.steps, recap.marks, recap.span
         if maxHP and span and steps and marks then
-            local function x(t: number): number return 1 + (1 - t / span) * lineW end
+            local function x(t: number): number
+                return 1 + (1 - t / span) * lineW
+            end
             for n, st in ipairs(steps) do
                 local hp = st.hp
-                local s = piece(line.steps, n, function(): Texture return UI.Fill(line, "unit-fill", "ARTWORK") end)
+                local s = piece(line.steps, n, function(): Texture
+                    return UI.Fill(line, "unit-fill", "ARTWORK")
+                end)
                 UI.PaintFill(s, hp / maxHP < 0.35 and "unit-fill-low" or "unit-fill")
                 s:ClearAllPoints()
                 local left, right = x(st.from), x(st.to)
                 s:SetPoint("BOTTOMLEFT", line, "BOTTOMLEFT", left, 1)
                 s:SetSize(math.max(1, right - left), math.max(0.01, (LINE_H - 2) * math.max(0, hp) / maxHP))
-                if hp <= 0 then s:Hide() end
+                if hp <= 0 then
+                    s:Hide()
+                end
             end
             for k, mk in ipairs(marks) do
-                local m = piece(line.marks, k, function(): Text return UI.Text(line, "caption", "ink-faint") end)
+                local m = piece(line.marks, k, function(): Text
+                    return UI.Text(line, "caption", "ink-faint")
+                end)
                 m:ClearAllPoints()
                 m:SetPoint("TOP", line, "BOTTOMLEFT", x(mk.t), -2)
                 m:SetValue(mk.text)
@@ -513,20 +594,30 @@ class DeathRecapModule extends Module<typeof(DEFAULTS)>
         if not self.hooked and type(OpenDeathRecapUI) == "function" then
             self.hooked = true
             hook("OpenDeathRecapUI", function(id: number?)
-                if not self:IsEnabled() then return end
+                if not self:IsEnabled() then
+                    return
+                end
                 local f = DeathRecapFrame
-                if f and f:IsShown() then HideUIPanel(f) end
+                if f and f:IsShown() then
+                    HideUIPanel(f)
+                end
                 self:Toggle(id)
             end)
         end
         -- a theme's line heights: the head sized again, the recap shown laid out again
         self:On("SUUUI_THEME_CHANGED", function()
             local parts = self.parts
-            if not parts then return end
+            if not parts then
+                return
+            end
             parts.head:Size()
-            if parts.window:IsShown() then self:ShowRecap(self.shownID or nil) end
+            if parts.window:IsShown() then
+                self:ShowRecap(self.shownID or nil)
+            end
         end)
-        self:RegisterCommand("recap", "Shows the recap of your last death.", function() self:Toggle(nil) end)
+        self:RegisterCommand("recap", "Shows the recap of your last death.", function()
+            self:Toggle(nil)
+        end)
     end
 end
 

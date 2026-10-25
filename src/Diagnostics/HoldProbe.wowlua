@@ -19,12 +19,16 @@ local currentNote: ((s: string) -> ())?
 local currentState: (() -> string)?
 
 local function name(f: unknown): string
-    if not f then return "nil" end
+    if not f then
+        return "nil"
+    end
     for _, method in ipairs({ "GetDebugName", "GetName" }) do
         local fn = tbl.field(f, method)
         if type(fn) == "function" then
             local ok, n = pcall(fn, f)
-            if ok and type(n) == "string" then return n end
+            if ok and type(n) == "string" then
+                return n
+            end
         end
     end
     return tostring(f)
@@ -32,47 +36,72 @@ end
 
 export function command()
     local m = modules.get("alerts")
-    if not reflect.isInstance(m, AlertsModule) then print("Hold probe: the Alerts module isn't up.") return end
+    if not reflect.isInstance(m, AlertsModule) then
+        print("Hold probe: the Alerts module isn't up.")
+        return
+    end
     local ui = m.ui
-    if not ui then print("Hold probe: the Alerts module isn't up.") return end
+    if not ui then
+        print("Hold probe: the Alerts module isn't up.")
+        return
+    end
     local log: string[] = {}
     DB.probe.hold = { at = date("%H:%M:%S"), log = log }
     local t0 = GetTime()
     local function note(s: string)
-        if #log < 400 then log[#log + 1] = ("%.1f %s"):format(GetTime() - t0, s) end
+        if #log < 400 then
+            log[#log + 1] = ("%.1f %s"):format(GetTime() - t0, s)
+        end
     end
     local function state(): string
         local card = ui.card
         local foci: string[] = {}
         local list = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
-        for _, f in ipairs(list) do foci[#foci + 1] = name(f) end
+        for _, f in ipairs(list) do
+            foci[#foci + 1] = name(f)
+        end
         local okH, hovered = pcall(card.IsHovered, card)
         return ("current=%s shown=%s visible=%s frameShown=%s hovered=%s over=%s look=%s holding=%s under=%s foci=[%s]"):format(
-            tostring(m.current), tostring(card:IsShown()), tostring(card:IsVisible()), tostring(ui.frame:IsShown()),
-            okH and tostring(hovered) or ("ERR " .. tostring(hovered)), tostring(card:IsMouseOver()),
-            tostring(IsMouselooking and IsMouselooking()), tostring(m.holding ~= nil),
-            tostring(m.under and m.under.key), table.concat(foci, ", "))
+            tostring(m.current),
+            tostring(card:IsShown()),
+            tostring(card:IsVisible()),
+            tostring(ui.frame:IsShown()),
+            okH and tostring(hovered) or ("ERR " .. tostring(hovered)),
+            tostring(card:IsMouseOver()),
+            tostring(IsMouselooking and IsMouselooking()),
+            tostring(m.holding ~= nil),
+            tostring(m.under and m.under.key),
+            table.concat(foci, ", ")
+        )
     end
     if not hooked then
         hooked = true
         hook(m, "Hide", function(_: unknown, key: unknown, now: unknown)
             local n, st = currentNote, currentState
-            if n and st and (key == nil or key == m.current or key == "suu:levelup") then n(("Hide(%s, %s) -> %s"):format(tostring(key), tostring(now), st())) end
+            if n and st and (key == nil or key == m.current or key == "suu:levelup") then
+                n(("Hide(%s, %s) -> %s"):format(tostring(key), tostring(now), st()))
+            end
         end)
         hook(m, "StopHolding", function()
             local n, st = currentNote, currentState
-            if n and st and m.holding then n("StopHolding -> " .. st()) end
+            if n and st and m.holding then
+                n("StopHolding -> " .. st())
+            end
         end)
         hook(m, "ShowLevelUp", function(_: unknown, key: unknown)
             local n, st = currentNote, currentState
-            if n and st then n(("ShowLevelUp(%s) -> %s"):format(tostring(key), st())) end
+            if n and st then
+                n(("ShowLevelUp(%s) -> %s"):format(tostring(key), st()))
+            end
         end)
         local ticker = CreateFrame("Frame")
         local acc = 0
         ticker:SetScript("OnUpdate", function(_, dt)
             acc = acc + dt
             local n, st = currentNote, currentState
-            if acc < 0.2 or not n or not st or not ui.card:IsShown() then return end
+            if acc < 0.2 or not n or not st or not ui.card:IsShown() then
+                return
+            end
             acc = 0
             n("tick " .. st())
         end)

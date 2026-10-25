@@ -45,12 +45,17 @@ local castNote: (s: string) -> () = function(_: string) end
 local castHooked = false
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
         local parts: string[] = {}
         for k, x in pairs(v) do
-            parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
+            parts[#parts + 1] = tostring(k) ..
+                "=" .. (isSecret(x) and "secret" or (type(x) == "table" and "table" or tostring(x)))
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -59,26 +64,42 @@ local function show(v: unknown): string
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 120) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 120)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 local function namesIn(t: unknown): string[]
     local out: string[] = {}
-    if type(t) ~= "table" then return { "missing" } end
-    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    if type(t) ~= "table" then
+        return { "missing" }
+    end
+    for k, v in pairs(t) do
+        if type(k) == "string" and type(v) == "function" then
+            out[#out + 1] = k
+        end
+    end
     table.sort(out)
     return out
 end
 
 local function enumList(e: unknown): string[]
     local out: string[] = {}
-    if type(e) ~= "table" then return { "missing" } end
-    for k, v in pairs(e) do out[#out + 1] = tostring(k) .. "=" .. tostring(v) end
+    if type(e) ~= "table" then
+        return { "missing" }
+    end
+    for k, v in pairs(e) do
+        out[#out + 1] = tostring(k) .. "=" .. tostring(v)
+    end
     table.sort(out)
     return out
 end
@@ -91,11 +112,17 @@ local function trainingFunctions(): (string[], string[])
         if type(t) == "table" then
             for k, v in pairs(t) do
                 local l = type(k) == "string" and k:lower() or ""
-                if type(k) ~= "string" then continue end
+                if type(k) ~= "string" then
+                    continue
+                end
                 -- only what reads (Get/Is/Has/Can/Should): nothing that buys or learns
-                local reads = k:match("^Get") or k:match("^Is") or k:match("^Has") or k:match("^Can") or k:match("^Should")
-                if type(v) == "function" and reads and (l:find("train") or l:find("cost") or l:find("rank") or l:find("future")
-                    or l:find("learn") or l:find("level") or l:find("unlearned") or l:find("available")) then
+                local reads = k:match("^Get") or k:match("^Is") or k:match("^Has") or k:match("^Can") or
+                    k:match("^Should")
+                if type(v) == "function" and reads and
+                    (l:find("train") or l:find("cost") or l:find("rank") or l:find("future") or l:find("learn") or
+                        l:find("level") or
+                        l:find("unlearned") or
+                        l:find("available")) then
                     out[#out + 1] = ns2 .. "." .. k
                 end
             end
@@ -104,7 +131,9 @@ local function trainingFunctions(): (string[], string[])
     -- global names only listed (never called)
     local globals: string[] = {}
     for k, v in pairs(_G) do
-        if type(k) == "string" and type(v) == "function" and (k:find("Trainer") or k:find("SpellRank")) then globals[#globals + 1] = k end
+        if type(k) == "string" and type(v) == "function" and (k:find("Trainer") or k:find("SpellRank")) then
+            globals[#globals + 1] = k
+        end
     end
     table.sort(globals)
     table.sort(out)
@@ -119,7 +148,8 @@ local function sampleItems(extra: string[]): Map[]
         local info = C_SpellBook.GetSpellBookSkillLineInfo(line)
         local items: Map[] = {}
         local l: Map = { info = show(info), items = items }
-        local offset, count = info and secret.asNumber(info.itemIndexOffset), info and secret.asNumber(info.numSpellBookItems)
+        local offset, count = info and secret.asNumber(info.itemIndexOffset),
+            info and secret.asNumber(info.numSpellBookItems)
         if offset and count then
             for i = offset + 1, math.min(offset + count, offset + 40) do
                 local item = C_SpellBook.GetSpellBookItemInfo(i, bank)
@@ -143,7 +173,9 @@ local function sampleItems(extra: string[]): Map[]
                     local f = ns2 and fn and tbl.field(_G, ns2, fn)
                     if f then
                         tried[#tried + 1] = path .. "(slot)=" .. call(f, i, bank):sub(1, 80)
-                        if spellID then tried[#tried + 1] = path .. "(spell)=" .. call(f, spellID):sub(1, 80) end
+                        if spellID then
+                            tried[#tried + 1] = path .. "(spell)=" .. call(f, spellID):sub(1, 80)
+                        end
                     end
                 end
                 e.tried = tried
@@ -157,25 +189,42 @@ end
 
 -- Blizzard's spellbook page, three levels deep: keys, types, sizes, texts.
 local function pageTree(f: Frame, depth: number, out: string[], prefix: string)
-    if depth > 3 or #out > 400 then return end
+    if depth > 3 or #out > 400 then
+        return
+    end
     local keys: { [Region]: string } = {}
-    for k, part in pairs(wf.keyed(f)) do keys[part] = k end
+    for k, part in pairs(wf.keyed(f)) do
+        keys[part] = k
+    end
     for _, c in ipairs(wf.children(f)) do
         local ok, line = pcall(function(): string
             local w, h = c:GetSize()
-            return ("%s%s %s %dx%d shown=%s"):format(prefix, c:GetObjectType(), keys[c] or c:GetName() or "-", w or 0, h or 0, tostring(c:IsShown()))
+            return ("%s%s %s %dx%d shown=%s"):format(
+                prefix,
+                c:GetObjectType(),
+                keys[c] or c:GetName() or "-",
+                w or 0,
+                h or 0,
+                tostring(c:IsShown())
+            )
         end)
-        if ok and line then out[#out + 1] = line end
+        if ok and line then
+            out[#out + 1] = line
+        end
         for _, r in ipairs(wf.fontStrings(c)) do
             local t = secret.asString(r:GetText())
-            if t and t ~= "" then out[#out + 1] = prefix .. "  text: " .. t:sub(1, 50) end
+            if t and t ~= "" then
+                out[#out + 1] = prefix .. "  text: " .. t:sub(1, 50)
+            end
         end
         pageTree(c, depth + 1, out, prefix .. "  ")
     end
 end
 
 local function store(): Store
-    return DB.probeData("spellbook", function(): Store return { trainingFunctions = {}, trainerGlobals = {}, lines = {} } end)
+    return DB.probeData("spellbook", function(): Store
+        return { trainingFunctions = {}, trainerGlobals = {}, lines = {} }
+    end)
 end
 
 export function sample(): Store
@@ -200,21 +249,30 @@ end
 
 -- SuuUI's code picks up the first learned spell and puts it back.
 export function pickup()
-    if InCombatLockdown() then print("Spellbook probe: out of combat, please.") return end
+    if InCombatLockdown() then
+        print("Spellbook probe: out of combat, please.")
+        return
+    end
     local s = store()
     local bank = Enum.SpellBookSpellBank.Player
     local blocked: string[] = {}
     local f = CreateFrame("Frame")
     f:RegisterEvent("ADDON_ACTION_BLOCKED")
     f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
-    f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown) blocked[#blocked + 1] = e .. " " .. show(a) .. " " .. show(b) end)
+    f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown)
+        blocked[#blocked + 1] = e .. " " .. show(a) .. " " .. show(b)
+    end)
     local slot: number? = nil
     local info = C_SpellBook.GetSpellBookSkillLineInfo(2) or C_SpellBook.GetSpellBookSkillLineInfo(1)
-    local offset, count = info and secret.asNumber(info.itemIndexOffset), info and secret.asNumber(info.numSpellBookItems)
+    local offset, count = info and secret.asNumber(info.itemIndexOffset),
+        info and secret.asNumber(info.numSpellBookItems)
     if offset and count then
         for i = offset + 1, offset + count do
             local item = C_SpellBook.GetSpellBookItemInfo(i, bank)
-            if item and item.itemType == Enum.SpellBookItemType.Spell and not item.isPassive then slot = i break end
+            if item and item.itemType == Enum.SpellBookItemType.Spell and not item.isPassive then
+                slot = i
+                break
+            end
         end
     end
     local r: Map = { at = date("%H:%M:%S"), slot = show(slot) }
@@ -226,7 +284,14 @@ export function pickup()
     after(0.5, function()
         r.blocked = blocked
         f:UnregisterAllEvents()
-        print("Spellbook probe: pickup " .. tostring(r.pickup) .. ", cursor " .. tostring(r.cursor) .. (#blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked") .. ". /reload to save.")
+        print(
+            "Spellbook probe: pickup " ..
+                tostring(r.pickup) ..
+                    ", cursor " ..
+                        tostring(r.cursor) ..
+                            (#blocked > 0 and (", BLOCKED: " .. blocked[1]) or ", nothing blocked") ..
+                                ". /reload to save."
+        )
     end)
     s.pickupTest = r
 end
@@ -234,20 +299,31 @@ end
 export function cast()
     local m = modules.get("spellbook")
     local book = m and reflect.isInstance(m, SpellbookModule) and m.book or nil
-    if not book then print("Spellbook probe: open the Spellbook once first.") return end
+    if not book then
+        print("Spellbook probe: open the Spellbook once first.")
+        return
+    end
     local log: string[] = {}
     DB.probe.castbook = { at = date("%H:%M:%S"), keyDownCVar = show(GetCVar("ActionButtonUseKeyDown")), log = log }
     local t0 = GetTime()
     local function note(s: string)
-        if #log < 300 then log[#log + 1] = ("%.2f %s %s"):format(GetTime() - t0, InCombatLockdown() and "[combat]" or "[calm]", s) end
+        if #log < 300 then
+            log[#log + 1] = ("%.2f %s %s"):format(GetTime() - t0, InCombatLockdown() and "[combat]" or "[calm]", s)
+        end
     end
     castNote = note
-    if castHooked then note("re-armed") print("Spellbook probe: recording again. Click spells, then /reload.") return end
+    if castHooked then
+        note("re-armed")
+        print("Spellbook probe: recording again. Click spells, then /reload.")
+        return
+    end
     castHooked = true
     local function foci(): string
         local out: string[] = {}
         for _, f in ipairs(GetMouseFoci()) do
-            local ok, n = pcall(function() return f:GetDebugName() end)
+            local ok, n = pcall(function()
+                return f:GetDebugName()
+            end)
             out[#out + 1] = ok and n or tostring(f)
         end
         return table.concat(out, ", ")
@@ -255,8 +331,15 @@ export function cast()
     local function describe(b: Button): string
         local ok1, prot = pcall(b.IsProtected, b)
         return ("type=%s spell=%s protected=%s shown=%s visible=%s mouse=%s alpha=%.2f foci=[%s]"):format(
-            show(b:GetAttribute("type")), show(b:GetAttribute("spell")), ok1 and show(prot) or "?",
-            show(b:IsShown()), show(b:IsVisible()), show(b:IsMouseEnabled()), b:GetEffectiveAlpha() or -1, foci())
+            show(b:GetAttribute("type")),
+            show(b:GetAttribute("spell")),
+            ok1 and show(prot) or "?",
+            show(b:IsShown()),
+            show(b:IsVisible()),
+            show(b:IsMouseEnabled()),
+            b:GetEffectiveAlpha() or -1,
+            foci()
+        )
     end
     local hooked: { [Button]: boolean } = {}
     local function hookCells()
@@ -264,19 +347,36 @@ export function cast()
             local b = c.button
             if b and not hooked[b] then
                 hooked[b] = true
-                b:HookScript("OnMouseDown", function(_, btn) castNote(("cell %d mousedown %s %s"):format(i, tostring(btn), describe(b))) end)
-                b:HookScript("PreClick", function(_, btn, down) castNote(("cell %d preclick %s down=%s %s"):format(i, tostring(btn), tostring(down), describe(b))) end)
-                b:HookScript("PostClick", function(_, btn, down) castNote(("cell %d postclick %s down=%s"):format(i, tostring(btn), tostring(down))) end)
+                b:HookScript("OnMouseDown", function(_, btn)
+                    castNote(("cell %d mousedown %s %s"):format(i, tostring(btn), describe(b)))
+                end)
+                b:HookScript("PreClick", function(_, btn, down)
+                    castNote(("cell %d preclick %s down=%s %s"):format(i, tostring(btn), tostring(down), describe(b)))
+                end)
+                b:HookScript("PostClick", function(_, btn, down)
+                    castNote(("cell %d postclick %s down=%s"):format(i, tostring(btn), tostring(down)))
+                end)
             end
         end
     end
     hookCells()
     hook(book, "SetSpells", hookCells)
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+    for _, e in ipairs({
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+        "UI_ERROR_MESSAGE",
+        "PLAYER_REGEN_DISABLED",
+        "PLAYER_REGEN_ENABLED",
+    }) do
         pcall(f.RegisterEvent, f, e)
     end
-    for _, e in ipairs({ "UNIT_SPELLCAST_SENT", "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED" }) do
+    for _, e in ipairs({
+        "UNIT_SPELLCAST_SENT",
+        "UNIT_SPELLCAST_START",
+        "UNIT_SPELLCAST_SUCCEEDED",
+        "UNIT_SPELLCAST_FAILED",
+    }) do
         pcall(f.RegisterUnitEvent, f, e, "player")
     end
     f:SetScript("OnEvent", function(_, e: string, a: unknown, b: unknown, c: unknown, d: unknown)
@@ -287,9 +387,17 @@ export function cast()
 end
 
 export function command(arg: string?)
-    if arg == "pickup" then return pickup() end
-    if arg == "cast" then return cast() end
+    if arg == "pickup" then
+        return pickup()
+    end
+    if arg == "cast" then
+        return cast()
+    end
     local s = sample()
-    print(("Spellbook probe: %d schools sampled%s. Run it on another school too, then /reload."):format(#s.lines,
-        s.page and ", Blizzard's page read" or " (open the spellbook to read Blizzard's page)"))
+    print(
+        ("Spellbook probe: %d schools sampled%s. Run it on another school too, then /reload."):format(
+            #s.lines,
+            s.page and ", Blizzard's page read" or " (open the spellbook to read Blizzard's page)"
+        )
+    )
 end

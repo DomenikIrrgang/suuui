@@ -27,14 +27,22 @@ type Sample = { at: string, name?: string, all: string[], ready: string, [string
 
 local function show(v: unknown, depth: number?): string
     depth = depth or 0
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
-        if depth > 3 then return "{…}" end
+        if depth > 3 then
+            return "{…}"
+        end
         local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
-            if #parts > 40 then break end
+            if #parts > 40 then
+                break
+            end
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -43,27 +51,43 @@ local function show(v: unknown, depth: number?): string
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 160)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 -- `fn(...)`'s results as they are: an empty list when it's missing or raises.
 local function results(fn: unknown, ...: unknown): unknown[]
-    if type(fn) ~= "function" then return {} end
+    if type(fn) ~= "function" then
+        return {}
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return {} end
+    if not res[1] then
+        return {}
+    end
     table.remove(res, 1)
     return res
 end
 
 local function namesIn(t: unknown): string[]
     local out: string[] = {}
-    if type(t) ~= "table" then return { "missing" } end
-    for k, v in pairs(t) do if type(k) == "string" and type(v) == "function" then out[#out + 1] = k end end
+    if type(t) ~= "table" then
+        return { "missing" }
+    end
+    for k, v in pairs(t) do
+        if type(k) == "string" and type(v) == "function" then
+            out[#out + 1] = k
+        end
+    end
     table.sort(out)
     return out
 end
@@ -72,12 +96,19 @@ local TS = C_TradeSkillUI
 
 export function sample(): Sample
     local all: string[] = {}
-    local store: Sample = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
-        all = all, ready = call(TS.IsTradeSkillReady) }
+    local store: Sample = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        level = UnitLevel("player"),
+        class = select(2, UnitClass("player")),
+        all = all,
+        ready = call(TS.IsTradeSkillReady),
+    }
     -- one per profession (its skill line), so each open window keeps its own;
     -- a probe from before that layout (a single one) is dropped
     local saved = DB.probe.professions
-    if type(saved) ~= "table" or tbl.field(saved, "at") then saved = {} end
+    if type(saved) ~= "table" or tbl.field(saved, "at") then
+        saved = {}
+    end
     DB.probe.professions = saved
     store.api = namesIn(TS)
     -- your professions
@@ -89,10 +120,28 @@ export function sample(): Sample
         local p: Record = { slot = slot, index = show(index) }
         if index ~= nil then
             local info = results(tbl.field(_G, "GetProfessionInfo"), index)
-            local name, icon, skill, maxSkill, numAbilities, offset, skillLine, mod, spec, specOffset =
-                info[1], info[2], info[3], info[4], info[5], info[6], info[7], info[8], info[9], info[10]
+            local name, icon, skill, maxSkill, numAbilities, offset, skillLine, mod, spec, specOffset = info[1],
+                info[2],
+                info[3],
+                info[4],
+                info[5],
+                info[6],
+                info[7],
+                info[8],
+                info[9],
+                info[10]
             p.info = ("name=%s icon=%s skill=%s/%s abilities=%s offset=%s skillLine=%s mod=%s spec=%s specOffset=%s"):format(
-                show(name), show(icon), show(skill), show(maxSkill), show(numAbilities), show(offset), show(skillLine), show(mod), show(spec), show(specOffset))
+                show(name),
+                show(icon),
+                show(skill),
+                show(maxSkill),
+                show(numAbilities),
+                show(offset),
+                show(skillLine),
+                show(mod),
+                show(spec),
+                show(specOffset)
+            )
             p.bySkillLine = call(TS.GetProfessionInfoBySkillLineID, skillLine)
             local spells: string[] = {}
             p.spells = spells
@@ -116,28 +165,39 @@ export function sample(): Sample
     local ids: number[] = {}
     for _, id in ipairs(tbl.list(results(TS.GetAllRecipeIDs)[1])) do
         local n = asNumber(id)
-        if n then ids[#ids + 1] = n end
+        if n then
+            ids[#ids + 1] = n
+        end
     end
     local filtered = tbl.list(results(TS.GetFilteredRecipeIDs)[1])
     store.recipeCount, store.filteredCount = #ids, #filtered
     local categories: string[] = {}
     store.categories = categories
     for _, c in ipairs(results(TS.GetCategories)) do
-        if #categories < 30 then categories[#categories + 1] = show(c) .. " " .. call(TS.GetCategoryInfo, c) end
+        if #categories < 30 then
+            categories[#categories + 1] = show(c) .. " " .. call(TS.GetCategoryInfo, c)
+        end
     end
     -- every recipe's category up to its header, and how many under each
     -- and every recipe, one line each: id|name|category|learned|ability|grey
     local tree: string[], perRoot: { [string]: number }, dupes: string[] = {}, {}, {}
     store.tree, store.perRoot = tree, perRoot
-    local function add(key: string) perRoot[key] = (perRoot[key] or 0) + 1 end
+    local function add(key: string)
+        perRoot[key] = (perRoot[key] or 0) + 1
+    end
     local seenCat: { [unknown]: boolean } = {}
     local names: { [string]: { [string]: number } } = {}
     for _, id in ipairs(ids) do
         local info = tryValue(TS.GetRecipeInfo, id)
         if info then
-            all[#all + 1] = ("%d|%s|%d|%d|%d|%d"):format(id, show(info.name), asNumber(info.categoryID) or 0,
-                info.learned and 1 or 0, asNumber(info.skillLineAbilityID) or 0,
-                asNumber(info.maxTrivialLevel) or 0)
+            all[#all + 1] = ("%d|%s|%d|%d|%d|%d"):format(
+                id,
+                show(info.name),
+                asNumber(info.categoryID) or 0,
+                info.learned and 1 or 0,
+                asNumber(info.skillLineAbilityID) or 0,
+                asNumber(info.maxTrivialLevel) or 0
+            )
         else
             all[#all + 1] = ("%d|nil"):format(id)
         end
@@ -146,10 +206,14 @@ export function sample(): Sample
         local guard = 0
         while cat and cat ~= 0 and guard < 8 do
             local ci = results(TS.GetCategoryInfo, cat)[1]
-            if ci == nil then break end
+            if ci == nil then
+                break
+            end
             if not seenCat[cat] then
                 seenCat[cat] = true
-                if #tree < 120 then tree[#tree + 1] = show(cat) .. " " .. show(ci) end
+                if #tree < 120 then
+                    tree[#tree + 1] = show(cat) .. " " .. show(ci)
+                end
             end
             root = tbl.field(ci, "name")
             cat = tbl.field(ci, "parentCategoryID")
@@ -166,19 +230,29 @@ export function sample(): Sample
             if before then
                 add(r .. " duplicate names")
                 store.dupes = dupes
-                if #dupes < 40 then dupes[#dupes + 1] = ("%s: %s and %s"):format(name, show(before), show(id)) end
+                if #dupes < 40 then
+                    dupes[#dupes + 1] = ("%s: %s and %s"):format(name, show(before), show(id))
+                end
             else
                 seen[name] = id
             end
-            if info.disabled then add(r .. " disabled") end
-            if (asNumber(info.maxTrivialLevel) or 0) > 300 then add(r .. " trivial past 300") end
-            if (asNumber(tbl.field(info, "itemLevel")) or 0) > 70 then add(r .. " item level past 70") end
+            if info.disabled then
+                add(r .. " disabled")
+            end
+            if (asNumber(info.maxTrivialLevel) or 0) > 300 then
+                add(r .. " trivial past 300")
+            end
+            if (asNumber(tbl.field(info, "itemLevel")) or 0) > 70 then
+                add(r .. " item level past 70")
+            end
         end
     end
     local recipes: Record[] = {}
     store.recipes = recipes
     for i, id in ipairs(ids) do
-        if i > 25 then break end
+        if i > 25 then
+            break
+        end
         local r: Record = { id = id }
         r.info = call(TS.GetRecipeInfo, id)
         r.schematic = call(TS.GetRecipeSchematic, id, false)
@@ -197,8 +271,12 @@ export function sample(): Sample
             local reagent = tbl.list(tbl.field(slot, "reagents"))[1]
             local itemID = tbl.field(reagent, "itemID")
             if itemID ~= nil then
-                counts[#counts + 1] = ("%s x%s have=%s name=%s"):format(show(itemID), show(tbl.field(slot, "quantityRequired")),
-                    call(C_Item.GetItemCount, itemID, true, false, true), show(results(C_Item.GetItemNameByID, itemID)[1]))
+                counts[#counts + 1] = ("%s x%s have=%s name=%s"):format(
+                    show(itemID),
+                    show(tbl.field(slot, "quantityRequired")),
+                    call(C_Item.GetItemCount, itemID, true, false, true),
+                    show(results(C_Item.GetItemNameByID, itemID)[1])
+                )
             end
         end
         r.counts = counts
@@ -209,6 +287,11 @@ end
 
 export function command()
     local store = sample()
-    print(("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
-        store.name or "no profession window open", #store.all, store.ready))
+    print(
+        ("Profession probe: %s, %d recipes saved (ready: %s). /reload to save."):format(
+            store.name or "no profession window open",
+            #store.all,
+            store.ready
+        )
+    )
 end

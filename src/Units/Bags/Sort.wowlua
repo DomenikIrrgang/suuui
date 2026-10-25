@@ -12,8 +12,8 @@ import * as tbl from "wowlua:table"
 
 local asNumber, asString, field = secret.asNumber, secret.asString, tbl.field
 
-export const WAVE = 6            -- moves sent at once, on separate slots
-export const WAVE_TIMEOUT = 4    -- s for a wave's moves to land
+export const WAVE = 6 -- moves sent at once, on separate slots
+export const WAVE_TIMEOUT = 4 -- s for a wave's moves to land
 export const MAX_WAVES = 300
 export const STACK_ROUNDS = 8
 
@@ -24,19 +24,54 @@ export const STACK_ROUNDS = 8
 -- subclass; then the highest item level, the dearest to sell, the name, and
 -- an item's part stacks before its full ones.
 local SLOT_ORDER: { [string]: number } = {}
-for i, loc in ipairs({ "INVTYPE_AMMO", "INVTYPE_HEAD", "INVTYPE_NECK", "INVTYPE_SHOULDER", "INVTYPE_BODY",
-    "INVTYPE_CHEST INVTYPE_ROBE", "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_WRIST", "INVTYPE_HAND",
-    "INVTYPE_FINGER", "INVTYPE_TRINKET", "INVTYPE_CLOAK", "INVTYPE_WEAPON", "INVTYPE_SHIELD", "INVTYPE_2HWEAPON",
-    "INVTYPE_WEAPONMAINHAND", "INVTYPE_WEAPONOFFHAND", "INVTYPE_HOLDABLE", "INVTYPE_RANGED", "INVTYPE_THROWN",
-    "INVTYPE_RANGEDRIGHT", "INVTYPE_RELIC", "INVTYPE_TABARD" }) do
-    for l in loc:gmatch("%S+") do SLOT_ORDER[l] = i end
+for i, loc in ipairs({
+    "INVTYPE_AMMO",
+    "INVTYPE_HEAD",
+    "INVTYPE_NECK",
+    "INVTYPE_SHOULDER",
+    "INVTYPE_BODY",
+    "INVTYPE_CHEST INVTYPE_ROBE",
+    "INVTYPE_WAIST",
+    "INVTYPE_LEGS",
+    "INVTYPE_FEET",
+    "INVTYPE_WRIST",
+    "INVTYPE_HAND",
+    "INVTYPE_FINGER",
+    "INVTYPE_TRINKET",
+    "INVTYPE_CLOAK",
+    "INVTYPE_WEAPON",
+    "INVTYPE_SHIELD",
+    "INVTYPE_2HWEAPON",
+    "INVTYPE_WEAPONMAINHAND",
+    "INVTYPE_WEAPONOFFHAND",
+    "INVTYPE_HOLDABLE",
+    "INVTYPE_RANGED",
+    "INVTYPE_THROWN",
+    "INVTYPE_RANGEDRIGHT",
+    "INVTYPE_RELIC",
+    "INVTYPE_TABARD",
+}) do
+    for l in loc:gmatch("%S+") do
+        SLOT_ORDER[l] = i
+    end
 end
 
 -- An item as a sort sees it (its count and quality, the rest read once per
 -- link), a slot it covers, and a move.
 export type SortItem = {
-    count: number, quality?: number, id: number | string, link?: string, name?: string, level?: number, maxStack?: number,
-    equipLoc?: string, price?: number, conjured?: boolean, classID?: number, subclassID?: number, reagent?: boolean,
+    count: number,
+    quality?: number,
+    id: number | string,
+    link?: string,
+    name?: string,
+    level?: number,
+    maxStack?: number,
+    equipLoc?: string,
+    price?: number,
+    conjured?: boolean,
+    classID?: number,
+    subclassID?: number,
+    reagent?: boolean,
     family?: number,
 }
 export type SortKey = (a: SortItem) -> number | string
@@ -52,28 +87,71 @@ export type Target = { [number]: SortItem }
 -- round, and the items that don't stack.
 export type StackState = { partials: { [number | string]: number }, noStack: { [number | string]: boolean } }
 
-local function isGear(a: SortItem): boolean return a.classID == 2 or a.classID == 4 end
+local function isGear(a: SortItem): boolean
+    return a.classID == 2 or a.classID == 4
+end
 
 -- The parts an order compares, each ascending (a minus for highest first).
 local KEY = {
-    rank = function(a: SortItem): number | string return a.conjured and 1 or -(a.quality or 0) end,
-    classID = function(a: SortItem): number | string return a.classID or 99 end,
-    slot = function(a: SortItem): number return isGear(a) and (SLOT_ORDER[a.equipLoc or ""] or -1) or 0 end,
-    kind = function(a: SortItem): number | string return isGear(a) and 0 or (a.subclassID or 99) end,
-    price = function(a: SortItem): number | string return -(a.price or 0) end,
-    fewer = function(a: SortItem): number | string return a.count end,
-    class = function(a: SortItem): number | string return a.classID or 99 end,
-    sub = function(a: SortItem): number | string return a.subclassID or 99 end,
-    equip = function(a: SortItem): number return SLOT_ORDER[a.equipLoc or ""] or 99 end,
-    quality = function(a: SortItem): number | string return -(a.quality or 0) end,
-    level = function(a: SortItem): number | string return -(a.level or 0) end,
-    name = function(a: SortItem): number | string return a.name or "" end,
-    id = function(a: SortItem): number | string return a.id end,
-    link = function(a: SortItem): number | string return a.link or "" end,
-    count = function(a: SortItem): number | string return -a.count end,
+    rank = function(a: SortItem): number | string
+        return a.conjured and 1 or -(a.quality or 0)
+    end,
+    classID = function(a: SortItem): number | string
+        return a.classID or 99
+    end,
+    slot = function(a: SortItem): number
+        return isGear(a) and (SLOT_ORDER[a.equipLoc or ""] or -1) or 0
+    end,
+    kind = function(a: SortItem): number | string
+        return isGear(a) and 0 or (a.subclassID or 99)
+    end,
+    price = function(a: SortItem): number | string
+        return -(a.price or 0)
+    end,
+    fewer = function(a: SortItem): number | string
+        return a.count
+    end,
+    class = function(a: SortItem): number | string
+        return a.classID or 99
+    end,
+    sub = function(a: SortItem): number | string
+        return a.subclassID or 99
+    end,
+    equip = function(a: SortItem): number
+        return SLOT_ORDER[a.equipLoc or ""] or 99
+    end,
+    quality = function(a: SortItem): number | string
+        return -(a.quality or 0)
+    end,
+    level = function(a: SortItem): number | string
+        return -(a.level or 0)
+    end,
+    name = function(a: SortItem): number | string
+        return a.name or ""
+    end,
+    id = function(a: SortItem): number | string
+        return a.id
+    end,
+    link = function(a: SortItem): number | string
+        return a.link or ""
+    end,
+    count = function(a: SortItem): number | string
+        return -a.count
+    end,
 }
 
-local BY_TYPE: SortKey[] = { KEY.rank, KEY.classID, KEY.slot, KEY.kind, KEY.level, KEY.price, KEY.name, KEY.id, KEY.link, KEY.fewer }
+local BY_TYPE: SortKey[] = {
+    KEY.rank,
+    KEY.classID,
+    KEY.slot,
+    KEY.kind,
+    KEY.level,
+    KEY.price,
+    KEY.name,
+    KEY.id,
+    KEY.link,
+    KEY.fewer,
+}
 local ORDERS: { [string]: SortKey[] } = {
     type = BY_TYPE,
     quality = { KEY.quality, KEY.class, KEY.sub, KEY.equip, KEY.level, KEY.name, KEY.id, KEY.link, KEY.count },
@@ -93,7 +171,11 @@ export const SORT_OPTIONS: SortOption[] = {
 -- An order's label ("By type" for one it doesn't know).
 export function sortLabel(order: unknown): string
     local label = "By type"
-    for _, o in ipairs(SORT_OPTIONS) do if o.value == order then label = o.label or label end end
+    for _, o in ipairs(SORT_OPTIONS) do
+        if o.value == order then
+            label = o.label or label
+        end
+    end
     return label
 end
 
@@ -108,7 +190,9 @@ export function before(a: SortItem, b: SortItem, keys: SortKey[]): boolean
         local x, y = k(a), k(b)
         if x ~= y then
             -- (each key gives numbers or strings, never both)
-            if type(x) == "number" and type(y) == "number" then return x < y end
+            if type(x) == "number" and type(y) == "number" then
+                return x < y
+            end
             return tostring(x) < tostring(y)
         end
     end
@@ -119,10 +203,14 @@ end
 -- the game's tooltip says "Conjured Item".
 export function conjured(id: number): boolean
     local data = errors.tryValue(C_TooltipInfo and C_TooltipInfo.GetItemByID, id)
-    if not data then return false end
+    if not data then
+        return false
+    end
     local mark = ITEM_CONJURED or "Conjured Item"
     for _, line in ipairs(tbl.list(data.lines)) do
-        if asString(tbl.field(line, "leftText")) == mark then return true end
+        if asString(tbl.field(line, "leftText")) == mark then
+            return true
+        end
     end
     return false
 end
@@ -137,16 +225,23 @@ export function itemOf(info: unknown): SortItem
     local d = itemCache[key]
     if not d then
         local made: SortItem = { count = 1, id = id, link = link }
-        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, price, classID, subclassID, _, _, _, reagent =
-            errors.try(field(C_Item, "GetItemInfo"), link or id)
+        local name, _, quality, level, _, _, _, maxStack, equipLoc, _, price, classID, subclassID, _, _, _, reagent = errors.try(
+            field(C_Item, "GetItemInfo"),
+            link or id
+        )
         local itemName = asString(name)
         if itemName then
-            made.name, made.quality, made.level, made.maxStack = itemName, asNumber(quality), asNumber(level), asNumber(maxStack)
+            made.name, made.quality, made.level, made.maxStack = itemName,
+                asNumber(quality),
+                asNumber(level),
+                asNumber(maxStack)
             made.equipLoc, made.price, made.conjured = asString(equipLoc), asNumber(price) or 0, conjured(id)
             made.classID, made.subclassID, made.reagent = asNumber(classID), asNumber(subclassID), secret.flag(reagent)
             if link then
                 local effective = asNumber((errors.try(field(C_Item, "GetDetailedItemLevelInfo"), link)))
-                if effective then made.level = effective end
+                if effective then
+                    made.level = effective
+                end
             end
             itemCache[key] = made
         else
@@ -155,11 +250,15 @@ export function itemOf(info: unknown): SortItem
             errors.try(field(C_Item, "RequestLoadItemDataByID"), id)
         end
         local fam = asNumber((errors.try(field(C_Item, "GetItemFamily"), id)))
-        if fam then made.family = fam end
+        if fam then
+            made.family = fam
+        end
         d = made
     end
     local quality = d.quality
-    if quality == nil then quality = asNumber(field(info, "quality")) end
+    if quality == nil then
+        quality = asNumber(field(info, "quality"))
+    end
     local out = tbl.shallowCopy(d)
     out.count, out.quality = asNumber(field(info, "stackCount")) or 1, quality
     return out
@@ -169,15 +268,23 @@ end
 -- reagent bag, crafting reagents only; else the bag's family bits). Bags
 -- themselves only into ordinary bags.
 export function fits(item: SortItem, family: Family): boolean
-    if family == 0 then return true end
-    if item.classID == 1 then return false end
-    if family == "reagent" then return item.reagent == true end
+    if family == 0 then
+        return true
+    end
+    if item.classID == 1 then
+        return false
+    end
+    if family == "reagent" then
+        return item.reagent == true
+    end
     return item.family ~= nil and bit.band(item.family, family) ~= 0
 end
 
 -- The same item and count in two slots (both empty: the same too).
 export function same(a: SortItem?, b: SortItem?): boolean
-    if a == nil or b == nil then return a == b end
+    if a == nil or b == nil then
+        return a == b
+    end
     return a.id == b.id and a.count == b.count and a.link == b.link
 end
 
@@ -189,7 +296,11 @@ export function planStacks(slots: SortSlot[], st: StackState): Move[]
         local it = s.item
         if it and not s.locked and (it.maxStack or 1) > 1 and it.count < (it.maxStack or 1) then
             local g = first[it.id]
-            if not g then first[it.id] = { i } else g[#g + 1] = i end
+            if not g then
+                first[it.id] = { i }
+            else
+                g[#g + 1] = i
+            end
         end
     end
     -- an item whose part stacks were no fewer after a round doesn't stack
@@ -197,9 +308,13 @@ export function planStacks(slots: SortSlot[], st: StackState): Move[]
     for id, g in pairs(first) do
         if #g > 1 then
             local had = st.partials[id]
-            if had and #g >= had then st.noStack[id] = true end
+            if had and #g >= had then
+                st.noStack[id] = true
+            end
             st.partials[id] = #g
-            if not st.noStack[id] and #moves < WAVE then moves[#moves + 1] = { from = slots[g[#g]], to = slots[g[1]] } end
+            if not st.noStack[id] and #moves < WAVE then
+                moves[#moves + 1] = { from = slots[g[#g]], to = slots[g[1]] }
+            end
         end
     end
     return moves
@@ -212,9 +327,15 @@ end
 -- slots before them. Nil: not everything fits.
 export function sortTarget(slots: SortSlot[], order: string, toEnd: boolean): Target?
     local items: SortItem[] = {}
-    for _, s in ipairs(slots) do if s.item then items[#items + 1] = s.item end end
+    for _, s in ipairs(slots) do
+        if s.item then
+            items[#items + 1] = s.item
+        end
+    end
     local keys = orderKeys(order)
-    table.sort(items, function(a: SortItem, b: SortItem) return before(a, b, keys) end)
+    table.sort(items, function(a: SortItem, b: SortItem)
+        return before(a, b, keys)
+    end)
     local target: Target = {}
     local function place(positions: Positions | number[], list: SortItem[])
         for i, item in ipairs(list) do
@@ -241,13 +362,18 @@ export function sortTarget(slots: SortSlot[], order: string, toEnd: boolean): Ta
     for _, positions in ipairs(special) do
         local taken: SortItem[], rest: SortItem[] = {}, {}
         for _, item in ipairs(items) do
-            if #taken < #positions and fits(item, positions.family) then taken[#taken + 1] = item
-            else rest[#rest + 1] = item end
+            if #taken < #positions and fits(item, positions.family) then
+                taken[#taken + 1] = item
+            else
+                rest[#rest + 1] = item
+            end
         end
         place(positions, taken)
         items = rest
     end
-    if #items > #general then return nil end
+    if #items > #general then
+        return nil
+    end
     place(general, items)
     return target
 end
@@ -261,17 +387,22 @@ export function planWave(slots: SortSlot[], target: Target): (Move[], number)
     local wrong = 0
     for i, s in ipairs(slots) do
         cur[i] = s.item
-        if not same(s.item, target[i]) then wrong = wrong + 1 end
+        if not same(s.item, target[i]) then
+            wrong = wrong + 1
+        end
     end
     for p = 1, #slots do
-        if #moves >= WAVE then break end
+        if #moves >= WAVE then
+            break
+        end
         local want = target[p]
         if want and not touched[p] and not slots[p].locked and not same(cur[p], want) then
             local from: number? = nil
             local here = cur[p]
             for i = 1, #slots do
-                if i ~= p and not touched[i] and not slots[i].locked and same(cur[i], want) and not same(cur[i], target[i])
-                    and (here == nil or fits(here, slots[i].family)) then
+                if i ~= p and not touched[i] and not slots[i].locked and same(cur[i], want) and
+                    not same(cur[i], target[i]) and
+                    (here == nil or fits(here, slots[i].family)) then
                     from = i
                     break
                 end
@@ -282,7 +413,8 @@ export function planWave(slots: SortSlot[], target: Target): (Move[], number)
                 cur[from], cur[p] = cur[p], cur[from]
             elseif here then
                 for e = 1, #slots do
-                    if e ~= p and not touched[e] and not slots[e].locked and cur[e] == nil and fits(here, slots[e].family) then
+                    if e ~= p and not touched[e] and not slots[e].locked and cur[e] == nil and
+                        fits(here, slots[e].family) then
                         moves[#moves + 1] = { from = slots[p], to = slots[e] }
                         touched[e], touched[p] = true, true
                         cur[e], cur[p] = here, nil
@@ -299,20 +431,37 @@ end
 -- free again and the bags have updated: plan the next), "finish" (the
 -- game's sort: the bags are quiet, or long enough), "timeout" (no answer).
 export type Wave = { at: number, moves: Move[], updated?: boolean }
-export function waveState(wave: Wave, now: number, game: boolean, lastUpdate: number?,
-                          isLocked: (s: SortSlot) -> boolean): string
+export function waveState(
+    wave: Wave,
+    now: number,
+    game: boolean,
+    lastUpdate: number?,
+    isLocked: (s: SortSlot) -> boolean
+): string
     if game then
         local quiet = now - (lastUpdate or wave.at)
-        if now - wave.at > 8 or (now - wave.at > 0.6 and quiet > 0.5) then return "finish" end
+        if now - wave.at > 8 or (now - wave.at > 0.6 and quiet > 0.5) then
+            return "finish"
+        end
         return "wait"
     end
-    if now - wave.at > WAVE_TIMEOUT then return "timeout" end
-    if now - wave.at < 0.05 then return "wait" end
+    if now - wave.at > WAVE_TIMEOUT then
+        return "timeout"
+    end
+    if now - wave.at < 0.05 then
+        return "wait"
+    end
     for _, m in ipairs(wave.moves) do
-        if isLocked(m.from) or isLocked(m.to) then return "wait" end
+        if isLocked(m.from) or isLocked(m.to) then
+            return "wait"
+        end
     end
     -- the bags' contents follow the locks; nothing sent: just a moment
-    if #wave.moves > 0 and not wave.updated and now - wave.at < 1 then return "wait" end
-    if #wave.moves == 0 and now - wave.at < 0.2 then return "wait" end
+    if #wave.moves > 0 and not wave.updated and now - wave.at < 1 then
+        return "wait"
+    end
+    if #wave.moves == 0 and now - wave.at < 0.2 then
+        return "wait"
+    end
     return "next"
 end

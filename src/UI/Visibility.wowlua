@@ -27,10 +27,10 @@ import * as motion from "/Core/Motion"
 import * as editMode from "/EditMode/EditMode"
 import * as keybindMode from "./KeybindMode"
 
-local modes: { [Frame]: string } = {}   -- frame -> mode
-local hover: { [Frame]: boolean } = {}   -- frames fading on mouseover
-local hoverOn: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })   -- shown by the mouse now
-local also: { [Frame]: Frame[] } = {}    -- frame -> frames whose hover counts as its own
+local modes: { [Frame]: string } = {} -- frame -> mode
+local hover: { [Frame]: boolean } = {} -- frames fading on mouseover
+local hoverOn: { [Frame]: boolean } = setmetatable({}, { __mode = "k" }) -- shown by the mouse now
+local also: { [Frame]: Frame[] } = {} -- frame -> frames whose hover counts as its own
 local forced = false
 
 export const VISIBILITY_OPTIONS: SelectOption<string>[] = {
@@ -43,16 +43,20 @@ local function apply(frame: Frame)
     local mode = modes[frame]
     local useDriver = mode == "combat" and not forced
     hoverOn[frame] = nil
-    combat.run("visibility:" .. tostring(frame), function()
-        UnregisterStateDriver(frame, "visibility")
-        if mode == "hidden" then
-            frame:Hide()
-        elseif useDriver then
-            RegisterStateDriver(frame, "visibility", "[combat] show; hide")
-        else
-            frame:Show()
-        end
-    end, "Visibility")
+    combat.run(
+        "visibility:" .. tostring(frame),
+        function()
+            UnregisterStateDriver(frame, "visibility")
+            if mode == "hidden" then
+                frame:Hide()
+            elseif useDriver then
+                RegisterStateDriver(frame, "visibility", "[combat] show; hide")
+            else
+                frame:Show()
+            end
+        end,
+        "Visibility"
+    )
     if mode == "mouseover" and not forced then
         hover[frame] = true
         frame:SetAlpha(0)
@@ -65,24 +69,34 @@ end
 export function setVisibility(frame: Frame, mode: string?, extra: Frame[]?)
     mode = mode or "always"
     also[frame] = extra
-    if modes[frame] == mode then return end
+    if modes[frame] == mode then
+        return
+    end
     modes[frame] = mode
     apply(frame)
 end
 
 local function reapply()
     forced = editMode.isActive() or keybindMode.isActive() or false
-    for frame in pairs(modes) do apply(frame) end
+    for frame in pairs(modes) do
+        apply(frame)
+    end
 end
 events.on("SUUUI_EDITMODE_CHANGED", reapply, "Visibility")
 events.on("SUUUI_KEYBINDMODE_CHANGED", reapply, "Visibility")
 
 -- Whether the mouse is over a frame or one of its `also` frames.
 local function mouseOver(frame: Frame): boolean
-    if not frame:IsVisible() then return false end
-    if frame:IsMouseOver() then return true end
+    if not frame:IsVisible() then
+        return false
+    end
+    if frame:IsMouseOver() then
+        return true
+    end
     for _, f in ipairs(also[frame] or {}) do
-        if f:IsVisible() and f:IsMouseOver() then return true end
+        if f:IsVisible() and f:IsMouseOver() then
+            return true
+        end
     end
     return false
 end
@@ -92,9 +106,13 @@ local poll = CreateFrame("Frame")
 local elapsed = 0
 poll:SetScript("OnUpdate", function(_, dt: number)
     elapsed = elapsed + dt
-    if elapsed < 0.1 then return end
+    if elapsed < 0.1 then
+        return
+    end
     elapsed = 0
-    if not next(hover) then return end
+    if not next(hover) then
+        return
+    end
     local dragging = GetCursorInfo() ~= nil
     for frame in pairs(hover) do
         local on = dragging or mouseOver(frame)

@@ -12,10 +12,33 @@ import expectNoErrors from "../../helpers"
 -- (partly absorbed), a mage's critical Fireball that killed
 local function threeHits(): DeathEvent[]
     return {
-        { timestamp = 103, amount = 500, currentHP = 300, spellId = 133, spellName = "Fireball", sourceName = "Mage",
-          school = 4, critical = true, overkill = 200, event = "SPELL_DAMAGE" },
-        { timestamp = 101.5, amount = 400, currentHP = 700, event = "SWING_DAMAGE", sourceName = "Wolf", absorbed = 50 },
-        { timestamp = 100, amount = 300, currentHP = 1000, event = "ENVIRONMENTAL_DAMAGE", environmentalType = "Falling" },
+        {
+            timestamp = 103,
+            amount = 500,
+            currentHP = 300,
+            spellId = 133,
+            spellName = "Fireball",
+            sourceName = "Mage",
+            school = 4,
+            critical = true,
+            overkill = 200,
+            event = "SPELL_DAMAGE",
+        },
+        {
+            timestamp = 101.5,
+            amount = 400,
+            currentHP = 700,
+            event = "SWING_DAMAGE",
+            sourceName = "Wolf",
+            absorbed = 50,
+        },
+        {
+            timestamp = 100,
+            amount = 300,
+            currentHP = 1000,
+            event = "ENVIRONMENTAL_DAMAGE",
+            environmentalType = "Falling",
+        },
     }
 end
 
@@ -25,14 +48,20 @@ local recapMax: unknown = nil
 @beforeEach
 local function world()
     recapEvents, recapMax = threeHits(), 1000
-    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown return recapEvents end)
-    mock.stub(C_DeathRecap, "GetRecapMaxHealth", function(_: number?): unknown return recapMax end)
+    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown
+        return recapEvents
+    end)
+    mock.stub(C_DeathRecap, "GetRecapMaxHealth", function(_: number?): unknown
+        return recapMax
+    end)
 end
 
 @afterEach
 local function clean()
     local parts = M.parts
-    if parts then parts.window:Hide() end
+    if parts then
+        parts.window:Hide()
+    end
     expectNoErrors()
 end
 
@@ -95,8 +124,13 @@ local function threeHitRecap()
     local r: Recap = recapOf(threeHits(), 1000)
     expect(r.count).toBe(3)
     expect(r.span).toBe(3)
-    expect(r.head).toEqual({ spell = "Fireball", by = "· Mage", detail = "500 Fire · critical · 200 overkill",
-        health = "1,000 health to 0", span = "in 3.0 s, 3 hits" })
+    expect(r.head).toEqual({
+        spell = "Fireball",
+        by = "· Mage",
+        detail = "500 Fire · critical · 200 overkill",
+        health = "1,000 health to 0",
+        span = "in 3.0 s, 3 hits",
+    })
     expect(r.steps).toEqual({
         { from = 3, to = 2.94, hp = 1000 },
         { from = 3, to = 1.5, hp = 700 },
@@ -128,10 +162,10 @@ end
 
 @test("recapOf: hits in the same moment share one health reading")
 local function sameMoment()
-    local r = recapOf({
-        { timestamp = 10, amount = 100, currentHP = 1000 },
-        { timestamp = 10, amount = 100, currentHP = 1000 },
-    }, 1000)
+    local r = recapOf(
+        { { timestamp = 10, amount = 100, currentHP = 1000 }, { timestamp = 10, amount = 100, currentHP = 1000 } },
+        1000
+    )
     expect(r.rows[1].hp).toBe(900)
     expect(r.rows[2].hp).toBe(800)
     -- no span: no health line
@@ -142,10 +176,19 @@ end
 
 @test("recapOf: without times, maximum or readable values")
 local function unreadable()
-    local r = recapOf({
-        { amount = mock.secret(5), currentHP = mock.secret(9), sourceName = "Hidden", hideCaster = true, overkill = 0,
-          spellId = 0 },
-    }, nil)
+    local r = recapOf(
+        {
+            {
+                amount = mock.secret(5),
+                currentHP = mock.secret(9),
+                sourceName = "Hidden",
+                hideCaster = true,
+                overkill = 0,
+                spellId = 0,
+            },
+        },
+        nil
+    )
     expect(r.span).toBeNil()
     expect(r.steps).toBeNil()
     expect(r.marks).toBeNil()
@@ -160,11 +203,14 @@ end
 
 @test("recapOf: an unknown school and a readable health after an unreadable one")
 local function schoolAndHealth()
-    local r = recapOf({
-        { timestamp = 5, amount = 50, school = 3 },
-        { timestamp = 4, amount = 50, currentHP = mock.secret(1) },
-        { timestamp = 2, amount = 50, currentHP = 500 },
-    }, 600)
+    local r = recapOf(
+        {
+            { timestamp = 5, amount = 50, school = 3 },
+            { timestamp = 4, amount = 50, currentHP = mock.secret(1) },
+            { timestamp = 2, amount = 50, currentHP = 500 },
+        },
+        600
+    )
     expect(r.head.detail).toBe("50")
     expect(r.head.health).toBe("500 health to 0")
     expect(r.rows[1].hp).toBe(450)
@@ -255,14 +301,18 @@ local function empty()
     recapEvents = nil
     M:ShowRecap(1)
     expect(M:Window().empty).toBeShown()
-    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown error("no recap") end)
+    mock.stub(C_DeathRecap, "GetRecapEvents", function(_: number?): unknown
+        error("no recap")
+    end)
     M:ShowRecap(1)
     expect(M:Window().empty).toBeShown()
 end
 
 @test("a secret recap: shown as secret until combat ends")
 local function secretRecap()
-    mock.fake("issecrettable", function(_: unknown): boolean return true end)
+    mock.fake("issecrettable", function(_: unknown): boolean
+        return true
+    end)
     M:ShowRecap(1)
     expect(M:Window().empty).toHaveText("The recap is secret until combat ends.")
 end
@@ -310,13 +360,19 @@ local function gameRecap()
     expect(M:Window().window).toBeShown()
     expect(M.shownID).toBe(3)
     local f = DeathRecapFrame
-    if f then expect(f).never.toBeShown() end
+    if f then
+        expect(f).never.toBeShown()
+    end
     -- turned off (until the reload): left to the game
     M:Window().window:Hide()
-    mock.stub(M, "IsEnabled", function(): boolean return false end)
+    mock.stub(M, "IsEnabled", function(): boolean
+        return false
+    end)
     OpenDeathRecapUI(3)
     expect(M:Window().window).never.toBeShown()
-    if f then f:Hide() end
+    if f then
+        f:Hide()
+    end
 end
 
 @test("a theme change sizes the head again and lays out a shown recap")

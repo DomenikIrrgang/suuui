@@ -27,7 +27,15 @@ local S = T.space
 
 -- An entry of the list: a spell group by what it drives (`custom`: added by
 -- the player).
-export type Entry = { name: string, kind: string, ward?: boolean, on: boolean, ids: number[], note?: string, custom?: boolean }
+export type Entry = {
+    name: string,
+    kind: string,
+    ward?: boolean,
+    on: boolean,
+    ids: number[],
+    note?: string,
+    custom?: boolean,
+}
 type DefensiveList = { entries?: Entry[] }
 
 local DEFAULTS = {
@@ -40,13 +48,19 @@ local DEFAULTS = {
 
 local M: DefensivesModule
 
-
-
 -- A copy of entries (their IDs copied too).
 local function copyEntries(list: Entry[]): Entry[]
     local out: Entry[] = {}
     for i, e in ipairs(list) do
-        out[i] = { name = e.name, kind = e.kind, ward = e.ward, on = e.on, ids = { unpack(e.ids) }, note = e.note, custom = e.custom }
+        out[i] = {
+            name = e.name,
+            kind = e.kind,
+            ward = e.ward,
+            on = e.on,
+            ids = { unpack(e.ids) },
+            note = e.note,
+            custom = e.custom,
+        }
     end
     return out
 end
@@ -69,14 +83,21 @@ local GROUPS: Group[] = {
     { kind = "external", title = "Externals", note = "Someone else puts it on them; shown first." },
     { kind = "defensive", title = "Defensives", note = "Their own; after the externals." },
 }
-local KIND_OPTIONS: SegmentedOption<string>[] = { { value = "external", label = "External" }, { value = "defensive", label = "Defensive" } }
+local KIND_OPTIONS: SegmentedOption<string>[] = {
+    { value = "external", label = "External" },
+    { value = "defensive", label = "Defensive" },
+}
 
 -- What a typed number finds: "Name · ID 123" (value "id:123").
 local function spellLookup(query: string): SelectOption<string>[]?
     local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
-    if not id then return nil end
+    if not id then
+        return nil
+    end
     local name = C_Spell.GetSpellName(id)
-    if secret.isSecret(name) or not name then return nil end
+    if secret.isSecret(name) or not name then
+        return nil
+    end
     return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
 end
 
@@ -102,14 +123,18 @@ export class WardChip extends Button
         self.label = UI.Text(self, "caption", "ink-faint")
         self.label:SetPoint("LEFT", self.glyph, "RIGHT", 4, 0)
         self.label:SetValue("Warded")
-        self:SetScript("OnClick", function() onClick(self) end)
+        self:SetScript("OnClick", function()
+            onClick(self)
+        end)
         self:SetScript("OnEnter", function()
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:SetText("Warded")
             GameTooltip:AddLine("While it's up, the frame shows the Warded badge and border.", 1, 1, 1, true)
             GameTooltip:Show()
         end)
-        self:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
     end
 
     function SetOn(on: boolean?)
@@ -144,21 +169,47 @@ export class EntryRow extends Frame
         self.rule:SetHeight(1)
         self.icon = UI.Icon(self, "icon-md")
         self.icon:SetPoint("LEFT", 4, 0)
-        self.remove = UI.Button(self, { text = "×", width = 28, onClick = function()
-            mutate(function(l: Entry[]) table.remove(l, self.index) end)
-        end })
+        self.remove = UI.Button(self, {
+            text = "×",
+            width = 28,
+            onClick = function()
+                mutate(function(l: Entry[])
+                    table.remove(l, self.index)
+                end)
+            end,
+        })
         self.remove:SetPoint("RIGHT", -2, 0)
-        self.toggle = UI.Toggle(self, { onChange = function(v: boolean)
-            mutate(function(l: Entry[]) local e = l[self.index]; if e then e.on = v end end)
-        end })
+        self.toggle = UI.Toggle(self, {
+            onChange = function(v: boolean)
+                mutate(function(l: Entry[])
+                    local e = l[self.index]
+                    if e then
+                        e.on = v
+                    end
+                end)
+            end,
+        })
         self.toggle:SetPoint("RIGHT", self.remove, "LEFT", -S["space-2"], 0)
         self.ward = WardChip.new(self, function(chip: WardChip)
-            mutate(function(l: Entry[]) local e = l[self.index]; if e then e.ward = not chip.value end end)
+            mutate(function(l: Entry[])
+                local e = l[self.index]
+                if e then
+                    e.ward = not chip.value
+                end
+            end)
         end)
         self.ward:SetPoint("RIGHT", self.toggle, "LEFT", -S["space-2"], 0)
-        self.kind = UI.Segmented(self, { options = KIND_OPTIONS, onChange = function(v: string)
-            mutate(function(l: Entry[]) local e = l[self.index]; if e then e.kind = v end end)
-        end })
+        self.kind = UI.Segmented(self, {
+            options = KIND_OPTIONS,
+            onChange = function(v: string)
+                mutate(function(l: Entry[])
+                    local e = l[self.index]
+                    if e then
+                        e.kind = v
+                    end
+                end)
+            end,
+        })
         self.kind:SetPoint("RIGHT", self.ward, "LEFT", -S["space-2"], 0)
         self.name = UI.Text(self, "label", "ink")
         self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", 8, 1)
@@ -211,13 +262,32 @@ export class ListEditor extends Frame
     constructor(parent: Frame)
         super(nil, parent)
         self:SetSize(WIDTH, 100)
-        for i, g in ipairs(GROUPS) do self.groups[i] = GroupHead.new(self, g) end
-        self.add = UI.Select(self, { width = 300, placeholder = "+ Add… (name or spell ID)", lookup = spellLookup,
-            onChange = function(v: string) self:Add(v) end })
-        self.reset = UI.Button(self, { text = "Reset to SuuUI's list", icon = "reset", tooltip = { title = "Reset to SuuUI's list", description = "Your changes go; SuuUI's list comes back (new spells SuuUI adds later come with it)." },
-            onClick = function() M:Reset("list") end })
+        for i, g in ipairs(GROUPS) do
+            self.groups[i] = GroupHead.new(self, g)
+        end
+        self.add = UI.Select(self, {
+            width = 300,
+            placeholder = "+ Add… (name or spell ID)",
+            lookup = spellLookup,
+            onChange = function(v: string)
+                self:Add(v)
+            end,
+        })
+        self.reset = UI.Button(self, {
+            text = "Reset to SuuUI's list",
+            icon = "reset",
+            tooltip = {
+                title = "Reset to SuuUI's list",
+                description = "Your changes go; SuuUI's list comes back (new spells SuuUI adds later come with it).",
+            },
+            onClick = function()
+                M:Reset("list")
+            end,
+        })
         self:Refresh()
-        self:HookScript("OnShow", function() self:Refresh() end)
+        self:HookScript("OnShow", function()
+            self:Refresh()
+        end)
     end
 
     -- "+ Add"'s choice: an aura SuuUI knows by name, or a spell by its ID ("id:123").
@@ -226,19 +296,34 @@ export class ListEditor extends Frame
         local e: Entry? = nil
         if id then
             local name = C_Spell.GetSpellName(id)
-            if not secret.isSecret(name) and name then e = { name = name, kind = "defensive", ward = false, on = true, ids = { id }, custom = true } end
+            if not secret.isSecret(name) and name then
+                e = { name = name, kind = "defensive", ward = false, on = true, ids = { id }, custom = true }
+            end
         else
             local known = self.catalog[v]
-            if known then e = { name = v, kind = "defensive", ward = false, on = true, ids = { unpack(known.ids) }, custom = true } end
+            if known then
+                e = {
+                    name = v,
+                    kind = "defensive",
+                    ward = false,
+                    on = true,
+                    ids = { unpack(known.ids) },
+                    custom = true,
+                }
+            end
         end
         if e then
             local added = e
-            mutate(function(l: Entry[]) table.insert(l, added) end)
+            mutate(function(l: Entry[])
+                table.insert(l, added)
+            end)
         end
     end
 
     function Refresh()
-        for _, r in ipairs(self.rows) do r:Hide() end
+        for _, r in ipairs(self.rows) do
+            r:Hide()
+        end
         local list = M:List()
         local used, y = 0, 0
         for gi, g in ipairs(GROUPS) do
@@ -276,7 +361,9 @@ export class ListEditor extends Frame
                     ry = ry + ROW_H
                 end
             end
-            if last then last.rule:Hide() end
+            if last then
+                last.rule:Hide()
+            end
             h.count:SetValue(tostring(n))
             h.empty:SetShown(n == 0)
             local wellH = n == 0 and 40 or (ry + 4)
@@ -286,11 +373,17 @@ export class ListEditor extends Frame
         -- "+ Add": every aura SuuUI's presets know, by name, not on the list yet
         self.catalog = SuuUI.AuraCatalog()
         local present: { [string]: boolean }, options: SelectOption<string>[] = {}, {}
-        for _, e in ipairs(list) do present[e.name or ""] = true end
-        for name in pairs(self.catalog) do
-            if not present[name] then options[#options + 1] = { value = name, label = name } end
+        for _, e in ipairs(list) do
+            present[e.name or ""] = true
         end
-        table.sort(options, function(a: SelectOption<string>, b: SelectOption<string>): boolean return (a.label or "") < (b.label or "") end)
+        for name in pairs(self.catalog) do
+            if not present[name] then
+                options[#options + 1] = { value = name, label = name }
+            end
+        end
+        table.sort(options, function(a: SelectOption<string>, b: SelectOption<string>): boolean
+            return (a.label or "") < (b.label or "")
+        end)
         self.add:SetOptions(options)
         self.add:SetValue(nil)
         self.add:ClearAllPoints()
@@ -315,20 +408,65 @@ end
 
 -- An aura on a made-up person: its spell, and a debuff's type.
 type Aura = { id: number, debuff?: string }
-type Person = StandInPerson & { name: string, class: string, role: string, aggro?: boolean, debuff?: string, auras: Aura[] }
+type Person = StandInPerson
+    & { name: string, class: string, role: string, aggro?: boolean, debuff?: string, auras: Aura[] }
 local PEOPLE: Person[] = {
-    { name = "Veyra", class = "SHAMAN", role = "HEALER", health = 0.92, max = 3800, power = 0.7, auras = { { id = 324 } } },
-    { name = "Brannoc", class = "WARRIOR", role = "TANK", health = 0.58, max = 8800, power = 0.4, auras = { { id = 10901 }, { id = 871 } } },
-    { name = "Ysolde", class = "PRIEST", role = "HEALER", health = 0.81, max = 3900, power = 0.66, auras = { { id = 10901 } } },
-    { name = "Kaelith", class = "MAGE", role = "DAMAGER", health = 0.34, max = 3600, power = 0.55, aggro = true,
-      auras = { { id = 1022 }, { id = 11426 } } },
-    { name = "Morrow", class = "ROGUE", role = "DAMAGER", health = 0.7, max = 4600, power = 0.8, debuff = "Poison",
-      auras = { { id = 2818, debuff = "Poison" }, { id = 5277 } } },
+    {
+        name = "Veyra",
+        class = "SHAMAN",
+        role = "HEALER",
+        health = 0.92,
+        max = 3800,
+        power = 0.7,
+        auras = { { id = 324 } },
+    },
+    {
+        name = "Brannoc",
+        class = "WARRIOR",
+        role = "TANK",
+        health = 0.58,
+        max = 8800,
+        power = 0.4,
+        auras = { { id = 10901 }, { id = 871 } },
+    },
+    {
+        name = "Ysolde",
+        class = "PRIEST",
+        role = "HEALER",
+        health = 0.81,
+        max = 3900,
+        power = 0.66,
+        auras = { { id = 10901 } },
+    },
+    {
+        name = "Kaelith",
+        class = "MAGE",
+        role = "DAMAGER",
+        health = 0.34,
+        max = 3600,
+        power = 0.55,
+        aggro = true,
+        auras = { { id = 1022 }, { id = 11426 } },
+    },
+    {
+        name = "Morrow",
+        class = "ROGUE",
+        role = "DAMAGER",
+        health = 0.7,
+        max = 4600,
+        power = 0.8,
+        debuff = "Poison",
+        auras = { { id = 2818, debuff = "Poison" }, { id = 5277 } },
+    },
 }
-local function person(unit: string): Person return PEOPLE[tonumber(unit:match("(%d)$")) or 1] end
+local function person(unit: string): Person
+    return PEOPLE[tonumber(unit:match("(%d)$")) or 1]
+end
 local STAND_IN = UI.UnitStandIn(person)
 -- a power line for tanks and healers, as on the group frames
-local function powerFor(unit: string): boolean return person(unit).role ~= "DAMAGER" end
+local function powerFor(unit: string): boolean
+    return person(unit).role ~= "DAMAGER"
+end
 
 local function partySize(): (number, number)
     local party = SuuUI.GetModule("party")
@@ -340,9 +478,24 @@ end
 -- A preview frame: the unit frame, its debuff-type looks and its icons.
 export type PreviewFrame = { frame: UnitFrame, decos: { [string]: Frame }, icons: Icon[] }
 
-local function previewFrame(view: Frame, unit: string, size: string, w: number, h: number, iconSize: number, count: number): PreviewFrame
-    local f = UI.UnitFrame(view, unit, { size = size, width = w, height = h, secure = false, api = STAND_IN,
-        powerFor = powerFor, textOnSmall = size == "sm" })
+local function previewFrame(
+    view: Frame,
+    unit: string,
+    size: string,
+    w: number,
+    h: number,
+    iconSize: number,
+    count: number
+): PreviewFrame
+    local f = UI.UnitFrame(view, unit, {
+        size = size,
+        width = w,
+        height = h,
+        secure = false,
+        api = STAND_IN,
+        powerFor = powerFor,
+        textOnSmall = size == "sm",
+    })
     f:SetScript("OnEnter", nil)
     f:SetScript("OnLeave", nil)
     f:EnableMouse(false)
@@ -365,20 +518,34 @@ end
 -- One frame: its state, Warded, and its icons as the group frames show
 -- them: listed defensives (externals first) and debuffs, each a set; other
 -- buffs don't show. place(icon, set, k) positions an icon.
-local function drawPerson(p: PreviewFrame, d: Person, listed: { [number]: string }, warding: { [number]: boolean },
-        place: (icon: Icon, set: string, k: number, nBuffs: number) -> boolean?)
+local function drawPerson(
+    p: PreviewFrame,
+    d: Person,
+    listed: { [number]: string },
+    warding: { [number]: boolean },
+    place: (icon: Icon, set: string, k: number, nBuffs: number) -> boolean?
+)
     local f = p.frame
     f:Refresh()
     f:SetState(d.aggro and "danger" or nil, d.aggro and "Aggro" or nil)
-    for kind, deco in pairs(p.decos) do deco:SetShown(d.debuff == kind) end
+    for kind, deco in pairs(p.decos) do
+        deco:SetShown(d.debuff == kind)
+    end
     local warded = false
-    for _, a in ipairs(d.auras) do warded = warded or warding[a.id] == true end
+    for _, a in ipairs(d.auras) do
+        warded = warded or warding[a.id] == true
+    end
     local ward = f.wardDeco
-    if ward then ward:SetWarded(warded) end
+    if ward then
+        ward:SetWarded(warded)
+    end
     local buffs: Aura[], debuffs: Aura[] = {}, {}
     for _, a in ipairs(d.auras) do
-        if a.debuff then debuffs[#debuffs + 1] = a
-        elseif listed[a.id] then buffs[#buffs + 1] = a end
+        if a.debuff then
+            debuffs[#debuffs + 1] = a
+        elseif listed[a.id] then
+            buffs[#buffs + 1] = a
+        end
     end
     table.sort(buffs, function(a: Aura, b: Aura): boolean
         return (listed[a.id] == "external" and 0 or 1) < (listed[b.id] == "external" and 0 or 1)
@@ -389,7 +556,9 @@ local function drawPerson(p: PreviewFrame, d: Person, listed: { [number]: string
         for k, a in ipairs(set.list) do
             used = used + 1
             local icon = p.icons[used]
-            if not icon then break end
+            if not icon then
+                break
+            end
             icon:SetArt((C_Spell.GetSpellTexture(a.id)))
             local debuff = a.debuff
             icon:SetBorder(debuff and ("dispel-" .. debuff:lower()) or "ward")
@@ -399,7 +568,9 @@ local function drawPerson(p: PreviewFrame, d: Person, listed: { [number]: string
             icon:SetShown(place(icon, key, k, #buffs) ~= false)
         end
     end
-    for k = used + 1, #p.icons do p.icons[k]:Hide() end
+    for k = used + 1, #p.icons do
+        p.icons[k]:Hide()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -407,12 +578,19 @@ end
 --------------------------------------------------------------------------------
 
 local SECTION: SettingsSection = {
-    id = "defensives", label = "Defensives", category = "Frames", order = 19,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "defensives",
+    label = "Defensives",
+    category = "Frames",
+    order = 19,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Defensives", description = "Which buffs count as defensives on your party and raid frames. The game doesn't tell which of another player's buffs are defensives, so SuuUI goes by this list: one list for this profile, for everyone's frames, yours included, in combat too. It drives the defensive icons on party and raid frames (externals first, then their own defensives) and the Warded badge and border (the spells with Warded on). Every rank counts.", rows = {
-            { label = "Defensives", control = "custom", build = buildEditor, stacked = true },
-        } },
+        {
+            title = "Defensives",
+            description = "Which buffs count as defensives on your party and raid frames. The game doesn't tell which of another player's buffs are defensives, so SuuUI goes by this list: one list for this profile, for everyone's frames, yours included, in combat too. It drives the defensive icons on party and raid frames (externals first, then their own defensives) and the Warded badge and border (the spells with Warded on). Every rank counts.",
+            rows = { { label = "Defensives", control = "custom", build = buildEditor, stacked = true } },
+        },
     },
 }
 
@@ -434,15 +612,26 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
 
     function List(): Entry[]
         local own = self:Get("list").entries
-        if type(own) == "table" then return own end
+        if type(own) == "table" then
+            return own
+        end
         local out: Entry[] = {}
         for _, d in ipairs(SuuUI.Defensives()) do
-            out[#out + 1] = { name = d.name, kind = d.kind, ward = d.ward, on = true, ids = { unpack(d.ids) }, note = d.note }
+            out[#out + 1] = {
+                name = d.name,
+                kind = d.kind,
+                ward = d.ward,
+                on = true,
+                ids = { unpack(d.ids) },
+                note = d.note,
+            }
         end
         return out
     end
 
-    function IsDefault(): boolean return type(self:Get("list").entries) ~= "table" end
+    function IsDefault(): boolean
+        return type(self:Get("list").entries) ~= "table"
+    end
 
     -- The spell IDs by what they drive, from the entries switched on.
     function Publish()
@@ -453,7 +642,9 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
                 for _, id in ipairs(e.ids or {}) do
                     slot[#slot + 1] = id
                     d.all[#d.all + 1] = id
-                    if e.ward then d.warded[#d.warded + 1] = id end
+                    if e.ward then
+                        d.warded[#d.warded + 1] = id
+                    end
                 end
             end
         end
@@ -471,7 +662,9 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
                 self.previewParty[i] = previewFrame(view, "defparty" .. i, "md", w, h, h, 2)
                 self.previewRaid[i] = previewFrame(view, "defraid" .. i, "sm", 108, 20, 14, 2)
             end
-            view:HookScript("OnShow", function() self:DrawPreview() end)
+            view:HookScript("OnShow", function()
+                self:DrawPreview()
+            end)
         end
         view:SetParent(parent)
         self:DrawPreview()
@@ -480,12 +673,20 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
 
     function DrawPreview()
         local view = self.previewView
-        if not view then return end
+        if not view then
+            return
+        end
         local d = UI.GroupDefensives()
         local listed: { [number]: string }, warding: { [number]: boolean } = {}, {}
-        for _, id in ipairs(d.defensive) do listed[id] = "defensive" end
-        for _, id in ipairs(d.external) do listed[id] = "external" end
-        for _, id in ipairs(d.warded) do warding[id] = true end
+        for _, id in ipairs(d.defensive) do
+            listed[id] = "defensive"
+        end
+        for _, id in ipairs(d.external) do
+            listed[id] = "external"
+        end
+        for _, id in ipairs(d.warded) do
+            warding[id] = true
+        end
         local w, h = partySize()
         local y, maxW = 0, 0
         for i, p in ipairs(self.previewParty) do
@@ -494,10 +695,17 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
             f:ClearAllPoints()
             f:SetPoint("TOPLEFT", view, "TOPLEFT", 0, -y)
             -- beside the bar: defensives, space-4, then debuffs
-            drawPerson(p, PEOPLE[i], listed, warding, function(icon: Icon, set: string, k: number, nBuffs: number): boolean?
+            drawPerson(p, PEOPLE[i], listed, warding, function(
+                icon: Icon,
+                set: string,
+                k: number,
+                nBuffs: number
+            ): boolean?
                 icon:SetSize(h, h)
                 local x = S["space-2"] + (k - 1) * (h + S["space-2"])
-                if set == "debuffs" and nBuffs > 0 then x = x + nBuffs * (h + S["space-2"]) - S["space-2"] + S["space-4"] end
+                if set == "debuffs" and nBuffs > 0 then
+                    x = x + nBuffs * (h + S["space-2"]) - S["space-2"] + S["space-4"]
+                end
                 icon:SetPoint("TOPLEFT", f, "TOPRIGHT", x, 0)
                 return true
             end)
@@ -512,11 +720,15 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
             -- inside the right end: debuffs at the very end, defensives before
             -- them (one of each, as the raid defaults)
             drawPerson(p, PEOPLE[i], listed, warding, function(icon: Icon, set: string, k: number): boolean?
-                if k > 1 then return false end
+                if k > 1 then
+                    return false
+                end
                 icon:SetSize(14, 14)
                 local hasDebuff = #PEOPLE[i].auras > 0 and PEOPLE[i].debuff ~= nil
                 local x = S["space-1"] + 1
-                if set == "buffs" and hasDebuff then x = x + 14 + S["space-2"] end
+                if set == "buffs" and hasDebuff then
+                    x = x + 14 + S["space-2"]
+                end
                 icon:SetPoint("RIGHT", f, "RIGHT", -x, 0)
                 return true
             end)
@@ -530,7 +742,9 @@ class DefensivesModule extends Module<typeof(DEFAULTS)>
         self:Publish()
         self:Watch("list", function()
             self:Publish()
-            if self.editor then self.editor:Refresh() end
+            if self.editor then
+                self.editor:Refresh()
+            end
             self:DrawPreview()
         end)
     end

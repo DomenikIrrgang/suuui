@@ -27,15 +27,21 @@ end
 local probePanel: SlotsPanel? = nil
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error " .. tostring(res[2]):sub(1, 100) end
+    if not res[1] then
+        return "error " .. tostring(res[2]):sub(1, 100)
+    end
     local parts = {}
     for i = 2, math.max(2, #res) do
         local v = res[i]
         if type(v) == "table" then
             local kv = {}
-            for k, x in pairs(v) do kv[#kv + 1] = tostring(k) .. "=" .. tostring(type(x) == "table" and "{…}" or x) end
+            for k, x in pairs(v) do
+                kv[#kv + 1] = tostring(k) .. "=" .. tostring(type(x) == "table" and "{…}" or x)
+            end
             table.sort(kv)
             v = "{" .. table.concat(kv, ", ") .. "}"
         end
@@ -51,19 +57,31 @@ local function purchaseButton(): (Button?, string?)
     local candidates: { name: string, path: string[] }[] = {
         { name = "BankFramePurchaseButton", path = { "BankFramePurchaseButton" } },
         { name = "BankFrame.BankPanel.PurchaseButton", path = { "BankFrame", "BankPanel", "PurchaseButton" } },
-        { name = "BankPanel.PurchasePrompt.TabCostFrame.PurchaseButton", path = { "BankPanel", "PurchasePrompt", "TabCostFrame", "PurchaseButton" } },
+        {
+            name = "BankPanel.PurchasePrompt.TabCostFrame.PurchaseButton",
+            path = { "BankPanel", "PurchasePrompt", "TabCostFrame", "PurchaseButton" },
+        },
     }
     for _, c in ipairs(candidates) do
         local b = asButton(field(_G, unpack(c.path)))
-        if b then return b, c.name end
+        if b then
+            return b, c.name
+        end
     end
     return nil, nil
 end
 
 local function frameInfo(name: string): string
     local f = find(name)
-    if not f then return "missing" end
-    return ("%s shown=%s visible=%s protected=%s"):format(f:GetObjectType(), tostring(f:IsShown()), tostring(f:IsVisible()), tostring(f:IsProtected()))
+    if not f then
+        return "missing"
+    end
+    return ("%s shown=%s visible=%s protected=%s"):format(
+        f:GetObjectType(),
+        tostring(f:IsShown()),
+        tostring(f:IsVisible()),
+        tostring(f:IsProtected())
+    )
 end
 
 local function record(out: { [string]: unknown })
@@ -84,17 +102,35 @@ local function record(out: { [string]: unknown })
         local item = call(C_Container.GetContainerItemID, tabBag, slot)
         local bagID = field(Enum.BagIndex, "CharacterBankTab_" .. slot)
         local size = bagID and call(C_Container.GetContainerNumSlots, bagID) or "?"
-        slots[slot] = ("item=%s bag=%s size=%s inv=%s"):format(item, tostring(bagID), size,
-            call(C_Bank.BankBagTypeAndIDToInvSlot, C, slot))
+        slots[slot] = ("item=%s bag=%s size=%s inv=%s"):format(
+            item,
+            tostring(bagID),
+            size,
+            call(C_Bank.BankBagTypeAndIDToInvSlot, C, slot)
+        )
     end
     local frames: { [string]: string } = {}
     out.frames = frames
-    for _, name in ipairs({ "BankFrame", "BankFramePurchaseButton", "MainMenuBarBackpackButton", "CharacterBag0Slot",
-                            "CharacterBag1Slot", "CharacterBag2Slot", "CharacterBag3Slot", "CharacterReagentBag0Slot", "BagsBar" }) do
+    for _, name in ipairs({
+        "BankFrame",
+        "BankFramePurchaseButton",
+        "MainMenuBarBackpackButton",
+        "CharacterBag0Slot",
+        "CharacterBag1Slot",
+        "CharacterBag2Slot",
+        "CharacterBag3Slot",
+        "CharacterReagentBag0Slot",
+        "BagsBar",
+    }) do
         frames[name] = frameInfo(name)
     end
     local b, path = purchaseButton()
-    out.purchaseButton = b and ((path or "?") .. " " .. b:GetObjectType() .. " shown=" .. tostring(b:IsShown()) .. " protected=" .. tostring(b:IsProtected())) or "none found"
+    out.purchaseButton = b and
+        ((path or "?") ..
+            " " ..
+                b:GetObjectType() ..
+                    " shown=" .. tostring(b:IsShown()) .. " protected=" .. tostring(b:IsProtected())) or
+        "none found"
     local dialog = StaticPopupDialogs and StaticPopupDialogs.CONFIRM_BUY_BANK_TAB
     out.dialog = dialog and "present" or "missing"
     out.money = GetMoney()
@@ -118,13 +154,19 @@ export function command(rest: string?)
         local since = asString(out.clickedAt) or asString(out.at) or ""
         for _, e in ipairs(DB.list("blocked")) do
             local time = field(e, "time")
-            if time and tostring(time) >= since then errors[#errors + 1] = tostring(field(e, "func")) end
+            if time and tostring(time) >= since then
+                errors[#errors + 1] = tostring(field(e, "func"))
+            end
         end
         print("Bank slots probe: checked. /reload to save it.")
         return
     end
-    if InCombatLockdown() then print("Bank slots probe: out of combat, at a banker.") return end
-    local p = probePanel or panel(UIParent, { title = "Bank slots probe", width = 300, height = 150, solid = true }) :: SlotsPanel
+    if InCombatLockdown() then
+        print("Bank slots probe: out of combat, at a banker.")
+        return
+    end
+    local p = probePanel or
+        panel(UIParent, { title = "Bank slots probe", width = 300, height = 150, solid = true }) :: SlotsPanel
     probePanel = p
     p:SetFrameStrata("DIALOG")
     p:ClearAllPoints()
@@ -136,7 +178,9 @@ export function command(rest: string?)
         note:SetWidth(276)
         note:SetJustifyH("LEFT")
         note:SetWordWrap(true)
-        note:SetValue("1. Click the button: the game's own purchase popup should open. Answer No (or Yes to buy a slot). 2. /suu probe bankslots check. 3. /reload.")
+        note:SetValue(
+            "1. Click the button: the game's own purchase popup should open. Answer No (or Yes to buy a slot). 2. /suu probe bankslots check. 3. /reload."
+        )
         local b = button(p.body, { text = "Buy next bank slot (game's button)", width = 276 })
         b:SetPoint("BOTTOMLEFT")
         p.status = text(p.body, "caption", "gilt-text")
@@ -158,5 +202,7 @@ export function command(rest: string?)
     p.over:SetAttribute("clickbutton1", target)
     p.status:SetValue(target and ("Clicks " .. (path or "?")) or "No purchase button found: open the bank first")
     p:Show()
-    print("Bank slots probe: at a banker, click the button, answer the popup, then /suu probe bankslots check and /reload.")
+    print(
+        "Bank slots probe: at a banker, click the button, answer the popup, then /suu probe bankslots check and /reload."
+    )
 end

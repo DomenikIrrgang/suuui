@@ -38,44 +38,81 @@ local M: TrainerModule
 
 local WIDTH, HEIGHT = 380, 560
 local ROW_H, HEAD_H = 47, 28
-local TYPES: FilterOption[] = { { value = "available", label = "Available" }, { value = "unavailable", label = "Unavailable" }, { value = "used", label = "Used" } }
+local TYPES: FilterOption[] = {
+    { value = "available", label = "Available" },
+    { value = "unavailable", label = "Unavailable" },
+    { value = "used", label = "Used" },
+}
 
 local function isPetTrainer(): boolean
-    return C_Trainer and C_Trainer.GetTrainerType and Enum.TrainerType and C_Trainer.GetTrainerType() == Enum.TrainerType.Pet or false
+    return C_Trainer and C_Trainer.GetTrainerType and Enum.TrainerType and
+        C_Trainer.GetTrainerType() == Enum.TrainerType.Pet or
+        false
 end
-local function canCategorize() return not isPetTrainer() end
+local function canCategorize()
+    return not isPetTrainer()
+end
 
 --------------------------------------------------------------------------------
 -- The services
 --------------------------------------------------------------------------------
 
 -- A service as the window draws it.
-export type Service = { index: number, name: string, kind: string, texture: (string | number)?, sub: string, category: string?,
-                 cost: number, profession: boolean }
+export type Service = {
+    index: number,
+    name: string,
+    kind: string,
+    texture: (string | number)?,
+    sub: string,
+    category: string?,
+    cost: number,
+    profession: boolean,
+}
 
 local function service(i: number): Service?
     local nameR, kindR, textureR, reqLevelR, rankTextR, categoryR = errors.try(GetTrainerServiceInfo, i)
     local name = secret.asString(nameR)
-    if not name then return nil end
-    local kind, reqLevel, rankText, category = secret.asString(kindR), secret.asNumber(reqLevelR), secret.asString(rankTextR), secret.asString(categoryR)
+    if not name then
+        return nil
+    end
+    local kind, reqLevel, rankText, category = secret.asString(kindR),
+        secret.asNumber(reqLevelR),
+        secret.asString(rankTextR),
+        secret.asString(categoryR)
     local unit = isPetTrainer() and "pet" or "player"
     local parts: string[] = {}
-    if rankText and rankText ~= "" then parts[#parts + 1] = "(" .. rankText .. ")" end
+    if rankText and rankText ~= "" then
+        parts[#parts + 1] = "(" .. rankText .. ")"
+    end
     if kind ~= "used" then
-        if reqLevel and reqLevel > 1 and (UnitLevel(unit) or 0) < reqLevel then parts[#parts + 1] = "Requires level " .. reqLevel end
+        if reqLevel and reqLevel > 1 and (UnitLevel(unit) or 0) < reqLevel then
+            parts[#parts + 1] = "Requires level " .. reqLevel
+        end
         local skillR, rank = errors.try(GetTrainerServiceSkillReq, i)
         local skill = secret.asString(skillR)
-        if skill then parts[#parts + 1] = ("Requires %s %s"):format(skill, tostring(rank or "")) end
+        if skill then
+            parts[#parts + 1] = ("Requires %s %s"):format(skill, tostring(rank or ""))
+        end
         for k = 1, (secret.asNumber(errors.try(GetTrainerServiceNumAbilityReq, i)) or 0) do
             local abilityR, has = errors.try(GetTrainerServiceAbilityReq, i, k)
             local ability = secret.asString(abilityR)
-            if ability and not has then parts[#parts + 1] = "Requires " .. ability end
+            if ability and not has then
+                parts[#parts + 1] = "Requires " .. ability
+            end
         end
     end
     local cost, isProfession = errors.try(GetTrainerServiceCost, i)
     local texture: (string | number)? = secret.asString(textureR) or secret.asNumber(textureR)
-    return { index = i, name = name, kind = kind or "available", texture = texture, sub = table.concat(parts, " · "),
-             category = category ~= "" and category or nil, cost = secret.asNumber(cost) or 0, profession = not not isProfession }
+    return {
+        index = i,
+        name = name,
+        kind = kind or "available",
+        texture = texture,
+        sub = table.concat(parts, " · "),
+        category = category ~= "" and category or nil,
+        cost = secret.asNumber(cost) or 0,
+        profession = not not isProfession,
+    }
 end
 
 -- A pet's training points left.
@@ -86,11 +123,19 @@ end
 
 -- Whether a service can be learned now, and why not.
 local function learnable(e: Service?): (boolean, string?)
-    if not e then return false, nil end
-    if e.kind == "used" then return false, "You know this." end
-    if e.kind ~= "available" then return false, e.sub ~= "" and e.sub or "You can't learn this yet." end
+    if not e then
+        return false, nil
+    end
+    if e.kind == "used" then
+        return false, "You know this."
+    end
+    if e.kind ~= "available" then
+        return false, e.sub ~= "" and e.sub or "You can't learn this yet."
+    end
     if isPetTrainer() then
-        if e.cost > trainingPoints() then return false, "Your pet doesn't have the training points." end
+        if e.cost > trainingPoints() then
+            return false, "Your pet doesn't have the training points."
+        end
     elseif e.cost > (GetMoney() or 0) then
         return false, "You can't afford it."
     end
@@ -102,10 +147,18 @@ end
 local function coins(copper: number): string
     local g, sv, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
     local out: string[] = {}
-    local function add(n: number, unit: string, hex: string) out[#out + 1] = ("|cff%s%d%s|r"):format(hex, n, unit) end
-    if g > 0 then add(g, "g", T.color["coin-gold"].hex) end
-    if sv > 0 then add(sv, "s", T.color["coin-silver"].hex) end
-    if c > 0 or #out == 0 then add(c, "c", T.color["coin-copper"].hex) end
+    local function add(n: number, unit: string, hex: string)
+        out[#out + 1] = ("|cff%s%d%s|r"):format(hex, n, unit)
+    end
+    if g > 0 then
+        add(g, "g", T.color["coin-gold"].hex)
+    end
+    if sv > 0 then
+        add(sv, "s", T.color["coin-silver"].hex)
+    end
+    if c > 0 or #out == 0 then
+        add(c, "c", T.color["coin-copper"].hex)
+    end
     return table.concat(out, " ")
 end
 
@@ -114,7 +167,9 @@ local function yourProfessions(): { [string]: boolean }
     local out: { [string]: boolean } = {}
     for _, index in pairs({ GetProfessions and GetProfessions() }) do
         local name = secret.asString(errors.try(GetProfessionInfo, index))
-        if name then out[name] = true end
+        if name then
+            out[name] = true
+        end
     end
     return out
 end
@@ -122,7 +177,9 @@ end
 -- The cheapest first while the money lasts: what of `list` (sorted by cost
 -- in place) `money` pays for together, and what that costs.
 local function pickAffordable(list: Service[], money: number): ({ Service }, number)
-    table.sort(list, function(a: Service, b: Service) return a.cost < b.cost end)
+    table.sort(list, function(a: Service, b: Service)
+        return a.cost < b.cost
+    end)
     local out: Service[], total = {}, 0
     for _, e in ipairs(list) do
         if total + e.cost <= money then
@@ -164,8 +221,12 @@ class TrainerHead extends Button
             owner.collapsed[self.category] = not owner.collapsed[self.category] or nil
             owner:Refresh()
         end)
-        self:SetScript("OnEnter", function() self.name:SetColor("ink") end)
-        self:SetScript("OnLeave", function() self.name:SetColor("gilt-text") end)
+        self:SetScript("OnEnter", function()
+            self.name:SetColor("ink")
+        end)
+        self:SetScript("OnLeave", function()
+            self.name:SetColor("gilt-text")
+        end)
     end
 end
 
@@ -215,7 +276,10 @@ class TrainerRow extends Button
             GameTooltip:SetTrainerService(self.index)
             GameTooltip:Show()
         end)
-        self:SetScript("OnLeave", function() self.hover:Hide(); GameTooltip:Hide() end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
         self:SetScript("OnClick", function()
             owner.selected = self.index
             errors.try(SelectTrainerService, self.index)
@@ -259,10 +323,14 @@ end
 -- The NPC's title under its name ("Warrior Trainer"), from its tooltip.
 local function npcTitle(): string?
     local ok, data = pcall(C_TooltipInfo.GetUnit, "npc")
-    if not ok or not data or issecretvalue(data) then return nil end
+    if not ok or not data or issecretvalue(data) then
+        return nil
+    end
     local line = data.lines and data.lines[2]
     local text = line and line.leftText
-    if type(text) == "string" and not issecretvalue(text) and not text:find("^Level") then return text end
+    if type(text) == "string" and not issecretvalue(text) and not text:find("^Level") then
+        return text
+    end
     return nil
 end
 
@@ -271,8 +339,13 @@ end
 -- categories (sorted by name). A service without a category takes its
 -- spellbook line by name, else by icon (`schoolOf`, `schoolOfIcon`).
 type Group = { name: string, rows: Service[] }
-local function arrange(services: Service[], step: number?, categorize: boolean, schoolOf: { [string]: string },
-                       schoolOfIcon: { [string | number]: string }): (Service[], Group[])
+local function arrange(
+    services: Service[],
+    step: number?,
+    categorize: boolean,
+    schoolOf: { [string]: string },
+    schoolOfIcon: { [string | number]: string }
+): (Service[], Group[])
     local list: Service[], groups: Group[], byName: { [string]: Group } = {}, {}, {}
     for _, e in ipairs(services) do
         local texture = e.texture
@@ -292,16 +365,20 @@ local function arrange(services: Service[], step: number?, categorize: boolean, 
             list[#list + 1] = e
         end
     end
-    table.sort(groups, function(a: Group, b: Group) return a.name < b.name end)
+    table.sort(groups, function(a: Group, b: Group)
+        return a.name < b.name
+    end)
     return list, groups
 end
 
 -- Train all's tooltip: the first six names, how many more; or why nothing.
 local function trainAllText(all: Service[]): string
     local names: string[] = {}
-    for i = 1, math.min(6, #all) do names[i] = all[i].name end
-    return #all > 0 and (table.concat(names, ", ") .. (#all > 6 and (" and " .. (#all - 6) .. " more") or ""))
-        or "Nothing you can learn and afford right now."
+    for i = 1, math.min(6, #all) do
+        names[i] = all[i].name
+    end
+    return #all > 0 and (table.concat(names, ", ") .. (#all > 6 and (" and " .. (#all - 6) .. " more") or "")) or
+        "Nothing you can learn and afford right now."
 end
 
 class TrainerModule extends Module<typeof(DEFAULTS)>
@@ -346,11 +423,19 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
 
     function Train()
         local e = self:Selected()
-        if not e or not learnable(e) then return end
+        if not e or not learnable(e) then
+            return
+        end
         if e.profession and IsTradeskillTrainer and IsTradeskillTrainer() then
             local line = secret.asString(errors.try(GetTrainerServiceSkillLine, e.index)) or e.name
-            UI.Confirm({ title = "Learn " .. line .. "?", text = ("You'll have %s as a profession."):format(line), confirm = "Learn",
-                onConfirm = function() BuyTrainerService(e.index) end })
+            UI.Confirm({
+                title = "Learn " .. line .. "?",
+                text = ("You'll have %s as a profession."):format(line),
+                confirm = "Learn",
+                onConfirm = function()
+                    BuyTrainerService(e.index)
+                end,
+            })
             return
         end
         BuyTrainerService(e.index)
@@ -363,13 +448,17 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     -- leaving every marked one out left nothing at a profession trainer).
     function TrainAllList(): (Service[], number)
         local list: Service[], money = {}, GetMoney() or 0
-        if isPetTrainer() then money = trainingPoints() end
+        if isPetTrainer() then
+            money = trainingPoints()
+        end
         local mine = yourProfessions()
         for i = 1, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) do
             local e = service(i)
             if e and e.kind == "available" and learnable(e) then
                 local line = e.profession and secret.asString(errors.try(GetTrainerServiceSkillLine, i))
-                if not e.profession or (line and mine[line]) then list[#list + 1] = e end
+                if not e.profession or (line and mine[line]) then
+                    list[#list + 1] = e
+                end
             end
         end
         return pickAffordable(list, money)
@@ -382,10 +471,14 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local function next()
             steps = steps + 1
             local w = self.window
-            if steps > 60 or not (w and w:IsShown()) then return end
+            if steps > 60 or not (w and w:IsShown()) then
+                return
+            end
             local list = self:TrainAllList()
             local e = list[1]
-            if not e then return end
+            if not e then
+                return
+            end
             BuyTrainerService(e.index)
             after(0.35, next)
         end
@@ -408,17 +501,31 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             r.money:Hide()
         end
         r.tp:SetShown(pet and e.cost > 0)
-        if pet then r.tp:SetValue(e.cost .. " TP") end
+        if pet then
+            r.tp:SetValue(e.cost .. " TP")
+        end
         r:SetAlpha(e.kind == "used" and T.opacity["opacity-disabled"] or 1)
         r.sel:SetShown(self.selected == e.index)
     end
 
     function Build()
-        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUITrainerWindow", title = "Trainer", width = WIDTH, height = HEIGHT,
-            footer = true, onClose = function(win: Panel) win:Hide() end })
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUITrainerWindow",
+            title = "Trainer",
+            width = WIDTH,
+            height = HEIGHT,
+            footer = true,
+            onClose = function(win: Panel)
+                win:Hide()
+            end,
+        })
         w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
         w:Hide()
-        w:HookScript("OnHide", function() if self.open then errors.try(CloseTrainer) end end)
+        w:HookScript("OnHide", function()
+            if self.open then
+                errors.try(CloseTrainer)
+            end
+        end)
         w.scroll:Hide()
         self.window = w
         local body = w.body
@@ -430,18 +537,30 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         self.tools = tools
         local filters = UI.FilterMenu(tools, {
             groups = { { key = "show", label = "Show", kind = "many", options = TYPES } },
-            defaults = { show = { "available", "unavailable" } }, placeholder = "Filters", width = 130,
+            defaults = { show = { "available", "unavailable" } },
+            placeholder = "Filters",
+            width = 130,
             onChange = function(value: FilterValues)
                 local on: { [FilterValue]: boolean } = {}
-                for _, v in ipairs(filterList(value.show)) do on[v] = true end
-                for _, t in ipairs(TYPES) do errors.try(SetTrainerServiceTypeFilter, t.value, on[t.value] and true or false) end
-            end })
+                for _, v in ipairs(filterList(value.show)) do
+                    on[v] = true
+                end
+                for _, t in ipairs(TYPES) do
+                    errors.try(SetTrainerServiceTypeFilter, t.value, on[t.value] and true or false)
+                end
+            end,
+        })
         self.filters = filters
         filters:SetPoint("LEFT")
-        local categorize = UI.Checkbox(tools, { label = "Categorize", onChange = function(on: boolean)
-            if C_Trainer and C_Trainer.SetCategorizeTrainerUI then C_Trainer.SetCategorizeTrainerUI(on) end
-            self:Refresh()
-        end })
+        local categorize = UI.Checkbox(tools, {
+            label = "Categorize",
+            onChange = function(on: boolean)
+                if C_Trainer and C_Trainer.SetCategorizeTrainerUI then
+                    C_Trainer.SetCategorizeTrainerUI(on)
+                end
+                self:Refresh()
+            end,
+        })
         self.categorize = categorize
         categorize:SetPoint("LEFT", filters, "RIGHT", S["space-5"], 0)
         local points = UI.Text(tools, "caption", "ink-muted")
@@ -453,7 +572,9 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         self.list = list
         list:SetPoint("TOPLEFT", tools, "BOTTOMLEFT", 0, -S["space-4"])
         list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
-        list:HookScript("OnSizeChanged", function(_: Frame, width: number) list.child:SetWidth(width) end)
+        list:HookScript("OnSizeChanged", function(_: Frame, width: number)
+            list.child:SetWidth(width)
+        end)
         self.heads, self.rows, self.collapsed = {}, {}, {}
         local empty = UI.Text(list.child, "body", "ink-muted")
         self.empty = empty
@@ -463,26 +584,53 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local money = UI.Money(footer)
         self.money = money
         money:SetPoint("LEFT")
-        local train = UI.Button(footer, { text = "Train", variant = "primary", width = 110, onClick = function() self:Train() end })
+        local train = UI.Button(footer, {
+            text = "Train",
+            variant = "primary",
+            width = 110,
+            onClick = function()
+                self:Train()
+            end,
+        })
         self.train = train
         train:SetPoint("RIGHT")
-        local trainAll = UI.Button(footer, { text = "Train all", width = 110, onClick = self:Guard(function()
-            local all, total = self:TrainAllList()
-            if #all == 0 then return end
-            local cost = isPetTrainer() and (total .. " training points") or coins(total)
-            UI.Confirm({ title = "Train all?", text = ("Learn %d %s for %s."):format(#all, #all == 1 and "skill" or "skills", cost),
-                confirm = "Train all", onConfirm = function() self:TrainAll() end })
-        end) })
+        local trainAll = UI.Button(footer, {
+            text = "Train all",
+            width = 110,
+            onClick = self:Guard(function()
+                local all, total = self:TrainAllList()
+                if #all == 0 then
+                    return
+                end
+                local cost = isPetTrainer() and (total .. " training points") or coins(total)
+                UI.Confirm({
+                    title = "Train all?",
+                    text = ("Learn %d %s for %s."):format(#all, #all == 1 and "skill" or "skills", cost),
+                    confirm = "Train all",
+                    onConfirm = function()
+                        self:TrainAll()
+                    end,
+                })
+            end),
+        })
         self.trainAll = trainAll
         trainAll:SetPoint("RIGHT", train, "LEFT", -S["space-3"], 0)
     end
 
     function Refresh()
         local w = self.window
-        if not (w and w:IsShown() and self.open) then return end
+        if not (w and w:IsShown() and self.open) then
+            return
+        end
         -- (built with the window)
-        local rankRow, tools, filters, categorizeBox = assert(self.rank), assert(self.tools), assert(self.filters), assert(self.categorize)
-        local points, scroll, empty, money = assert(self.points), assert(self.list), assert(self.empty), assert(self.money)
+        local rankRow, tools, filters, categorizeBox = assert(self.rank),
+            assert(self.tools),
+            assert(self.filters),
+            assert(self.categorize)
+        local points, scroll, empty, money = assert(self.points),
+            assert(self.list),
+            assert(self.empty),
+            assert(self.money)
         local train, trainAll = assert(self.train), assert(self.trainAll)
         local name = UnitName("npc")
         w:SetTitle(type(name) == "string" and not issecretvalue(name) and name or "Trainer", npcTitle())
@@ -504,14 +652,21 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         tools:SetPoint("RIGHT")
         -- the tools
         local shown: FilterValue[] = {}
-        for _, t in ipairs(TYPES) do if errors.try(GetTrainerServiceTypeFilter, t.value) then shown[#shown + 1] = t.value end end
+        for _, t in ipairs(TYPES) do
+            if errors.try(GetTrainerServiceTypeFilter, t.value) then
+                shown[#shown + 1] = t.value
+            end
+        end
         filters:SetValue({ show = shown })
-        local categorize = canCategorize() and C_Trainer and C_Trainer.GetCategorizeTrainerUI and C_Trainer.GetCategorizeTrainerUI()
+        local categorize = canCategorize() and C_Trainer and C_Trainer.GetCategorizeTrainerUI and
+            C_Trainer.GetCategorizeTrainerUI()
         categorizeBox:SetShown(canCategorize())
         categorizeBox:SetValue(categorize and true or false)
         local pet = isPetTrainer()
         points:SetShown(pet)
-        if pet then points:SetValue("Training points: " .. trainingPoints()) end
+        if pet then
+            points:SetValue("Training points: " .. trainingPoints())
+        end
         -- the services: the profession's next rank first, then by category. The
         -- game gives a class trainer's spells none: their spellbook line instead
         -- (SuuUI's trainer data, as the spellbook groups them)
@@ -520,16 +675,28 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local schoolOf: { [string]: string }, schoolOfIcon: { [string | number]: string } = {}, {}
         if not pet and not (IsTradeskillTrainer and IsTradeskillTrainer()) then
             for _, sp in ipairs(SuuUI.TrainerSpells and SuuUI.TrainerSpells() or {}) do
-                if sp.name and sp.school then schoolOf[sp.name] = sp.school end
-                if sp.icon and sp.school then schoolOfIcon[sp.icon] = schoolOfIcon[sp.icon] or sp.school end
+                if sp.name and sp.school then
+                    schoolOf[sp.name] = sp.school
+                end
+                if sp.icon and sp.school then
+                    schoolOfIcon[sp.icon] = schoolOfIcon[sp.icon] or sp.school
+                end
             end
         end
         local services: Service[] = {}
         for i = 1, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) do
             local e = service(i)
-            if e then services[#services + 1] = e end
+            if e then
+                services[#services + 1] = e
+            end
         end
-        local list, groups = arrange(services, secret.asNumber(errors.try(GetTrainerServiceStepIndex)), categorize and true or false, schoolOf, schoolOfIcon)
+        local list, groups = arrange(
+            services,
+            secret.asNumber(errors.try(GetTrainerServiceStepIndex)),
+            categorize and true or false,
+            schoolOf,
+            schoolOfIcon
+        )
         -- uncategorized first (as the game does), then each category
         local c = scroll.child
         local y, nh, nr = 0, 0, 0
@@ -544,7 +711,9 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             r:Show()
             y = y + ROW_H
         end
-        for _, e in ipairs(list) do row(e) end
+        for _, e in ipairs(list) do
+            row(e)
+        end
         for _, g in ipairs(groups) do
             nh = nh + 1
             local h = self.heads[nh] or TrainerHead.new(c, self)
@@ -554,15 +723,26 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             h:SetPoint("TOPLEFT", 0, -y)
             h:SetPoint("RIGHT", c, "RIGHT")
             local folded = self.collapsed[g.name]
-            h.chev:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" .. (folded and "chevronRight" or "chevronDown") .. ".tga")
+            h.chev:SetTexture(
+                "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\" ..
+                    (folded and "chevronRight" or "chevronDown") .. ".tga"
+            )
             h.name:SetValue(g.name)
             h.count:SetValue(tostring(#g.rows))
             h:Show()
             y = y + HEAD_H
-            if not folded then for _, e in ipairs(g.rows) do row(e) end end
+            if not folded then
+                for _, e in ipairs(g.rows) do
+                    row(e)
+                end
+            end
         end
-        for i = nh + 1, #self.heads do self.heads[i]:Hide() end
-        for i = nr + 1, #self.rows do self.rows[i]:Hide() end
+        for i = nh + 1, #self.heads do
+            self.heads[i]:Hide()
+        end
+        for i = nr + 1, #self.rows do
+            self.rows[i]:Hide()
+        end
         empty:SetShown(nr == 0 and nh == 0)
         empty:SetValue("Nothing to show with these filters.")
         c:SetHeight(math.max(1, y))
@@ -570,14 +750,18 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         money:SetCopper(GetMoney() or 0)
         local ok, why = learnable(self:Selected())
         train:SetEnabledState(ok)
-        train.tooltip = (not ok) and { title = "Train", description = self.selected and why or "Choose what to learn." } or nil
+        train.tooltip = (not ok) and
+            { title = "Train", description = self.selected and why or "Choose what to learn." } or
+            nil
         local all = self:TrainAllList()
         trainAll:SetEnabledState(#all > 0)
         trainAll.tooltip = { title = "Train all", description = trainAllText(all) }
     end
 
     function QueueRefresh()
-        if self.refreshPending then return end
+        if self.refreshPending then
+            return
+        end
         self.refreshPending = true
         after(0.05, function()
             self.refreshPending = nil
@@ -588,11 +772,15 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     -- The game's frame out of sight: see-through and off screen, still shown,
     -- and back off screen whenever the game places it again.
     function Away(frame: Frame?)
-        if not frame or self.away then return end
+        if not frame or self.away then
+            return
+        end
         self.away = true
         local placing = false
         local function away()
-            if not self:IsEnabled() then return end
+            if not self:IsEnabled() then
+                return
+            end
             placing = true
             frame:SetAlpha(0)
             frame:ClearAllPoints()
@@ -600,8 +788,14 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             placing = false
         end
         away()
-        hook(frame, "SetPoint", function() if not placing then after(0, away) end end)
-        hookScript(frame, "OnShow", function() after(0, away) end)
+        hook(frame, "SetPoint", function()
+            if not placing then
+                after(0, away)
+            end
+        end)
+        hookScript(frame, "OnShow", function()
+            after(0, away)
+        end)
     end
 
     -- "/suu trainall": at an open trainer, each service and whether Train all
@@ -610,16 +804,34 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     function ExplainTrainAll()
         local mine = yourProfessions()
         local names: string[] = {}
-        for n in pairs(mine) do names[#names + 1] = n end
+        for n in pairs(mine) do
+            names[#names + 1] = n
+        end
         local count = secret.asNumber(errors.try(GetNumTrainerServices)) or 0
-        self:Print(("%d services; your professions: %s; money %s"):format(count, table.concat(names, ", "), tostring(GetMoney())))
+        self:Print(
+            ("%d services; your professions: %s; money %s"):format(
+                count,
+                table.concat(names, ", "),
+                tostring(GetMoney())
+            )
+        )
         for i = 1, math.min(25, count) do
             local e = service(i)
             if e then
                 local ok, why = learnable(e)
                 local line = errors.try(GetTrainerServiceSkillLine, i)
-                self:Print(("%d %s: kind=%s cost=%s profession=%s line=%s learnable=%s %s"):format(i, tostring(e.name), tostring(e.kind),
-                    tostring(e.cost), tostring(e.profession), tostring(line), tostring(ok), why or ""))
+                self:Print(
+                    ("%d %s: kind=%s cost=%s profession=%s line=%s learnable=%s %s"):format(
+                        i,
+                        tostring(e.name),
+                        tostring(e.kind),
+                        tostring(e.cost),
+                        tostring(e.profession),
+                        tostring(line),
+                        tostring(ok),
+                        why or ""
+                    )
+                )
             end
         end
         local list, total = self:TrainAllList()
@@ -630,11 +842,15 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         self:RegisterCommand("trainall", "At a trainer: what Train all would learn, and why it leaves something out.", function()
             self:ExplainTrainAll()
         end)
-        if not self.window then self:Build() end
+        if not self.window then
+            self:Build()
+        end
         self:OnGameEvent("TRAINER_SHOW", function()
             self.open = true
             self.selected = nil
-            after(0, function() self:Away(frames.find("ClassTrainerFrame")) end)
+            after(0, function()
+                self:Away(frames.find("ClassTrainerFrame"))
+            end)
             assert(self.window):Show()
             assert(self.list):SetVerticalScroll(0)
             self:Refresh()
@@ -643,15 +859,24 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             self.open = false
             assert(self.window):Hide()
         end)
-        for _, e in ipairs({ "TRAINER_UPDATE", "TRAINER_SERVICE_INFO_NAME_UPDATE", "PLAYER_MONEY", "UNIT_PET_TRAINING_POINTS",
-                             "SKILL_LINES_CHANGED" }) do
-            self:OnGameEvent(e, function() self:QueueRefresh() end)
+        for _, e in ipairs({
+            "TRAINER_UPDATE",
+            "TRAINER_SERVICE_INFO_NAME_UPDATE",
+            "PLAYER_MONEY",
+            "UNIT_PET_TRAINING_POINTS",
+            "SKILL_LINES_CHANGED",
+        }) do
+            self:OnGameEvent(e, function()
+                self:QueueRefresh()
+            end)
         end
     end
 
     override function OnDisable()
         local w = self.window
-        if w then w:Hide() end
+        if w then
+            w:Hide()
+        end
     end
 end
 

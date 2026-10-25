@@ -30,34 +30,50 @@ local armed = false
 
 -- One value as text: secret, nil, or readable (with what it was).
 local function describe(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     return "readable: " .. tostring(v)
 end
 
 -- Calls fn and describes its first (or chosen) returns; errors are kept short.
 local function try(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local ok, a, b = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120) end
-    if b ~= nil or isSecret(b) then return describe(a) .. " / " .. describe(b) end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 120)
+    end
+    if b ~= nil or isSecret(b) then
+        return describe(a) .. " / " .. describe(b)
+    end
     return describe(a)
 end
 
 local colorCurve: unknown = nil
 local function dispelCurve(): unknown
-    if colorCurve ~= nil then return colorCurve or nil end
+    if colorCurve ~= nil then
+        return colorCurve or nil
+    end
     colorCurve = false
     local make = C_CurveUtil and (C_CurveUtil.CreateColorCurve or C_CurveUtil.CreateCurve)
     if make then
         local ok: boolean, c: unknown = pcall(make)
-        if ok and c then colorCurve = c end
+        if ok and c then
+            colorCurve = c
+        end
     end
     return colorCurve or nil
 end
 
 local function sampleUnit(unit: string): { [string]: unknown }?
-    if not UnitExists(unit) then return nil end
+    if not UnitExists(unit) then
+        return nil
+    end
     local r: { [string]: unknown } = {}
     r.name = try(UnitName, unit)
     r.range = try(UnitInRange, unit)
@@ -90,33 +106,54 @@ local function sampleUnit(unit: string): { [string]: unknown }?
         r.auraIDs = describe(ids)
     end
     local okAll, all = pcall(C_UnitAuras.GetUnitAuraInstanceIDs, unit, "HARMFUL")
-    r.allDebuffIDs = not okAll and ("error: " .. tostring(all):sub(1, 120))
-        or (type(all) == "table" and ("readable: %d"):format(#all)) or describe(all)
+    r.allDebuffIDs = not okAll and ("error: " .. tostring(all):sub(1, 120)) or
+        (type(all) == "table" and ("readable: %d"):format(#all)) or
+        describe(all)
     r.byIndex = try(C_UnitAuras.GetAuraDataByIndex, unit, 1, "HARMFUL")
     return r
 end
 
 -- One sample: when, the group, and each unit's readings.
-export type Sample = { at: string, label: string, combat: string, group: string, instance: string, units: { [string]: unknown } }
+export type Sample = {
+    at: string,
+    label: string,
+    combat: string,
+    group: string,
+    instance: string,
+    units: { [string]: unknown },
+}
 
 export function sample(label: string): Sample
-    local store = DB.probeData("group", function(): { samples: Sample[] } return { samples = {} } end)
+    local store = DB.probeData("group", function(): { samples: Sample[] }
+        return { samples = {} }
+    end)
     local s: Sample = {
-        at = date("%H:%M:%S"), label = label,
+        at = date("%H:%M:%S"),
+        label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
         instance = select(2, IsInInstance()) or "none",
         units = {},
     }
-    for _, unit in ipairs(UNITS) do s.units[unit] = sampleUnit(unit) end
+    for _, unit in ipairs(UNITS) do
+        s.units[unit] = sampleUnit(unit)
+    end
     table.insert(store.samples, s)
-    while #store.samples > MAX_SAMPLES do table.remove(store.samples, 1) end
+    while #store.samples > MAX_SAMPLES do
+        table.remove(store.samples, 1)
+    end
     return s
 end
 
 local function onFight()
-    if not armed then return end
-    after(1, function() if armed then sample("1s into the fight") end end)
+    if not armed then
+        return
+    end
+    after(1, function()
+        if armed then
+            sample("1s into the fight")
+        end
+    end)
     after(4, function()
         if armed then
             sample("4s into the fight")
@@ -126,7 +163,13 @@ local function onFight()
 end
 
 local function afterFight()
-    if armed then after(1, function() if armed then sample("after the fight") end end) end
+    if armed then
+        after(1, function()
+            if armed then
+                sample("after the fight")
+            end
+        end)
+    end
 end
 
 export function command(arg: string?)
@@ -142,6 +185,13 @@ export function command(arg: string?)
     end
     local s = sample("on command")
     local n = 0
-    for _ in pairs(s.units) do n = n + 1 end
-    print(("Group probe: armed (%s, %d units). Fight something with a target; it samples 1s and 4s in. /reload to save."):format(s.group, n))
+    for _ in pairs(s.units) do
+        n = n + 1
+    end
+    print(
+        ("Group probe: armed (%s, %d units). Fight something with a target; it samples 1s and 4s in. /reload to save."):format(
+            s.group,
+            n
+        )
+    )
 end

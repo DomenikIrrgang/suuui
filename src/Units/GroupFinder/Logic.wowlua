@@ -22,20 +22,30 @@ export type Row = { entry: Entry } & BrowseRow
 -- Where a note came from (the notification's `source`).
 export type NoteSource = { tool?: boolean, channel?: string, text?: string }
 
-local function lfg(): ForeverLFG return SuuUI.LFG end
+local function lfg(): ForeverLFG
+    return SuuUI.LFG
+end
 
 -- "now", "12m", "3h": how long ago, short.
 export function ago(seconds: number?): string
-    if not seconds then return "" end
+    if not seconds then
+        return ""
+    end
     seconds = math.max(0, seconds)
-    if seconds < 60 then return "now" end
-    if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
+    if seconds < 60 then
+        return "now"
+    end
+    if seconds < 3600 then
+        return math.floor(seconds / 60) .. "m"
+    end
     return math.floor(seconds / 3600) .. "h"
 end
 
 -- A role's count as the library gives it (a number, or true for one).
 local function roleCount(n: number | boolean | nil): number
-    if type(n) == "number" then return n end
+    if type(n) == "number" then
+        return n
+    end
     return n and 1 or 0
 end
 
@@ -56,40 +66,75 @@ export function groupSlots(e: Entry, mine: { [string]: boolean }): (string[], st
     local shown = 0
     if small then
         for _, role in ipairs({ "tank", "healer", "damage", "none" }) do
-            for _ = 1, has and has[role] or 0 do slots[#slots + 1] = "has:" .. role; shown = shown + 1 end
+            for _ = 1, has and has[role] or 0 do
+                slots[#slots + 1] = "has:" .. role
+                shown = shown + 1
+            end
         end
-        for _ = shown + 1, have do slots[#slots + 1] = "has:none" end
+        for _ = shown + 1, have do
+            slots[#slots + 1] = "has:none"
+        end
     end
     local needed: string[] = {}
     local function add(role: string)
-        for _ = 1, roleCount(e.roles.needed[role]) do needed[#needed + 1] = role end
+        for _ = 1, roleCount(e.roles.needed[role]) do
+            needed[#needed + 1] = role
+        end
     end
-    for _, role in ipairs({ "tank", "healer", "damage" }) do if mine[role] then add(role) end end
-    for _, role in ipairs({ "tank", "healer", "damage" }) do if not mine[role] then add(role) end end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        if mine[role] then
+            add(role)
+        end
+    end
+    for _, role in ipairs({ "tank", "healer", "damage" }) do
+        if not mine[role] then
+            add(role)
+        end
+    end
     local free = max and math.max(0, max - have)
     local fit = free and math.min(#needed, free) or #needed
-    for i = 1, fit do slots[#slots + 1] = "need:" .. needed[i] end
+    for i = 1, fit do
+        slots[#slots + 1] = "need:" .. needed[i]
+    end
     if free and small then
-        for _ = 1, free - fit do slots[#slots + 1] = "open" end
+        for _ = 1, free - fit do
+            slots[#slots + 1] = "open"
+        end
     end
     -- the hover text
     local function list(counts: { [string]: number }): string
         local out: string[] = {}
         for _, role in ipairs({ "tank", "healer", "damage" }) do
             local n = counts[role] or 0
-            if n > 0 then out[#out + 1] = n .. " " .. (ROLE_WORD[role] or role) end
+            if n > 0 then
+                out[#out + 1] = n .. " " .. (ROLE_WORD[role] or role)
+            end
         end
         local none = counts.none or 0
-        if none > 0 then out[#out + 1] = none .. " without a role" end
+        if none > 0 then
+            out[#out + 1] = none .. " without a role"
+        end
         return table.concat(out, ", ")
     end
     local hasCounts: { [string]: number } = {}
-    if has then for k, v in pairs(has) do hasCounts[k] = v end else hasCounts.none = have end
+    if has then
+        for k, v in pairs(has) do
+            hasCounts[k] = v
+        end
+    else
+        hasCounts.none = have
+    end
     local needCounts: { [string]: number } = {}
-    for _, role in ipairs(needed) do needCounts[role] = (needCounts[role] or 0) + 1 end
+    for _, role in ipairs(needed) do
+        needCounts[role] = (needCounts[role] or 0) + 1
+    end
     local tip: string[] = {}
-    if have > 0 then tip[#tip + 1] = "Has: " .. list(hasCounts) end
-    if #needed > 0 then tip[#tip + 1] = "Needs: " .. list(needCounts) end
+    if have > 0 then
+        tip[#tip + 1] = "Has: " .. list(hasCounts)
+    end
+    if #needed > 0 then
+        tip[#tip + 1] = "Needs: " .. list(needCounts)
+    end
     if free and #needed > free then
         tip[#tip + 1] = ("%d free %s: any of these"):format(free, free == 1 and "spot" or "spots")
     end
@@ -109,12 +154,18 @@ export function fits(e: Entry, interest: Interest): boolean
         for _, k in ipairs(LFG.Catalogue.Expand(key)) do
             local a = LFG.Catalogue.Get(k)
             local range = a and a.level
-            if range and range[2] and lvl >= (range[1] or 0) - 3 and lvl <= range[2] + 3 then return true end
-            if a and not range then return true end
+            if range and range[2] and lvl >= (range[1] or 0) - 3 and lvl <= range[2] + 3 then
+                return true
+            end
+            if a and not range then
+                return true
+            end
         end
     end
     local low = e.level and e.level[1]
-    if low then return math.abs(low - lvl) <= 6 end
+    if low then
+        return math.abs(low - lvl) <= 6
+    end
     return #e.activities == 0
 end
 
@@ -124,20 +175,28 @@ export function fitsMe(e: Entry, interest: Interest): boolean
     local ok = fits(e, interest)
     if ok and e.intent == "group" and next(e.roles.needed) then
         ok = false
-        for role in pairs(e.roles.needed) do if interest.roles[role] then ok = true end end
+        for role in pairs(e.roles.needed) do
+            if interest.roles[role] then
+                ok = true
+            end
+        end
     end
     return ok
 end
 
 -- The Browse page's order: matches first, then the newest.
 export function rowOrder(a: Row, b: Row): boolean
-    if a.match ~= b.match then return a.match == true end
+    if a.match ~= b.match then
+        return a.match == true
+    end
     return (a.entry.lastSeen or 0) > (b.entry.lastSeen or 0)
 end
 
 -- "a, b or c"
 export function joinWith(list: string[], last: string): string
-    if #list <= 1 then return list[1] or "" end
+    if #list <= 1 then
+        return list[1] or ""
+    end
     return table.concat(list, ", ", 1, #list - 1) .. " " .. last .. " " .. list[#list]
 end
 
@@ -148,10 +207,16 @@ end
 
 -- "a moment", "12m", "1h 5m"
 export function minutesText(seconds: number?): string?
-    if not seconds then return nil end
+    if not seconds then
+        return nil
+    end
     local m = math.floor(seconds / 60)
-    if m < 1 then return "a moment" end
-    if m < 60 then return m .. "m" end
+    if m < 1 then
+        return "a moment"
+    end
+    if m < 60 then
+        return m .. "m"
+    end
     return math.floor(m / 60) .. "h " .. (m % 60) .. "m"
 end
 
@@ -162,9 +227,13 @@ export type AdContext = { inGroup: boolean, roles: string[], level: number, clas
 export function adContext(): AdContext
     if IsInGroup() then
         local units: string[] = { "player" }
-        for i = 1, (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0) do units[#units + 1] = "party" .. i end
+        for i = 1, (GetNumSubgroupMembers and GetNumSubgroupMembers() or 0) do
+            units[#units + 1] = "party" .. i
+        end
         local roles: string[] = {}
-        for i, u in ipairs(units) do roles[i] = secret.known(UnitGroupRolesAssigned(u), "NONE") end
+        for i, u in ipairs(units) do
+            roles[i] = secret.known(UnitGroupRolesAssigned(u), "NONE")
+        end
         return { inGroup = true, roles = roles, level = UnitLevel("player") }
     end
     local _, class = UnitClass("player")
@@ -175,34 +244,59 @@ end
 -- and your details. A group asks for the roles a 1 / 1 / 3 group still
 -- lacks by its members' roles; alone, the roles you offer and who you are.
 export function adText(listing: Listing?, ctx: AdContext): string
-    if not listing then return "" end
+    if not listing then
+        return ""
+    end
     local LFG = lfg()
     local names: string[] = {}
-    for _, key in ipairs(listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
+    for _, key in ipairs(listing.activities or {}) do
+        names[#names + 1] = LFG.Catalogue.Name(key)
+    end
     local acts = joinWith(names, "or")
     local text
     if ctx.inGroup then
         local tanks, healers, damage = 0, 0, 0
         for _, r in ipairs(ctx.roles) do
-            if r == "TANK" then tanks = tanks + 1 elseif r == "HEALER" then healers = healers + 1
-            elseif r == "DAMAGER" then damage = damage + 1 end
+            if r == "TANK" then
+                tanks = tanks + 1
+            elseif r == "HEALER" then
+                healers = healers + 1
+            elseif r == "DAMAGER" then
+                damage = damage + 1
+            end
         end
         local need: string[] = {}
-        if tanks < 1 then need[#need + 1] = "Tank" end
-        if healers < 1 then need[#need + 1] = "Healer" end
+        if tanks < 1 then
+            need[#need + 1] = "Tank"
+        end
+        if healers < 1 then
+            need[#need + 1] = "Healer"
+        end
         local dps = math.max(0, 3 - damage)
-        if dps > 0 then need[#need + 1] = dps .. " DPS" end
+        if dps > 0 then
+            need[#need + 1] = dps .. " DPS"
+        end
         text = ("LFM %sfor %s (%d/5)."):format(#need > 0 and (joinWith(need, "and") .. " ") or "", acts, #ctx.roles)
     else
         local roles: string[] = {}
         local r = listing.roles
-        if r.tank then roles[#roles + 1] = "Tank" end
-        if r.healer then roles[#roles + 1] = "Healer" end
-        if r.damage then roles[#roles + 1] = "DPS" end
+        if r.tank then
+            roles[#roles + 1] = "Tank"
+        end
+        if r.healer then
+            roles[#roles + 1] = "Healer"
+        end
+        if r.damage then
+            roles[#roles + 1] = "DPS"
+        end
         local class = ctx.class
         local cname = className(class)
-        text = ("LFG %s(%d %s) for %s."):format(#roles > 0 and (joinWith(roles, "or") .. " ") or "", ctx.level,
-            (cname or ""):lower(), acts)
+        text = ("LFG %s(%d %s) for %s."):format(
+            #roles > 0 and (joinWith(roles, "or") .. " ") or "",
+            ctx.level,
+            (cname or ""):lower(),
+            acts
+        )
     end
     local comment = secret.asString(listing.comment)
     if comment and comment ~= "" then
@@ -218,7 +312,9 @@ export function channelId(name: string, list: unknown[]?): number?
     local channels: unknown[] = list or { GetChannelList() }
     for i = 1, #channels, 3 do
         local id, n = secret.asNumber(channels[i]), secret.asString(channels[i + 1])
-        if id and n and (n == name or n:find("^" .. name .. " %-")) then return id end
+        if id and n and (n == name or n:find("^" .. name .. " %-")) then
+            return id
+        end
     end
     local id = GetChannelName(name)
     return (type(id) == "number" and id > 0) and id or nil
@@ -229,7 +325,10 @@ export function activityText(e: Entry): string
     local LFG = lfg()
     local names: string[] = {}
     for i, key in ipairs(e.activities) do
-        if i > 2 then names[#names + 1] = "+" .. (#e.activities - 2) break end
+        if i > 2 then
+            names[#names + 1] = "+" .. (#e.activities - 2)
+            break
+        end
         names[#names + 1] = LFG.Catalogue.Name(key)
     end
     return table.concat(names, ", ")
@@ -254,8 +353,11 @@ export function needsText(e: Entry): string?
     local out: string[] = {}
     for _, role in ipairs({ "tank", "healer", "damage" }) do
         local n = roleCount(e.roles.needed[role])
-        if n == 1 then out[#out + 1] = A_ROLE[role] or role
-        elseif n > 1 then out[#out + 1] = n .. (role == "damage" and " damage" or (" " .. role .. "s")) end
+        if n == 1 then
+            out[#out + 1] = A_ROLE[role] or role
+        elseif n > 1 then
+            out[#out + 1] = n .. (role == "damage" and " damage" or (" " .. role .. "s"))
+        end
     end
     return #out > 0 and ("needs " .. joinAnd(out)) or nil
 end
@@ -264,7 +366,9 @@ end
 export function offersText(e: Entry): string?
     local out: string[] = {}
     for _, role in ipairs({ "tank", "healer", "damage" }) do
-        if e.roles.offered[role] then out[#out + 1] = role end
+        if e.roles.offered[role] then
+            out[#out + 1] = role
+        end
     end
     return #out > 0 and ("offers " .. table.concat(out, " or ")) or nil
 end
@@ -274,7 +378,9 @@ export function lines(...: string?): string
     local out: string[] = {}
     for i = 1, select("#", ...) do
         local v: string? = select(i, ...)
-        if v and v ~= "" then out[#out + 1] = v end
+        if v and v ~= "" then
+            out[#out + 1] = v
+        end
     end
     return table.concat(out, " · ")
 end
@@ -297,9 +403,13 @@ export function classIcon(class: string?): NotificationIcon?
     local coords: number[] = {}
     for _, c in ipairs(tbl.list(class and tbl.field(_G, "CLASS_ICON_TCOORDS", class))) do
         local n = secret.asNumber(c)
-        if n then coords[#coords + 1] = n end
+        if n then
+            coords[#coords + 1] = n
+        end
     end
-    if #coords == 0 then return nil end
+    if #coords == 0 then
+        return nil
+    end
     return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = coords }
 end
 
@@ -308,9 +418,15 @@ end
 export function listedText(listing: Listing?, all: boolean?): string
     local LFG = lfg()
     local names: string[] = {}
-    for _, key in ipairs(listing and listing.activities or {}) do names[#names + 1] = LFG.Catalogue.Name(key) end
-    if all then return joinAnd(names) end
-    if #names > 1 then return names[1] .. " and " .. (#names - 1) .. " more" end
+    for _, key in ipairs(listing and listing.activities or {}) do
+        names[#names + 1] = LFG.Catalogue.Name(key)
+    end
+    if all then
+        return joinAnd(names)
+    end
+    if #names > 1 then
+        return names[1] .. " and " .. (#names - 1) .. " more"
+    end
     return names[1] or "your activity"
 end
 
@@ -319,6 +435,8 @@ end
 -- micro menu's button when it's closed, then the listing tab.
 export function openListingMacro(): string
     local f = frames.find("LFGParentFrame")
-    if f and f:IsShown() then return "/click LFGParentFrameTab1" end
+    if f and f:IsShown() then
+        return "/click LFGParentFrameTab1"
+    end
     return "/click LFDMicroButton\n/click LFGParentFrameTab1"
 end

@@ -44,14 +44,27 @@ export type Instance = table
 -- What its maker and plugins tell about an instance (SuuUI.InstanceInfo,
 -- Docs/API.md); a plugin may add fields of its own.
 export type Tags = {
-    module?: string, role?: string, unit?: string, name?: string, preview?: boolean,
-    meter?: string, totems?: boolean, skinned?: Frame,
+    module?: string,
+    role?: string,
+    unit?: string,
+    name?: string,
+    preview?: boolean,
+    meter?: string,
+    totems?: boolean,
+    skinned?: Frame,
     [string]: unknown,
 }
 export type Info = {
-    kind: string, seq: number,
-    module?: string, role?: string, unit?: string, name?: string, preview?: boolean,
-    meter?: string, totems?: boolean, skinned?: Frame,
+    kind: string,
+    seq: number,
+    module?: string,
+    role?: string,
+    unit?: string,
+    name?: string,
+    preview?: boolean,
+    meter?: string,
+    totems?: boolean,
+    skinned?: Frame,
     [string]: unknown,
 }
 
@@ -59,10 +72,17 @@ export type Info = {
 -- M:Each, M:Hook, M:Override and SuuUI.Instances (a kind of a plugin's
 -- own, and nameplates, are an Instance).
 export type KindInstances = {
-    unitframe: UnitFrame, castbar: CastBar, auracontainer: UnitAuras,
-    actionbar: ActionBar | TotemBar, actionbutton: ActionButton,
-    window: WindowFrame | WindowChrome, inventory: Inventory, tracker: ObjectiveTracker,
-    cooldowns: CooldownTracker, meter: DamageMeter | ThreatMeter, micromenu: MicroMenu,
+    unitframe: UnitFrame,
+    castbar: CastBar,
+    auracontainer: UnitAuras,
+    actionbar: ActionBar | TotemBar,
+    actionbutton: ActionButton,
+    window: WindowFrame | WindowChrome,
+    inventory: Inventory,
+    tracker: ObjectiveTracker,
+    cooldowns: CooldownTracker,
+    meter: DamageMeter | ThreatMeter,
+    micromenu: MicroMenu,
     notification: Notification,
     [string]: Instance,
 }
@@ -101,7 +121,9 @@ export enum Kind {
 }
 
 export const KINDS: string[] = {}
-for _, entry in ipairs(reflect.enumEntries(Kind)) do KINDS[#KINDS + 1] = entry.value end
+for _, entry in ipairs(reflect.enumEntries(Kind)) do
+    KINDS[#KINDS + 1] = entry.value
+end
 
 -- The lists SuuUI's own modules add to (any other name works too).
 export enum List {
@@ -133,7 +155,9 @@ export class GameNextFrame implements NextFrame
             f:Hide()
             local todo = self.due
             self.due = {}
-            for _, fn in ipairs(todo) do fn() end
+            for _, fn in ipairs(todo) do
+                fn()
+            end
         end)
     end
 
@@ -154,7 +178,6 @@ type Queued = { kind: Kind, object: Instance }
 type MenuExtender = { fn: MenuExtension, owner: unknown }
 type Addition = { item: unknown, owner: unknown }
 type Made = { obj: Instance, seq: number }
-
 
 local function ownerName(owner: unknown): string
     local name = tbl.field(owner, "name")
@@ -184,7 +207,9 @@ export class ExtendRegistry
     -- whoever called the module's function).
     private function per(kind: string): PerKind
         local k = reflect.enumFrom(Kind, kind)
-        if k == nil then error(("SuuUI: unknown kind %q (SuuUI.KINDS lists them)"):format(tostring(kind)), 4) end
+        if k == nil then
+            error(("SuuUI: unknown kind %q (SuuUI.KINDS lists them)"):format(tostring(kind)), 4)
+        end
         return assert(self.kinds[k])
     end
 
@@ -197,7 +222,9 @@ export class ExtendRegistry
     private function base(obj: Instance, method: string): Base
         local mine = self.bases[obj]
         local b = mine and mine[method]
-        if b then return b end
+        if b then
+            return b
+        end
         local raw: unknown = rawget(obj, method)
         local made: Base = { fn = raw or obj[method], raw = raw ~= nil }
         if not mine then
@@ -211,7 +238,9 @@ export class ExtendRegistry
     private function wrap(obj: Instance, method: string, chain: HookEntry[])
         local b = self:base(obj, method)
         local made = b.fn
-        if type(made) ~= "function" then return end
+        if type(made) ~= "function" then
+            return
+        end
         if #chain == 0 then
             rawset(obj, method, b.raw and made or nil)
             return
@@ -227,7 +256,9 @@ export class ExtendRegistry
                 fn = function(this: Instance, ...: unknown): ...unknown
                     -- an override that fails falls back to what it replaced
                     local res = { reporter:call(source, instead, this, inner, ...) }
-                    if res[1] then return unpack(res, 2) end
+                    if res[1] then
+                        return unpack(res, 2)
+                    end
                     return inner(this, ...)
                 end
             elseif after then
@@ -242,14 +273,18 @@ export class ExtendRegistry
         local inner = fn
         rawset(obj, method, function(this: Instance, ...: unknown): (unknown, unknown, unknown, unknown)
             local a, b2, c, d = inner(this, ...)
-            for i, post in ipairs(posts) do reporter:call(ownerName(postOwners[i]), post, this, ...) end
+            for i, post in ipairs(posts) do
+                reporter:call(ownerName(postOwners[i]), post, this, ...)
+            end
             return a, b2, c, d
         end)
     end
 
     private function rewrap(p: PerKind, method: string)
         local chain = p.hooks[method] or {}
-        for obj in pairs(p.made) do self:wrap(obj, method, chain) end
+        for obj in pairs(p.made) do
+            self:wrap(obj, method, chain)
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -265,22 +300,32 @@ export class ExtendRegistry
             local p = assert(self.kinds[item.kind])
             for _, e in ipairs(p.extenders) do
                 local i = p.made[item.object]
-                if i then self.reporter:call(ownerName(e.owner), e.fn, item.object, i) end
+                if i then
+                    self.reporter:call(ownerName(e.owner), e.fn, item.object, i)
+                end
             end
         end
     end
 
     function add(kind: string, object: Instance, given: Tags?): Info?
         local p = self:per(kind)
-        if p.made[object] then return nil end
+        if p.made[object] then
+            return nil
+        end
         self.seq += 1
         -- the table given becomes the info (its maker may keep it)
         local i = (given or {}) :: Info
         i.kind, i.seq = kind, self.seq
         p.made[object] = i
-        for method, chain in pairs(p.hooks) do self:wrap(object, method, chain) end
+        for method, chain in pairs(p.hooks) do
+            self:wrap(object, method, chain)
+        end
         if #p.extenders > 0 then
-            if #self.queue == 0 then self.later:run(function() self:flush() end) end
+            if #self.queue == 0 then
+                self.later:run(function()
+                    self:flush()
+                end)
+            end
             self.queue[#self.queue + 1] = { kind = kind :: Kind, object = object }
         end
         return i
@@ -292,7 +337,9 @@ export class ExtendRegistry
             local i = p.made[object]
             if i then
                 for k, v in pairs(fields) do
-                    if k ~= "kind" and k ~= "seq" then rawset(i, k, v) end
+                    if k ~= "kind" and k ~= "seq" then
+                        rawset(i, k, v)
+                    end
                 end
             end
         end
@@ -301,7 +348,9 @@ export class ExtendRegistry
     function info(object: Instance): Info?
         for _, kind in ipairs(KINDS) do
             local i = assert(self.kinds[kind :: Kind]).made[object]
-            if i then return i end
+            if i then
+                return i
+            end
         end
         return nil
     end
@@ -309,10 +358,16 @@ export class ExtendRegistry
     -- The instances of a kind, in the order they were made.
     function list(kind: string): Instance[]
         local made: Made[] = {}
-        for obj, i in pairs(self:per(kind).made) do made[#made + 1] = { obj = obj, seq = i.seq } end
-        table.sort(made, function(a: Made, b: Made): boolean return a.seq < b.seq end)
+        for obj, i in pairs(self:per(kind).made) do
+            made[#made + 1] = { obj = obj, seq = i.seq }
+        end
+        table.sort(made, function(a: Made, b: Made): boolean
+            return a.seq < b.seq
+        end)
         local out: Instance[] = {}
-        for n, o in ipairs(made) do out[n] = o.obj end
+        for n, o in ipairs(made) do
+            out[n] = o.obj
+        end
         return out
     end
 
@@ -326,7 +381,9 @@ export class ExtendRegistry
         p.extenders[#p.extenders + 1] = { fn = fn, undo = undo, owner = owner }
         for _, obj in ipairs(self:list(kind)) do
             local i = p.made[obj]
-            if i then self.reporter:call(ownerName(owner), fn, obj, i) end
+            if i then
+                self.reporter:call(ownerName(owner), fn, obj, i)
+            end
         end
     end
 
@@ -381,7 +438,9 @@ export class ExtendRegistry
     -- What was added, as it was given: whoever reads a list checks its items.
     function additions(listName: string): unknown[]
         local out: unknown[] = {}
-        for _, a in ipairs(self.lists[listName] or {}) do out[#out + 1] = a.item end
+        for _, a in ipairs(self.lists[listName] or {}) do
+            out[#out + 1] = a.item
+        end
         return out
     end
 
@@ -396,7 +455,9 @@ export class ExtendRegistry
                 if e.owner == owner then
                     local undo = e.undo
                     if undo then
-                        for obj, i in pairs(p.made) do self.reporter:call(ownerName(owner), undo, obj, i) end
+                        for obj, i in pairs(p.made) do
+                            self.reporter:call(ownerName(owner), undo, obj, i)
+                        end
                     end
                 else
                     kept[#kept + 1] = e
@@ -407,7 +468,11 @@ export class ExtendRegistry
                 local rest: HookEntry[] = {}
                 local changed = false
                 for _, h in ipairs(entries) do
-                    if h.owner == owner then changed = true else rest[#rest + 1] = h end
+                    if h.owner == owner then
+                        changed = true
+                    else
+                        rest[#rest + 1] = h
+                    end
                 end
                 if changed then
                     p.hooks[method] = rest
@@ -417,12 +482,20 @@ export class ExtendRegistry
         end
         for id, entries in pairs(self.menus) do
             local kept: MenuExtender[] = {}
-            for _, e in ipairs(entries) do if e.owner ~= owner then kept[#kept + 1] = e end end
+            for _, e in ipairs(entries) do
+                if e.owner ~= owner then
+                    kept[#kept + 1] = e
+                end
+            end
             self.menus[id] = kept
         end
         for listName, entries in pairs(self.lists) do
             local kept: Addition[] = {}
-            for _, a in ipairs(entries) do if a.owner ~= owner then kept[#kept + 1] = a end end
+            for _, a in ipairs(entries) do
+                if a.owner ~= owner then
+                    kept[#kept + 1] = a
+                end
+            end
             if #kept ~= #entries then
                 self.lists[listName] = kept
                 self.notifier:emit("SUUUI_ADDITIONS_CHANGED", listName)
@@ -434,31 +507,64 @@ end
 -- SuuUI's registry, and its methods as the module's functions.
 export const registry = ExtendRegistry.new()
 
-export function add(kind: string, object: Instance, given: Tags?): Info? return registry:add(kind, object, given) end
-export function tag(object: Instance, fields: Tags) registry:tag(object, fields) end
-export function info(object: Instance): Info? return registry:info(object) end
+export function add(kind: string, object: Instance, given: Tags?): Info?
+    return registry:add(kind, object, given)
+end
+export function tag(object: Instance, fields: Tags)
+    registry:tag(object, fields)
+end
+export function info(object: Instance): Info?
+    return registry:info(object)
+end
 -- (typed by kind: the registry keeps every kind's instances alike)
 export function list<K extends Kinds>(kind: K): KindInstances[K][]
     return registry:list(kind) :: unknown :: KindInstances[K][]
 end
-export function eachOf<K extends Kinds>(kind: K, fn: (obj: KindInstances[K], info: Info) -> (),
-        undo: ((obj: KindInstances[K], info: Info) -> ())?, owner: unknown)
+export function eachOf<K extends Kinds>(
+    kind: K,
+    fn: (obj: KindInstances[K], info: Info) -> (),
+    undo: ((obj: KindInstances[K], info: Info) -> ())?,
+    owner: unknown
+)
     registry:each(kind, fn :: unknown :: Extender, undo :: unknown :: Extender?, owner)
 end
-export function hookOf<K extends Kinds>(kind: K, method: string, fn: (this: KindInstances[K], ...unknown) -> (), owner: unknown)
+export function hookOf<K extends Kinds>(
+    kind: K,
+    method: string,
+    fn: (this: KindInstances[K], ...unknown) -> (),
+    owner: unknown
+)
     registry:hook(kind, method, fn :: unknown :: Hook, owner)
 end
-export function overrideOf<K extends Kinds>(kind: K, method: string,
-        fn: (this: KindInstances[K], original: Method, ...unknown) -> ...unknown, owner: unknown)
+export function overrideOf<K extends Kinds>(
+    kind: K,
+    method: string,
+    fn: (this: KindInstances[K], original: Method, ...unknown) -> ...unknown,
+    owner: unknown
+)
     registry:override(kind, method, fn :: unknown :: Override, owner)
 end
 export function each(kind: string, fn: Extender, undo: Extender?, owner: unknown)
     registry:each(kind, fn, undo, owner)
 end
-export function hook(kind: string, method: string, fn: Hook, owner: unknown) registry:hook(kind, method, fn, owner) end
-export function override(kind: string, method: string, fn: Override, owner: unknown) registry:override(kind, method, fn, owner) end
-export function extendMenu(id: string, fn: MenuExtension, owner: unknown) registry:extendMenu(id, fn, owner) end
-export function applyMenu(id: string?, menu: Menu, context: MenuContext?) registry:applyMenu(id, menu, context) end
-export function addTo(listName: string, item: unknown, owner: unknown) registry:addTo(listName, item, owner) end
-export function additions(listName: string): unknown[] return registry:additions(listName) end
-export function unregister(owner: unknown) registry:unregister(owner) end
+export function hook(kind: string, method: string, fn: Hook, owner: unknown)
+    registry:hook(kind, method, fn, owner)
+end
+export function override(kind: string, method: string, fn: Override, owner: unknown)
+    registry:override(kind, method, fn, owner)
+end
+export function extendMenu(id: string, fn: MenuExtension, owner: unknown)
+    registry:extendMenu(id, fn, owner)
+end
+export function applyMenu(id: string?, menu: Menu, context: MenuContext?)
+    registry:applyMenu(id, menu, context)
+end
+export function addTo(listName: string, item: unknown, owner: unknown)
+    registry:addTo(listName, item, owner)
+end
+export function additions(listName: string): unknown[]
+    return registry:additions(listName)
+end
+export function unregister(owner: unknown)
+    registry:unregister(owner)
+end

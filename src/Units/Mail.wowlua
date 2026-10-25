@@ -37,33 +37,60 @@ local ROW_H = 44
 local ATTACH_IN = ATTACHMENTS_MAX_RECEIVE or 16
 local ATTACH_OUT = ATTACHMENTS_MAX_SEND or 12
 local SENT_MAX = 50
-local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
 local ENVELOPE = "Interface\\Icons\\INV_Letter_15"
 
-local function hex(token: string): string return assert(colors[token]).hex end
+local function hex(token: string): string
+    return assert(colors[token]).hex
+end
 
 local function coins(copper: number?): string
     local total = math.max(0, math.floor(copper or 0))
     local g, s, c = math.floor(total / 10000), math.floor(total / 100) % 100, total % 100
     local parts: string[] = {}
-    local function part(v: number, unit: string, token: string) parts[#parts + 1] = v .. "|cff" .. hex(token) .. unit .. "|r" end
-    if g > 0 then part(g, "g", "coin-gold") end
-    if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
-    if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
+    local function part(v: number, unit: string, token: string)
+        parts[#parts + 1] = v .. "|cff" .. hex(token) .. unit .. "|r"
+    end
+    if g > 0 then
+        part(g, "g", "coin-gold")
+    end
+    if s > 0 or (g > 0 and c > 0) then
+        part(s, "s", "coin-silver")
+    end
+    if c > 0 or #parts == 0 then
+        part(c, "c", "coin-copper")
+    end
     return table.concat(parts, " ")
 end
-local function tint(token: string, text: string): string return "|cff" .. hex(token) .. text .. "|r" end
+local function tint(token: string, text: string): string
+    return "|cff" .. hex(token) .. text .. "|r"
+end
 
 -- "12 d", "5 h", "under an hour" from the days a mail has left.
 local function daysLeft(d: number?): string
-    if not d then return "" end
-    if d >= 1 then return math.floor(d) .. " d" end
+    if not d then
+        return ""
+    end
+    if d >= 1 then
+        return math.floor(d) .. " d"
+    end
     local h = math.floor(d * 24)
     return h >= 1 and (h .. " h") or "< 1 h"
 end
 
 -- "3 d ago" from a time() stamp.
-local function ago(stamp: number?): string return format.ago(time() - (stamp or 0)) end
+local function ago(stamp: number?): string
+    return format.ago(time() - (stamp or 0))
+end
 
 -- The game's mail functions, protected (an index past the inbox gives
 -- nothing), their values read with wowlua:secret.
@@ -75,25 +102,54 @@ local try, asString, asNumber, flag = errors.try, secret.asString, secret.asNumb
 
 -- One mail's header as the list shows it.
 export type Header = {
-    index: number, icon: number | string, sender: string, subject: string, money: number, cod: number, days: number?,
-    items: number, read: boolean, returned: boolean, canReply: boolean, gm: boolean,
+    index: number,
+    icon: number | string,
+    sender: string,
+    subject: string,
+    money: number,
+    cod: number,
+    days: number?,
+    items: number,
+    read: boolean,
+    returned: boolean,
+    canReply: boolean,
+    gm: boolean,
 }
 local function header(i: number): Header?
-    local packageIcon, _, sender, subject, money, cod, days, itemCount, wasRead, wasReturned, _, canReply, isGM = try(GetInboxHeaderInfo, i)
+    local packageIcon, _, sender, subject, money, cod, days, itemCount, wasRead, wasReturned, _, canReply, isGM = try(
+        GetInboxHeaderInfo,
+        i
+    )
     local who, about = asString(sender), asString(subject)
-    if about == nil and who == nil then return nil end
+    if about == nil and who == nil then
+        return nil
+    end
     local items = asNumber(itemCount) or 0
     local firstIcon: (number | string)? = nil
     if items > 0 then
         for a = 1, ATTACH_IN do
             local _, _, texture = try(GetInboxItem, i, a)
             local tex = asNumber(texture) or asString(texture)
-            if tex then firstIcon = tex break end
+            if tex then
+                firstIcon = tex
+                break
+            end
         end
     end
-    return { index = i, icon = firstIcon or asNumber(packageIcon) or asString(packageIcon) or ENVELOPE, sender = who or "?",
-             subject = about or "", money = asNumber(money) or 0, cod = asNumber(cod) or 0, days = asNumber(days), items = items,
-             read = flag(wasRead), returned = flag(wasReturned), canReply = flag(canReply), gm = flag(isGM) }
+    return {
+        index = i,
+        icon = firstIcon or asNumber(packageIcon) or asString(packageIcon) or ENVELOPE,
+        sender = who or "?",
+        subject = about or "",
+        money = asNumber(money) or 0,
+        cod = asNumber(cod) or 0,
+        days = asNumber(days),
+        items = items,
+        read = flag(wasRead),
+        returned = flag(wasReturned),
+        canReply = flag(canReply),
+        gm = flag(isGM),
+    }
 end
 
 local function inboxCount(): (number, number)
@@ -107,10 +163,14 @@ local function nextTake(moneyOnly: boolean): (number?, number?)
     for i = 1, (inboxCount()) do
         local h = header(i)
         if h and h.cod == 0 and not h.gm then
-            if h.money > 0 then return i, nil end
+            if h.money > 0 then
+                return i, nil
+            end
             if not moneyOnly and h.items > 0 then
                 for a = ATTACH_IN, 1, -1 do
-                    if flag(try(HasInboxItem, i, a)) then return i, a end
+                    if flag(try(HasInboxItem, i, a)) then
+                        return i, a
+                    end
                 end
             end
         end
@@ -156,8 +216,17 @@ export class MailRow extends Button
         self.subject:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], 0)
         self.subject:SetPoint("RIGHT", self.right2, "LEFT", -S["space-2"], 0)
         self.subject:SetWordWrap(false)
-        self:SetScript("OnEnter", function() if not self.selected then self.hl:Show() self.hl:SetAlpha(0.5) end end)
-        self:SetScript("OnLeave", function() if not self.selected then self.hl:Hide() end end)
+        self:SetScript("OnEnter", function()
+            if not self.selected then
+                self.hl:Show()
+                self.hl:SetAlpha(0.5)
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            if not self.selected then
+                self.hl:Hide()
+            end
+        end)
     end
 end
 
@@ -192,26 +261,43 @@ export class OpenMail extends Frame
         self.from = UI.Text(self, "caption", "ink-muted")
         self.from:SetPoint("TOPLEFT", self.subject, "BOTTOMLEFT", 0, -S["space-2"])
         -- the buttons at the foot of the pane
-        self.delete = UI.Button(self, { text = "Delete", onClick = function()
-            local i = m.openIndex
-            if i then try(DeleteInboxItem, i); m.openIndex = nil end
-        end })
+        self.delete = UI.Button(self, {
+            text = "Delete",
+            onClick = function()
+                local i = m.openIndex
+                if i then
+                    try(DeleteInboxItem, i)
+                    m.openIndex = nil
+                end
+            end,
+        })
         self.delete:SetPoint("BOTTOMRIGHT")
-        self.ret = UI.Button(self, { text = "Return", onClick = function()
-            local i = m.openIndex
-            if i then try(ReturnInboxItem, i); m.openIndex = nil end
-        end })
+        self.ret = UI.Button(self, {
+            text = "Return",
+            onClick = function()
+                local i = m.openIndex
+                if i then
+                    try(ReturnInboxItem, i)
+                    m.openIndex = nil
+                end
+            end,
+        })
         self.ret:SetPoint("RIGHT", self.delete, "LEFT", -S["space-2"], 0)
-        self.reply = UI.Button(self, { text = "Reply", onClick = function()
-            local i = m.openIndex
-            local h = i and header(i)
-            if not h then return end
-            local send = assert(m.send)
-            assert(m.window):SetTab("send")
-            send.to:SetValue(h.sender)
-            send.subject:SetValue((h.subject:find("^RE:") and "" or "RE: ") .. h.subject)
-            send.body:SetFocus()
-        end })
+        self.reply = UI.Button(self, {
+            text = "Reply",
+            onClick = function()
+                local i = m.openIndex
+                local h = i and header(i)
+                if not h then
+                    return
+                end
+                local send = assert(m.send)
+                assert(m.window):SetTab("send")
+                send.to:SetValue(h.sender)
+                send.subject:SetValue((h.subject:find("^RE:") and "" or "RE: ") .. h.subject)
+                send.body:SetFocus()
+            end,
+        })
         self.reply:SetPoint("BOTTOMLEFT")
         -- money and COD over the buttons
         self.moneyRow = CreateFrame("Frame", nil, self)
@@ -220,10 +306,16 @@ export class OpenMail extends Frame
         self.moneyRow:SetPoint("RIGHT")
         self.moneyText = UI.Text(self.moneyRow, "numeric", "ink")
         self.moneyText:SetPoint("LEFT")
-        self.takeMoney = UI.Button(self.moneyRow, { text = "Take", width = 70, onClick = function()
-            local i = m.openIndex
-            if i then try(TakeInboxMoney, i) end
-        end })
+        self.takeMoney = UI.Button(self.moneyRow, {
+            text = "Take",
+            width = 70,
+            onClick = function()
+                local i = m.openIndex
+                if i then
+                    try(TakeInboxMoney, i)
+                end
+            end,
+        })
         self.takeMoney:SetPoint("RIGHT")
         self.codRow = CreateFrame("Frame", nil, self)
         self.codRow:SetHeight(20)
@@ -240,17 +332,25 @@ export class OpenMail extends Frame
             local b = AttachSlot.new(self.attach)
             b:SetScript("OnEnter", function()
                 local i = m.openIndex
-                if not i then return end
+                if not i then
+                    return
+                end
                 GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
                 GameTooltip:SetInboxItem(i, b.attachment)
                 GameTooltip:Show()
             end)
-            b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            b:SetScript("OnLeave", function()
+                GameTooltip:Hide()
+            end)
             b:SetScript("OnClick", function()
                 local i = m.openIndex
-                if not i then return end
+                if not i then
+                    return
+                end
                 local link = asString(try(GetInboxItemLink, i, b.attachment))
-                if link and IsModifiedClick() and HandleModifiedItemClick(link) then return end
+                if link and IsModifiedClick() and HandleModifiedItemClick(link) then
+                    return
+                end
                 m:Take(b.attachment)
             end)
             b:Hide()
@@ -277,7 +377,14 @@ end
 
 -- The Inbox page: Collect all and Collect money, the list, the open mail.
 export type Inbox = {
-    rows: MailRow[], collect: SuuButton, money: SuuButton, count: Text, list: ScrollArea, empty: Text, open: OpenMail, none: Text,
+    rows: MailRow[],
+    collect: SuuButton,
+    money: SuuButton,
+    count: Text,
+    list: ScrollArea,
+    empty: Text,
+    open: OpenMail,
+    none: Text,
 }
 
 --------------------------------------------------------------------------------
@@ -287,8 +394,16 @@ export type Inbox = {
 -- The Send page: To, Subject, the message and its counter, the attachments,
 -- money or COD, the postage and Send.
 export type SendForm = {
-    to: TextField, subject: TextField, body: EditBox, well: Frame, counter: Text, slots: ItemSlot[],
-    mode: Segmented<string>, money: MoneyInput, postage: Text, go: SuuButton,
+    to: TextField,
+    subject: TextField,
+    body: EditBox,
+    well: Frame,
+    counter: Text,
+    slots: ItemSlot[],
+    mode: Segmented<string>,
+    money: MoneyInput,
+    postage: Text,
+    go: SuuButton,
 }
 
 -- A mail on its way, then in Sent.
@@ -297,7 +412,14 @@ export type SentMail = { to: string, subject: string, items: SentItem[], money: 
 
 -- What a character keeps: the mails it sent, and who it is (for the other
 -- characters' suggestions).
-export type MailChar = { sent?: SentMail[], name?: string, realm?: string, level?: number, class?: string, faction?: string }
+export type MailChar = {
+    sent?: SentMail[],
+    name?: string,
+    realm?: string,
+    level?: number,
+    class?: string,
+    faction?: string,
+}
 
 --------------------------------------------------------------------------------
 -- To's suggestions: your characters, the people you sent to lately, and the
@@ -317,17 +439,34 @@ end
 local function lastOnline(i: number): string
     local ry, rmo, rd, rh = try(GetGuildRosterLastOnline, i)
     local y, mo, d, h = asNumber(ry), asNumber(rmo), asNumber(rd), asNumber(rh)
-    if not (y or mo or d or h) then return "Offline" end
+    if not (y or mo or d or h) then
+        return "Offline"
+    end
     y, mo, d, h = y or 0, mo or 0, d or 0, h or 0
-    if y > 0 then return "last online " .. y .. " y" end
-    if mo > 0 then return "last online " .. mo .. " mo" end
-    if d > 0 then return "last online " .. d .. " d" end
-    if h > 0 then return "last online " .. h .. " h" end
+    if y > 0 then
+        return "last online " .. y .. " y"
+    end
+    if mo > 0 then
+        return "last online " .. mo .. " mo"
+    end
+    if d > 0 then
+        return "last online " .. d .. " d"
+    end
+    if h > 0 then
+        return "last online " .. h .. " h"
+    end
     return "last online < 1 h"
 end
 
 -- The groups for what's typed.
-export type SuggestRow = { name: string, color: string, note?: string, right?: string, diamond?: boolean, online?: boolean }
+export type SuggestRow = {
+    name: string,
+    color: string,
+    note?: string,
+    right?: string,
+    diamond?: boolean,
+    online?: boolean,
+}
 export type SuggestGroup = { title: string, rows: SuggestRow[] }
 
 -- A suggestion's row in the list.
@@ -352,10 +491,15 @@ class SuggestButton extends Button
         self.note = UI.Text(self, "caption", "ink-muted")
         self.right = UI.Text(self, "caption", "ink-muted")
         self.right:SetPoint("RIGHT", -S["space-4"], 0)
-        self:SetScript("OnEnter", function() list.pick = self.flatIndex; m:DrawSuggest(true) end)
+        self:SetScript("OnEnter", function()
+            list.pick = self.flatIndex
+            m:DrawSuggest(true)
+        end)
         self:SetScript("OnClick", function()
             local row = self.row
-            if row then m:PickSuggest(row) end
+            if row then
+                m:PickSuggest(row)
+            end
         end)
     end
 end
@@ -385,7 +529,9 @@ export class SuggestList extends Frame
         self.scroll = UI.ScrollArea(self, S["space-2"])
         self.scroll:SetPoint("TOPLEFT", 1, -1)
         self.scroll:SetPoint("BOTTOMRIGHT", -(S["space-2"] * 2 + 3), 1)
-        self.scroll:HookScript("OnSizeChanged", function(sc, w) sc.child:SetWidth(w) end)
+        self.scroll:HookScript("OnSizeChanged", function(sc, w)
+            sc.child:SetWidth(w)
+        end)
     end
 end
 
@@ -434,9 +580,13 @@ class MailModule extends Module<typeof(DEFAULTS)>
     -- Takes one thing a moment until nothing is left, the bags are full or the
     -- mailbox closes.
     function CollectAll(moneyOnly: boolean)
-        if self.collecting then return end
+        if self.collecting then
+            return
+        end
         self.collecting = every(0.25, function(ticker)
-            if C_Mail.IsCommandPending and flag(try(C_Mail.IsCommandPending)) then return end
+            if C_Mail.IsCommandPending and flag(try(C_Mail.IsCommandPending)) then
+                return
+            end
             local i, a = nextTake(moneyOnly)
             local full = a and (asNumber(try(C_Container.CalculateTotalNumberOfFreeBagSlots)) or 1) == 0
             if not self.open or not i or full then
@@ -445,7 +595,11 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 self:Refresh()
                 return
             end
-            if a then TakeInboxItem(i, a) else TakeInboxMoney(i) end
+            if a then
+                TakeInboxItem(i, a)
+            else
+                TakeInboxMoney(i)
+            end
         end)
         self:Refresh()
     end
@@ -454,7 +608,10 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local inbox = assert(self.inbox)
         local n, total = inboxCount()
         local c = inbox.list.child
-        inbox.count:SetValue(total > n and ("%d mails, %d more once these are gone"):format(n, total - n) or (n == 1 and "1 mail" or (n .. " mails")))
+        inbox.count:SetValue(
+            total > n and ("%d mails, %d more once these are gone"):format(n, total - n) or
+                (n == 1 and "1 mail" or (n .. " mails"))
+        )
         inbox.collect:SetEnabledState(not self.collecting and nextTake(false) ~= nil)
         inbox.collect:SetLabel(self.collecting and "Collecting…" or "Collect all")
         inbox.money:SetEnabledState(not self.collecting and nextTake(true) ~= nil)
@@ -479,9 +636,13 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 r.right:SetValue(h and (days and days <= 3 and tint("amber", daysLeft(days)) or daysLeft(days)) or "")
                 local what = ""
                 if h then
-                    if h.cod > 0 then what = tint("amber", "COD " .. coins(h.cod))
-                    elseif h.money > 0 then what = coins(h.money)
-                    elseif h.items > 0 then what = h.items == 1 and "1 item" or (h.items .. " items") end
+                    if h.cod > 0 then
+                        what = tint("amber", "COD " .. coins(h.cod))
+                    elseif h.money > 0 then
+                        what = coins(h.money)
+                    elseif h.items > 0 then
+                        what = h.items == 1 and "1 item" or (h.items .. " items")
+                    end
                 end
                 r.right2:SetValue(what)
                 r.selected = self.openIndex == i
@@ -489,7 +650,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 r.hl:SetAlpha(1)
                 r.rule:SetShown(i < n)
                 r:SetScript("OnClick", function()
-                    if IsModifiedClick("AUTOLOOTTOGGLE") and h and h.cod == 0 then try(AutoLootMailItem, i) end
+                    if IsModifiedClick("AUTOLOOTTOGGLE") and h and h.cod == 0 then
+                        try(AutoLootMailItem, i)
+                    end
                     self.openIndex = i
                     self:Refresh()
                 end)
@@ -501,7 +664,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
         c:SetHeight(math.max(1, n * ROW_H))
         inbox.empty:SetShown(n == 0)
         local open = self.openIndex
-        if open and open > n then self.openIndex = nil end
+        if open and open > n then
+            self.openIndex = nil
+        end
         self:DrawOpen()
     end
 
@@ -513,7 +678,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local h = i and header(i)
         p:SetShown(h ~= nil)
         inbox.none:SetShown(h == nil)
-        if not i or not h then return end
+        if not i or not h then
+            return
+        end
         local body, _, _, _, isInvoice = try(GetInboxText, i)
         p.subject:SetValue(h.subject ~= "" and h.subject or "(no subject)")
         p.from:SetValue("From " .. h.sender .. (h.returned and "  ·  returned" or ""))
@@ -535,7 +702,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 lines[#lines + 1] = "Seller: " .. (playerName or "?")
                 lines[#lines + 1] = "Price: " .. coins(bid or buyout or 0)
             end
-            if #lines > 0 then text = table.concat(lines, "\n") .. (text ~= "" and ("\n\n" .. text) or "") end
+            if #lines > 0 then
+                text = table.concat(lines, "\n") .. (text ~= "" and ("\n\n" .. text) or "")
+            end
         end
         p.body:SetValue(text)
         -- attachments, then money and COD
@@ -549,7 +718,11 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 b:ClearAllPoints()
                 local col, row = (used - 1) % 8, math.floor((used - 1) / 8)
                 b:SetPoint("TOPLEFT", p.attach, "TOPLEFT", col * (36 + S["space-2"]), -row * (36 + S["space-2"]))
-                b.skin:SetItem({ icon = tex, count = asNumber(count), quality = QUALITY[asNumber(quality) or 1] or "common" })
+                b.skin:SetItem({
+                    icon = tex,
+                    count = asNumber(count),
+                    quality = QUALITY[asNumber(quality) or 1] or "common",
+                })
                 b.attachment = a
                 b:Show()
             else
@@ -565,7 +738,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local canDelete = flag(try(InboxItemCanDelete, i))
         -- Delete only once nothing is attached; Return a player's mail
         p.delete:SetEnabledState(canDelete and h.items == 0 and h.money == 0)
-        p.delete.tooltip = (h.items > 0 or h.money > 0) and { title = "Delete", description = "Take what's attached first." } or nil
+        p.delete.tooltip = (h.items > 0 or h.money > 0) and
+            { title = "Delete", description = "Take what's attached first." } or
+            nil
         p.ret:SetShown(not canDelete and not h.returned)
     end
 
@@ -573,24 +748,51 @@ class MailModule extends Module<typeof(DEFAULTS)>
     function Take(a: number)
         local i = self.openIndex
         local h = i and header(i)
-        if not i or not h then return end
+        if not i or not h then
+            return
+        end
         if h.cod > 0 then
             if h.cod > (GetMoney() or 0) then
-                UI.Confirm({ title = "Not enough money", text = "Cash on delivery: " .. coins(h.cod) .. ". You have " .. coins(GetMoney() or 0) .. ".", confirm = "OK" })
+                UI.Confirm({
+                    title = "Not enough money",
+                    text = "Cash on delivery: " .. coins(h.cod) .. ". You have " .. coins(GetMoney() or 0) .. ".",
+                    confirm = "OK",
+                })
                 return
             end
-            UI.Confirm({ title = "Pay cash on delivery?", text = ("Pay %s to %s for this?"):format(coins(h.cod), h.sender),
-                confirm = "Pay", onConfirm = function() TakeInboxItem(i, a) end })
+            UI.Confirm({
+                title = "Pay cash on delivery?",
+                text = ("Pay %s to %s for this?"):format(coins(h.cod), h.sender),
+                confirm = "Pay",
+                onConfirm = function()
+                    TakeInboxItem(i, a)
+                end,
+            })
             return
         end
         TakeInboxItem(i, a)
     end
 
     function BuildInbox(page: Frame)
-        local collect = UI.Button(page, { text = "Collect all", variant = "primary", width = 120, onClick = function() self:CollectAll(false) end,
-            tooltip = { title = "Collect all", description = "Every item and the money of every mail; mails with cash on delivery, and a game master's, stay for you to open." } })
+        local collect = UI.Button(page, {
+            text = "Collect all",
+            variant = "primary",
+            width = 120,
+            onClick = function()
+                self:CollectAll(false)
+            end,
+            tooltip = {
+                title = "Collect all",
+                description = "Every item and the money of every mail; mails with cash on delivery, and a game master's, stay for you to open.",
+            },
+        })
         collect:SetPoint("TOPLEFT")
-        local money = UI.Button(page, { text = "Collect money", onClick = function() self:CollectAll(true) end })
+        local money = UI.Button(page, {
+            text = "Collect money",
+            onClick = function()
+                self:CollectAll(true)
+            end,
+        })
         money:SetPoint("LEFT", collect, "RIGHT", S["space-2"], 0)
         local count = UI.Text(page, "caption", "ink-muted")
         count:SetPoint("LEFT", money, "RIGHT", S["space-4"], 0)
@@ -610,7 +812,16 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local none = UI.Text(page, "body", "ink-muted")
         none:SetPoint("TOPLEFT", p, "TOPLEFT")
         none:SetValue("Choose a mail to read it.")
-        self.inbox = { rows = {}, collect = collect, money = money, count = count, list = list, empty = empty, open = p, none = none }
+        self.inbox = {
+            rows = {},
+            collect = collect,
+            money = money,
+            count = count,
+            list = list,
+            empty = empty,
+            open = p,
+            none = none,
+        }
     end
 
     function BuildSend(page: Frame)
@@ -622,10 +833,20 @@ class MailModule extends Module<typeof(DEFAULTS)>
         end
         label("To", -7)
         -- as wide as Subject; its suggestions under it take its width
-        local to = UI.TextField(page, { width = WIDTH - 2 * S["space-5"] - labelW, onTextChanged = function() self:DrawSendState() end })
+        local to = UI.TextField(page, {
+            width = WIDTH - 2 * S["space-5"] - labelW,
+            onTextChanged = function()
+                self:DrawSendState()
+            end,
+        })
         to:SetPoint("TOPLEFT", labelW, 0)
         label("Subject", -(30 + S["space-4"] + 7))
-        local subject = UI.TextField(page, { width = WIDTH - 2 * S["space-5"] - labelW, onTextChanged = function() self:DrawSendState() end })
+        local subject = UI.TextField(page, {
+            width = WIDTH - 2 * S["space-5"] - labelW,
+            onTextChanged = function()
+                self:DrawSendState()
+            end,
+        })
         subject:SetPoint("TOPLEFT", labelW, -(30 + S["space-4"]))
         subject.edit:SetMaxLetters(64)
         -- the message: a multi-line field in a sunk well, 500 characters
@@ -648,14 +869,21 @@ class MailModule extends Module<typeof(DEFAULTS)>
         e:SetFontObject(subject.edit:GetFontObject())
         e:SetMaxLetters(MAX_MAIL_TEXT_LENGTH or 500)
         e:SetPoint("TOPLEFT")
-        e:SetScript("OnEscapePressed", function(box) box:ClearFocus() end)
+        e:SetScript("OnEscapePressed", function(box)
+            box:ClearFocus()
+        end)
         e:SetScript("OnTextChanged", function(box)
             scroll.child:SetHeight(math.max(scroll:GetHeight(), box:GetHeight()))
             counter:SetValue(("%d / %d"):format(#(box:GetText() or ""), MAX_MAIL_TEXT_LENGTH or 500))
         end)
-        scroll:HookScript("OnSizeChanged", function(s, w) s.child:SetWidth(w); e:SetWidth(w) end)
+        scroll:HookScript("OnSizeChanged", function(s, w)
+            s.child:SetWidth(w)
+            e:SetWidth(w)
+        end)
         well:EnableMouse(true)
-        well:SetScript("OnMouseDown", function() e:SetFocus() end)
+        well:SetScript("OnMouseDown", function()
+            e:SetFocus()
+        end)
         -- the attachments: drop or click an item from your bags, right click takes it back
         -- (no hint line: everyone knows how to attach an item)
         local attachY = 2 * (30 + S["space-4"]) + 150 + S["space-5"] + 4
@@ -665,46 +893,85 @@ class MailModule extends Module<typeof(DEFAULTS)>
             b:SetPoint("TOPLEFT", labelW + (a - 1) * (36 + S["space-2"]), -attachY - 4)
             b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
             b:RegisterForDrag("LeftButton")
-            b:SetScript("OnClick", function(_, button) try(ClickSendMailItemButton, a, button == "RightButton") end)
-            b:SetScript("OnReceiveDrag", function() try(ClickSendMailItemButton, a) end)
+            b:SetScript("OnClick", function(_, button)
+                try(ClickSendMailItemButton, a, button == "RightButton")
+            end)
+            b:SetScript("OnReceiveDrag", function()
+                try(ClickSendMailItemButton, a)
+            end)
             b:SetScript("OnEnter", function(btn)
-                if not flag(try(HasSendMailItem, a)) then return end
+                if not flag(try(HasSendMailItem, a)) then
+                    return
+                end
                 GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
                 GameTooltip:SetSendMailItem(a)
                 GameTooltip:Show()
             end)
-            b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            b:SetScript("OnLeave", function()
+                GameTooltip:Hide()
+            end)
             slots[a] = b
         end
         -- money: send it, or ask it on delivery
         local moneyY = attachY + 36 + S["space-5"] + 4
-        local mode = UI.Segmented(page, { options = { { value = "send", label = "Send money" }, { value = "cod", label = "Cash on delivery" } },
-            value = "send", onChange = function() self:DrawSendState() end })
+        local mode = UI.Segmented(page, {
+            options = { { value = "send", label = "Send money" }, { value = "cod", label = "Cash on delivery" } },
+            value = "send",
+            onChange = function()
+                self:DrawSendState()
+            end,
+        })
         mode:SetPoint("TOPLEFT", labelW, -moneyY)
-        local money = UI.MoneyInput(page, { onChange = function() self:DrawSendState() end })
+        local money = UI.MoneyInput(page, {
+            onChange = function()
+                self:DrawSendState()
+            end,
+        })
         money:SetPoint("LEFT", mode, "RIGHT", S["space-5"], 0)
         -- the foot: postage and Send
         local postage = UI.Text(page, "label", "ink-muted")
         postage:SetPoint("BOTTOMLEFT", 0, 7)
-        local go = UI.Button(page, { text = "Send", variant = "primary", width = 110, onClick = function() self:Send() end })
+        local go = UI.Button(page, {
+            text = "Send",
+            variant = "primary",
+            width = 110,
+            onClick = function()
+                self:Send()
+            end,
+        })
         go:SetPoint("BOTTOMRIGHT")
-        self.send = { to = to, subject = subject, body = e, well = well, counter = counter, slots = slots, mode = mode,
-                      money = money, postage = postage, go = go }
+        self.send = {
+            to = to,
+            subject = subject,
+            body = e,
+            well = well,
+            counter = counter,
+            slots = slots,
+            mode = mode,
+            money = money,
+            postage = postage,
+            go = go,
+        }
         self:BuildSuggest(to)
     end
 
     -- The attachments, the postage and whether Send can go.
     function DrawSendState()
         local send = self.send
-        if not send then return end
+        if not send then
+            return
+        end
         local first: string? = nil
         for a = 1, ATTACH_OUT do
             local b = send.slots[a]
             if flag(try(HasSendMailItem, a)) then
                 local name, _, texture, count, quality = try(GetSendMailItem, a)
                 first = first or asString(name)
-                b.skin:SetItem({ icon = asNumber(texture) or asString(texture), count = asNumber(count),
-                                 quality = QUALITY[asNumber(quality) or 1] or "common" })
+                b.skin:SetItem({
+                    icon = asNumber(texture) or asString(texture),
+                    count = asNumber(count),
+                    quality = QUALITY[asNumber(quality) or 1] or "common",
+                })
             else
                 b.skin:SetItem(nil)
             end
@@ -716,16 +983,28 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local postage = asNumber(try(GetSendMailPrice)) or 0
         local copper = send.money:GetCopper()
         local total = postage + ((send.mode.value or "send") == "send" and copper or 0)
-        send.postage:SetValue("Postage " .. coins(postage) .. (total > postage and ("  ·  in all " .. coins(total)) or ""))
+        send.postage:SetValue(
+            "Postage " .. coins(postage) .. (total > postage and ("  ·  in all " .. coins(total)) or "")
+        )
         local to = strtrim(send.to.edit:GetText() or "")
         local subject = strtrim(send.subject.edit:GetText() or "")
         local cod = (send.mode.value or "send") == "cod"
         local ok, why = true, nil
-        if to == "" then ok, why = false, "Who is it for?" end
-        if ok and subject == "" then ok, why = false, "Give it a subject." end
-        if ok and cod and (copper == 0 or not first) then ok, why = false, "Cash on delivery needs an amount and an attachment." end
-        if ok and total > (GetMoney() or 0) then ok, why = false, "You don't have enough money." end
-        if self.sending then why = "Waiting for the game: the mail is on its way, or its confirmation is open." end
+        if to == "" then
+            ok, why = false, "Who is it for?"
+        end
+        if ok and subject == "" then
+            ok, why = false, "Give it a subject."
+        end
+        if ok and cod and (copper == 0 or not first) then
+            ok, why = false, "Cash on delivery needs an amount and an attachment."
+        end
+        if ok and total > (GetMoney() or 0) then
+            ok, why = false, "You don't have enough money."
+        end
+        if self.sending then
+            why = "Waiting for the game: the mail is on its way, or its confirmation is open."
+        end
         send.go:SetLabel(self.sending and "Sending…" or "Send")
         send.go:SetEnabledState(ok and not self.sending)
         send.go.tooltip = why and { title = "Send", description = why } or nil
@@ -741,24 +1020,42 @@ class MailModule extends Module<typeof(DEFAULTS)>
         try(SetSendMailCOD, 0)
         try(SetSendMailMoney, 0)
         if copper > 0 then
-            if cod then try(SetSendMailCOD, copper) else try(SetSendMailMoney, copper) end
+            if cod then
+                try(SetSendMailCOD, copper)
+            else
+                try(SetSendMailMoney, copper)
+            end
         end
         -- what goes out, for the Sent list once the game says it went
         local items: SentItem[] = {}
         for a = 1, ATTACH_OUT do
             if flag(try(HasSendMailItem, a)) then
                 local name, _, texture, count = try(GetSendMailItem, a)
-                items[#items + 1] = { name = asString(name), icon = asNumber(texture) or asString(texture), count = asNumber(count) }
+                items[#items + 1] = {
+                    name = asString(name),
+                    icon = asNumber(texture) or asString(texture),
+                    count = asNumber(count),
+                }
             end
         end
-        self.pending = { to = to, subject = subject, items = items, money = cod and 0 or copper, cod = cod and copper or 0 }
+        self.pending = {
+            to = to,
+            subject = subject,
+            items = items,
+            money = cod and 0 or copper,
+            cod = cod and copper or 0,
+        }
         self.sending = true
         self:DrawSendState()
         SendMail(to, subject, body)
         -- never stuck: if neither success nor failure comes, Send comes back
         local mark = {}
         self.sendMark = mark
-        after(30, function() if self.sending and self.sendMark == mark then self:SendDone(false) end end)
+        after(30, function()
+            if self.sending and self.sendMark == mark then
+                self:SendDone(false)
+            end
+        end)
     end
 
     function SendDone(ok: boolean)
@@ -770,7 +1067,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
             data.sent = sent
             p.at = time()
             table.insert(sent, 1, p)
-            while #sent > SENT_MAX do table.remove(sent) end
+            while #sent > SENT_MAX do
+                table.remove(sent)
+            end
             local send = assert(self.send)
             send.subject:SetValue("")
             send.body:SetText("")
@@ -785,10 +1084,16 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local typed = strtrim(text or ""):lower()
         local seen: { [string]: boolean }, groups: SuggestGroup[] = {}, {}
         local function matches(name: string): number?
-            if typed == "" then return 1 end
+            if typed == "" then
+                return 1
+            end
             local low = name:lower()
-            if low:sub(1, #typed) == typed then return 1 end
-            if low:find(typed, 1, true) then return 2 end
+            if low:sub(1, #typed) == typed then
+                return 1
+            end
+            if low:find(typed, 1, true) then
+                return 2
+            end
             return nil
         end
         local function add(title: string, rows: SuggestRow[])
@@ -800,7 +1105,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
                     out[#out + 1] = r
                 end
             end
-            if #out > 0 then groups[#groups + 1] = { title = title, rows = out } end
+            if #out > 0 then
+                groups[#groups + 1] = { title = title, rows = out }
+            end
         end
         -- your characters on this realm and side
         local me = self:MailData()
@@ -809,10 +1116,16 @@ class MailModule extends Module<typeof(DEFAULTS)>
             local d = raw :: unknown :: MailChar
             local name = d.name
             if key ~= self:CharKey() and name and d.realm == me.realm and d.faction == me.faction and matches(name) then
-                mine[#mine + 1] = { name = name, color = classToken(d.class), right = d.level and ("level " .. d.level) or nil }
+                mine[#mine + 1] = {
+                    name = name,
+                    color = classToken(d.class),
+                    right = d.level and ("level " .. d.level) or nil,
+                }
             end
         end
-        table.sort(mine, function(a: SuggestRow, b: SuggestRow): boolean return a.name < b.name end)
+        table.sort(mine, function(a: SuggestRow, b: SuggestRow): boolean
+            return a.name < b.name
+        end)
         add("Your characters", mine)
         -- the people you sent to lately
         local recent: SuggestRow[], had: { [string]: boolean } = {}, {}
@@ -835,20 +1148,41 @@ class MailModule extends Module<typeof(DEFAULTS)>
                     local m = matches(name)
                     if m and Ambiguate(full, "short") ~= myName then
                         local online = flag(onlineR)
-                        local row: SuggestRow = { name = name, color = classToken(file), note = asString(rankR),
-                                      right = online and tint("fel", "● ") .. "Online" or lastOnline(i), diamond = true,
-                                      online = online }
+                        local row: SuggestRow = {
+                            name = name,
+                            color = classToken(file),
+                            note = asString(rankR),
+                            right = online and tint("fel", "● ") .. "Online" or lastOnline(i),
+                            diamond = true,
+                            online = online,
+                        }
                         if typed == "" then
-                            if online then first[#first + 1] = row else rest[#rest + 1] = row end
-                        elseif m == 1 then first[#first + 1] = row else rest[#rest + 1] = row end
+                            if online then
+                                first[#first + 1] = row
+                            else
+                                rest[#rest + 1] = row
+                            end
+                        elseif m == 1 then
+                            first[#first + 1] = row
+                        else
+                            rest[#rest + 1] = row
+                        end
                     end
                 end
             end
-            table.sort(first, function(a: SuggestRow, b: SuggestRow): boolean return a.name < b.name end)
-            table.sort(rest, function(a: SuggestRow, b: SuggestRow): boolean return a.name < b.name end)
+            table.sort(first, function(a: SuggestRow, b: SuggestRow): boolean
+                return a.name < b.name
+            end)
+            table.sort(rest, function(a: SuggestRow, b: SuggestRow): boolean
+                return a.name < b.name
+            end)
             local guild: SuggestRow[] = {}
             for _, list in ipairs({ first, rest }) do
-                for _, r in ipairs(list) do if #guild < GUILD_MAX then guild[#guild + 1] = r end end
+                for _, r in ipairs(list) do
+                    if #guild < GUILD_MAX then
+                        guild[#guild + 1] = r
+                    end
+                end
             end
             add("Guild", guild)
         end
@@ -863,43 +1197,70 @@ class MailModule extends Module<typeof(DEFAULTS)>
         -- (guarded: an error here is recorded under the module's name)
         -- any change of the text while you're in the field (not only the ones
         -- the game flags as typed)
-        edit:HookScript("OnTextChanged", self:Guard(function(box: EditBox)
-            local text = box:GetText() or ""
-            if text == d.lastText or not box:HasFocus() then return end
-            d.lastText = text
-            d.pick = 1
-            self:DrawSuggest()
-        end))
-        edit:HookScript("OnEditFocusGained", self:Guard(function()
-            -- the roster comes a moment after it's asked for; an open list redraws then
-            if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then try(C_GuildInfo.GuildRoster) end
-            d.pick = 1
-            self:DrawSuggest()
-        end))
+        edit:HookScript(
+            "OnTextChanged",
+            self:Guard(function(box: EditBox)
+                local text = box:GetText() or ""
+                if text == d.lastText or not box:HasFocus() then
+                    return
+                end
+                d.lastText = text
+                d.pick = 1
+                self:DrawSuggest()
+            end)
+        )
+        edit:HookScript(
+            "OnEditFocusGained",
+            self:Guard(function()
+                -- the roster comes a moment after it's asked for; an open list redraws then
+                if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then
+                    try(C_GuildInfo.GuildRoster)
+                end
+                d.pick = 1
+                self:DrawSuggest()
+            end)
+        )
         -- leaving the field closes the list, unless the mouse is on it (its bar)
         edit:HookScript("OnEditFocusLost", function()
-            after(0.15, function() if not d:IsMouseOver() then d:Hide() end end)
+            after(0.15, function()
+                if not d:IsMouseOver() then
+                    d:Hide()
+                end
+            end)
         end)
-        d:SetScript("OnLeave", function() if not edit:HasFocus() and not d:IsMouseOver() then d:Hide() end end)
+        d:SetScript("OnLeave", function()
+            if not edit:HasFocus() and not d:IsMouseOver() then
+                d:Hide()
+            end
+        end)
         edit:SetScript("OnArrowPressed", function(_, key)
-            if not d:IsShown() or #d.flat == 0 then return end
+            if not d:IsShown() or #d.flat == 0 then
+                return
+            end
             d.pick = (d.pick + (key == "DOWN" and 1 or (key == "UP" and -1 or 0)) - 1) % #d.flat + 1
             self:DrawSuggest(true)
             -- keep the highlighted row in view
             local r = d.rows[d.pick]
             if r then
                 local top, viewH = d.scroll:GetVerticalScroll(), d.scroll:GetHeight()
-                if r.y < top then d.scroll:SetVerticalScroll(r.y)
-                elseif r.y + SUGGEST_ROW > top + viewH then d.scroll:SetVerticalScroll(r.y + SUGGEST_ROW - viewH) end
+                if r.y < top then
+                    d.scroll:SetVerticalScroll(r.y)
+                elseif r.y + SUGGEST_ROW > top + viewH then
+                    d.scroll:SetVerticalScroll(r.y + SUGGEST_ROW - viewH)
+                end
             end
         end)
         edit:HookScript("OnEnterPressed", function()
             local row = d.flat[d.pick]
-            if d:IsShown() and row then self:PickSuggest(row) end
+            if d:IsShown() and row then
+                self:PickSuggest(row)
+            end
         end)
         edit:HookScript("OnTabPressed", function()
             local row = d.flat[d.pick]
-            if d:IsShown() and row then self:PickSuggest(row) end
+            if d:IsShown() and row then
+                self:PickSuggest(row)
+            end
             assert(self.send).subject.edit:SetFocus()
         end)
     end
@@ -915,10 +1276,17 @@ class MailModule extends Module<typeof(DEFAULTS)>
     -- The dropdown for what To says now (keep: only the highlight moved).
     function DrawSuggest(keep: boolean?)
         local d, send = self.suggest, self.send
-        if not d or not send then return end
+        if not d or not send then
+            return
+        end
         local edit = send.to.edit
-        if not edit:HasFocus() then d:Hide() return end
-        if not keep then d.groups = self:Suggestions(edit:GetText()) end
+        if not edit:HasFocus() then
+            d:Hide()
+            return
+        end
+        if not keep then
+            d.groups = self:Suggestions(edit:GetText())
+        end
         d.flat = {}
         local y, nh, nr = S["space-2"], 0, 0
         for _, g in ipairs(d.groups) do
@@ -947,7 +1315,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 r:SetPoint("TOPLEFT", 0, -y)
                 r:SetPoint("RIGHT", d.scroll.child, "RIGHT")
                 r.dot:SetShown(row.diamond and true or false)
-                if row.diamond then UI.Paint(r.dot, row.color or "ink") end
+                if row.diamond then
+                    UI.Paint(r.dot, row.color or "ink")
+                end
                 r.name:ClearAllPoints()
                 r.name:SetPoint("LEFT", row.diamond and (S["space-4"] + 10) or S["space-4"], 0)
                 r.name:SetValue(row.name)
@@ -961,11 +1331,17 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 y = y + SUGGEST_ROW
             end
         end
-        for i = nh + 1, #d.heads do d.heads[i]:Hide() end
-        for i = nr + 1, #d.rows do d.rows[i]:Hide() end
+        for i = nh + 1, #d.heads do
+            d.heads[i]:Hide()
+        end
+        for i = nr + 1, #d.rows do
+            d.rows[i]:Hide()
+        end
         d.scroll.child:SetHeight(y + S["space-2"])
         d:SetHeight(math.min(SUGGEST_MAX_H, y + S["space-2"]) + 2)
-        if not keep then d.scroll:SetVerticalScroll(0) end
+        if not keep then
+            d.scroll:SetVerticalScroll(0)
+        end
         d:SetShown(nr > 0)
     end
 
@@ -985,7 +1361,9 @@ class MailModule extends Module<typeof(DEFAULTS)>
         local list = UI.ScrollArea(page, S["space-3"])
         list:SetPoint("TOPLEFT")
         list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
-        list:HookScript("OnSizeChanged", function(s, w) s.child:SetWidth(w) end)
+        list:HookScript("OnSizeChanged", function(s, w)
+            s.child:SetWidth(w)
+        end)
         local empty = UI.Text(list.child, "body", "ink-muted")
         empty:SetPoint("TOPLEFT", 0, -S["space-4"])
         empty:SetValue("Mails you send show here: the last " .. SENT_MAX .. ", for this character.")
@@ -1010,13 +1388,23 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
                 r:SetPoint("RIGHT", c, "RIGHT")
                 local first = e.items and e.items[1]
-                r.slot.skin:SetItem({ icon = first and first.icon or ENVELOPE, count = first and first.count, quality = "common" })
+                r.slot.skin:SetItem({
+                    icon = first and first.icon or ENVELOPE,
+                    count = first and first.count,
+                    quality = "common",
+                })
                 r.sender:SetValue("To " .. (e.to or "?"))
                 r.sender:SetColor("ink")
                 local what: string[] = {}
-                if e.items and #e.items > 1 then what[#what + 1] = #e.items .. " items" end
-                if (e.money or 0) > 0 then what[#what + 1] = coins(e.money) end
-                if (e.cod or 0) > 0 then what[#what + 1] = tint("amber", "COD " .. coins(e.cod)) end
+                if e.items and #e.items > 1 then
+                    what[#what + 1] = #e.items .. " items"
+                end
+                if (e.money or 0) > 0 then
+                    what[#what + 1] = coins(e.money)
+                end
+                if (e.cod or 0) > 0 then
+                    what[#what + 1] = tint("amber", "COD " .. coins(e.cod))
+                end
                 r.subject:SetValue(e.subject or "")
                 r.right:SetValue(ago(e.at))
                 r.right2:SetValue(table.concat(what, "  "))
@@ -1032,21 +1420,36 @@ class MailModule extends Module<typeof(DEFAULTS)>
     end
 
     function Build()
-        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIMailWindow", title = "Mail", width = WIDTH, height = HEIGHT,
-            onClose = function(win) win:Hide() end,
-            tabs = { { key = "inbox", label = "Inbox" }, { key = "send", label = "Send" }, { key = "sent", label = "Sent" } },
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUIMailWindow",
+            title = "Mail",
+            width = WIDTH,
+            height = HEIGHT,
+            onClose = function(win)
+                win:Hide()
+            end,
+            tabs = {
+                { key = "inbox", label = "Inbox" },
+                { key = "send", label = "Send" },
+                { key = "sent", label = "Sent" },
+            },
             onTab = function(key: string)
                 self.tab = key
-                for k, page in pairs(self.pages) do page:SetShown(k == key) end
+                for k, page in pairs(self.pages) do
+                    page:SetShown(k == key)
+                end
                 -- the game attaches a right-clicked bag item while its send page shows
                 try(SetSendMailShowing, key == "send")
                 self:Refresh()
-            end })
+            end,
+        })
         w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
         w:Hide()
         w:HookScript("OnHide", function()
             try(SetSendMailShowing, false)
-            if self.open then CloseMail() end
+            if self.open then
+                CloseMail()
+            end
         end)
         w.scroll:Hide()
         self.window = w
@@ -1063,15 +1466,23 @@ class MailModule extends Module<typeof(DEFAULTS)>
 
     function Refresh()
         local window = self.window
-        if not (window and window:IsShown()) then return end
+        if not (window and window:IsShown()) then
+            return
+        end
         local tab = self.tab or "inbox"
-        if tab == "inbox" then self:DrawInbox()
-        elseif tab == "send" then self:DrawSendState()
-        else self:DrawSent() end
+        if tab == "inbox" then
+            self:DrawInbox()
+        elseif tab == "send" then
+            self:DrawSendState()
+        else
+            self:DrawSent()
+        end
     end
 
     function QueueRefresh()
-        if self.refreshPending then return end
+        if self.refreshPending then
+            return
+        end
         self.refreshPending = true
         after(0.05, function()
             self.refreshPending = nil
@@ -1082,43 +1493,81 @@ class MailModule extends Module<typeof(DEFAULTS)>
     -- The game's mail frames out of sight while the module is on: see-through
     -- and off screen, still shown (they hold the mailbox conversation).
     function Away()
-        local function enabled(): boolean return self:IsEnabled() end
+        local function enabled(): boolean
+            return self:IsEnabled()
+        end
         local mail = frames.find("MailFrame")
-        if mail and not self.away then self.away = frames.keepAway(mail, { fade = true, when = enabled }) end
+        if mail and not self.away then
+            self.away = frames.keepAway(mail, { fade = true, when = enabled })
+        end
         local open = frames.find("OpenMailFrame")
-        if open and not self.awayOpen then self.awayOpen = frames.keepAway(open, { fade = true, when = enabled }) end
+        if open and not self.awayOpen then
+            self.awayOpen = frames.keepAway(open, { fade = true, when = enabled })
+        end
     end
 
     override function OnEnable()
-        if not self.window then self:Build() end
+        if not self.window then
+            self:Build()
+        end
         self:RememberMe()
         -- what To would suggest for a text, and what the guild roster gives
         -- (also saved to SuuUIProbe.mailSuggest on /reload)
-        self:RegisterCommand("mailsuggest", "test: what Send's To suggests for a text, and what the guild roster gives: /suu mailsuggest <text>", function(arg: string?)
+        self:RegisterCommand("mailsuggest", "test: what Send's To suggests for a text, and what the guild roster gives: /suu mailsuggest <text>", function(
+            arg: string?
+        )
             local lines: string[] = {}
-            local function out(text: string) lines[#lines + 1] = text; self:Print(text) end
+            local function out(text: string)
+                lines[#lines + 1] = text
+                self:Print(text)
+            end
             local n, online = try(GetNumGuildMembers)
-            out(("typed %q; in a guild %s, roster %s members (%s online)"):format(arg or "", tostring(IsInGuild()), tostring(n), tostring(online)))
+            out(
+                ("typed %q; in a guild %s, roster %s members (%s online)"):format(
+                    arg or "",
+                    tostring(IsInGuild()),
+                    tostring(n),
+                    tostring(online)
+                )
+            )
             for i = 1, math.min(3, asNumber(n) or 0) do
                 local full, rank, _, _, _, _, _, _, isOnline, _, file = try(GetGuildRosterInfo, i)
                 local name = asString(full)
-                out(("  %d: %s, %s, %s, online %s, as To %s"):format(i, tostring(full), tostring(rank), tostring(file), tostring(isOnline),
-                    tostring(name and Ambiguate(name, "mail"))))
+                out(
+                    ("  %d: %s, %s, %s, online %s, as To %s"):format(
+                        i,
+                        tostring(full),
+                        tostring(rank),
+                        tostring(file),
+                        tostring(isOnline),
+                        tostring(name and Ambiguate(name, "mail"))
+                    )
+                )
             end
             local ok, got = pcall(self.Suggestions, self, arg)
             local groups: SuggestGroup[] = ok and got or {}
-            if not ok then out("suggestions failed: " .. tostring(got)) end
-            if #groups == 0 then out("no suggestions") end
+            if not ok then
+                out("suggestions failed: " .. tostring(got))
+            end
+            if #groups == 0 then
+                out("no suggestions")
+            end
             for _, g in ipairs(groups) do
                 local names: string[] = {}
-                for _, r in ipairs(g.rows) do names[#names + 1] = r.name end
+                for _, r in ipairs(g.rows) do
+                    names[#names + 1] = r.name
+                end
                 out(g.title .. ": " .. table.concat(names, ", "))
             end
             local probe = (SuuUIProbe or {}) :: { [string]: unknown }
             SuuUIProbe = probe
             probe.mailSuggest = { at = date("%H:%M:%S"), lines = lines }
         end)
-        self:OnGameEvent("PLAYER_LEVEL_UP", function() after(1, function() self:RememberMe() end) end)
+        self:OnGameEvent("PLAYER_LEVEL_UP", function()
+            after(1, function()
+                self:RememberMe()
+            end)
+        end)
         self:OnGameEvent("MAIL_SHOW", function()
             self.open = true
             self.openIndex = nil
@@ -1128,36 +1577,65 @@ class MailModule extends Module<typeof(DEFAULTS)>
             window:SetTab("inbox")
             try(CheckInbox)
             -- the guild roster for To's suggestions
-            if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then try(C_GuildInfo.GuildRoster) end
+            if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then
+                try(C_GuildInfo.GuildRoster)
+            end
         end)
         self:OnGameEvent("MAIL_CLOSED", function()
             self.open = false
             local collecting = self.collecting
-            if collecting then collecting:Cancel(); self.collecting = nil end
+            if collecting then
+                collecting:Cancel()
+                self.collecting = nil
+            end
             assert(self.window):Hide()
         end)
-        for _, e in ipairs({ "MAIL_INBOX_UPDATE", "MAIL_SEND_INFO_UPDATE", "CLOSE_INBOX_ITEM", "PLAYER_MONEY", "BAG_UPDATE_DELAYED" }) do
-            self:OnGameEvent(e, function() self:QueueRefresh() end)
+        for _, e in ipairs({
+            "MAIL_INBOX_UPDATE",
+            "MAIL_SEND_INFO_UPDATE",
+            "CLOSE_INBOX_ITEM",
+            "PLAYER_MONEY",
+            "BAG_UPDATE_DELAYED",
+        }) do
+            self:OnGameEvent(e, function()
+                self:QueueRefresh()
+            end)
         end
         self:OnGameEvent("GUILD_ROSTER_UPDATE", function()
             local d, send = self.suggest, self.send
-            if (d and d:IsShown()) or (send and send.to.edit:HasFocus()) then self:DrawSuggest() end
+            if (d and d:IsShown()) or (send and send.to.edit:HasFocus()) then
+                self:DrawSuggest()
+            end
         end)
         -- amounts, COD and "Online" carry colour codes: drawn again
         self:On("SUUUI_THEME_CHANGED", function()
             self:Refresh()
             local d = self.suggest
-            if d and d:IsShown() then self:DrawSuggest() end
+            if d and d:IsShown() then
+                self:DrawSuggest()
+            end
         end)
-        self:OnGameEvent("MAIL_SEND_SUCCESS", function() self:SendDone(true) end)
-        self:OnGameEvent("MAIL_FAILED", function() if self.sending then self:SendDone(false) end end)
+        self:OnGameEvent("MAIL_SEND_SUCCESS", function()
+            self:SendDone(true)
+        end)
+        self:OnGameEvent("MAIL_FAILED", function()
+            if self.sending then
+                self:SendDone(false)
+            end
+        end)
         -- money's confirmation (the game's secure dialog) cancelled
-        self:OnGameEvent("SECURE_TRANSFER_CANCEL", function() if self.sending then self:SendDone(false) end end)
+        self:OnGameEvent("SECURE_TRANSFER_CANCEL", function()
+            if self.sending then
+                self:SendDone(false)
+            end
+        end)
     end
 
     override function OnDisable()
         local window = self.window
-        if window then window:Hide() end
+        if window then
+            window:Hide()
+        end
     end
 end
 

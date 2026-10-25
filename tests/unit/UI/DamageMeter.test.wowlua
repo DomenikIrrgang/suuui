@@ -22,7 +22,9 @@ local asked: { string } = {}
 
 local function typeEnum(value: string): unknown
     for _, t in ipairs(DAMAGE_METER_TYPES) do
-        if t.value == value then return tbl.field(Enum.DamageMeterType, t.enum or "") end
+        if t.value == value then
+            return tbl.field(Enum.DamageMeterType, t.enum or "")
+        end
     end
     return nil
 end
@@ -44,19 +46,27 @@ local API: MeterApi = {
         asked[#asked + 1] = "srcid:" .. id
         return spells[guid] :: DamageMeterCombatSessionSourceSecret
     end,
-    GetSessionDurationSeconds = function(_) return duration end,
-    GetAvailableCombatSessions = function() return past :: DamageMeterAvailableCombatSession[] end,
+    GetSessionDurationSeconds = function(_)
+        return duration
+    end,
+    GetAvailableCombatSessions = function()
+        return past :: DamageMeterAvailableCombatSession[]
+    end,
 }
 
 local recapEvents: unknown = {}
 local recapMax: unknown = 1000
 local RECAP: RecapApi = {
     GetRecapEvents = function(_)
-        if recapEvents == "error" then error("no recap") end
+        if recapEvents == "error" then
+            error("no recap")
+        end
         return recapEvents
     end,
     GetRecapMaxHealth = function(_)
-        if recapMax == "error" then error("no max") end
+        if recapMax == "error" then
+            error("no max")
+        end
         return recapMax :: number
     end,
 }
@@ -68,15 +78,21 @@ local tips: unknown[] = {}
 local function lastTip(): tooltip.TooltipData
     for i = #tips, 1, -1 do
         local t = tips[i]
-        if type(t) == "table" then return t :: tooltip.TooltipData end
+        if type(t) == "table" then
+            return t :: tooltip.TooltipData
+        end
     end
     return {}
 end
 @beforeAll
 local function recordTips()
     mock.module(tooltip, {
-        showTooltip = function(_: Region, data: tooltip.TooltipSource) tips[#tips + 1] = data end,
-        hideTooltip = function() tips[#tips + 1] = "hide" end,
+        showTooltip = function(_: Region, data: tooltip.TooltipSource)
+            tips[#tips + 1] = data
+        end,
+        hideTooltip = function()
+            tips[#tips + 1] = "hide"
+        end,
     })
 end
 
@@ -92,12 +108,26 @@ end
 
 -- A source with the fields the game always gives (the window's argument
 -- checks want them).
-local REQUIRED: { [string]: unknown } = { name = "", classFilename = "", specIconID = 0, totalAmount = 0, amountPerSecond = 0,
-    isLocalPlayer = false, deathRecapID = 0, deathTimeSeconds = 0, classification = "normal", sourceDisplayType = 0 }
+local REQUIRED: { [string]: unknown } = {
+    name = "",
+    classFilename = "",
+    specIconID = 0,
+    totalAmount = 0,
+    amountPerSecond = 0,
+    isLocalPlayer = false,
+    deathRecapID = 0,
+    deathTimeSeconds = 0,
+    classification = "normal",
+    sourceDisplayType = 0,
+}
 
 local function session(meterType: string, list: Source[], total: number?)
     for _, src in ipairs(list) do
-        for k, v in pairs(REQUIRED) do if src[k] == nil then src[k] = v end end
+        for k, v in pairs(REQUIRED) do
+            if src[k] == nil then
+                src[k] = v
+            end
+        end
     end
     sessions[typeEnum(meterType)] = { combatSources = list, totalAmount = total }
 end
@@ -106,24 +136,40 @@ end
 local function sources(n: number, you: number?): Source[]
     local list: Source[] = {}
     for i = 1, n do
-        list[i] = { name = "P" .. i .. "-Realm", classFilename = "MAGE", totalAmount = 1000 * (n - i + 1),
-                    amountPerSecond = 10 * (n - i + 1), isLocalPlayer = i == you, sourceGUID = "Player-1-" .. i,
-                    deathTimeSeconds = 30 + i, deathRecapID = i }
+        list[i] = {
+            name = "P" .. i .. "-Realm",
+            classFilename = "MAGE",
+            totalAmount = 1000 * (n - i + 1),
+            amountPerSecond = 10 * (n - i + 1),
+            isLocalPlayer = i == you,
+            sourceGUID = "Player-1-" .. i,
+            deathTimeSeconds = 30 + i,
+            deathRecapID = i,
+        }
     end
     return list
 end
 
 @afterEach
 local function cleanup()
-    if parent then parent:Hide() end
+    if parent then
+        parent:Hide()
+    end
     parent = nil
     sessions, spells, past, asked = {}, {}, {}, {}
     duration, recapEvents, recapMax = 75, {}, 1000
 end
 
 @test("abbr: grouped below 10k, then k and M")
-@cases({ { 0, "0" }, { 8412.4, "8,412" }, { 48200, "48.2k" }, { 482000, "482k" }, { 1210000, "1.21M" },
-         { 12400000, "12.4M" }, { -48200, "-48.2k" } })
+@cases({
+    { 0, "0" },
+    { 8412.4, "8,412" },
+    { 48200, "48.2k" },
+    { 482000, "482k" },
+    { 1210000, "1.21M" },
+    { 12400000, "12.4M" },
+    { -48200, "-48.2k" },
+})
 local function abbrCases(v: number, out: string)
     expect(abbr(v)).toBe(out)
 end
@@ -161,7 +207,9 @@ local function names()
     expect(shortName("Thrall-Realm")).toBe("Thrall")
     expect(shortName(7)).toBe("")
     expect(shortName(mock.secret("Thrall-Realm"))).never.toBeNil() -- through Ambiguate
-    mock.fake("Ambiguate", function(_: unknown, _: string): unknown error("refused") end)
+    mock.fake("Ambiguate", function(_: unknown, _: string): unknown
+        error("refused")
+    end)
     local s = shortName(mock.secret("X"))
     expect(issecretvalue(s)).toBe(true)
     mock.setField(_G, "Ambiguate", nil) -- a global the declarations type as always there
@@ -183,16 +231,24 @@ local function fetching()
     session("damage", sources(1))
     expect(fetch(API, 3, "damage")).never.toBeNil()
     expect(asked[#asked]).toBe("id:3")
-    local broken: MeterApi = setmetatable({ GetCombatSessionFromType = function(): DamageMeterCombatSessionSecret error("no") end }, { __index = API })
+    local broken: MeterApi = setmetatable({
+        GetCombatSessionFromType = function(): DamageMeterCombatSessionSecret
+            error("no")
+        end,
+    }, { __index = API })
     expect(fetch(broken, "current", "damage")).toBeNil()
 end
 
 @test("inCombat: lockdown or the player in combat")
 local function combat()
     expect(inCombat()).toBe(false)
-    mock.fake("UnitAffectingCombat", function(_: string): boolean return true end)
+    mock.fake("UnitAffectingCombat", function(_: string): boolean
+        return true
+    end)
     expect(inCombat()).toBe(true)
-    mock.fake("UnitAffectingCombat", function(_: string): Secret<boolean> return mock.secret(true) end)
+    mock.fake("UnitAffectingCombat", function(_: string): Secret<boolean>
+        return mock.secret(true)
+    end)
     expect(inCombat()).toBe(false)
 end
 
@@ -307,8 +363,10 @@ end
 @test("markers, bar colours and name colours")
 local function looks()
     local w = meter()
-    session("damage", { { name = "A", classFilename = "WARRIOR", totalAmount = 10, amountPerSecond = 1 },
-                        { name = "B", totalAmount = 5, amountPerSecond = 1 } })
+    session("damage", {
+        { name = "A", classFilename = "WARRIOR", totalAmount = 10, amountPerSecond = 1 },
+        { name = "B", totalAmount = 5, amountPerSecond = 1 },
+    })
     w:SetOptions({ marker = "diamond" })
     expect(w.rows[1].diamond).toBeShown()
     expect(w.rows[1].icon).never.toBeShown()
@@ -320,7 +378,9 @@ local function looks()
     expect(tokenOf(w.rows[1].name)).toBe("ink")
     -- class icons from the circles when there is no atlas
     w:SetOptions({ marker = "icon", nameColor = "class" })
-    mock.fake("GetClassAtlas", function(_: string): string? return nil end)
+    mock.fake("GetClassAtlas", function(_: string): string?
+        return nil
+    end)
     w:Refresh()
     expect(w.rows[1].icon).toBeShown()
 end
@@ -330,7 +390,13 @@ local function enemies()
     local w = meter()
     session("enemyDamageTaken", {
         { name = "Hogger", totalAmount = 100, amountPerSecond = 2, sourceGUID = "Creature-1", sourceCreatureID = 448 },
-        { name = "Boss", totalAmount = 50, amountPerSecond = 1, sourceGUID = "Creature-2", sourceCreatureID = mock.secret(9) },
+        {
+            name = "Boss",
+            totalAmount = 50,
+            amountPerSecond = 1,
+            sourceGUID = "Creature-2",
+            sourceCreatureID = mock.secret(9),
+        },
     })
     w:SetView("enemyDamageTaken", "current")
     expect(tokenOf(w.rows[1].name)).toBe("reaction-hostile")
@@ -345,13 +411,18 @@ local function drill()
     local w = meter()
     local views: { string } = {}
     session("damage", sources(2, 1))
-    spells[UnitGUID("player")] = { totalAmount = 1000, combatSpells = {
-        { spellID = 6603, totalAmount = 600, amountPerSecond = 6 },
-        { spellID = 133, totalAmount = 400, amountPerSecond = 4, creatureName = "Imp" },
-        { spellID = 999999, totalAmount = 0, amountPerSecond = 0 },
-    } }
+    spells[UnitGUID("player")] = {
+        totalAmount = 1000,
+        combatSpells = {
+            { spellID = 6603, totalAmount = 600, amountPerSecond = 6 },
+            { spellID = 133, totalAmount = 400, amountPerSecond = 4, creatureName = "Imp" },
+            { spellID = 999999, totalAmount = 0, amountPerSecond = 0 },
+        },
+    }
     mock.fake("C_Spell.GetSpellName", function(id: number): string
-        if id == 999999 then error("unknown") end
+        if id == 999999 then
+            error("unknown")
+        end
         return "Fireball"
     end)
     w:SetView("damage", "current")
@@ -384,7 +455,10 @@ end
 local function drillOther()
     local w = meter()
     session("hps", sources(2))
-    spells["Player-1-1"] = { totalAmount = 10, combatSpells = { { spellID = 2061, totalAmount = 10, amountPerSecond = 0 } } }
+    spells["Player-1-1"] = {
+        totalAmount = 10,
+        combatSpells = { { spellID = 2061, totalAmount = 10, amountPerSecond = 0 } },
+    }
     w:SetView("hps", 4)
     -- a past fight that's gone: back to current
     expect(w.session).toBe("current")
@@ -408,9 +482,15 @@ end
 @test("a past fight is read by its ID")
 local function pastFight()
     local w = meter()
-    past = { { sessionID = 11, name = "Hogger", durationSeconds = 42 }, { sessionID = 12, name = mock.secret("x"), durationSeconds = 5 } }
+    past = {
+        { sessionID = 11, name = "Hogger", durationSeconds = 42 },
+        { sessionID = 12, name = mock.secret("x"), durationSeconds = 5 },
+    }
     session("damage", sources(1, 1))
-    spells[UnitGUID("player")] = { totalAmount = 1, combatSpells = { { spellID = 133, totalAmount = 1, amountPerSecond = 1 } } }
+    spells[UnitGUID("player")] = {
+        totalAmount = 1,
+        combatSpells = { { spellID = 133, totalAmount = 1, amountPerSecond = 1 } },
+    }
     w:SetView("damage", 11)
     expect(asked[#asked]).toBe("id:11")
     expect(w.time).toHaveText("0:42")
@@ -421,7 +501,9 @@ end
 @test("the fight select: Current with its time, Overall, past fights newest first")
 local function sessionOptions()
     local w = meter()
-    for i = 1, 25 do past[i] = { sessionID = i, name = i == 25 and "" or ("Fight " .. i), durationSeconds = i } end
+    for i = 1, 25 do
+        past[i] = { sessionID = i, name = i == 25 and "" or ("Fight " .. i), durationSeconds = i }
+    end
     local opts = w:SessionOptions()
     expect(opts[1].value).toBe("current")
     expect(opts[1].note).toBe("1:15")
@@ -439,7 +521,11 @@ local function sessionOptions()
     w:SetView("damage", "overall")
     expect(w.time).toHaveText("")
     -- a broken list: Current and Overall only
-    local broken: MeterApi = setmetatable({ GetAvailableCombatSessions = function(): DamageMeterAvailableCombatSession[] error("no") end }, { __index = API })
+    local broken: MeterApi = setmetatable({
+        GetAvailableCombatSessions = function(): DamageMeterAvailableCombatSession[]
+            error("no")
+        end,
+    }, { __index = API })
     w.api = broken
     expect(#w:SessionOptions()).toBe(2)
 end
@@ -447,7 +533,11 @@ end
 @test("the selects change the view and tell onView")
 local function selects()
     local seen: { string } = {}
-    local w = meter({ onView = function(t: string, s: MeterSession) seen[#seen + 1] = t .. "/" .. tostring(s) end })
+    local w = meter({
+        onView = function(t: string, s: MeterSession)
+            seen[#seen + 1] = t .. "/" .. tostring(s)
+        end,
+    })
     assert(w.typeSelect.onChange)("healing")
     expect(w.type).toBe("healing")
     assert(w.sessionSelect.onChange)("overall")
@@ -472,8 +562,23 @@ local function deaths()
     expect(tokenOf(w.rows[1].rank)).toBe("ink-muted")
     expect(w.rows[2].open).toBeNil() -- no recap
     recapEvents = {
-        { event = "SPELL_DAMAGE", spellId = 133, spellName = "Fireball", amount = 300, currentHP = 200, timestamp = 10, overkill = 0 },
-        { event = "SPELL_HEAL", spellId = 2061, spellName = "Flash Heal", amount = 400, currentHP = 500, timestamp = 9 },
+        {
+            event = "SPELL_DAMAGE",
+            spellId = 133,
+            spellName = "Fireball",
+            amount = 300,
+            currentHP = 200,
+            timestamp = 10,
+            overkill = 0,
+        },
+        {
+            event = "SPELL_HEAL",
+            spellId = 2061,
+            spellName = "Flash Heal",
+            amount = 400,
+            currentHP = 500,
+            timestamp = 9,
+        },
         { event = "SWING_DAMAGE", amount = mock.secret(5), currentHP = 100, timestamp = 8 },
         { event = "SPELL_DAMAGE", spellName = mock.secret("Secret"), currentHP = 900, timestamp = 7 },
         { event = 5, spellId = 1, timestamp = mock.secret(6) },
@@ -544,7 +649,9 @@ end
 @test("hovering a row: the gilt edge if it opens, its tip")
 local function rowHover()
     local w = meter()
-    session("damage", { { name = "A", classFilename = "MAGE", totalAmount = 10, amountPerSecond = 1, sourceGUID = mock.secret("G") } })
+    session("damage", {
+        { name = "A", classFilename = "MAGE", totalAmount = 10, amountPerSecond = 1, sourceGUID = mock.secret("G") },
+    })
     w:SetView("damage", "current")
     local r = w.rows[1]
     tips = {}
@@ -564,8 +671,17 @@ end
 @test("the menu: new window (when allowed), reset, close, settings")
 local function menu()
     local calls: { string } = {}
-    local function on(name: string): () -> () return function() calls[#calls + 1] = name end end
-    local w = meter({ onNewWindow = on("new"), onReset = on("reset"), onClose = on("close"), onSettings = on("settings") })
+    local function on(name: string): () -> ()
+        return function()
+            calls[#calls + 1] = name
+        end
+    end
+    local w = meter({
+        onNewWindow = on("new"),
+        onReset = on("reset"),
+        onClose = on("close"),
+        onSettings = on("settings"),
+    })
     tips = {}
     mock.hover(w.more)
     expect(w.more.hover).toBeShown()
@@ -623,14 +739,36 @@ end
 local function secrets()
     local w = meter()
     w:SetOptions({ numbers = "complete" })
-    mock.fake("UnitAffectingCombat", function(_: string): boolean return true end)
-    session("damage", {
-        { name = mock.secret("Foe-Realm"), classFilename = "MAGE", totalAmount = mock.secret(5000), amountPerSecond = mock.secret(50),
-          isLocalPlayer = mock.secret(false), sourceGUID = mock.secret("G") },
-        { name = "Me", classFilename = mock.secret("MAGE"), totalAmount = 100, amountPerSecond = 1, isLocalPlayer = true },
-    }, 6000)
-    spells[UnitGUID("player")] = { totalAmount = mock.secret(100), combatSpells = {
-        { spellID = mock.secret(6603), totalAmount = 100, amountPerSecond = 1, creatureName = mock.secret("Imp") } } }
+    mock.fake("UnitAffectingCombat", function(_: string): boolean
+        return true
+    end)
+    session(
+        "damage",
+        {
+            {
+                name = mock.secret("Foe-Realm"),
+                classFilename = "MAGE",
+                totalAmount = mock.secret(5000),
+                amountPerSecond = mock.secret(50),
+                isLocalPlayer = mock.secret(false),
+                sourceGUID = mock.secret("G"),
+            },
+            {
+                name = "Me",
+                classFilename = mock.secret("MAGE"),
+                totalAmount = 100,
+                amountPerSecond = 1,
+                isLocalPlayer = true,
+            },
+        },
+        6000
+    )
+    spells[UnitGUID("player")] = {
+        totalAmount = mock.secret(100),
+        combatSpells = {
+            { spellID = mock.secret(6603), totalAmount = 100, amountPerSecond = 1, creatureName = mock.secret("Imp") },
+        },
+    }
     w:Refresh()
     expect(w.rows[1].share).never.toBeShown()
     expect(w.rows[1].main.value).toBeNil()

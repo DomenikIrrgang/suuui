@@ -16,14 +16,34 @@ local asNumber, asString, field = secret.asNumber, secret.asString, tbl.field
 
 -- Who you are, for what you can pick up and who serves you (WorldMap's
 -- M:Player); the quest checks fill in the rest as they go.
-export type Me = { level: number, raceBit: number, classBit: number, class?: string, faction?: string,
-                   mapID?: number, skills?: { [number]: number }, reps?: { [number]: number } }
+export type Me = {
+    level: number,
+    raceBit: number,
+    classBit: number,
+    class?: string,
+    faction?: string,
+    mapID?: number,
+    skills?: { [number]: number },
+    reps?: { [number]: number },
+}
 
 -- A merged quest pin takes the one ranked first.
-export const QUEST_RANK: { [string]: number } = { difficult = 1, standard = 2, ["very-difficult"] = 3, impossible = 4, trivial = 5 }
+export const QUEST_RANK: { [string]: number } = {
+    difficult = 1,
+    standard = 2,
+    ["very-difficult"] = 3,
+    impossible = 4,
+    trivial = 5,
+}
 
 -- Easiest to hardest: a split ring's arcs go clockwise in this order.
-local HARDNESS: { [string]: number } = { trivial = 1, standard = 2, difficult = 3, ["very-difficult"] = 4, impossible = 5 }
+local HARDNESS: { [string]: number } = {
+    trivial = 1,
+    standard = 2,
+    difficult = 3,
+    ["very-difficult"] = 4,
+    impossible = 5,
+}
 
 -- A quest a pin offers: its name, level, difficulty for you, whether you
 -- pick it up (or it repeats), whether it needs a group.
@@ -33,31 +53,55 @@ export type Offer = { name: string, level: number, difficulty: string, state?: s
 -- edge a 2 px ring in the quest's difficulty colour (split per quest for
 -- several, easiest to hardest clockwise), outlined; the bar under it in the
 -- group quest's colour when one of them needs a group.
-export function questPin<O extends { difficulty: string, group?: boolean }>(list: O[], best: { difficulty: string }): MapPinData
+export function questPin<O extends { difficulty: string, group?: boolean }>(
+    list: O[],
+    best: { difficulty: string }
+): MapPinData
     local sorted: O[] = {}
-    for i, q in ipairs(list) do sorted[i] = q end
-    table.sort(sorted, function(a: O, b: O): boolean return (HARDNESS[a.difficulty] or 2) < (HARDNESS[b.difficulty] or 2) end)
+    for i, q in ipairs(list) do
+        sorted[i] = q
+    end
+    table.sort(sorted, function(a: O, b: O): boolean
+        return (HARDNESS[a.difficulty] or 2) < (HARDNESS[b.difficulty] or 2)
+    end)
     local arcs: string[]? = nil
     local bar: string? = nil
     if #sorted > 1 then
         local each: string[] = {}
-        for i, q in ipairs(sorted) do each[i] = "quest-" .. q.difficulty end
+        for i, q in ipairs(sorted) do
+            each[i] = "quest-" .. q.difficulty
+        end
         arcs = each
     end
     for _, q in ipairs(sorted) do
-        if q.group then bar = "quest-" .. q.difficulty end
+        if q.group then
+            bar = "quest-" .. q.difficulty
+        end
     end
-    return { char = "!", color = "gilt-text", edge = "quest-" .. best.difficulty, edgeWidth = 2, outline = true,
-             arcs = arcs, bar = bar }
+    return {
+        char = "!",
+        color = "gilt-text",
+        edge = "quest-" .. best.difficulty,
+        edgeWidth = 2,
+        outline = true,
+        arcs = arcs,
+        bar = bar,
+    }
 end
 
 -- The level at and below which a quest is grey for you, as the original
 -- game had it (Forever's own colour keeps a level 3 quest green for a level
 -- 15 character; found in game, Mulgore).
 export function grayLevel(p: number): number
-    if p <= 5 then return 0 end
-    if p <= 39 then return p - 5 - math.floor(p / 10) end
-    if p <= 59 then return p - 1 - math.floor(p / 5) end
+    if p <= 5 then
+        return 0
+    end
+    if p <= 39 then
+        return p - 5 - math.floor(p / 10)
+    end
+    if p <= 59 then
+        return p - 1 - math.floor(p / 5)
+    end
     return p - 9
 end
 
@@ -67,10 +111,18 @@ end
 -- quest yellow for a level 15 character; found in game, Mulgore.)
 export function questDifficulty(level: number, mine: number): string
     local diff = level - mine
-    if diff >= 5 then return "impossible" end
-    if diff >= 3 then return "very-difficult" end
-    if diff >= -2 then return "difficult" end
-    if level > grayLevel(mine) then return "standard" end
+    if diff >= 5 then
+        return "impossible"
+    end
+    if diff >= 3 then
+        return "very-difficult"
+    end
+    if diff >= -2 then
+        return "difficult"
+    end
+    if level > grayLevel(mine) then
+        return "standard"
+    end
     return "trivial"
 end
 
@@ -84,14 +136,18 @@ export function raceBit(race: number): number
 end
 
 export function maskHas(mask: number?, bit: number): boolean
-    if not mask or mask == 0 or bit == 0 then return true end
+    if not mask or mask == 0 or bit == 0 then
+        return true
+    end
     return mask % (bit * 2) >= bit
 end
 
 -- the quests you've turned in, once per refresh
 export function completedSet(): { [number]: boolean }
     local set: { [number]: boolean } = {}
-    for _, id in ipairs(errors.tryValue(C_QuestLog.GetAllCompletedQuestIDs) or {}) do set[id] = true end
+    for _, id in ipairs(errors.tryValue(C_QuestLog.GetAllCompletedQuestIDs) or {}) do
+        set[id] = true
+    end
     return set
 end
 
@@ -99,7 +155,9 @@ export function onQuest(id: number): boolean
     local isOn = field(C_QuestLog, "IsOnQuest")
     if type(isOn) == "function" then
         local ok, v = pcall(isOn :: (number) -> unknown, id)
-        if ok then return secret.flag(v) end
+        if ok then
+            return secret.flag(v)
+        end
     end
     return errors.tryValue(C_QuestLog.GetLogIndexForQuestID, id) ~= nil
 end
@@ -113,7 +171,9 @@ export function skillLines(): { [number]: number }
         if index ~= nil then
             local _, _, rank, _, _, _, line = errors.try(field(_G, "GetProfessionInfo"), index)
             local lineID, value = asNumber(line), asNumber(rank)
-            if lineID and value then out[lineID] = value end
+            if lineID and value then
+                out[lineID] = value
+            end
         end
     end
     return out
@@ -125,7 +185,9 @@ export function standing(me: Me, faction: number): number
     local reps = me.reps or {}
     me.reps = reps
     local known = reps[faction]
-    if known then return known end
+    if known then
+        return known
+    end
     local value = 0
     local byID = field(C_Reputation, "GetFactionDataByID")
     if type(byID) == "function" then
@@ -152,9 +214,17 @@ end
 -- Effort, the Scourge Invasion) aren't running, and nothing in the game
 -- would say when they are: never on.
 local HOLIDAYS: { [number]: string } = {
-    [141] = "winterVeil", [1879] = "winterVeil", [324] = "hallowsEnd", [327] = "lunarFestival", [341] = "midsummer",
-    [335] = "loveIsInTheAir", [321] = "harvestFestival", [201] = "childrensWeek", [181] = "noblegarden",
-    [263] = "darkmoonFaire", [264] = "darkmoonFaire",
+    [141] = "winterVeil",
+    [1879] = "winterVeil",
+    [324] = "hallowsEnd",
+    [327] = "lunarFestival",
+    [341] = "midsummer",
+    [335] = "loveIsInTheAir",
+    [321] = "harvestFestival",
+    [201] = "childrensWeek",
+    [181] = "noblegarden",
+    [263] = "darkmoonFaire",
+    [264] = "darkmoonFaire",
 }
 local DARKMOON_SITE: { [number]: number } = { [263] = 1429, [264] = 1412 } -- Elwynn Forest, Mulgore
 local events: { on: { [string]: boolean }, darkmoon?: number } = { on = {} }
@@ -167,9 +237,13 @@ end
 export function readCalendar(): boolean
     local cal = C_Calendar
     local now = errors.tryValue(C_DateAndTime and C_DateAndTime.GetCurrentCalendarTime)
-    if not (cal and now) then return false end
+    if not (cal and now) then
+        return false
+    end
     local month = errors.tryValue(cal.GetMonthInfo, 0)
-    if not (month and month.month == now.month and month.year == now.year) then return false end
+    if not (month and month.month == now.month and month.year == now.year) then
+        return false
+    end
     local on: { [string]: boolean } = {}
     local site: number? = nil
     local t = stamp(now)
@@ -186,8 +260,12 @@ export function readCalendar(): boolean
 end
 
 export function eventOn(key: string, mapID: number?): boolean
-    if not events.on[key] then return false end
-    if key == "darkmoonFaire" then return mapID == events.darkmoon end
+    if not events.on[key] then
+        return false
+    end
+    if key == "darkmoonFaire" then
+        return mapID == events.darkmoon
+    end
     return true
 end
 
@@ -196,53 +274,96 @@ end
 -- library's book quests).
 export function questName(q: Quest?, id: number): string
     local name = q and q.name
-    if name then return name end
+    if name then
+        return name
+    end
     local t = asString(errors.tryValue(C_QuestLog.GetTitleForQuestID, id))
-    if t and t ~= "" then return t end
+    if t and t ~= "" then
+        return t
+    end
     return "Quest " .. tostring(id)
 end
 
 export function questState(q: Quest, id: number, me: Me, done: { [number]: boolean }): (string?, string?, number?)
-    if onQuest(id) then return nil end
+    if onQuest(id) then
+        return nil
+    end
     local flags = q.flags
     local repeatable = flags % 2 == 1
-    if done[id] and not repeatable then return nil end
+    if done[id] and not repeatable then
+        return nil
+    end
     -- an event's quest by its event; one needing an event we can't tell: never
     local event = q.event
     if event then
-        if not eventOn(event, me.mapID) then return nil end
+        if not eventOn(event, me.mapID) then
+            return nil
+        end
     elseif flags % 4 >= 2 then
         return nil
     end
     local nextInChain, parent, breadcrumbFor = q.nextInChain, q.parent, q.breadcrumbFor
-    if nextInChain and (done[nextInChain] or onQuest(nextInChain)) then return nil end
-    if parent and not onQuest(parent) then return nil end
-    if breadcrumbFor and (done[breadcrumbFor] or onQuest(breadcrumbFor)) then return nil end
+    if nextInChain and (done[nextInChain] or onQuest(nextInChain)) then
+        return nil
+    end
+    if parent and not onQuest(parent) then
+        return nil
+    end
+    if breadcrumbFor and (done[breadcrumbFor] or onQuest(breadcrumbFor)) then
+        return nil
+    end
     local skill = q.skill
     if skill then
         local skills = me.skills or skillLines()
         me.skills = skills
-        if (skills[skill.id] or 0) < skill.value then return nil end
+        if (skills[skill.id] or 0) < skill.value then
+            return nil
+        end
     end
     local minRep, maxRep = q.minRep, q.maxRep
-    if minRep and standing(me, minRep.id) < minRep.value then return nil end
-    if maxRep and standing(me, maxRep.id) >= maxRep.value then return nil end
+    if minRep and standing(me, minRep.id) < minRep.value then
+        return nil
+    end
+    if maxRep and standing(me, maxRep.id) >= maxRep.value then
+        return nil
+    end
     local minLevel = q.minLevel
-    if minLevel and minLevel > me.level then return nil end
-    if not maskHas(q.races, me.raceBit) or not maskHas(q.classes, me.classBit) then return nil end
-    for _, pre in ipairs(q.preGroup or {}) do if not done[pre] then return nil end end
+    if minLevel and minLevel > me.level then
+        return nil
+    end
+    if not maskHas(q.races, me.raceBit) or not maskHas(q.classes, me.classBit) then
+        return nil
+    end
+    for _, pre in ipairs(q.preGroup or {}) do
+        if not done[pre] then
+            return nil
+        end
+    end
     local preSingle = q.preSingle
     if preSingle then
         local one = false
-        for _, pre in ipairs(preSingle) do if done[pre] then one = true break end end
-        if not one then return nil end
+        for _, pre in ipairs(preSingle) do
+            if done[pre] then
+                one = true
+                break
+            end
+        end
+        if not one then
+            return nil
+        end
     end
-    for _, other in ipairs(q.exclusiveTo or {}) do if done[other] or onQuest(other) then return nil end end
+    for _, other in ipairs(q.exclusiveTo or {}) do
+        if done[other] or onQuest(other) then
+            return nil
+        end
+    end
     local qLevel = q.level
     local level = (qLevel and qLevel > 0) and qLevel or me.level
     local difficulty = questDifficulty(level, me.level)
     -- far above you (the data often lacks the level a quest asks): the
     -- game wouldn't offer it yet
-    if difficulty == "impossible" then return nil end
+    if difficulty == "impossible" then
+        return nil
+    end
     return repeatable and "repeatable" or "available", difficulty, level
 end

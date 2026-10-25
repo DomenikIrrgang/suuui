@@ -24,8 +24,7 @@ import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import after from "wowlua:timer"
 import hookScript from "wowlua:hooks"
-import type LegacyPoints, LegacyChallenges, LegacyTrack, Challenge, ChallengeStep, ChallengeGroup,
-    ChallengeCategory, TrackStop, TrackData from "/UI/Legacy"
+import type LegacyPoints, LegacyChallenges, LegacyTrack, Challenge, ChallengeStep, ChallengeGroup, ChallengeCategory, TrackStop, TrackData from "/UI/Legacy"
 import type TalentTree, TalentNode, TalentLink, TalentTreeData from "/UI/TalentTree"
 import * as errors from "wowlua:errors"
 import * as secret from "wowlua:secret"
@@ -37,14 +36,28 @@ local S = T.space
 
 local DEFAULTS = {}
 
-
 local FACTION = 2802
 local CURRENCY = 4225
 type TreeDef = { id: number, name: () -> string }
 local TREES: TreeDef[] = {
-    { id = 1187, name = function(): string return secret.asString(tbl.field(_G, "LEGACY_TREE_PROFESSIONS")) or "Professions" end },
-    { id = 1188, name = function(): string return secret.asString(tbl.field(_G, "LEGACY_TREE_ADVENTURE")) or "Adventure" end },
-    { id = 1189, name = function(): string return secret.asString(tbl.field(_G, "LEGACY_TREE_PROGRESSION")) or "Progression" end },
+    {
+        id = 1187,
+        name = function(): string
+            return secret.asString(tbl.field(_G, "LEGACY_TREE_PROFESSIONS")) or "Professions"
+        end,
+    },
+    {
+        id = 1188,
+        name = function(): string
+            return secret.asString(tbl.field(_G, "LEGACY_TREE_ADVENTURE")) or "Adventure"
+        end,
+    },
+    {
+        id = 1189,
+        name = function(): string
+            return secret.asString(tbl.field(_G, "LEGACY_TREE_PROGRESSION")) or "Progression"
+        end,
+    },
 }
 local FIRST_TREE = 1187
 local STEP = 750
@@ -52,17 +65,29 @@ local STEP = 750
 -- One of the game's functions, if it has it: every value it returns, as it
 -- comes (read each with `secret.asString` or `secret.asNumber`; GetAchievementInfo returns a dozen).
 
-local function hex(token: keyof typeof(T.color)): string return T.color[token].hex end
+local function hex(token: keyof typeof(T.color)): string
+    return T.color[token].hex
+end
 
 -- The game's Legacy window (its addon loads on demand).
-local function legacyFrame(): Frame? return frames.find("LegacySystemFrame") end
+local function legacyFrame(): Frame?
+    return frames.find("LegacySystemFrame")
+end
 
 --------------------------------------------------------------------------------
 -- Points
 --------------------------------------------------------------------------------
 
 -- What this character has: renown earned, the most there is, spent and left.
-export type Points = { earned: number, total: number, spent: number, cap: number, available: number, character?: string, pending?: number }
+export type Points = {
+    earned: number,
+    total: number,
+    spent: number,
+    cap: number,
+    available: number,
+    character?: string,
+    pending?: number,
+}
 
 --------------------------------------------------------------------------------
 -- The trees
@@ -70,25 +95,51 @@ export type Points = { earned: number, total: number, spent: number, cap: number
 
 -- A Legacy talent: the game's node as the trees draw it.
 export type LegacyNode = {
-    id: number, x: number, y: number, row: number, col: number, max: number, rank: number, pending: number,
-    canPurchase: boolean, open: boolean, meetsEdges: boolean, conditions: number[], edges: TraitOutEdgeInfo[],
-    name: string, icon?: number | string, tree: LegacyTree, requires?: LegacyNode[], locked?: boolean, canSpend?: boolean,
+    id: number,
+    x: number,
+    y: number,
+    row: number,
+    col: number,
+    max: number,
+    rank: number,
+    pending: number,
+    canPurchase: boolean,
+    open: boolean,
+    meetsEdges: boolean,
+    conditions: number[],
+    edges: TraitOutEdgeInfo[],
+    name: string,
+    icon?: number | string,
+    tree: LegacyTree,
+    requires?: LegacyNode[],
+    locked?: boolean,
+    canSpend?: boolean,
 }
 -- One tree: its nodes, the arrows between them, what's still to come.
 export type LegacyTree = {
-    id: number, name: string, nodes: LegacyNode[], links: TalentLink[], placeholders: number, points: number,
-    byID: { [number]: LegacyNode }, more?: string,
+    id: number,
+    name: string,
+    nodes: LegacyNode[],
+    links: TalentLink[],
+    placeholders: number,
+    points: number,
+    byID: { [number]: LegacyNode },
+    more?: string,
 }
 
 -- A tree as the talent tree draws it.
 local function treeData(t: LegacyTree): TalentTreeData
     local nodes: TalentNode[] = {}
-    for i, n in ipairs(t.nodes) do nodes[i] = n end
+    for i, n in ipairs(t.nodes) do
+        nodes[i] = n
+    end
     return { name = t.name, points = t.points, more = t.more, nodes = nodes, links = t.links }
 end
 
 local function isPlaceholder(ni: TraitNodeInfo, name: string): boolean
-    if name == "Unknown" then return true end
+    if name == "Unknown" then
+        return true
+    end
     local flags = secret.asNumber(ni.flags) or 0
     return bit and bit.band and bit.band(flags, 2) ~= 0 or false
 end
@@ -98,19 +149,27 @@ type Talent = { entryID: number, spellID?: number, name: string, icon?: number }
 local function talentOf(configID: number, ni: TraitNodeInfo): Talent?
     local active = ni.activeEntry
     local entryID = active and active.entryID or ni.entryIDs[1]
-    if not entryID then return nil end
+    if not entryID then
+        return nil
+    end
     local okEntry, entry = pcall(C_Traits.GetEntryInfo, configID, entryID)
     local definitionID = okEntry and entry and entry.definitionID
     local def: TraitDefinitionInfo? = nil
     if definitionID then
         local ok, read = pcall(C_Traits.GetDefinitionInfo, definitionID)
-        if ok then def = read end
+        if ok then
+            def = read
+        end
     end
     local spellID = def and def.spellID
     local name = def and def.overrideName
-    if (not name or name == "") and spellID then name = secret.asString(C_Spell.GetSpellName(spellID)) end
+    if (not name or name == "") and spellID then
+        name = secret.asString(C_Spell.GetSpellName(spellID))
+    end
     local icon = def and def.overrideIcon
-    if (not icon or icon == 0) and spellID then icon = secret.asNumber(C_Spell.GetSpellTexture(spellID)) end
+    if (not icon or icon == 0) and spellID then
+        icon = secret.asNumber(C_Spell.GetSpellTexture(spellID))
+    end
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
 end
 
@@ -132,9 +191,13 @@ local function progressOf(id: number): string?
         local done = 0
         for k = 1, n do
             local _, _, ok = errors.try(GetAchievementCriteriaInfo, id, k)
-            if ok then done = done + 1 end
+            if ok then
+                done = done + 1
+            end
         end
-        if done > 0 and done < n then return done .. "/" .. n end
+        if done > 0 and done < n then
+            return done .. "/" .. n
+        end
     end
     return nil
 end
@@ -149,7 +212,9 @@ local function countDone(id: number, n: number): number
     local done = 0
     for k = 1, n do
         local _, _, ok = errors.try(GetAchievementCriteriaInfo, id, k)
-        if ok then done = done + 1 end
+        if ok then
+            done = done + 1
+        end
     end
     return done
 end
@@ -160,19 +225,25 @@ local function stepsOf(id: number, depthArg: number?): ChallengeStep[]
     if n == 1 and depth < 4 then
         local _, ctype, done, _, _, _, _, assetR = errors.try(GetAchievementCriteriaInfo, id, 1)
         local asset = secret.asNumber(assetR)
-        if ctype == CRITERIA_ACHIEVEMENT and asset and not done then return stepsOf(asset, depth + 1) end
+        if ctype == CRITERIA_ACHIEVEMENT and asset and not done then
+            return stepsOf(asset, depth + 1)
+        end
     end
     local out: ChallengeStep[] = {}
     for k = 1, n do
         local text, ctype, done, quantityR, requiredR, _, _, assetR = errors.try(GetAchievementCriteriaInfo, id, k)
         local step: ChallengeStep = { text = secret.asString(text), done = done and true or false }
-        local asset, quantity, required = secret.asNumber(assetR), secret.asNumber(quantityR), secret.asNumber(requiredR)
+        local asset, quantity, required = secret.asNumber(assetR),
+            secret.asNumber(quantityR),
+            secret.asNumber(requiredR)
         if ctype == CRITERIA_ACHIEVEMENT and asset and depth < 4 then
             local sub = secret.asNumber(errors.try(GetAchievementNumCriteria, asset)) or 0
             if sub > 1 then
                 step.id = "a" .. asset
                 step.stepsN, step.stepsDone = sub, countDone(asset, sub)
-                step.steps = function(): ChallengeStep[] return stepsOf(asset, depth + 1) end
+                step.steps = function(): ChallengeStep[]
+                    return stepsOf(asset, depth + 1)
+                end
             end
         elseif quantity and required and required > 1 and not done then
             step.count = { quantity, required }
@@ -186,7 +257,9 @@ local function challengeTip(owner: Frame, id: number, name: string?, description
     local tip = GameTooltip
     tip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip_SetTitle(tip, name or "")
-    if description and description ~= "" then GameTooltip_AddNormalLine(tip, description, true) end
+    if description and description ~= "" then
+        GameTooltip_AddNormalLine(tip, description, true)
+    end
     local n = secret.asNumber(errors.try(GetAchievementNumCriteria, id)) or 0
     if n > 1 then
         GameTooltip_AddBlankLineToTooltip(tip)
@@ -194,14 +267,20 @@ local function challengeTip(owner: Frame, id: number, name: string?, description
             local textR, _, done = errors.try(GetAchievementCriteriaInfo, id, k)
             local text = secret.asString(textR)
             if text and text ~= "" then
-                if done then GameTooltip_AddColoredLine(tip, text, GREEN_FONT_COLOR or HIGHLIGHT_FONT_COLOR)
-                else GameTooltip_AddDisabledLine(tip, text) end
+                if done then
+                    GameTooltip_AddColoredLine(tip, text, GREEN_FONT_COLOR or HIGHLIGHT_FONT_COLOR)
+                else
+                    GameTooltip_AddDisabledLine(tip, text)
+                end
             end
         end
     end
     if points then
         GameTooltip_AddBlankLineToTooltip(tip)
-        GameTooltip_AddHighlightLine(tip, ("|cff%s+%d Legacy %s|r"):format(hex("gilt-text"), points, points == 1 and "point" or "points"))
+        GameTooltip_AddHighlightLine(
+            tip,
+            ("|cff%s+%d Legacy %s|r"):format(hex("gilt-text"), points, points == 1 and "point" or "points")
+        )
     end
     tip:Show()
 end
@@ -212,12 +291,24 @@ local function itemsIn(category: number, closeness: { [Challenge]: number }): Ch
     local out: Challenge[] = {}
     local total = secret.asNumber(errors.try(GetCategoryNumAchievements, category)) or 0
     for i = 1, total do
-        local idR, nameR, _, completed, _, _, _, descriptionR, _, _, rewardR = errors.try(GetAchievementInfo, category, i)
-        local id, name, description, reward = secret.asNumber(idR), secret.asString(nameR), secret.asString(descriptionR), secret.asString(rewardR)
+        local idR, nameR, _, completed, _, _, _, descriptionR, _, _, rewardR = errors.try(
+            GetAchievementInfo,
+            category,
+            i
+        )
+        local id, name, description, reward = secret.asNumber(idR),
+            secret.asString(nameR),
+            secret.asString(descriptionR),
+            secret.asString(rewardR)
         local points = reward and tonumber(reward:match("(%d+) Legacy Point"))
         if id and points then
-            local item: Challenge = { id = id, name = name, done = completed and true or false, points = points,
-                progress = (not completed) and progressOf(id) or nil }
+            local item: Challenge = {
+                id = id,
+                name = name,
+                done = completed and true or false,
+                points = points,
+                progress = (not completed) and progressOf(id) or nil,
+            }
             -- the full list's detail: steps (zones, dungeons, bosses; other
             -- achievements, which open in turn) or one count
             local n = secret.asNumber(errors.try(GetAchievementNumCriteria, id)) or 0
@@ -226,14 +317,22 @@ local function itemsIn(category: number, closeness: { [Challenge]: number }): Ch
             if (n > 1 or single) and not completed then
                 local list = stepsOf(id)
                 local done = 0
-                for _, st in ipairs(list) do if st.done then done = done + 1 end end
+                for _, st in ipairs(list) do
+                    if st.done then
+                        done = done + 1
+                    end
+                end
                 if #list > 0 then
                     item.stepsN, item.stepsDone = #list, done
-                    item.steps = function(): ChallengeStep[] return stepsOf(id) end
+                    item.steps = function(): ChallengeStep[]
+                        return stepsOf(id)
+                    end
                 end
             elseif n > 1 then
                 item.stepsN, item.stepsDone = n, countDone(id, n)
-                item.steps = function(): ChallengeStep[] return stepsOf(id) end
+                item.steps = function(): ChallengeStep[]
+                    return stepsOf(id)
+                end
             elseif n == 1 then
                 local _, _, ok, quantityR, requiredR = errors.try(GetAchievementCriteriaInfo, id, 1)
                 local quantity, required = secret.asNumber(quantityR), secret.asNumber(requiredR)
@@ -241,8 +340,12 @@ local function itemsIn(category: number, closeness: { [Challenge]: number }): Ch
                     item.count = { quantity, required }
                 end
             end
-            item.onEnter = function(owner: Frame) challengeTip(owner, id, name, description, points) end
-            item.onLeave = function() GameTooltip:Hide() end
+            item.onEnter = function(owner: Frame)
+                challengeTip(owner, id, name, description, points)
+            end
+            item.onLeave = function()
+                GameTooltip:Hide()
+            end
             local a, b = (item.progress or ""):match("(%d+)/(%d+)")
             closeness[item] = (a and b and (tonumber(b) or 0) > 0) and ((tonumber(a) or 0) / (tonumber(b) or 1)) or 0
             out[#out + 1] = item
@@ -264,7 +367,9 @@ local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rar
 -- Blizzard's page numbers: reward track 1, challenges 2, tree 3
 local TREE_PAGE = 3
 -- the track, a rule and room (a theme can change the track's height)
-local function stripH(): number return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1 end
+local function stripH(): number
+    return UI.LEGACY_TRACK_H + S["space-5"] * 2 + 1
+end
 -- between a page and the strip's rule (Apply touched it: found in game): as
 -- much as the tree's foot leaves above its buttons (38 - 30), so they sit
 -- evenly between the two rules (asked for)
@@ -280,8 +385,14 @@ local function placePage(view: Frame, f: Frame, blizz: Frame, owner: LegacyModul
     -- none of Blizzard's buttons take the mouse outside SuuUI's page
     frames.keepAway(blizz, { fade = true })
     view:SetShown(blizz:IsShown())
-    hookScript(blizz, "OnShow", function() view:Show(); owner:Render() end)
-    hookScript(blizz, "OnHide", function() view:Hide(); GameTooltip:Hide() end)
+    hookScript(blizz, "OnShow", function()
+        view:Show()
+        owner:Render()
+    end)
+    hookScript(blizz, "OnHide", function()
+        view:Hide()
+        GameTooltip:Hide()
+    end)
 end
 
 -- The trees' page.
@@ -299,23 +410,40 @@ export class TreePage extends Frame
         body.noSummary = true
         body.fillPanels = true
         -- its height settles after the first layout: again then
-        body:HookScript("OnSizeChanged", function() owner:QueueRender() end)
-        body.onClick = function(n: TalentNode) owner:Plan(n) end
-        body.onRemove = function(n: TalentNode) owner:Unplan(n) end
+        body:HookScript("OnSizeChanged", function()
+            owner:QueueRender()
+        end)
+        body.onClick = function(n: TalentNode)
+            owner:Plan(n)
+        end
+        body.onRemove = function(n: TalentNode)
+            owner:Unplan(n)
+        end
         body.onEnter = function(b: Button, n: TalentNode)
             local node = owner:NodeOf(n)
-            if node then owner:ShowTip(b, node) end
+            if node then
+                owner:ShowTip(b, node)
+            end
         end
-        body.onLeave = function() GameTooltip:Hide() end
+        body.onLeave = function()
+            GameTooltip:Hide()
+        end
         body.onUndo = function()
             local configID = owner.configID
-            if configID then pcall(C_Traits.RollbackConfig, configID); owner:Render() end
+            if configID then
+                pcall(C_Traits.RollbackConfig, configID)
+                owner:Render()
+            end
         end
         body.onApply = function()
             local configID = owner.configID
-            if not (configID and owner:Editable()) then return end
+            if not (configID and owner:Editable()) then
+                return
+            end
             local ok, applied = pcall(C_Traits.CommitConfig, configID)
-            if ok and applied == false then owner:Print("The Legacy talents couldn't be applied.") end
+            if ok and applied == false then
+                owner:Print("The Legacy talents couldn't be applied.")
+            end
             owner:QueueRender()
         end
         body:Layout()
@@ -376,7 +504,10 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
     end
 
     function Points(): Points
-        local earned = secret.asNumber(errors.try(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION)) or 0
+        local earned = secret.asNumber(
+            errors.try(C_MajorFactions and C_MajorFactions.GetCurrentRenownLevel, FACTION)
+        ) or
+            0
         local total = secret.asNumber(errors.try(C_Traits.GetMaxAvailableTraitCurrency, CURRENCY, false)) or 0
         local configID = self:ConfigID()
         local spent, cap, quantity = 0, 0, 0
@@ -389,21 +520,37 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 quantity = secret.asNumber(c.quantity) or 0
             end
         end
-        return { earned = earned, total = total, spent = spent, cap = cap, available = quantity, character = secret.asString(UnitName("player")) }
+        return {
+            earned = earned,
+            total = total,
+            spent = spent,
+            cap = cap,
+            available = quantity,
+            character = secret.asString(UnitName("player")),
+        }
     end
 
     function Trees(configID: number): (LegacyTree[], number, number)
         local okStaged, isStaged = pcall(C_Traits.ConfigHasStagedChanges, configID)
         local staged = okStaged and isStaged == true
-        if not staged then self.learned = {} end
+        if not staged then
+            self.learned = {}
+        end
         local learned = self.learned
         local trees: LegacyTree[], all: LegacyNode[] = {}, {}
         local minX: number?, minY: number? = nil, nil
         for i, def in ipairs(TREES) do
             local okCurrency, currency = pcall(C_Traits.GetTreeCurrencyInfo, configID, def.id, false)
             local first = okCurrency and currency and currency[1]
-            local t: LegacyTree = { id = def.id, name = def.name(), nodes = {}, links = {}, placeholders = 0,
-                points = first and secret.asNumber(first.spentInTree) or 0, byID = {} }
+            local t: LegacyTree = {
+                id = def.id,
+                name = def.name(),
+                nodes = {},
+                links = {},
+                placeholders = 0,
+                points = first and secret.asNumber(first.spentInTree) or 0,
+                byID = {},
+            }
             trees[i] = t
             local okNodes, nodeIDs = pcall(C_Traits.GetTreeNodes, def.id)
             for _, nodeID in ipairs(okNodes and nodeIDs or {}) do
@@ -414,17 +561,32 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                         t.placeholders = t.placeholders + 1
                     elseif talent then
                         local current = ni.currentRank or ni.activeRank or 0
-                        if not staged then learned[nodeID] = current end
+                        if not staged then
+                            learned[nodeID] = current
+                        end
                         local base = learned[nodeID]
-                        if base == nil then base = math.min(ni.activeRank or 0, current) end
+                        if base == nil then
+                            base = math.min(ni.activeRank or 0, current)
+                        end
                         base = math.min(base, current)
-                        local n: LegacyNode = { id = nodeID, x = ni.posX, y = ni.posY, row = 0, col = 0, max = ni.maxRanks,
-                            rank = base, pending = current - base,
+                        local n: LegacyNode = {
+                            id = nodeID,
+                            x = ni.posX,
+                            y = ni.posY,
+                            row = 0,
+                            col = 0,
+                            max = ni.maxRanks,
+                            rank = base,
+                            pending = current - base,
                             canPurchase = ni.canPurchaseRank and true or false,
                             open = ni.isAvailable and ni.meetsEdgeRequirements and true or false,
                             meetsEdges = ni.meetsEdgeRequirements and true or false,
-                            conditions = ni.conditionIDs or {}, edges = ni.visibleEdges or {},
-                            name = talent.name, icon = talent.icon, tree = t }
+                            conditions = ni.conditionIDs or {},
+                            edges = ni.visibleEdges or {},
+                            name = talent.name,
+                            icon = talent.icon,
+                            tree = t,
+                        }
                         t.nodes[#t.nodes + 1] = n
                         t.byID[nodeID] = n
                         all[#all + 1] = n
@@ -456,15 +618,20 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 end
             end
             if t.placeholders > 0 then
-                t.more = t.placeholders == 1 and "1 more talent in a future update" or (t.placeholders .. " more talents in a future update")
+                t.more = t.placeholders == 1 and "1 more talent in a future update" or
+                    (t.placeholders .. " more talents in a future update")
             end
         end
-        if staged and pending == 0 then pending = 1 end
+        if staged and pending == 0 then
+            pending = 1
+        end
         return trees, rows, pending
     end
 
     function Editable(): (boolean, string?)
-        if InCombatLockdown() then return false, "Legacy talents can't change in combat." end
+        if InCombatLockdown() then
+            return false, "Legacy talents can't change in combat."
+        end
         return true, nil
     end
 
@@ -477,14 +644,18 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
     -- A click plans a point; the minus takes a planned one back.
     function Plan(given: TalentNode)
         local n, configID = self:NodeOf(given), self.configID
-        if not (n and n.canSpend and configID) then return end
+        if not (n and n.canSpend and configID) then
+            return
+        end
         pcall(C_Traits.PurchaseRank, configID, n.id)
         self:Render()
     end
 
     function Unplan(given: TalentNode)
         local n, configID = self:NodeOf(given), self.configID
-        if not n or not configID or n.pending <= 0 or not self:Editable() then return end
+        if not n or not configID or n.pending <= 0 or not self:Editable() then
+            return
+        end
         pcall(C_Traits.RefundRank, configID, n.id)
         self:Render()
     end
@@ -495,7 +666,8 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
         for _, cat in ipairs(okList and cats or {}) do
             local _, parentR = errors.try(GetCategoryInfo, cat)
             local parent = secret.asNumber(parentR)
-            if parent == -1 then tops[#tops + 1] = cat
+            if parent == -1 then
+                tops[#tops + 1] = cat
             elseif parent then
                 local list = children[parent] or {}
                 children[parent] = list
@@ -508,16 +680,27 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
             local closeness: { [Challenge]: number } = {}
             local groups: ChallengeGroup[] = {}
             local own = itemsIn(top, closeness)
-            if #own > 0 then groups[#groups + 1] = { name = "", done = 0, items = own } end
+            if #own > 0 then
+                groups[#groups + 1] = { name = "", done = 0, items = own }
+            end
             for _, sub in ipairs(children[top] or {}) do
                 local items = itemsIn(sub, closeness)
-                if #items > 0 then groups[#groups + 1] = { name = secret.asString(errors.try(GetCategoryInfo, sub)) or "", done = 0, items = items } end
+                if #items > 0 then
+                    groups[#groups + 1] = {
+                        name = secret.asString(errors.try(GetCategoryInfo, sub)) or "",
+                        done = 0,
+                        items = items,
+                    }
+                end
             end
             local all: Challenge[], done = {}, 0
             for _, g in ipairs(groups) do
                 for _, item in ipairs(g.items) do
                     all[#all + 1] = item
-                    if item.done then done = done + 1; g.done = g.done + 1 end
+                    if item.done then
+                        done = done + 1
+                        g.done = g.done + 1
+                    end
                 end
             end
             if #all > 0 then
@@ -525,11 +708,18 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 -- (ties keep the game's order: Novice, Experienced, Master)
                 local seq: { [Challenge]: number } = {}
                 local short: Challenge[] = {}
-                for k, item in ipairs(all) do seq[item] = k; short[#short + 1] = item end
+                for k, item in ipairs(all) do
+                    seq[item] = k
+                    short[#short + 1] = item
+                end
                 table.sort(short, function(a: Challenge, b: Challenge): boolean
-                    if a.done ~= b.done then return not a.done end
+                    if a.done ~= b.done then
+                        return not a.done
+                    end
                     local ca, cb = closeness[a] or 0, closeness[b] or 0
-                    if ca ~= cb then return ca > cb end
+                    if ca ~= cb then
+                        return ca > cb
+                    end
                     return (seq[a] or 0) < (seq[b] or 0)
                 end)
                 list[#list + 1] = { name = name, done = done, total = #all, items = short, groups = groups }
@@ -550,7 +740,8 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 local itemID = r.itemID
                 -- the item's own name when the reward has none (found in game)
                 if (not r.name or r.name == "") and itemID then
-                    r.name = secret.asString(errors.try(C_Item.GetItemNameByID, itemID)) or secret.asString(errors.try(GetItemInfo, itemID))
+                    r.name = secret.asString(errors.try(C_Item.GetItemNameByID, itemID)) or
+                        secret.asString(errors.try(GetItemInfo, itemID))
                     if not r.name and C_Item.RequestLoadItemDataByID then
                         errors.try(C_Item.RequestLoadItemDataByID, itemID)
                         self.namesPending = true
@@ -558,18 +749,28 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 end
                 local quality = itemID and secret.asNumber(errors.try(C_Item.GetItemQualityByID, itemID))
                 local name, description = r.name, r.description
-                local stop: TrackStop = { at = lv.level, icon = r.icon, quality = QUALITY[quality or 3] or "rare",
-                    collected = r.isCollected and true or false }
+                local stop: TrackStop = {
+                    at = lv.level,
+                    icon = r.icon,
+                    quality = QUALITY[quality or 3] or "rare",
+                    collected = r.isCollected and true or false,
+                }
                 stop.onEnter = function(owner: Frame)
                     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-                    if itemID then GameTooltip:SetItemByID(itemID) else GameTooltip_SetTitle(GameTooltip, name or "") end
+                    if itemID then
+                        GameTooltip:SetItemByID(itemID)
+                    else
+                        GameTooltip_SetTitle(GameTooltip, name or "")
+                    end
                     if description and description ~= "" then
                         GameTooltip_AddBlankLineToTooltip(GameTooltip)
                         GameTooltip_AddNormalLine(GameTooltip, description, true)
                     end
                     GameTooltip:Show()
                 end
-                stop.onLeave = function() GameTooltip:Hide() end
+                stop.onLeave = function()
+                    GameTooltip:Hide()
+                end
                 stops[#stops + 1] = stop
                 names[#names + 1] = { at = lv.level, name = name }
             end
@@ -583,17 +784,26 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 break
             end
         end
-        return { earned = earned, total = total, max = max, stops = stops,
-            next = nextText or "Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet." }
+        return {
+            earned = earned,
+            total = total,
+            max = max,
+            stops = stops,
+            next = nextText or "Every reward on the track is yours. Claim them from Innkeeper Wiley in Ratchet.",
+        }
     end
 
     function Render()
         local pages = self.pages
-        if not pages then return end
+        if not pages then
+            return
+        end
         local points = self:Points()
         local configID = self:ConfigID()
         local trees: LegacyTree[], rows, pending = {}, 3, 0
-        if configID then trees, rows, pending = self:Trees(configID) end
+        if configID then
+            trees, rows, pending = self:Trees(configID)
+        end
 
         self.configID = configID
         points.pending = pending
@@ -612,50 +822,83 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
                 data[i] = treeData(t)
             end
             self.trees, self.nodes = trees, nodes
-            pages.tree.body:SetData({ trees = data, rows = rows, available = points.available, pending = pending,
-                editable = editable, hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply." })
+            pages.tree.body:SetData({
+                trees = data,
+                rows = rows,
+                available = points.available,
+                pending = pending,
+                editable = editable,
+                hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
+            })
         end
-        if pages.challenges:IsVisible() then pages.challenges.body:SetCategories(self:Challenges()) end
+        if pages.challenges:IsVisible() then
+            pages.challenges.body:SetCategories(self:Challenges())
+        end
         local track = self.track
         if track and track:IsVisible() then
             self.namesPending = nil
             track:SetTrack(self:Rewards(points.earned, points.total))
             -- item names still loading: once more in a moment
             self.nameTries = self.namesPending and self.nameTries + 1 or 0
-            if self.namesPending and self.nameTries <= 6 then after(0.5, function() self:QueueRender() end) end
+            if self.namesPending and self.nameTries <= 6 then
+                after(0.5, function()
+                    self:QueueRender()
+                end)
+            end
         end
     end
 
     function QueueRender()
-        if self.renderQueued then return end
+        if self.renderQueued then
+            return
+        end
         self.renderQueued = true
         after(0.1, function()
             self.renderQueued = nil
-            if self:IsEnabled() then self:Render() end
+            if self:IsEnabled() then
+                self:Render()
+            end
         end)
     end
 
     function ShowTip(button: Frame, n: LegacyNode)
         local configID = self.configID
-        if not configID then return end
+        if not configID then
+            return
+        end
         local needs: string[] = {}
         if not n.meetsEdges then
             for _, from in ipairs(n.requires or {}) do
                 if from.rank + from.pending < from.max then
-                    needs[#needs + 1] = ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
+                    needs[#needs + 1] = ("Requires %d %s in %s"):format(
+                        from.max,
+                        from.max == 1 and "point" or "points",
+                        from.name
+                    )
                 end
             end
         end
         local editable, why = self:Editable()
-        UI.TraitTooltip(button, configID, n.id, { name = n.name, treeName = n.tree.name, conditions = n.conditions,
-            canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
+        UI.TraitTooltip(button, configID, n.id, {
+            name = n.name,
+            treeName = n.tree.name,
+            conditions = n.conditions,
+            canSpend = n.canSpend,
+            pending = n.pending,
+            needs = needs,
+            blocked = (not editable) and why or nil,
+        })
     end
 
     -- One height for every tab (asked for in game): the header, the points and
     -- the challenges' two rows of cards; the trees' panels reach down to their
     -- foot.
     function Size(f: Frame)
-        f:SetHeight(44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP + stripH() + 16)
+        f:SetHeight(
+            44 + (T.type.caption.lineHeight + 1 + 24) + S["space-6"] + 2 * UI.LEGACY_CARD_H + S["space-5"] + STRIP_GAP +
+                stripH() +
+                16
+        )
     end
 
     -- The reward track along the window's foot, on every tab; Blizzard's reward
@@ -682,49 +925,83 @@ class LegacyModule extends Module<typeof(DEFAULTS)>
             local function toTree()
                 after(0, function()
                     local select = tbl.field(f, "SelectPage")
-                    if blizz:IsShown() and type(select) == "function" then pcall(select :: (f: Frame, page: number) -> (), f, TREE_PAGE) end
+                    if blizz:IsShown() and type(select) == "function" then
+                        pcall(select :: (f: Frame, page: number) -> (), f, TREE_PAGE)
+                    end
                 end)
             end
             hookScript(blizz, "OnShow", toTree)
-            if blizz:IsShown() then toTree() end
+            if blizz:IsShown() then
+                toTree()
+            end
         end
     end
 
     function Build()
         local f = legacyFrame()
-        if not f or self.pages then return end
-        local treeBlizz, challengesBlizz = frames.asFrame(tbl.field(f, "TreePage")), frames.asFrame(tbl.field(f, "ChallengesPage"))
-        if not (treeBlizz and challengesBlizz) then return end
-        self.pages = { tree = TreePage.new(f, treeBlizz, self), challenges = ChallengesPage.new(f, challengesBlizz, self) }
+        if not f or self.pages then
+            return
+        end
+        local treeBlizz, challengesBlizz = frames.asFrame(tbl.field(f, "TreePage")),
+            frames.asFrame(tbl.field(f, "ChallengesPage"))
+        if not (treeBlizz and challengesBlizz) then
+            return
+        end
+        self.pages = {
+            tree = TreePage.new(f, treeBlizz, self),
+            challenges = ChallengesPage.new(f, challengesBlizz, self),
+        }
         self:Strip(f)
         self:Size(f)
-        hookScript(f, "OnShow", function() self:Size(f); self:QueueRender() end)
+        hookScript(f, "OnShow", function()
+            self:Size(f)
+            self:QueueRender()
+        end)
         self:Render()
     end
 
     -- A theme changed the text styles the heights are worked out from.
     function Restyle()
         local f, pages = legacyFrame(), self.pages
-        if not (f and pages) then return end
+        if not (f and pages) then
+            return
+        end
         for _, view in ipairs({ pages.tree, pages.challenges }) do
             view:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16 + stripH() + STRIP_GAP)
         end
         local strip = self.strip
-        if strip then strip:SetHeight(stripH()) end
+        if strip then
+            strip:SetHeight(stripH())
+        end
         self:Size(f)
-        if f:IsVisible() then self:QueueRender() end
+        if f:IsVisible() then
+            self:QueueRender()
+        end
     end
 
     override function OnEnable()
         self:Build()
-        self:On("SUUUI_THEME_CHANGED", function() self:Restyle() end)
-        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
-        for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
-                             "MAJOR_FACTION_RENOWN_LEVEL_CHANGED", "ACHIEVEMENT_EARNED", "CRITERIA_UPDATE",
-                             "PLAYER_REGEN_ENABLED", "PLAYER_REGEN_DISABLED" }) do
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:Restyle()
+        end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:Build()
+        end)
+        for _, e in ipairs({
+            "TRAIT_CONFIG_UPDATED",
+            "TRAIT_NODE_CHANGED",
+            "TRAIT_TREE_CURRENCY_INFO_UPDATED",
+            "MAJOR_FACTION_RENOWN_LEVEL_CHANGED",
+            "ACHIEVEMENT_EARNED",
+            "CRITERIA_UPDATE",
+            "PLAYER_REGEN_ENABLED",
+            "PLAYER_REGEN_DISABLED",
+        }) do
             self:OnGameEvent(e, function()
                 local f = legacyFrame()
-                if self.pages and f and f:IsVisible() then self:QueueRender() end
+                if self.pages and f and f:IsVisible() then
+                    self:QueueRender()
+                end
             end)
         end
     end

@@ -31,7 +31,6 @@ local DEFAULTS = {}
 
 local M: GameMenuModule
 
-
 local WIDTH = 300
 local ITEM_H = 30
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
@@ -40,8 +39,12 @@ local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local function closeThen(fn: (() -> ())?, sound: number?): () -> ()
     return function()
         PlaySound(sound or SOUNDKIT.IG_MAINMENU_OPTION)
-        if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
-        if fn then fn() end
+        if GameMenuFrame:IsShown() then
+            HideUIPanel(GameMenuFrame)
+        end
+        if fn then
+            fn()
+        end
     end
 end
 
@@ -55,59 +58,140 @@ local function exitBlocked(): string?
     if StaticPopup_Visible and (StaticPopup_Visible("CAMP") or StaticPopup_Visible("QUIT")) then
         return "Already on the way out"
     end
-    if inFight() then return "Not in combat" end
+    if inFight() then
+        return "Not in combat"
+    end
 end
 
 local function notInCombat(): string?
-    if inFight() then return "Not in combat" end
+    if inFight() then
+        return "Not in combat"
+    end
     return nil
 end
 
 -- An entry: what it says, its glyph, what a click does, why it's blocked
 -- now (nil: it isn't); the secure ones a slash command and a sound instead
 -- of the click.
-export type Entry = { label: string, glyph: string, onClick?: () -> (), blocked?: () -> string?, slash?: string, sound?: number }
+export type Entry = {
+    label: string,
+    glyph: string,
+    onClick?: () -> (),
+    blocked?: () -> string?,
+    slash?: string,
+    sound?: number,
+}
 -- A group of entries under a caption.
 export type Group = { name: string, entries: Entry[] }
 
 local GROUPS: Group[] = {
-    { name = "Game", entries = {
-        { label = "Options", glyph = "gear", onClick = closeThen(function() SettingsPanel:Open() end) },
-        { label = "Edit Mode", glyph = "pushpin", onClick = closeThen(function() ShowUIPanel(EditModeManagerFrame) end),
-            blocked = function(): string?
-                if inFight() then return "Not in combat" end
-                if EditModeManagerFrame and EditModeManagerFrame.CanEnterEditMode and not EditModeManagerFrame:CanEnterEditMode() then
-                    return "Not available right now"
-                end
-                return nil
-            end },
-        { label = "Macros", glyph = "scroll", onClick = closeThen(function() ShowMacroFrame() end) },
-        { label = "AddOns", glyph = "menu", onClick = closeThen(function() ShowUIPanel(AddonList) end) },
-        { label = "SuuUI settings", glyph = "markDiamond", onClick = closeThen(function() SuuUI.OpenSettings() end) },
-    } },
-    { name = "Help", entries = {
-        { label = "Support", glyph = "chat", onClick = closeThen(function() ToggleHelpFrame() end) },
-    } },
-    { name = "Session", entries = {
-        { label = "Reload UI", glyph = "reset", blocked = notInCombat, slash = "/reload", sound = SOUNDKIT.IG_MAINMENU_OPTION },
-        { label = "Log Out", glyph = "door", blocked = exitBlocked, slash = "/logout", sound = SOUNDKIT.IG_MAINMENU_LOGOUT },
-        -- asks first (asked 2026-10-18: a slip of the finger quit the game)
-        { label = "Exit Game", glyph = "close", onClick = closeThen(function() M:ConfirmQuit() end), blocked = exitBlocked },
-    } },
+    {
+        name = "Game",
+        entries = {
+            {
+                label = "Options",
+                glyph = "gear",
+                onClick = closeThen(function()
+                    SettingsPanel:Open()
+                end),
+            },
+            {
+                label = "Edit Mode",
+                glyph = "pushpin",
+                onClick = closeThen(function()
+                    ShowUIPanel(EditModeManagerFrame)
+                end),
+                blocked = function(): string?
+                    if inFight() then
+                        return "Not in combat"
+                    end
+                    if EditModeManagerFrame and EditModeManagerFrame.CanEnterEditMode and
+                        not EditModeManagerFrame:CanEnterEditMode() then
+                        return "Not available right now"
+                    end
+                    return nil
+                end,
+            },
+            {
+                label = "Macros",
+                glyph = "scroll",
+                onClick = closeThen(function()
+                    ShowMacroFrame()
+                end),
+            },
+            {
+                label = "AddOns",
+                glyph = "menu",
+                onClick = closeThen(function()
+                    ShowUIPanel(AddonList)
+                end),
+            },
+            {
+                label = "SuuUI settings",
+                glyph = "markDiamond",
+                onClick = closeThen(function()
+                    SuuUI.OpenSettings()
+                end),
+            },
+        },
+    },
+    {
+        name = "Help",
+        entries = {
+            {
+                label = "Support",
+                glyph = "chat",
+                onClick = closeThen(function()
+                    ToggleHelpFrame()
+                end),
+            },
+        },
+    },
+    {
+        name = "Session",
+        entries = {
+            {
+                label = "Reload UI",
+                glyph = "reset",
+                blocked = notInCombat,
+                slash = "/reload",
+                sound = SOUNDKIT.IG_MAINMENU_OPTION,
+            },
+            {
+                label = "Log Out",
+                glyph = "door",
+                blocked = exitBlocked,
+                slash = "/logout",
+                sound = SOUNDKIT.IG_MAINMENU_LOGOUT,
+            },
+            -- asks first (asked 2026-10-18: a slip of the finger quit the game)
+            {
+                label = "Exit Game",
+                glyph = "close",
+                onClick = closeThen(function()
+                    M:ConfirmQuit()
+                end),
+                blocked = exitBlocked,
+            },
+        },
+    },
 }
 
 -- A plugin's entry (M:AddGameMenuItem: { group, label, glyph, onClick,
 -- blocked = fn -> reason }; read with care), and the group it goes in.
 local function pluginEntry(v: unknown): (Entry?, string)
-    if type(v) ~= "table" then return nil, "Game" end
+    if type(v) ~= "table" then
+        return nil, "Game"
+    end
     local t = v :: { [string]: unknown }
     local group, label, glyph, onClick, blocked = t.group, t.label, t.glyph, t.onClick, t.blocked
     return {
-        label = type(label) == "string" and label or "?",
-        glyph = type(glyph) == "string" and glyph or "markDiamond",
-        onClick = closeThen(type(onClick) == "function" and onClick :: () -> () or nil),
-        blocked = type(blocked) == "function" and blocked :: () -> string? or nil,
-    }, type(group) == "string" and group or "Game"
+            label = type(label) == "string" and label or "?",
+            glyph = type(glyph) == "string" and glyph or "markDiamond",
+            onClick = closeThen(type(onClick) == "function" and onClick :: () -> () or nil),
+            blocked = type(blocked) == "function" and blocked :: () -> string? or nil,
+        },
+        type(group) == "string" and group or "Game"
 end
 
 -- An entry of the panel.
@@ -150,7 +234,9 @@ export class MenuItem extends Button
         end)
         self:SetScript("OnClick", function()
             local click = def.onClick
-            if self.blocked or not click then return end
+            if self.blocked or not click then
+                return
+            end
             UI.HideTooltip()
             click()
         end)
@@ -238,12 +324,19 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     -- Built again for plugins' entries, the next time it opens out of combat.
     -- Its secure covers can't be freed: the old ones stay hidden.
     function Rebuild()
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         self.stale = nil
-        for _, over in pairs(self.overs or {}) do over.hide() end
+        for _, over in pairs(self.overs or {}) do
+            over.hide()
+        end
         self.overs, self.secureItems = nil, nil
         local dim = self.dim
-        if dim then dim:Hide(); dim:SetScript("OnUpdate", nil) end
+        if dim then
+            dim:Hide()
+            dim:SetScript("OnUpdate", nil)
+        end
         self:Build()
     end
 
@@ -265,7 +358,11 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
         self.panel = p
         local body = p.body
         local y = 0
-        local back = UI.Button(body, { text = "Return to Game", variant = "primary", onClick = closeThen(nil, SOUNDKIT.IG_MAINMENU_CONTINUE) })
+        local back = UI.Button(body, {
+            text = "Return to Game",
+            variant = "primary",
+            onClick = closeThen(nil, SOUNDKIT.IG_MAINMENU_CONTINUE),
+        })
         back:SetHeight(34)
         back:SetPoint("TOPLEFT")
         back:SetPoint("TOPRIGHT")
@@ -304,11 +401,15 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     end
 
     function Draw()
-        for _, b in ipairs(self.items) do b:Draw() end
+        for _, b in ipairs(self.items) do
+            b:Draw()
+        end
         local name, given = UnitFullName("player")
         local realm = secret.known(given, "")
         local who = self.who
-        if who then who:SetValue(secret.known(name, "") .. (realm ~= "" and (" · " .. realm) or "")) end
+        if who then
+            who:SetValue(secret.known(name, "") .. (realm ~= "" and (" · " .. realm) or ""))
+        end
         self:DrawPerf()
     end
 
@@ -316,16 +417,26 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     -- secure /quit (quitting from addon code is blocked on Forever). Out of
     -- combat; the cover goes with the dialog.
     function ConfirmQuit()
-        if InCombatLockdown() then return end
-        local d = UI.Confirm({ title = "Exit the game?", text = "You'll leave the world and the game closes.",
-            confirm = "Exit Game", onConfirm = function() end })
+        if InCombatLockdown() then
+            return
+        end
+        local d = UI.Confirm({
+            title = "Exit the game?",
+            text = "You'll leave the world and the game closes.",
+            confirm = "Exit Game",
+            onConfirm = function() end,
+        })
         local over = self.quitOver
         if not over then
             local made = secure.overlay(d.ok, { strata = "FULLSCREEN_DIALOG" })
             made.set("type1", "macro")
             made.set("macrotext1", "/quit")
-            made.button:SetScript("PreClick", function() PlaySound(SOUNDKIT.IG_MAINMENU_QUIT) end)
-            d:HookScript("OnHide", function() made.hide() end)
+            made.button:SetScript("PreClick", function()
+                PlaySound(SOUNDKIT.IG_MAINMENU_QUIT)
+            end)
+            d:HookScript("OnHide", function()
+                made.hide()
+            end)
             self.quitOver = made
             over = made
         end
@@ -335,7 +446,9 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     -- The secure buttons over Reload UI, Log Out and Exit Game: there while the
     -- menu shows (out of combat: a secure frame can't be placed in one).
     function PlaceSecure(on: boolean)
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         local overs = self.overs or {}
         self.overs = overs
         local panel = self.panel
@@ -346,17 +459,25 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
                 over = secure.overlay(item)
                 over.set("type1", "macro")
                 over.set("macrotext1", def.slash)
-                over.button:SetScript("PreClick", function() PlaySound(def.sound or SOUNDKIT.IG_MAINMENU_OPTION) end)
+                over.button:SetScript("PreClick", function()
+                    PlaySound(def.sound or SOUNDKIT.IG_MAINMENU_OPTION)
+                end)
                 -- the menu closes after (closing it first would hide this button mid-click)
                 over.button:SetScript("PostClick", function()
-                    C_Timer.After(0, function() if GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end end)
+                    C_Timer.After(0, function()
+                        if GameMenuFrame:IsShown() then
+                            HideUIPanel(GameMenuFrame)
+                        end
+                    end)
                 end)
                 overs[i] = over
             end
             if over then
                 if on and not item.blocked then
                     over.show()
-                    if panel then over.button:SetFrameLevel(panel:GetFrameLevel() + 20) end
+                    if panel then
+                        over.button:SetFrameLevel(panel:GetFrameLevel() + 20)
+                    end
                 else
                     over.hide()
                 end
@@ -368,20 +489,31 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
         local fps = math.floor((GetFramerate() or 0) + 0.5)
         local _, _, home, world = GetNetStats()
         local perf = self.perf
-        if perf then perf:SetValue(("%d fps · %d ms"):format(fps, world or home or 0)) end
+        if perf then
+            perf:SetValue(("%d fps · %d ms"):format(fps, world or home or 0))
+        end
     end
 
     -- The game's menu out of sight: see-through and off screen, still shown
     -- (it isn't protected: it moves in a fight too). Again on every show and
     -- whenever the game places it (it sets both itself when it opens).
     function Away(frame: Frame)
-        if self.away then return end
-        self.away = frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
+        if self.away then
+            return
+        end
+        self.away = frames.keepAway(frame, {
+            fade = true,
+            when = function(): boolean
+                return self:IsEnabled()
+            end,
+        })
     end
 
     function PutAway()
         local away = self.away
-        if away then away.apply() end
+        if away then
+            away.apply()
+        end
     end
 
     -- The dimmed screen under the panel (Build makes it, Rebuild again).
@@ -391,42 +523,71 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         local g = GameMenuFrame
-        if not g then return end
-        if not self.panel then self:Build() end
+        if not g then
+            return
+        end
+        if not self.panel then
+            self:Build()
+        end
         self:Away(g)
-        self:On("SUUUI_ADDITIONS_CHANGED", function(_, list) if list == "gamemenu" then self.stale = true end end)
-        if #SuuUI.Additions("gamemenu") > 0 then self.stale = true end
+        self:On("SUUUI_ADDITIONS_CHANGED", function(_, list)
+            if list == "gamemenu" then
+                self.stale = true
+            end
+        end)
+        if #SuuUI.Additions("gamemenu") > 0 then
+            self.stale = true
+        end
         -- a theme with another caption line height: built again (colours follow by themselves)
         self:On("SUUUI_THEME_CHANGED", function()
-            if self.builtLine ~= T.type.caption.lineHeight then self.stale = true end
+            if self.builtLine ~= T.type.caption.lineHeight then
+                self.stale = true
+            end
         end)
         g:HookScript("OnShow", function()
-            if not self:IsEnabled() then return end
-            if self.stale then self:Rebuild() end
+            if not self:IsEnabled() then
+                return
+            end
+            if self.stale then
+                self:Rebuild()
+            end
             self:Away(g)
-            C_Timer.After(0, function() self:PutAway() end)
+            C_Timer.After(0, function()
+                self:PutAway()
+            end)
             self:Draw()
             self:Dim():Show()
             self:PlaceSecure(true)
             -- while it shows: keep it away, whatever the game does to it
             self:Dim():SetScript("OnUpdate", function()
                 local _, rel = g:GetPoint(1)
-                if g:GetAlpha() > 0 or rel ~= UIParent or g:GetNumPoints() ~= 1 then self:PutAway() end
+                if g:GetAlpha() > 0 or rel ~= UIParent or g:GetNumPoints() ~= 1 then
+                    self:PutAway()
+                end
             end)
             if not self.ticker then
-                self.ticker = C_Timer.NewTicker(1, function() if self:Dim():IsShown() then self:DrawPerf() end end)
+                self.ticker = C_Timer.NewTicker(1, function()
+                    if self:Dim():IsShown() then
+                        self:DrawPerf()
+                    end
+                end)
             end
         end)
         g:HookScript("OnHide", function()
             self:PlaceSecure(false)
             self:Dim():Hide()
             self:Dim():SetScript("OnUpdate", nil)
-            if self.ticker then self.ticker:Cancel(); self.ticker = nil end
+            if self.ticker then
+                self.ticker:Cancel()
+                self.ticker = nil
+            end
         end)
         for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
             self:OnGameEvent(e, function()
                 self.fighting = e == "PLAYER_REGEN_DISABLED" or nil
-                if self:Dim():IsShown() then self:Draw() end
+                if self:Dim():IsShown() then
+                    self:Draw()
+                end
                 self:PlaceSecure(self:Dim():IsShown())
             end)
         end
@@ -434,7 +595,9 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
 
     override function OnDisable()
         local dim = self.dim
-        if dim then dim:Hide() end
+        if dim then
+            dim:Hide()
+        end
     end
 end
 

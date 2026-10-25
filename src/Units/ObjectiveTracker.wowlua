@@ -50,12 +50,12 @@ local DEFAULTS = {
     position = { point = "TOPRIGHT", x = -28, y = -300 } :: Position,
     shows = "always",
     maxHeight = 440,
-    collapsed = false,            -- the head's toggle
+    collapsed = false, -- the head's toggle
     collapseInBossFights = true,
-    items = true,                 -- quest items beside their quests
-    recipes = true,               -- tracked recipes, their own block under the quests
-    recipesCollapsed = false,     -- that block's head toggle
-    autoTrack = true,             -- a quest you accept is tracked (asked 2026-10-18)
+    items = true, -- quest items beside their quests
+    recipes = true, -- tracked recipes, their own block under the quests
+    recipesCollapsed = false, -- that block's head toggle
+    autoTrack = true, -- a quest you accept is tracked (asked 2026-10-18)
 }
 
 local M: ObjectiveTrackerModule
@@ -90,17 +90,25 @@ export type QuestPlace = { zone?: string, distance?: number, logIndex: number }
 
 -- The game's difficulty colour, by its font name, as the design's token.
 local DIFFICULTY_FONTS: { font: string, token: string }[] = {
-    { font = "VeryDifficult", token = "very-difficult" }, { font = "Impossible", token = "impossible" },
-    { font = "Difficult", token = "difficult" }, { font = "Standard", token = "standard" },
+    { font = "VeryDifficult", token = "very-difficult" },
+    { font = "Impossible", token = "impossible" },
+    { font = "Difficult", token = "difficult" },
+    { font = "Standard", token = "standard" },
     { font = "Trivial", token = "trivial" },
 }
 local function difficultyOf(level: number): string
-    if not (secret.readable(level) and GetQuestDifficultyColor) then return "standard" end
+    if not (secret.readable(level) and GetQuestDifficultyColor) then
+        return "standard"
+    end
     local c = errors.try(GetQuestDifficultyColor, level)
     local font = type(c) == "table" and secret.asString((c :: { font: unknown }).font)
-    if not font then return "standard" end
+    if not font then
+        return "standard"
+    end
     for _, d in ipairs(DIFFICULTY_FONTS) do
-        if font:find(d.font, 1, true) then return d.token end
+        if font:find(d.font, 1, true) then
+            return d.token
+        end
     end
     return "standard"
 end
@@ -108,16 +116,22 @@ end
 -- "0/2 Handful of Cattails" or "Cattails: 0/2" → the text and its count.
 local function splitObjective(text: string): (string?, string?)
     local count, rest = text:match("^(%d+%s*/%s*%d+)%s+(.+)$")
-    if count then return rest, count end
+    if count then
+        return rest, count
+    end
     rest, count = text:match("^(.-):?%s+(%d+%s*/%s*%d+)$")
-    if count then return rest, count end
+    if count then
+        return rest, count
+    end
     return text, nil
 end
 
 local function objectivesOf(questID: number): TrackerObjective[]
     local out: TrackerObjective[] = {}
     local ok, list = pcall(C_QuestLog.GetQuestObjectives, questID)
-    if not ok or type(list) ~= "table" then return out end
+    if not ok or type(list) ~= "table" then
+        return out
+    end
     for _, o in ipairs(list) do
         local text = secret.readable(o.text) and o.text or ""
         local shown, count = splitObjective(text)
@@ -129,9 +143,13 @@ end
 -- One tracked quest as the tracker draws it (nil: not in the log).
 local function questOf(questID: number): Quest?
     local logIndex = C_QuestLog.GetLogIndexForQuestID(questID)
-    if not secret.readable(logIndex) or not logIndex then return nil end
+    if not secret.readable(logIndex) or not logIndex then
+        return nil
+    end
     local info = C_QuestLog.GetInfo(logIndex)
-    if type(info) ~= "table" or info.isHeader or info.isHidden then return nil end
+    if type(info) ~= "table" or info.isHeader or info.isHidden then
+        return nil
+    end
     local complete = C_QuestLog.IsComplete(questID) or C_QuestLog.ReadyForTurnIn(questID)
     local failed = C_QuestLog.IsFailed and C_QuestLog.IsFailed(questID)
     local q: Quest = {
@@ -142,11 +160,15 @@ local function questOf(questID: number): Quest?
         complete = secret.readable(complete) and complete == true,
         failed = secret.readable(failed) and failed == true,
     }
-    if not q.complete then q.objectives = objectivesOf(questID) end
+    if not q.complete then
+        q.objectives = objectivesOf(questID)
+    end
     -- a quest with nothing to count, not complete (rare): its text instead
     if q.complete then
         local text = secret.asString(errors.try(GetQuestLogCompletionText, logIndex))
-        if text and text ~= "" then q.tooltip = { title = q.title, description = text } end
+        if text and text ~= "" then
+            q.tooltip = { title = q.title, description = text }
+        end
     end
     -- its usable item
     if GetQuestLogSpecialItemInfo then
@@ -166,7 +188,10 @@ local function zoneOf(questID: number, logIndex: number): string?
         -- walk up the log to the heading above
         for i = logIndex - 1, 1, -1 do
             local info = C_QuestLog.GetInfo(i)
-            if type(info) == "table" and info.isHeader then header = i break end
+            if type(info) == "table" and info.isHeader then
+                header = i
+                break
+            end
         end
     end
     local info = header and C_QuestLog.GetInfo(header)
@@ -175,9 +200,13 @@ end
 
 -- How far a quest is (squared), when it's on your continent; nil otherwise.
 local function distanceOf(questID: number): number?
-    if not C_QuestLog.GetDistanceSqToQuest then return nil end
+    if not C_QuestLog.GetDistanceSqToQuest then
+        return nil
+    end
     local ok, d, onContinent = pcall(C_QuestLog.GetDistanceSqToQuest, questID)
-    if ok and secret.readable(d) and d and secret.readable(onContinent) and onContinent then return d end
+    if ok and secret.readable(d) and d and secret.readable(onContinent) and onContinent then
+        return d
+    end
     return nil
 end
 
@@ -185,11 +214,15 @@ end
 local function hereNames(): { [string]: boolean }
     local here: { [string]: boolean } = {}
     for _, name in ipairs({ GetRealZoneText and GetRealZoneText(), GetZoneText and GetZoneText() }) do
-        if secret.readable(name) and name ~= "" then here[name] = true end
+        if secret.readable(name) and name ~= "" then
+            here[name] = true
+        end
     end
     local map = C_Map.GetBestMapForUnit("player")
     local info = secret.readable(map) and map and C_Map.GetMapInfo(map) or nil
-    if info and secret.readable(info.name) then here[info.name] = true end
+    if info and secret.readable(info.name) then
+        here[info.name] = true
+    end
     return here
 end
 
@@ -211,19 +244,29 @@ export function sortQuests<Q extends QuestPlace>(list: Q[], here: { [string]: bo
         end
         local distance = q.distance
         local nearest = z.nearest
-        if distance and (not nearest or distance < nearest) then z.nearest = distance end
-        if q.logIndex < z.first then z.first = q.logIndex end
+        if distance and (not nearest or distance < nearest) then
+            z.nearest = distance
+        end
+        if q.logIndex < z.first then
+            z.first = q.logIndex
+        end
     end
     table.sort(list, function(a: Q, b: Q): boolean
         local za, zb = assert(zones[a.zone or ""]), assert(zones[b.zone or ""])
         if za ~= zb then
-            if za.here ~= zb.here then return za.here end
+            if za.here ~= zb.here then
+                return za.here
+            end
             local da, db = za.nearest or math.huge, zb.nearest or math.huge
-            if da ~= db then return da < db end
+            if da ~= db then
+                return da < db
+            end
             return za.first < zb.first
         end
         local da, db = a.distance or math.huge, b.distance or math.huge
-        if da ~= db then return da < db end
+        if da ~= db then
+            return da < db
+        end
         return a.logIndex < b.logIndex
     end)
 end
@@ -255,7 +298,9 @@ export class QuestItemButton extends ActionButton
 
     override function UpdateCooldown()
         local logIndex = self.logIndex
-        if not logIndex or not GetQuestLogSpecialItemCooldown then return end
+        if not logIndex or not GetQuestLogSpecialItemCooldown then
+            return
+        end
         local ok, start, duration = pcall(GetQuestLogSpecialItemCooldown, logIndex)
         if ok and start and duration then
             pcall(self.cooldown.SetCooldown, self.cooldown, start, duration)
@@ -279,7 +324,9 @@ export class QuestItemButton extends ActionButton
     -- In the quest's area: an arcane border, its glow and an arcane ring just inside.
     function SetSuggested(given: unknown)
         local on = given and true or false
-        if self.suggested == on then return end
+        if self.suggested == on then
+            return
+        end
         self.suggested = on
         local suggest = self.suggest
         if not suggest then
@@ -324,7 +371,8 @@ class TrackerFrame extends Frame
         ]=])
         self.holder = h
         -- the head's toggle
-        local b = CreateFrame("Button", "SuuUIObjectiveTrackerToggle", self, "SecureHandlerClickTemplate") :: Button & FrameRefs
+        local b = CreateFrame("Button", "SuuUIObjectiveTrackerToggle", self, "SecureHandlerClickTemplate") :: Button
+            & FrameRefs
         b:SetPoint("TOPLEFT")
         b:RegisterForClicks("LeftButtonUp")
         b:SetFrameRef("holder", h)
@@ -339,7 +387,9 @@ class TrackerFrame extends Frame
             m:ApplyCollapse()
         end)
         h:HookScript("OnAttributeChanged", function(_, name)
-            if name == "state-boss" then m:ApplyCollapse() end
+            if name == "state-boss" then
+                m:ApplyCollapse()
+            end
         end)
         self.toggle = b
         local tracker = UI.ObjectiveTracker(self, { width = WIDTH, toggle = b })
@@ -353,7 +403,14 @@ end
 -- Tracked recipes
 --------------------------------------------------------------------------------
 
-local QUALITY: { [number]: string } = { [0] = "quality-poor", "ink", "quality-uncommon", "quality-rare", "quality-epic", "quality-legendary" }
+local QUALITY: { [number]: string } = {
+    [0] = "quality-poor",
+    "ink",
+    "quality-uncommon",
+    "quality-rare",
+    "quality-epic",
+    "quality-legendary",
+}
 
 -- Opening a profession from an addon is protected (blocked from the
 -- tracker, found in game): out of combat a secure button lies over the
@@ -369,7 +426,10 @@ end
 -- Its profession open in the Professions window, ready.
 local function professionShown(line: number?): boolean
     local ok, base = pcall(C_TradeSkillUI.GetBaseProfessionInfo)
-    return ok and type(base) == "table" and base.professionID == line and errors.try(C_TradeSkillUI.IsTradeSkillReady) and true or false
+    return ok and type(base) == "table" and base.professionID == line and
+        errors.try(C_TradeSkillUI.IsTradeSkillReady) and
+        true or
+        false
 end
 
 -- The secure button over a tracked recipe's row: a cast opens its profession.
@@ -386,7 +446,9 @@ class RecipeOpener extends Button
         self:SetAttribute("type1", "spell")
         self:HookScript("PreClick", function(_, button)
             local id = self.recipeID
-            if button == "LeftButton" and id then SuuUI.ExpectRecipe(id) end
+            if button == "LeftButton" and id then
+                SuuUI.ExpectRecipe(id)
+            end
         end)
         self:HookScript("PostClick", function(_, button)
             local id, row = self.recipeID, self.row
@@ -399,17 +461,25 @@ class RecipeOpener extends Button
             -- the next click decides afresh (opened, closed, chosen by now)
             after(0.3, function()
                 local now = self.row
-                if self:IsShown() and now and self:IsMouseOver() and not InCombatLockdown() then m:RowEnter(now) end
+                if self:IsShown() and now and self:IsMouseOver() and not InCombatLockdown() then
+                    m:RowEnter(now)
+                end
             end)
         end)
         self:SetScript("OnEnter", function()
             local row = self.row
-            if row then row:LockHighlight() end
+            if row then
+                row:LockHighlight()
+            end
         end)
         self:SetScript("OnLeave", function()
             local row = self.row
-            if row then row:UnlockHighlight() end
-            if not InCombatLockdown() then self:Hide() end
+            if row then
+                row:UnlockHighlight()
+            end
+            if not InCombatLockdown() then
+                self:Hide()
+            end
         end)
         self:Hide()
     end
@@ -420,35 +490,97 @@ end
 --------------------------------------------------------------------------------
 
 local PREVIEW_QUESTS: TrackerQuest[] = {
-    { questID = 1, zone = "Duskwater Hollow", title = "The Ashmaw Den", difficulty = "difficult", objectives = {
-        { text = "Ashmaw Ravager slain", progress = "3/8" },
-        { text = "Ember Pelt", progress = "5/5", done = true },
-    }, item = { preview = true, icon = 134075 } },
-    { questID = 2, zone = "Duskwater Hollow", title = "Letters for the Crossroads", difficulty = "standard", complete = true },
-    { questID = 3, zone = "Durotar", title = "Speargrass Cuttings", difficulty = "trivial", objectives = {
-        { text = "Handful of Cattails", progress = "0/2" },
-        { text = "Speargrass Cuttings", progress = "1/4" },
-    } },
+    {
+        questID = 1,
+        zone = "Duskwater Hollow",
+        title = "The Ashmaw Den",
+        difficulty = "difficult",
+        objectives = {
+            { text = "Ashmaw Ravager slain", progress = "3/8" },
+            { text = "Ember Pelt", progress = "5/5", done = true },
+        },
+        item = { preview = true, icon = 134075 },
+    },
+    {
+        questID = 2,
+        zone = "Duskwater Hollow",
+        title = "Letters for the Crossroads",
+        difficulty = "standard",
+        complete = true,
+    },
+    {
+        questID = 3,
+        zone = "Durotar",
+        title = "Speargrass Cuttings",
+        difficulty = "trivial",
+        objectives = {
+            { text = "Handful of Cattails", progress = "0/2" },
+            { text = "Speargrass Cuttings", progress = "1/4" },
+        },
+    },
 }
 
 local SECTION: SettingsSection = {
-    id = "tracker", label = "Objective tracker", category = "World", order = 15,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "tracker",
+    label = "Objective tracker",
+    category = "World",
+    order = 15,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Objective tracker", description = "Your tracked quests under the minimap. Left click a quest for its details on the map; right click to focus, share or stop tracking it. Move it in edit mode.", rows = {
-            { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
-              description = "Always, only in combat, or when the mouse is over it." },
-            { key = "maxHeight", label = "Height", control = "slider", min = 160, max = 800, step = 10, unit = "px", combat = true,
-              description = "The most it takes down the screen; scroll with the mouse wheel for the quests below." },
-            { key = "autoTrack", label = "Track accepted quests", control = "toggle",
-              description = "A quest you accept goes on the tracker at once." },
-            { key = "items", label = "Quest items", control = "toggle", combat = true,
-              description = "A quest's usable item left of its title: click it to use, in combat too." },
-            { key = "collapseInBossFights", label = "Collapse in boss fights", control = "toggle", combat = true,
-              description = "Only the head while a boss is up (its quest items hide too); back after the fight." },
-            { key = "recipes", label = "Tracked recipes", control = "toggle", combat = true,
-              description = "Recipes you track in Professions, under the quests: their reagents and whether you can craft them." },
-        } },
+        {
+            title = "Objective tracker",
+            description = "Your tracked quests under the minimap. Left click a quest for its details on the map; right click to focus, share or stop tracking it. Move it in edit mode.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Shows",
+                    control = "segmented",
+                    options = UI.VISIBILITY_OPTIONS,
+                    combat = true,
+                    description = "Always, only in combat, or when the mouse is over it.",
+                },
+                {
+                    key = "maxHeight",
+                    label = "Height",
+                    control = "slider",
+                    min = 160,
+                    max = 800,
+                    step = 10,
+                    unit = "px",
+                    combat = true,
+                    description = "The most it takes down the screen; scroll with the mouse wheel for the quests below.",
+                },
+                {
+                    key = "autoTrack",
+                    label = "Track accepted quests",
+                    control = "toggle",
+                    description = "A quest you accept goes on the tracker at once.",
+                },
+                {
+                    key = "items",
+                    label = "Quest items",
+                    control = "toggle",
+                    combat = true,
+                    description = "A quest's usable item left of its title: click it to use, in combat too.",
+                },
+                {
+                    key = "collapseInBossFights",
+                    label = "Collapse in boss fights",
+                    control = "toggle",
+                    combat = true,
+                    description = "Only the head while a boss is up (its quest items hide too); back after the fight.",
+                },
+                {
+                    key = "recipes",
+                    label = "Tracked recipes",
+                    control = "toggle",
+                    combat = true,
+                    description = "Recipes you track in Professions, under the quests: their reagents and whether you can craft them.",
+                },
+            },
+        },
     },
 }
 
@@ -492,7 +624,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     function TrackedQuests(): Quest[]
         local list: Quest[] = {}
         local n = C_QuestLog.GetNumQuestWatches()
-        if not secret.readable(n) then return list end
+        if not secret.readable(n) then
+            return list
+        end
         for i = 1, n do
             local id = C_QuestLog.GetQuestIDForQuestWatchIndex(i)
             if secret.readable(id) and id then
@@ -510,7 +644,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     function ItemButton(i: number): QuestItemButton
         local b = self.itemButtons[i]
-        if b then return b end
+        if b then
+            return b
+        end
         b = QuestItemButton.new(self:Parts().holder, i)
         self.itemButtons[i] = b
         return b
@@ -518,7 +654,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     -- The buttons beside their quests (out of combat only).
     function LayoutItems(quests: Quest[])
-        if InCombatLockdown() then self.pendingItems = true return end
+        if InCombatLockdown() then
+            self.pendingItems = true
+            return
+        end
         self.pendingItems = nil
         local parts = self:Parts()
         local used = 0
@@ -565,7 +704,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     -- The quest items placed: their cooldowns current.
     function ItemCooldowns()
-        for i = 1, self.itemsShown do self.itemButtons[i]:UpdateCooldown() end
+        for i = 1, self.itemsShown do
+            self.itemButtons[i]:UpdateCooldown()
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -573,8 +714,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     ----------------------------------------------------------------------------
 
     function InBossFight(): boolean
-        return self:Parts().holder:GetAttribute("state-boss") == 1
-            or (self.encounter and self:Get("collapseInBossFights")) or false
+        return self:Parts().holder:GetAttribute("state-boss") == 1 or
+            (self.encounter and self:Get("collapseInBossFights")) or
+            false
     end
 
     -- The head's toggle folds the quests only (the Recipes section stays:
@@ -588,7 +730,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     -- The saved collapse and the boss setting, into the secure side (out of combat).
     function ApplySecure()
-        if InCombatLockdown() then self.pendingSecure = true return end
+        if InCombatLockdown() then
+            self.pendingSecure = true
+            return
+        end
         self.pendingSecure = nil
         local holder = self:Parts().holder
         holder:SetAttribute("usercollapsed", self:Get("collapsed") and true or false)
@@ -609,7 +754,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         -- SuuUI's menu, in the tooltip's look (asked for in game)
         UI.ContextMenuFrom(row, function(_, root)
             local title = C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)
-            if secret.readable(title) and title then root:CreateTitle(title) end
+            if secret.readable(title) and title then
+                root:CreateTitle(title)
+            end
             if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
                 local focused = C_SuperTrack.GetSuperTrackedQuestID and C_SuperTrack.GetSuperTrackedQuestID() == questID
                 root:CreateButton(focused and "Stop focusing" or "Focus", function()
@@ -619,7 +766,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
             local pushable = C_QuestLog.IsPushableQuest and C_QuestLog.IsPushableQuest(questID)
             if secret.readable(pushable) and pushable and IsInGroup() and QuestLogPushQuest then
                 root:CreateButton("Share", function()
-                    if C_QuestLog.SetSelectedQuest then C_QuestLog.SetSelectedQuest(questID) end
+                    if C_QuestLog.SetSelectedQuest then
+                        C_QuestLog.SetSelectedQuest(questID)
+                    end
                     pcall(QuestLogPushQuest)
                 end)
             end
@@ -639,9 +788,13 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     -- The tracked recipes as tracker entries.
     function TrackedRecipes(): TrackerQuest[]
         local out: TrackerQuest[] = {}
-        if not self:Get("recipes") or not C_TradeSkillUI then return out end
+        if not self:Get("recipes") or not C_TradeSkillUI then
+            return out
+        end
         local ok, tracked = pcall(C_TradeSkillUI.GetRecipesTracked, false)
-        if not ok or type(tracked) ~= "table" then return out end
+        if not ok or type(tracked) ~= "table" then
+            return out
+        end
         for _, id in ipairs(tracked) do
             local got, sch = pcall(C_TradeSkillUI.GetRecipeSchematic, id, false)
             if got and type(sch) == "table" then
@@ -651,7 +804,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 if product then
                     local n, _, q, _, _, _, _, _, _, ic = errors.try(C_Item.GetItemInfo, product)
                     name, quality, icon = secret.asString(n), secret.asNumber(q), secret.asNumber(ic)
-                    if not name then self.waitingItems = true; errors.try(C_Item.RequestLoadItemDataByID, product) end
+                    if not name then
+                        self.waitingItems = true
+                        errors.try(C_Item.RequestLoadItemDataByID, product)
+                    end
                 end
                 local can = math.huge
                 for _, slot in ipairs(sch.reagentSlotSchematics or {}) do
@@ -661,13 +817,21 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                         local need = slot.quantityRequired or 1
                         local have = secret.asNumber(errors.try(C_Item.GetItemCount, itemID)) or 0
                         local rName = secret.asString(errors.try(C_Item.GetItemNameByID, itemID))
-                        if not rName then self.waitingItems = true; errors.try(C_Item.RequestLoadItemDataByID, itemID) end
-                        objectives[#objectives + 1] = { text = rName or "…", progress = math.min(have, need) .. "/" .. need,
-                                                        done = have >= need }
+                        if not rName then
+                            self.waitingItems = true
+                            errors.try(C_Item.RequestLoadItemDataByID, itemID)
+                        end
+                        objectives[#objectives + 1] = {
+                            text = rName or "…",
+                            progress = math.min(have, need) .. "/" .. need,
+                            done = have >= need,
+                        }
                         can = math.min(can, math.floor(have / math.max(1, need)))
                     end
                 end
-                if can == math.huge then can = 0 end
+                if can == math.huge then
+                    can = 0
+                end
                 out[#out + 1] = {
                     questID = id,
                     objectives = objectives,
@@ -685,7 +849,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     function RecipeOpener(): RecipeOpener
         local opener = self.opener
-        if opener then return opener end
+        if opener then
+            return opener
+        end
         opener = RecipeOpener.new(self, self:Parts())
         self.opener = opener
         return opener
@@ -694,11 +860,15 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     -- The mouse onto a tracked recipe: the secure opener over it (out of combat).
     function RowEnter(row: QuestRow)
         local quest = row.quest
-        if not (quest and quest.recipe) or InCombatLockdown() then return end
+        if not (quest and quest.recipe) or InCombatLockdown() then
+            return
+        end
         local id = quest.questID
         local line = recipeSkillLine(id)
         local spell = line and SuuUI.ProfessionOpener(line)
-        if not spell then return end
+        if not spell then
+            return
+        end
         local b = self:RecipeOpener()
         b.recipeID, b.row = id, row
         -- its profession already open: no cast (it would close the window, found
@@ -717,7 +887,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     function RecipeMenu(recipeID: number, row: QuestRow)
         UI.ContextMenuFrom(row, function(_, root)
             local title = row.quest and row.quest.title
-            if title then root:CreateTitle(title) end
+            if title then
+                root:CreateTitle(title)
+            end
             root:CreateButton("Stop tracking", function()
                 pcall(C_TradeSkillUI.SetRecipeTracked, recipeID, false, false)
             end)
@@ -745,7 +917,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     function Refresh()
         self.refreshQueued = nil
         local parts = self.frame
-        if not parts then return end
+        if not parts then
+            return
+        end
         local tracker = parts.tracker
         local quests = self:TrackedQuests()
         local combat = InCombatLockdown()
@@ -755,10 +929,15 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         -- list, so they scroll together within the tracker's height (asked for
         -- in game: a block of their own sat too low on the screen)
         local recipes = self:TrackedRecipes()
-        tracker:SetRecipes(recipes, self:Get("recipesCollapsed"),
-            #recipes == 1 and "1 recipe" or (#recipes .. " recipes"))
+        tracker:SetRecipes(
+            recipes,
+            self:Get("recipesCollapsed"),
+            #recipes == 1 and "1 recipe" or (#recipes .. " recipes")
+        )
         local shown: TrackerQuest[] = {}
-        for i, q in ipairs(quests) do shown[i] = q end
+        for i, q in ipairs(quests) do
+            shown[i] = q
+        end
         tracker:SetQuests(shown, freeze)
         local n = #quests
         tracker:SetMeta(n == 1 and "1 quest" or (n .. " quests"))
@@ -774,7 +953,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         -- secure buttons, and its visibility is the Shows setting's)
         -- the list moved under it: the opener waits for the mouse again
         local opener = self.opener
-        if opener and opener:IsShown() and not combat then opener:Hide() end
+        if opener and opener:IsShown() and not combat then
+            opener:Hide()
+        end
         local empty = n == 0 and #recipes == 0
         tracker:SetAlpha(empty and 0 or 1)
         parts.toggle:SetAlpha(empty and 0 or 1)
@@ -782,13 +963,22 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     -- Many quest events come at once: one refresh on the next frame.
     function QueueRefresh()
-        if self.refreshQueued then return end
+        if self.refreshQueued then
+            return
+        end
         self.refreshQueued = true
-        after(0, function() if self:IsEnabled() then self:Refresh() end end)
+        after(0, function()
+            if self:IsEnabled() then
+                self:Refresh()
+            end
+        end)
     end
 
     function ApplySize()
-        if InCombatLockdown() then self.pendingSize = true return end
+        if InCombatLockdown() then
+            self.pendingSize = true
+            return
+        end
         self.pendingSize = nil
         local h = self:Get("maxHeight")
         local parts = self:Parts()
@@ -818,21 +1008,31 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     ----------------------------------------------------------------------------
 
     override function OnEnable()
-        if not C_QuestLog or not C_QuestLog.GetNumQuestWatches then return end
+        if not C_QuestLog or not C_QuestLog.GetNumQuestWatches then
+            return
+        end
         local parts = self.frame
         if not parts then
             parts = TrackerFrame.new(self)
             self.frame = parts
             local tracker = parts.tracker
-            tracker.onQuestClick = function(id: number, button: string, row: QuestRow) self:QuestClick(id, button, row) end
+            tracker.onQuestClick = function(id: number, button: string, row: QuestRow)
+                self:QuestClick(id, button, row)
+            end
             -- the items follow the list (out of combat: in combat it's locked
             -- while items show)
             tracker.onScroll = function()
                 local quests = self.quests
-                if not InCombatLockdown() and quests then self:LayoutItems(quests) end
+                if not InCombatLockdown() and quests then
+                    self:LayoutItems(quests)
+                end
             end
-            tracker.onRecipeClick = function(id: number, button: string, row: QuestRow) self:RecipeClick(id, button, row) end
-            tracker.onRowEnter = function(row: QuestRow) self:RowEnter(row) end
+            tracker.onRecipeClick = function(id: number, button: string, row: QuestRow)
+                self:RecipeClick(id, button, row)
+            end
+            tracker.onRowEnter = function(row: QuestRow)
+                self:RowEnter(row)
+            end
             tracker.onSectionToggle = function()
                 self:Set("recipesCollapsed", not self:Get("recipesCollapsed"))
                 self:Refresh()
@@ -845,10 +1045,14 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 if resort <= 0 then
                     resort = 10
                     -- (nor while you're reading it with the mouse on it)
-                    if not InCombatLockdown() and not tracker:IsMouseOver() then self:QueueRefresh() end
+                    if not InCombatLockdown() and not tracker:IsMouseOver() then
+                        self:QueueRefresh()
+                    end
                 end
                 wait = wait - elapsed
-                if wait > 0 then return end
+                if wait > 0 then
+                    return
+                end
                 wait = 0.25
                 self:TickItems()
             end)
@@ -864,45 +1068,83 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         self:ApplyShows()
         self:ApplySize()
         self:ApplySecure()
-        self:Watch("shows", function() self:ApplyShows() end)
-        self:Watch("position", function() self:ApplyShows() end)
-        self:Watch("maxHeight", function() self:ApplySize() end)
-        self:Watch("items", function() self:Refresh() end)
-        self:Watch("recipes", function() self:Refresh() end)
-        self:Watch("collapseInBossFights", function() self:ApplySecure() end)
+        self:Watch("shows", function()
+            self:ApplyShows()
+        end)
+        self:Watch("position", function()
+            self:ApplyShows()
+        end)
+        self:Watch("maxHeight", function()
+            self:ApplySize()
+        end)
+        self:Watch("items", function()
+            self:Refresh()
+        end)
+        self:Watch("recipes", function()
+            self:Refresh()
+        end)
+        self:Watch("collapseInBossFights", function()
+            self:ApplySecure()
+        end)
         -- a theme's line heights: laid out again (the preview too)
         self:On("SUUUI_THEME_CHANGED", function()
             self:QueueRefresh()
             local preview = self.preview
-            if preview then preview:SetQuests(PREVIEW_QUESTS) end
+            if preview then
+                preview:SetQuests(PREVIEW_QUESTS)
+            end
         end)
         -- a quest you accept goes on the tracker
         self:OnGameEvent("QUEST_ACCEPTED", function(_: unknown, a: unknown, b: unknown)
-            if not self:Get("autoTrack") then return end
+            if not self:Get("autoTrack") then
+                return
+            end
             -- (questLogIndex, questID) on older clients, (questID) on newer ones
             local questID = secret.asNumber(b or a)
-            if not (questID and C_QuestLog.AddQuestWatch) then return end
+            if not (questID and C_QuestLog.AddQuestWatch) then
+                return
+            end
             local watched = C_QuestLog.GetQuestWatchType and C_QuestLog.GetQuestWatchType(questID)
-            if watched == nil then pcall(C_QuestLog.AddQuestWatch, questID) end
+            if watched == nil then
+                pcall(C_QuestLog.AddQuestWatch, questID)
+            end
         end)
-        for _, e in ipairs({ "QUEST_LOG_UPDATE", "QUEST_WATCH_LIST_CHANGED", "QUEST_WATCH_UPDATE", "QUEST_ACCEPTED",
-                             "QUEST_REMOVED", "QUEST_TURNED_IN", "QUEST_ITEM_UPDATE", "PLAYER_LEVEL_UP",
-                             "PLAYER_ENTERING_WORLD",
-                             -- tracked recipes: tracking changes, reagents come and go
-                             "TRACKED_RECIPE_UPDATE", "BAG_UPDATE_DELAYED" }) do
-            self:OnGameEvent(e, function() self:QueueRefresh() end)
+        for _, e in ipairs({
+            "QUEST_LOG_UPDATE",
+            "QUEST_WATCH_LIST_CHANGED",
+            "QUEST_WATCH_UPDATE",
+            "QUEST_ACCEPTED",
+            "QUEST_REMOVED",
+            "QUEST_TURNED_IN",
+            "QUEST_ITEM_UPDATE",
+            "PLAYER_LEVEL_UP",
+            "PLAYER_ENTERING_WORLD",
+            -- tracked recipes: tracking changes, reagents come and go
+            "TRACKED_RECIPE_UPDATE",
+            "BAG_UPDATE_DELAYED",
+        }) do
+            self:OnGameEvent(e, function()
+                self:QueueRefresh()
+            end)
         end
         -- an item's cooldown: only the quest items' own (it comes with every
         -- potion and trinket; a whole redraw each time was most of SuuUI's
         -- garbage, 175 KB a redraw: /suu probe garbage, 2026-10-18)
-        self:OnGameEvent("BAG_UPDATE_COOLDOWN", function() self:ItemCooldowns() end)
+        self:OnGameEvent("BAG_UPDATE_COOLDOWN", function()
+            self:ItemCooldowns()
+        end)
         -- a new zone: sorted again (the zone you're in goes first)
         for _, e in ipairs({ "ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "QUEST_POI_UPDATE" }) do
-            self:OnGameEvent(e, function() self:QueueRefresh() end)
+            self:OnGameEvent(e, function()
+                self:QueueRefresh()
+            end)
         end
         -- item names the game hadn't loaded yet (tracked recipes' reagents)
         self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
-            if self.waitingItems then self.waitingItems = false; self:QueueRefresh() end
+            if self.waitingItems then
+                self.waitingItems = false
+                self:QueueRefresh()
+            end
         end)
         -- a boss fight without a boss unit: the tracker (not its items) collapses
         for _, e in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END" }) do
@@ -915,20 +1157,28 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
             -- the recipe opener away (a profession can't open in combat)
             local opener = self.opener
-            if opener then opener:Hide() end
+            if opener then
+                opener:Hide()
+            end
             tracker:SetScrollLocked(self.itemsShown > 0)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             tracker:SetScrollLocked(false)
-            if self.pendingSecure then self:ApplySecure() end
-            if self.pendingSize then self:ApplySize() end
+            if self.pendingSecure then
+                self:ApplySecure()
+            end
+            if self.pendingSize then
+                self:ApplySize()
+            end
             self:Refresh()
         end)
     end
 
     override function OnDisable()
         local parts = self.frame
-        if parts then parts:Hide() end
+        if parts then
+            parts:Hide()
+        end
     end
 end
 

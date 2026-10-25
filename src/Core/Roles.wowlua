@@ -26,20 +26,16 @@ local CLASS: string = secret.known(classFile, "")
 -- Each class's trees, left to right, as roles. Feral counts as damage (cat
 -- and bear share the tree): bear tanks choose Tank for the character.
 -- A role, as the game names it (UnitGroupRolesAssigned).
-export enum Role {
-    Tank = "TANK",
-    Healer = "HEALER",
-    Damager = "DAMAGER",
-}
+export enum Role { Tank = "TANK", Healer = "HEALER", Damager = "DAMAGER" }
 
 -- Where the role came from.
 -- the role, before any profile switch it causes (Docs/API.md)
 declare message SUUUI_ROLE_CHANGED(role: Role)
 
 export enum RoleSource {
-    Chosen = "chosen",       -- this character's choice (profiles.chosenRole)
-    Assigned = "assigned",   -- the group's (role check, group finder)
-    Talents = "talents",     -- the tree with the most points
+    Chosen = "chosen", -- this character's choice (profiles.chosenRole)
+    Assigned = "assigned", -- the group's (role check, group finder)
+    Talents = "talents", -- the tree with the most points
 }
 
 const TREE_ROLE: { [string]: Role[] } = {
@@ -57,7 +53,9 @@ export const LABEL: { [Role]: string } = { [Role.Tank] = "Tank", [Role.Healer] =
 local function treePoints(): (number[], number)
     local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
     local info = cfg and C_Traits and C_Traits.GetConfigInfo(cfg)
-    if not (info and info.treeIDs) then return { 0, 0, 0 }, 0 end
+    if not (info and info.treeIDs) then
+        return { 0, 0, 0 }, 0
+    end
     local nodes: { x: number, ranks: unknown }[] = {}
     for _, treeID in ipairs(info.treeIDs) do
         for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
@@ -67,9 +65,13 @@ local function treePoints(): (number[], number)
             end
         end
     end
-    if #nodes == 0 then return { 0, 0, 0 }, 0 end
+    if #nodes == 0 then
+        return { 0, 0, 0 }, 0
+    end
     local lo, hi = math.huge, -math.huge
-    for _, n in ipairs(nodes) do lo, hi = math.min(lo, n.x), math.max(hi, n.x) end
+    for _, n in ipairs(nodes) do
+        lo, hi = math.min(lo, n.x), math.max(hi, n.x)
+    end
     local third = (hi - lo) / 3
     local pts, total = { 0, 0, 0 }, 0
     for _, n in ipairs(nodes) do
@@ -83,17 +85,28 @@ end
 
 export function spec(): (number, number[])
     local ok, pts, total = pcall(treePoints)
-    if not ok or total == 0 then return 0, ok and pts or { 0, 0, 0 } end
+    if not ok or total == 0 then
+        return 0, ok and pts or { 0, 0, 0 }
+    end
     local best = 1
-    for t = 2, 3 do if pts[t] > pts[best] then best = t end end
+    for t = 2, 3 do
+        if pts[t] > pts[best] then
+            best = t
+        end
+    end
     return best, pts
 end
 
 export function current(): (Role, RoleSource)
     local chosen = reflect.enumFrom(Role, profiles.chosenRole())
-    if chosen then return chosen, RoleSource.Chosen end
-    local assigned = UnitGroupRolesAssigned and reflect.enumFrom(Role, secret.known(UnitGroupRolesAssigned("player"), "NONE"))
-    if assigned then return assigned, RoleSource.Assigned end
+    if chosen then
+        return chosen, RoleSource.Chosen
+    end
+    local assigned = UnitGroupRolesAssigned and
+        reflect.enumFrom(Role, secret.known(UnitGroupRolesAssigned("player"), "NONE"))
+    if assigned then
+        return assigned, RoleSource.Assigned
+    end
     local tree = spec()
     local roles = TREE_ROLE[CLASS]
     return (roles and roles[tree]) or Role.Damager, RoleSource.Talents
@@ -115,22 +128,32 @@ local function apply(force: boolean)
     -- Right after login the talents can read as unspent for a moment: a
     -- character past level 10 with no tree read is that, not a real DPS role.
     -- Wait for the talent events instead of switching away and back.
-    if source == RoleSource.Talents and tree == 0 and UnitLevel("player") >= 10 then return end
+    if source == RoleSource.Talents and tree == 0 and UnitLevel("player") >= 10 then
+        return
+    end
     if role ~= lastRole then
         lastRole = role
         events.emit("SUUUI_ROLE_CHANGED", role)
     end
-    if role == profiles.lastRole() and not force then return end
+    if role == profiles.lastRole() and not force then
+        return
+    end
     profiles.setLastRole(role)
     local profileName = profiles.roleProfile(role)
-    if not profileName or profileName == profiles.current() then return end
-    combat.run("roleProfile", function()
-        -- the role may have changed again while combat lasted
-        local now = profiles.roleProfile((current()))
-        if now and now ~= profiles.current() and profiles.use(now) then
-            print(("%s role: switched to the profile %s."):format(LABEL[(current())] or "?", now))
-        end
-    end, "Profiles by role")
+    if not profileName or profileName == profiles.current() then
+        return
+    end
+    combat.run(
+        "roleProfile",
+        function()
+            -- the role may have changed again while combat lasted
+            local now = profiles.roleProfile((current()))
+            if now and now ~= profiles.current() and profiles.use(now) then
+                print(("%s role: switched to the profile %s."):format(LABEL[(current())] or "?", now))
+            end
+        end,
+        "Profiles by role"
+    )
 end
 
 -- Events come in bursts (a roster update fires several); settle first. A
@@ -138,7 +161,9 @@ end
 local pending, pendingForce = false, false
 local function soon(force: boolean?)
     pendingForce = pendingForce or force == true
-    if pending then return end
+    if pending then
+        return
+    end
     pending = true
     after(0.5, function()
         local f = pendingForce
@@ -151,14 +176,34 @@ local function listen(event: EventName, fn: () -> ())
     events.onGame(event, fn, "Roles")
 end
 
-events.on("SUUUI_SETTINGS_READY", function()
-    listen("PLAYER_ENTERING_WORLD", function() soon() end)
-    local gameEvents: EventName[] = { "PLAYER_ROLES_ASSIGNED", "GROUP_ROSTER_UPDATE", "TRAIT_CONFIG_UPDATED",
-                                      "TRAIT_NODE_CHANGED", "PLAYER_TALENT_UPDATE", "CHARACTER_POINTS_CHANGED",
-                                      "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" }
-    for _, e in ipairs(gameEvents) do
-        listen(e, function() soon() end)
-    end
-    -- a new mapping or role choice applies at once
-    events.on("SUUUI_ROLE_PROFILES_CHANGED", function() soon(true) end, "Roles")
-end, "Roles")
+events.on(
+    "SUUUI_SETTINGS_READY",
+    function()
+        listen("PLAYER_ENTERING_WORLD", function()
+            soon()
+        end)
+        local gameEvents: EventName[] = {
+            "PLAYER_ROLES_ASSIGNED",
+            "GROUP_ROSTER_UPDATE",
+            "TRAIT_CONFIG_UPDATED",
+            "TRAIT_NODE_CHANGED",
+            "PLAYER_TALENT_UPDATE",
+            "CHARACTER_POINTS_CHANGED",
+            "ACTIVE_PLAYER_SPECIALIZATION_CHANGED",
+        }
+        for _, e in ipairs(gameEvents) do
+            listen(e, function()
+                soon()
+            end)
+        end
+        -- a new mapping or role choice applies at once
+        events.on(
+            "SUUUI_ROLE_PROFILES_CHANGED",
+            function()
+                soon(true)
+            end,
+            "Roles"
+        )
+    end,
+    "Roles"
+)

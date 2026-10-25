@@ -52,15 +52,18 @@ local DEFAULTS = {
     -- under the micro menu (28px down, 36px tall), space-5 clear
     position = { point = "TOPLEFT", x = 28, y = -76 } :: Position,
     max = 5,
-    requests = true,   -- Blizzard's popups as cards
+    requests = true, -- Blizzard's popups as cards
     durability = true, -- a note while your gear is badly damaged or broken
-    bagsFull = true,   -- a note while your bags are full
+    bagsFull = true, -- a note while your bags are full
     talentPoints = true, -- a note while you have talent points to spend
     legacyPoints = true, -- a note while you have Legacy points to spend
     -- friends and guild members coming online / going offline
-    presenceBnetOnline = true, presenceBnetOffline = true,
-    presenceFriendOnline = true, presenceFriendOffline = true,
-    presenceGuildOnline = true, presenceGuildOffline = false,
+    presenceBnetOnline = true,
+    presenceBnetOffline = true,
+    presenceFriendOnline = true,
+    presenceFriendOffline = true,
+    presenceGuildOnline = true,
+    presenceGuildOffline = false,
     presenceHideChat = true, -- the game's own lines in chat hidden
 }
 
@@ -74,8 +77,15 @@ local OFF_SCREEN = 200
 -- the dangerous one, whether it's about the item on the cursor, whether you
 -- type DELETE, what it costs.
 export type Kind = {
-    category?: string, glyph?: string, tone?: string, title?: string, primary?: number, danger?: number,
-    item?: boolean, confirm?: boolean, cost?: (dialog: Frame) -> number?,
+    category?: string,
+    glyph?: string,
+    tone?: string,
+    title?: string,
+    primary?: number,
+    danger?: number,
+    item?: boolean,
+    confirm?: boolean,
+    cost?: (dialog: Frame) -> number?,
 }
 
 -- The popups SuuUI shows as cards: caption, glyph, tone, which button is the
@@ -98,9 +108,23 @@ local KINDS: { [string]: Kind } = {
     AREA_SPIRIT_HEAL = { category = "Spirit healer", glyph = "skull", primary = 1 },
     XP_LOSS = { category = "Spirit healer", glyph = "skull", tone = "warning" },
     DELETE_ITEM = { category = "Delete item", glyph = "trash", tone = "danger", danger = 1, item = true },
-    DELETE_GOOD_ITEM = { category = "Delete item", glyph = "trash", tone = "danger", danger = 1, item = true, confirm = true },
+    DELETE_GOOD_ITEM = {
+        category = "Delete item",
+        glyph = "trash",
+        tone = "danger",
+        danger = 1,
+        item = true,
+        confirm = true,
+    },
     DELETE_QUEST_ITEM = { category = "Delete quest item", glyph = "trash", tone = "danger", danger = 1, item = true },
-    DELETE_GOOD_QUEST_ITEM = { category = "Delete quest item", glyph = "trash", tone = "danger", danger = 1, item = true, confirm = true },
+    DELETE_GOOD_QUEST_ITEM = {
+        category = "Delete quest item",
+        glyph = "trash",
+        tone = "danger",
+        danger = 1,
+        item = true,
+        confirm = true,
+    },
     CAMP = { category = "Logging out", glyph = "door" },
     QUIT = { category = "Quitting", glyph = "door", danger = 1 },
     CONFIRM_BATTLEFIELD_ENTRY = { category = "Battleground", glyph = "flag", primary = 1 },
@@ -119,14 +143,22 @@ local KINDS: { [string]: Kind } = {
     CLIENT_INVENTORY_FULL_OVERFLOW = { category = "Inventory full", glyph = "bag", tone = "warning", primary = 1 },
     -- the bags' buy cell (a secure click on the game's purchase button):
     -- the game's own question, its cost on the card
-    CONFIRM_BUY_BANK_TAB = { category = "Bank", glyph = "bank", primary = 1, cost = function(dialog: Frame): number?
-        -- what the popup's own money frame shows, else the next tab's price
-        local shown = asNumber(field(dialog, "MoneyFrame", "staticMoney"))
-        if shown and shown > 0 then return shown end
-        local bankType = asNumber(field(dialog, "data", "bankType")) or asNumber(field(Enum, "BankType", "Character"))
-        local nextTab = bankType and errors.tryValue(C_Bank and C_Bank.FetchNextPurchasableBankTabData, bankType)
-        return nextTab and asNumber(nextTab.tabCost) or nil
-    end },
+    CONFIRM_BUY_BANK_TAB = {
+        category = "Bank",
+        glyph = "bank",
+        primary = 1,
+        cost = function(dialog: Frame): number?
+            -- what the popup's own money frame shows, else the next tab's price
+            local shown = asNumber(field(dialog, "MoneyFrame", "staticMoney"))
+            if shown and shown > 0 then
+                return shown
+            end
+            local bankType = asNumber(field(dialog, "data", "bankType")) or
+                asNumber(field(Enum, "BankType", "Character"))
+            local nextTab = bankType and errors.tryValue(C_Bank and C_Bank.FetchNextPurchasableBankTabData, bankType)
+            return nextTab and asNumber(nextTab.tabCost) or nil
+        end,
+    },
 }
 
 -- "1g 20s 5c", each in its coin's colour (zero coins left out).
@@ -136,9 +168,15 @@ local function coinString(copper: number): string
     local function add(n: number, suffix: string, token: ColorToken)
         out[#out + 1] = ("|cff%s%d%s|r"):format(T.color[token].hex, n, suffix)
     end
-    if g > 0 then add(g, "g", "coin-gold") end
-    if s > 0 then add(s, "s", "coin-silver") end
-    if c > 0 or #out == 0 then add(c, "c", "coin-copper") end
+    if g > 0 then
+        add(g, "g", "coin-gold")
+    end
+    if s > 0 then
+        add(s, "s", "coin-silver")
+    end
+    if c > 0 or #out == 0 then
+        add(c, "c", "coin-copper")
+    end
     return table.concat(out, " ")
 end
 
@@ -151,7 +189,9 @@ local nextNote = 0
 -- A note as SuuUI.Notify was given it (its fields in Docs/API.md; a
 -- plugin's passed on as it gave it, as before).
 local function noteOf(def: unknown): NotificationData?
-    if type(def) ~= "table" or not secret.readable(def) then return nil end
+    if type(def) ~= "table" or not secret.readable(def) then
+        return nil
+    end
     return def :: NotificationData
 end
 
@@ -167,7 +207,9 @@ local function worstDurability(): number?
         local cur, max = asNumber(c), asNumber(m)
         if cur and max and max > 0 then
             local r = cur / max
-            if not worst or r < worst then worst = r end
+            if not worst or r < worst then
+                worst = r
+            end
         end
     end
     return worst
@@ -184,7 +226,9 @@ local function showRepairers()
         return
     end
     local shown = frames.find("WorldMapFrame")
-    if shown and shown:IsShown() then return end
+    if shown and shown:IsShown() then
+        return
+    end
     ToggleWorldMap()
 end
 
@@ -192,7 +236,9 @@ end
 local function wornList(d: DurabilityInfo): string
     local out: string[] = {}
     for _, p in ipairs(d.pieces) do
-        if p.state == "damaged" then out[#out + 1] = p.label .. " " .. p.percent .. "%" end
+        if p.state == "damaged" then
+            out[#out + 1] = p.label .. " " .. p.percent .. "%"
+        end
     end
     return table.concat(out, " · ")
 end
@@ -229,19 +275,27 @@ local function freeSlots(): number
     for bag = 0, (NUM_BAG_SLOTS or 4) do
         local n, family = C_Container.GetContainerNumFreeSlots(bag)
         local slots, kind = asNumber(n), asNumber(family)
-        if slots and (kind == nil or kind == 0) then free = free + slots end
+        if slots and (kind == nil or kind == 0) then
+            free = free + slots
+        end
     end
     return free
 end
 
 -- Talent points not spent yet (the active talent config's points to spend).
 local function unspentTalents(): number
-    if not (C_ClassTalents and C_Traits) then return 0 end
+    if not (C_ClassTalents and C_Traits) then
+        return 0
+    end
     local configID = asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
-    if not configID then return 0 end
+    if not configID then
+        return 0
+    end
     local info = errors.tryValue(C_Traits.GetConfigInfo, configID)
     local treeID = info and info.treeIDs and info.treeIDs[1]
-    if not treeID then return 0 end
+    if not treeID then
+        return 0
+    end
     local currency = errors.tryValue(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
     return asNumber(currency and currency[1] and currency[1].quantity) or 0
 end
@@ -250,9 +304,13 @@ end
 -- one config for all three trees: 1187 is Professions).
 local LEGACY_TREE = 1187
 local function unspentLegacy(): number
-    if not C_Traits then return 0 end
+    if not C_Traits then
+        return 0
+    end
     local configID = asNumber(errors.tryValue(C_Traits.GetConfigIDByTreeID, LEGACY_TREE))
-    if not configID then return 0 end
+    if not configID then
+        return 0
+    end
     local currency = errors.tryValue(C_Traits.GetTreeCurrencyInfo, configID, LEGACY_TREE, false)
     return asNumber(currency and currency[1] and currency[1].quantity) or 0
 end
@@ -262,9 +320,13 @@ end
 -- so showing it from here taints nothing Esc relies on (checked in
 -- Blizzard's code, 2026-10-14).
 local function openLegacy()
-    if not frames.find("LegacySystemFrame") then try(field(C_AddOns, "LoadAddOn"), "Blizzard_LegacySystem") end
+    if not frames.find("LegacySystemFrame") then
+        try(field(C_AddOns, "LoadAddOn"), "Blizzard_LegacySystem")
+    end
     local f = frames.find("LegacySystemFrame")
-    if f and not f:IsShown() then f:Show() end
+    if f and not f:IsShown() then
+        f:Show()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -280,7 +342,9 @@ end
 -- A pattern from one of the game's format strings: "%s" a capture, the
 -- rest literal.
 local function patternOf(fmt: unknown): string?
-    if type(fmt) ~= "string" then return nil end
+    if type(fmt) ~= "string" then
+        return nil
+    end
     local parts: string[] = {}
     -- the text between the "%s"s (one more "%s" at the end closes the last)
     for piece in (fmt .. "%s"):gmatch("(.-)%%s") do
@@ -289,9 +353,9 @@ local function patternOf(fmt: unknown): string?
     return "^" .. table.concat(parts, "(.-)") .. "$"
 end
 
-local ONLINE = patternOf(ERR_FRIEND_ONLINE_SS)    -- link, name
-local OFFLINE = patternOf(ERR_FRIEND_OFFLINE_S)   -- name
-local BATCH = 2.5                                  -- seconds that share one card
+local ONLINE = patternOf(ERR_FRIEND_ONLINE_SS) -- link, name
+local OFFLINE = patternOf(ERR_FRIEND_OFFLINE_S) -- name
+local BATCH = 2.5 -- seconds that share one card
 
 -- A class's file name ("PRIEST") by its name as the game writes it.
 local CLASS_FILES: { [string]: string } = {}
@@ -300,34 +364,54 @@ for _, key in ipairs({ "LOCALIZED_CLASS_NAMES_MALE", "LOCALIZED_CLASS_NAMES_FEMA
     if type(names) == "table" and secret.readable(names) then
         for file, name in pairs(names :: { [unknown]: unknown }) do
             local f, n = asString(file), asString(name)
-            if f and n then CLASS_FILES[n] = f end
+            if f and n then
+                CLASS_FILES[n] = f
+            end
         end
     end
 end
 
 local GAMES: { [string]: string } = {
-    App = "Battle.net", BSAp = "Battle.net Mobile", WTCG = "Hearthstone", Hero = "Heroes of the Storm",
-    Pro = "Overwatch", S2 = "StarCraft II", S1 = "StarCraft", D3 = "Diablo III", Fen = "Diablo IV",
-    ANBS = "Diablo Immortal", VIPR = "Call of Duty", W3 = "Warcraft III", GRY = "Warcraft Rumble",
+    App = "Battle.net",
+    BSAp = "Battle.net Mobile",
+    WTCG = "Hearthstone",
+    Hero = "Heroes of the Storm",
+    Pro = "Overwatch",
+    S2 = "StarCraft II",
+    S1 = "StarCraft",
+    D3 = "Diablo III",
+    Fen = "Diablo IV",
+    ANBS = "Diablo Immortal",
+    VIPR = "Call of Duty",
+    W3 = "Warcraft III",
+    GRY = "Warcraft Rumble",
 }
 
 local function classIcon(file: string?): NotificationIcon?
     local c = file and field(_G, "CLASS_ICON_TCOORDS", file)
-    if type(c) ~= "table" then return nil end
+    if type(c) ~= "table" then
+        return nil
+    end
     local coords: number[] = {}
-    for i, v in ipairs(tbl.list(c)) do coords[i] = asNumber(v) or 0 end
+    for i, v in ipairs(tbl.list(c)) do
+        coords[i] = asNumber(v) or 0
+    end
     return { texture = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes", coords = coords }
 end
 
 local function classColor(file: string?): string?
-    if not file then return nil end
+    if not file then
+        return nil
+    end
     local token = "class-" .. file:lower()
     return field(T.color, token) ~= nil and token or nil
 end
 
 -- What a group invite by name does (a card's Invite).
 local function inviting(name: string): () -> ()
-    return function() unit.invite(name) end
+    return function()
+        unit.invite(name)
+    end
 end
 
 -- Someone on a friends card, and what SuuUI knows besides: their
@@ -338,7 +422,9 @@ type Person = NotificationPerson & { bnetID?: number, inviteName?: string, invit
 -- The people as the card takes them.
 local function cardPeople(people: Person[]): NotificationPerson[]
     local out: NotificationPerson[] = {}
-    for i, p in ipairs(people) do out[i] = p end
+    for i, p in ipairs(people) do
+        out[i] = p
+    end
     return out
 end
 
@@ -347,14 +433,20 @@ end
 -- Same game and side (no realm check: Forever's realms are rulesets, and a
 -- friend on another realm ID still groups; the game says when it can't).
 local function canCooperate(game: BNetGameAccountInfo): boolean
-    if not (game.wowProjectID == asNumber(field(_G, "WOW_PROJECT_ID")) and game.gameAccountID) then return false end
+    if not (game.wowProjectID == asNumber(field(_G, "WOW_PROJECT_ID")) and game.gameAccountID) then
+        return false
+    end
     local side = asString(game.factionName)
     return side ~= nil and side == asString(UnitFactionGroup("player"))
 end
 
 -- the presence settings: a kind's setting, then Online or Offline
-type PresenceKey = "presenceBnetOnline" | "presenceBnetOffline" | "presenceFriendOnline" | "presenceFriendOffline"
-    | "presenceGuildOnline" | "presenceGuildOffline"
+type PresenceKey = "presenceBnetOnline"
+    | "presenceBnetOffline"
+    | "presenceFriendOnline"
+    | "presenceFriendOffline"
+    | "presenceGuildOnline"
+    | "presenceGuildOffline"
 
 -- Who comes and goes: a Battle.net friend, a friend, a guild member.
 type PresenceKind = "bnet" | "friend" | "guild"
@@ -384,7 +476,9 @@ end
 -- Is this one of the game's online/offline lines (for the chat filter)?
 local function isPresenceLine(msg: unknown): boolean
     local text = asString(msg)
-    if not text then return false end
+    if not text then
+        return false
+    end
     return (ONLINE ~= nil and text:match(ONLINE) ~= nil) or (OFFLINE ~= nil and text:match(OFFLINE) ~= nil)
 end
 
@@ -412,20 +506,40 @@ type Point = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint, x: n
 
 -- How a part of the game's window was before SuuUI moved and styled it.
 type Saved = {
-    points: Point[], width: number, height: number, strata: FrameStrata, level: number,
-    alphas: { [Texture]: number }, font?: Font, fs?: FontString, color?: number[],
+    points: Point[],
+    width: number,
+    height: number,
+    strata: FrameStrata,
+    level: number,
+    alphas: { [Texture]: number },
+    font?: Font,
+    fs?: FontString,
+    color?: number[],
 }
 
 -- A hosted window: its parts, its card's data and card, what was changed.
 export type Host = {
-    dialog: Frame, order: number, which: string, kind: Kind, id: string,
-    buttons: () -> Shown[], text: () -> string?, time: () -> (number?, number?),
-    editBox?: EditBox, roles?: () -> Button[], warning?: () -> string?,
-    clamped?: boolean, data: NotificationData, card?: Notification, cost?: number,
+    dialog: Frame,
+    order: number,
+    which: string,
+    kind: Kind,
+    id: string,
+    buttons: () -> Shown[],
+    text: () -> string?,
+    time: () -> (number?, number?),
+    editBox?: EditBox,
+    roles?: () -> Button[],
+    warning?: () -> string?,
+    clamped?: boolean,
+    data: NotificationData,
+    card?: Notification,
+    cost?: number,
     saved?: { [Frame]: Saved },
 }
 
-local function noTime(): (number?, number?) return nil, nil end
+local function noTime(): (number?, number?)
+    return nil, nil
+end
 
 -- A font string's text, when it is one and readable.
 local function textOf(v: unknown): string?
@@ -437,9 +551,11 @@ local function buttonsOf(dialog: Frame): Shown[]
     local out: Shown[] = {}
     local name = dialog:GetName()
     for i = 1, 4 do
-        local b = frames.asButton(field(dialog, "ButtonContainer", "Button" .. i))
-            or (name and frames.asButton(field(_G, name .. "Button" .. i)) or nil)
-        if b and b:IsShown() then out[#out + 1] = { button = b, index = i } end
+        local b = frames.asButton(field(dialog, "ButtonContainer", "Button" .. i)) or
+            (name and frames.asButton(field(_G, name .. "Button" .. i)) or nil)
+        if b and b:IsShown() then
+            out[#out + 1] = { button = b, index = i }
+        end
     end
     return out
 end
@@ -455,7 +571,9 @@ end
 
 local function restorePoints(f: Frame, pts: Point[])
     f:ClearAllPoints()
-    for _, p in ipairs(pts) do f:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y) end
+    for _, p in ipairs(pts) do
+        f:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y)
+    end
 end
 
 -- SuuUI's look behind a Blizzard button: quiet (surface-raised, gilt-line),
@@ -482,7 +600,11 @@ end
 -- one the game has disabled (your class can't, or the group has no room;
 -- its tooltip says which) at opacity-disabled.
 local ROLE_TEX: { [string]: string } = { TANK = "RoleTank.tga", HEALER = "RoleHealer.tga", DAMAGER = "RoleDamage.tga" }
-local ROLE_WORD: { [string]: string } = { TANK = TANK or "Tank", HEALER = HEALER or "Healer", DAMAGER = DAMAGER or "Damage" }
+local ROLE_WORD: { [string]: string } = {
+    TANK = TANK or "Tank",
+    HEALER = HEALER or "Healer",
+    DAMAGER = DAMAGER or "Damage",
+}
 local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 
 local function circle(owner: Frame, file: string, layer: DrawLayer): Texture
@@ -527,7 +649,9 @@ class RoleArt extends Frame
     end
 
     function Draw()
-        if not self:IsShown() then return end
+        if not self:IsShown() then
+            return
+        end
         local cb = self.check
         local on = cb ~= nil and cb:GetChecked() and true or false
         UI.Paint(self.edge, on and "arcane" or (self.hover and "gilt" or "gilt-line"))
@@ -547,20 +671,33 @@ end
 local function kindFrom(def: NotificationKind): Kind
     local cost = def.cost
     return {
-        category = asString(def.category), glyph = asString(def.glyph), tone = asString(def.tone),
-        title = asString(def.title), primary = asNumber(def.primary), danger = asNumber(def.danger),
-        item = secret.flag(def.item), confirm = secret.flag(def.confirm),
-        cost = type(cost) == "function" and function(dialog: Frame): number? return asNumber((try(cost, dialog))) end or nil,
+        category = asString(def.category),
+        glyph = asString(def.glyph),
+        tone = asString(def.tone),
+        title = asString(def.title),
+        primary = asNumber(def.primary),
+        danger = asNumber(def.danger),
+        item = secret.flag(def.item),
+        confirm = secret.flag(def.confirm),
+        cost = type(cost) == "function" and
+            function(dialog: Frame): number?
+                return asNumber((try(cost, dialog)))
+            end or
+            nil,
     }
 end
 
 local function kindOf(which: string): Kind?
     local own = KINDS[which]
-    if own then return own end
+    if own then
+        return own
+    end
     for _, added in ipairs(SuuUI.Additions("notificationkinds")) do
         -- M:AddNotificationKind's table, with `which` set
         local def = added :: NotificationKind
-        if def.which == which then return kindFrom(def) end
+        if def.which == which then
+            return kindFrom(def)
+        end
     end
     return nil
 end
@@ -572,7 +709,9 @@ local function shownButtons(...: unknown): Shown[]
     local out: Shown[] = {}
     for i = 1, select("#", ...) do
         local b = frames.asButton((select(i, ...)))
-        if b and b:IsShown() then out[#out + 1] = { button = b, index = i } end
+        if b and b:IsShown() then
+            out[#out + 1] = { button = b, index = i }
+        end
     end
     return out
 end
@@ -580,7 +719,9 @@ end
 -- The battleground waiting for you to enter.
 local function battlefieldReady(): number?
     for i = 1, asNumber((try(field(_G, "GetMaxBattlefieldID")))) or 0 do
-        if asString((try(field(_G, "GetBattlefieldStatus"), i))) == "confirm" then return i end
+        if asString((try(field(_G, "GetBattlefieldStatus"), i))) == "confirm" then
+            return i
+        end
     end
     return nil
 end
@@ -597,25 +738,36 @@ local WINDOWS: Window[] = {
         parts = function(f: Frame): Parts
             return {
                 buttons = function(): Shown[]
-                    return shownButtons(field(_G, "LFGInvitePopupAcceptButton"), field(_G, "LFGInvitePopupDeclineButton"))
+                    return shownButtons(
+                        field(_G, "LFGInvitePopupAcceptButton"),
+                        field(_G, "LFGInvitePopupDeclineButton")
+                    )
                 end,
-                text = function(): string? return textOf(field(_G, "LFGInvitePopupText")) end,
+                text = function(): string?
+                    return textOf(field(_G, "LFGInvitePopupText"))
+                end,
                 time = function(): (number?, number?)
                     local total, left = asNumber(field(_G, "StaticPopupTimeoutSec")), asNumber(field(f, "timeOut"))
-                    if total and left and total > 0 then return total, math.max(0, left) end
+                    if total and left and total > 0 then
+                        return total, math.max(0, left)
+                    end
                     return nil, nil
                 end,
                 roles = function(): Button[]
                     local out: Button[] = {}
                     for _, b in ipairs(tbl.list(field(f, "RoleButtons"))) do
                         local button = frames.asButton(b)
-                        if button then out[#out + 1] = button end
+                        if button then
+                            out[#out + 1] = button
+                        end
                     end
                     return out
                 end,
                 warning = function(): string?
                     local w = frames.asFontString(field(f, "QueueWarningText"))
-                    if w and w:IsShown() then return asString(w:GetText()) end
+                    if w and w:IsShown() then
+                        return asString(w:GetText())
+                    end
                     return nil
                 end,
             }
@@ -627,8 +779,12 @@ local WINDOWS: Window[] = {
         parts = function(f: Frame): Parts
             local total: number? = nil -- the first reading: the whole time to enter
             return {
-                buttons = function(): Shown[] return shownButtons(field(f, "enterButton"), field(f, "leaveButton")) end,
-                text = function(): string? return textOf(field(f, "label")) end,
+                buttons = function(): Shown[]
+                    return shownButtons(field(f, "enterButton"), field(f, "leaveButton"))
+                end,
+                text = function(): string?
+                    return textOf(field(f, "label"))
+                end,
                 time = function(): (number?, number?)
                     local i = battlefieldReady()
                     local t = i and asNumber((try(field(_G, "GetBattlefieldPortExpiration"), i)))
@@ -650,11 +806,17 @@ local WINDOWS: Window[] = {
         parts = function(f: Frame): Parts
             local l = frames.find("ReadyCheckListenerFrame") or f
             return {
-                buttons = function(): Shown[] return shownButtons(field(l, "YesButton"), field(l, "NoButton")) end,
-                text = function(): string? return textOf(field(l, "Text")) end,
+                buttons = function(): Shown[]
+                    return shownButtons(field(l, "YesButton"), field(l, "NoButton"))
+                end,
+                text = function(): string?
+                    return textOf(field(l, "Text"))
+                end,
                 time = function(): (number?, number?)
                     local ends = M.readyEndsAt
-                    if ends then return M.readyDuration, math.max(0, ends - GetTime()) end
+                    if ends then
+                        return M.readyDuration, math.max(0, ends - GetTime())
+                    end
                     return nil, nil
                 end,
             }
@@ -677,16 +839,27 @@ class MacroButton extends Button
         super(nil, UIParent, "SecureActionButtonTemplate")
         self:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
         self:SetFrameStrata("DIALOG")
-        self:SetScript("OnEnter", function(me) me:Pass("OnEnter") end)
-        self:SetScript("OnLeave", function(me) me:Pass("OnLeave") end)
-        self:SetScript("PostClick", function(me) local after = me.after if after then after() end end)
+        self:SetScript("OnEnter", function(me)
+            me:Pass("OnEnter")
+        end)
+        self:SetScript("OnLeave", function(me)
+            me:Pass("OnLeave")
+        end)
+        self:SetScript("PostClick", function(me)
+            local after = me.after
+            if after then
+                after()
+            end
+        end)
     end
 
     -- The button under it gets the hover.
     function Pass(script: "OnEnter" | "OnLeave")
         local over = self.over
         local fn = over and over:GetScript(script)
-        if over and fn then fn(over) end
+        if over and fn then
+            fn(over)
+        end
     end
 
     function Release()
@@ -701,51 +874,142 @@ end
 --------------------------------------------------------------------------------
 
 local PREVIEW: NotificationData[] = {
-    { id = "p1", kind = "action", category = "Party invite", title = "Ysolde invites you to a group.", icon = { glyph = "people" },
-      duration = 60, remaining = 42, actions = { { label = "Accept", variant = "primary" }, { label = "Decline" } } },
-    { id = "p2", kind = "action", tone = "danger", category = "Delete item", title = "Do you want to destroy Ember Pelt?",
-      icon = { glyph = "trash" }, item = { icon = 134075, label = "Ember Pelt", quality = "uncommon" }, confirmText = "DELETE",
-      actions = { { label = "Yes", variant = "danger" }, { label = "No" } } },
-    { id = "p3", kind = "until", category = "Durability", title = "Your gear is badly damaged", icon = { glyph = "anvil" },
-      tone = "warning", ["until"] = "Goes when you repair" },
-    { id = "p4", kind = "timed", presence = { online = true, source = "Battle.net", people = {
-        { name = "Kaelith", tag = "#1137", color = "class-priest", detail = "Kaelith · Eastern Plaguelands",
-          icon = classIcon("PRIEST") } }, invite = function() end },
-      duration = 6, remaining = 4 },
-    { id = "p5", kind = "timed", presence = { online = false, source = "Guild", people = { { name = "Ysolde" } } },
-      duration = 4, remaining = 3 },
+    {
+        id = "p1",
+        kind = "action",
+        category = "Party invite",
+        title = "Ysolde invites you to a group.",
+        icon = { glyph = "people" },
+        duration = 60,
+        remaining = 42,
+        actions = { { label = "Accept", variant = "primary" }, { label = "Decline" } },
+    },
+    {
+        id = "p2",
+        kind = "action",
+        tone = "danger",
+        category = "Delete item",
+        title = "Do you want to destroy Ember Pelt?",
+        icon = { glyph = "trash" },
+        item = { icon = 134075, label = "Ember Pelt", quality = "uncommon" },
+        confirmText = "DELETE",
+        actions = { { label = "Yes", variant = "danger" }, { label = "No" } },
+    },
+    {
+        id = "p3",
+        kind = "until",
+        category = "Durability",
+        title = "Your gear is badly damaged",
+        icon = { glyph = "anvil" },
+        tone = "warning",
+        ["until"] = "Goes when you repair",
+    },
+    {
+        id = "p4",
+        kind = "timed",
+        presence = {
+            online = true,
+            source = "Battle.net",
+            people = {
+                {
+                    name = "Kaelith",
+                    tag = "#1137",
+                    color = "class-priest",
+                    detail = "Kaelith · Eastern Plaguelands",
+                    icon = classIcon("PRIEST"),
+                },
+            },
+            invite = function() end,
+        },
+        duration = 6,
+        remaining = 4,
+    },
+    {
+        id = "p5",
+        kind = "timed",
+        presence = { online = false, source = "Guild", people = { { name = "Ysolde" } } },
+        duration = 4,
+        remaining = 3,
+    },
 }
 
 local SECTION: SettingsSection = {
-    id = "notifications", label = "Notifications", category = "General", order = 30,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "notifications",
+    label = "Notifications",
+    category = "General",
+    order = 30,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Notifications", description = "Requests and notes at the top left, under the micro menu: requests first, then what waits on something, then notes. In combat only requests and conditions show. Move them in edit mode.", rows = {
-            { key = "requests", label = "Blizzard's popups as cards", control = "toggle",
-              description = "Invites, resurrection, summons, duels, trades, release spirit, deleting items, logging out, battleground entry: Blizzard's own buttons on SuuUI's cards, so every answer is still Blizzard's. Off: Blizzard's popups as they are." },
-            { key = "max", label = "Shown at once", control = "slider", min = 3, max = 8, step = 1,
-              description = "The rest wait behind \"+N more\"." },
-        } },
-        { title = "Notes", rows = {
-            { key = "durability", label = "Damaged gear", control = "toggle",
-              description = "Amber while a piece is at 20% or less (the Durability module's line while it's on, and the pieces by name), ember once one breaks; goes when you repair." },
-            { key = "bagsFull", label = "Full bags", control = "toggle",
-              description = "While your bags have no free slot; goes when one frees up." },
-            { key = "talentPoints", label = "Talent points to spend", control = "toggle",
-              description = "While you have talent points left, with a button that opens your talents; goes when you spend them." },
-            { key = "legacyPoints", label = "Legacy points to spend", control = "toggle",
-              description = "While this character has Legacy points left, with a button that opens the Legacy window; goes when you spend them." },
-        } },
-        { title = "Friends and guild", description = "A card when someone comes online or goes offline: who, what they're playing or where they are; click it to whisper them. Several at once share one card; in combat they wait. /suu presence shows one of each.", rows = {
-            { key = "presenceBnetOnline", label = "Battle.net friends online", control = "toggle" },
-            { key = "presenceBnetOffline", label = "Battle.net friends offline", control = "toggle" },
-            { key = "presenceFriendOnline", label = "Friends online", control = "toggle" },
-            { key = "presenceFriendOffline", label = "Friends offline", control = "toggle" },
-            { key = "presenceGuildOnline", label = "Guild members online", control = "toggle" },
-            { key = "presenceGuildOffline", label = "Guild members offline", control = "toggle" },
-            { key = "presenceHideChat", label = "Hide the game's online and offline lines in chat", control = "toggle",
-              description = "The \"has come online\" and \"has gone offline\" lines, and Battle.net's own popup for them while SuuUI shows Battle.net friends." },
-        } },
+        {
+            title = "Notifications",
+            description = "Requests and notes at the top left, under the micro menu: requests first, then what waits on something, then notes. In combat only requests and conditions show. Move them in edit mode.",
+            rows = {
+                {
+                    key = "requests",
+                    label = "Blizzard's popups as cards",
+                    control = "toggle",
+                    description = "Invites, resurrection, summons, duels, trades, release spirit, deleting items, logging out, battleground entry: Blizzard's own buttons on SuuUI's cards, so every answer is still Blizzard's. Off: Blizzard's popups as they are.",
+                },
+                {
+                    key = "max",
+                    label = "Shown at once",
+                    control = "slider",
+                    min = 3,
+                    max = 8,
+                    step = 1,
+                    description = "The rest wait behind \"+N more\".",
+                },
+            },
+        },
+        {
+            title = "Notes",
+            rows = {
+                {
+                    key = "durability",
+                    label = "Damaged gear",
+                    control = "toggle",
+                    description = "Amber while a piece is at 20% or less (the Durability module's line while it's on, and the pieces by name), ember once one breaks; goes when you repair.",
+                },
+                {
+                    key = "bagsFull",
+                    label = "Full bags",
+                    control = "toggle",
+                    description = "While your bags have no free slot; goes when one frees up.",
+                },
+                {
+                    key = "talentPoints",
+                    label = "Talent points to spend",
+                    control = "toggle",
+                    description = "While you have talent points left, with a button that opens your talents; goes when you spend them.",
+                },
+                {
+                    key = "legacyPoints",
+                    label = "Legacy points to spend",
+                    control = "toggle",
+                    description = "While this character has Legacy points left, with a button that opens the Legacy window; goes when you spend them.",
+                },
+            },
+        },
+        {
+            title = "Friends and guild",
+            description = "A card when someone comes online or goes offline: who, what they're playing or where they are; click it to whisper them. Several at once share one card; in combat they wait. /suu presence shows one of each.",
+            rows = {
+                { key = "presenceBnetOnline", label = "Battle.net friends online", control = "toggle" },
+                { key = "presenceBnetOffline", label = "Battle.net friends offline", control = "toggle" },
+                { key = "presenceFriendOnline", label = "Friends online", control = "toggle" },
+                { key = "presenceFriendOffline", label = "Friends offline", control = "toggle" },
+                { key = "presenceGuildOnline", label = "Guild members online", control = "toggle" },
+                { key = "presenceGuildOffline", label = "Guild members offline", control = "toggle" },
+                {
+                    key = "presenceHideChat",
+                    label = "Hide the game's online and offline lines in chat",
+                    control = "toggle",
+                    description = "The \"has come online\" and \"has gone offline\" lines, and Battle.net's own popup for them while SuuUI shows Battle.net friends.",
+                },
+            },
+        },
     },
 }
 
@@ -808,7 +1072,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- → id. A request (roll) with duration and remaining counts down on its own
     -- and stays until it is dismissed.
     function Notify(def: NotificationData?): string?
-        if type(def) ~= "table" then return nil end
+        if type(def) ~= "table" then
+            return nil
+        end
         nextNote = nextNote + 1
         local given = def.id
         local id = given and tostring(given) or ("note:" .. nextNote)
@@ -825,27 +1091,38 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         elseif d.duration and remaining then
             self.endsAt[id] = GetTime() + remaining
         end
-        d.onClose = function() self:Dismiss(id) end
+        d.onClose = function()
+            self:Dismiss(id)
+        end
         -- the same id again: replaced in place
-        if not self.notes[id] then self.noteOrder[#self.noteOrder + 1] = id end
+        if not self.notes[id] then
+            self.noteOrder[#self.noteOrder + 1] = id
+        end
         self.notes[id] = d
         self:Rebuild()
         return id
     end
 
     function Dismiss(id: string)
-        if not self.notes[id] then return end
+        if not self.notes[id] then
+            return
+        end
         self.notes[id] = nil
         self.endsAt[id] = nil
         for i, x in ipairs(self.noteOrder) do
-            if x == id then table.remove(self.noteOrder, i) break end
+            if x == id then
+                table.remove(self.noteOrder, i)
+                break
+            end
         end
         self:Rebuild()
     end
 
     function DismissAll()
         for id, d in pairs(self.notes) do
-            if d.kind == "sticky" then self:Dismiss(id) end
+            if d.kind == "sticky" then
+                self:Dismiss(id)
+            end
         end
     end
 
@@ -873,16 +1150,34 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         end
         -- only when it changes (durability moves with every hit in combat)
         local key = state .. "|" .. (title or "") .. "|" .. (body or "")
-        if key == self.durabilityState then return end
+        if key == self.durabilityState then
+            return
+        end
         self.durabilityState = key
         if state == "broken" then
-            self:Notify({ id = "suu:durability", kind = "until", tone = "danger", category = "Durability",
-                title = title or "Some of your gear is broken", body = body, icon = { glyph = "anvil" },
-                ["until"] = "Goes when you repair", actions = actions })
+            self:Notify({
+                id = "suu:durability",
+                kind = "until",
+                tone = "danger",
+                category = "Durability",
+                title = title or "Some of your gear is broken",
+                body = body,
+                icon = { glyph = "anvil" },
+                ["until"] = "Goes when you repair",
+                actions = actions,
+            })
         elseif state == "damaged" then
-            self:Notify({ id = "suu:durability", kind = "until", tone = "warning", category = "Durability",
-                title = title or "Your gear is badly damaged", body = body, icon = { glyph = "anvil" },
-                ["until"] = "Goes when you repair", actions = actions })
+            self:Notify({
+                id = "suu:durability",
+                kind = "until",
+                tone = "warning",
+                category = "Durability",
+                title = title or "Your gear is badly damaged",
+                body = body,
+                icon = { glyph = "anvil" },
+                ["until"] = "Goes when you repair",
+                actions = actions,
+            })
         elseif self.notes["suu:durability"] then
             self:Dismiss("suu:durability")
         end
@@ -891,8 +1186,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     function CheckBags()
         if self:Get("bagsFull") and freeSlots() == 0 then
             if not self.notes["suu:bags"] then
-                self:Notify({ id = "suu:bags", kind = "until", tone = "warning", category = "Bags",
-                    title = "Your bags are full", icon = { glyph = "bag" }, ["until"] = "Goes when you free a slot" })
+                self:Notify({
+                    id = "suu:bags",
+                    kind = "until",
+                    tone = "warning",
+                    category = "Bags",
+                    title = "Your bags are full",
+                    icon = { glyph = "bag" },
+                    ["until"] = "Goes when you free a slot",
+                })
             end
         elseif self.notes["suu:bags"] then
             self:Dismiss("suu:bags")
@@ -904,15 +1206,25 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         -- with a talent build followed, the note names its next talent (design I)
         local nextTalent = n > 0 and SuuUI.TalentBuildNext() or nil
         local key = n .. (nextTalent and (":" .. nextTalent.node .. ":" .. nextTalent.rank) or "")
-        if key == self.talentPointsShown then return end
+        if key == self.talentPointsShown then
+            return
+        end
         self.talentPointsShown = key
         if n > 0 then
             local talents = SuuUI.GetModule("talents")
             local actions: NotificationAction[]? = nil
             if talents and talents:IsEnabled() then
-                actions = { { label = "Open talents", variant = "primary", onClick = function()
-                    if not SuuUI.TalentsShown() then SuuUI.ToggleTalents() end
-                end } }
+                actions = {
+                    {
+                        label = "Open talents",
+                        variant = "primary",
+                        onClick = function()
+                            if not SuuUI.TalentsShown() then
+                                SuuUI.ToggleTalents()
+                            end
+                        end,
+                    },
+                }
             end
             local title = n == 1 and "1 talent point to spend" or (n .. " talent points to spend")
             local body: string? = nil
@@ -920,11 +1232,21 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             if nextTalent then
                 title = ("%d talent %s · next: %s"):format(n, n == 1 and "point" or "points", nextTalent.name)
                 body = ("Rank %d of %d · %s"):format(nextTalent.rank, nextTalent.max, nextTalent.build)
-                if nextTalent.icon then icon = { texture = nextTalent.icon } end
+                if nextTalent.icon then
+                    icon = { texture = nextTalent.icon }
+                end
             end
-            self:Notify({ id = "suu:talents", kind = "until", tone = "info", category = "Talents",
-                title = title, body = body, icon = icon,
-                ["until"] = n == 1 and "Goes when you spend it" or "Goes when you spend them", actions = actions })
+            self:Notify({
+                id = "suu:talents",
+                kind = "until",
+                tone = "info",
+                category = "Talents",
+                title = title,
+                body = body,
+                icon = icon,
+                ["until"] = n == 1 and "Goes when you spend it" or "Goes when you spend them",
+                actions = actions,
+            })
         elseif self.notes["suu:talents"] then
             self:Dismiss("suu:talents")
         end
@@ -932,13 +1254,21 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
 
     function CheckLegacy()
         local n = self:Get("legacyPoints") and unspentLegacy() or 0
-        if n == self.legacyPointsShown then return end
+        if n == self.legacyPointsShown then
+            return
+        end
         self.legacyPointsShown = n
         if n > 0 then
-            self:Notify({ id = "suu:legacy", kind = "until", tone = "info", category = "Legacy",
+            self:Notify({
+                id = "suu:legacy",
+                kind = "until",
+                tone = "info",
+                category = "Legacy",
                 title = n == 1 and "1 Legacy point to spend" or (n .. " Legacy points to spend"),
-                icon = { glyph = "trophy" }, ["until"] = "Goes when you spend them",
-                actions = { { label = "Open Legacy", variant = "primary", onClick = openLegacy } } })
+                icon = { glyph = "trophy" },
+                ["until"] = "Goes when you spend them",
+                actions = { { label = "Open Legacy", variant = "primary", onClick = openLegacy } },
+            })
         elseif self.notes["suu:legacy"] then
             self:Dismiss("suu:legacy")
         end
@@ -961,22 +1291,50 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             file = file or CLASS_FILES[info.className or ""]
             local where: string[] = {}
             local level = asNumber(info.level)
-            if level and level > 0 then where[#where + 1] = "Level " .. level end
+            if level and level > 0 then
+                where[#where + 1] = "Level " .. level
+            end
             local area = asString(info.area)
-            if area and area ~= "" then where[#where + 1] = area end
-            return "friend", { name = short, color = classColor(file), icon = classIcon(file),
-                detail = table.concat(where, " · "), whisper = function() chat.whisper(name) end, inviteName = name }
+            if area and area ~= "" then
+                where[#where + 1] = area
+            end
+            return "friend",
+                {
+                    name = short,
+                    color = classColor(file),
+                    icon = classIcon(file),
+                    detail = table.concat(where, " · "),
+                    whisper = function()
+                        chat.whisper(name)
+                    end,
+                    inviteName = name,
+                }
         end
         if IsInGuild() then
             for i = 1, (GetNumGuildMembers()) or 0 do
                 local full, rank, _, level, _, zone, _, _, _, _, file = GetGuildRosterInfo(i)
                 if full and Ambiguate(full, "short") == short then
                     local where: string[] = {}
-                    if rank and rank ~= "" then where[#where + 1] = rank end
-                    if level and level > 0 then where[#where + 1] = "Level " .. level end
-                    if zone and zone ~= "" then where[#where + 1] = zone end
-                    return "guild", { name = short, color = classColor(file), icon = classIcon(file),
-                        detail = table.concat(where, " · "), whisper = function() chat.whisper(full) end, inviteName = full }
+                    if rank and rank ~= "" then
+                        where[#where + 1] = rank
+                    end
+                    if level and level > 0 then
+                        where[#where + 1] = "Level " .. level
+                    end
+                    if zone and zone ~= "" then
+                        where[#where + 1] = zone
+                    end
+                    return "guild",
+                        {
+                            name = short,
+                            color = classColor(file),
+                            icon = classIcon(file),
+                            detail = table.concat(where, " · "),
+                            whisper = function()
+                                chat.whisper(full)
+                            end,
+                            inviteName = full,
+                        }
                 end
             end
         end
@@ -987,18 +1345,26 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- the game draws; SuuUI never reads it).
     function BnetPerson(accountID: number): Person?
         local info = errors.tryValue(C_BattleNet and C_BattleNet.GetAccountInfoByID, accountID)
-        if not info then return nil end
+        if not info then
+            return nil
+        end
         local game: BNetGameAccountInfo? = info.gameAccountInfo
         local account = info.accountName
         local person: Person = { name = account or info.battleTag or "?", bnetID = accountID }
         local tag = asString(info.battleTag)
-        if tag then person.tag = tag:match("(#%d+)$") end
+        if tag then
+            person.tag = tag:match("(#%d+)$")
+        end
         person.whisper = function()
-            if account then chat.whisperBnet(account) end
+            if account then
+                chat.whisperBnet(account)
+            end
         end
         -- the character they play, remembered so going offline matches too
         local character = game and asString(game.characterName)
-        if character and character ~= "" then self.bnetCharacters[accountID] = character end
+        if character and character ~= "" then
+            self.bnetCharacters[accountID] = character
+        end
         person.character = self.bnetCharacters[accountID]
         if game and game.clientProgram == (BNET_CLIENT_WOW or "WoW") and character then
             local file = CLASS_FILES[game.className or ""]
@@ -1011,7 +1377,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             -- name and realm the game didn't find them; found in game)
             if canCooperate(game) then
                 local id = game.gameAccountID
-                person.invite = function() unit.inviteBnet(id) end
+                person.invite = function()
+                    unit.inviteBnet(id)
+                end
             end
         else
             person.detail = GAMES[game and game.clientProgram or ""] or "Battle.net"
@@ -1022,8 +1390,12 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- One more arrival or departure; a card once the burst is over.
     function Presence(kind: PresenceKind, online: boolean, person: Person?)
         local k = KINDS_OF[kind]
-        if not person then return end
-        if not self:Get((k.setting .. (online and "Online" or "Offline")) :: PresenceKey) then return end
+        if not person then
+            return
+        end
+        if not self:Get((k.setting .. (online and "Online" or "Offline")) :: PresenceKey) then
+            return
+        end
         local queue = self.presence or {}
         self.presence = queue
         local key = kind .. (online and "+" or "-")
@@ -1032,9 +1404,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             local fresh: Arrivals = { kind = kind, online = online, people = {} }
             q = fresh
             queue[key] = fresh
-            timer.after(BATCH, function() self:FlushPresence(key) end)
+            timer.after(BATCH, function()
+                self:FlushPresence(key)
+            end)
         end
-        for _, x in ipairs(q.people) do if x.name == person.name then return end end
+        for _, x in ipairs(q.people) do
+            if x.name == person.name then
+                return
+            end
+        end
         q.people[#q.people + 1] = person
     end
 
@@ -1047,11 +1425,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             -- a first name alone matches only a name without a surname
             out["first:" .. firstName(name)] = true
         end
-        for _, name in pairs(self.bnetCharacters) do add(name) end
+        for _, name in pairs(self.bnetCharacters) do
+            add(name)
+        end
         for i = 1, asNumber((try(field(_G, "BNGetNumFriends")))) or 0 do
             local info = errors.tryValue(C_BattleNet and C_BattleNet.GetFriendAccountInfo, i)
             local name = info and info.gameAccountInfo and asString(info.gameAccountInfo.characterName)
-            if name and name ~= "" then add(name) end
+            if name and name ~= "" then
+                add(name)
+            end
         end
         return out
     end
@@ -1059,9 +1441,14 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     function FlushPresence(key: string)
         local queue = self.presence
         local q = queue and queue[key]
-        if not (queue and q) then return end
+        if not (queue and q) then
+            return
+        end
         -- in combat they wait for the fight's end
-        if InCombatLockdown() then q.held = true return end
+        if InCombatLockdown() then
+            q.held = true
+            return
+        end
         queue[key] = nil
         -- someone who is a guild member (or friend) and a Battle.net friend: one
         -- card, the Battle.net one (asked 2026-10-18: two cards for one person)
@@ -1071,11 +1458,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             for _, p in ipairs(q.people) do
                 local whole = wholeName(p.name)
                 local same = bnet[whole] or (not whole:find(" ") and bnet["first:" .. firstName(p.name)])
-                if not same then kept[#kept + 1] = p end
+                if not same then
+                    kept[#kept + 1] = p
+                end
             end
             q.people = kept
         end
-        if not self:IsEnabled() or #q.people == 0 then return end
+        if not self:IsEnabled() or #q.people == 0 then
+            return
+        end
         local k = KINDS_OF[q.kind]
         local source = k.source or asString((GetGuildInfo("player"))) or "Guild"
         -- Battle.net friends as they are now: by the event their character
@@ -1096,28 +1487,49 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 local name = one.inviteName
                 invite = one.invite or (name and inviting(name)) or nil
             end
-            self:Notify({ id = id, kind = "timed", duration = q.online and 6 or 4,
-                presence = { online = q.online, source = source, people = cardPeople(q.people), plural = k.plural,
-                             glyph = k.glyph, invite = invite } })
+            self:Notify({
+                id = id,
+                kind = "timed",
+                duration = q.online and 6 or 4,
+                presence = {
+                    online = q.online,
+                    source = source,
+                    people = cardPeople(q.people),
+                    plural = k.plural,
+                    glyph = k.glyph,
+                    invite = invite,
+                },
+            })
         end
         show()
         -- one Battle.net friend still loading in: the card gains Invite when
         -- their character arrives on your realm and side, while it shows
         local waiting: number? = nil
-        if q.online and single and not single.invite then waiting = single.bnetID end
+        if q.online and single and not single.invite then
+            waiting = single.bnetID
+        end
         if waiting then
-            self.awaitInvite = { id = id, bnetID = waiting, refresh = function(person: Person)
-                q.people[1], single = person, person
-                show()
-            end }
+            self.awaitInvite = {
+                id = id,
+                bnetID = waiting,
+                refresh = function(person: Person)
+                    q.people[1], single = person, person
+                    show()
+                end,
+            }
         end
     end
 
     -- A Battle.net friend's info changed: the card waiting for their character.
     function BnetInfoChanged()
         local w = self.awaitInvite
-        if not w then return end
-        if not self.notes[w.id] then self.awaitInvite = nil return end
+        if not w then
+            return
+        end
+        if not self.notes[w.id] then
+            self.awaitInvite = nil
+            return
+        end
         local person = self:BnetPerson(w.bnetID)
         if person and person.invite then
             self.awaitInvite = nil
@@ -1128,7 +1540,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- The game's system line: who, and whether it's theirs to show.
     function SystemLine(msg: unknown)
         local text = asString(msg)
-        if not text then return end
+        if not text then
+            return
+        end
         local online = true
         local name: string? = nil
         if ONLINE then
@@ -1139,32 +1553,43 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             name = text:match(OFFLINE)
             online = false
         end
-        if not name or Ambiguate(name, "short") == asString(SuuUI.FullName("player")) then return end
+        if not name or Ambiguate(name, "short") == asString(SuuUI.FullName("player")) then
+            return
+        end
         -- a link's name keeps its colour codes out
         local plain = name:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
         local kind, person = self:WhoIs(plain)
-        if kind then self:Presence(kind, online, person) end
+        if kind then
+            self:Presence(kind, online, person)
+        end
     end
 
     function HookPresence()
-        if self.presenceHooked then return end
+        if self.presenceHooked then
+            return
+        end
         self.presenceHooked = true
         chat.filter("CHAT_MSG_SYSTEM", function(msg: unknown): boolean
             return self:IsEnabled() and self:Get("presenceHideChat") and isPresenceLine(msg)
         end)
         chat.filter("CHAT_MSG_BN_INLINE_TOAST_ALERT", function(process: unknown): boolean
-            return self:IsEnabled() and self:Get("presenceHideChat") and (process == "FRIEND_ONLINE" or process == "FRIEND_OFFLINE")
+            return self:IsEnabled() and self:Get("presenceHideChat") and
+                (process == "FRIEND_ONLINE" or process == "FRIEND_OFFLINE")
         end)
         -- Battle.net's own toast (bottom right) for the same: away while SuuUI
         -- shows Battle.net friends
         local toast = frames.find("BNToastFrame")
         if toast then
             hookScript(toast, "OnShow", function(f: Frame)
-                if not self:IsEnabled() then return end
+                if not self:IsEnabled() then
+                    return
+                end
                 local t = asNumber(field(f, "toastType"))
                 local online = t == (asNumber(field(_G, "BN_TOAST_TYPE_ONLINE")) or 1)
                 local offline = t == (asNumber(field(_G, "BN_TOAST_TYPE_OFFLINE")) or 2)
-                if (online and self:Get("presenceBnetOnline")) or (offline and self:Get("presenceBnetOffline")) then f:Hide() end
+                if (online and self:Get("presenceBnetOnline")) or (offline and self:Get("presenceBnetOffline")) then
+                    f:Hide()
+                end
             end)
         end
     end
@@ -1180,21 +1605,45 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         local file = asString(classFile)
         local zone = GetRealZoneText()
         local function mine(detail: string): Person
-            return { name = full, color = classColor(file), icon = classIcon(file), detail = detail,
-                     whisper = function() chat.whisper(full) end, inviteName = full }
+            return {
+                name = full,
+                color = classColor(file),
+                icon = classIcon(file),
+                detail = detail,
+                whisper = function()
+                    chat.whisper(full)
+                end,
+                inviteName = full,
+            }
         end
         local function sample(name: string, f: string): Person
-            return { name = name, color = classColor(f), icon = classIcon(f), whisper = function() chat.whisper(name) end }
+            return {
+                name = name,
+                color = classColor(f),
+                icon = classIcon(f),
+                whisper = function()
+                    chat.whisper(name)
+                end,
+            }
         end
         local function card(kind: PresenceKind, online: boolean, people: Person[])
             local k = KINDS_OF[kind]
             local single: Person? = #people == 1 and people[1] or nil
             local name = single and single.inviteName
             self.presenceCount = self.presenceCount + 1
-            self:Notify({ id = "suu:presence:" .. self.presenceCount, kind = "timed", duration = online and 20 or 15,
-                presence = { online = online, source = k.source or asString((GetGuildInfo("player"))) or "Guild",
-                             people = cardPeople(people), plural = k.plural, glyph = k.glyph,
-                             invite = online and name and inviting(name) or nil } })
+            self:Notify({
+                id = "suu:presence:" .. self.presenceCount,
+                kind = "timed",
+                duration = online and 20 or 15,
+                presence = {
+                    online = online,
+                    source = k.source or asString((GetGuildInfo("player"))) or "Guild",
+                    people = cardPeople(people),
+                    plural = k.plural,
+                    glyph = k.glyph,
+                    invite = online and name and inviting(name) or nil,
+                },
+            })
         end
         local bn = mine(full .. " · " .. zone)
         bn.tag = "#1137"
@@ -1202,8 +1651,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         card("friend", true, { mine("Level " .. UnitLevel("player") .. " · " .. zone) })
         local _, rank = GetGuildInfo("player")
         local ranked = asString(rank)
-        card("guild", true, { mine((ranked and (ranked .. " · ") or "") .. "Level " .. UnitLevel("player") .. " · " .. zone) })
-        card("guild", true, { sample("Lyra", "MAGE"), sample("Thorn", "ROGUE"), sample("Maelis", "PALADIN"), sample("Durn", "HUNTER") })
+        card("guild", true, {
+            mine((ranked and (ranked .. " · ") or "") .. "Level " .. UnitLevel("player") .. " · " .. zone),
+        })
+        card("guild", true, {
+            sample("Lyra", "MAGE"),
+            sample("Thorn", "ROGUE"),
+            sample("Maelis", "PALADIN"),
+            sample("Durn", "HUNTER"),
+        })
         card("guild", false, { sample("Ysolde", "DRUID") })
     end
 
@@ -1216,49 +1672,81 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         local saved = h.saved or {}
         h.saved = saved
         local known = saved[f]
-        if known then return known end
-        local s: Saved = { points = savePoints(f), width = f:GetWidth(), height = f:GetHeight(), alphas = {},
-            strata = f:GetFrameStrata(), level = f:GetFrameLevel() }
-        for _, r in ipairs(frames.textures(f)) do s.alphas[r] = r:GetAlpha() end
+        if known then
+            return known
+        end
+        local s: Saved = {
+            points = savePoints(f),
+            width = f:GetWidth(),
+            height = f:GetHeight(),
+            alphas = {},
+            strata = f:GetFrameStrata(),
+            level = f:GetFrameLevel(),
+        }
+        for _, r in ipairs(frames.textures(f)) do
+            s.alphas[r] = r:GetAlpha()
+        end
         local b = frames.asButton(f)
         if b then
             -- a button's state textures (not always among its regions)
             for _, t in ipairs(frames.stateTextures(b)) do
-                if s.alphas[t] == nil then s.alphas[t] = t:GetAlpha() end
+                if s.alphas[t] == nil then
+                    s.alphas[t] = t:GetAlpha()
+                end
             end
             local fs = b:GetFontString()
-            if fs then s.font, s.fs, s.color = fs:GetFontObject(), fs, { fs:GetTextColor() } end
+            if fs then
+                s.font, s.fs, s.color = fs:GetFontObject(), fs, { fs:GetTextColor() }
+            end
         end
         local eb = frames.asEditBox(f)
-        if eb then s.font = eb:GetFontObject() end
+        if eb then
+            s.font = eb:GetFontObject()
+        end
         saved[f] = s
         return s
     end
 
     function Undo(h: Host)
         local saved = h.saved
-        if not saved then return end
+        if not saved then
+            return
+        end
         -- every part loose first: the buttons hang off each other here (each
         -- beside the next) and in Blizzard's layout the other way round, so
         -- restoring one by one anchored a button to one depending on it (an
         -- error, found in game)
-        for f in pairs(saved) do f:ClearAllPoints() end
+        for f in pairs(saved) do
+            f:ClearAllPoints()
+        end
         for f, s in pairs(saved) do
             self.widths[f] = nil
             restorePoints(f, s.points)
             f:SetSize(s.width, s.height)
             f:SetFrameStrata(s.strata)
             f:SetFrameLevel(s.level)
-            for r, a in pairs(s.alphas) do r:SetAlpha(a) end
+            for r, a in pairs(s.alphas) do
+                r:SetAlpha(a)
+            end
             local fs, font, color = s.fs, s.font, s.color
-            if fs and font then fs:SetFontObject(font) end
-            if fs and color then fs:SetTextColor(color[1], color[2], color[3], color[4]) end
+            if fs and font then
+                fs:SetFontObject(font)
+            end
+            if fs and color then
+                fs:SetTextColor(color[1], color[2], color[3], color[4])
+            end
             local eb = frames.asEditBox(f)
-            if eb and font then eb:SetFontObject(font) end
+            if eb and font then
+                eb:SetFontObject(font)
+            end
             local art = self.arts[f]
-            if art then art:Hide() end
+            if art then
+                art:Hide()
+            end
             local roleArt = self.roleArts[f]
-            if roleArt then roleArt:Hide() end
+            if roleArt then
+                roleArt:Hide()
+            end
         end
         h.saved = nil
     end
@@ -1266,29 +1754,45 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- SuuUI's look behind a Blizzard button (ButtonArt).
     function ArtFor(b: Button, stack: NotificationStack): ButtonArt
         local known = self.arts[b]
-        if known then return known end
+        if known then
+            return known
+        end
         local art = ButtonArt.new(stack)
         self.arts[b] = art
         hookScript(b, "OnEnter", function()
-            if not art:IsShown() then return end
-            if art.variant == "primary" then art.glow:SetShown(true) else art.edge:SetColor(art.variant == "danger" and "ember" or "gilt") end
+            if not art:IsShown() then
+                return
+            end
+            if art.variant == "primary" then
+                art.glow:SetShown(true)
+            else
+                art.edge:SetColor(art.variant == "danger" and "ember" or "gilt")
+            end
         end)
         hookScript(b, "OnLeave", function()
-            if not art:IsShown() then return end
+            if not art:IsShown() then
+                return
+            end
             art.glow:SetShown(false)
-            art.edge:SetColor(art.variant == "primary" and "arcane" or art.variant == "danger" and "ember" or "gilt-line")
+            art.edge:SetColor(
+                art.variant == "primary" and "arcane" or art.variant == "danger" and "ember" or "gilt-line"
+            )
         end)
         return art
     end
 
     function StyleButton(h: Host, b: Button, variant: string, stack: NotificationStack): number
         local s = self:Remember(h, b)
-        for r in pairs(s.alphas) do r:SetAlpha(0) end
+        for r in pairs(s.alphas) do
+            r:SetAlpha(0)
+        end
         local fs = b:GetFontString()
         if fs then
             fs:SetFontObject(SuuUI.Fonts.Get("label"))
             -- the game's own text: set plainly, again by Rebuild after a theme change
-            fs:SetTextColor(UI.RGBA(variant == "primary" and "on-signal" or variant == "danger" and "ember-text" or "ink"))
+            fs:SetTextColor(
+                UI.RGBA(variant == "primary" and "on-signal" or variant == "danger" and "ember-text" or "ink")
+            )
         end
         local w = math.max(64, math.ceil((fs and fs:GetUnboundedStringWidth() or 40) + S["space-4"] * 2))
         -- and kept: Blizzard sizes its popup buttons again after showing them
@@ -1299,7 +1803,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             self.widthHooked[b] = true
             local function keep()
                 local want = self.widths[b]
-                if not want or self.sizing or math.abs(b:GetWidth() - want) < 0.5 then return end
+                if not want or self.sizing or math.abs(b:GetWidth() - want) < 0.5 then
+                    return
+                end
                 self.sizing = true
                 b:SetSize(want, ACTION_H)
                 self.sizing = false
@@ -1323,7 +1829,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
 
     function StyleEditBox(h: Host, eb: EditBox, box: Frame)
         local s = self:Remember(h, eb)
-        for r in pairs(s.alphas) do r:SetAlpha(0) end
+        for r in pairs(s.alphas) do
+            r:SetAlpha(0)
+        end
         eb:SetFontObject(SuuUI.Fonts.Get("body"))
         eb:ClearAllPoints()
         eb:SetPoint("TOPLEFT", box, "TOPLEFT", S["space-4"], 0)
@@ -1335,29 +1843,49 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         local kind = h.kind
         local roles, warn = h.roles, h.warning
         local d: NotificationData = {
-            id = h.id, kind = "action", tone = kind.tone, category = kind.category,
-            title = h.text() or kind.title or "", icon = { glyph = kind.glyph },
+            id = h.id,
+            kind = "action",
+            tone = kind.tone,
+            category = kind.category,
+            title = h.text() or kind.title or "",
+            icon = { glyph = kind.glyph },
             host = { buttons = #h.buttons(), roles = roles and #roles() or nil },
         }
         local warning = warn and warn()
-        if warning and warning ~= "" then d.warning = warning end
+        if warning and warning ~= "" then
+            d.warning = warning
+        end
         local duration, remaining = h.time()
-        if duration then d.duration, d.remaining = duration, remaining end
+        if duration then
+            d.duration, d.remaining = duration, remaining
+        end
         if kind.item then
             local what = GetCursorInfo()
             local link = asString((select(3, GetCursorInfo())))
             if what == "item" and link then
                 local data = item.get(link)
-                local qualities: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
-                d.item = { icon = data and data.icon, label = data and data.name or link,
-                           quality = qualities[data and data.quality or 1] or "common" }
+                local qualities: { [number]: string } = {
+                    [0] = "poor",
+                    "common",
+                    "uncommon",
+                    "rare",
+                    "epic",
+                    "legendary",
+                }
+                d.item = {
+                    icon = data and data.icon,
+                    label = data and data.name or link,
+                    quality = qualities[data and data.quality or 1] or "common",
+                }
             end
         end
         -- a cost the game's popup shows in its money frame, on its own line
         local costOf = kind.cost
         local cost = costOf and costOf(h.dialog)
         h.cost = cost
-        if cost then d.body = "Costs " .. coinString(cost) end
+        if cost then
+            d.body = "Costs " .. coinString(cost)
+        end
         local eb = h.editBox
         if kind.confirm and eb and eb:IsShown() then
             d.confirmText = DELETE_ITEM_CONFIRM_STRING or "DELETE"
@@ -1407,7 +1935,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         end
         local roles = h.roles
         if roles then
-            for i, b in ipairs(roles()) do self:HostRole(h, card, b, i, stack) end
+            for i, b in ipairs(roles()) do
+                self:HostRole(h, card, b, i, stack)
+            end
         end
     end
 
@@ -1415,16 +1945,30 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- the button or its checkbox.
     function RoleArtFor(b: Button, cb: CheckButton?, stack: NotificationStack): RoleArt
         local known = self.roleArts[b]
-        if known then return known end
+        if known then
+            return known
+        end
         local art = RoleArt.new(stack, b, cb)
-        local function draw() art:Draw() end
-        for _, m in ipairs({ "Enable", "Disable", "SetEnabled" }) do hook(b, m, draw) end
+        local function draw()
+            art:Draw()
+        end
+        for _, m in ipairs({ "Enable", "Disable", "SetEnabled" }) do
+            hook(b, m, draw)
+        end
         if cb then
-            for _, m in ipairs({ "SetChecked", "Show", "Hide" }) do hook(cb, m, draw) end
+            for _, m in ipairs({ "SetChecked", "Show", "Hide" }) do
+                hook(cb, m, draw)
+            end
             hookScript(cb, "OnClick", draw)
         end
-        hookScript(b, "OnEnter", function() art.hover = true; art:Draw() end)
-        hookScript(b, "OnLeave", function() art.hover = false; art:Draw() end)
+        hookScript(b, "OnEnter", function()
+            art.hover = true
+            art:Draw()
+        end)
+        hookScript(b, "OnLeave", function()
+            art.hover = false
+            art:Draw()
+        end)
         self.roleArts[b] = art
         return art
     end
@@ -1432,7 +1976,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     function HostRole(h: Host, card: Notification, b: Button, i: number, stack: NotificationStack)
         local cb = frames.asCheckButton(field(b, "checkButton"))
         local s = self:Remember(h, b)
-        for r in pairs(s.alphas) do r:SetAlpha(0) end
+        for r in pairs(s.alphas) do
+            r:SetAlpha(0)
+        end
         b:SetFrameStrata(card:GetFrameStrata())
         b:SetFrameLevel(card:GetFrameLevel() + 10)
         b:SetSize(36, 36)
@@ -1440,7 +1986,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         b:SetPoint("TOP", card.rolesRow, "TOPLEFT", 30 + (i - 1) * 60, 0)
         if cb then
             local cs = self:Remember(h, cb)
-            for r in pairs(cs.alphas) do r:SetAlpha(0) end
+            for r in pairs(cs.alphas) do
+                r:SetAlpha(0)
+            end
             -- 14px on screen (the game draws it at 0.7)
             local scale = cb:GetScale() > 0 and cb:GetScale() or 1
             cb:SetSize(14 / scale, 14 / scale)
@@ -1466,14 +2014,22 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- A Blizzard popup: its buttons, text, time left and edit box.
     function Host(dialog: Frame, which: string)
         local kind = kindOf(which)
-        if not kind then return end
+        if not kind then
+            return
+        end
         local info = field(_G, "StaticPopupDialogs", which)
         self:HostFrame(dialog, which, kind, {
-            buttons = function(): Shown[] return buttonsOf(dialog) end,
-            text = function(): string? return textOf(field(dialog, "Text")) end,
+            buttons = function(): Shown[]
+                return buttonsOf(dialog)
+            end,
+            text = function(): string?
+                return textOf(field(dialog, "Text"))
+            end,
             time = function(): (number?, number?)
                 local timeout, left = asNumber(field(info, "timeout")), asNumber(field(dialog, "timeleft"))
-                if timeout and timeout > 0 and left then return timeout, left end
+                if timeout and timeout > 0 and left then
+                    return timeout, left
+                end
                 return nil, nil
             end,
             editBox = frames.asEditBox(field(dialog, "EditBox")),
@@ -1483,16 +2039,32 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- Any Blizzard request window: `parts` says where its buttons ({ button,
     -- index } in order), text, time (duration, remaining) and edit box are.
     function HostFrame(dialog: Frame, which: string, kind: Kind, parts: Parts)
-        if not self:Get("requests") then return end
+        if not self:Get("requests") then
+            return
+        end
         local known = self.hosts[dialog]
-        if known and known.which ~= which then self:Undo(known) end
-        local h: Host = known or { dialog = dialog, order = GetTime(), which = which, kind = kind, id = "",
-            buttons = parts.buttons, text = parts.text, time = noTime, data = {} }
+        if known and known.which ~= which then
+            self:Undo(known)
+        end
+        local h: Host = known or
+            {
+                dialog = dialog,
+                order = GetTime(),
+                which = which,
+                kind = kind,
+                id = "",
+                buttons = parts.buttons,
+                text = parts.text,
+                time = noTime,
+                data = {},
+            }
         if not known then
             self.hosts[dialog] = h
             if not self.hookedHide[dialog] then
                 self.hookedHide[dialog] = true
-                hookScript(dialog, "OnHide", function() self:Release(dialog) end)
+                hookScript(dialog, "OnHide", function()
+                    self:Release(dialog)
+                end)
             end
         end
         h.which, h.kind = which, kind
@@ -1501,7 +2073,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         h.id = "popup:" .. (dialog:GetName() or tostring(dialog))
         -- the popup itself out of sight (its parts come onto the card); kept on
         -- screen by its clamp otherwise
-        if h.clamped == nil then h.clamped = dialog:IsClampedToScreen() and true or false end
+        if h.clamped == nil then
+            h.clamped = dialog:IsClampedToScreen() and true or false
+        end
         dialog:SetClampedToScreen(false)
         dialog:ClearAllPoints()
         dialog:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -OFF_SCREEN, OFF_SCREEN)
@@ -1511,10 +2085,14 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
 
     function Release(dialog: Frame)
         local h = self.hosts[dialog]
-        if not h then return end
+        if not h then
+            return
+        end
         self:Undo(h)
         local clamped = h.clamped
-        if clamped ~= nil then dialog:SetClampedToScreen(clamped) end
+        if clamped ~= nil then
+            dialog:SetClampedToScreen(clamped)
+        end
         self.hosts[dialog] = nil
         self:Rebuild()
     end
@@ -1525,10 +2103,16 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             if f and not self.hookedHide[f] then
                 self.hookedHide[f] = true
                 hookScript(f, "OnShow", function(frame: Frame)
-                    if self:IsEnabled() then self:HostFrame(frame, w.name, w.kind, w.parts(frame)) end
+                    if self:IsEnabled() then
+                        self:HostFrame(frame, w.name, w.kind, w.parts(frame))
+                    end
                 end)
-                hookScript(f, "OnHide", function(frame: Frame) self:Release(frame) end)
-                if f:IsShown() then self:HostFrame(f, w.name, w.kind, w.parts(f)) end
+                hookScript(f, "OnHide", function(frame: Frame)
+                    self:Release(frame)
+                end)
+                if f:IsShown() then
+                    self:HostFrame(f, w.name, w.kind, w.parts(f))
+                end
             end
         end
     end
@@ -1540,22 +2124,34 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     function Items(): NotificationData[]
         local list: NotificationData[] = {}
         local hosts: Host[] = {}
-        for _, h in pairs(self.hosts) do hosts[#hosts + 1] = h end
-        table.sort(hosts, function(a: Host, b: Host): boolean return a.order < b.order end)
-        for _, h in ipairs(hosts) do list[#list + 1] = h.data end
+        for _, h in pairs(self.hosts) do
+            hosts[#hosts + 1] = h
+        end
+        table.sort(hosts, function(a: Host, b: Host): boolean
+            return a.order < b.order
+        end)
+        for _, h in ipairs(hosts) do
+            list[#list + 1] = h.data
+        end
         for _, id in ipairs(self.noteOrder) do
             local n = self.notes[id]
-            if n then list[#list + 1] = n end
+            if n then
+                list[#list + 1] = n
+            end
         end
         return list
     end
 
     function Rebuild()
         local stack = self.stack
-        if not stack then return end
+        if not stack then
+            return
+        end
         -- (in a fight from its event on: the lockdown itself comes a moment later)
         stack:SetItems(self:Items(), InCombatLockdown() or self.fighting)
-        for _, h in pairs(self.hosts) do self:Attach(h) end
+        for _, h in pairs(self.hosts) do
+            self:Attach(h)
+        end
         self:SecureActions()
     end
 
@@ -1568,7 +2164,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     -- button then says why it can't.
     function SecureActions()
         local stack = self.stack
-        if InCombatLockdown() or self.fighting or not stack then return end
+        if InCombatLockdown() or self.fighting or not stack then
+            return
+        end
         local used: { [string]: boolean } = {}
         local ui = UIParent:GetEffectiveScale()
         for id, d in pairs(self.notes) do
@@ -1590,23 +2188,36 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                     s:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left * scale, bottom * scale)
                     s:SetSize(b:GetWidth() * scale, b:GetHeight() * scale)
                     local text: string
-                    if type(macro) == "function" then text = macro() else text = macro end
+                    if type(macro) == "function" then
+                        text = macro()
+                    else
+                        text = macro
+                    end
                     s:SetAttribute("type1", "macro")
                     s:SetAttribute("macrotext1", text)
                     local onClick, clicked = a.onClick, card
-                    s.over, s.after = b, onClick and function() onClick(clicked) end or nil
+                    s.over, s.after = b,
+                        onClick and
+                            function()
+                                onClick(clicked)
+                            end or
+                            nil
                     s:Show()
                     used[key] = true
                 end
             end
         end
         for key, s in pairs(self.secure) do
-            if not used[key] then s:Release() end
+            if not used[key] then
+                s:Release()
+            end
         end
     end
 
     function HideSecureActions()
-        for _, s in pairs(self.secure) do s:Release() end
+        for _, s in pairs(self.secure) do
+            s:Release()
+        end
     end
 
     -- A few times a second: counting titles (logging out in 12 s), time left,
@@ -1616,7 +2227,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     function Tick()
         local stack = self.stack
         -- notes hide while an open window covers them (requests stay)
-        if stack then stack:SetNotesHidden(UI.IsCoveredByWindow(stack)) end
+        if stack then
+            stack:SetNotesHidden(UI.IsCoveredByWindow(stack))
+        end
         local now = GetTime()
         local changed = false
         for id, d in pairs(self.notes) do
@@ -1625,22 +2238,35 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 local remaining = math.max(0, ends - now)
                 d.remaining = remaining
                 local card = stack and stack:CardFor(id)
-                if card then card:SetRemaining(remaining) end
+                if card then
+                    card:SetRemaining(remaining)
+                end
             elseif d.kind == "timed" and ends then
                 local remaining = ends - now
                 d.remaining = remaining
                 if remaining <= 0 then
                     self.notes[id] = nil
                     self.endsAt[id] = nil
-                    for i, x in ipairs(self.noteOrder) do if x == id then table.remove(self.noteOrder, i) break end end
+                    for i, x in ipairs(self.noteOrder) do
+                        if x == id then
+                            table.remove(self.noteOrder, i)
+                            break
+                        end
+                    end
                     changed = true
                 else
                     local card = stack and stack:CardFor(id)
-                    if card then card:SetRemaining(remaining) end
+                    if card then
+                        card:SetRemaining(remaining)
+                    end
                 end
             end
         end
-        if changed then self:Rebuild() else self:SecureActions() end
+        if changed then
+            self:Rebuild()
+        else
+            self:SecureActions()
+        end
         for dialog, h in pairs(self.hosts) do
             local card = h.card
             if card then
@@ -1651,7 +2277,9 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 end
                 if h.data.duration then
                     local _, remaining = h.time()
-                    if remaining then card:SetRemaining(remaining) end
+                    if remaining then
+                        card:SetRemaining(remaining)
+                    end
                 end
                 local point, rel = dialog:GetPoint(1)
                 if point ~= "BOTTOMRIGHT" or rel ~= UIParent then
@@ -1662,12 +2290,16 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 local last = list[#list]
                 if last then
                     local _, brel = last.button:GetPoint(1)
-                    if brel ~= card.actionsRow then self:Attach(h) end
+                    if brel ~= card.actionsRow then
+                        self:Attach(h)
+                    end
                 end
                 -- disabled until typed (delete): Blizzard's own rule, shown dim
                 for _, x in ipairs(list) do
                     local art = self.arts[x.button]
-                    if art then art:SetAlpha(x.button:IsEnabled() and 1 or T.opacity["opacity-disabled"]) end
+                    if art then
+                        art:SetAlpha(x.button:IsEnabled() and 1 or T.opacity["opacity-disabled"])
+                    end
                 end
             end
         end
@@ -1706,8 +2338,12 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         self:ProvideService(NOTIFICATIONS, {
-            Notify = function(def: { [string]: unknown }): string? return self:Notify(noteOf(def)) end,
-            Dismiss = function(id: string) self:Dismiss(id) end,
+            Notify = function(def: { [string]: unknown }): string?
+                return self:Notify(noteOf(def))
+            end,
+            Dismiss = function(id: string)
+                self:Dismiss(id)
+            end,
         })
         local frame = self.frame
         if not frame then
@@ -1717,13 +2353,19 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             frame:SetSize(T.size["notice-w"], 200)
             local stack = UI.NotificationStack(frame, { max = self:Get("max") })
             stack:SetPoint("TOPLEFT")
-            stack.onExpand = function() self:Rebuild() end
-            stack.onClearAll = function() self:DismissAll() end
+            stack.onExpand = function()
+                self:Rebuild()
+            end
+            stack.onClearAll = function()
+                self:DismissAll()
+            end
             self.frame, self.stack = frame, stack
             local wait = 0
             frame:SetScript("OnUpdate", function(_, elapsed)
                 wait = wait - elapsed
-                if wait > 0 then return end
+                if wait > 0 then
+                    return
+                end
                 wait = 0.1
                 self:Tick()
             end)
@@ -1732,48 +2374,101 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         self:RegisterSettings(SECTION)
         self:Watch("max", function(v)
             local stack = self.stack
-            if stack then stack.max = v end
+            if stack then
+                stack.max = v
+            end
             self:Rebuild()
         end)
         self:Watch("requests", function(on)
-            if not on then for dialog in pairs(self.hosts) do self:Release(dialog) end end
+            if not on then
+                for dialog in pairs(self.hosts) do
+                    self:Release(dialog)
+                end
+            end
         end)
         if not self.hooked and type(StaticPopup_Show) == "function" then
             self.hooked = true
             hook("StaticPopup_Show", function(which: unknown, _: unknown, _: unknown, data: unknown)
-                if not self:IsEnabled() then return end
+                if not self:IsEnabled() then
+                    return
+                end
                 local name = asString(which)
                 local dialog = name and frames.asFrame(try(field(_G, "StaticPopup_FindVisible"), name, data))
-                if name and dialog then self:Host(dialog, name) end
+                if name and dialog then
+                    self:Host(dialog, name)
+                end
             end)
         end
         self:HookWindows()
         -- request windows whose addon loads later
-        self:OnGameEvent("ADDON_LOADED", function() self:HookWindows() end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:HookWindows()
+        end)
         -- notes about the game
         for _, e in ipairs({ "UPDATE_INVENTORY_DURABILITY", "PLAYER_ENTERING_WORLD" }) do
-            self:OnGameEvent(e, function() self:CheckDurability() end)
+            self:OnGameEvent(e, function()
+                self:CheckDurability()
+            end)
         end
         for _, e in ipairs({ "BAG_UPDATE_DELAYED", "PLAYER_ENTERING_WORLD" }) do
-            self:OnGameEvent(e, function() self:CheckBags() end)
+            self:OnGameEvent(e, function()
+                self:CheckBags()
+            end)
         end
-        self:Watch("durability", function() self:CheckDurability() end)
+        self:Watch("durability", function()
+            self:CheckDurability()
+        end)
         -- the Durability module's reading (its line, the pieces' names)
-        self:On("SUUUI_DURABILITY_CHANGED", function() self:CheckDurability() end)
-        self:On("SUUUI_SERVICE_CHANGED", function(_, name) if name == "durability" then self:CheckDurability() end end)
-        self:Watch("bagsFull", function() self:CheckBags() end)
-        for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED", "PLAYER_TALENT_UPDATE",
-                             "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD" }) do
+        self:On("SUUUI_DURABILITY_CHANGED", function()
+            self:CheckDurability()
+        end)
+        self:On("SUUUI_SERVICE_CHANGED", function(_, name)
+            if name == "durability" then
+                self:CheckDurability()
+            end
+        end)
+        self:Watch("bagsFull", function()
+            self:CheckBags()
+        end)
+        for _, e in ipairs({
+            "TRAIT_CONFIG_UPDATED",
+            "TRAIT_TREE_CURRENCY_INFO_UPDATED",
+            "PLAYER_TALENT_UPDATE",
+            "CHARACTER_POINTS_CHANGED",
+            "PLAYER_LEVEL_UP",
+            "PLAYER_ENTERING_WORLD",
+        }) do
             -- a moment later: the points read right only after the change has landed
-            self:OnGameEvent(e, function() timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents(); self:CheckLegacy() end end) end)
+            self:OnGameEvent(e, function()
+                timer.after(0.2, function()
+                    if self:IsEnabled() then
+                        self:CheckTalents()
+                        self:CheckLegacy()
+                    end
+                end)
+            end)
         end
-        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function() timer.after(0.2, function() if self:IsEnabled() then self:CheckLegacy() end end) end)
-        self:Watch("talentPoints", function() self:CheckTalents() end)
+        self:OnGameEvent("MAJOR_FACTION_RENOWN_LEVEL_CHANGED", function()
+            timer.after(0.2, function()
+                if self:IsEnabled() then
+                    self:CheckLegacy()
+                end
+            end)
+        end)
+        self:Watch("talentPoints", function()
+            self:CheckTalents()
+        end)
         -- a talent build followed, changed or learned along
         self:On("SUUUI_TALENT_BUILD_CHANGED", function()
-            timer.after(0.2, function() if self:IsEnabled() then self:CheckTalents() end end)
+            timer.after(0.2, function()
+                if self:IsEnabled() then
+                    self:CheckTalents()
+                end
+            end)
         end)
-        self:Watch("legacyPoints", function() self:CheckLegacy() end)
+        self:Watch("legacyPoints", function()
+            self:CheckLegacy()
+        end)
         -- the ready check's time
         self:OnGameEvent("READY_CHECK", function(_, _, timeLeft)
             local seconds = asNumber(timeLeft)
@@ -1781,56 +2476,101 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 self.readyDuration, self.readyEndsAt = seconds, GetTime() + seconds
             end
         end)
-        self:OnGameEvent("READY_CHECK_FINISHED", function() self.readyEndsAt = nil end)
+        self:OnGameEvent("READY_CHECK_FINISHED", function()
+            self.readyEndsAt = nil
+        end)
         -- a theme change: the coins' colours in a cost, and the game's button
         -- text (StyleButton through Rebuild)
         self:On("SUUUI_THEME_CHANGED", function()
             for _, h in pairs(self.hosts) do
                 local cost = h.cost
-                if cost then h.data.body = "Costs " .. coinString(cost) end
+                if cost then
+                    h.data.body = "Costs " .. coinString(cost)
+                end
             end
             self:Rebuild()
         end)
         -- in combat notes wait; out of it they come back
         -- (the event comes before the lockdown: drawn as in combat from here)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self.fighting = true; self:HideSecureActions(); self:Rebuild() end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self.fighting = true
+            self:HideSecureActions()
+            self:Rebuild()
+        end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self.fighting = false
             self:Rebuild()
             -- online/offline held in the fight
-            for key, q in pairs(self.presence or {}) do if q.held then self:FlushPresence(key) end end
+            for key, q in pairs(self.presence or {}) do
+                if q.held then
+                    self:FlushPresence(key)
+                end
+            end
         end)
         -- friends and guild members coming and going (handlers take the event
         -- first, then its values: these read one value too far, the companion
         -- app flag and the sender, and no note ever came; found with /suu probe
         -- social)
         self:HookPresence()
-        self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, msg) self:SystemLine(msg) end)
+        self:OnGameEvent("CHAT_MSG_SYSTEM", function(_, msg)
+            self:SystemLine(msg)
+        end)
         self:OnGameEvent("BN_FRIEND_ACCOUNT_ONLINE", function(_, id)
             local account = asNumber(id)
-            if account then self:Presence("bnet", true, self:BnetPerson(account)) end
+            if account then
+                self:Presence("bnet", true, self:BnetPerson(account))
+            end
         end)
-        self:OnGameEvent("BN_FRIEND_INFO_CHANGED", function() self:BnetInfoChanged() end)
+        self:OnGameEvent("BN_FRIEND_INFO_CHANGED", function()
+            self:BnetInfoChanged()
+        end)
         self:OnGameEvent("BN_FRIEND_ACCOUNT_OFFLINE", function(_, id)
             local account = asNumber(id)
-            if account then self:Presence("bnet", false, self:BnetPerson(account)) end
+            if account then
+                self:Presence("bnet", false, self:BnetPerson(account))
+            end
         end)
         -- the roster asked for now and then, so a guild member's line finds them
-        if IsInGuild() then try(field(C_GuildInfo, "GuildRoster")) end
+        if IsInGuild() then
+            try(field(C_GuildInfo, "GuildRoster"))
+        end
         self:RegisterCommand("presence", "test: shows a card for each kind of friend coming online and going offline", function()
             self:TestPresence()
         end)
         self:RegisterCommand("notify", "test: shows one notification of each kind", function()
-            self:Notify({ kind = "timed", category = "Test", title = "A timed note", body = "It goes by itself after 8 seconds.", icon = { glyph = "bell" } })
-            self:Notify({ kind = "sticky", category = "Test", title = "A sticky note", body = "It stays until you close it.", icon = { glyph = "mail" } })
-            self:Notify({ kind = "until", category = "Test", title = "A condition", ["until"] = "Goes when the test ends", icon = { glyph = "hourglass" }, tone = "warning" })
+            self:Notify({
+                kind = "timed",
+                category = "Test",
+                title = "A timed note",
+                body = "It goes by itself after 8 seconds.",
+                icon = { glyph = "bell" },
+            })
+            self:Notify({
+                kind = "sticky",
+                category = "Test",
+                title = "A sticky note",
+                body = "It stays until you close it.",
+                icon = { glyph = "mail" },
+            })
+            self:Notify({
+                kind = "until",
+                category = "Test",
+                title = "A condition",
+                ["until"] = "Goes when the test ends",
+                icon = { glyph = "hourglass" },
+                tone = "warning",
+            })
         end)
     end
 
     override function OnDisable()
-        for dialog in pairs(self.hosts) do self:Release(dialog) end
+        for dialog in pairs(self.hosts) do
+            self:Release(dialog)
+        end
         local frame = self.frame
-        if frame then frame:Hide() end
+        if frame then
+            frame:Hide()
+        end
     end
 end
 

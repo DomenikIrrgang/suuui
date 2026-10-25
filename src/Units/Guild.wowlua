@@ -48,13 +48,29 @@ local M: GuildModule
 -- A guild member as the roster and the details panel draw them (the
 -- roster's GuildMember, with what this module needs besides).
 export type Member = {
-    key: string, full: string, name: string, rank?: string, rankIndex: number, level?: number, zone?: string,
-    note?: string, officerNote?: string, online: boolean, away: boolean, busy: boolean, class?: string,
-    className?: string, guid?: string, you: boolean, lastOnline?: string,
+    key: string,
+    full: string,
+    name: string,
+    rank?: string,
+    rankIndex: number,
+    level?: number,
+    zone?: string,
+    note?: string,
+    officerNote?: string,
+    online: boolean,
+    away: boolean,
+    busy: boolean,
+    class?: string,
+    className?: string,
+    guid?: string,
+    you: boolean,
+    lastOnline?: string,
 }
 
 -- A part of Blizzard's window, by its key(s).
-local function part(f: unknown, ...: string): Frame? return frames.asFrame(field(f, ...)) end
+local function part(f: unknown, ...: string): Frame?
+    return frames.asFrame(field(f, ...))
+end
 
 -- The game's "how long ago" in years, months, days and hours, worded as
 -- format.ago does (a month 30 days, a year 365).
@@ -65,30 +81,52 @@ end
 
 local function lastOnline(i: number): string
     local y, mo, d, h = try(GetGuildRosterLastOnline, i)
-    if y == nil and mo == nil and d == nil and h == nil then return "Offline" end
+    if y == nil and mo == nil and d == nil and h == nil then
+        return "Offline"
+    end
     return agoParts(y, mo, d, h, "hour")
 end
 
 -- The game's roster again (it answers with GUILD_ROSTER_UPDATE).
-local function askRoster() try(field(C_GuildInfo, "GuildRoster")) end
+local function askRoster()
+    try(field(C_GuildInfo, "GuildRoster"))
+end
 
 local SORTS: { [string]: (a: Member, b: Member) -> boolean } = {
-    rank = function(a: Member, b: Member): boolean if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end return a.name < b.name end,
-    name = function(a: Member, b: Member): boolean return a.name < b.name end,
-    level = function(a: Member, b: Member): boolean if (a.level or 0) ~= (b.level or 0) then return (a.level or 0) > (b.level or 0) end return a.name < b.name end,
+    rank = function(a: Member, b: Member): boolean
+        if a.rankIndex ~= b.rankIndex then
+            return a.rankIndex < b.rankIndex
+        end
+        return a.name < b.name
+    end,
+    name = function(a: Member, b: Member): boolean
+        return a.name < b.name
+    end,
+    level = function(a: Member, b: Member): boolean
+        if (a.level or 0) ~= (b.level or 0) then
+            return (a.level or 0) > (b.level or 0)
+        end
+        return a.name < b.name
+    end,
     zone = function(a: Member, b: Member): boolean
         local x, y = a.online and (a.zone or "") or "~", b.online and (b.zone or "") or "~"
-        if x ~= y then return x < y end
+        if x ~= y then
+            return x < y
+        end
         return a.name < b.name
     end,
     class = function(a: Member, b: Member): boolean
         local x, y = a.className or "~", b.className or "~"
-        if x ~= y then return x < y end
+        if x ~= y then
+            return x < y
+        end
         return a.name < b.name
     end,
     note = function(a: Member, b: Member): boolean
         local x, y = a.note or "~", b.note or "~"
-        if x ~= y then return x < y end
+        if x ~= y then
+            return x < y
+        end
         return a.name < b.name
     end,
 }
@@ -105,12 +143,25 @@ local SLASH: { [string]: string } = { promote = "/gpromote ", demote = "/gdemote
 -- The details panel beside the window: who, where, the notes with Edit,
 -- Whisper and Invite.
 type NoteBlock = { head: Text, edit: SuuButton, text: Text }
-type Details = { panel: Panel, line1: Text, line2: Text, note: NoteBlock, officer: NoteBlock, row1: Frame,
-                 whisper: SuuButton, invite: SuuButton, member: Member? }
+type Details = {
+    panel: Panel,
+    line1: Text,
+    line2: Text,
+    note: NoteBlock,
+    officer: NoteBlock,
+    row1: Frame,
+    whisper: SuuButton,
+    invite: SuuButton,
+    member: Member?,
+}
 
 local LOG: { [string]: string } = {
-    invite = "%s invited %s", join = "%s joined the guild", promote = "%s promoted %s to %s",
-    demote = "%s demoted %s to %s", remove = "%s removed %s", quit = "%s left the guild",
+    invite = "%s invited %s",
+    join = "%s joined the guild",
+    promote = "%s promoted %s to %s",
+    demote = "%s demoted %s to %s",
+    remove = "%s removed %s",
+    quit = "%s left the guild",
 }
 
 local HIDDEN_BUTTONS: { [string]: boolean } = { ["View Log"] = true, ["Invite Member"] = true }
@@ -120,12 +171,13 @@ local NOTE_POPUP = "SET_GUILD_COMMUNITIY_NOTE"
 
 -- Blizzard's Communities window: the methods of its mixin this module
 -- calls (each may be missing on a client).
-type CommunitiesWindow = Frame & {
-    GetDisplayMode?: (self: Frame) -> unknown,
-    SetDisplayMode?: (self: Frame, mode: unknown) -> (),
-    GetSelectedClubId?: (self: Frame) -> number?,
-    SelectClub?: (self: Frame, clubId: number) -> (),
-}
+type CommunitiesWindow = Frame
+    & {
+        GetDisplayMode?: (self: Frame) -> unknown,
+        SetDisplayMode?: (self: Frame, mode: unknown) -> (),
+        GetSelectedClubId?: (self: Frame) -> number?,
+        SelectClub?: (self: Frame, clubId: number) -> (),
+    }
 
 -- A club the picker lists.
 type Club = { value: number, label: string, guild: boolean }
@@ -197,20 +249,41 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function Members(): (Member[], number, number)
         local all: Member[], online = {}, 0
-        if not IsInGuild() then return all, 0, 0 end
+        if not IsInGuild() then
+            return all, 0, 0
+        end
         local me = Ambiguate(SuuUI.FullName("player") or "", "short")
         for i = 1, asNumber(try(GetNumGuildMembers)) or 0 do
-            local rawName, rank, rankIndex, level, className, zone, note, officerNote, isOnline, status, file,
-                  _, _, _, _, _, guid = try(GetGuildRosterInfo, i)
+            local rawName, rank, rankIndex, level, className, zone, note, officerNote, isOnline, status, file, _, _, _, _, _, guid = try(
+                GetGuildRosterInfo,
+                i
+            )
             local name = asString(rawName)
             if name then
                 local st = asNumber(status)
-                local m: Member = { key = name, full = name, name = Ambiguate(name, "guild"), rank = asString(rank),
-                    rankIndex = asNumber(rankIndex) or 0, level = asNumber(level), zone = asString(zone),
-                    note = asString(note), officerNote = asString(officerNote), online = flag(isOnline),
-                    away = st == 1, busy = st == 2, class = asString(file), guid = asString(guid),
-                    className = asString(className), you = Ambiguate(name, "short") == me }
-                if m.online then online = online + 1 else m.lastOnline = lastOnline(i) end
+                local m: Member = {
+                    key = name,
+                    full = name,
+                    name = Ambiguate(name, "guild"),
+                    rank = asString(rank),
+                    rankIndex = asNumber(rankIndex) or 0,
+                    level = asNumber(level),
+                    zone = asString(zone),
+                    note = asString(note),
+                    officerNote = asString(officerNote),
+                    online = flag(isOnline),
+                    away = st == 1,
+                    busy = st == 2,
+                    class = asString(file),
+                    guid = asString(guid),
+                    className = asString(className),
+                    you = Ambiguate(name, "short") == me,
+                }
+                if m.online then
+                    online = online + 1
+                else
+                    m.lastOnline = lastOnline(i)
+                end
                 all[#all + 1] = m
             end
         end
@@ -219,8 +292,14 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     -- The member with this key, as last read.
     function MemberBy(key: string?): Member?
-        if not key then return nil end
-        for _, m in ipairs(self.members) do if m.key == key then return m end end
+        if not key then
+            return nil
+        end
+        for _, m in ipairs(self.members) do
+            if m.key == key then
+                return m
+            end
+        end
         return nil
     end
 
@@ -228,23 +307,46 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     function Actions(m: Member?): Actions
         local out: Actions = {}
         out.guildInvite = { enabled = flag(try(CanGuildInvite)), why = "Your rank can't invite to the guild." }
-        if not m then return out end
+        if not m then
+            return out
+        end
         local mine = self:MyRank()
         local below = m.rankIndex > mine
         local lowest = (asNumber(try(GuildControlGetNumRanks)) or 1) - 1
         out.whisper = { enabled = m.online and not m.you, why = m.you and "That's you." or "They're offline." }
         local canGroup = not IsInGroup() or flag(UnitIsGroupLeader("player")) or flag(UnitIsGroupAssistant("player"))
-        out.invite = { enabled = m.online and not m.you and canGroup,
-                       why = m.you and "That's you." or (not m.online and "They're offline.") or "Only your group's leader or an assistant can invite." }
+        out.invite = {
+            enabled = m.online and not m.you and canGroup,
+            why = m.you and "That's you." or (not m.online and "They're offline.") or
+                "Only your group's leader or an assistant can invite.",
+        }
         local function rule(can: unknown, extra: boolean, whyRank: string, whyExtra: string?): GuildAction
-            if not flag(can) then return { enabled = false, why = whyRank } end
-            if m.you then return { enabled = false, why = "That's you." } end
-            if not below then return { enabled = false, why = "Only for members ranked below you." } end
-            if not extra then return { enabled = false, why = whyExtra } end
+            if not flag(can) then
+                return { enabled = false, why = whyRank }
+            end
+            if m.you then
+                return { enabled = false, why = "That's you." }
+            end
+            if not below then
+                return { enabled = false, why = "Only for members ranked below you." }
+            end
+            if not extra then
+                return { enabled = false, why = whyExtra }
+            end
             return { enabled = true }
         end
-        out.promote = rule(try(CanGuildPromote), m.rankIndex - 1 > mine, "Your rank can't promote.", "They'd reach your own rank.")
-        out.demote = rule(try(CanGuildDemote), m.rankIndex < lowest, "Your rank can't demote.", "They're at the lowest rank already.")
+        out.promote = rule(
+            try(CanGuildPromote),
+            m.rankIndex - 1 > mine,
+            "Your rank can't promote.",
+            "They'd reach your own rank."
+        )
+        out.demote = rule(
+            try(CanGuildDemote),
+            m.rankIndex < lowest,
+            "Your rank can't demote.",
+            "They're at the lowest rank already."
+        )
         out.remove = rule(try(CanGuildRemove), true, "Your rank can't remove members.")
         return out
     end
@@ -257,7 +359,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- run the slash command for the selected member (out of combat).
     function FootOverlays(m: Member?, actions: Actions)
         local page = self.roster
-        if not page or InCombatLockdown() then return end
+        if not page or InCombatLockdown() then
+            return
+        end
         for key, slash in pairs(SLASH) do
             local btn = page.buttons[key]
             local over = self.overs[key]
@@ -266,7 +370,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 made.button:HookScript("PostClick", function(_: Button, _: string, down: boolean)
                     -- the release only: a click is a press and a release here, and
                     -- both would arm Remove and disarm it again at once
-                    if down or InCombatLockdown() then return end
+                    if down or InCombatLockdown() then
+                        return
+                    end
                     if key == "remove" and not self.armed[key] then
                         -- the first click arms it
                         self.armed[key] = true
@@ -275,7 +381,10 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                         return
                     end
                     self.armed[key] = nil
-                    if key == "remove" then btn:SetLabel("Remove"); made.set("type1", nil) end
+                    if key == "remove" then
+                        btn:SetLabel("Remove")
+                        made.set("type1", nil)
+                    end
                     after(0.5, askRoster)
                 end)
                 self.overs[key] = made
@@ -286,7 +395,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 local who = m and m.key or ""
                 if self.overMember[key] ~= who then
                     self.armed[key] = nil
-                    if key == "remove" then btn:SetLabel("Remove") end
+                    if key == "remove" then
+                        btn:SetLabel("Remove")
+                    end
                 end
                 self.overMember[key] = who
                 over.set("type1", (on and (key ~= "remove" or self.armed[key])) and "macro" or nil)
@@ -296,14 +407,20 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 -- button under it (found in game). Anchored only while shown:
                 -- a secure button anchored to the roster made the whole guild
                 -- window protected (it couldn't open in combat then)
-                if on then over.show() else over.hide() end
+                if on then
+                    over.show()
+                else
+                    over.hide()
+                end
             end
         end
     end
 
     function Render()
         local page = self.roster
-        if not (page and page:IsVisible()) then return end
+        if not (page and page:IsVisible()) then
+            return
+        end
         local all, online, total = self:Members()
         local showOffline = self:Get("showOffline")
         local search = self.search and self.search ~= "" and self.search:lower() or nil
@@ -314,23 +431,38 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 local hay = (m.name .. " " .. (m.zone or "") .. " " .. (m.rank or "") .. " " .. (m.note or "")):lower()
                 keep = hay:find(search, 1, true) ~= nil
             end
-            if keep then shown[#shown + 1] = m end
-            if m.key == self.selected then selected = m end
+            if keep then
+                shown[#shown + 1] = m
+            end
+            if m.key == self.selected then
+                selected = m
+            end
         end
         table.sort(shown, SORTS[self.sort] or SORTS.rank)
         self.members = all
         local actions = self:Actions(selected)
         local rows: GuildMember[] = {}
-        for i, m in ipairs(shown) do rows[i] = m end
-        page:SetData({ online = online, total = total, showOffline = showOffline, sort = self.sort,
-                       members = rows, selected = self.selected, actions = actions })
+        for i, m in ipairs(shown) do
+            rows[i] = m
+        end
+        page:SetData({
+            online = online,
+            total = total,
+            showOffline = showOffline,
+            sort = self.sort,
+            members = rows,
+            selected = self.selected,
+            actions = actions,
+        })
         self:FootOverlays(selected, actions)
         -- the open details panel with the member's fresh data (a saved note)
         local p = self.details
         local shownMember = p and p.panel:IsShown() and p.member
         if shownMember then
             local fresh = self:MemberBy(shownMember.key)
-            if fresh then self:ShowDetails(fresh) end
+            if fresh then
+                self:ShowDetails(fresh)
+            end
         end
         self:SizeBlizzList()
         -- the row under the layer may show someone else now
@@ -343,11 +475,15 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     end
 
     function QueueRender()
-        if self.renderQueued then return end
+        if self.renderQueued then
+            return
+        end
         self.renderQueued = true
         after(0.15, function()
             self.renderQueued = false
-            if self:IsEnabled() then self:Render() end
+            if self:IsEnabled() then
+                self:Render()
+            end
         end)
     end
 
@@ -370,7 +506,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function SizeBlizzList()
         local list = self:BlizzList()
-        if not list or InCombatLockdown() then return end
+        if not list or InCombatLockdown() then
+            return
+        end
         local n = asNumber(try(GetNumGuildMembers)) or 0
         self.placingList = true
         list:ClearAllPoints()
@@ -379,7 +517,13 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         self.placingList = false
         if not self.memberListHooked then
             self.memberListHooked = true
-            local function again() if not self.placingList then after(0, function() self:SizeBlizzList() end) end end
+            local function again()
+                if not self.placingList then
+                    after(0, function()
+                        self:SizeBlizzList()
+                    end)
+                end
+            end
             hook(list, "SetPoint", again)
             hook(list, "SetSize", again)
         end
@@ -387,15 +531,21 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     -- The game's row for a member (by GUID), if it has one.
     function BlizzRow(guid: string?): Frame?
-        if not guid then return nil end
+        if not guid then
+            return nil
+        end
         for _, row in ipairs(frames.rows(field(self:BlizzList(), "ScrollBox"))) do
-            if asString(field(row, "memberInfo", "guid")) == guid then return row end
+            if asString(field(row, "memberInfo", "guid")) == guid then
+                return row
+            end
         end
         return nil
     end
 
     -- The game's member panel (picked by the notes' secure buttons, never seen).
-    function MemberPanel(): Frame? return part(self.frame, "GuildMemberDetailFrame") end
+    function MemberPanel(): Frame?
+        return part(self.frame, "GuildMemberDetailFrame")
+    end
 
     -- The game's note box, the member's or the officer's.
     function NoteBox(officer: boolean): Frame?
@@ -405,7 +555,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- The game's own note boxes, back on its (off screen) member panel.
     function StowNoteBoxes()
         local d = self:MemberPanel()
-        if not d or InCombatLockdown() then return end
+        if not d or InCombatLockdown() then
+            return
+        end
         for _, officer in ipairs({ false, true }) do
             local box = self:NoteBox(officer)
             local edit = box and self.placedBoxes[box]
@@ -422,11 +574,15 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- to is see-through and off screen).
     function PlaceNoteBox(officer: boolean, edit: SuuButton, direct: boolean?)
         local box = self:NoteBox(officer)
-        if not box then return end
+        if not box then
+            return
+        end
         self.placedBoxes[box] = edit
         -- armed, the way Remove is: the second click opens the game's note box
         -- (picked through the roster row: the first one does)
-        if not direct then edit:SetLabel("Click again") end
+        if not direct then
+            edit:SetLabel("Click again")
+        end
         box:ClearAllPoints()
         box:SetAllPoints(edit)
         box:SetFrameStrata("DIALOG")
@@ -437,17 +593,23 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- shown, the way the roster's are).
     function NoteOverlays(m: Member?)
         local p = self.details
-        if not p or InCombatLockdown() then return end
+        if not p or InCombatLockdown() then
+            return
+        end
         self:StowNoteBoxes()
         -- the game picked them already (the roster row's layer): its note boxes
         -- straight over Edit, one click
         local d = self:MemberPanel()
         local picked = d and d:IsShown() and asString(field(tryMethod(d, "GetMemberInfo"), "guid"))
         if m and p.panel:IsVisible() and picked and picked == m.guid then
-            for _, over in pairs(self.noteOvers) do over.hide() end
+            for _, over in pairs(self.noteOvers) do
+                over.hide()
+            end
             for _, officer in ipairs({ false, true }) do
                 local edit = officer and p.officer.edit or p.note.edit
-                if edit:IsVisible() and edit:IsEnabled() then self:PlaceNoteBox(officer, edit, true) end
+                if edit:IsVisible() and edit:IsEnabled() then
+                    self:PlaceNoteBox(officer, edit, true)
+                end
             end
             return
         end
@@ -460,7 +622,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 local made = secure.overlay(edit)
                 made.set("type1", "click")
                 made.button:HookScript("PostClick", function()
-                    if InCombatLockdown() then return end
+                    if InCombatLockdown() then
+                        return
+                    end
                     made.hide()
                     self:PlaceNoteBox(officer, edit)
                 end)
@@ -469,7 +633,11 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             end
             local on = row ~= nil and edit:IsVisible() and edit:IsEnabled()
             over.set("clickbutton1", on and row or nil)
-            if on then over.show() else over.hide() end
+            if on then
+                over.show()
+            else
+                over.hide()
+            end
         end
     end
 
@@ -482,7 +650,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- there, so the window doesn't stay protected.
     function RowOver(row: RosterRow, given: GuildMember?)
         local m = self:MemberBy(given and given.key)
-        if InCombatLockdown() or not m then return end
+        if InCombatLockdown() or not m then
+            return
+        end
         local over = self.rowOver
         if not over then
             local made = secure.overlay(row)
@@ -493,27 +663,37 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 local r = self.rowOverRow
                 self:HideRowOver()
                 local fn = r and r:GetScript("OnLeave")
-                if r and fn then fn(r, false) end
+                if r and fn then
+                    fn(r, false)
+                end
             end)
             b:HookScript("PostClick", function(_: Button, _: string, down: boolean)
                 -- the release is the row's click
-                if down then return end
+                if down then
+                    return
+                end
                 local r = self.rowOverRow
                 local member = r and r.member
                 local roster = self.roster
                 local select = roster and roster.onSelect
-                if member and select then select(member.key) end
+                if member and select then
+                    select(member.key)
+                end
             end)
             b:SetScript("OnDoubleClick", function()
                 local r = self.rowOverRow
                 local fn = r and r:GetScript("OnDoubleClick")
-                if r and fn then fn(r, "LeftButton") end
+                if r and fn then
+                    fn(r, "LeftButton")
+                end
             end)
             self.rowOver = made
             over = made
         end
         over.set("clickbutton1", self:BlizzRow(m.guid))
-        if over.button:IsShown() and self.rowOverRow == row then return end
+        if over.button:IsShown() and self.rowOverRow == row then
+            return
+        end
         self.rowOverRow = row
         over.show(row)
     end
@@ -523,7 +703,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         -- the layer itself came over the row: the row keeps its hover
         if over and over.button:IsShown() and self.rowOverRow == row and over.button:IsMouseOver() then
             local fn = row:GetScript("OnEnter")
-            if fn then fn(row, false) end
+            if fn then
+                fn(row, false)
+            end
             return
         end
         self:HideRowOver()
@@ -531,14 +713,20 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function HideRowOver()
         local over = self.rowOver
-        if not over or InCombatLockdown() then return end
+        if not over or InCombatLockdown() then
+            return
+        end
         over.hide()
         self.rowOverRow = nil
     end
 
     function HideNoteOverlays()
-        if InCombatLockdown() then return end
-        for _, over in pairs(self.noteOvers) do over.hide() end
+        if InCombatLockdown() then
+            return
+        end
+        for _, over in pairs(self.noteOvers) do
+            over.hide()
+        end
         self:StowNoteBoxes()
     end
 
@@ -549,12 +737,18 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- to addons: /suu probe social guildcontrol), but your clicks inside
     -- Blizzard's window are yours and save (found in game). UI.GuildControl
     -- lays its controls out in SuuUI's look (design component GuildControl).
-    function GuildSettings() self:ShowOwn("settings") end
+    function GuildSettings()
+        self:ShowOwn("settings")
+    end
 
     function HostSettings(on: boolean)
         local f = self.frame
-        if not f then return end
-        if on and not frames.find("GuildControlUI") then try(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI") end
+        if not f then
+            return
+        end
+        if on and not frames.find("GuildControlUI") then
+            try(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI")
+        end
         local ui = frames.find("GuildControlUI")
         -- a cover over Blizzard's own page underneath
         local cover = self.settingsCover
@@ -572,7 +766,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             cover = made
         end
         cover:SetShown(on)
-        if not ui then return end
+        if not ui then
+            return
+        end
         if on then
             ui:SetFrameLevel(cover:GetFrameLevel() + 5)
             local hosted = self.hostedSettings or UI.GuildControl(cover, ui)
@@ -594,12 +790,20 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             local made = secure.overlay(p.ok, { strata = "FULLSCREEN_DIALOG" })
             made.set("type1", "macro")
             made.button:HookScript("PostClick", function()
-                after(0, function() if p:IsShown() then p:Hide() end end)
+                after(0, function()
+                    if p:IsShown() then
+                        p:Hide()
+                    end
+                end)
                 after(1, askRoster)
             end)
-            p:HookScript("OnHide", function() made.hide() end)
+            p:HookScript("OnHide", function()
+                made.hide()
+            end)
             p.field.edit:HookScript("OnTextChanged", function(box: EditBox)
-                if made.button:IsShown() then made.set("macrotext1", "/ginvite " .. strtrim(box:GetText() or "")) end
+                if made.button:IsShown() then
+                    made.set("macrotext1", "/ginvite " .. strtrim(box:GetText() or ""))
+                end
             end)
             self.inviteOver = made
             over = made
@@ -615,17 +819,29 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 return
             end
             -- Enter can't invite (only a click can), so it leaves the dialog open
-            local p = UI.Confirm({ title = "Invite to the guild", text = "Their character's whole name.",
-                input = { label = "Name", placeholder = "Name" }, confirm = "Invite", enterConfirms = false })
+            local p = UI.Confirm({
+                title = "Invite to the guild",
+                text = "Their character's whole name.",
+                input = { label = "Name", placeholder = "Name" },
+                confirm = "Invite",
+                enterConfirms = false,
+            })
             self:InviteOverlay(p)
             return
         end
-        if not m then return end
+        if not m then
+            return
+        end
         if SLASH[action] then
             -- the click reached the button under the secure one
             local over = self.overs[action]
-            self:Print(("%s: the secure button wasn't under the mouse (%s)."):format(action,
-                InCombatLockdown() and "in combat" or (over and (over.button:IsShown() and "shown" or "hidden") or "not made")))
+            self:Print(
+                ("%s: the secure button wasn't under the mouse (%s)."):format(
+                    action,
+                    InCombatLockdown() and "in combat" or
+                        (over and (over.button:IsShown() and "shown" or "hidden") or "not made")
+                )
+            )
             return
         end
         if action == "whisper" then
@@ -640,31 +856,58 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         local a = self:Actions(m)
         UI.ContextMenuFrom(owner, function(_, root)
             root:CreateTitle(m.name)
-            if allowed(a, "whisper") then root:CreateButton("Whisper", function() self:Act("whisper", m) end) end
-            if allowed(a, "invite") then root:CreateButton("Invite", function() self:Act("invite", m) end) end
+            if allowed(a, "whisper") then
+                root:CreateButton("Whisper", function()
+                    self:Act("whisper", m)
+                end)
+            end
+            if allowed(a, "invite") then
+                root:CreateButton("Invite", function()
+                    self:Act("invite", m)
+                end)
+            end
             -- notes: in the details panel (the game's own note box; the menu
             -- can't pick the member in the game's list)
         end, "guildMember", { member = m })
     end
 
     function Wire(page: GuildRoster)
-        page.onSearch = function(text: string) self.search = text; self:QueueRender() end
-        page.onShowOffline = function(on: boolean) self:Set("showOffline", on); self:Render() end
-        page.onSort = function(key: string) self.sort = key; self:Render() end
+        page.onSearch = function(text: string)
+            self.search = text
+            self:QueueRender()
+        end
+        page.onShowOffline = function(on: boolean)
+            self:Set("showOffline", on)
+            self:Render()
+        end
+        page.onSort = function(key: string)
+            self.sort = key
+            self:Render()
+        end
         page.onSelect = function(key: string?)
             self.selected = key
             self:Render()
             -- a click opens their details, as Blizzard's roster did
             local m = self:MemberBy(key)
-            if m then self:ShowDetails(m) end
+            if m then
+                self:ShowDetails(m)
+            end
         end
-        page.onAction = function(action: string, given: GuildMember?) self:Act(action, self:MemberBy(given and given.key)) end
+        page.onAction = function(action: string, given: GuildMember?)
+            self:Act(action, self:MemberBy(given and given.key))
+        end
         page.onMenu = function(given: GuildMember, owner: RosterRow)
             local m = self:MemberBy(given.key)
-            if m then self:Menu(m, owner) end
+            if m then
+                self:Menu(m, owner)
+            end
         end
-        page.onRowEnter = function(row: RosterRow, given: GuildMember) self:RowOver(row, given) end
-        page.onRowLeave = function(row: RosterRow) self:RowLeft(row) end
+        page.onRowEnter = function(row: RosterRow, given: GuildMember)
+            self:RowOver(row, given)
+        end
+        page.onRowLeave = function(row: RosterRow)
+            self:RowLeft(row)
+        end
     end
 
     --------------------------------------------------------------------------------
@@ -679,7 +922,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function BuildDetails(): Details
         local built = self.details
-        if built then return built end
+        if built then
+            return built
+        end
         local f = assert(self.frame)
         local S = T.space
         local p = UI.Panel(f, { title = " ", width = 320, closable = true, solid = true })
@@ -698,17 +943,25 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             head:SetValue(label)
             -- the secure button on top does the work (NoteOverlays); reaching
             -- this one means it couldn't be there
-            local edit = UI.Button(b, { text = "Edit", variant = "quiet", onClick = function()
-                local m = d.member
-                if not m then return end
-                if InCombatLockdown() then
-                    self:Print("Notes can be changed out of combat.")
-                elseif not m.online and not flag(field(self:BlizzList(), "showOfflinePlayers")) then
-                    self:Print("Offline members' notes can be changed after a /reload (the game's member list adds them then).")
-                else
-                    self:Print(("%s isn't in the game's member list yet; try again in a moment."):format(m.name))
-                end
-            end })
+            local edit = UI.Button(b, {
+                text = "Edit",
+                variant = "quiet",
+                onClick = function()
+                    local m = d.member
+                    if not m then
+                        return
+                    end
+                    if InCombatLockdown() then
+                        self:Print("Notes can be changed out of combat.")
+                    elseif not m.online and not flag(field(self:BlizzList(), "showOfflinePlayers")) then
+                        self:Print(
+                            "Offline members' notes can be changed after a /reload (the game's member list adds them then)."
+                        )
+                    else
+                        self:Print(("%s isn't in the game's member list yet; try again in a moment."):format(m.name))
+                    end
+                end,
+            })
             edit:SetHeight(22)
             -- placed from the body's top in ShowDetails, never anchored to a
             -- text: the notes' secure buttons hang off it
@@ -724,33 +977,60 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         -- the actions: Whisper, Invite; Promote, Demote, Remove (secure)
         local row1 = CreateFrame("Frame", nil, b)
         row1:SetHeight(26)
-        local whisper = UI.Button(row1, { text = "Whisper", variant = "quiet", onClick = function()
-            local m = d.member
-            if m then self:Act("whisper", m) end
-        end })
+        local whisper = UI.Button(row1, {
+            text = "Whisper",
+            variant = "quiet",
+            onClick = function()
+                local m = d.member
+                if m then
+                    self:Act("whisper", m)
+                end
+            end,
+        })
         whisper:SetHeight(26)
         whisper:SetPoint("LEFT")
-        local invite = UI.Button(row1, { text = "Invite", variant = "quiet", onClick = function()
-            local m = d.member
-            if m then self:Act("invite", m) end
-        end })
+        local invite = UI.Button(row1, {
+            text = "Invite",
+            variant = "quiet",
+            onClick = function()
+                local m = d.member
+                if m then
+                    self:Act("invite", m)
+                end
+            end,
+        })
         invite:SetHeight(26)
         invite:SetPoint("LEFT", whisper, "RIGHT", S["space-3"], 0)
-        d = { panel = p, line1 = line1, line2 = line2, note = note, officer = officer, row1 = row1,
-              whisper = whisper, invite = invite, member = nil }
-        p:HookScript("OnHide", function() self:HideNoteOverlays() end)
+        d = {
+            panel = p,
+            line1 = line1,
+            line2 = line2,
+            note = note,
+            officer = officer,
+            row1 = row1,
+            whisper = whisper,
+            invite = invite,
+            member = nil,
+        }
+        p:HookScript("OnHide", function()
+            self:HideNoteOverlays()
+        end)
         self.details = d
         return d
     end
 
     function ShowDetails(m: Member?)
-        if not m then return end
+        if not m then
+            return
+        end
         local d = self:BuildDetails()
         local p = d.panel
         d.member = m
         p:SetTitle(m.name)
         local who: string[] = {}
-        if m.level then who[#who + 1] = "Level " .. m.level end
+        if m.level then
+            who[#who + 1] = "Level " .. m.level
+        end
         local class = m.class
         if class then
             who[#who + 1] = asString(field(_G, "LOCALIZED_CLASS_NAMES_MALE", class)) or class
@@ -766,7 +1046,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         d.officer.head:SetShown(canView)
         d.officer.text:SetShown(canView)
         d.officer.edit:SetShown(canView)
-        d.officer.text:SetValue((m.officerNote and m.officerNote ~= "") and m.officerNote or faint .. "No officer note|r")
+        d.officer.text:SetValue(
+            (m.officerNote and m.officerNote ~= "") and m.officerNote or faint .. "No officer note|r"
+        )
         d.officer.edit:SetEnabledState(flag(try(field(C_GuildInfo, "CanEditOfficerNote"))))
         -- the rows placed from the body's top by the texts' heights, never
         -- anchored to a text: the secure buttons hang off them, and a secure
@@ -780,11 +1062,13 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         -- each Edit level with its heading (4px above its top)
         d.note.edit:ClearAllPoints()
         d.note.edit:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -(y + S["space-5"]) + 4)
-        y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(d.note.text:GetStringHeight()))
+        y = y + S["space-5"] + cap + S["space-3"] +
+            math.max(T.type.body.lineHeight, math.ceil(d.note.text:GetStringHeight()))
         d.officer.edit:ClearAllPoints()
         d.officer.edit:SetPoint("TOPRIGHT", p.body, "TOPRIGHT", 0, -(y + S["space-5"]) + 4)
         if canView then
-            y = y + S["space-5"] + cap + S["space-3"] + math.max(T.type.body.lineHeight, math.ceil(d.officer.text:GetStringHeight()))
+            y = y + S["space-5"] + cap + S["space-3"] +
+                math.max(T.type.body.lineHeight, math.ceil(d.officer.text:GetStringHeight()))
         end
         y = y + S["space-5"]
         d.row1:ClearAllPoints()
@@ -813,11 +1097,15 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             motd = self.lastMotd
         else
             motd = asString(try(GetGuildRosterMOTD))
-            if motd then self.lastMotd = motd end
+            if motd then
+                self.lastMotd = motd
+            end
         end
         local fresh = self.freshMotd
         if fresh then
-            if motd == fresh then self.freshMotd = nil end
+            if motd == fresh then
+                self.freshMotd = nil
+            end
             motd = self.freshMotd or motd
         end
         return motd
@@ -827,10 +1115,14 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- GuildMotdBanner): only on your guild's chat, gone without a message.
     function RenderBanner()
         local b = self.motdBanner
-        if not b then return end
+        if not b then
+            return
+        end
         local text = self.onChat and self:Motd() or nil
         -- (whether you may edit it: read out of combat, as the message)
-        if not InCombatLockdown() then self.lastCanEdit = flag(try(CanEditMOTD)) end
+        if not InCombatLockdown() then
+            self.lastCanEdit = flag(try(CanEditMOTD))
+        end
         b:SetData({ text = text, canEdit = self.lastCanEdit })
         self:LayChat()
         self:InfoOverlays()
@@ -839,14 +1131,22 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- The Info page's data.
     function RenderInfo()
         local page = self.infoPage
-        if not (page and page:IsVisible()) then return end
+        if not (page and page:IsVisible()) then
+            return
+        end
         local counts: { [number]: number } = {}
-        for _, m in ipairs((self:Members())) do counts[m.rankIndex] = (counts[m.rankIndex] or 0) + 1 end
+        for _, m in ipairs((self:Members())) do
+            counts[m.rankIndex] = (counts[m.rankIndex] or 0) + 1
+        end
         local ranks: GuildRank[] = {}
         for i = 1, asNumber(try(GuildControlGetNumRanks)) or 0 do
             ranks[#ranks + 1] = { name = asString(try(GuildControlGetRankName, i)), count = counts[i - 1] or 0 }
         end
-        page:SetData({ info = asString(try(GetGuildInfoText)), canEditInfo = flag(try(CanEditGuildInfo)), ranks = ranks })
+        page:SetData({
+            info = asString(try(GetGuildInfoText)),
+            canEditInfo = flag(try(CanEditGuildInfo)),
+            ranks = ranks,
+        })
         self:InfoOverlays()
     end
 
@@ -857,7 +1157,8 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- so the Info page's Edit buttons are secure buttons on top that click
     -- Blizzard's (InfoOverlays); this is the fallback when they can't be.
     function BlizzEdit(key: string): Frame?
-        local info = field(self.frame, "GuildDetailsFrame", "Info") or field(_G, "CommunitiesFrameGuildDetailsFrameInfo")
+        local info = field(self.frame, "GuildDetailsFrame", "Info") or
+            field(_G, "CommunitiesFrameGuildDetailsFrameInfo")
         -- by their keys (probed: EditMOTDButton, EditDetailsButton)
         return part(info, key == "motd" and "EditMOTDButton" or "EditDetailsButton")
     end
@@ -875,28 +1176,44 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- "[Click to edit]" (out of combat; anchored only while shown, the way the
     -- roster's are, so the window never turns protected).
     function InfoOverlays()
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         local page, banner = self.infoPage, self.motdBanner
         local mine: { [string]: SuuButton } = {}
-        if page then mine.info = page.info.edit end
-        if banner then mine.banner = banner.edit end
+        if page then
+            mine.info = page.info.edit
+        end
+        if banner then
+            mine.banner = banner.edit
+        end
         for key, button in pairs(mine) do
             local over = self.infoOvers[key]
             if not over then
                 local made = secure.overlay(button)
                 made.set("type1", "click")
-                made.button:HookScript("PostClick", function() after(0, function() self:SkinTextEdit() end) end)
+                made.button:HookScript("PostClick", function()
+                    after(0, function()
+                        self:SkinTextEdit()
+                    end)
+                end)
                 self.infoOvers[key] = made
                 over = made
             end
             local target = button:IsVisible() and self:BlizzEdit(key == "banner" and "motd" or key) or nil
             over.set("clickbutton1", target)
-            if target then over.show() else over.hide() end
+            if target then
+                over.show()
+            else
+                over.hide()
+            end
         end
     end
 
     function HideInfoOverlays()
-        for _, over in pairs(self.infoOvers) do over.hide() end
+        for _, over in pairs(self.infoOvers) do
+            over.hide()
+        end
     end
 
     -- Blizzard's edit box for the message of the day and the information, in
@@ -907,29 +1224,45 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             for k, v in pairs(_G) do
                 if type(k) == "string" and k:find("GuildTextEditFrame$") then
                     dlg = frames.asFrame(v)
-                    if dlg then break end
+                    if dlg then
+                        break
+                    end
                 end
             end
         end
-        if not dlg then return end
+        if not dlg then
+            return
+        end
         if not self.skinnedEdit then
             self.skinnedEdit = true
             local box = dlg
-            hookScript(box, "OnShow", function() UI.ReskinDialog(box) end)
+            hookScript(box, "OnShow", function()
+                UI.ReskinDialog(box)
+            end)
             -- saved or not: the page shows what the game has now
             hookScript(box, "OnHide", function()
                 askRoster()
-                for _, t in ipairs({ 0.3, 1.5 }) do after(t, function() self:RenderInfo(); self:RenderBanner() end) end
+                for _, t in ipairs({ 0.3, 1.5 }) do
+                    after(t, function()
+                        self:RenderInfo()
+                        self:RenderBanner()
+                    end)
+                end
             end)
         end
-        if dlg:IsShown() then UI.ReskinDialog(dlg) end
+        if dlg:IsShown() then
+            UI.ReskinDialog(dlg)
+        end
     end
 
     -- Without Blizzard's box: saying why (SetMOTD and SetInfoText are forbidden
     -- to addon code; a dialog of SuuUI's own could never save).
     function EditInfoOwn(key: string)
-        self:Print(("The game's own box for the %s isn't available right now: try again in a moment."):format(
-            key == "motd" and "message of the day" or "guild information"))
+        self:Print(
+            ("The game's own box for the %s isn't available right now: try again in a moment."):format(
+                key == "motd" and "message of the day" or "guild information"
+            )
+        )
     end
 
     --------------------------------------------------------------------------------
@@ -938,14 +1271,18 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function RenderLog()
         local page = self.logPage
-        if not (page and page:IsVisible()) then return end
+        if not (page and page:IsVisible()) then
+            return
+        end
         local lines: GuildLogLine[] = {}
         for i = asNumber(try(GetNumGuildEvents)) or 0, 1, -1 do
             local kind, p1, p2, rank, y, mo, d, h = try(GetGuildEventInfo, i)
             local fmt = LOG[asString(kind) or ""]
             if fmt then
-                lines[#lines + 1] = { text = fmt:format(asString(p1) or "?", asString(p2) or "?", asString(rank) or "?"),
-                                      when = agoParts(y, mo, d, h, "minute") }
+                lines[#lines + 1] = {
+                    text = fmt:format(asString(p1) or "?", asString(p2) or "?", asString(rank) or "?"),
+                    when = agoParts(y, mo, d, h, "minute"),
+                }
             end
         end
         page:SetData({ lines = lines })
@@ -955,10 +1292,14 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- tab's own page).
     function ShowOwn(key: string?)
         self.ownPage = key
-        if key == "log" then try(QueryGuildEventLog) end
+        if key == "log" then
+            try(QueryGuildEventLog)
+        end
         self:Follow()
         local chrome = self.frame and chromeOf(self.frame)
-        if chrome then chrome:UpdateTabs() end
+        if chrome then
+            chrome:UpdateTabs()
+        end
     end
 
     -- Your guild and communities, the guild first.
@@ -972,7 +1313,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             end
         end
         table.sort(out, function(a: Club, b: Club): boolean
-            if a.guild ~= b.guild then return a.guild end
+            if a.guild ~= b.guild then
+                return a.guild
+            end
             return a.label < b.label
         end)
         return out
@@ -981,7 +1324,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- The clubs as the picker's options.
     function ClubOptions(): SelectOption<number>[]
         local out: SelectOption<number>[] = {}
-        for i, c in ipairs(self:Clubs()) do out[i] = { value = c.value, label = c.label } end
+        for i, c in ipairs(self:Clubs()) do
+            out[i] = { value = c.value, label = c.label }
+        end
         return out
     end
 
@@ -991,16 +1336,24 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         for _, b in ipairs(frames.rows(field(self.frame, "CommunitiesList", "ScrollBox"))) do
             local fs = field(b, "Name") or field(b, "Text") or tryMethod(b, "GetFontString")
             local text = asString(tryMethod(fs, "GetText"))
-            if not found and text and (text:find("Join") or text:find("Create")) then found = frames.asButton(b) end
+            if not found and text and (text:find("Join") or text:find("Create")) then
+                found = frames.asButton(b)
+            end
         end
-        if found then found:Click() else self:Print("The game's Join or Create Community isn't available here.") end
+        if found then
+            found:Click()
+        else
+            self:Print("The game's Join or Create Community isn't available here.")
+        end
     end
 
     -- The picker in the header's tab row, right, and the + beside it.
     function BuildPicker()
         local f = self.frame
         local chrome = f and chromeOf(f)
-        if not f or not chrome or self.picker then return end
+        if not f or not chrome or self.picker then
+            return
+        end
         local S = T.space
         local plus = CreateFrame("Button", nil, chrome.head)
         plus:SetSize(22, 22)
@@ -1017,23 +1370,38 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             GameTooltip_SetTitle(GameTooltip, "Join or create a community")
             GameTooltip:Show()
         end)
-        plus:SetScript("OnLeave", function() edge:SetColor("gilt-line"); GameTooltip:Hide() end)
-        plus:SetScript("OnClick", function() self:JoinOrCreate() end)
-        local picker = UI.Select(chrome.head, { bare = true, width = 220, textStyle = "label", textColor = "ink",
-            options = self:ClubOptions(), onChange = function(id: number)
+        plus:SetScript("OnLeave", function()
+            edge:SetColor("gilt-line")
+            GameTooltip:Hide()
+        end)
+        plus:SetScript("OnClick", function()
+            self:JoinOrCreate()
+        end)
+        local picker = UI.Select(chrome.head, {
+            bare = true,
+            width = 220,
+            textStyle = "label",
+            textColor = "ink",
+            options = self:ClubOptions(),
+            onChange = function(id: number)
                 self.ownPage = nil
                 tryMethod(f, "SelectClub", id)
-            end })
+            end,
+        })
         picker:SetPoint("RIGHT", plus, "LEFT", -S["space-3"], 0)
         self.picker, self.plus = picker, plus
     end
 
     function UpdatePicker()
         local picker = self.picker
-        if not picker then return end
+        if not picker then
+            return
+        end
         picker:SetOptions(self:ClubOptions())
         local club = asNumber(tryMethod(self.frame, "GetSelectedClubId"))
-        if club then picker:SetValue(club) end
+        if club then
+            picker:SetValue(club)
+        end
     end
 
     -- Blizzard's communities list on the left, folded away (the picker has its
@@ -1042,7 +1410,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     function FoldList()
         local f = self.frame
         local list = part(f, "CommunitiesList")
-        if not f or not list then return end
+        if not f or not list then
+            return
+        end
         list:SetAlpha(0)
         -- its width comes from its anchors: anchored again as a 1px strip at the
         -- window's left edge (setting the width alone left a gap, found in game)
@@ -1054,7 +1424,13 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         self.folding = false
         if not self.foldHooked then
             self.foldHooked = true
-            local function again() if not self.folding then after(0, function() self:FoldList() end) end end
+            local function again()
+                if not self.folding then
+                    after(0, function()
+                        self:FoldList()
+                    end)
+                end
+            end
             hook(list, "SetWidth", again)
             hook(list, "SetSize", again)
             hook(list, "SetPoint", again)
@@ -1076,12 +1452,16 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     -- A Blizzard part off screen, back there whenever Blizzard places it.
     function Away(p: Frame?)
-        if not p or self.away[p] or InCombatLockdown() then return end
+        if not p or self.away[p] or InCombatLockdown() then
+            return
+        end
         self.away[p] = frames.keepAway(p)
     end
 
     function HideButtons(frame: Frame, depth: number)
-        if depth > 4 then return end
+        if depth > 4 then
+            return
+        end
         for _, child in ipairs(frames.children(frame)) do
             local c = frames.asFrame(child)
             if c and not isOwn(c) then
@@ -1105,7 +1485,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     function LayChat()
         local f = self.frame
         local chatFrame = part(f, "Chat")
-        if not f or not chatFrame then return end
+        if not f or not chatFrame then
+            return
+        end
         local S = T.space
         self.layingChat = true
         -- the messages in SuuUI's own box (Blizzard's inset frame and its
@@ -1114,12 +1496,16 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         -- found in game)
         local EDIT_H = 28
         local inset = part(chatFrame, "InsetFrame")
-        if inset then inset:SetAlpha(0) end
+        if inset then
+            inset:SetAlpha(0)
+        end
         -- the messages keep their own colours and spacing: the restyle pass
         -- recoloured and re-fonted the lines on show, until a scroll redrew
         -- them (found in game)
         local mf = part(chatFrame, "MessageFrame")
-        if mf then markOwn(mf) end
+        if mf then
+            markOwn(mf)
+        end
         if not self.chatBox then
             local box = chatFrame:CreateTexture(nil, "BACKGROUND", nil, -7)
             UI.PaintFill(box, "surface-sunk")
@@ -1165,33 +1551,56 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         end
         -- the voice chat headset over the chat: out of sight
         local headset = part(f, "VoiceChatHeadset")
-        if headset then headset:SetAlpha(0); headset:EnableMouse(false) end
+        if headset then
+            headset:SetAlpha(0)
+            headset:EnableMouse(false)
+        end
         -- the member list beside the chat (in the chat's mode; the roster mode's
         -- is under SuuUI's roster page anyway)
         local onChatMode = self:Mode() == self:ModeOf("CHAT")
         local members = self:BlizzList()
-        if members and onChatMode then members:SetAlpha(0) end
+        if members and onChatMode then
+            members:SetAlpha(0)
+        end
         self.layingChat = false
         if not self.chatHooked then
             self.chatHooked = true
-            local function again() if not self.layingChat then after(0, function() self:LayChat() end) end end
+            local function again()
+                if not self.layingChat then
+                    after(0, function()
+                        self:LayChat()
+                    end)
+                end
+            end
             hook(chatFrame, "SetPoint", again)
-            if edit then hook(edit, "SetPoint", again) end
-            if stream then hook(stream, "SetPoint", again) end
-            if mf then hook(mf, "SetPoint", again) end
+            if edit then
+                hook(edit, "SetPoint", again)
+            end
+            if stream then
+                hook(stream, "SetPoint", again)
+            end
+            if mf then
+                hook(mf, "SetPoint", again)
+            end
             -- the hidden member list takes no clicks in the chat's mode
-            if members then hookScript(members, "OnShow", again) end
+            if members then
+                hookScript(members, "OnShow", again)
+            end
         end
         -- its clicks: none while hidden there
         if members then
             members:EnableMouse(not onChatMode)
             local box = part(members, "ScrollBox")
-            if box then box:SetShown(not onChatMode) end
+            if box then
+                box:SetShown(not onChatMode)
+            end
         end
     end
 
     -- The window's display mode (COMMUNITIES_FRAME_DISPLAY_MODES), and one by name.
-    function Mode(): unknown return tryMethod(self.frame, "GetDisplayMode") end
+    function Mode(): unknown
+        return tryMethod(self.frame, "GetDisplayMode")
+    end
     function ModeOf(name: string): unknown
         local mode = field(_G, "COMMUNITIES_FRAME_DISPLAY_MODES", name)
         -- a mode the client lacks is no mode (it never equals the window's)
@@ -1201,12 +1610,16 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- The roster page while the window shows your guild's roster.
     function Follow()
         local f, roster = self.frame, self.roster
-        if not (f and roster) then return end
+        if not (f and roster) then
+            return
+        end
         local mode = self:Mode()
         local club = asNumber(tryMethod(f, "GetSelectedClubId"))
         local guild = asNumber(try(field(C_Club, "GetGuildClubId")))
         local isGuild = f:IsShown() and guild ~= nil and club == guild
-        if not isGuild then self.ownPage = nil end
+        if not isGuild then
+            self.ownPage = nil
+        end
         local onLog = isGuild and self.ownPage == "log"
         local onSettings = isGuild and self.ownPage == "settings"
         self:HostSettings(onSettings)
@@ -1219,7 +1632,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         local log = self.logPage
         if log then
             log:SetShown(onLog)
-            if onLog then self:RenderLog() end
+            if onLog then
+                self:RenderLog()
+            end
         end
         self:BuildPicker()
         self:UpdatePicker()
@@ -1228,21 +1643,37 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         if info then
             info:SetShown(onInfo)
             local blizz = part(f, "GuildDetailsFrame")
-            if blizz then blizz:SetAlpha(onInfo and 0 or 1) end
-            if onInfo then self:RenderInfo() else self:InfoOverlays() end
+            if blizz then
+                blizz:SetAlpha(onInfo and 0 or 1)
+            end
+            if onInfo then
+                self:RenderInfo()
+            else
+                self:InfoOverlays()
+            end
         end
         -- the rest in SuuUI's look: Blizzard's own parts restyled in place
-        after(0, function() if f:IsShown() then UI.Reskin(f) end end)
+        after(0, function()
+            if f:IsShown() then
+                UI.Reskin(f)
+            end
+        end)
         roster:SetShown(onRoster)
         if not onRoster then
-            for _, over in pairs(self.overs) do over.hide() end
+            for _, over in pairs(self.overs) do
+                over.hide()
+            end
         end
         -- Blizzard's member list: under SuuUI's roster, and out of sight beside
         -- the chat (LayChat)
         local members = self:BlizzList()
-        if members then members:SetAlpha((onRoster or chatMode) and 0 or 1) end
+        if members then
+            members:SetAlpha((onRoster or chatMode) and 0 or 1)
+        end
         local dropdown = part(f, "GuildMemberListDropdown")
-        if dropdown then dropdown:SetAlpha(onRoster and 0 or 1) end
+        if dropdown then
+            dropdown:SetAlpha(onRoster and 0 or 1)
+        end
         if onRoster then
             askRoster()
             self:Render()
@@ -1251,7 +1682,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
 
     function Build()
         local found = frames.find("CommunitiesFrame")
-        if not found or self.roster then return end
+        if not found or self.roster then
+            return
+        end
         local f = found :: CommunitiesWindow
         self.frame = f
         local page = UI.GuildRoster(f)
@@ -1271,14 +1704,22 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         info:EnableMouse(true)
         info:Hide()
         markOwn(info)
-        info.onEdit = function(key: string) self:EditInfo(key) end
+        info.onEdit = function(key: string)
+            self:EditInfo(key)
+        end
         -- the Chat tab's message of the day, pinned over the messages
         local banner = UI.GuildMotdBanner(f)
         banner:SetFrameLevel(f:GetFrameLevel() + 20)
         markOwn(banner)
-        banner.onEdit = function() self:EditInfo("motd") end
+        banner.onEdit = function()
+            self:EditInfo("motd")
+        end
         -- one line or two: the box follows
-        banner:HookScript("OnSizeChanged", function() if not self.layingChat then self:LayChat() end end)
+        banner:HookScript("OnSizeChanged", function()
+            if not self.layingChat then
+                self:LayChat()
+            end
+        end)
         self.motdBanner = banner
         self.infoPage = info
         -- the Log page: over the whole content, the chat's parts included
@@ -1296,29 +1737,51 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             detail:SetAlpha(0)
             self:Away(detail)
         end
-        hookScript(f, "OnShow", function() self:Follow() end)
+        hookScript(f, "OnShow", function()
+            self:Follow()
+        end)
         hookScript(f, "OnHide", function()
             GameTooltip:Hide()
             local d = self.details
-            if d then d.panel:Hide() end
+            if d then
+                d.panel:Hide()
+            end
             -- the secure buttons let go of the window (it stays unprotected)
-            for _, over in pairs(self.overs) do over.hide() end
+            for _, over in pairs(self.overs) do
+                over.hide()
+            end
             self:HideInfoOverlays()
             self:HideRowOver()
         end)
         self:SkinTextEdit()
-        if f.SetDisplayMode then hook(f, "SetDisplayMode", function() self:Follow() end) end
-        if f.SelectClub then hook(f, "SelectClub", function() after(0, function() self:Follow() end) end) end
+        if f.SetDisplayMode then
+            hook(f, "SetDisplayMode", function()
+                self:Follow()
+            end)
+        end
+        if f.SelectClub then
+            hook(f, "SelectClub", function()
+                after(0, function()
+                    self:Follow()
+                end)
+            end)
+        end
         self:Follow()
     end
 
     function HookNotePopup()
-        if self.notePopupHooked or type(StaticPopup_Show) ~= "function" then return end
+        if self.notePopupHooked or type(StaticPopup_Show) ~= "function" then
+            return
+        end
         self.notePopupHooked = true
         hook("StaticPopup_Show", function(which: string)
-            if which ~= NOTE_POPUP or not self:IsEnabled() then return end
+            if which ~= NOTE_POPUP or not self:IsEnabled() then
+                return
+            end
             local dialog = frames.asFrame(try(field(_G, "StaticPopup_FindVisible"), which))
-            if dialog then UI.ReskinPopup(dialog) end
+            if dialog then
+                UI.ReskinPopup(dialog)
+            end
         end)
     end
 
@@ -1330,7 +1793,9 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         try(field(C_CVar, "SetCVar") or field(_G, "SetCVar"), "communitiesShowOffline", "1")
         self:HookNotePopup()
         self:Build()
-        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:Build()
+        end)
         -- the details' secure buttons away when a fight starts (rank changes
         -- wait for its end)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
@@ -1339,38 +1804,66 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             self:Motd()
             self.lastCanEdit = flag(try(CanEditMOTD))
             for _, list in ipairs({ self.overs, self.infoOvers, self.noteOvers }) do
-                for _, over in pairs(list) do over.button:Hide() end
+                for _, over in pairs(list) do
+                    over.button:Hide()
+                end
             end
             local row = self.rowOver
-            if row then row.button:Hide() end
+            if row then
+                row.button:Hide()
+            end
         end)
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:QueueRender(); self:RenderInfo() end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:QueueRender()
+            self:RenderInfo()
+        end)
         -- the details' "No note" colour code and their rows' heights, the
         -- banner's height: again with the theme
         self:On("SUUUI_THEME_CHANGED", function()
             local d = self.details
             local m = d and d.panel:IsShown() and d.member
-            if m then self:ShowDetails(m) end
-            if self.onChat then self:RenderBanner() end
+            if m then
+                self:ShowDetails(m)
+            end
+            if self.onChat then
+                self:RenderBanner()
+            end
         end)
         -- the new message comes with the event; the game's own copy
         -- (GetGuildRosterMOTD) can lag behind it
         self:OnGameEvent("GUILD_MOTD", function(_, motd)
             local text = asString(motd)
-            if text then self.freshMotd = text end
+            if text then
+                self.freshMotd = text
+            end
             self:RenderInfo()
             self:RenderBanner()
         end)
-        self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function() self:RenderLog() end)
+        self:OnGameEvent("GUILD_EVENT_LOG_UPDATE", function()
+            self:RenderLog()
+        end)
         for _, e in ipairs({ "CLUB_ADDED", "CLUB_REMOVED", "CLUB_UPDATED" }) do
-            self:OnGameEvent(e, function() self:UpdatePicker() end)
+            self:OnGameEvent(e, function()
+                self:UpdatePicker()
+            end)
         end
-        for _, e in ipairs({ "GUILD_ROSTER_UPDATE", "PLAYER_GUILD_UPDATE", "GUILD_RANKS_UPDATE", "GROUP_ROSTER_UPDATE" }) do
+        for _, e in ipairs({
+            "GUILD_ROSTER_UPDATE",
+            "PLAYER_GUILD_UPDATE",
+            "GUILD_RANKS_UPDATE",
+            "GROUP_ROSTER_UPDATE",
+        }) do
             self:OnGameEvent(e, function()
                 local roster, info = self.roster, self.infoPage
-                if roster and roster:IsVisible() then self:QueueRender() end
-                if info and info:IsVisible() then self:RenderInfo() end
-                if self.onChat then self:RenderBanner() end
+                if roster and roster:IsVisible() then
+                    self:QueueRender()
+                end
+                if info and info:IsVisible() then
+                    self:RenderInfo()
+                end
+                if self.onChat then
+                    self:RenderBanner()
+                end
             end)
         end
     end

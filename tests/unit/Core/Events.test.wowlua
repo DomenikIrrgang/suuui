@@ -39,7 +39,9 @@ end
 
 local function faultWith(text: string): fault.Entry?
     for _, e in ipairs(fault.entries()) do
-        if e.message:find(text, 1, true) then return e end
+        if e.message:find(text, 1, true) then
+            return e
+        end
     end
     return nil
 end
@@ -63,26 +65,64 @@ end
 @test("listeners run in the order they were added")
 local function order()
     local seen: string[] = {}
-    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "first" end, A)
-    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "second" end, B)
-    events.on("SUUUI_COREATEST_ORDER", function() seen[#seen + 1] = "third" end, A)
+    events.on(
+        "SUUUI_COREATEST_ORDER",
+        function()
+            seen[#seen + 1] = "first"
+        end,
+        A
+    )
+    events.on(
+        "SUUUI_COREATEST_ORDER",
+        function()
+            seen[#seen + 1] = "second"
+        end,
+        B
+    )
+    events.on(
+        "SUUUI_COREATEST_ORDER",
+        function()
+            seen[#seen + 1] = "third"
+        end,
+        A
+    )
     events.emit("SUUUI_COREATEST_ORDER")
     expect(seen).toEqual({ "first", "second", "third" })
 end
 
 @test("a callback and an owner are required")
 local function required()
-    expect(function() events.on("SUUUI_COREATEST_A", "fn" :: unknown :: () -> (), A) end).toThrow()
-    expect(function() events.on("SUUUI_COREATEST_A", function() end, nil) end).toThrow("an owner is required")
-    expect(function() events.onGame("PLAYER_MONEY", function() end, nil) end).toThrow("an owner is required")
-    expect(function() events.onUnit("UNIT_HEALTH", "player", 5 :: unknown :: () -> (), A) end).toThrow()
+    expect(function()
+        events.on("SUUUI_COREATEST_A", "fn" :: unknown :: () -> (), A)
+    end).toThrow()
+    expect(function()
+        events.on("SUUUI_COREATEST_A", function() end, nil)
+    end).toThrow("an owner is required")
+    expect(function()
+        events.onGame("PLAYER_MONEY", function() end, nil)
+    end).toThrow("an owner is required")
+    expect(function()
+        events.onUnit("UNIT_HEALTH", "player", 5 :: unknown :: () -> (), A)
+    end).toThrow()
 end
 
 @test("an error is reported under the owner's name and the next listener still runs")
 local function isolated()
     local after = listener()
-    events.on("SUUUI_COREATEST_ERR", function() error("events-err-table") end, A)
-    events.on("SUUUI_COREATEST_ERR", function() error("events-err-string") end, "Events Test")
+    events.on(
+        "SUUUI_COREATEST_ERR",
+        function()
+            error("events-err-table")
+        end,
+        A
+    )
+    events.on(
+        "SUUUI_COREATEST_ERR",
+        function()
+            error("events-err-string")
+        end,
+        "Events Test"
+    )
     events.on("SUUUI_COREATEST_ERR", after, B)
     events.emit("SUUUI_COREATEST_ERR")
     expect(after).toHaveBeenCalledTimes(1)
@@ -128,7 +168,13 @@ end
 @test("a listener removed during a dispatch isn't called from then on")
 local function removedDuringDispatch()
     local b1 = listener()
-    events.on("SUUUI_COREATEST_DURING", function() events.off("SUUUI_COREATEST_DURING", B) end, A)
+    events.on(
+        "SUUUI_COREATEST_DURING",
+        function()
+            events.off("SUUUI_COREATEST_DURING", B)
+        end,
+        A
+    )
     events.on("SUUUI_COREATEST_DURING", b1, B)
     events.emit("SUUUI_COREATEST_DURING")
     expect(b1).never.toHaveBeenCalled()
@@ -138,10 +184,14 @@ end
 local function selfRemoval()
     local b1 = listener()
     local calls = 0
-    events.on("SUUUI_COREATEST_SELF", function()
-        calls += 1
-        events.offAll(A)
-    end, A)
+    events.on(
+        "SUUUI_COREATEST_SELF",
+        function()
+            calls += 1
+            events.offAll(A)
+        end,
+        A
+    )
     events.on("SUUUI_COREATEST_SELF", b1, B)
     events.emit("SUUUI_COREATEST_SELF")
     events.emit("SUUUI_COREATEST_SELF")
@@ -153,11 +203,17 @@ end
 local function addedDuringDispatch()
     local late = listener()
     local added = false
-    events.on("SUUUI_COREATEST_ADD", function()
-        if added then return end
-        added = true
-        events.on("SUUUI_COREATEST_ADD", late, B)
-    end, A)
+    events.on(
+        "SUUUI_COREATEST_ADD",
+        function()
+            if added then
+                return
+            end
+            added = true
+            events.on("SUUUI_COREATEST_ADD", late, B)
+        end,
+        A
+    )
     events.emit("SUUUI_COREATEST_ADD", 1)
     expect(late).never.toHaveBeenCalled()
     events.emit("SUUUI_COREATEST_ADD", 2)
@@ -216,13 +272,24 @@ end
 
 @test("onUnit: a unit or a list of units is required")
 local function unitsRequired()
-    expect(function() events.onUnit("UNIT_HEALTH", {}, function() end, A) end).toThrow("a unit or a list of units is required")
-    expect(function() events.onUnit("UNIT_HEALTH", 5 :: unknown :: string, function() end, A) end).toThrow()
+    expect(function()
+        events.onUnit("UNIT_HEALTH", {}, function() end, A)
+    end).toThrow("a unit or a list of units is required")
+    expect(function()
+        events.onUnit("UNIT_HEALTH", 5 :: unknown :: string, function() end, A)
+    end).toThrow()
 end
 
 @test("onUnit: an error goes under the owner's name")
 local function unitError()
-    events.onUnit("UNIT_HEALTH", { "player" }, function() error("events-err-unit") end, B)
+    events.onUnit(
+        "UNIT_HEALTH",
+        { "player" },
+        function()
+            error("events-err-unit")
+        end,
+        B
+    )
     mock.fireUnitEvent("UNIT_HEALTH", "player")
     local e = faultWith("events-err-unit")
     expect(e and e.source).toBe("Events Test B")
@@ -237,9 +304,27 @@ local function ownBus()
     local d, r = FakeDispatcher.new(), FakeReporter.new()
     local bus = events.EventBus.new(d, r)
     local heard: string[] = {}
-    bus:on("SUUUI_OWN", function(name: string, a: unknown) heard[#heard + 1] = `{name} {tostring(a)}` end, A)
-    bus:on("SUUUI_OWN", function() error("own-bus-err") end, B)
-    bus:on("SUUUI_OWN", function(name: string) heard[#heard + 1] = "after " .. name end, A)
+    bus:on(
+        "SUUUI_OWN",
+        function(name: string, a: unknown)
+            heard[#heard + 1] = `{name} {tostring(a)}`
+        end,
+        A
+    )
+    bus:on(
+        "SUUUI_OWN",
+        function()
+            error("own-bus-err")
+        end,
+        B
+    )
+    bus:on(
+        "SUUUI_OWN",
+        function(name: string)
+            heard[#heard + 1] = "after " .. name
+        end,
+        A
+    )
     bus:emit("SUUUI_OWN", 7)
     expect(heard).toEqual({ "SUUUI_OWN 7", "after SUUUI_OWN" })
     expect(r.errors).toEqual({ "Events Test B: own-bus-err" })
@@ -269,8 +354,20 @@ local function ownRemovedDuring()
     local d = FakeDispatcher.new()
     local bus = events.EventBus.new(d, FakeReporter.new())
     local second = 0
-    bus:onGame("PLAYER_LOGIN", function() bus:offAll(B) end, A)
-    bus:onGame("PLAYER_LOGIN", function() second += 1 end, B)
+    bus:onGame(
+        "PLAYER_LOGIN",
+        function()
+            bus:offAll(B)
+        end,
+        A
+    )
+    bus:onGame(
+        "PLAYER_LOGIN",
+        function()
+            second += 1
+        end,
+        B
+    )
     d:deliver("PLAYER_LOGIN")
     expect(second).toBe(0)
 end

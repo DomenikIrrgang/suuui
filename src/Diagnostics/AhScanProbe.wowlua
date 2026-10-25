@@ -22,7 +22,9 @@ local waiting: boolean? = nil
 local listFrame: Frame? = nil
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
+    if isSecret(v) then
+        return "secret"
+    end
     return tostring(v)
 end
 
@@ -34,16 +36,32 @@ end
 local function collect(out: { [string]: unknown })
     local ok, n = pcall(C_AuctionHouse.GetNumReplicateItems)
     out.count = ok and show(n) or ("error: " .. tostring(n))
-    if not ok or type(n) ~= "number" then return end
+    if not ok or type(n) ~= "number" then
+        return
+    end
     local full, samples = 0, {}
     for i = 0, n - 1 do
-        local okInfo, name, _, count, quality, _, level, _, minBid, _, buyout, _, _, _, owner, _, _, itemID, hasAll =
-            pcall(C_AuctionHouse.GetReplicateItemInfo, i)
+        local okInfo, name, _, count, quality, _, level, _, minBid, _, buyout, _, _, _, owner, _, _, itemID, hasAll = pcall(
+            C_AuctionHouse.GetReplicateItemInfo,
+            i
+        )
         if okInfo then
-            if hasAll then full = full + 1 end
+            if hasAll then
+                full = full + 1
+            end
             if #samples < 5 then
-                samples[#samples + 1] = ("%s | item %s | x%s | q%s | lvl %s | bid %s | buyout %s | owner %s | all %s"):format(
-                    show(name), show(itemID), show(count), show(quality), show(level), show(minBid), show(buyout), show(owner), show(hasAll))
+                samples[#samples +
+                    1] = ("%s | item %s | x%s | q%s | lvl %s | bid %s | buyout %s | owner %s | all %s"):format(
+                    show(name),
+                    show(itemID),
+                    show(count),
+                    show(quality),
+                    show(level),
+                    show(minBid),
+                    show(buyout),
+                    show(owner),
+                    show(hasAll)
+                )
             end
         elseif #samples < 5 then
             samples[#samples + 1] = "error at " .. i .. ": " .. tostring(name)
@@ -58,7 +76,10 @@ export function command()
         print("Auction house scan probe: open the auction house first.")
         return
     end
-    if waiting then print("Auction house scan probe: already waiting for the scan.") return end
+    if waiting then
+        print("Auction house scan probe: already waiting for the scan.")
+        return
+    end
     local out: { [string]: unknown } = { at = date("%Y-%m-%d %H:%M:%S") }
     store(out)
     local okReady, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
@@ -81,9 +102,16 @@ export function command()
         end
     end)
     local watch = CreateFrame("Frame")
-    for _, e in ipairs({ "REPLICATE_ITEM_LIST_UPDATE", "AUCTION_HOUSE_THROTTLED_MESSAGE_SENT", "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
-                         "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED", "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
-                         "AUCTION_HOUSE_THROTTLED_SYSTEM_READY", "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "ITEM_KEY_ITEM_INFO_RECEIVED" }) do
+    for _, e in ipairs({
+        "REPLICATE_ITEM_LIST_UPDATE",
+        "AUCTION_HOUSE_THROTTLED_MESSAGE_SENT",
+        "AUCTION_HOUSE_THROTTLED_MESSAGE_QUEUED",
+        "AUCTION_HOUSE_THROTTLED_MESSAGE_RESPONSE_RECEIVED",
+        "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
+        "AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
+        "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED",
+        "ITEM_KEY_ITEM_INFO_RECEIVED",
+    }) do
         pcall(watch.RegisterEvent, watch, e)
     end
     watch:SetScript("OnEvent", function(_, e: string)
@@ -94,18 +122,30 @@ export function command()
         ev.last = ("%.2fs"):format(GetTime() - started)
     end)
     local function finish(why: string)
-        if not waiting then return end
+        if not waiting then
+            return
+        end
         waiting = nil
         ticker:Cancel()
-        after(2, function() watch:UnregisterAllEvents() end)
+        after(2, function()
+            watch:UnregisterAllEvents()
+        end)
         f:UnregisterEvent("REPLICATE_ITEM_LIST_UPDATE")
         out.result = why
         out.seconds = ("%.1f"):format(GetTime() - started)
         collect(out)
-        print(("Auction house scan probe: %s after %ss, %s auctions (%s with all info). /reload to save."):format(
-            why, out.seconds, tostring(out.count), tostring(out.withAllInfo)))
+        print(
+            ("Auction house scan probe: %s after %ss, %s auctions (%s with all info). /reload to save."):format(
+                why,
+                out.seconds,
+                tostring(out.count),
+                tostring(out.withAllInfo)
+            )
+        )
     end
-    f:SetScript("OnEvent", function() finish("list came back") end)
+    f:SetScript("OnEvent", function()
+        finish("list came back")
+    end)
     waiting = true
     local ok, err = pcall(C_AuctionHouse.ReplicateItems)
     out.call = ok and "ok" or ("error: " .. tostring(err))
@@ -114,5 +154,7 @@ export function command()
         return
     end
     print("Auction house scan probe: asked for every auction; waiting up to a minute.")
-    after(60, function() finish("no answer in a minute") end)
+    after(60, function()
+        finish("no answer in a minute")
+    end)
 end

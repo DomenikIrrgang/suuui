@@ -66,11 +66,17 @@ end
 
 -- a theme change: the shown ones laid out again (the text styles' sizes)
 local tips: { [TooltipFrame]: boolean } = setmetatable({}, { __mode = "k" })
-events.on("SUUUI_THEME_CHANGED", function()
-    for t in pairs(tips) do
-        if t:IsShown() and t.content then t:SetContent(t.content) end
-    end
-end, "UI.TooltipFrame")
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for t in pairs(tips) do
+            if t:IsShown() and t.content then
+                t:SetContent(t.content)
+            end
+        end
+    end,
+    "UI.TooltipFrame"
+)
 
 export class TooltipFrame extends Panel
     stackFrame: Frame
@@ -127,12 +133,15 @@ export class TooltipFrame extends Panel
             natural = math.max(natural, self.sub:GetUnboundedStringWidth())
         end
 
-        for _, r in ipairs(self.rows) do r:Hide() end
+        for _, r in ipairs(self.rows) do
+            r:Hide()
+        end
         for i, l in ipairs(d.lines or {}) do
             local r = self:Row(i)
             r.left:SetValue(l[1] or "")
             r.right:SetValue(l[2] or "")
-            local w = r.left:GetUnboundedStringWidth() + (l[2] and (S["space-5"] + r.right:GetUnboundedStringWidth()) or 0)
+            local w = r.left:GetUnboundedStringWidth() +
+                (l[2] and (S["space-5"] + r.right:GetUnboundedStringWidth()) or 0)
             natural = math.max(natural, w)
             r:SetHeight(T.type.body.lineHeight)
             r:Show()
@@ -218,8 +227,13 @@ local shared: TooltipFrame?, intent: TimerHandle?
 local current: { owner?: Region, data?: TooltipSource } = {}
 
 export function hideTooltip()
-    if intent then intent:Cancel() intent = nil end
-    if shared then shared:Hide() end
+    if intent then
+        intent:Cancel()
+        intent = nil
+    end
+    if shared then
+        shared:Hide()
+    end
     current.owner, current.data = nil, nil
 end
 
@@ -227,7 +241,9 @@ export function showTooltip(owner: Region, data: TooltipSource)
     hideTooltip()
     intent = after(INTENT, function()
         intent = nil
-        if not owner:IsVisible() then return end
+        if not owner:IsVisible() then
+            return
+        end
         local tip = shared or tooltipFrame(suuRoot)
         shared = tip
         tip:SetFrameStrata("TOOLTIP")
@@ -235,7 +251,11 @@ export function showTooltip(owner: Region, data: TooltipSource)
         tip:SetIgnoreParentAlpha(true)
         tip:SetClampedToScreen(true)
         current.owner, current.data = owner, data
-        if type(data) == "function" then tip:SetContent(data(owner)) else tip:SetContent(data) end
+        if type(data) == "function" then
+            tip:SetContent(data(owner))
+        else
+            tip:SetContent(data)
+        end
         tip:ClearAllPoints()
         tip:SetPoint("BOTTOMLEFT", owner, "TOPRIGHT", S["space-4"], S["space-4"])
         tip:Show()
@@ -248,13 +268,17 @@ end
 -- for another frame, or not yet.
 export function refreshTooltip(owner: Region)
     local data, tip = current.data, shared
-    if not (tip and tip:IsShown() and current.owner == owner and type(data) == "function") then return end
+    if not (tip and tip:IsShown() and current.owner == owner and type(data) == "function") then
+        return
+    end
     tip:SetContent(data(owner))
 end
 
 -- Shows `data` (a table, or a function of the frame) while the mouse is over `frame`.
 export function attachTooltip(frame: Frame, data: TooltipSource)
-    frame:HookScript("OnEnter", function(self: Frame) showTooltip(self, data) end)
+    frame:HookScript("OnEnter", function(self: Frame)
+        showTooltip(self, data)
+    end)
     frame:HookScript("OnLeave", hideTooltip)
 end
 
@@ -277,11 +301,15 @@ local skinned: { [Frame]: Art } = {}
 -- Blizzard's tooltip art (the NineSlice its template makes).
 local function hideBlizzardArt(tooltip: Frame)
     local nineSlice = (tooltip :: { NineSlice?: Frame }).NineSlice
-    if nineSlice then nineSlice:SetAlpha(0) end
+    if nineSlice then
+        nineSlice:SetAlpha(0)
+    end
 end
 
 export function skinTooltip(tooltip: Frame?): Art?
-    if not tooltip or skinned[tooltip] then return nil end
+    if not tooltip or skinned[tooltip] then
+        return nil
+    end
     local bg = tooltip:CreateTexture(nil, "BACKGROUND", nil, -8)
     draw.paintFill(bg, "surface-glass")
     bg:SetAllPoints()
@@ -296,11 +324,15 @@ export function skinTooltip(tooltip: Frame?): Art?
     return art
 end
 
-export function isTooltipSkinned(tooltip: Frame): boolean return skinned[tooltip] ~= nil end
+export function isTooltipSkinned(tooltip: Frame): boolean
+    return skinned[tooltip] ~= nil
+end
 
 if type(SharedTooltip_SetBackdropStyle) == "function" then
     hook("SharedTooltip_SetBackdropStyle", function(tooltip: Frame)
-        if skinned[tooltip] then hideBlizzardArt(tooltip) end
+        if skinned[tooltip] then
+            hideBlizzardArt(tooltip)
+        end
     end)
 end
 
@@ -319,7 +351,9 @@ type Pending = { id: number, owner: Frame, lines: string[], added?: boolean }
 local pending: Pending? -- { id, lines }
 
 local function addExtra(tooltip: GameTooltip, lines: string[])
-    for _, line in ipairs(lines) do tooltip:AddLine(line, 1, 1, 1, true) end
+    for _, line in ipairs(lines) do
+        tooltip:AddLine(line, 1, 1, 1, true)
+    end
 end
 
 -- The spell post-call: the pending lines on GameTooltip when it draws that
@@ -327,9 +361,13 @@ end
 -- (data: the game's tooltip data; the id is a secret in some places)
 local function spellPostCall(tooltip: GameTooltip, data: { id?: number | Secret<number> }?)
     local p = pending
-    if tooltip ~= GameTooltip or not p then return end
+    if tooltip ~= GameTooltip or not p then
+        return
+    end
     local id = data and data.id
-    if isSecret(id) then return end
+    if isSecret(id) then
+        return
+    end
     if id == p.id and tooltip:GetOwner() == p.owner then
         addExtra(tooltip, p.lines)
         p.added = true
@@ -338,13 +376,18 @@ end
 
 local hooked: boolean | "post" = false
 local function hookSpellTips()
-    if hooked then return end
+    if hooked then
+        return
+    end
     hooked = true
-    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType and Enum.TooltipDataType.Spell then
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType and
+        Enum.TooltipDataType.Spell then
         TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, spellPostCall)
         hooked = "post"
     end
-    hookScript(GameTooltip, "OnHide", function() pending = nil end)
+    hookScript(GameTooltip, "OnHide", function()
+        pending = nil
+    end)
 end
 
 export function spellTooltip(owner: Frame, spellID: number, extra: string | string[] | nil, anchor: TooltipAnchor?)

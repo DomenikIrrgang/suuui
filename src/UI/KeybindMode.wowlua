@@ -40,18 +40,37 @@ type KeybindState = {
 local state: KeybindState = {}
 local hooked: { [ActionButton]: boolean } = {}
 
-local IGNORED: { [string]: boolean } = { LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true,
-                  LMETA = true, RMETA = true, UNKNOWN = true }
+local IGNORED: { [string]: boolean } = {
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+    LMETA = true,
+    RMETA = true,
+    UNKNOWN = true,
+}
 local MOUSE: { [string]: string } = { MiddleButton = "BUTTON3", Button4 = "BUTTON4", Button5 = "BUTTON5" }
 
 -- The key with its modifiers, as the binding API spells it ("SHIFT-1").
 local function withModifiers(key: string?): string?
-    if not key or IGNORED[key] then return nil end
+    if not key or IGNORED[key] then
+        return nil
+    end
     local mods = ""
-    if IsAltKeyDown() then mods = mods .. "ALT-" end
-    if IsControlKeyDown() then mods = mods .. "CTRL-" end
-    if IsShiftKeyDown() then mods = mods .. "SHIFT-" end
-    if IsMetaKeyDown and IsMetaKeyDown() then mods = mods .. "META-" end
+    if IsAltKeyDown() then
+        mods = mods .. "ALT-"
+    end
+    if IsControlKeyDown() then
+        mods = mods .. "CTRL-"
+    end
+    if IsShiftKeyDown() then
+        mods = mods .. "SHIFT-"
+    end
+    if IsMetaKeyDown and IsMetaKeyDown() then
+        mods = mods .. "META-"
+    end
     return mods .. key
 end
 
@@ -65,7 +84,9 @@ end
 
 local function setStatus(line: string?)
     local status = state.status
-    if status then status:SetValue(line or "") end
+    if status then
+        status:SetValue(line or "")
+    end
 end
 
 -- A tooltip line in a token's colour. It wraps: the colour's alpha used to
@@ -77,14 +98,18 @@ end
 
 local function showTip()
     local target = state.target
-    if not target then return end
+    if not target then
+        return
+    end
     GameTooltip:SetOwner(state.highlight :: Button, "ANCHOR_TOP") -- (built before any target)
     GameTooltip:AddLine((target.bindLabel or target.bindCommand) :: string, 1, 1, 1)
     local keys = { GetBindingKey(target.bindCommand :: string) }
     if #keys == 0 then
         tipLine("Not bound", "ink-muted")
     else
-        for _, key in ipairs(keys) do tipLine(keyText(key), "ink") end
+        for _, key in ipairs(keys) do
+            tipLine(keyText(key), "ink")
+        end
     end
     tipLine("Press a key to bind it. Delete clears.", "ink-muted")
     GameTooltip:Show()
@@ -96,27 +121,39 @@ end
 
 local function bind(key: string?)
     local target = state.target
-    if not (target and key) or InCombatLockdown() then return end
+    if not (target and key) or InCombatLockdown() then
+        return
+    end
     local cmd = target.bindCommand :: string -- (only buttons with a command are hooked)
     local was = GetBindingAction(key)
-    if was == cmd then return end
+    if was == cmd then
+        return
+    end
     if not SetBinding(key, cmd) then
         setStatus(("%s can't be bound."):format(keyText(key)))
         return
     end
     save()
     local line = ("%s → %s"):format(keyText(key), target.bindLabel or cmd)
-    if was and was ~= "" then line = line .. (" (was %s)"):format(commandName(was)) end
+    if was and was ~= "" then
+        line = line .. (" (was %s)"):format(commandName(was))
+    end
     setStatus(line)
     showTip()
 end
 
 local function clear()
     local target = state.target
-    if not target or InCombatLockdown() then return end
+    if not target or InCombatLockdown() then
+        return
+    end
     local keys = { GetBindingKey(target.bindCommand :: string) }
-    if #keys == 0 then return end
-    for _, key in ipairs(keys) do SetBinding(key) end
+    if #keys == 0 then
+        return
+    end
+    for _, key in ipairs(keys) do
+        SetBinding(key)
+    end
     save()
     setStatus(("%s: no keys."):format(target.bindLabel or target.bindCommand))
     showTip()
@@ -131,7 +168,9 @@ local function setTarget(b: ActionButton?)
     local highlight = state.highlight :: Button -- (built before any target)
     if not b then
         highlight:Hide()
-        if GameTooltip:GetOwner() == highlight then GameTooltip:Hide() end
+        if GameTooltip:GetOwner() == highlight then
+            GameTooltip:Hide()
+        end
         return
     end
     highlight:ClearAllPoints()
@@ -151,9 +190,15 @@ local function buildHighlight(): Button
     fill:SetAllPoints()
     draw.paintFill(fill, "arcane", 0.25)
     draw.border(h, "arcane", { layer = "OVERLAY" })
-    h:SetScript("OnMouseDown", function(_, button) bind(withModifiers(MOUSE[button])) end)
-    h:SetScript("OnMouseWheel", function(_, delta) bind(withModifiers(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN")) end)
-    h:SetScript("OnLeave", function() setTarget(nil) end)
+    h:SetScript("OnMouseDown", function(_, button)
+        bind(withModifiers(MOUSE[button]))
+    end)
+    h:SetScript("OnMouseWheel", function(_, delta)
+        bind(withModifiers(delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN"))
+    end)
+    h:SetScript("OnLeave", function()
+        setTarget(nil)
+    end)
     h:Hide()
     return h
 end
@@ -187,7 +232,9 @@ local function buildPanel(): Panel
     hint:SetWordWrap(true)
     hint:SetJustifyH("LEFT")
     hint:SetFixedWidth(296)
-    hint:SetValue("Hover a button and press a key, a mouse button or the wheel. Shift, Ctrl and Alt combine. Delete clears the button's keys.")
+    hint:SetValue(
+        "Hover a button and press a key, a mouse button or the wheel. Shift, Ctrl and Alt combine. Delete clears the button's keys."
+    )
     stack:Add(hint)
 
     local status = text(p.body, "caption", "ink-muted")
@@ -198,7 +245,13 @@ local function buildPanel(): Panel
     status:SetValue(" ")
     stack:Add(status)
 
-    local done = uiButton(p.body, { text = "Done", variant = "primary", onClick = function() exit() end })
+    local done = uiButton(p.body, {
+        text = "Done",
+        variant = "primary",
+        onClick = function()
+            exit()
+        end,
+    })
     stack:Add(done)
     return p
 end
@@ -209,10 +262,15 @@ local function buildCatcher(): Frame
     c:EnableKeyboard(true)
     c:SetPropagateKeyboardInput(false)
     c:SetScript("OnKeyDown", function(_, key)
-        if key == "ESCAPE" then exit()
-        elseif key == "PRINTSCREEN" then Screenshot()
-        elseif key == "DELETE" then clear()
-        else bind(withModifiers(key)) end
+        if key == "ESCAPE" then
+            exit()
+        elseif key == "PRINTSCREEN" then
+            Screenshot()
+        elseif key == "DELETE" then
+            clear()
+        else
+            bind(withModifiers(key))
+        end
     end)
     c:Hide()
     return c
@@ -220,7 +278,9 @@ end
 
 local function setGrid(on: boolean)
     for _, b in ipairs(actionButtons) do
-        if b.bindCommand and b.SetGrid then b:SetGrid(on) end
+        if b.bindCommand and b.SetGrid then
+            b:SetGrid(on)
+        end
     end
 end
 
@@ -229,12 +289,16 @@ export function isActive(): boolean?
 end
 
 export function enter(): boolean
-    if state.active then return true end
+    if state.active then
+        return true
+    end
     if InCombatLockdown() then
         print("Keybind mode opens out of combat.")
         return false
     end
-    if editMode.isActive() then editMode.exit() end
+    if editMode.isActive() then
+        editMode.exit()
+    end
     settingsWindow.close()
     local panel = state.panel or buildPanel()
     state.panel = panel
@@ -252,7 +316,9 @@ export function enter(): boolean
 end
 
 export function exit()
-    if not state.active then return end
+    if not state.active then
+        return
+    end
     state.active = false
     setTarget(nil)
     ;(state.panel :: Panel):Hide()
@@ -262,14 +328,22 @@ export function exit()
 end
 
 export function toggle()
-    if state.active then exit() else enter() end
-end
-
-events.onGame("PLAYER_REGEN_DISABLED", function()
     if state.active then
         exit()
-        print("Keybind mode closed: combat started.")
+    else
+        enter()
     end
-end, "KeybindMode")
+end
+
+events.onGame(
+    "PLAYER_REGEN_DISABLED",
+    function()
+        if state.active then
+            exit()
+            print("Keybind mode closed: combat started.")
+        end
+    end,
+    "KeybindMode"
+)
 
 registerCommand("keybind", "Bind keys to SuuUI's action bars: hover a button and press a key.", toggle)

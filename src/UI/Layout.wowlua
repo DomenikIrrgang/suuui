@@ -80,13 +80,17 @@ local function depth(frame: Region): number
     return d
 end
 
-local function padding(p: number | { [number]: number } | { left?: number, right?: number, top?: number, bottom?: number } | nil): Padding
+local function padding(
+    p: number | { [number]: number } | { left?: number, right?: number, top?: number, bottom?: number } | nil
+): Padding
     if type(p) == "table" then
         local list = p :: { [number]: number }
         local named = p :: { left?: number, right?: number, top?: number, bottom?: number }
         return {
-            left = list[1] or named.left or 0, right = list[2] or named.right or 0,
-            top = list[3] or named.top or 0, bottom = list[4] or named.bottom or 0,
+            left = list[1] or named.left or 0,
+            right = list[2] or named.right or 0,
+            top = list[3] or named.top or 0,
+            bottom = list[4] or named.bottom or 0,
         }
     end
     local n = p or 0
@@ -94,7 +98,9 @@ local function padding(p: number | { [number]: number } | { left?: number, right
 end
 
 local function number(v: uiUnit | Secret<number> | nil, fallback: number?): number
-    if isSecret(v) or v == nil then return fallback or 0 end
+    if isSecret(v) or v == nil then
+        return fallback or 0
+    end
     return v
 end
 
@@ -106,7 +112,9 @@ end
 -- A child's size: its own GetLayoutSize, a text's natural size, or its frame size.
 local function measure(child: Region): (number, number)
     local own = sized(child)
-    if own then return own:GetLayoutSize() end
+    if own then
+        return own:GetLayoutSize()
+    end
     if child:GetObjectType() == "FontString" then
         local fs = child :: FontString
         local w = isInstance(child, Text) and child.fixedWidth or number(fs:GetUnboundedStringWidth())
@@ -118,14 +126,22 @@ end
 local function onChildChanged(child: Region, w: number?, h: number?)
     local placed = placements[child]
     local l = placed and placed.layout
-    if not placed or not l or l.applying then return end
+    if not placed or not l or l.applying then
+        return
+    end
     if w ~= nil then
         -- Ignore the echo of a size this layout itself caused.
-        if isSecret(w) or isSecret(h) then return end
+        if isSecret(w) or isSecret(h) then
+            return
+        end
         local lw, lh = placed.w, placed.h
         if l.stretches then
-            if l.direction == "vertical" and lh == h then return end
-            if l.direction == "horizontal" and lw == w then return end
+            if l.direction == "vertical" and lh == h then
+                return
+            end
+            if l.direction == "horizontal" and lw == w then
+                return
+            end
         elseif lw == w and lh == h then
             return
         end
@@ -159,7 +175,9 @@ export abstract class Layout
         self.gap = opts.gap or 0
         self.padding = padding(opts.padding)
         local a = opts.autoSize
-        if a == nil then a = true end
+        if a == nil then
+            a = true
+        end
         self.autoSize = a
         self.depth = depth(container)
     end
@@ -173,16 +191,24 @@ export abstract class Layout
 
     function Add<C extends Region>(child: C, opts: AddOptions?): C
         placements[child] = { layout = self, opts = opts }
-        if isInstance(child, Text) then child.layout = self end
+        if isInstance(child, Text) then
+            child.layout = self
+        end
         self.children[#self.children + 1] = child
         -- Texts and textures have HookScript too, but no size scripts: only frames are hooked.
         if child:IsObjectType("Frame") and not hooked[child] then
             hooked[child] = true
             local region: Region = child
             local f = region :: Frame
-            f:HookScript("OnSizeChanged", function(c: Frame, w: number, h: number) onChildChanged(c, w, h) end)
-            f:HookScript("OnShow", function(c: Frame) onChildChanged(c) end)
-            f:HookScript("OnHide", function(c: Frame) onChildChanged(c) end)
+            f:HookScript("OnSizeChanged", function(c: Frame, w: number, h: number)
+                onChildChanged(c, w, h)
+            end)
+            f:HookScript("OnShow", function(c: Frame)
+                onChildChanged(c)
+            end)
+            f:HookScript("OnHide", function(c: Frame)
+                onChildChanged(c)
+            end)
         end
         self:Invalidate()
         return child
@@ -190,7 +216,9 @@ export abstract class Layout
 
     private function Release(child: Region)
         placements[child] = nil
-        if isInstance(child, Text) then child.layout = nil end
+        if isInstance(child, Text) then
+            child.layout = nil
+        end
     end
 
     function Remove(child: Region)
@@ -205,7 +233,9 @@ export abstract class Layout
     end
 
     function Clear()
-        for _, c in ipairs(self.children) do self:Release(c) end
+        for _, c in ipairs(self.children) do
+            self:Release(c)
+        end
         wipe(self.children)
         self:Invalidate()
     end
@@ -213,7 +243,13 @@ export abstract class Layout
     function ApplyNow()
         local c = self.container
         if InCombatLockdown() and c:IsProtected() then
-            combat.run("layout:" .. tostring(self), function() self:ApplyNow() end, "Layout")
+            combat.run(
+                "layout:" .. tostring(self),
+                function()
+                    self:ApplyNow()
+                end,
+                "Layout"
+            )
             return
         end
         self.applying = true
@@ -231,13 +267,17 @@ export abstract class Layout
         end
         -- A container that changed size tells the layout it sits in.
         local outer = placements[c]
-        if changed and outer then outer.layout:Invalidate() end
+        if changed and outer then
+            outer.layout:Invalidate()
+        end
     end
 
     -- the size it was laid out at, kept to ignore its echo
     protected function Placed(child: Region, w: number, h: number)
         local placed = placements[child]
-        if placed then placed.w, placed.h = w, h end
+        if placed then
+            placed.w, placed.h = w, h
+        end
     end
 end
 
@@ -245,12 +285,20 @@ flusher:SetScript("OnUpdate", function(self)
     self:Hide()
     -- A container that grows dirties the layout it sits in; settle in a few passes.
     for _ = 1, 8 do
-        if not next(pending) then return end
+        if not next(pending) then
+            return
+        end
         local list: Layout[] = {}
-        for l in pairs(pending) do list[#list + 1] = l end
+        for l in pairs(pending) do
+            list[#list + 1] = l
+        end
         pending = {}
-        table.sort(list, function(a: Layout, b: Layout): boolean return a.depth > b.depth end)
-        for _, l in ipairs(list) do l:ApplyNow() end
+        table.sort(list, function(a: Layout, b: Layout): boolean
+            return a.depth > b.depth
+        end)
+        for _, l in ipairs(list) do
+            l:ApplyNow()
+        end
     end
 end)
 
@@ -302,11 +350,15 @@ export class Stack extends Layout
             child:ClearAllPoints()
             if vertical then
                 child:SetPoint("TOPLEFT", c, "TOPLEFT", p.left + offset, -(p.top + pos))
-                if self.align == "stretch" then child:SetPoint("TOPRIGHT", c, "TOPRIGHT", -p.right, -(p.top + pos)) end
+                if self.align == "stretch" then
+                    child:SetPoint("TOPRIGHT", c, "TOPRIGHT", -p.right, -(p.top + pos))
+                end
                 pos = pos + h
             else
                 child:SetPoint("TOPLEFT", c, "TOPLEFT", p.left + pos, -(p.top + offset))
-                if self.align == "stretch" then child:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", p.left + pos, p.bottom) end
+                if self.align == "stretch" then
+                    child:SetPoint("BOTTOMLEFT", c, "BOTTOMLEFT", p.left + pos, p.bottom)
+                end
                 pos = pos + w
             end
             self:Placed(child, w, h)
@@ -344,7 +396,13 @@ export class Grid extends Layout
             if child:IsShown() then
                 local col, row = n % cols, math.floor(n / cols)
                 child:ClearAllPoints()
-                child:SetPoint("TOPLEFT", c, "TOPLEFT", p.left + col * (cw + self.gap), -(p.top + row * (ch + self.gap)))
+                child:SetPoint(
+                    "TOPLEFT",
+                    c,
+                    "TOPLEFT",
+                    p.left + col * (cw + self.gap),
+                    -(p.top + row * (ch + self.gap))
+                )
                 local w, h = measure(child)
                 self:Placed(child, w, h)
                 n = n + 1

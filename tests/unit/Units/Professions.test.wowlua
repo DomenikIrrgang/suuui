@@ -10,7 +10,6 @@
 -- the empty slots and secondary professions; the rail, opening a recipe,
 -- tracking, creating, links; Blizzard's pages off screen; trainers recorded.
 
-
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
@@ -38,14 +37,18 @@ end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     M.search, M.sort, M.filters = nil, "category", UI.PROFESSION_FILTER_DEFAULTS
     M.pendingRecipe = nil
     mock.advanceTime(0.5)
     expectNoErrors()
 end
 
-local function view(): Professions return assert(M.view) end
+local function view(): Professions
+    return assert(M.view)
+end
 
 local function openSmithing()
     if not (C_TradeSkillUI.IsTradeSkillReady() and M.view and view():IsVisible()) then
@@ -56,18 +59,28 @@ local function openSmithing()
     M:Render()
 end
 
-local function data(): CraftingData return assert(view().craftData) end
+local function data(): CraftingData
+    return assert(view().craftData)
+end
 
 local function allRecipes(): RecipeEntry[]
     local out: RecipeEntry[] = {}
-    for _, c in ipairs(data().categories or {}) do for _, r in ipairs(c.recipes or {}) do out[#out + 1] = r end end
+    for _, c in ipairs(data().categories or {}) do
+        for _, r in ipairs(c.recipes or {}) do
+            out[#out + 1] = r
+        end
+    end
     return out
 end
 
-local function recipeAt(i: number): RecipeEntry return assert(allRecipes()[i]) end
+local function recipeAt(i: number): RecipeEntry
+    return assert(allRecipes()[i])
+end
 
 local function sources(list: RecipeSource[]?)
-    mock.stub(SuuUI, "RecipeSources", function(_: number): RecipeSource[]? return list end)
+    mock.stub(SuuUI, "RecipeSources", function(_: number): RecipeSource[]?
+        return list
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -84,7 +97,7 @@ local function recipes()
     expect(d.selected).toBe(recipeAt(1).id)
     local total = #allRecipes()
     expect(total < #numbers(C_TradeSkillUI.GetAllRecipeIDs())).toBe(true)
-    expect(assert(assert(M:Char().recipes)[BLACKSMITHING]).total >= total).toBe(true)   -- (of all: the list shows learned ones)
+    expect(assert(assert(M:Char().recipes)[BLACKSMITHING]).total >= total).toBe(true) -- (of all: the list shows learned ones)
     -- a recipe in no category, or under another profession's header, isn't this game's
     expect(M:InGame({ categoryID = 0 }, "Blacksmithing")).toBe(false)
     expect(M:InGame({ categoryID = 999999 }, "Blacksmithing")).toBe(true)
@@ -115,7 +128,9 @@ local function filtering()
     local search = assert(view().onSearch)
     search("bar")
     mock.advanceTime(0.2)
-    for _, rec in ipairs(allRecipes()) do expect((rec.name or ""):lower():find("bar", 1, true) ~= nil).toBe(true) end
+    for _, rec in ipairs(allRecipes()) do
+        expect((rec.name or ""):lower():find("bar", 1, true) ~= nil).toBe(true)
+    end
     search("")
     mock.advanceTime(0.2)
 end
@@ -123,7 +138,9 @@ end
 @test("sorts: by category with headers; by difficulty, skill, level or name in one list")
 local function sorting()
     mock.stub(SuuUI, "RecipeSources", function(id: number): RecipeSource[]?
-        if id % 2 == 0 then return { { t = "t", s = id % 300 } } end
+        if id % 2 == 0 then
+            return { { t = "t", s = id % 300 } }
+        end
         return nil
     end)
     openSmithing()
@@ -136,14 +153,20 @@ local function sorting()
         expect(M:Char().sort).toBe(key)
     end
     local names = allRecipes()
-    for i = 2, #names do expect((names[i - 1].name or "") <= (names[i].name or "")).toBe(true) end
+    for i = 2, #names do
+        expect((names[i - 1].name or "") <= (names[i].name or "")).toBe(true)
+    end
     onSort("category")
     expect(#assert(data().categories) > 1).toBe(true)
     -- categories in the same place: by name
-    mock.stub(C_TradeSkillUI, "GetCategoryInfo", function(id: number): unknown return { name = "Cat " .. id, uiOrder = 1 } end)
+    mock.stub(C_TradeSkillUI, "GetCategoryInfo", function(id: number): unknown
+        return { name = "Cat " .. id, uiOrder = 1 }
+    end)
     M:Render()
     local cats = assert(data().categories)
-    for i = 2, #cats do expect((cats[i - 1].name or "") <= (cats[i].name or "")).toBe(true) end
+    for i = 2, #cats do
+        expect((cats[i - 1].name or "") <= (cats[i].name or "")).toBe(true)
+    end
 end
 
 @test("choosing a recipe; tracking it; creating one or all; links into chat")
@@ -163,13 +186,19 @@ local function actions()
     expect(craft).toHaveBeenCalledTimes(2)
     -- the profession's link, a recipe's
     local n = printedCount()
-    mock.stub(C_TradeSkillUI, "GetTradeSkillListLink", function(): string? return nil end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillListLink", function(): string?
+        return nil
+    end)
     local link = assert(v.onLink)
     link()
     expect(hasLine(printedSince(n), "can't be linked")).toBe(true)
-    mock.stub(C_TradeSkillUI, "GetTradeSkillListLink", function(): string return "|Htrade:1|h[Blacksmithing]|h" end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillListLink", function(): string
+        return "|Htrade:1|h[Blacksmithing]|h"
+    end)
     local chat = tbl.field(_G, "ChatFrameUtil")
-    local inserted = mock.stub(chat, "InsertLink", function(_: string): boolean return false end)
+    local inserted = mock.stub(chat, "InsertLink", function(_: string): boolean
+        return false
+    end)
     local opened = mock.stub(chat, "OpenChat", function(_: string) end)
     link()
     expect(inserted).toHaveBeenCalledTimes(1)
@@ -192,10 +221,16 @@ local function details()
     mock.stub(C_TradeSkillUI, "GetRecipeRequirements", function(_: number): unknown
         return { { name = "Anvil", met = false }, { name = "Anvil", met = true }, { name = "Forge", met = false } }
     end)
-    mock.stub(C_TradeSkillUI, "GetRecipeCooldown", function(_: number): number return 3600 end)
+    mock.stub(C_TradeSkillUI, "GetRecipeCooldown", function(_: number): number
+        return 3600
+    end)
     mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
-        return { outputItemID = 999999, quantityMin = 1, quantityMax = 2,
-                 reagentSlotSchematics = { { reagents = { { itemID = 2840 } }, quantityRequired = 2 } } }
+        return {
+            outputItemID = 999999,
+            quantityMin = 1,
+            quantityMax = 2,
+            reagentSlotSchematics = { { reagents = { { itemID = 2840 } }, quantityRequired = 2 } },
+        }
     end)
     local r = assert(M:Recipe(id))
     local tools = assert(r.tools)
@@ -208,11 +243,17 @@ local function details()
     assert(r.onReagent)(1, UIParent)
     assert(r.onProduct)(UIParent)
     -- an enchant: its description, no product
-    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown return { reagentSlotSchematics = {} } end)
-    mock.stub(C_TradeSkillUI, "GetRecipeDescription", function(_: number, _: unknown): string return "Enchants something." end)
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return { reagentSlotSchematics = {} }
+    end)
+    mock.stub(C_TradeSkillUI, "GetRecipeDescription", function(_: number, _: unknown): string
+        return "Enchants something."
+    end)
     expect(assert(M:Recipe(id)).desc).toBe("Enchants something.")
     -- the level its product needs: asked for while the item isn't loaded
-    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown return { outputItemID = 999998 } end)
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return { outputItemID = 999998 }
+    end)
     M.waitingItems = false
     expect(M:UseLevel(id)).toBe(nil)
     expect(M.waitingItems).toBe(true)
@@ -227,7 +268,11 @@ end
 
 local function unlearnedId(): number
     assert(view().onFilters)({ show = "all" })
-    for _, r in ipairs(allRecipes()) do if not r.learned then return r.id end end
+    for _, r in ipairs(allRecipes()) do
+        if not r.learned then
+            return r.id
+        end
+    end
     error("every recipe is learned")
 end
 
@@ -254,12 +299,29 @@ local function itemSources()
     local id = unlearnedId()
     local mine = UnitFactionGroup("player") == "Alliance" and "A" or "H"
     local theirs = mine == "A" and "H" or "A"
-    sources({ { t = "i", i = 2840, s = 50,
-        v = { "Vendor One|Zone|" .. mine, "Vendor Two|Zone|", "Plain Vendor||", "Vendor Three|Zone|" .. mine, "Vendor Four|Zone|" .. mine,
-              "Theirs|Far|" .. theirs },
-        d = { "Ogre|Hills", "Bear|Woods", "Wolf|" }, dn = 5, o = { "Chest|Cave", "Crate|Dock", "Box|Hut" },
-        q = { 1, 2 }, c = { 2840 } } })
-    mock.stub(C_QuestLog, "GetTitleForQuestID", function(q: number): string? return q == 1 and "A Quest" or nil end)
+    sources({
+        {
+            t = "i",
+            i = 2840,
+            s = 50,
+            v = {
+                "Vendor One|Zone|" .. mine,
+                "Vendor Two|Zone|",
+                "Plain Vendor||",
+                "Vendor Three|Zone|" .. mine,
+                "Vendor Four|Zone|" .. mine,
+                "Theirs|Far|" .. theirs,
+            },
+            d = { "Ogre|Hills", "Bear|Woods", "Wolf|" },
+            dn = 5,
+            o = { "Chest|Cave", "Crate|Dock", "Box|Hut" },
+            q = { 1, 2 },
+            c = { 2840 },
+        },
+    })
+    mock.stub(C_QuestLog, "GetTitleForQuestID", function(q: number): string?
+        return q == 1 and "A Quest" or nil
+    end)
     local src = M:Source(id)
     local text = table.concat(src.lines, "\n")
     expect(text:find("Sold by ", 1, true) ~= nil).toBe(true)
@@ -285,15 +347,27 @@ local function recorded()
     openSmithing()
     local id = unlearnedId()
     local name = assert(C_TradeSkillUI.GetRecipeInfo(id)).name
-    mock.stub(_G, "GetNumTrainerServices", function(): number return 3 end)
+    mock.stub(_G, "GetNumTrainerServices", function(): number
+        return 3
+    end)
     mock.stub(_G, "GetTrainerServiceInfo", function(i: number): ...unknown
-        if i == 1 then return "Weapons", "header" end
-        if i == 2 then return name, "unavailable", 133333 end
+        if i == 1 then
+            return "Weapons", "header"
+        end
+        if i == 2 then
+            return name, "unavailable", 133333
+        end
         return "Plain thing", nil, "available"
     end)
-    mock.stub(_G, "GetTrainerServiceSkillReq", function(i: number): ...unknown return "Blacksmithing", i == 2 and 125 or 1 end)
-    mock.stub(_G, "GetTrainerServiceCost", function(_: number): number return 500 end)
-    mock.stub(_G, "GetTrainerServiceTypeFilter", function(_: string): boolean return true end)
+    mock.stub(_G, "GetTrainerServiceSkillReq", function(i: number): ...unknown
+        return "Blacksmithing", i == 2 and 125 or 1
+    end)
+    mock.stub(_G, "GetTrainerServiceCost", function(_: number): number
+        return 500
+    end)
+    mock.stub(_G, "GetTrainerServiceTypeFilter", function(_: string): boolean
+        return true
+    end)
     mock.stub(_G, "SetTrainerServiceTypeFilter", function(_: string, _: number) end)
     M:RecordTrainer()
     local _, saved = next(assert(M:Char().trainers))
@@ -306,16 +380,22 @@ local function recorded()
     local lines = M:Source(id).lines
     expect(lines[1]:find("(125)", 1, true) ~= nil).toBe(true)
     sources({ { t = "a" } })
-    expect(#M:Source(id).lines).toBe(3)            -- the recorded trainer added
+    expect(#M:Source(id).lines).toBe(3) -- the recorded trainer added
     sources(nil)
     expect(M:SkillFor(id, "Blacksmithing", name)).toBe(125)
     -- a class trainer: nothing recorded; a profession trainer without the skill's name
-    mock.stub(_G, "GetTrainerServiceSkillReq", function(_: number): ...unknown return nil end)
-    mock.stub(_G, "IsTradeskillTrainer", function(): boolean return false end)
+    mock.stub(_G, "GetTrainerServiceSkillReq", function(_: number): ...unknown
+        return nil
+    end)
+    mock.stub(_G, "IsTradeskillTrainer", function(): boolean
+        return false
+    end)
     local before = M:Char().trainers
     M:RecordTrainer()
     expect(M:Char().trainers).toBe(before)
-    mock.stub(_G, "IsTradeskillTrainer", function(): boolean return true end)
+    mock.stub(_G, "IsTradeskillTrainer", function(): boolean
+        return true
+    end)
     M:RecordTrainer()
 end
 
@@ -327,22 +407,40 @@ end
 -- spell only casts; Bait and Tackle opens the window), Find Minerals tracking.
 local function professions()
     local names: { [number]: string } = { [185] = "Cooking", [129] = "First Aid", [356] = "Fishing" }
-    mock.stub(C_TradeSkillUI, "GetTradeSkillDisplayName", function(line: number): string return names[line] or "" end)
-    mock.stub(_G, "GetProfessions", function(): ...unknown return 1, nil, nil, 2, nil, nil end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillDisplayName", function(line: number): string
+        return names[line] or ""
+    end)
+    mock.stub(_G, "GetProfessions", function(): ...unknown
+        return 1, nil, nil, 2, nil, nil
+    end)
     mock.stub(_G, "GetProfessionInfo", function(i: number): ...unknown
-        if i == 1 then return "Blacksmithing", 136241, 87, 150, 2, 10, BLACKSMITHING end
+        if i == 1 then
+            return "Blacksmithing", 136241, 87, 150, 2, 10, BLACKSMITHING
+        end
         return "Fishing", 136245, 30, 75, 2, 20, 356
     end)
     mock.stub(C_SpellBook, "GetSpellBookItemInfo", function(slot: number, _: unknown): unknown
-        if slot == 11 then return { spellID = 2018, name = "Blacksmithing", iconID = 136241, subName = "Journeyman" } end
-        if slot == 12 then return { spellID = 2580, name = "Find Minerals", iconID = 136025 } end
-        if slot == 21 then return { spellID = 7620, name = "Fishing", iconID = 136245 } end
+        if slot == 11 then
+            return { spellID = 2018, name = "Blacksmithing", iconID = 136241, subName = "Journeyman" }
+        end
+        if slot == 12 then
+            return { spellID = 2580, name = "Find Minerals", iconID = 136025 }
+        end
+        if slot == 21 then
+            return { spellID = 7620, name = "Fishing", iconID = 136245 }
+        end
         return { spellID = 999901, name = "Bait and Tackle", iconID = 134400 }
     end)
-    mock.stub(C_TradeSkillUI, "CanTradeSkillShowCraftingUI", function(id: number): boolean return id == 2018 or id == 999901 end)
-    mock.stub(C_Minimap, "GetNumTrackingTypes", function(): number return 2 end)
+    mock.stub(C_TradeSkillUI, "CanTradeSkillShowCraftingUI", function(id: number): boolean
+        return id == 2018 or id == 999901
+    end)
+    mock.stub(C_Minimap, "GetNumTrackingTypes", function(): number
+        return 2
+    end)
     mock.stub(C_Minimap, "GetTrackingInfo", function(i: number): ...unknown
-        if i == 1 then return { name = "Find Minerals", active = false, spellID = 2580 } end
+        if i == 1 then
+            return { name = "Find Minerals", active = false, spellID = 2580 }
+        end
         return "Find Herbs", nil, true, nil, nil, 2383
     end)
 end
@@ -350,7 +448,11 @@ end
 local function card(name: string): ProfessionCard
     local p = M:Professions()
     for _, list in ipairs({ p.primary, p.secondary }) do
-        for _, c in ipairs(list) do if c.name == name then return c end end
+        for _, c in ipairs(list) do
+            if c.name == name then
+                return c
+            end
+        end
     end
     error("no card " .. name)
 end
@@ -363,7 +465,7 @@ local function overview()
     expect(p.primary[1].rank).toBe("Journeyman")
     expect(p.primary[2].hint).toBe("Learn one from a profession trainer")
     expect(p.secondary[2].name).toBe("Fishing")
-    expect(p.secondary[2].rank).toBe("Apprentice")    -- by its cap, without a rank name
+    expect(p.secondary[2].rank).toBe("Apprentice") -- by its cap, without a rank name
     expect(p.secondary[1].hint).toBe("Learn it from a Cooking trainer")
     expect(p.secondary[3].hint).toBe("Learn it from a First Aid trainer")
     expect(M:Professions().secondary[1].untrained).toBe(true)
@@ -396,30 +498,44 @@ end
 local function opener()
     professions()
     local drag = assert(card("Fishing").onDrag)
-    local made = mock.stub(_G, "CreateMacro", function(_: string, _: unknown, _: string, _: boolean): number return 121 end)
+    local made = mock.stub(_G, "CreateMacro", function(_: string, _: unknown, _: string, _: boolean): number
+        return 121
+    end)
     local picked = mock.stub(_G, "PickupMacro", function(_: number) end)
-    mock.stub(_G, "GetNumMacros", function(): (number, number) return 0, 0 end)
-    mock.stub(C_Spell, "GetSpellName", function(id: number): string? return id == 999901 and "Bait and Tackle" or nil end)
+    mock.stub(_G, "GetNumMacros", function(): (number, number)
+        return 0, 0
+    end)
+    mock.stub(C_Spell, "GetSpellName", function(id: number): string?
+        return id == 999901 and "Bait and Tackle" or nil
+    end)
     drag()
     expect(made).toHaveBeenCalledTimes(1)
     expect(picked).toHaveBeenCalledWith(121)
     -- made already: the same one
-    mock.stub(_G, "GetNumMacros", function(): (number, number) return 0, 1 end)
-    mock.stub(_G, "GetMacroBody", function(_: number): string return "/cast Bait and Tackle\n" end)
+    mock.stub(_G, "GetNumMacros", function(): (number, number)
+        return 0, 1
+    end)
+    mock.stub(_G, "GetMacroBody", function(_: number): string
+        return "/cast Bait and Tackle\n"
+    end)
     drag()
     expect(made).toHaveBeenCalledTimes(1)
     -- none made yet, in combat, or no free slot
-    mock.stub(_G, "GetNumMacros", function(): (number, number) return 0, 0 end)
+    mock.stub(_G, "GetNumMacros", function(): (number, number)
+        return 0, 0
+    end)
     local n = printedCount()
     mock.player:enterCombat()
     drag()
     mock.player:leaveCombat()
-    mock.stub(_G, "CreateMacro", function(_: string, _: unknown, _: string, _: boolean): number error("full") end)
+    mock.stub(_G, "CreateMacro", function(_: string, _: unknown, _: string, _: boolean): number
+        error("full")
+    end)
     drag()
     local lines = printedSince(n)
     expect(hasLine(lines, "Macros can't be made in combat")).toBe(true)
     expect(hasLine(lines, "No free character macro slot for Fishing")).toBe(true)
-    M:PickupOpener("Nothing", nil, 1)               -- no such spell: nothing
+    M:PickupOpener("Nothing", nil, 1) -- no such spell: nothing
 end
 
 @test("Unlearn asks first (typing UNLEARN), then the game abandons it; a failure is said")
@@ -432,7 +548,9 @@ local function unlearn()
     local abandon = mock.stub(C_SkillInfo, "AbandonSkill", function(_: number) end)
     confirm(nil)
     expect(abandon).toHaveBeenCalledWith(BLACKSMITHING)
-    mock.stub(C_SkillInfo, "AbandonSkill", function(_: number) error("nope") end)
+    mock.stub(C_SkillInfo, "AbandonSkill", function(_: number)
+        error("nope")
+    end)
     local n = printedCount()
     confirm(nil)
     expect(hasLine(printedSince(n), "Blacksmithing couldn't be unlearned")).toBe(true)
@@ -448,13 +566,15 @@ local function rail()
     local tab, open = assert(view().onTab), assert(view().onOpen)
     tab("overview")
     expect(M.mode).toBe("overview")
-    tab(BLACKSMITHING)                               -- open already
+    tab(BLACKSMITHING) -- open already
     expect(M.mode).toBe("crafting")
     local opened = mock.stub(C_TradeSkillUI, "OpenTradeSkill", function(_: number) end)
     open({ skillLine = 356 })
     expect(opened).toHaveBeenCalledWith(356)
     open({})
-    mock.stub(C_TradeSkillUI, "OpenTradeSkill", function(_: number) error("not here") end)
+    mock.stub(C_TradeSkillUI, "OpenTradeSkill", function(_: number)
+        error("not here")
+    end)
     local n = printedCount()
     M:Open(356)
     mock.player:enterCombat()
@@ -469,7 +589,9 @@ end
 local function openRecipe()
     openSmithing()
     local target = recipeAt(3)
-    mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): ...unknown return 999, nil, BLACKSMITHING end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): ...unknown
+        return 999, nil, BLACKSMITHING
+    end)
     local api = assert(services.use(PROFESSIONS))
     local shown = assert(api.ShownRecipe)
     assert(api.OpenRecipe)(target.id)
@@ -480,7 +602,9 @@ local function openRecipe()
     expect(M.pendingRecipe).toBe(target.id)
     M.pendingRecipe = nil
     local n = printedCount()
-    mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): ...unknown return nil end)
+    mock.stub(C_TradeSkillUI, "GetTradeSkillLineForRecipe", function(_: number): ...unknown
+        return nil
+    end)
     M:OpenRecipe(1)
     M:OpenRecipe(nil)
     mock.player:enterCombat()
@@ -536,25 +660,35 @@ local function blizzardParts()
     mock.fireEvent("ADDON_LOADED", "Blizzard_Professions", false)
 end
 
-@test("a profession only its opener opens (Mining: Smelting), one whose spell doesn't craft (Skinning); the old PickupSpell")
+@test(
+    "a profession only its opener opens (Mining: Smelting), one whose spell doesn't craft (Skinning); the old PickupSpell"
+)
 local function otherDrags()
-    mock.stub(_G, "GetProfessions", function(): ...unknown return 3, 4, nil, nil, nil, nil end)
+    mock.stub(_G, "GetProfessions", function(): ...unknown
+        return 3, 4, nil, nil, nil, nil
+    end)
     mock.stub(_G, "GetProfessionInfo", function(i: number): ...unknown
-        if i == 3 then return "Mining", 136248, 10, 75, 1, 30, 186 end
+        if i == 3 then
+            return "Mining", 136248, 10, 75, 1, 30, 186
+        end
         return "Skinning", 134366, 10, 75, 1, 40, 393
     end)
     mock.stub(C_SpellBook, "GetSpellBookItemInfo", function(slot: number, _: unknown): unknown
-        if slot == 31 then return { spellID = 2656, name = "Smelting", iconID = 135811 } end
+        if slot == 31 then
+            return { spellID = 2656, name = "Smelting", iconID = 135811 }
+        end
         return { spellID = 8613, name = "Skinning", iconID = 134366 }
     end)
-    mock.stub(C_TradeSkillUI, "CanTradeSkillShowCraftingUI", function(id: number): boolean return id == 2656 end)
+    mock.stub(C_TradeSkillUI, "CanTradeSkillShowCraftingUI", function(id: number): boolean
+        return id == 2656
+    end)
     local p = M:Professions()
     local pick = mock.stub(C_Spell, "PickupSpell", function(_: number) end)
     assert(p.primary[1].onDrag)()
     expect(pick).toHaveBeenCalledWith(2656)
     assert(p.primary[2].onDrag)()
     expect(pick).toHaveBeenCalledWith(8613)
-    mock.setField(C_Spell, "PickupSpell", nil)       -- an older client: the global
+    mock.setField(C_Spell, "PickupSpell", nil) -- an older client: the global
     local global = mock.stub(_G, "PickupSpell", function(_: number) end)
     M:Pickup(2656)
     expect(global).toHaveBeenCalledWith(2656)

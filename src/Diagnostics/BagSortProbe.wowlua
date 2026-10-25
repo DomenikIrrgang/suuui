@@ -34,9 +34,20 @@ import * as tbl from "wowlua:table"
 -- A step's record: when it started, what the game said meanwhile, and its
 -- own findings by name.
 type Rec = {
-    at: string, t0: number, events: string[], errors: string[], steps: string[],
-    error?: string, ended?: string, result?: string, skipped?: string,
-    burst?: string, waited?: string, moved?: string, took?: string, restored?: string,
+    at: string,
+    t0: number,
+    events: string[],
+    errors: string[],
+    steps: string[],
+    error?: string,
+    ended?: string,
+    result?: string,
+    skipped?: string,
+    burst?: string,
+    waited?: string,
+    moved?: string,
+    took?: string,
+    restored?: string,
     [string]: unknown,
 }
 type Slot = number[]
@@ -45,18 +56,25 @@ type Content = { id: unknown, count: number, locked: boolean }
 type Out = { now?: { [string]: unknown }, combat?: string[], [string]: unknown }
 
 local function show(v: unknown): string
-    if isSecret(v) then return "SECRET" end
-    if type(v) == "number" and v ~= math.floor(v) then return ("%.3f"):format(v) end
+    if isSecret(v) then
+        return "SECRET"
+    end
+    if type(v) == "number" and v ~= math.floor(v) then
+        return ("%.3f"):format(v)
+    end
     return tostring(v)
 end
 
-
 local function out(): Out
-    return DB.probeData("bagsort", function(): Out return {} end)
+    return DB.probeData("bagsort", function(): Out
+        return {}
+    end)
 end
 
 local function push(list: string[], line: string, cap: number?)
-    if #list < (cap or 60) then list[#list + 1] = line end
+    if #list < (cap or 60) then
+        list[#list + 1] = line
+    end
 end
 
 local C = C_Container
@@ -77,16 +95,23 @@ end
 
 local function family(bag: number): number?
     local ok, _, fam = pcall(C.GetContainerNumFreeSlots, bag)
-    if ok and secret.isNumber(fam) then return fam end
+    if ok and secret.isNumber(fam) then
+        return fam
+    end
     return nil
 end
 
 -- A slot's content: { id, count, locked } or nil when empty.
 local function slot(bag: number, i: number): Content?
     local ok, info = pcall(C.GetContainerItemInfo, bag, i)
-    if not ok or type(info) ~= "table" then return nil end
-    return { id = secret.readable(info.itemID) and info.itemID or "SECRET", count = secret.asNumber(info.stackCount) or 0,
-             locked = info.isLocked == true }
+    if not ok or type(info) ~= "table" then
+        return nil
+    end
+    return {
+        id = secret.readable(info.itemID) and info.itemID or "SECRET",
+        count = secret.asNumber(info.stackCount) or 0,
+        locked = info.isLocked == true,
+    }
 end
 
 -- Every slot of the general bags (family 0) in order: { bag, slot }
@@ -94,13 +119,17 @@ local function generalSlots(): Slot[]
     local list: Slot[] = {}
     for bag = 0, lastBag() do
         if family(bag) == 0 then
-            for i = 1, numSlots(bag) do list[#list + 1] = { bag, i } end
+            for i = 1, numSlots(bag) do
+                list[#list + 1] = { bag, i }
+            end
         end
     end
     return list
 end
 
-local function key(s: Slot): string return s[1] .. ":" .. s[2] end
+local function key(s: Slot): string
+    return s[1] .. ":" .. s[2]
+end
 
 -- "0:1 2589x5, 0:2 -, …"
 local function layout(): string[]
@@ -118,7 +147,9 @@ local function anyLocked(): boolean
     for bag = 0, lastBag() do
         for i = 1, numSlots(bag) do
             local c = slot(bag, i)
-            if c and c.locked then return true end
+            if c and c.locked then
+                return true
+            end
         end
     end
     return false
@@ -128,17 +159,25 @@ end
 -- Events and the running step
 --------------------------------------------------------------------------------
 
-local cur: Rec? = nil         -- the step being recorded: { t0, events, errors }
-local running: thread? = nil  -- its coroutine
+local cur: Rec? = nil -- the step being recorded: { t0, events, errors }
+local running: thread? = nil -- its coroutine
 
 local listener = CreateFrame("Frame")
-for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE", "ITEM_LOCK_CHANGED",
-                     "BAG_UPDATE", "BAG_UPDATE_DELAYED" }) do
+for _, e in ipairs({
+    "ADDON_ACTION_BLOCKED",
+    "ADDON_ACTION_FORBIDDEN",
+    "UI_ERROR_MESSAGE",
+    "ITEM_LOCK_CHANGED",
+    "BAG_UPDATE",
+    "BAG_UPDATE_DELAYED",
+}) do
     pcall(listener.RegisterEvent, listener, e)
 end
 listener:SetScript("OnEvent", function(_, event, a: unknown, b: unknown)
     local rec = cur
-    if not rec then return end
+    if not rec then
+        return
+    end
     local line = ("%.3fs %s %s %s"):format(GetTime() - rec.t0, event, show(a), show(b))
     push(rec.events, line, 80)
     if event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE" then
@@ -151,18 +190,29 @@ local driver = CreateFrame("Frame")
 driver:Hide()
 driver:SetScript("OnUpdate", function()
     local co = running
-    if not co then driver:Hide() return end
+    if not co then
+        driver:Hide()
+        return
+    end
     local ok: boolean, err: unknown = coroutine.resume(co)
     if not ok then
         local rec = cur
-        if rec then rec.error = tostring(err):sub(1, 200) end
+        if rec then
+            rec.error = tostring(err):sub(1, 200)
+        end
         print("Bag sort probe: stopped with an error (" .. tostring(err):sub(1, 120) .. "). /reload to save it.")
     end
     if not ok or coroutine.status(co) == "dead" then
         running = nil
-        pcall(function() if CursorHasItem() then ClearCursor() end end)
+        pcall(function()
+            if CursorHasItem() then
+                ClearCursor()
+            end
+        end)
         local rec = cur
-        if rec then rec.ended = ("%.3fs"):format(GetTime() - rec.t0) end
+        if rec then
+            rec.ended = ("%.3fs"):format(GetTime() - rec.t0)
+        end
         cur = nil
         driver:Hide()
     end
@@ -184,7 +234,9 @@ local function start(name: string, fn: (rec: Rec) -> ())
     local rec: Rec = { at = date("%H:%M:%S"), t0 = GetTime(), events = {}, errors = {}, steps = {} }
     o[name] = rec
     cur = rec
-    running = coroutine.create(function() fn(rec) end)
+    running = coroutine.create(function()
+        fn(rec)
+    end)
     driver:Show()
 end
 
@@ -193,7 +245,9 @@ local function waitFor(cond: () -> unknown, timeout: number?): (boolean, number)
     local t = GetTime()
     while GetTime() - t < (timeout or TIMEOUT) do
         coroutine.yield()
-        if cond() then return true, GetTime() - t end
+        if cond() then
+            return true, GetTime() - t
+        end
     end
     return false, GetTime() - t
 end
@@ -208,18 +262,33 @@ local function pickPlace(a: Slot, b: Slot): (boolean, string)
     local ok1, e1 = pcall(C.PickupContainerItem, a[1], a[2])
     local held = cursorLine()
     local ok2, e2 = pcall(C.PickupContainerItem, b[1], b[2])
-    return ok1 and ok2, ("pick %s (%s), cursor %s, place %s (%s), cursor %s"):format(key(a),
-        ok1 and "ok" or tostring(e1):sub(1, 80), held, key(b), ok2 and "ok" or tostring(e2):sub(1, 80), cursorLine())
+    return ok1 and ok2,
+        ("pick %s (%s), cursor %s, place %s (%s), cursor %s"):format(
+            key(a),
+            ok1 and "ok" or tostring(e1):sub(1, 80),
+            held,
+            key(b),
+            ok2 and "ok" or tostring(e2):sub(1, 80),
+            cursorLine()
+        )
 end
 
-local function same(c: Content?, id: unknown): boolean? return c and c.id == id and not c.locked end
+local function same(c: Content?, id: unknown): boolean?
+    return c and c.id == id and not c.locked
+end
 
 -- a → b (b empty): landed when b holds the item and neither slot is locked.
 local function moveAndWait(rec: Rec, a: Slot, b: Slot, label: string): boolean
     local item = slot(a[1], a[2])
-    if not item then push(rec.steps, label .. ": nothing at " .. key(a)) return false end
+    if not item then
+        push(rec.steps, label .. ": nothing at " .. key(a))
+        return false
+    end
     local ok, line = pickPlace(a, b)
-    if not ok then push(rec.steps, label .. ": " .. line) return false end
+    if not ok then
+        push(rec.steps, label .. ": " .. line)
+        return false
+    end
     local landed, secs = waitFor(function()
         return same(slot(b[1], b[2]), item.id) and not slot(a[1], a[2])
     end)
@@ -233,14 +302,18 @@ end
 
 local function firstEmpty(list: Slot[], skip: { [string]: boolean }?): Slot?
     for _, s in ipairs(list) do
-        if not slot(s[1], s[2]) and not (skip and skip[key(s)]) then return s end
+        if not slot(s[1], s[2]) and not (skip and skip[key(s)]) then
+            return s
+        end
     end
 end
 
 local function lastFull(list: Slot[], skip: { [string]: boolean }?): Slot?
     for n = #list, 1, -1 do
         local s = list[n]
-        if slot(s[1], s[2]) and not (skip and skip[key(s)]) then return s end
+        if slot(s[1], s[2]) and not (skip and skip[key(s)]) then
+            return s
+        end
     end
 end
 
@@ -248,8 +321,13 @@ local function stepMove(rec: Rec)
     rec.steps = {}
     local list = generalSlots()
     local a, b = lastFull(list), firstEmpty(list)
-    if not (a and b) then rec.skipped = "no item, or no empty slot, in the general bags" return end
-    if moveAndWait(rec, a, b, "there") then moveAndWait(rec, b, a, "back") end
+    if not (a and b) then
+        rec.skipped = "no item, or no empty slot, in the general bags"
+        return
+    end
+    if moveAndWait(rec, a, b, "there") then
+        moveAndWait(rec, b, a, "back")
+    end
     rec.result = ("%d errors; layout %s"):format(#rec.errors, slot(a[1], a[2]) and "restored" or "NOT restored")
 end
 
@@ -257,25 +335,40 @@ local function stepSwap(rec: Rec)
     rec.steps = {}
     local list = generalSlots()
     local a
-    for _, s in ipairs(list) do if slot(s[1], s[2]) then a = s break end end
+    for _, s in ipairs(list) do
+        if slot(s[1], s[2]) then
+            a = s
+            break
+        end
+    end
     local b = lastFull(list)
-    if not (a and b) or key(a) == key(b) then rec.skipped = "fewer than two items" return end
+    if not (a and b) or key(a) == key(b) then
+        rec.skipped = "fewer than two items"
+        return
+    end
     -- both hold an item (picked above)
     local ia, ib = slot(a[1], a[2]) :: Content, slot(b[1], b[2]) :: Content
     rec.items = ("%s %s, %s %s"):format(key(a), show(ia.id), key(b), show(ib.id))
     for _, label in ipairs({ "swap", "back" }) do
         local x, y = slot(a[1], a[2]) :: Content, slot(b[1], b[2]) :: Content
         local ok, line = pickPlace(a, b)
-        if not ok then push(rec.steps, label .. ": " .. line) break end
+        if not ok then
+            push(rec.steps, label .. ": " .. line)
+            break
+        end
         local landed, secs = waitFor(function()
             return same(slot(a[1], a[2]), y.id) and same(slot(b[1], b[2]), x.id)
         end)
         push(rec.steps, ("%s: %s; %s after %.3fs"):format(label, line, landed and "swapped" or "NOT swapped", secs))
-        if not landed or #rec.errors > 0 then break end
+        if not landed or #rec.errors > 0 then
+            break
+        end
     end
     local na, nb = slot(a[1], a[2]), slot(b[1], b[2])
-    rec.result = ("%d errors; layout %s"):format(#rec.errors,
-        (na and na.id == ia.id and nb and nb.id == ib.id) and "restored" or "NOT restored")
+    rec.result = ("%d errors; layout %s"):format(
+        #rec.errors,
+        (na and na.id == ia.id and nb and nb.id == ib.id) and "restored" or "NOT restored"
+    )
 end
 
 type Move = { a: Slot, b: Slot, id: unknown }
@@ -285,12 +378,18 @@ local function pairsFor(list: Slot[], n: number): Move[]
     local found: Move[], taken: { [string]: boolean } = {}, {}
     for _ = 1, n do
         local a = lastFull(list, taken)
-        if not a then break end
+        if not a then
+            break
+        end
         taken[key(a)] = true
         local b = firstEmpty(list, taken)
-        if not b then break end
+        if not b then
+            break
+        end
         taken[key(b)] = true
-        if a[1] * 1000 + a[2] < b[1] * 1000 + b[2] then break end
+        if a[1] * 1000 + a[2] < b[1] * 1000 + b[2] then
+            break
+        end
         found[#found + 1] = { a = a, b = b, id = (slot(a[1], a[2]) :: Content).id }
     end
     return found
@@ -300,7 +399,9 @@ end
 local function undo(rec: Rec, moves: Move[], label: string): boolean
     for _, m in ipairs(moves) do
         if same(slot(m.b[1], m.b[2]), m.id) and not slot(m.a[1], m.a[2]) then
-            if not moveAndWait(rec, m.b, m.a, label) then return false end
+            if not moveAndWait(rec, m.b, m.a, label) then
+                return false
+            end
         end
     end
     return true
@@ -310,46 +411,92 @@ local function stepBurst(rec: Rec)
     rec.steps = {}
     local list = generalSlots()
     local moves = pairsFor(list, 6)
-    if #moves < 2 then rec.skipped = "fewer than two items with empty slots before them" return end
+    if #moves < 2 then
+        rec.skipped = "fewer than two items with empty slots before them"
+        return
+    end
     rec.moves = #moves
     -- all in one frame
     local t = GetTime()
     for i, m in ipairs(moves) do
         local ok, line = pickPlace(m.a, m.b)
         push(rec.steps, ("burst %d: %s"):format(i, line))
-        if not ok then break end
+        if not ok then
+            break
+        end
     end
     local function landedCount()
         local n = 0
-        for _, m in ipairs(moves) do if same(slot(m.b[1], m.b[2]), m.id) then n = n + 1 end end
+        for _, m in ipairs(moves) do
+            if same(slot(m.b[1], m.b[2]), m.id) then
+                n = n + 1
+            end
+        end
         return n
     end
-    local all = waitFor(function() return landedCount() == #moves and not anyLocked() end, 5)
-    rec.burst = ("%d of %d landed in %.3fs%s; errors so far %d"):format(landedCount(), #moves, GetTime() - t,
-        all and "" or " (gave up after 5 s)", #rec.errors)
-    pcall(function() if CursorHasItem() then ClearCursor() end end)
-    waitFor(function() return not anyLocked() end, 2)
-    if not undo(rec, moves, "undo burst") then rec.result = "stopped while undoing the burst" return end
-    if #rec.errors > 0 then rec.result = "stopped: errors in the burst (undone)" return end
+    local all = waitFor(
+        function()
+            return landedCount() == #moves and not anyLocked()
+        end,
+        5
+    )
+    rec.burst = ("%d of %d landed in %.3fs%s; errors so far %d"):format(
+        landedCount(),
+        #moves,
+        GetTime() - t,
+        all and "" or " (gave up after 5 s)",
+        #rec.errors
+    )
+    pcall(function()
+        if CursorHasItem() then
+            ClearCursor()
+        end
+    end)
+    waitFor(
+        function()
+            return not anyLocked()
+        end,
+        2
+    )
+    if not undo(rec, moves, "undo burst") then
+        rec.result = "stopped while undoing the burst"
+        return
+    end
+    if #rec.errors > 0 then
+        rec.result = "stopped: errors in the burst (undone)"
+        return
+    end
     -- one at a time
     t = GetTime()
     local done = 0
     for i, m in ipairs(moves) do
-        if not moveAndWait(rec, m.a, m.b, "waited " .. i) then break end
+        if not moveAndWait(rec, m.a, m.b, "waited " .. i) then
+            break
+        end
         done = done + 1
     end
-    rec.waited = ("%d of %d landed in %.3fs, %.3fs each"):format(done, #moves, GetTime() - t,
-        done > 0 and (GetTime() - t) / done or 0)
+    rec.waited = ("%d of %d landed in %.3fs, %.3fs each"):format(
+        done,
+        #moves,
+        GetTime() - t,
+        done > 0 and (GetTime() - t) / done or 0
+    )
     undo(rec, moves, "undo waited")
     rec.result = ("%d errors"):format(#rec.errors)
 end
 
 local function maxStack(id: unknown): number?
-    if not secret.readable(id) or type(id) ~= "number" then return nil end
+    if not secret.readable(id) or type(id) ~= "number" then
+        return nil
+    end
     local n = C_Item and C_Item.GetItemMaxStackSizeByID and select(2, pcall(C_Item.GetItemMaxStackSizeByID, id))
-    if secret.isNumber(n) then return n end
+    if secret.isNumber(n) then
+        return n
+    end
     local info = { pcall(C_Item and C_Item.GetItemInfo or GetItemInfo, id) }
-    if info[1] then return secret.asNumber(info[9]) end
+    if info[1] then
+        return secret.asNumber(info[9])
+    end
     return nil
 end
 
@@ -363,10 +510,15 @@ local function stepStack(rec: Rec)
         if x and max and max > 1 and x.count < max then
             for j = i + 1, #list do
                 local y = slot(list[j][1], list[j][2])
-                if y and y.id == x.id and y.count < max then a, b = list[j], s break end
+                if y and y.id == x.id and y.count < max then
+                    a, b = list[j], s
+                    break
+                end
             end
         end
-        if a then break end
+        if a then
+            break
+        end
     end
     -- (set together)
     if not a or not b then
@@ -375,19 +527,33 @@ local function stepStack(rec: Rec)
         return
     end
     local ia, ib = slot(a[1], a[2]) :: Content, slot(b[1], b[2]) :: Content
-    rec.before = ("%s %sx%s onto %s x%s (max %s)"):format(key(a), show(ia.id), show(ia.count), key(b), show(ib.count),
-        show(maxStack(ia.id)))
+    rec.before = ("%s %sx%s onto %s x%s (max %s)"):format(
+        key(a),
+        show(ia.id),
+        show(ia.count),
+        key(b),
+        show(ib.count),
+        show(maxStack(ia.id))
+    )
     local ok, line = pickPlace(a, b)
     push(rec.steps, "merge: " .. line)
-    if not ok then return end
+    if not ok then
+        return
+    end
     local total = ia.count + ib.count
     local landed, secs = waitFor(function()
         local nb = slot(b[1], b[2])
         return nb and not nb.locked and nb.count ~= ib.count and not (slot(a[1], a[2]) or {}).locked
     end)
     local na, nb = slot(a[1], a[2]), slot(b[1], b[2])
-    rec.after = ("%s %s, %s x%s; %s after %.3fs"):format(key(a), na and ("x" .. show(na.count)) or "empty", key(b),
-        nb and show(nb.count) or "-", landed and "merged" or "NOT merged", secs)
+    rec.after = ("%s %s, %s x%s; %s after %.3fs"):format(
+        key(a),
+        na and ("x" .. show(na.count)) or "empty",
+        key(b),
+        nb and show(nb.count) or "-",
+        landed and "merged" or "NOT merged",
+        secs
+    )
     -- split back: what a sort needs to undo a merge, or to fill a stack
     if landed and #rec.errors == 0 and not na and nb and nb.count == total then
         local ok1, e1 = pcall(C.SplitContainerItem, b[1], b[2], ia.count)
@@ -397,15 +563,26 @@ local function stepStack(rec: Rec)
             local x, y = slot(a[1], a[2]), slot(b[1], b[2])
             return x and not x.locked and y and not y.locked and x.count == ia.count
         end)
-        push(rec.steps, ("split %d: %s, cursor %s, place %s; %s after %.3fs"):format(ia.count,
-            ok1 and "ok" or tostring(e1):sub(1, 80), held, ok2 and "ok" or tostring(e2):sub(1, 80),
-            back and "split back" or "NOT split back", secs2))
+        push(
+            rec.steps,
+            ("split %d: %s, cursor %s, place %s; %s after %.3fs"):format(
+                ia.count,
+                ok1 and "ok" or tostring(e1):sub(1, 80),
+                held,
+                ok2 and "ok" or tostring(e2):sub(1, 80),
+                back and "split back" or "NOT split back",
+                secs2
+            )
+        )
     end
     rec.result = ("%d errors"):format(#rec.errors)
 end
 
 local function stepDirection(rec: Rec)
-    if type(C.SortBags) ~= "function" then rec.skipped = "no C_Container.SortBags" return end
+    if type(C.SortBags) ~= "function" then
+        rec.skipped = "no C_Container.SortBags"
+        return
+    end
     local okGet, was = pcall(C.GetSortBagsRightToLeft)
     rec.rightToLeft = okGet and show(was) or "error"
     local before = layout()
@@ -418,15 +595,25 @@ local function stepDirection(rec: Rec)
     -- done: nothing locked and no bag event for a second
     local lastEvent = GetTime()
     local seen = #rec.events
-    waitFor(function()
-        if #rec.events ~= seen then seen = #rec.events; lastEvent = GetTime() end
-        return GetTime() - t > 1 and not anyLocked() and GetTime() - lastEvent > 1
-    end, 20)
+    waitFor(
+        function()
+            if #rec.events ~= seen then
+                seen = #rec.events
+                lastEvent = GetTime()
+            end
+            return GetTime() - t > 1 and not anyLocked() and GetTime() - lastEvent > 1
+        end,
+        20
+    )
     rec.took = ("%.3fs"):format(GetTime() - t)
     local after = layout()
     rec.after = after
     local moved = 0
-    for i, line in ipairs(after) do if line ~= before[i] then moved = moved + 1 end end
+    for i, line in ipairs(after) do
+        if line ~= before[i] then
+            moved = moved + 1
+        end
+    end
     rec.moved = moved .. " slots changed"
     pcall(C.SetSortBagsRightToLeft, was)
     rec.restored = "setting back to " .. tostring(was)
@@ -436,38 +623,101 @@ end
 -- What exists, and one item's data
 --------------------------------------------------------------------------------
 
-local FUNCS = { "PickupContainerItem", "SplitContainerItem", "SortBags", "SetSortBagsRightToLeft",
-    "GetSortBagsRightToLeft", "GetBagSlotFlag", "SetBagSlotFlag", "GetContainerItemInfo", "GetContainerNumSlots",
-    "GetContainerNumFreeSlots", "UseContainerItem", "GetBagName", "GetContainerItemID", "GetItemCooldown" }
-local ITEM_FUNCS = { "GetItemInfo", "GetItemInfoInstant", "GetItemInventoryTypeByID", "GetItemMaxStackSizeByID",
-    "GetDetailedItemLevelInfo", "GetItemQualityByID", "GetItemClassInfo", "GetItemSubClassInfo", "IsEquippableItem" }
-local INFO_NAMES = { "name", "link", "quality", "itemLevel", "minLevel", "type", "subType", "maxStack", "equipLoc",
-    "texture", "sellPrice", "classID", "subclassID", "bindType", "expansionID", "setID", "isCraftingReagent" }
+local FUNCS = {
+    "PickupContainerItem",
+    "SplitContainerItem",
+    "SortBags",
+    "SetSortBagsRightToLeft",
+    "GetSortBagsRightToLeft",
+    "GetBagSlotFlag",
+    "SetBagSlotFlag",
+    "GetContainerItemInfo",
+    "GetContainerNumSlots",
+    "GetContainerNumFreeSlots",
+    "UseContainerItem",
+    "GetBagName",
+    "GetContainerItemID",
+    "GetItemCooldown",
+}
+local ITEM_FUNCS = {
+    "GetItemInfo",
+    "GetItemInfoInstant",
+    "GetItemInventoryTypeByID",
+    "GetItemMaxStackSizeByID",
+    "GetDetailedItemLevelInfo",
+    "GetItemQualityByID",
+    "GetItemClassInfo",
+    "GetItemSubClassInfo",
+    "IsEquippableItem",
+}
+local INFO_NAMES = {
+    "name",
+    "link",
+    "quality",
+    "itemLevel",
+    "minLevel",
+    "type",
+    "subType",
+    "maxStack",
+    "equipLoc",
+    "texture",
+    "sellPrice",
+    "classID",
+    "subclassID",
+    "bindType",
+    "expansionID",
+    "setID",
+    "isCraftingReagent",
+}
 
 local function snapshot()
     local o = out()
     local container, item, bags = {} :: string[], {} :: string[], {} :: string[]
-    local now: { [string]: unknown } = { at = date("%H:%M:%S"), combat = tostring(InCombatLockdown()), container = container, item = item, bags = bags }
-    for _, f in ipairs(FUNCS) do push(container, f .. ": " .. type(tbl.field(C, f)), 40) end
-    for _, f in ipairs(ITEM_FUNCS) do push(item, "C_Item." .. f .. ": " .. type(tbl.field(C_Item, f)), 40) end
+    local now: { [string]: unknown } = {
+        at = date("%H:%M:%S"),
+        combat = tostring(InCombatLockdown()),
+        container = container,
+        item = item,
+        bags = bags,
+    }
+    for _, f in ipairs(FUNCS) do
+        push(container, f .. ": " .. type(tbl.field(C, f)), 40)
+    end
+    for _, f in ipairs(ITEM_FUNCS) do
+        push(item, "C_Item." .. f .. ": " .. type(tbl.field(C_Item, f)), 40)
+    end
     push(item, "GetItemInfo (global): " .. type(GetItemInfo), 40)
     local ok, r = pcall(C.GetSortBagsRightToLeft)
     now.rightToLeft = ok and show(r) or "error"
     for bag = 0, lastBag() do
         local free, fam
         local okF, f1, f2 = pcall(C.GetContainerNumFreeSlots, bag)
-        if okF then free, fam = f1, f2 end
+        if okF then
+            free, fam = f1, f2
+        end
         local flags = {}
         if Enum and Enum.BagSlotFlags and type(C.GetBagSlotFlag) == "function" then
             for name, v in pairs(Enum.BagSlotFlags) do
                 local okB, on = pcall(C.GetBagSlotFlag, bag, v)
-                if okB and on then flags[#flags + 1] = name end
+                if okB and on then
+                    flags[#flags + 1] = name
+                end
             end
             table.sort(flags)
         end
         local okN, bname = pcall(C.GetBagName, bag)
-        push(bags, ("bag %d %s: %d slots, %s free, family %s, flags %s"):format(bag, okN and show(bname) or "?",
-            numSlots(bag), show(free), show(fam), #flags > 0 and table.concat(flags, " ") or "none"), 12)
+        push(
+            bags,
+            ("bag %d %s: %d slots, %s free, family %s, flags %s"):format(
+                bag,
+                okN and show(bname) or "?",
+                numSlots(bag),
+                show(free),
+                show(fam),
+                #flags > 0 and table.concat(flags, " ") or "none"
+            ),
+            12
+        )
     end
     -- the first item: its container info and item info, field by field
     for bag = 0, lastBag() do
@@ -475,7 +725,9 @@ local function snapshot()
             local okI, info = pcall(C.GetContainerItemInfo, bag, i)
             if okI and type(info) == "table" and not now.slot then
                 local parts = {}
-                for k, v in pairs(info) do parts[#parts + 1] = tostring(k) .. "=" .. show(v) end
+                for k, v in pairs(info) do
+                    parts[#parts + 1] = tostring(k) .. "=" .. show(v)
+                end
                 table.sort(parts)
                 now.slot = ("%d:%d %s"):format(bag, i, table.concat(parts, ", "))
                 local id = info.itemID
@@ -483,17 +735,22 @@ local function snapshot()
                     local GI = C_Item and C_Item.GetItemInfo or GetItemInfo
                     local res = { pcall(GI, id) }
                     local fields = {}
-                    for n, name in ipairs(INFO_NAMES) do fields[#fields + 1] = name .. "=" .. show(res[n + 1]) end
+                    for n, name in ipairs(INFO_NAMES) do
+                        fields[#fields + 1] = name .. "=" .. show(res[n + 1])
+                    end
                     now.itemInfo = res[1] and table.concat(fields, ", ") or ("error: " .. tostring(res[2]):sub(1, 80))
                     local inst = { pcall(C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant, id) }
                     local ip = {}
-                    for n = 2, #inst do ip[#ip + 1] = show(inst[n]) end
+                    for n = 2, #inst do
+                        ip[#ip + 1] = show(inst[n])
+                    end
                     now.itemInstant = table.concat(ip, ", ")
                     if C_Item and C_Item.GetItemInventoryTypeByID then
                         now.inventoryType = show(select(2, pcall(C_Item.GetItemInventoryTypeByID, id)))
                     end
                     now.maxStack = show(maxStack(id))
-                    if info.hyperlink and secret.readable(info.hyperlink) and C_Item and C_Item.GetDetailedItemLevelInfo then
+                    if info.hyperlink and secret.readable(info.hyperlink) and C_Item and
+                        C_Item.GetDetailedItemLevelInfo then
                         now.detailedLevel = show(select(2, pcall(C_Item.GetDetailedItemLevelInfo, info.hyperlink)))
                     end
                 end
@@ -503,14 +760,22 @@ local function snapshot()
     o.now = now
 end
 
-local STEPS: { [string]: (rec: Rec) -> () } = { move = stepMove, swap = stepSwap, burst = stepBurst, stack = stepStack, direction = stepDirection }
+local STEPS: { [string]: (rec: Rec) -> () } = {
+    move = stepMove,
+    swap = stepSwap,
+    burst = stepBurst,
+    stack = stepStack,
+    direction = stepDirection,
+}
 local NEXT: { [string]: string } = { move = "swap", swap = "burst", burst = "stack", stack = "direction" }
 
 export function command(arg: string?)
     local mode = ((arg or ""):match("^(%S*)") :: string):lower()
     if mode == "" then
         snapshot()
-        print("Bag sort probe: recorded what the game has. Next, out of combat with your bags closed or open: /suu probe bagsort move, then swap, burst, stack and direction, one at a time (wait for each one's line); then /reload to save it.")
+        print(
+            "Bag sort probe: recorded what the game has. Next, out of combat with your bags closed or open: /suu probe bagsort move, then swap, burst, stack and direction, one at a time (wait for each one's line); then /reload to save it."
+        )
         return
     end
     local fn = STEPS[mode]
@@ -518,13 +783,24 @@ export function command(arg: string?)
         print("Bag sort probe: /suu probe bagsort, then move, swap, burst, stack, direction.")
         return
     end
-    if not out().now then snapshot() end
+    if not out().now then
+        snapshot()
+    end
     start(mode, function(rec)
         fn(rec)
         local msg = rec.skipped and ("skipped (" .. rec.skipped .. ")") or (rec.result or "done")
-        if mode == "burst" and rec.burst then msg = "burst " .. rec.burst .. "; one at a time " .. tostring(rec.waited) end
-        if mode == "direction" and rec.moved then msg = rec.moved .. " in " .. tostring(rec.took) .. ", " .. tostring(rec.restored) end
-        print(("Bag sort probe, %s: %s.%s"):format(mode, msg,
-            NEXT[mode] and (" Next: /suu probe bagsort " .. (NEXT[mode] :: string)) or " Now /reload to save it."))
+        if mode == "burst" and rec.burst then
+            msg = "burst " .. rec.burst .. "; one at a time " .. tostring(rec.waited)
+        end
+        if mode == "direction" and rec.moved then
+            msg = rec.moved .. " in " .. tostring(rec.took) .. ", " .. tostring(rec.restored)
+        end
+        print(
+            ("Bag sort probe, %s: %s.%s"):format(
+                mode,
+                msg,
+                NEXT[mode] and (" Next: /suu probe bagsort " .. (NEXT[mode] :: string)) or " Now /reload to save it."
+            )
+        )
     end)
 end

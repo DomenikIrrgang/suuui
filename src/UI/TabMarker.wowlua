@@ -57,22 +57,32 @@ local EASE = T.easing["ease-in-out"].bezier :: number[]
 -- cubic-bezier(x1, y1, x2, y2) at time t: x solved for t by halving, then y
 local function ease(t: number): number
     local x1, y1, x2, y2 = EASE[1], EASE[2], EASE[3], EASE[4]
-    local function at(a: number, b: number, u: number): number return 3 * a * u * (1 - u) ^ 2 + 3 * b * u ^ 2 * (1 - u) + u ^ 3 end
+    local function at(a: number, b: number, u: number): number
+        return 3 * a * u * (1 - u) ^ 2 + 3 * b * u ^ 2 * (1 - u) + u ^ 3
+    end
     local lo, hi = 0, 1
     for _ = 1, 14 do
         local mid = (lo + hi) / 2
-        if at(x1, x2, mid) < t then lo = mid else hi = mid end
+        if at(x1, x2, mid) < t then
+            lo = mid
+        else
+            hi = mid
+        end
     end
     return at(y1, y2, (lo + hi) / 2)
 end
 
 -- A moving place `p` with its size `s` (nil for the jewel): where it is
 -- (at), was (from) and goes (to).
-local function newMark(): Mark return { at = {}, from = {}, to = {} } end
+local function newMark(): Mark
+    return { at = {}, from = {}, to = {} }
+end
 
 local function aim(mark: Mark, p: number, s: number?, now: boolean)
     local to = mark.to
-    if mark.placed and to.p == p and to.s == s then return end
+    if mark.placed and to.p == p and to.s == s then
+        return
+    end
     if now or not mark.placed then
         mark.at.p, mark.at.s, mark.start = p, s, nil
     else
@@ -83,7 +93,9 @@ end
 
 local function step(mark: Mark): boolean
     local start = mark.start
-    if not start then return false end
+    if not start then
+        return false
+    end
     local t = (GetTime() - start) / GLIDE
     if t >= 1 then
         mark.at.p, mark.at.s, mark.start = mark.to.p, mark.to.s, nil
@@ -92,7 +104,9 @@ local function step(mark: Mark): boolean
     local e = ease(t)
     local from, to = mark.from, mark.to
     mark.at.p = (from.p :: number) + ((to.p :: number) - (from.p :: number)) * e
-    if to.s and from.s then mark.at.s = from.s + (to.s - from.s) * e end
+    if to.s and from.s then
+        mark.at.s = from.s + (to.s - from.s) * e
+    end
     return true
 end
 
@@ -122,14 +136,20 @@ export class TabMarker
     waiting?: boolean
 
     constructor(row: Frame, opts: TabMarkerOptions)
-        self.row, self.y, self.vertical, self.side, self.x = row, opts.y or 0, opts.vertical, opts.side or "LEFT", opts.x or 0
+        self.row, self.y, self.vertical, self.side, self.x = row,
+            opts.y or 0,
+            opts.vertical,
+            opts.side or "LEFT",
+            opts.x or 0
         -- one holder above the row's buttons: the line, then the jewel over it
         local holder = CreateFrame("Frame", nil, row)
         self.holder = holder
         holder:SetAllPoints()
         holder:SetFrameLevel(row:GetFrameLevel() + (opts.level or 2))
         -- shown again after a change while hidden: placed at once
-        row:HookScript("OnShow", function() self:Aim() end)
+        row:HookScript("OnShow", function()
+            self:Aim()
+        end)
         local boxOpts = opts.box
         if boxOpts then
             local box = CreateFrame("Frame", nil, holder)
@@ -157,11 +177,15 @@ export class TabMarker
     function Place(b: Region): (number?, number, number, number)
         local row = self.row
         local l, bt, rl, rb = b:GetLeft(), b:GetBottom(), row:GetLeft(), row:GetBottom()
-        if not (l and bt and rl and rb) then return nil, 0, 0, 0 end
+        if not (l and bt and rl and rb) then
+            return nil, 0, 0, 0
+        end
         local k = b:GetEffectiveScale() / row:GetEffectiveScale()
         local left, width = l * k - rl, b:GetWidth() * k
         local span = b :: MarkSpan
-        if span.markLeft then left, width = span.markLeft, span.markWidth or width end
+        if span.markLeft then
+            left, width = span.markLeft, span.markWidth or width
+        end
         return left, bt * k - rb, width, b:GetHeight() * k
     end
 
@@ -178,7 +202,9 @@ export class TabMarker
             return moving
         end
         local j, jewel = self.jewelMark.at, self.jewel
-        if not jewel then return moving end
+        if not jewel then
+            return moving
+        end
         jewel:ClearAllPoints()
         if self.vertical then
             jewel:SetPoint("CENTER", row, "BOTTOMLEFT", self.jewelX, j.p :: number)
@@ -200,16 +226,27 @@ export class TabMarker
         local chosen = self.chosen
         local shown = chosen ~= nil and chosen:IsShown()
         local rule, box = self.rule, self.box
-        if rule then rule:SetShown(shown) end
+        if rule then
+            rule:SetShown(shown)
+        end
         local jewel = self.jewel
-        if box then box:SetShown(shown) elseif jewel then jewel:SetShown(shown) end
-        if not shown or not chosen then return end
+        if box then
+            box:SetShown(shown)
+        elseif jewel then
+            jewel:SetShown(shown)
+        end
+        if not shown or not chosen then
+            return
+        end
         local left, bottom, width, height = self:Place(chosen)
         if not left then
             -- not laid out yet: next frame
             if not self.waiting then
                 self.waiting = true
-                after(0, function() self.waiting = false; self:Aim() end)
+                after(0, function()
+                    self.waiting = false
+                    self:Aim()
+                end)
             end
             return
         end
@@ -218,7 +255,9 @@ export class TabMarker
         local ol, ob, ow, oh = left, bottom, width, height
         if over and over ~= chosen and over:IsShown() then
             local pl, pb, pw, ph = self:Place(over)
-            if pl then ol, ob, ow, oh = pl, pb, pw, ph end
+            if pl then
+                ol, ob, ow, oh = pl, pb, pw, ph
+            end
         end
         if self.box then
             self.base, self.boxH = bottom, height
@@ -233,7 +272,9 @@ export class TabMarker
         end
         if self:Draw() then
             self.holder:SetScript("OnUpdate", function()
-                if not self:Draw() then self.holder:SetScript("OnUpdate", nil) end
+                if not self:Draw() then
+                    self.holder:SetScript("OnUpdate", nil)
+                end
             end)
         end
     end
@@ -244,11 +285,18 @@ export class TabMarker
     end
 
     function Track(button: Frame)
-        if tracked[button] == self then return end
+        if tracked[button] == self then
+            return
+        end
         tracked[button] = self
-        button:HookScript("OnEnter", function(b) self.hovered = b; self:Aim() end)
+        button:HookScript("OnEnter", function(b)
+            self.hovered = b
+            self:Aim()
+        end)
         button:HookScript("OnLeave", function(b)
-            if self.hovered == b then self.hovered = nil end
+            if self.hovered == b then
+                self.hovered = nil
+            end
             self:Aim()
         end)
     end

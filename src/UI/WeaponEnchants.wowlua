@@ -60,17 +60,27 @@ local ORDER: string[] = { "main", "off", "ranged" }
 -- Reading
 --------------------------------------------------------------------------------
 
-export type Info = { slot: string, enchantID: number, weaponID: number?, icon: string | number, expires: number,
-    duration: number, charges: number, name: string?, weapon: string?, spellID: number? }
+export type Info = {
+    slot: string,
+    enchantID: number,
+    weaponID: number?,
+    icon: string | number,
+    expires: number,
+    duration: number,
+    charges: number,
+    name: string?,
+    weapon: string?,
+    spellID: number?,
+}
 
-local state: { [string]: Info | false } = {}      -- slot -> info, or false
+local state: { [string]: Info | false } = {} -- slot -> info, or false
 type Seen = { id: number, duration: number }
-local seen: { [string]: Seen } = {}       -- slot -> { id, duration } of the enchant on it
-local spellFor: { [string]: number } = {}   -- slot -> the spell that put its enchant on
-local tipNames: { [string]: string | false } = {}   -- "slot:enchantID" -> the tooltip's name
-local lastArt: { [string]: string | number } = {}    -- slot -> the art of the enchant it had last (grey while missing)
-local weapons: { [string]: number? } = {}    -- slot -> the item in it, at the last look
-local lastCast: { id: number, at: number }?        -- { id, at }: the player's last successful cast
+local seen: { [string]: Seen } = {} -- slot -> { id, duration } of the enchant on it
+local spellFor: { [string]: number } = {} -- slot -> the spell that put its enchant on
+local tipNames: { [string]: string | false } = {} -- "slot:enchantID" -> the tooltip's name
+local lastArt: { [string]: string | number } = {} -- slot -> the art of the enchant it had last (grey while missing)
+local weapons: { [string]: number? } = {} -- slot -> the item in it, at the last look
+local lastCast: { id: number, at: number }? -- { id, at }: the player's last successful cast
 
 -- Where the game's functions are read from: the game's (a table, so tests
 -- can stand in for one).
@@ -85,20 +95,28 @@ type Game = {
     GetInventoryItemLink: typeof(GetInventoryItemLink),
     GetInventoryItemTexture: typeof(GetInventoryItemTexture),
 }
-local G = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end }) :: Game
-
+local G = setmetatable({}, {
+    __index = function(_: unknown, k: string): unknown
+        return _G[k]
+    end,
+}) :: Game
 
 -- The temporary enchant in a weapon slot's list: the entry with time left
 -- (a permanent enchant has none).
 local function read(ws: number): WeaponEnchantInfo?
     local items = G.C_Item
     local get = items and items.GetWeaponEnchantInfo
-    if not get then return nil end
+    if not get then
+        return nil
+    end
     local ok, list = pcall(get, ws)
-    if not ok or secret.isSecret(list) or type(list) ~= "table" then return nil end
+    if not ok or secret.isSecret(list) or type(list) ~= "table" then
+        return nil
+    end
     for _, e in pairs(list) do
-        if type(e) == "table" and not secret.isSecret(e) and secret.readable(e.hasEnchant) and e.hasEnchant
-            and secret.readable(e.timeLeft) and e.timeLeft > 0 then
+        if type(e) == "table" and not secret.isSecret(e) and secret.readable(e.hasEnchant) and e.hasEnchant and
+            secret.readable(e.timeLeft) and
+            e.timeLeft > 0 then
             return e
         end
     end
@@ -108,14 +126,20 @@ end
 local function tooltipName(inv: number): string?
     local tips = G.C_TooltipInfo
     local get = tips and tips.GetInventoryItem
-    if not get then return nil end
+    if not get then
+        return nil
+    end
     local ok, data = pcall(get, "player", inv)
-    if not ok or secret.isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then return nil end
+    if not ok or secret.isSecret(data) or type(data) ~= "table" or type(data.lines) ~= "table" then
+        return nil
+    end
     for _, l in ipairs(data.lines) do
         local text = l.leftText
         if secret.readable(text) and type(text) == "string" and text:find("%(%d+ [%a ]+%)") then
             local name = text:gsub("%s*%(.*%)%s*$", ""):gsub("%s+%d+$", "")
-            if name ~= "" then return name end
+            if name ~= "" then
+                return name
+            end
         end
     end
 end
@@ -127,27 +151,47 @@ end
 
 export function weaponEnchantable(slot: string): boolean
     local s = SLOTS[slot]
-    if not s then return false end
-    if state[slot] then return true end
+    if not s then
+        return false
+    end
+    if state[slot] then
+        return true
+    end
     local id = G.GetInventoryItemID("player", s.inv)
-    if not secret.readable(id) or not id then return false end
+    if not secret.readable(id) or not id then
+        return false
+    end
     local items = G.C_Item
-    if not items then return false end
+    if not items then
+        return false
+    end
     local classID = select(6, items.GetItemInfoInstant(id))
     return classID == (Enum.ItemClass and Enum.ItemClass.Weapon or 2)
 end
 
-export function weaponEnchant(slot: string): Info? return state[slot] or nil end
-export function weaponEnchantSpell(slot: string): number? return spellFor[slot] end
+export function weaponEnchant(slot: string): Info?
+    return state[slot] or nil
+end
+export function weaponEnchantSpell(slot: string): number?
+    return spellFor[slot]
+end
 
 local ticker: TickerHandle?
 local scan: () -> ()
 
 -- Forgets everything seen (tests: each starts from a session's beginning).
 local function reset()
-    wipe(state); wipe(seen); wipe(spellFor); wipe(tipNames); wipe(lastArt); wipe(weapons)
+    wipe(state)
+    wipe(seen)
+    wipe(spellFor)
+    wipe(tipNames)
+    wipe(lastArt)
+    wipe(weapons)
     lastCast = nil
-    if ticker then ticker:Cancel() ticker = nil end
+    if ticker then
+        ticker:Cancel()
+        ticker = nil
+    end
 end
 
 -- Every weapon again; a change (an enchant on or off, another enchant, its
@@ -176,46 +220,72 @@ scan = function()
                 end
             end
             local key = slot .. ":" .. id
-            if tipNames[key] == nil then tipNames[key] = tooltipName(s.inv) or false end
+            if tipNames[key] == nil then
+                tipNames[key] = tooltipName(s.inv) or false
+            end
             local spell = spellFor[slot]
             local spellName = spell and G.C_Spell.GetSpellName(spell)
             local info = {
-                slot = slot, enchantID = id, weaponID = weapon,
-                icon = secret.readable(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or G.GetInventoryItemTexture("player", s.inv),
-                expires = now + left, duration = math.max((seen[slot] :: Seen).duration, left),
+                slot = slot,
+                enchantID = id,
+                weaponID = weapon,
+                icon = secret.readable(e.enchantIconID) and e.enchantIconID ~= 0 and e.enchantIconID or
+                    G.GetInventoryItemTexture("player", s.inv),
+                expires = now + left,
+                duration = math.max((seen[slot] :: Seen).duration, left),
                 charges = secret.readable(e.charges) and e.charges or 0,
                 name = (secret.readable(spellName) and spellName) or tipNames[key] or nil,
-                weapon = itemName(s.inv), spellID = spell,
+                weapon = itemName(s.inv),
+                spellID = spell,
             }
-            if not old or old.enchantID ~= id or old.charges ~= info.charges or fresh then changed = true end
+            if not old or old.enchantID ~= id or old.charges ~= info.charges or fresh then
+                changed = true
+            end
             state[slot] = info
             lastArt[slot] = info.icon
         else
-            if old then changed = true end
+            if old then
+                changed = true
+            end
             state[slot] = false
         end
-        if weapons[slot] ~= weapon then changed = true end
+        if weapons[slot] ~= weapon then
+            changed = true
+        end
         weapons[slot] = weapon
     end
     -- while one is up, a look each second (its charges, the end)
     if any and not ticker then
-        ticker = every(1, function() scan() end)
+        ticker = every(1, function()
+            scan()
+        end)
     elseif not any and ticker then
         ticker:Cancel()
         ticker = nil
     end
-    if changed then events.emit("SUUUI_WEAPON_ENCHANTS_CHANGED") end
+    if changed then
+        events.emit("SUUUI_WEAPON_ENCHANTS_CHANGED")
+    end
 end
 
-local function later() after(0, scan) end
+local function later()
+    after(0, scan)
+end
 local gameEvents: EventName[] = { "WEAPON_ENCHANT_CHANGED", "PLAYER_EQUIPMENT_CHANGED", "PLAYER_ENTERING_WORLD" }
 for _, e in ipairs(gameEvents) do
     events.onGame(e, later, "WeaponEnchants")
 end
 events.onUnit("UNIT_INVENTORY_CHANGED", "player", later, "WeaponEnchants")
-events.onUnit("UNIT_SPELLCAST_SUCCEEDED", "player", function(_, _, _, spellID)
-    if secret.readable(spellID) and spellID then lastCast = { id = spellID, at = GetTime() } end
-end, "WeaponEnchants")
+events.onUnit(
+    "UNIT_SPELLCAST_SUCCEEDED",
+    "player",
+    function(_, _, _, spellID)
+        if secret.readable(spellID) and spellID then
+            lastCast = { id = spellID, at = GetTime() }
+        end
+    end,
+    "WeaponEnchants"
+)
 
 --------------------------------------------------------------------------------
 -- The icon: the buff icon's look (well, art, hairline, digits over a dark
@@ -224,12 +294,16 @@ end, "WeaponEnchants")
 
 -- 42, 1:30, 5m, 1h: the buff digits' format
 local function digits(left: number): string
-    if left < 60 then return ("%d"):format(math.ceil(left)) end
+    if left < 60 then
+        return ("%d"):format(math.ceil(left))
+    end
     if left < 600 then
         local s = math.ceil(left)
         return ("%d:%02d"):format(math.floor(s / 60), s % 60)
     end
-    if left < 3600 then return ("%dm"):format(math.floor(left / 60)) end
+    if left < 3600 then
+        return ("%dm"):format(math.floor(left / 60))
+    end
     return ("%dh"):format(math.floor(left / 3600))
 end
 
@@ -238,7 +312,9 @@ local function longTime(left: number): string
     if left >= 3600 then
         return ("%d h %d min"):format(math.floor(left / 3600), math.floor(left % 3600 / 60))
     end
-    if left >= 60 then return ("%d min"):format(math.floor(left / 60)) end
+    if left >= 60 then
+        return ("%d min"):format(math.floor(left / 60))
+    end
     return ("%d sec"):format(math.ceil(left))
 end
 
@@ -254,22 +330,33 @@ end
 local function showTip(self: WeaponEnchantIcon)
     local slot = self.slot
     local s = SLOTS[slot]
-    if not s or self.preview then return end
+    if not s or self.preview then
+        return
+    end
     local info = state[slot]
     local weapon = itemName(s.inv)
     local sub = weapon and (s.label .. " · " .. weapon) or s.label
     if info then
         local lines = { { "Time left", longTime(math.max(0, info.expires - GetTime())) } }
-        if info.charges > 0 then lines[#lines + 1] = { "Charges", tostring(info.charges) } end
-        tooltip.showTooltip(self, { title = info.name or (s.label .. " enchant"), subtitle = sub, lines = lines,
-            meta = "Can't be removed from SuuUI: the game only lets you replace it." })
+        if info.charges > 0 then
+            lines[#lines + 1] = { "Charges", tostring(info.charges) }
+        end
+        tooltip.showTooltip(self, {
+            title = info.name or (s.label .. " enchant"),
+            subtitle = sub,
+            lines = lines,
+            meta = "Can't be removed from SuuUI: the game only lets you replace it.",
+        })
     else
         local spell = spellFor[slot]
         local spellName = spell and G.C_Spell.GetSpellName(spell)
         spellName = secret.readable(spellName) and spellName or nil
-        tooltip.showTooltip(self, { title = spellName or (s.label .. " enchant"), subtitle = sub,
+        tooltip.showTooltip(self, {
+            title = spellName or (s.label .. " enchant"),
+            subtitle = sub,
             lines = { { "Not on the weapon" } },
-            meta = spellName and ("Cast " .. spellName .. " to put it back.") or nil })
+            meta = spellName and ("Cast " .. spellName .. " to put it back.") or nil,
+        })
     end
 end
 
@@ -370,7 +457,9 @@ export class WeaponEnchantIcon extends Frame
             fs:SetShadowColor(0, 0, 0, 1)
             fs:SetShadowOffset(0, -1)
             local path, height = fs:GetFont()
-            if path then fs:SetFont(path, height, "OUTLINE") end
+            if path then
+                fs:SetFont(path, height, "OUTLINE")
+            end
         end
         draw.paint(self.duration, "ink")
         draw.paint(self.stacks, "ink")
@@ -390,10 +479,14 @@ export class WeaponEnchantIcon extends Frame
         self.showTag = true
 
         -- a tooltip, no clicks: removing an enchant is forbidden
-        if not pcall(self.SetMouseMotionEnabled, self, true) then self:EnableMouse(true) end
+        if not pcall(self.SetMouseMotionEnabled, self, true) then
+            self:EnableMouse(true)
+        end
         pcall(self.SetMouseClickEnabled, self, false)
         self:SetScript("OnEnter", showTip)
-        self:SetScript("OnLeave", function() tooltip.hideTooltip() end)
+        self:SetScript("OnLeave", function()
+            tooltip.hideTooltip()
+        end)
     end
 
     function SetSlot(slot: string)
@@ -404,7 +497,9 @@ export class WeaponEnchantIcon extends Frame
         self.tag:SetSize(math.ceil(uiText.measureText("micro", text)) + 6, 11)
     end
 
-    function SetMissing(mode: string?) self.missing = mode end
+    function SetMissing(mode: string?)
+        self.missing = mode
+    end
 
     function SetTag(shown: unknown)
         self.showTag = shown ~= nil and shown ~= false
@@ -415,7 +510,9 @@ export class WeaponEnchantIcon extends Frame
     -- 30 px, as on a buff).
     function Resize(given: number | string)
         local size = draw.size(given)
-        if size == self.size then return end
+        if size == self.size then
+            return
+        end
         self.size = size
         self:SetSize(size, size)
         local barH = size >= 30 and 3 or 2
@@ -423,7 +520,9 @@ export class WeaponEnchantIcon extends Frame
         self.scrim:SetHeight(math.floor(size * 0.6))
         fonts.apply(self.duration, size >= 30 and "numeric" or "micro")
         local path, height = self.duration:GetFont()
-        if path then self.duration:SetFont(path, height, "OUTLINE") end
+        if path then
+            self.duration:SetFont(path, height, "OUTLINE")
+        end
         self.duration:ClearAllPoints()
         self.duration:SetPoint("BOTTOM", 0, 1 + barH + (size >= 30 and 1 or 0))
     end
@@ -431,7 +530,9 @@ export class WeaponEnchantIcon extends Frame
     -- The digits, the bar and the amber blink, from the time left.
     function Tick()
         local info = self.info
-        if not info then return end
+        if not info then
+            return
+        end
         local left = info.expires - GetTime()
         if left <= 0 then
             -- ended: look again (the game's event may come a moment later)
@@ -444,14 +545,21 @@ export class WeaponEnchantIcon extends Frame
         if amber ~= self.amber then
             self.amber = amber
             draw.paint(self.duration, amber and "amber" or "ink")
-            if amber then self.blink:Play() else self.blink:Stop(); self.text:SetAlpha(1) end
+            if amber then
+                self.blink:Play()
+            else
+                self.blink:Stop()
+                self.text:SetAlpha(1)
+            end
         end
         self.drain:SetValue(info.duration > 0 and math.min(1, left / info.duration) or 0)
     end
 
     -- Whether the slot shows an enchant (or a preview).
     function Refresh(): boolean
-        if self.preview then return true end
+        if self.preview then
+            return true
+        end
         local info = self.slot and state[self.slot] or nil
         self.info = info
         if info then
@@ -467,7 +575,10 @@ export class WeaponEnchantIcon extends Frame
             self:Tick()
             self:SetScript("OnUpdate", function(_: Frame, elapsed: number)
                 self.acc = self.acc + elapsed
-                if self.acc >= 0.1 then self.acc = 0; self:Tick() end
+                if self.acc >= 0.1 then
+                    self.acc = 0
+                    self:Tick()
+                end
             end)
             self.body:Show()
             self.tag:SetShown(self.showTag)
@@ -497,7 +608,9 @@ export class WeaponEnchantIcon extends Frame
     -- left. Nil goes back to the real one.
     function SetPreview(texture: string | number | nil): boolean
         self.preview = texture ~= nil or nil
-        if not texture then return self:Refresh() end
+        if not texture then
+            return self:Refresh()
+        end
         self:SetScript("OnUpdate", nil)
         self.info = nil
         self.art:SetTexture(texture)

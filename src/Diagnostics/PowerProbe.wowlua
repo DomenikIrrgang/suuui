@@ -28,39 +28,76 @@ import * as secret from "wowlua:secret"
 import * as tbl from "wowlua:table"
 
 -- Every value at one moment, and the StatusBar test.
-type Snapshot = { at: string, what: string, combat: string, powerType: string, form: string, plain: string,
-                  types: string[], comboPoints: string, bars: string[] }
+type Snapshot = {
+    at: string,
+    what: string,
+    combat: string,
+    powerType: string,
+    form: string,
+    plain: string,
+    types: string[],
+    comboPoints: string,
+    bars: string[],
+}
 -- A power token's timing: the gaps between its events, and how often each gap came.
 type Timing = { intervals: string[], histogram: { [string]: number } }
-type Events = { counts: { [string]: number }, byToken: { [string]: number }, args: { [string]: string[] },
-                maxPerSecond: { [string]: number }, seconds?: string }
+type Events = {
+    counts: { [string]: number },
+    byToken: { [string]: number },
+    args: { [string]: string[] },
+    maxPerSecond: { [string]: number },
+    seconds?: string,
+}
 type Fight = { started: string, ended?: string, twoSeconds?: Snapshot, comboSeen?: boolean, combo?: Snapshot }
 -- What the probe saves in SuuUIProbe.power.
-type Out = { now?: Snapshot, session?: string, events: Events, timing: { [string]: Timing }, forms: string[],
-             casts: string[], fights: Fight[] }
+type Out = {
+    now?: Snapshot,
+    session?: string,
+    events: Events,
+    timing: { [string]: Timing },
+    forms: string[],
+    casts: string[],
+    fights: Fight[],
+}
 
 local function show(v: unknown): string
-    if secret.isSecret(v) then return "SECRET" end
-    if type(v) == "number" and v ~= math.floor(v) then return ("%.3f"):format(v) end
+    if secret.isSecret(v) then
+        return "SECRET"
+    end
+    if type(v) == "number" and v ~= math.floor(v) then
+        return ("%.3f"):format(v)
+    end
     return tostring(v)
 end
 
 -- A function that may not exist, may error or may answer secret.
 local function call(fn: unknown, ...: unknown): (unknown, unknown, unknown, unknown)
-    if type(fn) ~= "function" then return "missing", nil, nil, nil end
+    if type(fn) ~= "function" then
+        return "missing", nil, nil, nil
+    end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120), nil, nil, nil end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 120), nil, nil, nil
+    end
     return a, b, c, d
 end
 
 -- `fn(...)` protected, with values as the game gave them (secret ones too).
 local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
-    if type(fn) ~= "function" then return false, "missing" end
+    if type(fn) ~= "function" then
+        return false, "missing"
+    end
     return pcall(fn, ...)
 end
 
 local function fresh(): Out
-    return { events = { counts = {}, byToken = {}, args = {}, maxPerSecond = {} }, timing = {}, forms = {}, casts = {}, fights = {} }
+    return {
+        events = { counts = {}, byToken = {}, args = {}, maxPerSecond = {} },
+        timing = {},
+        forms = {},
+        casts = {},
+        fights = {},
+    }
 end
 
 local function out(): Out
@@ -68,7 +105,9 @@ local function out(): Out
 end
 
 local function push<T>(list: T[], line: T, cap: number?)
-    if #list < (cap or 60) then list[#list + 1] = line end
+    if #list < (cap or 60) then
+        list[#list + 1] = line
+    end
 end
 
 local PT = Enum.PowerType
@@ -118,9 +157,13 @@ local function testBars(): string[]
     local max, now = (call(UnitPowerMax, "player", ENERGY)), (call(UnitPower, "player", ENERGY))
     local okMax, errMax = attempt(b.SetMinMaxValues, b, 0, max)
     local okValue, errValue = attempt(b.SetValue, b, now)
-    res[#res + 1] = ("energy bar: SetMinMaxValues(0, %s) %s, SetValue(%s) %s, reads %s"):format(show(max),
-        okMax and "ok" or ("error: " .. tostring(errMax):sub(1, 80)), show(now),
-        okValue and "ok" or ("error: " .. tostring(errValue):sub(1, 80)), show(b:GetValue()))
+    res[#res + 1] = ("energy bar: SetMinMaxValues(0, %s) %s, SetValue(%s) %s, reads %s"):format(
+        show(max),
+        okMax and "ok" or ("error: " .. tostring(errMax):sub(1, 80)),
+        show(now),
+        okValue and "ok" or ("error: " .. tostring(errValue):sub(1, 80)),
+        show(b:GetValue())
+    )
     return res
 end
 
@@ -128,19 +171,30 @@ local function snapshot(label: string): Snapshot
     local pType, pToken = call(UnitPowerType, "player")
     local types: string[] = {}
     for _, t in ipairs(TYPES) do
-        types[#types + 1] = ("%s (%d): UnitPower %s, UnitPowerMax %s, UnitPowerPercent %s"):format(t.name, t.id,
-            show((call(UnitPower, "player", t.id))), show((call(UnitPowerMax, "player", t.id))),
-            show((call(UnitPowerPercent, "player", t.id))))
+        types[#types + 1] = ("%s (%d): UnitPower %s, UnitPowerMax %s, UnitPowerPercent %s"):format(
+            t.name,
+            t.id,
+            show((call(UnitPower, "player", t.id))),
+            show((call(UnitPowerMax, "player", t.id))),
+            show((call(UnitPowerPercent, "player", t.id)))
+        )
     end
     return {
-        at = date("%H:%M:%S"), what = label, combat = tostring(InCombatLockdown()),
+        at = date("%H:%M:%S"),
+        what = label,
+        combat = tostring(InCombatLockdown()),
         powerType = ("%s, %s"):format(show(pType), show(pToken)),
         form = show((call(GetShapeshiftForm))),
-        plain = ("UnitPower %s, UnitPowerMax %s, UnitPowerPercent %s"):format(show((call(UnitPower, "player"))),
-            show((call(UnitPowerMax, "player"))), show((call(UnitPowerPercent, "player")))),
+        plain = ("UnitPower %s, UnitPowerMax %s, UnitPowerPercent %s"):format(
+            show((call(UnitPower, "player"))),
+            show((call(UnitPowerMax, "player"))),
+            show((call(UnitPowerPercent, "player")))
+        ),
         types = types,
-        comboPoints = ("GetComboPoints(player, target) %s; target %s"):format(show((call(GetComboPoints, "player", "target"))),
-            show((call(UnitExists, "target")))),
+        comboPoints = ("GetComboPoints(player, target) %s; target %s"):format(
+            show((call(GetComboPoints, "player", "target"))),
+            show((call(UnitExists, "target")))
+        ),
         bars = testBars(),
     }
 end
@@ -152,9 +206,9 @@ end
 local start: number = 0
 local lastCast: number? = nil
 local fight: Fight? = nil
-local seconds: { [string]: { second: number, count: number } } = {}      -- [event] = { second = n, count = n }
-local lastAt: { [string]: number } = {}       -- [token] = GetTime() of its last power event
-local lastAmount: { [string]: number } = {}   -- [token] = the last readable amount
+local seconds: { [string]: { second: number, count: number } } = {} -- [event] = { second = n, count = n }
+local lastAt: { [string]: number } = {} -- [token] = GetTime() of its last power event
+local lastAmount: { [string]: number } = {} -- [token] = the last readable amount
 
 local function rate(e: Events, event: string)
     local now = math.floor(GetTime())
@@ -164,7 +218,9 @@ local function rate(e: Events, event: string)
         seconds[event] = s
     end
     s.count = s.count + 1
-    if s.count > (e.maxPerSecond[event] or 0) then e.maxPerSecond[event] = s.count end
+    if s.count > (e.maxPerSecond[event] or 0) then
+        e.maxPerSecond[event] = s.count
+    end
 end
 
 local TOKEN_TYPE: { [string]: number } = { MANA = PT.Mana, RAGE = PT.Rage, ENERGY = PT.Energy, COMBO_POINTS = COMBO }
@@ -174,16 +230,22 @@ local function onPower(o: Out, event: string, token: unknown)
     local key = secret.readable(token) and tostring(token) or "SECRET"
     e.byToken[event .. " " .. key] = (e.byToken[event .. " " .. key] or 0) + 1
     -- the timing per token (UNIT_POWER_FREQUENT only, so one event per change)
-    if event ~= "UNIT_POWER_FREQUENT" then return end
+    if event ~= "UNIT_POWER_FREQUENT" then
+        return
+    end
     local now = GetTime()
     local amount: unknown = nil
     local id = TOKEN_TYPE[key]
-    if id then amount = call(UnitPower, "player", id) end
+    if id then
+        amount = call(UnitPower, "player", id)
+    end
     local amountText = show(amount)
     local delta = ""
     if secret.isNumber(amount) then
         local last = lastAmount[key]
-        if last then delta = (" (%+d)"):format(amount - last) end
+        if last then
+            delta = (" (%+d)"):format(amount - last)
+        end
         lastAmount[key] = amount
     end
     local t: Timing = o.timing[key] or { intervals = {}, histogram = {} }
@@ -192,7 +254,9 @@ local function onPower(o: Out, event: string, token: unknown)
     if lastTime then
         local gap = now - lastTime
         local line = ("%.2f s, amount %s%s, combat %s"):format(gap, amountText, delta, tostring(InCombatLockdown()))
-        if key == "MANA" and lastCast then line = line .. (", %.1f s since your last cast"):format(now - lastCast) end
+        if key == "MANA" and lastCast then
+            line = line .. (", %.1f s since your last cast"):format(now - lastCast)
+        end
         push(t.intervals, line, 80)
         local bucket = ("%.1f"):format(math.floor(gap * 10 + 0.5) / 10)
         t.histogram[bucket] = (t.histogram[bucket] or 0) + 1
@@ -208,14 +272,28 @@ end
 
 local function costText(spellID: unknown): string
     local costs = call(tbl.field(C_Spell, "GetSpellPowerCost"), spellID)
-    if secret.isSecret(costs) then return "SECRET" end
-    if type(costs) ~= "table" then return show(costs) end
+    if secret.isSecret(costs) then
+        return "SECRET"
+    end
+    if type(costs) ~= "table" then
+        return show(costs)
+    end
     local list: string[] = {}
     for _, c in ipairs(tbl.list(costs)) do
-        if secret.isSecret(c) then list[#list + 1] = "SECRET" else
-            local function f(name: string): string return show(tbl.field(c, name)) end
-            list[#list + 1] = ("type %s %s: cost %s, min %s, percent %s, per sec %s"):format(f("type"), f("name"),
-                f("cost"), f("minCost"), f("costPercent"), f("costPerSec"))
+        if secret.isSecret(c) then
+            list[#list + 1] = "SECRET"
+        else
+            local function f(name: string): string
+                return show(tbl.field(c, name))
+            end
+            list[#list + 1] = ("type %s %s: cost %s, min %s, percent %s, per sec %s"):format(
+                f("type"),
+                f("name"),
+                f("cost"),
+                f("minCost"),
+                f("costPercent"),
+                f("costPerSec")
+            )
         end
     end
     return #list > 0 and table.concat(list, " | ") or "no cost"
@@ -223,15 +301,26 @@ end
 
 local listening: Frame? = nil
 local function listen()
-    if listening then return end
+    if listening then
+        return
+    end
     local f = CreateFrame("Frame")
     listening = f
-    for _, event in ipairs({ "UNIT_POWER_FREQUENT", "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER",
-                             "UNIT_SPELLCAST_SUCCEEDED" }) do
+    for _, event in ipairs({
+        "UNIT_POWER_FREQUENT",
+        "UNIT_POWER_UPDATE",
+        "UNIT_MAXPOWER",
+        "UNIT_DISPLAYPOWER",
+        "UNIT_SPELLCAST_SUCCEEDED",
+    }) do
         pcall(f.RegisterUnitEvent, f, event, "player")
     end
-    for _, event in ipairs({ "PLAYER_TARGET_CHANGED", "UPDATE_SHAPESHIFT_FORM", "PLAYER_REGEN_DISABLED",
-                             "PLAYER_REGEN_ENABLED" }) do
+    for _, event in ipairs({
+        "PLAYER_TARGET_CHANGED",
+        "UPDATE_SHAPESHIFT_FORM",
+        "PLAYER_REGEN_DISABLED",
+        "PLAYER_REGEN_ENABLED",
+    }) do
         pcall(f.RegisterEvent, f, event)
     end
     f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown, c: unknown)
@@ -249,15 +338,38 @@ local function listen()
             onPower(o, event, b)
         elseif event == "UNIT_DISPLAYPOWER" or event == "UPDATE_SHAPESHIFT_FORM" then
             local pType, pToken = call(UnitPowerType, "player")
-            push(o.forms, ("%s %s: form %s, UnitPowerType %s, %s, UnitPower %s / %s, combat %s"):format(date("%H:%M:%S"), event,
-                show((call(GetShapeshiftForm))), show(pType), show(pToken), show((call(UnitPower, "player"))),
-                show((call(UnitPowerMax, "player"))), tostring(InCombatLockdown())), 40)
+            push(
+                o.forms,
+                ("%s %s: form %s, UnitPowerType %s, %s, UnitPower %s / %s, combat %s"):format(
+                    date("%H:%M:%S"),
+                    event,
+                    show((call(GetShapeshiftForm))),
+                    show(pType),
+                    show(pToken),
+                    show((call(UnitPower, "player"))),
+                    show((call(UnitPowerMax, "player"))),
+                    tostring(InCombatLockdown())
+                ),
+                40
+            )
         elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
             lastCast = GetTime()
-            push(o.casts, ("%s %s (spell %s): %s; combat %s"):format(date("%H:%M:%S"), show((call(C_Spell.GetSpellName, c))),
-                show(c), costText(c), tostring(InCombatLockdown())), 40)
+            push(
+                o.casts,
+                ("%s %s (spell %s): %s; combat %s"):format(
+                    date("%H:%M:%S"),
+                    show((call(C_Spell.GetSpellName, c))),
+                    show(c),
+                    costText(c),
+                    tostring(InCombatLockdown())
+                ),
+                40
+            )
         elseif event == "PLAYER_REGEN_DISABLED" then
-            if #o.fights >= 6 then fight = nil return end
+            if #o.fights >= 6 then
+                fight = nil
+                return
+            end
             local mine: Fight = { started = date("%H:%M:%S") }
             fight = mine
             o.fights[#o.fights + 1] = mine
@@ -269,7 +381,9 @@ local function listen()
             end)
         elseif event == "PLAYER_REGEN_ENABLED" then
             local f2 = fight
-            if f2 then f2.ended = date("%H:%M:%S") end
+            if f2 then
+                f2.ended = date("%H:%M:%S")
+            end
             fight = nil
         end
     end)
@@ -298,5 +412,7 @@ export function command(_rest: string?)
     else
         hint = "Fight a few mobs."
     end
-    print(("Power probe: recorded your power now. %s Up to 6 fights are recorded; then /reload to save it."):format(hint))
+    print(
+        ("Power probe: recorded your power now. %s Up to 6 fights are recorded; then /reload to save it."):format(hint)
+    )
 end

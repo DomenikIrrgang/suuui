@@ -10,23 +10,31 @@ import list, field from "wowlua:table"
 -- A stored table to change in place (a list, an entry, a setup), when `v`
 -- is one; nil otherwise.
 local function tableOf(v: unknown): { [string]: unknown }?
-    if type(v) == "table" then return v :: unknown :: { [string]: unknown } end
+    if type(v) == "table" then
+        return v :: unknown :: { [string]: unknown }
+    end
     return nil
 end
 -- A stored entry, when `v` is a table.
 local function entryOf(v: unknown): Entry?
-    if type(v) == "table" then return v :: unknown :: Entry end
+    if type(v) == "table" then
+        return v :: unknown :: Entry
+    end
     return nil
 end
 -- Every setup's lists: fn(lists, class, spec) for each, read from what is stored.
 local function eachSetup(values: Values, fn: (lists: unknown, class: string, spec: string) -> ())
     local setups = tableOf(values.setups)
-    if not setups then return end
+    if not setups then
+        return
+    end
     for class, specs in pairs(setups) do
         local bySpec = tableOf(specs)
         if bySpec then
             for spec, s in pairs(bySpec) do
-                if type(s) == "table" then fn(field(s, "lists"), tostring(class), tostring(spec)) end
+                if type(s) == "table" then
+                    fn(field(s, "lists"), tostring(class), tostring(spec))
+                end
             end
         end
     end
@@ -36,7 +44,9 @@ end
 -- stays, moved into the range if it was outside.
 export function essentialSize(values: Values)
     local v: unknown = values.essentialSize
-    if type(v) == "number" then values.essentialSize = math.max(30, math.min(52, v)) end
+    if type(v) == "number" then
+        values.essentialSize = math.max(30, math.min(52, v))
+    end
 end
 
 -- Shared slots (groups) saved before every one had a uid get one, so the
@@ -44,15 +54,21 @@ end
 export function slotUids(values: Values)
     local function give(lists: unknown, tag: string)
         local byKey = tableOf(lists)
-        if not byKey then return end
+        if not byKey then
+            return
+        end
         for key, l in pairs(byKey) do
             for i, raw in ipairs(list(l)) do
                 local e = entryOf(raw)
-                if e and (e.group or e.collection) and not e.uid then e.uid = tag .. tostring(key) .. i end
+                if e and (e.group or e.collection) and not e.uid then
+                    e.uid = tag .. tostring(key) .. i
+                end
             end
         end
     end
-    eachSetup(values, function(lists: unknown, class: string, spec: string) give(lists, "m" .. class .. spec) end)
+    eachSetup(values, function(lists: unknown, class: string, spec: string)
+        give(lists, "m" .. class .. spec)
+    end)
     give(values.lists, "m")
 end
 
@@ -65,23 +81,33 @@ export function missingPerEntry(values: Values)
     values.missingBuffs, values.missingDebuffs = nil, nil
     local function set(raw: unknown, mode: string)
         local e = entryOf(raw)
-        if not e then return end
+        if not e then
+            return
+        end
         if e.collection then
-            for _, x in ipairs(list(e.entries)) do set(x, mode) end
+            for _, x in ipairs(list(e.entries)) do
+                set(x, mode)
+            end
         elseif e.missing == nil then
             e.missing = mode
         end
     end
     local function apply(lists: unknown)
         local byKey = tableOf(lists)
-        if not byKey then return end
+        if not byKey then
+            return
+        end
         for key, mode in pairs(old) do
             if type(mode) == "string" then
-                for _, e in ipairs(list(byKey[key])) do set(e, mode) end
+                for _, e in ipairs(list(byKey[key])) do
+                    set(e, mode)
+                end
             end
         end
     end
-    eachSetup(values, function(lists: unknown) apply(lists) end)
+    eachSetup(values, function(lists: unknown)
+        apply(lists)
+    end)
     apply(values.lists)
 end
 
@@ -93,16 +119,22 @@ export function shamanShieldsAuto(values: Values)
     local function fix(l: unknown)
         for _, raw in ipairs(list(l)) do
             local e = entryOf(raw)
-            if e and e.collection then fix(e.entries) end
+            if e and e.collection then
+                fix(e.entries)
+            end
             local m = e and e.group and e.fixedIcon and e.name == "Shields" and e.members
             if e and m and #m == 2 and m[1].name == "Lightning Shield" and m[2].name == "Water Shield" then
                 e.fixedIcon = nil
-                if e.icon == m[2].icon then m[1], m[2] = m[2], m[1] end
+                if e.icon == m[2].icon then
+                    m[1], m[2] = m[2], m[1]
+                end
             end
         end
     end
     eachSetup(values, function(lists: unknown, class: string)
-        if class == "SHAMAN" then fix(field(lists, "buffs")) end
+        if class == "SHAMAN" then
+            fix(field(lists, "buffs"))
+        end
     end)
 end
 
@@ -115,12 +147,18 @@ export function shortBuffsWarn(values: Values)
     local function fix(l: unknown, name: string)
         for _, raw in ipairs(list(l)) do
             local e = entryOf(raw)
-            if e and e.collection then fix(e.entries, name) end
-            if e and e.name == name and e.missing == "remind" then e.missing = "warn" end
+            if e and e.collection then
+                fix(e.entries, name)
+            end
+            if e and e.name == name and e.missing == "remind" then
+                e.missing = "warn"
+            end
         end
     end
     eachSetup(values, function(lists: unknown, class: string)
         local name = SHORT_BUFFS[class]
-        if name then fix(field(lists, "buffs"), name) end
+        if name then
+            fix(field(lists, "buffs"), name)
+        end
     end)
 end

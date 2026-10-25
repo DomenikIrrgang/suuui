@@ -62,15 +62,26 @@ export class ChatOutput implements FaultOutput
     end
 
     function keep(source: string, text: string, stack: string?)
-        if not DB.loaded() then return end
+        if not DB.loaded() then
+            return
+        end
         local saved = DB.list("errors")
-        saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), source = source, message = text,
-            stack = stack, version = version }
-        while #saved > 30 do table.remove(saved, 1) end
+        saved[#saved + 1] = {
+            time = date("%Y-%m-%d %H:%M:%S"),
+            source = source,
+            message = text,
+            stack = stack,
+            version = version,
+        }
+        while #saved > 30 do
+            table.remove(saved, 1)
+        end
     end
 
     function forget()
-        if DB.loaded() then DB.db.errors = nil end
+        if DB.loaded() then
+            DB.db.errors = nil
+        end
     end
 end
 
@@ -93,8 +104,8 @@ end
 --------------------------------------------------------------------------------
 
 export class FaultLog implements Reporter
-    private list: Entry[] = {}                -- oldest first
-    private byKey: { [string]: Entry } = {}   -- source .. "\0" .. message
+    private list: Entry[] = {} -- oldest first
+    private byKey: { [string]: Entry } = {} -- source .. "\0" .. message
     -- the stack of the error the handler last saw (xpcall's handler runs
     -- before the stack unwinds)
     private lastStack: string? = nil
@@ -112,8 +123,11 @@ export class FaultLog implements Reporter
     private kbChilds: number[] = {}
     private depth: number = 0
 
-    constructor(private output: FaultOutput = ChatOutput.new(), private meter: Meter = GameMeter.new(),
-                private maxKept: number = MAX_KEPT)
+    constructor(
+        private output: FaultOutput = ChatOutput.new(),
+        private meter: Meter = GameMeter.new(),
+        private maxKept: number = MAX_KEPT
+    )
         self.handler = function(err: unknown): unknown
             self.lastStack = debugstack(2)
             return err
@@ -136,7 +150,9 @@ export class FaultLog implements Reporter
         self.list[#self.list + 1] = entry
         if #self.list > self.maxKept then
             local old = table.remove(self.list, 1)
-            if old then self.byKey[old.source .. "\0" .. old.message] = nil end
+            if old then
+                self.byKey[old.source .. "\0" .. old.message] = nil
+            end
         end
         self.output:announce(from, text)
         self.output:keep(from, text, stack)
@@ -154,7 +170,9 @@ export class FaultLog implements Reporter
     private function finishTimed<R...>(source: string, ok: boolean, ...: R...): (boolean, R...)
         local depth = self.depth
         -- timing was turned off (or on again) inside this call: nothing to add
-        if depth == 0 or not self.starts[depth] then return self:finish(source, ok, ...) end
+        if depth == 0 or not self.starts[depth] then
+            return self:finish(source, ok, ...)
+        end
         local now, kbNow = self.meter:ms(), self.meter:kb()
         local total = now - self.starts[depth]
         local own = total - self.childs[depth]
@@ -171,7 +189,9 @@ export class FaultLog implements Reporter
             self.spent[source] = rec
         end
         rec.ms, rec.calls, rec.kb = rec.ms + own, rec.calls + 1, rec.kb + kbOwn
-        if own > rec.peak then rec.peak = own end
+        if own > rec.peak then
+            rec.peak = own
+        end
         return self:finish(source, ok, ...)
     end
 
@@ -179,7 +199,9 @@ export class FaultLog implements Reporter
     -- Returns true plus fn's results on success, false on error. Allocates
     -- nothing on success, so every event callback can go through it.
     function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
-        if not self.timing then return self:finish(source, xpcall(fn, self.handler, ...)) end
+        if not self.timing then
+            return self:finish(source, xpcall(fn, self.handler, ...))
+        end
         self.depth += 1
         local depth = self.depth
         self.starts[depth], self.childs[depth] = self.meter:ms(), 0
@@ -191,7 +213,9 @@ export class FaultLog implements Reporter
     function setTiming(enabled: boolean)
         self.timing = enabled and true or false
         self.depth = 0
-        if enabled then wipe(self.spent) end
+        if enabled then
+            wipe(self.spent)
+        end
     end
 
     function timingState(): (boolean, { [string]: Spent })
@@ -244,14 +268,28 @@ errors.onError(function(msg: string)
     log:report("SuuUI", text)
 end)
 
-registerCommand("errors", "List the errors SuuUI caught this session; \"/suu errors test\" raises one on purpose.", function(arg: string)
+registerCommand("errors", "List the errors SuuUI caught this session; \"/suu errors test\" raises one on purpose.", function(
+    arg: string
+)
     if arg == "clear" then
         log:clear()
         return print("Errors cleared.")
     end
     if arg == "test" then
-        events.on("SUUUI_FAULT_TEST", function() error("a deliberate test error") end, "Fault test")
-        events.on("SUUUI_FAULT_TEST", function() print("The next listener still ran.") end, "Fault test (second listener)")
+        events.on(
+            "SUUUI_FAULT_TEST",
+            function()
+                error("a deliberate test error")
+            end,
+            "Fault test"
+        )
+        events.on(
+            "SUUUI_FAULT_TEST",
+            function()
+                print("The next listener still ran.")
+            end,
+            "Fault test (second listener)"
+        )
         events.emit("SUUUI_FAULT_TEST")
         events.offAll("Fault test")
         events.offAll("Fault test (second listener)")
@@ -264,16 +302,17 @@ registerCommand("errors", "List the errors SuuUI caught this session; \"/suu err
     end
     for _, e in ipairs(list) do
         print(("%s  %s: %s%s"):format(e.time, e.source, e.message, e.count > 1 and (" (x%d)"):format(e.count) or ""))
-        if arg == "full" and e.stack then _G.print(e.stack) end
+        if arg == "full" and e.stack then
+            _G.print(e.stack)
+        end
     end
-    if arg ~= "full" then _G.print("  /suu errors full adds the stacks.") end
+    if arg ~= "full" then
+        _G.print("  /suu errors full adds the stacks.")
+    end
 end)
 
 -- What the game blocked: the event's names.
-enum Blocked {
-    Blocked = "ADDON_ACTION_BLOCKED",
-    Forbidden = "ADDON_ACTION_FORBIDDEN",
-}
+enum Blocked { Blocked = "ADDON_ACTION_BLOCKED", Forbidden = "ADDON_ACTION_FORBIDDEN" }
 
 -- Protected calls the game blocked ("Interface action failed because of an
 -- AddOn"): in combat, or out of it where a call needs the user's click or
@@ -281,8 +320,7 @@ enum Blocked {
 -- so that is what is kept, with SuuUI's stack at the moment it fired when
 -- there is one.
 local function blocked(event: Blocked, addon: unknown, func: unknown)
-    local what = event == Blocked.Forbidden and "Forbidden"
-        or (InCombatLockdown() and "Blocked in combat" or "Blocked")
+    local what = event == Blocked.Forbidden and "Forbidden" or (InCombatLockdown() and "Blocked in combat" or "Blocked")
     if addon ~= ADDON then
         -- blamed on someone else (another addon, or a name the game makes
         -- up): kept too, quietly, since SuuUI may still be the cause (found
@@ -290,9 +328,17 @@ local function blocked(event: Blocked, addon: unknown, func: unknown)
         -- was logged)
         if DB.loaded() then
             local saved = DB.list("blocked")
-            saved[#saved + 1] = { time = date("%Y-%m-%d %H:%M:%S"), event = event, addon = tostring(addon), func = tostring(func),
-                combat = InCombatLockdown() and true or false, stack = debugstack(2) }
-            while #saved > 30 do table.remove(saved, 1) end
+            saved[#saved + 1] = {
+                time = date("%Y-%m-%d %H:%M:%S"),
+                event = event,
+                addon = tostring(addon),
+                func = tostring(func),
+                combat = InCombatLockdown() and true or false,
+                stack = debugstack(2),
+            }
+            while #saved > 30 do
+                table.remove(saved, 1)
+            end
         end
         return
     end
@@ -307,5 +353,9 @@ local function blocked(event: Blocked, addon: unknown, func: unknown)
     log:report("Taint", ("%s: %s"):format(what, tostring(func)), stack)
 end
 
-on(Blocked.Blocked, function(addon: unknown, func: unknown) blocked(Blocked.Blocked, addon, func) end)
-on(Blocked.Forbidden, function(addon: unknown, func: unknown) blocked(Blocked.Forbidden, addon, func) end)
+on(Blocked.Blocked, function(addon: unknown, func: unknown)
+    blocked(Blocked.Blocked, addon, func)
+end)
+on(Blocked.Forbidden, function(addon: unknown, func: unknown)
+    blocked(Blocked.Forbidden, addon, func)
+end)

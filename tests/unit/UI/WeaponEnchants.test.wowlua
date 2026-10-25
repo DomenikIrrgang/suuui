@@ -37,39 +37,84 @@ local function tokenOf(region: unknown): string?
 end
 
 local function enchant(seconds: number, extra: { [string]: unknown }?): { [string]: unknown }
-    local e: { [string]: unknown } = { hasEnchant = true, timeLeft = seconds * 1000, charges = 0, enchantID = 29, enchantIconID = 136086 }
-    for k, v in pairs(extra or {}) do e[k] = v end
+    local e: { [string]: unknown } = {
+        hasEnchant = true,
+        timeLeft = seconds * 1000,
+        charges = 0,
+        enchantID = 29,
+        enchantIconID = 136086,
+    }
+    for k, v in pairs(extra or {}) do
+        e[k] = v
+    end
     return e
 end
 
 local function stand(f: Fake)
     rawset(G, "C_Item", {
-        GetWeaponEnchantInfo = function(ws: number): unknown return f.enchants[ws] end,
-        GetItemInfoInstant = function(id: number): (number, nil, nil, nil, nil, number?) return id, nil, nil, nil, nil, f.classes[id] end,
+        GetWeaponEnchantInfo = function(ws: number): unknown
+            return f.enchants[ws]
+        end,
+        GetItemInfoInstant = function(id: number): (number, nil, nil, nil, nil, number?)
+            return id, nil, nil, nil, nil, f.classes[id]
+        end,
     })
-    rawset(G, "C_TooltipInfo", { GetInventoryItem = function(_: string, inv: number): unknown return f.tips[inv] end })
-    rawset(G, "C_Spell", { GetSpellName = function(id: number): string? return f.spells[id] end })
-    rawset(G, "GetInventoryItemID", function(_: string, inv: number): (number | Secret<number>)? return f.items[inv] end)
-    rawset(G, "GetInventoryItemLink", function(_: string, inv: number): string? return f.links[inv] end)
-    rawset(G, "GetInventoryItemTexture", function(_: string, inv: number): number? return f.textures[inv] end)
+    rawset(G, "C_TooltipInfo", {
+        GetInventoryItem = function(_: string, inv: number): unknown
+            return f.tips[inv]
+        end,
+    })
+    rawset(G, "C_Spell", {
+        GetSpellName = function(id: number): string?
+            return f.spells[id]
+        end,
+    })
+    rawset(G, "GetInventoryItemID", function(_: string, inv: number): (number | Secret<number>)?
+        return f.items[inv]
+    end)
+    rawset(G, "GetInventoryItemLink", function(_: string, inv: number): string?
+        return f.links[inv]
+    end)
+    rawset(G, "GetInventoryItemTexture", function(_: string, inv: number): number?
+        return f.textures[inv]
+    end)
 end
 
 @beforeEach
 local function setUp()
     parent = newParent(300, 200)
-    fake = { enchants = {}, items = { [16] = 1001 }, classes = { [1001] = 2, [1002] = 2, [2001] = 4 },
-        links = { [16] = "|cffffffff|Hitem:1001::::::::1:::::::|h[Stone Hammer]|h|r" }, textures = { [16] = 135000 },
-        tips = {}, spells = { [8017] = "Rockbiter Weapon" } }
+    fake = {
+        enchants = {},
+        items = { [16] = 1001 },
+        classes = { [1001] = 2, [1002] = 2, [2001] = 4 },
+        links = { [16] = "|cffffffff|Hitem:1001::::::::1:::::::|h[Stone Hammer]|h|r" },
+        textures = { [16] = 135000 },
+        tips = {},
+        spells = { [8017] = "Rockbiter Weapon" },
+    }
     stand(fake)
     reset()
     heard = 0
-    events.on("SUUUI_WEAPON_ENCHANTS_CHANGED", function() heard += 1 end, listener)
+    events.on(
+        "SUUUI_WEAPON_ENCHANTS_CHANGED",
+        function()
+            heard += 1
+        end,
+        listener
+    )
 end
 
 @afterEach
 local function tearDown()
     events.offAll(listener)
-    for _, k in ipairs({ "C_Item", "C_TooltipInfo", "C_Spell", "GetInventoryItemID", "GetInventoryItemLink", "GetInventoryItemTexture" }) do
+    for _, k in ipairs({
+        "C_Item",
+        "C_TooltipInfo",
+        "C_Spell",
+        "GetInventoryItemID",
+        "GetInventoryItemLink",
+        "GetInventoryItemTexture",
+    }) do
         rawset(G, k, nil)
     end
     reset()
@@ -85,13 +130,22 @@ local function reading()
     expect(read(0)).toBeNil()
     fake.enchants[0] = { { hasEnchant = true, timeLeft = 0 }, enchant(60) }
     expect((read(0) :: WeaponEnchantInfo).timeLeft).toBe(60000)
-    fake.enchants[0] = { mock.secret({}), { hasEnchant = mock.secret(true), timeLeft = 5 }, { hasEnchant = false, timeLeft = 9 }, 7 }
+    fake.enchants[0] = {
+        mock.secret({}),
+        { hasEnchant = mock.secret(true), timeLeft = 5 },
+        { hasEnchant = false, timeLeft = 9 },
+        7,
+    }
     expect(read(0)).toBeNil()
     fake.enchants[0] = mock.secret({ enchant(60) })
     expect(read(0)).toBeNil()
     fake.enchants[0] = "nope"
     expect(read(0)).toBeNil()
-    rawset(G, "C_Item", { GetWeaponEnchantInfo = function(_: number): unknown error("refused") end })
+    rawset(G, "C_Item", {
+        GetWeaponEnchantInfo = function(_: number): unknown
+            error("refused")
+        end,
+    })
     expect(read(0)).toBeNil()
     rawset(G, "C_Item", {})
     expect(read(0)).toBeNil()
@@ -100,7 +154,13 @@ end
 @test("tooltipName: the weapon tooltip's timed line, its rank and time cut off")
 local function tipNames()
     expect(tooltipName(16)).toBeNil()
-    fake.tips[16] = { lines = { { leftText = "Stone Hammer" }, { leftText = mock.secret("x") }, { leftText = "Rockbiter 2 (60 min)" } } }
+    fake.tips[16] = {
+        lines = {
+            { leftText = "Stone Hammer" },
+            { leftText = mock.secret("x") },
+            { leftText = "Rockbiter 2 (60 min)" },
+        },
+    }
     expect(tooltipName(16)).toBe("Rockbiter")
     fake.tips[16] = { lines = { { leftText = "Instant Poison (30 min)" } } }
     expect(tooltipName(16)).toBe("Instant Poison")
@@ -394,7 +454,11 @@ local function tips()
     i:SetSlot("main")
     mock.hover(i)
     local data: tooltip.TooltipData? = nil
-    shown = mock.stub(tooltip, "showTooltip", function(_: Region, d: tooltip.TooltipSource) if type(d) == "table" then data = d end end)
+    shown = mock.stub(tooltip, "showTooltip", function(_: Region, d: tooltip.TooltipSource)
+        if type(d) == "table" then
+            data = d
+        end
+    end)
     mock.hover(nil)
     expect(hidden).toHaveBeenCalled()
     mock.hover(i)

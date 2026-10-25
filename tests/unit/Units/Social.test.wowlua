@@ -21,14 +21,24 @@ import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import * as errors from "wowlua:errors"
 
-local function frame(): Frame return (assert(frames.find("SocialUIFrame"))) end
-local function view(): Contacts return (assert(M.view)) end
-local function friendsList(): Frame return (assert(M:FriendsList())) end
+local function frame(): Frame
+    return (assert(frames.find("SocialUIFrame")))
+end
+local function view(): Contacts
+    return (assert(M.view))
+end
+local function friendsList(): Frame
+    return (assert(M:FriendsList()))
+end
 -- The confirm dialog's OK with this text.
-local function confirmWith(c: Confirms, text: string?) assert(c.last().onConfirm)(text) end
+local function confirmWith(c: Confirms, text: string?)
+    assert(c.last().onConfirm)(text)
+end
 
 local function open()
-    if not frame():IsShown() then mock.pressKey("O") end
+    if not frame():IsShown() then
+        mock.pressKey("O")
+    end
     mock.advanceFrames(3)
 end
 
@@ -36,9 +46,13 @@ end
 local function tab(kind: string): Button?
     local want = tbl.field(tbl.field(_G, "SocialUITabType"), kind)
     local step, state, init = errors.tryMethod(tbl.field(frame(), "socialTabPool"), "EnumerateActive")
-    if type(step) ~= "function" then return nil end
+    if type(step) ~= "function" then
+        return nil
+    end
     for t in step :: (unknown, unknown) -> unknown, state, init do
-        if tbl.field(tbl.field(t, "tabData"), "tabType") == want then return frames.asButton(t) end
+        if tbl.field(tbl.field(t, "tabData"), "tabType") == want then
+            return frames.asButton(t)
+        end
     end
     return nil
 end
@@ -46,7 +60,9 @@ end
 local function openTab(kind: string)
     open()
     local b = tab(kind)
-    if b then mock.click(b) end
+    if b then
+        mock.click(b)
+    end
     mock.advanceFrames(3)
 end
 
@@ -55,31 +71,57 @@ local FACTION = UnitFactionGroup("player")
 local OTHER = FACTION == "Alliance" and "Horde" or "Alliance"
 type Fake = { [string]: unknown }
 local function bnetFriends(list: Fake[])
-    mock.stub(_G, "BNGetNumFriends", function(): (number, number, number, number) return #list, #list, 0, 0 end)
-    mock.stub(C_BattleNet, "GetFriendAccountInfo", function(i: number): BNetAccountInfo? return list[i] :: unknown :: BNetAccountInfo? end)
+    mock.stub(_G, "BNGetNumFriends", function(): (number, number, number, number)
+        return #list, #list, 0, 0
+    end)
+    mock.stub(C_BattleNet, "GetFriendAccountInfo", function(i: number): BNetAccountInfo?
+        return list[i] :: unknown :: BNetAccountInfo?
+    end)
 end
 
 local function wowGame(over: Fake?): Fake
-    local g: Fake = { isOnline = true, clientProgram = BNET_CLIENT_WOW or "WoW", characterName = "Brannoc Ironhand",
-        className = "Warrior", characterLevel = 60, areaName = "Ironforge", wowProjectID = WOW_PROJECT_ID, gameAccountID = 77,
-        factionName = FACTION }
-    for k, v in pairs(over or {}) do g[k] = v end
+    local g: Fake = {
+        isOnline = true,
+        clientProgram = BNET_CLIENT_WOW or "WoW",
+        characterName = "Brannoc Ironhand",
+        className = "Warrior",
+        characterLevel = 60,
+        areaName = "Ironforge",
+        wowProjectID = WOW_PROJECT_ID,
+        gameAccountID = 77,
+        factionName = FACTION,
+    }
+    for k, v in pairs(over or {}) do
+        g[k] = v
+    end
     return g
 end
 
 -- Character friends as the client gives them (C_FriendList.GetFriendInfoByIndex).
 local function characterFriends(list: Fake[])
-    mock.stub(C_FriendList, "GetNumFriends", function(): number return #list end)
-    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(i: number): FriendInfo? return list[i] :: unknown :: FriendInfo? end)
+    mock.stub(C_FriendList, "GetNumFriends", function(): number
+        return #list
+    end)
+    mock.stub(C_FriendList, "GetFriendInfoByIndex", function(i: number): FriendInfo?
+        return list[i] :: unknown :: FriendInfo?
+    end)
 end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
-    if M.raidTest then M:TestRaid() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    if M.raidTest then
+        M:TestRaid()
+    end
     local panel = M:LockoutPanel()
-    if panel and panel:IsShown() then M:ToggleLockouts() end
-    if frame():IsShown() then HideUIPanel(frame()) end
+    if panel and panel:IsShown() then
+        M:ToggleLockouts()
+    end
+    if frame():IsShown() then
+        HideUIPanel(frame())
+    end
     mock.group:leave()
     M.selected, M.mode, M.pinWanted = nil, nil, nil
     mock.advanceFrames(3)
@@ -106,25 +148,66 @@ end
 @test("friends: online first, then by name; each kind's line and why it can't be invited")
 local function friends()
     bnetFriends({
-        { bnetAccountID = 1, accountName = "|Kq1|k", battleTag = "Brannoc#1137", note = "raid lead", gameAccountInfo = wowGame() },
-        { bnetAccountID = 2, accountName = "|Kq2|k", battleTag = "Aster#2001", gameAccountInfo = wowGame({ factionName = OTHER, characterName = "Aster Vale" }) },
-        { bnetAccountID = 3, accountName = "|Kq3|k", battleTag = "Corwin#3001", gameAccountInfo = wowGame({ wowProjectID = -1 }) },
-        { bnetAccountID = 4, accountName = "|Kq4|k", battleTag = "Dara#4001", isAFK = true, gameAccountInfo = { isOnline = true, clientProgram = "WTCG" } },
-        { bnetAccountID = 5, accountName = "|Kq5|k", battleTag = "Elian#5001", lastOnlineTime = time() - 3 * 86400, gameAccountInfo = { isOnline = false } },
+        {
+            bnetAccountID = 1,
+            accountName = "|Kq1|k",
+            battleTag = "Brannoc#1137",
+            note = "raid lead",
+            gameAccountInfo = wowGame(),
+        },
+        {
+            bnetAccountID = 2,
+            accountName = "|Kq2|k",
+            battleTag = "Aster#2001",
+            gameAccountInfo = wowGame({ factionName = OTHER, characterName = "Aster Vale" }),
+        },
+        {
+            bnetAccountID = 3,
+            accountName = "|Kq3|k",
+            battleTag = "Corwin#3001",
+            gameAccountInfo = wowGame({ wowProjectID = -1 }),
+        },
+        {
+            bnetAccountID = 4,
+            accountName = "|Kq4|k",
+            battleTag = "Dara#4001",
+            isAFK = true,
+            gameAccountInfo = { isOnline = true, clientProgram = "WTCG" },
+        },
+        {
+            bnetAccountID = 5,
+            accountName = "|Kq5|k",
+            battleTag = "Elian#5001",
+            lastOnlineTime = time() - 3 * 86400,
+            gameAccountInfo = { isOnline = false },
+        },
         { bnetAccountID = 6, accountName = "|Kq6|k", battleTag = "Fenn#6001", gameAccountInfo = { isOnline = false } },
     })
     characterFriends({
-        { name = "Tamsin Ashford", connected = true, level = 42, className = "Priest", area = "Stormwind City", notes = "healer" },
+        {
+            name = "Tamsin Ashford",
+            connected = true,
+            level = 42,
+            className = "Priest",
+            area = "Stormwind City",
+            notes = "healer",
+        },
         { name = "Morrow Fenwick", connected = false, className = "Druid" },
     })
     local list, online = M:Friends()
     expect(#list).toBe(8)
     expect(online).toBe(5)
     -- online first
-    for i = 1, 5 do expect(list[i].online).toBe(true) end
+    for i = 1, 5 do
+        expect(list[i].online).toBe(true)
+    end
     local rows: { [string]: Friend } = {}
-    for _, r in ipairs(list) do rows[assert(r.key)] = r end
-    local function by(key: string): Friend return (assert(rows[key], key)) end
+    for _, r in ipairs(list) do
+        rows[assert(r.key)] = r
+    end
+    local function by(key: string): Friend
+        return (assert(rows[key], key))
+    end
     local b1 = by("bn:1")
     expect(b1.character).toBe("Brannoc Ironhand")
     expect(b1.detail).toBe("Level 60 Warrior · Ironforge")
@@ -141,10 +224,14 @@ local function friends()
     expect(tamsin.color).toBe("class-priest")
     expect(by("c:Morrow Fenwick").why).toBe("They're offline.")
     -- drawn: the page gets them with your status and BattleTag
-    mock.stub(_G, "BNGetInfo", function(): (number?, string, number, string, boolean, boolean, boolean) return 1, "Tamsin#1234", 1, "", false, true, false end)
+    mock.stub(_G, "BNGetInfo", function(): (number?, string, number, string, boolean, boolean, boolean)
+        return 1, "Tamsin#1234", 1, "", false, true, false
+    end)
     local drawn: ContactsData? = nil
     open()
-    mock.stub(view(), "SetData", function(_: unknown, d: ContactsData) drawn = d end)
+    mock.stub(view(), "SetData", function(_: unknown, d: ContactsData)
+        drawn = d
+    end)
     M:Render()
     local d = assert(drawn)
     expect(d.total).toBe(8)
@@ -157,7 +244,15 @@ end
 local function ago()
     local now = time()
     local function lastOnline(seconds: number): string
-        bnetFriends({ { bnetAccountID = 9, accountName = "x", battleTag = "X#1", lastOnlineTime = now - seconds, gameAccountInfo = { isOnline = false } } })
+        bnetFriends({
+            {
+                bnetAccountID = 9,
+                accountName = "x",
+                battleTag = "X#1",
+                lastOnlineTime = now - seconds,
+                gameAccountInfo = { isOnline = false },
+            },
+        })
         characterFriends({})
         return assert((M:Friends())[1].detail)
     end
@@ -207,8 +302,12 @@ local function actions()
     expect(sent).toHaveBeenCalledWith("Brannoc#1137")
     assert(v.onAdd)()
     local said: string[] = {}
-    mock.stub(M, "Print", function(_: unknown, text: string) said[#said + 1] = text end)
-    mock.stub(SuuUI, "AddFriend", function(_: string): boolean return true end)
+    mock.stub(M, "Print", function(_: unknown, text: string)
+        said[#said + 1] = text
+    end)
+    mock.stub(SuuUI, "AddFriend", function(_: string): boolean
+        return true
+    end)
     confirmWith(confirms, "Brannoc Ironhand")
     expect(said[1]).toBe("Friend request sent to Brannoc Ironhand.")
     -- ignore and unignore
@@ -227,8 +326,12 @@ local function actions()
     assert(v.onSelect)("bn:1")
     expect(M.selected).toBe("bn:1")
     -- the ignored list
-    mock.stub(C_FriendList, "GetNumIgnores", function(): number return 1 end)
-    mock.stub(C_FriendList, "GetIgnoreName", function(_: number): string return "Corwin Hale" end)
+    mock.stub(C_FriendList, "GetNumIgnores", function(): number
+        return 1
+    end)
+    mock.stub(C_FriendList, "GetIgnoreName", function(_: number): string
+        return "Corwin Hale"
+    end)
     expect(M:Ignored()).toEqual({ "Corwin Hale" })
     mock.advanceTime(0.5)
 end
@@ -238,7 +341,13 @@ local function friendMenu()
     local menu = captureMenus()
     local confirms = captureConfirm()
     open()
-    local row: Friend = { name = "Tamsin Ashford", whisper = true, invite = true, inviteName = "Tamsin Ashford", note = "healer" }
+    local row: Friend = {
+        name = "Tamsin Ashford",
+        whisper = true,
+        invite = true,
+        inviteName = "Tamsin Ashford",
+        note = "healer",
+    }
     local tell = mock.spy(function(_: string) end)
     mock.stub(ChatFrameUtil, "SendTell", tell)
     assert(view().onMenu)(row, view())
@@ -282,17 +391,28 @@ end
 local function allies(pinned: { [string]: boolean })
     mock.stub(C_RecentAllies, "GetRecentAllies", function(): RecentAllyData[]
         local list: Fake[] = {
-            { characterData = { guid = "Player-0000-00000001", fullName = "Tamsin Ashford", classID = 5, level = 42 },
-              stateData = { isOnline = true, currentLocation = "Stormwind City" },
-              interactionData = { note = "good healer", interactions = { { description = "Grouped in The Stockade" } } } },
-            { characterData = { guid = "Player-0000-00000002", name = "Brannoc Ironhand", classID = 1, level = 60 },
-              stateData = { isOnline = false, friendRequestSentThisSession = true } },
-            { characterData = { guid = "Player-0000-00000003", name = "Aster Vale", classID = 8 },
-              stateData = { isOnline = false } },
+            {
+                characterData = { guid = "Player-0000-00000001", fullName = "Tamsin Ashford", classID = 5, level = 42 },
+                stateData = { isOnline = true, currentLocation = "Stormwind City" },
+                interactionData = {
+                    note = "good healer",
+                    interactions = { { description = "Grouped in The Stockade" } },
+                },
+            },
+            {
+                characterData = { guid = "Player-0000-00000002", name = "Brannoc Ironhand", classID = 1, level = 60 },
+                stateData = { isOnline = false, friendRequestSentThisSession = true },
+            },
+            {
+                characterData = { guid = "Player-0000-00000003", name = "Aster Vale", classID = 8 },
+                stateData = { isOnline = false },
+            },
         }
         return list :: unknown :: RecentAllyData[]
     end)
-    mock.stub(C_RecentAllies, "IsRecentAllyPinned", function(guid: string): boolean return pinned[guid] or false end)
+    mock.stub(C_RecentAllies, "IsRecentAllyPinned", function(guid: string): boolean
+        return pinned[guid] or false
+    end)
 end
 
 @test("recent allies: pinned first, then online, then by name; how you met; add friend or already requested")
@@ -314,7 +434,9 @@ local function recentAllies()
     expect(bActs[1].label).toBe("Requested")
     expect(bActs[1].disabled).toBe(true)
     -- Add friend: a request, the list again a moment later
-    mock.stub(SuuUI, "AddFriend", function(_: string): boolean return false end)
+    mock.stub(SuuUI, "AddFriend", function(_: string): boolean
+        return false
+    end)
     assert(acts[2].onClick)(t)
     mock.advanceTime(0.6)
     -- the page on its tab
@@ -355,7 +477,9 @@ local function allyMenu()
     mock.advanceTime(1.1)
     choose(menu, "Ignore")
     expect(confirms.last().title).toBe("Ignore Tamsin Ashford?")
-    mock.stub(C_RecentAllies, "CanSetRecentAllyNote", function(): boolean return true end)
+    mock.stub(C_RecentAllies, "CanSetRecentAllyNote", function(): boolean
+        return true
+    end)
     local noted = mock.spy(function(_: string, _: string) end)
     mock.stub(C_RecentAllies, "SetRecentAllyNote", noted)
     M:AllyMenu(row, UIParent)
@@ -368,9 +492,13 @@ end
 
 @test("friend requests: who and when, accept or decline")
 local function requests()
-    mock.stub(_G, "BNGetNumFriendInvites", function(): number return 2 end)
+    mock.stub(_G, "BNGetNumFriendInvites", function(): number
+        return 2
+    end)
     mock.stub(_G, "BNGetFriendInviteInfo", function(i: number): (number, string, boolean, nil, number?)
-        if i == 1 then return 11, "|Kq7|k", false, nil, time() - 2 * 3600 end
+        if i == 1 then
+            return 11, "|Kq7|k", false, nil, time() - 2 * 3600
+        end
         return 12, "|Kq8|k", false, nil, nil
     end)
     local list = M:Requests()
@@ -393,14 +521,21 @@ end
 -- Placeholder raiders, made once.
 local raiders: mock.MockUnit[] = {}
 for i, class in ipairs({ "WARRIOR", "PRIEST", "MAGE" }) do
-    raiders[i] = mock.spawnUnit({ name = ({ "Brannoc Ironhand", "Tamsin Ashford", "Aster Vale" })[i], player = true, class = class,
-        level = 60, reaction = "friendly" })
+    raiders[i] = mock.spawnUnit({
+        name = ({ "Brannoc Ironhand", "Tamsin Ashford", "Aster Vale" })[i],
+        player = true,
+        class = class,
+        level = 60,
+        reaction = "friendly",
+    })
 end
 
 @test("the Raid page: the raid's members by group, moves and swaps, the leader's menu, its buttons")
 local function raid()
     local menu = captureMenus()
-    for i, u in ipairs(raiders) do mock.group:add(u, { raid = true, subgroup = i == 3 and 2 or 1, quiet = i < 3 }) end
+    for i, u in ipairs(raiders) do
+        mock.group:add(u, { raid = true, subgroup = i == 3 and 2 or 1, quiet = i < 3 })
+    end
     mock.advanceTime(0.6)
     openTab("RaidList")
     local page = assert(M.raidPage)
@@ -409,19 +544,31 @@ local function raid()
     local members = M:RaidMembers()
     expect(#members).toBe(4)
     local found: RaidMember? = nil
-    for _, m in ipairs(members) do if m.you then found = m end end
+    for _, m in ipairs(members) do
+        if m.you then
+            found = m
+        end
+    end
     local me = assert(found)
     expect(me.leader).toBe(true)
     -- moved to another group, swapped
     local function memberNamed(name: string): RaidMember
-        for _, m in ipairs(M:RaidMembers()) do if m.name == name then return m end end
+        for _, m in ipairs(M:RaidMembers()) do
+            if m.name == name then
+                return m
+            end
+        end
         error("no " .. name)
     end
     local aster = memberNamed("Aster Vale")
     move(aster.index, 3)
     mock.advanceTime(0.6)
     local function groupOf(name: string): number?
-        for _, m in ipairs(M:RaidMembers()) do if m.name == name then return m.group end end
+        for _, m in ipairs(M:RaidMembers()) do
+            if m.name == name then
+                return m.group
+            end
+        end
         return nil
     end
     expect(groupOf("Aster Vale")).toBe(3)
@@ -494,9 +641,15 @@ end
 
 @test("Raid Info: your lockouts in a panel beside the window; none")
 local function lockouts()
-    mock.stub(_G, "GetNumSavedInstances", function(): number return 2 end)
-    mock.stub(_G, "GetSavedInstanceInfo", function(i: number): (string, number, number, number, boolean, boolean, number, boolean, number, string, number, number, boolean, number)
-        if i == 1 then return "Molten Core", 1, 3 * 86400, 9, true, false, 0, true, 40, "40 Player", 10, 3, false, 409 end
+    mock.stub(_G, "GetNumSavedInstances", function(): number
+        return 2
+    end)
+    mock.stub(_G, "GetSavedInstanceInfo", function(
+        i: number
+    ): (string, number, number, number, boolean, boolean, number, boolean, number, string, number, number, boolean, number)
+        if i == 1 then
+            return "Molten Core", 1, 3 * 86400, 9, true, false, 0, true, 40, "40 Player", 10, 3, false, 409
+        end
         return "The Stockade", 2, 0, 1, false, false, 0, false, 5, "Normal", 6, 6, false, 34
     end)
     local list = M:Lockouts()
@@ -512,12 +665,16 @@ local function lockouts()
     mock.fireEvent("UPDATE_INSTANCE_INFO")
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
     -- extended, no bosses counted
-    mock.stub(_G, "GetSavedInstanceInfo", function(_: number): (string, number, number, number, boolean, boolean, number, boolean, number, string, number, number, boolean, number)
+    mock.stub(_G, "GetSavedInstanceInfo", function(
+        _: number
+    ): (string, number, number, number, boolean, boolean, number, boolean, number, string, number, number, boolean, number)
         return "Onyxia's Lair", 3, 0, 9, false, true, 0, true, 40, "", 0, 0, false, 249
     end)
     M:DrawLockouts()
     expect(p.rows[1].detail:GetText()).toBe("extended")
-    mock.stub(_G, "GetNumSavedInstances", function(): number return 0 end)
+    mock.stub(_G, "GetNumSavedInstances", function(): number
+        return 0
+    end)
     M:DrawLockouts()
     expect(p.empty:IsShown()).toBe(true)
     M:ToggleLockouts()
@@ -541,7 +698,9 @@ end
 
 @test("a probe that shows Blizzard's own social pages: SuuUI's step aside")
 local function probeAside()
-    mock.stub(SuuUI, "ProbeShowsBlizzardSocial", function(): boolean return true end)
+    mock.stub(SuuUI, "ProbeShowsBlizzardSocial", function(): boolean
+        return true
+    end)
     open()
     M:Follow()
     expect(M.view).never.toBeShown()

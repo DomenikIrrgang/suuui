@@ -25,37 +25,58 @@ local MAX_SAMPLES = 12
 local armed = false
 
 local function describe(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     return "readable: " .. tostring(v)
 end
 
 local function try(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local ok, a, b = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 120) end
-    if b ~= nil or isSecret(b) then return describe(a) .. " / " .. describe(b) end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 120)
+    end
+    if b ~= nil or isSecret(b) then
+        return describe(a) .. " / " .. describe(b)
+    end
     return describe(a)
 end
 
 local function forbidden(frame: unknown): string
-    if not frame then return "none" end
+    if not frame then
+        return "none"
+    end
     local isForbidden = tbl.field(frame, "IsForbidden")
-    if type(isForbidden) ~= "function" then return "error" end
+    if type(isForbidden) ~= "function" then
+        return "error"
+    end
     local ok, f = pcall(isForbidden, frame)
-    if not ok then return "error" end
+    if not ok then
+        return "error"
+    end
     return f and "forbidden" or "ok"
 end
 
 -- The APIs, enums and CVars SuuUI's plates would use.
 local function environment(): { [string]: string }
     local env: { [string]: string } = {}
-    local function has(name: string, value: unknown) env[name] = value ~= nil and (type(value) == "function" and "function" or "present") or "missing" end
+    local function has(name: string, value: unknown)
+        env[name] = value ~= nil and (type(value) == "function" and "function" or "present") or "missing"
+    end
     has("C_NamePlate.GetNamePlateForUnit", C_NamePlate and C_NamePlate.GetNamePlateForUnit)
     has("C_NamePlate.GetNamePlates", C_NamePlate and C_NamePlate.GetNamePlates)
     has("C_NamePlate.SetNamePlateSize", C_NamePlate and C_NamePlate.SetNamePlateSize)
     has("C_NamePlateManager", C_NamePlateManager)
-    has("C_NamePlateManager.SetNamePlateHitTestInsets", C_NamePlateManager and C_NamePlateManager.SetNamePlateHitTestInsets)
+    has(
+        "C_NamePlateManager.SetNamePlateHitTestInsets",
+        C_NamePlateManager and C_NamePlateManager.SetNamePlateHitTestInsets
+    )
     has("Enum.NamePlateType", Enum.NamePlateType)
     has("Enum.NamePlateStackType", Enum.NamePlateStackType)
     has("NamePlateDriverFrame", _G.NamePlateDriverFrame)
@@ -64,16 +85,27 @@ local function environment(): { [string]: string }
     has("UnitChannelDuration", UnitChannelDuration)
     has("C_CurveUtil.EvaluateColorValueFromBoolean", C_CurveUtil and C_CurveUtil.EvaluateColorValueFromBoolean)
     has("C_Secrets.ShouldAurasBeSecret", C_Secrets and C_Secrets.ShouldAurasBeSecret)
-    for _, cvar in ipairs({ "nameplateShowAll", "nameplateShowEnemies", "nameplateShowFriends", "nameplateSize",
-                            "nameplateMaxDistance", "nameplateOverlapV", "nameplateMinAlpha", "nameplateMaxAlpha",
-                            "nameplateShowFriendlyNPCs", "nameplateMotion" }) do
+    for _, cvar in ipairs({
+        "nameplateShowAll",
+        "nameplateShowEnemies",
+        "nameplateShowFriends",
+        "nameplateSize",
+        "nameplateMaxDistance",
+        "nameplateOverlapV",
+        "nameplateMinAlpha",
+        "nameplateMaxAlpha",
+        "nameplateShowFriendlyNPCs",
+        "nameplateMotion",
+    }) do
         local ok, v = pcall(C_CVar.GetCVar, cvar)
         env["cvar " .. cvar] = ok and tostring(v) or "missing"
     end
     -- other nameplate addons: two would fight over the same plates
     local loaded: string[] = {}
     for _, name in ipairs({ "Plater", "Kui_Nameplates", "TidyPlates_ThreatPlates", "Platynator", "NeatPlates" }) do
-        if C_AddOns.IsAddOnLoaded(name) then loaded[#loaded + 1] = name end
+        if C_AddOns.IsAddOnLoaded(name) then
+            loaded[#loaded + 1] = name
+        end
     end
     env.otherPlateAddons = #loaded > 0 and table.concat(loaded, ", ") or "none"
     return env
@@ -90,13 +122,18 @@ local function samplePlate(unit: string): { [string]: string }
     r.name = try(UnitName, unit)
     r.attackable = try(UnitCanAttack, "player", unit)
     r.health = try(UnitHealth, unit)
-    r.healthPercent = (UnitHealthPercent and CurveConstants) and try(UnitHealthPercent, unit, true, CurveConstants.ScaleTo100) or "missing"
+    r.healthPercent = (UnitHealthPercent and CurveConstants) and
+        try(UnitHealthPercent, unit, true, CurveConstants.ScaleTo100) or
+        "missing"
     r.threatOnYou = try(UnitThreatSituation, "player", unit)
     r.isTarget = try(UnitIsUnit, unit, "target")
     r.reaction = try(UnitReaction, unit, "player")
     local okCast, castName, _, _, _, _, _, _, notInterruptible = pcall(UnitCastingInfo, unit)
-    r.casting = not okCast and "error" or (isSecret(castName) and "secret" or (castName and ("readable: " .. castName) or "none"))
-    if okCast and (isSecret(castName) or castName ~= nil) then r.castInterruptible = describe(notInterruptible) end
+    r.casting = not okCast and "error" or
+        (isSecret(castName) and "secret" or (castName and ("readable: " .. castName) or "none"))
+    if okCast and (isSecret(castName) or castName ~= nil) then
+        r.castInterruptible = describe(notInterruptible)
+    end
     r.castDuration = UnitCastingDuration and try(UnitCastingDuration, unit) or "missing"
     return r
 end
@@ -106,7 +143,8 @@ export function sample(label: string?): { [string]: unknown }
     DB.probe.plates = store
     store.environment = environment()
     local s: { [string]: unknown } = {
-        at = date("%H:%M:%S"), label = label,
+        at = date("%H:%M:%S"),
+        label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
@@ -118,18 +156,28 @@ export function sample(label: string?): { [string]: unknown }
         if UnitExists(unit) then
             s.plates[unit] = samplePlate(unit)
             count = count + 1
-            if count >= 8 then break end
+            if count >= 8 then
+                break
+            end
         end
     end
     s.count = count
     table.insert(store.samples, s)
-    while #store.samples > MAX_SAMPLES do table.remove(store.samples, 1) end
+    while #store.samples > MAX_SAMPLES do
+        table.remove(store.samples, 1)
+    end
     return s
 end
 
 local function onFight()
-    if not armed then return end
-    after(1, function() if armed then sample("1s into the fight") end end)
+    if not armed then
+        return
+    end
+    after(1, function()
+        if armed then
+            sample("1s into the fight")
+        end
+    end)
     after(4, function()
         if armed then
             sample("4s into the fight")
@@ -139,7 +187,13 @@ local function onFight()
 end
 
 local function afterFight()
-    if armed then after(1, function() if armed then sample("after the fight") end end) end
+    if armed then
+        after(1, function()
+            if armed then
+                sample("after the fight")
+            end
+        end)
+    end
 end
 
 export function command(arg: string?)

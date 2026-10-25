@@ -34,7 +34,9 @@ local risenKB: number? = nil
 local collections = 0
 
 local function memory(): number?
-    if UpdateAddOnMemoryUsage then pcall(UpdateAddOnMemoryUsage) end
+    if UpdateAddOnMemoryUsage then
+        pcall(UpdateAddOnMemoryUsage)
+    end
     local ok, kb = pcall(GetAddOnMemoryUsage, ADDON)
     return ok and kb or nil
 end
@@ -43,10 +45,14 @@ end
 local function share(): (number?, number?)
     local P = C_AddOnProfiler
     local metric = secret.asNumber(tbl.field(Enum, "AddOnProfilerMetric", "RecentAverageTime"))
-    if not (P and metric and P.IsEnabled and P.IsEnabled()) then return nil end
+    if not (P and metric and P.IsEnabled and P.IsEnabled()) then
+        return nil
+    end
     local ok1, mine = pcall(P.GetAddOnMetric, ADDON, metric)
     local ok2, app = pcall(P.GetApplicationMetric, metric)
-    if ok1 and ok2 and mine and app and app > 0 then return mine, mine / app * 100 end
+    if ok1 and ok2 and mine and app and app > 0 then
+        return mine, mine / app * 100
+    end
     return nil
 end
 
@@ -57,9 +63,16 @@ type Busy = { name: string, n: number, line: string }
 
 --- What /suu perf reports, also saved to SuuUIProbe.perf.
 export type Report = {
-    at: string, seconds: number, total: number, modules: string[],
-    allocated?: string[], allocatedKB?: number, allocatedAll?: string,
-    memory?: string, memoryAtStart?: string, share?: string,
+    at: string,
+    seconds: number,
+    total: number,
+    modules: string[],
+    allocated?: string[],
+    allocatedKB?: number,
+    allocatedAll?: string,
+    memory?: string,
+    memoryAtStart?: string,
+    share?: string,
     dev?: { byCalls: string[], bySelf: string[], scripts?: string[], timers?: string[], events?: string[] },
 }
 
@@ -72,18 +85,32 @@ export function report(): Report
         rows[#rows + 1] = { source = source, ms = r.ms, calls = r.calls, peak = r.peak, kb = r.kb or 0 }
         total = total + r.ms
     end
-    table.sort(rows, function(a: Row, b: Row): boolean return a.ms > b.ms end)
+    table.sort(rows, function(a: Row, b: Row): boolean
+        return a.ms > b.ms
+    end)
     local out: Report = { at = date("%Y-%m-%d %H:%M:%S"), seconds = math.floor(seconds), total = total, modules = {} }
     print(("Perf over %d s: %.1f ms in all (%.2f ms a second)."):format(seconds, total, total / seconds))
     for i, r in ipairs(rows) do
-        local line = ("%s: %.1f ms (%.3f ms/s), %d calls, slowest %.2f ms, %s allocated"):format(r.source, r.ms, r.ms / seconds,
-            r.calls, r.peak, r.kb >= 1024 and ("%.1f MB"):format(r.kb / 1024) or ("%.0f KB"):format(r.kb))
+        local line = ("%s: %.1f ms (%.3f ms/s), %d calls, slowest %.2f ms, %s allocated"):format(
+            r.source,
+            r.ms,
+            r.ms / seconds,
+            r.calls,
+            r.peak,
+            r.kb >= 1024 and ("%.1f MB"):format(r.kb / 1024) or ("%.0f KB"):format(r.kb)
+        )
         out.modules[i] = line
-        if i <= TOP then print("  " .. line) end
+        if i <= TOP then
+            print("  " .. line)
+        end
     end
-    if #rows > TOP then print(("  … %d more in SuuUIProbe.perf"):format(#rows - TOP)) end
+    if #rows > TOP then
+        print(("  … %d more in SuuUIProbe.perf"):format(#rows - TOP))
+    end
     -- what allocates most: the garbage makers
-    table.sort(rows, function(a: Row, b: Row): boolean return a.kb > b.kb end)
+    table.sort(rows, function(a: Row, b: Row): boolean
+        return a.kb > b.kb
+    end)
     local alloc: string[] = {}
     local allocKB = 0
     for i, r in ipairs(rows) do
@@ -94,10 +121,19 @@ export function report(): Report
     end
     out.allocated = alloc
     out.allocatedKB = math.floor(allocKB)
-    print(("Allocated: %.1f MB (%.1f KB a second); most: %s"):format(allocKB / 1024, allocKB / seconds,
-        table.concat(alloc, ", ", 1, math.min(5, #alloc))))
+    print(
+        ("Allocated: %.1f MB (%.1f KB a second); most: %s"):format(
+            allocKB / 1024,
+            allocKB / seconds,
+            table.concat(alloc, ", ", 1, math.min(5, #alloc))
+        )
+    )
     if risenKB then
-        local all = ("%.1f MB (%.1f KB a second), %d collections"):format(risenKB / 1024, risenKB / seconds, collections)
+        local all = ("%.1f MB (%.1f KB a second), %d collections"):format(
+            risenKB / 1024,
+            risenKB / seconds,
+            collections
+        )
         out.allocatedAll = all
         print("Allocated by all of SuuUI (frame scripts too): " .. all)
     end
@@ -121,26 +157,49 @@ export function report(): Report
     if wl and wl.prof and wl.prof.stats then
         -- the n busiest of a list, by the number each has
         local function top(list: Busy[], n: number): string[]
-            table.sort(list, function(a: Busy, b: Busy): boolean return a.n > b.n end)
+            table.sort(list, function(a: Busy, b: Busy): boolean
+                return a.n > b.n
+            end)
             local lines: string[] = {}
-            for i = 1, math.min(n, #list) do lines[i] = list[i].line end
+            for i = 1, math.min(n, #list) do
+                lines[i] = list[i].line
+            end
             return lines
         end
         local stats = wl.prof.stats
         local function functions(by: "calls" | "self", n: number): string[]
             local list: Busy[] = {}
             for name, st in pairs(stats) do
-                list[#list + 1] = { name = name, n = st[by] or 0,
-                    line = ("%s: %d calls, self %.1f ms, total %.1f ms%s"):format(name, st.calls or 0, st.self or 0, st.total or 0,
-                        st.location and (" (" .. st.location .. ")") or "") }
+                list[#list + 1] = {
+                    name = name,
+                    n = st[by] or 0,
+                    line = ("%s: %d calls, self %.1f ms, total %.1f ms%s"):format(
+                        name,
+                        st.calls or 0,
+                        st.self or 0,
+                        st.total or 0,
+                        st.location and (" (" .. st.location .. ")") or ""
+                    ),
+                }
             end
             return top(list, n)
         end
-        local function hits(entries: { [string]: { count: number, total: number, max: number, detail: string } }?, n: number): string[]
+        local function hits(
+            entries: { [string]: { count: number, total: number, max: number, detail: string } }?,
+            n: number
+        ): string[]
             local list: Busy[] = {}
             for name, st in pairs(entries or {}) do
-                list[#list + 1] = { name = name, n = st.count or 0,
-                    line = ("%s: %d, %.1f ms%s"):format(name, st.count or 0, st.total or 0, st.detail and (" (" .. tostring(st.detail) .. ")") or "") }
+                list[#list + 1] = {
+                    name = name,
+                    n = st.count or 0,
+                    line = ("%s: %d, %.1f ms%s"):format(
+                        name,
+                        st.count or 0,
+                        st.total or 0,
+                        st.detail and (" (" .. tostring(st.detail) .. ")") or ""
+                    ),
+                }
             end
             return top(list, n)
         end
@@ -158,13 +217,20 @@ export function report(): Report
     return out
 end
 
-registerCommand("perf", "Time each SuuUI module: /suu perf starts, again shows the report, /suu perf stop ends it.", function(arg: string)
+registerCommand("perf", "Time each SuuUI module: /suu perf starts, again shows the report, /suu perf stop ends it.", function(
+    arg: string
+)
     local on = fault.timingState()
     if arg == "stop" then
-        if on then report() end
+        if on then
+            report()
+        end
         fault.setTiming(false)
         startedAt, startKB = nil, nil
-        if sampler then sampler:Cancel(); sampler = nil end
+        if sampler then
+            sampler:Cancel()
+            sampler = nil
+        end
         lastKB, risenKB = nil, nil
         print("Perf: stopped.")
         return
@@ -174,15 +240,27 @@ registerCommand("perf", "Time each SuuUI module: /suu perf starts, again shows t
         startedAt = GetTime()
         -- a dev build's profiler and monitor count from now too
         local wl = ns.__wowlua
-        if wl and wl.prof and wl.prof.reset then pcall(wl.prof.reset) end
-        if wl and wl.mon and wl.mon.reset then pcall(wl.mon.reset) end
+        if wl and wl.prof and wl.prof.reset then
+            pcall(wl.prof.reset)
+        end
+        if wl and wl.mon and wl.mon.reset then
+            pcall(wl.mon.reset)
+        end
         startKB = memory()
         lastKB, risenKB, collections = startKB, 0, 0
-        if sampler then sampler:Cancel() end
+        if sampler then
+            sampler:Cancel()
+        end
         sampler = every(1, function()
             local now = memory()
-            if not (now and lastKB) then return end
-            if now >= lastKB then risenKB = (risenKB or 0) + (now - lastKB) else collections += 1 end
+            if not (now and lastKB) then
+                return
+            end
+            if now >= lastKB then
+                risenKB = (risenKB or 0) + (now - lastKB)
+            else
+                collections += 1
+            end
             lastKB = now
         end)
         print("Perf: measuring. Play a while (a fight, a city), then /suu perf for the report.")

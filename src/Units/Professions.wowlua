@@ -69,7 +69,9 @@ local function numbers(list: unknown): number[]
     local out: number[] = {}
     for _, v in ipairs(tbl.list(list)) do
         local n = asNumber(v)
-        if n then out[#out + 1] = n end
+        if n then
+            out[#out + 1] = n
+        end
     end
     return out
 end
@@ -78,20 +80,48 @@ end
 type CategoryInfo = { name?: string, uiOrder?: number, parentCategoryID?: number, type?: string }
 local function categoryInfo(id: number): CategoryInfo?
     local ci = try(C_TradeSkillUI.GetCategoryInfo, id)
-    if type(ci) ~= "table" or not secret.readable(ci) then return nil end
-    return { name = asString(field(ci, "name")), uiOrder = asNumber(field(ci, "uiOrder")),
-             parentCategoryID = asNumber(field(ci, "parentCategoryID")), type = asString(field(ci, "type")) }
+    if type(ci) ~= "table" or not secret.readable(ci) then
+        return nil
+    end
+    return {
+        name = asString(field(ci, "name")),
+        uiOrder = asNumber(field(ci, "uiOrder")),
+        parentCategoryID = asNumber(field(ci, "parentCategoryID")),
+        type = asString(field(ci, "type")),
+    }
 end
 
 -- What this character keeps: its recipes counted as each profession was
 -- last open, the list's filters and sort, the trainers recorded.
 type Counts = { learned: number, total: number }
-type Service = { name: string, skill?: string, rank?: number, cost?: number, level?: number, item?: number, line?: string }
-type TrainerRecord = { npc?: string, npcID?: number, zone?: string, subzone?: string, faction?: string,
-                       profession: string, at?: string, services: Service[] }
-type ProfessionsChar = { recipes?: { [number]: Counts }, filters?: FilterValues, sort?: string,
-                         trainers?: { [string | number]: TrainerRecord } }
-local function charOf(data: { [string]: unknown }): ProfessionsChar return data :: unknown :: ProfessionsChar end
+type Service = {
+    name: string,
+    skill?: string,
+    rank?: number,
+    cost?: number,
+    level?: number,
+    item?: number,
+    line?: string,
+}
+type TrainerRecord = {
+    npc?: string,
+    npcID?: number,
+    zone?: string,
+    subzone?: string,
+    faction?: string,
+    profession: string,
+    at?: string,
+    services: Service[],
+}
+type ProfessionsChar = {
+    recipes?: { [number]: Counts },
+    filters?: FilterValues,
+    sort?: string,
+    trainers?: { [string | number]: TrainerRecord },
+}
+local function charOf(data: { [string]: unknown }): ProfessionsChar
+    return data :: unknown :: ProfessionsChar
+end
 
 -- What the trainers this account recorded teach a recipe: the skill and
 -- where they are ("npc|zone|faction").
@@ -99,11 +129,26 @@ type Recorded = { skill?: number, trainers: string[] }
 
 -- A recipe in the list, and a category of them (the view gets them as its
 -- RecipeEntry and RecipeCategory).
-type Row = { id: number, name: string, difficulty: number, canMake: number, learned: boolean, tracked: boolean,
-             need?: number, use?: number }
+type Row = {
+    id: number,
+    name: string,
+    difficulty: number,
+    canMake: number,
+    learned: boolean,
+    tracked: boolean,
+    need?: number,
+    use?: number,
+}
 type Category = { name?: string, order?: number, recipes: Row[], flat?: boolean }
-type Crafting = { name?: string, skill?: number, max?: number, skillLine?: number, categories: RecipeCategory[],
-                  recipes?: Counts, selected?: number }
+type Crafting = {
+    name?: string,
+    skill?: number,
+    max?: number,
+    skillLine?: number,
+    categories: RecipeCategory[],
+    recipes?: Counts,
+    selected?: number,
+}
 type Need = { itemID: number, need: number, have: number }
 type Source = { item?: RecipeSourceItem, lines: string[] }
 
@@ -119,7 +164,9 @@ local function trackingFor(spellID: number?, name: string?): (number?, boolean?)
         else
             tName, active, tSpell = asString(a), flag(c), asNumber(f)
         end
-        if (spellID and tSpell == spellID) or (name and tName == name) then return i, active end
+        if (spellID and tSpell == spellID) or (name and tName == name) then
+            return i, active
+        end
     end
     return nil
 end
@@ -137,10 +184,17 @@ local EMPTY_ICON = 134939 -- INV_Scroll_04, Blizzard's empty slot
 local function untrained(def: Secondary): ProfessionCard
     local name = def.name
     local shown = tryValue(C_TradeSkillUI.GetTradeSkillDisplayName, def.skillLine)
-    if shown and secret.readable(shown) and shown ~= "" then name = shown end
-    return { name = name, icon = tryValue(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
-             skillLine = def.skillLine, untrained = true, rank = "Not learned",
-             hint = "Learn it from " .. article(name) .. " " .. name .. " trainer" }
+    if shown and secret.readable(shown) and shown ~= "" then
+        name = shown
+    end
+    return {
+        name = name,
+        icon = tryValue(C_TradeSkillUI.GetTradeSkillTexture, def.skillLine) or def.icon,
+        skillLine = def.skillLine,
+        untrained = true,
+        rank = "Not learned",
+        hint = "Learn it from " .. article(name) .. " " .. name .. " trainer",
+    }
 end
 
 local function itemCount(itemID: number): number
@@ -155,13 +209,17 @@ local DIFFICULTY_KEYS: { [number]: string } = { [0] = "optimal", "medium", "easy
 local function chosenSet(c: FilterChoice?): { [string]: boolean }
     local out: { [string]: boolean } = {}
     if type(c) == "table" then
-        for _, v in ipairs(c) do out[tostring(v)] = true end
+        for _, v in ipairs(c) do
+            out[tostring(v)] = true
+        end
     end
     return out
 end
 
 local function itemTip(owner: Frame, itemID: number?)
-    if not itemID then return end
+    if not itemID then
+        return
+    end
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetItemByID(itemID)
     GameTooltip:Show()
@@ -174,24 +232,46 @@ end
 local FACTIONS: { [string]: string } = { Alliance = "A", Horde = "H" }
 local MY_FACTION = FACTIONS[asString(UnitFactionGroup("player")) or ""]
 
-local function inkText(s: string): string return "|cff" .. T.color.ink.hex .. s .. "|r" end
+local function inkText(s: string): string
+    return "|cff" .. T.color.ink.hex .. s .. "|r"
+end
 
 local function place(name: string?, zone: string?): string
-    if zone and zone ~= "" then return inkText(name or "") .. ", " .. zone end
+    if zone and zone ~= "" then
+        return inkText(name or "") .. ", " .. zone
+    end
     return inkText(name or "")
 end
 
 local PROFESSION_NAMES: { [string]: boolean } = {}
-for _, n in ipairs({ "Alchemy", "Blacksmithing", "Enchanting", "Engineering", "Herbalism", "Leatherworking",
-                     "Mining", "Skinning", "Tailoring", "Cooking", "First Aid", "Fishing" }) do PROFESSION_NAMES[n] = true end
+for _, n in ipairs({
+    "Alchemy",
+    "Blacksmithing",
+    "Enchanting",
+    "Engineering",
+    "Herbalism",
+    "Leatherworking",
+    "Mining",
+    "Skinning",
+    "Tailoring",
+    "Cooking",
+    "First Aid",
+    "Fishing",
+}) do
+    PROFESSION_NAMES[n] = true
+end
 
 -- Blizzard's professions window loads the first time it opens; in combat
 -- SuuUI couldn't skin it or build its page then, and Blizzard's own showed
 -- (found in game). Loaded out of combat: at login, else the moment before
 -- a fight's lockdown.
 local function preload()
-    if InCombatLockdown() then return end
-    if not tryValue(C_AddOns.IsAddOnLoaded, "Blizzard_Professions") then try(C_AddOns.LoadAddOn, "Blizzard_Professions") end
+    if InCombatLockdown() then
+        return
+    end
+    if not tryValue(C_AddOns.IsAddOnLoaded, "Blizzard_Professions") then
+        try(C_AddOns.LoadAddOn, "Blizzard_Professions")
+    end
 end
 
 class ProfessionsModule extends Module<typeof(DEFAULTS)>
@@ -227,7 +307,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- What this character keeps (its data, typed).
-    function Char(): ProfessionsChar return charOf(self:CharData()) end
+    function Char(): ProfessionsChar
+        return charOf(self:CharData())
+    end
 
     -- The crafting page's data shown now.
     function Crafted(): CraftingData?
@@ -240,14 +322,24 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     --------------------------------------------------------------------------------
 
     function Profession(index: number?): ProfessionCard?
-        if not index then return nil end
+        if not index then
+            return nil
+        end
         local rawName, rawIcon, rawSkill, rawMax, rawSpells, rawOffset, rawLine = try(GetProfessionInfo, index)
         local name = asString(rawName)
-        if not name then return nil end
+        if not name then
+            return nil
+        end
         local icon, max, skillLine = iconOf(rawIcon), asNumber(rawMax), asNumber(rawLine)
         local spellList: ProfessionSpell[] = {}
-        local card: ProfessionCard = { name = name, icon = icon, skill = asNumber(rawSkill), max = max,
-                                       skillLine = skillLine, spells = spellList }
+        local card: ProfessionCard = {
+            name = name,
+            icon = icon,
+            skill = asNumber(rawSkill),
+            max = max,
+            skillLine = skillLine,
+            spells = spellList,
+        }
         local own: SpellBookItemInfo? = nil
         local ownCrafts = false
         local craftSpell: SpellBookItemInfo? = nil
@@ -279,13 +371,21 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         self:QueueRender()
                     end
                 end
-                spell.onEnter = function(owner: Frame) UI.SpellTooltip(owner, spellID) end
-                spell.onLeave = function() GameTooltip:Hide() end
-                spell.onDrag = function() self:Pickup(spellID) end
+                spell.onEnter = function(owner: Frame)
+                    UI.SpellTooltip(owner, spellID)
+                end
+                spell.onLeave = function()
+                    GameTooltip:Hide()
+                end
+                spell.onDrag = function()
+                    self:Pickup(spellID)
+                end
                 spellList[#spellList + 1] = spell
             end
         end
-        if own and own.subName ~= "" then card.rank = own.subName end
+        if own and own.subName ~= "" then
+            card.rank = own.subName
+        end
         card.rank = card.rank or (max and RANKS[max]) or ""
         -- the card dragged onto a bar opens the profession's window, as
         -- Blacksmithing's own spell does: its own spell, else the spell that
@@ -295,17 +395,27 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         -- casts the opener (asked for in game: the default UI can't either)
         local ownID, craftID = own and own.spellID, craftSpell and craftSpell.spellID
         if ownID and ownCrafts then
-            card.onDrag = function() self:Pickup(ownID) end
+            card.onDrag = function()
+                self:Pickup(ownID)
+            end
         elseif ownID and craftID then
-            card.onDrag = function() self:PickupOpener(name, icon, craftID) end
+            card.onDrag = function()
+                self:PickupOpener(name, icon, craftID)
+            end
         elseif craftID then
-            card.onDrag = function() self:Pickup(craftID) end
+            card.onDrag = function()
+                self:Pickup(craftID)
+            end
         elseif ownID then
-            card.onDrag = function() self:Pickup(ownID) end
+            card.onDrag = function()
+                self:Pickup(ownID)
+            end
         end
         -- unlearning: SuuUI's confirmation, then the game's (Unlearn)
         if skillLine then
-            card.onUnlearn = function() self:Unlearn(name, skillLine) end
+            card.onUnlearn = function()
+                self:Unlearn(name, skillLine)
+            end
             -- its recipes, as counted when it was last open
             local counts = self:Char().recipes
             card.recipes = counts and counts[skillLine]
@@ -320,7 +430,8 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     function Unlearn(name: string, skillLine: number)
         UI.Confirm({
             title = "Unlearn " .. name .. "?",
-            text = "You lose your " .. name .. " skill and every " .. name .. " recipe you know. If you learn it again, you start at 1.",
+            text = "You lose your " ..
+                name .. " skill and every " .. name .. " recipe you know. If you learn it again, you start at 1.",
             confirm = "Unlearn",
             cancel = "Keep it",
             -- as the game's own asks (found in game)
@@ -334,7 +445,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     local done, e = pcall(abandon, skillLine)
                     ok, err = done, tostring(e)
                 end
-                if not ok then self:Print(name .. " couldn't be unlearned: " .. err) end
+                if not ok then
+                    self:Print(name .. " couldn't be unlearned: " .. err)
+                end
                 self:QueueRender()
             end,
         })
@@ -342,7 +455,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
 
     -- A profession's spell on the cursor, to put on an action bar.
     function Pickup(spellID: number?)
-        if not spellID then return end
+        if not spellID then
+            return
+        end
         try(field(C_Spell, "PickupSpell") or field(_G, "PickupSpell"), spellID)
     end
 
@@ -351,7 +466,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- text) is used again.
     function PickupOpener(name: string, icon: number | string | nil, spellID: number)
         local spell = spells.name(spellID)
-        if not spell then return end
+        if not spell then
+            return
+        end
         local body = "/cast " .. spell
         local first = (MAX_ACCOUNT_MACROS or 120) + 1
         local _, chars = GetNumMacros()
@@ -362,7 +479,10 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 return
             end
         end
-        if InCombatLockdown() then self:Print("Macros can't be made in combat. Drag it again after the fight.") return end
+        if InCombatLockdown() then
+            self:Print("Macros can't be made in combat. Drag it again after the fight.")
+            return
+        end
         local ok, index = pcall(CreateMacro, name:sub(1, 16), icon or 134400, body, true)
         if not ok or not index then
             self:Print("No free character macro slot for " .. name .. ".")
@@ -384,15 +504,28 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             if c and line and not learned[line] then
                 learned[line] = c
                 local isSecondary = false
-                for _, def in ipairs(SECONDARY) do if def.skillLine == line then isSecondary = true end end
-                if not isSecondary then primary[#primary + 1] = c end
+                for _, def in ipairs(SECONDARY) do
+                    if def.skillLine == line then
+                        isSecondary = true
+                    end
+                end
+                if not isSecondary then
+                    primary[#primary + 1] = c
+                end
             end
         end
         for i = #primary + 1, 2 do
-            primary[i] = { name = "Primary profession", icon = EMPTY_ICON, untrained = true, rank = "Not learned",
-                           hint = "Learn one from a profession trainer" }
+            primary[i] = {
+                name = "Primary profession",
+                icon = EMPTY_ICON,
+                untrained = true,
+                rank = "Not learned",
+                hint = "Learn one from a profession trainer",
+            }
         end
-        for _, def in ipairs(SECONDARY) do secondary[#secondary + 1] = learned[def.skillLine] or untrained(def) end
+        for _, def in ipairs(SECONDARY) do
+            secondary[#secondary + 1] = learned[def.skillLine] or untrained(def)
+        end
         return { primary = primary, secondary = secondary }
     end
 
@@ -415,7 +548,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 can = math.min(can, math.floor(have / math.max(1, need)))
             end
         end
-        if can == math.huge then can = 0 end
+        if can == math.huge then
+            can = 0
+        end
         return list, can, sch
     end
 
@@ -423,11 +558,15 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- to the top).
     function RootOf(catID: number): CategoryInfo | false
         local known = self.roots[catID]
-        if known ~= nil then return known end
+        if known ~= nil then
+            return known
+        end
         local id: number?, root: CategoryInfo | false, guard = catID, false, 0
         while id and id ~= 0 and guard < 8 do
             local ci = categoryInfo(id)
-            if not ci then break end
+            if not ci then
+                break
+            end
             root = ci
             id = ci.parentCategoryID
             guard = guard + 1
@@ -444,9 +583,13 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- across all twelve professions).
     function InGame(info: { categoryID?: number }, profession: string?): boolean
         local cat = info.categoryID
-        if not cat or cat == 0 then return false end
+        if not cat or cat == 0 then
+            return false
+        end
         local root = self:RootOf(cat)
-        if not root or root.type ~= "header" or not profession then return true end
+        if not root or root.type ~= "header" or not profession then
+            return true
+        end
         return root.name == profession
     end
 
@@ -458,8 +601,12 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local mySkill = mine and mine.skill
         for _, src in ipairs(SuuUI.RecipeSources(id) or {}) do
             local skill = src.s
-            if src.t == "t" and mySkill then skill = mySkill end
-            if skill and (not need or skill < need) then need = skill end
+            if src.t == "t" and mySkill then
+                skill = mySkill
+            end
+            if skill and (not need or skill < need) then
+                need = skill
+            end
         end
         return need or mySkill
     end
@@ -469,7 +616,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     function UseLevel(id: number): number?
         local sch = tryValue(C_TradeSkillUI.GetRecipeSchematic, id, false)
         local out = sch and sch.outputItemID
-        if not out then return nil end
+        if not out then
+            return nil
+        end
         local data = self:Item(out)
         return data and (data.minLevel or 0)
     end
@@ -478,7 +627,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- the page drawn again once it's there).
     function Item(itemID: number): items.ItemData?
         local data = items.get(itemID)
-        if not data then self.waitingItems = true end
+        if not data then
+            self.waitingItems = true
+        end
         return data
     end
 
@@ -498,18 +649,19 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
             if info and secret.readable(info.name) and not info.isDummyRecipe and self:InGame(info, profession) then
                 total = total + 1
-                if info.learned then learned = learned + 1 end
+                if info.learned then
+                    learned = learned + 1
+                end
                 local _, can = self:Reagents(id)
                 local diff = info.relativeDifficulty or 3
                 -- the product's quality is in the recipe's link ("|cnIQ3:")
                 local quality = info.hyperlink and info.hyperlink:match("IQ(%d)")
-                local keep = (f.show ~= "learned" or info.learned)
-                    and (f.show ~= "unlearned" or not info.learned)
-                    and (anyDifficulty or difficulties[DIFFICULTY_KEYS[diff] or "trivial"])
-                    and (anyQuality or (quality ~= nil and qualities[quality]))
-                    and (not other.materials or can > 0)
-                    and (not other.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned))
-                    and (not search or info.name:lower():find(search, 1, true))
+                local keep = (f.show ~= "learned" or info.learned) and (f.show ~= "unlearned" or not info.learned) and
+                    (anyDifficulty or difficulties[DIFFICULTY_KEYS[diff] or "trivial"]) and
+                    (anyQuality or (quality ~= nil and qualities[quality])) and
+                    (not other.materials or can > 0) and
+                    (not other.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned)) and
+                    (not search or info.name:lower():find(search, 1, true))
                 if keep then
                     local catID = info.categoryID or 0
                     local cat = byCat[catID]
@@ -519,37 +671,56 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         byCat[catID] = cat
                         cats[#cats + 1] = cat
                     end
-                    cat.recipes[#cat.recipes + 1] = { id = id, name = info.name, difficulty = diff, canMake = can,
+                    cat.recipes[#cat.recipes + 1] = {
+                        id = id,
+                        name = info.name,
+                        difficulty = diff,
+                        canMake = can,
                         learned = info.learned and true or false,
                         tracked = tryValue(C_TradeSkillUI.IsRecipeTracked, id, false) == true,
-                        need = (self.sort == "skill" or self.sort == "level") and self:SkillFor(id, profession, info.name) or nil,
-                        use = self.sort == "level" and self:UseLevel(id) or nil }
+                        need = (self.sort == "skill" or self.sort == "level") and
+                            self:SkillFor(id, profession, info.name) or
+                            nil,
+                        use = self.sort == "level" and self:UseLevel(id) or nil,
+                    }
                 end
             end
         end
         -- (every category has its name and order here: only the flat list below has none)
         table.sort(cats, function(a: Category, b: Category): boolean
             local x, y = a.order or 0, b.order or 0
-            if x ~= y then return x < y end
+            if x ~= y then
+                return x < y
+            end
             return (a.name or "") < (b.name or "")
         end)
         -- the sort orders recipes inside their categories, which stay
         local sort = self.sort
-        local function byName(a: Row, b: Row): boolean return a.name < b.name end
+        local function byName(a: Row, b: Row): boolean
+            return a.name < b.name
+        end
         local orders: { [string]: (a: Row, b: Row) -> boolean } = {
             category = function(a: Row, b: Row): boolean
-                if a.learned ~= b.learned then return a.learned end
-                if a.difficulty ~= b.difficulty then return a.difficulty < b.difficulty end
+                if a.learned ~= b.learned then
+                    return a.learned
+                end
+                if a.difficulty ~= b.difficulty then
+                    return a.difficulty < b.difficulty
+                end
                 return byName(a, b)
             end,
             difficulty = function(a: Row, b: Row): boolean
-                if a.difficulty ~= b.difficulty then return a.difficulty < b.difficulty end
+                if a.difficulty ~= b.difficulty then
+                    return a.difficulty < b.difficulty
+                end
                 return byName(a, b)
             end,
             -- a skill not known yet goes last
             skill = function(a: Row, b: Row): boolean
                 local x, y = a.need or math.huge, b.need or math.huge
-                if x ~= y then return x < y end
+                if x ~= y then
+                    return x < y
+                end
                 return byName(a, b)
             end,
             -- the level the product needs to be used; none (enchants) or not
@@ -558,9 +729,13 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             -- (asked for in game), then the name
             level = function(a: Row, b: Row): boolean
                 local x, y = a.use or math.huge, b.use or math.huge
-                if x ~= y then return x < y end
+                if x ~= y then
+                    return x < y
+                end
                 x, y = a.need or math.huge, b.need or math.huge
-                if x ~= y then return x < y end
+                if x ~= y then
+                    return x < y
+                end
                 return byName(a, b)
             end,
             name = byName,
@@ -571,13 +746,22 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         if sort ~= "category" and order then
             local all: Row[] = {}
             for _, cat in ipairs(cats) do
-                for _, r in ipairs(cat.recipes) do all[#all + 1] = r end
+                for _, r in ipairs(cat.recipes) do
+                    all[#all + 1] = r
+                end
             end
             cats = #all > 0 and { { recipes = all, flat = true } } or {}
         end
-        for _, cat in ipairs(cats) do table.sort(cat.recipes, order or orders.category) end
-        local data: Crafting = { name = profession, skill = base and base.skillLevel, max = base and base.maxSkillLevel,
-                                 skillLine = skillLine, categories = {} }  -- no rank here: the overview has it (asked for in game)
+        for _, cat in ipairs(cats) do
+            table.sort(cat.recipes, order or orders.category)
+        end
+        local data: Crafting = {
+            name = profession,
+            skill = base and base.skillLevel,
+            max = base and base.maxSkillLevel,
+            skillLine = skillLine,
+            categories = {},
+        } -- no rank here: the overview has it (asked for in game)
         -- learned of all, kept for the overview (it can only ask the open one)
         if skillLine and total > 0 then
             local counts: Counts = { learned = learned, total = total }
@@ -597,15 +781,25 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     if r.id == pending then
                         self.chosen[key] = r.id
                         local view = self.view
-                        if cat.name and view then view.folded[cat.name] = nil end
+                        if cat.name and view then
+                            view.folded[cat.name] = nil
+                        end
                     end
                 end
             end
-            if self.chosen[key] == pending then self.pendingRecipe = nil end
+            if self.chosen[key] == pending then
+                self.pendingRecipe = nil
+            end
         end
         local chosen = self.chosen[key]
         local found = false
-        for _, cat in ipairs(cats) do for _, r in ipairs(cat.recipes) do if r.id == chosen then found = true end end end
+        for _, cat in ipairs(cats) do
+            for _, r in ipairs(cat.recipes) do
+                if r.id == chosen then
+                    found = true
+                end
+            end
+        end
         if not found then
             local firstCat = cats[1]
             local firstRow = firstCat and firstCat.recipes[1]
@@ -616,7 +810,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         -- the view's entries (the rows carry need and use along)
         for i, cat in ipairs(cats) do
             local entries: RecipeEntry[] = {}
-            for j, r in ipairs(cat.recipes) do entries[j] = r end
+            for j, r in ipairs(cat.recipes) do
+                entries[j] = r
+            end
             data.categories[i] = { name = cat.name, recipes = entries, flat = cat.flat }
         end
         return data
@@ -637,15 +833,21 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         local key = (rec.profession or "") .. "\0" .. sv.name:lower()
                         local t = built[key] or { trainers = {} }
                         built[key] = t
-                        if sv.rank and (not t.skill or sv.rank < t.skill) then t.skill = sv.rank end
-                        if not tContains(t.trainers, where) then t.trainers[#t.trainers + 1] = where end
+                        if sv.rank and (not t.skill or sv.rank < t.skill) then
+                            t.skill = sv.rank
+                        end
+                        if not tContains(t.trainers, where) then
+                            t.trainers[#t.trainers + 1] = where
+                        end
                     end
                 end
             end
             index = built
             self.recordedIndex = built
         end
-        if not (profession and recipe) then return nil end
+        if not (profession and recipe) then
+            return nil
+        end
         return index[profession .. "\0" .. recipe:lower()]
     end
 
@@ -662,28 +864,42 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             for i, src in ipairs(list or {}) do
                 if src.t == "t" then
                     local names: string[] = {}
-                    for _, n in ipairs(mine.trainers) do names[#names + 1] = n end
-                    for _, n in ipairs(src.n or {}) do if not tContains(names, n) then names[#names + 1] = n end end
+                    for _, n in ipairs(mine.trainers) do
+                        names[#names + 1] = n
+                    end
+                    for _, n in ipairs(src.n or {}) do
+                        if not tContains(names, n) then
+                            names[#names + 1] = n
+                        end
+                    end
                     merged[i] = { t = "t", s = mine.skill or src.s, n = names }
                     found = true
                 else
                     merged[i] = src
                 end
             end
-            if not found then merged[#merged + 1] = { t = "t", s = mine.skill, n = mine.trainers } end
+            if not found then
+                merged[#merged + 1] = { t = "t", s = mine.skill, n = mine.trainers }
+            end
             list = merged
         end
-        if not list then return { lines = { "Where this recipe is learned isn't known yet." } } end
+        if not list then
+            return { lines = { "Where this recipe is learned isn't known yet." } }
+        end
         local lines: string[] = {}
         local out: Source = { lines = lines }
         -- the skill it needs (on its recipe item, or recorded at trainers), as
         -- the game words it; ember while yours is short
         local need: number? = nil
-        for _, s in ipairs(list) do if s.s and (not need or s.s < need) then need = s.s end end
+        for _, s in ipairs(list) do
+            if s.s and (not need or s.s < need) then
+                need = s.s
+            end
+        end
         if need then
             local short = craft and (craft.skill or 0) < need
-            lines[#lines + 1] = (short and "|cff" .. T.color["ember-text"].hex or "|cff" .. T.color.ink.hex)
-                .. "Requires " .. (profession or "skill") .. " (" .. need .. ")|r"
+            lines[#lines + 1] = (short and "|cff" .. T.color["ember-text"].hex or "|cff" .. T.color.ink.hex) ..
+                "Requires " .. (profession or "skill") .. " (" .. need .. ")|r"
         else
             -- a trainer recipe nobody has recorded yet (Forever's new ones)
             for _, s in ipairs(list) do
@@ -698,16 +914,24 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             if s.t == "t" then
                 -- any trainer of the profession: there are many, in every city
                 -- (asked for in game: no names)
-                lines[#lines + 1] = "From " .. (profession and (article(profession) .. " " .. profession .. " trainer") or "a profession trainer")
+                lines[#lines + 1] = "From " ..
+                    (profession and (article(profession) .. " " .. profession .. " trainer") or "a profession trainer")
             elseif s.t == "a" then
                 lines[#lines + 1] = "Learned automatically with the profession"
             elseif s.t == "i" and itemID then
                 local data = self:Item(itemID)
                 local quality = data and data.quality
                 local have = tryValue(C_Item.GetItemCount, itemID, true) or 0
-                out.item = { icon = data and data.icon or tryValue(C_Item.GetItemIconByID, itemID), name = data and data.name,
-                             quality = quality, qualityName = quality and QUALITY_NAME[quality], note = have > 0 and "In your bags" or nil,
-                             onEnter = function(owner: Frame) itemTip(owner, itemID) end }
+                out.item = {
+                    icon = data and data.icon or tryValue(C_Item.GetItemIconByID, itemID),
+                    name = data and data.name,
+                    quality = quality,
+                    qualityName = quality and QUALITY_NAME[quality],
+                    note = have > 0 and "In your bags" or nil,
+                    onEnter = function(owner: Frame)
+                        itemTip(owner, itemID)
+                    end,
+                }
                 local known = false
                 -- vendors: yours, else say the other faction's sell it
                 local sellers: string[], theirs = {}, 0
@@ -719,32 +943,47 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         theirs = theirs + 1
                     end
                 end
-                for i = 1, math.min(3, #sellers) do lines[#lines + 1] = "Sold by " .. sellers[i] end
-                if #sellers > 3 then lines[#lines + 1] = more(#sellers - 3, "vendor") end
-                if #sellers == 0 and theirs > 0 then lines[#lines + 1] = "Sold only by the other faction's vendors" end
+                for i = 1, math.min(3, #sellers) do
+                    lines[#lines + 1] = "Sold by " .. sellers[i]
+                end
+                if #sellers > 3 then
+                    lines[#lines + 1] = more(#sellers - 3, "vendor")
+                end
+                if #sellers == 0 and theirs > 0 then
+                    lines[#lines + 1] = "Sold only by the other faction's vendors"
+                end
                 known = known or #sellers > 0 or theirs > 0
                 -- drops: the first two, how many more
                 local drops = s.d or {}
                 local total = s.dn or #drops
                 if total > 8 then
-                    lines[#lines + 1] = ("A world drop from %d creatures, such as %s"):format(total, place(strsplit("|", drops[1] or "")))
+                    lines[#lines + 1] = ("A world drop from %d creatures, such as %s"):format(
+                        total,
+                        place(strsplit("|", drops[1] or ""))
+                    )
                 else
                     for i = 1, math.min(2, #drops) do
                         local dName, zone = strsplit("|", drops[i])
                         lines[#lines + 1] = "Dropped by " .. place(dName, zone)
                     end
-                    if total > 2 then lines[#lines + 1] = more(total - 2, "creature") end
+                    if total > 2 then
+                        lines[#lines + 1] = more(total - 2, "creature")
+                    end
                 end
                 known = known or total > 0
                 for i, o in ipairs(s.o or {}) do
-                    if i > 2 then break end
+                    if i > 2 then
+                        break
+                    end
                     local oName, zone = strsplit("|", o)
                     lines[#lines + 1] = "Found in " .. place(oName, zone)
                     known = true
                 end
                 for _, q in ipairs(s.q or {}) do
                     local title = tryValue(C_QuestLog.GetTitleForQuestID, q)
-                    if not title then try(C_QuestLog.RequestLoadQuestByID, q) end
+                    if not title then
+                        try(C_QuestLog.RequestLoadQuestByID, q)
+                    end
                     lines[#lines + 1] = "Rewarded by the quest " .. inkText(title or ("#" .. q))
                     known = true
                 end
@@ -754,16 +993,22 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     lines[#lines + 1] = "Inside " .. inkText(cName or "a container")
                     known = true
                 end
-                if not known then lines[#lines + 1] = "Where to get it isn't known yet." end
+                if not known then
+                    lines[#lines + 1] = "Where to get it isn't known yet."
+                end
             end
         end
         return out
     end
 
     function Recipe(id: number?): RecipeDetail?
-        if not id then return nil end
+        if not id then
+            return nil
+        end
         local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
-        if not info then return nil end
+        if not info then
+            return nil
+        end
         local reagents, can, sch = self:Reagents(id)
         local parts: RecipeReagent[] = {}
         local tools: { name?: string, met?: boolean }[] = {}
@@ -776,17 +1021,27 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             r.quality = quality
             r.qualityName = quality and QUALITY_NAME[quality]
             r.icon = product and product.icon or info.icon
-            r.onProduct = function(owner: Frame) itemTip(owner, out) end
+            r.onProduct = function(owner: Frame)
+                itemTip(owner, out)
+            end
         else
             r.desc = tryValue(C_TradeSkillUI.GetRecipeDescription, id, {})
         end
         local lo, hi = sch and sch.quantityMin, sch and sch.quantityMax
-        if lo and hi and hi > 1 then r.makes = hi end
+        if lo and hi and hi > 1 then
+            r.makes = hi
+        end
         for i, g in ipairs(reagents) do
             local data = self:Item(g.itemID)
             local quality = data and data.quality
-            parts[i] = { name = data and data.name, icon = data and data.icon or tryValue(C_Item.GetItemIconByID, g.itemID),
-                         quality = quality, qualityName = quality and QUALITY_NAME[quality], have = g.have, need = g.need }
+            parts[i] = {
+                name = data and data.name,
+                icon = data and data.icon or tryValue(C_Item.GetItemIconByID, g.itemID),
+                quality = quality,
+                qualityName = quality and QUALITY_NAME[quality],
+                have = g.have,
+                need = g.need,
+            }
         end
         r.onReagent = function(i: number, owner: Frame)
             local g = reagents[i]
@@ -803,12 +1058,20 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             else
                 line = { name = t.name, met = t.met == true }
                 tools[#tools + 1] = line
-                if t.name then byName[t.name] = line end
+                if t.name then
+                    byName[t.name] = line
+                end
             end
         end
-        for _, t in ipairs(tools) do if not t.met then toolsMet = false end end
+        for _, t in ipairs(tools) do
+            if not t.met then
+                toolsMet = false
+            end
+        end
         local cd = asNumber(try(C_TradeSkillUI.GetRecipeCooldown, id))
-        if cd and cd > 0 then r.cooldown = SecondsToTime(cd) end
+        if cd and cd > 0 then
+            r.cooldown = SecondsToTime(cd)
+        end
         r.tracked = tryValue(C_TradeSkillUI.IsRecipeTracked, id, false) == true
         if not info.learned then
             r.source = self:Source(id)
@@ -827,11 +1090,15 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     --------------------------------------------------------------------------------
 
     function Tabs(profs: { primary: ProfessionCard[], secondary: ProfessionCard[] }): ProfessionTab[]
-        local tabs: ProfessionTab[] = { { key = "overview", label = "Overview", icon = "Interface\\ICONS\\INV_SideTab_Professions_c60" } }
+        local tabs: ProfessionTab[] = {
+            { key = "overview", label = "Overview", icon = "Interface\\ICONS\\INV_SideTab_Professions_c60" },
+        }
         for _, list in ipairs({ profs.primary, profs.secondary }) do
             for _, c in ipairs(list) do
                 local line = asNumber(c.skillLine)
-                if c.crafting and line then tabs[#tabs + 1] = { key = line, label = c.name, icon = c.icon } end
+                if c.crafting and line then
+                    tabs[#tabs + 1] = { key = line, label = c.name, icon = c.icon }
+                end
             end
         end
         return tabs
@@ -839,7 +1106,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
 
     function Render()
         local view = self.view
-        if not (view and view:IsVisible()) then return end
+        if not (view and view:IsVisible()) then
+            return
+        end
         self.waitingItems = false
         local profs = self:Professions()
         self.tabList = self:Tabs(profs)
@@ -855,11 +1124,15 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     end
 
     function QueueRender()
-        if self.renderQueued then return end
+        if self.renderQueued then
+            return
+        end
         self.renderQueued = true
         after(0.1, function()
             self.renderQueued = false
-            if self:IsEnabled() then self:Render() end
+            if self:IsEnabled() then
+                self:Render()
+            end
         end)
     end
 
@@ -872,9 +1145,14 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             self:Render()
             return
         end
-        if InCombatLockdown() then self:Print("Professions open out of combat.") return end
+        if InCombatLockdown() then
+            self:Print("Professions open out of combat.")
+            return
+        end
         local ok, err = pcall(C_TradeSkillUI.OpenTradeSkill, skillLine)
-        if not ok then self:Print("That profession couldn't be opened here: " .. tostring(err)) end
+        if not ok then
+            self:Print("That profession couldn't be opened here: " .. tostring(err))
+        end
     end
 
     -- A recipe opened (the tracker's click): its profession's window, and the
@@ -883,8 +1161,13 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- blocked, found in game); the profession's trade skill opened the way the
     -- rail does, then the recipe chosen.
     function OpenRecipe(recipeID: number?)
-        if not recipeID then return end
-        if InCombatLockdown() then self:Print("Professions open out of combat.") return end
+        if not recipeID then
+            return
+        end
+        if InCombatLockdown() then
+            self:Print("Professions open out of combat.")
+            return
+        end
         self.pendingRecipe = recipeID
         local line, _, parent = try(C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
         local up = asNumber(parent)
@@ -899,7 +1182,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     function Craft(count: number?)
         local craft = self:Crafted()
         local id = craft and craft.selected
-        if not id or InCombatLockdown() then return end
+        if not id or InCombatLockdown() then
+            return
+        end
         try(C_TradeSkillUI.CraftRecipe, id, math.max(1, count or 1))
     end
 
@@ -910,12 +1195,16 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 self:Render()
             else
                 local line = tonumber(key)
-                if line then self:Open(line) end
+                if line then
+                    self:Open(line)
+                end
             end
         end
         view.onOpen = function(card: ProfessionCard)
             local line = asNumber(card.skillLine)
-            if line then self:Open(line) end
+            if line then
+                self:Open(line)
+            end
         end
         view.onSelect = function(id: number)
             local craft = view.craftData
@@ -924,7 +1213,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         end
         view.onRecipeEnter = function(rec: RecipeEntry, owner: Frame)
             local sch = tryValue(C_TradeSkillUI.GetRecipeSchematic, rec.id, false)
-            if sch and sch.outputItemID then itemTip(owner, sch.outputItemID) end
+            if sch and sch.outputItemID then
+                itemTip(owner, sch.outputItemID)
+            end
         end
         view.onSearch = function(text: string)
             self.search = text
@@ -944,21 +1235,33 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         view.onTrack = function(on: boolean)
             local craft = view.craftData
             local id = craft and craft.selected
-            if id then try(C_TradeSkillUI.SetRecipeTracked, id, on, false) end
+            if id then
+                try(C_TradeSkillUI.SetRecipeTracked, id, on, false)
+            end
             self:QueueRender()
         end
-        view.onCreate = function(count: number) self:Craft(count) end
+        view.onCreate = function(count: number)
+            self:Craft(count)
+        end
         view.onLink = function()
             local link = asString(try(C_TradeSkillUI.GetTradeSkillListLink))
-            if link then chat.insertLink(link) else self:Print("This profession can't be linked here.") end
+            if link then
+                chat.insertLink(link)
+            else
+                self:Print("This profession can't be linked here.")
+            end
         end
         view.onLinkRecipe = function(id: number)
             local link = asString(try(C_TradeSkillUI.GetRecipeLink, id))
-            if link then chat.insertLink(link) end
+            if link then
+                chat.insertLink(link)
+            end
         end
         view.onCreateAll = function()
             local r = view.recipeData
-            if r then self:Craft(r.canMake) end
+            if r then
+                self:Craft(r.canMake)
+            end
         end
     end
 
@@ -970,15 +1273,21 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     -- and back off screen whenever Blizzard places it again (a protected one
     -- after the fight: the window may hold secure spell buttons).
     function Away(part: Frame?)
-        if not part or self.away[part] then return end
+        if not part or self.away[part] then
+            return
+        end
         self.away[part] = frames.keepAway(part, { fade = true })
     end
 
     -- The window at SuuUI's size (Blizzard sizes it per page).
     function Size()
         local f = frames.find("ProfessionsFrame")
-        if not f or InCombatLockdown() then return end
-        if math.abs(f:GetWidth() - W) < 1 and math.abs(f:GetHeight() - H) < 1 then return end
+        if not f or InCombatLockdown() then
+            return
+        end
+        if math.abs(f:GetWidth() - W) < 1 and math.abs(f:GetHeight() - H) < 1 then
+            return
+        end
         self.sizing = true
         f:SetSize(W, H)
         self.sizing = false
@@ -986,7 +1295,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
 
     function Build()
         local f = frames.find("ProfessionsFrame")
-        if not f or self.view or InCombatLockdown() then return end
+        if not f or self.view or InCombatLockdown() then
+            return
+        end
         local saved = self:Char()
         self.filters, self.sort = saved.filters or UI.PROFESSION_FILTER_DEFAULTS, saved.sort or "category"
         local view = UI.Professions(f)
@@ -1003,7 +1314,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         self:Away(book)
         self:Away(crafting)
         self:Away(frames.asFrame(field(f, "ProfessionsOverviewTab")))
-        for _, tab in ipairs(tbl.list(field(f, "rightProfessionTabs"))) do self:Away(frames.asFrame(tab)) end
+        for _, tab in ipairs(tbl.list(field(f, "rightProfessionTabs"))) do
+            self:Away(frames.asFrame(tab))
+        end
         self:Away(frames.asFrame(field(f, "TabSystem")))
         -- the page follows Blizzard's: its book is the overview, its crafting
         -- page the open trade skill
@@ -1013,18 +1326,35 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         end
         for _, page in ipairs({ book, crafting }) do
             -- (ipairs stops at a missing one)
-            if not page then break end
+            if not page then
+                break
+            end
             hookScript(page, "OnShow", follow)
             hookScript(page, "OnHide", follow)
         end
         follow()
-        hookScript(f, "OnShow", function() self:Size(); follow() end)
-        hookScript(f, "OnHide", function() GameTooltip:Hide() end)
-        local function again() if not self.sizing and f:IsShown() then after(0, function() self:Size() end) end end
+        hookScript(f, "OnShow", function()
+            self:Size()
+            follow()
+        end)
+        hookScript(f, "OnHide", function()
+            GameTooltip:Hide()
+        end)
+        local function again()
+            if not self.sizing and f:IsShown() then
+                after(0, function()
+                    self:Size()
+                end)
+            end
+        end
         hook(f, "SetWidth", again)
         hook(f, "SetHeight", again)
         hook(f, "SetSize", again)
-        view:HookScript("OnSizeChanged", function() if view:IsVisible() then self:QueueRender() end end)
+        view:HookScript("OnSizeChanged", function()
+            if view:IsVisible() then
+                self:QueueRender()
+            end
+        end)
         self:Size()
     end
 
@@ -1037,14 +1367,18 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
     --------------------------------------------------------------------------------
 
     function RecordTrainer()
-        if self.recording then return end
+        if self.recording then
+            return
+        end
         self.recording = true
         -- every service, not only what you can learn now; the trainer's own
         -- filters back afterwards
         local kinds, before = { "available", "unavailable", "used" }, {} :: { [string]: boolean }
         for _, k in ipairs(kinds) do
             local was = try(GetTrainerServiceTypeFilter, k)
-            if was ~= nil then before[k] = flag(was) end
+            if was ~= nil then
+                before[k] = flag(was)
+            end
             try(SetTrainerServiceTypeFilter, k, 1)
         end
         local services: Service[], profession: string? = {}, nil
@@ -1058,11 +1392,18 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 local skillName = asString(skillRaw)
                 local link = asString(try(GetTrainerServiceItemLink, i))
                 local line = asString(try(GetTrainerServiceSkillLine, i))
-                if skillName and PROFESSION_NAMES[skillName] then profession = profession or skillName end
-                if line and PROFESSION_NAMES[line] then profession = profession or line end
+                if skillName and PROFESSION_NAMES[skillName] then
+                    profession = profession or skillName
+                end
+                if line and PROFESSION_NAMES[line] then
+                    profession = profession or line
+                end
                 services[#services + 1] = {
-                    name = name, skill = skillName, rank = tonumber(asString(rankRaw) or asNumber(rankRaw)),
-                    cost = asNumber(try(GetTrainerServiceCost, i)), level = asNumber(try(GetTrainerServiceLevelReq, i)),
+                    name = name,
+                    skill = skillName,
+                    rank = tonumber(asString(rankRaw) or asNumber(rankRaw)),
+                    cost = asNumber(try(GetTrainerServiceCost, i)),
+                    level = asNumber(try(GetTrainerServiceLevelReq, i)),
                     item = link and tonumber(link:match("item:(%d+)")) or nil,
                     line = line,
                 }
@@ -1070,13 +1411,19 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         end
         for _, k in ipairs(kinds) do
             local was = before[k]
-            if was ~= nil then try(SetTrainerServiceTypeFilter, k, was and 1 or 0) end
+            if was ~= nil then
+                try(SetTrainerServiceTypeFilter, k, was and 1 or 0)
+            end
         end
         self.recording = false
         -- a class trainer, a riding trainer: not ours (unless the game says
         -- it's a profession trainer and only the skill's name is missing)
-        if not profession and flag(try(IsTradeskillTrainer)) then profession = "?" end
-        if not profession or #services == 0 then return end
+        if not profession and flag(try(IsTradeskillTrainer)) then
+            profession = "?"
+        end
+        if not profession or #services == 0 then
+            return
+        end
         local guid = asString(UnitGUID("npc"))
         local npcID = guid and tonumber((select(6, strsplit("-", guid))))
         local npc = asString(UnitName("npc"))
@@ -1085,9 +1432,14 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         saved.trainers = trainers
         self.recordedIndex = nil
         trainers[npcID or npc or "?"] = {
-            npc = npc, npcID = npcID, zone = GetRealZoneText(), subzone = GetSubZoneText(),
-            faction = asString(UnitFactionGroup("player")), profession = profession,
-            at = date("%Y-%m-%d %H:%M"), services = services,
+            npc = npc,
+            npcID = npcID,
+            zone = GetRealZoneText(),
+            subzone = GetSubZoneText(),
+            faction = asString(UnitFactionGroup("player")),
+            profession = profession,
+            at = date("%Y-%m-%d %H:%M"),
+            services = services,
         }
     end
 
@@ -1095,32 +1447,61 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         preload()
         self:Build()
         self:ProvideService(PROFESSIONS, {
-            OpenRecipe = function(recipeID: number) self:OpenRecipe(recipeID) end,
-            ExpectRecipe = function(recipeID: number) self.pendingRecipe = recipeID end,
+            OpenRecipe = function(recipeID: number)
+                self:OpenRecipe(recipeID)
+            end,
+            ExpectRecipe = function(recipeID: number)
+                self.pendingRecipe = recipeID
+            end,
             ShownRecipe = function(): number?
                 local view = self.view
                 local craft = view and view.craftData
-                if not (view and view:IsVisible() and self.mode == "crafting" and craft) then return nil end
+                if not (view and view:IsVisible() and self.mode == "crafting" and craft) then
+                    return nil
+                end
                 return craft.selected
             end,
         })
-        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:Build()
+        end)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", preload)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            if not self.view then self:Build() end
+            if not self.view then
+                self:Build()
+            end
             self:Size()
         end)
-        local function redraw() if self.view and self.view:IsVisible() then self:QueueRender() end end
-        for _, e in ipairs({ "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "TRADE_SKILL_SHOW",
-                             "TRADE_SKILL_CLOSE", "SKILL_LINES_CHANGED", "BAG_UPDATE_DELAYED", "TRACKED_RECIPE_UPDATE",
-                             "MINIMAP_UPDATE_TRACKING", "NEW_RECIPE_LEARNED", "QUEST_DATA_LOAD_RESULT" }) do
+        local function redraw()
+            if self.view and self.view:IsVisible() then
+                self:QueueRender()
+            end
+        end
+        for _, e in ipairs({
+            "TRADE_SKILL_LIST_UPDATE",
+            "TRADE_SKILL_DATA_SOURCE_CHANGED",
+            "TRADE_SKILL_SHOW",
+            "TRADE_SKILL_CLOSE",
+            "SKILL_LINES_CHANGED",
+            "BAG_UPDATE_DELAYED",
+            "TRACKED_RECIPE_UPDATE",
+            "MINIMAP_UPDATE_TRACKING",
+            "NEW_RECIPE_LEARNED",
+            "QUEST_DATA_LOAD_RESULT",
+        }) do
             self:OnGameEvent(e, redraw)
         end
         -- profession trainers: what they teach, recorded once they've listed it
-        self:OnGameEvent("TRAINER_SHOW", function() after(0.3, function() self:RecordTrainer() end) end)
+        self:OnGameEvent("TRAINER_SHOW", function()
+            after(0.3, function()
+                self:RecordTrainer()
+            end)
+        end)
         -- item names the game hadn't loaded yet
         self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function()
-            if self.waitingItems then redraw() end
+            if self.waitingItems then
+                redraw()
+            end
         end)
         -- a recipe's sources carry colour codes: drawn again
         self:On("SUUUI_THEME_CHANGED", redraw)

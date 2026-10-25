@@ -34,7 +34,9 @@ mock.defineItem(VEST, { name = "Militia Vest", quality = 1, icon = 132760, equip
 local function worn(): number
     for slot = 1, 19 do
         local _, max = GetInventoryItemDurability(slot)
-        if max then return slot end
+        if max then
+            return slot
+        end
     end
     error("nothing worn")
 end
@@ -80,14 +82,18 @@ end
 local function hideAll()
     for i = 1, 4 do
         local d = frames.find("StaticPopup" .. i)
-        if d and d:IsShown() then d:Hide() end
+        if d and d:IsShown() then
+            d:Hide()
+        end
     end
 end
 
 -- The hosted popup's card (the only one, or by its category).
 local function hosted(category: string?): Host?
     for _, h in pairs(M.hosts) do
-        if not category or h.kind.category == category then return h end
+        if not category or h.kind.category == category then
+            return h
+        end
     end
     return nil
 end
@@ -106,24 +112,48 @@ end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
-    M:ResetAll({ "requests", "max", "durability", "bagsFull", "talentPoints", "legacyPoints",
-                         "presenceBnetOnline", "presenceBnetOffline", "presenceFriendOnline", "presenceFriendOffline",
-                         "presenceGuildOnline", "presenceGuildOffline", "presenceHideChat" })
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
     hideAll()
-    for id in pairs(M.notes) do M:Dismiss(id) end
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
     M.presence = nil
     mock.group:leave()
     tick(1)
     expectNoErrors()
 end
 
-@test("notes: a timed one goes by itself, a sticky one stays till closed, a condition till it's over; one id replaced in place")
+@test(
+    "notes: a timed one goes by itself, a sticky one stays till closed, a condition till it's over; one id replaced in place"
+)
 local function notes()
     expect(M:Notify(nil)).toBeNil()
     local timed = M:Notify({ category = "Test", title = "A timed note", duration = 1 }) :: string
     local sticky = M:Notify({ kind = "sticky", category = "Test", title = "A sticky note" }) :: string
-    local cond = M:Notify({ id = "test:cond", kind = "until", category = "Test", title = "A condition", ["until"] = "Goes later" }) :: string
+    local cond = M:Notify({
+        id = "test:cond",
+        kind = "until",
+        category = "Test",
+        title = "A condition",
+        ["until"] = "Goes later",
+    }) :: string
     expect(card(timed) ~= nil).toBe(true)
     expect(card(sticky) ~= nil).toBe(true)
     expect(card(cond) ~= nil).toBe(true)
@@ -148,7 +178,13 @@ end
 
 @test("a request with a time counts down and stays; in combat only requests and conditions show")
 local function combat()
-    local roll = M:Notify({ kind = "roll", category = "Loot", title = "Need or greed", duration = 60, remaining = 30 }) :: string
+    local roll = M:Notify({
+        kind = "roll",
+        category = "Loot",
+        title = "Need or greed",
+        duration = 60,
+        remaining = 30,
+    }) :: string
     local sticky = M:Notify({ kind = "sticky", category = "Test", title = "A note" }) :: string
     tick(0.5)
     expect((note(roll).remaining or 30) < 30).toBe(true)
@@ -176,7 +212,9 @@ local function durability()
     tick()
     expect(note("suu:durability").tone).toBe("danger")
     -- without the Durability module: the game's own numbers
-    mock.stub(SuuUI, "Durability", function(): DurabilityInfo? return nil end)
+    mock.stub(SuuUI, "Durability", function(): DurabilityInfo?
+        return nil
+    end)
     M.durabilityState = nil
     M:CheckDurability()
     expect(note("suu:durability").title).toBe("Some of your gear is broken")
@@ -196,21 +234,34 @@ end
 
 -- The Durability module's reading, made up.
 local function reading(state: string, pieces: { [string]: unknown }[]): () -> DurabilityInfo?
-    return function(): DurabilityInfo? return mock.partial({ state = state, parts = { note = true }, pieces = pieces }) end
+    return function(): DurabilityInfo?
+        return mock.partial({ state = state, parts = { note = true }, pieces = pieces })
+    end
 end
 
 @test("the Durability module's note: which pieces, Show repairers")
 local function namedPieces()
-    mock.stub(SuuUI, "Durability", reading("broken", {
-        { state = "broken", label = "Chest", name = "Militia Vest" },
-        { state = "damaged", label = "Legs", percent = 15 } }))
+    mock.stub(
+        SuuUI,
+        "Durability",
+        reading("broken", {
+            { state = "broken", label = "Chest", name = "Militia Vest" },
+            { state = "damaged", label = "Legs", percent = 15 },
+        })
+    )
     M.durabilityState = nil
     M:CheckDurability()
     local n = note("suu:durability")
     expect(n.title).toBe("Your Chest is broken")
     expect(n.body).toBe("Militia Vest gives no stats until repaired · Legs 15%")
-    mock.stub(SuuUI, "Durability", reading("broken", {
-        { state = "broken", label = "Chest", name = "Militia Vest" }, { state = "broken", label = "Feet", name = "Boots" } }))
+    mock.stub(
+        SuuUI,
+        "Durability",
+        reading("broken", {
+            { state = "broken", label = "Chest", name = "Militia Vest" },
+            { state = "broken", label = "Feet", name = "Boots" },
+        })
+    )
     M:CheckDurability()
     expect(note("suu:durability").title).toBe("2 pieces are broken")
     mock.stub(SuuUI, "Durability", reading("damaged", { { state = "damaged", label = "Legs", percent = 15 } }))
@@ -220,17 +271,23 @@ local function namedPieces()
     -- Show repairers: the world map
     local toggled = mock.spy(function() end)
     mock.stub(_G, "ToggleWorldMap", toggled)
-    mock.stub(SuuUI, "GetModule", function(_: string) return nil end)
+    mock.stub(SuuUI, "GetModule", function(_: string)
+        return nil
+    end)
     act(n)
     expect(toggled).toHaveBeenCalled()
 end
 
 @test("full bags: a note while no slot is free, gone when one is")
 local function bags()
-    mock.stub(C_Container, "GetContainerNumFreeSlots", function(_: number): (number, number) return 0, 0 end)
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(_: number): (number, number)
+        return 0, 0
+    end)
     mock.fireEvent("BAG_UPDATE_DELAYED")
     expect(M.notes["suu:bags"] ~= nil).toBe(true)
-    mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number, number) return bag == 0 and 1 or 0, 0 end)
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number, number)
+        return bag == 0 and 1 or 0, 0
+    end)
     mock.fireEvent("BAG_UPDATE_DELAYED")
     expect(M.notes["suu:bags"]).toBeNil()
 end
@@ -246,21 +303,34 @@ end
 @test("talent points to spend: the count, the next talent of a build followed, Open talents")
 local function talents()
     mock.stub(C_Traits, "GetTreeCurrencyInfo", points(2))
-    mock.stub(C_ClassTalents, "GetActiveConfigID", function(): number return 7143862 end)
-    mock.stub(C_Traits, "GetConfigInfo", function(_: number): TraitConfigInfo? return mock.partial({ treeIDs = { 1117 } }) end)
+    mock.stub(C_ClassTalents, "GetActiveConfigID", function(): number
+        return 7143862
+    end)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): TraitConfigInfo?
+        return mock.partial({ treeIDs = { 1117 } })
+    end)
     M.talentPointsShown = nil
     M:CheckTalents()
     local n = note("suu:talents")
     expect(n.title).toBe("2 talent points to spend")
     local opened = mock.spy(function() end)
     mock.stub(SuuUI, "ToggleTalents", opened)
-    mock.stub(SuuUI, "TalentsShown", function(): boolean return false end)
+    mock.stub(SuuUI, "TalentsShown", function(): boolean
+        return false
+    end)
     if n.actions then
         act(n)
         expect(opened).toHaveBeenCalled()
     end
     mock.stub(SuuUI, "TalentBuildNext", function(): TalentNext?
-        return mock.partial({ node = 1, rank = 1, max = 3, name = "Tactical Mastery", build = "Arms leveling", icon = 136031 })
+        return mock.partial({
+            node = 1,
+            rank = 1,
+            max = 3,
+            name = "Tactical Mastery",
+            build = "Arms leveling",
+            icon = 136031,
+        })
     end)
     M:CheckTalents()
     n = note("suu:talents")
@@ -276,7 +346,9 @@ end
 
 @test("Legacy points to spend: a note with Open Legacy")
 local function legacy()
-    mock.stub(C_Traits, "GetConfigIDByTreeID", function(_: number): number return 7143863 end)
+    mock.stub(C_Traits, "GetConfigIDByTreeID", function(_: number): number
+        return 7143863
+    end)
     mock.stub(C_Traits, "GetTreeCurrencyInfo", points(1))
     M.legacyPointsShown = nil
     M:CheckLegacy()
@@ -297,7 +369,9 @@ end
 local function friendList(friends: { [string]: { [string]: unknown } })
     mock.stub(C_FriendList, "GetFriendInfo", function(name: string): FriendInfo?
         local f = friends[name]
-        if not f then return nil end
+        if not f then
+            return nil
+        end
         return mock.partial(f)
     end)
 end
@@ -306,7 +380,9 @@ local function presenceCards(): NotificationData[]
     local out: NotificationData[] = {}
     for _, id in ipairs(M.noteOrder) do
         local n = note(id)
-        if n.presence then out[#out + 1] = n end
+        if n.presence then
+            out[#out + 1] = n
+        end
     end
     return out
 end
@@ -322,8 +398,10 @@ end
 
 @test("friends coming online: one card for a burst, Whisper and Invite; going offline; your own line ignored")
 local function friendsOnline()
-    friendList({ ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60, area = "Ironforge", className = "Warrior" },
-                 ["Tamsin Ashford"] = { name = "Tamsin Ashford", level = 42, className = "Priest" } })
+    friendList({
+        ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60, area = "Ironforge", className = "Warrior" },
+        ["Tamsin Ashford"] = { name = "Tamsin Ashford", level = 42, className = "Priest" },
+    })
     mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
     mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
     -- the same one again: once
@@ -371,8 +449,14 @@ end
 @test("guild members: their rank, level and zone; in combat the card waits for the fight's end")
 local function guildOnline()
     mock.joinGuild({ name = "Wardens of Dawn", ranks = { { name = "Guild Master" }, { name = "Officer" } } })
-    mock.defineGuildMember({ name = "Tamsin Ashford", rank = 1, level = 42, class = "PRIEST",
-        zone = "Stormwind City", online = true })
+    mock.defineGuildMember({
+        name = "Tamsin Ashford",
+        rank = 1,
+        level = 42,
+        class = "PRIEST",
+        zone = "Stormwind City",
+        online = true,
+    })
     mock.advanceTime(1)
     friendList({})
     mock.player:enterCombat()
@@ -397,9 +481,15 @@ end
 
 @test("a Battle.net friend: their game and character, Invite on your side; the card for them only once")
 local function bnet()
-    local game: { [string]: unknown } = { clientProgram = BNET_CLIENT_WOW or "WoW", characterName = "Brannoc Ironhand",
-        className = "Warrior", areaName = "Ironforge", wowProjectID = tbl.field(_G, "WOW_PROJECT_ID"), gameAccountID = 77,
-        factionName = UnitFactionGroup("player") }
+    local game: { [string]: unknown } = {
+        clientProgram = BNET_CLIENT_WOW or "WoW",
+        characterName = "Brannoc Ironhand",
+        className = "Warrior",
+        areaName = "Ironforge",
+        wowProjectID = tbl.field(_G, "WOW_PROJECT_ID"),
+        gameAccountID = 77,
+        factionName = UnitFactionGroup("player"),
+    }
     bnetAccount("Brannoc#1137", game)
     mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", 5, false)
     mock.advanceTime(2.6)
@@ -517,7 +607,13 @@ local function death()
     mock.advanceFrames(2)
     expect(hosted("You died")).toBeNil()
     -- a priest offers to bring you back: its card
-    local healer = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "PRIEST", reaction = "friendly", distance = 5 })
+    local healer = mock.spawnUnit({
+        name = "Tamsin Ashford",
+        player = true,
+        class = "PRIEST",
+        reaction = "friendly",
+        distance = 5,
+    })
     healer:resurrect(mock.player)
     mock.advanceFrames(3)
     host("Resurrection").buttons()[1].button:Click()
@@ -538,7 +634,11 @@ local function deleting()
     local it = h.data.item
     expect(it and it.label).toBe("Ember Pelt")
     -- Blizzard's "No"
-    for _, x in ipairs(h.buttons()) do if x.index == 2 then x.button:Click() end end
+    for _, x in ipairs(h.buttons()) do
+        if x.index == 2 then
+            x.button:Click()
+        end
+    end
     mock.advanceFrames(2)
     expect(hosted("Delete item")).toBeNil()
     ClearCursor()
@@ -568,7 +668,9 @@ local function deletingGood()
     h.dialog:Hide()
 end
 
-@test("logging out: the countdown on its card; a party invite; a popup a plugin added; one SuuUI doesn't know stays Blizzard's")
+@test(
+    "logging out: the countdown on its card; a party invite; a popup a plugin added; one SuuUI doesn't know stays Blizzard's"
+)
 local function camping()
     mock.slash("/camp")
     mock.advanceFrames(3)
@@ -597,25 +699,38 @@ local function camping()
     local d = frames.asFrame(StaticPopup_Show("CONFIRM_RESET_INSTANCES"))
     mock.advanceFrames(2)
     expect(hosted("Reset") ~= nil).toBe(true)
-    if d then d:Hide() end
+    if d then
+        d:Hide()
+    end
 end
 
 @test("a bank tab's price on its card, in coins")
 local function bankTab()
-    local d = frames.asFrame(StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") }))
+    local d = frames.asFrame(
+        StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") })
+    )
     mock.advanceFrames(2)
     local h = hosted("Bank")
     if h then
         local body = h.data.body
-        if body then expect(body:sub(1, 6)).toBe("Costs ") end
+        if body then
+            expect(body:sub(1, 6)).toBe("Costs ")
+        end
         M:Emit("SUUUI_THEME_CHANGED", "suuui")
     end
-    if d then d:Hide() end
+    if d then
+        d:Hide()
+    end
 end
 
 @test("the ready check: Blizzard's window on a card with its time")
 local function readyCheck()
-    local friend = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", reaction = "friendly" })
+    local friend = mock.spawnUnit({
+        name = "Brannoc Ironhand",
+        player = true,
+        class = "WARRIOR",
+        reaction = "friendly",
+    })
     mock.group:add(friend)
     mock.advanceFrames(2)
     mock.fireEvent("READY_CHECK", "Brannoc Ironhand", 30)
@@ -630,14 +745,20 @@ local function readyCheck()
     mock.fireEvent("READY_CHECK_FINISHED", false)
     expect(M.readyEndsAt).toBeNil()
     local ready = frames.find("ReadyCheckFrame")
-    if ready and ready:IsShown() then ready:Hide() end
+    if ready and ready:IsShown() then
+        ready:Hide()
+    end
 end
 
 @test("a note's macro action: a secure button over it, out of combat")
 local function secureAction()
     local after = mock.spy(function(_: Notification) end)
-    local id = M:Notify({ kind = "sticky", category = "Group Finder", title = "Your listing",
-        actions = { { label = "Open", variant = "primary", macro = "/run print(1)", onClick = after } } }) :: string
+    local id = M:Notify({
+        kind = "sticky",
+        category = "Group Finder",
+        title = "Your listing",
+        actions = { { label = "Open", variant = "primary", macro = "/run print(1)", onClick = after } },
+    }) :: string
     M:SecureActions()
     local s = M.secure[id .. "#1"]
     if s then
@@ -654,7 +775,17 @@ end
 @test("an invite that asks for your role: Blizzard's role buttons on the card as SuuUI's toggles, its queue warning")
 local function roleInvite()
     -- (the game's own event: with a role allowed, Blizzard shows its role popup)
-    mock.fireEvent("PARTY_INVITE_REQUEST", "Brannoc Ironhand", true, true, false, true, false, "Player-0000-00000000", false)
+    mock.fireEvent(
+        "PARTY_INVITE_REQUEST",
+        "Brannoc Ironhand",
+        true,
+        true,
+        false,
+        true,
+        false,
+        "Player-0000-00000000",
+        false
+    )
     mock.advanceFrames(3)
     local h = host("Party invite")
     expect(h.which).toBe("LFGInvitePopup")
@@ -703,10 +834,16 @@ end
 
 @test("the battleground ready to enter: its window on a card, its time counting down")
 local function battleground()
-    mock.stub(_G, "GetMaxBattlefieldID", function(): number return 2 end)
-    mock.stub(_G, "GetBattlefieldStatus", function(i: number): string return i == 2 and "confirm" or "none" end)
+    mock.stub(_G, "GetMaxBattlefieldID", function(): number
+        return 2
+    end)
+    mock.stub(_G, "GetBattlefieldStatus", function(i: number): string
+        return i == 2 and "confirm" or "none"
+    end)
     local left = 80000
-    mock.stub(_G, "GetBattlefieldPortExpiration", function(_: number): number return left end)
+    mock.stub(_G, "GetBattlefieldPortExpiration", function(_: number): number
+        return left
+    end)
     local dialog = frame("PVPReadyDialog")
     dialog:Show()
     mock.advanceFrames(2)
@@ -724,7 +861,9 @@ local function battleground()
     local _, r3 = h.time()
     expect(r3).toBe(30)
     -- none waiting: no time
-    mock.stub(_G, "GetBattlefieldStatus", function(_: number): string return "none" end)
+    mock.stub(_G, "GetBattlefieldStatus", function(_: number): string
+        return "none"
+    end)
     expect((h.time())).toBeNil()
     dialog:Hide()
     mock.advanceFrames(2)
@@ -736,7 +875,9 @@ local function bankTabPrice()
     mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: number): PurchasableBankTabData?
         return mock.partial({ tabCost = 1234567 })
     end)
-    local d = frames.asFrame(StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") }))
+    local d = frames.asFrame(
+        StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") })
+    )
     mock.advanceFrames(2)
     local h = host("Bank")
     local shown = secret.asNumber(tbl.field(d, "MoneyFrame", "staticMoney"))
@@ -747,7 +888,9 @@ local function bankTabPrice()
         expect(h.cost).toBe(1234567)
         expect((h.data.body or ""):find("123", 1, true) ~= nil).toBe(true)
     end
-    if d then d:Hide() end
+    if d then
+        d:Hide()
+    end
 end
 
 @test("the settings' preview")

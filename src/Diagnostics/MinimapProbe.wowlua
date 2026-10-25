@@ -21,17 +21,27 @@ import * as tbl from "wowlua:table"
 local ARROW = "Interface\\AddOns\\SuuUI\\Media\\Textures\\PlayerArrow.tga"
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     return tostring(v)
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 140) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 140)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, ", ")
 end
 
@@ -39,10 +49,17 @@ end
 local function methods(): string[]
     local out: string[] = {}
     local index = tbl.field(getmetatable(Minimap), "__index")
-    if type(index) ~= "table" then return { "no metatable index" } end
+    if type(index) ~= "table" then
+        return { "no metatable index" }
+    end
     for k in pairs(index) do
-        if type(k) == "string" and (k:find("Texture") or k:find("Blip") or k:find("Player") or k:find("Icon")
-            or k:find("Arrow") or k:find("POI") or k:find("Zoom") or k:find("Ping") or k:find("Rotat") or k:find("Mask")) then
+        if type(k) == "string" and
+            (k:find("Texture") or k:find("Blip") or k:find("Player") or k:find("Icon") or k:find("Arrow") or
+                k:find("POI") or
+                k:find("Zoom") or
+                k:find("Ping") or
+                k:find("Rotat") or
+                k:find("Mask")) then
             out[#out + 1] = k
         end
     end
@@ -64,23 +81,35 @@ export function sample(): { [string]: unknown }
     s.uiMapID = C_Minimap and call(C_Minimap.GetUiMapID) or "missing"
     s.rotate = show(GetCVar("rotateMinimap"))
     s.facing = call(GetPlayerFacing)
-    s.compassRotation = MinimapCompassTexture and call(MinimapCompassTexture.GetRotation, MinimapCompassTexture) or "missing"
+    s.compassRotation = MinimapCompassTexture and call(MinimapCompassTexture.GetRotation, MinimapCompassTexture) or
+        "missing"
     -- positions: you and up to four others
     s.positions = {}
     local mapID = C_Map.GetBestMapForUnit("player")
     s.bestMap = show(mapID)
     local units = { "player" }
-    if IsInRaid() then for i = 1, 4 do units[#units + 1] = "raid" .. i end
-    else for i = 1, 4 do units[#units + 1] = "party" .. i end end
+    if IsInRaid() then
+        for i = 1, 4 do
+            units[#units + 1] = "raid" .. i
+        end
+    else
+        for i = 1, 4 do
+            units[#units + 1] = "party" .. i
+        end
+    end
     for _, u in ipairs(units) do
         if UnitExists(u) then
             s.positions[u] = {
                 unitPosition = call(UnitPosition, u),
-                mapPosition = mapID and call(function()
-                    local p = C_Map.GetPlayerMapPosition(mapID, u)
-                    if not p then return nil end
-                    return p.x, p.y
-                end) or "no map",
+                mapPosition = mapID and
+                    call(function()
+                        local p = C_Map.GetPlayerMapPosition(mapID, u)
+                        if not p then
+                            return nil
+                        end
+                        return p.x, p.y
+                    end) or
+                    "no map",
             }
         end
     end
@@ -103,15 +132,19 @@ export function sample(): { [string]: unknown }
     s.instanceInfo = call(GetInstanceInfo)
     local samples = tbl.listAt(store, "samples")
     table.insert(samples, s)
-    while #samples > 8 do table.remove(samples, 1) end
+    while #samples > 8 do
+        table.remove(samples, 1)
+    end
     return s
 end
 
 export function command(arg: string?)
     if arg == "arrow" then
         local ok, err = pcall(Minimap.SetPlayerTexture, Minimap, ARROW)
-        print(ok and "Minimap probe: your arrow is SuuUI's now. Does it show? (/suu probe minimap arrow off)"
-            or ("Minimap probe: SetPlayerTexture failed: " .. tostring(err)))
+        print(
+            ok and "Minimap probe: your arrow is SuuUI's now. Does it show? (/suu probe minimap arrow off)" or
+                ("Minimap probe: SetPlayerTexture failed: " .. tostring(err))
+        )
         DB.probe.minimapArrow = ok and "set" or tostring(err)
         return
     end
@@ -121,6 +154,11 @@ export function command(arg: string?)
         return
     end
     local s = sample()
-    print(("Minimap probe: %d methods, %s, %s. Sample in a dungeon and in a group too, then /reload."):format(
-        #tbl.list(tbl.field(DB.probe, "minimap", "methods")), tostring(s.instance), tostring(s.group)))
+    print(
+        ("Minimap probe: %d methods, %s, %s. Sample in a dungeon and in a group too, then /reload."):format(
+            #tbl.list(tbl.field(DB.probe, "minimap", "methods")),
+            tostring(s.instance),
+            tostring(s.group)
+        )
+    )
 end

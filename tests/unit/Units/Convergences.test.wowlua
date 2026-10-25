@@ -14,7 +14,16 @@ import type TooltipData from "/UI/Tooltip"
 const SKYSIGHT = 1259686
 const BLESSING = 1270893
 
-type Spot = { map: number, x: number, y: number, by?: string, at?: number, from?: string, confirmed?: boolean, seed?: boolean }
+type Spot = {
+    map: number,
+    x: number,
+    y: number,
+    by?: string,
+    at?: number,
+    from?: string,
+    confirmed?: boolean,
+    seed?: boolean,
+}
 
 local changes = 0
 local listener = {}
@@ -26,35 +35,57 @@ local CONTINENT: { [number]: number } = { [2521] = 1, [2522] = 1, [7000] = 2 }
 local function fakeWorld()
     mock.fake("C_Map.GetWorldPosFromMapPos", function(map: number, pos: Vector2DMixin): (number?, Vector2DMixin?)
         local c = CONTINENT[map]
-        if not c then return nil, nil end
+        if not c then
+            return nil, nil
+        end
         local x, y = pos:GetXY()
         local shift = map == 2522 and 1000 or 0
         return c, CreateVector2D(y * 1000, x * 1000 + shift)
     end)
-    mock.fake("C_Map.GetMapPosFromWorldPos", function(continent: number, pos: Vector2DMixin, map: number): (number?, Vector2DMixin?)
+    mock.fake("C_Map.GetMapPosFromWorldPos", function(
+        continent: number,
+        pos: Vector2DMixin,
+        map: number
+    ): (number?, Vector2DMixin?)
         local n, w = pos:GetXY()
-        if map == 1 and continent == 1 then return 1, CreateVector2D(w / 2000, n / 2000) end
-        if map == 3 then return 3, CreateVector2D(5, 5) end
+        if map == 1 and continent == 1 then
+            return 1, CreateVector2D(w / 2000, n / 2000)
+        end
+        if map == 3 then
+            return 3, CreateVector2D(5, 5)
+        end
         return nil, nil
     end)
 end
 
 local function skyborne(on: boolean)
-    mock.fake("UnitRace", function(): (string, string, number) return "Skyborne", "Skyborne", on and 95 or 1 end)
-    mock.fake("IsPlayerSpell", function(): boolean return false end)
+    mock.fake("UnitRace", function(): (string, string, number)
+        return "Skyborne", "Skyborne", on and 95 or 1
+    end)
+    mock.fake("IsPlayerSpell", function(): boolean
+        return false
+    end)
 end
 
 local function blessed(expires: number?, duration: number?)
     mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(id: number): unknown
-        if id ~= BLESSING or not expires then return nil end
+        if id ~= BLESSING or not expires then
+            return nil
+        end
         return { spellId = BLESSING, expirationTime = expires, duration = duration or 900 }
     end)
 end
 
 local function inGroup(party: boolean, guild: boolean)
-    mock.fake("IsInGroup", function(category: number?): boolean return party and category == nil end)
-    mock.fake("IsInRaid", function(): boolean return false end)
-    mock.fake("IsInGuild", function(): boolean return guild end)
+    mock.fake("IsInGroup", function(category: number?): boolean
+        return party and category == nil
+    end)
+    mock.fake("IsInRaid", function(): boolean
+        return false
+    end)
+    mock.fake("IsInGuild", function(): boolean
+        return guild
+    end)
 end
 
 @beforeEach
@@ -64,8 +95,16 @@ local function setup()
     M.pending, M.blessed, M.taken = nil, nil, nil
     changes = 0
     notes = {}
-    events.on("SUUUI_CONVERGENCES_CHANGED", function() changes = changes + 1 end, listener)
-    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown }) notes[#notes + 1] = def end)
+    events.on(
+        "SUUUI_CONVERGENCES_CHANGED",
+        function()
+            changes = changes + 1
+        end,
+        listener
+    )
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown })
+        notes[#notes + 1] = def
+    end)
     fakeWorld()
     skyborne(true)
     blessed(nil)
@@ -78,7 +117,9 @@ local function teardown()
     M:Set("send", true)
     M:Set("receive", true)
     M:Set("minimap", true)
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -101,12 +142,20 @@ local function isSkyborne()
     skyborne(false)
     expect(M:IsSkyborne()).toBe(false)
     expect(M:Shown()).toBe(false)
-    mock.fake("IsPlayerSpell", function(id: number): boolean return id == SKYSIGHT end)
+    mock.fake("IsPlayerSpell", function(id: number): boolean
+        return id == SKYSIGHT
+    end)
     expect(M:IsSkyborne()).toBe(true)
-    mock.fake("IsPlayerSpell", function(): unknown return mock.secret(true) end)
+    mock.fake("IsPlayerSpell", function(): unknown
+        return mock.secret(true)
+    end)
     expect(M:IsSkyborne()).toBe(false)
-    mock.fake("UnitRace", function(): (string, string, unknown) return "x", "x", mock.secret(95) end)
-    mock.fake("IsPlayerSpell", function(): boolean error("no") end)
+    mock.fake("UnitRace", function(): (string, string, unknown)
+        return "x", "x", mock.secret(95)
+    end)
+    mock.fake("IsPlayerSpell", function(): boolean
+        error("no")
+    end)
     expect(M:IsSkyborne()).toBe(false)
 end
 
@@ -117,10 +166,17 @@ local function world()
     expect(w).toEqual({ continent = 1, north = 250, west = 500 })
     expect(worldOf(a)).toBe(w)
     expect(worldOf({ map = 1234, x = 0, y = 0 })).toBeNil()
-    mock.fake("C_Map.GetWorldPosFromMapPos", function(): unknown error("no") end)
+    mock.fake("C_Map.GetWorldPosFromMapPos", function(): unknown
+        error("no")
+    end)
     expect(worldOf({ map = 2521, x = 0, y = 0 })).toBeNil()
     mock.fake("C_Map.GetWorldPosFromMapPos", function(): (number, unknown)
-        return 1, { GetXY = function(): (unknown, number) return mock.secret(1), 2 end }
+        return 1,
+            {
+                GetXY = function(): (unknown, number)
+                    return mock.secret(1), 2
+                end,
+            }
     end)
     expect(worldOf({ map = 2521, x = 0, y = 0 })).toBeNil()
 end
@@ -131,7 +187,9 @@ local function distance()
     expect(yards({ map = 2521, x = 0.5, y = 0.5 }, { map = 2522, x = 0.5, y = 0.5 })).toBeCloseTo(1000, 3)
     expect(yards({ map = 2521, x = 0.5, y = 0.5 }, { map = 7000, x = 0.5, y = 0.5 })).toBeNil()
     -- no world places: the map's size
-    mock.fake("C_Map.GetMapWorldSize", function(map: number): (number, number) return map == 50 and 1000 or 0, 500 end)
+    mock.fake("C_Map.GetMapWorldSize", function(map: number): (number, number)
+        return map == 50 and 1000 or 0, 500
+    end)
     expect(yards({ map = 50, x = 0.1, y = 0.1 }, { map = 50, x = 0.13, y = 0.18 })).toBeCloseTo(50, 3)
     expect(yards({ map = 50, x = 0.1, y = 0.1 }, { map = 51, x = 0.1, y = 0.1 })).toBeNil()
     expect(yards({ map = 52, x = 0.1, y = 0.1 }, { map = 52, x = 0.1, y = 0.1 })).toBeNil()
@@ -149,7 +207,9 @@ local function room()
     local list: Spot[] = {}
     makeRoom(list)
     expect(#list).toBe(0)
-    for i = 1, MAX_SPOTS do list[i] = { map = 1, x = 0, y = 0, at = i } end
+    for i = 1, MAX_SPOTS do
+        list[i] = { map = 1, x = 0, y = 0, at = i }
+    end
     list[1].seed = true
     list[5].from = "Bram"
     list[5].confirmed = true
@@ -165,7 +225,9 @@ local function room()
     expect(list[1].seed).toBe(true)
     -- through Add
     local spots = M:Spots()
-    for i = 2, MAX_SPOTS do spots[i] = { map = 1, x = 0, y = 0, at = i } end
+    for i = 2, MAX_SPOTS do
+        spots[i] = { map = 1, x = 0, y = 0, at = i }
+    end
     M:Add({ map = 2, x = 0, y = 0 })
     expect(#M:Spots()).toBe(MAX_SPOTS)
     expect(M:Spots()[2].at).toBe(3)
@@ -186,7 +248,9 @@ end
 
 @test("MapName and Where")
 local function mapName()
-    mock.fake("C_Map.GetMapInfo", function(map: number): unknown return map == 2521 and { name = "Zephra's Isle" } or nil end)
+    mock.fake("C_Map.GetMapInfo", function(map: number): unknown
+        return map == 2521 and { name = "Zephra's Isle" } or nil
+    end)
     expect(M:MapName(2521)).toBe("Zephra's Isle")
     expect(M:MapName(nil)).toBeNil()
     expect(M:MapName(5)).toBeNil()
@@ -203,11 +267,17 @@ local function readTheBlessing()
     expect(blessing()).toBeNil()
     blessed(GetTime() + 600)
     expect(assert(blessing()).duration).toBe(900)
-    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown error("no") end)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown
+        error("no")
+    end)
     expect(blessing()).toBe(false)
-    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown return mock.secret({}) end)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown
+        return mock.secret({})
+    end)
     expect(blessing()).toBe(false)
-    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown return { expirationTime = mock.secret(5), duration = 900 } end)
+    mock.fake("C_UnitAuras.GetPlayerAuraBySpellID", function(): unknown
+        return { expirationTime = mock.secret(5), duration = 900 }
+    end)
     expect(blessing()).toBe(false)
     blessed(nil)
     mock.player:enterCombat()
@@ -246,10 +316,18 @@ end
 --------------------------------------------------------------------------------
 
 local function standAt(map: unknown, x: unknown, y: unknown)
-    mock.fake("C_Map.GetBestMapForUnit", function(): unknown return map end)
+    mock.fake("C_Map.GetBestMapForUnit", function(): unknown
+        return map
+    end)
     mock.fake("C_Map.GetPlayerMapPosition", function(): unknown
-        if x == nil then return nil end
-        return { GetXY = function(): (unknown, unknown) return x, y end }
+        if x == nil then
+            return nil
+        end
+        return {
+            GetXY = function(): (unknown, unknown)
+                return x, y
+            end,
+        }
     end)
 end
 
@@ -261,7 +339,9 @@ local function castFinds()
     mock.fake("C_ChatInfo.SendAddonMessage", function(prefix: string, text: string, channel: string)
         sent[#sent + 1] = { prefix, text, channel }
     end)
-    mock.fake("C_Map.GetMapInfo", function(): unknown return { name = "Zephra's Isle" } end)
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Zephra's Isle" }
+    end)
     mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", SKYSIGHT)
     expect(assert(M.pending).map).toBe(2521)
     blessed(GetTime() + 900, 900)
@@ -365,12 +445,20 @@ local function channels()
     expect(groupChannel()).toBeNil()
     inGroup(true, true)
     expect(M:Channels()).toEqual({ "PARTY", "GUILD" })
-    mock.fake("IsInRaid", function(): boolean return true end)
+    mock.fake("IsInRaid", function(): boolean
+        return true
+    end)
     expect(groupChannel()).toBe("RAID")
-    mock.fake("IsInGroup", function(category: number?): boolean return category ~= nil end)
+    mock.fake("IsInGroup", function(category: number?): boolean
+        return category ~= nil
+    end)
     expect(groupChannel()).toBe("INSTANCE_CHAT")
-    mock.fake("IsInGroup", function(): unknown return mock.secret(true) end)
-    mock.fake("IsInRaid", function(): boolean return false end)
+    mock.fake("IsInGroup", function(): unknown
+        return mock.secret(true)
+    end)
+    mock.fake("IsInRaid", function(): boolean
+        return false
+    end)
     expect(groupChannel()).toBeNil()
 end
 
@@ -379,7 +467,9 @@ local function texts()
     expect(clean("a\tb\nc|d\re")).toBe("a b c d e")
     expect(clean(nil)).toBe("")
     expect(#clean(("x"):rep(60))).toBe(40)
-    expect(message({ map = 2521, x = 0.48281, y = 0.2, by = "Suu", at = 1700000000 })).toBe("CONV\t1\t2521\t0.4828\t0.2000\tSuu\t1700000000")
+    expect(message({ map = 2521, x = 0.48281, y = 0.2, by = "Suu", at = 1700000000 })).toBe(
+        "CONV\t1\t2521\t0.4828\t0.2000\tSuu\t1700000000"
+    )
     expect(message({ map = 1, x = 0, y = 1 })).toBe("CONV\t1\t1\t0.0000\t1.0000\t\t0")
 end
 
@@ -397,7 +487,9 @@ local function sendSetting()
     M:Send(spot)
     expect(sent).toHaveBeenCalledTimes(1)
     -- a failing send is quiet
-    mock.fake("C_ChatInfo.SendAddonMessage", function() error("throttled") end)
+    mock.fake("C_ChatInfo.SendAddonMessage", function()
+        error("throttled")
+    end)
     M:Send(spot)
     expectNoErrors()
 end
@@ -420,7 +512,9 @@ end
 
 @test("fromMe: your name, with or without the realm")
 local function mine()
-    mock.fake("UnitFullName", function(): (string, string) return "Suu", "Realm" end)
+    mock.fake("UnitFullName", function(): (string, string)
+        return "Suu", "Realm"
+    end)
     expect(fromMe("Suu")).toBe(true)
     expect(fromMe("Suu-Realm")).toBe(true)
     expect(fromMe("Suu Realm")).toBe(true)
@@ -433,7 +527,9 @@ end
 
 @test("OnMessage: a shared spot is checked, saved and told")
 local function onMessage()
-    mock.fake("C_Map.GetMapInfo", function(map: number): unknown return map == 2521 and { name = "Zephra's Isle" } or nil end)
+    mock.fake("C_Map.GetMapInfo", function(map: number): unknown
+        return map == 2521 and { name = "Zephra's Isle" } or nil
+    end)
     receive("CONV\t1\t2521\t0.9000\t0.9000\tTam|sin\t1700000000")
     local s = M:Spots()[2]
     expect(s).toEqual({ map = 2521, x = 0.9, y = 0.9, at = 1700000000, by = "Tam sin", from = "Bram Stoker" })
@@ -453,8 +549,12 @@ end
 
 @test("OnMessage: what isn't a spot is dropped")
 local function onMessageBad()
-    mock.fake("C_Map.GetMapInfo", function(map: number): unknown return map == 2521 and { name = "Zephra's Isle" } or nil end)
-    mock.fake("UnitFullName", function(): (string, string) return "Suu", "Realm" end)
+    mock.fake("C_Map.GetMapInfo", function(map: number): unknown
+        return map == 2521 and { name = "Zephra's Isle" } or nil
+    end)
+    mock.fake("UnitFullName", function(): (string, string)
+        return "Suu", "Realm"
+    end)
     M:OnMessage("Other", "CONV\t1\t2521\t0.5\t0.5", "GUILD", "Bram")
     M:OnMessage("SuuUI", mock.secret("CONV\t1\t2521\t0.5\t0.5"), "GUILD", "Bram")
     M:OnMessage("SuuUI", "CONV\t1\t2521\t0.5\t0.5", "GUILD", mock.secret("Bram"))
@@ -480,11 +580,16 @@ end
 
 @test("OnMessage: one sender's spots a session are capped; not told when not Skyborne")
 local function onMessageCap()
-    mock.fake("C_Map.GetMapInfo", function(): unknown return { name = "Isle" } end)
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Isle" }
+    end)
     skyborne(false)
     -- a grid 100 yards apart
     for i = 1, 35 do
-        receive(("CONV\t1\t2521\t%.4f\t%.4f\tX\t0"):format((i % 10) / 10 + 0.05, math.floor(i / 10) / 10 + 0.05), "Spammer")
+        receive(
+            ("CONV\t1\t2521\t%.4f\t%.4f\tX\t0"):format((i % 10) / 10 + 0.05, math.floor(i / 10) / 10 + 0.05),
+            "Spammer"
+        )
     end
     expect(#M:Spots()).toBe(31)
     expect(assert(M.taken).Spammer).toBe(30)
@@ -493,7 +598,9 @@ end
 
 @test("A real addon message reaches it")
 local function realMessage()
-    mock.fake("C_Map.GetMapInfo", function(): unknown return { name = "Isle" } end)
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Isle" }
+    end)
     mock.receiveAddonMessage("SuuUI", "CONV\t1\t2521\t0.3000\t0.3000\tX\t0", "GUILD", "Bram Stoker")
     mock.advanceFrames(2)
     expect(#M:Spots()).toBe(2)
@@ -512,7 +619,9 @@ end
 
 @test("Tip: the blessing, who found it, who shared it")
 local function tip()
-    mock.fake("C_Map.GetMapInfo", function(): unknown return { name = "Isle" } end)
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Isle" }
+    end)
     local t = M:Tip({ map = 2521, x = 0.5, y = 0.25, seed = true })
     expect(t.title).toBe("Convergence of Elements")
     expect(t.subtitle).toBe("Isle · 50.0, 25.0")
@@ -542,20 +651,28 @@ end
 --------------------------------------------------------------------------------
 
 local function onMinimap(radius: unknown, rotate: boolean)
-    mock.fake("UnitPosition", function(): (unknown, unknown, unknown, unknown) return 250, 500, 0, 1 end)
-    mock.fake("C_Minimap.GetViewRadius", function(): unknown return radius end)
-    mock.fake("GetCVar", function(name: string): string? return name == "rotateMinimap" and (rotate and "1" or "0") or nil end)
-    mock.fake("GetPlayerFacing", function(): number return math.pi / 2 end)
+    mock.fake("UnitPosition", function(): (unknown, unknown, unknown, unknown)
+        return 250, 500, 0, 1
+    end)
+    mock.fake("C_Minimap.GetViewRadius", function(): unknown
+        return radius
+    end)
+    mock.fake("GetCVar", function(name: string): string?
+        return name == "rotateMinimap" and (rotate and "1" or "0") or nil
+    end)
+    mock.fake("GetPlayerFacing", function(): number
+        return math.pi / 2
+    end)
 end
 
 @test("MinimapPlaces: the spots in range, turned with a rotating minimap")
 local function places()
     onMinimap(100, false)
     local spots = M:Spots()
-    spots[1] = { map = 2521, x = 0.53, y = 0.25 }   -- 30 yards west... east
-    spots[2] = { map = 2521, x = 0.5, y = 0.2 }     -- 50 yards north
-    spots[3] = { map = 2521, x = 0.9, y = 0.9 }     -- far
-    spots[4] = { map = 7000, x = 0.5, y = 0.25 }    -- another continent
+    spots[1] = { map = 2521, x = 0.53, y = 0.25 } -- 30 yards west... east
+    spots[2] = { map = 2521, x = 0.5, y = 0.2 } -- 50 yards north
+    spots[3] = { map = 2521, x = 0.9, y = 0.9 } -- far
+    spots[4] = { map = 7000, x = 0.5, y = 0.25 } -- another continent
     local half = Minimap:GetWidth() / 2
     local out = M:MinimapPlaces()
     expect(#out).toBe(2)
@@ -571,7 +688,9 @@ local function places()
     expect(M:MinimapPlaces()).toEqual({})
     onMinimap(mock.secret(100), false)
     expect(M:MinimapPlaces()).toEqual({})
-    mock.fake("UnitPosition", function(): unknown error("restricted") end)
+    mock.fake("UnitPosition", function(): unknown
+        error("restricted")
+    end)
     expect(M:MinimapPlaces()).toEqual({})
 end
 
@@ -595,7 +714,9 @@ local function minimapLayer()
     expect(pins[1].glow).never.toBeShown()
     -- the tooltip
     local shown: TooltipData? = nil
-    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, fn: () -> TooltipData) shown = fn() end)
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, fn: () -> TooltipData)
+        shown = fn()
+    end)
     mock.hover(pins[1])
     expect(assert(shown).title).toBe("Convergence of Elements")
     mock.hover(nil)

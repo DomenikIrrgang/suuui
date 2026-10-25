@@ -8,14 +8,18 @@ import FakeCombat, FakeReporter from "../../fakes"
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     mock.slash("/suu errors clear")
 end
 
 -- The fault entry whose message has `text`, if any.
 local function faultWith(text: string): fault.Entry?
     for _, e in ipairs(fault.entries()) do
-        if e.message:find(text, 1, true) then return e end
+        if e.message:find(text, 1, true) then
+            return e
+        end
     end
     return nil
 end
@@ -30,8 +34,16 @@ end
 
 @test("an error is reported under the source, else under the key")
 local function errorsReported()
-    combat.run("coreatest:err1", function() error("combat-err-one") end, "Combat Test")
-    combat.run("coreatest:err2", function() error("combat-err-two") end)
+    combat.run(
+        "coreatest:err1",
+        function()
+            error("combat-err-one")
+        end,
+        "Combat Test"
+    )
+    combat.run("coreatest:err2", function()
+        error("combat-err-two")
+    end)
     local one, two = faultWith("combat-err-one"), faultWith("combat-err-two")
     expect(one and one.source).toBe("Combat Test")
     expect(two and two.source).toBe("coreatest:err2")
@@ -42,8 +54,20 @@ local function waits()
     local order: string[] = {}
     mock.player:enterCombat()
     expect(InCombatLockdown()).toBe(true)
-    combat.run("coreatest:a", function() order[#order + 1] = "a" end, "Test")
-    combat.run("coreatest:b", function() order[#order + 1] = "b" end, "Test")
+    combat.run(
+        "coreatest:a",
+        function()
+            order[#order + 1] = "a"
+        end,
+        "Test"
+    )
+    combat.run(
+        "coreatest:b",
+        function()
+            order[#order + 1] = "b"
+        end,
+        "Test"
+    )
     expect(order).toEqual({})
     expect(combat.pendingCount()).toBe(2)
     mock.player:leaveCombat()
@@ -56,9 +80,27 @@ local function replaces()
     local order: string[] = {}
     local key = {} -- any value is a key
     mock.player:enterCombat()
-    combat.run(key, function() order[#order + 1] = "first" end, "Test")
-    combat.run("coreatest:other", function() order[#order + 1] = "other" end, "Test")
-    combat.run(key, function() order[#order + 1] = "latest" end, "Latest source")
+    combat.run(
+        key,
+        function()
+            order[#order + 1] = "first"
+        end,
+        "Test"
+    )
+    combat.run(
+        "coreatest:other",
+        function()
+            order[#order + 1] = "other"
+        end,
+        "Test"
+    )
+    combat.run(
+        key,
+        function()
+            order[#order + 1] = "latest"
+        end,
+        "Latest source"
+    )
     expect(combat.pendingCount()).toBe(2)
     mock.player:leaveCombat()
     expect(order).toEqual({ "latest", "other" })
@@ -68,7 +110,13 @@ end
 local function queuedError()
     mock.player:enterCombat()
     combat.run("coreatest:qerr", function() end, "First")
-    combat.run("coreatest:qerr", function() error("combat-err-queued") end, "Second")
+    combat.run(
+        "coreatest:qerr",
+        function()
+            error("combat-err-queued")
+        end,
+        "Second"
+    )
     mock.player:leaveCombat()
     local e = faultWith("combat-err-queued")
     expect(e and e.source).toBe("Second")
@@ -79,16 +127,32 @@ end
 local function restart()
     local order: string[] = {}
     mock.player:enterCombat()
-    combat.run("coreatest:r1", function()
-        order[#order + 1] = "r1"
-        mock.player:enterCombat()
-    end, "Test")
-    combat.run("coreatest:r2", function() order[#order + 1] = "r2" end, "Test")
+    combat.run(
+        "coreatest:r1",
+        function()
+            order[#order + 1] = "r1"
+            mock.player:enterCombat()
+        end,
+        "Test"
+    )
+    combat.run(
+        "coreatest:r2",
+        function()
+            order[#order + 1] = "r2"
+        end,
+        "Test"
+    )
     mock.player:leaveCombat()
     expect(order).toEqual({ "r1" })
     expect(combat.pendingCount()).toBe(1)
     -- a new request for the waiting key still replaces it
-    combat.run("coreatest:r2", function() order[#order + 1] = "r2 latest" end, "Test")
+    combat.run(
+        "coreatest:r2",
+        function()
+            order[#order + 1] = "r2 latest"
+        end,
+        "Test"
+    )
     expect(combat.pendingCount()).toBe(1)
     mock.player:leaveCombat()
     expect(order).toEqual({ "r1", "r2 latest" })
@@ -99,10 +163,22 @@ end
 local function again()
     local runs = 0
     mock.player:enterCombat()
-    combat.run("coreatest:again", function() runs += 1 end, "Test")
+    combat.run(
+        "coreatest:again",
+        function()
+            runs += 1
+        end,
+        "Test"
+    )
     mock.player:leaveCombat()
     mock.player:enterCombat()
-    combat.run("coreatest:again", function() runs += 1 end, "Test")
+    combat.run(
+        "coreatest:again",
+        function()
+            runs += 1
+        end,
+        "Test"
+    )
     expect(combat.pendingCount()).toBe(1)
     mock.player:leaveCombat()
     expect(runs).toBe(2)
@@ -112,17 +188,27 @@ end
 -- A queue of its own: a fight the test runs
 --------------------------------------------------------------------------------
 
-@test("a queue of its own: now out of combat; in a fight the latest request per key runs at its end, in the first's place")
+@test(
+    "a queue of its own: now out of combat; in a fight the latest request per key runs at its end, in the first's place"
+)
 local function ownQueue()
     local fight, r = FakeCombat.new(), FakeReporter.new()
     local q = combat.CombatQueue.new(fight, r)
     local ran: string[] = {}
-    q:run("a", function() ran[#ran + 1] = "a now" end)
+    q:run("a", function()
+        ran[#ran + 1] = "a now"
+    end)
     expect(ran).toEqual({ "a now" })
     fight.fighting = true
-    q:run("bar", function() ran[#ran + 1] = "bar 1" end)
-    q:run("other", function() ran[#ran + 1] = "other" end)
-    q:run("bar", function() ran[#ran + 1] = "bar 2" end)
+    q:run("bar", function()
+        ran[#ran + 1] = "bar 1"
+    end)
+    q:run("other", function()
+        ran[#ran + 1] = "other"
+    end)
+    q:run("bar", function()
+        ran[#ran + 1] = "bar 2"
+    end)
     expect(q:pendingCount()).toBe(2)
     expect(#ran).toBe(1)
     fight:finish()
@@ -136,8 +222,16 @@ local function ownQueueError()
     local q = combat.CombatQueue.new(fight, r)
     fight.fighting = true
     local ran = false
-    q:run("x", function() error("queue-boom") end, "Bars")
-    q:run("y", function() ran = true end)
+    q:run(
+        "x",
+        function()
+            error("queue-boom")
+        end,
+        "Bars"
+    )
+    q:run("y", function()
+        ran = true
+    end)
     fight:finish()
     expect(r.errors).toEqual({ "Bars: queue-boom" })
     expect(ran).toBe(true)

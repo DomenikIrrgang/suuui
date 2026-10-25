@@ -39,32 +39,47 @@ type Size = (v: unknown) -> number
 local function walker(seen: { [unknown]: unknown }): Size
     local function size(v: unknown): number
         if type(v) == "string" then
-            if seen[v] then return 0 end
+            if seen[v] then
+                return 0
+            end
             seen[v] = true
             return 25 + #v
         elseif type(v) == "function" then
-            if seen[v] then return 0 end
+            if seen[v] then
+                return 0
+            end
             seen[v] = true
             return 40
         elseif type(v) ~= "table" then
             return 0
         end
-        if seen[v] then return 0 end
+        if seen[v] then
+            return 0
+        end
         seen[v] = true
         -- a frame: its own fields only, never into the game's frames
         local forbidden = tbl.field(v, "IsForbidden")
-        if isFrame(v) and type(forbidden) == "function" and forbidden(v) then return 0 end
+        if isFrame(v) and type(forbidden) == "function" and forbidden(v) then
+            return 0
+        end
         local arr, hash, n = 0, 0, 56
         -- a table the game guards (secret keys) can't be walked: counted empty
         pcall(function()
             arr = #v
             for k, x in pairs(v) do
-                if not (type(k) == "number" and k >= 1 and k <= arr and k % 1 == 0) then hash = hash + 1 end
+                if not (type(k) == "number" and k >= 1 and k <= arr and k % 1 == 0) then
+                    hash = hash + 1
+                end
                 n = n + size(k) + size(x)
             end
         end)
         local slots = 0
-        if hash > 0 then slots = 1; while slots < hash do slots = slots * 2 end end
+        if hash > 0 then
+            slots = 1
+            while slots < hash do
+                slots = slots * 2
+            end
+        end
         return n + 16 * arr + 40 * slots
     end
     return size
@@ -77,7 +92,9 @@ local function seenWith(gameFrames: { [unknown]: boolean }): { [unknown]: unknow
     return seen
 end
 
-local function kb(bytes: number): number return math.floor(bytes / 1024 + 0.5) end
+local function kb(bytes: number): number
+    return math.floor(bytes / 1024 + 0.5)
+end
 
 -- The largest entries of a table, each its own size (walked in order, so a
 -- table shared by two counts for the first).
@@ -87,16 +104,27 @@ local function biggest(size: Size, t: unknown, limit: number): (string[], number
     local rows: Row[] = {}
     if type(t) == "table" then
         for k, v in pairs(t) do
-            if type(v) == "table" then rows[#rows + 1] = { k = tostring(k), v = v, n = 0 } end
+            if type(v) == "table" then
+                rows[#rows + 1] = { k = tostring(k), v = v, n = 0 }
+            end
         end
     end
-    table.sort(rows, function(a: Row, b: Row): boolean return a.k < b.k end)
+    table.sort(rows, function(a: Row, b: Row): boolean
+        return a.k < b.k
+    end)
     local total = 0
-    for _, r in ipairs(rows) do r.n = size(r.v); total = total + r.n end
-    table.sort(rows, function(a: Row, b: Row): boolean return a.n > b.n end)
+    for _, r in ipairs(rows) do
+        r.n = size(r.v)
+        total = total + r.n
+    end
+    table.sort(rows, function(a: Row, b: Row): boolean
+        return a.n > b.n
+    end)
     local out: string[] = {}
     for i = 1, math.min(limit, #rows) do
-        if rows[i].n >= 10240 then out[#out + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n)) end
+        if rows[i].n >= 10240 then
+            out[#out + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n))
+        end
     end
     return out, total
 end
@@ -108,7 +136,9 @@ local function drill(gameFrames: { [unknown]: boolean }, start: unknown, depth: 
     local out: string[] = {}
     local t = start
     for level = 1, depth do
-        if type(t) ~= "table" then break end
+        if type(t) ~= "table" then
+            break
+        end
         local seen = seenWith(gameFrames)
         seen[t] = true
         local size = walker(seen)
@@ -118,15 +148,23 @@ local function drill(gameFrames: { [unknown]: boolean }, start: unknown, depth: 
             if type(k) == "number" then
                 items = items + 1
                 itemN = itemN + size(v)
-                if first == nil then first = v end
+                if first == nil then
+                    first = v
+                end
             elseif type(v) == "table" or type(v) == "string" then
                 rows[#rows + 1] = { k = tostring(k), v = v, n = size(v) }
             end
         end
-        if items > 0 then rows[#rows + 1] = { k = "[" .. items .. "]", v = first, n = itemN } end
-        table.sort(rows, function(a: Row, b: Row): boolean return a.n > b.n end)
+        if items > 0 then
+            rows[#rows + 1] = { k = "[" .. items .. "]", v = first, n = itemN }
+        end
+        table.sort(rows, function(a: Row, b: Row): boolean
+            return a.n > b.n
+        end)
         local line: string[] = {}
-        for i = 1, math.min(6, #rows) do line[#line + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n)) end
+        for i = 1, math.min(6, #rows) do
+            line[#line + 1] = ("%s %d KB"):format(rows[i].k, kb(rows[i].n))
+        end
         out[level] = table.concat(line, ", ")
         t = rows[1] and rows[1].v
     end
@@ -137,13 +175,20 @@ end
 -- distinct buttons, in case it initialises one twice), against the maxima.
 local function containerInfo(c: unknown): string
     local buttons = tbl.field(c, "buttons")
-    if buttons == nil then return "none" end
+    if buttons == nil then
+        return "none"
+    end
     local list = tbl.list(buttons)
     local per: { [unknown]: number }, distinct: { [unknown]: boolean }, n = {}, {}, 0
     for _, b in ipairs(list) do
         local key, button = tbl.field(b, "key"), tbl.field(b, "button")
-        if key ~= nil then per[key] = (per[key] or 0) + 1 end
-        if button ~= nil and not distinct[button] then distinct[button] = true; n = n + 1 end
+        if key ~= nil then
+            per[key] = (per[key] or 0) + 1
+        end
+        if button ~= nil and not distinct[button] then
+            distinct[button] = true
+            n = n + 1
+        end
     end
     local maxima: string[] = {}
     local container = tbl.field(c, "container")
@@ -151,9 +196,15 @@ local function containerInfo(c: unknown): string
     for _, g in ipairs(tbl.list(tbl.field(c, "opts", "groups"))) do
         local key = tbl.field(g, "key")
         local cur: unknown = nil
-        if type(getMax) == "function" then cur = select(2, pcall(getMax, container, key)) end
-        maxima[#maxima + 1] = ("%s made=%d max=%s now=%s"):format(tostring(key), key ~= nil and per[key] or 0,
-            tostring(tbl.field(g, "max")), tostring(cur))
+        if type(getMax) == "function" then
+            cur = select(2, pcall(getMax, container, key))
+        end
+        maxima[#maxima + 1] = ("%s made=%d max=%s now=%s"):format(
+            tostring(key),
+            key ~= nil and per[key] or 0,
+            tostring(tbl.field(g, "max")),
+            tostring(cur)
+        )
     end
     return ("%d entries, %d buttons: %s"):format(#list, n, table.concat(maxima, "; "))
 end
@@ -172,7 +223,9 @@ export function command()
     -- the game's named frames are the game's: never walked
     local gameFrames: { [unknown]: boolean } = {}
     for name, v in pairs(_G) do
-        if isFrame(v) and not (type(name) == "string" and name:find("^SuuUI")) then gameFrames[v] = true end
+        if isFrame(v) and not (type(name) == "string" and name:find("^SuuUI")) then
+            gameFrames[v] = true
+        end
     end
     local size = walker(seenWith(gameFrames))
     local walked = 0
@@ -205,15 +258,24 @@ export function command()
         if type(all) == "table" then
             for k, v in pairs(all) do
                 local n = walker({})(v)
-                if not bestN or n > bestN then best, bestN = k, n end
+                if not bestN or n > bestN then
+                    best, bestN = k, n
+                end
             end
         end
-        if best ~= nil then out[which .. "Inside"] = { name = tostring(best), (biggest(walker({}), tbl.field(all, tostring(best)), 10)) } end
+        if best ~= nil then
+            out[which .. "Inside"] = {
+                name = tostring(best),
+                (biggest(walker({}), tbl.field(all, tostring(best)), 10)),
+            }
+        end
     end
 
     -- each module, its frames included
     local mods: { [string]: unknown } = {}
-    for _, m in ipairs(modules.all()) do mods[tostring(m.id)] = m end
+    for _, m in ipairs(modules.all()) do
+        mods[tostring(m.id)] = m
+    end
     local modBytes: number
     out.modules, modBytes = biggest(size, mods, 25)
     local modulesKB = kb(modBytes)
@@ -223,21 +285,27 @@ export function command()
     local drilled: { [string]: string[] } = {}
     out.drill = drilled
     for _, id in ipairs({ "raid", "party", "auras", "cooldowns", "actionbars" }) do
-        if mods[id] then drilled[id] = drill(gameFrames, mods[id], 6) end
+        if mods[id] then
+            drilled[id] = drill(gameFrames, mods[id], 6)
+        end
     end
 
     -- the namespace: bundled data, shared tables
     local nsTables: { [unknown]: unknown } = {}
     if type(addonTable) == "table" then
         for k, v in pairs(addonTable) do
-            if k ~= "__wowlua" and type(v) == "table" and not isFrame(v) then nsTables[k] = v end
+            if k ~= "__wowlua" and type(v) == "table" and not isFrame(v) then
+                nsTables[k] = v
+            end
         end
     end
     -- the modules' export tables (ns.X before the port), by module ID
     local exportsByModule = tbl.field(addonTable, "__wowlua", "modules")
     if type(exportsByModule) == "table" then
         for id, exports in pairs(exportsByModule) do
-            if type(exports) == "table" and not isFrame(exports) then nsTables[id] = exports end
+            if type(exports) == "table" and not isFrame(exports) then
+                nsTables[id] = exports
+            end
         end
     end
     local nsBytes: number
@@ -261,6 +329,14 @@ export function command()
     collectgarbage("collect")
 
     DB.probe.memory = out
-    print(("Memory probe: SuuUI %.1f MB (%.1f MB after collecting garbage); probe data ~%.1f MB, saved settings ~%.1f MB, data ~%.1f MB, modules ~%.1f MB. /reload to save it.")
-        :format(before / 1024, after / 1024, probeKB / 1024, dbKB / 1024, nsKB / 1024, modulesKB / 1024))
+    print(
+        ("Memory probe: SuuUI %.1f MB (%.1f MB after collecting garbage); probe data ~%.1f MB, saved settings ~%.1f MB, data ~%.1f MB, modules ~%.1f MB. /reload to save it."):format(
+            before / 1024,
+            after / 1024,
+            probeKB / 1024,
+            dbKB / 1024,
+            nsKB / 1024,
+            modulesKB / 1024
+        )
+    )
 end

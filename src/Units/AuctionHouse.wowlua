@@ -34,8 +34,15 @@ local S = T.space
 local try, tryValue, tryMethod, field, list = errors.try, errors.tryValue, errors.tryMethod, tbl.field, tbl.list
 local asNumber, asString = secret.asNumber, secret.asString
 
-local DEFAULTS = { cheapCheck = true, cheapPercent = 25, cheapShare = 10,
-                   tipShow = true, tipMost = true, tipOffered = true, tipStack = true }
+local DEFAULTS = {
+    cheapCheck = true,
+    cheapPercent = 25,
+    cheapShare = 10,
+    tipShow = true,
+    tipMost = true,
+    tipOffered = true,
+    tipStack = true,
+}
 
 local M: AuctionHouseModule
 
@@ -44,31 +51,88 @@ local M: AuctionHouseModule
 -- cheapPercent % under the next price) don't set the price; Post asks first
 -- when yours is that far under.
 export const SECTION: SettingsSection = {
-    id = "auctionhouse", label = "Auction house", category = "General", order = 28,
+    id = "auctionhouse",
+    label = "Auction house",
+    category = "General",
+    order = 28,
     groups = {
-        { title = "A cheap few", description = "When a few items are offered far under the rest, the sell price is filled in under the rest instead, and Post asks first when your price is that far under.", rows = {
-            { key = "cheapCheck", label = "Look past a cheap few", control = "toggle",
-              description = "Off: the price is filled in 1c under the very cheapest offer, and Post never asks." },
-            { key = "cheapPercent", label = "Far under", control = "slider", min = 10, max = 60, step = 5, unit = "%",
-              description = "How far under the rest's price counts as too cheap.",
-              disabled = function(): (boolean, string) return not M:Get("cheapCheck"), "Look past a cheap few is off." end },
-            { key = "cheapShare", label = "A few", control = "slider", min = 5, max = 30, step = 5, unit = "%",
-              description = "The most the cheap offers may make up of everything offered, together.",
-              disabled = function(): (boolean, string) return not M:Get("cheapCheck"), "Look past a cheap few is off." end },
-        } },
-        { title = "Item tooltips", description = "What the auction house showed last for an item, from Scan all and your searches, under its tooltip everywhere.", rows = {
-            { key = "tipShow", label = "Auction prices", control = "toggle",
-              description = "The lowest buyout per item and when it was seen." },
-            { key = "tipMost", label = "What most sell it for", control = "toggle",
-              description = "When a cheap few sell under the rest (the rule above).",
-              disabled = function(): (boolean, string) return not M:Get("tipShow"), "Auction prices are off." end },
-            { key = "tipOffered", label = "How many are offered", control = "toggle",
-              description = "Items offered, and in how many auctions when Scan all or a search counted them.",
-              disabled = function(): (boolean, string) return not M:Get("tipShow"), "Auction prices are off." end },
-            { key = "tipStack", label = "Price for the stack", control = "toggle",
-              description = "On a stack in your bags: the lowest buyout times how many.",
-              disabled = function(): (boolean, string) return not M:Get("tipShow"), "Auction prices are off." end },
-        } },
+        {
+            title = "A cheap few",
+            description = "When a few items are offered far under the rest, the sell price is filled in under the rest instead, and Post asks first when your price is that far under.",
+            rows = {
+                {
+                    key = "cheapCheck",
+                    label = "Look past a cheap few",
+                    control = "toggle",
+                    description = "Off: the price is filled in 1c under the very cheapest offer, and Post never asks.",
+                },
+                {
+                    key = "cheapPercent",
+                    label = "Far under",
+                    control = "slider",
+                    min = 10,
+                    max = 60,
+                    step = 5,
+                    unit = "%",
+                    description = "How far under the rest's price counts as too cheap.",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("cheapCheck"), "Look past a cheap few is off."
+                    end,
+                },
+                {
+                    key = "cheapShare",
+                    label = "A few",
+                    control = "slider",
+                    min = 5,
+                    max = 30,
+                    step = 5,
+                    unit = "%",
+                    description = "The most the cheap offers may make up of everything offered, together.",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("cheapCheck"), "Look past a cheap few is off."
+                    end,
+                },
+            },
+        },
+        {
+            title = "Item tooltips",
+            description = "What the auction house showed last for an item, from Scan all and your searches, under its tooltip everywhere.",
+            rows = {
+                {
+                    key = "tipShow",
+                    label = "Auction prices",
+                    control = "toggle",
+                    description = "The lowest buyout per item and when it was seen.",
+                },
+                {
+                    key = "tipMost",
+                    label = "What most sell it for",
+                    control = "toggle",
+                    description = "When a cheap few sell under the rest (the rule above).",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("tipShow"), "Auction prices are off."
+                    end,
+                },
+                {
+                    key = "tipOffered",
+                    label = "How many are offered",
+                    control = "toggle",
+                    description = "Items offered, and in how many auctions when Scan all or a search counted them.",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("tipShow"), "Auction prices are off."
+                    end,
+                },
+                {
+                    key = "tipStack",
+                    label = "Price for the stack",
+                    control = "toggle",
+                    description = "On a stack in your bags: the lowest buyout times how many.",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("tipShow"), "Auction prices are off."
+                    end,
+                },
+            },
+        },
     },
 }
 
@@ -76,23 +140,42 @@ local AH = C_AuctionHouse
 local WIDTH, HEIGHT = 840, 580
 local CAT_W = 170
 local ROW_H = 32
-local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
 local BAND: { [number]: string } = { [0] = "Short", "Medium", "Long", "Very long" }
 
 local function coins(copper: number?): string
     local c0 = math.max(0, math.floor(copper or 0))
     local g, s, c = math.floor(c0 / 10000), math.floor(c0 / 100) % 100, c0 % 100
     local parts: string[] = {}
-    local function part(v: number, unit: string, token: keyof typeof(T.color)) parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r" end
-    if g > 0 then part(g, "g", "coin-gold") end
-    if s > 0 or (g > 0 and c > 0) then part(s, "s", "coin-silver") end
-    if c > 0 or #parts == 0 then part(c, "c", "coin-copper") end
+    local function part(v: number, unit: string, token: keyof typeof(T.color))
+        parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r"
+    end
+    if g > 0 then
+        part(g, "g", "coin-gold")
+    end
+    if s > 0 or (g > 0 and c > 0) then
+        part(s, "s", "coin-silver")
+    end
+    if c > 0 or #parts == 0 then
+        part(c, "c", "coin-copper")
+    end
     return table.concat(parts, " ")
 end
 
 local function sorts(): AuctionHouseSortType[]
-    return { { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
-             { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false } }
+    return {
+        { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+        { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+    }
 end
 
 -- An item key's name, icon, quality and kind (nil until the game has it:
@@ -109,8 +192,11 @@ end
 local function keyTooltip(owner: Frame, key: ItemKey)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     local byKey = field(GameTooltip, "SetItemKey")
-    if byKey then try(byKey, GameTooltip, key.itemID, key.itemLevel, key.itemSuffix)
-    else GameTooltip:SetItemByID(key.itemID) end
+    if byKey then
+        try(byKey, GameTooltip, key.itemID, key.itemLevel, key.itemSuffix)
+    else
+        GameTooltip:SetItemByID(key.itemID)
+    end
     GameTooltip:Show()
 end
 
@@ -154,9 +240,14 @@ class TableRow extends Button
         self:SetScript("OnEnter", function()
             self.hover:Show()
             local onEnter = self.onEnter
-            if onEnter then onEnter(self) end
+            if onEnter then
+                onEnter(self)
+            end
         end)
-        self:SetScript("OnLeave", function() self.hover:Hide(); GameTooltip:Hide() end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
     end
 end
 
@@ -241,7 +332,10 @@ class AuctionTable<R extends TableRow> extends Frame
         self.list = UI.ScrollArea(self, S["space-3"])
         self.list:SetPoint("TOPLEFT", 0, -22)
         self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
-        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number) self.list.child:SetWidth(w); self:LayoutCols() end)
+        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number)
+            self.list.child:SetWidth(w)
+            self:LayoutCols()
+        end)
         local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
         rule:SetPoint("TOPLEFT", 0, -20)
         rule:SetPoint("TOPRIGHT", 0, -20)
@@ -254,7 +348,9 @@ class AuctionTable<R extends TableRow> extends Frame
 
     function SetCols(c: Col[])
         self.cols = c
-        for i, h in ipairs(self.headCells) do h:SetShown(c[i] ~= nil) end
+        for i, h in ipairs(self.headCells) do
+            h:SetShown(c[i] ~= nil)
+        end
         for i, col in ipairs(c) do
             local h = self.headCells[i]
             if not h then
@@ -271,7 +367,9 @@ class AuctionTable<R extends TableRow> extends Frame
     -- each column's x and width in a row of width w
     function Places(w: number): Place[]
         local fixed = 0
-        for _, col in ipairs(self.cols) do fixed = fixed + (col.w or 0) + S["space-4"] end
+        for _, col in ipairs(self.cols) do
+            fixed = fixed + (col.w or 0) + S["space-4"]
+        end
         local x = S["space-3"]
         local out: Place[] = {}
         for i, col in ipairs(self.cols) do
@@ -297,7 +395,9 @@ class AuctionTable<R extends TableRow> extends Frame
     -- Row i (made on first use).
     function Row(i: number): R
         local r = self.rows[i]
-        if r then return r end
+        if r then
+            return r
+        end
         local made = self.make(self.list.child)
         self.rows[i] = made
         return made
@@ -314,7 +414,9 @@ class AuctionTable<R extends TableRow> extends Frame
 
     -- The rows past n hidden, the list's height for n.
     function Fit(n: number)
-        for i = n + 1, #self.rows do self.rows[i]:Hide() end
+        for i = n + 1, #self.rows do
+            self.rows[i]:Hide()
+        end
         self.list.child:SetHeight(math.max(1, n * ROW_H))
     end
 
@@ -332,7 +434,9 @@ class AuctionTable<R extends TableRow> extends Frame
                     cell:SetPoint("LEFT", r, "LEFT", p.x, 0)
                 end
                 local text = frames.asFontString(cell)
-                if text then text:SetWidth(p.w) end
+                if text then
+                    text:SetWidth(p.w)
+                end
             end
         end
     end
@@ -343,7 +447,12 @@ end
 --------------------------------------------------------------------------------
 
 -- One of the game's categories (AuctionCategories, from its auction house UI).
-type Category = { name?: string, filters?: AuctionHouseItemClassFilter[], subCategories?: Category[], flags?: { WOW_TOKEN_FLAG?: boolean } }
+type Category = {
+    name?: string,
+    filters?: AuctionHouseItemClassFilter[],
+    subCategories?: Category[],
+    flags?: { WOW_TOKEN_FLAG?: boolean },
+}
 
 -- The game's category tree, WoW Token left out (its auctions are unavailable
 -- on Forever).
@@ -352,14 +461,18 @@ local function categories(): Category[]
     local all = list(rawget(_G, "AuctionCategories")) :: unknown :: Category[]
     for _, c in ipairs(all) do
         local flags = c.flags
-        if not (flags and flags.WOW_TOKEN_FLAG) then out[#out + 1] = c end
+        if not (flags and flags.WOW_TOKEN_FLAG) then
+            out[#out + 1] = c
+        end
     end
     return out
 end
 
 -- A filter group's values (a list, or one).
 local function choices(c: FilterChoice?): FilterValue[]
-    if type(c) == "table" then return c end
+    if type(c) == "table" then
+        return c
+    end
     return {}
 end
 
@@ -387,13 +500,17 @@ class CatButton extends Button
         self.text:SetPoint("RIGHT", -S["space-2"], 0)
         self.text:SetWordWrap(false)
         self:SetScript("OnEnter", function()
-            if self.chosen then return end
+            if self.chosen then
+                return
+            end
             self.hover:Show()
             self.text:SetColor("ink")
         end)
         self:SetScript("OnLeave", function()
             self.hover:Hide()
-            if not self.chosen then self.text:SetColor(self.depth > 0 and "ink-muted" or "ink") end
+            if not self.chosen then
+                self.text:SetColor(self.depth > 0 and "ink-muted" or "ink")
+            end
         end)
     end
 end
@@ -414,12 +531,17 @@ class FavButton extends Button
         self.glyph:SetSize(14, 14)
         self.glyph:SetPoint("CENTER")
         UI.Paint(self.glyph, "gilt")
-        self:SetScript("OnClick", function() M:Favorites() end)
+        self:SetScript("OnClick", function()
+            M:Favorites()
+        end)
         self:SetScript("OnEnter", function()
             self.edge:SetColor("gilt")
             UI.ShowTooltip(self, { title = "Favourites", description = "The items you marked as favourites." })
         end)
-        self:SetScript("OnLeave", function() self.edge:SetColor("gilt-line"); UI.HideTooltip() end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetColor("gilt-line")
+            UI.HideTooltip()
+        end)
     end
 end
 
@@ -453,12 +575,23 @@ class ItemView extends Frame
         self.slot:SetPoint("TOPLEFT")
         self.slot:SetScript("OnEnter", function()
             local key = M.itemKey
-            if key then keyTooltip(self.slot, key) end
+            if key then
+                keyTooltip(self.slot, key)
+            end
         end)
-        self.slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self.slot:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
         self.name = UI.Text(self, "unit-name-lg", "ink")
         self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-4"], 0)
-        self.back = UI.Button(self, { text = "Back", icon = "reset", onClick = function() M.view = "browse"; M:Refresh() end })
+        self.back = UI.Button(self, {
+            text = "Back",
+            icon = "reset",
+            onClick = function()
+                M.view = "browse"
+                M:Refresh()
+            end,
+        })
         self.back:SetPoint("TOPRIGHT")
         -- the foot: bid, buy out; a commodity's quantity, unit price, total, buy now
         local foot = CreateFrame("Frame", nil, self)
@@ -466,30 +599,57 @@ class ItemView extends Frame
         foot:SetPoint("BOTTOMLEFT")
         foot:SetPoint("BOTTOMRIGHT")
         foot:SetHeight(30)
-        self.buyout = UI.Button(foot, { text = "Buy out", variant = "primary", onClick = function() M:BuyOut() end })
+        self.buyout = UI.Button(foot, {
+            text = "Buy out",
+            variant = "primary",
+            onClick = function()
+                M:BuyOut()
+            end,
+        })
         self.buyout:SetPoint("RIGHT")
-        self.bidButton = UI.Button(foot, { text = "Bid", onClick = function() M:Bid() end })
+        self.bidButton = UI.Button(foot, {
+            text = "Bid",
+            onClick = function()
+                M:Bid()
+            end,
+        })
         self.bidButton:SetPoint("RIGHT", self.buyout, "LEFT", -S["space-2"], 0)
         self.bid = UI.MoneyInput(foot)
         self.bid:SetPoint("RIGHT", self.bidButton, "LEFT", -S["space-4"], 0)
         self.bidLabel = UI.Text(foot, "caption", "ink-muted")
         self.bidLabel:SetValue("Your bid")
         self.bidLabel:SetPoint("RIGHT", self.bid, "LEFT", -S["space-3"], 0)
-        self.buyNow = UI.Button(foot, { text = "Buy now", variant = "primary", onClick = function() M:BuyCommodity() end })
+        self.buyNow = UI.Button(foot, {
+            text = "Buy now",
+            variant = "primary",
+            onClick = function()
+                M:BuyCommodity()
+            end,
+        })
         self.buyNow:SetPoint("RIGHT")
         self.qtyLabel = UI.Text(foot, "caption", "ink-muted")
         self.qtyLabel:SetValue("Quantity")
         self.qtyLabel:SetPoint("LEFT")
-        self.qty = UI.TextField(foot, { width = 70, onTextChanged = function() M:DrawCommodityFoot() end })
+        self.qty = UI.TextField(foot, {
+            width = 70,
+            onTextChanged = function()
+                M:DrawCommodityFoot()
+            end,
+        })
         self.qty.edit:SetNumeric(true)
         self.qty.edit:SetMaxLetters(6)
         self.qty:SetPoint("LEFT", self.qtyLabel, "RIGHT", S["space-3"], 0)
-        self.max = UI.Button(foot, { text = "Max", onClick = function()
-            local total = 0
-            for _, o in ipairs(M.offers) do total = total + (o.quantity or 0) end
-            self.qty:SetValue(tostring(total))
-            M:DrawCommodityFoot()
-        end })
+        self.max = UI.Button(foot, {
+            text = "Max",
+            onClick = function()
+                local total = 0
+                for _, o in ipairs(M.offers) do
+                    total = total + (o.quantity or 0)
+                end
+                self.qty:SetValue(tostring(total))
+                M:DrawCommodityFoot()
+            end,
+        })
         self.max:SetPoint("LEFT", self.qty, "RIGHT", S["space-2"], 0)
         self.unitLabel = UI.Text(foot, "caption", "ink-muted")
         self.unitLabel:SetValue("Unit price")
@@ -502,7 +662,9 @@ class ItemView extends Frame
         self.total = UI.Money(foot)
         self.total:SetPoint("LEFT", self.totalLabel, "RIGHT", S["space-3"], 0)
         -- the auctions or offers between head and foot
-        self.table = AuctionTable.new(self, { { label = "Buyout", w = 120 } }, function(p: Frame): OfferRow return OfferRow.new(p) end)
+        self.table = AuctionTable.new(self, { { label = "Buyout", w = 120 } }, function(p: Frame): OfferRow
+            return OfferRow.new(p)
+        end)
         self.table:SetPoint("TOPLEFT", self.slot, "BOTTOMLEFT", 0, -S["space-4"])
         self.table:SetPoint("BOTTOMRIGHT", foot, "TOPRIGHT", 0, S["space-4"])
     end
@@ -541,25 +703,58 @@ class BuyPage extends Frame
         self.fav = FavButton.new(bar)
         self.search = UI.TextField(bar, { width = 300, placeholder = "Search" })
         self.search:SetPoint("LEFT", self.fav, "RIGHT", S["space-2"], 0)
-        self.search.edit:HookScript("OnEnterPressed", function() M:Search() end)
+        self.search.edit:HookScript("OnEnterPressed", function()
+            M:Search()
+        end)
         self.filter = UI.FilterMenu(bar, {
             groups = {
-                { key = "only", label = "Show", kind = "toggles", options = { { value = "usable", label = "Usable only" } } },
-                { key = "rarity", label = "Rarity", kind = "many", options = {
-                    { value = "poor", label = "Poor", color = "quality-poor" }, { value = "common", label = "Common", color = "quality-common" },
-                    { value = "uncommon", label = "Uncommon", color = "quality-uncommon" }, { value = "rare", label = "Rare", color = "quality-rare" },
-                    { value = "epic", label = "Epic", color = "quality-epic" } } },
+                {
+                    key = "only",
+                    label = "Show",
+                    kind = "toggles",
+                    options = { { value = "usable", label = "Usable only" } },
+                },
+                {
+                    key = "rarity",
+                    label = "Rarity",
+                    kind = "many",
+                    options = {
+                        { value = "poor", label = "Poor", color = "quality-poor" },
+                        { value = "common", label = "Common", color = "quality-common" },
+                        { value = "uncommon", label = "Uncommon", color = "quality-uncommon" },
+                        { value = "rare", label = "Rare", color = "quality-rare" },
+                        { value = "epic", label = "Epic", color = "quality-epic" },
+                    },
+                },
             },
-            defaults = { only = {}, rarity = {} }, placeholder = "Filter", width = 110,
-            onChange = function(v: FilterValues) M.filterValue = v end })
+            defaults = { only = {}, rarity = {} },
+            placeholder = "Filter",
+            width = 110,
+            onChange = function(v: FilterValues)
+                M.filterValue = v
+            end,
+        })
         self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
-        self.searchButton = UI.Button(bar, { text = "Search", variant = "primary", icon = "search", onClick = function() M:Search() end })
+        self.searchButton = UI.Button(bar, {
+            text = "Search",
+            variant = "primary",
+            icon = "search",
+            onClick = function()
+                M:Search()
+            end,
+        })
         self.searchButton:SetPoint("LEFT", self.filter, "RIGHT", S["space-2"], 0)
         -- Scan all: after a thin divider, the button and when it last ran
         local div = UI.Fill(bar, "gilt-faint", "ARTWORK")
         div:SetSize(1, 22)
         div:SetPoint("LEFT", self.searchButton, "RIGHT", S["space-4"], 0)
-        self.scanButton = UI.Button(bar, { text = "Scan all", icon = "sort", onClick = function() M:Scan() end })
+        self.scanButton = UI.Button(bar, {
+            text = "Scan all",
+            icon = "sort",
+            onClick = function()
+                M:Scan()
+            end,
+        })
         self.scanButton:SetPoint("LEFT", div, "RIGHT", S["space-4"], 0)
         self.scanWhen = UI.Text(bar, "caption", "ink-muted")
         self.scanWhen:SetPoint("LEFT", self.scanButton, "RIGHT", S["space-3"], 0)
@@ -575,13 +770,23 @@ class BuyPage extends Frame
         main:SetPoint("TOPLEFT", CAT_W + S["space-3"] + S["space-5"], -(30 + S["space-4"]))
         main:SetPoint("BOTTOMRIGHT")
         self.main = main
-        self.results = AuctionTable.new(main, { { label = "Name" }, { label = "Item level", w = 70, right = true },
-            { label = "Available", w = 70, right = true }, { label = "Lowest price", w = 120, right = true } },
-            function(p: Frame): ResultRow return ResultRow.new(p) end)
+        self.results = AuctionTable.new(main, {
+            { label = "Name" },
+            { label = "Item level", w = 70, right = true },
+            { label = "Available", w = 70, right = true },
+            { label = "Lowest price", w = 120, right = true },
+        }, function(p: Frame): ResultRow
+            return ResultRow.new(p)
+        end)
         self.results:SetAllPoints()
         self.empty = UI.Text(main, "body", "ink-muted")
         self.empty:SetPoint("TOP", 0, -60)
-        self.more = UI.Button(main, { text = "More results", onClick = function() try(AH.RequestMoreBrowseResults) end })
+        self.more = UI.Button(main, {
+            text = "More results",
+            onClick = function()
+                try(AH.RequestMoreBrowseResults)
+            end,
+        })
         self.more:SetPoint("BOTTOM", 0, S["space-2"])
         self.more:Hide()
         self.itemView = ItemView.new(main)
@@ -604,8 +809,12 @@ class BuyPage extends Frame
         block:SetAllPoints(cats)
         block:SetFrameLevel(cats:GetFrameLevel() + 20)
         block:EnableMouse(true)
-        block:SetScript("OnEnter", function() UI.ShowTooltip(block, { title = "Categories", description = "Scanning: back when the scan is done." }) end)
-        block:SetScript("OnLeave", function() UI.HideTooltip() end)
+        block:SetScript("OnEnter", function()
+            UI.ShowTooltip(block, { title = "Categories", description = "Scanning: back when the scan is done." })
+        end)
+        block:SetScript("OnLeave", function()
+            UI.HideTooltip()
+        end)
         block:Hide()
         self.catBlock = block
     end
@@ -615,11 +824,22 @@ end
 -- Sell: the item, its prices, the duration, the deposit, Post; your items
 --------------------------------------------------------------------------------
 
-local DURATIONS = { { value = 1, label = "12 hours" }, { value = 2, label = "24 hours" }, { value = 3, label = "48 hours" } }
+local DURATIONS = {
+    { value = 1, label = "12 hours" },
+    { value = 2, label = "24 hours" },
+    { value = 3, label = "48 hours" },
+}
 
 -- An item in your bags the auction house takes: where (its first stack),
 -- its look, its link, how many you have.
-type Sellable = { itemID: number, loc: ItemLocationMixin, icon?: number, quality?: number, link?: string, count: number }
+type Sellable = {
+    itemID: number,
+    loc: ItemLocationMixin,
+    icon?: number,
+    quality?: number,
+    link?: string,
+    count: number,
+}
 
 -- The items in your bags the auction house takes, one entry per item.
 local function sellable(): Sellable[]
@@ -633,8 +853,14 @@ local function sellable(): Sellable[]
                 if tryValue(AH.IsSellItemValid, loc, false) then
                     local e = byID[info.itemID]
                     if not e then
-                        e = { itemID = info.itemID, loc = loc, icon = info.iconFileID, quality = info.quality,
-                              link = info.hyperlink, count = 0 }
+                        e = {
+                            itemID = info.itemID,
+                            loc = loc,
+                            icon = info.iconFileID,
+                            quality = info.quality,
+                            link = info.hyperlink,
+                            count = 0,
+                        }
                         byID[info.itemID] = e
                         out[#out + 1] = e
                     end
@@ -643,7 +869,9 @@ local function sellable(): Sellable[]
             end
         end
     end
-    table.sort(out, function(a: Sellable, b: Sellable): boolean return (a.link or "") < (b.link or "") end)
+    table.sort(out, function(a: Sellable, b: Sellable): boolean
+        return (a.link or "") < (b.link or "")
+    end)
     return out
 end
 
@@ -680,12 +908,19 @@ class SellRow extends Button
             local loc = self.loc
             if loc then
                 local bag, slot = loc:GetBagAndSlot()
-                if bag and slot then GameTooltip:SetBagItem(bag, slot) end
+                if bag and slot then
+                    GameTooltip:SetBagItem(bag, slot)
+                end
             end
             GameTooltip:Show()
         end)
-        self:SetScript("OnLeave", function() self.hover:Hide(); GameTooltip:Hide() end)
-        self:SetScript("OnClick", function() M:SetSellItem(self.loc) end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            M:SetSellItem(self.loc)
+        end)
     end
 end
 
@@ -744,17 +979,27 @@ class SellPage extends Frame
         end
         self.slot:SetScript("OnReceiveDrag", fromCursor)
         self.slot:SetScript("OnClick", function(_: Frame, button: string)
-            if button == "RightButton" then M:SetSellItem(nil) else fromCursor() end
+            if button == "RightButton" then
+                M:SetSellItem(nil)
+            else
+                fromCursor()
+            end
         end)
         self.slot:SetScript("OnEnter", function()
             local loc = self.loc
-            if not loc then return end
+            if not loc then
+                return
+            end
             GameTooltip:SetOwner(self.slot, "ANCHOR_RIGHT")
             local bag, slot = loc:GetBagAndSlot()
-            if bag and slot then GameTooltip:SetBagItem(bag, slot) end
+            if bag and slot then
+                GameTooltip:SetBagItem(bag, slot)
+            end
             GameTooltip:Show()
         end)
-        self.slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self.slot:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
         self.name = UI.Text(form, "unit-name-lg", "ink")
         self.name:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], 0)
         self.name:SetPoint("RIGHT", form, "RIGHT")
@@ -776,29 +1021,49 @@ class SellPage extends Frame
             return holder, l
         end
         local qh = row("Quantity")
-        self.qty = UI.TextField(qh, { width = 80, onTextChanged = function() M:DrawSell() end })
+        self.qty = UI.TextField(qh, {
+            width = 80,
+            onTextChanged = function()
+                M:DrawSell()
+            end,
+        })
         self.qty.edit:SetNumeric(true)
         self.qty.edit:SetMaxLetters(6)
         self.qty:SetPoint("LEFT")
-        self.max = UI.Button(qh, { text = "Max", onClick = function()
-            local loc = self.loc
-            self.qty:SetValue(tostring(loc and tryValue(AH.GetAvailablePostCount, loc) or 1))
-            M:DrawSell()
-        end })
+        self.max = UI.Button(qh, {
+            text = "Max",
+            onClick = function()
+                local loc = self.loc
+                self.qty:SetValue(tostring(loc and tryValue(AH.GetAvailablePostCount, loc) or 1))
+                M:DrawSell()
+            end,
+        })
         self.max:SetPoint("LEFT", self.qty, "RIGHT", S["space-2"], 0)
         local bh, bidLabel = row("Starting bid")
         self.bidHolder, self.bidLabel = bh, bidLabel
-        self.bid = UI.MoneyInput(bh, { onChange = function() M:DrawSell() end })
+        self.bid = UI.MoneyInput(bh, {
+            onChange = function()
+                M:DrawSell()
+            end,
+        })
         self.bid:SetPoint("LEFT")
         local ph, priceLabel = row("Buyout")
         self.priceLabel = priceLabel
-        self.price = UI.MoneyInput(ph, { onChange = function()
-            self.priceTyped = true -- yours from now on: no undercut over it
-            M:DrawSell()
-        end })
+        self.price = UI.MoneyInput(ph, {
+            onChange = function()
+                self.priceTyped = true -- yours from now on: no undercut over it
+                M:DrawSell()
+            end,
+        })
         self.price:SetPoint("LEFT")
         local dh = row("Duration")
-        self.duration = UI.Segmented(dh, { options = DURATIONS, value = 2, onChange = function() M:DrawSell() end })
+        self.duration = UI.Segmented(dh, {
+            options = DURATIONS,
+            value = 2,
+            onChange = function()
+                M:DrawSell()
+            end,
+        })
         self.duration:SetPoint("LEFT")
         -- deposit and total
         local th = row("Deposit")
@@ -807,7 +1072,14 @@ class SellPage extends Frame
         local th2 = row("Total")
         self.total = UI.Money(th2)
         self.total:SetPoint("LEFT")
-        self.post = UI.Button(form, { text = "Post", variant = "primary", width = 120, onClick = function() M:PostOrAsk() end })
+        self.post = UI.Button(form, {
+            text = "Post",
+            variant = "primary",
+            width = 120,
+            onClick = function()
+                M:PostOrAsk()
+            end,
+        })
         self.post:SetPoint("TOPRIGHT", form, "TOPLEFT", FORM_W, -y - S["space-2"])
         -- your items
         local items = CreateFrame("Frame", nil, self)
@@ -819,7 +1091,9 @@ class SellPage extends Frame
         self.list = UI.ScrollArea(items, S["space-3"])
         self.list:SetPoint("TOPLEFT", 0, -28)
         self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
-        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number) self.list.child:SetWidth(w) end)
+        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number)
+            self.list.child:SetWidth(w)
+        end)
         self.none = UI.Text(self.list.child, "body", "ink-muted")
         self.none:SetPoint("TOPLEFT", 0, -S["space-4"])
         self.none:SetValue("Nothing in your bags to sell here.")
@@ -839,25 +1113,53 @@ type Market = { low: number, ref: Offer, cheap: number, total: number, n: number
 
 -- One of yours or one of your bids, as the lists show it.
 type Listed = {
-    auctionID: number, itemKey: ItemKey, itemLink?: string, quantity?: number, status?: number,
-    timeLeft?: number, timeLeftSeconds?: number, minBid?: number, bidAmount?: number, buyoutAmount?: number, bidder?: string,
+    auctionID: number,
+    itemKey: ItemKey,
+    itemLink?: string,
+    quantity?: number,
+    status?: number,
+    timeLeft?: number,
+    timeLeftSeconds?: number,
+    minBid?: number,
+    bidAmount?: number,
+    buyoutAmount?: number,
+    bidder?: string,
 }
 
 local function ownedListed(o: OwnedAuctionInfo): Listed
-    return { auctionID = o.auctionID, itemKey = o.itemKey, itemLink = o.itemLink, quantity = o.quantity, status = o.status,
-             timeLeft = o.timeLeft, timeLeftSeconds = o.timeLeftSeconds, bidAmount = o.bidAmount, buyoutAmount = o.buyoutAmount,
-             bidder = o.bidder }
+    return {
+        auctionID = o.auctionID,
+        itemKey = o.itemKey,
+        itemLink = o.itemLink,
+        quantity = o.quantity,
+        status = o.status,
+        timeLeft = o.timeLeft,
+        timeLeftSeconds = o.timeLeftSeconds,
+        bidAmount = o.bidAmount,
+        buyoutAmount = o.buyoutAmount,
+        bidder = o.bidder,
+    }
 end
 
 local function bidListed(b: BidInfo): Listed
-    return { auctionID = b.auctionID, itemKey = b.itemKey, itemLink = b.itemLink, timeLeft = b.timeLeft,
-             minBid = b.minBid, bidAmount = b.bidAmount, buyoutAmount = b.buyoutAmount, bidder = b.bidder }
+    return {
+        auctionID = b.auctionID,
+        itemKey = b.itemKey,
+        itemLink = b.itemLink,
+        timeLeft = b.timeLeft,
+        minBid = b.minBid,
+        bidAmount = b.bidAmount,
+        buyoutAmount = b.buyoutAmount,
+        bidder = b.bidder,
+    }
 end
 
 -- Time left: an owned auction's in hours or minutes, else the game's band.
 local function timeLeft(seconds: number?, band: number?): string
     if seconds and not secret.isSecret(seconds) then
-        if seconds >= 3600 then return math.floor(seconds / 3600) .. " h" end
+        if seconds >= 3600 then
+            return math.floor(seconds / 3600) .. " h"
+        end
         return math.max(1, math.floor(seconds / 60)) .. " min"
     end
     return BAND[band or -1] or "?"
@@ -923,9 +1225,19 @@ class AuctionsPage extends Frame
             b:SetSize(UI.MeasureText("header", t.label) + 2 * S["space-4"], TAB_H)
             b:SetPoint("TOPLEFT", x, 0)
             x = x + b:GetWidth() + S["space-2"]
-            b:SetScript("OnEnter", function() if self.sub ~= b.key then b.label:SetColor("ink") end end)
-            b:SetScript("OnLeave", function() if self.sub ~= b.key then b.label:SetColor("ink-muted") end end)
-            b:SetScript("OnClick", function() M:SetAuctionsTab(b.key) end)
+            b:SetScript("OnEnter", function()
+                if self.sub ~= b.key then
+                    b.label:SetColor("ink")
+                end
+            end)
+            b:SetScript("OnLeave", function()
+                if self.sub ~= b.key then
+                    b.label:SetColor("ink-muted")
+                end
+            end)
+            b:SetScript("OnClick", function()
+                M:SetAuctionsTab(b.key)
+            end)
             self.marker:Track(b)
             self.tabs[#self.tabs + 1] = b
         end
@@ -938,37 +1250,76 @@ class AuctionsPage extends Frame
             return f
         end
         self.mineFoot = foot()
-        self.cancel = UI.Button(self.mineFoot, { text = "Cancel auction", icon = "close", onClick = function() M:CancelChosen() end })
+        self.cancel = UI.Button(self.mineFoot, {
+            text = "Cancel auction",
+            icon = "close",
+            onClick = function()
+                M:CancelChosen()
+            end,
+        })
         self.cancel:SetPoint("RIGHT")
         self.cancelNote = UI.Text(self.mineFoot, "caption", "ink-muted")
         self.cancelNote:SetPoint("RIGHT", self.cancel, "LEFT", -S["space-4"], 0)
         self.bidsFoot = foot()
-        self.buyout = UI.Button(self.bidsFoot, { text = "Buy out", variant = "primary", onClick = function() M:BuyOutBid() end })
+        self.buyout = UI.Button(self.bidsFoot, {
+            text = "Buy out",
+            variant = "primary",
+            onClick = function()
+                M:BuyOutBid()
+            end,
+        })
         self.buyout:SetPoint("RIGHT")
-        self.bidButton = UI.Button(self.bidsFoot, { text = "Bid", onClick = function() M:BidAgain() end })
+        self.bidButton = UI.Button(self.bidsFoot, {
+            text = "Bid",
+            onClick = function()
+                M:BidAgain()
+            end,
+        })
         self.bidButton:SetPoint("RIGHT", self.buyout, "LEFT", -S["space-2"], 0)
-        self.bid = UI.MoneyInput(self.bidsFoot, { onChange = function() M:DrawAuctionsFoot() end })
+        self.bid = UI.MoneyInput(self.bidsFoot, {
+            onChange = function()
+                M:DrawAuctionsFoot()
+            end,
+        })
         self.bid:SetPoint("RIGHT", self.bidButton, "LEFT", -S["space-4"], 0)
         local bidLabel = UI.Text(self.bidsFoot, "caption", "ink-muted")
         bidLabel:SetValue("Your bid")
         bidLabel:SetPoint("RIGHT", self.bid, "LEFT", -S["space-3"], 0)
         -- the lists
         local function table(cols: Col[], f: Frame): AuctionTable<AuctionRow>
-            local t = AuctionTable.new(self, cols, function(p: Frame): AuctionRow return AuctionRow.new(p) end)
+            local t = AuctionTable.new(self, cols, function(p: Frame): AuctionRow
+                return AuctionRow.new(p)
+            end)
             t:SetPoint("TOPLEFT", 0, -(TAB_H + S["space-4"]))
             t:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, S["space-4"])
             return t
         end
-        self.mineT = table({ { label = "Item" }, { label = "Time left", w = 90 }, { label = "Bid", w = 120, right = true },
-            { label = "Buyout", w = 120, right = true } }, self.mineFoot)
-        self.bidsT = table({ { label = "Item" }, { label = "Time left", w = 90 }, { label = "Your bid", w = 150, right = true },
-            { label = "Buyout", w = 120, right = true } }, self.bidsFoot)
+        self.mineT = table(
+            {
+                { label = "Item" },
+                { label = "Time left", w = 90 },
+                { label = "Bid", w = 120, right = true },
+                { label = "Buyout", w = 120, right = true },
+            },
+            self.mineFoot
+        )
+        self.bidsT = table(
+            {
+                { label = "Item" },
+                { label = "Time left", w = 90 },
+                { label = "Your bid", w = 150, right = true },
+                { label = "Buyout", w = 120, right = true },
+            },
+            self.bidsFoot
+        )
     end
 
     -- The chosen one of the list shown.
     function Chosen(): Listed?
         for _, e in ipairs(self.list) do
-            if e.auctionID == self.chosen then return e end
+            if e.auctionID == self.chosen then
+                return e
+            end
         end
         return nil
     end
@@ -982,8 +1333,12 @@ type Cell = number | string | false
 type SeenEntry = { price: number, at: number, qty?: number, n?: number, most?: number }
 type PostedEntry = { price: number, at: number }
 type CharStore = {
-    seen?: { [number]: SeenEntry }, posted?: { [number]: PostedEntry }, bids?: { [number]: number },
-    scanAt?: number, scanSeconds?: number, scanCount?: number,
+    seen?: { [number]: SeenEntry },
+    posted?: { [number]: PostedEntry },
+    bids?: { [number]: number },
+    scanAt?: number,
+    scanSeconds?: number,
+    scanCount?: number,
 }
 
 -- A purchase asked of the house; a post sent; a scan running.
@@ -994,10 +1349,14 @@ type Scanning = { started: number, reading?: boolean, read?: number, total?: num
 local SCAN_WAIT = 15 * 60
 
 local function when(at: number?): string
-    if not at then return "" end
+    if not at then
+        return ""
+    end
     local d = date("*t", at)
     local today = date("*t")
-    if d.year == today.year and d.yday == today.yday then return ("today %02d:%02d"):format(d.hour, d.min) end
+    if d.year == today.year and d.yday == today.yday then
+        return ("today %02d:%02d"):format(d.hour, d.min)
+    end
     local days = math.floor((time() - at) / 86400)
     return days <= 1 and "yesterday" or (days .. " days ago")
 end
@@ -1011,10 +1370,14 @@ end
 -- Item tooltips anywhere: the stack under the tooltip (a bag item's).
 local function stackCount(tooltip: GameTooltip): number?
     local info = tryMethod(tooltip, "GetProcessingTooltipInfo") or tryMethod(tooltip, "GetPrimaryTooltipInfo")
-    if field(info, "getterName") ~= "GetBagItem" then return nil end
+    if field(info, "getterName") ~= "GetBagItem" then
+        return nil
+    end
     local args = list(field(info, "getterArgs"))
     local bag, slot = asNumber(args[1]), asNumber(args[2])
-    if not (bag and slot) then return nil end
+    if not (bag and slot) then
+        return nil
+    end
     local item = tryValue(C_Container.GetContainerItemInfo, bag, slot)
     return item and asNumber(item.stackCount) or nil
 end
@@ -1072,10 +1435,14 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     -- What SuuUI keeps for this character, and for each of yours.
-    function Saved(): CharStore return self:CharData() :: unknown :: CharStore end
+    function Saved(): CharStore
+        return self:CharData() :: unknown :: CharStore
+    end
     function AllSaved(): CharStore[]
         local out: CharStore[] = {}
-        for _, d in pairs(self:AllCharData()) do out[#out + 1] = d :: unknown :: CharStore end
+        for _, d in pairs(self:AllCharData()) do
+            out[#out + 1] = d :: unknown :: CharStore
+        end
         return out
     end
 
@@ -1084,7 +1451,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function Note(text: string?, tone: string?, waiting: boolean?)
         self.waiting = waiting or false
         local note = self.note
-        if not note then return end
+        if not note then
+            return
+        end
         note:SetValue(text or "")
         note:SetColor(TONE[tone or "info"] or "ink-muted")
     end
@@ -1096,13 +1465,19 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function Search(text: string?)
         local buy = self.buy
         self.view = "browse"
-        local query: AuctionHouseBrowseQuery = { searchString = text or (buy and buy.search.edit:GetText()) or "", sorts = sorts(),
-            filters = self:QueryFilters(), itemClassFilters = self.catFilters or {} }
+        local query: AuctionHouseBrowseQuery = {
+            searchString = text or (buy and buy.search.edit:GetText()) or "",
+            sorts = sorts(),
+            filters = self:QueryFilters(),
+            itemClassFilters = self.catFilters or {},
+        }
         self.query = query
         self.searched = true
         self:Note("Searching…", nil, true)
         local ok, err = pcall(AH.SendBrowseQuery, query)
-        if not ok then self:Note("The search didn't go out: " .. tostring(err), "error") end
+        if not ok then
+            self:Note("The search didn't go out: " .. tostring(err), "error")
+        end
         self:Refresh()
     end
 
@@ -1121,13 +1496,22 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local v = self.filterValue or {}
         local out: AuctionHouseFilter[] = {}
         for _, t in ipairs(choices(v.only)) do
-            if t == "usable" then out[#out + 1] = F.UsableOnly end
+            if t == "usable" then
+                out[#out + 1] = F.UsableOnly
+            end
         end
-        local rarity: { [string]: AuctionHouseFilter } = { poor = F.PoorQuality, common = F.CommonQuality, uncommon = F.UncommonQuality,
-            rare = F.RareQuality, epic = F.EpicQuality }
+        local rarity: { [string]: AuctionHouseFilter } = {
+            poor = F.PoorQuality,
+            common = F.CommonQuality,
+            uncommon = F.UncommonQuality,
+            rare = F.RareQuality,
+            epic = F.EpicQuality,
+        }
         for _, q in ipairs(choices(v.rarity)) do
             local f = type(q) == "string" and rarity[q] or nil
-            if f then out[#out + 1] = f end
+            if f then
+                out[#out + 1] = f
+            end
         end
         return out
     end
@@ -1135,7 +1519,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- The category tree: top categories, the chosen one's subcategories under it.
     function DrawCategories()
         local buy = self.buy
-        if not buy then return end
+        if not buy then
+            return
+        end
         local c = buy.catList.child
         local y, n = 0, 0
         local function button(label: string, depth: number, chosen: boolean, onClick: () -> ())
@@ -1154,7 +1540,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             b.text:SetColor(chosen and "arcane" or (depth > 0 and "ink-muted" or "ink"))
             b.sel:SetShown(chosen)
             b.hover:SetShown(not chosen and b:IsMouseOver() and b:IsVisible())
-            b:SetScript("OnClick", function() onClick() end)
+            b:SetScript("OnClick", function()
+                onClick()
+            end)
             b:Show()
             y = y + 24
         end
@@ -1177,13 +1565,17 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
-        for i = n + 1, #buy.catButtons do buy.catButtons[i]:Hide() end
+        for i = n + 1, #buy.catButtons do
+            buy.catButtons[i]:Hide()
+        end
         c:SetHeight(math.max(1, y))
     end
 
     function DrawResults()
         local buy = self.buy
-        if not buy then return end
+        if not buy then
+            return
+        end
         local t = buy.results
         local results = tryValue(AH.GetBrowseResults) or {}
         local n = 0
@@ -1214,9 +1606,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             row.key = r.itemKey
             row.onEnter = function()
                 local key = row.key
-                if key then keyTooltip(row, key) end
+                if key then
+                    keyTooltip(row, key)
+                end
             end
-            row:SetScript("OnClick", function() self:OpenItem(row.key) end)
+            row:SetScript("OnClick", function()
+                self:OpenItem(row.key)
+            end)
             row:Show()
         end
         t:Fit(n)
@@ -1226,7 +1622,10 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if n == 0 then
             local query = self.query
             local q = query and query.searchString or ""
-            buy.empty:SetValue(self.searched and (q ~= "" and ("Nothing for “" .. q .. "”.") or "Nothing here.") or "Search, or choose a category.")
+            buy.empty:SetValue(
+                self.searched and (q ~= "" and ("Nothing for “" .. q .. "”.") or "Nothing here.") or
+                    "Search, or choose a category."
+            )
         end
     end
 
@@ -1240,15 +1639,21 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self.view = commodity and "commodity" or "item"
         self.itemKey, self.chosen, self.offers, self.auctions = key, nil, {}, {}
         local buy = self.buy
-        if buy then buy.itemView.qty:SetValue("1") end
+        if buy then
+            buy.itemView.qty:SetValue("1")
+        end
         self:Note(commodity and "Asking for the offers…" or "Asking for the auctions…", nil, true)
-        if key then try(AH.SendSearchQuery, key, sorts(), true) end
+        if key then
+            try(AH.SendSearchQuery, key, sorts(), true)
+        end
         self:Refresh()
     end
 
     function DrawItemView()
         local buy, key = self.buy, self.itemKey
-        if not (buy and key) then return end
+        if not (buy and key) then
+            return
+        end
         local v = buy.itemView
         local info = keyInfo(key)
         local quality = info and info.quality
@@ -1257,44 +1662,73 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         v.name:SetColor(qualityToken(quality))
         local commodity = self.view == "commodity"
         local itemParts: Region[] = { v.buyout, v.bidButton, v.bid, v.bidLabel }
-        for _, w in ipairs(itemParts) do w:SetShown(not commodity) end
-        local commodityParts: Region[] = { v.buyNow, v.qtyLabel, v.qty, v.max, v.unitLabel, v.unit, v.totalLabel, v.total }
-        for _, w in ipairs(commodityParts) do w:SetShown(commodity) end
+        for _, w in ipairs(itemParts) do
+            w:SetShown(not commodity)
+        end
+        local commodityParts: Region[] = {
+            v.buyNow,
+            v.qtyLabel,
+            v.qty,
+            v.max,
+            v.unitLabel,
+            v.unit,
+            v.totalLabel,
+            v.total,
+        }
+        for _, w in ipairs(commodityParts) do
+            w:SetShown(commodity)
+        end
         local t = v.table
         local rows: Cell[][] = {}
         if commodity then
-            t:SetCols({ { label = "Unit price", w = 140 }, { label = "Available", w = 90, right = true }, { label = "Sellers" } })
+            t:SetCols({
+                { label = "Unit price", w = 140 },
+                { label = "Available", w = 90, right = true },
+                { label = "Sellers" },
+            })
             local offers: CommoditySearchResultInfo[] = {}
             for i = 1, tryValue(AH.GetNumCommoditySearchResults, key.itemID) or 0 do
                 local o = tryValue(AH.GetCommoditySearchResultInfo, key.itemID, i)
-                if o then offers[#offers + 1] = o end
+                if o then
+                    offers[#offers + 1] = o
+                end
             end
             self.offers = offers
             local priced: Offer[] = {}
             for _, o in ipairs(offers) do
-                if o.unitPrice and o.unitPrice > 0 then priced[#priced + 1] = { price = o.unitPrice, qty = o.quantity or 1 } end
+                if o.unitPrice and o.unitPrice > 0 then
+                    priced[#priced + 1] = { price = o.unitPrice, qty = o.quantity or 1 }
+                end
             end
             self:Seen(key.itemID, self:Market(priced))
             for _, o in ipairs(offers) do
                 local who: string
                 local owners = o.owners
                 local sellers = o.totalNumberOfOwners or 0
-                if o.containsOwnerItem then who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
-                elseif owners and owners[1] and sellers <= 1 then who = owners[1]
-                else who = sellers == 1 and "1 seller" or (sellers .. " sellers") end
+                if o.containsOwnerItem then
+                    who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
+                elseif owners and owners[1] and sellers <= 1 then
+                    who = owners[1]
+                else
+                    who = sellers == 1 and "1 seller" or (sellers .. " sellers")
+                end
                 rows[#rows + 1] = { o.unitPrice or 0, tostring(o.quantity or 0), who }
             end
         else
             local auctions: ItemSearchResultInfo[] = {}
             for i = 1, tryValue(AH.GetNumItemSearchResults, key) or 0 do
                 local a = tryValue(AH.GetItemSearchResultInfo, key, i)
-                if a then auctions[#auctions + 1] = a end
+                if a then
+                    auctions[#auctions + 1] = a
+                end
             end
             self.auctions = auctions
             local withBid = false
             local priced: Offer[] = {}
             for _, a in ipairs(auctions) do
-                if a.bidAmount or a.minBid then withBid = true end
+                if a.bidAmount or a.minBid then
+                    withBid = true
+                end
                 local buyout, qty = a.buyoutAmount, a.quantity or 1
                 if buyout and buyout > 0 and qty > 0 then
                     priced[#priced + 1] = { price = math.floor(buyout / qty), qty = qty }
@@ -1302,14 +1736,18 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
             self:Seen(key.itemID, self:Market(priced))
             local cols: Col[] = {}
-            if withBid then cols[#cols + 1] = { label = "Bid", w = 120 } end
+            if withBid then
+                cols[#cols + 1] = { label = "Bid", w = 120 }
+            end
             cols[#cols + 1] = { label = "Buyout", w = 120 }
             cols[#cols + 1] = { label = "Quantity", w = 70, right = true }
             cols[#cols + 1] = { label = "Time left" }
             t:SetCols(cols)
             for _, a in ipairs(auctions) do
                 local cells: Cell[] = {}
-                if withBid then cells[#cells + 1] = (a.bidAmount or a.minBid) or false end
+                if withBid then
+                    cells[#cells + 1] = (a.bidAmount or a.minBid) or false
+                end
                 cells[#cells + 1] = a.buyoutAmount or "none"
                 cells[#cells + 1] = tostring(a.quantity or 1)
                 cells[#cells + 1] = BAND[a.timeLeft or -1] or "?"
@@ -1326,7 +1764,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     row.money[k] = money
                     money:SetCopper(val)
                     money:Show()
-                    if text then text:Hide() end
+                    if text then
+                        text:Hide()
+                    end
                     placed[k] = money
                 else
                     text = text or UI.Text(row, k == 1 and "caption" or "body", "ink")
@@ -1335,23 +1775,33 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     local col = t.cols[k]
                     text:SetJustifyH(col and col.right and "RIGHT" or "LEFT")
                     text:Show()
-                    if money then money:Hide() end
+                    if money then
+                        money:Hide()
+                    end
                     placed[k] = text
                 end
             end
             for k = #cells + 1, 6 do
                 local money, text = row.money[k], row.texts[k]
-                if money then money:Hide() end
-                if text then text:Hide() end
+                if money then
+                    money:Hide()
+                end
+                if text then
+                    text:Hide()
+                end
             end
             t:PlaceCells(row, placed)
             row.index = i
             row.sel:SetShown(not commodity and self.chosen == i)
             row.onEnter = nil
             row:SetScript("OnClick", function()
-                if commodity then return end
+                if commodity then
+                    return
+                end
                 -- another auction: its own least bid, not the one typed for the last
-                if self.chosen ~= row.index then v.bid:Clear() end
+                if self.chosen ~= row.index then
+                    v.bid:Clear()
+                end
                 self.chosen = row.index
                 self:DrawItemFoot()
                 self:DrawItemView()
@@ -1359,7 +1809,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             row:Show()
         end
         t:Fit(#rows)
-        if commodity then self:DrawCommodityFoot() else self:DrawItemFoot() end
+        if commodity then
+            self:DrawCommodityFoot()
+        else
+            self:DrawItemFoot()
+        end
     end
 
     -- The auction chosen in an item's view.
@@ -1371,27 +1825,36 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- An item's foot: Bid only for an auction with one, Buy out for one with a buyout.
     function DrawItemFoot()
         local buy = self.buy
-        if not buy then return end
+        if not buy then
+            return
+        end
         local v = buy.itemView
         local a = self:ChosenAuction()
         local least = a and (a.minBid or a.bidAmount)
         local bidParts: Region[] = { v.bidButton, v.bid, v.bidLabel }
-        for _, w in ipairs(bidParts) do w:SetShown(least ~= nil) end
+        for _, w in ipairs(bidParts) do
+            w:SetShown(least ~= nil)
+        end
         if a and least then
-            if (v.bid:GetCopper() or 0) < least then v.bid:SetCopper(least) end
+            if (v.bid:GetCopper() or 0) < least then
+                v.bid:SetCopper(least)
+            end
         end
         local money = GetMoney() or 0
         local buyout = a and a.buyoutAmount
         v.buyout:SetEnabledState(buyout ~= nil and buyout > 0 and money >= buyout)
-        v.buyout.tooltip = not a and { title = "Buy out", description = "Choose an auction." }
-            or (buyout and money < buyout) and { title = "Buy out", description = "Not enough money." } or nil
+        v.buyout.tooltip = not a and { title = "Buy out", description = "Choose an auction." } or
+            (buyout and money < buyout) and { title = "Buy out", description = "Not enough money." } or
+            nil
     end
 
     -- A commodity's foot: what a quantity costs, cheapest offers first.
     function CommodityPrice(qty: number): (number, boolean)
         local left, total = qty, 0
         for _, o in ipairs(self.offers) do
-            if left <= 0 then break end
+            if left <= 0 then
+                break
+            end
             local n = math.min(left, o.quantity or 0)
             total = total + n * (o.unitPrice or 0)
             left = left - n
@@ -1401,7 +1864,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawCommodityFoot()
         local buy = self.buy
-        if not buy then return end
+        if not buy then
+            return
+        end
         local v = buy.itemView
         local qty = tonumber(v.qty.edit:GetText()) or 0
         local total, short = self:CommodityPrice(qty)
@@ -1410,26 +1875,40 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local money = GetMoney() or 0
         local ok = qty > 0 and not short and total <= money
         v.buyNow:SetEnabledState(ok)
-        v.buyNow.tooltip = (not ok) and { title = "Buy now",
-            description = qty <= 0 and "How many?" or short and "There aren't that many." or "Not enough money." } or nil
+        v.buyNow.tooltip = (not ok) and
+            {
+                title = "Buy now",
+                description = qty <= 0 and "How many?" or short and "There aren't that many." or "Not enough money.",
+            } or
+            nil
     end
 
     function BuyOut()
         local a = self:ChosenAuction()
         local buyout = a and a.buyoutAmount
-        if not (a and buyout) then return end
+        if not (a and buyout) then
+            return
+        end
         local info = keyInfo(self.itemKey)
         local id = a.auctionID
-        UI.Confirm({ title = "Buy out " .. (info and info.itemName or "this") .. "?", text = ("For %s."):format(coins(buyout)), confirm = "Buy out",
+        UI.Confirm({
+            title = "Buy out " .. (info and info.itemName or "this") .. "?",
+            text = ("For %s."):format(coins(buyout)),
+            confirm = "Buy out",
             onConfirm = function()
                 local ok, err = pcall(AH.PlaceBid, id, buyout)
-                if not ok then self:Note("Couldn't buy out: " .. tostring(err), "error") end
-            end })
+                if not ok then
+                    self:Note("Couldn't buy out: " .. tostring(err), "error")
+                end
+            end,
+        })
     end
 
     function Bid()
         local a, buy = self:ChosenAuction(), self.buy
-        if not (a and buy) then return end
+        if not (a and buy) then
+            return
+        end
         local amount = buy.itemView.bid:GetCopper()
         local ok, err = pcall(AH.PlaceBid, a.auctionID, amount)
         if not ok then
@@ -1443,9 +1922,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- Buy now asks the game; it answers with the final price (COMMODITY_PRICE_UPDATED).
     function BuyCommodity()
         local buy, key = self.buy, self.itemKey
-        if not (buy and key) then return end
+        if not (buy and key) then
+            return
+        end
         local qty = tonumber(buy.itemView.qty.edit:GetText()) or 0
-        if qty <= 0 then return end
+        if qty <= 0 then
+            return
+        end
         self.buying = { itemID = key.itemID, qty = qty, expected = (self:CommodityPrice(qty)) }
         self:Note("Asking for the final price…")
         local ok, err = pcall(AH.StartCommoditiesPurchase, key.itemID, qty)
@@ -1457,22 +1940,31 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function OnCommodityPrice(unit: unknown, totalR: unknown)
         local b = self.buying
-        if not b then return end
+        if not b then
+            return
+        end
         local info = keyInfo(self.itemKey)
         local total = asNumber(totalR)
         local changed = b.expected and total and total ~= b.expected
-        UI.Confirm({ title = ("Buy %d %s?"):format(b.qty, info and info.itemName or "of this"),
-            text = ("The game's final price: %s (%s each).%s"):format(coins(total), coins(asNumber(unit)),
-                changed and " It changed since you searched: someone bought or posted." or ""),
+        UI.Confirm({
+            title = ("Buy %d %s?"):format(b.qty, info and info.itemName or "of this"),
+            text = ("The game's final price: %s (%s each).%s"):format(
+                coins(total),
+                coins(asNumber(unit)),
+                changed and " It changed since you searched: someone bought or posted." or ""
+            ),
             confirm = "Buy",
             onConfirm = function()
                 local ok, err = pcall(AH.ConfirmCommoditiesPurchase, b.itemID, b.qty)
-                if not ok then self:Note("Couldn't buy: " .. tostring(err), "error") end
+                if not ok then
+                    self:Note("Couldn't buy: " .. tostring(err), "error")
+                end
             end,
             onCancel = function()
                 try(AH.CancelCommoditiesPurchase)
                 self:Note("")
-            end })
+            end,
+        })
         self.buying = nil
     end
 
@@ -1494,7 +1986,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             low, total, n = m.low, m.total, m.n
             most = m.cheap > 0 and m.ref.price or nil
         end
-        if not (itemID and low and low > 0) then return end
+        if not (itemID and low and low > 0) then
+            return
+        end
         local d = self:Saved()
         local seen = d.seen or {}
         d.seen = seen
@@ -1503,20 +1997,28 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function LowestSeen(itemID: number?): SeenEntry?
         local best: SeenEntry? = nil
-        if not itemID then return nil end
+        if not itemID then
+            return nil
+        end
         for _, d in ipairs(self:AllSaved()) do
             local e = d.seen and d.seen[itemID]
-            if e and (not best or (e.at or 0) > (best.at or 0)) then best = e end
+            if e and (not best or (e.at or 0) > (best.at or 0)) then
+                best = e
+            end
         end
         return best
     end
 
     function LastPosted(itemID: number?): PostedEntry?
         local best: PostedEntry? = nil
-        if not itemID then return nil end
+        if not itemID then
+            return nil
+        end
         for _, d in ipairs(self:AllSaved()) do
             local e = d.posted and d.posted[itemID]
-            if e and (not best or (e.at or 0) > (best.at or 0)) then best = e end
+            if e and (not best or (e.at or 0) > (best.at or 0)) then
+                best = e
+            end
         end
         return best
     end
@@ -1531,7 +2033,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local last: number? = nil
         for _, d in ipairs(self:AllSaved()) do
             local at = d.scanAt
-            if at and (not last or at > last) then last = at end
+            if at and (not last or at > last) then
+                last = at
+            end
         end
         return last
     end
@@ -1541,14 +2045,18 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local best: CharStore? = nil
         for _, d in ipairs(self:AllSaved()) do
             local at = d.scanAt
-            if at and d.scanSeconds and (not best or at > (best.scanAt or 0)) then best = d end
+            if at and d.scanSeconds and (not best or at > (best.scanAt or 0)) then
+                best = d
+            end
         end
         return best and best.scanSeconds, best and best.scanCount
     end
 
     function DrawScan()
         local buy = self.buy
-        if not buy then return end
+        if not buy then
+            return
+        end
         local last = self:LastScan()
         local wait = last and (last + SCAN_WAIT - time()) or 0
         if self.scanning then
@@ -1558,12 +2066,18 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         elseif wait > 0 then
             local text = ("Again in %d min"):format(math.ceil(wait / 60))
             buy.scanButton:SetEnabledState(false)
-            buy.scanButton.tooltip = { title = "Scan all", description = "The game allows one full scan every 15 minutes. " .. text .. "." }
+            buy.scanButton.tooltip = {
+                title = "Scan all",
+                description = "The game allows one full scan every 15 minutes. " .. text .. ".",
+            }
             buy.scanWhen:SetValue(text)
             buy.scanWhen:SetColor("amber")
         else
             buy.scanButton:SetEnabledState(true)
-            buy.scanButton.tooltip = { title = "Scan all", description = "Read every auction once, for the lowest buyouts in the sell view and tooltips." }
+            buy.scanButton.tooltip = {
+                title = "Scan all",
+                description = "Read every auction once, for the lowest buyouts in the sell view and tooltips.",
+            }
             buy.scanWhen:SetValue(last and ("Last scan " .. when(last)) or "Not scanned yet")
             buy.scanWhen:SetColor("ink-muted")
         end
@@ -1574,8 +2088,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         buy.catList:SetAlpha(on and T.opacity["opacity-disabled"] or 1)
         buy.catBlock:SetShown(on)
         buy.searchButton:SetEnabledState(not on)
-        buy.searchButton.tooltip = on and { title = "Search", description = "Scanning: back when the scan is done." } or nil
-        if on then buy.scanCaption:SetValue(self:ScanProgress()) end
+        buy.searchButton.tooltip = on and { title = "Search", description = "Scanning: back when the scan is done." } or
+            nil
+        if on then
+            buy.scanCaption:SetValue(self:ScanProgress())
+        end
     end
 
     -- The caption under the mark. Asking: the auctions received so far when the
@@ -1583,24 +2100,31 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- then reading them.
     function ScanProgress(): string
         local sc = self.scanning
-        if not sc then return "" end
-        if sc.reading then return ("Reading %s of %s…"):format(thousands(sc.read), thousands(sc.total)) end
+        if not sc then
+            return ""
+        end
+        if sc.reading then
+            return ("Reading %s of %s…"):format(thousands(sc.read), thousands(sc.total))
+        end
         local seconds, count = self:LastScanSize()
         local got = tryValue(AH.GetNumReplicateItems) or 0
         if got > 0 then
-            return count and ("Received %s of about %s auctions…"):format(thousands(got), thousands(count))
-                or ("Received %s auctions…"):format(thousands(got))
+            return count and ("Received %s of about %s auctions…"):format(thousands(got), thousands(count)) or
+                ("Received %s auctions…"):format(thousands(got))
         end
         local took = math.floor(GetTime() - sc.started)
         if seconds then
             local left = math.ceil(seconds - (GetTime() - sc.started))
-            return "Asking the house for every auction… " .. (left > 0 and ("about %d s left"):format(left) or "any moment now")
+            return "Asking the house for every auction… " ..
+                (left > 0 and ("about %d s left"):format(left) or "any moment now")
         end
         return ("Asking the house for every auction… %d s"):format(took)
     end
 
     function Scan()
-        if self.scanning then return end
+        if self.scanning then
+            return
+        end
         local sc: Scanning = { started = GetTime() }
         self.scanning = sc
         self:Note("")
@@ -1612,9 +2136,15 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         local buy = self.buy
-        if buy then buy.scanMark:Start() end
+        if buy then
+            buy.scanMark:Start()
+        end
         -- the progress, four times a second
-        self.scanTicker = every(0.25, function() if self.scanning then self:DrawScan() end end)
+        self.scanTicker = every(0.25, function()
+            if self.scanning then
+                self:DrawScan()
+            end
+        end)
         -- no answer in a minute: the game didn't run it
         after(60, function()
             if self.scanning == sc and not sc.reading then
@@ -1634,7 +2164,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self.scanTicker = nil
         end
         local buy = self.buy
-        if buy then buy.scanMark:Stop() end
+        if buy then
+            buy.scanMark:Stop()
+        end
         self:DrawScan()
         self:QueueRefresh()
     end
@@ -1643,7 +2175,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- the lowest buyout per item (per unit for stacks), then keep them.
     function ReadScan()
         local sc = self.scanning
-        if not sc or sc.reading then return end
+        if not sc or sc.reading then
+            return
+        end
         sc.reading = true
         local n = tryValue(AH.GetNumReplicateItems) or 0
         sc.read, sc.total = 0, n
@@ -1653,7 +2187,10 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         ticker = every(0, function()
             local stop = math.min(n, i + 2500)
             for k = i, stop - 1 do
-                local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(AH.GetReplicateItemInfo, k)
+                local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
+                    AH.GetReplicateItemInfo,
+                    k
+                )
                 if ok and itemID and buyout and buyout > 0 then
                     local qty = math.max(1, count or 1)
                     local offered = offers[itemID]
@@ -1678,7 +2215,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 local seconds = GetTime() - sc.started
                 d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
                 self:EndScan()
-                self:Note(("Scan done: %s auctions, %s items, in %d s."):format(thousands(n), thousands(items), math.floor(seconds + 0.5)))
+                self:Note(
+                    ("Scan done: %s auctions, %s items, in %d s."):format(
+                        thousands(n),
+                        thousands(items),
+                        math.floor(seconds + 0.5)
+                    )
+                )
             end
         end)
     end
@@ -1687,36 +2230,54 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- (Settings › Auction house › Item tooltips): the lowest buyout, what most
     -- sell it for, how many are offered, and on a stack in your bags its price.
     function AddTooltipPrices(tooltip: GameTooltip, data: unknown)
-        if not self:Get("tipShow") then return end
+        if not self:Get("tipShow") then
+            return
+        end
         local itemID = asNumber(field(data, "id"))
-        if not itemID then return end
+        if not itemID then
+            return
+        end
         local e = self:LowestSeen(itemID)
-        if not e then return end
+        if not e then
+            return
+        end
         local stack = asNumber((select(8, C_Item.GetItemInfo(itemID))))
         local each = (stack and stack > 1) and " each" or ""
         local head, label, value = T.color["gilt-text"], T.color["ink-muted"], T.color["ink"]
-        local function row(l: string, v: string) tooltip:AddDoubleLine(l, v, label[1], label[2], label[3], value[1], value[2], value[3]) end
+        local function row(l: string, v: string)
+            tooltip:AddDoubleLine(l, v, label[1], label[2], label[3], value[1], value[2], value[3])
+        end
         tooltip:AddLine(" ")
         tooltip:AddLine("Auction house · " .. when(e.at), head[1], head[2], head[3])
         row("Lowest buyout", coins(e.price) .. each)
         local most, qty, n = e.most, e.qty, e.n
-        if self:Get("tipMost") and most then row("Most sell it for", coins(most) .. each) end
+        if self:Get("tipMost") and most then
+            row("Most sell it for", coins(most) .. each)
+        end
         if self:Get("tipOffered") and qty then
             row("Offered", n and n ~= qty and ("%d in %d auctions"):format(qty, n) or tostring(qty))
         end
         if self:Get("tipStack") then
             local count = stackCount(tooltip)
-            if count and count > 1 then row(("This stack (%d)"):format(count), coins(e.price * count)) end
+            if count and count > 1 then
+                row(("This stack (%d)"):format(count), coins(e.price * count))
+            end
         end
     end
 
     function HookTooltips()
         local add = field(_G, "TooltipDataProcessor", "AddTooltipPostCall")
         local itemType = field(Enum, "TooltipDataType", "Item")
-        if self.tooltipHooked or not (add and itemType) then return end
+        if self.tooltipHooked or not (add and itemType) then
+            return
+        end
         self.tooltipHooked = true
         try(add, itemType, function(tooltip: GameTooltip, data: unknown)
-            if self:IsEnabled() then self:Guard(function() self:AddTooltipPrices(tooltip, data) end)() end
+            if self:IsEnabled() then
+                self:Guard(function()
+                    self:AddTooltipPrices(tooltip, data)
+                end)()
+            end
         end)
     end
 
@@ -1726,7 +2287,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function SetSellItem(loc: ItemLocationMixin?)
         local sell = self.sell
-        if not sell then return end
+        if not sell then
+            return
+        end
         if loc and not tryValue(AH.IsSellItemValid, loc, true) then
             self:Note("The auction house doesn't take that.", "error")
             return
@@ -1758,18 +2321,25 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function AskSellPrice()
         local sell = self.sell
         local loc = sell and sell.loc
-        if not (sell and loc and loc:IsValid()) then return end
+        if not (sell and loc and loc:IsValid()) then
+            return
+        end
         local key = tryValue(AH.GetItemKeyFromItem, loc)
-        if not key then return end
+        if not key then
+            return
+        end
         local info = tryValue(AH.GetItemKeyInfo, key)
         local gear: boolean
-        if info then gear = info.isEquipment
+        if info then
+            gear = info.isEquipment
         else
             local itemID = sell.itemID
             local classID = itemID and asNumber((select(6, C_Item.GetItemInfoInstant(itemID))))
             gear = classID ~= nil and (classID == Enum.ItemClass.Weapon or classID == Enum.ItemClass.Armor)
         end
-        if gear then key.itemLevel, key.itemSuffix = 0, 0 end
+        if gear then
+            key.itemLevel, key.itemSuffix = 0, 0
+        end
         self.sellKey = key
         local asking = sell.asking
         if not (asking and asking.itemID == sell.itemID) then
@@ -1778,11 +2348,17 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end
         asking.tries = asking.tries + 1
         local tries = asking.tries
-        if gear then try(AH.SendSellSearchQuery, key, sorts(), false)
-        else try(AH.SendSearchQuery, key, sorts(), false) end
+        if gear then
+            try(AH.SendSellSearchQuery, key, sorts(), false)
+        else
+            try(AH.SendSearchQuery, key, sorts(), false)
+        end
         after(5, function()
-            if sell.asking ~= asking or asking.tries ~= tries then return end
-            if tries < 2 then self:AskSellPrice()
+            if sell.asking ~= asking or asking.tries ~= tries then
+                return
+            end
+            if tries < 2 then
+                self:AskSellPrice()
             else
                 sell.asking = nil
                 self:QueueRefresh()
@@ -1792,18 +2368,25 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawSell()
         local sell = self.sell
-        if not sell then return end
+        if not sell then
+            return
+        end
         local loc = sell.loc
         if loc and not loc:IsValid() then
             sell.loc, loc = nil, nil
         end
         if loc then
-            sell.slot.skin:SetItem({ icon = tryValue(C_Item.GetItemIcon, loc), quality = QUALITY[tryValue(C_Item.GetItemQuality, loc) or 1] or "common",
-                count = tryValue(AH.GetAvailablePostCount, loc) })
+            sell.slot.skin:SetItem({
+                icon = tryValue(C_Item.GetItemIcon, loc),
+                quality = QUALITY[tryValue(C_Item.GetItemQuality, loc) or 1] or "common",
+                count = tryValue(AH.GetAvailablePostCount, loc),
+            })
         else
             sell.slot.skin:SetItem(nil)
         end
-        sell.name:SetValue(loc and (tryValue(C_Item.GetItemName, loc) or "?") or "Drop an item here, or choose one from your items")
+        sell.name:SetValue(
+            loc and (tryValue(C_Item.GetItemName, loc) or "?") or "Drop an item here, or choose one from your items"
+        )
         sell.name:SetStyle(loc and "unit-name-lg" or "caption")
         local q = loc and tryValue(C_Item.GetItemQuality, loc)
         sell.name:SetColor(loc and qualityToken(q) or "ink-muted")
@@ -1812,10 +2395,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         sell.last:SetValue(last and ("Last posted at " .. coins(last.price) .. " · " .. when(last.at)) or "")
         -- what the background search found: nobody selling it now is worth saying
         local lowText = low and ("Lowest buyout seen: " .. coins(low.price) .. " · " .. when(low.at)) or ""
-        local now = loc and (sell.asking and "Asking the house…"
-            or sell.offered == false and "Nobody sells it right now."
-            or sell.offered == nil and "The house didn't answer.") or nil
-        if now then lowText = (lowText ~= "" and (lowText .. "  ·  ") or "") .. now end
+        local now = loc and
+            (sell.asking and "Asking the house…" or sell.offered == false and "Nobody sells it right now." or
+                sell.offered == nil and "The house didn't answer.") or
+            nil
+        if now then
+            lowText = (lowText ~= "" and (lowText .. "  ·  ") or "") .. now
+        end
         sell.lowest:SetValue(lowText)
         -- a commodity: a unit price, no starting bid
         sell.bidHolder:SetShown(not sell.commodity)
@@ -1826,21 +2412,32 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local deposit = 0
         local itemID = sell.itemID
         if loc then
-            if sell.commodity and itemID then deposit = tryValue(AH.CalculateCommodityDeposit, itemID, dur, qty) or 0
-            else deposit = tryValue(AH.CalculateItemDeposit, loc, dur, qty) or 0 end
+            if sell.commodity and itemID then
+                deposit = tryValue(AH.CalculateCommodityDeposit, itemID, dur, qty) or 0
+            else
+                deposit = tryValue(AH.CalculateItemDeposit, loc, dur, qty) or 0
+            end
         end
         sell.deposit:SetCopper(deposit)
         local price, bid = sell.price:GetCopper(), sell.bid:GetCopper()
         sell.total:SetCopper(sell.commodity and price * qty or price)
         -- Post, or why not
         local why: string? = nil
-        if not loc then why = "Choose an item."
-        elseif qty <= 0 then why = "How many?"
-        elseif qty > (tryValue(AH.GetAvailablePostCount, loc) or 0) then why = "You don't have that many."
-        elseif sell.commodity and price <= 0 then why = "Give it a unit price."
-        elseif not sell.commodity and price <= 0 and bid <= 0 then why = "Give it a buyout or a starting bid."
-        elseif not sell.commodity and price > 0 and bid > price then why = "The starting bid is above the buyout."
-        elseif deposit > (GetMoney() or 0) then why = "Not enough money for the deposit (" .. coins(deposit) .. ")." end
+        if not loc then
+            why = "Choose an item."
+        elseif qty <= 0 then
+            why = "How many?"
+        elseif qty > (tryValue(AH.GetAvailablePostCount, loc) or 0) then
+            why = "You don't have that many."
+        elseif sell.commodity and price <= 0 then
+            why = "Give it a unit price."
+        elseif not sell.commodity and price <= 0 and bid <= 0 then
+            why = "Give it a buyout or a starting bid."
+        elseif not sell.commodity and price > 0 and bid > price then
+            why = "The starting bid is above the buyout."
+        elseif deposit > (GetMoney() or 0) then
+            why = "Not enough money for the deposit (" .. coins(deposit) .. ")."
+        end
         sell.post:SetEnabledState(why == nil and not self.posting)
         sell.post.tooltip = why and { title = "Post", description = why } or nil
         self:DrawSellList()
@@ -1848,7 +2445,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawSellList()
         local sell = self.sell
-        if not sell then return end
+        if not sell then
+            return
+        end
         local items = sellable()
         local c = sell.list.child
         for i, e in ipairs(items) do
@@ -1867,11 +2466,15 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             r.name:SetColor(qualityToken(e.quality))
             local low = self:LowestSeen(e.itemID)
             r.seen:SetShown(low ~= nil)
-            if low then r.seen:SetCopper(low.price) end
+            if low then
+                r.seen:SetCopper(low.price)
+            end
             r.sel:SetShown(sell.itemID == e.itemID)
             r:Show()
         end
-        for i = #items + 1, #sell.rows do sell.rows[i]:Hide() end
+        for i = #items + 1, #sell.rows do
+            sell.rows[i]:Hide()
+        end
         c:SetHeight(math.max(1, #items * ROW_H))
         sell.none:SetShown(#items == 0)
     end
@@ -1879,7 +2482,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function Post()
         local sell = self.sell
         local loc = sell and sell.loc
-        if not (sell and loc and loc:IsValid()) then return end
+        if not (sell and loc and loc:IsValid()) then
+            return
+        end
         local qty = tonumber(sell.qty.edit:GetText()) or 0
         local dur = sell.duration.value or 2
         local price, bid = sell.price:GetCopper(), sell.bid:GetCopper()
@@ -1887,11 +2492,15 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local ok: boolean, needs: unknown = false, nil
         if sell.commodity then
             ok, needs = pcall(AH.PostCommodity, loc, dur, qty, price)
-            if ok and needs then ok = pcall(AH.ConfirmPostCommodity, loc, dur, qty, price) end
+            if ok and needs then
+                ok = pcall(AH.ConfirmPostCommodity, loc, dur, qty, price)
+            end
         else
             local b, p = bid > 0 and bid or nil, price > 0 and price or nil
             ok, needs = pcall(AH.PostItem, loc, dur, qty, b, p)
-            if ok and needs then ok = pcall(AH.ConfirmPostItem, loc, dur, qty, b, p) end
+            if ok and needs then
+                ok = pcall(AH.ConfirmPostItem, loc, dur, qty, b, p)
+            end
         end
         if not ok then
             self.posting = nil
@@ -1906,19 +2515,31 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- together are at most cheapShare % of all offered and at least
     -- cheapPercent % under the next price.
     function Market(offers: Offer[]): Market?
-        if #offers == 0 then return nil end
-        table.sort(offers, function(a: Offer, b: Offer): boolean return a.price < b.price end)
+        if #offers == 0 then
+            return nil
+        end
+        table.sort(offers, function(a: Offer, b: Offer): boolean
+            return a.price < b.price
+        end)
         local total = 0
-        for _, o in ipairs(offers) do total = total + o.qty end
+        for _, o in ipairs(offers) do
+            total = total + o.qty
+        end
         local m: Market = { low = offers[1].price, ref = offers[1], cheap = 0, total = total, n = #offers }
-        if not self:Get("cheapCheck") then return m end
+        if not self:Get("cheapCheck") then
+            return m
+        end
         local under = 1 - self:Get("cheapPercent") / 100
         local most = total * self:Get("cheapShare") / 100
         local count = 0
         for k = 1, #offers - 1 do
             count = count + offers[k].qty
-            if count > most then break end
-            if offers[k].price <= offers[k + 1].price * under then m.ref, m.cheap = offers[k + 1], count end
+            if count > most then
+                break
+            end
+            if offers[k].price <= offers[k + 1].price * under then
+                m.ref, m.cheap = offers[k + 1], count
+            end
         end
         return m
     end
@@ -1927,7 +2548,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- rest go for, ask first.
     function PostOrAsk()
         local sell = self.sell
-        if not sell then return end
+        if not sell then
+            return
+        end
         local m = sell.market
         local price = sell.price:GetCopper()
         if not (self:Get("cheapCheck") and m and price > 0) then
@@ -1941,29 +2564,46 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         local each = sell.commodity and " each" or ""
-        local text = ("Your price is %d%% under %s (%s%s)."):format(under,
-            m.cheap > 0 and "what most sell it for" or "the cheapest offer", coins(ref), each)
+        local text = ("Your price is %d%% under %s (%s%s)."):format(
+            under,
+            m.cheap > 0 and "what most sell it for" or "the cheapest offer",
+            coins(ref),
+            each
+        )
         if m.cheap > 0 then
             text = text .. (" Only %d of the %d offered are that cheap."):format(m.cheap, m.total)
         end
-        UI.Confirm({ title = "Post this cheap?", text = text, confirm = "Post anyway", cancel = "Change price",
-            onConfirm = function() self:Post() end })
+        UI.Confirm({
+            title = "Post this cheap?",
+            text = text,
+            confirm = "Post anyway",
+            cancel = "Change price",
+            onConfirm = function()
+                self:Post()
+            end,
+        })
     end
 
     -- What the item goes for now: the price 1c under it (your own cheapest
     -- offer: the same price, not under yourself), unless you typed one.
     function SellLowest(low: number?, mine: boolean?)
         local sell = self.sell
-        if not (sell and sell.loc and low and low > 0) or sell.priceTyped then return end
+        if not (sell and sell.loc and low and low > 0) or sell.priceTyped then
+            return
+        end
         sell.price:SetCopper(mine and low or math.max(1, low - 1))
-        if not sell.commodity then sell.bid:Clear() end
+        if not sell.commodity then
+            sell.bid:Clear()
+        end
     end
 
     -- The game confirmed a post: remember its price, say so.
     function Posted()
         local p = self.posting
         self.posting = nil
-        if not p then return end
+        if not p then
+            return
+        end
         local itemID = p.itemID
         if p.price > 0 and itemID then
             local d = self:Saved()
@@ -1981,25 +2621,46 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function SetAuctionsTab(key: string)
         local a = self.mine
-        if not a then return end
+        if not a then
+            return
+        end
         a.sub = key
         a.chosen = nil
         for _, b in ipairs(a.tabs) do
             local on = b.key == key
             b.label:SetColor(on and "gilt-text" or "ink-muted")
-            if on then a.marker:SetChosen(b) end
+            if on then
+                a.marker:SetChosen(b)
+            end
         end
-        if key == "bids" then try(AH.QueryBids, {}, {}) else try(AH.QueryOwnedAuctions, {}) end
+        if key == "bids" then
+            try(AH.QueryBids, {}, {})
+        else
+            try(AH.QueryOwnedAuctions, {})
+        end
         self:DrawAuctions()
     end
 
     -- One row of either list: the item (slot, name, a tag), time left, two prices.
-    function AuctionRowOf(t: AuctionTable<AuctionRow>, i: number, entry: Listed, tag: string?, tagColor: string?, time: string,
-                          first: Cell, second: Cell, chosen: boolean): AuctionRow
+    function AuctionRowOf(
+        t: AuctionTable<AuctionRow>,
+        i: number,
+        entry: Listed,
+        tag: string?,
+        tagColor: string?,
+        time: string,
+        first: Cell,
+        second: Cell,
+        chosen: boolean
+    ): AuctionRow
         local row = t:Line(i)
         local name, quality, icon = itemOf(entry)
         local quantity = entry.quantity or 1
-        row.slot.skin:SetItem({ icon = icon, quality = QUALITY[quality or 1] or "common", count = quantity > 1 and quantity or nil })
+        row.slot.skin:SetItem({
+            icon = icon,
+            quality = QUALITY[quality or 1] or "common",
+            count = quantity > 1 and quantity or nil,
+        })
         row.name:SetValue(name or "…")
         row.name:SetColor(qualityToken(quality))
         row.tag:SetValue(tag or "")
@@ -2024,15 +2685,24 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         row.name:ClearAllPoints()
         row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
         local tagW = tag and (UI.MeasureText("micro", tag) + S["space-2"]) or 0
-        row.name:SetWidth(math.max(20, math.min(UI.MeasureText("label", name or "…") + 2, places[1].w - 24 - S["space-3"] - tagW)))
+        row.name:SetWidth(
+            math.max(20, math.min(UI.MeasureText("label", name or "…") + 2, places[1].w - 24 - S["space-3"] - tagW))
+        )
         row.tag:ClearAllPoints()
         row.tag:SetPoint("LEFT", row.name, "RIGHT", S["space-2"], 0)
-        t:PlaceCells(row, { false, row.time, price(row.first, row.firstText, first), price(row.second, row.secondText, second) })
+        t:PlaceCells(row, {
+            false,
+            row.time,
+            price(row.first, row.firstText, first),
+            price(row.second, row.secondText, second),
+        })
         row.sel:SetShown(chosen)
         row.entry = entry
         row.onEnter = function()
             local e = row.entry
-            if not e then return end
+            if not e then
+                return
+            end
             local link = asString(e.itemLink)
             if link then
                 GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
@@ -2048,7 +2718,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawAuctions()
         local a = self.mine
-        if not a then return end
+        if not a then
+            return
+        end
         local bids = a.sub == "bids"
         a.mineT:SetShown(not bids)
         a.mineFoot:SetShown(not bids)
@@ -2061,7 +2733,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             local d = self:Saved()
             local mine = d.bids or {}
             local entries: Listed[] = {}
-            for _, b in ipairs(tryValue(AH.GetBids) or {}) do entries[#entries + 1] = bidListed(b) end
+            for _, b in ipairs(tryValue(AH.GetBids) or {}) do
+                entries[#entries + 1] = bidListed(b)
+            end
             a.list = entries
             for i, b in ipairs(entries) do
                 n = i
@@ -2073,35 +2747,64 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     self:Note("You've been outbid on " .. (name or "an item") .. ".", "error")
                 end
                 a.highest[b.auctionID] = not outbid
-                local row = self:AuctionRowOf(t, i, b, outbid and "Outbid" or "Highest bid", outbid and "ember-text" or "fel",
-                    timeLeft(nil, b.timeLeft), mine[b.auctionID] or b.bidAmount or false, b.buyoutAmount or "none", a.chosen == b.auctionID)
+                local row = self:AuctionRowOf(
+                    t,
+                    i,
+                    b,
+                    outbid and "Outbid" or "Highest bid",
+                    outbid and "ember-text" or "fel",
+                    timeLeft(nil, b.timeLeft),
+                    mine[b.auctionID] or b.bidAmount or false,
+                    b.buyoutAmount or "none",
+                    a.chosen == b.auctionID
+                )
                 row:SetScript("OnClick", function()
-                    if a.chosen ~= b.auctionID then a.bid:Clear() end
+                    if a.chosen ~= b.auctionID then
+                        a.bid:Clear()
+                    end
                     a.chosen = b.auctionID
                     local least = b.minBid or b.bidAmount or 0
-                    if (a.bid:GetCopper() or 0) < least then a.bid:SetCopper(least) end
+                    if (a.bid:GetCopper() or 0) < least then
+                        a.bid:SetCopper(least)
+                    end
                     self:DrawAuctions()
                 end)
             end
             -- the bids you placed that the house no longer lists are over
             local live: { [number]: boolean } = {}
-            for _, b in ipairs(entries) do live[b.auctionID] = true end
-            for id in pairs(mine) do if not live[id] then mine[id] = nil end end
+            for _, b in ipairs(entries) do
+                live[b.auctionID] = true
+            end
+            for id in pairs(mine) do
+                if not live[id] then
+                    mine[id] = nil
+                end
+            end
             t.empty:SetValue("You have no bids.")
         else
             local entries: Listed[] = {}
             for i = 1, tryValue(AH.GetNumOwnedAuctions) or 0 do
                 local o = tryValue(AH.GetOwnedAuctionInfo, i)
-                if o then entries[#entries + 1] = ownedListed(o) end
+                if o then
+                    entries[#entries + 1] = ownedListed(o)
+                end
             end
             a.list = entries
             local sold = Enum.AuctionStatus.Sold
             for i, o in ipairs(entries) do
                 n = i
                 local isSold = o.status == sold
-                local row = self:AuctionRowOf(t, i, o, isSold and "Sold" or nil, "fel",
-                    isSold and "" or timeLeft(o.timeLeftSeconds, o.timeLeft), o.bidAmount or (isSold and "" or "no bids"),
-                    o.buyoutAmount or "", a.chosen == o.auctionID)
+                local row = self:AuctionRowOf(
+                    t,
+                    i,
+                    o,
+                    isSold and "Sold" or nil,
+                    "fel",
+                    isSold and "" or timeLeft(o.timeLeftSeconds, o.timeLeft),
+                    o.bidAmount or (isSold and "" or "no bids"),
+                    o.buyoutAmount or "",
+                    a.chosen == o.auctionID
+                )
                 row:SetScript("OnClick", function()
                     a.chosen = o.auctionID
                     self:DrawAuctions()
@@ -2116,37 +2819,51 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawAuctionsFoot()
         local a = self.mine
-        if not a then return end
+        if not a then
+            return
+        end
         local e = a:Chosen()
         if a.sub == "bids" then
             local least = e and (e.minBid or e.bidAmount) or 0
             local amount = a.bid:GetCopper() or 0
             local money = GetMoney() or 0
-            local why = not e and "Choose a bid." or amount < least and ("At least " .. coins(least) .. ".")
-                or amount > money and "Not enough money." or nil
+            local why = not e and "Choose a bid." or amount < least and ("At least " .. coins(least) .. ".") or
+                amount > money and "Not enough money." or
+                nil
             a.bidButton:SetEnabledState(why == nil)
             a.bidButton.tooltip = why and { title = "Bid", description = why } or nil
             local buy = e and e.buyoutAmount
-            why = not e and "Choose a bid." or not buy and "This auction has no buyout." or (buy and buy > money) and "Not enough money." or nil
+            why = not e and "Choose a bid." or not buy and "This auction has no buyout." or
+                (buy and buy > money) and "Not enough money." or
+                nil
             a.buyout:SetEnabledState(why == nil)
             a.buyout.tooltip = why and { title = "Buy out", description = why } or nil
         else
             local active = e ~= nil and e.status ~= Enum.AuctionStatus.Sold
             local can = e ~= nil and active and tryValue(AH.CanCancelAuction, e.auctionID) ~= false
             a.cancel:SetEnabledState(can)
-            a.cancel.tooltip = not can and { title = "Cancel auction", description = not e and "Choose one of your auctions."
-                or not active and "It has sold." or "The house doesn't allow cancelling this one." } or nil
+            a.cancel.tooltip = not can and
+                {
+                    title = "Cancel auction",
+                    description = not e and "Choose one of your auctions." or not active and "It has sold." or
+                        "The house doesn't allow cancelling this one.",
+                } or
+                nil
             -- what cancelling costs, when it costs more than the deposit
             local cost = (can and e) and tryValue(AH.GetCancelCost, e.auctionID) or 0
-            a.cancelNote:SetValue("The deposit isn't returned when you cancel." ..
-                ((cost and cost > 0) and (" Cancelling this one costs " .. coins(cost) .. ".") or ""))
+            a.cancelNote:SetValue(
+                "The deposit isn't returned when you cancel." ..
+                    ((cost and cost > 0) and (" Cancelling this one costs " .. coins(cost) .. ".") or "")
+            )
         end
     end
 
     function CancelChosen()
         local a = self.mine
         local e = a and a:Chosen()
-        if not (a and e) then return end
+        if not (a and e) then
+            return
+        end
         a.cancelling = e
         local ok, err = pcall(AH.CancelAuction, e.auctionID)
         if not ok then
@@ -2162,7 +2879,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             local name = itemOf(e)
             self:Note(("Cancelled: %s ×%d. The deposit isn't returned."):format(name or "?", e.quantity or 1), "ok")
         end
-        if a then a.cancelling, a.chosen = nil, nil end
+        if a then
+            a.cancelling, a.chosen = nil, nil
+        end
         try(AH.QueryOwnedAuctions, {})
     end
 
@@ -2177,7 +2896,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function BidAgain()
         local a = self.mine
         local e = a and a:Chosen()
-        if not (a and e) then return end
+        if not (a and e) then
+            return
+        end
         local amount = a.bid:GetCopper()
         local ok, err = pcall(AH.PlaceBid, e.auctionID, amount)
         if not ok then
@@ -2192,14 +2913,22 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local a = self.mine
         local e = a and a:Chosen()
         local buyout = e and e.buyoutAmount
-        if not (e and buyout) then return end
+        if not (e and buyout) then
+            return
+        end
         local name = itemOf(e)
         local id = e.auctionID
-        UI.Confirm({ title = "Buy out " .. (name or "this") .. "?", text = ("For %s."):format(coins(buyout)), confirm = "Buy out",
+        UI.Confirm({
+            title = "Buy out " .. (name or "this") .. "?",
+            text = ("For %s."):format(coins(buyout)),
+            confirm = "Buy out",
             onConfirm = function()
                 local ok, err = pcall(AH.PlaceBid, id, buyout)
-                if not ok then self:Note("Couldn't buy out: " .. tostring(err), "error") end
-            end })
+                if not ok then
+                    self:Note("Couldn't buy out: " .. tostring(err), "error")
+                end
+            end,
+        })
     end
 
     ----------------------------------------------------------------------------
@@ -2207,21 +2936,39 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     ----------------------------------------------------------------------------
 
     function Build(): WindowFrame
-        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIAuctionHouseWindow", title = "Auction house", width = WIDTH, height = HEIGHT,
-            footer = true, onClose = function(win: Frame) win:Hide() end,
-            tabs = { { key = "buy", label = "Buy" }, { key = "sell", label = "Sell" }, { key = "auctions", label = "Auctions" } },
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUIAuctionHouseWindow",
+            title = "Auction house",
+            width = WIDTH,
+            height = HEIGHT,
+            footer = true,
+            onClose = function(win: Frame)
+                win:Hide()
+            end,
+            tabs = {
+                { key = "buy", label = "Buy" },
+                { key = "sell", label = "Sell" },
+                { key = "auctions", label = "Auctions" },
+            },
             onTab = function(key: string)
                 self.tab = key
-                for k, page in pairs(self.pages) do page:SetShown(k == key) end
+                for k, page in pairs(self.pages) do
+                    page:SetShown(k == key)
+                end
                 -- the house sends your auctions or bids when asked
                 local mine = self.mine
-                if key == "auctions" and mine then self:SetAuctionsTab(mine.sub) end
+                if key == "auctions" and mine then
+                    self:SetAuctionsTab(mine.sub)
+                end
                 self:Refresh()
-            end })
+            end,
+        })
         w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
         w:Hide()
         w:HookScript("OnHide", function()
-            if self.open then try(AH.CloseAuctionHouse) end
+            if self.open then
+                try(AH.CloseAuctionHouse)
+            end
         end)
         w.scroll:Hide()
         self.window = w
@@ -2243,9 +2990,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function Refresh()
         local window, buy = self.window, self.buy
-        if not (window and buy and window:IsShown() and self.open) then return end
+        if not (window and buy and window:IsShown() and self.open) then
+            return
+        end
         local money = self.money
-        if money then money:SetCopper(GetMoney() or 0) end
+        if money then
+            money:SetCopper(GetMoney() or 0)
+        end
         if self.tab == "sell" then
             self:DrawSell()
             return
@@ -2254,7 +3005,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:DrawAuctions()
             return
         end
-        if self.tab ~= "buy" then return end
+        if self.tab ~= "buy" then
+            return
+        end
         self:DrawCategories()
         self:DrawScan()
         -- a scan holds the main column; what it showed comes back after
@@ -2279,7 +3032,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     function QueueRefresh()
-        if self.refreshPending then return end
+        if self.refreshPending then
+            return
+        end
         self.refreshPending = true
         after(0.05, function()
             self.refreshPending = false
@@ -2291,9 +3046,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- and back off screen whenever the game places it again (unless it was
     -- SuuUI placing it itself).
     function Away(frame: Frame?)
-        if not frame then return end
+        if not frame then
+            return
+        end
         local function away()
-            if not self:IsEnabled() then return end
+            if not self:IsEnabled() then
+                return
+            end
             self.placing = true
             frame:SetAlpha(0)
             frame:ClearAllPoints()
@@ -2303,7 +3062,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         away()
         if not self.awayHooked then
             self.awayHooked = true
-            hook(frame, "SetPoint", function() if not self.placing then after(0, away) end end)
+            hook(frame, "SetPoint", function()
+                if not self.placing then
+                    after(0, away)
+                end
+            end)
         end
     end
 
@@ -2311,13 +3074,19 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     function OnSellResults(answered: unknown)
         local key = self.sellKey
         local sell = self.sell
-        if not (key and sell) or self.tab ~= "sell" then return end
+        if not (key and sell) or self.tab ~= "sell" then
+            return
+        end
         -- only the answer about the chosen item (a commodity's comes as
         -- its item ID); an item's results come under the house's own key
         -- for it, not always the one made from the bag item
         local id = type(answered) == "table" and asNumber(field(answered, "itemID")) or asNumber(answered)
-        if id ~= key.itemID then return end
-        if type(answered) == "table" then key = answered :: unknown :: ItemKey end
+        if id ~= key.itemID then
+            return
+        end
+        if type(answered) == "table" then
+            key = answered :: unknown :: ItemKey
+        end
         sell.asking = nil
         -- every offer: its price per unit, how many, whether it's yours
         local offers: Offer[] = {}
@@ -2333,15 +3102,20 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 local a = tryValue(AH.GetItemSearchResultInfo, key, i)
                 local buyout = a and a.buyoutAmount
                 if a and buyout and buyout > 0 then
-                    offers[#offers + 1] = { price = math.floor(buyout / (a.quantity or 1)), qty = a.quantity or 1,
-                        mine = a.containsOwnerItem }
+                    offers[#offers + 1] = {
+                        price = math.floor(buyout / (a.quantity or 1)),
+                        qty = a.quantity or 1,
+                        mine = a.containsOwnerItem,
+                    }
                 end
             end
         end
         local market = self:Market(offers)
         sell.market = market
         self:Seen(key.itemID, market)
-        if market then self:SellLowest(market.ref.price, market.ref.mine) end
+        if market then
+            self:SellLowest(market.ref.price, market.ref.mine)
+        end
         sell.offered = market ~= nil
         self:QueueRefresh()
     end
@@ -2362,7 +3136,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     -- (the house's own method, of its mixin: not a frame's)
                     local house: unknown = f
                     hook(house, "SetPostItem", function(_: Frame, loc: ItemLocationMixin?)
-                        if not self:IsEnabled() or not loc then return end
+                        if not self:IsEnabled() or not loc then
+                            return
+                        end
                         window:SetTab("sell")
                         self:SetSellItem(loc)
                     end)
@@ -2377,20 +3153,44 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             window:Hide()
         end)
         local function results(isResults: boolean)
-            if isResults and self.waiting then self:Note("") end
+            if isResults and self.waiting then
+                self:Note("")
+            end
             self:QueueRefresh()
         end
-        self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function() results(true) end)
-        self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function() results(true) end)
-        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function() results(false) end)
-        self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function() results(true) end)
-        self:OnGameEvent("ITEM_SEARCH_RESULTS_ADDED", function() results(true) end)
-        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_UPDATED", function() results(true) end)
-        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_ADDED", function() results(true) end)
-        self:OnGameEvent("PLAYER_MONEY", function() results(false) end)
-        self:OnGameEvent("AUCTION_HOUSE_FAVORITES_UPDATED", function() results(false) end)
-        self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function() self:Note("The search failed; try again in a moment.", "error") end)
-        self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total) self:OnCommodityPrice(unit, total) end)
+        self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+            results(true)
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function()
+            results(true)
+        end)
+        self:OnGameEvent("ITEM_KEY_ITEM_INFO_RECEIVED", function()
+            results(false)
+        end)
+        self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function()
+            results(true)
+        end)
+        self:OnGameEvent("ITEM_SEARCH_RESULTS_ADDED", function()
+            results(true)
+        end)
+        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_UPDATED", function()
+            results(true)
+        end)
+        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_ADDED", function()
+            results(true)
+        end)
+        self:OnGameEvent("PLAYER_MONEY", function()
+            results(false)
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_FAVORITES_UPDATED", function()
+            results(false)
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function()
+            self:Note("The search failed; try again in a moment.", "error")
+        end)
+        self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total)
+            self:OnCommodityPrice(unit, total)
+        end)
         self:OnGameEvent("COMMODITY_PRICE_UNAVAILABLE", function()
             self.buying = nil
             self:Note("That price isn't available any more: search again.", "error")
@@ -2398,55 +3198,107 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("COMMODITY_PURCHASE_SUCCEEDED", function()
             self:Note("Bought.", "ok")
             local key = self.itemKey
-            if key then try(AH.SendSearchQuery, key, sorts(), true) end
+            if key then
+                try(AH.SendSearchQuery, key, sorts(), true)
+            end
         end)
-        self:OnGameEvent("COMMODITY_PURCHASE_FAILED", function() self:Note("The purchase failed.", "error") end)
+        self:OnGameEvent("COMMODITY_PURCHASE_FAILED", function()
+            self:Note("The purchase failed.", "error")
+        end)
         self:OnGameEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", function()
             self:Note("Bought.", "ok")
             self.chosen = nil
             local key = self.itemKey
-            if key then try(AH.SendSearchQuery, key, sorts(), true) end
+            if key then
+                try(AH.SendSearchQuery, key, sorts(), true)
+            end
         end)
-        self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function() self:Posted() end)
+        self:OnGameEvent("AUCTION_HOUSE_AUCTION_CREATED", function()
+            self:Posted()
+        end)
         -- prices and "Yours" carry colour codes: drawn again
-        self:On("SUUUI_THEME_CHANGED", function() self:QueueRefresh() end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:QueueRefresh()
+        end)
         -- Auctions: the lists as the house sends them; after a change, asked again
-        self:OnGameEvent("OWNED_AUCTIONS_UPDATED", function() if self.tab == "auctions" then self:QueueRefresh() end end)
-        self:OnGameEvent("BIDS_UPDATED", function() if self.tab == "auctions" then self:QueueRefresh() end end)
-        self:OnGameEvent("AUCTION_CANCELED", function(_, id) self:OnCancelled(id) end)
-        self:OnGameEvent("BID_ADDED", function() if self.tab == "auctions" then try(AH.QueryBids, {}, {}) end end)
-        self:OnGameEvent("AUCTION_HOUSE_AUCTIONS_EXPIRED", function() if self.tab == "auctions" then try(AH.QueryOwnedAuctions, {}) end end)
-        self:OnGameEvent("REPLICATE_ITEM_LIST_UPDATE", function() self:ReadScan() end)
+        self:OnGameEvent("OWNED_AUCTIONS_UPDATED", function()
+            if self.tab == "auctions" then
+                self:QueueRefresh()
+            end
+        end)
+        self:OnGameEvent("BIDS_UPDATED", function()
+            if self.tab == "auctions" then
+                self:QueueRefresh()
+            end
+        end)
+        self:OnGameEvent("AUCTION_CANCELED", function(_, id)
+            self:OnCancelled(id)
+        end)
+        self:OnGameEvent("BID_ADDED", function()
+            if self.tab == "auctions" then
+                try(AH.QueryBids, {}, {})
+            end
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_AUCTIONS_EXPIRED", function()
+            if self.tab == "auctions" then
+                try(AH.QueryOwnedAuctions, {})
+            end
+        end)
+        self:OnGameEvent("REPLICATE_ITEM_LIST_UPDATE", function()
+            self:ReadScan()
+        end)
         self:HookTooltips()
         -- the wait counts down while the window is open (kept, so turning the
         -- module off stops it; a second OnEnable doesn't start another)
         local ticker = self.waitTicker
-        if ticker then ticker:Cancel() end
-        self.waitTicker = every(30, function() if window:IsShown() then self:DrawScan() end end)
-        self:OnGameEvent("BAG_UPDATE_DELAYED", function() if self.tab == "sell" then self:QueueRefresh() end end)
+        if ticker then
+            ticker:Cancel()
+        end
+        self.waitTicker = every(30, function()
+            if window:IsShown() then
+                self:DrawScan()
+            end
+        end)
+        self:OnGameEvent("BAG_UPDATE_DELAYED", function()
+            if self.tab == "sell" then
+                self:QueueRefresh()
+            end
+        end)
         self:OnGameEvent("AUCTION_HOUSE_POST_ERROR", function()
             self.posting = nil
             self:Note("Couldn't post.", "error")
             self:DrawSell() -- Post again
         end)
         -- the sell search: what the chosen item goes for now
-        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_UPDATED", function(_, answered) self:OnSellResults(answered) end)
-        self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function(_, answered) self:OnSellResults(answered) end)
-        self:OnGameEvent("ITEM_SEARCH_RESULTS_ADDED", function(_, answered) self:OnSellResults(answered) end)
+        self:OnGameEvent("COMMODITY_SEARCH_RESULTS_UPDATED", function(_, answered)
+            self:OnSellResults(answered)
+        end)
+        self:OnGameEvent("ITEM_SEARCH_RESULTS_UPDATED", function(_, answered)
+            self:OnSellResults(answered)
+        end)
+        self:OnGameEvent("ITEM_SEARCH_RESULTS_ADDED", function(_, answered)
+            self:OnSellResults(answered)
+        end)
         -- a query the house dropped (too many at once): the sell one again once
         -- it is ready
         self:OnGameEvent("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED", function()
             local sell = self.sell
-            if sell and sell.asking then sell.resend = true end
+            if sell and sell.asking then
+                sell.resend = true
+            end
         end)
         self:OnGameEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function()
             local sell = self.sell
             if sell and sell.resend then
                 sell.resend = false
-                if sell.asking then self:AskSellPrice() end
+                if sell.asking then
+                    self:AskSellPrice()
+                end
             end
         end)
-        self:OnGameEvent("AUCTION_HOUSE_SHOW_ERROR", function(_, err) self:Note("The auction house said no (" .. tostring(err) .. ").", "error") end)
+        self:OnGameEvent("AUCTION_HOUSE_SHOW_ERROR", function(_, err)
+            self:Note("The auction house said no (" .. tostring(err) .. ").", "error")
+        end)
     end
 
     override function OnDisable()
@@ -2456,7 +3308,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self.waitTicker = nil
         end
         local window = self.window
-        if window then window:Hide() end
+        if window then
+            window:Hide()
+        end
     end
 end
 

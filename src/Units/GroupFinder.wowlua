@@ -46,22 +46,50 @@ import invite as groupInvite from "wowlua:unit"
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local LFG = SuuUI.LFG
 local asString, asNumber = secret.asString, secret.asNumber
-local function field(t: unknown, ...: string): unknown return tbl.field(t, ...) end
+local function field(t: unknown, ...: string): unknown
+    return tbl.field(t, ...)
+end
 
 -- ForeverLFG's entries, and the Browse rows made from them.
 type Entry = logic.Entry
 type Row = logic.Row
 -- A kind's notification settings (only some kinds have each option).
-type NotifyKind = { on?: boolean, sound?: boolean, tool?: boolean, chat?: boolean, conf?: number, combat?: boolean, inst?: boolean }
+type NotifyKind = {
+    on?: boolean,
+    sound?: boolean,
+    tool?: boolean,
+    chat?: boolean,
+    conf?: number,
+    combat?: boolean,
+    inst?: boolean,
+}
 -- A note held while you fight or are in an instance.
 type HeldNote = { kind: string, build: () -> NotificationData? }
 
-local function notifyKind(tool: boolean, conf: number?, combat: boolean, inst: boolean, on: boolean, sound: boolean): NotifyKind
-    return { on = on, sound = sound, tool = conf and tool or nil, chat = conf and true or nil, conf = conf, combat = combat, inst = inst }
+local function notifyKind(
+    tool: boolean,
+    conf: number?,
+    combat: boolean,
+    inst: boolean,
+    on: boolean,
+    sound: boolean
+): NotifyKind
+    return {
+        on = on,
+        sound = sound,
+        tool = conf and tool or nil,
+        chat = conf and true or nil,
+        conf = conf,
+        combat = combat,
+        inst = inst,
+    }
 end
 
 local DEFAULTS = {
-    category = "all", activities = {} :: string[], fits = false, show = "both",
+    category = "all",
+    activities = {} :: string[],
+    fits = false,
+    show = "both",
     collapsed = { groups = false, players = false } :: { [string]: boolean },
     adChannel = "General",
     -- the chat channels read (tool listings always are), LookingForGroup
@@ -69,7 +97,8 @@ local DEFAULTS = {
     channels = { "LookingForGroup", "General", "Trade", "Say" } :: string[],
     joinLFG = true,
     extraLanguages = {} :: string[],
-    chatExpiry = 300, staleAfter = 300,
+    chatExpiry = 300,
+    staleAfter = 300,
     -- each kind: on, sound, from the tool, from chat, the least chat
     -- confidence (%), shown in combat, shown in instances (off holds
     -- the note until you're out)
@@ -104,12 +133,19 @@ local CATEGORIES: Category[] = {
     { value = "custom", label = "Custom", kinds = { custom = true }, tool = CUSTOM },
 }
 local BY_VALUE: { [string]: Category } = {}
-for _, c in ipairs(CATEGORIES) do BY_VALUE[c.value] = c end
+for _, c in ipairs(CATEGORIES) do
+    BY_VALUE[c.value] = c
+end
 local ALL = CATEGORIES[1]
 
 local REASON_TEXT: { [string]: string } = {
-    role = "Needs your role", activity = "For your listing", player = "Player for your group",
-    quest = "Quest in your log", zone = "In your zone", boss = "World boss", friend = "Friend or guild",
+    role = "Needs your role",
+    activity = "For your listing",
+    player = "Player for your group",
+    quest = "Quest in your log",
+    zone = "In your zone",
+    boss = "World boss",
+    friend = "Friend or guild",
 }
 local REASON_ORDER = { "role", "player", "quest", "friend", "activity", "zone", "boss" }
 
@@ -150,8 +186,15 @@ class PlainText extends Frame
 
     function Fit()
         local source = self.source
-        if type(source) == "function" then self.text:SetValue(source()) else self.text:SetValue(source) end
-        self:SetSize(math.max(1, math.ceil(self.text:GetUnboundedStringWidth())), math.ceil(self.text:GetStringHeight()))
+        if type(source) == "function" then
+            self.text:SetValue(source())
+        else
+            self.text:SetValue(source)
+        end
+        self:SetSize(
+            math.max(1, math.ceil(self.text:GetUnboundedStringWidth())),
+            math.ceil(self.text:GetStringHeight())
+        )
     end
 
     -- (a setting's row sets its control's value: nothing to set here)
@@ -172,9 +215,20 @@ end
 --------------------------------------------------------------------------------
 
 local CHAT_CHANNELS = { "LookingForGroup", "General", "Trade", "Services", "Say", "Yell" }
-local LANGUAGE_NAMES: { [string]: string } = { enUS = "English", enGB = "English", deDE = "German", frFR = "French", esES = "Spanish",
-    esMX = "Spanish", ptBR = "Portuguese", itIT = "Italian", koKR = "Korean", zhCN = "Chinese", zhTW = "Chinese",
-    ruRU = "Russian" }
+local LANGUAGE_NAMES: { [string]: string } = {
+    enUS = "English",
+    enGB = "English",
+    deDE = "German",
+    frFR = "French",
+    esES = "Spanish",
+    esMX = "Spanish",
+    ptBR = "Portuguese",
+    itIT = "Italian",
+    koKR = "Korean",
+    zhCN = "Chinese",
+    zhTW = "Chinese",
+    ruRU = "Russian",
+}
 local LATIN = { "deDE", "frFR", "esES", "ptBR", "itIT" }
 local SCRIPTS = { { "koKR", "Korean" }, { "zhCN", "Chinese" }, { "ruRU", "Russian" } }
 
@@ -195,37 +249,66 @@ local NOTIFY_ROWS = {
 -- Choices of strings, as chips.
 local function chipsOf(values: string[], label: ((v: string) -> string)?): ChipOption[]
     local out: ChipOption[] = {}
-    for _, v in ipairs(values) do out[#out + 1] = { value = v, label = label and label(v) or v } end
+    for _, v in ipairs(values) do
+        out[#out + 1] = { value = v, label = label and label(v) or v }
+    end
     return out
 end
 
 -- Choices of strings, as options.
 local function choices(values: string[], label: ((v: string) -> string)?): SelectOption<string>[]
     local out: SelectOption<string>[] = {}
-    for _, v in ipairs(values) do out[#out + 1] = { value = v, label = label and label(v) or v } end
+    for _, v in ipairs(values) do
+        out[#out + 1] = { value = v, label = label and label(v) or v }
+    end
     return out
 end
 
 -- Notes (stage 2; design board "Notifications · Group Finder")
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
-local ROLE_TEX: { [string]: string } = { tank = TEX .. "RoleTank.tga", healer = TEX .. "RoleHealer.tga", damage = TEX .. "RoleDamage.tga" }
+local ROLE_TEX: { [string]: string } = {
+    tank = TEX .. "RoleTank.tga",
+    healer = TEX .. "RoleHealer.tga",
+    damage = TEX .. "RoleDamage.tga",
+}
 -- a match's reasons, most telling first, and the kind of note each makes
 local NOTE_ORDER = { "role", "player", "quest", "friend", "activity", "zone", "boss" }
-local NOTE_KIND: { [string]: string } = { role = "role", player = "player", quest = "quest", friend = "friends",
-    activity = "fresh", zone = "zone", boss = "boss" }
+local NOTE_KIND: { [string]: string } = {
+    role = "role",
+    player = "player",
+    quest = "quest",
+    friend = "friends",
+    activity = "fresh",
+    zone = "zone",
+    boss = "boss",
+}
 local AGAIN = 300 -- the same group never notifies twice within this
 
 -- A made-up entry for /suu lfgnotes and the preview, with the fields the
 -- library always fills.
 local function madeUp(t: { [string]: unknown }): Entry
-    local defaults: { [string]: unknown } = { quests = {}, classes = {}, text = "", confidence = 1, you = false,
-                                             firstSeen = 0, lastSeen = 0, sources = {} }
-    for k, v in pairs(defaults) do if t[k] == nil then t[k] = v end end
+    local defaults: { [string]: unknown } = {
+        quests = {},
+        classes = {},
+        text = "",
+        confidence = 1,
+        you = false,
+        firstSeen = 0,
+        lastSeen = 0,
+        sources = {},
+    }
+    for k, v in pairs(defaults) do
+        if t[k] == nil then
+            t[k] = v
+        end
+    end
     local given = t.roles
     local roles: table = type(given) == "table" and given or {}
     t.roles = roles
     for _, part in ipairs({ "needed", "offered" }) do
-        if rawget(roles, part) == nil then rawset(roles, part, {}) end
+        if rawget(roles, part) == nil then
+            rawset(roles, part, {})
+        end
     end
     return t :: unknown :: Entry
 end
@@ -283,48 +366,86 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function Row(e: Entry, interest: Interest): Row
         local names: string[] = {}
         for i, key in ipairs(e.activities) do
-            if i > 2 then names[#names + 1] = "+" .. (#e.activities - 2) break end
+            if i > 2 then
+                names[#names + 1] = "+" .. (#e.activities - 2)
+                break
+            end
             names[#names + 1] = LFG.Catalogue.Name(key)
         end
-        if #names == 0 and #e.quests > 0 then names[1] = logic.questTitle(e) or "" end
+        if #names == 0 and #e.quests > 0 then
+            names[1] = logic.questTitle(e) or ""
+        end
         local has: { [string]: boolean } = {}
-        for _, r in ipairs(LFG.MatchReasons(e, interest)) do has[r] = true end
+        for _, r in ipairs(LFG.MatchReasons(e, interest)) do
+            has[r] = true
+        end
         local reason: string? = nil
-        for _, r in ipairs(REASON_ORDER) do if has[r] then reason = REASON_TEXT[r] break end end
+        for _, r in ipairs(REASON_ORDER) do
+            if has[r] then
+                reason = REASON_TEXT[r]
+                break
+            end
+        end
         local tool, chat = e.sources.tool, e.sources.chat
         local now = LFG.Now()
         local age: number? = nil
-        if tool and tool.age then age = tool.age + (now - (tool.seenAt or now)) elseif chat then age = now - chat.lastPost end
+        if tool and tool.age then
+            age = tool.age + (now - (tool.seenAt or now))
+        elseif chat then
+            age = now - chat.lastPost
+        end
         local sources: string[] = {}
-        if tool then sources[#sources + 1] = "Tool" end
+        if tool then
+            sources[#sources + 1] = "Tool"
+        end
         local channel = chat and logic.channelName(chat.channel)
-        if channel then sources[#sources + 1] = channel end
+        if channel then
+            sources[#sources + 1] = channel
+        end
         -- roles: a group's spots, or what a player offers
         local slots: string[], rolesTip: string? = {}, nil
         if e.intent == "group" then
             slots, rolesTip = logic.groupSlots(e, interest.roles)
         else
             for _, role in ipairs({ "tank", "healer", "damage" }) do
-                if e.roles.offered[role] then slots[#slots + 1] = role end
+                if e.roles.offered[role] then
+                    slots[#slots + 1] = role
+                end
             end
         end
         local who: string? = nil
         local lvl = e.leader.level
         local cls = logic.className(e.leader.class)
-        if lvl or cls then who = (lvl and ("Lvl " .. lvl .. " ") or "") .. (cls or "") end
+        if lvl or cls then
+            who = (lvl and ("Lvl " .. lvl .. " ") or "") .. (cls or "")
+        end
         -- the chat post, else the listing's comment
         local post = asString(chat and chat.text or e.text)
-        if post == "" then post = nil end
+        if post == "" then
+            post = nil
+        end
         local low = e.level and e.level[1]
         self.shown[e.key] = e
         return {
-            key = e.key, entry = e, isPlayer = e.intent == "player",
-            activity = table.concat(names, ", "), level = low and (low .. "+") or nil,
-            newPlayerFriendly = tool and tool.newPlayerFriendly, reason = reason, match = reason ~= nil,
-            leader = e.leader.name or e.key, class = e.leader.class, who = who,
-            playstyle = playstyleText(tool and tool.playstyle), post = post,
-            slots = slots, rolesTip = rolesTip ~= "" and rolesTip or nil, mine = interest.roles, members = e.members,
-            sources = sources, age = logic.ago(age),
+            key = e.key,
+            entry = e,
+            isPlayer = e.intent == "player",
+            activity = table.concat(names, ", "),
+            level = low and (low .. "+") or nil,
+            newPlayerFriendly = tool and tool.newPlayerFriendly,
+            reason = reason,
+            match = reason ~= nil,
+            leader = e.leader.name or e.key,
+            class = e.leader.class,
+            who = who,
+            playstyle = playstyleText(tool and tool.playstyle),
+            post = post,
+            slots = slots,
+            rolesTip = rolesTip ~= "" and rolesTip or nil,
+            mine = interest.roles,
+            members = e.members,
+            sources = sources,
+            age = logic.ago(age),
             canInvite = LFG.CanInvite(e),
         }
     end
@@ -333,18 +454,31 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         local interest = LFG.Interest()
         local cat = self:Category()
         local acts: { [string]: boolean } = {}
-        for _, v in ipairs(self:Get("activities")) do acts[v] = true end
-        local filter = { kinds = cat.kinds, activities = next(acts) and acts or nil, search = self.search,
-                         minConfidence = 0, notYou = false }
+        for _, v in ipairs(self:Get("activities")) do
+            acts[v] = true
+        end
+        local filter = {
+            kinds = cat.kinds,
+            activities = next(acts) and acts or nil,
+            search = self.search,
+            minConfidence = 0,
+            notYou = false,
+        }
         local show = self:Get("show")
         local groups: Row[], players: Row[] = {}, {}
         self.shown = {}
         for _, e in ipairs(LFG.Entries(filter)) do
             local ok = true
-            if self:Get("fits") then ok = logic.fitsMe(e, interest) end
+            if self:Get("fits") then
+                ok = logic.fitsMe(e, interest)
+            end
             if ok and (show == "both" or show == e.intent) then
                 local row = self:Row(e, interest)
-                if e.intent == "player" then players[#players + 1] = row else groups[#groups + 1] = row end
+                if e.intent == "player" then
+                    players[#players + 1] = row
+                else
+                    groups[#groups + 1] = row
+                end
             end
         end
         -- matches first, then the newest
@@ -359,35 +493,60 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
-        table.sort(options, function(a: SelectOption<string>, b: SelectOption<string>): boolean return (a.label or "") < (b.label or "") end)
+        table.sort(options, function(a: SelectOption<string>, b: SelectOption<string>): boolean
+            return (a.label or "") < (b.label or "")
+        end)
         local age = LFG.ToolAge(cat.tool)
         local categories: SelectOption<string>[] = {}
-        for _, c in ipairs(CATEGORIES) do categories[#categories + 1] = { value = c.value, label = c.label } end
+        for _, c in ipairs(CATEGORIES) do
+            categories[#categories + 1] = { value = c.value, label = c.label }
+        end
         local rows: BrowseRow[], playerRows: BrowseRow[] = {}, {}
-        for i, r in ipairs(groups) do rows[i] = r end
-        for i, r in ipairs(players) do playerRows[i] = r end
+        for i, r in ipairs(groups) do
+            rows[i] = r
+        end
+        for i, r in ipairs(players) do
+            playerRows[i] = r
+        end
         return {
-            groups = rows, players = playerRows, collapsed = self:Get("collapsed"),
+            groups = rows,
+            players = playerRows,
+            collapsed = self:Get("collapsed"),
             -- loading: the tool's first search for this category (chat shows meanwhile)
-            tool = { age = age, stale = age and age > self:Get("staleAfter"), searching = self.searching,
-                     loading = self.searching and not age },
-            category = cat.value, categories = categories, activities = self:Get("activities"),
-            activityOptions = options, search = self.search or "", fits = self:Get("fits"), show = show,
+            tool = {
+                age = age,
+                stale = age and age > self:Get("staleAfter"),
+                searching = self.searching,
+                loading = self.searching and not age,
+            },
+            category = cat.value,
+            categories = categories,
+            activities = self:Get("activities"),
+            activityOptions = options,
+            search = self.search or "",
+            fits = self:Get("fits"),
+            show = show,
         }
     end
 
     function Render()
         local b = self.browse
-        if not (b and b:IsVisible()) then return end
+        if not (b and b:IsVisible()) then
+            return
+        end
         b:SetData(self:Data())
     end
 
     function QueueRender()
-        if self.renderQueued then return end
+        if self.renderQueued then
+            return
+        end
         self.renderQueued = true
         after(0.2, function()
             self.renderQueued = nil
-            if self:IsEnabled() then self:Render() end
+            if self:IsEnabled() then
+                self:Render()
+            end
         end)
     end
 
@@ -402,11 +561,22 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     function Wire(b: GroupFinderBrowse)
         b.onFilter = function(t: BrowseFilter)
-            if t.category then self:Set("category", t.category); self:Set("activities", {}) end
-            if t.activities then self:Set("activities", t.activities) end
-            if t.fits ~= nil then self:Set("fits", t.fits and true or false) end
-            if t.show then self:Set("show", t.show) end
-            if t.search ~= nil then self.search = t.search end
+            if t.category then
+                self:Set("category", t.category)
+                self:Set("activities", {})
+            end
+            if t.activities then
+                self:Set("activities", t.activities)
+            end
+            if t.fits ~= nil then
+                self:Set("fits", t.fits and true or false)
+            end
+            if t.show then
+                self:Set("show", t.show)
+            end
+            if t.search ~= nil then
+                self.search = t.search
+            end
             self:QueueRender()
         end
         -- the tool searches on this click (the game's rule)
@@ -415,12 +585,19 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             self:Render()
         end
         b.onClear = function()
-            self:Set("category", "all"); self:Set("activities", {}); self:Set("fits", false); self:Set("show", "both")
+            self:Set("category", "all")
+            self:Set("activities", {})
+            self:Set("fits", false)
+            self:Set("show", "both")
             self.search = nil
             self:Render()
         end
-        b.onWhisper = function(row: BrowseRow) LFG.Whisper(self:EntryOf(row)) end
-        b.onInvite = function(row: BrowseRow) LFG.Invite(self:EntryOf(row)) end
+        b.onWhisper = function(row: BrowseRow)
+            LFG.Whisper(self:EntryOf(row))
+        end
+        b.onInvite = function(row: BrowseRow)
+            LFG.Invite(self:EntryOf(row))
+        end
         b.onToggle = function(key: "groups" | "players")
             local c = self:Get("collapsed")
             c[key] = not c[key]
@@ -431,12 +608,18 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     function Follow()
         local f, b, who, listed, cover = self.frame, self.browse, self.who, self.listed, self.cover
-        if not (f and b and who and listed and cover) then return end
+        if not (f and b and who and listed and cover) then
+            return
+        end
         local browse = frames.find("LFGBrowseFrame")
         local on = f:IsShown() and browse ~= nil and browse:IsShown()
         b:SetShown(on)
-        if browse then browse:SetAlpha(on and 0 or 1) end
-        if on then self:Render() end
+        if browse then
+            browse:SetAlpha(on and 0 or 1)
+        end
+        if on then
+            self:Render()
+        end
         -- Who over the game's page
         local whoPage = frames.find("LFGWhoListFrame")
         local whoOn = f:IsShown() and whoPage ~= nil and whoPage:IsShown()
@@ -445,17 +628,25 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             whoPage:SetAlpha(whoOn and 0 or 1)
             -- its search box is on the HIGH layer: no clicks through our page
             local box = frames.asFrame(field(whoPage, "EditBox"))
-            if box then box:EnableMouse(not whoOn) end
+            if box then
+                box:EnableMouse(not whoOn)
+            end
         end
-        if whoOn then self:RenderWho() end
+        if whoOn then
+            self:RenderWho()
+        end
         -- My listing over the game's panel while you're listed (Update shows the panel)
         local panel = frames.find("LFGListingFrame")
         local isListed = f:IsShown() and panel ~= nil and panel:IsShown() and LFG.Listing() ~= nil and not self.editing
         listed:SetShown(isListed)
         -- the game's panel out of sight under it (its own buttons showed through);
         -- back for Update
-        if panel then panel:SetAlpha(isListed and 0 or 1) end
-        if isListed then self:RenderListed() end
+        if panel then
+            panel:SetAlpha(isListed and 0 or 1)
+        end
+        if isListed then
+            self:RenderListed()
+        end
         cover:SetShown(on or isListed or whoOn)
     end
 
@@ -467,14 +658,18 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- and your details. A group asks for the roles a 1 / 1 / 3 group still
     -- lacks by its members' roles; alone, the roles you offer and who you are.
     function AdFromListing(listing: Listing?): string
-        if not listing then return "" end
+        if not listing then
+            return ""
+        end
         return logic.adText(listing, logic.adContext())
     end
 
     -- The ad goes out from the Post click (the game sends public chat only
     -- from a click).
     function PostAd(channel: string?, text: string?)
-        if not (channel and text and text:match("%S")) then return end
+        if not (channel and text and text:match("%S")) then
+            return
+        end
         local send = field(C_ChatInfo, "SendChatMessage") or SendChatMessage
         if channel == "Say" then
             errors.try(send, text, "SAY")
@@ -492,25 +687,50 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     function RenderListed()
         local l = self.listed
-        if not (l and l:IsShown()) then return end
+        if not (l and l:IsShown()) then
+            return
+        end
         local listing = LFG.Listing()
-        if not listing then return end
+        if not listing then
+            return
+        end
         local names: string[] = {}
-        for _, key in ipairs(listing.activities) do names[#names + 1] = LFG.Catalogue.Name(key) end
+        for _, key in ipairs(listing.activities) do
+            names[#names + 1] = LFG.Catalogue.Name(key)
+        end
         local roles: string[] = {}
-        for _, r in ipairs({ "tank", "healer", "damage" }) do if listing.roles[r] then roles[#roles + 1] = r end end
-        local category = listing.category and asString(field(errors.try(field(C_LFGList, "GetLfgCategoryInfo"), listing.category), "name"))
+        for _, r in ipairs({ "tank", "healer", "damage" }) do
+            if listing.roles[r] then
+                roles[#roles + 1] = r
+            end
+        end
+        local category = listing.category and
+            asString(field(errors.try(field(C_LFGList, "GetLfgCategoryInfo"), listing.category), "name"))
         local labels = field(_G, "LFGVoiceChat", "VoiceModeLabels")
-        local voice = listing.voiceMode and type(labels) == "table" and asString(rawget(labels, listing.voiceMode)) or nil
-        if not self.adEdited then self.adText = self:AdFromListing(listing) end
+        local voice = listing.voiceMode and type(labels) == "table" and asString(rawget(labels, listing.voiceMode)) or
+            nil
+        if not self.adEdited then
+            self.adText = self:AdFromListing(listing)
+        end
         local lastPost = self.lastPost
         l:SetData({
-            listing = { listedFor = logic.minutesText(self.listedAt and (LFG.Now() - self.listedAt)),
-                        left = logic.minutesText(listing.duration), category = category, activities = names, roles = roles,
-                        playstyle = asString(playstyleText(listing.playstyle)), comment = asString(listing.comment),
-                        voice = voice or "None" },
-            ad = { text = self.adText or "", channel = self:Get("adChannel"), channels = choices(AD_CHANNELS),
-                   lastPost = lastPost and logic.minutesText(GetTime() - lastPost) or nil, max = 255 },
+            listing = {
+                listedFor = logic.minutesText(self.listedAt and (LFG.Now() - self.listedAt)),
+                left = logic.minutesText(listing.duration),
+                category = category,
+                activities = names,
+                roles = roles,
+                playstyle = asString(playstyleText(listing.playstyle)),
+                comment = asString(listing.comment),
+                voice = voice or "None",
+            },
+            ad = {
+                text = self.adText or "",
+                channel = self:Get("adChannel"),
+                channels = choices(AD_CHANNELS),
+                lastPost = lastPost and logic.minutesText(GetTime() - lastPost) or nil,
+                max = 255,
+            },
         })
     end
 
@@ -521,24 +741,39 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function ReadWho()
         local count, all = errors.try(field(C_FriendList, "GetNumWhoResults"))
         local num, total = asNumber(count), asNumber(all)
-        if not num then return end
+        if not num then
+            return
+        end
         local results: WhoResult[] = {}
         for i = 1, num do
             local info = errors.try(field(C_FriendList, "GetWhoInfo"), i)
             local name = asString(field(info, "fullName"))
             if name then
-                results[#results + 1] = { name = name, level = asNumber(field(info, "level")), race = asString(field(info, "raceStr")),
-                    class = asString(field(info, "filename")), className = asString(field(info, "classStr")),
-                    guild = asString(field(info, "fullGuildName")), zone = asString(field(info, "area")) }
+                results[#results + 1] = {
+                    name = name,
+                    level = asNumber(field(info, "level")),
+                    race = asString(field(info, "raceStr")),
+                    class = asString(field(info, "filename")),
+                    className = asString(field(info, "classStr")),
+                    guild = asString(field(info, "fullGuildName")),
+                    zone = asString(field(info, "area")),
+                }
             end
         end
-        self.whoData = { state = #results > 0 and "results" or "none", query = self.whoQuery or "",
-                         total = total or #results, capped = (total or 0) > num, results = results }
+        self.whoData = {
+            state = #results > 0 and "results" or "none",
+            query = self.whoQuery or "",
+            total = total or #results,
+            capped = (total or 0) > num,
+            results = results,
+        }
     end
 
     function RenderWho()
         local w = self.who
-        if not (w and w:IsShown()) then return end
+        if not (w and w:IsShown()) then
+            return
+        end
         w:SetData(self.whoData or { state = "idle" })
     end
 
@@ -554,7 +789,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         -- the game's own filter menu (class, race, zone, sort), opened under our button
         w.onFilter = function(button: Frame)
             local dd = frames.asFrame(field(_G, "LFGWhoListFrame", "FilterDropdown"))
-            if not dd then return end
+            if not dd then
+                return
+            end
             if not self.whoDropdownSkinned then
                 self.whoDropdownSkinned = true
                 UI.ReskinDropdown(dd)
@@ -562,21 +799,31 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             dd:ClearAllPoints()
             dd:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
             dd:SetSize(button:GetWidth(), button:GetHeight())
-            if field(dd, "OpenMenu") then errors.tryMethod(dd, "OpenMenu") else errors.tryMethod(dd, "Click") end
+            if field(dd, "OpenMenu") then
+                errors.tryMethod(dd, "OpenMenu")
+            else
+                errors.tryMethod(dd, "Click")
+            end
         end
         w.onMenu = function(row: WhoResult)
             errors.try(field(_G, "FriendsFrame_ShowDropdown"), row.name, 1)
         end
         w.onWhisper = function(row: WhoResult)
-            if row.name then chatLine.whisper(row.name) end
+            if row.name then
+                chatLine.whisper(row.name)
+            end
         end
         w.onInvite = function(row: WhoResult)
-            if row.name then groupInvite(row.name) end
+            if row.name then
+                groupInvite(row.name)
+            end
         end
         w.onAddFriend = function(row: WhoResult)
             -- a friend request (Forever's classic friends list is off: AddFriend did nothing)
             local name = row.name
-            if name and SuuUI.AddFriend(name) then self:Print("Friend request sent to " .. name .. ".") end
+            if name and SuuUI.AddFriend(name) then
+                self:Print("Friend request sent to " .. name .. ".")
+            end
         end
         self:OnGameEvent("WHO_LIST_UPDATE", function()
             self:ReadWho()
@@ -585,16 +832,28 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     end
 
     function WireListed(p: GroupFinderListed)
-        p.onDelist = function() LFG.Delist() end
+        p.onDelist = function()
+            LFG.Delist()
+        end
         p.onUpdate = function()
             -- the game's own panel, to change the listing; back here once it's saved
             self.editing = true
             self:Follow()
         end
-        p.onChannel = function(v: string) self:Set("adChannel", v); self:RenderListed() end
-        p.onText = function(t: string) self.adText, self.adEdited = t, true end
-        p.onRewrite = function() self.adEdited = false; self:RenderListed() end
-        p.onPost = function(channel: string?, text: string) self:PostAd(channel, text) end
+        p.onChannel = function(v: string)
+            self:Set("adChannel", v)
+            self:RenderListed()
+        end
+        p.onText = function(t: string)
+            self.adText, self.adEdited = t, true
+        end
+        p.onRewrite = function()
+            self.adEdited = false
+            self:RenderListed()
+        end
+        p.onPost = function(channel: string?, text: string)
+            self:PostAd(channel, text)
+        end
     end
 
     -- Opening the window searches the tool for the chosen category (the key
@@ -603,7 +862,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function SearchOnOpen()
         local cat = self:Category()
         local age = LFG.ToolAge(cat.tool)
-        if age and age < 60 then return end
+        if age and age < 60 then
+            return
+        end
         self.searching = LFG.Refresh(cat.tool) and true or nil
     end
 
@@ -620,7 +881,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     function Build()
         local f = frames.find("LFGParentFrame")
-        if not f or self.browse then return end
+        if not f or self.browse then
+            return
+        end
         self.frame = f
         local b = self:Page(f, UI.GroupFinderBrowse(f))
         self.browse = b
@@ -638,7 +901,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         self:Wire(b)
         -- List yourself: the game's own panel, restyled (stage 3)
         local panel = frames.find("LFGListingFrame")
-        if panel then UI.SkinGroupFinderListing(panel :: unknown :: ListingFrame) end
+        if panel then
+            UI.SkinGroupFinderListing(panel :: unknown :: ListingFrame)
+        end
         -- Who
         local wp = self:Page(f, UI.GroupFinderWho(f))
         self.who = wp
@@ -649,18 +914,26 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         self:WireListed(l)
         if panel then
             -- leaving the panel ends an Update
-            hookScript(panel, "OnHide", function() self.editing = nil end)
+            hookScript(panel, "OnHide", function()
+                self.editing = nil
+            end)
         end
         hookScript(f, "OnShow", function()
             self:SearchOnOpen()
             self:Follow()
         end)
-        hookScript(f, "OnHide", function() GameTooltip:Hide() end)
+        hookScript(f, "OnHide", function()
+            GameTooltip:Hide()
+        end)
         for _, name in ipairs({ "LFGBrowseFrame", "LFGListingFrame", "LFGWhoListFrame" }) do
             local c = frames.find(name)
             if c then
-                hookScript(c, "OnShow", function() self:Follow() end)
-                hookScript(c, "OnHide", function() self:Follow() end)
+                hookScript(c, "OnShow", function()
+                    self:Follow()
+                end)
+                hookScript(c, "OnHide", function()
+                    self:Follow()
+                end)
             end
         end
         self:Follow()
@@ -669,31 +942,54 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- The library by your settings.
     function Configure()
         local channels: { [string]: boolean } = {}
-        for _, c in ipairs(self:Get("channels")) do channels[c == "Say" and "SAY" or (c == "Yell" and "YELL" or c)] = true end
+        for _, c in ipairs(self:Get("channels")) do
+            channels[c == "Say" and "SAY" or (c == "Yell" and "YELL" or c)] = true
+        end
         local extra: { [string]: boolean } = {}
-        for _, code in ipairs(self:Get("extraLanguages")) do extra[code] = true end
-        LFG.Configure({ chatExpiry = self:Get("chatExpiry"), staleAfter = self:Get("staleAfter"), channels = channels,
-                        joinLookingForGroup = self:Get("joinLFG"), hideLookingForGroup = self:Get("joinLFG"),
-                        extraLanguages = extra })
+        for _, code in ipairs(self:Get("extraLanguages")) do
+            extra[code] = true
+        end
+        LFG.Configure({
+            chatExpiry = self:Get("chatExpiry"),
+            staleAfter = self:Get("staleAfter"),
+            channels = channels,
+            joinLookingForGroup = self:Get("joinLFG"),
+            hideLookingForGroup = self:Get("joinLFG"),
+            extraLanguages = extra,
+        })
     end
 
     override function OnEnable()
         self:Configure()
-        self:WatchAll({ "channels", "joinLFG", "chatExpiry", "extraLanguages" }, function() self:Configure() end)
+        self:WatchAll({ "channels", "joinLFG", "chatExpiry", "extraLanguages" }, function()
+            self:Configure()
+        end)
         self:RegisterSettings(self:SettingsSection())
         LFG.Start()
         -- the list follows the library
         local changes: LfgEvent[] = { "EntryAdded", "EntryUpdated", "EntryRemoved", "ListingChanged" }
         for _, ev in ipairs(changes) do
-            LFG.On(ev, function() self:QueueRender() end)
+            LFG.On(ev, function()
+                self:QueueRender()
+            end)
         end
-        LFG.On("ToolSearched", function() self.searching = nil; self:QueueRender() end)
-        LFG.On("ToolSearchFailed", function() self.searching = nil; self:QueueRender() end)
+        LFG.On("ToolSearched", function()
+            self.searching = nil
+            self:QueueRender()
+        end)
+        LFG.On("ToolSearchFailed", function()
+            self.searching = nil
+            self:QueueRender()
+        end)
         -- the tool's age moves on
         every(15, function()
             local b, l = self.browse, self.listed
-            if b and b:IsVisible() then self:Render() end
-            if l and l:IsVisible() then self:RenderListed() end
+            if b and b:IsVisible() then
+                self:Render()
+            end
+            if l and l:IsVisible() then
+                self:RenderListed()
+            end
         end)
         -- your listing made, changed or gone: My listing follows
         LFG.On("ListingChanged", function()
@@ -701,14 +997,22 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             self:Follow()
         end)
         self:Build()
-        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:Build()
+        end)
         self:StartNotes()
         -- the theme: the settings' plain texts, and the pages' widths measured from their text
         self:On("SUUUI_THEME_CHANGED", function()
-            for f in pairs(plains) do f:Fit() end
+            for f in pairs(plains) do
+                f:Fit()
+            end
             local b, l = self.browse, self.listed
-            if b and b:IsVisible() then self:Render() end
-            if l and l:IsVisible() then self:RenderListed() end
+            if b and b:IsVisible() then
+                self:Render()
+            end
+            if l and l:IsVisible() then
+                self:RenderListed()
+            end
         end)
     end
 
@@ -723,77 +1027,177 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function SettingsSection(): SettingsSection
         local modules = LFG.Lang.modules
         return {
-            id = "groupfinder", label = "Group Finder", category = "World", order = 30,
-            preview = function(parent: Frame): Frame return self:SettingsPreview(parent) end,
+            id = "groupfinder",
+            label = "Group Finder",
+            category = "World",
+            order = 30,
+            preview = function(parent: Frame): Frame
+                return self:SettingsPreview(parent)
+            end,
             groups = {
-                { title = "Group Finder", description = "One list from the game’s group finder and the public chat channels. The tool searches when you open the window or press Refresh; chat is read as it’s written.", rows = {
-                    { key = "channels", label = "Channels to read", description = "Posts in these channels join the list. Tool listings always do.",
-                      control = "custom", build = function(parent: Frame, onChange: (values: string[]) -> ()): Frame
-                          return UI.ToggleChips(parent, { options = chipsOf(CHAT_CHANNELS), onChange = onChange })
-                      end, stacked = true },
-                    { key = "joinLFG", label = "Join LookingForGroup", control = "toggle",
-                      description = "Joins the channel when you log in and keeps it out of your chat windows: its posts show here instead." },
-                    { label = "Chat posts expire after", control = "slider", min = 1, max = 15, step = 1, unit = " min",
-                      description = "A post leaves the list this long after its last repost. Posting again brings it back.",
-                      get = function(): number return math.floor(self:Get("chatExpiry") / 60 + 0.5) end,
-                      set = function(v: unknown): (boolean, string?) return self:Set("chatExpiry", (secret.asNumber(v) or 5) * 60) end,
-                      isDefault = function(): boolean return self:Get("chatExpiry") == 300 end,
-                      reset = function() self:Set("chatExpiry", 300) end },
-                } },
-                { title = "Languages", description = "What the chat parser understands. Activity, zone and quest names come from the game in your client’s language; a language module adds the words players type around them.", rows = {
-                    { label = "Always read", description = "Your Forever language preference and your client’s language.",
-                      control = "custom", build = function(parent: Frame): Frame
-                          local names: string[], seen: { [string]: boolean } = {}, {}
-                          for _, code in ipairs(LFG.Languages()) do
-                              local n = LANGUAGE_NAMES[code] or code
-                              if not seen[n] then seen[n] = true; names[#names + 1] = n end
-                          end
-                          return plainText(parent, table.concat(names, ", "))
-                      end },
-                    { label = "Other scripts", description = "Posts in Hangul, Chinese characters or Cyrillic are read with that language’s module whenever SuuUI has one.",
-                      control = "custom", build = function(parent: Frame): Frame
-                          return plainText(parent, function(): string
-                              local lines: string[] = {}
-                              for _, sc in ipairs(SCRIPTS) do
-                                  local ready = modules[sc[1]] ~= nil
-                                  lines[#lines + 1] = "|cff" .. T.color[ready and "ink" or "ink-faint"].hex .. sc[2] .. "|r |cff"
-                                      .. T.color[ready and "ink-muted" or "ink-faint"].hex .. (ready and "· module ready" or "· no module yet") .. "|r"
-                              end
-                              return table.concat(lines, "\n")
-                          end)
-                      end },
-                    { key = "extraLanguages", label = "Also read", description = "Other Latin-script languages. Off by default: their words overlap with English, so each one adds false matches.",
-                      control = "custom", stacked = true, build = function(parent: Frame, onChange: (values: string[]) -> ()): Frame
-                          local codes: string[] = {}
-                          for _, code in ipairs(LATIN) do
-                              if modules[code] then codes[#codes + 1] = code end
-                          end
-                          if #codes == 0 then return plainText(parent, "No other language modules yet.", "ink-faint") end
-                          return UI.ToggleChips(parent, { options = chipsOf(codes, function(code: string): string return LANGUAGE_NAMES[code] or code end),
-                                                          onChange = onChange })
-                      end },
-                } },
-                { title = "Your ad", rows = {
-                    { key = "adChannel", label = "Channel for your ad", control = "select", width = 180,
-                      description = "Where the ad on My listing posts by default. You can pick another each time; it’s only ever sent on your click.",
-                      options = choices(AD_CHANNELS) },
-                } },
-                { title = "Notifications", description = "Each kind on or off, with its options. Tool and Chat: where it may come from. Confidence: how sure the chat parser must be. In combat and In instances: off holds the note until you’re out. The same group never notifies twice within a few minutes. /suu lfgnotes shows each.", rows = {
-                    { key = "notify", label = "Group Finder notifications", control = "custom", stacked = true,
-                      build = function(parent: Frame, onChange: (value: MatrixValue) -> ()): Frame
-                          local conf: SelectOption<SelectValue>[] = { { value = 0, label = "Any" }, { value = 50, label = "50%" }, { value = 70, label = "70%" }, { value = 90, label = "90%" } }
-                          return UI.SettingsMatrix(parent, { width = 540, onChange = onChange, rows = NOTIFY_ROWS, columns = {
-                              { key = "on", label = "On", width = 28, master = true },
-                              { key = "sound", label = "Sound", width = 38 },
-                              { key = "tool", label = "Tool", width = 30 },
-                              { key = "chat", label = "Chat", width = 30 },
-                              { key = "conf", label = "Confidence", width = 62, kind = "select", options = conf,
-                                title = "The least the chat parser must be sure of a post" },
-                              { key = "combat", label = "In combat", width = 50 },
-                              { key = "inst", label = "In instances", width = 58 },
-                          } })
-                      end },
-                } },
+                {
+                    title = "Group Finder",
+                    description = "One list from the game’s group finder and the public chat channels. The tool searches when you open the window or press Refresh; chat is read as it’s written.",
+                    rows = {
+                        {
+                            key = "channels",
+                            label = "Channels to read",
+                            description = "Posts in these channels join the list. Tool listings always do.",
+                            control = "custom",
+                            build = function(parent: Frame, onChange: (values: string[]) -> ()): Frame
+                                return UI.ToggleChips(parent, { options = chipsOf(CHAT_CHANNELS), onChange = onChange })
+                            end,
+                            stacked = true,
+                        },
+                        {
+                            key = "joinLFG",
+                            label = "Join LookingForGroup",
+                            control = "toggle",
+                            description = "Joins the channel when you log in and keeps it out of your chat windows: its posts show here instead.",
+                        },
+                        {
+                            label = "Chat posts expire after",
+                            control = "slider",
+                            min = 1,
+                            max = 15,
+                            step = 1,
+                            unit = " min",
+                            description = "A post leaves the list this long after its last repost. Posting again brings it back.",
+                            get = function(): number
+                                return math.floor(self:Get("chatExpiry") / 60 + 0.5)
+                            end,
+                            set = function(v: unknown): (boolean, string?)
+                                return self:Set("chatExpiry", (secret.asNumber(v) or 5) * 60)
+                            end,
+                            isDefault = function(): boolean
+                                return self:Get("chatExpiry") == 300
+                            end,
+                            reset = function()
+                                self:Set("chatExpiry", 300)
+                            end,
+                        },
+                    },
+                },
+                {
+                    title = "Languages",
+                    description = "What the chat parser understands. Activity, zone and quest names come from the game in your client’s language; a language module adds the words players type around them.",
+                    rows = {
+                        {
+                            label = "Always read",
+                            description = "Your Forever language preference and your client’s language.",
+                            control = "custom",
+                            build = function(parent: Frame): Frame
+                                local names: string[], seen: { [string]: boolean } = {}, {}
+                                for _, code in ipairs(LFG.Languages()) do
+                                    local n = LANGUAGE_NAMES[code] or code
+                                    if not seen[n] then
+                                        seen[n] = true
+                                        names[#names + 1] = n
+                                    end
+                                end
+                                return plainText(parent, table.concat(names, ", "))
+                            end,
+                        },
+                        {
+                            label = "Other scripts",
+                            description = "Posts in Hangul, Chinese characters or Cyrillic are read with that language’s module whenever SuuUI has one.",
+                            control = "custom",
+                            build = function(parent: Frame): Frame
+                                return plainText(parent, function(): string
+                                    local lines: string[] = {}
+                                    for _, sc in ipairs(SCRIPTS) do
+                                        local ready = modules[sc[1]] ~= nil
+                                        lines[#lines + 1] = "|cff" ..
+                                            T.color[ready and "ink" or "ink-faint"].hex ..
+                                                sc[2] ..
+                                                    "|r |cff" ..
+                                                        T.color[ready and "ink-muted" or "ink-faint"].hex ..
+                                                            (ready and "· module ready" or "· no module yet") .. "|r"
+                                    end
+                                    return table.concat(lines, "\n")
+                                end)
+                            end,
+                        },
+                        {
+                            key = "extraLanguages",
+                            label = "Also read",
+                            description = "Other Latin-script languages. Off by default: their words overlap with English, so each one adds false matches.",
+                            control = "custom",
+                            stacked = true,
+                            build = function(parent: Frame, onChange: (values: string[]) -> ()): Frame
+                                local codes: string[] = {}
+                                for _, code in ipairs(LATIN) do
+                                    if modules[code] then
+                                        codes[#codes + 1] = code
+                                    end
+                                end
+                                if #codes == 0 then
+                                    return plainText(parent, "No other language modules yet.", "ink-faint")
+                                end
+                                return UI.ToggleChips(parent, {
+                                    options = chipsOf(codes, function(code: string): string
+                                        return LANGUAGE_NAMES[code] or code
+                                    end),
+                                    onChange = onChange,
+                                })
+                            end,
+                        },
+                    },
+                },
+                {
+                    title = "Your ad",
+                    rows = {
+                        {
+                            key = "adChannel",
+                            label = "Channel for your ad",
+                            control = "select",
+                            width = 180,
+                            description = "Where the ad on My listing posts by default. You can pick another each time; it’s only ever sent on your click.",
+                            options = choices(AD_CHANNELS),
+                        },
+                    },
+                },
+                {
+                    title = "Notifications",
+                    description = "Each kind on or off, with its options. Tool and Chat: where it may come from. Confidence: how sure the chat parser must be. In combat and In instances: off holds the note until you’re out. The same group never notifies twice within a few minutes. /suu lfgnotes shows each.",
+                    rows = {
+                        {
+                            key = "notify",
+                            label = "Group Finder notifications",
+                            control = "custom",
+                            stacked = true,
+                            build = function(parent: Frame, onChange: (value: MatrixValue) -> ()): Frame
+                                local conf: SelectOption<SelectValue>[] = {
+                                    { value = 0, label = "Any" },
+                                    { value = 50, label = "50%" },
+                                    { value = 70, label = "70%" },
+                                    { value = 90, label = "90%" },
+                                }
+                                return UI.SettingsMatrix(parent, {
+                                    width = 540,
+                                    onChange = onChange,
+                                    rows = NOTIFY_ROWS,
+                                    columns = {
+                                        { key = "on", label = "On", width = 28, master = true },
+                                        { key = "sound", label = "Sound", width = 38 },
+                                        { key = "tool", label = "Tool", width = 30 },
+                                        { key = "chat", label = "Chat", width = 30 },
+                                        {
+                                            key = "conf",
+                                            label = "Confidence",
+                                            width = 62,
+                                            kind = "select",
+                                            options = conf,
+                                            title = "The least the chat parser must be sure of a post",
+                                        },
+                                        { key = "combat", label = "In combat", width = 50 },
+                                        { key = "inst", label = "In instances", width = 58 },
+                                    },
+                                })
+                            end,
+                        },
+                    },
+                },
             },
         }
     end
@@ -804,17 +1208,39 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         if not stack then
             stack = UI.NotificationStack(parent, { max = 3 })
             self.preview = stack
-            local kessra = madeUp({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 3, 5 }, level = { 29, 29 },
-                leader = { name = "Kessra", class = "MAGE", level = 31 }, roles = { needed = { healer = 1, tank = 1 }, offered = {} },
-                sources = { tool = {}, chat = { channel = "LookingForGroup", text = "LFM Heal / Tank (drood) or Pala for RFK", confidence = 0.9 } } })
-            local morrow = madeUp({ key = "Morrow", intent = "player", activities = { "dungeon:wc" }, leader = { name = "Morrow", class = "ROGUE", level = 20 },
-                roles = { needed = {}, offered = { damage = true } }, sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } } })
+            local kessra = madeUp({
+                key = "Kessra",
+                intent = "group",
+                activities = { "dungeon:rfk" },
+                members = { 3, 5 },
+                level = { 29, 29 },
+                leader = { name = "Kessra", class = "MAGE", level = 31 },
+                roles = { needed = { healer = 1, tank = 1 }, offered = {} },
+                sources = {
+                    tool = {},
+                    chat = {
+                        channel = "LookingForGroup",
+                        text = "LFM Heal / Tank (drood) or Pala for RFK",
+                        confidence = 0.9,
+                    },
+                },
+            })
+            local morrow = madeUp({
+                key = "Morrow",
+                intent = "player",
+                activities = { "dungeon:wc" },
+                leader = { name = "Morrow", class = "ROGUE", level = 20 },
+                roles = { needed = {}, offered = { damage = true } },
+                sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } },
+            })
             local items: NotificationData[] = {}
             for _, n in ipairs({ { kind = "role", e = kessra }, { kind = "player", e = morrow } }) do
                 local d = self:MatchNote(n.kind, n.e)
                 d.id = "preview:" .. n.kind
                 d.remaining = d.duration
-                for _, a in ipairs(d.actions or {}) do a.onClick = function() end end
+                for _, a in ipairs(d.actions or {}) do
+                    a.onClick = function() end
+                end
                 items[#items + 1] = d
             end
             stack:SetItems(items, false)
@@ -834,7 +1260,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- May this kind show for this entry (its sources, the parser's confidence)?
     function Allowed(e: Entry, cfg: NotifyKind): boolean
         local chat = e.sources.chat
-        if e.sources.tool and cfg.tool then return true end
+        if e.sources.tool and cfg.tool then
+            return true
+        end
         if chat and cfg.chat then
             return (chat.confidence or e.confidence or 0) * 100 >= (cfg.conf or 0)
         end
@@ -845,36 +1273,52 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- kind's choice); held notes are checked again when you're out.
     function Note(kind: string, build: () -> NotificationData?): string?
         local cfg = self:NotifyFor(kind)
-        if not (cfg and cfg.on) then return nil end
+        if not (cfg and cfg.on) then
+            return nil
+        end
         local inInstance = IsInInstance()
         if (InCombatLockdown() and not cfg.combat) or (inInstance and not cfg.inst) then
             -- the latest few only: a dungeon's worth of chat shouldn't arrive at once
             local held = self.held or {}
             self.held = held
             held[#held + 1] = { kind = kind, build = build }
-            if #held > 5 then table.remove(held, 1) end
+            if #held > 5 then
+                table.remove(held, 1)
+            end
             return nil
         end
         local def = build()
-        if not def then return nil end
-        if cfg.sound then UI.TrackerSound("chime") end
+        if not def then
+            return nil
+        end
+        if cfg.sound then
+            UI.TrackerSound("chime")
+        end
         return SuuUI.Notify(def)
     end
 
     function FlushHeld()
         local held = self.held
         self.held = nil
-        for _, h in ipairs(held or {}) do self:Note(h.kind, h.build) end
+        for _, h in ipairs(held or {}) do
+            self:Note(h.kind, h.build)
+        end
     end
 
     -- A group or player that concerns you: one note, for its most telling reason.
     function OnMatch(e: Entry, reasons: MatchReason[])
-        if e.you then return end
+        if e.you then
+            return
+        end
         local now = LFG.Now()
         local last = self.noted[e.key]
-        if last and now - last < AGAIN then return end
+        if last and now - last < AGAIN then
+            return
+        end
         local has: { [string]: boolean } = {}
-        for _, r in ipairs(reasons) do has[r] = true end
+        for _, r in ipairs(reasons) do
+            has[r] = true
+        end
         for _, reason in ipairs(NOTE_ORDER) do
             local kind = NOTE_KIND[reason] or reason
             local cfg = self:NotifyFor(kind)
@@ -883,7 +1327,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
                 self:Note(kind, function(): NotificationData?
                     -- still there?
                     local cur = LFG.Entry(e.key)
-                    if not cur then return nil end
+                    if not cur then
+                        return nil
+                    end
                     return self:MatchNote(kind, cur)
                 end)
                 return
@@ -897,23 +1343,45 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         local who: string? = nil
         local lvl = e.leader.level
         local cname = localizedClass(cls)
-        if lvl or cname then who = ((lvl and ("Lvl " .. lvl .. " ")) or "") .. (cname or "") end
+        if lvl or cname then
+            who = ((lvl and ("Lvl " .. lvl .. " ")) or "") .. (cname or "")
+        end
         local tool = e.sources.tool
         local playstyle = playstyleText(tool and tool.playstyle)
         local size = sizeText(e, "/")
         local low = e.level and e.level[1]
         local level = low and (low .. "+") or nil
         local act = logic.activityText(e)
-        local whisper: NotificationAction = { label = "Whisper", icon = "chat", onClick = function() LFG.Whisper(e) end }
-        local d: NotificationData = { id = "lfg:" .. e.key, kind = "timed", duration = 8, source = logic.sourceOf(e),
-                    icon = logic.classIcon(cls) or { glyph = "people" } }
+        local whisper: NotificationAction = {
+            label = "Whisper",
+            icon = "chat",
+            onClick = function()
+                LFG.Whisper(e)
+            end,
+        }
+        local d: NotificationData = {
+            id = "lfg:" .. e.key,
+            kind = "timed",
+            duration = 8,
+            source = logic.sourceOf(e),
+            icon = logic.classIcon(cls) or { glyph = "people" },
+        }
         if kind == "role" then
             local mine = LFG.Interest().roles
             local role: string? = nil
-            for _, r in ipairs({ "tank", "healer", "damage" }) do if mine[r] and e.roles.needed[r] then role = r break end end
+            for _, r in ipairs({ "tank", "healer", "damage" }) do
+                if mine[r] and e.roles.needed[r] then
+                    role = r
+                    break
+                end
+            end
             d.duration, d.category = 12, "Your role is needed"
             d.icon = role and { texture = ROLE_TEX[role], coords = { 0, 1, 0, 1 } } or d.icon
-            d.title = ("%s needs %s for %s"):format(leader, logic.aRole(role) or "your role", act ~= "" and act or "a group")
+            d.title = ("%s needs %s for %s"):format(
+                leader,
+                logic.aRole(role) or "your role",
+                act ~= "" and act or "a group"
+            )
             d.body = logic.lines(size, who, playstyle, level)
             whisper.variant = "primary"
             d.actions = { whisper }
@@ -924,13 +1392,15 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         elseif kind == "quest" then
             local q = logic.questTitle(e)
             d.category, d.icon = "Quest group", { glyph = "scroll" }
-            d.title = e.intent == "player" and (leader .. " is looking for " .. (q or "a quest")) or ("A group for " .. (q or "a quest in your log"))
+            d.title = e.intent == "player" and (leader .. " is looking for " .. (q or "a quest")) or
+                ("A group for " .. (q or "a quest in your log"))
             d.body = logic.lines(act, leader, size, "a quest in your log")
             d.actions = { whisper }
         elseif kind == "zone" then
             local zone = asString(errors.try(GetRealZoneText))
             d.category, d.icon = "In your zone", { glyph = "map" }
-            d.title = e.intent == "player" and (leader .. " is looking for a group here") or ("A group in " .. (zone or "your zone"))
+            d.title = e.intent == "player" and (leader .. " is looking for a group here") or
+                ("A group in " .. (zone or "your zone"))
             d.body = logic.lines(leader, who, size)
             d.actions = { whisper }
         elseif kind == "boss" then
@@ -941,10 +1411,14 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         elseif kind == "friends" then
             local social = LFG.Social(leader)
             d.category = "Friends and guild"
-            d.title = e.intent == "player" and (leader .. " is looking for " .. (act ~= "" and act or "a group"))
-                or (leader .. "’s group for " .. (act ~= "" and act or "an activity"))
-            d.body = logic.lines(social == "guild" and "Guild" or (social == "friend" and "Friend" or nil), who,
-                e.intent == "player" and logic.offersText(e) or logic.needsText(e), playstyle)
+            d.title = e.intent == "player" and (leader .. " is looking for " .. (act ~= "" and act or "a group")) or
+                (leader .. "’s group for " .. (act ~= "" and act or "an activity"))
+            d.body = logic.lines(
+                social == "guild" and "Guild" or (social == "friend" and "Friend" or nil),
+                who,
+                e.intent == "player" and logic.offersText(e) or logic.needsText(e),
+                playstyle
+            )
             d.actions = { whisper }
         elseif kind == "player" then
             d.kind, d.duration, d.category = "sticky", nil, "A player for your group"
@@ -953,10 +1427,15 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             local actions: NotificationAction[] = { whisper }
             if LFG.CanInvite(e) then
                 local id = tostring(d.id)
-                actions[2] = { label = "Invite", variant = "primary", icon = "plus", onClick = function()
-                    LFG.Invite(e)
-                    SuuUI.DismissNotification(id)
-                end }
+                actions[2] = {
+                    label = "Invite",
+                    variant = "primary",
+                    icon = "plus",
+                    onClick = function()
+                        LFG.Invite(e)
+                        SuuUI.DismissNotification(id)
+                    end,
+                }
             end
             d.actions = actions
         end
@@ -966,28 +1445,44 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- A group you whispered: posted again, full, or gone.
     function OnContacted(e: Entry, what: string)
         local cfg = self:NotifyFor("contacted")
-        if not (cfg and cfg.on and self:Allowed(e, cfg)) then return end
+        if not (cfg and cfg.on and self:Allowed(e, cfg)) then
+            return
+        end
         self:Note("contacted", function(): NotificationData?
             local leader = e.leader.name or e.key
             local act = logic.activityText(e)
             local at = LFG.ContactedAt(e.key)
             local ago = at and (math.max(1, math.floor((LFG.Now() - at) / 60)) .. "m ago")
-            local d: NotificationData = { id = "lfg:contacted:" .. e.key, kind = "timed", category = "A group you contacted",
-                        icon = logic.classIcon(e.leader.class) or { glyph = "people" }, source = logic.sourceOf(e) }
+            local d: NotificationData = {
+                id = "lfg:contacted:" .. e.key,
+                kind = "timed",
+                category = "A group you contacted",
+                icon = logic.classIcon(e.leader.class) or { glyph = "people" },
+                source = logic.sourceOf(e),
+            }
             if what == "reposted" then
                 local need = logic.needsText(e)
                 d.duration = 10
                 d.title = leader .. " posted again" .. (need and (", still " .. (need:gsub("^needs", "needing"))) or "")
                 d.body = logic.lines(act, sizeText(e, "/"), ago and ("you whispered " .. ago))
-                d.actions = { { label = "Whisper", icon = "chat", variant = "primary", onClick = function() LFG.Whisper(e) end } }
+                d.actions = {
+                    {
+                        label = "Whisper",
+                        icon = "chat",
+                        variant = "primary",
+                        onClick = function()
+                            LFG.Whisper(e)
+                        end,
+                    },
+                }
             elseif what == "full" then
                 d.duration = 6
                 d.title = leader .. "’s group for " .. (act ~= "" and act or "its activity") .. " is full"
                 d.body = ago and ("You whispered " .. leader .. " " .. ago .. ".") or nil
             else
                 d.duration = 6
-                d.title = e.sources.tool and (leader .. " delisted " .. (act ~= "" and act or "the group"))
-                    or (leader .. " stopped posting for " .. (act ~= "" and act or "the group"))
+                d.title = e.sources.tool and (leader .. " delisted " .. (act ~= "" and act or "the group")) or
+                    (leader .. " stopped posting for " .. (act ~= "" and act or "the group"))
                 d.body = ago and ("You whispered " .. leader .. " " .. ago .. ".") or nil
                 d.source = nil
             end
@@ -998,47 +1493,92 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     function OnStale(category: number?, age: number?)
         self:Note("stale", function(): NotificationData?
             local listing = LFG.Listing()
-            if not listing and not next(LFG.Watches()) then return nil end
+            if not listing and not next(LFG.Watches()) then
+                return nil
+            end
             local minutes = age and math.floor(age / 60) or nil
             local actions: NotificationAction[] = {}
             if listing then
-                actions[#actions + 1] = { label = "Delist", icon = "close", onClick = function()
-                    LFG.Delist(); SuuUI.DismissNotification("lfg:stale") end }
+                actions[#actions + 1] = {
+                    label = "Delist",
+                    icon = "close",
+                    onClick = function()
+                        LFG.Delist()
+                        SuuUI.DismissNotification("lfg:stale")
+                    end,
+                }
             end
-            actions[#actions + 1] = { label = "Refresh", variant = "primary", icon = "reset", onClick = function()
-                if LFG.Refresh(category) then self.searching = true end
-                SuuUI.DismissNotification("lfg:stale")
-            end }
-            return { id = "lfg:stale", kind = "until", tone = "warning", category = "Results are stale",
-                     icon = { glyph = "hourglass" },
-                     title = minutes and ("Tool results are " .. minutes .. " minutes old") or "The tool hasn’t searched yet",
-                     body = (listing and ("You’re listed for " .. logic.listedText(listing) .. ". ") or "")
-                         .. "Chat stays live; the tool only searches on your click.",
-                     ["until"] = "Goes when you refresh", actions = actions }
+            actions[#actions + 1] = {
+                label = "Refresh",
+                variant = "primary",
+                icon = "reset",
+                onClick = function()
+                    if LFG.Refresh(category) then
+                        self.searching = true
+                    end
+                    SuuUI.DismissNotification("lfg:stale")
+                end,
+            }
+            return {
+                id = "lfg:stale",
+                kind = "until",
+                tone = "warning",
+                category = "Results are stale",
+                icon = { glyph = "hourglass" },
+                title = minutes and ("Tool results are " .. minutes .. " minutes old") or
+                    "The tool hasn’t searched yet",
+                body = (listing and ("You’re listed for " .. logic.listedText(listing) .. ". ") or "") ..
+                    "Chat stays live; the tool only searches on your click.",
+                ["until"] = "Goes when you refresh",
+                actions = actions,
+            }
         end)
     end
 
     function OnExpiring(seconds: number)
         self:Note("runout", function(): NotificationData?
             local listing = LFG.Listing()
-            if not listing then return nil end
+            if not listing then
+                return nil
+            end
             local minutes = math.max(1, math.ceil(seconds / 60))
             local names: string[] = {}
-            for _, key in ipairs(listing.activities) do names[#names + 1] = LFG.Catalogue.Name(key) end
-            return { id = "lfg:runout", kind = "action", duration = seconds, remaining = seconds,
-                     category = "Your listing runs out soon", icon = { glyph = "hourglass" },
-                     title = ("Your listing runs out in %d %s"):format(minutes, minutes == 1 and "minute" or "minutes"),
-                     body = logic.lines(table.concat(names, " · ")),
-                     actions = {
-                         { label = "Delist", icon = "close", onClick = function() LFG.Delist(); SuuUI.DismissNotification("lfg:runout") end },
-                         { label = "Open listing", variant = "primary", icon = "scroll", macro = logic.openListingMacro, onClick = function()
-                             if InCombatLockdown() then
-                                 self:Print("The listing opens out of combat.")
-                             else
-                                 SuuUI.DismissNotification("lfg:runout")
-                             end
-                         end },
-                     } }
+            for _, key in ipairs(listing.activities) do
+                names[#names + 1] = LFG.Catalogue.Name(key)
+            end
+            return {
+                id = "lfg:runout",
+                kind = "action",
+                duration = seconds,
+                remaining = seconds,
+                category = "Your listing runs out soon",
+                icon = { glyph = "hourglass" },
+                title = ("Your listing runs out in %d %s"):format(minutes, minutes == 1 and "minute" or "minutes"),
+                body = logic.lines(table.concat(names, " · ")),
+                actions = {
+                    {
+                        label = "Delist",
+                        icon = "close",
+                        onClick = function()
+                            LFG.Delist()
+                            SuuUI.DismissNotification("lfg:runout")
+                        end,
+                    },
+                    {
+                        label = "Open listing",
+                        variant = "primary",
+                        icon = "scroll",
+                        macro = logic.openListingMacro,
+                        onClick = function()
+                            if InCombatLockdown() then
+                                self:Print("The listing opens out of combat.")
+                            else
+                                SuuUI.DismissNotification("lfg:runout")
+                            end
+                        end,
+                    },
+                },
+            }
         end)
     end
 
@@ -1051,37 +1591,72 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     function OnDelisted()
         SuuUI.DismissNotification("lfg:runout")
-        if not next(LFG.Watches()) then SuuUI.DismissNotification("lfg:stale") end
+        if not next(LFG.Watches()) then
+            SuuUI.DismissNotification("lfg:stale")
+        end
         local listing, since = self.lastListing, self.listedAt
         self.lastListing, self.listedAt = nil, nil
         -- you took it down yourself: nothing to tell
         local byYou = self.delistedByYou
-        if byYou and GetTime() - byYou < 5 then return end
+        if byYou and GetTime() - byYou < 5 then
+            return
+        end
         self:Note("delisted", function(): NotificationData?
             local minutes = since and math.max(1, math.floor((LFG.Now() - since) / 60))
-            return { id = "lfg:delisted", kind = "sticky", category = "You were delisted", icon = { glyph = "close" },
-                     title = "Your listing has ended",
-                     body = listing and (("Listed %s for %s."):format(minutes and (minutes .. " minutes") or "a while",
-                         logic.listedText(listing, true))) or nil }
+            return {
+                id = "lfg:delisted",
+                kind = "sticky",
+                category = "You were delisted",
+                icon = { glyph = "close" },
+                title = "Your listing has ended",
+                body = listing and
+                    (("Listed %s for %s."):format(
+                        minutes and (minutes .. " minutes") or "a while",
+                        logic.listedText(listing, true)
+                    )) or
+                    nil,
+            }
         end)
     end
 
     function StartNotes()
-        if self.notesOn then return end
+        if self.notesOn then
+            return
+        end
         self.notesOn = true
-        LFG.On("Match", function(e, reasons) self:OnMatch(e, reasons) end)
-        LFG.On("Contacted", function(e, what) self:OnContacted(e, what) end)
-        LFG.On("ToolStale", function(category, age) self:OnStale(category, age) end)
-        LFG.On("ToolSearched", function() SuuUI.DismissNotification("lfg:stale") end)
-        LFG.On("ListingExpiring", function(seconds) self:OnExpiring(seconds) end)
-        LFG.On("ListingChanged", function(listing: Listing?) self:OnListingChanged(listing) end)
-        LFG.On("Delisted", function() self:OnDelisted() end)
+        LFG.On("Match", function(e, reasons)
+            self:OnMatch(e, reasons)
+        end)
+        LFG.On("Contacted", function(e, what)
+            self:OnContacted(e, what)
+        end)
+        LFG.On("ToolStale", function(category, age)
+            self:OnStale(category, age)
+        end)
+        LFG.On("ToolSearched", function()
+            SuuUI.DismissNotification("lfg:stale")
+        end)
+        LFG.On("ListingExpiring", function(seconds)
+            self:OnExpiring(seconds)
+        end)
+        LFG.On("ListingChanged", function(listing: Listing?)
+            self:OnListingChanged(listing)
+        end)
+        LFG.On("Delisted", function()
+            self:OnDelisted()
+        end)
         -- your own delisting (the game's Unlist, a note's Delist)
         if field(C_LFGList, "RemoveListing") then
-            hook(C_LFGList, "RemoveListing", function() self.delistedByYou = GetTime() end)
+            hook(C_LFGList, "RemoveListing", function()
+                self.delistedByYou = GetTime()
+            end)
         end
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:FlushHeld() end)
-        self:OnGameEvent("PLAYER_ENTERING_WORLD", function() self:FlushHeld() end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:FlushHeld()
+        end)
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            self:FlushHeld()
+        end)
         self:OnListingChanged(LFG.Listing())
         self:RegisterCommand("lfgnotes", "test: shows one Group Finder note of each kind, from made-up groups", function()
             self:TestNotes()
@@ -1090,30 +1665,101 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
 
     -- Made-up groups and players for /suu lfgnotes.
     function TestNotes()
-        local kessra = madeUp({ key = "Kessra", intent = "group", activities = { "dungeon:rfk" }, members = { 3, 5 }, level = { 29, 29 },
-            leader = { name = "Kessra", class = "MAGE", level = 31 }, roles = { needed = { healer = 1, tank = 1 } },
-            sources = { tool = {}, chat = { channel = "LookingForGroup", text = "LFM Heal / Tank (drood) or Pala for RFK", confidence = 0.9 } } })
-        local brannoc = madeUp({ key = "Brannoc", intent = "group", activities = { "dungeon:sfk" }, members = { 2, 5 },
-            leader = { name = "Brannoc", class = "WARRIOR", level = 22 }, roles = { needed = { healer = 1, damage = 2 } }, sources = { tool = {} } })
-        local morrow = madeUp({ key = "Morrow", intent = "player", activities = { "dungeon:wc" }, leader = { name = "Morrow", class = "ROGUE", level = 20 },
-            roles = { offered = { damage = true } }, sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } } })
-        local dorran = madeUp({ key = "Dorran", intent = "group", activities = { "zone:wetlands" }, members = { 3, 5 },
-            leader = { name = "Dorran", class = "PALADIN", level = 26 }, sources = { chat = { channel = "SAY", text = "LF2M Wetlands elites", confidence = 0.6 } } })
-        for _, n in ipairs({ { kind = "role", e = kessra }, { kind = "fresh", e = brannoc }, { kind = "zone", e = dorran },
-                             { kind = "friends", e = morrow }, { kind = "player", e = morrow } }) do
+        local kessra = madeUp({
+            key = "Kessra",
+            intent = "group",
+            activities = { "dungeon:rfk" },
+            members = { 3, 5 },
+            level = { 29, 29 },
+            leader = { name = "Kessra", class = "MAGE", level = 31 },
+            roles = { needed = { healer = 1, tank = 1 } },
+            sources = {
+                tool = {},
+                chat = {
+                    channel = "LookingForGroup",
+                    text = "LFM Heal / Tank (drood) or Pala for RFK",
+                    confidence = 0.9,
+                },
+            },
+        })
+        local brannoc = madeUp({
+            key = "Brannoc",
+            intent = "group",
+            activities = { "dungeon:sfk" },
+            members = { 2, 5 },
+            leader = { name = "Brannoc", class = "WARRIOR", level = 22 },
+            roles = { needed = { healer = 1, damage = 2 } },
+            sources = { tool = {} },
+        })
+        local morrow = madeUp({
+            key = "Morrow",
+            intent = "player",
+            activities = { "dungeon:wc" },
+            leader = { name = "Morrow", class = "ROGUE", level = 20 },
+            roles = { offered = { damage = true } },
+            sources = { chat = { channel = "LookingForGroup", text = "20 rogue lfg WC", confidence = 0.8 } },
+        })
+        local dorran = madeUp({
+            key = "Dorran",
+            intent = "group",
+            activities = { "zone:wetlands" },
+            members = { 3, 5 },
+            leader = { name = "Dorran", class = "PALADIN", level = 26 },
+            sources = { chat = { channel = "SAY", text = "LF2M Wetlands elites", confidence = 0.6 } },
+        })
+        for _, n in ipairs({
+            { kind = "role", e = kessra },
+            { kind = "fresh", e = brannoc },
+            { kind = "zone", e = dorran },
+            { kind = "friends", e = morrow },
+            { kind = "player", e = morrow },
+        }) do
             local d = self:MatchNote(n.kind, n.e)
             local id = tostring(d.id) .. ":" .. n.kind
             d.id = id
             -- a test never whispers or invites anyone
-            for _, a in ipairs(d.actions or {}) do a.onClick = function() SuuUI.DismissNotification(id) end end
+            for _, a in ipairs(d.actions or {}) do
+                a.onClick = function()
+                    SuuUI.DismissNotification(id)
+                end
+            end
             SuuUI.Notify(d)
         end
-        SuuUI.Notify({ id = "lfg:test:stale", kind = "until", tone = "warning", category = "Results are stale", icon = { glyph = "hourglass" },
-            title = "Tool results are 9 minutes old", body = "You’re listed for Shadowfang Keep and 2 more. Chat stays live; the tool only searches on your click.",
-            ["until"] = "Goes when you refresh", actions = { { label = "Delist", icon = "close", onClick = function() SuuUI.DismissNotification("lfg:test:stale") end },
-                { label = "Refresh", variant = "primary", icon = "reset", onClick = function() SuuUI.DismissNotification("lfg:test:stale") end } } })
-        SuuUI.Notify({ id = "lfg:test:delisted", kind = "sticky", category = "You were delisted", icon = { glyph = "close" },
-            title = "Your listing has ended", body = "Listed 30 minutes for Shadowfang Keep, Deadmines and Wailing Caverns." })
+        SuuUI.Notify({
+            id = "lfg:test:stale",
+            kind = "until",
+            tone = "warning",
+            category = "Results are stale",
+            icon = { glyph = "hourglass" },
+            title = "Tool results are 9 minutes old",
+            body = "You’re listed for Shadowfang Keep and 2 more. Chat stays live; the tool only searches on your click.",
+            ["until"] = "Goes when you refresh",
+            actions = {
+                {
+                    label = "Delist",
+                    icon = "close",
+                    onClick = function()
+                        SuuUI.DismissNotification("lfg:test:stale")
+                    end,
+                },
+                {
+                    label = "Refresh",
+                    variant = "primary",
+                    icon = "reset",
+                    onClick = function()
+                        SuuUI.DismissNotification("lfg:test:stale")
+                    end,
+                },
+            },
+        })
+        SuuUI.Notify({
+            id = "lfg:test:delisted",
+            kind = "sticky",
+            category = "You were delisted",
+            icon = { glyph = "close" },
+            title = "Your listing has ended",
+            body = "Listed 30 minutes for Shadowfang Keep, Deadmines and Wailing Caverns.",
+        })
     end
 end
 

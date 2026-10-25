@@ -13,15 +13,23 @@ import version from "/Core/Init"
 const PREFIX = "|cff9fd3c7SuuUI|r "
 
 -- What taintScan.scan gives in these tests (replaced for the whole file).
-local scanResult: () -> unknown = function(): unknown return {} end
-mock.module(taintScan, { scan = function(): string[] return scanResult() :: string[] end })
+local scanResult: () -> unknown = function(): unknown
+    return {}
+end
+mock.module(taintScan, {
+    scan = function(): string[]
+        return scanResult() :: string[]
+    end,
+})
 
 @afterEach
 local function cleanup()
     fault.setTiming(false)
     mock.slash("/suu errors clear")
     DB.db.blocked = nil
-    scanResult = function(): unknown return {} end
+    scanResult = function(): unknown
+        return {}
+    end
 end
 
 local function printedBy(fn: () -> ()): string[]
@@ -29,7 +37,9 @@ local function printedBy(fn: () -> ()): string[]
     fn()
     local all = mock.printed()
     local out: string[] = {}
-    for i = before + 1, #all do out[#out + 1] = all[i] end
+    for i = before + 1, #all do
+        out[#out + 1] = all[i]
+    end
     return out
 end
 
@@ -44,7 +54,9 @@ end
 
 @test("report: one entry, one chat line, kept in the saved variables")
 local function reports()
-    local out = printedBy(function() fault.report("Bags", "fault-one\nsecond line", "the stack") end)
+    local out = printedBy(function()
+        fault.report("Bags", "fault-one\nsecond line", "the stack")
+    end)
     expect(#fault.entries()).toBe(1)
     local e = last()
     expect(e.source).toBe("Bags")
@@ -64,7 +76,9 @@ end
 @test("report: the same error again counts, quietly; another source is another entry")
 local function dedupes()
     fault.report("Bags", "fault-same")
-    local out = printedBy(function() fault.report("Bags", "fault-same\nother detail") end)
+    local out = printedBy(function()
+        fault.report("Bags", "fault-same\nother detail")
+    end)
     expect(out).toEqual({})
     expect(#fault.entries()).toBe(1)
     expect(last().count).toBe(2)
@@ -83,7 +97,9 @@ end
 
 @test("report: the newest 50 are kept, and a dropped one is new again")
 local function keepsFifty()
-    for i = 1, 51 do fault.report("Many", "fault-many-" .. i) end
+    for i = 1, 51 do
+        fault.report("Many", "fault-many-" .. i)
+    end
     local list = fault.entries()
     expect(#list).toBe(50)
     expect(list[1].message).toBe("fault-many-2")
@@ -102,7 +118,9 @@ end
 
 @test("call: true and fn's results; its arguments passed on")
 local function callOk()
-    local function f(a: number, b: number): (number, nil, string) return a + b, nil, "x" end
+    local function f(a: number, b: number): (number, nil, string)
+        return a + b, nil, "x"
+    end
     local ok, sum, gap, x = fault.call("Test", f, 2, 3)
     expect(ok).toBe(true)
     expect(sum).toBe(5)
@@ -114,7 +132,9 @@ end
 
 @test("call: false alone on an error, reported under the source with a stack")
 local function callError()
-    local function boom() error("fault-call-err") end
+    local function boom()
+        error("fault-call-err")
+    end
     local n = select("#", fault.call("Call Test", boom))
     expect(n).toBe(1)
     expect((fault.call("Call Test", boom))).toBe(false)
@@ -139,10 +159,14 @@ local function timing()
     expect(spent).toEqual({})
     fault.call("Outer", function()
         mock.spend(5)
-        fault.call("Inner", function() mock.spend(20) end)
+        fault.call("Inner", function()
+            mock.spend(20)
+        end)
         mock.spend(5)
     end)
-    fault.call("Inner", function() mock.spend(30) end)
+    fault.call("Inner", function()
+        mock.spend(30)
+    end)
     local outer, inner = spent.Outer :: fault.Spent, spent.Inner :: fault.Spent
     expect(outer.calls).toBe(1)
     expect(outer.ms).toBeCloseTo(10, 0)
@@ -156,7 +180,10 @@ end
 @test("timing: an error is still reported and timed")
 local function timedError()
     fault.setTiming(true)
-    local ok = fault.call("Timed Error", function() mock.spend(3); error("fault-timed-err") end)
+    local ok = fault.call("Timed Error", function()
+        mock.spend(3)
+        error("fault-timed-err")
+    end)
     expect(ok).toBe(false)
     local _, spent = fault.timingState()
     expect((spent["Timed Error"] :: fault.Spent).calls).toBe(1)
@@ -261,15 +288,21 @@ local function ownTiming()
     log:setTiming(true)
     log:call("Outer", function()
         meter:spend(5, 1)
-        log:call("Inner", function() meter:spend(20, 4) end)
+        log:call("Inner", function()
+            meter:spend(20, 4)
+        end)
         meter:spend(5, 1)
     end)
-    log:call("Inner", function() meter:spend(30, 2) end)
+    log:call("Inner", function()
+        meter:spend(30, 2)
+    end)
     local _, spent = log:timingState()
     expect(spent.Outer).toEqual({ ms = 10, calls = 1, peak = 10, kb = 2 })
     expect(spent.Inner).toEqual({ ms = 50, calls = 2, peak = 30, kb = 6 })
     -- a garbage collection inside a call reads as nothing allocated
-    log:call("Collected", function() meter:spend(1, -50) end)
+    log:call("Collected", function()
+        meter:spend(1, -50)
+    end)
     expect((spent.Collected :: fault.Spent).kb).toBe(0)
 end
 
@@ -277,7 +310,9 @@ end
 local function ownCall()
     local out = FakeOutput.new()
     local log = fault.FaultLog.new(out)
-    local ok = log:call("Boom", function() error("own-boom") end)
+    local ok = log:call("Boom", function()
+        error("own-boom")
+    end)
     expect(ok).toBe(false)
     expect(out.announced[1]:find("Boom: ", 1, true) ~= nil).toBe(true)
     expect(type(log:entries()[1].stack)).toBe("string")
@@ -302,7 +337,9 @@ end
 
 @test("/suu errors: none yet")
 local function listNone()
-    local out = printedBy(function() mock.slash("/suu errors") end)
+    local out = printedBy(function()
+        mock.slash("/suu errors")
+    end)
     expect(out).toEqual({ PREFIX .. "No errors this session." })
 end
 
@@ -312,13 +349,17 @@ local function listSome()
     fault.report("Bags", "fault-list-a")
     fault.report("Chat", "fault-list-b")
     local t1, t2 = fault.entries()[1].time, fault.entries()[2].time
-    local out = printedBy(function() mock.slash("/suu errors") end)
+    local out = printedBy(function()
+        mock.slash("/suu errors")
+    end)
     expect(out).toEqual({
         PREFIX .. t1 .. "  Bags: fault-list-a (x2)",
         PREFIX .. t2 .. "  Chat: fault-list-b",
         "  /suu errors full adds the stacks.",
     })
-    local full = printedBy(function() mock.slash("/suu errors full") end)
+    local full = printedBy(function()
+        mock.slash("/suu errors full")
+    end)
     expect(full).toEqual({
         PREFIX .. t1 .. "  Bags: fault-list-a (x2)",
         "stack-a",
@@ -329,7 +370,9 @@ end
 @test("/suu errors clear: the list and the saved log")
 local function clear()
     fault.report("Bags", "fault-clear")
-    local out = printedBy(function() mock.slash("/suu errors clear") end)
+    local out = printedBy(function()
+        mock.slash("/suu errors clear")
+    end)
     expect(out).toEqual({ PREFIX .. "Errors cleared." })
     expect(#fault.entries()).toBe(0)
     expect(DB.db.errors).toBeNil()
@@ -340,12 +383,16 @@ end
 
 @test("/suu errors test: a deliberate error, and the next listener still runs")
 local function deliberate()
-    local out = printedBy(function() mock.slash("/suu errors test") end)
+    local out = printedBy(function()
+        mock.slash("/suu errors test")
+    end)
     expect(last().source).toBe("Fault test")
     expect(last().message:find("a deliberate test error", 1, true) ~= nil).toBe(true)
     expect(out).toContain(PREFIX .. "The next listener still ran.")
     -- its listeners are gone again
-    local again = printedBy(function() mock.slash("/suu errors test") end)
+    local again = printedBy(function()
+        mock.slash("/suu errors test")
+    end)
     expect(last().count).toBe(2)
     expect(#again).toBe(1)
 end
@@ -356,7 +403,9 @@ end
 
 @test("a protected call blocked for SuuUI: reported as Taint, with what addon code wrote")
 local function blockedMine()
-    scanResult = function(): unknown return { "PlayerFrame.x", "ActionButton1.y" } end
+    scanResult = function(): unknown
+        return { "PlayerFrame.x", "ActionButton1.y" }
+    end
     mock.player:enterCombat()
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "CastSpellByName")
     mock.player:leaveCombat()
@@ -372,18 +421,26 @@ end
 @test("blocked for SuuUI: at most 40 written places; none when the scan fails or finds none")
 local function blockedScan()
     local many: string[] = {}
-    for i = 1, 45 do many[i] = "w" .. i end
-    scanResult = function(): unknown return many end
+    for i = 1, 45 do
+        many[i] = "w" .. i
+    end
+    scanResult = function(): unknown
+        return many
+    end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncMany")
     local stack = last().stack :: string
     expect(stack:find("; w40", 1, true) ~= nil).toBe(true)
     expect(stack:find("; w41", 1, true)).toBeNil()
-    scanResult = function(): unknown error("scan failed") end
+    scanResult = function(): unknown
+        error("scan failed")
+    end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncErr")
     -- (out of combat: a call that needs the user's click)
     expect(last().message).toBe("Blocked: FuncErr")
     expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
-    scanResult = function(): unknown return "nothing" end
+    scanResult = function(): unknown
+        return "nothing"
+    end
     mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "FuncOdd")
     expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
 end
@@ -400,7 +457,9 @@ local function blockedOther()
     expect(field(saved[1], "combat")).toBe(false)
     expect(type(field(saved[1], "stack"))).toBe("string")
     mock.player:enterCombat()
-    for i = 1, 31 do mock.fireEvent("ADDON_ACTION_BLOCKED", "OtherAddon", "F" .. i) end
+    for i = 1, 31 do
+        mock.fireEvent("ADDON_ACTION_BLOCKED", "OtherAddon", "F" .. i)
+    end
     mock.player:leaveCombat()
     saved = DB.list("blocked")
     expect(#saved).toBe(30)

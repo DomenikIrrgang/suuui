@@ -69,9 +69,9 @@ local DEFAULTS = {
     keyring = false,
     bank = true,
     itemCounts = true,
-    bagSlots = true,       -- the bag slot rails beside the windows
+    bagSlots = true, -- the bag slot rails beside the windows
     bankPosition = { point = "TOP", x = -216, y = -240 } :: Position,
-    sortOrder = "type",    -- type, quality, level, name or game
+    sortOrder = "type", -- type, quality, level, name or game
     sortDirection = "end", -- where the items gather: end or start
 }
 
@@ -84,7 +84,9 @@ local BANK_FIRST = asNumber(field(Enum, "BagIndex", "CharacterBankTab_1")) or 6
 local BANK_LAST = asNumber(field(Enum, "BagIndex", "CharacterBankTab_9")) or 14
 local BANK_TYPE = asNumber(field(Enum, "BankType", "Character"))
 
-local function isBank(bag: number): boolean return bag >= BANK_FIRST and bag <= BANK_LAST end
+local function isBank(bag: number): boolean
+    return bag >= BANK_FIRST and bag <= BANK_LAST
+end
 
 local function numSlots(bag: number): number
     return asNumber(C_Container.GetContainerNumSlots(bag)) or 0
@@ -128,8 +130,15 @@ local BACKPACK_ICON = 133633
 -- inventory slot it is (a bag of yours) or the bank slot, whether it can't
 -- change, what's in it.
 type RailEntry = {
-    kind: string, bag?: number, inv?: number, tab?: number, fixed?: boolean, has: boolean, icon: number | string,
-    size: number, quality?: string,
+    kind: string,
+    bag?: number,
+    inv?: number,
+    tab?: number,
+    fixed?: boolean,
+    has: boolean,
+    icon: number | string,
+    size: number,
+    quality?: string,
 }
 type RailBuy = { off?: boolean, why?: string, done?: boolean, price?: number, next?: number }
 
@@ -170,10 +179,17 @@ class BuyCell extends ItemSlot
         self:SetScript("OnEnter", function(cell)
             cell.skin.hover = not cell.off
             cell.skin:Draw()
-            UI.ShowTooltip(cell, { title = "Buy bank slot", subtitle = cell.next and ("Bank slot " .. cell.next) or nil,
-                description = cell.why or ("Costs " .. coinText(cell.price) .. ". The game asks first.") })
+            UI.ShowTooltip(cell, {
+                title = "Buy bank slot",
+                subtitle = cell.next and ("Bank slot " .. cell.next) or nil,
+                description = cell.why or ("Costs " .. coinText(cell.price) .. ". The game asks first."),
+            })
         end)
-        self:SetScript("OnLeave", function(cell) cell.skin.hover = false; cell.skin:Draw(); UI.HideTooltip() end)
+        self:SetScript("OnLeave", function(cell)
+            cell.skin.hover = false
+            cell.skin:Draw()
+            UI.HideTooltip()
+        end)
     end
 end
 
@@ -239,29 +255,45 @@ class ForgetRow extends Frame
         super(nil, parent)
         local choice: string? = nil
         local timer: TimerHandle? = nil
-        self.select = UI.Select(self, { width = 190, placeholder = "Choose a character", options = options(),
-            onChange = function(v: string) choice = v end })
+        self.select = UI.Select(self, {
+            width = 190,
+            placeholder = "Choose a character",
+            options = options(),
+            onChange = function(v: string)
+                choice = v
+            end,
+        })
         self.select:SetPoint("LEFT")
-        self.button = UI.Button(self, { text = "Forget", onClick = function(b)
-            local key = choice
-            if not key then return end
-            local pending = timer
-            if not pending then
-                b:SetLabel("Click again")
-                timer = after(3, function() timer = nil; b:SetLabel("Forget") end)
-                return
-            end
-            pending:Cancel()
-            timer = nil
-            b:SetLabel("Forget")
-            forget(key)
-            choice = nil
-            self.select:SetOptions(options())
-            self.select:SetValue(nil)
-        end })
+        self.button = UI.Button(self, {
+            text = "Forget",
+            onClick = function(b)
+                local key = choice
+                if not key then
+                    return
+                end
+                local pending = timer
+                if not pending then
+                    b:SetLabel("Click again")
+                    timer = after(3, function()
+                        timer = nil
+                        b:SetLabel("Forget")
+                    end)
+                    return
+                end
+                pending:Cancel()
+                timer = nil
+                b:SetLabel("Forget")
+                forget(key)
+                choice = nil
+                self.select:SetOptions(options())
+                self.select:SetValue(nil)
+            end,
+        })
         self.button:SetPoint("LEFT", self.select, "RIGHT", S["space-3"], 0)
         self:SetSize(190 + S["space-3"] + self.button:GetWidth(), 30)
-        self:SetScript("OnShow", function() self.select:SetOptions(options()) end)
+        self:SetScript("OnShow", function()
+            self.select:SetOptions(options())
+        end)
     end
 end
 
@@ -274,12 +306,16 @@ local ago, nameOf, classDiamond = chars.ago, chars.nameOf, chars.classDiamond
 local function itemTip(owner: Frame, link: unknown, extra: string[]?)
     local text = asString(link)
     local ref = text and (text:match("|H(item:[^|]+)|h") or (text:match("^item:") and text))
-    if not ref then return end
+    if not ref then
+        return
+    end
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetHyperlink(ref)
     if extra then
         GameTooltip:AddLine(" ")
-        for _, line in ipairs(extra) do GameTooltip:AddLine(line, 0.85, 0.82, 0.76) end
+        for _, line in ipairs(extra) do
+            GameTooltip:AddLine(line, 0.85, 0.82, 0.76)
+        end
     end
     GameTooltip:Show()
 end
@@ -298,7 +334,12 @@ local function snapshot(bags: number[]): Snapshot
             local icon = info and asNumber(info.iconFileID)
             local e: SavedItem | false = false
             if info and icon then
-                e = { t = icon, c = asNumber(info.stackCount) or 1, q = asNumber(info.quality) or 1, l = asString(info.hyperlink) }
+                e = {
+                    t = icon,
+                    c = asNumber(info.stackCount) or 1,
+                    q = asNumber(info.quality) or 1,
+                    l = asString(info.hyperlink),
+                }
             end
             slots[#slots + 1] = e
         end
@@ -317,7 +358,9 @@ local label = chars.charLabel
 --------------------------------------------------------------------------------
 
 local WHERE: { key: "bags" | "bank" | "equipped", label: string }[] = {
-    { key = "bags", label = "Bags" }, { key = "bank", label = "Bank" }, { key = "equipped", label = "Equipped" },
+    { key = "bags", label = "Bags" },
+    { key = "bank", label = "Bank" },
+    { key = "equipped", label = "Equipped" },
 }
 
 -- How many of item `id` each saved character has: { { c, total, bags, bank, equipped } } in picker order.
@@ -330,9 +373,15 @@ type Counts = chars.Counts
 -- A grey item the vendor will buy: its sell price per item, or nil.
 local function junkAt(bag: number, slot: number): (number?, number?)
     local info = C_Container.GetContainerItemInfo(bag, slot)
-    if not (info and asNumber(info.quality) == 0) then return nil, nil end
-    if flag(info.hasNoValue) then return nil, nil end
-    if flag(info.isLocked) then return nil, nil end
+    if not (info and asNumber(info.quality) == 0) then
+        return nil, nil
+    end
+    if flag(info.hasNoValue) then
+        return nil, nil
+    end
+    if flag(info.isLocked) then
+        return nil, nil
+    end
     local price = 0
     local link = asString(info.hyperlink)
     if link then
@@ -360,16 +409,22 @@ local CLOSES: { [string]: boolean } = { CloseAllBags = true, CloseBag = true, Cl
 
 local function closeBank()
     local close = field(C_Bank, "CloseBankFrame")
-    if type(close) ~= "function" then close = field(_G, "CloseBankFrame") end
+    if type(close) ~= "function" then
+        close = field(_G, "CloseBankFrame")
+    end
     try(close)
 end
 
 local function sortBank()
     local sortFn = field(C_Container, "SortBank")
-    if type(sortFn) ~= "function" then return end
+    if type(sortFn) ~= "function" then
+        return
+    end
     local run = sortFn :: (...unknown) -> ()
     -- (without an argument as before: 0.9.1 declares SortBank's bankType as required)
-    if not (BANK_TYPE and pcall(run, BANK_TYPE)) then pcall(run) end
+    if not (BANK_TYPE and pcall(run, BANK_TYPE)) then
+        pcall(run)
+    end
 end
 
 -- The window's name for a frame that opened the bags (the mail, a vendor).
@@ -406,9 +461,22 @@ local itemOf = sort.itemOf
 -- A sort under way: its window and order, where it stands, the wave on its
 -- way, what PlanStacks remembers.
 type SortState = {
-    bank: boolean, inv: Inventory, order: string, toEnd: boolean, phase: string, rounds: number, waves: number,
-    idle: number, started: number, partials: { [number | string]: number }, noStack: { [number | string]: boolean },
-    game?: boolean, wait?: sort.Wave, total?: number, lastWrong?: number, lastUpdate?: number,
+    bank: boolean,
+    inv: Inventory,
+    order: string,
+    toEnd: boolean,
+    phase: string,
+    rounds: number,
+    waves: number,
+    idle: number,
+    started: number,
+    partials: { [number | string]: number },
+    noStack: { [number | string]: boolean },
+    game?: boolean,
+    wait?: sort.Wave,
+    total?: number,
+    lastWrong?: number,
+    lastUpdate?: number,
 }
 
 local function locked(s: SortSlot): boolean
@@ -421,39 +489,110 @@ end
 --------------------------------------------------------------------------------
 
 local PREVIEW_ITEMS: { icon: number, count?: number, quality?: string }[] = {
-    { icon = 134414 }, { icon = 132796, count = 5 }, { icon = 132889, count = 20 }, { icon = 135232, count = 6 },
-    { icon = 134566, count = 14 }, { icon = 134074, count = 2, quality = "uncommon" }, { icon = 134939, quality = "rare" },
-    { icon = 135637, quality = "poor" }, { icon = 134075, quality = "uncommon" }, { icon = 134173 },
-    { icon = 133972, count = 12 }, { icon = 134937, quality = "epic" },
+    { icon = 134414 },
+    { icon = 132796, count = 5 },
+    { icon = 132889, count = 20 },
+    { icon = 135232, count = 6 },
+    { icon = 134566, count = 14 },
+    { icon = 134074, count = 2, quality = "uncommon" },
+    { icon = 134939, quality = "rare" },
+    { icon = 135637, quality = "poor" },
+    { icon = 134075, quality = "uncommon" },
+    { icon = 134173 },
+    { icon = 133972, count = 12 },
+    { icon = 134937, quality = "epic" },
 }
 
 export const SECTION: SettingsSection = {
-    id = "bags", label = "Bags", category = "General", order = 20,
-    preview = function(parent: Frame): Inventory return M:PreviewView(parent) end,
+    id = "bags",
+    label = "Bags",
+    category = "General",
+    order = 20,
+    preview = function(parent: Frame): Inventory
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Bags", description = "Every bag in one window: it opens wherever Blizzard's bags would (B, the bag buttons, the mailbox, a vendor, the bank). Items work as always: right click to use, drag to move, shift-click to link. Move it in edit mode.", rows = {
-            { key = "columns", label = "Slots per row", control = "slider", min = 6, max = 16, step = 1 },
-            { key = "reagentBag", label = "Reagent bag", control = "toggle", description = "Its slots after your bags'." },
-            { key = "keyring", label = "Keyring", control = "toggle", description = "Your keys after everything else." },
-            { key = "bagSlots", label = "Bag slots", control = "toggle",
-              description = "Your bags in a rail beside the window (and the bank's slots at a banker): drag a bag on to change it, hover one to see its slots. Also the Bags toggle in the window's header." },
-        } },
-        { title = "Sort", description = "The Sort button in your bags and at the bank. SuuUI's own orders move your items a few at a time, stacking part stacks first; a full sort takes a few seconds, and the window waits under the loading mark meanwhile. Combat, picking up an item or closing the window stops it; Sort again finishes it.", rows = {
-            { key = "sortOrder", label = "Order", control = "select", width = 180, options = SORT_OPTIONS,
-              description = "By type: the best quality first, conjured items last; within a quality what you use, bags, weapons, gems, armour, reagents, trade goods, recipes, quest items and keys, gear by slot, then the highest item level and the dearest to sell. The reagent bag and profession bags are filled with what fits them first. The game's sort: Blizzard's own, in one go." },
-            { key = "sortDirection", label = "Items gather at", control = "segmented",
-              options = { { value = "end", label = "End of bags" }, { value = "start", label = "Start of bags" } },
-              description = "Where your items go; the empty slots are left at the other end. At the end the order is mirrored: the first item in it sits in the last slot." },
-        } },
-        { title = "Characters", description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.", rows = {
-            { key = "itemCounts", label = "Counts in item tooltips", control = "toggle",
-              description = "An item's tooltip lists which of your characters has how many, in their bags, bank or worn." },
-            { label = "Forget a character", control = "custom", build = function(p: Frame): Frame return M:ForgetRow(p) end,
-              description = "Takes their bags and bank out of the picker and the search, until they log in again." },
-        } },
-        { title = "Bank", description = "At a banker your bank opens in the same window, top centre, your bags beside it. Every bank tab you own in one grid; items move between them as always (right click, drag). One search runs across both. Move it in edit mode.", rows = {
-            { key = "bank", label = "SuuUI's bank", control = "toggle", description = "Off: Blizzard's bank window." },
-        } },
+        {
+            title = "Bags",
+            description = "Every bag in one window: it opens wherever Blizzard's bags would (B, the bag buttons, the mailbox, a vendor, the bank). Items work as always: right click to use, drag to move, shift-click to link. Move it in edit mode.",
+            rows = {
+                { key = "columns", label = "Slots per row", control = "slider", min = 6, max = 16, step = 1 },
+                {
+                    key = "reagentBag",
+                    label = "Reagent bag",
+                    control = "toggle",
+                    description = "Its slots after your bags'.",
+                },
+                {
+                    key = "keyring",
+                    label = "Keyring",
+                    control = "toggle",
+                    description = "Your keys after everything else.",
+                },
+                {
+                    key = "bagSlots",
+                    label = "Bag slots",
+                    control = "toggle",
+                    description = "Your bags in a rail beside the window (and the bank's slots at a banker): drag a bag on to change it, hover one to see its slots. Also the Bags toggle in the window's header.",
+                },
+            },
+        },
+        {
+            title = "Sort",
+            description = "The Sort button in your bags and at the bank. SuuUI's own orders move your items a few at a time, stacking part stacks first; a full sort takes a few seconds, and the window waits under the loading mark meanwhile. Combat, picking up an item or closing the window stops it; Sort again finishes it.",
+            rows = {
+                {
+                    key = "sortOrder",
+                    label = "Order",
+                    control = "select",
+                    width = 180,
+                    options = SORT_OPTIONS,
+                    description = "By type: the best quality first, conjured items last; within a quality what you use, bags, weapons, gems, armour, reagents, trade goods, recipes, quest items and keys, gear by slot, then the highest item level and the dearest to sell. The reagent bag and profession bags are filled with what fits them first. The game's sort: Blizzard's own, in one go.",
+                },
+                {
+                    key = "sortDirection",
+                    label = "Items gather at",
+                    control = "segmented",
+                    options = {
+                        { value = "end", label = "End of bags" },
+                        { value = "start", label = "Start of bags" },
+                    },
+                    description = "Where your items go; the empty slots are left at the other end. At the end the order is mirrored: the first item in it sits in the last slot.",
+                },
+            },
+        },
+        {
+            title = "Characters",
+            description = "The bags window's header picks a character: their bags or bank as they last were, read only, from anywhere. \"All characters\" searches every character's bags and bank at once. A character's bank shows once they have visited a banker.",
+            rows = {
+                {
+                    key = "itemCounts",
+                    label = "Counts in item tooltips",
+                    control = "toggle",
+                    description = "An item's tooltip lists which of your characters has how many, in their bags, bank or worn.",
+                },
+                {
+                    label = "Forget a character",
+                    control = "custom",
+                    build = function(p: Frame): Frame
+                        return M:ForgetRow(p)
+                    end,
+                    description = "Takes their bags and bank out of the picker and the search, until they log in again.",
+                },
+            },
+        },
+        {
+            title = "Bank",
+            description = "At a banker your bank opens in the same window, top centre, your bags beside it. Every bank tab you own in one grid; items move between them as always (right click, drag). One search runs across both. Move it in edit mode.",
+            rows = {
+                {
+                    key = "bank",
+                    label = "SuuUI's bank",
+                    control = "toggle",
+                    description = "Off: Blizzard's bank window.",
+                },
+            },
+        },
     },
 }
 
@@ -512,7 +651,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- What this character keeps (its saved entry, typed).
-    function Char(): CharEntry return self:CharData() :: unknown :: CharEntry end
+    function Char(): CharEntry
+        return self:CharData() :: unknown :: CharEntry
+    end
 
     -- A saved character's entry (nil: none).
     function EntryOf(key: string): CharEntry?
@@ -522,8 +663,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The bags shown, in order.
     function Bags(): number[]
         local list: number[] = { 0, 1, 2, 3, 4 }
-        if self:Get("reagentBag") then list[#list + 1] = REAGENT end
-        if self:Get("keyring") then list[#list + 1] = KEYRING end
+        if self:Get("reagentBag") then
+            list[#list + 1] = REAGENT
+        end
+        if self:Get("keyring") then
+            list[#list + 1] = KEYRING
+        end
         return list
     end
 
@@ -533,12 +678,16 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         if BANK_TYPE then
             for _, id in ipairs(errors.tryValue(C_Bank and C_Bank.FetchPurchasedBankTabIDs, BANK_TYPE) or {}) do
                 local bag = asNumber(id)
-                if bag and isBank(bag) then list[#list + 1] = bag end
+                if bag and isBank(bag) then
+                    list[#list + 1] = bag
+                end
             end
         end
         if #list == 0 then
             for bag = BANK_FIRST, BANK_LAST do
-                if numSlots(bag) > 0 then list[#list + 1] = bag end
+                if numSlots(bag) > 0 then
+                    list[#list + 1] = bag
+                end
             end
         end
         return list
@@ -546,7 +695,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     -- The window a bag's slots are in (nil: neither shows it).
     function InvFor(bag: number): Inventory?
-        if isBank(bag) then return self.bank end
+        if isBank(bag) then
+            return self.bank
+        end
         return self.inv
     end
 
@@ -557,7 +708,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- A bag's frame: its ID is the bag (Blizzard's slot buttons read it).
     function BagFrame(bag: number): Frame
         local known = self.bagFrames[bag]
-        if known then return known end
+        if known then
+            return known
+        end
         local inv = self:InvFor(bag)
         assert(inv, "no window for bag " .. bag)
         local f = CreateFrame("Frame", nil, inv.grid)
@@ -572,11 +725,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         local list = self.buttons[bag] or {}
         self.buttons[bag] = list
         local known = list[slot]
-        if known then return known end
-        local name = isBank(bag) and ("SuuUIBank%dSlot%d"):format(bag - BANK_FIRST + 1, slot)
-            or ("SuuUIBag%dSlot%d"):format(bag + 2, slot)
+        if known then
+            return known
+        end
+        local name = isBank(bag) and ("SuuUIBank%dSlot%d"):format(bag - BANK_FIRST + 1, slot) or
+            ("SuuUIBag%dSlot%d"):format(bag + 2, slot)
         -- (an ItemButton is a Button the game draws an item on)
-        local b = frames.asButton(CreateFrame("ItemButton", name, self:BagFrame(bag), "ContainerFrameItemButtonTemplate"))
+        local b = frames.asButton(
+            CreateFrame("ItemButton", name, self:BagFrame(bag), "ContainerFrameItemButtonTemplate")
+        )
         assert(b, "no item button")
         b:SetID(slot)
         self.skins[b] = UI.SkinItemSlot(b)
@@ -587,7 +744,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     function UpdateSlot(bag: number, slot: number)
         local list = self.buttons[bag]
         local b = list and list[slot]
-        if not b then return end
+        if not b then
+            return
+        end
         local info = C_Container.GetContainerItemInfo(bag, slot)
         local skin = self.skins[b]
         local icon = info and asNumber(info.iconFileID)
@@ -617,17 +776,23 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     function UpdateBag(bag: number)
-        for slot = 1, numSlots(bag) do self:UpdateSlot(bag, slot) end
+        for slot = 1, numSlots(bag) do
+            self:UpdateSlot(bag, slot)
+        end
     end
 
     -- Every slot of every bag a shown window holds.
     function UpdateShown()
         local inv, bank = self.inv, self.bank
         if inv and inv:IsShown() then
-            for _, bag in ipairs(self:Bags()) do self:UpdateBag(bag) end
+            for _, bag in ipairs(self:Bags()) do
+                self:UpdateBag(bag)
+            end
         end
         if bank and bank:IsShown() then
-            for _, bag in ipairs(self:BankBags()) do self:UpdateBag(bag) end
+            for _, bag in ipairs(self:BankBags()) do
+                self:UpdateBag(bag)
+            end
         end
     end
 
@@ -648,8 +813,11 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 if bag == REAGENT and n == 0 then
                     here[#here + 1] = { at = #list + 1, note = "No reagent bag · the reagent slot takes one" }
                 elseif bag == REAGENT then
-                    here[#here + 1] = { at = #list + 1, label = "Reagents",
-                        meta = ("%d · %d free"):format(n, freeSlots(bag) or 0) }
+                    here[#here + 1] = {
+                        at = #list + 1,
+                        label = "Reagents",
+                        meta = ("%d · %d free"):format(n, freeSlots(bag) or 0),
+                    }
                 elseif n > 0 then
                     here[#here + 1] = { at = #list + 1, label = "Keyring", meta = tostring(n) }
                 end
@@ -660,7 +828,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             end
             -- hide what the bag no longer has
             local made = self.buttons[bag] or {}
-            for slot = n + 1, #made do made[slot]:Hide() end
+            for slot = n + 1, #made do
+                made[slot]:Hide()
+            end
             if bag ~= REAGENT and bag ~= KEYRING then
                 total = total + n
                 free = free + (freeSlots(bag) or 0)
@@ -668,7 +838,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         for bag, slots in pairs(self.buttons) do
             if not shown[bag] and self:InvFor(bag) == inv then
-                for _, b in ipairs(slots) do b:Hide() end
+                for _, b in ipairs(slots) do
+                    b:Hide()
+                end
             end
         end
         inv:LayoutSlots(list, sections)
@@ -679,7 +851,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- Every slot laid out again (bags or sizes changed), the counts, the money.
     function Rebuild()
         local inv = self.inv
-        if not (inv and self:IsLive()) then return end
+        if not (inv and self:IsLive()) then
+            return
+        end
         self:Fill(inv, self:Bags())
         self:Foot()
         self:DrawBagRail()
@@ -687,7 +861,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     function RebuildBank()
         local bank = self.bank
-        if not (bank and bank:IsShown()) then return end
+        if not (bank and bank:IsShown()) then
+            return
+        end
         local tabs = self:BankBags()
         local total = self:Fill(bank, tabs)
         bank:SetNote(("%s · %d slots"):format(#tabs > 1 and (#tabs .. " tabs") or "Bank", total))
@@ -701,7 +877,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- One cell of a rail.
     function RailCell(rail: Rail, i: number): RailCell
         local known = rail.cells[i]
-        if known then return known end
+        if known then
+            return known
+        end
         local b = RailCell.new(rail)
         b:SetScript("OnEnter", function(cell)
             cell.skin.hover = true
@@ -709,7 +887,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             self:RailTip(cell)
             local entry = cell.entry
             local bag = entry and entry.bag
-            if bag then self:LightBag(bag) end
+            if bag then
+                self:LightBag(bag)
+            end
         end)
         b:SetScript("OnLeave", function(cell)
             cell.skin.hover = false
@@ -718,9 +898,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             UI.HideTooltip()
             self:LightBag(nil)
         end)
-        b:SetScript("OnClick", function(cell) self:RailPut(cell) end)
-        b:SetScript("OnReceiveDrag", function(cell) self:RailPut(cell) end)
-        b:SetScript("OnDragStart", function(cell) self:RailPick(cell) end)
+        b:SetScript("OnClick", function(cell)
+            self:RailPut(cell)
+        end)
+        b:SetScript("OnReceiveDrag", function(cell)
+            self:RailPut(cell)
+        end)
+        b:SetScript("OnDragStart", function(cell)
+            self:RailPick(cell)
+        end)
         rail.cells[i] = b
         return b
     end
@@ -728,10 +914,16 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- Put what the cursor holds into the slot (or pick the slot's bag up).
     function RailPut(cell: RailCell)
         local e = cell.entry
-        if not e or e.fixed then return end
+        if not e or e.fixed then
+            return
+        end
         local inv, tab = e.inv, e.tab
         if inv then
-            if CursorHasItem() then try(PutItemInBag, inv) else try(PickupBagFromSlot, inv) end
+            if CursorHasItem() then
+                try(PutItemInBag, inv)
+            else
+                try(PickupBagFromSlot, inv)
+            end
         elseif tab and TAB_BAG then
             try(C_Container.PickupContainerItem, TAB_BAG, tab)
         end
@@ -739,32 +931,53 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     function RailPick(cell: RailCell)
         local e = cell.entry
-        if not e or e.fixed then return end
+        if not e or e.fixed then
+            return
+        end
         local inv, tab = e.inv, e.tab
-        if inv then try(PickupBagFromSlot, inv)
-        elseif tab and TAB_BAG then try(C_Container.PickupContainerItem, TAB_BAG, tab) end
+        if inv then
+            try(PickupBagFromSlot, inv)
+        elseif tab and TAB_BAG then
+            try(C_Container.PickupContainerItem, TAB_BAG, tab)
+        end
     end
 
     function RailTip(cell: RailCell)
         local e = cell.entry
-        if not e then return end
+        if not e then
+            return
+        end
         local free = e.bag and freeSlots(e.bag)
         local sizeLine = e.size > 0 and (e.size .. " slots" .. (free and (" · " .. free .. " free") or "")) or nil
         if e.fixed then
-            UI.ShowTooltip(cell, { title = e.kind == "bank" and "Bank" or "Backpack", subtitle = sizeLine,
-                description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed." })
+            UI.ShowTooltip(cell, {
+                title = e.kind == "bank" and "Bank" or "Backpack",
+                subtitle = sizeLine,
+                description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed.",
+            })
         elseif not e.has then
-            UI.ShowTooltip(cell, { title = e.tab and ("Bank slot " .. e.tab) or (e.kind == "reagent" and "Reagent bag" or "Bag slot"),
-                subtitle = "Empty", description = e.kind == "reagent" and "Drag a reagent bag here. Only reagent bags fit." or "Drag a bag here." })
+            UI.ShowTooltip(cell, {
+                title = e.tab and ("Bank slot " .. e.tab) or (e.kind == "reagent" and "Reagent bag" or "Bag slot"),
+                subtitle = "Empty",
+                description = e.kind == "reagent" and "Drag a reagent bag here. Only reagent bags fit." or
+                    "Drag a bag here.",
+            })
         else
             GameTooltip:SetOwner(cell, "ANCHOR_RIGHT", S["space-4"], 0)
             local inv, tab = e.inv, e.tab
             local shown = false
-            if inv then shown = flag(GameTooltip:SetInventoryItem("player", inv))
-            elseif tab and TAB_BAG then shown = flag(GameTooltip:SetBagItem(TAB_BAG, tab)) end
-            if not shown then GameTooltip:SetText(tab and ("Bank slot " .. tab) or "Bag") end
+            if inv then
+                shown = flag(GameTooltip:SetInventoryItem("player", inv))
+            elseif tab and TAB_BAG then
+                shown = flag(GameTooltip:SetBagItem(TAB_BAG, tab))
+            end
+            if not shown then
+                GameTooltip:SetText(tab and ("Bank slot " .. tab) or "Bag")
+            end
             local r, g, b = UI.RGBA("ink-muted")
-            if sizeLine then GameTooltip:AddLine(sizeLine, r, g, b, true) end
+            if sizeLine then
+                GameTooltip:AddLine(sizeLine, r, g, b, true)
+            end
             GameTooltip:AddLine("Pick it up to take it off, or drop another bag on it to swap.", r, g, b, true)
             GameTooltip:Show()
         end
@@ -812,7 +1025,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             b:Show()
             y = y + RAIL_SLOT + RAIL_GAP
         end
-        for i = #entries + 1, #rail.cells do rail.cells[i]:Hide() end
+        for i = #entries + 1, #rail.cells do
+            rail.cells[i]:Hide()
+        end
         -- the bank's buy cell last, its cost under it
         if buy then
             local c = rail.buy
@@ -838,8 +1053,13 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- Your bags' rail: only while the window shows your own, live bags.
     function DrawBagRail()
         local rail, inv, bank = self.bagRail, self.inv, self.bank
-        if not (rail and inv) then return end
-        if not (inv:IsShown() and self:IsLive() and self:Get("bagSlots")) then rail:Hide() return end
+        if not (rail and inv) then
+            return
+        end
+        if not (inv:IsShown() and self:IsLive() and self:Get("bagSlots")) then
+            rail:Hide()
+            return
+        end
         -- left of the window; at a banker on its right (the bank is on its left)
         rail:ClearAllPoints()
         if bank and bank:IsShown() then
@@ -847,9 +1067,13 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         else
             rail:SetPoint("TOPRIGHT", inv, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
         end
-        local entries: RailEntry[] = { { kind = "backpack", bag = 0, fixed = true, has = true, icon = BACKPACK_ICON, size = numSlots(0) } }
+        local entries: RailEntry[] = {
+            { kind = "backpack", bag = 0, fixed = true, has = true, icon = BACKPACK_ICON, size = numSlots(0) },
+        }
         local bags = { 1, 2, 3, 4 }
-        if self:Get("reagentBag") then bags[#bags + 1] = REAGENT end
+        if self:Get("reagentBag") then
+            bags[#bags + 1] = REAGENT
+        end
         -- one empty bag slot is enough to drop a bag on: the others stay out
         -- (asked for in game); the reagent slot always shows
         local emptyShown = false
@@ -859,9 +1083,18 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             local q = slot and asNumber(GetInventoryItemQuality("player", slot))
             local reagent = bag == REAGENT
             if icon or reagent or not emptyShown then
-                if not icon and not reagent then emptyShown = true end
-                entries[#entries + 1] = { kind = reagent and "reagent" or "bag", bag = bag, inv = slot, has = icon ~= nil,
-                    icon = icon or BACKPACK_ICON, size = numSlots(bag), quality = q and QUALITY[q] or nil }
+                if not icon and not reagent then
+                    emptyShown = true
+                end
+                entries[#entries + 1] = {
+                    kind = reagent and "reagent" or "bag",
+                    bag = bag,
+                    inv = slot,
+                    has = icon ~= nil,
+                    icon = icon or BACKPACK_ICON,
+                    size = numSlots(bag),
+                    quality = q and QUALITY[q] or nil,
+                }
             end
         end
         self:LayoutRail(rail, entries)
@@ -871,7 +1104,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The bank's rail and the buy cell (at a banker).
     function DrawBankRail()
         local rail, bank = self.bankRail, self.bank
-        if not (rail and bank) then return end
+        if not (rail and bank) then
+            return
+        end
         if not (bank:IsShown() and TAB_BAG and BANK_TYPE and self:Get("bagSlots")) then
             rail:Hide()
             self:PlaceBuy(false)
@@ -879,7 +1114,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         local max = errors.tryValue(C_Bank.FetchMaxNumBankTabs, BANK_TYPE) or 9
         local bought: { [number]: boolean } = {}
-        for _, bag in ipairs(self:BankBags()) do bought[bag - BANK_FIRST + 1] = true end
+        for _, bag in ipairs(self:BankBags()) do
+            bought[bag - BANK_FIRST + 1] = true
+        end
         -- the slots you bought, one of them empty at most (as your bags' rail,
         -- asked for in game); the buy cell stands for the rest
         local entries: RailEntry[] = {}
@@ -890,11 +1127,20 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             local icon = info and asNumber(info.iconFileID)
             local owned = n == 1 or bought[n]
             if owned and (n == 1 or icon or not emptyShown) then
-                if n > 1 and not icon then emptyShown = true end
+                if n > 1 and not icon then
+                    emptyShown = true
+                end
                 local q = info and asNumber(info.quality)
-                entries[#entries + 1] = { kind = n == 1 and "bank" or "bankbag", tab = n, bag = bag, fixed = n == 1,
-                    has = icon ~= nil or n == 1, icon = icon or BACKPACK_ICON, size = numSlots(bag),
-                    quality = q and QUALITY[q] or nil }
+                entries[#entries + 1] = {
+                    kind = n == 1 and "bank" or "bankbag",
+                    tab = n,
+                    bag = bag,
+                    fixed = n == 1,
+                    has = icon ~= nil or n == 1,
+                    icon = icon or BACKPACK_ICON,
+                    size = numSlots(bag),
+                    quality = q and QUALITY[q] or nil,
+                }
             end
         end
         local buy: RailBuy = {}
@@ -919,20 +1165,30 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The buy cell's secure button: a click on the game's own purchase button
     -- (its confirmation asks). Placed out of combat, while the cell can buy.
     function PlaceBuy(on: boolean)
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         local rail = self.bankRail
         local cell = rail and rail.buy
         local target = frames.asButton(field(_G, "BankFrame", "BankPanel", "PurchaseButton"))
         local over = self.buyOver
         if not over then
-            if not (on and target and cell) then return end
+            if not (on and target and cell) then
+                return
+            end
             -- (a layer above the windows: a click raises them, toplevel)
             over = secure.overlay(cell, { strata = "DIALOG" })
             over.set("type1", "click")
             self.buyOver = over
         end
-        if target then over.set("clickbutton1", target) end
-        if on and target and cell and cell:IsVisible() then over.show() else over.hide() end
+        if target then
+            over.set("clickbutton1", target)
+        end
+        if on and target and cell and cell:IsVisible() then
+            over.show()
+        else
+            over.hide()
+        end
     end
 
     function DrawRails()
@@ -953,25 +1209,35 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         d.class, d.level = asString(class), asNumber(UnitLevel("player"))
         d.money, d.seen = GetMoney(), time()
         local bags = snapshot(self:Bags())
-        if bags.size > 0 then d.bags = bags end
+        if bags.size > 0 then
+            d.bags = bags
+        end
         if self.atBank then
             local bank = snapshot(self:BankBags())
-            if bank.size > 0 then d.bank = bank end
+            if bank.size > 0 then
+                d.bank = bank
+            end
         end
         -- what you wear: item links by slot (head 1 … tabard 19)
         local worn: string[] = {}
         for slot = 1, 19 do
             local link = asString(GetInventoryItemLink("player", slot))
-            if link then worn[#worn + 1] = link end
+            if link then
+                worn[#worn + 1] = link
+            end
         end
         d.equipped = worn
     end
 
     function QueueSave()
-        if self.saveTimer then return end
+        if self.saveTimer then
+            return
+        end
         self.saveTimer = after(1, function()
             self.saveTimer = nil
-            if self:IsEnabled() then self:SaveMe() end
+            if self:IsEnabled() then
+                self:SaveMe()
+            end
         end)
     end
 
@@ -983,7 +1249,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     function UpdatePicker()
         local inv = self.inv
         local who, view = inv and inv.who, inv and inv.view
-        if not (inv and who) then return end
+        if not (inv and who) then
+            return
+        end
         local opts: SelectOption<string>[] = {}
         local myRealm = GetRealmName()
         for _, c in ipairs(self:Characters()) do
@@ -991,7 +1259,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         who:SetOptions(opts)
         who:SetValue(self.who or self:CharKey())
-        if view then view:SetValue(self.view or "bags") end
+        if view then
+            view:SetValue(self.view or "bags")
+        end
     end
 
     function ShowingResults(): boolean
@@ -1002,7 +1272,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     -- Your own bags: Blizzard's live slots. Anything else is a saved copy.
     function IsLive(): boolean
-        if not self.inv then return false end
+        if not self.inv then
+            return false
+        end
         local who = self.who or self:CharKey()
         return who == self:CharKey() and (self.view or "bags") == "bags" and not self:ShowingResults()
     end
@@ -1011,32 +1283,46 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- shift-click links it.
     function SavedSlot(i: number): SavedSlot
         local known = self.savedSlots[i]
-        if known then return known end
+        if known then
+            return known
+        end
         local inv = self.inv
         assert(inv, "no bags window")
         local b = SavedSlot.new(inv.grid)
-        b:SetScript("OnEnter", function(slot) itemTip(slot, slot.link) end)
-        b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        b:SetScript("OnEnter", function(slot)
+            itemTip(slot, slot.link)
+        end)
+        b:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
         b:SetScript("OnClick", function(slot)
             local link = slot.link
-            if link and IsModifiedClick() then try(field(_G, "HandleModifiedItemClick"), link) end
+            if link and IsModifiedClick() then
+                try(field(_G, "HandleModifiedItemClick"), link)
+            end
         end)
         self.savedSlots[i] = b
         return b
     end
 
     function HideSaved()
-        for _, b in ipairs(self.savedSlots) do b:Hide() end
+        for _, b in ipairs(self.savedSlots) do
+            b:Hide()
+        end
     end
 
     function ShowSaved()
         local inv = self.inv
-        if not inv then return end
+        if not inv then
+            return
+        end
         local me = self:CharKey()
         local who, view = self.who or me or "", self.view or "bags"
         local d = self:EntryOf(who)
         local box: Snapshot? = nil
-        if d then box = view == "bank" and d.bank or (view ~= "bank" and d.bags or nil) end
+        if d then
+            box = view == "bank" and d.bank or (view ~= "bank" and d.bags or nil)
+        end
         local q = (self.query or ""):lower()
         local list: SavedSlot[] = {}
         for i, e in ipairs(box and box.slots or {}) do
@@ -1044,14 +1330,20 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             b.link = e and e.l or nil
             if e then
                 local name = nameOf(e.l)
-                b.skin:SetItem({ icon = e.t, count = e.c, quality = QUALITY[e.q] or "common",
-                    dim = q ~= "" and not (name and name:lower():find(q, 1, true)) })
+                b.skin:SetItem({
+                    icon = e.t,
+                    count = e.c,
+                    quality = QUALITY[e.q] or "common",
+                    dim = q ~= "" and not (name and name:lower():find(q, 1, true)),
+                })
             else
                 b.skin:SetItem(nil)
             end
             list[i] = b
         end
-        for i = #list + 1, #self.savedSlots do self.savedSlots[i]:Hide() end
+        for i = #list + 1, #self.savedSlots do
+            self.savedSlots[i]:Hide()
+        end
         inv:LayoutSlots(list)
         inv:SetMeta(box and ("%d free of %d"):format(box.free or 0, box.size or 0) or "")
         inv:SetBanner(chars.savedBanner(who, me, view, d, box))
@@ -1061,21 +1353,34 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- character's bags and bank, most first.
     function ShowResults()
         local inv = self.inv
-        if not inv then return end
+        if not inv then
+            return
+        end
         self:SaveMe()
         local found: FoundItem[] = {}
         for i, r in ipairs(chars.searchResults(self:Characters(), (self.query or ""):lower())) do
-            found[i] = { icon = r.icon, quality = r.quality, label = r.label, count = r.count, places = r.places,
-                         link = r.link, lines = r.lines }
+            found[i] = {
+                icon = r.icon,
+                quality = r.quality,
+                label = r.label,
+                count = r.count,
+                places = r.places,
+                link = r.link,
+                lines = r.lines,
+            }
         end
         self.more = inv:SetResults(found)
         for _, row in ipairs(inv.resultRows or {}) do
             row:EnableMouse(true)
             row.onEnter = function(rowFrame: ResultRow)
                 local it = rowFrame.item
-                if it.link then itemTip(rowFrame, it.link, it.lines) end
+                if it.link then
+                    itemTip(rowFrame, it.link, it.lines)
+                end
             end
-            row.onLeave = function() GameTooltip:Hide() end
+            row.onLeave = function()
+                GameTooltip:Hide()
+            end
         end
         inv:SetMeta(#found == 1 and "1 item" or ("%d items"):format(#found))
         inv:SetBanner(nil)
@@ -1085,7 +1390,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- the money of whoever is shown.
     function Foot()
         local inv = self.inv
-        if not inv then return end
+        if not inv then
+            return
+        end
         local who = self.who or self:CharKey()
         local more = self:ShowingResults() and (self.more or 0) or 0
         local reagentFree: number? = nil
@@ -1106,11 +1413,17 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     function AddCounts(tooltip: GameTooltip, data: unknown)
-        if not self:Get("itemCounts") then return end
+        if not self:Get("itemCounts") then
+            return
+        end
         local id = asNumber(field(data, "id"))
-        if not id then return end
+        if not id then
+            return
+        end
         local counts = self:CountsFor(id)
-        if #counts == 0 then return end
+        if #counts == 0 then
+            return
+        end
         local muted, gilt = T.color["ink-muted"], T.color["gilt-text"]
         tooltip:AddLine(" ")
         local all = 0
@@ -1118,14 +1431,18 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             local parts: string[] = {}
             for _, w in ipairs(WHERE) do
                 local count = w.key == "bags" and n.bags or w.key == "bank" and n.bank or n.equipped
-                if count > 0 then parts[#parts + 1] = w.label .. " " .. count end
+                if count > 0 then
+                    parts[#parts + 1] = w.label .. " " .. count
+                end
             end
             local d = n.c.d
             local classFile = d.class
             local class = classFile and asString(field(T.color, "class-" .. classFile:lower(), "hex"))
             local name = d.name or n.c.key
             local realm = d.realm
-            if realm and realm ~= GetRealmName() then name = name .. "-" .. realm end
+            if realm and realm ~= GetRealmName() then
+                name = name .. "-" .. realm
+            end
             local left = classDiamond(classFile) .. (class and ("|cff" .. class .. name .. "|r") or name)
             tooltip:AddDoubleLine(left, table.concat(parts, " · "), 1, 1, 1, muted[1], muted[2], muted[3])
             all = all + n.total
@@ -1147,7 +1464,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             if bag ~= KEYRING then
                 for slot = 1, numSlots(bag) do
                     local price, count = junkAt(bag, slot)
-                    if price and count then n, copper = n + 1, copper + price * count end
+                    if price and count then
+                        n, copper = n + 1, copper + price * count
+                    end
                 end
             end
         end
@@ -1156,7 +1475,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     -- One grey item a tick until none is left or the vendor closes.
     function SellJunk()
-        if self.selling then return end
+        if self.selling then
+            return
+        end
         self.selling = every(0.2, function(ticker)
             local sold = false
             if self.atMerchant and not InCombatLockdown() then
@@ -1170,7 +1491,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                             end
                         end
                     end
-                    if sold then break end
+                    if sold then
+                        break
+                    end
                 end
             end
             if not sold then
@@ -1184,12 +1507,21 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The Sell junk button: at a vendor with something grey to sell.
     function UpdateJunk()
         local inv = self.inv
-        if not inv then return end
+        if not inv then
+            return
+        end
         local n, copper = 0, 0
-        if self.atMerchant and self:IsLive() then n, copper = self:Junk() end
+        if self.atMerchant and self:IsLive() then
+            n, copper = self:Junk()
+        end
         if n > 0 then
-            inv:SetAction({ text = "Sell junk", onClick = function() self:SellJunk() end,
-                tooltip = { title = "Sell junk", description = chars.junkText(n, copper) } })
+            inv:SetAction({
+                text = "Sell junk",
+                onClick = function()
+                    self:SellJunk()
+                end,
+                tooltip = { title = "Sell junk", description = chars.junkText(n, copper) },
+            })
         else
             inv:SetAction(nil)
         end
@@ -1199,20 +1531,28 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- search has run).
     function QueueRefresh()
         local pending = self.refreshTimer
-        if pending then pending:Cancel() end
+        if pending then
+            pending:Cancel()
+        end
         self.refreshTimer = after(0.15, function()
             self.refreshTimer = nil
-            if self:IsEnabled() then self:Guard(self.Refresh)(self) end
+            if self:IsEnabled() then
+                self:Guard(self.Refresh)(self)
+            end
         end)
     end
 
     -- The window as the picker, Bags/Bank, All characters and the search say.
     function Refresh()
         local inv = self.inv
-        if not (inv and inv:IsShown()) then return end
+        if not (inv and inv:IsShown()) then
+            return
+        end
         local live = self:IsLive()
         for bag, f in pairs(self.bagFrames) do
-            if not isBank(bag) then f:SetShown(live) end
+            if not isBank(bag) then
+                f:SetShown(live)
+            end
         end
         inv.sort:SetEnabled(live and not self.sorting)
         self.more = nil
@@ -1240,13 +1580,19 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- A Blizzard frame under the hidden parent, kept there (if Blizzard moves it
     -- again) while keep() says so.
     function KeepHidden(f: Frame, keep: () -> boolean)
-        if f:GetParent() ~= hidden then f:SetParent(hidden) end
-        if self.parentHooked[f] then return end
+        if f:GetParent() ~= hidden then
+            f:SetParent(hidden)
+        end
+        if self.parentHooked[f] then
+            return
+        end
         self.parentHooked[f] = true
         hook(f, "SetParent", function(_: unknown, parent: unknown)
             if parent ~= hidden and self:IsEnabled() and keep() then
                 after(0, function()
-                    if f:GetParent() ~= hidden and self:IsEnabled() and keep() then f:SetParent(hidden) end
+                    if f:GetParent() ~= hidden and self:IsEnabled() and keep() then
+                        f:SetParent(hidden)
+                    end
                 end)
             end
         end)
@@ -1259,17 +1605,27 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- a frame later. With the setting off it returns to where Blizzard put it.
     function HideBlizzardBank()
         local f = frames.find("BankFrame")
-        if not f then return end
+        if not f then
+            return
+        end
         local on = self:IsEnabled() and self:Get("bank")
         if not self.bankHooked then
             self.bankHooked = true
             self.bankClamped = f:IsClampedToScreen() and true or false
             hook(f, "SetPoint", function(_: unknown, ...: unknown)
-                if self.movingBank then return end
+                if self.movingBank then
+                    return
+                end
                 self.bankPoint = { ... } -- where Blizzard put it
-                if self:IsEnabled() and self:Get("bank") then self:QueueBankAway() end
+                if self:IsEnabled() and self:Get("bank") then
+                    self:QueueBankAway()
+                end
             end)
-            hookScript(f, "OnShow", function() if self:IsEnabled() and self:Get("bank") then self:BankAway() end end)
+            hookScript(f, "OnShow", function()
+                if self:IsEnabled() and self:Get("bank") then
+                    self:BankAway()
+                end
+            end)
         end
         if on then
             self:BankAway()
@@ -1288,7 +1644,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     function BankAway()
         local f = frames.find("BankFrame")
-        if not f then return end
+        if not f then
+            return
+        end
         f:SetAlpha(0)
         f:SetClampedToScreen(false)
         self.movingBank = true
@@ -1298,13 +1656,19 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     function QueueBankAway()
-        if self.bankAwayQueued then return end
+        if self.bankAwayQueued then
+            return
+        end
         self.bankAwayQueued = true
         local f = frames.find("BankFrame")
-        if f then f:SetAlpha(0) end
+        if f then
+            f:SetAlpha(0)
+        end
         after(0, function()
             self.bankAwayQueued = false
-            if self:IsEnabled() and self:Get("bank") then self:BankAway() end
+            if self:IsEnabled() and self:Get("bank") then
+                self:BankAway()
+            end
         end)
     end
 
@@ -1312,13 +1676,21 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- closing (so every way of opening bags still works), out of sight.
     function HideBlizzardBags()
         local names = { "ContainerFrameContainer", "ContainerFrameCombinedBags" }
-        for i = 1, (NUM_CONTAINER_FRAMES or 13) do names[#names + 1] = "ContainerFrame" .. i end
+        for i = 1, (NUM_CONTAINER_FRAMES or 13) do
+            names[#names + 1] = "ContainerFrame" .. i
+        end
         local container = frames.find("ContainerFrameContainer")
         for _, name in ipairs(names) do
             local f = frames.find(name)
             -- frames inside Blizzard's container go with it
-            if f and f ~= container and container and f:GetParent() == container then f = nil end
-            if f then self:KeepHidden(f, function(): boolean return true end) end
+            if f and f ~= container and container and f:GetParent() == container then
+                f = nil
+            end
+            if f then
+                self:KeepHidden(f, function(): boolean
+                    return true
+                end)
+            end
         end
     end
 
@@ -1328,12 +1700,16 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         -- Blizzard's outer calls make inner ones first (OpenAllBags opens the
         -- backpack and each bag, CloseAllBags closes them): whether the window
         -- was open is read at the first call of the moment.
-        if not self.syncQueued then self.burstShown, self.burstOpenedBy = shown, self.openedBy end
+        if not self.syncQueued then
+            self.burstShown, self.burstOpenedBy = shown, self.openedBy
+        end
         if OPENS[name] then
             -- opened for a window (a vendor, the mail): closed with it, unless
             -- the bags were open before (Blizzard's own rule)
             if name == "OpenAllBags" then
-                if not self.burstShown then self.openedBy = nameOfFrame(frame) end
+                if not self.burstShown then
+                    self.openedBy = nameOfFrame(frame)
+                end
             end
             self.wantOpen = true
         elseif CLOSES[name] then
@@ -1351,7 +1727,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             end
             -- one bag closing (the game closes a bag taken off its slot) leaves
             -- the window, which shows every bag, open (found in game)
-            if name == "CloseBag" and frame ~= 0 then return end
+            if name == "CloseBag" and frame ~= 0 then
+                return
+            end
             self.openedBy = nil
             self.wantOpen = false
         else -- a toggle
@@ -1376,7 +1754,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The bags at their place, or beside the bank while it is open.
     function PlaceBags()
         local inv, bank = self.inv, self.bank
-        if not inv then return end
+        if not inv then
+            return
+        end
         inv:ClearAllPoints()
         if bank and bank:IsShown() then
             -- the bags' rail moves to their right side here (asked for in game)
@@ -1389,7 +1769,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     function Sync()
         local inv = self.inv
-        if not inv then return end
+        if not inv then
+            return
+        end
         local open = self.wantOpen
         if open and not inv:IsShown() then
             self:PlaceBags()
@@ -1404,7 +1786,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- At a banker (BANKFRAME_OPENED) and away again.
     function ShowBank()
         local bank = self.bank
-        if not (bank and self:Get("bank")) then return end
+        if not (bank and self:Get("bank")) then
+            return
+        end
         self:HideBlizzardBank()
         bank:Show()
         self:RebuildBank()
@@ -1414,18 +1798,24 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     function HideBank()
         local bank = self.bank
-        if not bank or not bank:IsShown() then return end
+        if not bank or not bank:IsShown() then
+            return
+        end
         bank:Hide()
         self:PlaceBags()
         self:DrawBagRail()
     end
 
     function QueueSync()
-        if self.syncQueued then return end
+        if self.syncQueued then
+            return
+        end
         self.syncQueued = true
         after(0, function()
             self.syncQueued = false
-            if self:IsEnabled() then self:Sync() end
+            if self:IsEnabled() then
+                self:Sync()
+            end
         end)
     end
 
@@ -1436,7 +1826,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- The slots a sort covers, in the window's order, as they are now.
     function SortSlots(bank: boolean): SortSlot[]
         local bags = bank and self:BankBags() or { 0, 1, 2, 3, 4 }
-        if not bank and self:Get("reagentBag") then bags[#bags + 1] = REAGENT end
+        if not bank and self:Get("reagentBag") then
+            bags[#bags + 1] = REAGENT
+        end
         local slots: SortSlot[] = {}
         for _, bag in ipairs(bags) do
             local family: Family = 0
@@ -1496,19 +1888,42 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     function SortCaption(text: string?)
         local st = self.sorting
         local cover = st and self.covers[st.inv]
-        if cover then cover.caption:SetValue(text or "") end
+        if cover then
+            cover.caption:SetValue(text or "")
+        end
     end
 
     -- The Sort button: SuuUI's order, or the game's sort.
     function Sort(bank: boolean)
-        if self.sorting then return end
+        if self.sorting then
+            return
+        end
         local inv = bank and self.bank or self.inv
-        if not inv then return end
-        if InCombatLockdown() then self:Print("Your bags can't be sorted in combat.") return end
-        if CursorHasItem() then self:Print("Put down the item you're holding first, then press Sort.") return end
+        if not inv then
+            return
+        end
+        if InCombatLockdown() then
+            self:Print("Your bags can't be sorted in combat.")
+            return
+        end
+        if CursorHasItem() then
+            self:Print("Put down the item you're holding first, then press Sort.")
+            return
+        end
         local order, toEnd = self:Get("sortOrder"), self:Get("sortDirection") ~= "start"
-        local st: SortState = { bank = bank, inv = inv, order = order, toEnd = toEnd, phase = "stack", rounds = 0, waves = 0,
-                                idle = 0, started = GetTime(), partials = {}, noStack = {} }
+        local st: SortState = {
+            bank = bank,
+            inv = inv,
+            order = order,
+            toEnd = toEnd,
+            phase = "stack",
+            rounds = 0,
+            waves = 0,
+            idle = 0,
+            started = GetTime(),
+            partials = {},
+            noStack = {},
+        }
         self.sorting = st
         self:SortCover(inv, true, bank and "Sorting the bank" or "Sorting bags")
         if order == "game" then
@@ -1516,11 +1931,17 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             -- right to left off: the game fills the last bags and leaves the gaps
             -- in the first (seen in the probe)
             try(field(C_Container, "SetSortBagsRightToLeft"), not toEnd)
-            if bank then sortBank() else try(field(C_Container, "SortBags")) end
+            if bank then
+                sortBank()
+            else
+                try(field(C_Container, "SortBags"))
+            end
             self:SortCaption("The game is sorting…")
             st.wait = { at = GetTime(), moves = {} }
             local driver = self.sortDriver
-            if driver then driver:Show() end
+            if driver then
+                driver:Show()
+            end
             return
         end
         self:SortStep()
@@ -1529,14 +1950,19 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- One wave: read, plan, send.
     function SortStep()
         local st = self.sorting
-        if not st then return end
-        if CursorHasItem() then return self:StopSort("you picked up an item") end
+        if not st then
+            return
+        end
+        if CursorHasItem() then
+            return self:StopSort("you picked up an item")
+        end
         local slots = self:SortSlots(st.bank)
         local moves: Move[]? = nil
         if st.phase == "stack" then
             st.rounds = st.rounds + 1
             local stacks = self:PlanStacks(slots, st)
-            if #stacks == 0 or st.rounds > STACK_ROUNDS then st.phase = "place"
+            if #stacks == 0 or st.rounds > STACK_ROUNDS then
+                st.phase = "place"
             else
                 moves = stacks
                 self:SortCaption("Stacking…")
@@ -1544,20 +1970,32 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         if not moves then
             local target = self:SortTarget(slots, st.order, st.toEnd)
-            if not target then return self:StopSort("there isn't room to put everything in order") end
+            if not target then
+                return self:StopSort("there isn't room to put everything in order")
+            end
             local wave, wrong = self:PlanWave(slots, target)
             moves = wave
-            if wrong == 0 then return self:FinishSort() end
+            if wrong == 0 then
+                return self:FinishSort()
+            end
             st.total = math.max(st.total or 0, wrong)
             self:SortCaption(("%d item%s to move"):format(wrong, wrong == 1 and "" or "s"))
             -- every move puts one slot right: no fewer wrong for a while means stuck
             local last = st.lastWrong
-            if last and wrong >= last then st.idle = st.idle + 1 else st.idle = 0 end
+            if last and wrong >= last then
+                st.idle = st.idle + 1
+            else
+                st.idle = 0
+            end
             st.lastWrong = wrong
-            if st.idle > 6 then return self:StopSort("some items wouldn't go where the order puts them") end
+            if st.idle > 6 then
+                return self:StopSort("some items wouldn't go where the order puts them")
+            end
         end
         st.waves = st.waves + 1
-        if st.waves > MAX_WAVES then return self:StopSort("it took too long") end
+        if st.waves > MAX_WAVES then
+            return self:StopSort("it took too long")
+        end
         for _, m in ipairs(moves) do
             pcall(C_Container.PickupContainerItem, m.from.bag, m.from.slot)
             if CursorHasItem() then
@@ -1570,7 +2008,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         st.wait = { at = GetTime(), moves = moves }
         local driver = self.sortDriver
-        if driver then driver:Show() end
+        if driver then
+            driver:Show()
+        end
     end
 
     -- Each frame while a wave is on its way: on when its slots are free again
@@ -1579,35 +2019,57 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         local st, driver = self.sorting, self.sortDriver
         local w = st and st.wait
         if not (st and w) then
-            if driver then driver:Hide() end
+            if driver then
+                driver:Hide()
+            end
             return
         end
         local state = sort.waveState(w, GetTime(), st.game == true, st.lastUpdate, locked)
-        if state == "finish" then return self:FinishSort() end
-        if state == "timeout" then return self:StopSort("the game didn't answer") end
-        if state == "wait" then return end
+        if state == "finish" then
+            return self:FinishSort()
+        end
+        if state == "timeout" then
+            return self:StopSort("the game didn't answer")
+        end
+        if state == "wait" then
+            return
+        end
         st.wait = nil
-        if driver then driver:Hide() end
+        if driver then
+            driver:Hide()
+        end
         self:SortStep()
     end
 
     function EndSort()
         local st = self.sorting
-        if not st then return end
+        if not st then
+            return
+        end
         self.sorting = nil
         local driver = self.sortDriver
-        if driver then driver:Hide() end
+        if driver then
+            driver:Hide()
+        end
         self:SortCover(st.inv, false)
-        if st.inv == self.inv then self:Rebuild() else self:RebuildBank() end
+        if st.inv == self.inv then
+            self:Rebuild()
+        else
+            self:RebuildBank()
+        end
     end
 
-    function FinishSort() self:EndSort() end
+    function FinishSort()
+        self:EndSort()
+    end
 
     -- Stopped where it is; Sort again finishes it. The bank's first wave refused:
     -- the game's bank sort instead.
     function StopSort(why: string)
         local st = self.sorting
-        if not st then return end
+        if not st then
+            return
+        end
         self:EndSort()
         if st.bank and not st.game and st.waves <= 1 and why:find("^the game") then
             sortBank()
@@ -1621,10 +2083,20 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     function SortTip()
         local orderLabel = sort.sortLabel(self:Get("sortOrder"))
         local where = self:Get("sortDirection") == "start" and "the start" or "the end"
-        local tip = { title = "Sort", description = ("%s, gathered at %s of your bags. Settings › Bags › Sort changes it."):format(orderLabel, where) }
+        local tip = {
+            title = "Sort",
+            description = ("%s, gathered at %s of your bags. Settings › Bags › Sort changes it."):format(
+                orderLabel,
+                where
+            ),
+        }
         local inv, bank = self.inv, self.bank
-        if inv then inv.sort.tip = tip end
-        if bank then bank.sort.tip = tip end
+        if inv then
+            inv.sort.tip = tip
+        end
+        if bank then
+            bank.sort.tip = tip
+        end
     end
 
     --------------------------------------------------------------------------------
@@ -1638,7 +2110,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             inv.onClose = function() end
             local who = inv.who
             assert(who, "no picker")
-            who:SetOptions({ { value = "you", label = secret.known(UnitName("player"), "You") .. " · " .. (asNumber(UnitLevel("player")) or 1) } })
+            who:SetOptions({
+                {
+                    value = "you",
+                    label = secret.known(UnitName("player"), "You") .. " · " .. (asNumber(UnitLevel("player")) or 1),
+                },
+            })
             who:SetValue("you")
             local slots: ItemSlot[] = {}
             for i = 1, 40 do
@@ -1664,11 +2141,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             local out: SelectOption<string>[] = {}
             local myRealm = GetRealmName()
             for _, c in ipairs(self:Characters()) do
-                if not c.me then out[#out + 1] = { value = c.key, label = label(c, myRealm), note = ago(c.d.seen) } end
+                if not c.me then
+                    out[#out + 1] = { value = c.key, label = label(c, myRealm), note = ago(c.d.seen) }
+                end
             end
             return out
         end
-        return ForgetRow.new(parent, options, function(key: string) self:ForgetCharData(key) end)
+        return ForgetRow.new(parent, options, function(key: string)
+            self:ForgetCharData(key)
+        end)
     end
 
     --------------------------------------------------------------------------------
@@ -1677,21 +2158,37 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     -- The windows, the rails and the sort's driver, once.
     function Build()
-        if self.inv then return end
-        local inv = UI.Inventory(SuuUI.Root, { name = "SuuUIBags", title = "Bags", columns = self:Get("columns"), characters = true })
+        if self.inv then
+            return
+        end
+        local inv = UI.Inventory(SuuUI.Root, {
+            name = "SuuUIBags",
+            title = "Bags",
+            columns = self:Get("columns"),
+            characters = true,
+        })
         local bank = UI.Inventory(SuuUI.Root, { name = "SuuUIBank", title = "Bank", columns = self:Get("columns") })
         self.inv, self.bank = inv, bank
         local who, view, all = inv.who, inv.view, inv.all
         if who then
             who.onChange = function(key: string)
                 self:Guard(function()
-                    if self.sorting and key ~= self:CharKey() then self:StopSort("you picked another character's bags") end
+                    if self.sorting and key ~= self:CharKey() then
+                        self:StopSort("you picked another character's bags")
+                    end
                     self.who = key
                     self:Refresh()
                 end)()
             end
         end
-        if view then view.onChange = function(v: string) self:Guard(function() self.view = v; self:Refresh() end)() end end
+        if view then
+            view.onChange = function(v: string)
+                self:Guard(function()
+                    self.view = v
+                    self:Refresh()
+                end)()
+            end
+        end
         if all then
             all.onChange = function(on: boolean)
                 self:Guard(function()
@@ -1708,26 +2205,44 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         inv:SetToplevel(true)
         inv:EnableMouse(true)
         inv:Hide()
-        inv.onClose = function() self:SetOpen(false) end
-        inv.sort:SetScript("OnClick", function() self:Guard(function() self:Sort(false) end)() end)
+        inv.onClose = function()
+            self:SetOpen(false)
+        end
+        inv.sort:SetScript("OnClick", function()
+            self:Guard(function()
+                self:Sort(false)
+            end)()
+        end)
         bank:SetFrameStrata("MEDIUM")
         bank:SetToplevel(true)
         bank:EnableMouse(true)
         bank:Hide()
         bank.onClose = closeBank
-        bank.sort:SetScript("OnClick", function() self:Guard(function() self:Sort(true) end)() end)
+        bank.sort:SetScript("OnClick", function()
+            self:Guard(function()
+                self:Sort(true)
+            end)()
+        end)
         -- a sort stops when its window closes, or another character's bags show
         inv:HookScript("OnHide", function()
             local st = self.sorting
-            if st and st.inv == inv then self:StopSort("the bags closed") end
+            if st and st.inv == inv then
+                self:StopSort("the bags closed")
+            end
         end)
         bank:HookScript("OnHide", function()
             local st = self.sorting
-            if st and st.inv == bank then self:StopSort("the bank closed") end
+            if st and st.inv == bank then
+                self:StopSort("the bank closed")
+            end
         end)
         local driver = CreateFrame("Frame")
         driver:Hide()
-        driver:SetScript("OnUpdate", function() self:Guard(function() self:SortTick() end)() end)
+        driver:SetScript("OnUpdate", function()
+            self:Guard(function()
+                self:SortTick()
+            end)()
+        end)
         self.sortDriver = driver
         -- one search across both windows; it ends with them
         local function search(from: Inventory, other: Inventory)
@@ -1737,11 +2252,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                     try(field(C_Container, "SetItemSearch"), text or "")
                     local wasLive = self:IsLive()
                     self.query = text or ""
-                    if not (wasLive and self:IsLive()) then self:QueueRefresh() end
+                    if not (wasLive and self:IsLive()) then
+                        self:QueueRefresh()
+                    end
                 end)()
             end
             from:HookScript("OnHide", function()
-                if other:IsShown() then return end
+                if other:IsShown() then
+                    return
+                end
                 if from.search.edit:GetText() ~= "" or other.search.edit:GetText() ~= "" then
                     from.search:SetValue("")
                     other.search:SetValue("")
@@ -1757,9 +2276,14 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         self.bankRail = Rail.new(bank)
         local allLabel = inv.allLabel
         if allLabel then
-            local toggle = UI.Toggle(inv.body, { value = self:Get("bagSlots"), onChange = function(on: boolean)
-                self:Guard(function() self:Set("bagSlots", on) end)()
-            end })
+            local toggle = UI.Toggle(inv.body, {
+                value = self:Get("bagSlots"),
+                onChange = function(on: boolean)
+                    self:Guard(function()
+                        self:Set("bagSlots", on)
+                    end)()
+                end,
+            })
             toggle:SetPoint("RIGHT", allLabel, "LEFT", -S["space-6"], 0)
             inv.slotsToggle = toggle
             local slotsLabel = UI.Text(inv.body, "label", "ink-muted")
@@ -1767,15 +2291,25 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             slotsLabel:SetPoint("RIGHT", toggle, "LEFT", -S["space-4"], 0)
             inv.slotsLabel = slotsLabel
         end
-        bank:HookScript("OnHide", function() self:PlaceBuy(false) end)
+        bank:HookScript("OnHide", function()
+            self:PlaceBuy(false)
+        end)
     end
 
     override function OnEnable()
-        if not C_Container then return end
-        self:ProvideService(BAGS, { Toggle = function() self:Toggle() end })
+        if not C_Container then
+            return
+        end
+        self:ProvideService(BAGS, {
+            Toggle = function()
+                self:Toggle()
+            end,
+        })
         self:Build()
         local inv, bank = self.inv, self.bank
-        if not (inv and bank) then return end
+        if not (inv and bank) then
+            return
+        end
         self:HideBlizzardBags()
         self:HideBlizzardBank()
         -- (the bags follow Blizzard's bags, the bank shows at a banker: not edit mode)
@@ -1790,28 +2324,56 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end)
         self:Watch("bank", function(on)
             self:HideBlizzardBank()
-            if not on then self:HideBank() end
+            if not on then
+                self:HideBank()
+            end
         end)
-        self:Watch("reagentBag", function() self:Refresh() end)
+        self:Watch("reagentBag", function()
+            self:Refresh()
+        end)
         self:Watch("bagSlots", function(on)
             local toggle = inv.slotsToggle
-            if toggle then toggle:SetValue(on) end
+            if toggle then
+                toggle:SetValue(on)
+            end
             self:DrawRails()
         end)
-        self:Watch("keyring", function() self:Refresh() end)
-        self:Watch("sortOrder", function() self:SortTip() end)
-        self:Watch("sortDirection", function() self:SortTip() end)
+        self:Watch("keyring", function()
+            self:Refresh()
+        end)
+        self:Watch("sortOrder", function()
+            self:SortTip()
+        end)
+        self:Watch("sortDirection", function()
+            self:SortTip()
+        end)
         self:SortTip()
         -- a theme can change the caption and micro styles the slots and rails
         -- are laid out in
-        self:On("SUUUI_THEME_CHANGED", function() self:Refresh(); self:RebuildBank() end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:Refresh()
+            self:RebuildBank()
+        end)
         -- Blizzard opening or closing bags, by any of its ways
         if not self.hooked then
             self.hooked = true
-            for _, name in ipairs({ "ToggleAllBags", "OpenAllBags", "CloseAllBags", "ToggleBag", "OpenBag", "CloseBag",
-                                    "ToggleBackpack", "OpenBackpack", "CloseBackpack" }) do
+            for _, name in ipairs({
+                "ToggleAllBags",
+                "OpenAllBags",
+                "CloseAllBags",
+                "ToggleBag",
+                "OpenBag",
+                "CloseBag",
+                "ToggleBackpack",
+                "OpenBackpack",
+                "CloseBackpack",
+            }) do
                 if type(field(_G, name)) == "function" then
-                    hook(name, function(frame: unknown) if self:IsEnabled() then self:BagCall(name, frame) end end)
+                    hook(name, function(frame: unknown)
+                        if self:IsEnabled() then
+                            self:BagCall(name, frame)
+                        end
+                    end)
                 end
             end
         end
@@ -1819,37 +2381,66 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("BAG_UPDATE", function(_, bagID)
             local bag = asNumber(bagID)
             local window = bag and self:InvFor(bag)
-            if bag and window and window:IsShown() then self:UpdateBag(bag) end
+            if bag and window and window:IsShown() then
+                self:UpdateBag(bag)
+            end
         end)
         for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_CONTAINER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
             self:OnGameEvent(e, function()
-                if inv:IsShown() then self:Rebuild(); self:UpdateJunk() end
+                if inv:IsShown() then
+                    self:Rebuild()
+                    self:UpdateJunk()
+                end
                 self:RebuildBank()
-                if e ~= "PLAYER_ENTERING_WORLD" then self:QueueSave() end
+                if e ~= "PLAYER_ENTERING_WORLD" then
+                    self:QueueSave()
+                end
             end)
         end
         for _, e in ipairs({ "BANK_TABS_CHANGED", "PLAYERBANKSLOTS_CHANGED" }) do
-            self:OnGameEvent(e, function() self:RebuildBank() end)
+            self:OnGameEvent(e, function()
+                self:RebuildBank()
+            end)
         end
         -- the rails: bags put in or taken off, the next slot's price against your money
-        self:OnGameEvent("UNIT_INVENTORY_CHANGED", function(_, unit) if unit == "player" then self:DrawRails() end end)
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() if bank:IsShown() then self:DrawBankRail() end end)
+        self:OnGameEvent("UNIT_INVENTORY_CHANGED", function(_, unit)
+            if unit == "player" then
+                self:DrawRails()
+            end
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            if bank:IsShown() then
+                self:DrawBankRail()
+            end
+        end)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
             local over = self.buyOver
-            if over then over.hide() end
+            if over then
+                over.hide()
+            end
         end)
         -- a sort: its waves land, combat or a refused move stops it
         self:OnGameEvent("BAG_UPDATE_DELAYED", function()
             local st = self.sorting
-            if not st then return end
+            if not st then
+                return
+            end
             st.lastUpdate = GetTime()
             local wave = st.wait
-            if wave then wave.updated = true end
+            if wave then
+                wave.updated = true
+            end
         end)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.sorting then self:StopSort("combat started") end end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            if self.sorting then
+                self:StopSort("combat started")
+            end
+        end)
         self:OnGameEvent("UI_ERROR_MESSAGE", function(_, _, message)
             local st = self.sorting
-            if not (st and st.wait and not st.game) then return end
+            if not (st and st.wait and not st.game) then
+                return
+            end
             local text = asString(message)
             self:StopSort("the game refused a move" .. (text and (" (" .. text .. ")") or ""))
         end)
@@ -1859,45 +2450,78 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             self:QueueSave()
         end)
         self:OnGameEvent("BANKFRAME_CLOSED", function()
-            if self.atBank then self:SaveMe() end
+            if self.atBank then
+                self:SaveMe()
+            end
             self.atBank = false
             self:HideBank()
         end)
-        self:OnGameEvent("PLAYER_LEVEL_UP", function() self:QueueSave() end)
-        self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function() self:QueueSave() end)
+        self:OnGameEvent("PLAYER_LEVEL_UP", function()
+            self:QueueSave()
+        end)
+        self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function()
+            self:QueueSave()
+        end)
         local addPostCall = field(_G, "TooltipDataProcessor", "AddTooltipPostCall")
         local itemType = field(Enum, "TooltipDataType", "Item")
         if not self.tipHooked and type(addPostCall) == "function" and itemType ~= nil then
             self.tipHooked = true
             try(addPostCall, itemType, function(tooltip: unknown, data: unknown)
-                if not self:IsEnabled() then return end
-                local tip = tooltip == GameTooltip and GameTooltip or tooltip == ItemRefTooltip and ItemRefTooltip or nil
-                if tip then self:Guard(function() self:AddCounts(tip, data) end)() end
+                if not self:IsEnabled() then
+                    return
+                end
+                local tip = tooltip == GameTooltip and GameTooltip or tooltip == ItemRefTooltip and ItemRefTooltip or
+                    nil
+                if tip then
+                    self:Guard(function()
+                        self:AddCounts(tip, data)
+                    end)()
+                end
             end)
         end
-        self:OnGameEvent("MERCHANT_SHOW", function() self.atMerchant = true; self:UpdateJunk() end)
-        self:OnGameEvent("MERCHANT_CLOSED", function() self.atMerchant = false; self:UpdateJunk() end)
-        self:OnGameEvent("PLAYER_LOGOUT", function() self:SaveMe() end)
+        self:OnGameEvent("MERCHANT_SHOW", function()
+            self.atMerchant = true
+            self:UpdateJunk()
+        end)
+        self:OnGameEvent("MERCHANT_CLOSED", function()
+            self.atMerchant = false
+            self:UpdateJunk()
+        end)
+        self:OnGameEvent("PLAYER_LOGOUT", function()
+            self:SaveMe()
+        end)
         self:OnGameEvent("ITEM_LOCK_CHANGED", function(_, bagID, slotID)
             local bag, slot = asNumber(bagID), asNumber(slotID)
             local window = bag and self:InvFor(bag)
-            if bag and slot and window and window:IsShown() then self:UpdateSlot(bag, slot) end
+            if bag and slot and window and window:IsShown() then
+                self:UpdateSlot(bag, slot)
+            end
         end)
         for _, e in ipairs({ "BAG_UPDATE_COOLDOWN", "INVENTORY_SEARCH_UPDATE" }) do
-            self:OnGameEvent(e, function() self:UpdateShown() end)
+            self:OnGameEvent(e, function()
+                self:UpdateShown()
+            end)
         end
         self:OnGameEvent("PLAYER_MONEY", function()
             self:Char().money = GetMoney()
-            if inv:IsShown() then self:Foot() end
-            if bank:IsShown() then self:DrawBankRail() end
+            if inv:IsShown() then
+                self:Foot()
+            end
+            if bank:IsShown() then
+                self:DrawBankRail()
+            end
         end)
         self:Sync()
     end
 
     override function OnDisable()
         local inv, bank = self.inv, self.bank
-        if inv then inv:Hide() end
-        if bank then bank:Hide() end
+        if inv then
+            inv:Hide()
+        end
+        if bank then
+            bank:Hide()
+        end
     end
 end
 

@@ -18,12 +18,20 @@ import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors from "../../helpers"
 
 local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
-local tank = mock.spawnUnit({ name = "Brannoc Ironhand", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
+local tank = mock.spawnUnit({
+    name = "Brannoc Ironhand",
+    player = true,
+    class = "WARRIOR",
+    level = 30,
+    reaction = "friendly",
+})
 
 -- What the meter was given last.
 local function meterRows(): (ThreatEntry[], ThreatOptions)
     local list: ThreatEntry[], opts: ThreatOptions = {}, {}
-    mock.stub(assert(M.meter), "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?) list, opts = l or {}, o or {} end)
+    mock.stub(assert(M.meter), "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?)
+        list, opts = l or {}, o or {}
+    end)
     M:Update()
     return list, opts
 end
@@ -32,16 +40,28 @@ end
 type Shown = { tone: string, title: string, detail: string }
 local function alerts(): { [string]: Shown }
     local shown: { [string]: Shown } = {}
-    mock.stub(SuuUI, "ShowAlert", function(key: string, tone: string, title: string, detail: string, ...: string | number)
+    mock.stub(SuuUI, "ShowAlert", function(
+        key: string,
+        tone: string,
+        title: string,
+        detail: string,
+        ...: string | number
+    )
         shown[key] = { tone = tone, title = title, detail = detail:format(...) }
     end)
-    mock.stub(SuuUI, "HideAlert", function(key: string) shown[key] = nil end)
+    mock.stub(SuuUI, "HideAlert", function(key: string)
+        shown[key] = nil
+    end)
     return shown
 end
 
 -- A unit's threat on the wolf (`who`: the player by default).
 local function on(value: number?, who: mock.MockUnit?)
-    if who then wolf:setThreat(value, who) else wolf:setThreat(value) end
+    if who then
+        wolf:setThreat(value, who)
+    else
+        wolf:setThreat(value)
+    end
 end
 
 local function fight()
@@ -54,21 +74,29 @@ end
 -- a tank by talents, unless a test makes one.
 @beforeEach
 local function untalented()
-    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown return { treeIDs = {} } end)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown
+        return { treeIDs = {} }
+    end)
 end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     mock.player:target(nil)
     wolf:setThreat(nil)
     mock.group:leave()
     mock.setPet(nil)
     wolf:target(nil)
-    for _, u in ipairs({ tank }) do wolf:setThreat(nil, u) end
+    for _, u in ipairs({ tank }) do
+        wolf:setThreat(nil, u)
+    end
     M:ResetAll({ "shows", "who", "marker", "raw", "warnPull", "aggroAlert", "openWorld", "position" })
     local dm = SuuUI.GetModule("damagemeter")
-    if dm then dm:Reset("rows") end
+    if dm then
+        dm:Reset("rows")
+    end
     mock.advanceFrames(2)
     expectNoErrors()
 end
@@ -93,7 +121,9 @@ local function solo()
     expect(assert(M.meter):IsShown()).toBe(true)
 end
 
-@test("shown always, in combat with a hostile target, never, or hidden in edit mode; read every 0.2s while it can change")
+@test(
+    "shown always, in combat with a hostile target, never, or hidden in edit mode; read every 0.2s while it can change"
+)
 local function shows()
     M:Set("shows", "combat")
     expect(assert(M.meter):IsShown()).toBe(false)
@@ -103,7 +133,10 @@ local function shows()
     expect(assert(M.driver):IsShown()).toBe(true)
     local reads = 0
     local real = M.Update
-    mock.stub(M, "Update", function(self: typeof(M)) reads = reads + 1; real(self) end)
+    mock.stub(M, "Update", function(self: typeof(M))
+        reads = reads + 1
+        real(self)
+    end)
     mock.advanceFrames(60)
     expect(reads >= 4).toBe(true)
     mock.player:leaveCombat()
@@ -207,7 +240,9 @@ local function aggro()
     M:Set("aggroAlert", "group")
     expect(shown["threat-aggro"] ~= nil).toBe(true)
     -- you the tank: no warnings
-    mock.stub(SuuUI, "Role", function(): string return "TANK" end)
+    mock.stub(SuuUI, "Role", function(): string
+        return "TANK"
+    end)
     M:Update()
     expect(shown["threat-aggro"]).toBeNil()
 end
@@ -215,7 +250,13 @@ end
 @test("no one to hold the mobs (two damage dealers), or the open world with Open world off: no warnings")
 local function noHolder()
     local shown = alerts()
-    local friend = mock.spawnUnit({ name = "Tamsin Ashford", player = true, class = "MAGE", level = 30, reaction = "friendly" })
+    local friend = mock.spawnUnit({
+        name = "Tamsin Ashford",
+        player = true,
+        class = "MAGE",
+        level = 30,
+        reaction = "friendly",
+    })
     friend:setRole("DAMAGER")
     mock.group:add(friend)
     fight()
@@ -263,8 +304,14 @@ end
 local function drop()
     mock.setPlayer({ class = "PRIEST" })
     local npc = mock.spawnUnit({ name = "Quartermaster Hale", level = 30, reaction = "friendly", distance = 3 })
-    mock.defineTrainer(npc, { greeting = "hi", services = { { spell = 586, name = "Fade", icon = 135994, level = 1, rank = "", cost = 0 } } })
-    mock.defineGossip(npc, { text = "hello", options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } } })
+    mock.defineTrainer(npc, {
+        greeting = "hi",
+        services = { { spell = 586, name = "Fade", icon = 135994, level = 1, rank = "", cost = 0 } },
+    })
+    mock.defineGossip(npc, {
+        text = "hello",
+        options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } },
+    })
     mock.player:interact(npc)
     mock.advanceTime(1)
     C_GossipInfo.SelectOption(7)
@@ -315,13 +362,17 @@ local function preview()
     local view = M:PreviewView(parent)
     expect(view:GetParent()).toBe(parent)
     local list: ThreatEntry[], opts: ThreatOptions = {}, {}
-    mock.stub(view, "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?) list, opts = l or {}, o or {} end)
+    mock.stub(view, "SetRows", function(_: unknown, l: ThreatEntry[]?, o: ThreatOptions?)
+        list, opts = l or {}, o or {}
+    end)
     M:RefreshPreview()
     expect(#list).toBe(6)
     expect(list[6].you).toBe(true)
     expect(list[1].you).toBe(false)
     local heights: { number } = {}
-    mock.stub(assert(M.meter), "SetMaxRows", function(_: unknown, n: number) heights[#heights + 1] = n end)
+    mock.stub(assert(M.meter), "SetMaxRows", function(_: unknown, n: number)
+        heights[#heights + 1] = n
+    end)
     local dm = assert(SuuUI.GetModule("damagemeter"))
     dm:Set("rows", 6)
     expect(heights[1]).toBe(6)
@@ -334,7 +385,9 @@ local function rowsWait()
     local function disabled(key: string): (boolean?, string?)
         for _, g in ipairs(SECTION.groups or {}) do
             for _, r in ipairs(g.rows) do
-                if r.key == key then return assert(r.disabled)() end
+                if r.key == key then
+                    return assert(r.disabled)()
+                end
             end
         end
         error("no row " .. key)

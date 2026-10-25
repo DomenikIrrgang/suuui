@@ -29,9 +29,7 @@ import type GroupDef as SettingsGroupDef from "/SettingsUI/Registry"
 import Module from "/Core/Modules"
 import RAID_PLANNER from "/Core/ServiceKeys"
 import type RaidClass, RaidFamily, RaidItem from "/Data/RaidPlanner"
-import type RaidPlanner as PlannerWindow, PlannerData, PlannerId, PlannerSpec, PlannerArt, PlannerSlot, PlannerSetup,
-    PaletteClass, PaletteSpec, PlannerGroup, PlannerListItem, PlannerPerson, PlannerChip, PlannerMove, PlannerStat,
-    DragWhat, DropWhere, SlotChanges from "/UI/RaidPlanner"
+import type RaidPlanner as PlannerWindow, PlannerData, PlannerId, PlannerSpec, PlannerArt, PlannerSlot, PlannerSetup, PaletteClass, PaletteSpec, PlannerGroup, PlannerListItem, PlannerPerson, PlannerChip, PlannerMove, PlannerStat, DragWhat, DropWhere, SlotChanges from "/UI/RaidPlanner"
 import type ConfirmDialog from "/UI/Panel"
 import type SelectOption from "/UI/Select"
 import type SegmentedOption, Checkbox from "/UI/Inputs"
@@ -51,8 +49,8 @@ local asNumber, asString = secret.asNumber, secret.asString
 local DEFAULTS = {
     preset = "essentials", -- "all" | "essentials" | "custom"
     tracked = {} :: { [string]: boolean }, -- custom: { [item key] = true }
-    fill = "instant",      -- "instant" (as the raid changes) | "review" (Fill slots)
-    inspect = "auto",      -- "auto" (while the planner is open) | "click"
+    fill = "instant", -- "instant" (as the raid changes) | "review" (Fill slots)
+    inspect = "auto", -- "auto" (while the planner is open) | "click"
     flagDoubled = true,
     shareSpec = true,
 }
@@ -81,13 +79,17 @@ local ITEM: { [string]: RaidItem } = {}
 local FAMILIES: RaidFamily[] = {}
 
 local function loadCatalog()
-    if #ITEMS > 0 then return end
+    if #ITEMS > 0 then
+        return
+    end
     local cat = SuuUI.RaidCatalog()
     for _, c in ipairs(cat.classes) do
         CLASSES[#CLASSES + 1] = c
         CLASS[c.file] = c
     end
-    for _, f in ipairs(cat.families) do FAMILIES[#FAMILIES + 1] = f end
+    for _, f in ipairs(cat.families) do
+        FAMILIES[#FAMILIES + 1] = f
+    end
     for _, it in ipairs(cat.items) do
         ITEMS[#ITEMS + 1] = it
         ITEM[it.key] = it
@@ -95,7 +97,11 @@ local function loadCatalog()
 end
 
 local function familyOf(famKey: string): RaidFamily?
-    for _, f in ipairs(FAMILIES) do if f.key == famKey then return f end end
+    for _, f in ipairs(FAMILIES) do
+        if f.key == famKey then
+            return f
+        end
+    end
     return nil
 end
 
@@ -108,9 +114,13 @@ end
 -- A class's trees that can take a role (Feral tanks too).
 local function canPlay(class: string, tree: number?, role: string): boolean
     local c = CLASS[class]
-    if not c then return false end
+    if not c then
+        return false
+    end
     for t = 1, 3 do
-        if (not tree or t == tree) and (c.roles[t] == role or (role == "TANK" and class == "DRUID" and t == 2)) then return true end
+        if (not tree or t == tree) and (c.roles[t] == role or (role == "TANK" and class == "DRUID" and t == 2)) then
+            return true
+        end
     end
     return false
 end
@@ -121,7 +131,9 @@ local function plural(class: string): string
 end
 
 local function joinAnd(parts: string[], word: string?): string
-    if #parts <= 1 then return parts[1] or "" end
+    if #parts <= 1 then
+        return parts[1] or ""
+    end
     return table.concat(parts, ", ", 1, #parts - 1) .. " " .. (word or "and") .. " " .. parts[#parts]
 end
 
@@ -132,14 +144,24 @@ end
 local function presetSet(preset: string): { [string]: boolean }
     local out: { [string]: boolean } = {}
     for _, it in ipairs(ITEMS) do
-        if preset == "all" or it.essential then out[it.key] = true end
+        if preset == "all" or it.essential then
+            out[it.key] = true
+        end
     end
     return out
 end
 
 local function sameSet(a: { [string]: boolean }, b: { [string]: boolean }): boolean
-    for k in pairs(a) do if not b[k] then return false end end
-    for k in pairs(b) do if not a[k] then return false end end
+    for k in pairs(a) do
+        if not b[k] then
+            return false
+        end
+    end
+    for k in pairs(b) do
+        if not a[k] then
+            return false
+        end
+    end
     return true
 end
 
@@ -161,12 +183,20 @@ type Requirement = { class?: string, spec?: number, role?: string }
 -- The account's data: the setups, the specs known, the trees' icons seen,
 -- the raid size shown, the loaded setup.
 type Store = {
-    setups: { [number]: Setup }, nextId: number, specs: { [string]: SpecNote },
-    treeIcons: { [string]: { [number]: PlannerArt } }, size: number, work?: Setup,
+    setups: { [number]: Setup },
+    nextId: number,
+    specs: { [string]: SpecNote },
+    treeIcons: { [string]: { [number]: PlannerArt } },
+    size: number,
+    work?: Setup,
 }
 type RawStore = {
-    setups?: { [number]: Setup }, nextId?: number, specs?: { [string]: SpecNote },
-    treeIcons?: { [string]: { [number]: PlannerArt } }, size?: number, work?: Setup,
+    setups?: { [number]: Setup },
+    nextId?: number,
+    specs?: { [string]: SpecNote },
+    treeIcons?: { [string]: { [number]: PlannerArt } },
+    size?: number,
+    work?: Setup,
 }
 
 local function newSetup(name: string, size: number?): Setup
@@ -182,16 +212,21 @@ end
 
 -- A saved setup by its ID ("work", the loaded unsaved one, is none).
 local function setupIn(d: Store, id: PlannerId?): Setup?
-    if type(id) == "number" then return d.setups[id] end
+    if type(id) == "number" then
+        return d.setups[id]
+    end
     return nil
 end
 
 -- The layout of a setup, for comparing the loaded one with its saved self.
 local function sameLayout(a: Setup?, b: Setup?): boolean
-    if not (a and b) or a.name ~= b.name or a.size ~= b.size or #a.slots ~= #b.slots then return false end
+    if not (a and b) or a.name ~= b.name or a.size ~= b.size or #a.slots ~= #b.slots then
+        return false
+    end
     for i, s in ipairs(a.slots) do
         local o = b.slots[i]
-        if s.g ~= o.g or s.class ~= o.class or s.spec ~= o.spec or s.role ~= o.role or s.label ~= o.label or s.pin ~= o.pin then
+        if s.g ~= o.g or s.class ~= o.class or s.spec ~= o.spec or s.role ~= o.role or s.label ~= o.label or
+            s.pin ~= o.pin then
             return false
         end
     end
@@ -207,7 +242,9 @@ end
 
 -- A spec as the module keeps it: the tree's number (1-3).
 local function specNumber(v: PlannerSpec | false | nil): number?
-    if type(v) == "number" then return v end
+    if type(v) == "number" then
+        return v
+    end
     return nil
 end
 
@@ -216,10 +253,14 @@ end
 --------------------------------------------------------------------------------
 
 local function esc(text: string?): string
-    return (tostring(text or ""):gsub("[%%;,|]", function(ch: string): string return ("%%%02X"):format(ch:byte()) end))
+    return (tostring(text or ""):gsub("[%%;,|]", function(ch: string): string
+        return ("%%%02X"):format(ch:byte())
+    end))
 end
 local function unesc(text: string): string
-    return (text:gsub("%%(%x%x)", function(h: string): string return string.char(tonumber(h, 16) or 0) end))
+    return (text:gsub("%%(%x%x)", function(h: string): string
+        return string.char(tonumber(h, 16) or 0)
+    end))
 end
 
 --------------------------------------------------------------------------------
@@ -228,22 +269,41 @@ end
 
 -- A player in the raid as the roster read them.
 type Member = {
-    index: number, unit: string, name: string, key: string, class: string, group: number,
-    online: boolean, you: boolean, role?: string, lead: boolean, assist: boolean, tree?: number,
+    index: number,
+    unit: string,
+    name: string,
+    key: string,
+    class: string,
+    group: number,
+    online: boolean,
+    you: boolean,
+    role?: string,
+    lead: boolean,
+    assist: boolean,
+    tree?: number,
 }
 -- Who fills a slot, and how ("pinned", "exact", "provisional").
 type Placed = { m: Member, how: string }
 -- The slots filled: by slot, who is where, two who fit one slot, who has none.
-type Filled = { slot: { [number]: Placed }, placed: { [string]: number }, conflict: { [number]: Member }, unplaced: Member[] }
+type Filled = {
+    slot: { [number]: Placed },
+    placed: { [string]: number },
+    conflict: { [number]: Member },
+    unplaced: Member[],
+}
 -- An inspect asked for.
 type InspectJob = { m: Member, guid: string }
 
 -- Whether you're in a raid now: IsInRaid, else (should it read false or
 -- secret while you are in one) your own index in the raid.
 local function inRaidNow(): boolean
-    if secret.flag(IsInRaid()) then return true end
+    if secret.flag(IsInRaid()) then
+        return true
+    end
     local n = asNumber(try(GetNumGroupMembers))
-    if not (n and n > 0) then return false end
+    if not (n and n > 0) then
+        return false
+    end
     local index = try(UnitInRaid, "player")
     return secret.readable(index)
 end
@@ -251,20 +311,28 @@ end
 -- What someone's role is, and how it's known: as set, from their spec, or
 -- the class's likely one.
 local function roleOf(m: { class: string, tree?: number, role?: string }): (string?, string)
-    if m.role then return m.role, "set" end
+    if m.role then
+        return m.role, "set"
+    end
     local c = CLASS[m.class]
-    if m.tree and c then return c.roles[m.tree], "spec" end
+    if m.tree and c then
+        return c.roles[m.tree], "spec"
+    end
     return c and c.likely or nil, "likely"
 end
 
 -- How a player fits a slot: "exact", "provisional" (their spec or role isn't
 -- known yet, so it may not be them), or nil.
 local function fit(s: Slot, m: Member): string?
-    if s.class and s.class ~= m.class then return nil end
+    if s.class and s.class ~= m.class then
+        return nil
+    end
     local sure = true
     if s.spec then
         if m.tree then
-            if m.tree ~= s.spec then return nil end
+            if m.tree ~= s.spec then
+                return nil
+            end
         else
             sure = false
         end
@@ -272,11 +340,17 @@ local function fit(s: Slot, m: Member): string?
     local role = s.role
     if role then
         if m.role then
-            if m.role ~= role then return nil end
+            if m.role ~= role then
+                return nil
+            end
         elseif m.tree then
-            if not canPlay(m.class, m.tree, role) then return nil end
+            if not canPlay(m.class, m.tree, role) then
+                return nil
+            end
         else
-            if not canPlay(m.class, nil, role) then return nil end
+            if not canPlay(m.class, nil, role) then
+                return nil
+            end
             sure = false
         end
     end
@@ -297,11 +371,15 @@ end
 local function treeByName(class: string, name: unknown): number?
     local c = CLASS[class]
     local text = asString(name)
-    if not (c and text) then return nil end
+    if not (c and text) then
+        return nil
+    end
     local n = text:lower()
     for t, spec in ipairs(c.specs) do
         local s = spec:lower()
-        if s == n or s:find(n, 1, true) or n:find(s, 1, true) then return t end
+        if s == n or s:find(n, 1, true) or n:find(s, 1, true) then
+            return t
+        end
     end
     return nil
 end
@@ -313,9 +391,13 @@ local QUESTION_MARK = 134400
 -- which would keep every spec to itself; a send it blocks just fails.
 local function chatRestricted(): boolean
     local f = field(C_ChatInfo, "InChatMessagingLockdown")
-    if not f then return false end
+    if not f then
+        return false
+    end
     local r = try(f)
-    if secret.isSecret(r) then return true end
+    if secret.isSecret(r) then
+        return true
+    end
     return r and true or false
 end
 
@@ -334,9 +416,13 @@ local function provides(item: RaidItem, p: { class: string, tree?: number }): st
     local maybe = false
     for _, b in ipairs(item.by) do
         if b.class == p.class then
-            if not b.tree then return "yes" end
+            if not b.tree then
+                return "yes"
+            end
             if p.tree then
-                if p.tree == b.tree then return "yes" end
+                if p.tree == b.tree then
+                    return "yes"
+                end
             else
                 maybe = true
             end
@@ -347,15 +433,25 @@ end
 
 local function isMelee(p: Person): boolean
     local c = CLASS[p.class]
-    if not c then return false end
-    if p.tree then return c.melee[p.tree] and true or false end
+    if not c then
+        return false
+    end
+    if p.tree then
+        return c.melee[p.tree] and true or false
+    end
     return c.melee[1] and c.melee[2] and c.melee[3] and true or false
 end
 
 local function uses(item: RaidItem, p: Person): boolean
-    if item.users == "melee" then return isMelee(p) end
-    if item.users == "hunter" then return p.class == "HUNTER" end
-    if item.users == "healer" then return (roleOf(p)) == "HEALER" end
+    if item.users == "melee" then
+        return isMelee(p)
+    end
+    if item.users == "hunter" then
+        return p.class == "HUNTER"
+    end
+    if item.users == "healer" then
+        return (roleOf(p)) == "HEALER"
+    end
     return false
 end
 
@@ -367,7 +463,10 @@ end
 local function names(people: Person[], max: number?): string
     local out: string[] = {}
     for i, p in ipairs(people) do
-        if i > (max or 3) then out[#out] = ("%d more"):format(#people - (max or 3) + 1) break end
+        if i > (max or 3) then
+            out[#out] = ("%d more"):format(#people - (max or 3) + 1)
+            break
+        end
         local spec = shortSpec(p.class, p.tree)
         out[#out + 1] = (p.name or plural(p.class)) .. (spec and (" (" .. spec .. ")") or "")
     end
@@ -378,11 +477,17 @@ local function classesOf(item: RaidItem, people: Person[], word: string?): strin
     local seen: { [string]: boolean } = {}
     local out: string[] = {}
     for _, p in ipairs(people) do
-        if not seen[p.class] then seen[p.class] = true; out[#out + 1] = plural(p.class) end
+        if not seen[p.class] then
+            seen[p.class] = true
+            out[#out + 1] = plural(p.class)
+        end
     end
     if #out == 0 then
         for _, b in ipairs(item.by) do
-            if not seen[b.class] then seen[b.class] = true; out[#out + 1] = plural(b.class) end
+            if not seen[b.class] then
+                seen[b.class] = true
+                out[#out + 1] = plural(b.class)
+            end
         end
     end
     return joinAnd(out, word)
@@ -400,17 +505,29 @@ local function byClass(people: Person[]): string
             of[p.class] = c
             order[#order + 1] = p.class
         end
-        if p.name then c.names[#c.names + 1] = p.name else c.slots = c.slots + 1 end
+        if p.name then
+            c.names[#c.names + 1] = p.name
+        else
+            c.slots = c.slots + 1
+        end
     end
     local parts: string[] = {}
     for _, class in ipairs(order) do
         local c = assert(of[class])
         local shown: string[] = {}
-        for i = 1, math.min(#c.names, 3) do shown[i] = c.names[i] end
-        if #c.names > 3 then shown[#shown + 1] = ("%d more"):format(#c.names - 3) end
+        for i = 1, math.min(#c.names, 3) do
+            shown[i] = c.names[i]
+        end
+        if #c.names > 3 then
+            shown[#shown + 1] = ("%d more"):format(#c.names - 3)
+        end
         local bits: string[] = {}
-        if #shown > 0 then bits[1] = joinAnd(shown) end
-        if c.slots > 0 then bits[#bits + 1] = ("%d slot%s"):format(c.slots, c.slots == 1 and "" or "s") end
+        if #shown > 0 then
+            bits[1] = joinAnd(shown)
+        end
+        if c.slots > 0 then
+            bits[#bits + 1] = ("%d slot%s"):format(c.slots, c.slots == 1 and "" or "s")
+        end
         parts[#parts + 1] = plural(class) .. ": " .. table.concat(bits, ", ")
     end
     return table.concat(parts, "; ")
@@ -426,22 +543,38 @@ local function reqText(s: Slot): string
     if c then
         parts[1] = c.name
         local role = s.role
-        if s.spec then parts[2] = c.specs[s.spec] elseif role then parts[2] = ROLE_NAME[role] or role end
+        if s.spec then
+            parts[2] = c.specs[s.spec]
+        elseif role then
+            parts[2] = ROLE_NAME[role] or role
+        end
     else
         local role = s.role
         parts[1] = role and ("Any " .. (ROLE_WORD[role] or role)) or "Any"
     end
-    if s.label and s.label ~= "" then parts[#parts + 1] = s.label end
+    if s.label and s.label ~= "" then
+        parts[#parts + 1] = s.label
+    end
     return table.concat(parts, " · ")
 end
 
 local function ago(t: number?): string
-    if not t then return "" end
+    if not t then
+        return ""
+    end
     local s = math.max(0, time() - t)
-    if s < 120 then return "just now" end
-    if s < 3600 then return math.floor(s / 60) .. "m ago" end
-    if s < 86400 then return math.floor(s / 3600) .. "h ago" end
-    if s < 14 * 86400 then return math.floor(s / 86400) .. "d ago" end
+    if s < 120 then
+        return "just now"
+    end
+    if s < 3600 then
+        return math.floor(s / 60) .. "m ago"
+    end
+    if s < 86400 then
+        return math.floor(s / 3600) .. "h ago"
+    end
+    if s < 14 * 86400 then
+        return math.floor(s / 86400) .. "d ago"
+    end
     return math.floor(s / (7 * 86400)) .. "w ago"
 end
 
@@ -450,33 +583,62 @@ local function summary(setup: Setup): string
     local tanks, healers = 0, 0
     for _, s in ipairs(setup.slots) do
         local role = s.role or (s.spec and treeRole(s.class, s.spec))
-        if role == "TANK" then tanks = tanks + 1 elseif role == "HEALER" then healers = healers + 1 end
+        if role == "TANK" then
+            tanks = tanks + 1
+        elseif role == "HEALER" then
+            healers = healers + 1
+        end
     end
-    return ("%d slots · %d tank%s · %d healer%s"):format(#setup.slots, tanks, tanks == 1 and "" or "s", healers, healers == 1 and "" or "s")
+    return ("%d slots · %d tank%s · %d healer%s"):format(
+        #setup.slots,
+        tanks,
+        tanks == 1 and "" or "s",
+        healers,
+        healers == 1 and "" or "s"
+    )
 end
 
 -- A group's caption from what its slots ask for.
 local function groupKind(slots: Slot[]): string
-    if #slots == 0 then return "" end
+    if #slots == 0 then
+        return ""
+    end
     local count: { [string]: number } = {}
     local anyone = 0
     for _, s in ipairs(slots) do
         local c = s.class and CLASS[s.class]
         local role = s.role or (s.spec and c and c.roles[s.spec])
         local kind: string? = nil
-        if role == "TANK" then kind = "tanks"
-        elseif role == "HEALER" then kind = "healers"
-        elseif s.class == "HUNTER" then kind = "hunters"
-        elseif c and ((s.spec and c.melee[s.spec]) or (not s.spec and c.melee[1] and c.melee[2])) then kind = "melee"
-        elseif c then kind = "casters"
-        else anyone = anyone + 1 end
-        if kind then count[kind] = (count[kind] or 0) + 1 end
+        if role == "TANK" then
+            kind = "tanks"
+        elseif role == "HEALER" then
+            kind = "healers"
+        elseif s.class == "HUNTER" then
+            kind = "hunters"
+        elseif c and ((s.spec and c.melee[s.spec]) or (not s.spec and c.melee[1] and c.melee[2])) then
+            kind = "melee"
+        elseif c then
+            kind = "casters"
+        else
+            anyone = anyone + 1
+        end
+        if kind then
+            count[kind] = (count[kind] or 0) + 1
+        end
     end
-    if count.tanks then return "tanks" end
+    if count.tanks then
+        return "tanks"
+    end
     local best: string? = nil
     local n = 0
-    for k, v in pairs(count) do if v > n then best, n = k, v end end
-    if best and n >= 3 then return best end
+    for k, v in pairs(count) do
+        if v > n then
+            best, n = k, v
+        end
+    end
+    if best and n >= 3 then
+        return best
+    end
     return anyone >= 3 and "flex" or "mixed"
 end
 
@@ -501,7 +663,12 @@ export class FamilyChecks extends Frame
         for _, item in ipairs(ITEMS) do
             if item.family == family then
                 local i = #self.boxes
-                local b = UI.Checkbox(self, { label = item.label, onChange = function(on: boolean) onChange(item.key, on) end })
+                local b = UI.Checkbox(self, {
+                    label = item.label,
+                    onChange = function(on: boolean)
+                        onChange(item.key, on)
+                    end,
+                })
                 b:SetPoint("TOPLEFT", (i % 2) * colW, -(math.floor(i / 2) * 26))
                 local note = item.note
                 local label = b.label
@@ -512,8 +679,12 @@ export class FamilyChecks extends Frame
                     b:SetWidth(b:GetWidth() + 6 + UI.MeasureText("caption", note))
                 end
                 -- the spell's own tooltip: what it is
-                b:HookScript("OnEnter", function() UI.SpellTooltip(b, item.spell, item.detail) end)
-                b:HookScript("OnLeave", function() GameTooltip:Hide() end)
+                b:HookScript("OnEnter", function()
+                    UI.SpellTooltip(b, item.spell, item.detail)
+                end)
+                b:HookScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
                 self.boxes[#self.boxes + 1] = b
                 self.items[#self.items + 1] = item
                 row = math.floor(i / 2) + 1
@@ -523,7 +694,9 @@ export class FamilyChecks extends Frame
     end
 
     function SetValue(set: { [string]: boolean }?)
-        for i, b in ipairs(self.boxes) do b:SetValue(set and set[self.items[i].key]) end
+        for i, b in ipairs(self.boxes) do
+            b:SetValue(set and set[self.items[i].key])
+        end
     end
 
     function SetDisabled() end
@@ -582,7 +755,11 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local preset = self:Get("preset")
         if preset == "custom" then
             local out: { [string]: boolean } = {}
-            for k, on in pairs(self:Get("tracked")) do if on and ITEM[k] then out[k] = true end end
+            for k, on in pairs(self:Get("tracked")) do
+                if on and ITEM[k] then
+                    out[k] = true
+                end
+            end
             return out
         end
         return presetSet(preset == "all" and "all" or "essentials")
@@ -616,7 +793,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function TrackedCount(): number
         local n = 0
-        for _ in pairs(self:TrackedSet()) do n = n + 1 end
+        for _ in pairs(self:TrackedSet()) do
+            n = n + 1
+        end
         return n
     end
 
@@ -646,13 +825,21 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function UniqueName(base: string): string
         local taken: { [string]: boolean } = {}
-        for _, s in pairs(self:Data().setups) do taken[s.name] = true end
+        for _, s in pairs(self:Data().setups) do
+            taken[s.name] = true
+        end
         local w = self:Data().work
-        if w then taken[w.name] = true end
-        if not taken[base] then return base end
+        if w then
+            taken[w.name] = true
+        end
+        if not taken[base] then
+            return base
+        end
         for n = 2, 99 do
             local name = ("%s %d"):format(base, n)
-            if not taken[name] then return name end
+            if not taken[name] then
+                return name
+            end
         end
         return base
     end
@@ -663,7 +850,11 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     end
 
     function SlotById(id: PlannerId?): Slot?
-        for _, s in ipairs(self:Work().slots) do if s.id == id then return s end end
+        for _, s in ipairs(self:Work().slots) do
+            if s.id == id then
+                return s
+            end
+        end
         return nil
     end
 
@@ -673,14 +864,20 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function SlotsInOf(w: Setup, g: number): Slot[]
         local out: Slot[] = {}
-        for _, s in ipairs(w.slots) do if s.g == g then out[#out + 1] = s end end
+        for _, s in ipairs(w.slots) do
+            if s.g == g then
+                out[#out + 1] = s
+            end
+        end
         return out
     end
 
     function Load(id: PlannerId)
         local d = self:Data()
         local s = setupIn(d, id)
-        if not s then return end
+        if not s then
+            return
+        end
         local saveId = type(id) == "number" and id or nil
         local function load()
             local work = tbl.copy(s)
@@ -690,8 +887,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             self:Refill(true)
         end
         if self:Changed() and #self:Work().slots > 0 and self:Work().id ~= id then
-            UI.Confirm({ title = "Load " .. s.name .. "?", text = ("The changes to %s aren't saved."):format(self:Work().name),
-                confirm = "Load", onConfirm = load })
+            UI.Confirm({
+                title = "Load " .. s.name .. "?",
+                text = ("The changes to %s aren't saved."):format(self:Work().name),
+                confirm = "Load",
+                onConfirm = load,
+            })
         else
             load()
         end
@@ -715,14 +916,20 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function SaveAsNew()
         local w = self:Work()
-        UI.Confirm({ title = "Save as new", text = "A new setup from this one, under its own name.", confirm = "Save",
+        UI.Confirm({
+            title = "Save as new",
+            text = "A new setup from this one, under its own name.",
+            confirm = "Save",
             input = { label = "Name", value = self:UniqueName(w.name) },
             onConfirm = function(name: string?)
-                if not name then return end
+                if not name then
+                    return
+                end
                 w.name = name
                 w.id = nil
                 self:Save()
-            end })
+            end,
+        })
     end
 
     -- Keeps a setup under a new ID.
@@ -750,18 +957,33 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local s = num and d.setups[num]
         if not (num and s) then
             -- the unsaved one: start again
-            if #w.slots == 0 then return end
-            UI.Confirm({ title = "Discard " .. w.name .. "?", text = "It was never saved.", confirm = "Discard",
-                onConfirm = function() d.work = nil; self:Refill(true) end })
+            if #w.slots == 0 then
+                return
+            end
+            UI.Confirm({
+                title = "Discard " .. w.name .. "?",
+                text = "It was never saved.",
+                confirm = "Discard",
+                onConfirm = function()
+                    d.work = nil
+                    self:Refill(true)
+                end,
+            })
             return
         end
-        UI.Confirm({ title = "Delete " .. s.name .. "?", text = "The setup is gone for every character.", confirm = "Delete",
+        UI.Confirm({
+            title = "Delete " .. s.name .. "?",
+            text = "The setup is gone for every character.",
+            confirm = "Delete",
             onConfirm = function()
                 d.setups[num] = nil
                 -- the loaded one stays open, unsaved
-                if w.id == num then w.id = nil end
+                if w.id == num then
+                    w.id = nil
+                end
                 self:Render()
-            end })
+            end,
+        })
     end
 
     function Rename(id: PlannerId, name: string?)
@@ -770,10 +992,14 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             return
         end
         local w = self:Work()
-        if id == "work" or w.id == id then w.name = name end
+        if id == "work" or w.id == id then
+            w.name = name
+        end
         -- a saved setup takes its new name at once (not a change to save)
         local s = setupIn(self:Data(), id)
-        if s then s.name = name end
+        if s then
+            s.name = name
+        end
         self:Render()
     end
 
@@ -786,13 +1012,20 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             if fromRaid then
                 -- big enough for everyone and for the highest group in use
                 local need = #self.roster
-                for _, m in ipairs(self.roster) do need = math.max(need, m.group * 5) end
+                for _, m in ipairs(self.roster) do
+                    need = math.max(need, m.group * 5)
+                end
                 w.size = need > 20 and 40 or need > 10 and 20 or 10
                 d.size = w.size
                 for _, m in ipairs(self.roster) do
                     if #self:SlotsInOf(w, m.group) < MAX_GROUP and m.group <= w.size / 5 then
-                        w.slots[#w.slots + 1] = { id = takeSlotId(w), g = m.group, class = m.class, spec = m.tree,
-                            role = m.role or (m.tree and treeRole(m.class, m.tree)) or nil }
+                        w.slots[#w.slots + 1] = {
+                            id = takeSlotId(w),
+                            g = m.group,
+                            class = m.class,
+                            spec = m.tree,
+                            role = m.role or (m.tree and treeRole(m.class, m.tree)) or nil,
+                        }
                     end
                 end
             end
@@ -800,8 +1033,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             self:Refill(true)
         end
         if self:Changed() and #self:Work().slots > 0 then
-            UI.Confirm({ title = "A new setup?", text = ("The changes to %s aren't saved."):format(self:Work().name),
-                confirm = "New setup", onConfirm = make })
+            UI.Confirm({
+                title = "A new setup?",
+                text = ("The changes to %s aren't saved."):format(self:Work().name),
+                confirm = "New setup",
+                onConfirm = make,
+            })
         else
             make()
         end
@@ -814,20 +1051,37 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function ExportText(setup: Setup): string
         local parts: string[] = { "SuuRaid1", esc(setup.name), tostring(setup.size) }
         for _, s in ipairs(setup.slots) do
-            parts[#parts + 1] = table.concat({ tostring(s.g), s.class or "", s.spec and tostring(s.spec) or "", s.role or "",
-                esc(s.label), esc(s.pin) }, ",")
+            parts[#parts + 1] = table.concat(
+                {
+                    tostring(s.g),
+                    s.class or "",
+                    s.spec and tostring(s.spec) or "",
+                    s.role or "",
+                    esc(s.label),
+                    esc(s.pin),
+                },
+                ","
+            )
         end
         return table.concat(parts, ";")
     end
 
     function ImportText(text: string?): (Setup?, string?)
         local fields: string[] = {}
-        for f in (strtrim(text or "") .. ";"):gmatch("([^;]*);") do fields[#fields + 1] = f end
-        if fields[1] ~= "SuuRaid1" then return nil, "That isn't a raid planner setup." end
+        for f in (strtrim(text or "") .. ";"):gmatch("([^;]*);") do
+            fields[#fields + 1] = f
+        end
+        if fields[1] ~= "SuuRaid1" then
+            return nil, "That isn't a raid planner setup."
+        end
         local size = tonumber(fields[3])
-        if size ~= 40 and size ~= 20 and size ~= 10 then return nil, "The setup's raid size is wrong." end
+        if size ~= 40 and size ~= 20 and size ~= 10 then
+            return nil, "The setup's raid size is wrong."
+        end
         local w = newSetup(unesc(fields[2] or ""), size)
-        if w.name == "" then w.name = "Imported setup" end
+        if w.name == "" then
+            w.name = "Imported setup"
+        end
         local per: { [number]: number } = {}
         for i = 4, #fields do
             local gText, class, specText, role, label, pin = strsplit(",", fields[i])
@@ -839,7 +1093,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 s.spec = (s.class and spec and spec >= 1 and spec <= 3) and spec or nil
                 s.role = ROLE_WORD[role or ""] and role or nil
                 s.label = label and unesc(label) or nil
-                if s.label == "" then s.label = nil end
+                if s.label == "" then
+                    s.label = nil
+                end
                 s.pin = pin and pin ~= "" and unesc(pin) or nil
                 w.slots[#w.slots + 1] = s
             end
@@ -850,17 +1106,27 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function Export(id: PlannerId?)
         local s = setupIn(self:Data(), id) or self:Work()
-        local p: ConfirmDialog? = UI.Confirm({ title = "Export " .. s.name,
+        local p: ConfirmDialog? = UI.Confirm({
+            title = "Export " .. s.name,
             text = "Copy the text (Ctrl+C) and share it; Import from text makes the same setup.",
-            confirm = "Done", input = { label = "Setup as text", value = self:ExportText(s) } })
-        if p then p.field.edit:HighlightText() end
+            confirm = "Done",
+            input = { label = "Setup as text", value = self:ExportText(s) },
+        })
+        if p then
+            p.field.edit:HighlightText()
+        end
     end
 
     function Import()
-        UI.Confirm({ title = "Import a setup", text = "Paste a setup's text (from Export as text).", confirm = "Import",
+        UI.Confirm({
+            title = "Import a setup",
+            text = "Paste a setup's text (from Export as text).",
+            confirm = "Import",
             input = { label = "Setup as text", placeholder = "SuuRaid1;…" },
             onConfirm = function(text: string?)
-                if not text then return end
+                if not text then
+                    return
+                end
                 local w, why = self:ImportText(text)
                 if not w then
                     self:Print(why)
@@ -873,7 +1139,8 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 self:AddSetup(s)
                 self:Print(("Imported %s."):format(s.name))
                 self:Load(id)
-            end })
+            end,
+        })
     end
 
     ----------------------------------------------------------------------------
@@ -882,9 +1149,13 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function AddSlot(g: number, req: Requirement?, pin: string?): Slot?
         local w = self:Work()
-        if g > w.size / 5 or #self:SlotsIn(g) >= MAX_GROUP then return nil end
+        if g > w.size / 5 or #self:SlotsIn(g) >= MAX_GROUP then
+            return nil
+        end
         local s: Slot = { id = takeSlotId(w), g = g }
-        if req then s.class, s.spec, s.role = req.class, req.spec, req.role end
+        if req then
+            s.class, s.spec, s.role = req.class, req.spec, req.role
+        end
         if pin then
             self:Unpin(pin)
             s.pin = pin
@@ -896,7 +1167,10 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function RemoveSlot(id: PlannerId)
         local w = self:Work()
         for i, s in ipairs(w.slots) do
-            if s.id == id then table.remove(w.slots, i) break end
+            if s.id == id then
+                table.remove(w.slots, i)
+                break
+            end
         end
     end
 
@@ -904,40 +1178,60 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function Unpin(name: string)
         local k = key(name)
         for _, s in ipairs(self:Work().slots) do
-            if s.pin and key(s.pin) == k then s.pin = nil end
+            if s.pin and key(s.pin) == k then
+                s.pin = nil
+            end
         end
     end
 
     -- The slot asks for a spec from the palette (or any of a class, or a role).
     function SetRequirement(s: Slot, req: Requirement)
         s.class, s.spec, s.role = req.class, req.spec, req.role
-        if s.spec and not s.role then s.role = treeRole(s.class, s.spec) end
+        if s.spec and not s.role then
+            s.role = treeRole(s.class, s.spec)
+        end
         local m = s.pin and self.byKey[key(s.pin)]
-        if m and s.class and m.class ~= s.class then s.pin = nil end
+        if m and s.class and m.class ~= s.class then
+            s.pin = nil
+        end
     end
 
     function ChangeSlot(id: PlannerId, changes: SlotChanges)
         local s = self:SlotById(id)
-        if not s then return end
+        if not s then
+            return
+        end
         if changes.class ~= nil then
             local v = changes.class or nil
-            if v ~= s.class then s.spec = nil end
+            if v ~= s.class then
+                s.spec = nil
+            end
             s.class = v
         end
         if changes.spec ~= nil then
             local v = specNumber(changes.spec)
             s.spec = v
             -- a spec brings its role (the healer of a Restoration shaman)
-            if v and s.class and CLASS[s.class] then s.role = treeRole(s.class, v) end
+            if v and s.class and CLASS[s.class] then
+                s.role = treeRole(s.class, v)
+            end
         end
-        if changes.role ~= nil then s.role = changes.role or nil end
-        if changes.label ~= nil then s.label = changes.label end
+        if changes.role ~= nil then
+            s.role = changes.role or nil
+        end
+        if changes.label ~= nil then
+            s.label = changes.label
+        end
         if changes.pin ~= nil then
             local v = changes.pin or nil
-            if v then self:Unpin(v) end
+            if v then
+                self:Unpin(v)
+            end
             s.pin = v
         end
-        if s.label == "" then s.label = nil end
+        if s.label == "" then
+            s.label = nil
+        end
         self:Refill()
     end
 
@@ -948,10 +1242,14 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             local req: Requirement = { class = spec.class, spec = specNumber(spec.spec), role = spec.role }
             if where.slot then
                 local s = self:SlotById(where.slot)
-                if s then self:SetRequirement(s, req) end
+                if s then
+                    self:SetRequirement(s, req)
+                end
             elseif where.group then
                 local s = self:AddSlot(where.group)
-                if s then self:SetRequirement(s, req) end
+                if s then
+                    self:SetRequirement(s, req)
+                end
             end
         elseif name then
             local m = self.byKey[key(name)]
@@ -960,7 +1258,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 self.letGo[key(name)] = true
             elseif where.slot then
                 local target = self:SlotById(where.slot)
-                if not target then return end
+                if not target then
+                    return
+                end
                 local from = what.from and self:SlotById(what.from)
                 local there = self.fill and self.fill.slot[target.id]
                 local displaced = (there and there.m.name) or target.pin
@@ -973,9 +1273,15 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 end
             elseif where.group and m then
                 local tree = m.tree
-                self:AddSlot(where.group, { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil }, name)
+                self:AddSlot(
+                    where.group,
+                    { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil },
+                    name
+                )
             end
-            if not where.unplaced then self.letGo[key(name)] = nil end
+            if not where.unplaced then
+                self.letGo[key(name)] = nil
+            end
         end
         self:Refill()
     end
@@ -993,7 +1299,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         end
         local specs = self:Data().specs
         local e = specs[key(name)] or specs[Ambiguate(name, "short")]
-        if e and e.tree and time() - (e.at or 0) < SPEC_FRESH then return e.tree end
+        if e and e.tree and time() - (e.at or 0) < SPEC_FRESH then
+            return e.tree
+        end
         return nil
     end
 
@@ -1009,7 +1317,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             self.roster, self.byKey, self.me = out, byKey, nil
             return out
         end
-        if InCombatLockdown() then return self.roster end
+        if InCombatLockdown() then
+            return self.roster
+        end
         local me: Member? = nil
         for i = 1, asNumber(try(GetNumGroupMembers)) or 0 do
             local nameR, rankR, groupR, _, _, fileR, _, online, _, _, _, combatRole = try(GetRaidRosterInfo, i)
@@ -1017,18 +1327,33 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             if name and file and group then
                 local unit = "raid" .. i
                 local role = asString(combatRole)
-                if role == "NONE" or role == "" then role = nil end
+                if role == "NONE" or role == "" then
+                    role = nil
+                end
                 if not role then
                     local r = asString(try(UnitGroupRolesAssigned, unit))
                     role = r ~= "NONE" and r or nil
                 end
                 local you = secret.flag(UnitIsUnit(unit, "player"))
-                local m: Member = { index = i, unit = unit, name = name, key = key(name), class = file, group = group,
-                    online = secret.flag(online), you = you, role = role, lead = rank == 2, assist = rank == 1 }
+                local m: Member = {
+                    index = i,
+                    unit = unit,
+                    name = name,
+                    key = key(name),
+                    class = file,
+                    group = group,
+                    online = secret.flag(online),
+                    you = you,
+                    role = role,
+                    lead = rank == 2,
+                    assist = rank == 1,
+                }
                 m.tree = self:KnownTree(name, you)
                 out[#out + 1] = m
                 byKey[m.key] = m
-                if you then me = m end
+                if you then
+                    me = m
+                end
             end
         end
         self.roster, self.byKey, self.me = out, byKey, me
@@ -1058,16 +1383,24 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local options: { [string]: number } = {}
         for _, m in ipairs(roster) do
             local n = 0
-            for _, s in ipairs(w.slots) do if not s.pin and fit(s, m) then n = n + 1 end end
+            for _, s in ipairs(w.slots) do
+                if not s.pin and fit(s, m) then
+                    n = n + 1
+                end
+            end
             options[m.key] = n
         end
         local order: { s: Slot, i: number }[] = {}
         for i, s in ipairs(w.slots) do
-            if not s.pin then order[#order + 1] = { s = s, i = i } end
+            if not s.pin then
+                order[#order + 1] = { s = s, i = i }
+            end
         end
         table.sort(order, function(a: { s: Slot, i: number }, b: { s: Slot, i: number }): boolean
             local x, y = strictness(a.s), strictness(b.s)
-            if x ~= y then return x > y end
+            if x ~= y then
+                return x > y
+            end
             return a.i < b.i
         end)
         local letGo = self.letGo
@@ -1078,14 +1411,24 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             local bestHow = ""
             for _, m in ipairs(roster) do
                 local how = not used[m.key] and not letGo[m.key] and fit(s, m) or nil
-                if how and keepOnly and prev[m.key] ~= s.id then how = nil end
+                if how and keepOnly and prev[m.key] ~= s.id then
+                    how = nil
+                end
                 if how then
                     local score = (how == "exact" and 100 or 0) - (options[m.key] or 0)
-                    if prev[m.key] == s.id then score = score + 20 end
-                    if m.group == s.g then score = score + 4 end
+                    if prev[m.key] == s.id then
+                        score = score + 20
+                    end
+                    if m.group == s.g then
+                        score = score + 4
+                    end
                     local c = CLASS[m.class]
-                    if s.role and not m.role and not m.tree and c and c.likely == s.role then score = score + 10 end
-                    if not bestScore or score > bestScore then best, bestScore, bestHow = m, score, how end
+                    if s.role and not m.role and not m.tree and c and c.likely == s.role then
+                        score = score + 10
+                    end
+                    if not bestScore or score > bestScore then
+                        best, bestScore, bestHow = m, score, how
+                    end
                 end
             end
             if best then
@@ -1095,7 +1438,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             end
         end
         for _, m in ipairs(roster) do
-            if not used[m.key] then fill.unplaced[#fill.unplaced + 1] = m end
+            if not used[m.key] then
+                fill.unplaced[#fill.unplaced + 1] = m
+            end
         end
         -- two fit one slot: someone left over fits a slot as well as its player
         for _, s in ipairs(w.slots) do
@@ -1116,7 +1461,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     -- Fills again (out of combat) and draws. `force`: review mode's Fill slots.
     function Refill(force: boolean?)
         if InCombatLockdown() then
-            self:RunOutOfCombat("fill", function() self:Refill(force) end)
+            self:RunOutOfCombat("fill", function()
+                self:Refill(force)
+            end)
             self:Render()
             return
         end
@@ -1129,11 +1476,15 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     -- The roster changes in bursts: one fill once it settles.
     function RefillSoon()
-        if self.refillQueued then return end
+        if self.refillQueued then
+            return
+        end
         self.refillQueued = true
         after(0.5, function()
             self.refillQueued = false
-            if self:IsEnabled() then self:Refill() end
+            if self:IsEnabled() then
+                self:Refill()
+            end
         end)
     end
 
@@ -1147,23 +1498,30 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     -- with the class icon; an inspected druid's is 1484 whatever the tree), so
     -- GetSpecializationInfoByID can't tell the trees apart.
     function TreeIcon(class: string?, tree: number?): PlannerArt?
-        if not (class and tree) then return nil end
+        if not (class and tree) then
+            return nil
+        end
         local seen = self:Data().treeIcons[class]
         local icon = seen and seen[tree]
-        if icon then return icon end
+        if icon then
+            return icon
+        end
         local c = CLASS[class]
         return c and c.icons[tree] or nil
     end
 
     -- Keeps the icons of a class's talent groups (GetGroupDisplayInfoByTreeID).
     function NoteTreeIcons(class: string, displays: unknown)
-        if not CLASS[class] or type(displays) ~= "table" then return end
+        if not CLASS[class] or type(displays) ~= "table" then
+            return
+        end
         local icons = self:Data().treeIcons
         for _, d in ipairs(list(displays)) do
             local tree = treeByName(class, field(d, "displayName"))
             local icon = tree and field(d, "icon")
             local id, path = asNumber(icon), asString(icon)
-            local art: PlannerArt? = (id and id > 0 and id ~= QUESTION_MARK and id) or (path and path ~= "" and path) or nil
+            local art: PlannerArt? = (id and id > 0 and id ~= QUESTION_MARK and id) or (path and path ~= "" and path) or
+                nil
             if tree and art then
                 local mine = icons[class] or {}
                 icons[class] = mine
@@ -1174,13 +1532,19 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     -- Your own class's, from your talents (once they're there).
     function NoteOwnTreeIcons()
-        if self.ownIconsRead then return end
+        if self.ownIconsRead then
+            return
+        end
         local _, class = UnitClass("player")
         local cfg = asNumber(try(field(C_ClassTalents, "GetActiveConfigID")))
-        if not cfg then return end
+        if not cfg then
+            return
+        end
         local info = try(field(C_Traits, "GetConfigInfo"), cfg)
         local treeID = asNumber(list(field(info, "treeIDs"))[1])
-        if not treeID then return end
+        if not treeID then
+            return
+        end
         local displays = try(field(C_Traits, "GetGroupDisplayInfoByTreeID"), treeID)
         if #list(displays) > 0 then
             self.ownIconsRead = true
@@ -1219,7 +1583,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             end
         end
         local tree = treeByName(class, best)
-        if tree then return tree end
+        if tree then
+            return tree
+        end
         local getSpec = field(C_SpecializationInfo, "GetInspectSpecialization") or field(_G, "GetInspectSpecialization")
         local id = asNumber(try(getSpec, unit))
         if id and id > 0 then
@@ -1230,12 +1596,16 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     end
 
     function NoteSpec(name: string, tree: number?, from: string)
-        if not (tree and tree >= 1 and tree <= 3) then return end
+        if not (tree and tree >= 1 and tree <= 3) then
+            return
+        end
         local specs = self:Data().specs
         local e: SpecNote = { tree = tree, at = time(), from = from }
         specs[key(name)] = e
         local short = Ambiguate(name, "short")
-        if short ~= key(name) then specs[short] = e end
+        if short ~= key(name) then
+            specs[short] = e
+        end
     end
 
     -- Who still lacks a spec: in the raid, online, not you, not failed lately.
@@ -1243,34 +1613,51 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local out: Member[] = {}
         for _, m in ipairs(self.roster) do
             local failed = self.inspectFailed[m.key]
-            if not m.tree and not m.you and m.online and not (failed and GetTime() - failed < 60) then out[#out + 1] = m end
+            if not m.tree and not m.you and m.online and not (failed and GetTime() - failed < 60) then
+                out[#out + 1] = m
+            end
         end
         return out
     end
 
     function UnknownSpecs(): number
         local n = 0
-        for _, m in ipairs(self.roster) do if not m.tree and m.online then n = n + 1 end end
+        for _, m in ipairs(self.roster) do
+            if not m.tree and m.online then
+                n = n + 1
+            end
+        end
         return n
     end
 
     -- Inspects the next player in the queue (while asked to: automatically with
     -- the planner open, or the Inspect button's round).
     function InspectNext()
-        if self.inspecting or InCombatLockdown() or not self.inRaid then return end
+        if self.inspecting or InCombatLockdown() or not self.inRaid then
+            return
+        end
         local window = self.window
         local auto = self:Get("inspect") == "auto" and window ~= nil and window:IsShown()
-        if not (auto or self.inspectRound) then return end
+        if not (auto or self.inspectRound) then
+            return
+        end
         -- never over the player's own inspect
         local theirs = frames.find("InspectFrame")
         if theirs and theirs:IsShown() then
-            after(5, function() if self:IsEnabled() then self:InspectNext() end end)
+            after(5, function()
+                if self:IsEnabled() then
+                    self:InspectNext()
+                end
+            end)
             return
         end
         local target: Member? = nil
         for _, m in ipairs(self:SpecQueue()) do
             local name = asString(try(GetUnitName, m.unit, true))
-            if secret.flag(try(CanInspect, m.unit)) and name and key(name) == m.key then target = m break end
+            if secret.flag(try(CanInspect, m.unit)) and name and key(name) == m.key then
+                target = m
+                break
+            end
             self.inspectFailed[m.key] = GetTime()
         end
         if not target then
@@ -1281,7 +1668,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 self.retryQueued = true
                 after(30, function()
                     self.retryQueued = false
-                    if self:IsEnabled() then self:InspectNext() end
+                    if self:IsEnabled() then
+                        self:InspectNext()
+                    end
                 end)
             end
             return
@@ -1296,16 +1685,22 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         self.inspecting = job
         try(NotifyInspect, target.unit)
         after(5, function()
-            if self.inspecting ~= job then return end
+            if self.inspecting ~= job then
+                return
+            end
             self.inspecting = nil
             self.inspectFailed[job.m.key] = GetTime()
-            if self:IsEnabled() then self:InspectNext() end
+            if self:IsEnabled() then
+                self:InspectNext()
+            end
         end)
     end
 
     function OnInspectReady(guid: unknown)
         local job = self.inspecting
-        if not (job and asString(guid) == job.guid) then return end
+        if not (job and asString(guid) == job.guid) then
+            return
+        end
         self.inspecting = nil
         local tree = self:InspectedTree(job.m.unit, job.m.class)
         if tree then
@@ -1315,10 +1710,16 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         end
         -- the game's own inspect keeps its player; this one is let go
         local theirs = frames.find("InspectFrame")
-        if not (theirs and theirs:IsShown()) then try(ClearInspectPlayer) end
+        if not (theirs and theirs:IsShown()) then
+            try(ClearInspectPlayer)
+        end
         self:RefillSoon()
         -- slowly, so the game allows it
-        after(1.5, function() if self:IsEnabled() then self:InspectNext() end end)
+        after(1.5, function()
+            if self:IsEnabled() then
+                self:InspectNext()
+            end
+        end)
     end
 
     ----------------------------------------------------------------------------
@@ -1326,43 +1727,63 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     ----------------------------------------------------------------------------
 
     function Send(text: string)
-        if InCombatLockdown() or not self.inRaid or chatRestricted() then return end
+        if InCombatLockdown() or not self.inRaid or chatRestricted() then
+            return
+        end
         try(field(C_ChatInfo, "SendAddonMessage"), PREFIX, text, "RAID")
     end
 
     function ShareSpec()
-        if not self:Get("shareSpec") then return end
+        if not self:Get("shareSpec") then
+            return
+        end
         local tree = SuuUI.Spec()
-        if tree > 0 then self:Send("RPSPEC\t" .. tree) end
+        if tree > 0 then
+            self:Send("RPSPEC\t" .. tree)
+        end
     end
 
     function ShareSoon(delay: number?)
-        if self.shareQueued then return end
+        if self.shareQueued then
+            return
+        end
         self.shareQueued = true
         after(delay or 2, function()
             self.shareQueued = false
-            if self:IsEnabled() then self:ShareSpec() end
+            if self:IsEnabled() then
+                self:ShareSpec()
+            end
         end)
     end
 
     -- Asks everyone's SuuUI for their spec, at most twice a minute.
     function AskSpecs()
-        if self:UnknownSpecs() == 0 then return end
+        if self:UnknownSpecs() == 0 then
+            return
+        end
         local asked = self.askedAt
-        if asked and GetTime() - asked < 30 then return end
+        if asked and GetTime() - asked < 30 then
+            return
+        end
         self.askedAt = GetTime()
         self:Send("RPSPECQ")
     end
 
     function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
         local message, from = asString(text), asString(sender)
-        if prefix ~= PREFIX or not message or not from then return end
+        if prefix ~= PREFIX or not message or not from then
+            return
+        end
         if message == "RPSPECQ" then
-            if key(from) ~= key(asString(SuuUI.FullName("player")) or "") then self:ShareSoon() end
+            if key(from) ~= key(asString(SuuUI.FullName("player")) or "") then
+                self:ShareSoon()
+            end
             return
         end
         local tree = tonumber(message:match("^RPSPEC\t(%d)$") or "")
-        if not tree then return end
+        if not tree then
+            return
+        end
         self:NoteSpec(from, tree, "message")
         self:RefillSoon()
     end
@@ -1385,7 +1806,11 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 people[#people + 1] = { name = f.m.name, class = f.m.class, tree = f.m.tree, role = f.m.role, g = s.g }
             elseif s.class then
                 local p: Person = { class = s.class, tree = s.spec, role = s.role, g = s.g, slot = s }
-                if inRaid then open[#open + 1] = p else people[#people + 1] = p end
+                if inRaid then
+                    open[#open + 1] = p
+                else
+                    people[#people + 1] = p
+                end
             end
         end
         if inRaid and fill then
@@ -1403,9 +1828,17 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local slots: Person[] = {}
         for _, p in ipairs(people) do
             local how = provides(item, p)
-            if how == "yes" then yes[#yes + 1] = p elseif how == "maybe" then maybe[#maybe + 1] = p end
+            if how == "yes" then
+                yes[#yes + 1] = p
+            elseif how == "maybe" then
+                maybe[#maybe + 1] = p
+            end
         end
-        for _, p in ipairs(open) do if provides(item, p) then slots[#slots + 1] = p end end
+        for _, p in ipairs(open) do
+            if provides(item, p) then
+                slots[#slots + 1] = p
+            end
+        end
         local r: ItemCount = { n = 0, lines = {} }
         if item.ask then
             r.n, r.detail = "ask", "from books, not trainers: ask your " .. classesOf(item, yes)
@@ -1430,8 +1863,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             end
         else
             bits[1] = byClass(yes)
-            if #maybe > 0 then bits[#bits + 1] = ("+%d if specced"):format(#maybe) end
-            if #slots > 0 then bits[#bits + 1] = ("+%d in open slots"):format(#slots) end
+            if #maybe > 0 then
+                bits[#bits + 1] = ("+%d if specced"):format(#maybe)
+            end
+            if #slots > 0 then
+                bits[#bits + 1] = ("+%d in open slots"):format(#slots)
+            end
         end
         r.detail = table.concat(bits, " · ")
         for _, p in ipairs(yes) do
@@ -1451,8 +1888,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             if fam and fam.scope == "raid" and self:IsTracked(item.key) then
                 local r = self:RaidItem(item, people, open)
                 local about: string[] = {}
-                if item.detail then about[1] = item.detail end
-                if r.detail and r.detail ~= "" then about[#about + 1] = r.detail end
+                if item.detail then
+                    about[1] = item.detail
+                end
+                if r.detail and r.detail ~= "" then
+                    about[#about + 1] = r.detail
+                end
                 out[#out + 1] = {
                     label = item.label,
                     n = tostring(r.n),
@@ -1471,9 +1912,19 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local flag = self:Get("flagDoubled")
         local here: Person[] = {}
         local slots: Person[] = {}
-        for _, p in ipairs(people) do if p.g == g then here[#here + 1] = p end end
-        for _, p in ipairs(open) do if p.g == g then slots[#slots + 1] = p end end
-        if #here == 0 and #slots == 0 then return chips end
+        for _, p in ipairs(people) do
+            if p.g == g then
+                here[#here + 1] = p
+            end
+        end
+        for _, p in ipairs(open) do
+            if p.g == g then
+                slots[#slots + 1] = p
+            end
+        end
+        if #here == 0 and #slots == 0 then
+            return chips
+        end
         for _, item in ipairs(ITEMS) do
             if item.family == "party" and self:IsTracked(item.key) then
                 local yes: Person[] = {}
@@ -1482,22 +1933,43 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 local slot: Person? = nil
                 for _, p in ipairs(here) do
                     local how = provides(item, p)
-                    if how == "yes" then yes[#yes + 1] = p elseif how == "maybe" then maybe[#maybe + 1] = p end
-                    if uses(item, p) then users = users + 1 end
+                    if how == "yes" then
+                        yes[#yes + 1] = p
+                    elseif how == "maybe" then
+                        maybe[#maybe + 1] = p
+                    end
+                    if uses(item, p) then
+                        users = users + 1
+                    end
                 end
-                for _, p in ipairs(slots) do if not slot and provides(item, p) then slot = p end end
+                for _, p in ipairs(slots) do
+                    if not slot and provides(item, p) then
+                        slot = p
+                    end
+                end
                 if #yes >= 2 and item.single and flag then
-                    chips[#chips + 1] = { text = item.short .. " ×" .. #yes .. ": one wasted", tone = "warn", tip = names(yes) .. ": one is enough in a group." }
+                    chips[#chips + 1] = {
+                        text = item.short .. " ×" .. #yes .. ": one wasted",
+                        tone = "warn",
+                        tip = names(yes) .. ": one is enough in a group.",
+                    }
                 elseif #yes >= 1 then
                     chips[#chips + 1] = { text = item.short, tone = "ok", tip = names(yes) }
                 elseif #maybe >= 1 then
                     chips[#chips + 1] = { text = item.short .. "?", tone = "ok", tip = "If specced: " .. names(maybe) }
                 elseif slot then
                     local c = CLASS[slot.class]
-                    chips[#chips + 1] = { text = item.short .. ": slot open", tone = "open", tip = "Its slot is open: " .. (c and c.name or "") }
+                    chips[#chips + 1] = {
+                        text = item.short .. ": slot open",
+                        tone = "open",
+                        tip = "Its slot is open: " .. (c and c.name or ""),
+                    }
                 elseif users > 0 then
-                    chips[#chips + 1] = { text = "No " .. item.short, tone = "warn",
-                        tip = ("%d in this group use it; no %s here."):format(users, classesOf(item, {}, "or")) }
+                    chips[#chips + 1] = {
+                        text = "No " .. item.short,
+                        tone = "warn",
+                        tip = ("%d in this group use it; no %s here."):format(users, classesOf(item, {}, "or")),
+                    }
                 end
             end
         end
@@ -1512,15 +1984,27 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     -- as the last roster read found it (the view says the same), leading or
     -- assisting (the roster's rank too), out of combat, someone to move.
     function CanArrange(): (boolean, string?)
-        if not self.inRaid then return false, "Not in a raid." end
+        if not self.inRaid then
+            return false, "Not in a raid."
+        end
         local me = self.me
-        local leads = secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player"))
-            or (me ~= nil and (me.lead or me.assist))
-        if not leads then return false, "Only the raid leader or an assistant can move players." end
-        if InCombatLockdown() then return false, "Not in combat." end
-        if #self:Work().slots == 0 then return false, "The setup has no slots yet." end
-        if not (self.fill and next(self.fill.placed)) then return false, "Nobody in the raid fills a slot yet." end
-        if #self:Moves() == 0 then return false, "Everyone is in their slot's group already." end
+        local leads = secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player")) or
+            (me ~= nil and (me.lead or me.assist))
+        if not leads then
+            return false, "Only the raid leader or an assistant can move players."
+        end
+        if InCombatLockdown() then
+            return false, "Not in combat."
+        end
+        if #self:Work().slots == 0 then
+            return false, "The setup has no slots yet."
+        end
+        if not (self.fill and next(self.fill.placed)) then
+            return false, "Nobody in the raid fills a slot yet."
+        end
+        if #self:Moves() == 0 then
+            return false, "Everyone is in their slot's group already."
+        end
         return true, nil
     end
 
@@ -1528,12 +2012,20 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function Moves(): PlannerMove[]
         local out: PlannerMove[] = {}
         local fill = self.fill
-        if not fill then return out end
+        if not fill then
+            return out
+        end
         for _, s in ipairs(self:Work().slots) do
             local f = fill.slot[s.id]
             if f and f.m.group ~= s.g then
-                out[#out + 1] = { name = f.m.name, class = f.m.class, icon = self:TreeIcon(f.m.class, f.m.tree), known = f.m.tree ~= nil,
-                    from = f.m.group, to = s.g }
+                out[#out + 1] = {
+                    name = f.m.name,
+                    class = f.m.class,
+                    icon = self:TreeIcon(f.m.class, f.m.tree),
+                    known = f.m.tree ~= nil,
+                    from = f.m.group,
+                    to = s.g,
+                }
             end
         end
         return out
@@ -1559,16 +2051,24 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         end
         local stored: { id: number, s: Setup }[] = {}
         for id, s in pairs(d.setups) do
-            if s.size == d.size then stored[#stored + 1] = { id = id, s = s } end
+            if s.size == d.size then
+                stored[#stored + 1] = { id = id, s = s }
+            end
         end
         table.sort(stored, function(a: { id: number, s: Setup }, b: { id: number, s: Setup }): boolean
             return a.s.name:lower() < b.s.name:lower()
         end)
         for _, e in ipairs(stored) do
             local loaded = w.id == e.id
-            local meta = loaded and ("loaded" .. (changed and " · changed" or "") .. " · saved " .. ago(e.s.saved))
-                or (summary(e.s) .. " · " .. ago(e.s.saved))
-            setups[#setups + 1] = { id = e.id, name = loaded and w.name or e.s.name, meta = meta, loaded = loaded, changed = loaded and changed }
+            local meta = loaded and ("loaded" .. (changed and " · changed" or "") .. " · saved " .. ago(e.s.saved)) or
+                (summary(e.s) .. " · " .. ago(e.s.saved))
+            setups[#setups + 1] = {
+                id = e.id,
+                name = loaded and w.name or e.s.name,
+                meta = meta,
+                loaded = loaded,
+                changed = loaded and changed,
+            }
         end
         v.setups = setups
 
@@ -1576,7 +2076,15 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local palette: PaletteClass[] = {}
         for _, c in ipairs(CLASSES) do
             local specs: PaletteSpec[] = {}
-            for t = 1, 3 do specs[t] = { spec = t, label = c.short[t], name = c.specs[t], role = c.roles[t], icon = self:TreeIcon(c.file, t) } end
+            for t = 1, 3 do
+                specs[t] = {
+                    spec = t,
+                    label = c.short[t],
+                    name = c.specs[t],
+                    role = c.roles[t],
+                    icon = self:TreeIcon(c.file, t),
+                }
+            end
             palette[#palette + 1] = { class = c.file, name = c.name, specs = specs }
         end
         v.palette = palette
@@ -1592,7 +2100,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 local f = fill.slot[s.id]
                 local req = reqText(s)
                 -- open or away: the icon of what the slot asks for (drawn dimmed)
-                local card: PlannerSlot = { id = s.id, req = req, icon = self:TreeIcon(s.class, s.spec), iconClass = s.class }
+                local card: PlannerSlot = {
+                    id = s.id,
+                    req = req,
+                    icon = self:TreeIcon(s.class, s.spec),
+                    iconClass = s.class,
+                }
                 if f then
                     local m = f.m
                     card.who, card.class, card.player = m.name, m.class, m.name
@@ -1601,12 +2114,22 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                     card.icon, card.iconClass = self:TreeIcon(m.class, m.tree), m.class
                     card.pinned = f.how == "pinned"
                     card.state = f.how == "provisional" and "provisional" or "filled"
-                    if card.pinned then card.req = "Pinned · " .. req end
+                    if card.pinned then
+                        card.req = "Pinned · " .. req
+                    end
                     local tips: string[] = {}
-                    if not m.tree then tips[#tips + 1] = "Spec not known yet: filled provisionally until inspected." end
-                    if card.pinned then tips[#tips + 1] = "Placed by hand: stays here until you move them." end
+                    if not m.tree then
+                        tips[#tips + 1] = "Spec not known yet: filled provisionally until inspected."
+                    end
+                    if card.pinned then
+                        tips[#tips + 1] = "Placed by hand: stays here until you move them."
+                    end
                     local role, from = roleOf(m)
-                    if s.role and from == "likely" then tips[#tips + 1] = ("Role: likely %s (the class's usual role)."):format(role and ROLE_WORD[role] or "?") end
+                    if s.role and from == "likely" then
+                        tips[#tips + 1] = ("Role: likely %s (the class's usual role)."):format(
+                            role and ROLE_WORD[role] or "?"
+                        )
+                    end
                     local other = fill.conflict[s.id]
                     if other then
                         card.state = "conflict"
@@ -1620,7 +2143,10 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                     card.req = "Pinned · not in the raid · " .. req
                     card.tip = s.pin .. " is pinned here but isn't in the raid."
                     nOpen = nOpen + 1
-                    openList[#openList + 1] = { label = ("Group %d · %s"):format(g, req), detail = s.pin .. " (pinned) isn't in the raid" }
+                    openList[#openList + 1] = {
+                        label = ("Group %d · %s"):format(g, req),
+                        detail = s.pin .. " (pinned) isn't in the raid",
+                    }
                 else
                     card.state = "open"
                     card.tip = inRaid and "Nobody in the raid fits: " .. req or "Fills with the raid."
@@ -1629,18 +2155,27 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                         local brings: string[] = {}
                         local class = s.class
                         for _, item in ipairs(ITEMS) do
-                            if self:IsTracked(item.key) and class and provides(item, { class = class, tree = s.spec }) == "yes" then
+                            if self:IsTracked(item.key) and class and
+                                provides(item, { class = class, tree = s.spec }) == "yes" then
                                 brings[#brings + 1] = item.short
                             end
                         end
-                        openList[#openList + 1] = { label = ("Group %d · %s"):format(g, req),
-                            detail = #brings > 0 and table.concat(brings, ", ", 1, math.min(#brings, 4)) or "nobody in the raid fits" }
+                        openList[#openList + 1] = {
+                            label = ("Group %d · %s"):format(g, req),
+                            detail = #brings > 0 and table.concat(brings, ", ", 1, math.min(#brings, 4)) or
+                                "nobody in the raid fits",
+                        }
                     end
                 end
                 cards[i] = card
             end
-            groups[g] = { n = g, kind = groupKind(slots), slots = cards, canAdd = #slots < MAX_GROUP,
-                chips = self:PartyChips(g, people, open) }
+            groups[g] = {
+                n = g,
+                kind = groupKind(slots),
+                slots = cards,
+                canAdd = #slots < MAX_GROUP,
+                chips = self:PartyChips(g, people, open),
+            }
         end
         v.groups = groups
         v.open = openList
@@ -1653,20 +2188,38 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             local why: string? = nil
             for _, s in ipairs(w.slots) do
                 local other = fill.conflict[s.id] == m and fill.slot[s.id]
-                if other then why = ("fits group %d's \"%s\" with %s: drag to swap"):format(s.g, reqText(s), other.m.name) break end
+                if other then
+                    why = ("fits group %d's \"%s\" with %s: drag to swap"):format(s.g, reqText(s), other.m.name)
+                    break
+                end
             end
             if not why then
                 if self.letGo[m.key] then
                     why = "let go by hand: drag onto a slot"
                 else
                     local asks = 0
-                    for _, s in ipairs(w.slots) do if s.class == m.class then asks = asks + 1 end end
-                    why = asks > 0 and ("the %d %s slot%s %s full: drag onto a slot or add one"):format(asks, c and c.name:lower() or "", asks == 1 and "" or "s", asks == 1 and "is" or "are")
-                        or ("no slot asks for a %s: drag onto a slot or add one"):format(c and c.name:lower() or "player")
+                    for _, s in ipairs(w.slots) do
+                        if s.class == m.class then
+                            asks = asks + 1
+                        end
+                    end
+                    why = asks > 0 and
+                        ("the %d %s slot%s %s full: drag onto a slot or add one"):format(
+                            asks,
+                            c and c.name:lower() or "",
+                            asks == 1 and "" or "s",
+                            asks == 1 and "is" or "are"
+                        ) or
+                        ("no slot asks for a %s: drag onto a slot or add one"):format(c and c.name:lower() or "player")
                 end
             end
-            unplaced[#unplaced + 1] = { name = m.name, class = m.class, icon = self:TreeIcon(m.class, m.tree), known = m.tree ~= nil,
-                detail = (c and c.name or "") .. " · " .. spec .. " · " .. why }
+            unplaced[#unplaced + 1] = {
+                name = m.name,
+                class = m.class,
+                icon = self:TreeIcon(m.class, m.tree),
+                known = m.tree ~= nil,
+                detail = (c and c.name or "") .. " · " .. spec .. " · " .. why,
+            }
         end
         v.unplaced = unplaced
 
@@ -1679,7 +2232,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local tracked = self:TrackedCount()
         if inRaid then
             local placed = 0
-            for _ in pairs(fill.placed) do placed = placed + 1 end
+            for _ in pairs(fill.placed) do
+                placed = placed + 1
+            end
             local unknown = self:UnknownSpecs()
             local stats: PlannerStat[] = {
                 { n = #roster, label = "in raid" },
@@ -1694,8 +2249,12 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             v.stats = { { n = #w.slots, label = "slots" }, { n = 0, label = "in raid" } }
         end
         local how = self:Get("fill") == "review" and "Fills when you click Fill slots" or "Fills as the raid changes"
-        if InCombatLockdown() then how = "In combat: fills when it ends" end
-        if not inRaid then how = "Not in a raid: coverage from what the slots ask for" end
+        if InCombatLockdown() then
+            how = "In combat: fills when it ends"
+        end
+        if not inRaid then
+            how = "Not in a raid: coverage from what the slots ask for"
+        end
         v.note = ("%s · %d tracked"):format(how, tracked)
 
         v.hint = "Click a slot to edit it; right-click for actions. Drag a spec onto a slot, a player onto another to swap."
@@ -1703,22 +2262,41 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         v.arrange = { enabled = canArrange, reason = why }
         local unknown = inRaid and #self:SpecQueue() or 0
         local inspectWhy: string? = nil
-        if InCombatLockdown() then inspectWhy = "Not in combat." elseif self.inspecting or self.inspectRound then inspectWhy = "Inspecting, one player at a time." end
-        v.inspect = { shown = unknown > 0, label = ("Inspect the %d"):format(unknown), enabled = inspectWhy == nil, reason = inspectWhy }
-        v.fill = { shown = self:Get("fill") == "review" and inRaid, enabled = not InCombatLockdown(), reason = "Not in combat." }
+        if InCombatLockdown() then
+            inspectWhy = "Not in combat."
+        elseif self.inspecting or self.inspectRound then
+            inspectWhy = "Inspecting, one player at a time."
+        end
+        v.inspect = {
+            shown = unknown > 0,
+            label = ("Inspect the %d"):format(unknown),
+            enabled = inspectWhy == nil,
+            reason = inspectWhy,
+        }
+        v.fill = {
+            shown = self:Get("fill") == "review" and inRaid,
+            enabled = not InCombatLockdown(),
+            reason = "Not in combat.",
+        }
         return v
     end
 
     function Render()
         local window = self.window
-        if not (window and window:IsShown()) then return end
+        if not (window and window:IsShown()) then
+            return
+        end
         self.trackCache = self:TrackedSet()
         local v = self:ViewData()
         self.trackCache = nil
         window:SetData(v)
         local editing = window:EditingSlot()
         if editing then
-            if self:SlotById(editing) then self:OpenEditor(editing) else window:CloseEditor() end
+            if self:SlotById(editing) then
+                self:OpenEditor(editing)
+            else
+                window:CloseEditor()
+            end
         end
     end
 
@@ -1729,115 +2307,213 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function OpenEditor(id: PlannerId, card: Frame?)
         local s = self:SlotById(id)
         local window = self.window
-        if not (s and window) then return end
+        if not (s and window) then
+            return
+        end
         local classes: SelectOption<string>[] = { { value = "any", label = "Any class" } }
-        for _, c in ipairs(CLASSES) do classes[#classes + 1] = { value = c.file, label = c.name } end
+        for _, c in ipairs(CLASSES) do
+            classes[#classes + 1] = { value = c.file, label = c.name }
+        end
         local specs: SegmentedOption<PlannerSpec>[] = { { value = "any", label = "Any" } }
         local c = s.class and CLASS[s.class]
-        if c then for t = 1, 3 do specs[#specs + 1] = { value = t, label = c.short[t] } end end
+        if c then
+            for t = 1, 3 do
+                specs[#specs + 1] = { value = t, label = c.short[t] }
+            end
+        end
         local who: SelectOption<string>[] = { { value = "any", label = "Anyone who fits" } }
         local listed: { [string]: boolean } = {}
         local people: Member[] = {}
         for _, m in ipairs(self.roster) do
-            if not s.class or m.class == s.class then people[#people + 1] = m end
+            if not s.class or m.class == s.class then
+                people[#people + 1] = m
+            end
         end
         if #people > 0 then
-            who[#who + 1] = { heading = c and ("Pin a %s in the raid"):format(c.name:lower()) or "Pin a player in the raid" }
+            who[#who + 1] = {
+                heading = c and ("Pin a %s in the raid"):format(c.name:lower()) or "Pin a player in the raid",
+            }
             for _, m in ipairs(people) do
                 who[#who + 1] = { value = m.name, label = m.name }
                 listed[m.key] = true
             end
         end
-        if s.pin and not listed[key(s.pin)] then who[#who + 1] = { value = s.pin, label = s.pin .. " (not in the raid)" } end
+        if s.pin and not listed[key(s.pin)] then
+            who[#who + 1] = { value = s.pin, label = s.pin .. " (not in the raid)" }
+        end
         local slots = self:SlotsIn(s.g)
         local pos = 1
-        for i, x in ipairs(slots) do if x == s then pos = i end end
-        window:EditSlot({ id = id, title = "Slot · group " .. s.g, meta = ("%d of %d"):format(pos, #slots),
-            class = s.class, spec = s.spec, role = s.role, label = s.label, who = s.pin, classes = classes, specs = specs,
-            whoOptions = who }, card)
+        for i, x in ipairs(slots) do
+            if x == s then
+                pos = i
+            end
+        end
+        window:EditSlot(
+            {
+                id = id,
+                title = "Slot · group " .. s.g,
+                meta = ("%d of %d"):format(pos, #slots),
+                class = s.class,
+                spec = s.spec,
+                role = s.role,
+                label = s.label,
+                who = s.pin,
+                classes = classes,
+                specs = specs,
+                whoOptions = who,
+            },
+            card
+        )
     end
 
     function SlotMenu(id: PlannerId, owner: Frame)
         local s = self:SlotById(id)
-        if not s then return end
+        if not s then
+            return
+        end
         local f = self.fill and self.fill.slot[s.id]
         local name = (f and f.m.name) or s.pin
         UI.ContextMenuFrom(owner, function(_, root)
             root:CreateTitle(name or reqText(s))
-            root:CreateButton("Edit slot", function() self:OpenEditor(id, owner) end)
+            root:CreateButton("Edit slot", function()
+                self:OpenEditor(id, owner)
+            end)
             local pin = s.pin
             if f then
                 local m = f.m
-                root:CreateButton("Whisper", function() whisper(m.name) end)
+                root:CreateButton("Whisper", function()
+                    whisper(m.name)
+                end)
                 if f.how == "pinned" then
-                    root:CreateButton("Unpin", function() s.pin = nil; self:Refill() end)
+                    root:CreateButton("Unpin", function()
+                        s.pin = nil
+                        self:Refill()
+                    end)
                 else
-                    root:CreateButton("Pin " .. m.name, function() self:Unpin(m.name); s.pin = m.name; self:Refill() end)
+                    root:CreateButton("Pin " .. m.name, function()
+                        self:Unpin(m.name)
+                        s.pin = m.name
+                        self:Refill()
+                    end)
                 end
             elseif pin then
-                root:CreateButton("Invite " .. pin, function() groupInvite(pin) end)
-                root:CreateButton("Whisper", function() whisper(pin) end)
-                root:CreateButton("Unpin", function() s.pin = nil; self:Refill() end)
+                root:CreateButton("Invite " .. pin, function()
+                    groupInvite(pin)
+                end)
+                root:CreateButton("Whisper", function()
+                    whisper(pin)
+                end)
+                root:CreateButton("Unpin", function()
+                    s.pin = nil
+                    self:Refill()
+                end)
             end
             root:CreateDivider()
             root:CreateButton("Clear (any player)", function()
                 s.class, s.spec, s.role, s.label, s.pin = nil, nil, nil, nil, nil
                 self:Refill()
             end)
-            root:CreateButton("Remove slot", function() self:RemoveSlot(id); self:Refill() end)
+            root:CreateButton("Remove slot", function()
+                self:RemoveSlot(id)
+                self:Refill()
+            end)
         end, "raidPlannerSlot", { slot = id, player = name })
     end
 
     function SetupMenu(id: PlannerId, owner: Frame)
         local w = self:Work()
         local s = id == "work" and w or setupIn(self:Data(), id)
-        if not s then return end
+        if not s then
+            return
+        end
         local loaded = id == "work" or w.id == id
         local saveId = id ~= "work" and id or nil
         UI.ContextMenuFrom(owner, function(_, root)
             root:CreateTitle(s.name)
-            if not loaded then root:CreateButton("Load", function() self:Load(id) end) end
-            if loaded then root:CreateButton("Save", function() self:Save() end) end
+            if not loaded then
+                root:CreateButton("Load", function()
+                    self:Load(id)
+                end)
+            end
+            if loaded then
+                root:CreateButton("Save", function()
+                    self:Save()
+                end)
+            end
             root:CreateButton("Save as new…", function()
-                if not loaded then self:Load(id) end
+                if not loaded then
+                    self:Load(id)
+                end
                 self:SaveAsNew()
             end)
             root:CreateDivider()
-            root:CreateButton("Rename", function() if self.window then self.window:Rename(id) end end)
-            if saveId then root:CreateButton("Duplicate", function() self:Duplicate(saveId) end) end
-            root:CreateButton("Export as text", function() self:Export(saveId) end)
+            root:CreateButton("Rename", function()
+                if self.window then
+                    self.window:Rename(id)
+                end
+            end)
+            if saveId then
+                root:CreateButton("Duplicate", function()
+                    self:Duplicate(saveId)
+                end)
+            end
+            root:CreateButton("Export as text", function()
+                self:Export(saveId)
+            end)
             root:CreateDivider()
-            root:CreateButton(saveId and "Delete…" or "Discard…", function() self:Delete(saveId) end)
+            root:CreateButton(saveId and "Delete…" or "Discard…", function()
+                self:Delete(saveId)
+            end)
         end, "raidPlannerSetup", { setup = id })
     end
 
     function NewMenu(owner: Frame)
-        UI.ContextMenuFrom(owner, function(_, root)
-            root:CreateTitle("New setup")
-            root:CreateButton(("Empty (%d players)"):format(self:Data().size), function() self:New(false) end)
-            root:CreateButton("From the raid as it is", function() self:New(true) end):SetEnabled(#self.roster > 0)
-            root:CreateDivider()
-            root:CreateButton("Import from text…", function() self:Import() end)
-        end, "raidPlannerNew")
+        UI.ContextMenuFrom(
+            owner,
+            function(_, root)
+                root:CreateTitle("New setup")
+                root:CreateButton(("Empty (%d players)"):format(self:Data().size), function()
+                    self:New(false)
+                end)
+                root:CreateButton("From the raid as it is", function()
+                    self:New(true)
+                end):SetEnabled(#self.roster > 0)
+                root:CreateDivider()
+                root:CreateButton("Import from text…", function()
+                    self:Import()
+                end)
+            end,
+            "raidPlannerNew"
+        )
     end
 
     function PersonMenu(name: string, owner: Frame)
         local m = self.byKey[key(name)]
         UI.ContextMenuFrom(owner, function(_, root)
             root:CreateTitle(name)
-            root:CreateButton("Whisper", function() whisper(name) end)
+            root:CreateButton("Whisper", function()
+                whisper(name)
+            end)
             if m then
                 root:CreateButton("Add a slot for them", function()
                     local w = self:Work()
                     -- their own group if it has room, else the first that has
                     local g = (m.group <= w.size / 5 and #self:SlotsIn(m.group) < MAX_GROUP) and m.group or nil
-                    for x = 1, w.size / 5 do if not g and #self:SlotsIn(x) < MAX_GROUP then g = x end end
+                    for x = 1, w.size / 5 do
+                        if not g and #self:SlotsIn(x) < MAX_GROUP then
+                            g = x
+                        end
+                    end
                     if not g then
                         self:Print("Every group has five slots.")
                         return
                     end
                     local tree = m.tree
-                    self:AddSlot(g, { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil }, m.name)
+                    self:AddSlot(
+                        g,
+                        { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil },
+                        m.name
+                    )
                     self.letGo[m.key] = nil
                     self:Refill()
                 end)
@@ -1856,28 +2532,41 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
             return
         end
         local window = self.window
-        if not window then return end
-        window:ShowMoves({ moves = self:Moves(),
-            note = "Open slots stay open; a player without a slot moves only when a full group needs their place. You lead; out of combat. The raid sees the moves." },
-            function() self:RunMoves(1) end)
+        if not window then
+            return
+        end
+        window:ShowMoves({
+            moves = self:Moves(),
+            note = "Open slots stay open; a player without a slot moves only when a full group needs their place. You lead; out of combat. The raid sees the moves.",
+        }, function()
+            self:RunMoves(1)
+        end)
     end
 
     -- One round of moves: into a group with room, a set; into a full one, a swap
     -- with someone there who doesn't belong (whose own group is best). Then,
     -- once the raid has caught up, another round for what's left (a few at most).
     function RunMoves(round: number)
-        if InCombatLockdown() or round > 4 then return end
+        if InCombatLockdown() or round > 4 then
+            return
+        end
         self:ReadRoster()
         local ok = self:CanArrange()
         local fill = self.fill
-        if not (ok and fill) then return end
+        if not (ok and fill) then
+            return
+        end
         local roster = self.roster
         local count: { [number]: number } = {}
         local target: { [string]: number } = {}
-        for _, m in ipairs(roster) do count[m.group] = (count[m.group] or 0) + 1 end
+        for _, m in ipairs(roster) do
+            count[m.group] = (count[m.group] or 0) + 1
+        end
         for _, s in ipairs(self:Work().slots) do
             local f = fill.slot[s.id]
-            if f then target[f.m.key] = s.g end
+            if f then
+                target[f.m.key] = s.g
+            end
         end
         local plan: RaidMove[] = {}
         local done: { [string]: boolean } = {}
@@ -1893,7 +2582,10 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                     local swap: Member? = nil
                     for _, x in ipairs(roster) do
                         if x.group == to and not done[x.key] and target[x.key] ~= to then
-                            if target[x.key] == m.group then swap = x break end
+                            if target[x.key] == m.group then
+                                swap = x
+                                break
+                            end
                             swap = swap or x
                         end
                     end
@@ -1906,18 +2598,30 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 done[m.key] = true
             end
         end
-        if #plan == 0 then return end
+        if #plan == 0 then
+            return
+        end
         for i, p in ipairs(plan) do
             after((i - 1) * 0.1, function()
-                if InCombatLockdown() then return end
-                if p.g then try(SetRaidSubgroup, p.a, p.g) else try(SwapRaidSubgroup, p.a, p.b) end
+                if InCombatLockdown() then
+                    return
+                end
+                if p.g then
+                    try(SetRaidSubgroup, p.a, p.g)
+                else
+                    try(SwapRaidSubgroup, p.a, p.b)
+                end
             end)
         end
         -- the roster update comes 0.4-0.7 s after a move (probed)
         after(#plan * 0.1 + 1.5, function()
-            if not self:IsEnabled() then return end
+            if not self:IsEnabled() then
+                return
+            end
             self:Refill()
-            if #self:Moves() > 0 then self:RunMoves(round + 1) end
+            if #self:Moves() > 0 then
+                self:RunMoves(round + 1)
+            end
         end)
     end
 
@@ -1928,18 +2632,43 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function Build(): PlannerWindow
         local w = UI.RaidPlanner(SuuUI.Root)
         self.window = w
-        w.onSize = function(size: number) self:Data().size = size; self:Render() end
+        w.onSize = function(size: number)
+            self:Data().size = size
+            self:Render()
+        end
         -- the loaded one's row does nothing (a load would drop its changes)
-        w.onSetup = function(id: PlannerId) if id ~= "work" and id ~= self:Work().id then self:Load(id) end end
-        w.onSetupMenu = function(id: PlannerId, owner: Frame) self:SetupMenu(id, owner) end
-        w.onNew = function(owner: Frame) self:NewMenu(owner) end
-        w.onRename = function(id: PlannerId, text: string) self:Rename(id, text) end
-        w.onSave = function() self:Save() end
-        w.onSaveAsNew = function() self:SaveAsNew() end
-        w.onDuplicate = function() self:Duplicate(self:Work().id) end
-        w.onDelete = function() self:Delete(nil) end
+        w.onSetup = function(id: PlannerId)
+            if id ~= "work" and id ~= self:Work().id then
+                self:Load(id)
+            end
+        end
+        w.onSetupMenu = function(id: PlannerId, owner: Frame)
+            self:SetupMenu(id, owner)
+        end
+        w.onNew = function(owner: Frame)
+            self:NewMenu(owner)
+        end
+        w.onRename = function(id: PlannerId, text: string)
+            self:Rename(id, text)
+        end
+        w.onSave = function()
+            self:Save()
+        end
+        w.onSaveAsNew = function()
+            self:SaveAsNew()
+        end
+        w.onDuplicate = function()
+            self:Duplicate(self:Work().id)
+        end
+        w.onDelete = function()
+            self:Delete(nil)
+        end
         w.onSlot = function(id: PlannerId, owner: Frame, button: string)
-            if button == "RightButton" then self:SlotMenu(id, owner) else self:OpenEditor(id, owner) end
+            if button == "RightButton" then
+                self:SlotMenu(id, owner)
+            else
+                self:OpenEditor(id, owner)
+            end
         end
         w.onAdd = function(g: number)
             local s = self:AddSlot(g)
@@ -1948,19 +2677,36 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 self:OpenEditor(s.id, w:CardFor(s.id))
             end
         end
-        w.onDrop = function(what: DragWhat, where: DropWhere) self:Drop(what, where) end
-        w.onPerson = function(name: string, owner: Frame, button: string) if button == "RightButton" then self:PersonMenu(name, owner) end end
-        w.onSlotChange = function(id: PlannerId, changes: SlotChanges) self:ChangeSlot(id, changes) end
-        w.onSlotRemove = function(id: PlannerId) self:RemoveSlot(id); self:Refill() end
+        w.onDrop = function(what: DragWhat, where: DropWhere)
+            self:Drop(what, where)
+        end
+        w.onPerson = function(name: string, owner: Frame, button: string)
+            if button == "RightButton" then
+                self:PersonMenu(name, owner)
+            end
+        end
+        w.onSlotChange = function(id: PlannerId, changes: SlotChanges)
+            self:ChangeSlot(id, changes)
+        end
+        w.onSlotRemove = function(id: PlannerId)
+            self:RemoveSlot(id)
+            self:Refill()
+        end
         w.onInspect = function()
             self.inspectRound = true
             self:InspectNext()
             self:Render()
         end
-        w.onArrange = function() self:Arrange() end
-        w.onFill = function() self:Refill(true) end
+        w.onArrange = function()
+            self:Arrange()
+        end
+        w.onFill = function()
+            self:Refill(true)
+        end
         w:HookScript("OnShow", function()
-            if not self:IsEnabled() then return end
+            if not self:IsEnabled() then
+                return
+            end
             self:Refill()
             self:AskSpecs()
             self:InspectNext()
@@ -1970,7 +2716,11 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
 
     function Toggle()
         local w = self.window or self:Build()
-        if w:IsShown() then w:Hide() else w:Show() end
+        if w:IsShown() then
+            w:Hide()
+        else
+            w:Show()
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -1983,7 +2733,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         for _, item in ipairs(ITEMS) do
             if item.family == family then
                 all = all + 1
-                if set[item.key] then on = on + 1 end
+                if set[item.key] then
+                    on = on + 1
+                end
             end
         end
         return on, all
@@ -1992,7 +2744,9 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function FamilyIsDefault(family: string): boolean
         local set, essential = self:TrackedSet(), presetSet("essentials")
         for _, item in ipairs(ITEMS) do
-            if item.family == family and (set[item.key] or false) ~= (essential[item.key] or false) then return false end
+            if item.family == family and (set[item.key] or false) ~= (essential[item.key] or false) then
+                return false
+            end
         end
         return true
     end
@@ -2000,58 +2754,124 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
     function ResetFamily(family: string)
         local set, essential = self:TrackedSet(), presetSet("essentials")
         for _, item in ipairs(ITEMS) do
-            if item.family == family then set[item.key] = essential[item.key] end
+            if item.family == family then
+                set[item.key] = essential[item.key]
+            end
         end
         self:SetTrackedSet(set)
     end
 
     function Section(): SettingsSection
         local groups: SettingsGroup[] = {
-            { title = "Raid planner", description = "Plan raids as setups of slots; the raid fills them. Open it from Social › Raid › Plan or /suu raid. Only what's tracked below shows in coverage and counts.",
-              rows = {
-                { label = "Open the planner", control = "button", text = "Raid planner",
-                  description = "Setups are saved for the account; what's tracked follows this profile.",
-                  onClick = function() SuuUI.ToggleSettings(); self:Toggle() end },
-                { label = "Track", control = "segmented", stacked = true, description = ESSENTIALS_TEXT,
-                  options = { { value = "all", label = "Everything" }, { value = "essentials", label = "The essentials" }, { value = "custom", label = "Custom" } },
-                  get = function(): unknown return self:Get("preset") end,
-                  set = function(v: unknown): (boolean, string?)
-                      if v == "custom" or type(v) ~= "string" then
-                          self:Set("tracked", self:TrackedSet())
-                          return self:Set("preset", "custom")
-                      end
-                      self:Set("tracked", {})
-                      return self:Set("preset", v)
-                  end,
-                  isDefault = function(): boolean return self:Get("preset") == "essentials" end,
-                  reset = function() self:Reset("tracked"); self:Reset("preset") end },
-                { key = "fill", label = "Auto-fill", control = "segmented",
-                  options = { { value = "instant", label = "As the raid changes" }, { value = "review", label = "After review" } },
-                  description = "As the raid changes: slots fill at once, out of combat; players you placed by hand stay. After review: who is placed stays, newcomers wait for Fill slots." },
-                { key = "inspect", label = "Inspect missing specs", control = "segmented",
-                  options = { { value = "auto", label = "Automatically" }, { value = "click", label = "On click" } },
-                  description = "Automatically: while the planner is open, one player at a time, out of combat, slowly so the game allows it. On click: only from the planner's Inspect button." },
-                { key = "flagDoubled", label = "Flag doubled party-wide buffs", control = "toggle",
-                  description = "Two Trueshot Auras or two Blood Pacts in one group: one is wasted." },
-                { key = "shareSpec", label = "Share my spec", control = "toggle",
-                  description = "Tell raid members who use SuuUI your spec, out of combat, so their planner needn't inspect you." },
-            } },
+            {
+                title = "Raid planner",
+                description = "Plan raids as setups of slots; the raid fills them. Open it from Social › Raid › Plan or /suu raid. Only what's tracked below shows in coverage and counts.",
+                rows = {
+                    {
+                        label = "Open the planner",
+                        control = "button",
+                        text = "Raid planner",
+                        description = "Setups are saved for the account; what's tracked follows this profile.",
+                        onClick = function()
+                            SuuUI.ToggleSettings()
+                            self:Toggle()
+                        end,
+                    },
+                    {
+                        label = "Track",
+                        control = "segmented",
+                        stacked = true,
+                        description = ESSENTIALS_TEXT,
+                        options = {
+                            { value = "all", label = "Everything" },
+                            { value = "essentials", label = "The essentials" },
+                            { value = "custom", label = "Custom" },
+                        },
+                        get = function(): unknown
+                            return self:Get("preset")
+                        end,
+                        set = function(v: unknown): (boolean, string?)
+                            if v == "custom" or type(v) ~= "string" then
+                                self:Set("tracked", self:TrackedSet())
+                                return self:Set("preset", "custom")
+                            end
+                            self:Set("tracked", {})
+                            return self:Set("preset", v)
+                        end,
+                        isDefault = function(): boolean
+                            return self:Get("preset") == "essentials"
+                        end,
+                        reset = function()
+                            self:Reset("tracked")
+                            self:Reset("preset")
+                        end,
+                    },
+                    {
+                        key = "fill",
+                        label = "Auto-fill",
+                        control = "segmented",
+                        options = {
+                            { value = "instant", label = "As the raid changes" },
+                            { value = "review", label = "After review" },
+                        },
+                        description = "As the raid changes: slots fill at once, out of combat; players you placed by hand stay. After review: who is placed stays, newcomers wait for Fill slots.",
+                    },
+                    {
+                        key = "inspect",
+                        label = "Inspect missing specs",
+                        control = "segmented",
+                        options = {
+                            { value = "auto", label = "Automatically" },
+                            { value = "click", label = "On click" },
+                        },
+                        description = "Automatically: while the planner is open, one player at a time, out of combat, slowly so the game allows it. On click: only from the planner's Inspect button.",
+                    },
+                    {
+                        key = "flagDoubled",
+                        label = "Flag doubled party-wide buffs",
+                        control = "toggle",
+                        description = "Two Trueshot Auras or two Blood Pacts in one group: one is wasted.",
+                    },
+                    {
+                        key = "shareSpec",
+                        label = "Share my spec",
+                        control = "toggle",
+                        description = "Tell raid members who use SuuUI your spec, out of combat, so their planner needn't inspect you.",
+                    },
+                },
+            },
         }
         for _, fam in ipairs(FAMILIES) do
             local famKey = fam.key
-            groups[#groups + 1] = { title = fam.title, description = fam.description, rows = {
-                { label = "Tracked", control = "custom", stacked = true,
-                  build = function(parent: Frame): FamilyChecks
-                      return FamilyChecks.new(parent, famKey, function(itemKey: string, on: boolean) self:SetTracked(itemKey, on) end)
-                  end,
-                  description = function(): string
-                      local on, all = self:FamilyCounts(famKey)
-                      return ("%d of %d tracked."):format(on, all)
-                  end,
-                  get = function(): unknown return self:TrackedSet() end,
-                  isDefault = function(): boolean return self:FamilyIsDefault(famKey) end,
-                  reset = function() self:ResetFamily(famKey) end },
-            } }
+            groups[#groups + 1] = {
+                title = fam.title,
+                description = fam.description,
+                rows = {
+                    {
+                        label = "Tracked",
+                        control = "custom",
+                        stacked = true,
+                        build = function(parent: Frame): FamilyChecks
+                            return FamilyChecks.new(parent, famKey, function(itemKey: string, on: boolean)
+                                self:SetTracked(itemKey, on)
+                            end)
+                        end,
+                        description = function(): string
+                            local on, all = self:FamilyCounts(famKey)
+                            return ("%d of %d tracked."):format(on, all)
+                        end,
+                        get = function(): unknown
+                            return self:TrackedSet()
+                        end,
+                        isDefault = function(): boolean
+                            return self:FamilyIsDefault(famKey)
+                        end,
+                        reset = function()
+                            self:ResetFamily(famKey)
+                        end,
+                    },
+                },
+            }
         end
         return { id = "raidplanner", label = "Raid planner", category = "Insights", order = 45, groups = groups }
     end
@@ -2066,23 +2886,35 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
         local specs = self:Data().specs
         for k, e in pairs(specs) do
             local raw: unknown = e
-            if type(raw) ~= "table" or time() - (e.at or 0) > SPEC_FRESH then specs[k] = nil end
+            if type(raw) ~= "table" or time() - (e.at or 0) > SPEC_FRESH then
+                specs[k] = nil
+            end
         end
         self:RegisterSettings(self:Section())
         self:ProvideService(RAID_PLANNER, {
-            Toggle = function() self:Toggle() end,
-            Show = function() (self.window or self:Build()):Show() end,
+            Toggle = function()
+                self:Toggle()
+            end,
+            Show = function()
+                (self.window or self:Build()):Show()
+            end,
             IsShown = function(): boolean
                 local window = self.window
                 return window ~= nil and window:IsShown()
             end,
         })
-        self:RegisterCommand("raid", "The raid planner: setups of slots the raid fills, and Arrange groups.", function() self:Toggle() end)
+        self:RegisterCommand("raid", "The raid planner: setups of slots the raid fills, and Arrange groups.", function()
+            self:Toggle()
+        end)
         try(field(C_ChatInfo, "RegisterAddonMessagePrefix"), PREFIX)
         local valid = field(C_EventUtils, "IsEventValid")
-        local function known(event: string): boolean return not valid or secret.flag(try(valid, event)) end
+        local function known(event: string): boolean
+            return not valid or secret.flag(try(valid, event))
+        end
         if known("CHAT_MSG_ADDON") then
-            self:OnGameEvent("CHAT_MSG_ADDON", function(_, prefix, text, channel, sender) self:OnMessage(prefix, text, channel, sender) end)
+            self:OnGameEvent("CHAT_MSG_ADDON", function(_, prefix, text, channel, sender)
+                self:OnMessage(prefix, text, channel, sender)
+            end)
         end
         self.wasInRaid = inRaidNow()
         if known("GROUP_ROSTER_UPDATE") then
@@ -2090,37 +2922,80 @@ class RaidPlannerModule extends Module<typeof(DEFAULTS)>
                 self:RefillSoon()
                 local inRaid = inRaidNow()
                 -- your spec to the raid once, as you join (later only when asked)
-                if inRaid and not self.wasInRaid then self:ShareSoon(3) end
+                if inRaid and not self.wasInRaid then
+                    self:ShareSoon(3)
+                end
                 self.wasInRaid = inRaid
                 local window = self.window
                 if inRaid and window and window:IsShown() then
-                    after(1, function() if self:IsEnabled() then self:AskSpecs(); self:InspectNext() end end)
+                    after(1, function()
+                        if self:IsEnabled() then
+                            self:AskSpecs()
+                            self:InspectNext()
+                        end
+                    end)
                 end
             end)
         end
-        if known("PLAYER_ROLES_ASSIGNED") then self:OnGameEvent("PLAYER_ROLES_ASSIGNED", function() self:RefillSoon() end) end
-        if known("PARTY_LEADER_CHANGED") then self:OnGameEvent("PARTY_LEADER_CHANGED", function() self:RefillSoon() end) end
-        if known("UNIT_CONNECTION") then self:OnGameEvent("UNIT_CONNECTION", function() self:RefillSoon() end) end
-        if known("INSPECT_READY") then self:OnGameEvent("INSPECT_READY", function(_, guid) self:OnInspectReady(guid) end) end
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Render() end)
+        if known("PLAYER_ROLES_ASSIGNED") then
+            self:OnGameEvent("PLAYER_ROLES_ASSIGNED", function()
+                self:RefillSoon()
+            end)
+        end
+        if known("PARTY_LEADER_CHANGED") then
+            self:OnGameEvent("PARTY_LEADER_CHANGED", function()
+                self:RefillSoon()
+            end)
+        end
+        if known("UNIT_CONNECTION") then
+            self:OnGameEvent("UNIT_CONNECTION", function()
+                self:RefillSoon()
+            end)
+        end
+        if known("INSPECT_READY") then
+            self:OnGameEvent("INSPECT_READY", function(_, guid)
+                self:OnInspectReady(guid)
+            end)
+        end
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:Render()
+        end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             after(1, function()
-                if not self:IsEnabled() then return end
+                if not self:IsEnabled() then
+                    return
+                end
                 self:Render()
                 self:InspectNext()
             end)
         end)
-        self:On("SUUUI_SPEC_CHANGED", function() self:ShareSoon(); self:RefillSoon() end)
+        self:On("SUUUI_SPEC_CHANGED", function()
+            self:ShareSoon()
+            self:RefillSoon()
+        end)
         -- tracking, fill mode and doubled flags: drawn again
-        self:WatchAll({ "preset", "tracked", "flagDoubled" }, function() self:Render() end)
-        self:Watch("fill", function() self:Refill(true) end)
-        self:Watch("inspect", function() self:InspectNext(); self:Render() end)
-        self:Watch("shareSpec", function(share) if share then self:ShareSoon() end end)
+        self:WatchAll({ "preset", "tracked", "flagDoubled" }, function()
+            self:Render()
+        end)
+        self:Watch("fill", function()
+            self:Refill(true)
+        end)
+        self:Watch("inspect", function()
+            self:InspectNext()
+            self:Render()
+        end)
+        self:Watch("shareSpec", function(share)
+            if share then
+                self:ShareSoon()
+            end
+        end)
         self:Refill()
     end
 
     override function OnDisable()
-        if self.window then self.window:Hide() end
+        if self.window then
+            self.window:Hide()
+        end
         self.inspecting, self.inspectRound = nil, false
     end
 end
@@ -2133,6 +3008,8 @@ M:Migrate("graceOfAir", function(values)
     local t: unknown = values.tracked
     if type(t) == "table" then
         local set = t :: unknown :: { [string]: boolean? }
-        if set.earth and set.graceOfAir == nil then set.graceOfAir = true end
+        if set.earth and set.graceOfAir == nil then
+            set.graceOfAir = true
+        end
     end
 end)

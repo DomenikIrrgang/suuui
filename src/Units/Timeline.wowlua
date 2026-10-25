@@ -35,17 +35,16 @@ local UI = SuuUI.UI
 
 local DEFAULTS = {
     position = { point = "TOP", x = 0, y = -28 } :: Position,
-    variant = "track",   -- "track" | "list" | "off"
+    variant = "track", -- "track" | "list" | "off"
     pullSeconds = 10,
-    pullAlert = "all",   -- "all" | "last10" | "off": the countdown as an alert
+    pullAlert = "all", -- "all" | "last10" | "off": the countdown as an alert
     pullVoice = "Bella", -- a voice in Media/Sounds/Countdown, or "off": the last ten seconds spoken
-    source = "suui",     -- "suui" | "dbm" | "bigwigs": where boss timers come from
-    hideTheirs = true,   -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
+    source = "suui", -- "suui" | "dbm" | "bigwigs": where boss timers come from
+    hideTheirs = true, -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
     dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
 }
 
 local M: TimelineModule
-
 
 local PREFIX = "SuuUI"
 local PULL_SPELL, PULL_ICON = 100, 132337 -- Charge's spell and art
@@ -58,16 +57,22 @@ type Badge = { tone: string, text: string }
 -- bit per Enum.EncounterTimelineIconSet value), as the design's badges.
 type IconBadge = { icon: string, tone: string, text: string }
 local BADGES: IconBadge[] = {
-    { icon = "TankAlert", tone = "warning", text = "Tank" }, { icon = "Deadly", tone = "danger", text = "Lethal" },
-    { icon = "HealerAlert", tone = "info", text = "Healer" }, { icon = "Dispel", tone = "magic", text = "Dispel" },
+    { icon = "TankAlert", tone = "warning", text = "Tank" },
+    { icon = "Deadly", tone = "danger", text = "Lethal" },
+    { icon = "HealerAlert", tone = "info", text = "Healer" },
+    { icon = "Dispel", tone = "magic", text = "Dispel" },
     { icon = "Enrage", tone = "warning", text = "Enrage" },
 }
 local function badgeOf(mask: unknown): Badge?
     local set = tbl.field(Enum, "EncounterTimelineIconSet")
-    if not isNumber(mask) or mask == 0 or not set then return nil end
+    if not isNumber(mask) or mask == 0 or not set then
+        return nil
+    end
     for _, b in ipairs(BADGES) do
         local v = tbl.field(set, b.icon)
-        if isNumber(v) and bit.band(mask, bit.lshift(1, v)) ~= 0 then return { tone = b.tone, text = b.text } end
+        if isNumber(v) and bit.band(mask, bit.lshift(1, v)) ~= 0 then
+            return { tone = b.tone, text = b.text }
+        end
     end
     return nil
 end
@@ -83,32 +88,52 @@ local ACTIVE, PAUSED = 0, 1
 -- the ones loaded are offered; a source that's gone falls back to SuuUI.
 --------------------------------------------------------------------------------
 
-local function plain(v: unknown): v is string return not isSecret(v) and type(v) == "string" and v ~= "" end
+local function plain(v: unknown): v is string
+    return not isSecret(v) and type(v) == "string" and v ~= ""
+end
 local function iconOf(v: unknown): (number | string)?
-    if isSecret(v) then return nil end
+    if isSecret(v) then
+        return nil
+    end
     return tonumber(v) or (type(v) == "string" and v ~= "" and v) or nil
 end
 -- a boss mod's own pull bar: SuuUI's countdown shows the pull already
-local function isPull(text: unknown): boolean return plain(text) and text:lower():find("^pull") ~= nil end
+local function isPull(text: unknown): boolean
+    return plain(text) and text:lower():find("^pull") ~= nil
+end
 
 -- A boss mod's function `key` of its global `name` (nil: not loaded).
 local function addonFn(name: string, key: string): ((...unknown) -> ...unknown)?
     local fn = tbl.field(tbl.field(_G, name), key)
-    if type(fn) == "function" then return fn :: (...unknown) -> ...unknown end
+    if type(fn) == "function" then
+        return fn :: (...unknown) -> ...unknown
+    end
     return nil
 end
 
 -- DBM's options table, while DBM is loaded.
 local function dbmOptions(): { [string]: unknown }?
     local options = tbl.field(tbl.field(_G, "DBM"), "Options")
-    if type(options) == "table" then return options :: { [string]: unknown } end
+    if type(options) == "table" then
+        return options :: { [string]: unknown }
+    end
     return nil
 end
 
 type Source = { label: string, loaded: () -> boolean }
 local SOURCES: { [string]: Source } = {
-    dbm = { label = "DBM", loaded = function(): boolean return addonFn("DBM", "RegisterCallback") ~= nil end },
-    bigwigs = { label = "BigWigs", loaded = function(): boolean return addonFn("BigWigsLoader", "RegisterMessage") ~= nil end },
+    dbm = {
+        label = "DBM",
+        loaded = function(): boolean
+            return addonFn("DBM", "RegisterCallback") ~= nil
+        end,
+    },
+    bigwigs = {
+        label = "BigWigs",
+        loaded = function(): boolean
+            return addonFn("BigWigsLoader", "RegisterMessage") ~= nil
+        end,
+    },
 }
 
 -- keep a frame invisible while its test says so (one hook per frame)
@@ -117,20 +142,29 @@ local hideHooked: { [Frame]: boolean } = {}
 setmetatable(hideTests, { __mode = "k" })
 setmetatable(hideHooked, { __mode = "k" })
 local function keepHidden(frame: Frame?, test: () -> boolean)
-    if not frame then return end
+    if not frame then
+        return
+    end
     hideTests[frame] = test
     if not hideHooked[frame] then
         hideHooked[frame] = true
         hook(frame, "SetAlpha", function(f, a)
             local hidden = hideTests[f]
-            if not issecretvalue(a) and a > 0 and hidden and hidden() then f:SetAlpha(0) end
+            if not issecretvalue(a) and a > 0 and hidden and hidden() then
+                f:SetAlpha(0)
+            end
         end)
     end
-    if test() then frame:SetAlpha(0) end
+    if test() then
+        frame:SetAlpha(0)
+    end
 end
 
 -- DBM's timer types (colorId): 4 interrupt, 5 role (tank).
-local DBM_BADGE: { [number]: Badge } = { [4] = { tone = "info", text = "Kick" }, [5] = { tone = "warning", text = "Tank" } }
+local DBM_BADGE: { [number]: Badge } = {
+    [4] = { tone = "info", text = "Kick" },
+    [5] = { tone = "warning", text = "Tank" },
+}
 
 --------------------------------------------------------------------------------
 -- The countdown voice: the last ten seconds and "Pull!" spoken
@@ -146,8 +180,12 @@ local VOICE_PATH = "Interface\\AddOns\\SuuUI\\Media\\Sounds\\Countdown\\%s\\%s.o
 -- Who may start one for the group: the leader or an assistant (anyone in a
 -- party without a leader flag).
 local function canLead(): boolean
-    if not secret.flag(IsInGroup()) then return true end
-    if secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player")) then return true end
+    if not secret.flag(IsInGroup()) then
+        return true
+    end
+    if secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player")) then
+        return true
+    end
     return not secret.flag(IsInRaid())
 end
 
@@ -173,52 +211,135 @@ local TEST: TestAbility[] = {
 --------------------------------------------------------------------------------
 
 local SECTION: SettingsSection = {
-    id = "timeline", label = "Timeline", category = "Insights", order = 30,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "timeline",
+    label = "Timeline",
+    category = "Insights",
+    order = 30,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Encounter timeline", description = "What's coming, riding toward now: boss abilities when the game sends them (Forever doesn't yet) and SuuUI's pull countdown. Hidden while nothing is on it.", rows = {
-            { key = "variant", label = "Show", control = "segmented", stacked = true,
-              options = { { value = "track", label = "Timeline" }, { value = "list", label = "List" }, { value = "off", label = "Off" } },
-              description = "Timeline: a line across the top of the screen, the next 30 seconds. List: the older panel, soonest first." },
-            { label = "Try it", control = "button", text = "Show a test timeline",
-              description = "Five abilities on the real timeline, the last one past its 30 seconds.",
-              onClick = function() M:Test() end },
-        } },
-        { title = "Boss timers", rows = {
-            { key = "source", label = "From", control = "segmented", stacked = true,
-              options = { { value = "suui", label = "SuuUI" } },
-              description = function()
-                  local missing: string[] = {}
-                  for _, key in ipairs({ "dbm", "bigwigs" }) do
-                      local source = assert(SOURCES[key])
-                      if not source.loaded() then missing[#missing + 1] = source.label end
-                  end
-                  local text = "SuuUI: the game's own timeline (Forever sends no boss data yet) and SuuUI's timers. A boss mod: its boss timers ride the timeline, SuuUI's pull countdown too; you can turn its own bars off in its settings."
-                  if #missing > 0 then text = text .. " Install " .. table.concat(missing, " or ") .. " to use " .. (#missing > 1 and "theirs" or "its") .. "." end
-                  return text
-              end },
-            { key = "hideTheirs", label = "Hide their bars", control = "toggle",
-              disabled = function() return M:Get("source") == "suui", "Choose DBM or BigWigs first." end,
-              description = "While a boss mod feeds the timeline, its own timer bars stay hidden; DBM's warnings too (its \"Hide DBM warnings\" option, given back when you switch). BigWigs' messages can't be hidden from outside: turn them off in BigWigs if you like." },
-        } },
-        { title = "Pull countdown", description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). It is the game's own countdown, the one DBM and BigWigs use: in a group, the leader's or an assistant's reaches everyone (their boss mods show it, players without addons see the game's numbers), and theirs shows here. Combat ends it.", rows = {
-            { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
-            { key = "pullAlert", label = "Alert", control = "segmented", stacked = true,
-              options = { { value = "all", label = "Whole countdown" }, { value = "last10", label = "Last 10 seconds" }, { value = "off", label = "Off" } },
-              description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline." },
-            { key = "pullVoice", label = "Voice", control = "segmented",
-              options = { { value = "Bella", label = "Bella" }, { value = "Heart", label = "Heart" }, { value = "Michael", label = "Michael" },
-                          { value = "off", label = "Off" } }, stacked = true,
-              description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then." },
-            { label = "Listen", control = "button", text = "Hear the voice",
-              disabled = function() return M:Get("pullVoice") == "off", "Choose a voice first." end,
-              onClick = function()
-                  local voice = M:Get("pullVoice")
-                  for i, n in ipairs({ "3", "2", "1", "pull" }) do after(i - 1, function() M:Speak(n, voice) end) end
-              end },
-            { label = "Start one", control = "button", text = "Start a pull countdown",
-              onClick = function() M:Pull() end },
-        } },
+        {
+            title = "Encounter timeline",
+            description = "What's coming, riding toward now: boss abilities when the game sends them (Forever doesn't yet) and SuuUI's pull countdown. Hidden while nothing is on it.",
+            rows = {
+                {
+                    key = "variant",
+                    label = "Show",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "track", label = "Timeline" },
+                        { value = "list", label = "List" },
+                        { value = "off", label = "Off" },
+                    },
+                    description = "Timeline: a line across the top of the screen, the next 30 seconds. List: the older panel, soonest first.",
+                },
+                {
+                    label = "Try it",
+                    control = "button",
+                    text = "Show a test timeline",
+                    description = "Five abilities on the real timeline, the last one past its 30 seconds.",
+                    onClick = function()
+                        M:Test()
+                    end,
+                },
+            },
+        },
+        {
+            title = "Boss timers",
+            rows = {
+                {
+                    key = "source",
+                    label = "From",
+                    control = "segmented",
+                    stacked = true,
+                    options = { { value = "suui", label = "SuuUI" } },
+                    description = function()
+                        local missing: string[] = {}
+                        for _, key in ipairs({ "dbm", "bigwigs" }) do
+                            local source = assert(SOURCES[key])
+                            if not source.loaded() then
+                                missing[#missing + 1] = source.label
+                            end
+                        end
+                        local text = "SuuUI: the game's own timeline (Forever sends no boss data yet) and SuuUI's timers. A boss mod: its boss timers ride the timeline, SuuUI's pull countdown too; you can turn its own bars off in its settings."
+                        if #missing > 0 then
+                            text = text ..
+                                " Install " ..
+                                    table.concat(missing, " or ") ..
+                                        " to use " .. (#missing > 1 and "theirs" or "its") .. "."
+                        end
+                        return text
+                    end,
+                },
+                {
+                    key = "hideTheirs",
+                    label = "Hide their bars",
+                    control = "toggle",
+                    disabled = function()
+                        return M:Get("source") == "suui", "Choose DBM or BigWigs first."
+                    end,
+                    description = "While a boss mod feeds the timeline, its own timer bars stay hidden; DBM's warnings too (its \"Hide DBM warnings\" option, given back when you switch). BigWigs' messages can't be hidden from outside: turn them off in BigWigs if you like.",
+                },
+            },
+        },
+        {
+            title = "Pull countdown",
+            description = "/suu pull starts it (/suu pull 15 for 15 seconds, /suu pull 0 cancels). It is the game's own countdown, the one DBM and BigWigs use: in a group, the leader's or an assistant's reaches everyone (their boss mods show it, players without addons see the game's numbers), and theirs shows here. Combat ends it.",
+            rows = {
+                { key = "pullSeconds", label = "Length", control = "slider", min = 5, max = 30, step = 1, unit = "s" },
+                {
+                    key = "pullAlert",
+                    label = "Alert",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "all", label = "Whole countdown" },
+                        { value = "last10", label = "Last 10 seconds" },
+                        { value = "off", label = "Off" },
+                    },
+                    description = "The countdown in the middle of the screen, then \"Pull!\". Off: only on the timeline.",
+                },
+                {
+                    key = "pullVoice",
+                    label = "Voice",
+                    control = "segmented",
+                    options = {
+                        { value = "Bella", label = "Bella" },
+                        { value = "Heart", label = "Heart" },
+                        { value = "Michael", label = "Michael" },
+                        { value = "off", label = "Off" },
+                    },
+                    stacked = true,
+                    description = "The last ten seconds and \"Pull!\" spoken. Quiet while DBM or BigWigs feeds the timeline (Boss timers): it counts out loud itself then.",
+                },
+                {
+                    label = "Listen",
+                    control = "button",
+                    text = "Hear the voice",
+                    disabled = function()
+                        return M:Get("pullVoice") == "off", "Choose a voice first."
+                    end,
+                    onClick = function()
+                        local voice = M:Get("pullVoice")
+                        for i, n in ipairs({ "3", "2", "1", "pull" }) do
+                            after(i - 1, function()
+                                M:Speak(n, voice)
+                            end)
+                        end
+                    end,
+                },
+                {
+                    label = "Start one",
+                    control = "button",
+                    text = "Start a pull countdown",
+                    onClick = function()
+                        M:Pull()
+                    end,
+                },
+            },
+        },
     },
 }
 
@@ -260,29 +381,46 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         local opts: SelectOption<string>[] = { { value = "suui", label = "SuuUI" } }
         for _, key in ipairs({ "dbm", "bigwigs" }) do
             local source = assert(SOURCES[key])
-            if source.loaded() then opts[#opts + 1] = { value = key, label = source.label } end
+            if source.loaded() then
+                opts[#opts + 1] = { value = key, label = source.label }
+            end
         end
         return opts
     end
 
     -- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }
     function AddonTimer(source: string, id: unknown, text: unknown, seconds: unknown, icon: unknown, badge: Badge?)
-        if self:Get("source") ~= source or not isNumber(seconds) or seconds <= 0 or isPull(text) then return end
+        if self:Get("source") ~= source or not isNumber(seconds) or seconds <= 0 or isPull(text) then
+            return
+        end
         local key = tostring(id)
-        self.addonTimers[key] = { id = "addon:" .. key, label = plain(text) and text or "", icon = iconOf(icon),
-                                  badge = badge, endsAt = GetTime() + seconds }
+        self.addonTimers[key] = {
+            id = "addon:" .. key,
+            label = plain(text) and text or "",
+            icon = iconOf(icon),
+            badge = badge,
+            endsAt = GetTime() + seconds,
+        }
         self:Refresh()
     end
 
     function AddonTimerStop(source: string, id: unknown)
-        if self:Get("source") ~= source then return end
-        if id == nil then self.addonTimers = {} else self.addonTimers[tostring(id)] = nil end
+        if self:Get("source") ~= source then
+            return
+        end
+        if id == nil then
+            self.addonTimers = {}
+        else
+            self.addonTimers[tostring(id)] = nil
+        end
         self:Refresh()
     end
 
     function AddonTimerPause(source: string, id: unknown, paused: boolean)
         local t = self:Get("source") == source and self.addonTimers[tostring(id)] or nil
-        if not t then return end
+        if not t then
+            return
+        end
         local endsAt, pausedLeft = t.endsAt, t.paused
         if paused and endsAt then
             t.paused, t.endsAt = math.max(0, endsAt - GetTime()), nil
@@ -332,7 +470,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             ;(dbt :: { [string]: unknown }).CreateBar = function(bars: unknown, ...: unknown): unknown
                 local bar = create(bars, ...)
                 if type(bar) == "table" then
-                    keepHidden(frames.asFrame(tbl.field(bar, "frame")), function(): boolean return M:Suppressing("dbm") end)
+                    keepHidden(frames.asFrame(tbl.field(bar, "frame")), function(): boolean
+                        return M:Suppressing("dbm")
+                    end)
                 end
                 return bar
             end
@@ -342,8 +482,14 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         local candy: unknown = nil
         -- (LibStub is a table one calls)
         if not hooked.candy and libStub then
-            local ok: boolean, lib: unknown = pcall(libStub :: (major: string, silent: boolean) -> unknown, "LibCandyBar-3.0", true)
-            if ok then candy = lib end
+            local ok: boolean, lib: unknown = pcall(
+                libStub :: (major: string, silent: boolean) -> unknown,
+                "LibCandyBar-3.0",
+                true
+            )
+            if ok then
+                candy = lib
+            end
         end
         local proto = tbl.field(candy, "barPrototype")
         if type(proto) == "table" and tbl.field(proto, "Start") then
@@ -351,8 +497,11 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             hook(proto, "Start", function(bar: unknown)
                 local get = tbl.field(bar, "Get")
                 local frame = frames.asFrame(bar)
-                if type(get) == "function" and (get :: (bar: unknown, key: string) -> unknown)(bar, "bigwigs:module") ~= nil then
-                    keepHidden(frame, function(): boolean return M:Suppressing("bigwigs") end)
+                if type(get) == "function" and
+                    (get :: (bar: unknown, key: string) -> unknown)(bar, "bigwigs:module") ~= nil then
+                    keepHidden(frame, function(): boolean
+                        return M:Suppressing("bigwigs")
+                    end)
                 elseif frame then
                     -- the pool is shared: another addon's bar shows as it likes
                     hideTests[frame] = nil
@@ -362,18 +511,37 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     end
 
     function HookSources()
-        if self.hooked then return end
+        if self.hooked then
+            return
+        end
         self.hooked = true
         local register = addonFn("DBM", "RegisterCallback")
         if register then
             local dbm = tbl.field(_G, "DBM")
-            local function on(event: string, fn: (...unknown) -> ()) pcall(register, dbm, event, fn) end
-            on("DBM_TimerBegin", function(_: unknown, id: unknown, msg: unknown, timer: unknown, icon: unknown, _: unknown, _: unknown, colorId: unknown)
+            local function on(event: string, fn: (...unknown) -> ())
+                pcall(register, dbm, event, fn)
+            end
+            on("DBM_TimerBegin", function(
+                _: unknown,
+                id: unknown,
+                msg: unknown,
+                timer: unknown,
+                icon: unknown,
+                _: unknown,
+                _: unknown,
+                colorId: unknown
+            )
                 self:AddonTimer("dbm", id, msg, timer, icon, isNumber(colorId) and DBM_BADGE[colorId] or nil)
             end)
-            on("DBM_TimerStop", function(_: unknown, id: unknown) self:AddonTimerStop("dbm", id) end)
-            on("DBM_TimerPause", function(_: unknown, id: unknown) self:AddonTimerPause("dbm", id, true) end)
-            on("DBM_TimerResume", function(_: unknown, id: unknown) self:AddonTimerPause("dbm", id, false) end)
+            on("DBM_TimerStop", function(_: unknown, id: unknown)
+                self:AddonTimerStop("dbm", id)
+            end)
+            on("DBM_TimerPause", function(_: unknown, id: unknown)
+                self:AddonTimerPause("dbm", id, true)
+            end)
+            on("DBM_TimerResume", function(_: unknown, id: unknown)
+                self:AddonTimerPause("dbm", id, false)
+            end)
             on("DBM_TimerUpdate", function(_: unknown, id: unknown, elapsed: unknown, total: unknown)
                 local t = self:Get("source") == "dbm" and self.addonTimers[tostring(id)] or nil
                 if t and isNumber(elapsed) and isNumber(total) then
@@ -386,15 +554,34 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         if reg then
             -- BigWigs keys its bars by module and text
             local owner = {}
-            local function key(module: unknown, text: unknown): string return tostring(module) .. "\31" .. (plain(text) and text or "?") end
-            local function on(message: string, fn: (...unknown) -> ()) pcall(reg, owner, message, fn) end
-            on("BigWigs_StartBar", function(_: unknown, module: unknown, _: unknown, text: unknown, time: unknown, icon: unknown)
+            local function key(module: unknown, text: unknown): string
+                return tostring(module) .. "\31" .. (plain(text) and text or "?")
+            end
+            local function on(message: string, fn: (...unknown) -> ())
+                pcall(reg, owner, message, fn)
+            end
+            on("BigWigs_StartBar", function(
+                _: unknown,
+                module: unknown,
+                _: unknown,
+                text: unknown,
+                time: unknown,
+                icon: unknown
+            )
                 self:AddonTimer("bigwigs", key(module, text), text, time, icon)
             end)
-            on("BigWigs_StopBar", function(_: unknown, module: unknown, text: unknown) self:AddonTimerStop("bigwigs", key(module, text)) end)
-            on("BigWigs_StopBars", function() self:AddonTimerStop("bigwigs", nil) end)
-            on("BigWigs_PauseBar", function(_: unknown, module: unknown, text: unknown) self:AddonTimerPause("bigwigs", key(module, text), true) end)
-            on("BigWigs_ResumeBar", function(_: unknown, module: unknown, text: unknown) self:AddonTimerPause("bigwigs", key(module, text), false) end)
+            on("BigWigs_StopBar", function(_: unknown, module: unknown, text: unknown)
+                self:AddonTimerStop("bigwigs", key(module, text))
+            end)
+            on("BigWigs_StopBars", function()
+                self:AddonTimerStop("bigwigs", nil)
+            end)
+            on("BigWigs_PauseBar", function(_: unknown, module: unknown, text: unknown)
+                self:AddonTimerPause("bigwigs", key(module, text), true)
+            end)
+            on("BigWigs_ResumeBar", function(_: unknown, module: unknown, text: unknown)
+                self:AddonTimerPause("bigwigs", key(module, text), false)
+            end)
         end
     end
 
@@ -409,27 +596,46 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         if source ~= "suui" then
             for id, t in pairs(self.addonTimers) do
                 local endsAt = t.endsAt
-                if t.paused or (endsAt and endsAt > now) then list[#list + 1] = t else self.addonTimers[id] = nil end
+                if t.paused or (endsAt and endsAt > now) then
+                    list[#list + 1] = t
+                else
+                    self.addonTimers[id] = nil
+                end
             end
         end
-        if not ET then return list end
+        if not ET then
+            return list
+        end
         local ok, ids = pcall(ET.GetEventList)
-        if not ok or type(ids) ~= "table" then return list end
+        if not ok or type(ids) ~= "table" then
+            return list
+        end
         local script = tbl.field(tbl.field(Enum, "EncounterTimelineEventSource"), "Script")
         local SCRIPT: number? = isNumber(script) and script or nil
         for _, id in ipairs(ids) do
             local okS: boolean, state: unknown = pcall(ET.GetEventState, id)
             local okR: boolean, left: unknown = pcall(ET.GetEventTimeRemaining, id)
             local okI, info = pcall(ET.GetEventInfo, id)
-            if okS and okR and okI and isNumber(state) and (state == ACTIVE or state == PAUSED) and isNumber(left)
-               and (left > 0 or state == PAUSED) and type(info) == "table"
-               and (source == "suui" or not isNumber(info.source) or info.source == SCRIPT) then
+            if okS and okR and okI and isNumber(state) and (state == ACTIVE or state == PAUSED) and isNumber(left) and
+                (left > 0 or state == PAUSED) and
+                type(info) == "table" and
+                (source == "suui" or not isNumber(info.source) or info.source == SCRIPT) then
                 local label: string? = nil
-                if not isSecret(info.spellName) and type(info.spellName) == "string" then label = info.spellName end
+                if not isSecret(info.spellName) and type(info.spellName) == "string" then
+                    label = info.spellName
+                end
                 local icon = info.iconFileID
-                local e: TimelineEvent = { id = id, label = self.labels[id] or label or "", icon = isNumber(icon) and icon or nil,
-                            badge = self.badges[id] or badgeOf(info.icons) }
-                if state == PAUSED then e.paused = left else e.endsAt = now + left end
+                local e: TimelineEvent = {
+                    id = id,
+                    label = self.labels[id] or label or "",
+                    icon = isNumber(icon) and icon or nil,
+                    badge = self.badges[id] or badgeOf(info.icons),
+                }
+                if state == PAUSED then
+                    e.paused = left
+                else
+                    e.endsAt = now + left
+                end
                 list[#list + 1] = e
             end
         end
@@ -438,7 +644,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
 
     function Refresh()
         local timeline = self.timeline
-        if not timeline then return end
+        if not timeline then
+            return
+        end
         local variant = self:Get("variant")
         local events = self:Read()
         local shown = variant ~= "off" and not self:Get("position").hidden and #events > 0
@@ -453,13 +661,17 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         local soonest: number? = nil
         for _, e in ipairs(events) do
             local endsAt = e.endsAt
-            if endsAt and (not soonest or endsAt < soonest) then soonest = endsAt end
+            if endsAt and (not soonest or endsAt < soonest) then
+                soonest = endsAt
+            end
         end
         if soonest then
             local token = {}
             self.refreshToken = token
             after(math.max(0.05, soonest - GetTime() + 0.05), function()
-                if self.refreshToken == token and self:IsEnabled() then self:Refresh() end
+                if self.refreshToken == token and self:IsEnabled() then
+                    self:Refresh()
+                end
             end)
         end
     end
@@ -467,36 +679,53 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     -- n: "1"-"10", or "pull"
     function Speak(n: number | string, voice: string?)
         local v = voice or self:Get("pullVoice")
-        if not VOICES[v] then return end
+        if not VOICES[v] then
+            return
+        end
         local count = tonumber(n)
-        if n ~= "pull" and (not count or count < 1 or count > 10) then return end
+        if n ~= "pull" and (not count or count < 1 or count > 10) then
+            return
+        end
         pcall(PlaySoundFile, VOICE_PATH:format(v, tostring(n)), "Master")
     end
 
     -- Each of the last ten seconds on the second, then "Pull!".
     function ScheduleVoice(seconds: number, token: table)
         local voice = self:Get("pullVoice")
-        if not VOICES[voice] or self:Get("source") ~= "suui" then return end
+        if not VOICES[voice] or self:Get("source") ~= "suui" then
+            return
+        end
         for n = math.min(10, math.floor(seconds)), 1, -1 do
             after(seconds - n, function()
-                if self.voiceToken == token then self:Speak(n, voice) end
+                if self.voiceToken == token then
+                    self:Speak(n, voice)
+                end
             end)
         end
         after(seconds, function()
-            if self.voiceToken == token then self:Speak("pull", voice) end
+            if self.voiceToken == token then
+                self:Speak("pull", voice)
+            end
         end)
     end
 
     function CancelPull(quiet: boolean?)
         self.voiceToken = nil
         local id = self.pullID
-        if id and ET then pcall(ET.CancelScriptEvent, id) end
+        if id and ET then
+            pcall(ET.CancelScriptEvent, id)
+        end
         self.pullID = nil
         self.pullEnds = nil
         local ticker = self.pullTicker
-        if ticker then ticker:Cancel(); self.pullTicker = nil end
+        if ticker then
+            ticker:Cancel()
+            self.pullTicker = nil
+        end
         SuuUI.HideAlert("pull")
-        if not quiet then self:Refresh() end
+        if not quiet then
+            self:Refresh()
+        end
     end
 
     function StartPull(given: unknown, from: string?)
@@ -508,7 +737,12 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
         seconds = math.min(seconds, 60)
         if ET and ET.AddScriptEvent then
-            local ok, id = pcall(ET.AddScriptEvent, { spellID = PULL_SPELL, iconFileID = PULL_ICON, duration = seconds, overrideName = "Pull" })
+            local ok, id = pcall(ET.AddScriptEvent, {
+                spellID = PULL_SPELL,
+                iconFileID = PULL_ICON,
+                duration = seconds,
+                overrideName = "Pull",
+            })
             if ok and isNumber(id) then
                 self.pullID = id
                 self.labels[id] = "Pull"
@@ -527,10 +761,14 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             if left <= 0 then
                 if mode ~= "off" then
                     SuuUI.ShowAlert("pull", "info", "Pull!", detail)
-                    after(1.5, function() SuuUI.HideAlert("pull") end)
+                    after(1.5, function()
+                        SuuUI.HideAlert("pull")
+                    end)
                 end
                 local ticker = self.pullTicker
-                if ticker then ticker:Cancel() end
+                if ticker then
+                    ticker:Cancel()
+                end
                 self.pullTicker = nil
                 self.pullID = nil
                 self.pullEnds = nil
@@ -557,11 +795,17 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             local token = {}
             self.awaiting = token
             if pcall(doCountdown, math.max(0, seconds)) then
-                if seconds <= 0 then self.awaiting = nil; self:CancelPull() return end
+                if seconds <= 0 then
+                    self.awaiting = nil
+                    self:CancelPull()
+                    return
+                end
                 after(0.5, function()
                     if self.awaiting == token then
                         self.awaiting = nil
-                        if not self.pullEnds then self:StartPull(seconds) end
+                        if not self.pullEnds then
+                            self:StartPull(seconds)
+                        end
                     end
                 end)
                 return
@@ -594,18 +838,28 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             shown[i] = isSecret(v) and "secret" or tostring(v)
         end
         table.insert(kept, { at = GetTime(), args = shown })
-        while #kept > 12 do table.remove(kept, 1) end
+        while #kept > 12 do
+            table.remove(kept, 1)
+        end
         -- ours arrived (or anyone's): no fallback start
         self.awaiting = nil
-        if isSecret(guid) or isSecret(seconds) or not isNumber(seconds) then return end
-        if InCombatLockdown() then return end
+        if isSecret(guid) or isSecret(seconds) or not isNumber(seconds) then
+            return
+        end
+        if InCombatLockdown() then
+            return
+        end
         -- the same countdown again (the event can come more than once): keep it
         local ends = self.pullEnds
-        if ends and math.abs(GetTime() + seconds - ends) < 1.5 then return end
+        if ends and math.abs(GetTime() + seconds - ends) < 1.5 then
+            return
+        end
         local from: string? = nil
         if type(guid) == "string" and guid ~= (UnitGUID("player") :: string?) and GetPlayerInfoByGUID then
             local ok, _, _, _, _, _, name = pcall(GetPlayerInfoByGUID, guid)
-            if ok and not isSecret(name) and type(name) == "string" then from = name end
+            if ok and not isSecret(name) and type(name) == "string" then
+                from = name
+            end
         end
         self:StartPull(seconds, from)
     end
@@ -613,7 +867,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     -- Blizzard's big countdown numbers, kept away while SuuUI's alert counts.
     function BlizzardNumbers(show: boolean)
         local tracker = frames.find("TimerTracker")
-        if not tracker then return end
+        if not tracker then
+            return
+        end
         if show then
             if self.trackerOff then
                 pcall(tracker.RegisterEvent, tracker, "START_PLAYER_COUNTDOWN")
@@ -628,13 +884,21 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     end
 
     function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
-        if prefix ~= PREFIX or type(text) ~= "string" or isSecret(text) then return end
+        if prefix ~= PREFIX or type(text) ~= "string" or isSecret(text) then
+            return
+        end
         local seconds = text:match("^PULL\t(%-?%d+)$")
-        if not seconds then return end
-        if isSecret(sender) or type(sender) ~= "string" then return end
+        if not seconds then
+            return
+        end
+        if isSecret(sender) or type(sender) ~= "string" then
+            return
+        end
         -- our own message comes back: already started
         local me = Ambiguate(SuuUI.FullName("player") :: string, "short")
-        if Ambiguate(sender, "short") == me then return end
+        if Ambiguate(sender, "short") == me then
+            return
+        end
         self:StartPull(tonumber(seconds), Ambiguate(sender, "short"))
     end
 
@@ -644,7 +908,12 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             return
         end
         for _, t in ipairs(TEST) do
-            local ok, id = pcall(ET.AddScriptEvent, { spellID = t.spell, iconFileID = t.icon, duration = t.seconds, overrideName = t.name })
+            local ok, id = pcall(ET.AddScriptEvent, {
+                spellID = t.spell,
+                iconFileID = t.icon,
+                duration = t.seconds,
+                overrideName = t.name,
+            })
             if ok and isNumber(id) then
                 self.labels[id] = t.name
                 self.badges[id] = t.badge
@@ -660,7 +929,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         local variant = self:Get("variant")
         p:SetVariant(variant == "list" and "list" or "track")
         local list: TimelineEvent[] = {}
-        for i, t in ipairs(TEST) do list[i] = { id = -i, label = t.name, icon = t.icon, badge = t.badge, paused = t.seconds } end
+        for i, t in ipairs(TEST) do
+            list[i] = { id = -i, label = t.name, icon = t.icon, badge = t.badge, paused = t.seconds }
+        end
         p:SetEvents(list)
         p:SetMeta("Ashmaw the Devourer")
         return p
@@ -670,26 +941,44 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         -- the boss mods loaded now; a chosen one that's gone: back to SuuUI
         local options = self:SourceOptions()
         local available: { [string]: boolean } = {}
-        for _, o in ipairs(options) do if o.value then available[o.value] = true end end
-        if not available[self:Get("source")] then self:Set("source", "suui") end
+        for _, o in ipairs(options) do
+            if o.value then
+                available[o.value] = true
+            end
+        end
+        if not available[self:Get("source")] then
+            self:Set("source", "suui")
+        end
         for _, g in ipairs(SECTION.groups or {}) do
             for _, row in ipairs(g.rows) do
-                if row.key == "source" then row.options = options end
+                if row.key == "source" then
+                    row.options = options
+                end
             end
         end
         self:HookSources()
         self:HookDisplays()
         self:ApplySuppression()
-        self:OnGameEvent("ADDON_LOADED", function() self:HookDisplays() end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:HookDisplays()
+        end)
         local timeline = self.timeline
         if not timeline then
-            timeline = UI.EncounterTimeline(SuuUI.Root, { variant = self:Get("variant") == "list" and "list" or "track" })
+            timeline = UI.EncounterTimeline(SuuUI.Root, {
+                variant = self:Get("variant") == "list" and "list" or "track",
+            })
             timeline:SetFrameStrata("MEDIUM")
             timeline:Hide()
             self.timeline = timeline
         end
-        self:RegisterMover(timeline, { key = "position", label = "Encounter timeline", managedShow = true,
-            enabled = function() return self:Get("variant") ~= "off" end })
+        self:RegisterMover(timeline, {
+            key = "position",
+            label = "Encounter timeline",
+            managedShow = true,
+            enabled = function()
+                return self:Get("variant") ~= "off"
+            end,
+        })
         -- "encounterTimeline": its place, for what shares the top edge with it
         -- (your buffs stop short of it)
         local function publish()
@@ -698,27 +987,58 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
         publish()
         self:RegisterSettings(SECTION)
-        self:RegisterCommand("pull", "Start a pull countdown: /suu pull [seconds] (0 cancels).", function(arg: string) self:Pull(arg) end)
+        self:RegisterCommand("pull", "Start a pull countdown: /suu pull [seconds] (0 cancels).", function(arg: string)
+            self:Pull(arg)
+        end)
         SuuUI.AllowAlertOutOfCombat("pull")
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...) self:OnMessage(...) end)
-        for _, e in ipairs({ "ENCOUNTER_TIMELINE_EVENT_ADDED", "ENCOUNTER_TIMELINE_EVENT_REMOVED", "ENCOUNTER_TIMELINE_EVENT_STATE_CHANGED",
-                             "ENCOUNTER_TIMELINE_EVENT_TRACK_CHANGED", "ENCOUNTER_TIMELINE_STATE_UPDATED" }) do
-            self:OnGameEvent(e, function() self:Refresh() end)
+        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
         end
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() if self.pullTicker then self:CancelPull() end end)
-        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, ...) self:OnCountdown(...) end)
-        self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function() self:CancelPull() end)
+        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
+            self:OnMessage(...)
+        end)
+        for _, e in ipairs({
+            "ENCOUNTER_TIMELINE_EVENT_ADDED",
+            "ENCOUNTER_TIMELINE_EVENT_REMOVED",
+            "ENCOUNTER_TIMELINE_EVENT_STATE_CHANGED",
+            "ENCOUNTER_TIMELINE_EVENT_TRACK_CHANGED",
+            "ENCOUNTER_TIMELINE_STATE_UPDATED",
+        }) do
+            self:OnGameEvent(e, function()
+                self:Refresh()
+            end)
+        end
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            if self.pullTicker then
+                self:CancelPull()
+            end
+        end)
+        self:OnGameEvent("START_PLAYER_COUNTDOWN", function(_, ...)
+            self:OnCountdown(...)
+        end)
+        self:OnGameEvent("CANCEL_PLAYER_COUNTDOWN", function()
+            self:CancelPull()
+        end)
         self:BlizzardNumbers(self:Get("pullAlert") == "off")
-        self:Watch("pullAlert", function() self:BlizzardNumbers(self:Get("pullAlert") == "off") end)
-        self:Watch("source", function() self.addonTimers = {}; self:ApplySuppression(); self:Refresh() end)
-        self:Watch("hideTheirs", function() self:ApplySuppression() end)
+        self:Watch("pullAlert", function()
+            self:BlizzardNumbers(self:Get("pullAlert") == "off")
+        end)
+        self:Watch("source", function()
+            self.addonTimers = {}
+            self:ApplySuppression()
+            self:Refresh()
+        end)
+        self:Watch("hideTheirs", function()
+            self:ApplySuppression()
+        end)
         self:WatchAll({ "variant", "position" }, function()
             publish()
             self:Refresh()
             SuuUI.EditMode.Refresh()
             local preview = self.preview
-            if preview and preview:IsVisible() then self:PreviewView(assert(preview:GetParent())) end
+            if preview and preview:IsVisible() then
+                self:PreviewView(assert(preview:GetParent()))
+            end
         end)
         self:Refresh()
     end
@@ -733,7 +1053,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
         self:CancelPull(true)
         local timeline = self.timeline
-        if timeline then timeline:Hide() end
+        if timeline then
+            timeline:Hide()
+        end
     end
 end
 
@@ -742,11 +1064,16 @@ M = SuuUI.AddModule(TimelineModule.new())
 -- The first voices (borrowed for a day) gave way to SuuUI's own.
 M:Migrate("pullVoice-kokoro-3", function(values: { [string]: unknown })
     local v = values.pullVoice
-    if v == "David" or v == "Male" or v == "Fenrir" or v == "Puck" then values.pullVoice = "Michael"
-    elseif v == "Jim" or v == "Female" then values.pullVoice = "Bella" end
+    if v == "David" or v == "Male" or v == "Fenrir" or v == "Puck" then
+        values.pullVoice = "Michael"
+    elseif v == "Jim" or v == "Female" then
+        values.pullVoice = "Bella"
+    end
 end)
 
 -- "Last 5 seconds" became "Last 10 seconds".
 M:Migrate("pullAlert-last10", function(values: { [string]: unknown })
-    if values.pullAlert == "last5" then values.pullAlert = "last10" end
+    if values.pullAlert == "last5" then
+        values.pullAlert = "last10"
+    end
 end)

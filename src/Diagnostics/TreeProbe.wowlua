@@ -20,30 +20,55 @@ import print from "/Core/Init"
 import * as DB from "/Core/DB"
 
 local function show(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
-    if type(v) == "number" then return (v == math.floor(v)) and tostring(v) or ("%.1f"):format(v) end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    if type(v) == "number" then
+        return (v == math.floor(v)) and tostring(v) or ("%.1f"):format(v)
+    end
     return tostring(v)
 end
 
 local PRESETS: { [string]: string[] } = {
-    character = { "CharacterFrame", "PaperDollFrame", "PaperDollItemsFrame", "CharacterStatsPane", "PaperDollSidebarTabs",
-                  "CharacterModelScene", "ReputationFrame", "SkillsFrame", "PVPRankFrame", "TokenFrame", "StatisticsFrame" },
+    character = {
+        "CharacterFrame",
+        "PaperDollFrame",
+        "PaperDollItemsFrame",
+        "CharacterStatsPane",
+        "PaperDollSidebarTabs",
+        "CharacterModelScene",
+        "ReputationFrame",
+        "SkillsFrame",
+        "PVPRankFrame",
+        "TokenFrame",
+        "StatisticsFrame",
+    },
 }
 
 local function ask(f: unknown, method: string, ...: unknown): ...unknown
     local fn = tbl.field(f, method)
-    if type(fn) ~= "function" then return nil end
+    if type(fn) ~= "function" then
+        return nil
+    end
     local res = { pcall(fn, f, ...) }
-    if res[1] then return unpack(res, 2) end
+    if res[1] then
+        return unpack(res, 2)
+    end
 end
 
 -- A method's many results as a list (gathered inside the protected call:
 -- pcall handing back a hundred values or more crashes the game).
 local function askAll(f: unknown, method: string): unknown[]
     local fn = tbl.field(f, method)
-    if type(fn) ~= "function" then return {} end
-    local ok, all = pcall(function(): unknown[] return { fn(f) } end)
+    if type(fn) ~= "function" then
+        return {}
+    end
+    local ok, all = pcall(function(): unknown[]
+        return { fn(f) }
+    end)
     return ok and all or {}
 end
 
@@ -52,14 +77,18 @@ local function keyOf(f: unknown): string?
     local parent = ask(f, "GetParent")
     if type(parent) == "table" then
         for k, v in pairs(parent) do
-            if v == f and type(k) == "string" then return k end
+            if v == f and type(k) == "string" then
+                return k
+            end
         end
     end
 end
 
 local function anchor(f: unknown): string
     local p, rel, rp, x, y = ask(f, "GetPoint", 1)
-    if not p then return "-" end
+    if not p then
+        return "-"
+    end
     local relName = rel and (secret.asString(ask(rel, "GetName")) or keyOf(rel) or "?") or "nil"
     return ("%s>%s.%s(%s,%s)"):format(show(p), show(relName), show(rp), show(x), show(y))
 end
@@ -67,8 +96,15 @@ end
 local function describe(f: unknown): string
     local t = secret.asString(ask(f, "GetObjectType")) or "?"
     local w, h = ask(f, "GetSize")
-    local parts: string[] = { t, (secret.asString(ask(f, "GetName")) or keyOf(f) or "-"), ("%sx%s"):format(show(w), show(h)), "shown=" .. show(ask(f, "IsShown")) }
-    if ask(f, "IsProtected") then parts[#parts + 1] = "PROTECTED" end
+    local parts: string[] = {
+        t,
+        (secret.asString(ask(f, "GetName")) or keyOf(f) or "-"),
+        ("%sx%s"):format(show(w), show(h)),
+        "shown=" .. show(ask(f, "IsShown")),
+    }
+    if ask(f, "IsProtected") then
+        parts[#parts + 1] = "PROTECTED"
+    end
     parts[#parts + 1] = "at " .. anchor(f)
     if t == "Texture" or t == "MaskTexture" then
         local atlas = secret.asString(ask(f, "GetAtlas"))
@@ -76,7 +112,9 @@ local function describe(f: unknown): string
         local layer, sub = ask(f, "GetDrawLayer")
         parts[#parts + 1] = "layer=" .. show(layer) .. ":" .. show(sub)
         local r, g, b, a = ask(f, "GetVertexColor")
-        if r then parts[#parts + 1] = ("rgba=%s,%s,%s,%s"):format(show(r), show(g), show(b), show(a)) end
+        if r then
+            parts[#parts + 1] = ("rgba=%s,%s,%s,%s"):format(show(r), show(g), show(b), show(a))
+        end
     elseif t == "FontString" then
         local text = ask(f, "GetText")
         parts[#parts + 1] = "text=" .. (isSecret(text) and "secret" or show(text):sub(1, 40))
@@ -84,13 +122,19 @@ local function describe(f: unknown): string
         local path = secret.asString(file)
         parts[#parts + 1] = "font=" .. show(path and path:match("[^\\/]+$")) .. " " .. show(size)
         local fo = ask(f, "GetFontObject")
-        if fo then parts[#parts + 1] = "object=" .. show(ask(fo, "GetName")) end
+        if fo then
+            parts[#parts + 1] = "object=" .. show(ask(fo, "GetName"))
+        end
     else
         local scripts: string[] = {}
         for _, s in ipairs({ "OnClick", "OnEnter", "OnShow" }) do
-            if ask(f, "HasScript", s) and ask(f, "GetScript", s) then scripts[#scripts + 1] = s end
+            if ask(f, "HasScript", s) and ask(f, "GetScript", s) then
+                scripts[#scripts + 1] = s
+            end
         end
-        if #scripts > 0 then parts[#parts + 1] = "scripts=" .. table.concat(scripts, ",") end
+        if #scripts > 0 then
+            parts[#parts + 1] = "scripts=" .. table.concat(scripts, ",")
+        end
         parts[#parts + 1] = "level=" .. show(ask(f, "GetFrameLevel"))
     end
     return table.concat(parts, " ")
@@ -98,16 +142,24 @@ end
 
 -- Lines, indented by depth: the frame, its regions, then its children.
 local function walk(f: unknown, depth: number, maxDepth: number, out: string[], seen: { [unknown]: boolean })
-    if #out > 1500 or seen[f] then return end
+    if #out > 1500 or seen[f] then
+        return
+    end
     seen[f] = true
     out[#out + 1] = string.rep("  ", depth) .. describe(f)
-    if depth >= maxDepth then return end
+    if depth >= maxDepth then
+        return
+    end
     for _, r in ipairs(askAll(f, "GetRegions")) do
-        if #out > 1500 then return end
+        if #out > 1500 then
+            return
+        end
         out[#out + 1] = string.rep("  ", depth + 1) .. "· " .. describe(r)
     end
     for _, c in ipairs(askAll(f, "GetChildren")) do
-        if not ask(c, "IsForbidden") then walk(c, depth + 1, maxDepth, out, seen) end
+        if not ask(c, "IsForbidden") then
+            walk(c, depth + 1, maxDepth, out, seen)
+        end
     end
 end
 
@@ -126,12 +178,18 @@ export function command(arg: string?)
         names = {}
         for _, c in ipairs(frames.children(UIParent)) do
             local ok, n = pcall(function()
-                if c:IsForbidden() or not c:IsVisible() then return nil end
+                if c:IsForbidden() or not c:IsVisible() then
+                    return nil
+                end
                 local fname = c:GetName()
                 local w, h = c:GetSize()
-                if fname and not fname:find("^SuuUI") and w >= 300 and h >= 250 then return fname end
+                if fname and not fname:find("^SuuUI") and w >= 300 and h >= 250 then
+                    return fname
+                end
             end)
-            if ok and n then names[#names + 1] = n end
+            if ok and n then
+                names[#names + 1] = n
+            end
         end
         trees._open = { date("%H:%M:%S") .. " " .. table.concat(names, ", ") }
     end
@@ -139,7 +197,9 @@ export function command(arg: string?)
     for _, n in ipairs(names) do
         -- a global name, or a path through keys ("PaperDollFrame.EquipmentManagerPane")
         local f: unknown = _G
-        for part in n:gmatch("[^%.]+") do f = tbl.field(f, part) end
+        for part in n:gmatch("[^%.]+") do
+            f = tbl.field(f, part)
+        end
         if type(f) == "table" and tbl.field(f, "GetObjectType") then
             local out = { "at " .. date("%H:%M:%S") }
             walk(f, 0, depth, out, {})

@@ -28,25 +28,26 @@ type View = { type: string, session?: string }
 
 local DEFAULTS = {
     position = { point = "BOTTOMRIGHT", x = -28, y = 28 } :: Position,
-    shows = "always",      -- "always" | "group" | "combat" | "hidden"
-    numbers = "compact",   -- "minimal" | "compact" | "complete"
+    shows = "always", -- "always" | "group" | "combat" | "hidden"
+    numbers = "compact", -- "minimal" | "compact" | "complete"
     rows = 9,
-    barColor = "class",    -- "neutral" | "class"
-    marker = "icon",       -- "icon" | "diamond" | "none"
-    nameColor = "class",   -- "class" | "ink"
+    barColor = "class", -- "neutral" | "class"
+    marker = "icon", -- "icon" | "diamond" | "none"
+    nameColor = "class", -- "class" | "ink"
     pinYou = true,
     windowCount = 1,
     views = { { type = "damage" }, { type = "healing" }, { type = "deaths" } } :: View[],
-    blizzardWas = "",      -- Blizzard's damageMeterEnabled before SuuUI turned it off
+    blizzardWas = "", -- Blizzard's damageMeterEnabled before SuuUI turned it off
 }
 
 local M: DamageMeterModule
 
-
 local TICK = 1
 local GAP = S["space-4"]
 
-local function inCombat(): boolean return InCombatLockdown() or secret.flag(UnitAffectingCombat("player")) end
+local function inCombat(): boolean
+    return InCombatLockdown() or secret.flag(UnitAffectingCombat("player"))
+end
 
 --------------------------------------------------------------------------------
 -- Blizzard's meter
@@ -69,22 +70,60 @@ local PREVIEW_DURATION = 102
 -- A made-up player of the preview's fight (no name: you), what they did,
 -- and (deaths) when they died and their recap.
 type PreviewRow = { name?: string, class?: string, amount: number, died?: number, recap?: number }
-local function row(name: string, class: string, amount: number): PreviewRow return { name = name, class = class, amount = amount } end
-local function you(amount: number): PreviewRow return { amount = amount } end
+local function row(name: string, class: string, amount: number): PreviewRow
+    return { name = name, class = class, amount = amount }
+end
+local function you(amount: number): PreviewRow
+    return { amount = amount }
+end
 local function death(name: string?, class: string?, died: number, recap: number): PreviewRow
     return { name = name, class = class, amount = 0, died = died, recap = recap }
 end
 
 local PREVIEW: { [string]: PreviewRow[] } = {
-    damage = { row("Morrow", "ROGUE", 98412), row("Lisset", "MAGE", 91870), row("Quell", "WARLOCK", 88240), row("Vosk", "WARRIOR", 84903),
-        row("Corvane", "ROGUE", 80115), row("Arlo", "HUNTER", 77402), row("Grimbolt", "WARLOCK", 74950), row("Sylva", "HUNTER", 71288),
-        row("Brannoc", "WARRIOR", 64130), you(61775), row("Tamsin", "DRUID", 52004), row("Hadrin", "WARRIOR", 39410) },
-    damageTaken = { row("Brannoc", "WARRIOR", 84210), row("Hadrin", "WARRIOR", 51230), you(18420), row("Morrow", "ROGUE", 9310), row("Lisset", "MAGE", 6120) },
+    damage = {
+        row("Morrow", "ROGUE", 98412),
+        row("Lisset", "MAGE", 91870),
+        row("Quell", "WARLOCK", 88240),
+        row("Vosk", "WARRIOR", 84903),
+        row("Corvane", "ROGUE", 80115),
+        row("Arlo", "HUNTER", 77402),
+        row("Grimbolt", "WARLOCK", 74950),
+        row("Sylva", "HUNTER", 71288),
+        row("Brannoc", "WARRIOR", 64130),
+        you(61775),
+        row("Tamsin", "DRUID", 52004),
+        row("Hadrin", "WARRIOR", 39410),
+    },
+    damageTaken = {
+        row("Brannoc", "WARRIOR", 84210),
+        row("Hadrin", "WARRIOR", 51230),
+        you(18420),
+        row("Morrow", "ROGUE", 9310),
+        row("Lisset", "MAGE", 6120),
+    },
     avoidable = { you(4120), row("Arlo", "HUNTER", 2980), row("Quell", "WARLOCK", 1210) },
-    enemyDamageTaken = { row("Flamewaker Elite", "", 151200), row("Lava Surger", "", 98400), row("Ember Hound", "", 61200) },
-    healing = { row("Ysolde", "PRIEST", 182440), row("Veyra", "SHAMAN", 171210), row("Aldric", "PALADIN", 160880), row("Thessaly", "DRUID", 120300),
-        row("Oren", "PRIEST", 98500), row("Brannoc", "WARRIOR", 3020), you(1840) },
-    interrupts = { row("Morrow", "ROGUE", 7), row("Corvane", "ROGUE", 5), row("Vosk", "WARRIOR", 4), you(3), row("Brannoc", "WARRIOR", 2) },
+    enemyDamageTaken = {
+        row("Flamewaker Elite", "", 151200),
+        row("Lava Surger", "", 98400),
+        row("Ember Hound", "", 61200),
+    },
+    healing = {
+        row("Ysolde", "PRIEST", 182440),
+        row("Veyra", "SHAMAN", 171210),
+        row("Aldric", "PALADIN", 160880),
+        row("Thessaly", "DRUID", 120300),
+        row("Oren", "PRIEST", 98500),
+        row("Brannoc", "WARRIOR", 3020),
+        you(1840),
+    },
+    interrupts = {
+        row("Morrow", "ROGUE", 7),
+        row("Corvane", "ROGUE", 5),
+        row("Vosk", "WARRIOR", 4),
+        you(3),
+        row("Brannoc", "WARRIOR", 2),
+    },
     dispels = { row("Ysolde", "PRIEST", 6), row("Aldric", "PALADIN", 4), row("Veyra", "SHAMAN", 3) },
     -- newest first, as the game returns them
     deaths = { death("Arlo", "HUNTER", 140, 3), death(nil, nil, 124, 2), death("Grimbolt", "WARLOCK", 72, 1) },
@@ -92,7 +131,9 @@ local PREVIEW: { [string]: PreviewRow[] } = {
 PREVIEW.dps, PREVIEW.hps = PREVIEW.damage, PREVIEW.healing
 -- A value of one of the game's enums, if this client has it.
 local function enumValue(enum: unknown, key: string): number?
-    if type(enum) ~= "table" then return nil end
+    if type(enum) ~= "table" then
+        return nil
+    end
     local v = (enum :: { [string]: unknown })[key]
     return type(v) == "number" and v or nil
 end
@@ -102,22 +143,43 @@ local PREVIEW_TYPE: { [number | string]: string } = {}
 for _, t in ipairs(UI.DAMAGE_METER_TYPES) do
     local value, enum = t.value, t.enum
     local id = enum and enumValue(Enum.DamageMeterType, enum)
-    if value then PREVIEW_TYPE[id or value] = value end
+    if value then
+        PREVIEW_TYPE[id or value] = value
+    end
 end
 -- a source's spells: the spell and its share
 type PreviewSpell = { id: number, share: number }
-local PREVIEW_SPELLS: PreviewSpell[] = { { id = 116, share = 0.42 }, { id = 2136, share = 0.18 }, { id = 120, share = 0.13 },
-    { id = 1449, share = 0.11 }, { id = 122, share = 0.09 }, { id = 6603, share = 0.07 } }
-local PREVIEW_HEALS: PreviewSpell[] = { { id = 2060, share = 0.38 }, { id = 139, share = 0.24 }, { id = 2061, share = 0.2 },
-    { id = 17, share = 0.12 }, { id = 596, share = 0.06 } }
+local PREVIEW_SPELLS: PreviewSpell[] = {
+    { id = 116, share = 0.42 },
+    { id = 2136, share = 0.18 },
+    { id = 120, share = 0.13 },
+    { id = 1449, share = 0.11 },
+    { id = 122, share = 0.09 },
+    { id = 6603, share = 0.07 },
+}
+local PREVIEW_HEALS: PreviewSpell[] = {
+    { id = 2060, share = 0.38 },
+    { id = 139, share = 0.24 },
+    { id = 2061, share = 0.2 },
+    { id = 17, share = 0.12 },
+    { id = 596, share = 0.06 },
+}
 
 -- A made-up source, as the game gives one.
 local function previewSource(i: number, p: PreviewRow, myName: string, myClass: string): DamageMeterCombatSourceSecret
     local isYou = p.name == nil
     return {
-        sourceGUID = "Preview-" .. i, name = isYou and myName or p.name or "", classFilename = isYou and myClass or p.class or "",
-        specIconID = 0, totalAmount = p.amount, amountPerSecond = p.amount / PREVIEW_DURATION, isLocalPlayer = isYou,
-        deathRecapID = p.recap or 0, deathTimeSeconds = p.died or 0, classification = "normal", sourceDisplayType = 0,
+        sourceGUID = "Preview-" .. i,
+        name = isYou and myName or p.name or "",
+        classFilename = isYou and myClass or p.class or "",
+        specIconID = 0,
+        totalAmount = p.amount,
+        amountPerSecond = p.amount / PREVIEW_DURATION,
+        isLocalPlayer = isYou,
+        deathRecapID = p.recap or 0,
+        deathTimeSeconds = p.died or 0,
+        classification = "normal",
+        sourceDisplayType = 0,
     }
 end
 
@@ -142,33 +204,72 @@ local function previewSpells(meterType: number, guid: string?): DamageMeterComba
     local mine = not issecretvalue(guidOf) and guidOf or nil
     local amount: number? = nil
     for i, p in ipairs(PREVIEW[key] or {}) do
-        if guid == "Preview-" .. i or (guid ~= nil and guid == mine and p.name == nil) then amount = p.amount end
+        if guid == "Preview-" .. i or (guid ~= nil and guid == mine and p.name == nil) then
+            amount = p.amount
+        end
     end
-    if not amount then return { combatSpells = {}, totalAmount = 0, maxAmount = 0 } end
+    if not amount then
+        return { combatSpells = {}, totalAmount = 0, maxAmount = 0 }
+    end
     local heals = key == "healing" or key == "hps"
     local spells: DamageMeterCombatSpellSecret[] = {}
     for i, sp in ipairs(heals and PREVIEW_HEALS or PREVIEW_SPELLS) do
         local part = math.floor(amount * sp.share)
-        spells[i] = { spellID = sp.id, totalAmount = part, amountPerSecond = part / PREVIEW_DURATION, creatureName = "",
-            overkillAmount = 0, isAvoidable = false, isDeadly = false,
-            combatSpellDetails = { unitName = "", unitClassFilename = "", classification = "normal", isPet = false, isMob = false,
-                                   amount = part, specIconID = 0 } }
+        spells[i] = {
+            spellID = sp.id,
+            totalAmount = part,
+            amountPerSecond = part / PREVIEW_DURATION,
+            creatureName = "",
+            overkillAmount = 0,
+            isAvoidable = false,
+            isDeadly = false,
+            combatSpellDetails = {
+                unitName = "",
+                unitClassFilename = "",
+                classification = "normal",
+                isPet = false,
+                isMob = false,
+                amount = part,
+                specIconID = 0,
+            },
+        }
     end
-    return { combatSpells = spells, totalAmount = amount, maxAmount = math.floor(amount * (heals and PREVIEW_HEALS or PREVIEW_SPELLS)[1].share) }
+    return {
+        combatSpells = spells,
+        totalAmount = amount,
+        maxAmount = math.floor(amount * (heals and PREVIEW_HEALS or PREVIEW_SPELLS)[1].share),
+    }
 end
 
 local PREVIEW_API: MeterApi = {
-    GetCombatSessionFromType = function(_: number, meterType: number): DamageMeterCombatSessionSecret return previewSession(meterType) end,
-    GetCombatSessionFromID = function(_: number, meterType: number): DamageMeterCombatSessionSecret return previewSession(meterType) end,
-    GetCombatSessionSourceFromType = function(_: number, meterType: number, guid: string?, _: number?): DamageMeterCombatSessionSourceSecret
+    GetCombatSessionFromType = function(_: number, meterType: number): DamageMeterCombatSessionSecret
+        return previewSession(meterType)
+    end,
+    GetCombatSessionFromID = function(_: number, meterType: number): DamageMeterCombatSessionSecret
+        return previewSession(meterType)
+    end,
+    GetCombatSessionSourceFromType = function(
+        _: number,
+        meterType: number,
+        guid: string?,
+        _: number?
+    ): DamageMeterCombatSessionSourceSecret
         return previewSpells(meterType, guid)
     end,
-    GetCombatSessionSourceFromID = function(_: number, meterType: number, guid: string?, _: number?): DamageMeterCombatSessionSourceSecret
+    GetCombatSessionSourceFromID = function(
+        _: number,
+        meterType: number,
+        guid: string?,
+        _: number?
+    ): DamageMeterCombatSessionSourceSecret
         return previewSpells(meterType, guid)
     end,
     GetAvailableCombatSessions = function(): DamageMeterAvailableCombatSession[]
-        return { { sessionID = 29, name = "Flamewaker Elite", durationSeconds = 38 }, { sessionID = 30, name = "Majordomo Executus", durationSeconds = 96 },
-                 { sessionID = 31, name = "Ragnaros", durationSeconds = 151 } }
+        return {
+            { sessionID = 29, name = "Flamewaker Elite", durationSeconds = 38 },
+            { sessionID = 30, name = "Majordomo Executus", durationSeconds = 96 },
+            { sessionID = 31, name = "Ragnaros", durationSeconds = 151 },
+        }
     end,
     GetSessionDurationSeconds = function(sessionType: number): number?
         return sessionType == enumValue(Enum.DamageMeterSessionType, "Overall") and 385 or PREVIEW_DURATION
@@ -177,7 +278,15 @@ local PREVIEW_API: MeterApi = {
 
 -- one recap for every death: oldest first here, newest first as returned
 -- (hp: the percent left after it; ago: seconds before the death)
-type RecapStep = { spell: number, name: string, event: string, amount: number, hp: number, ago: number, overkill?: number }
+type RecapStep = {
+    spell: number,
+    name: string,
+    event: string,
+    amount: number,
+    hp: number,
+    ago: number,
+    overkill?: number,
+}
 local RECAP: RecapStep[] = {
     { spell = 21158, name = "Lava Burst", event = "SPELL_DAMAGE", amount = 1180, hp = 71, ago = 5.8 },
     { spell = 20566, name = "Wrath of Ragnaros", event = "SPELL_DAMAGE", amount = 1460, hp = 52, ago = 4.1 },
@@ -191,12 +300,21 @@ local PREVIEW_RECAP: RecapApi = {
         local out: RecapEvent[] = {}
         for i = #RECAP, 1, -1 do
             local e = RECAP[i]
-            out[#out + 1] = { spellId = e.spell, spellName = e.name, event = e.event, amount = e.amount, currentHP = e.hp * 40,
-                              timestamp = 1000 - e.ago, overkill = e.overkill or 0 }
+            out[#out + 1] = {
+                spellId = e.spell,
+                spellName = e.name,
+                event = e.event,
+                amount = e.amount,
+                currentHP = e.hp * 40,
+                timestamp = 1000 - e.ago,
+                overkill = e.overkill or 0,
+            }
         end
         return out
     end,
-    GetRecapMaxHealth = function(_: number?): number? return 4000 end,
+    GetRecapMaxHealth = function(_: number?): number?
+        return 4000
+    end,
 }
 
 local function meterHidden(): (boolean, string)
@@ -204,31 +322,98 @@ local function meterHidden(): (boolean, string)
 end
 
 local SECTION: SettingsSection = {
-    id = "damagemeter", label = "Damage & threat", category = "Insights", order = 50,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "damagemeter",
+    label = "Damage & threat",
+    category = "Insights",
+    order = 50,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     previewTitle = "Live preview · Damage & threat",
     groups = {
-        { title = "Damage meter", description = "Blizzard's own meter, restyled. Blizzard's meter window stays off while this one is on.", rows = {
-            { key = "shows", label = "Show", control = "segmented", stacked = true,
-              options = { { value = "always", label = "Always" }, { value = "group", label = "In a group" },
-                          { value = "combat", label = "In combat" }, { value = "hidden", label = "Hidden" } } },
-            { key = "numbers", label = "Numbers", control = "segmented", disabled = meterHidden,
-              options = { { value = "minimal", label = "Minimal" }, { value = "compact", label = "Compact" }, { value = "complete", label = "Complete" } },
-              description = "Compact adds the per-second value (or the total, on DPS and HPS). Complete adds each player's share of the total. In combat the client hides the numbers' sums, so the share appears when combat ends." },
-            { key = "rows", label = "Rows", control = "slider", min = 4, max = 15, step = 1, disabled = meterHidden,
-              description = "The meter keeps this height; the threat meter matches it." },
-            { key = "barColor", label = "Bars", control = "segmented", disabled = meterHidden,
-              options = { { value = "neutral", label = "Neutral" }, { value = "class", label = "Class colour" } },
-              description = "Class colours are identity: SuuUI keeps them on names and icons unless you ask. On class-coloured bars, names are ink." },
-            { key = "marker", label = "Before the name", control = "segmented", disabled = meterHidden,
-              options = { { value = "icon", label = "Class icon" }, { value = "diamond", label = "Diamond" }, { value = "none", label = "None" } } },
-            { key = "nameColor", label = "Names", control = "segmented", disabled = meterHidden,
-              options = { { value = "class", label = "Class colour" }, { value = "ink", label = "Ink" } } },
-            { key = "pinYou", label = "Keep my row in view", control = "toggle", disabled = meterHidden,
-              description = "Below the visible rows, your row takes the last slot." },
-            { key = "windowCount", label = "Windows", control = "stepper", min = 1, max = 3, step = 1, disabled = meterHidden,
-              description = "Up to three, stacked, each with its own type and fight (pick them in the window's head)." },
-        } },
+        {
+            title = "Damage meter",
+            description = "Blizzard's own meter, restyled. Blizzard's meter window stays off while this one is on.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Show",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "always", label = "Always" },
+                        { value = "group", label = "In a group" },
+                        { value = "combat", label = "In combat" },
+                        { value = "hidden", label = "Hidden" },
+                    },
+                },
+                {
+                    key = "numbers",
+                    label = "Numbers",
+                    control = "segmented",
+                    disabled = meterHidden,
+                    options = {
+                        { value = "minimal", label = "Minimal" },
+                        { value = "compact", label = "Compact" },
+                        { value = "complete", label = "Complete" },
+                    },
+                    description = "Compact adds the per-second value (or the total, on DPS and HPS). Complete adds each player's share of the total. In combat the client hides the numbers' sums, so the share appears when combat ends.",
+                },
+                {
+                    key = "rows",
+                    label = "Rows",
+                    control = "slider",
+                    min = 4,
+                    max = 15,
+                    step = 1,
+                    disabled = meterHidden,
+                    description = "The meter keeps this height; the threat meter matches it.",
+                },
+                {
+                    key = "barColor",
+                    label = "Bars",
+                    control = "segmented",
+                    disabled = meterHidden,
+                    options = { { value = "neutral", label = "Neutral" }, { value = "class", label = "Class colour" } },
+                    description = "Class colours are identity: SuuUI keeps them on names and icons unless you ask. On class-coloured bars, names are ink.",
+                },
+                {
+                    key = "marker",
+                    label = "Before the name",
+                    control = "segmented",
+                    disabled = meterHidden,
+                    options = {
+                        { value = "icon", label = "Class icon" },
+                        { value = "diamond", label = "Diamond" },
+                        { value = "none", label = "None" },
+                    },
+                },
+                {
+                    key = "nameColor",
+                    label = "Names",
+                    control = "segmented",
+                    disabled = meterHidden,
+                    options = { { value = "class", label = "Class colour" }, { value = "ink", label = "Ink" } },
+                },
+                {
+                    key = "pinYou",
+                    label = "Keep my row in view",
+                    control = "toggle",
+                    disabled = meterHidden,
+                    description = "Below the visible rows, your row takes the last slot.",
+                },
+                {
+                    key = "windowCount",
+                    label = "Windows",
+                    control = "stepper",
+                    min = 1,
+                    max = 3,
+                    step = 1,
+                    disabled = meterHidden,
+                    description = "Up to three, stacked, each with its own type and fight (pick them in the window's head).",
+                },
+            },
+        },
     },
 }
 
@@ -258,9 +443,15 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
 
     function BlizzardOff()
         local ok, was = pcall(C_CVar.GetCVar, "damageMeterEnabled")
-        if not ok or was == nil then return end
-        if self:Get("blizzardWas") == "" then self:Set("blizzardWas", was) end
-        if was ~= "0" then pcall(C_CVar.SetCVar, "damageMeterEnabled", "0") end
+        if not ok or was == nil then
+            return
+        end
+        if self:Get("blizzardWas") == "" then
+            self:Set("blizzardWas", was)
+        end
+        if was ~= "0" then
+            pcall(C_CVar.SetCVar, "damageMeterEnabled", "0")
+        end
     end
 
     function BlizzardBack()
@@ -279,7 +470,9 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
     function SaveView(i: number, typeValue: string, session: MeterSession)
         local views = self:Get("views")
         local copy: View[] = {}
-        for k, v in ipairs(views) do copy[k] = { type = v.type, session = v.session } end
+        for k, v in ipairs(views) do
+            copy[k] = { type = v.type, session = v.session }
+        end
         -- past fights don't outlive the session: only Current and Overall are kept
         copy[i] = { type = typeValue, session = (session == "overall") and "overall" or nil }
         self:Set("views", copy)
@@ -291,13 +484,25 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         if not w then
             w = UI.DamageMeter(assert(self.frame), {
                 rows = self:Get("rows"),
-                onView = function(typeValue: string, session: MeterSession) self:SaveView(i, typeValue, session) end,
-                onNewWindow = function() self:Set("windowCount", math.min(3, self:Get("windowCount") + 1)) end,
-                onClose = i > 1 and function() self:CloseWindow(i) end or nil,
-                onReset = function()
-                    if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then C_DamageMeter.ResetAllCombatSessions() end
+                onView = function(typeValue: string, session: MeterSession)
+                    self:SaveView(i, typeValue, session)
                 end,
-                onSettings = function() SuuUI.OpenSettings("damagemeter") end,
+                onNewWindow = function()
+                    self:Set("windowCount", math.min(3, self:Get("windowCount") + 1))
+                end,
+                onClose = i > 1 and
+                    function()
+                        self:CloseWindow(i)
+                    end or
+                    nil,
+                onReset = function()
+                    if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
+                        C_DamageMeter.ResetAllCombatSessions()
+                    end
+                end,
+                onSettings = function()
+                    SuuUI.OpenSettings("damagemeter")
+                end,
             })
             self.windows[i] = w
             local view = self:ViewOf(i)
@@ -311,26 +516,37 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         local views = self:Get("views")
         local copy: View[] = {}
         for k, v in ipairs(views) do
-            if k ~= i then copy[#copy + 1] = { type = v.type, session = v.session } end
+            if k ~= i then
+                copy[#copy + 1] = { type = v.type, session = v.session }
+            end
         end
         copy[#copy + 1] = { type = "damage" }
         self:Set("views", copy)
         for j = i, 3 do
             local w = self.windows[j]
-            if w then w:SetView(copy[j].type, copy[j].session or "current") end
+            if w then
+                w:SetView(copy[j].type, copy[j].session or "current")
+            end
         end
         self:Set("windowCount", math.max(1, self:Get("windowCount") - 1))
     end
 
     function MeterOptions(): MeterView
-        return { numbers = self:Get("numbers"), barColor = self:Get("barColor"), marker = self:Get("marker"),
-                 nameColor = self:Get("nameColor"), pinYou = self:Get("pinYou") }
+        return {
+            numbers = self:Get("numbers"),
+            barColor = self:Get("barColor"),
+            marker = self:Get("marker"),
+            nameColor = self:Get("nameColor"),
+            pinYou = self:Get("pinYou"),
+        }
     end
 
     -- The stack: window 1 at the bottom, the others above it.
     function Layout()
         local frame = self.frame
-        if not frame then return end
+        if not frame then
+            return
+        end
         local n = math.max(1, math.min(3, self:Get("windowCount")))
         local y = 0
         local width = UI.Size("meter-w")
@@ -356,31 +572,40 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
     function Refresh()
         for i = 1, math.min(3, self:Get("windowCount")) do
             local w = self.windows[i]
-            if w and w:IsShown() then w:Refresh() end
+            if w and w:IsShown() then
+                w:Refresh()
+            end
         end
     end
 
     function UpdateVisibility()
         local frame, driver = self.frame, self.driver
-        if not (frame and driver) then return end
+        if not (frame and driver) then
+            return
+        end
         local shows = self:Get("shows")
-        local shown = not self:Get("position").hidden and (shows == "always"
-            or (shows == "group" and secret.flag(IsInGroup()))
-            or (shows == "combat" and inCombat()))
+        local shown = not self:Get("position").hidden and
+            (shows == "always" or (shows == "group" and secret.flag(IsInGroup())) or (shows == "combat" and inCombat()))
         frame:SetShown(shown and true or false)
         -- the ticker: in combat while shown
         driver:SetShown(shown and inCombat() and true or false)
-        if shown then self:Refresh() end
+        if shown then
+            self:Refresh()
+        end
     end
 
     -- Out of combat: one refresh shortly after a burst of events.
     function Soon(delay: number?)
-        if self.pending then return end
+        if self.pending then
+            return
+        end
         self.pending = true
         after(delay or 0.2, function()
             self.pending = nil
             local frame = self.frame
-            if self:IsEnabled() and frame and frame:IsShown() then self:Refresh() end
+            if self:IsEnabled() and frame and frame:IsShown() then
+                self:Refresh()
+            end
         end)
     end
 
@@ -429,7 +654,9 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
             local wait = 0
             driver:SetScript("OnUpdate", function(_: Frame, elapsed: number)
                 wait = wait - elapsed
-                if wait > 0 then return end
+                if wait > 0 then
+                    return
+                end
                 wait = TICK
                 self:Refresh()
             end)
@@ -437,43 +664,84 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         end
         self:BlizzardOff()
         self:Layout()
-        self:RegisterMover(frame, { key = "position", label = "Damage meter", managedShow = true,
-            enabled = function() return self:Get("shows") ~= "hidden" end })
+        self:RegisterMover(frame, {
+            key = "position",
+            label = "Damage meter",
+            managedShow = true,
+            enabled = function()
+                return self:Get("shows") ~= "hidden"
+            end,
+        })
         self:RegisterSettings(SECTION)
-        self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:UpdateVisibility() end)
-        self:Watch("position", function() self:UpdateVisibility() end)
+        self:Watch("shows", function()
+            SuuUI.EditMode.Refresh()
+            self:UpdateVisibility()
+        end)
+        self:Watch("position", function()
+            self:UpdateVisibility()
+        end)
         self:WatchAll({ "numbers", "barColor", "marker", "nameColor", "pinYou" }, function()
             local o = self:MeterOptions()
-            for _, w in ipairs(self.windows) do w:SetOptions(o) end
+            for _, w in ipairs(self.windows) do
+                w:SetOptions(o)
+            end
             local preview = self.previewMeter
-            if preview then preview:SetOptions(o) end
+            if preview then
+                preview:SetOptions(o)
+            end
         end)
         self:WatchAll({ "rows", "windowCount" }, function()
             self:Layout()
             local preview = self.previewMeter
-            if preview then preview:SetMaxRows(self:Get("rows")) end
+            if preview then
+                preview:SetMaxRows(self:Get("rows"))
+            end
             SuuUI.EditMode.Refresh()
         end)
-        for _, e in ipairs({ "DAMAGE_METER_COMBAT_SESSION_UPDATED", "DAMAGE_METER_CURRENT_SESSION_UPDATED", "DAMAGE_METER_RESET" }) do
+        for _, e in ipairs({
+            "DAMAGE_METER_COMBAT_SESSION_UPDATED",
+            "DAMAGE_METER_CURRENT_SESSION_UPDATED",
+            "DAMAGE_METER_RESET",
+        }) do
             self:OnGameEvent(e, function()
-                if not inCombat() then self:Soon(0.2) end
+                if not inCombat() then
+                    self:Soon(0.2)
+                end
             end)
         end
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:UpdateVisibility() end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:UpdateVisibility()
+        end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self:UpdateVisibility()
             -- the numbers turn readable a moment after combat
-            after(0.5, function() if self:IsEnabled() then self:Refresh() end end)
-            after(1.5, function() if self:IsEnabled() then self:Refresh() end end)
+            after(0.5, function()
+                if self:IsEnabled() then
+                    self:Refresh()
+                end
+            end)
+            after(1.5, function()
+                if self:IsEnabled() then
+                    self:Refresh()
+                end
+            end)
         end)
-        self:OnGameEvent("GROUP_ROSTER_UPDATE", function() self:UpdateVisibility() end)
-        self:OnGameEvent("ADDON_RESTRICTION_STATE_CHANGED", function() self:Soon(0.2) end)
+        self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
+            self:UpdateVisibility()
+        end)
+        self:OnGameEvent("ADDON_RESTRICTION_STATE_CHANGED", function()
+            self:Soon(0.2)
+        end)
         self:UpdateVisibility()
     end
 
     override function OnDisable()
-        if self.driver then self.driver:Hide() end
-        if self.frame then self.frame:Hide() end
+        if self.driver then
+            self.driver:Hide()
+        end
+        if self.frame then
+            self.frame:Hide()
+        end
         self:BlizzardBack()
     end
 end

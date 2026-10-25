@@ -55,8 +55,12 @@ local MAX_LINES = 4000
 local field = tbl.field
 
 local function show(v: unknown): string
-    if isSecret(v) then return "<secret>" end
-    if type(v) ~= "table" then return tostring(v) end
+    if isSecret(v) then
+        return "<secret>"
+    end
+    if type(v) ~= "table" then
+        return tostring(v)
+    end
     local parts: string[] = {}
     for k, x in pairs(v) do
         local s = isSecret(x) and "<secret>" or (type(x) == "table" and "{...}" or tostring(x))
@@ -68,19 +72,29 @@ end
 
 local function names(t: unknown): string[]
     local out: string[] = {}
-    if type(t) ~= "table" then return out end
-    for k, v in pairs(t) do if type(v) == "function" then out[#out + 1] = tostring(k) end end
+    if type(t) ~= "table" then
+        return out
+    end
+    for k, v in pairs(t) do
+        if type(v) == "function" then
+            out[#out + 1] = tostring(k)
+        end
+    end
     table.sort(out)
     return out
 end
 
 local function store(): Lfg
-    return DB.probeData("lfg", function(): Lfg return {} end)
+    return DB.probeData("lfg", function(): Lfg
+        return {}
+    end)
 end
 
 -- `fn(...)`, protected: whether it ran and its first three results.
 local function attempt(fn: unknown, ...: unknown): (boolean, unknown, unknown, unknown)
-    if type(fn) ~= "function" then return false, "missing", nil, nil end
+    if type(fn) ~= "function" then
+        return false, "missing", nil, nil
+    end
     local ok, a, b, c = pcall(fn, ...)
     return ok, a, b, c
 end
@@ -99,21 +113,40 @@ end
 -- what a search result holds (compact), and its member counts
 local function result(id: unknown): string
     local ok, info = attempt(L("GetSearchResultInfo"), id)
-    if not ok then return "error: " .. tostring(info) end
-    if not info then return "nil" end
-    if isSecret(info) then return "<secret table>" end
+    if not ok then
+        return "error: " .. tostring(info)
+    end
+    if not info then
+        return "nil"
+    end
+    if isSecret(info) then
+        return "<secret table>"
+    end
     local acts: string[] = {}
     local ids = field(info, "activityIDs")
-    for _, a in ipairs(ids ~= nil and tbl.list(ids) or { field(info, "activityID") }) do acts[#acts + 1] = tostring(a) end
+    for _, a in ipairs(ids ~= nil and tbl.list(ids) or { field(info, "activityID") }) do
+        acts[#acts + 1] = tostring(a)
+    end
     local okC, counts = attempt(L("GetSearchResultMemberCounts"), id)
     local need = ""
     if okC and type(counts) == "table" and not isSecret(counts) then
-        need = ("need T%s H%s D%s"):format(tostring(field(counts, "TANK_REMAINING")), tostring(field(counts, "HEALER_REMAINING")),
-            tostring(field(counts, "DAMAGER_REMAINING")))
+        need = ("need T%s H%s D%s"):format(
+            tostring(field(counts, "TANK_REMAINING")),
+            tostring(field(counts, "HEALER_REMAINING")),
+            tostring(field(counts, "DAMAGER_REMAINING"))
+        )
     end
     return ("acts=%s leader=%s members=%s age=%s delisted=%s quest=%s name=%s comment=%s %s"):format(
-        table.concat(acts, ","), show(field(info, "leaderName")), show(field(info, "numMembers")), show(field(info, "age")),
-        show(field(info, "isDelisted")), show(field(info, "questID")), show(field(info, "name")), show(field(info, "comment")), need)
+        table.concat(acts, ","),
+        show(field(info, "leaderName")),
+        show(field(info, "numMembers")),
+        show(field(info, "age")),
+        show(field(info, "isDelisted")),
+        show(field(info, "questID")),
+        show(field(info, "name")),
+        show(field(info, "comment")),
+        need
+    )
 end
 
 export function snapshot()
@@ -128,26 +161,53 @@ export function snapshot()
     for _, cat in ipairs(okCats and tbl.list(cats) or {}) do
         local okI, info = attempt(L("GetLfgCategoryInfo"), cat)
         local activities: string[], groupLines: string[] = {}, {}
-        local entry: Record = { id = cat, info = show(okI and info or nil), activities = activities, groups = groupLines }
+        local entry: Record = {
+            id = cat,
+            info = show(okI and info or nil),
+            activities = activities,
+            groups = groupLines,
+        }
         -- the game's way: per activity group, then the ones in none
         local acts: unknown[], seen: { [unknown]: boolean } = {}, {}
         local okG, groups = attempt(L("GetAvailableActivityGroups"), cat)
         for _, g in ipairs(okG and tbl.list(groups) or {}) do
             local okN, gname = attempt(L("GetActivityGroupInfo"), g)
             local okGA, ga = attempt(L("GetAvailableActivities"), cat, g)
-            groupLines[#groupLines + 1] = ("%s %s: %d"):format(tostring(g), tostring(okN and gname), okGA and type(ga) == "table" and #tbl.list(ga) or -1)
-            for _, a in ipairs(okGA and tbl.list(ga) or {}) do if not seen[a] then seen[a] = true; acts[#acts + 1] = a end end
+            groupLines[#groupLines + 1] = ("%s %s: %d"):format(
+                tostring(g),
+                tostring(okN and gname),
+                okGA and type(ga) == "table" and #tbl.list(ga) or -1
+            )
+            for _, a in ipairs(okGA and tbl.list(ga) or {}) do
+                if not seen[a] then
+                    seen[a] = true
+                    acts[#acts + 1] = a
+                end
+            end
         end
         local okA, all = attempt(L("GetAvailableActivities"), cat, nil)
         entry.ungroupedCall = okA and type(all) == "table" and #tbl.list(all) or ("error: " .. tostring(all))
-        for _, a in ipairs(okA and tbl.list(all) or {}) do if not seen[a] then seen[a] = true; acts[#acts + 1] = a end end
+        for _, a in ipairs(okA and tbl.list(all) or {}) do
+            if not seen[a] then
+                seen[a] = true
+                acts[#acts + 1] = a
+            end
+        end
         for i, a in ipairs(acts) do
-            if i > 120 then activities[#activities + 1] = "... " .. #acts .. " in all" break end
+            if i > 120 then
+                activities[#activities + 1] = "... " .. #acts .. " in all"
+                break
+            end
             local okT, t = attempt(L("GetActivityInfoTable"), a)
             if okT and type(t) == "table" then
-                activities[#activities + 1] = ("%s %s lvl %s-%s max %s group %s"):format(tostring(a), tostring(field(t, "fullName")),
-                    tostring(field(t, "minLevel")), tostring(field(t, "maxLevelSuggestion")), tostring(field(t, "maxNumPlayers")),
-                    tostring(field(t, "groupFinderActivityGroupID")))
+                activities[#activities + 1] = ("%s %s lvl %s-%s max %s group %s"):format(
+                    tostring(a),
+                    tostring(field(t, "fullName")),
+                    tostring(field(t, "minLevel")),
+                    tostring(field(t, "maxLevelSuggestion")),
+                    tostring(field(t, "maxNumPlayers")),
+                    tostring(field(t, "groupFinderActivityGroupID"))
+                )
             else
                 activities[#activities + 1] = tostring(a)
             end
@@ -162,14 +222,22 @@ export function snapshot()
         s.ownActivities = show(ownIDs)
     end
     local okR, a, b, c = attempt(tbl.field(_G, "GetLFGRoles"))
-    s.ownRoles = okR and ("leader=%s tank=%s healer=%s dps=%s"):format(tostring(a), tostring(b), tostring(c),
-        tostring(select(4, GetLFGRoles()))) or "no GetLFGRoles"
+    s.ownRoles = okR and
+        ("leader=%s tank=%s healer=%s dps=%s"):format(
+            tostring(a),
+            tostring(b),
+            tostring(c),
+            tostring(select(4, GetLFGRoles()))
+        ) or
+        "no GetLFGRoles"
     -- the chat channels you're in
     local serverChannels: string[] = {}
     s.serverChannels = serverChannels
     local enumerate = tbl.field(_G, "EnumerateServerChannels")
     if type(enumerate) == "function" then
-        for _, name in ipairs({ enumerate() }) do serverChannels[#serverChannels + 1] = tostring(name) end
+        for _, name in ipairs({ enumerate() }) do
+            serverChannels[#serverChannels + 1] = tostring(name)
+        end
     end
     local okL, lfgIndex, lfgName = attempt(GetChannelName, "LookingForGroup")
     s.lookingForGroupJoined = okL and (tostring(lfgIndex) .. " " .. tostring(lfgName)) or "error"
@@ -177,7 +245,11 @@ export function snapshot()
     s.channels = channels
     local list = { GetChannelList() }
     for i = 1, #list, 3 do
-        channels[#channels + 1] = ("%s %s%s"):format(tostring(list[i]), tostring(list[i + 1]), list[i + 2] and " (disabled)" or "")
+        channels[#channels + 1] = ("%s %s%s"):format(
+            tostring(list[i]),
+            tostring(list[i + 1]),
+            list[i + 2] and " (disabled)" or ""
+        )
     end
 end
 
@@ -188,9 +260,16 @@ export function timerSearch()
     local blocked: string[] = {}
     local t: Record = { category = tostring(cat), blocked = blocked }
     s.timerSearch = t
-    if cat == nil then return end
+    if cat == nil then
+        return
+    end
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
+    for _, e in ipairs({
+        "LFG_LIST_SEARCH_RESULTS_RECEIVED",
+        "LFG_LIST_SEARCH_FAILED",
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+    }) do
         f:RegisterEvent(e)
     end
     f:SetScript("OnEvent", function(self, event: string, a1: unknown, a2: unknown)
@@ -206,10 +285,17 @@ export function timerSearch()
         local results: string[] = {}
         t.results = results
         for i, id in ipairs(okR and tbl.list(ids) or {}) do
-            if i > 25 then break end
+            if i > 25 then
+                break
+            end
             results[i] = result(id)
         end
-        print(("LFG probe: the timer's search %s (%s results); /reload."):format(event == "LFG_LIST_SEARCH_FAILED" and "failed" or "came back", countText))
+        print(
+            ("LFG probe: the timer's search %s (%s results); /reload."):format(
+                event == "LFG_LIST_SEARCH_FAILED" and "failed" or "came back",
+                countText
+            )
+        )
     end)
     after(2, function()
         local ok, err = attempt(L("Search"), cat)
@@ -232,8 +318,15 @@ export function clickTest()
     local t: Record = { blocked = events }
     s.clickTest = t
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "LFG_LIST_ACTIVE_ENTRY_UPDATE",
-                         "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do f:RegisterEvent(e) end
+    for _, e in ipairs({
+        "LFG_LIST_SEARCH_RESULTS_RECEIVED",
+        "LFG_LIST_SEARCH_FAILED",
+        "LFG_LIST_ACTIVE_ENTRY_UPDATE",
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+    }) do
+        f:RegisterEvent(e)
+    end
     f:SetScript("OnEvent", function(_, event: string, a1: unknown, a2: unknown)
         events[#events + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
         if event == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then
@@ -253,8 +346,11 @@ export function clickTest()
         t.search = ok and "called" or ("error: " .. tostring(err))
         local okE, entry = attempt(L("GetActiveEntryInfo"))
         if okE and type(entry) == "table" and not isSecret(entry) then
-            local okU, errU = attempt(L("UpdateListing"), { activityIDs = field(entry, "activityIDs"),
-                newPlayerFriendly = field(entry, "newPlayerFriendly"), voiceMode = field(entry, "voiceMode") })
+            local okU, errU = attempt(L("UpdateListing"), {
+                activityIDs = field(entry, "activityIDs"),
+                newPlayerFriendly = field(entry, "newPlayerFriendly"),
+                voiceMode = field(entry, "voiceMode"),
+            })
             t.update = okU and "called" or ("error: " .. tostring(errU))
         else
             t.update = "no listing: skipped"
@@ -279,10 +375,18 @@ export function openTest()
     s.openTest = t
     openTestRecord = t
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "LFG_LIST_SEARCH_RESULTS_RECEIVED", "LFG_LIST_SEARCH_FAILED", "ADDON_ACTION_BLOCKED",
-                         "ADDON_ACTION_FORBIDDEN" }) do f:RegisterEvent(e) end
+    for _, e in ipairs({
+        "LFG_LIST_SEARCH_RESULTS_RECEIVED",
+        "LFG_LIST_SEARCH_FAILED",
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+    }) do
+        f:RegisterEvent(e)
+    end
     f:SetScript("OnEvent", function(_, event: string, a1: unknown, a2: unknown)
-        if not t.opened then return end
+        if not t.opened then
+            return
+        end
         events[#events + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
     end)
     local parent = wf.find("LFGParentFrame")
@@ -295,14 +399,20 @@ export function openTest()
     if not openHooked then
         openHooked = true
         hookScript(parent, "OnShow", function()
-            if not openArmed then return end
+            if not openArmed then
+                return
+            end
             openArmed = false
             local tt = openTestRecord
-            if not tt then return end
+            if not tt then
+                return
+            end
             tt.opened = date("%H:%M:%S")
             local ok, err = attempt(L("Search"), firstCategory(), 0, 0, nil, false, nil, nil)
             tt.search = ok and "called" or ("error: " .. tostring(err))
-            after(4, function() print("LFG probe: open test done; /reload.") end)
+            after(4, function()
+                print("LFG probe: open test done; /reload.")
+            end)
         end)
     end
     print("LFG probe: now open the Group Finder (press I or use the micro menu).")
@@ -317,22 +427,40 @@ export function whoTest()
     s.who = t
     local api: { [string]: boolean } = {}
     t.api = api
-    for _, n in ipairs({ "SendWho", "GetNumWhoResults", "GetWhoInfo", "SetWhoToUi", "SortWho", "GetWhoRaceFilters", "AddFriend" }) do
+    for _, n in ipairs({
+        "SendWho",
+        "GetNumWhoResults",
+        "GetWhoInfo",
+        "SetWhoToUi",
+        "SortWho",
+        "GetWhoRaceFilters",
+        "AddFriend",
+    }) do
         api[n] = type(field(fl, n)) == "function"
     end
-    for _, n in ipairs({ "LFGWhoListFrame", "LFGWhoListFilterUtil", "FriendsFrame_ShowDropdown", "UnitPopupSharedUtil" }) do
+    for _, n in ipairs({
+        "LFGWhoListFrame",
+        "LFGWhoListFilterUtil",
+        "FriendsFrame_ShowDropdown",
+        "UnitPopupSharedUtil",
+    }) do
         api[n] = field(_G, n) ~= nil
     end
     local filterUtil = field(_G, "LFGWhoListFilterUtil")
     local okF, filters = attempt(field(filterUtil, "GetWhoFilters"))
     if okF and filters then
-        t.filters = { classIDs = #tbl.list(field(filters, "classIDs")), raceIDs = #tbl.list(field(filters, "raceIDs")),
-                      uiMapIDs = #tbl.list(field(filters, "uiMapIDs")) }
+        t.filters = {
+            classIDs = #tbl.list(field(filters, "classIDs")),
+            raceIDs = #tbl.list(field(filters, "raceIDs")),
+            uiMapIDs = #tbl.list(field(filters, "uiMapIDs")),
+        }
     else
         t.filters = "none"
     end
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "WHO_LIST_UPDATE", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHAT_MSG_SYSTEM" }) do f:RegisterEvent(e) end
+    for _, e in ipairs({ "WHO_LIST_UPDATE", "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHAT_MSG_SYSTEM" }) do
+        f:RegisterEvent(e)
+    end
     local system: string[] = {}
     f:SetScript("OnEvent", function(_, event: string, a1: unknown, a2: unknown)
         if event == "WHO_LIST_UPDATE" then
@@ -346,7 +474,9 @@ export function whoTest()
             end
         elseif event == "CHAT_MSG_SYSTEM" then
             t.system = system
-            if #system < 5 then system[#system + 1] = show(a1) end
+            if #system < 5 then
+                system[#system + 1] = show(a1)
+            end
         else
             blocked[#blocked + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
         end
@@ -377,12 +507,21 @@ end
 -- Watch for the game's verdict on what follows.
 local function verdicts(list: string[], seconds: number?)
     local f = CreateFrame("Frame")
-    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN", "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE",
-                         "LFG_LIST_ACTIVE_ENTRY_UPDATE" }) do f:RegisterEvent(e) end
+    for _, e in ipairs({
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+        "CHANNEL_UI_UPDATE",
+        "CHAT_MSG_CHANNEL_NOTICE",
+        "LFG_LIST_ACTIVE_ENTRY_UPDATE",
+    }) do
+        f:RegisterEvent(e)
+    end
     f:SetScript("OnEvent", function(_, event: string, a1: unknown, a2: unknown)
         list[#list + 1] = date("%H:%M:%S ") .. event .. " " .. tostring(a1) .. " " .. tostring(a2)
     end)
-    after(seconds or 5, function() f:UnregisterAllEvents() end)
+    after(seconds or 5, function()
+        f:UnregisterAllEvents()
+    end)
 end
 
 local function windowsWith(channel: string): number[]
@@ -391,7 +530,9 @@ local function windowsWith(channel: string): number[]
         local list = { GetChatWindowChannels(i) }
         for j = 1, #list, 2 do
             local name = asString(list[j])
-            if name and name:lower() == channel:lower() then out[#out + 1] = i end
+            if name and name:lower() == channel:lower() then
+                out[#out + 1] = i
+            end
         end
     end
     return out
@@ -425,8 +566,13 @@ export function join()
         after(1, function()
             local windowsAfter = table.concat(windowsWith("LookingForGroup"), ",")
             t.windowsAfter = windowsAfter
-            print(("LFG probe: LookingForGroup %s, on windows %s, after removing: %s; /reload."):format(joined,
-                windowsBefore ~= "" and windowsBefore or "none", windowsAfter ~= "" and windowsAfter or "none"))
+            print(
+                ("LFG probe: LookingForGroup %s, on windows %s, after removing: %s; /reload."):format(
+                    joined,
+                    windowsBefore ~= "" and windowsBefore or "none",
+                    windowsAfter ~= "" and windowsAfter or "none"
+                )
+            )
         end)
     end)
 end
@@ -448,7 +594,12 @@ export function timerJoin()
             local joined = okN and (tostring(index) .. " " .. tostring(name)) or "error"
             local windows = table.concat(windowsWith("LookingForGroup"), ",")
             t.joined, t.windows = joined, windows
-            print(("LFG probe: joined from a timer: %s (windows %s); /reload."):format(joined, windows ~= "" and windows or "none"))
+            print(
+                ("LFG probe: joined from a timer: %s (windows %s); /reload."):format(
+                    joined,
+                    windows ~= "" and windows or "none"
+                )
+            )
         end)
     end)
 end
@@ -496,11 +647,25 @@ export function lang()
     local acc = field(_G, "C_AccountServices")
     t.api = acc and "C_AccountServices" or "missing"
     local function read(label: string)
-        if not acc then return end
+        if not acc then
+            return
+        end
         local settings = { attempt(field(acc, "GetPreferredPlaySettings")) }
-        local ok, loaded, localeID, dcID, localeDate, cooldown = settings[1], settings[2], settings[3], settings[4], settings[5], settings[7]
-        t[label] = ok and ("loaded=%s locale=%s datacenter=%s localeChanged=%s cooldownDays=%s"):format(tostring(loaded),
-            tostring(localeID), tostring(dcID), tostring(localeDate), tostring(cooldown)) or ("error: " .. tostring(loaded))
+        local ok, loaded, localeID, dcID, localeDate, cooldown = settings[1],
+            settings[2],
+            settings[3],
+            settings[4],
+            settings[5],
+            settings[7]
+        t[label] = ok and
+            ("loaded=%s locale=%s datacenter=%s localeChanged=%s cooldownDays=%s"):format(
+                tostring(loaded),
+                tostring(localeID),
+                tostring(dcID),
+                tostring(localeDate),
+                tostring(cooldown)
+            ) or
+            ("error: " .. tostring(loaded))
     end
     read("before")
     if acc then
@@ -508,19 +673,29 @@ export function lang()
         local locales: string[] = {}
         t.locales = locales
         if okL and type(ids) == "table" then
-            for i, id in ipairs(tbl.list(ids)) do locales[#locales + 1] = tostring(id) .. " " .. tostring(tbl.list(localeNames)[i]) end
+            for i, id in ipairs(tbl.list(ids)) do
+                locales[#locales + 1] = tostring(id) .. " " .. tostring(tbl.list(localeNames)[i])
+            end
         else
             locales[1] = "error: " .. tostring(ids)
         end
         local okD, dids, dnames = attempt(field(acc, "GetPreferredDatacenterLocalities"))
         local datacenters: string[] = {}
         t.datacenters = datacenters
-        for i, id in ipairs(okD and tbl.list(dids) or {}) do datacenters[#datacenters + 1] = tostring(id) .. " " .. tostring(tbl.list(dnames)[i]) end
+        for i, id in ipairs(okD and tbl.list(dids) or {}) do
+            datacenters[#datacenters + 1] = tostring(id) .. " " .. tostring(tbl.list(dnames)[i])
+        end
         local okF, canLocale, canDC = attempt(field(acc, "GetPreferredPlaySettingsFeatures"))
-        t.features = okF and ("canChangeLocale=%s canChangeDatacenter=%s"):format(tostring(canLocale), tostring(canDC)) or "error"
+        t.features = okF and
+            ("canChangeLocale=%s canChangeDatacenter=%s"):format(tostring(canLocale), tostring(canDC)) or
+            "error"
     end
     -- the tool's language filters
-    for _, fn in ipairs({ "GetLanguageSearchFilter", "GetDefaultLanguageSearchFilter", "GetAvailableLanguageSearchFilter" }) do
+    for _, fn in ipairs({
+        "GetLanguageSearchFilter",
+        "GetDefaultLanguageSearchFilter",
+        "GetAvailableLanguageSearchFilter",
+    }) do
         local ok, v = attempt(L(fn))
         t[fn] = ok and show(v) or ("error: " .. tostring(v))
     end
@@ -558,36 +733,74 @@ export function live()
     s.live = log
     local function note(text: string, loud: boolean)
         log[#log + 1] = date("%H:%M:%S ") .. text
-        while #log > 2000 do table.remove(log, 1) end
-        if loud then print("LFG: " .. text) end
+        while #log > 2000 do
+            table.remove(log, 1)
+        end
+        if loud then
+            print("LFG: " .. text)
+        end
     end
     local function describe(e: Entry): string
         local roles: string[] = {}
         for side, set in pairs(e.roles) do
             if type(set) == "table" then
-                for role, v in pairs(set) do roles[#roles + 1] = side:sub(1, 1) .. ":" .. tostring(role) .. (type(v) == "number" and v or "") end
+                for role, v in pairs(set) do
+                    roles[#roles + 1] = side:sub(1, 1) .. ":" .. tostring(role) .. (type(v) == "number" and v or "")
+                end
             end
         end
         local src: string[] = {}
-        for k in pairs(e.sources) do src[#src + 1] = k end
+        for k in pairs(e.sources) do
+            src[#src + 1] = k
+        end
         table.sort(src)
-        return ("%s [%s] %s %s roles %s need %s (%s) conf %.2f \"%s\""):format(e.key, table.concat(src, "+"), e.intent or "?",
-            table.concat(e.activities, ","), table.concat(roles, " "), tostring(e.need), e.leader.class or "?",
-            e.confidence, e.text:sub(1, 60))
+        return ("%s [%s] %s %s roles %s need %s (%s) conf %.2f \"%s\""):format(
+            e.key,
+            table.concat(src, "+"),
+            e.intent or "?",
+            table.concat(e.activities, ","),
+            table.concat(roles, " "),
+            tostring(e.need),
+            e.leader.class or "?",
+            e.confidence,
+            e.text:sub(1, 60)
+        )
     end
     if not liveHooked then
         liveHooked = true
-        LFG.On("EntryAdded", function(e) note("added " .. describe(e), false) end)
-        LFG.On("EntryUpdated", function(e) note("updated " .. describe(e), false) end)
-        LFG.On("EntryRemoved", function(e, why) note("removed " .. e.key .. " (" .. tostring(why) .. ")", false) end)
-        LFG.On("Match", function(e, reasons) note("MATCH " .. table.concat(reasons, ",") .. ": " .. describe(e), true) end)
-        LFG.On("ToolSearched", function(cat, n) note("tool searched " .. tostring(cat) .. ": " .. tostring(n), true) end)
-        LFG.On("ToolSearchFailed", function(cat) note("tool search failed " .. tostring(cat), true) end)
-        LFG.On("ToolStale", function(cat, age) note("tool stale " .. tostring(cat) .. " age " .. tostring(age and math.floor(age)), true) end)
-        LFG.On("ListingChanged", function(l) note("listing " .. (l and table.concat(l.activities, ",") or "none"), true) end)
-        LFG.On("ListingExpiring", function(left) note("listing runs out in " .. tostring(left), true) end)
-        LFG.On("Delisted", function() note("delisted", true) end)
-        LFG.On("Contacted", function(e, what) note("contacted " .. e.key .. ": " .. what, true) end)
+        LFG.On("EntryAdded", function(e)
+            note("added " .. describe(e), false)
+        end)
+        LFG.On("EntryUpdated", function(e)
+            note("updated " .. describe(e), false)
+        end)
+        LFG.On("EntryRemoved", function(e, why)
+            note("removed " .. e.key .. " (" .. tostring(why) .. ")", false)
+        end)
+        LFG.On("Match", function(e, reasons)
+            note("MATCH " .. table.concat(reasons, ",") .. ": " .. describe(e), true)
+        end)
+        LFG.On("ToolSearched", function(cat, n)
+            note("tool searched " .. tostring(cat) .. ": " .. tostring(n), true)
+        end)
+        LFG.On("ToolSearchFailed", function(cat)
+            note("tool search failed " .. tostring(cat), true)
+        end)
+        LFG.On("ToolStale", function(cat, age)
+            note("tool stale " .. tostring(cat) .. " age " .. tostring(age and math.floor(age)), true)
+        end)
+        LFG.On("ListingChanged", function(l)
+            note("listing " .. (l and table.concat(l.activities, ",") or "none"), true)
+        end)
+        LFG.On("ListingExpiring", function(left)
+            note("listing runs out in " .. tostring(left), true)
+        end)
+        LFG.On("Delisted", function()
+            note("delisted", true)
+        end)
+        LFG.On("Contacted", function(e, what)
+            note("contacted " .. e.key .. ": " .. what, true)
+        end)
     end
     LFG.Start()
     note(("started: languages %s"):format(table.concat(LFG.Languages(), ",")), true)
@@ -598,15 +811,37 @@ export function entries()
     local list = LFG.Entries()
     local st = LFG.Chat.stats
     local lastError = LFG.Chat.lastError
-    print(("LFG: %d entries; chat lines seen %d, secret %d, channel off %d, not group %d, low confidence %d, entries %d, errors %d%s"):format(
-        #list, st.seen or 0, st.secret or 0, st.channelOff or 0, st.nothing or 0, st.lowConfidence or 0, st.entries or 0,
-        st.errors or 0, lastError and (" (" .. lastError .. ")") or ""))
+    print(
+        ("LFG: %d entries; chat lines seen %d, secret %d, channel off %d, not group %d, low confidence %d, entries %d, errors %d%s"):format(
+            #list,
+            st.seen or 0,
+            st.secret or 0,
+            st.channelOff or 0,
+            st.nothing or 0,
+            st.lowConfidence or 0,
+            st.entries or 0,
+            st.errors or 0,
+            lastError and (" (" .. lastError .. ")") or ""
+        )
+    )
     for i, e in ipairs(list) do
-        if i > 15 then print("...") break end
+        if i > 15 then
+            print("...")
+            break
+        end
         local src: string[] = {}
-        for k in pairs(e.sources) do src[#src + 1] = k end
-        print(("  %s [%s] %s %s need %s"):format(e.key, table.concat(src, "+"), e.intent or "?",
-            table.concat(e.activities, ","), tostring(e.need)))
+        for k in pairs(e.sources) do
+            src[#src + 1] = k
+        end
+        print(
+            ("  %s [%s] %s %s need %s"):format(
+                e.key,
+                table.concat(src, "+"),
+                e.intent or "?",
+                table.concat(e.activities, ","),
+                tostring(e.need)
+            )
+        )
     end
 end
 
@@ -614,10 +849,22 @@ end
 local recorder: Frame? = nil
 local CHAT_EVENTS = { "CHAT_MSG_CHANNEL", "CHAT_MSG_SAY", "CHAT_MSG_YELL" }
 
-local function recordLine(event: string, text: unknown, author: unknown, _: unknown, channelName: unknown, _: unknown, _: unknown,
-                          _: unknown, _: unknown, channelBase: unknown)
+local function recordLine(
+    event: string,
+    text: unknown,
+    author: unknown,
+    _: unknown,
+    channelName: unknown,
+    _: unknown,
+    _: unknown,
+    _: unknown,
+    _: unknown,
+    channelBase: unknown
+)
     local r = store().record
-    if not (r and r.on) then return end
+    if not (r and r.on) then
+        return
+    end
     -- every event that arrives, saved or not
     local seen = r.seen or {}
     r.seen = seen
@@ -625,22 +872,35 @@ local function recordLine(event: string, text: unknown, author: unknown, _: unkn
     local inInstance, kind = IsInInstance()
     local line = {
         date("%H:%M:%S"),
-        event == "CHAT_MSG_CHANNEL" and (isSecret(channelBase) and "<secret>" or tostring(channelBase or channelName)) or event:sub(10):lower(),
+        event == "CHAT_MSG_CHANNEL" and
+            (isSecret(channelBase) and "<secret>" or tostring(channelBase or channelName)) or
+            event:sub(10):lower(),
         isSecret(author) and "<secret>" or tostring(author),
         isSecret(text) and "<secret>" or tostring(text),
-        (InCombatLockdown() and "combat " or "") .. (inInstance and (tostring(kind) .. " ") or "") .. tostring(GetZoneText()),
+        (InCombatLockdown() and "combat " or "") ..
+            (inInstance and (tostring(kind) .. " ") or "") .. tostring(GetZoneText()),
     }
     table.insert(r.lines, table.concat(line, " | "))
-    if isSecret(text) then r.secret = (r.secret or 0) + 1 end
-    while #r.lines > MAX_LINES do table.remove(r.lines, 1) end
+    if isSecret(text) then
+        r.secret = (r.secret or 0) + 1
+    end
+    while #r.lines > MAX_LINES do
+        table.remove(r.lines, 1)
+    end
 end
 
 local function arm()
-    if recorder then return end
+    if recorder then
+        return
+    end
     local f = CreateFrame("Frame")
     recorder = f
-    for _, e in ipairs(CHAT_EVENTS) do f:RegisterEvent(e) end
-    f:SetScript("OnEvent", function(_, event: string, ...: unknown) recordLine(event, ...) end)
+    for _, e in ipairs(CHAT_EVENTS) do
+        f:RegisterEvent(e)
+    end
+    f:SetScript("OnEvent", function(_, event: string, ...: unknown)
+        recordLine(event, ...)
+    end)
 end
 
 export function record(on: boolean)
@@ -651,9 +911,15 @@ export function record(on: boolean)
     if on then
         r.since = r.since or date("%Y-%m-%d %H:%M:%S")
         arm()
-        print(("LFG recorder: on (%d lines so far); it keeps recording after /reload until \"/suu probe lfg stop\"."):format(#r.lines))
+        print(
+            ("LFG recorder: on (%d lines so far); it keeps recording after /reload until \"/suu probe lfg stop\"."):format(
+                #r.lines
+            )
+        )
     else
-        if recorder then recorder:UnregisterAllEvents() end
+        if recorder then
+            recorder:UnregisterAllEvents()
+        end
         print(("LFG recorder: off, %d lines kept; /reload to save them."):format(#r.lines))
     end
 end
@@ -661,21 +927,53 @@ end
 -- after a /reload: recording again if it was on
 @onLogin
 local function resume()
-    if tbl.field(DB.probe, "lfg", "record", "on") then arm() end
+    if tbl.field(DB.probe, "lfg", "record", "on") then
+        arm()
+    end
 end
 
 export function command(arg: string?)
     local rest = (arg or ""):lower()
-    if rest == "record" then record(true) return end
-    if rest == "stop" then record(false) return end
-    if rest == "click" then clickTest() return end
-    if rest == "who" then whoTest() return end
-    if rest == "open" then openTest() return end
-    if rest == "join" then join() return end
-    if rest == "timerjoin" then timerJoin() return end
-    if rest == "lang" then lang() return end
-    if rest == "live" then live() return end
-    if rest == "entries" then entries() return end
+    if rest == "record" then
+        record(true)
+        return
+    end
+    if rest == "stop" then
+        record(false)
+        return
+    end
+    if rest == "click" then
+        clickTest()
+        return
+    end
+    if rest == "who" then
+        whoTest()
+        return
+    end
+    if rest == "open" then
+        openTest()
+        return
+    end
+    if rest == "join" then
+        join()
+        return
+    end
+    if rest == "timerjoin" then
+        timerJoin()
+        return
+    end
+    if rest == "lang" then
+        lang()
+        return
+    end
+    if rest == "live" then
+        live()
+        return
+    end
+    if rest == "entries" then
+        entries()
+        return
+    end
     local cat = rest:match("^refresh ?(%d*)$")
     if cat then
         local LFG: ForeverLFG = foreverLFG
@@ -683,7 +981,10 @@ export function command(arg: string?)
         print("LFG: searching the tool " .. (ok and "" or "(failed) ") .. (cat ~= "" and cat or "2"))
         return
     end
-    if rest == "delist" then delist() return end
+    if rest == "delist" then
+        delist()
+        return
+    end
     if rest == "clear" then
         local s = store()
         local r = s.record
@@ -692,7 +993,9 @@ export function command(arg: string?)
         return
     end
     snapshot()
-    if rest == "timer" then timerSearch() end
+    if rest == "timer" then
+        timerSearch()
+    end
     local s = store()
     print(("LFG probe: %d categories, %d channels saved; /reload."):format(#(s.categories or {}), #(s.channels or {})))
 end

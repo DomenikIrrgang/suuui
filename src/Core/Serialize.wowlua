@@ -25,30 +25,44 @@ const VERSION = 2
 
 -- Returns value, next position; errors with a message on malformed input.
 local function read(s: string, i: number, depth: number): (unknown, number)
-    if depth > 20 then error("too deeply nested") end
+    if depth > 20 then
+        error("too deeply nested")
+    end
     local c = s:sub(i, i)
-    if c == "T" then return true, i + 1 end
-    if c == "F" then return false, i + 1 end
+    if c == "T" then
+        return true, i + 1
+    end
+    if c == "F" then
+        return false, i + 1
+    end
     if c == "n" then
         local j = s:find(";", i + 1, true)
         local n = j and tonumber(s:sub(i + 1, j - 1))
-        if not (j and n) then error("bad number") end
+        if not (j and n) then
+            error("bad number")
+        end
         return n, j + 1
     end
     if c == "s" then
         local colon = s:find(":", i + 1, true)
         local len = colon and tonumber(s:sub(i + 1, colon - 1))
-        if not (colon and len) or len < 0 or colon + len > #s then error("bad string") end
+        if not (colon and len) or len < 0 or colon + len > #s then
+            error("bad string")
+        end
         return s:sub(colon + 1, colon + len), colon + len + 1
     end
     if c == "{" then
         local t: { [unknown]: unknown } = {}
         local at = i + 1
         while s:sub(at, at) ~= "}" do
-            if at > #s then error("unterminated table") end
+            if at > #s then
+                error("unterminated table")
+            end
             local k: unknown, v: unknown
             k, at = read(s, at, depth + 1)
-            if type(k) ~= "string" and type(k) ~= "number" then error("bad key") end
+            if type(k) ~= "string" and type(k) ~= "number" then
+                error("bad key")
+            end
             v, at = read(s, at, depth + 1)
             t[k] = v
         end
@@ -59,7 +73,9 @@ end
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local B64INDEX: { [string]: number } = {}
-for i = 1, 64 do B64INDEX[B64:sub(i, i)] = i - 1 end
+for i = 1, 64 do
+    B64INDEX[B64:sub(i, i)] = i - 1
+end
 
 export function base64(s: string): string
     local out: string[] = {}
@@ -70,32 +86,44 @@ export function base64(s: string): string
         local c2 = math.floor(n / 4096) % 64
         local c3 = math.floor(n / 64) % 64
         local c4 = n % 64
-        out[#out + 1] = B64:sub(c1 + 1, c1 + 1) .. B64:sub(c2 + 1, c2 + 1)
-            .. (b and B64:sub(c3 + 1, c3 + 1) or "=") .. (c and B64:sub(c4 + 1, c4 + 1) or "=")
+        out[#out + 1] = B64:sub(c1 + 1, c1 + 1) ..
+            B64:sub(c2 + 1, c2 + 1) .. (b and B64:sub(c3 + 1, c3 + 1) or "=") .. (c and B64:sub(c4 + 1, c4 + 1) or "=")
     end
     return table.concat(out)
 end
 
 export function fromBase64(text: string): string?
     local s = text:gsub("%s", "")
-    if #s % 4 ~= 0 then return nil end
+    if #s % 4 ~= 0 then
+        return nil
+    end
     local out: string[] = {}
     for i = 1, #s, 4 do
         local v: (number?)[] = {}
         for j = 1, 4 do
             local ch = s:sub(i + j - 1, i + j - 1)
-            if ch == "=" then v[j] = nil else
+            if ch == "=" then
+                v[j] = nil
+            else
                 local x = B64INDEX[ch]
-                if not x then return nil end
+                if not x then
+                    return nil
+                end
                 v[j] = x
             end
         end
         local v1, v2, v3, v4 = v[1], v[2], v[3], v[4]
-        if not (v1 and v2) or (v4 and not v3) then return nil end
+        if not (v1 and v2) or (v4 and not v3) then
+            return nil
+        end
         local n = v1 * 262144 + v2 * 4096 + (v3 or 0) * 64 + (v4 or 0)
         out[#out + 1] = string.char(math.floor(n / 65536) % 256)
-        if v3 then out[#out + 1] = string.char(math.floor(n / 256) % 256) end
-        if v4 then out[#out + 1] = string.char(n % 256) end
+        if v3 then
+            out[#out + 1] = string.char(math.floor(n / 256) % 256)
+        end
+        if v4 then
+            out[#out + 1] = string.char(n % 256)
+        end
     end
     return table.concat(out)
 end
@@ -116,12 +144,20 @@ end
 
 local function decodeLegacy(text: string): (any, string?)
     local raw = fromBase64(text:sub(#LEGACY_PREFIX + 1))
-    if not raw or #raw < 5 then return nil, "The string is incomplete; copy all of it." end
+    if not raw or #raw < 5 then
+        return nil, "The string is incomplete; copy all of it."
+    end
     local sum, payload = raw:sub(1, 4), raw:sub(5)
-    if checksum(payload) ~= sum then return nil, "The string is damaged or incomplete; copy all of it." end
+    if checksum(payload) ~= sum then
+        return nil, "The string is damaged or incomplete; copy all of it."
+    end
     local ok, value, last = pcall(read, payload, 1, 0)
-    if not ok then return nil, "The string is damaged: " .. tostring(value) .. "." end
-    if last ~= #payload + 1 then return nil, "The string has extra data at the end." end
+    if not ok then
+        return nil, "The string is damaged: " .. tostring(value) .. "."
+    end
+    if last ~= #payload + 1 then
+        return nil, "The string has extra data at the end."
+    end
     return value
 end
 
@@ -133,9 +169,15 @@ end
 
 export function decode(input: string?): (unknown, string?)
     local text = strtrim(input or "")
-    if text:sub(1, #LEGACY_PREFIX) == LEGACY_PREFIX then return decodeLegacy(text) end
-    if text:sub(1, #PREFIX + 2) ~= "!" .. PREFIX .. ":" then return nil, "This isn't a SuuUI profile string." end
+    if text:sub(1, #LEGACY_PREFIX) == LEGACY_PREFIX then
+        return decodeLegacy(text)
+    end
+    if text:sub(1, #PREFIX + 2) ~= "!" .. PREFIX .. ":" then
+        return nil, "This isn't a SuuUI profile string."
+    end
     local ok: boolean, value: unknown = serialize.importString(text)
-    if not ok then return nil, "The string is damaged or incomplete; copy all of it." end
+    if not ok then
+        return nil, "The string is damaged or incomplete; copy all of it."
+    end
     return value
 end

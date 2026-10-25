@@ -35,8 +35,12 @@ local function listsOf(v: Values): Lists.ListSet
     return field(v, "lists") :: unknown :: Lists.ListSet
 end
 -- A collection's entries, a shared slot's members.
-local function inside(e: Lists.Entry?): Lists.Entry[] return (assert(assert(e).entries)) end
-local function membersOf(e: Lists.Entry?): Lists.Entry[] return (assert(assert(e).members)) end
+local function inside(e: Lists.Entry?): Lists.Entry[]
+    return (assert(assert(e).entries))
+end
+local function membersOf(e: Lists.Entry?): Lists.Entry[]
+    return (assert(assert(e).members))
+end
 
 --------------------------------------------------------------------------------
 -- essentialSize-30-52
@@ -70,7 +74,16 @@ local function slotUids()
     local v: Values = {
         setups = {
             WARRIOR = {
-                ["3"] = { lists = { buffs = { { name = "A" }, { group = true }, { collection = true }, { group = true, uid = "keep" } } } },
+                ["3"] = {
+                    lists = {
+                        buffs = {
+                            { name = "A" },
+                            { group = true },
+                            { collection = true },
+                            { group = true, uid = "keep" },
+                        },
+                    },
+                },
                 ["1"] = "not a setup",
                 ["2"] = { lists = "not lists" },
             },
@@ -104,15 +117,26 @@ end
 @test("missing per entry: the list-wide choice onto entries without their own")
 local function missingPerEntry()
     local v: Values = {
-        missingBuffs = "remind", missingDebuffs = "hide",
-        setups = { WARRIOR = {
-            ["3"] = { lists = {
-                buffs = { { name = "A" }, { name = "B", missing = "warn" }, { collection = true, entries = { { name = "C" }, "junk" } }, "junk" },
-                debuffs = { { name = "D" } },
-                procs = { { name = "P" } },
-            } },
-            ["1"] = "not a setup",
-        }, DRUID = "not specs" },
+        missingBuffs = "remind",
+        missingDebuffs = "hide",
+        setups = {
+            WARRIOR = {
+                ["3"] = {
+                    lists = {
+                        buffs = {
+                            { name = "A" },
+                            { name = "B", missing = "warn" },
+                            { collection = true, entries = { { name = "C" }, "junk" } },
+                            "junk",
+                        },
+                        debuffs = { { name = "D" } },
+                        procs = { { name = "P" } },
+                    },
+                },
+                ["1"] = "not a setup",
+            },
+            DRUID = "not specs",
+        },
         lists = { buffs = { { name = "Old" } } },
     }
     migrations.missingPerEntry(v)
@@ -130,11 +154,18 @@ end
 
 @test("missing per entry: no old choice changes nothing")
 local function missingPerEntryNone()
-    local v: Values = { setups = { WARRIOR = { ["3"] = { lists = { buffs = { { name = "A" } }, debuffs = "junk" } } } }, lists = "junk" }
+    local v: Values = {
+        setups = { WARRIOR = { ["3"] = { lists = { buffs = { { name = "A" } }, debuffs = "junk" } } } },
+        lists = "junk",
+    }
     migrations.missingPerEntry(v)
     expect(storedList(v, "WARRIOR", "3", "buffs")[1].missing).toBeNil()
     -- a list that isn't a table, and a missing value that isn't a string
-    local w: Values = { missingBuffs = true, missingDebuffs = "hide", lists = { buffs = { { name = "A" } }, debuffs = "junk" } }
+    local w: Values = {
+        missingBuffs = true,
+        missingDebuffs = "hide",
+        lists = { buffs = { { name = "A" } }, debuffs = "junk" },
+    }
     migrations.missingPerEntry(w)
     expect(assert(listsOf(w).buffs)[1].missing).toBeNil()
     local empty: Values = { setups = "junk" }
@@ -147,17 +178,31 @@ end
 --------------------------------------------------------------------------------
 
 local function shields(icon: number?): Lists.Entry
-    return { group = true, name = "Shields", fixedIcon = true, icon = icon,
-             members = { { name = "Lightning Shield", ids = { 324 }, icon = 324 }, { name = "Water Shield", ids = { 52127 }, icon = 52127 } } }
+    return {
+        group = true,
+        name = "Shields",
+        fixedIcon = true,
+        icon = icon,
+        members = {
+            { name = "Lightning Shield", ids = { 324 }, icon = 324 },
+            { name = "Water Shield", ids = { 52127 }, icon = 52127 },
+        },
+    }
 end
 
 @test("shaman shields: not fixed any more; Water Shield's art leads")
 local function shamanShields()
-    local v: Values = { setups = { SHAMAN = {
-        ["3"] = { lists = { buffs = { shields(52127), { collection = true, entries = { shields(324) } }, "junk" } } },
-        ["2"] = "junk",
-        ["1"] = { lists = "junk" },
-    } } }
+    local v: Values = {
+        setups = {
+            SHAMAN = {
+                ["3"] = {
+                    lists = { buffs = { shields(52127), { collection = true, entries = { shields(324) } }, "junk" } },
+                },
+                ["2"] = "junk",
+                ["1"] = { lists = "junk" },
+            },
+        },
+    }
     migrations.shamanShieldsAuto(v)
     local buffs = storedList(v, "SHAMAN", "3", "buffs")
     expect(buffs[1].fixedIcon).toBeNil()
@@ -207,19 +252,29 @@ end
 @test("short buffs: the reminders of Shields, Battle Shout and Inner Fire warn")
 local function shortBuffs()
     expect(migrations.SHORT_BUFFS).toEqual({ SHAMAN = "Shields", WARRIOR = "Battle Shout", PRIEST = "Inner Fire" })
-    local v: Values = { setups = {
-        WARRIOR = { ["3"] = { lists = { buffs = {
-            { name = "Battle Shout", missing = "remind" },
-            { name = "Battle Shout", missing = "grey" },
-            { name = "Bloodrage", missing = "remind" },
-            { collection = true, entries = { { name = "Battle Shout", missing = "remind" } } },
-            "junk",
-        } } }, ["1"] = "junk", ["2"] = { lists = "junk" } },
-        PRIEST = { ["1"] = { lists = { buffs = { { name = "Inner Fire", missing = "remind" } } } } },
-        -- another class's buff of that name isn't one of these
-        MAGE = { ["1"] = { lists = { buffs = { { name = "Battle Shout", missing = "remind" } } } } },
-        SHAMAN = "junk",
-    } }
+    local v: Values = {
+        setups = {
+            WARRIOR = {
+                ["3"] = {
+                    lists = {
+                        buffs = {
+                            { name = "Battle Shout", missing = "remind" },
+                            { name = "Battle Shout", missing = "grey" },
+                            { name = "Bloodrage", missing = "remind" },
+                            { collection = true, entries = { { name = "Battle Shout", missing = "remind" } } },
+                            "junk",
+                        },
+                    },
+                },
+                ["1"] = "junk",
+                ["2"] = { lists = "junk" },
+            },
+            PRIEST = { ["1"] = { lists = { buffs = { { name = "Inner Fire", missing = "remind" } } } } },
+            -- another class's buff of that name isn't one of these
+            MAGE = { ["1"] = { lists = { buffs = { { name = "Battle Shout", missing = "remind" } } } } },
+            SHAMAN = "junk",
+        },
+    }
     migrations.shortBuffsWarn(v)
     local buffs = storedList(v, "WARRIOR", "3", "buffs")
     expect(buffs[1].missing).toBe("warn")
@@ -247,7 +302,13 @@ end
 @test("an old profile loads migrated, once")
 local function oldProfile()
     local p: unknown = field(DB.db, "profiles", "Player - Realm")
-    for _, id in ipairs({ "essentialSize-30-52", "slot-uids", "missing-per-entry", "shaman-shields-auto", "short-buffs-warn" }) do
+    for _, id in ipairs({
+        "essentialSize-30-52",
+        "slot-uids",
+        "missing-per-entry",
+        "shaman-shields-auto",
+        "short-buffs-warn",
+    }) do
         expect(field(p, "__migrated", "cooldowns/" .. id)).toBe(true)
     end
     local saved: unknown = field(p, "cooldowns")

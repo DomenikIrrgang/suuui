@@ -13,47 +13,93 @@ import type RaidButton from "/Units/RaidFrames"
 import * as frames from "wowlua:frames"
 
 -- The raid frames' holder, a group's header (by their global names).
-local function holder(): Frame return (assert(frames.find("SuuUIRaidFrames"))) end
-local function header(g: number): Frame return (assert(frames.find("SuuUIRaidGroup" .. g))) end
+local function holder(): Frame
+    return (assert(frames.find("SuuUIRaidFrames")))
+end
+local function header(g: number): Frame
+    return (assert(frames.find("SuuUIRaidGroup" .. g)))
+end
 
 local CLASSES = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "SHAMAN" }
-local ROLES: { [string]: ("TANK" | "HEALER" | "DAMAGER")? } = { WARRIOR = "TANK", PRIEST = "HEALER", SHAMAN = "HEALER", MAGE = "DAMAGER", ROGUE = "DAMAGER" }
+local ROLES: { [string]: ("TANK" | "HEALER" | "DAMAGER")? } = {
+    WARRIOR = "TANK",
+    PRIEST = "HEALER",
+    SHAMAN = "HEALER",
+    MAGE = "DAMAGER",
+    ROGUE = "DAMAGER",
+}
 
 -- Placeholder raiders, made once (the engine keeps them).
 local raiders: mock.MockUnit[] = {}
 for i = 1, 24 do
     local class = CLASSES[(i - 1) % #CLASSES + 1]
-    local u = mock.spawnUnit({ name = "Raider " .. i, player = true, class = class, level = 60, reaction = "friendly",
-        health = 3000, healthMax = 4000 })
+    local u = mock.spawnUnit({
+        name = "Raider " .. i,
+        player = true,
+        class = class,
+        level = 60,
+        reaction = "friendly",
+        health = 3000,
+        healthMax = 4000,
+    })
     local role = ROLES[class]
-    if role then u:setRole(role) end
+    if role then
+        u:setRole(role)
+    end
     raiders[i] = u
 end
 
 -- A raid of you and `n` others, five a group.
 local function raid(n: number)
-    for i = 1, n do mock.group:add(raiders[i], { raid = true, subgroup = math.floor(i / 5) + 1, quiet = i < n }) end
+    for i = 1, n do
+        mock.group:add(raiders[i], { raid = true, subgroup = math.floor(i / 5) + 1, quiet = i < n })
+    end
     mock.advanceFrames(2)
     mock.advanceTime(0.4)
 end
 
 local function buttonOf(unit: string): RaidButton?
-    for _, f in ipairs(M.buttons) do if f.unit == unit and f:IsShown() then return f end end
+    for _, f in ipairs(M.buttons) do
+        if f.unit == unit and f:IsShown() then
+            return f
+        end
+    end
     return nil
 end
 
 local function myButton(): RaidButton
-    for _, f in ipairs(M.buttons) do if f.isMe and f:IsShown() then return f end end
+    for _, f in ipairs(M.buttons) do
+        if f.isMe and f:IsShown() then
+            return f
+        end
+    end
     error("no button of yours")
 end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     mock.group:leave()
     mock.player:target(nil)
-    M:ResetAll({ "showSolo", "arrangement", "sort", "perBand", "width", "height", "heightLarge", "gap",
-                           "groupGap", "power", "healthText", "debuffBadges", "buffIcons", "debuffIcons", "rangeAlpha" })
+    M:ResetAll({
+        "showSolo",
+        "arrangement",
+        "sort",
+        "perBand",
+        "width",
+        "height",
+        "heightLarge",
+        "gap",
+        "groupGap",
+        "power",
+        "healthText",
+        "debuffBadges",
+        "buffIcons",
+        "debuffIcons",
+        "rangeAlpha",
+    })
     mock.advanceFrames(2)
     mock.advanceTime(0.4)
     expectNoErrors()
@@ -78,7 +124,11 @@ local function inRaid()
     expect(holder()).toBeShown()
     myButton()
     local shown = 0
-    for _, f in ipairs(M.buttons) do if f:IsShown() and f.unit then shown = shown + 1 end end
+    for _, f in ipairs(M.buttons) do
+        if f:IsShown() and f.unit then
+            shown = shown + 1
+        end
+    end
     expect(shown).toBe(7)
     expect(header(1)).toBeShown()
     expect(header(2)).toBeShown()
@@ -145,7 +195,9 @@ local function states()
     mock.player:target(raiders[1])
     local selected = 0
     for _, f in ipairs(M.buttons) do
-        if f:IsShown() and f.selected:GetAlpha() == 1 then selected = selected + 1 end
+        if f:IsShown() and f.selected:GetAlpha() == 1 then
+            selected = selected + 1
+        end
     end
     expect(selected).toBe(1)
 end
@@ -162,10 +214,16 @@ local function rangeAndOffline()
     local f: RaidButton? = nil
     for _, b in ipairs(M.buttons) do
         local unit = b.unit
-        if b:IsShown() and unit and not b.isMe and UnitIsUnit(unit, "raid1") then f = b end
+        if b:IsShown() and unit and not b.isMe and UnitIsUnit(unit, "raid1") then
+            f = b
+        end
     end
     if not f then
-        for _, b in ipairs(M.buttons) do if b:IsShown() and b.unit and not b.isMe then f = b end end
+        for _, b in ipairs(M.buttons) do
+            if b:IsShown() and b.unit and not b.isMe then
+                f = b
+            end
+        end
     end
     expect(f ~= nil).toBe(true)
     -- (set from the range answer, a secret: it reads back secret for good)
@@ -175,7 +233,9 @@ local function rangeAndOffline()
     local off = 0
     for _, b in ipairs(M.buttons) do
         local auras = b.auras
-        if b:IsShown() and b.unit and not b.isMe and auras and auras.container:GetAlpha() == 0 then off = off + 1 end
+        if b:IsShown() and b.unit and not b.isMe and auras and auras.container:GetAlpha() == 0 then
+            off = off + 1
+        end
     end
     expect(off).toBe(2)
     raiders[1]:setOnline(true)
@@ -265,8 +325,12 @@ local function migrations()
         if m.namespace == "raid" then
             local v: { [string]: unknown } = { auras = 2, badges = "off" }
             m.fn(v)
-            if m.id == "auraSplit" then expect(v.auras).toBeNil() end
-            if m.id == "debuffBadges" then expect(v.debuffBadges).toBe("off") end
+            if m.id == "auraSplit" then
+                expect(v.auras).toBeNil()
+            end
+            if m.id == "debuffBadges" then
+                expect(v.debuffBadges).toBe("off")
+            end
         end
     end
 end

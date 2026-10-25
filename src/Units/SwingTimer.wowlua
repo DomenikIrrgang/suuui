@@ -44,21 +44,49 @@ end
 -- Shown inside the cast bars' section, after its own groups (on its own while
 -- the cast bars module is off).
 local SECTION: SettingsSection = {
-    id = "swingtimer", label = "Swing timer", category = "Frames", order = 25, merge = "castbars",
+    id = "swingtimer",
+    label = "Swing timer",
+    category = "Frames",
+    order = 25,
+    merge = "castbars",
     groups = {
-        { title = "Swing timer", description = "Drawn from the game's own swing timer. Without the combat log SuuUI can't see parry haste or clipped swings, so it shows neither.", rows = {
-            { key = "shows", label = "Show", control = "segmented",
-              stacked = true, options = { { value = "off", label = "Off" }, { value = "combat", label = "In combat" }, { value = "always", label = "Always" } },
-              description = "Off: no swing timer at all. In combat: out of combat it's gone." },
-            { key = "hideForHealers", label = "Hide when you heal", control = "toggle", disabled = isOff,
-              description = "With the healer role in a group, there is no swing timer." },
-            { key = "autoShotWindow", label = "Auto Shot window", control = "toggle",
-              description = "The last half second of a shot, when you must stand still, hatched at the end of the ranged bar; it turns amber while you move. It switches itself off if this client's Auto Shot fires while moving.",
-              disabled = function(): (boolean, string?)
-                  if M:Get("autoShotNoCast") then return true, "This client's Auto Shot fires while you move, so there is no window." end
-                  return isOff()
-              end },
-        } },
+        {
+            title = "Swing timer",
+            description = "Drawn from the game's own swing timer. Without the combat log SuuUI can't see parry haste or clipped swings, so it shows neither.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Show",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "off", label = "Off" },
+                        { value = "combat", label = "In combat" },
+                        { value = "always", label = "Always" },
+                    },
+                    description = "Off: no swing timer at all. In combat: out of combat it's gone.",
+                },
+                {
+                    key = "hideForHealers",
+                    label = "Hide when you heal",
+                    control = "toggle",
+                    disabled = isOff,
+                    description = "With the healer role in a group, there is no swing timer.",
+                },
+                {
+                    key = "autoShotWindow",
+                    label = "Auto Shot window",
+                    control = "toggle",
+                    description = "The last half second of a shot, when you must stand still, hatched at the end of the ranged bar; it turns amber while you move. It switches itself off if this client's Auto Shot fires while moving.",
+                    disabled = function(): (boolean, string?)
+                        if M:Get("autoShotNoCast") then
+                            return true, "This client's Auto Shot fires while you move, so there is no window."
+                        end
+                        return isOff()
+                    end,
+                },
+            },
+        },
     },
 }
 
@@ -78,48 +106,77 @@ class SwingTimerModule extends Module<typeof(DEFAULTS)>
 
     function ApplyAutoShot()
         local timer = self.timer
-        if timer then timer:SetAutoShotWindow(self:Get("autoShotWindow") and not self:Get("autoShotNoCast")) end
+        if timer then
+            timer:SetAutoShotWindow(self:Get("autoShotWindow") and not self:Get("autoShotNoCast"))
+        end
     end
 
     function UpdateVisibility()
         local f = self.timer
-        if not f then return end
+        if not f then
+            return
+        end
         local pos = self:Get("position")
         local shows = self:Get("shows")
         -- Off: no events either
-        if shows == "off" then f:Deactivate() else f:Activate() end
+        if shows == "off" then
+            f:Deactivate()
+        else
+            f:Activate()
+        end
         -- SuuUI's role (chosen, assigned or from talents), in a group only
         local healer = IsInGroup() and SuuUI.Role() == "HEALER"
-        local shown = shows ~= "off" and not pos.hidden
-            and not (self:Get("hideForHealers") and healer)
-            and not (shows == "combat" and not secret.flag(UnitAffectingCombat("player")))
+        local shown = shows ~= "off" and not pos.hidden and not (self:Get("hideForHealers") and healer) and
+            not (shows == "combat" and not secret.flag(UnitAffectingCombat("player")))
         f:SetShown(shown and true or false)
     end
 
     override function OnEnable()
-        local timer = self.timer or UI.SwingTimer(SuuUI.Root, { width = castWidth(), name = "SuuUISwingTimer",
-            onNoAutoShotCast = function()
-                self:Set("autoShotNoCast", true)
-                self:Print("Auto Shot fired on time while you ran, so this client has no stand-still cast: the Auto Shot window is off.")
-            end })
+        local timer = self.timer or
+            UI.SwingTimer(SuuUI.Root, {
+                width = castWidth(),
+                name = "SuuUISwingTimer",
+                onNoAutoShotCast = function()
+                    self:Set("autoShotNoCast", true)
+                    self:Print(
+                        "Auto Shot fired on time while you ran, so this client has no stand-still cast: the Auto Shot window is off."
+                    )
+                end,
+            })
         self.timer = timer
         self:ApplyAutoShot()
         timer:SetBarWidth(castWidth())
-        self:RegisterMover(timer, { key = "position", label = "Swing timer", managedShow = true,
-            enabled = function() return self:Get("shows") ~= "off" end })
+        self:RegisterMover(timer, {
+            key = "position",
+            label = "Swing timer",
+            managedShow = true,
+            enabled = function()
+                return self:Get("shows") ~= "off"
+            end,
+        })
         self:Watch("shows", SuuUI.EditMode.Refresh)
         self:RegisterSettings(SECTION)
         -- as wide as your cast bar, live
         self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
-            if namespace == "castbars" and key == "playerWidth" then timer:SetBarWidth(castWidth()) end
+            if namespace == "castbars" and key == "playerWidth" then
+                timer:SetBarWidth(castWidth())
+            end
         end)
         local gameEvents: EventName[] = { "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "GROUP_ROSTER_UPDATE" }
         for _, e in ipairs(gameEvents) do
-            self:OnGameEvent(e, function() self:UpdateVisibility() end)
+            self:OnGameEvent(e, function()
+                self:UpdateVisibility()
+            end)
         end
-        self:On("SUUUI_ROLE_CHANGED", function() self:UpdateVisibility() end)
-        self:WatchAll({ "shows", "hideForHealers", "position" }, function() self:UpdateVisibility() end)
-        self:Watch("autoShotWindow", function() self:ApplyAutoShot() end)
+        self:On("SUUUI_ROLE_CHANGED", function()
+            self:UpdateVisibility()
+        end)
+        self:WatchAll({ "shows", "hideForHealers", "position" }, function()
+            self:UpdateVisibility()
+        end)
+        self:Watch("autoShotWindow", function()
+            self:ApplyAutoShot()
+        end)
         self:UpdateVisibility()
     end
 

@@ -45,13 +45,26 @@ type Row = { def: RowDef, count: Text, container: UnitAuras? }
 type Count = number | string
 -- Per context: the samples taken, each row's highest count, how aura reads
 -- went, and each reactive ability's states.
-type Summary = { samples: number, maxCounts: Count[], auraReads: { [string]: number }, reactive: { [string]: { [string]: number } } }
+type Summary = {
+    samples: number,
+    maxCounts: Count[],
+    auraReads: { [string]: number },
+    reactive: { [string]: { [string]: number } },
+}
 type Sample = { ctx: string, counts: Count[], auras: string }
 type Glow = { ctx: string, spellID: string, name?: string }
 -- What the probe saves in SuuUIProbe.track.
 type Track = {
-    buffs?: Aura[], debuffs?: Aura[], pickBuff?: number, pickDebuff?: number, capturedAt?: string,
-    samples: Sample[], summary: { [string]: Summary }, glowEvents: Glow[], countMethod?: string, glowEventExists?: boolean,
+    buffs?: Aura[],
+    debuffs?: Aura[],
+    pickBuff?: number,
+    pickDebuff?: number,
+    capturedAt?: string,
+    samples: Sample[],
+    summary: { [string]: Summary },
+    glowEvents: Glow[],
+    countMethod?: string,
+    glowEventExists?: boolean,
 }
 
 -- Reactive abilities by class: usable only after a dodge, parry or block, or
@@ -84,7 +97,9 @@ local verdictText: Text? = nil
 local ticker: TickerHandle? = nil
 
 local function store(): Track
-    return DB.probeData("track", function(): Track return { samples = {}, summary = {}, glowEvents = {} } end)
+    return DB.probeData("track", function(): Track
+        return { samples = {}, summary = {}, glowEvents = {} }
+    end)
 end
 
 -- Your class's token ("WARRIOR").
@@ -94,8 +109,12 @@ local function classToken(): string
 end
 
 local function state(v: unknown): string
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     return tostring(v)
 end
 
@@ -108,10 +127,16 @@ local function readAuras(unit: string, filter: string): Aura[]?
     local out: Aura[] = {}
     for i = 1, 40 do
         local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
-        if not ok or isSecret(a) then return nil end
-        if not a then break end
+        if not ok or isSecret(a) then
+            return nil
+        end
+        if not a then
+            break
+        end
         local id, name = a.spellId, a.name
-        if isSecret(id) or isSecret(name) then return nil end
+        if isSecret(id) or isSecret(name) then
+            return nil
+        end
         out[#out + 1] = { id = id, name = name }
     end
     return out
@@ -123,7 +148,9 @@ local function knownDebuffs(): Aura[]
     for _, name in ipairs(DEBUFFS[classToken()] or {}) do
         local info = C_Spell.GetSpellInfo(name)
         local id = info and info.spellID
-        if id and not isSecret(id) and IsPlayerSpell(id) then out[#out + 1] = { id = id, name = name } end
+        if id and not isSecret(id) and IsPlayerSpell(id) then
+            out[#out + 1] = { id = id, name = name }
+        end
     end
     return out
 end
@@ -143,14 +170,20 @@ export function capture(): boolean
     t.samples, t.summary, t.glowEvents = {}, {}, {}
     local function names(list: Aura[]): string
         local n: string[] = {}
-        for _, a in ipairs(list) do n[#n + 1] = ("%s (%d)"):format(a.name, a.id) end
+        for _, a in ipairs(list) do
+            n[#n + 1] = ("%s (%d)"):format(a.name, a.id)
+        end
         return #n > 0 and table.concat(n, ", ") or "none"
     end
     print(("Track probe captured buffs: %s"):format(names(buffs)))
     print(("Track probe: your debuff spells it knows: %s"):format(names(debuffs)))
-    if #buffs < 2 then print("Track probe: have at least two buffs on you, or the buff test can't tell anything.") end
+    if #buffs < 2 then
+        print("Track probe: have at least two buffs on you, or the buff test can't tell anything.")
+    end
     if debuffs[1] then
-        print(("Track probe: test debuff is %s. On a mob, use it plus at least one other debuff."):format(debuffs[1].name))
+        print(
+            ("Track probe: test debuff is %s. On a mob, use it plus at least one other debuff."):format(debuffs[1].name)
+        )
     else
         print("Track probe: no known debuff spell for your class; the debuff test will stay empty.")
     end
@@ -165,17 +198,29 @@ end
 -- forbidden (not even IsShown may be asked), so then the count comes from the
 -- container's width, if the engine sizes it to its icons; else "locked".
 local ICON = 24 -- icon-md
-local GAP = 4   -- space-2
+local GAP = 4 -- space-2
 local function shownCount(c: UnitAuras?): (Count, string?)
-    if not c then return "n/a", nil end
+    if not c then
+        return "n/a", nil
+    end
     local n, locked = 0, false
     for _, child in ipairs(wf.children(c.container)) do
-        if child:IsForbidden() then locked = true break end
+        if child:IsForbidden() then
+            locked = true
+            break
+        end
         local ok, shown = pcall(child.IsShown, child)
-        if not ok or isSecret(shown) then locked = true break end
-        if shown then n = n + 1 end
+        if not ok or isSecret(shown) then
+            locked = true
+            break
+        end
+        if shown then
+            n = n + 1
+        end
     end
-    if not locked then return n, nil end
+    if not locked then
+        return n, nil
+    end
     local ok, w = pcall(c.container.GetWidth, c.container)
     if ok and w and not isSecret(w) and w > 1 then
         return math.floor((w + GAP) / (ICON + GAP) + 0.5), "width"
@@ -184,7 +229,11 @@ local function shownCount(c: UnitAuras?): (Count, string?)
 end
 
 local function nameOf(list: Aura[]?, id: number?): string
-    for _, a in ipairs(list or {}) do if a.id == id then return a.name end end
+    for _, a in ipairs(list or {}) do
+        if a.id == id then
+            return a.name
+        end
+    end
     return id and tostring(id) or "none"
 end
 
@@ -201,9 +250,19 @@ local function buildPanel(): Panel
 
     local defs: RowDef[] = {
         { label = "Your buffs, all", unit = "player", filter = { "HELPFUL" } },
-        { label = "Your buffs, only " .. nameOf(t.buffs, t.pickBuff), unit = "player", filter = { "HELPFUL" }, include = t.pickBuff },
+        {
+            label = "Your buffs, only " .. nameOf(t.buffs, t.pickBuff),
+            unit = "player",
+            filter = { "HELPFUL" },
+            include = t.pickBuff,
+        },
         { label = "Your debuffs on the target, all", unit = "target", filter = { "HARMFUL", "PLAYER" } },
-        { label = "Your debuffs on the target, only " .. nameOf(t.debuffs, t.pickDebuff), unit = "target", filter = { "HARMFUL", "PLAYER" }, include = t.pickDebuff },
+        {
+            label = "Your debuffs on the target, only " .. nameOf(t.debuffs, t.pickDebuff),
+            unit = "target",
+            filter = { "HARMFUL", "PLAYER" },
+            include = t.pickDebuff,
+        },
     }
     rows = {}
     for i, d in ipairs(defs) do
@@ -216,11 +275,18 @@ local function buildPanel(): Panel
         local holder = CreateFrame("Frame", nil, p)
         holder:SetSize(480, 24)
         holder:SetPoint("TOPLEFT", S["space-5"], y - 16)
-        local c = (d.include or not d.label:find("only")) and auraContainer(holder, d.unit, {
-            size = "icon-md", anchor = "TOPLEFT", growth = { "RIGHT", "DOWN" }, lineWidth = 480,
-            groups = { { key = "g", filter = d.filter, max = 12, include = d.include and { d.include } or nil } },
-        }) or nil
-        if c then c.container:SetPoint("TOPLEFT", holder, "TOPLEFT") end
+        local c = (d.include or not d.label:find("only")) and
+            auraContainer(holder, d.unit, {
+                size = "icon-md",
+                anchor = "TOPLEFT",
+                growth = { "RIGHT", "DOWN" },
+                lineWidth = 480,
+                groups = { { key = "g", filter = d.filter, max = 12, include = d.include and { d.include } or nil } },
+            }) or
+            nil
+        if c then
+            c.container:SetPoint("TOPLEFT", holder, "TOPLEFT")
+        end
         rows[i] = { def = d, count = count, container = c }
     end
 
@@ -250,8 +316,12 @@ end
 
 local function aurasReadable(): string
     local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", 1, "HELPFUL")
-    if not ok then return "error" end
-    if isSecret(a) or (a and isSecret(a.spellId)) then return "secret" end
+    if not ok then
+        return "error"
+    end
+    if isSecret(a) or (a and isSecret(a.spellId)) then
+        return "secret"
+    end
     return "readable"
 end
 
@@ -277,7 +347,9 @@ local function record(counts: Count[])
     for i, c in ipairs(counts) do
         if type(c) == "number" then
             local was = sum.maxCounts[i]
-            if type(was) ~= "number" or c > was then sum.maxCounts[i] = c end
+            if type(was) ~= "number" or c > was then
+                sum.maxCounts[i] = c
+            end
         else
             sum.maxCounts[i] = c
         end
@@ -292,20 +364,32 @@ local function record(counts: Count[])
     t.summary[ctx] = sum
     if InCombatLockdown() then
         table.insert(t.samples, { ctx = ctx, counts = counts, auras = r })
-        if #t.samples > 300 then table.remove(t.samples, 1) end
+        if #t.samples > 300 then
+            table.remove(t.samples, 1)
+        end
     end
 end
 
 local function verdict(all: Count?, only: Count?, what: string): string
-    if type(all) ~= "number" or type(only) ~= "number" then return what .. ": counts unreadable" end
-    if all < 2 then return what .. ": need 2+ to tell" end
-    if only <= 1 then return what .. ": filtered (" .. only .. " of " .. all .. ")" end
-    if only >= all then return what .. ": NOT filtered (" .. only .. " of " .. all .. ")" end
+    if type(all) ~= "number" or type(only) ~= "number" then
+        return what .. ": counts unreadable"
+    end
+    if all < 2 then
+        return what .. ": need 2+ to tell"
+    end
+    if only <= 1 then
+        return what .. ": filtered (" .. only .. " of " .. all .. ")"
+    end
+    if only >= all then
+        return what .. ": NOT filtered (" .. only .. " of " .. all .. ")"
+    end
     return what .. ": partly (" .. only .. " of " .. all .. ")"
 end
 
 local function tick()
-    if not (panel and panel:IsShown()) then return end
+    if not (panel and panel:IsShown()) then
+        return
+    end
     local counts: Count[], methods: { [number]: string? } = {}, {}
     for i, row in ipairs(rows) do
         counts[i], methods[i] = shownCount(row.container)
@@ -316,19 +400,31 @@ local function tick()
     -- (both exist once the panel does)
     local status, verdictLine = statusText :: Text, verdictText :: Text
     status:SetValue(("%s · auras %s · %s"):format(context(), aurasReadable(), date("%H:%M:%S")))
-    verdictLine:SetValue(verdict(counts[1], counts[2], "Buffs") .. "   " .. verdict(counts[3], counts[4], "Target debuffs"))
+    verdictLine:SetValue(
+        verdict(counts[1], counts[2], "Buffs") .. "   " .. verdict(counts[3], counts[4], "Target debuffs")
+    )
 end
 
 -- The game's proc glow: does the event come, and is its spell ID readable?
 local GLOW = "SPELL_ACTIVATION_OVERLAY_GLOW_SHOW"
 local glowExists = C_EventUtils.IsEventValid(GLOW)
-local glowOk = glowExists and pcall(Events.onGame, GLOW, function(_, spellID)
-    if not (panel and panel:IsShown()) then return end
-    local t = store()
-    local name = (not isSecret(spellID) and spellID) and C_Spell.GetSpellName(spellID) or nil
-    table.insert(t.glowEvents, { ctx = context(), spellID = state(spellID), name = name })
-    if #t.glowEvents > 50 then table.remove(t.glowEvents, 1) end
-end, "TrackProbe")
+local glowOk = glowExists and
+    pcall(
+        Events.onGame,
+        GLOW,
+        function(_, spellID)
+            if not (panel and panel:IsShown()) then
+                return
+            end
+            local t = store()
+            local name = (not isSecret(spellID) and spellID) and C_Spell.GetSpellName(spellID) or nil
+            table.insert(t.glowEvents, { ctx = context(), spellID = state(spellID), name = name })
+            if #t.glowEvents > 50 then
+                table.remove(t.glowEvents, 1)
+            end
+        end,
+        "TrackProbe"
+    )
 
 --------------------------------------------------------------------------------
 -- The command
@@ -336,18 +432,28 @@ end, "TrackProbe")
 
 export function command(arg: string?)
     if arg == "off" then
-        if panel then panel:Hide() end
+        if panel then
+            panel:Hide()
+        end
         return
     end
     local t = store()
     if arg == "new" or not t.buffs then
-        if not capture() then return end
-        if panel then panel:Hide(); panel = nil end -- rebuilt with the new test spells
+        if not capture() then
+            return
+        end
+        if panel then
+            panel:Hide()
+            panel = nil
+        end -- rebuilt with the new test spells
     end
     panel = panel or buildPanel()
     panel:Show()
     t.glowEventExists = glowOk and true or false
-    ticker = ticker or every(1, function() fault.call("TrackProbe", tick) end)
+    ticker = ticker or
+        every(1, function()
+            fault.call("TrackProbe", tick)
+        end)
     tick()
     print("Track probe running. Fight in a dungeon with the test buff and debuff up, then /reload to save the results.")
 end

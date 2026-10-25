@@ -18,13 +18,20 @@ import * as events from "/Core/Events"
 import * as DB from "/Core/DB"
 
 local function show(v: unknown, depth: number = 0): string
-    if isSecret(v) then return "<secret>" end
-    if type(v) ~= "table" then return tostring(v) end
-    if depth > 1 then return "{…}" end
+    if isSecret(v) then
+        return "<secret>"
+    end
+    if type(v) ~= "table" then
+        return tostring(v)
+    end
+    if depth > 1 then
+        return "{…}"
+    end
     local parts: string[] = {}
     for k, x in pairs(v) do
         if type(x) ~= "function" then
-            parts[#parts + 1] = tostring(k) .. "=" .. (isSecret(x) and "<secret>" or (type(x) == "table" and show(x, depth + 1) or tostring(x)))
+            parts[#parts + 1] = tostring(k) ..
+                "=" .. (isSecret(x) and "<secret>" or (type(x) == "table" and show(x, depth + 1) or tostring(x)))
         end
     end
     table.sort(parts)
@@ -33,9 +40,13 @@ end
 
 local function call(t: unknown, name: string, ...: unknown): (unknown, unknown, unknown, unknown)
     local fn = field(t, name)
-    if type(fn) ~= "function" then return "missing", nil, nil, nil end
+    if type(fn) ~= "function" then
+        return "missing", nil, nil, nil
+    end
     local ok, a, b, c, d = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a), nil, nil, nil end
+    if not ok then
+        return "error: " .. tostring(a), nil, nil, nil
+    end
     return a, b, c, d
 end
 
@@ -43,7 +54,9 @@ local function xy(v: unknown): string
     local getXY = field(v, "GetXY")
     if type(getXY) == "function" then
         local ok, x, y = pcall(getXY, v)
-        if ok then return show({ x, y }) end
+        if ok then
+            return show({ x, y })
+        end
     end
     return show(v)
 end
@@ -75,7 +88,8 @@ export function snapshot()
     local had = call(cm, "GetUserWaypoint")
     s.waypointBefore = show(had)
     s.canSet = show((type(map) == "number" and call(cm, "CanSetUserWaypointOnMap", map)))
-    if type(map) == "number" and type(pos) == "table" and type(field(_G, "UiMapPoint", "CreateFromVector2D")) == "function" then
+    if type(map) == "number" and type(pos) == "table" and
+        type(field(_G, "UiMapPoint", "CreateFromVector2D")) == "function" then
         local point = call(_G["UiMapPoint"], "CreateFromVector2D", map, pos)
         s.set = show((call(cm, "SetUserWaypoint", point)))
         s.has = show((call(cm, "HasUserWaypoint")))
@@ -93,7 +107,11 @@ export function snapshot()
         s.superTracking = show((call(st, "IsSuperTrackingUserWaypoint")))
         call(st, "SetSuperTrackedUserWaypoint", false)
         -- yours back as it was
-        if type(had) == "table" then call(cm, "SetUserWaypoint", had) else call(cm, "ClearUserWaypoint") end
+        if type(had) == "table" then
+            call(cm, "SetUserWaypoint", had)
+        else
+            call(cm, "ClearUserWaypoint")
+        end
         s.waypointAfter = show((call(cm, "GetUserWaypoint")))
     else
         s.set = "skipped (no map, position or UiMapPoint)"
@@ -106,7 +124,8 @@ export function snapshot()
         viewRadius = show((call(mm, "GetViewRadius"))),
         zoom = show((call(_G.Minimap, "GetZoom", _G.Minimap))),
         zoomLevels = show((call(_G.Minimap, "GetZoomLevels", _G.Minimap))),
-        size = _G.Minimap and (math.floor(_G.Minimap:GetWidth()) .. "x" .. math.floor(_G.Minimap:GetHeight())) or "none",
+        size = _G.Minimap and (math.floor(_G.Minimap:GetWidth()) .. "x" .. math.floor(_G.Minimap:GetHeight())) or
+            "none",
         rotate = show((call(_G, "GetCVar", "rotateMinimap"))),
         indoors = show((call(_G, "IsIndoors"))),
     }
@@ -121,19 +140,28 @@ export function snapshot()
     s.addonWhisperTo = show(me)
     s.addonReceived = "no (waited 3 s)"
     events.off("CHAT_MSG_ADDON", "MarkProbe")
-    events.onGame("CHAT_MSG_ADDON", function(_, prefix, text, channel, sender)
-        if prefix == "SuuUIProbe" then
-            s.addonReceived = show({ text = text, channel = channel, sender = sender })
-            events.off("CHAT_MSG_ADDON", "MarkProbe")
-        end
-    end, "MarkProbe")
+    events.onGame(
+        "CHAT_MSG_ADDON",
+        function(_, prefix, text, channel, sender)
+            if prefix == "SuuUIProbe" then
+                s.addonReceived = show({ text = text, channel = channel, sender = sender })
+                events.off("CHAT_MSG_ADDON", "MarkProbe")
+            end
+        end,
+        "MarkProbe"
+    )
     s.addonSend = show({ call(chat, "SendAddonMessage", "SuuUIProbe", "mark:test", "WHISPER", me) })
     after(3, function()
         events.off("CHAT_MSG_ADDON", "MarkProbe")
         print("Mark probe: done; /reload saves it.")
     end)
-    print(("Mark probe: waypoint %s, link %s, world %s; waiting 3 s for the addon message…"):format(
-        s.set, type(s.link) == "string" and s.link ~= "nil" and "yes" or "no", s.worldFromMap and "yes" or "no"))
+    print(
+        ("Mark probe: waypoint %s, link %s, world %s; waiting 3 s for the addon message…"):format(
+            s.set,
+            type(s.link) == "string" and s.link ~= "nil" and "yes" or "no",
+            s.worldFromMap and "yes" or "no"
+        )
+    )
 end
 
 -- "/suu probe marks nav": with a mark's Show the way on, what the game's
@@ -156,17 +184,31 @@ export function nav()
     s.wasClamped = show((call(navigation, "WasClampedToScreen")))
     local f = SuperTrackedFrame
     local parent = f and f:GetParent()
-    local frame = f and { shown = f:IsShown(), visible = f:IsVisible(), alpha = f:GetAlpha(),
-        parent = parent and (parent:GetName() or "?") or "none",
-        effAlpha = f:GetEffectiveAlpha() }
+    local frame = f and
+        {
+            shown = f:IsShown(),
+            visible = f:IsVisible(),
+            alpha = f:GetAlpha(),
+            parent = parent and (parent:GetName() or "?") or "none",
+            effAlpha = f:GetEffectiveAlpha(),
+        }
     s.frame = frame or "no SuperTrackedFrame"
     s.loaded = show((call(C_AddOns, "IsAddOnLoaded", "Blizzard_QuestNavigation")))
-    print(("Navigation: setting %s, frame %s, distance %s, indicator %s; /reload saves it."):format(
-        s.cvar, s.navFrame, s.distance, frame and (frame.visible and "visible" or "hidden") or "none"))
+    print(
+        ("Navigation: setting %s, frame %s, distance %s, indicator %s; /reload saves it."):format(
+            s.cvar,
+            s.navFrame,
+            s.distance,
+            frame and (frame.visible and "visible" or "hidden") or "none"
+        )
+    )
 end
 
 export function command(rest: string?)
-    if rest == "nav" then nav() return end
+    if rest == "nav" then
+        nav()
+        return
+    end
     if InCombatLockdown() then
         print("Mark probe: out of combat, please.")
         return

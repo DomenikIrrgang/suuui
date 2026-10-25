@@ -33,16 +33,39 @@ type Map = { [string]: unknown }
 -- and the enchant's name from them.
 type SlotInfo = { list: string, link: string, icon: string, tooltip: string[], name?: string }
 -- Everything about the weapons at one moment.
-type Snapshot = { at: string, t: string, what: string, combat: boolean, old: string, slots: { [string]: SlotInfo }, castBefore?: string }
+type Snapshot = {
+    at: string,
+    t: string,
+    what: string,
+    combat: boolean,
+    old: string,
+    slots: { [string]: SlotInfo },
+    castBefore?: string,
+}
 type Cancel = { armedAt: string, before?: Snapshot, after?: Snapshot, enchantType?: string, calls: string[] }
-type Secure = { armedAt: string, before?: Snapshot, after?: Snapshot, tempInfo: { [number]: string }, goneAfter?: string,
-                button?: string, [string]: unknown }
+type Secure = {
+    armedAt: string,
+    before?: Snapshot,
+    after?: Snapshot,
+    tempInfo: { [number]: string },
+    goneAfter?: string,
+    button?: string,
+    [string]: unknown,
+}
 -- What the probe saves in SuuUIProbe.weaponenchants.
 type Out = {
-    session?: string, api?: string[], blizzard?: Map, now?: Snapshot, refused?: string,
-    changes?: Snapshot[], auras?: string[], fights?: Snapshot[], blocked?: string[],
+    session?: string,
+    api?: string[],
+    blizzard?: Map,
+    now?: Snapshot,
+    refused?: string,
+    changes?: Snapshot[],
+    auras?: string[],
+    fights?: Snapshot[],
+    blocked?: string[],
     events?: { counts: { [string]: number }, log: string[] },
-    cancel?: Cancel, secure?: Secure,
+    cancel?: Cancel,
+    secure?: Secure,
 }
 
 -- the cancel button and the secure test's aura container (were WP.button
@@ -51,26 +74,36 @@ local cancelButton: Button? = nil
 local secureFrame: Frame? = nil
 
 local function show(v: unknown): string
-    if isSecret(v) then return "SECRET" end
+    if isSecret(v) then
+        return "SECRET"
+    end
     return tostring(v)
 end
 
 local function out(): Out
-    return DB.probeData("weaponenchants", function(): Out return {} end)
+    return DB.probeData("weaponenchants", function(): Out
+        return {}
+    end)
 end
 
 local function push<T>(list: T[], line: T, cap: number?)
-    if #list < (cap or 60) then list[#list + 1] = line end
+    if #list < (cap or 60) then
+        list[#list + 1] = line
+    end
 end
 
 -- `fn(...)` protected: { ok, results… }, or { false, "missing" }.
 local function results(fn: unknown, ...: unknown): unknown[]
-    if type(fn) ~= "function" then return { false, "missing" } end
+    if type(fn) ~= "function" then
+        return { false, "missing" }
+    end
     return { pcall(fn, ...) }
 end
 
 local t0 = GetTime()
-local function stamp(): string return ("%.1fs"):format(GetTime() - t0) end
+local function stamp(): string
+    return ("%.1fs"):format(GetTime() - t0)
+end
 
 -- weapon slot (Enum.WeaponSlot), inventory slot
 local SLOTS = {
@@ -86,42 +119,66 @@ local FIELDS = { "hasEnchant", "enchantType", "timeLeft", "charges", "enchantID"
 local function listInfo(ws: number): (string, unknown)
     local res = results(tbl.field(C_Item, "GetWeaponEnchantInfo"), ws)
     local ok, list = res[1], res[2]
-    if list == "missing" and not ok then return "no C_Item.GetWeaponEnchantInfo", nil end
-    if not ok then return "error: " .. tostring(list), nil end
-    if isSecret(list) then return "SECRET (the list)", nil end
-    if type(list) ~= "table" then return "returned " .. type(list), nil end
+    if list == "missing" and not ok then
+        return "no C_Item.GetWeaponEnchantInfo", nil
+    end
+    if not ok then
+        return "error: " .. tostring(list), nil
+    end
+    if isSecret(list) then
+        return "SECRET (the list)", nil
+    end
+    if type(list) ~= "table" then
+        return "returned " .. type(list), nil
+    end
     local parts: string[], first: unknown = {}, nil
     for i, e in pairs(list) do
         if isSecret(e) then
             parts[#parts + 1] = ("[%s] SECRET"):format(tostring(i))
         elseif type(e) == "table" then
             local f: string[] = {}
-            for _, k in ipairs(FIELDS) do f[#f + 1] = k .. "=" .. show(tbl.field(e, k)) end
+            for _, k in ipairs(FIELDS) do
+                f[#f + 1] = k .. "=" .. show(tbl.field(e, k))
+            end
             parts[#parts + 1] = ("[%s] %s"):format(tostring(i), table.concat(f, ", "))
             local has = tbl.field(e, "hasEnchant")
-            if first == nil and not isSecret(has) and has then first = e end
+            if first == nil and not isSecret(has) and has then
+                first = e
+            end
         else
             parts[#parts + 1] = ("[%s] %s"):format(tostring(i), type(e))
         end
     end
-    if #parts == 0 then return "empty list", nil end
+    if #parts == 0 then
+        return "empty list", nil
+    end
     return table.concat(parts, " | "), first
 end
 
 -- the old global GetWeaponEnchantInfo(): all its returns
 local function oldInfo(): string
-    if type(GetWeaponEnchantInfo) ~= "function" then return "no global GetWeaponEnchantInfo" end
+    if type(GetWeaponEnchantInfo) ~= "function" then
+        return "no global GetWeaponEnchantInfo"
+    end
     local r = results(GetWeaponEnchantInfo)
-    if not r[1] then return "error: " .. tostring(r[2]) end
+    if not r[1] then
+        return "error: " .. tostring(r[2])
+    end
     local parts: string[] = {}
-    for i = 2, math.max(#r, 2) do parts[#parts + 1] = show(r[i]) end
+    for i = 2, math.max(#r, 2) do
+        parts[#parts + 1] = show(r[i])
+    end
     return table.concat(parts, ", ")
 end
 
 local function greenish(c: unknown): boolean
-    if type(c) ~= "table" or isSecret(c) then return false end
+    if type(c) ~= "table" or isSecret(c) then
+        return false
+    end
     local r, g, b = tbl.field(c, "r"), tbl.field(c, "g"), tbl.field(c, "b")
-    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return false end
+    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then
+        return false
+    end
     return g > 0.8 and r < 0.3 and b < 0.3
 end
 
@@ -129,11 +186,19 @@ end
 local function tooltipLines(inv: number): string[]
     local res = results(tbl.field(C_TooltipInfo, "GetInventoryItem"), "player", inv)
     local ok, data = res[1], res[2]
-    if data == "missing" and not ok then return { "no C_TooltipInfo.GetInventoryItem" } end
-    if not ok then return { "error: " .. tostring(data) } end
-    if isSecret(data) then return { "SECRET (the data)" } end
+    if data == "missing" and not ok then
+        return { "no C_TooltipInfo.GetInventoryItem" }
+    end
+    if not ok then
+        return { "error: " .. tostring(data) }
+    end
+    if isSecret(data) then
+        return { "SECRET (the data)" }
+    end
     local lines = tbl.field(data, "lines")
-    if type(lines) ~= "table" then return { "no lines" } end
+    if type(lines) ~= "table" then
+        return { "no lines" }
+    end
     local found: string[] = {}
     local all = tbl.list(lines)
     for i, l in ipairs(all) do
@@ -145,13 +210,19 @@ local function tooltipLines(inv: number): string[]
             if timed or greenish(c) then
                 local color = "?"
                 if type(c) == "table" and not isSecret(c) then
-                    color = ("%s,%s,%s"):format(show(tbl.field(c, "r")), show(tbl.field(c, "g")), show(tbl.field(c, "b")))
+                    color = ("%s,%s,%s"):format(
+                        show(tbl.field(c, "r")),
+                        show(tbl.field(c, "g")),
+                        show(tbl.field(c, "b"))
+                    )
                 end
                 found[#found + 1] = ("line %d: %s (colour %s%s)"):format(i, text, color, timed and ", timed" or "")
             end
         end
     end
-    if #found == 0 then found[1] = ("%d lines, none green or timed"):format(#all) end
+    if #found == 0 then
+        found[1] = ("%d lines, none green or timed"):format(#all)
+    end
     return found
 end
 
@@ -161,7 +232,9 @@ local function enchantName(lines: string[]): string?
         local text = l:match("^line %d+: (.-) %(colour")
         if text and text:find("%(%d+ [%a ]+%)") then
             local name = text:gsub("%s*%(.*%)%s*$", ""):gsub("%s+%d+$", "")
-            if name ~= "" then return name end
+            if name ~= "" then
+                return name
+            end
         end
     end
     return nil
@@ -173,11 +246,17 @@ local function blizzard(): Map
     if bf then
         local temp = 0
         for _, a in pairs(tbl.list(tbl.field(bf, "auraInfo"))) do
-            if tbl.field(a, "auraType") == "TempEnchant" then temp = temp + 1 end
+            if tbl.field(a, "auraType") == "TempEnchant" then
+                temp = temp + 1
+            end
         end
         local parent = bf:GetParent()
-        b.buffFrame = ("exists, shown %s, alpha %s, parent %s, TempEnchant entries in auraInfo %d"):format(show(bf:IsShown()),
-            show(bf:GetAlpha()), parent and (parent:GetName() or "unnamed") or "none", temp)
+        b.buffFrame = ("exists, shown %s, alpha %s, parent %s, TempEnchant entries in auraInfo %d"):format(
+            show(bf:IsShown()),
+            show(bf:GetAlpha()),
+            parent and (parent:GetName() or "unnamed") or "none",
+            temp
+        )
     else
         b.buffFrame = "no BuffFrame"
     end
@@ -189,7 +268,9 @@ end
 
 local function api(): string[]
     local a: string[] = {}
-    local function has(label: string, v: unknown) a[#a + 1] = label .. ": " .. type(v) end
+    local function has(label: string, v: unknown)
+        a[#a + 1] = label .. ": " .. type(v)
+    end
     has("C_Item.GetWeaponEnchantInfo", tbl.field(C_Item, "GetWeaponEnchantInfo"))
     has("GetWeaponEnchantInfo (global)", GetWeaponEnchantInfo)
     has("C_Spell.CancelItemTempEnchantment", tbl.field(C_Spell, "CancelItemTempEnchantment"))
@@ -202,8 +283,14 @@ end
 
 -- Everything about the weapons now, and a signature of the enchants.
 local function snapshot(what: string): (Snapshot, string)
-    local s: Snapshot = { at = date("%H:%M:%S"), t = stamp(), what = what, combat = InCombatLockdown() and true or false,
-                old = oldInfo(), slots = {} }
+    local s: Snapshot = {
+        at = date("%H:%M:%S"),
+        t = stamp(),
+        what = what,
+        combat = InCombatLockdown() and true or false,
+        old = oldInfo(),
+        slots = {},
+    }
     local sig: string[] = {}
     for _, slot in ipairs(SLOTS) do
         local list, first = listInfo(slot.ws)
@@ -215,7 +302,9 @@ local function snapshot(what: string): (Snapshot, string)
             tooltip = lines,
             name = enchantName(lines),
         }
-        sig[#sig + 1] = first ~= nil and (show(tbl.field(first, "enchantID")) .. "/" .. show(tbl.field(first, "enchantType"))) or list
+        sig[#sig + 1] = first ~= nil and
+            (show(tbl.field(first, "enchantID")) .. "/" .. show(tbl.field(first, "enchantType"))) or
+            list
     end
     return s, table.concat(sig, ";")
 end
@@ -231,9 +320,9 @@ end
 --------------------------------------------------------------------------------
 
 type Cast = { at: number, id: string, name: string, icon: string }
-local casts: Cast[] = {}        -- the last few player casts { at, id, name, icon }
+local casts: Cast[] = {} -- the last few player casts { at, id, name, icon }
 local lastSig: string? = nil
-local knownNames: { [string]: boolean } = {}   -- enchant names from the tooltip
+local knownNames: { [string]: boolean } = {} -- enchant names from the tooltip
 local seenAura: { [string]: boolean } = {}
 local fights = 0
 
@@ -251,13 +340,17 @@ end
 local function learnNames(s: Snapshot)
     for _, slot in pairs(s.slots) do
         local name = slot.name
-        if name then knownNames[name:lower()] = true end
+        if name then
+            knownNames[name:lower()] = true
+        end
     end
 end
 
 local function checkChange(event: string)
     local s, sig = snapshot("after " .. event)
-    if sig == lastSig then return end
+    if sig == lastSig then
+        return
+    end
     lastSig = sig
     learnNames(s)
     local castBefore = recentCasts(5)
@@ -266,14 +359,20 @@ local function checkChange(event: string)
     local changes = o.changes or {}
     o.changes = changes
     push(changes, s, 30)
-    print(("Weapon enchant probe: a change (%s). Main hand: %s; cast before: %s."):format(event, mainHand(s), castBefore))
+    print(
+        ("Weapon enchant probe: a change (%s). Main hand: %s; cast before: %s."):format(event, mainHand(s), castBefore)
+    )
 end
 
 local function scanAuras()
-    if not next(knownNames) then return end
+    if not next(knownNames) then
+        return
+    end
     for i = 1, 40 do
         local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
-        if not ok or type(a) ~= "table" then break end
+        if not ok or type(a) ~= "table" then
+            break
+        end
         local name = tbl.field(a, "name")
         if not isSecret(name) and type(name) == "string" then
             local low = name:lower()
@@ -283,8 +382,18 @@ local function scanAuras()
                     local o = out()
                     local auras = o.auras or {}
                     o.auras = auras
-                    push(auras, ("%s %s: spell %s, duration %s, expires %s (matches the enchant %q)"):format(stamp(), name,
-                        show(tbl.field(a, "spellId")), show(tbl.field(a, "duration")), show(tbl.field(a, "expirationTime")), n), 20)
+                    push(
+                        auras,
+                        ("%s %s: spell %s, duration %s, expires %s (matches the enchant %q)"):format(
+                            stamp(),
+                            name,
+                            show(tbl.field(a, "spellId")),
+                            show(tbl.field(a, "duration")),
+                            show(tbl.field(a, "expirationTime")),
+                            n
+                        ),
+                        20
+                    )
                 end
             end
         end
@@ -301,12 +410,21 @@ end
 
 local listening: Frame? = nil
 local function listen()
-    if listening then return end
+    if listening then
+        return
+    end
     local f = CreateFrame("Frame")
     listening = f
-    for _, e in ipairs({ "WEAPON_ENCHANT_CHANGED", "WEAPON_SLOT_CHANGED", "PLAYER_EQUIPMENT_CHANGED",
-                         "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "ADDON_ACTION_BLOCKED",
-                         "ADDON_ACTION_FORBIDDEN", "UI_ERROR_MESSAGE" }) do
+    for _, e in ipairs({
+        "WEAPON_ENCHANT_CHANGED",
+        "WEAPON_SLOT_CHANGED",
+        "PLAYER_EQUIPMENT_CHANGED",
+        "PLAYER_REGEN_DISABLED",
+        "PLAYER_REGEN_ENABLED",
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+        "UI_ERROR_MESSAGE",
+    }) do
         pcall(f.RegisterEvent, f, e)
     end
     pcall(f.RegisterUnitEvent, f, "UNIT_INVENTORY_CHANGED", "player")
@@ -325,25 +443,36 @@ local function listen()
             local name = results(tbl.field(C_Spell, "GetSpellName"), id)[2]
             local icon = results(tbl.field(C_Spell, "GetSpellTexture"), id)[2]
             casts[#casts + 1] = { at = GetTime(), id = show(id), name = show(name), icon = show(icon) }
-            if #casts > 8 then table.remove(casts, 1) end
-        elseif event == "WEAPON_ENCHANT_CHANGED" or event == "WEAPON_SLOT_CHANGED" or event == "UNIT_INVENTORY_CHANGED"
-            or event == "PLAYER_EQUIPMENT_CHANGED" then
+            if #casts > 8 then
+                table.remove(casts, 1)
+            end
+        elseif event == "WEAPON_ENCHANT_CHANGED" or event == "WEAPON_SLOT_CHANGED" or
+            event == "UNIT_INVENTORY_CHANGED" or
+            event == "PLAYER_EQUIPMENT_CHANGED" then
             -- a moment later as well: the enchant may land after the event
             checkChange(event)
-            after(0.5, function() checkChange(event .. " +0.5 s") end)
+            after(0.5, function()
+                checkChange(event .. " +0.5 s")
+            end)
         elseif event == "UNIT_AURA" then
             scanAuras()
         elseif event == "PLAYER_REGEN_DISABLED" then
             fights = fights + 1
             if fights <= 6 then
                 local n = fights
-                after(1, function() sample(("fight %d, 1 s in"):format(n)) end)
-                after(5, function() sample(("fight %d, 5 s in"):format(n)) end)
+                after(1, function()
+                    sample(("fight %d, 1 s in"):format(n))
+                end)
+                after(5, function()
+                    sample(("fight %d, 5 s in"):format(n))
+                end)
             end
         elseif event == "PLAYER_REGEN_ENABLED" then
             if fights <= 6 then
                 local n = fights
-                after(0.5, function() sample(("fight %d, after it"):format(n)) end)
+                after(0.5, function()
+                    sample(("fight %d, after it"):format(n))
+                end)
             end
         elseif event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" or event == "UI_ERROR_MESSAGE" then
             local blocked = o.blocked or {}
@@ -381,8 +510,10 @@ local function cancel()
             local tries: number[] = kind and { kind } or { 2, 3 }
             for _, k in ipairs(tries) do
                 local res = results(cancelFn, 0, k)
-                r.calls[#r.calls + 1] = ("C_Spell.CancelItemTempEnchantment(0, %d): %s"):format(k,
-                    res[1] and "ran" or ("error: " .. tostring(res[2])))
+                r.calls[#r.calls + 1] = ("C_Spell.CancelItemTempEnchantment(0, %d): %s"):format(
+                    k,
+                    res[1] and "ran" or ("error: " .. tostring(res[2]))
+                )
             end
         elseif type(globalCancel) == "function" then
             local res = results(globalCancel, 1)
@@ -394,12 +525,18 @@ local function cancel()
         after(1, function()
             local later = snapshot("1 s after the cancel")
             r.after = later
-            print(("Weapon enchant probe: cancel %s; main hand now: %s. /reload to save it."):format(
-                table.concat(r.calls, "; "), mainHand(later)))
+            print(
+                ("Weapon enchant probe: cancel %s; main hand now: %s. /reload to save it."):format(
+                    table.concat(r.calls, "; "),
+                    mainHand(later)
+                )
+            )
         end)
     end)
     b:Show()
-    print("Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil). Click it once if that's fine.")
+    print(
+        "Weapon enchant probe: the button at the top of the screen REMOVES your main hand's temporary enchant (imbue, poison, stone or oil). Click it once if that's fine."
+    )
 end
 
 --------------------------------------------------------------------------------
@@ -414,20 +551,27 @@ local function secure()
     local o = out()
     local r: Secure = { armedAt = date("%H:%M:%S"), tempInfo = {} }
     o.secure = r
-    if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer") end
+    if not C_AddOns.IsAddOnLoaded("Blizzard_AuraContainer") then
+        pcall(C_AddOns.LoadAddOn, "Blizzard_AuraContainer")
+    end
     local before = snapshot("before the click")
     r.before = before
     -- what the container reads an enchant with (nothing: it never shows one)
     local tempInfo = tbl.field(C_PaperDollInfo, "GetTemporaryEnchantmentInfo")
     for _, inv in ipairs({ 16, 17, 18 }) do
-        if type(tempInfo) ~= "function" then r.tempInfo[inv] = "missing" break end
+        if type(tempInfo) ~= "function" then
+            r.tempInfo[inv] = "missing"
+            break
+        end
         local res = results(tempInfo, inv)
         local parts: string[] = {}
         for i = 2, math.max(2, #res) do
             local v = res[i]
             if type(v) == "table" and not isSecret(v) then
                 local kv: string[] = {}
-                for k, x in pairs(v) do kv[#kv + 1] = ("%s=%s"):format(tostring(k), show(x)) end
+                for k, x in pairs(v) do
+                    kv[#kv + 1] = ("%s=%s"):format(tostring(k), show(x))
+                end
                 table.sort(kv)
                 parts[#parts + 1] = "{" .. table.concat(kv, ", ") .. "}"
             else
@@ -445,10 +589,19 @@ local function secure()
     end
     local c = secureFrame
     if not c then
-        local okMade: boolean, madeValue: unknown = pcall(CreateFrame, "AuraContainer", nil, UIParent, "CustomAuraContainerTemplate")
+        local okMade: boolean, madeValue: unknown = pcall(
+            CreateFrame,
+            "AuraContainer",
+            nil,
+            UIParent,
+            "CustomAuraContainerTemplate"
+        )
         local made = okMade and frames.asFrame(madeValue) or nil
         r.container = made and "made" or ("error: " .. tostring(madeValue))
-        if not made then print("Weapon enchant probe: no aura container (" .. tostring(madeValue) .. "). /reload to save it.") return end
+        if not made then
+            print("Weapon enchant probe: no aura container (" .. tostring(madeValue) .. "). /reload to save it.")
+            return
+        end
         c = made
         secureFrame = made
         made:SetSize(44, 44)
@@ -465,18 +618,25 @@ local function secure()
         -- they're registered
         local function init(value: unknown)
             local button = frames.asFrame(value)
-            if not button then return end
+            if not button then
+                return
+            end
             try("size", button, "SetSize", 40, 40)
             local icon = button:CreateTexture(nil, "ARTWORK")
             icon:SetAllPoints()
             try("setIcon", button, "SetIcon", icon)
             try("setCancel", button, "SetCancelAuraButtons", "RightButtonUp")
         end
-        local res = results(tbl.field(made, "AddItemEnchantment"), made, slot, { hidePermanent = false, initializeFrame = init })
+        local res = results(tbl.field(made, "AddItemEnchantment"), made, slot, {
+            hidePermanent = false,
+            initializeFrame = init,
+        })
         local button = res[2]
         r.add = res[1] and show(button) or ("error: " .. tostring(button))
         try("enable", made, "SetItemEnchantmentEnabled", slot, true)
-        if res[1] and button and not r.size then init(button) end
+        if res[1] and button and not r.size then
+            init(button)
+        end
         local bg = made:CreateTexture(nil, "BACKGROUND")
         bg:SetAllPoints()
         bg:SetColorTexture(1, 0, 1, 0.25)
@@ -493,7 +653,12 @@ local function secure()
         local button = frames.asFrame(value)
         if button then
             local w, h = button:GetSize()
-            r.button = ("shown %s visible %s size %s x %s"):format(show(button:IsShown()), show(button:IsVisible()), show(w), show(h))
+            r.button = ("shown %s visible %s size %s x %s"):format(
+                show(button:IsShown()),
+                show(button:IsVisible()),
+                show(w),
+                show(h)
+            )
         else
             r.button = show(value)
         end
@@ -512,14 +677,18 @@ local function secure()
             r.after = now
             r.goneAfter = n .. " s"
             ticker:Cancel()
-            print("Weapon enchant probe: your main hand's enchant changed (" .. mainHand(now) .. "). /reload to save it.")
+            print(
+                "Weapon enchant probe: your main hand's enchant changed (" .. mainHand(now) .. "). /reload to save it."
+            )
         elseif n >= 60 then
             ticker:Cancel()
             r.after = now
             print("Weapon enchant probe: a minute passed, the enchant is still there. /reload to save it.")
         end
     end)
-    print("Weapon enchant probe: right-click the icon at the top of the screen (a pink square shows where the container is); it REMOVES your main hand's temporary enchant. Watching for a minute.")
+    print(
+        "Weapon enchant probe: right-click the icon at the top of the screen (a pink square shows where the container is); it REMOVES your main hand's temporary enchant. Watching for a minute."
+    )
 end
 
 export function command(rest: string?)
@@ -546,6 +715,9 @@ export function command(rest: string?)
     lastSig = sig
     learnNames(s)
     scanAuras()
-    print(("Weapon enchant probe: recorded your weapons (main hand: %s). Now put an enchant on (an imbue, a poison, a stone or an oil), fight a few mobs, then /reload."):format(
-        mainHand(s)))
+    print(
+        ("Weapon enchant probe: recorded your weapons (main hand: %s). Now put an enchant on (an imbue, a poison, a stone or an oil), fight a few mobs, then /reload."):format(
+            mainHand(s)
+        )
+    )
 end

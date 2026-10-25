@@ -32,12 +32,16 @@ local S = T.space
 -- isSecret with its type: strict mode reads a named stdlib import as `any`
 -- while the project has an import cycle (Core has some), so the stdlib's own
 -- predicate wouldn't narrow here (Docs/port-notes/units-hud.md).
-local function isSecret(v: unknown): v is Secret<unknown> return isSecretValue(v) end
+local function isSecret(v: unknown): v is Secret<unknown>
+    return isSecretValue(v)
+end
 
 local BAR_CHILDREN = { "healthbar", "healthBar", "HealthBar", "HealthBarsContainer.healthBar", "manabar", "ManaBar" }
 local function children(extra: string[]?): string[]
     local list = { unpack(BAR_CHILDREN) }
-    for _, c in ipairs(extra or {}) do list[#list + 1] = c end
+    for _, c in ipairs(extra or {}) do
+        list[#list + 1] = c
+    end
     return list
 end
 
@@ -66,11 +70,11 @@ local DEFAULTS = {
     -- the defaults are the design's bar-lg and unit-lg
     width = UI.Size("bar-lg"),
     height = UI.Size("unit-lg"),
-    debuffBadges = "all",   -- your frame: "all" debuff types, "removable", "off"
+    debuffBadges = "all", -- your frame: "all" debuff types, "removable", "off"
     -- the rested sign over your frame's top-right corner
     restedSign = true,
-    restedShow = "resting",        -- or "carrying": also out in the world with rested XP left
-    restedAnimation = "animated",  -- or "still"
+    restedShow = "resting", -- or "carrying": also out in the world with rested XP left
+    restedAnimation = "animated", -- or "still"
     restedHideCombat = true,
     restedHideMax = true,
 }
@@ -79,22 +83,67 @@ local M: UnitFramesModule
 
 -- Every frame this module draws. `show` names the setting that turns it off.
 -- the single frames: their position setting and the setting that shows them
-type FrameDef = { key: string, unit: UnitToken, label: string, position: "playerPosition" | "targetPosition" | "totPosition"
-                  | "focusPosition" | "petPosition", watch?: boolean, show?: "showToT" | "showFocus" | "showPet",
-                  opts: UnitFrameOptions }
+type FrameDef = {
+    key: string,
+    unit: UnitToken,
+    label: string,
+    position: "playerPosition" | "targetPosition" | "totPosition" | "focusPosition" | "petPosition",
+    watch?: boolean,
+    show?: "showToT" | "showFocus" | "showPet",
+    opts: UnitFrameOptions,
+}
 local FRAMES: FrameDef[] = {
-    { key = "player", unit = "player", label = "Player", position = "playerPosition",
-      -- No "you" badge here (the design has one): the player frame is always you.
-      -- Target of target keeps it, where it tells you a mob is on you.
-      opts = { size = "lg", anchor = true, name = "SuuUIPlayerFrame" } },
-    { key = "target", unit = "target", label = "Target", position = "targetPosition", watch = true,
-      opts = { size = "lg", meta = true, crest = true, name = "SuuUITargetFrame" } },
-    { key = "tot", unit = "targettarget", label = "Target of target", position = "totPosition", watch = true, show = "showToT",
-      opts = { size = "sm", width = "bar-tot", power = false, youWhenPlayer = true, poll = 0.2, name = "SuuUITargetTargetFrame" } },
-    { key = "focus", unit = "focus", label = "Focus", position = "focusPosition", watch = true, show = "showFocus",
-      opts = { size = "md", meta = true, crest = true, name = "SuuUIFocusFrame" } },
-    { key = "pet", unit = "pet", label = "Pet", position = "petPosition", watch = true, show = "showPet",
-      opts = { size = "md", meta = "family", name = "SuuUIPetFrame" } },
+    {
+        key = "player",
+        unit = "player",
+        label = "Player",
+        position = "playerPosition",
+        -- No "you" badge here (the design has one): the player frame is always you.
+        -- Target of target keeps it, where it tells you a mob is on you.
+        opts = { size = "lg", anchor = true, name = "SuuUIPlayerFrame" },
+    },
+    {
+        key = "target",
+        unit = "target",
+        label = "Target",
+        position = "targetPosition",
+        watch = true,
+        opts = { size = "lg", meta = true, crest = true, name = "SuuUITargetFrame" },
+    },
+    {
+        key = "tot",
+        unit = "targettarget",
+        label = "Target of target",
+        position = "totPosition",
+        watch = true,
+        show = "showToT",
+        opts = {
+            size = "sm",
+            width = "bar-tot",
+            power = false,
+            youWhenPlayer = true,
+            poll = 0.2,
+            name = "SuuUITargetTargetFrame",
+        },
+    },
+    {
+        key = "focus",
+        unit = "focus",
+        label = "Focus",
+        position = "focusPosition",
+        watch = true,
+        show = "showFocus",
+        opts = { size = "md", meta = true, crest = true, name = "SuuUIFocusFrame" },
+    },
+    {
+        key = "pet",
+        unit = "pet",
+        label = "Pet",
+        position = "petPosition",
+        watch = true,
+        show = "showPet",
+        opts = { size = "md", meta = "family", name = "SuuUIPetFrame" },
+    },
 }
 
 local BOSSES = 5
@@ -119,7 +168,9 @@ local function standDownBlizzard()
     SuuUI.SuppressBlizzard("TargetFrame", { children = children(targetChildren) })
     SuuUI.SuppressBlizzard("ComboFrame", { keepParent = true })
     if M:Get("showFocus") then
-        SuuUI.SuppressBlizzard("FocusFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "totFrame" }) })
+        SuuUI.SuppressBlizzard("FocusFrame", {
+            children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame", "totFrame" }),
+        })
     end
     if M:Get("showPet") then
         SuuUI.SuppressBlizzard("PetFrame", { children = children() })
@@ -127,7 +178,9 @@ local function standDownBlizzard()
     if M:Get("showBoss") then
         SuuUI.SuppressBlizzard("BossTargetFrameContainer")
         for i = 1, BOSSES do
-            SuuUI.SuppressBlizzard("Boss" .. i .. "TargetFrame", { children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame" }) })
+            SuuUI.SuppressBlizzard("Boss" .. i .. "TargetFrame", {
+                children = children({ "spellbar", "castBar", "BuffFrame", "AurasFrame" }),
+            })
         end
     end
 end
@@ -136,7 +189,9 @@ end
 -- or the secret it is. A colour (never, with these curves) is 0.
 type CurveResult = LuaCurveEvaluatedResult | Secret<LuaCurveEvaluatedResult> | nil
 local function curveAmount(r: CurveResult): number | Secret<number>
-    if isSecret(r) then return r :: Secret<number> end
+    if isSecret(r) then
+        return r :: Secret<number>
+    end
     return type(r) == "number" and r or 0
 end
 
@@ -149,7 +204,9 @@ end
 local function comboClass(): boolean
     local _, cls = UnitClass("player")
     local class = cls :: string? -- your own class reads plain (compared unguarded, as before)
-    if class == "ROGUE" then return true end
+    if class == "ROGUE" then
+        return true
+    end
     if class == "DRUID" then
         local _, token = UnitPowerType("player")
         return token == "ENERGY"
@@ -193,9 +250,12 @@ export class ComboPips extends Frame
     end
 
     function Update()
-        local shown = M:Get("comboPoints") and comboClass() and UnitExists("target") and secret.flag(UnitCanAttack("player", "target"))
+        local shown = M:Get("comboPoints") and comboClass() and UnitExists("target") and
+            secret.flag(UnitCanAttack("player", "target"))
         self:SetShown(shown and true or false)
-        if not shown then return end
+        if not shown then
+            return
+        end
         local given = GetComboPoints and GetComboPoints("player", "target")
         if issecretvalue(given) then
             -- Hidden in combat: each pip's alpha comes from an engine step curve.
@@ -233,7 +293,9 @@ local restCurve: LuaCurveObject? = nil
 local restAt: number? = nil
 local function restingAlpha(): number | Secret<number>
     local ooc = T.opacity["opacity-ooc"]
-    if not (C_CurveUtil and Enum.LuaCurveType and UnitHealthPercent) then return ooc end
+    if not (C_CurveUtil and Enum.LuaCurveType and UnitHealthPercent) then
+        return ooc
+    end
     local curve = restCurve
     if not curve or restAt ~= ooc then
         curve = C_CurveUtil.CreateCurve()
@@ -257,8 +319,10 @@ local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 -- No XP to earn: the account's level cap, or XP turned off.
 local function noXP(): boolean
-    local cap = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion()
-        or GetMaxPlayerLevel and GetMaxPlayerLevel() or MAX_PLAYER_LEVEL or 60
+    local cap = GetMaxLevelForPlayerExpansion and GetMaxLevelForPlayerExpansion() or
+        GetMaxPlayerLevel and GetMaxPlayerLevel() or
+        MAX_PLAYER_LEVEL or
+        60
     return UnitLevel("player") >= cap or (IsXPUserDisabled and IsXPUserDisabled()) or false
 end
 
@@ -266,7 +330,9 @@ end
 -- it is full (150% of a level).
 local function restedPool(): (number, number, boolean)
     local pool, max = GetXPExhaustion() or 0, UnitXPMax("player") or 0
-    if max <= 0 then return pool, 0, false end
+    if max <= 0 then
+        return pool, 0, false
+    end
     return pool, pool / max, pool >= math.floor(max * 1.5)
 end
 
@@ -290,7 +356,12 @@ local function person(_: string): StandInPerson
     if not made then
         local _, class = UnitClass("player")
         local name = UnitName("player")
-        made = { name = type(name) == "string" and name or nil, class = type(class) == "string" and class or nil, health = 1, power = 1 }
+        made = {
+            name = type(name) == "string" and name or nil,
+            class = type(class) == "string" and class or nil,
+            health = 1,
+            power = 1,
+        }
         previewPerson = made
     end
     return made
@@ -304,7 +375,12 @@ export class UnitFramesPreview extends Frame
 
     constructor(parent: Frame, owner: UnitFramesModule)
         super(nil, parent)
-        self.frame = UI.UnitFrame(self, "preview", { size = "lg", anchor = true, secure = false, api = UI.UnitStandIn(person) })
+        self.frame = UI.UnitFrame(self, "preview", {
+            size = "lg",
+            anchor = true,
+            secure = false,
+            api = UI.UnitStandIn(person),
+        })
         self.frame:SetScript("OnEnter", nil)
         self.frame:SetScript("OnLeave", nil)
         self.frame:EnableMouse(false)
@@ -312,7 +388,9 @@ export class UnitFramesPreview extends Frame
         self.reason = UI.Text(self, "caption", "ink-muted")
         self.reason:SetWordWrap(true)
         self.reason:SetJustifyH("CENTER")
-        self:HookScript("OnShow", function() owner:DrawPreview() end)
+        self:HookScript("OnShow", function()
+            owner:DrawPreview()
+        end)
     end
 end
 
@@ -334,74 +412,220 @@ end
 --------------------------------------------------------------------------------
 
 local function signOff(): (boolean?, string?)
-    if not M:Get("restedSign") then return true, "The rested sign is off." end
+    if not M:Get("restedSign") then
+        return true, "The rested sign is off."
+    end
     return nil, nil
 end
 
 local SECTION: SettingsSection = {
-    id = "unitframes", label = "Unit frames", category = "Frames", order = 10,
-    preview = function(parent: Frame): Frame return M:PreviewView(parent) end,
+    id = "unitframes",
+    label = "Unit frames",
+    category = "Frames",
+    order = 10,
+    preview = function(parent: Frame): Frame
+        return M:PreviewView(parent)
+    end,
     groups = {
-        { title = "Frames", description = "Turning a frame off brings Blizzard's back after a reload.", rows = {
-            { key = "showToT", label = "Target of target", control = "toggle", combat = true,
-              description = "Right of the target, centred on it. Blizzard's belongs to its target frame, so off there is none." },
-            { key = "showFocus", label = "Focus", control = "toggle", combat = true, description = "Right of centre, above the target of target." },
-            { key = "showPet", label = "Pet", control = "toggle", combat = true, description = "Under the player frame, with its focus or mana." },
-            { key = "showBoss", label = "Boss frames", control = "toggle", combat = true, description = "Top right, left of the tracker, one per boss." },
-        } },
-        { title = "Size", description = "The player and target frames; the others keep theirs.", rows = {
-            { key = "width", label = "Width", control = "slider", min = 200, max = 400, step = 2, unit = "px", live = false, combat = true },
-            { key = "height", label = "Height", control = "slider", min = 24, max = 48, step = 1, unit = "px", live = false, combat = true },
-        } },
-        { title = "Bars and text", description = "The bar is the frame: name, state and health inside it, power along its foot.", rows = {
-            { key = "showPower", label = "Power line", control = "toggle",
-              description = "Mana, rage, energy or focus along the bottom of each bar. Low mana turns it amber." },
-            { key = "healthText", label = "Health text", control = "segmented",
-              options = { { value = "percent", label = "64%" }, { value = "value", label = "8.5k" },
-                          { value = "both", label = "8.5k · 64%" }, { value = "none", label = "None" } },
-              description = "At the right end of each bar: the health percentage, the current health, or both." },
-            { key = "nameColor", label = "Name colour", control = "segmented",
-              options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
-              description = "Players in their class colour, hostile and neutral NPCs in their reaction colour." },
-            { key = "showMeta", label = "Level and classification", control = "toggle",
-              description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\"." },
-            { key = "eliteDragon", label = "Elite dragon", control = "toggle",
-              description = "The game's own dragon around the target and focus frames' right end for elites, rares and bosses, in place of the crest; friendly and neutral NPCs too." },
-            { key = "raidMarkers", label = "Raid markers", control = "toggle",
-              description = "A skull, cross or other raid marker over the top edge of the frame, in combat too." },
-        } },
-        { title = "Your frame", rows = {
-            { key = "debuffBadges", label = "Debuff badges", control = "segmented", combat = true,
-              options = { { value = "all", label = "Every type" }, { value = "removable", label = "Only what you can remove" }, { value = "off", label = "Off" } },
-              description = "Magic, Curse, Poison, Disease on your frame as a badge and border, in combat too." },
-            { key = "comboPoints", label = "Combo points", control = "toggle",
-              description = "Five diamonds over the target frame; all arcane at five.",
-              disabled = function()
-                  local _, cls = UnitClass("player")
-                  local class = cls :: string?
-                  if class ~= "ROGUE" and class ~= "DRUID" then return true, "Only rogues and druids use combo points." end
-                  return false
-              end },
-        } },
-        { title = "Rested", description = "A sign on your frame while you rest in an inn or a city and earn rested XP. Hover your frame for how much you have.", rows = {
-            { key = "restedSign", label = "Show the rested sign", control = "toggle",
-              description = "Three letters rising from your frame's top-right corner; a full moon once your rested XP is full." },
-            { key = "restedShow", label = "Show", control = "select", width = 280, disabled = signOff,
-              options = { { value = "resting", label = "While resting" },
-                          { value = "carrying", label = "While resting or carrying rested XP" } },
-              description = "Out in the world with rested XP left: nothing, or the still sign at 60%." },
-            { key = "restedAnimation", label = "Animation", control = "segmented", disabled = signOff,
-              options = { { value = "animated", label = "Animated" }, { value = "still", label = "Still" } },
-              description = "Still whenever Reduce motion is on (General › Motion)." },
-            { key = "restedHideCombat", label = "Hide in combat", control = "toggle", disabled = signOff,
-              description = "Fades out when combat starts, back when it ends." },
-            { key = "restedHideMax", label = "Hide at max level", control = "toggle", disabled = signOff,
-              description = "At the level cap there is no XP to rest for. Off: a still sign in rest areas." },
-        } },
-        { title = "Behaviour", rows = {
-            { key = "fadeOutOfCombat", label = "Fade out of combat", control = "toggle",
-              description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover." },
-        } },
+        {
+            title = "Frames",
+            description = "Turning a frame off brings Blizzard's back after a reload.",
+            rows = {
+                {
+                    key = "showToT",
+                    label = "Target of target",
+                    control = "toggle",
+                    combat = true,
+                    description = "Right of the target, centred on it. Blizzard's belongs to its target frame, so off there is none.",
+                },
+                {
+                    key = "showFocus",
+                    label = "Focus",
+                    control = "toggle",
+                    combat = true,
+                    description = "Right of centre, above the target of target.",
+                },
+                {
+                    key = "showPet",
+                    label = "Pet",
+                    control = "toggle",
+                    combat = true,
+                    description = "Under the player frame, with its focus or mana.",
+                },
+                {
+                    key = "showBoss",
+                    label = "Boss frames",
+                    control = "toggle",
+                    combat = true,
+                    description = "Top right, left of the tracker, one per boss.",
+                },
+            },
+        },
+        {
+            title = "Size",
+            description = "The player and target frames; the others keep theirs.",
+            rows = {
+                {
+                    key = "width",
+                    label = "Width",
+                    control = "slider",
+                    min = 200,
+                    max = 400,
+                    step = 2,
+                    unit = "px",
+                    live = false,
+                    combat = true,
+                },
+                {
+                    key = "height",
+                    label = "Height",
+                    control = "slider",
+                    min = 24,
+                    max = 48,
+                    step = 1,
+                    unit = "px",
+                    live = false,
+                    combat = true,
+                },
+            },
+        },
+        {
+            title = "Bars and text",
+            description = "The bar is the frame: name, state and health inside it, power along its foot.",
+            rows = {
+                {
+                    key = "showPower",
+                    label = "Power line",
+                    control = "toggle",
+                    description = "Mana, rage, energy or focus along the bottom of each bar. Low mana turns it amber.",
+                },
+                {
+                    key = "healthText",
+                    label = "Health text",
+                    control = "segmented",
+                    options = {
+                        { value = "percent", label = "64%" },
+                        { value = "value", label = "8.5k" },
+                        { value = "both", label = "8.5k · 64%" },
+                        { value = "none", label = "None" },
+                    },
+                    description = "At the right end of each bar: the health percentage, the current health, or both.",
+                },
+                {
+                    key = "nameColor",
+                    label = "Name colour",
+                    control = "segmented",
+                    options = { { value = "game", label = "Class" }, { value = "ink", label = "Plain" } },
+                    description = "Players in their class colour, hostile and neutral NPCs in their reaction colour.",
+                },
+                {
+                    key = "showMeta",
+                    label = "Level and classification",
+                    control = "toggle",
+                    description = "After the name on the target, focus and boss frames: \"60 Elite\", \"?? Boss\".",
+                },
+                {
+                    key = "eliteDragon",
+                    label = "Elite dragon",
+                    control = "toggle",
+                    description = "The game's own dragon around the target and focus frames' right end for elites, rares and bosses, in place of the crest; friendly and neutral NPCs too.",
+                },
+                {
+                    key = "raidMarkers",
+                    label = "Raid markers",
+                    control = "toggle",
+                    description = "A skull, cross or other raid marker over the top edge of the frame, in combat too.",
+                },
+            },
+        },
+        {
+            title = "Your frame",
+            rows = {
+                {
+                    key = "debuffBadges",
+                    label = "Debuff badges",
+                    control = "segmented",
+                    combat = true,
+                    options = {
+                        { value = "all", label = "Every type" },
+                        { value = "removable", label = "Only what you can remove" },
+                        { value = "off", label = "Off" },
+                    },
+                    description = "Magic, Curse, Poison, Disease on your frame as a badge and border, in combat too.",
+                },
+                {
+                    key = "comboPoints",
+                    label = "Combo points",
+                    control = "toggle",
+                    description = "Five diamonds over the target frame; all arcane at five.",
+                    disabled = function()
+                        local _, cls = UnitClass("player")
+                        local class = cls :: string?
+                        if class ~= "ROGUE" and class ~= "DRUID" then
+                            return true, "Only rogues and druids use combo points."
+                        end
+                        return false
+                    end,
+                },
+            },
+        },
+        {
+            title = "Rested",
+            description = "A sign on your frame while you rest in an inn or a city and earn rested XP. Hover your frame for how much you have.",
+            rows = {
+                {
+                    key = "restedSign",
+                    label = "Show the rested sign",
+                    control = "toggle",
+                    description = "Three letters rising from your frame's top-right corner; a full moon once your rested XP is full.",
+                },
+                {
+                    key = "restedShow",
+                    label = "Show",
+                    control = "select",
+                    width = 280,
+                    disabled = signOff,
+                    options = {
+                        { value = "resting", label = "While resting" },
+                        { value = "carrying", label = "While resting or carrying rested XP" },
+                    },
+                    description = "Out in the world with rested XP left: nothing, or the still sign at 60%.",
+                },
+                {
+                    key = "restedAnimation",
+                    label = "Animation",
+                    control = "segmented",
+                    disabled = signOff,
+                    options = { { value = "animated", label = "Animated" }, { value = "still", label = "Still" } },
+                    description = "Still whenever Reduce motion is on (General › Motion).",
+                },
+                {
+                    key = "restedHideCombat",
+                    label = "Hide in combat",
+                    control = "toggle",
+                    disabled = signOff,
+                    description = "Fades out when combat starts, back when it ends.",
+                },
+                {
+                    key = "restedHideMax",
+                    label = "Hide at max level",
+                    control = "toggle",
+                    disabled = signOff,
+                    description = "At the level cap there is no XP to rest for. Off: a still sign in rest areas.",
+                },
+            },
+        },
+        {
+            title = "Behaviour",
+            rows = {
+                {
+                    key = "fadeOutOfCombat",
+                    label = "Fade out of combat",
+                    control = "toggle",
+                    description = "Rest at 60% while you are out of combat at full health; full again in combat or on hover.",
+                },
+            },
+        },
     },
 }
 
@@ -446,7 +670,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         local hovered = false
         for _, d in ipairs(FRAMES) do
             local f = self:FrameOf(d.key)
-            if f:IsVisible() and f:IsMouseOver() then hovered = true end
+            if f:IsVisible() and f:IsMouseOver() then
+                hovered = true
+            end
         end
         local resting = self:Get("fadeOutOfCombat") and not secret.flag(UnitAffectingCombat("player")) and not hovered
         local alpha = resting and restingAlpha() or 1
@@ -473,24 +699,34 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         local status = UnitThreatSituation("player")
         local role = UnitGroupRolesAssigned and UnitGroupRolesAssigned("player")
         -- issecretvalue first: a truth test on a secret value would error.
-        local danger = secret.flag(IsInGroup()) and not issecretvalue(status) and status ~= nil and status >= 2
-            and not (not issecretvalue(role) and role == "TANK")
+        local danger = secret.flag(IsInGroup()) and not issecretvalue(status) and status ~= nil and status >= 2 and
+            not (not issecretvalue(role) and role == "TANK")
         self:FrameOf("player"):SetState(danger and "danger" or nil, danger and "Aggro" or nil)
     end
 
     -- The sign's look now ("earn", "rest", "full", "carry" or nil, as
     -- UI.RestedSign takes it); `anyCombat` leaves Hide in combat out.
     function RestedLook(anyCombat: boolean?): string?
-        if not self:Get("restedSign") then return nil end
+        if not self:Get("restedSign") then
+            return nil
+        end
         local capped = noXP()
-        if capped and self:Get("restedHideMax") then return nil end
-        if not anyCombat and self:Get("restedHideCombat") and self.inCombat then return nil end
+        if capped and self:Get("restedHideMax") then
+            return nil
+        end
+        if not anyCombat and self:Get("restedHideCombat") and self.inCombat then
+            return nil
+        end
         local pool, _, full = restedPool()
         if IsResting() then
-            if capped then return "rest" end
+            if capped then
+                return "rest"
+            end
             return full and "full" or "earn"
         end
-        if not capped and pool > 0 and self:Get("restedShow") == "carrying" then return "carry" end
+        if not capped and pool > 0 and self:Get("restedShow") == "carrying" then
+            return "carry"
+        end
         return nil
     end
 
@@ -498,7 +734,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
     -- stands still wherever it could show, so you see where it sits.
     function UpdateRested(fade: number?)
         local sign = self.restedSign
-        if not sign then return end
+        if not sign then
+            return
+        end
         local look, still = self:RestedLook(), self:Get("restedAnimation") == "still"
         if SuuUI.EditMode.IsActive() then
             local can = self:Get("restedSign") and not (self:Get("restedHideMax") and noXP())
@@ -510,16 +748,28 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
     -- Your frame's tooltip: the rested lines after the unit's, while the sign shows.
     function AddRestedLines(tooltip: GameTooltip)
         local look = self:RestedLook()
-        if not look then return end
+        if not look then
+            return
+        end
         local ink, muted, fill = { UI.RGBA("ink") }, { UI.RGBA("ink-muted") }, { UI.RGBA("progress-fill") }
-        local function line(text: string, c: number[]) tooltip:AddLine(text, c[1], c[2], c[3]) end
+        local function line(text: string, c: number[])
+            tooltip:AddLine(text, c[1], c[2], c[3])
+        end
         tooltip:AddLine(" ")
         line(tooltipIcon(look == "full") .. (look == "carry" and "Rested" or "Resting"), ink)
         if look ~= "rest" then
             local pool, share = restedPool()
             local amount = BreakUpLargeNumbers and BreakUpLargeNumbers(pool) or tostring(pool)
-            tooltip:AddDoubleLine("Rested XP", ("%s · %d%% of a level"):format(amount, math.floor(share * 100 + 0.5)),
-                ink[1], ink[2], ink[3], muted[1], muted[2], muted[3])
+            tooltip:AddDoubleLine(
+                "Rested XP",
+                ("%s · %d%% of a level"):format(amount, math.floor(share * 100 + 0.5)),
+                ink[1],
+                ink[2],
+                ink[3],
+                muted[1],
+                muted[2],
+                muted[3]
+            )
         end
         if look == "earn" then
             line("Earning rested XP", muted)
@@ -530,7 +780,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             line("Kills give double XP until it's spent.", muted)
             line("Rest in an inn or a city to earn more.", muted)
         end
-        if look ~= "carry" then line("Logging out here is instant.", muted) end
+        if look ~= "carry" then
+            line("Logging out here is instant.", muted)
+        end
     end
 
     function PreviewView(parent: Frame): UnitFramesPreview
@@ -543,7 +795,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
 
     function DrawPreview()
         local v = self.previewView
-        if not v then return end
+        if not v then
+            return
+        end
         local f = v.frame
         local w, h = self:Get("width"), self:Get("height")
         f.opts.power = self:Get("showPower")
@@ -587,7 +841,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             end
         end
         local bossOn = self:Get("showBoss") and not self:Get("bossPosition").hidden
-        for i = 1, BOSSES do follow(self, assert(self.bosses[i]), bossOn) end
+        for i = 1, BOSSES do
+            follow(self, assert(self.bosses[i]), bossOn)
+        end
     end
 
     function ApplyOptions()
@@ -596,12 +852,20 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             f.opts.healthText = self:Get("healthText")
             f.opts.nameColor = self:Get("nameColor")
             f.opts.raidMarker = self:Get("raidMarkers")
-            if self.levelMeta[f] then f.opts.meta = self:Get("showMeta") end
-            if f.opts.crest then f.opts.dragon = self:Get("eliteDragon") end
-            if f.active then f:Refresh() end
+            if self.levelMeta[f] then
+                f.opts.meta = self:Get("showMeta")
+            end
+            if f.opts.crest then
+                f.opts.dragon = self:Get("eliteDragon")
+            end
+            if f.active then
+                f:Refresh()
+            end
         end
         local combo = self.combo
-        if combo then combo:Update() end
+        if combo then
+            combo:Update()
+        end
         self:UpdateFade()
         self:DrawPreview()
     end
@@ -611,7 +875,9 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
     function ApplySize()
         self:RunOutOfCombat("size", function()
             local w, h = self:Get("width"), self:Get("height")
-            for _, key in ipairs({ "player", "target" }) do self:FrameOf(key):Resize(w, h) end
+            for _, key in ipairs({ "player", "target" }) do
+                self:FrameOf(key):Resize(w, h)
+            end
             SuuUI.EditMode.Refresh()
             self:DrawPreview()
         end)
@@ -622,12 +888,19 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         for _, d in ipairs(FRAMES) do
             local f = UI.UnitFrame(SuuUI.Root, d.unit, d.opts)
             SuuUI.TagInstance(f, { module = self.id, role = d.key })
-            if d.opts.meta == true then self.levelMeta[f] = true end
+            if d.opts.meta == true then
+                self.levelMeta[f] = true
+            end
             made[d.key] = f
             self.allFrames[d.key] = f
         end
-        local frames: Frames = { player = assert(made.player), target = assert(made.target), tot = assert(made.tot),
-            focus = assert(made.focus), pet = assert(made.pet) }
+        local frames: Frames = {
+            player = assert(made.player),
+            target = assert(made.target),
+            tot = assert(made.tot),
+            focus = assert(made.focus),
+            pet = assert(made.pet),
+        }
         self.frames = frames
         -- The boss stack: one holder, moved as one in edit mode.
         local holder = CreateFrame("Frame", "SuuUIBossFrames", SuuUI.Root)
@@ -637,7 +910,11 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         holder:SetSize(w, BOSSES * pitch - S["space-5"])
         self.bossHolder, self.bosses = holder, {}
         for i = 1, BOSSES do
-            local f = UI.UnitFrame(holder, "boss" .. i, { size = "md", meta = true, name = "SuuUIBoss" .. i .. "Frame" })
+            local f = UI.UnitFrame(holder, "boss" .. i, {
+                size = "md",
+                meta = true,
+                name = "SuuUIBoss" .. i .. "Frame",
+            })
             self.levelMeta[f] = true
             SuuUI.TagInstance(f, { module = self.id, role = "boss" })
             f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * pitch)
@@ -655,68 +932,159 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         local holder, combo = assert(self.bossHolder), assert(self.combo)
 
         frames.player:Show()
-        for _, f in pairs(self.allFrames) do f:Activate() end
+        for _, f in pairs(self.allFrames) do
+            f:Activate()
+        end
         -- A frame turned off in the settings gets no mover in edit mode;
         -- the ones that follow their unit are shown by it (managedShow).
         for _, d in ipairs(FRAMES) do
             local show = d.show
-            self:RegisterMover(self:FrameOf(d.key), { key = d.position, label = d.label, managedShow = d.watch or nil,
-                enabled = show and function() return self:Get(show) end or nil })
-            if show then self:Watch(show, SuuUI.EditMode.Refresh) end
+            self:RegisterMover(self:FrameOf(d.key), {
+                key = d.position,
+                label = d.label,
+                managedShow = d.watch or nil,
+                enabled = show and
+                    function()
+                        return self:Get(show)
+                    end or
+                    nil,
+            })
+            if show then
+                self:Watch(show, SuuUI.EditMode.Refresh)
+            end
         end
-        self:RegisterMover(holder, { key = "bossPosition", label = "Boss frames", managedShow = true,
-            enabled = function() return self:Get("showBoss") end })
+        self:RegisterMover(holder, {
+            key = "bossPosition",
+            label = "Boss frames",
+            managedShow = true,
+            enabled = function()
+                return self:Get("showBoss")
+            end,
+        })
         self:Watch("showBoss", SuuUI.EditMode.Refresh)
         -- Published, so other modules (cast bars, auras) and plugins can attach to them.
-        for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, self:FrameOf(d.key)) end
-        for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, self.bosses[i]) end
+        for _, d in ipairs(FRAMES) do
+            SuuUI.PublishAnchor(d.unit, self:FrameOf(d.key))
+        end
+        for i = 1, BOSSES do
+            SuuUI.PublishAnchor("boss" .. i, self.bosses[i])
+        end
         self:RegisterSettings(SECTION)
         self:UpdateVisibility()
         self:ApplySize()
         self:ApplyOptions()
 
         local player = frames.player
-        player.onHealth = function() self:UpdateFade() end
+        player.onHealth = function()
+            self:UpdateFade()
+        end
         for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
-            self:OnGameEvent(e, function() self:UpdateFade() end)
+            self:OnGameEvent(e, function()
+                self:UpdateFade()
+            end)
         end
         for _, d in ipairs(FRAMES) do
             local f = self:FrameOf(d.key)
-            f:HookScript("OnEnter", function() self:UpdateFade() end)
-            f:HookScript("OnLeave", function() self:UpdateFade() end)
+            f:HookScript("OnEnter", function()
+                self:UpdateFade()
+            end)
+            f:HookScript("OnLeave", function()
+                self:UpdateFade()
+            end)
         end
 
-        self:OnUnitEvent("UNIT_THREAT_SITUATION_UPDATE", "player", function() self:UpdateThreat() end)
-        self:OnGameEvent("GROUP_ROSTER_UPDATE", function() self:UpdateThreat() end)
-        self:OnUnitEvent("UNIT_POWER_UPDATE", "player", function() combo:Update() end)
-        self:OnUnitEvent("UNIT_DISPLAYPOWER", "player", function() combo:Update() end)
-        self:OnGameEvent("PLAYER_TARGET_CHANGED", function() combo:Update() end)
+        self:OnUnitEvent("UNIT_THREAT_SITUATION_UPDATE", "player", function()
+            self:UpdateThreat()
+        end)
+        self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
+            self:UpdateThreat()
+        end)
+        self:OnUnitEvent("UNIT_POWER_UPDATE", "player", function()
+            combo:Update()
+        end)
+        self:OnUnitEvent("UNIT_DISPLAYPOWER", "player", function()
+            combo:Update()
+        end)
+        self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
+            combo:Update()
+        end)
 
-        self:WatchAll({ "fadeOutOfCombat", "showPower", "healthText", "nameColor", "showMeta", "eliteDragon", "raidMarkers", "comboPoints" }, function() self:ApplyOptions() end)
-        self:WatchAll({ "showToT", "showFocus", "showPet", "showBoss", "targetPosition", "totPosition",
-                               "focusPosition", "petPosition", "bossPosition" }, function() self:UpdateVisibility() end)
-        self:WatchAll({ "width", "height" }, function() self:ApplySize() end)
+        self:WatchAll({
+            "fadeOutOfCombat",
+            "showPower",
+            "healthText",
+            "nameColor",
+            "showMeta",
+            "eliteDragon",
+            "raidMarkers",
+            "comboPoints",
+        }, function()
+            self:ApplyOptions()
+        end)
+        self:WatchAll({
+            "showToT",
+            "showFocus",
+            "showPet",
+            "showBoss",
+            "targetPosition",
+            "totPosition",
+            "focusPosition",
+            "petPosition",
+            "bossPosition",
+        }, function()
+            self:UpdateVisibility()
+        end)
+        self:WatchAll({ "width", "height" }, function()
+            self:ApplySize()
+        end)
         self:UpdateThreat()
-        self:RunOutOfCombat("debuffBadges", function() player:SetDispelBadges(self:Get("debuffBadges")) end)
+        self:RunOutOfCombat("debuffBadges", function()
+            player:SetDispelBadges(self:Get("debuffBadges"))
+        end)
         self:Watch("debuffBadges", function()
-            self:RunOutOfCombat("debuffBadges", function() player:SetDispelBadges(self:Get("debuffBadges")) end)
+            self:RunOutOfCombat("debuffBadges", function()
+                player:SetDispelBadges(self:Get("debuffBadges"))
+            end)
         end)
 
         -- rested: the sign and the tooltip's lines
         local base, fast = T.duration["dur-base"], T.duration["dur-fast"]
         self.inCombat = InCombatLockdown() or secret.flag(UnitAffectingCombat("player"))
-        player.onTooltip = self:Guard(function(_: UnitFrame, tooltip: GameTooltip) self:AddRestedLines(tooltip) end)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self.inCombat = true; self:UpdateRested(fast) end)
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self.inCombat = false; self:UpdateRested(base) end)
-        for _, e in ipairs({ "PLAYER_UPDATE_RESTING", "UPDATE_EXHAUSTION", "PLAYER_XP_UPDATE", "PLAYER_LEVEL_UP",
-                             "PLAYER_ENTERING_WORLD" }) do
-            self:OnGameEvent(e, function() self:UpdateRested(base) end)
-        end
-        self:On("SUUUI_EDITMODE_CHANGED", function() self:UpdateRested() end)
-        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
-            if namespace == "ui" and key == "reducedMotion" then self:UpdateRested(); self:DrawPreview() end
+        player.onTooltip = self:Guard(function(_: UnitFrame, tooltip: GameTooltip)
+            self:AddRestedLines(tooltip)
         end)
-        self:WatchAll({ "restedSign", "restedShow", "restedAnimation", "restedHideCombat", "restedHideMax" }, function() self:UpdateRested(base); self:DrawPreview() end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self.inCombat = true
+            self:UpdateRested(fast)
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self.inCombat = false
+            self:UpdateRested(base)
+        end)
+        for _, e in ipairs({
+            "PLAYER_UPDATE_RESTING",
+            "UPDATE_EXHAUSTION",
+            "PLAYER_XP_UPDATE",
+            "PLAYER_LEVEL_UP",
+            "PLAYER_ENTERING_WORLD",
+        }) do
+            self:OnGameEvent(e, function()
+                self:UpdateRested(base)
+            end)
+        end
+        self:On("SUUUI_EDITMODE_CHANGED", function()
+            self:UpdateRested()
+        end)
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "ui" and key == "reducedMotion" then
+                self:UpdateRested()
+                self:DrawPreview()
+            end
+        end)
+        self:WatchAll({ "restedSign", "restedShow", "restedAnimation", "restedHideCombat", "restedHideMax" }, function()
+            self:UpdateRested(base)
+            self:DrawPreview()
+        end)
         self:UpdateRested()
     end
 
@@ -725,10 +1093,16 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         local frames = self.frames
         if frames then
             -- Withdraw the anchors, so nothing stays attached to frames that are gone.
-            for _, d in ipairs(FRAMES) do SuuUI.PublishAnchor(d.unit, nil) end
-            for i = 1, BOSSES do SuuUI.PublishAnchor("boss" .. i, nil) end
+            for _, d in ipairs(FRAMES) do
+                SuuUI.PublishAnchor(d.unit, nil)
+            end
+            for i = 1, BOSSES do
+                SuuUI.PublishAnchor("boss" .. i, nil)
+            end
             local sign = self.restedSign
-            if sign then sign:SetLook(nil) end
+            if sign then
+                sign:SetLook(nil)
+            end
             frames.player.onTooltip = nil
             for _, f in pairs(self.allFrames) do
                 f:Deactivate()

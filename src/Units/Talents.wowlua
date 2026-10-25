@@ -24,8 +24,7 @@ import TALENTS from "/Core/ServiceKeys"
 import type TalentNext from "/Core/ServiceKeys"
 import Panel from "/UI/Panel"
 import type WindowChrome from "/UI/WindowSkin"
-import type TalentTree, TalentNode as PageTalent, TalentTreeData as PageTreeData, TalentLink, TalentSpec,
-    OrderLineData, TalentBuilds, BuildButton from "/UI/TalentTree"
+import type TalentTree, TalentNode as PageTalent, TalentTreeData as PageTreeData, TalentLink, TalentSpec, OrderLineData, TalentBuilds, BuildButton from "/UI/TalentTree"
 import type TalentNode as BuildTalent, TalentStep from "/UI/TalentBuilds"
 import type SelectOption, SelectFootLink, Select from "/UI/Select"
 import type Text from "/UI/Text"
@@ -51,8 +50,8 @@ local M: TalentsModule
 -- (your own class: never secret)
 local CLASS = asString((select(2, UnitClass("player")))) or ""
 
-local STEP = 600          -- the grid's step in the tree's coordinates
-local TREE_GAP = 1500     -- more than this between columns: another tree
+local STEP = 600 -- the grid's step in the tree's coordinates
+local TREE_GAP = 1500 -- more than this between columns: another tree
 -- the spells window's height on this tab: the header's 44 and the foot's
 -- 16 around the page (summary, trees, foot: 426), and the specs' row with
 -- two talent groups
@@ -67,27 +66,63 @@ local SPECS_H = 42
 -- ranks learned and planned, what the game says it can do, its talent, its
 -- place in its tree's grid; drawn with what the page sets on it.
 type PageNode = {
-    id: number, x: number, y: number, max: number, rank: number, pending: number,
-    canPurchase: boolean, canRefund: boolean, open: boolean, meetsEdges: boolean,
-    conditions: number[], edges: TraitOutEdgeInfo[],
-    name: string, icon?: number | string, spellID?: number, entryID: number,
-    row: number, col: number, tree?: PageTree, requires: PageNode[],
-    locked?: boolean, canSpend?: boolean, next?: boolean,
+    id: number,
+    x: number,
+    y: number,
+    max: number,
+    rank: number,
+    pending: number,
+    canPurchase: boolean,
+    canRefund: boolean,
+    open: boolean,
+    meetsEdges: boolean,
+    conditions: number[],
+    edges: TraitOutEdgeInfo[],
+    name: string,
+    icon?: number | string,
+    spellID?: number,
+    entryID: number,
+    row: number,
+    col: number,
+    tree?: PageTree,
+    requires: PageNode[],
+    locked?: boolean,
+    canSpend?: boolean,
+    next?: boolean,
 }
 -- One of the class's three trees on the page.
 type PageTree = {
-    name: string, icon?: number, groupID?: number, nodes: PageNode[],
-    links: { from: PageNode, to: PageNode, met: boolean }[], points: number,
+    name: string,
+    icon?: number,
+    groupID?: number,
+    nodes: PageNode[],
+    links: { from: PageNode, to: PageNode, met: boolean }[],
+    points: number,
 }
 -- What the page shows for a config (Collect).
 type Collected = {
-    configID: number, treeID: number, trees: PageTree[], available: number, pending: number, staged: boolean,
+    configID: number,
+    treeID: number,
+    trees: PageTree[],
+    available: number,
+    pending: number,
+    staged: boolean,
 }
 
 -- A talent of a build planned on its trees (FillPlan).
 type PlanNode = {
-    id: number, row: number, col: number, max: number, rank: number, pending: number, icon?: number | string,
-    name: string, entryID?: number, canSpend: boolean, locked: boolean, problem?: string,
+    id: number,
+    row: number,
+    col: number,
+    max: number,
+    rank: number,
+    pending: number,
+    icon?: number | string,
+    name: string,
+    entryID?: number,
+    canSpend: boolean,
+    locked: boolean,
+    problem?: string,
 }
 
 -- A node's talent: name, icon, spell, entry.
@@ -96,27 +131,44 @@ type Talent = { entryID: number, spellID?: number, name: string, icon?: number |
 local function talentOf(configID: number, info: TraitNodeInfo): Talent?
     local active = info.activeEntry
     local entryID = active and active.entryID or info.entryIDs[1]
-    if not entryID then return nil end
+    if not entryID then
+        return nil
+    end
     local entry = errors.tryValue(C_Traits.GetEntryInfo, configID, entryID)
     local definitionID = entry and entry.definitionID
     local def = definitionID and errors.tryValue(C_Traits.GetDefinitionInfo, definitionID) or nil
     local spellID = def and def.spellID
     local name = def and def.overrideName
-    if (not name or name == "") and spellID then name = asString(C_Spell.GetSpellName(spellID)) end
+    if (not name or name == "") and spellID then
+        name = asString(C_Spell.GetSpellName(spellID))
+    end
     local icon: number | string | nil = def and def.overrideIcon
-    if (not icon or icon == 0) and spellID then icon = asNumber(C_Spell.GetSpellTexture(spellID)) end
+    if (not icon or icon == 0) and spellID then
+        icon = asNumber(C_Spell.GetSpellTexture(spellID))
+    end
     return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
 end
 
 -- The trees: the nodes sorted left to right (then top to bottom), columns
 -- more than TREE_GAP apart starting a new one (as Blizzard draws the group
 -- headers); each { nodes, minX, maxX }.
-local function clusterNodes<N extends { x: number, y: number }>(nodes: N[]): { nodes: N[], minX: number, maxX: number }[]
-    table.sort(nodes, function(a: N, b: N): boolean if a.x ~= b.x then return a.x < b.x end return a.y < b.y end)
+local function clusterNodes<N extends { x: number, y: number }>(nodes: N[]): {
+    nodes: N[],
+    minX: number,
+    maxX: number,
+}[]
+    table.sort(nodes, function(a: N, b: N): boolean
+        if a.x ~= b.x then
+            return a.x < b.x
+        end
+        return a.y < b.y
+    end)
     local clusters: { nodes: N[], minX: number, maxX: number }[] = {}
     local last: number? = nil
     for _, n in ipairs(nodes) do
-        if not last or n.x - last > TREE_GAP then clusters[#clusters + 1] = { nodes = {}, minX = n.x, maxX = n.x } end
+        if not last or n.x - last > TREE_GAP then
+            clusters[#clusters + 1] = { nodes = {}, minX = n.x, maxX = n.x }
+        end
         local c = clusters[#clusters]
         c.nodes[#c.nodes + 1] = n
         c.minX = math.min(c.minX, n.x)
@@ -130,7 +182,8 @@ end
 -- rightmost is column 3) and its row from the top (`minY`).
 local function gridCell(x: number, y: number, minX: number, maxX: number, minY: number): (number, number)
     local base = math.min(minX, maxX - 3 * STEP)
-    return math.max(0, math.min(3, math.floor((x - base) / STEP + 0.5))), math.max(0, math.floor((y - minY) / STEP + 0.5))
+    return math.max(0, math.min(3, math.floor((x - base) / STEP + 0.5))),
+        math.max(0, math.floor((y - minY) / STEP + 0.5))
 end
 
 -- The game's spells window showing another player's talents ("View
@@ -141,7 +194,9 @@ local INSPECT_CONFIG = asNumber(field(_G, "Constants", "TraitConsts", "INSPECT_T
 -- A node the game says is shown and placed.
 local function placedNode(configID: number, nodeID: number): TraitNodeInfo?
     local ni = errors.tryValue(C_Traits.GetNodeInfo, configID, nodeID)
-    if not (ni and ni.isVisible ~= false and asNumber(ni.posX) and asNumber(ni.posY) and ni.maxRanks > 0) then return nil end
+    if not (ni and ni.isVisible ~= false and asNumber(ni.posX) and asNumber(ni.posY) and ni.maxRanks > 0) then
+        return nil
+    end
     return ni
 end
 
@@ -164,7 +219,9 @@ local EDGE_REQUIRED = asNumber(field(Enum, "TraitEdgeType", "RequiredForAvailabi
 local SELECTION = asNumber(field(Enum, "TraitNodeType", "Selection"))
 local NOTE_RESET, NOTE_PLANNED = "suu:talentbuild:reset", "suu:talentbuild:planned"
 
-local function plural(n: number, one: string, many: string): string return n == 1 and one or many end
+local function plural(n: number, one: string, many: string): string
+    return n == 1 and one or many
+end
 
 -- A dialog's height for a body `h` tall and a row of buttons under it.
 local function fitDialog(p: Panel, h: number)
@@ -175,23 +232,39 @@ end
 -- A saved build: its name, class, tree, steps (one a rank), its points per
 -- tree as text, when it changed.
 type SavedBuild = {
-    id: string, name?: string, class: string, classID?: number, treeID?: number, steps: TalentStep[],
-    split?: string, updated?: number,
+    id: string,
+    name?: string,
+    class: string,
+    classID?: number,
+    treeID?: number,
+    steps: TalentStep[],
+    split?: string,
+    updated?: number,
 }
 -- A build being planned (a copy until Save build).
 type Draft = {
-    id: string, name?: string, class: string, classID?: number, treeID?: number, steps: TalentStep[],
-    dirty: boolean, problem?: string,
+    id: string,
+    name?: string,
+    class: string,
+    classID?: number,
+    treeID?: number,
+    steps: TalentStep[],
+    dirty: boolean,
+    problem?: string,
 }
 -- The builds of the account: by id; each character's active one and the
 -- one waiting for a trainer's reset, by talent group.
 type BuildStore = {
-    builds: { [string]: SavedBuild }, active: { [string]: { [number]: string } },
-    reset: { [string]: { [number]: string } }, nextID: number,
+    builds: { [string]: SavedBuild },
+    active: { [string]: { [number]: string } },
+    reset: { [string]: { [number]: string } },
+    nextID: number,
 }
 type RawStore = {
-    builds?: { [string]: SavedBuild }, active?: { [string]: { [number]: string } },
-    reset?: { [string]: { [number]: string } }, nextID?: number,
+    builds?: { [string]: SavedBuild },
+    active?: { [string]: { [number]: string } },
+    reset?: { [string]: { [number]: string } },
+    nextID?: number,
 }
 
 local function store(): BuildStore
@@ -210,7 +283,9 @@ end
 
 local function copySteps(steps: TalentStep[]?): TalentStep[]
     local out: TalentStep[] = {}
-    for i, s in ipairs(steps or {}) do out[i] = { node = s.node, entry = s.entry } end
+    for i, s in ipairs(steps or {}) do
+        out[i] = { node = s.node, entry = s.entry }
+    end
     return out
 end
 
@@ -222,21 +297,33 @@ type Classes = { byFile: { [string]: ClassInfo }, list: ClassInfo[] }
 -- `trees`: the three classic trees, as the page draws them).
 type BuildCluster = { name: string, nodes: BuildTalent[], links: { from: BuildTalent, to: BuildTalent }[] }
 type BuildTree = {
-    file: string, classID: number, specID: number, treeID: number, configID: number, order: number[],
-    byID: { [number]: BuildTalent }, trees: BuildCluster[],
+    file: string,
+    classID: number,
+    specID: number,
+    treeID: number,
+    configID: number,
+    order: number[],
+    byID: { [number]: BuildTalent },
+    trees: BuildCluster[],
 }
 
 -- "0 / 29 / 2": a build's points per tree.
 local function splitOf(tree: BuildTree?, steps: TalentStep[]): string
     local per: number[] = {}
-    for i = 1, #(tree and tree.trees or {}) do per[i] = 0 end
+    for i = 1, #(tree and tree.trees or {}) do
+        per[i] = 0
+    end
     for _, s in ipairs(steps) do
         local n = tree and tree.byID[s.node]
         local index = n and n.treeIndex
-        if index then per[index] = (per[index] or 0) + 1 end
+        if index then
+            per[index] = (per[index] or 0) + 1
+        end
     end
     local parts: string[] = {}
-    for i = 1, #per do parts[i] = tostring(per[i]) end
+    for i = 1, #per do
+        parts[i] = tostring(per[i])
+    end
     return table.concat(parts, " / ")
 end
 
@@ -249,7 +336,9 @@ end
 -- The level that brings step i, with `talented` points from Talented (one
 -- a level from 5, then one a level from 10).
 local function stepLevel(i: number, talented: number): number
-    if i <= talented then return 4 + i end
+    if i <= talented then
+        return 4 + i
+    end
     return 9 + i - talented
 end
 
@@ -260,7 +349,9 @@ local function nextStep(steps: TalentStep[], have: { [number]: number }): (numbe
     for i, s in ipairs(steps) do
         local n = (count[s.node] or 0) + 1
         count[s.node] = n
-        if n > (have[s.node] or 0) then return i, n end
+        if n > (have[s.node] or 0) then
+            return i, n
+        end
     end
     return nil, nil
 end
@@ -284,13 +375,24 @@ class MismatchDialog extends Panel
 
     constructor()
         super(SuuUI.Root, { title = " ", width = 480, height = 300, solid = true })
-        self.use = UI.Button(self, { text = "Use", variant = "primary", onClick = function()
-            local fn = self.onUse
-            self:Hide()
-            if fn then fn() end
-        end })
+        self.use = UI.Button(self, {
+            text = "Use",
+            variant = "primary",
+            onClick = function()
+                local fn = self.onUse
+                self:Hide()
+                if fn then
+                    fn()
+                end
+            end,
+        })
         self.use:SetPoint("BOTTOMRIGHT", -20, 18)
-        self.cancel = UI.Button(self, { text = "Cancel", onClick = function() self:Hide() end })
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
         self.cancel:SetPoint("RIGHT", self.use, "LEFT", -S["space-3"], 0)
         UI.MakeModal(self)
     end
@@ -317,16 +419,30 @@ class NewBuildDialog extends Panel
         self.classLabel:SetValue("Class")
         self.class = UI.Select(self.body, { width = 320, options = options, value = CLASS })
         self.class:SetPoint("TOPLEFT", self.classLabel, "BOTTOMLEFT", 0, -S["space-2"])
-        self.create = UI.Button(self, { text = "Create", variant = "primary", onClick = function()
-            local name = strtrim(self.name.edit:GetText() or "")
-            if name == "" then self.name.edit:SetFocus() return end
-            self:Hide()
-            onCreate(name, self.class.value or CLASS)
-        end })
+        self.create = UI.Button(self, {
+            text = "Create",
+            variant = "primary",
+            onClick = function()
+                local name = strtrim(self.name.edit:GetText() or "")
+                if name == "" then
+                    self.name.edit:SetFocus()
+                    return
+                end
+                self:Hide()
+                onCreate(name, self.class.value or CLASS)
+            end,
+        })
         self.create:SetPoint("BOTTOMRIGHT", -20, 18)
-        self.cancel = UI.Button(self, { text = "Cancel", onClick = function() self:Hide() end })
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
         self.cancel:SetPoint("RIGHT", self.create, "LEFT", -S["space-3"], 0)
-        self.name.edit:HookScript("OnEnterPressed", function() self.create:Click() end)
+        self.name.edit:HookScript("OnEnterPressed", function()
+            self.create:Click()
+        end)
         fitDialog(self, 30 + S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30)
         UI.MakeModal(self)
     end
@@ -361,30 +477,51 @@ class ShareDialog extends Panel
     constructor(onMode: (mode: string) -> (), onPaste: (text: string) -> (), onDone: () -> ())
         super(SuuUI.Root, { title = " ", width = 460, height = 300, solid = true })
         local W = 420
-        self.switch = UI.Segmented(self.body, { options = { { value = "copy", label = "Copy" }, { value = "import", label = "Import" } },
-            onChange = function(v: string) onMode(v) end })
+        self.switch = UI.Segmented(self.body, {
+            options = { { value = "copy", label = "Copy" }, { value = "import", label = "Import" } },
+            onChange = function(v: string)
+                onMode(v)
+            end,
+        })
         self.switch:SetPoint("TOPLEFT")
         -- Copy
         self.copy = CreateFrame("Frame", nil, self.body)
         self.copy:SetPoint("TOPLEFT", self.switch, "BOTTOMLEFT", 0, -S["space-5"])
         self.copy:SetSize(W, 10)
-        self.text = UI.TextField(self.copy, { width = W, onTextChanged = function() self:Reselect() end })
+        self.text = UI.TextField(self.copy, {
+            width = W,
+            onTextChanged = function()
+                self:Reselect()
+            end,
+        })
         self.text:SetPoint("TOPLEFT")
         self.textHint = UI.Text(self.copy, "caption", "ink-muted")
         self.textHint:SetPoint("TOPLEFT", self.text, "BOTTOMLEFT", 0, -S["space-2"])
         self.textHint:SetFixedWidth(W)
         self.textHint:SetWordWrap(true)
         self.textHint:SetJustifyH("LEFT")
-        self.textHint:SetValue("Selected: press Ctrl+C (Cmd+C on a Mac), then paste it in chat or a guide. Fits one chat line.")
+        self.textHint:SetValue(
+            "Selected: press Ctrl+C (Cmd+C on a Mac), then paste it in chat or a guide. Fits one chat line."
+        )
         self.gameLabel = UI.Text(self.copy, "caption", "ink-muted")
         self.gameLabel:SetValue("The game's talent string (no order, no name)")
-        self.game = UI.TextField(self.copy, { width = W, onTextChanged = function() self:Reselect() end })
+        self.game = UI.TextField(self.copy, {
+            width = W,
+            onTextChanged = function()
+                self:Reselect()
+            end,
+        })
         -- Import
         self.import = CreateFrame("Frame", nil, self.body)
         self.import:SetPoint("TOPLEFT", self.switch, "BOTTOMLEFT", 0, -S["space-5"])
         self.import:SetSize(W, 10)
-        self.paste = UI.TextField(self.import, { width = W, placeholder = "Paste SuuUI text or the game's string",
-            onTextChanged = function(text: string) onPaste(text) end })
+        self.paste = UI.TextField(self.import, {
+            width = W,
+            placeholder = "Paste SuuUI text or the game's string",
+            onTextChanged = function(text: string)
+                onPaste(text)
+            end,
+        })
         self.paste:SetPoint("TOPLEFT")
         self.diamond = UI.Diamond(self.import, 7, "ink", "OVERLAY")
         self.diamond:SetPoint("TOPLEFT", self.paste, "BOTTOMLEFT", 1, -(S["space-5"] + 6))
@@ -404,7 +541,12 @@ class ShareDialog extends Panel
         -- the buttons
         self.ok = UI.Button(self, { text = "Done", variant = "primary", onClick = onDone })
         self.ok:SetPoint("BOTTOMRIGHT", -20, 18)
-        self.cancel = UI.Button(self, { text = "Cancel", onClick = function() self:Hide() end })
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
         self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
         UI.MakeModal(self)
     end
@@ -413,8 +555,12 @@ class ShareDialog extends Panel
     function Reselect()
         for _, pair in ipairs({ { self.text, self.textShared }, { self.game, self.gameShared } }) do
             local f, shared = pair[1] :: TextField, pair[2] :: string
-            if f.edit:GetText() ~= shared then f.edit:SetText(shared) end
-            if f.edit:HasFocus() then f.edit:HighlightText() end
+            if f.edit:GetText() ~= shared then
+                f.edit:SetText(shared)
+            end
+            if f.edit:HasFocus() then
+                f.edit:HighlightText()
+            end
         end
     end
 end
@@ -488,31 +634,41 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local view = self.viewing or active
         if groups > 1 and view ~= active then
             local id = asNumber((try(field(C_SpecializationInfo, "GetCombatConfigIDForSpecGroup"), view)))
-            if id then return id end
+            if id then
+                return id
+            end
         end
         return asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
     end
 
     function Inspecting(): string?
         local f = frames.find("PlayerSpellsFrame")
-        if not (f and flag(errors.tryMethod(f, "IsInspecting"))) then return nil end
+        if not (f and flag(errors.tryMethod(f, "IsInspecting"))) then
+            return nil
+        end
         return asString(errors.tryMethod(f, "GetInspectUnit")) or "target"
     end
 
     -- Everything the page shows, for the config viewed (another's: configID given).
     function Collect(given: number?): Collected?
         local configID = given or self:ConfigID()
-        if not configID then return nil end
+        if not configID then
+            return nil
+        end
         local info = errors.tryValue(C_Traits.GetConfigInfo, configID)
         local treeID = info and info.treeIDs[1]
-        if not treeID then return nil end
+        if not treeID then
+            return nil
+        end
         -- what is learned: each node's rank while nothing is planned (the
         -- game's committed rank counts planned ones too on Forever: found in
         -- game, Apply stayed off and right-click did nothing)
         local staged = errors.tryValue(C_Traits.ConfigHasStagedChanges, configID) == true
         if not staged or self.learnedFor ~= configID then
             self.learnedFor = configID
-            if not staged then self.learned = {} end
+            if not staged then
+                self.learned = {}
+            end
         end
         local learned = self.learned
         -- the nodes, placed
@@ -523,45 +679,72 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             local talent = ni and talentOf(configID, ni)
             if ni and talent then
                 local current = ni.currentRank or ni.activeRank or 0
-                if not staged then learned[nodeID] = current end
+                if not staged then
+                    learned[nodeID] = current
+                end
                 local base = learned[nodeID]
-                if base == nil then base = math.min(ni.activeRank or 0, current) end
+                if base == nil then
+                    base = math.min(ni.activeRank or 0, current)
+                end
                 base = math.min(base, current)
                 local n: PageNode = {
-                    id = nodeID, x = ni.posX, y = ni.posY, max = ni.maxRanks,
-                    rank = base, pending = current - base,
-                    canPurchase = ni.canPurchaseRank == true, canRefund = ni.canRefundRank == true,
+                    id = nodeID,
+                    x = ni.posX,
+                    y = ni.posY,
+                    max = ni.maxRanks,
+                    rank = base,
+                    pending = current - base,
+                    canPurchase = ni.canPurchaseRank == true,
+                    canRefund = ni.canRefundRank == true,
                     open = ni.isAvailable == true and ni.meetsEdgeRequirements == true,
                     meetsEdges = ni.meetsEdgeRequirements == true,
-                    conditions = ni.conditionIDs or {}, edges = ni.visibleEdges or {},
-                    name = talent.name, icon = talent.icon, spellID = talent.spellID, entryID = talent.entryID,
-                    row = 0, col = 0, requires = {},
+                    conditions = ni.conditionIDs or {},
+                    edges = ni.visibleEdges or {},
+                    name = talent.name,
+                    icon = talent.icon,
+                    spellID = talent.spellID,
+                    entryID = talent.entryID,
+                    row = 0,
+                    col = 0,
+                    requires = {},
                 }
                 nodes[#nodes + 1] = n
                 byID[nodeID] = n
                 minY = math.min(minY or n.y, n.y)
             end
         end
-        if #nodes == 0 or not minY then return nil end
+        if #nodes == 0 or not minY then
+            return nil
+        end
         local top = minY
         local clusters = clusterNodes(nodes)
         -- their names and points: the tree's groups, in order
         local displays = errors.tryValue(C_Traits.GetGroupDisplayInfoByTreeID, treeID) or {}
         local groupIDs: number[] = {}
-        for i, d in ipairs(displays) do groupIDs[i] = d.groupID end
+        for i, d in ipairs(displays) do
+            groupIDs[i] = d.groupID
+        end
         local spentBy: { [number]: number } = {}
         if #groupIDs > 0 then
             for _, g in ipairs(errors.tryValue(C_Traits.GetGroupCurrencyInfo, configID, groupIDs) or {}) do
                 local c = g.currencyInfos[1]
                 local spent = c and asNumber(c.spent)
-                if spent then spentBy[g.traitNodeGroupID] = spent end
+                if spent then
+                    spentBy[g.traitNodeGroupID] = spent
+                end
             end
         end
         local trees: PageTree[] = {}
         for i, c in ipairs(clusters) do
             local display = displays[i]
-            local t: PageTree = { name = display and display.displayName or ("Tree " .. i), icon = display and display.icon,
-                groupID = display and display.groupID, nodes = {}, links = {}, points = 0 }
+            local t: PageTree = {
+                name = display and display.displayName or ("Tree " .. i),
+                icon = display and display.icon,
+                groupID = display and display.groupID,
+                nodes = {},
+                links = {},
+                points = 0,
+            }
             local points = 0
             for _, n in ipairs(c.nodes) do
                 n.col, n.row = gridCell(n.x, n.y, c.minX, c.maxX, top)
@@ -591,10 +774,24 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local first = currency and currency[1]
         local available = first and asNumber(first.quantity) or 0
         local pending = 0
-        for _, n in ipairs(nodes) do pending = pending + n.pending end
+        for _, n in ipairs(nodes) do
+            pending = pending + n.pending
+        end
         -- planned changes the counts can't see still make Apply and Undo work
-        if staged and pending == 0 then pending = 1; self.unseenStaged = true else self.unseenStaged = false end
-        return { configID = configID, treeID = treeID, trees = trees, available = available, pending = pending, staged = staged }
+        if staged and pending == 0 then
+            pending = 1
+            self.unseenStaged = true
+        else
+            self.unseenStaged = false
+        end
+        return {
+            configID = configID,
+            treeID = treeID,
+            trees = trees,
+            available = available,
+            pending = pending,
+            staged = staged,
+        }
     end
 
     -- Why a node can't take a point: the tree's points, or a talent above it.
@@ -619,11 +816,17 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     -- Can talents change now? (Out of combat; Blizzard's own check.)
     function Editable(): (boolean, string?)
-        if InCombatLockdown() then return false, "Talents can't change in combat." end
+        if InCombatLockdown() then
+            return false, "Talents can't change in combat."
+        end
         local can, reason = try(C_ClassTalents.CanChangeTalents)
-        if can == false then return false, asString(reason) end
+        if can == false then
+            return false, asString(reason)
+        end
         local _, active = self:SpecGroups()
-        if (self.viewing or active) ~= active then return false, "Activate this specialization to change its talents." end
+        if (self.viewing or active) ~= active then
+            return false, "Activate this specialization to change its talents."
+        end
         return true, nil
     end
 
@@ -636,14 +839,18 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function Pages(): TalentTree[]
         local out: TalentTree[] = {}
         for _, page in ipairs({ self.windowPage, self.page }) do
-            if page and page:IsVisible() then out[#out + 1] = page end
+            if page and page:IsVisible() then
+                out[#out + 1] = page
+            end
         end
         return out
     end
 
     function Render()
         local pages = self:Pages()
-        if #pages == 0 then return end
+        if #pages == 0 then
+            return
+        end
         local data = self:Collect()
         self.data = data
         self:FitWindow()
@@ -656,7 +863,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 -- another player's talents (View Talents on inspect), read only;
                 -- what last arrived stays when the inspect ends
                 local theirs = self:Collect(INSPECT_CONFIG)
-                if theirs then self.inspectData = theirs end
+                if theirs then
+                    self.inspectData = theirs
+                end
                 self:Fill(page, self.inspectData, self.inspectUnit)
             elseif page == self.page and inspected then
                 -- the page over the game's window shows whose talents it shows
@@ -677,7 +886,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 self.pageNodes[n] = n
             end
             local links: TalentLink[] = {}
-            for _, l in ipairs(t.links) do links[#links + 1] = { from = l.from, to = l.to, met = l.met } end
+            for _, l in ipairs(t.links) do
+                links[#links + 1] = { from = l.from, to = l.to, met = l.met }
+            end
             out[i] = { name = t.name, points = t.points, nodes = list, links = links }
         end
         return out
@@ -722,7 +933,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             if b then
                 local learned: { [number]: number } = {}
                 for _, t in ipairs(data.trees) do
-                    for _, n in ipairs(t.nodes) do learned[n.id] = n.rank end
+                    for _, n in ipairs(t.nodes) do
+                        learned[n.id] = n.rank
+                    end
                 end
                 page:SetOrder(self:OrderLines(b.steps, self:BuildTree(CLASS), learned, nextTalent and nextTalent.index))
             else
@@ -734,31 +947,46 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end
         -- the spec's name: the tree with the most points
         local best: PageTree? = nil
-        for _, t in ipairs(data.trees) do if not best or t.points > best.points then best = t end end
+        for _, t in ipairs(data.trees) do
+            if not best or t.points > best.points then
+                best = t
+            end
+        end
         local head: { name?: string, class?: string, line?: string }? = nil
         if inspected then
             -- someone else's, read only (design InspectTalents)
             local className, class = UnitClass(inspected)
             local level = asNumber(UnitLevel(inspected))
-            head = { name = who, class = asString(class),
-                line = ("Level %s %s"):format((level and level > 0) and level or "??", asString(className) or "") }
+            head = {
+                name = who,
+                class = asString(class),
+                line = ("Level %s %s"):format((level and level > 0) and level or "??", asString(className) or ""),
+            }
             why = ("Viewing %s's talents. Nothing here can be changed."):format(who or "their")
         end
         page:SetData({
             name = (best and best.points > 0) and best.name or asString((UnitClass(inspected or "player"))),
-            trees = self:PageTrees(data.trees), available = data.available, pending = data.pending, editable = editable,
+            trees = self:PageTrees(data.trees),
+            available = data.available,
+            pending = data.pending,
+            editable = editable,
             hint = (not editable and why) or "Click a talent to plan a point; nothing changes until you apply.",
-            head = head, readOnly = inspected ~= nil,
+            head = head,
+            readOnly = inspected ~= nil,
             back = (inspected and page == self.windowPage) and "Back to inspect" or nil,
         })
     end
 
     function QueueRender()
-        if self.renderQueued then return end
+        if self.renderQueued then
+            return
+        end
         self.renderQueued = true
         after(0, function()
             self.renderQueued = false
-            if not self:IsEnabled() then return end
+            if not self:IsEnabled() then
+                return
+            end
             self:CheckReset()
             self:Render()
         end)
@@ -769,49 +997,74 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- what a click does, what it still needs in red); asked for in game.
     function ShowTip(button: Frame, n: PageNode, given: Collected?)
         local data = given or self.data
-        if not data then return end
+        if not data then
+            return
+        end
         local needs: string[] = {}
         if not n.meetsEdges then
             for _, from in ipairs(n.requires) do
                 if from.rank + from.pending < from.max then
-                    needs[#needs + 1] = ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
+                    needs[#needs + 1] = ("Requires %d %s in %s"):format(
+                        from.max,
+                        from.max == 1 and "point" or "points",
+                        from.name
+                    )
                 end
             end
         end
         local editable, why = self:Editable()
-        if data.configID == INSPECT_CONFIG then editable, why = false, nil end
+        if data.configID == INSPECT_CONFIG then
+            editable, why = false, nil
+        end
         local tree = n.tree
-        UI.TraitTooltip(button, data.configID, n.id, { name = n.name, treeName = tree and tree.name, conditions = n.conditions,
-            canSpend = n.canSpend, pending = n.pending, needs = needs, blocked = (not editable) and why or nil })
+        UI.TraitTooltip(button, data.configID, n.id, {
+            name = n.name,
+            treeName = tree and tree.name,
+            conditions = n.conditions,
+            canSpend = n.canSpend,
+            pending = n.pending,
+            needs = needs,
+            blocked = (not editable) and why or nil,
+        })
     end
 
     function Purchase(n: PageNode)
         local data = self.data
-        if not data or not n.canSpend or data.configID == INSPECT_CONFIG then return end
+        if not data or not n.canSpend or data.configID == INSPECT_CONFIG then
+            return
+        end
         errors.tryValue(C_Traits.PurchaseRank, data.configID, n.id)
         self:Render()
     end
 
     function Refund(n: PageNode)
         local data = self.data
-        if not data or n.pending <= 0 or not self:Editable() then return end
+        if not data or n.pending <= 0 or not self:Editable() then
+            return
+        end
         errors.tryValue(C_Traits.RefundRank, data.configID, n.id)
         self:Render()
     end
 
     function Undo()
         local data = self.data
-        if not data or data.pending <= 0 then return end
+        if not data or data.pending <= 0 then
+            return
+        end
         errors.tryValue(C_Traits.RollbackConfig, data.configID)
         self:Render()
     end
 
     function Apply()
         local data = self.data
-        if not data or data.pending <= 0 or not self:Editable() then return end
+        if not data or data.pending <= 0 or not self:Editable() then
+            return
+        end
         local commit = field(C_ClassTalents, "CommitConfig") or field(C_Traits, "CommitConfig")
         local ok = try(commit, data.configID)
-        if ok == false then self:Print("The talents couldn't be applied.") end
+        if ok == false then
+            self:Print("The talents couldn't be applied.")
+        end
         self:QueueRender()
     end
 
@@ -822,7 +1075,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- The classes and their trees.
     function Classes(): Classes
         local known = self.classes
-        if known then return known end
+        if known then
+            return known
+        end
         local byFile: { [string]: ClassInfo } = {}
         local list: ClassInfo[] = {}
         for classID = 1, 13 do
@@ -832,13 +1087,21 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 local specID = asNumber((try(GetSpecializationInfoForClassID, classID, 1)))
                 local treeID = specID and errors.tryValue(C_ClassTalents.GetTraitTreeForSpec, specID)
                 if specID and treeID then
-                    local c: ClassInfo = { classID = classID, file = classFile, name = className, specID = specID, treeID = treeID }
+                    local c: ClassInfo = {
+                        classID = classID,
+                        file = classFile,
+                        name = className,
+                        specID = specID,
+                        treeID = treeID,
+                    }
                     byFile[classFile] = c
                     list[#list + 1] = c
                 end
             end
         end
-        table.sort(list, function(a: ClassInfo, b: ClassInfo): boolean return a.name < b.name end)
+        table.sort(list, function(a: ClassInfo, b: ClassInfo): boolean
+            return a.name < b.name
+        end)
         local out: Classes = { byFile = byFile, list = list }
         self.classes = out
         return out
@@ -849,18 +1112,26 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- it too: the probe read every class's both ways).
     function BuildTree(file: string): BuildTree?
         local known = self.buildTrees[file]
-        if known then return known end
+        if known then
+            return known
+        end
         local class = self:Classes().byFile[file]
-        if not class then return nil end
+        if not class then
+            return nil
+        end
         local configs: number[] = {}
         local active = asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
         if file == CLASS then
-            if active then configs[1] = active end
+            if active then
+                configs[1] = active
+            end
         elseif VIEW_CONFIG and type(field(C_ClassTalents, "InitializeViewLoadout")) == "function" then
             try(C_ClassTalents.InitializeViewLoadout, class.specID, 60)
             try(C_ClassTalents.ViewLoadout, {})
             configs[1] = VIEW_CONFIG
-            if active then configs[2] = active end
+            if active then
+                configs[2] = active
+            end
         end
         local order = errors.tryValue(C_Traits.GetTreeNodes, class.treeID) or {}
         -- each node with its place, and its arrows
@@ -874,17 +1145,29 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 local ni = placedNode(cfg, nodeID)
                 local talent = ni and talentOf(cfg, ni)
                 if ni and talent then
-                    local n: BuildTalent = { id = nodeID, max = ni.maxRanks, name = talent.name,
-                        icon = talent.icon, entryID = talent.entryID, entryIDs = ni.entryIDs or {}, requires = {},
-                        choice = SELECTION ~= nil and ni.type == SELECTION }
+                    local n: BuildTalent = {
+                        id = nodeID,
+                        max = ni.maxRanks,
+                        name = talent.name,
+                        icon = talent.icon,
+                        entryID = talent.entryID,
+                        entryIDs = ni.entryIDs or {},
+                        requires = {},
+                        choice = SELECTION ~= nil and ni.type == SELECTION,
+                    }
                     placed[#placed + 1] = { node = n, x = ni.posX, y = ni.posY, edges = ni.visibleEdges or {} }
                     byID[nodeID] = n
                     minY = math.min(minY or ni.posY, ni.posY)
                 end
             end
-            if #placed > 0 then configID = cfg break end
+            if #placed > 0 then
+                configID = cfg
+                break
+            end
         end
-        if not (configID and minY) then return nil end
+        if not (configID and minY) then
+            return nil
+        end
         local top = minY
         -- the trees, as Collect splits them
         local clusters = clusterNodes(placed)
@@ -911,7 +1194,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                     local requires = to.requires or {}
                     to.requires = requires
                     requires[#requires + 1] = n.id
-                    if e.type == EDGE_REQUIRED then to.requiresAll = true end
+                    if e.type == EDGE_REQUIRED then
+                        to.requiresAll = true
+                    end
                     local index = n.treeIndex
                     if index and to.treeIndex == index then
                         table.insert(trees[index].links, { from = n, to = to })
@@ -919,8 +1204,16 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
-        local tree: BuildTree = { file = file, classID = class.classID, specID = class.specID, treeID = class.treeID,
-            configID = configID, order = order, byID = byID, trees = trees }
+        local tree: BuildTree = {
+            file = file,
+            classID = class.classID,
+            specID = class.specID,
+            treeID = class.treeID,
+            configID = configID,
+            order = order,
+            byID = byID,
+            trees = trees,
+        }
         self.buildTrees[file] = tree
         return tree
     end
@@ -933,7 +1226,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local first = c and c[1]
         local max = first and asNumber(first.maxQuantity)
         local level = asNumber(UnitLevel("player")) or 1
-        if not max or level >= 60 then return self.talented end
+        if not max or level >= 60 then
+            return self.talented
+        end
         self.talented = talentedPoints(max, level)
         return self.talented
     end
@@ -944,7 +1239,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The build the window shows, its draft (being planned) or as saved.
-    function Builds(): { [string]: SavedBuild } return store().builds end
+    function Builds(): { [string]: SavedBuild }
+        return store().builds
+    end
 
     function ActiveID(group: number?): string?
         local _, active = self:SpecGroups()
@@ -964,33 +1261,52 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function Viewed(): SavedBuild?
         local id = self.buildView
-        if not id or id == "" then return nil end
+        if not id or id == "" then
+            return nil
+        end
         local d = self.draft
-        if d and d.id == id then return d end
+        if d and d.id == id then
+            return d
+        end
         return store().builds[id]
     end
 
     -- Planning: the draft of the build shown (a copy until Save build).
     function Planning(): boolean
         local b = self:Viewed()
-        if not b or self.inspectUnit then return false end
-        if b.class ~= CLASS then return true end
+        if not b or self.inspectUnit then
+            return false
+        end
+        if b.class ~= CLASS then
+            return true
+        end
         return self.planning or self:ActiveID() ~= b.id
     end
 
     function Draft(): Draft?
         local b = self:Viewed()
-        if not b then return nil end
+        if not b then
+            return nil
+        end
         local d = self.draft
         if not (d and d.id == b.id) then
-            local made: Draft = { id = b.id, name = b.name, class = b.class, classID = b.classID, treeID = b.treeID,
-                steps = copySteps(b.steps), dirty = false }
+            local made: Draft = {
+                id = b.id,
+                name = b.name,
+                class = b.class,
+                classID = b.classID,
+                treeID = b.treeID,
+                steps = copySteps(b.steps),
+                dirty = false,
+            }
             -- a tree that changed in a patch: the steps that still fit stay
             local tree = self:BuildTree(b.class)
             if tree then
                 local ok, at, why = UI.TalentOrderCheck(made.steps, tree)
                 if not ok and at then
-                    for i = #made.steps, at, -1 do table.remove(made.steps, i) end
+                    for i = #made.steps, at, -1 do
+                        table.remove(made.steps, i)
+                    end
                     made.dirty, made.problem = true, why
                 end
             end
@@ -1002,9 +1318,13 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function SaveDraft()
         local d = self.draft
-        if not d then return end
+        if not d then
+            return
+        end
         local b = store().builds[d.id]
-        if not b then return end
+        if not b then
+            return
+        end
         b.name, b.steps, b.updated = d.name, copySteps(d.steps), time()
         b.split = splitOf(self:BuildTree(b.class), b.steps)
         d.dirty, d.problem = false, nil
@@ -1021,8 +1341,15 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function Leave(fn: () -> ())
         local d = self.draft
         if d and d.dirty and store().builds[d.id] then
-            UI.Confirm({ title = "Discard changes?", text = ("Your changes to %s aren't saved."):format(d.name or "this build"),
-                confirm = "Discard", onConfirm = function() self.draft = nil; fn() end })
+            UI.Confirm({
+                title = "Discard changes?",
+                text = ("Your changes to %s aren't saved."):format(d.name or "this build"),
+                confirm = "Discard",
+                onConfirm = function()
+                    self.draft = nil
+                    fn()
+                end,
+            })
             return
         end
         self.draft = nil
@@ -1045,10 +1372,19 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function AddBuild(name: string, file: string, steps: TalentStep[]): string?
         local class = self:Classes().byFile[file]
-        if not class then return nil end
+        if not class then
+            return nil
+        end
         local id = self:NewID()
-        local b: SavedBuild = { id = id, name = name, class = file, classID = class.classID, treeID = class.treeID,
-            steps = copySteps(steps), updated = time() }
+        local b: SavedBuild = {
+            id = id,
+            name = name,
+            class = file,
+            classID = class.classID,
+            treeID = class.treeID,
+            steps = copySteps(steps),
+            updated = time(),
+        }
         b.split = splitOf(self:BuildTree(file), b.steps)
         store().builds[id] = b
         self:Emit("SUUUI_TALENT_BUILD_CHANGED")
@@ -1059,28 +1395,47 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local d = store()
         d.builds[id] = nil
         for _, groups in pairs(d.active) do
-            for g, a in pairs(groups) do if a == id then groups[g] = nil end end
+            for g, a in pairs(groups) do
+                if a == id then
+                    groups[g] = nil
+                end
+            end
         end
         for _, groups in pairs(d.reset) do
-            for g, a in pairs(groups) do if a == id then groups[g] = nil end end
+            for g, a in pairs(groups) do
+                if a == id then
+                    groups[g] = nil
+                end
+            end
         end
         local draft = self.draft
-        if draft and draft.id == id then self.draft = nil end
-        if self.buildView == id then self.buildView = nil end
+        if draft and draft.id == id then
+            self.draft = nil
+        end
+        if self.buildView == id then
+            self.buildView = nil
+        end
         SuuUI.DismissNotification(NOTE_RESET)
         self:Emit("SUUUI_TALENT_BUILD_CHANGED")
         self:Render()
     end
 
     -- Runs of a talent's ranks one after another: the order panel's lines.
-    function OrderLines(steps: TalentStep[], tree: BuildTree?, learned: { [number]: number }?, nextIndex: number?): OrderLineData[]
+    function OrderLines(
+        steps: TalentStep[],
+        tree: BuildTree?,
+        learned: { [number]: number }?,
+        nextIndex: number?
+    ): OrderLineData[]
         local lines: OrderLineData[] = {}
         local seen: { [number]: number } = {}
         local i = 1
         while i <= #steps do
             local id = steps[i].node
             local j = i
-            while steps[j + 1] and steps[j + 1].node == id do j = j + 1 end
+            while steps[j + 1] and steps[j + 1].node == id do
+                j = j + 1
+            end
             local n = tree and tree.byID[id]
             local first = (seen[id] or 0) + 1
             local upTo = (seen[id] or 0) + (j - i + 1)
@@ -1088,13 +1443,25 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             local a, b = self:StepLevel(i), self:StepLevel(j)
             local state: string? = nil
             if learned then
-                if upTo <= (learned[id] or 0) then state = "learned" end
-                if nextIndex and nextIndex >= i and nextIndex <= j then state = "next" end
+                if upTo <= (learned[id] or 0) then
+                    state = "learned"
+                end
+                if nextIndex and nextIndex >= i and nextIndex <= j then
+                    state = "next"
+                end
             end
             local max = n and n.max or 1
-            lines[#lines + 1] = { node = id, from = i, to = j, count = j - i + 1, state = state,
-                levels = a == b and tostring(a) or (a .. "–" .. b), name = n and n.name or "?", icon = n and n.icon,
-                ranks = max > 1 and (first == upTo and tostring(first) or (first .. "–" .. upTo)) or "" }
+            lines[#lines + 1] = {
+                node = id,
+                from = i,
+                to = j,
+                count = j - i + 1,
+                state = state,
+                levels = a == b and tostring(a) or (a .. "–" .. b),
+                name = n and n.name or "?",
+                icon = n and n.icon,
+                ranks = max > 1 and (first == upTo and tostring(first) or (first .. "–" .. upTo)) or "",
+            }
             i = j + 1
         end
         return lines
@@ -1105,10 +1472,14 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function NextTalent(group: number?, given: number?): TalentNext?
         local id = self:ActiveID(group)
         local b = id and store().builds[id]
-        if not b or b.class ~= CLASS then return nil end
+        if not b or b.class ~= CLASS then
+            return nil
+        end
         local tree = self:BuildTree(CLASS)
         local configID = given or asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
-        if not (tree and configID) then return nil end
+        if not (tree and configID) then
+            return nil
+        end
         local have: { [number]: number } = {}
         for _, s in ipairs(b.steps) do
             if have[s.node] == nil then
@@ -1118,9 +1489,19 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end
         local i, rank = nextStep(b.steps, have)
         local n = i and tree.byID[b.steps[i].node]
-        if not (i and rank and n) then return nil end
-        return { node = n.id, name = n.name or "?", icon = n.icon or 0, rank = rank, max = n.max or 1,
-            treeName = n.treeName or "", build = b.name or "", index = i }
+        if not (i and rank and n) then
+            return nil
+        end
+        return {
+            node = n.id,
+            name = n.name or "?",
+            icon = n.icon or 0,
+            rank = rank,
+            max = n.max or 1,
+            treeName = n.treeName or "",
+            build = b.name or "",
+            index = i,
+        }
     end
 
     --------------------------------------------------------------------------------
@@ -1133,10 +1514,15 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local active = self:ActiveID()
         for id, b in pairs(store().builds) do
             local class = classes[b.class]
-            local o: SelectOption<string> = { value = id, label = b.name or "?", diamond = "class-" .. b.class:lower(),
+            local o: SelectOption<string> = {
+                value = id,
+                label = b.name or "?",
+                diamond = "class-" .. b.class:lower(),
                 search = class and class.name or b.class,
-                note = (b.split or "") .. (active == id and " · Active" or "") }
-            if b.class == CLASS then mine[#mine + 1] = o
+                note = (b.split or "") .. (active == id and " · Active" or ""),
+            }
+            if b.class == CLASS then
+                mine[#mine + 1] = o
             else
                 o.note = (class and class.name or "") .. " · " .. (b.split or "")
                 others[#others + 1] = o
@@ -1147,80 +1533,151 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end
         table.sort(mine, byName)
         table.sort(others, function(a: SelectOption<string>, b: SelectOption<string>): boolean
-            if a.search ~= b.search then return (a.search or "") < (b.search or "") end
+            if a.search ~= b.search then
+                return (a.search or "") < (b.search or "")
+            end
             return byName(a, b)
         end)
         local my = classes[CLASS]
         local out: SelectOption<string>[] = { { value = "", label = "Your talents", note = "no build" } }
         out[#out + 1] = { heading = my and my.name or "Your class" }
-        for _, o in ipairs(mine) do out[#out + 1] = o end
-        if #mine == 0 then out[#out + 1] = { value = "__none", label = "No builds yet", disabled = true } end
+        for _, o in ipairs(mine) do
+            out[#out + 1] = o
+        end
+        if #mine == 0 then
+            out[#out + 1] = { value = "__none", label = "No builds yet", disabled = true }
+        end
         if #others > 0 then
             out[#out + 1] = { heading = "Other classes" }
-            for _, o in ipairs(others) do out[#out + 1] = o end
+            for _, o in ipairs(others) do
+                out[#out + 1] = o
+            end
         end
         return out
     end
 
     function PickerFoot(): SelectFootLink[]
         local foot: SelectFootLink[] = {
-            { label = "New build…", onClick = function() self:AskNewBuild() end },
-            { label = "Import…", onClick = function() self:ShowShare("import") end },
+            {
+                label = "New build…",
+                onClick = function()
+                    self:AskNewBuild()
+                end,
+            },
+            {
+                label = "Import…",
+                onClick = function()
+                    self:ShowShare("import")
+                end,
+            },
         }
-        if self:Viewed() then foot[#foot + 1] = { label = "Copy this build as text", onClick = function() self:ShowShare("copy") end } end
+        if self:Viewed() then
+            foot[#foot + 1] = {
+                label = "Copy this build as text",
+                onClick = function()
+                    self:ShowShare("copy")
+                end,
+            }
+        end
         return foot
     end
 
     -- The head's buttons for what the window shows.
     function HeadButtons(b: SavedBuild?, planning: boolean): BuildButton[]
         local out: BuildButton[] = {}
-        if not b then return out end
+        if not b then
+            return out
+        end
         if planning then
             if b.class == CLASS then
                 local d = self.draft
                 local dirty = d ~= nil and d.dirty
                 if self:ActiveID() == b.id then
-                    out[#out + 1] = { label = "Your talents", onClick = function()
-                        self:Leave(function() self.planning = false; self:Render() end)
-                    end }
+                    out[#out + 1] = {
+                        label = "Your talents",
+                        onClick = function()
+                            self:Leave(function()
+                                self.planning = false
+                                self:Render()
+                            end)
+                        end,
+                    }
                 else
-                    out[#out + 1] = { label = "Use build", variant = "primary", disabled = dirty,
-                        reason = dirty and "Save it first." or "Follow it on this character: what fits is planned, Apply learns it.",
-                        onClick = function() self:UseBuild(b.id) end }
+                    out[#out + 1] = {
+                        label = "Use build",
+                        variant = "primary",
+                        disabled = dirty,
+                        reason = dirty and "Save it first." or
+                            "Follow it on this character: what fits is planned, Apply learns it.",
+                        onClick = function()
+                            self:UseBuild(b.id)
+                        end,
+                    }
                 end
             end
-            out[#out + 1] = { label = "Delete", onClick = function()
-                UI.Confirm({ title = ("Delete %s?"):format(b.name or "this build"),
-                    text = "Every character on this account loses it.", confirm = "Delete",
-                    onConfirm = function() self:DeleteBuild(b.id) end })
-            end }
-            out[#out + 1] = { label = "Rename", onClick = function()
-                UI.Confirm({ title = "Rename build", confirm = "Rename", input = { label = "Name", value = b.name },
-                    onConfirm = function(name: string?)
-                        if not name then return end
-                        local saved = store().builds[b.id]
-                        if saved then saved.name = name end
-                        local draft = self.draft
-                        if draft and draft.id == b.id then draft.name = name end
-                        self:Emit("SUUUI_TALENT_BUILD_CHANGED")
-                        self:Render()
-                    end })
-            end }
+            out[#out + 1] = {
+                label = "Delete",
+                onClick = function()
+                    UI.Confirm({
+                        title = ("Delete %s?"):format(b.name or "this build"),
+                        text = "Every character on this account loses it.",
+                        confirm = "Delete",
+                        onConfirm = function()
+                            self:DeleteBuild(b.id)
+                        end,
+                    })
+                end,
+            }
+            out[#out + 1] = {
+                label = "Rename",
+                onClick = function()
+                    UI.Confirm({
+                        title = "Rename build",
+                        confirm = "Rename",
+                        input = { label = "Name", value = b.name },
+                        onConfirm = function(name: string?)
+                            if not name then
+                                return
+                            end
+                            local saved = store().builds[b.id]
+                            if saved then
+                                saved.name = name
+                            end
+                            local draft = self.draft
+                            if draft and draft.id == b.id then
+                                draft.name = name
+                            end
+                            self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+                            self:Render()
+                        end,
+                    })
+                end,
+            }
         else
-            out[#out + 1] = { label = "Plan", onClick = function() self.planning = true; self:Render() end,
-                reason = "Change the build's order or talents; your talents stay as they are." }
+            out[#out + 1] = {
+                label = "Plan",
+                onClick = function()
+                    self.planning = true
+                    self:Render()
+                end,
+                reason = "Change the build's order or talents; your talents stay as they are.",
+            }
         end
         return out
     end
 
     function Picker(b: SavedBuild?, planning: boolean): TalentBuilds
         return {
-            options = self:PickerOptions(), value = b and b.id or "", foot = self:PickerFoot(),
+            options = self:PickerOptions(),
+            value = b and b.id or "",
+            foot = self:PickerFoot(),
             diamond = b and ("class-" .. b.class:lower()) or nil,
             badge = (b and self:ActiveID() == b.id) and "Active" or nil,
             buttons = self:HeadButtons(b, planning),
             onChange = function(v: string)
-                if v == "__none" then return end
+                if v == "__none" then
+                    return
+                end
                 self:ShowBuild(v ~= "" and v or nil)
             end,
         }
@@ -1240,7 +1697,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             return
         end
         local count: { [number]: number } = {}
-        for _, s in ipairs(d.steps) do count[s.node] = (count[s.node] or 0) + 1 end
+        for _, s in ipairs(d.steps) do
+            count[s.node] = (count[s.node] or 0) + 1
+        end
         local trees: PageTreeData[] = {}
         for i, c in ipairs(tree.trees) do
             local list: PageTalent[] = {}
@@ -1249,9 +1708,20 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             for _, n in ipairs(c.nodes) do
                 local r = count[n.id] or 0
                 local problem = UI.TalentNextProblem(d.steps, tree, n.id)
-                local node: PlanNode = { id = n.id, row = n.row or 0, col = n.col or 0, max = n.max or 1, rank = r, pending = 0,
-                    icon = n.icon, name = n.name or "?", entryID = n.entryID, canSpend = problem == nil,
-                    locked = problem ~= nil and r == 0, problem = problem }
+                local node: PlanNode = {
+                    id = n.id,
+                    row = n.row or 0,
+                    col = n.col or 0,
+                    max = n.max or 1,
+                    rank = r,
+                    pending = 0,
+                    icon = n.icon,
+                    name = n.name or "?",
+                    entryID = n.entryID,
+                    canSpend = problem == nil,
+                    locked = problem ~= nil and r == 0,
+                    problem = problem,
+                }
                 list[#list + 1] = node
                 made[n.id] = node
                 self.planNodes[node] = node
@@ -1260,7 +1730,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             local links: TalentLink[] = {}
             for _, l in ipairs(c.links) do
                 local from, to = made[l.from.id], made[l.to.id]
-                if from and to then links[#links + 1] = { from = from, to = to, met = from.rank >= from.max } end
+                if from and to then
+                    links[#links + 1] = { from = from, to = to, met = from.rank >= from.max }
+                end
             end
             trees[i] = { name = c.name, nodes = list, links = links, points = points }
         end
@@ -1279,12 +1751,28 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end
         local saved = store().builds[d.id] ~= nil
         page:SetData({
-            trees = trees, available = left, spentLabel = " planned", editable = true,
+            trees = trees,
+            available = left,
+            spentLabel = " planned",
+            editable = true,
             unspent = ("|cff%s%d|r %s left"):format(T.color.ink.hex, left, plural(left, "point", "points")),
-            status = status, statusColor = color,
+            status = status,
+            statusColor = color,
             actions = {
-                secondary = { label = "Discard", enabled = d.dirty, onClick = function() self:DiscardDraft() end },
-                primary = { label = "Save build", enabled = d.dirty and saved, onClick = function() self:SaveDraft() end },
+                secondary = {
+                    label = "Discard",
+                    enabled = d.dirty,
+                    onClick = function()
+                        self:DiscardDraft()
+                    end,
+                },
+                primary = {
+                    label = "Save build",
+                    enabled = d.dirty and saved,
+                    onClick = function()
+                        self:SaveDraft()
+                    end,
+                },
             },
         })
     end
@@ -1292,9 +1780,14 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function PlanAdd(n: PlanNode)
         local d = self:Draft()
         local tree = d and self:BuildTree(d.class)
-        if not (d and tree) then return end
+        if not (d and tree) then
+            return
+        end
         local why = UI.TalentNextProblem(d.steps, tree, n.id)
-        if why then UIErrorsFrame:AddMessage(why, 1, 0.35, 0.21) return end
+        if why then
+            UIErrorsFrame:AddMessage(why, 1, 0.35, 0.21)
+            return
+        end
         local talent = tree.byID[n.id]
         d.steps[#d.steps + 1] = { node = n.id, entry = talent and talent.choice and n.entryID or nil }
         d.dirty, d.problem = true, nil
@@ -1304,10 +1797,19 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function PlanRemove(n: PlanNode)
         local d = self:Draft()
         local tree = d and self:BuildTree(d.class)
-        if not (d and tree) then return end
+        if not (d and tree) then
+            return
+        end
         local at: number? = nil
-        for i = #d.steps, 1, -1 do if d.steps[i].node == n.id then at = i break end end
-        if not at then return end
+        for i = #d.steps, 1, -1 do
+            if d.steps[i].node == n.id then
+                at = i
+                break
+            end
+        end
+        if not at then
+            return
+        end
         local steps = copySteps(d.steps)
         table.remove(steps, at)
         local ok, _, why = UI.TalentOrderCheck(steps, tree)
@@ -1325,30 +1827,55 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local lines = page.orderLines
         local line = lines and lines[from]
         local first, last = line and line.from, line and line.to
-        if not (lines and line and first and last) then return end
+        if not (lines and line and first and last) then
+            return
+        end
         local planning = self:Planning()
         local d = planning and self:Draft() or nil
         local saved = not planning and self:Viewed() or nil
         local current: TalentStep[]? = d and d.steps or (saved and store().builds[saved.id] and saved.steps) or nil
         local class = d and d.class or (saved and saved.class)
         local tree = class and self:BuildTree(class)
-        if not (current and tree) then return end
+        if not (current and tree) then
+            return
+        end
         local run: TalentStep[], rest: TalentStep[] = {}, {}
         for i, s in ipairs(current) do
-            if i >= first and i <= last then run[#run + 1] = s else rest[#rest + 1] = s end
+            if i >= first and i <= last then
+                run[#run + 1] = s
+            else
+                rest[#rest + 1] = s
+            end
         end
         -- where it goes: in front of that line's first step, among the rest
         local target = lines[before]
         local at = target and target.from or (#current + 1)
-        if at > last then at = at - #run end
+        if at > last then
+            at = at - #run
+        end
         local steps: TalentStep[] = {}
-        for i = 1, at - 1 do steps[#steps + 1] = rest[i] end
-        for _, s in ipairs(run) do steps[#steps + 1] = s end
-        for i = at, #rest do steps[#steps + 1] = rest[i] end
+        for i = 1, at - 1 do
+            steps[#steps + 1] = rest[i]
+        end
+        for _, s in ipairs(run) do
+            steps[#steps + 1] = s
+        end
+        for i = at, #rest do
+            steps[#steps + 1] = rest[i]
+        end
         local ok, _, why = UI.TalentOrderCheck(steps, tree)
         if not ok then
-            UI.Confirm({ title = ("%s can't go there"):format(line.name or "That talent"), text = why, cancel = false,
-                onConfirm = function() self:Render() end, onCancel = function() self:Render() end })
+            UI.Confirm({
+                title = ("%s can't go there"):format(line.name or "That talent"),
+                text = why,
+                cancel = false,
+                onConfirm = function()
+                    self:Render()
+                end,
+                onCancel = function()
+                    self:Render()
+                end,
+            })
             return
         end
         if d then
@@ -1356,7 +1883,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         elseif saved then
             -- your active build, shown on your talents: saved at once
             local b = store().builds[saved.id]
-            if b then b.steps, b.updated = steps, time() end
+            if b then
+                b.steps, b.updated = steps, time()
+            end
             self:Emit("SUUUI_TALENT_BUILD_CHANGED")
         end
         self:Render()
@@ -1367,7 +1896,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function ShowPlanTip(button: Frame, n: PlanNode)
         local d = self.draft
         local tree = d and self:BuildTree(d.class)
-        if not (d and tree) then return end
+        if not (d and tree) then
+            return
+        end
         local tip = GameTooltip
         tip:SetOwner(button, "ANCHOR_RIGHT")
         GameTooltip_SetTitle(tip, n.name)
@@ -1378,22 +1909,38 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             errors.tryMethod(tip, "AppendInfo", "GetTraitEntry", entryID, math.max(1, n.rank))
         end
         local at: number[] = {}
-        for i, s in ipairs(d.steps) do if s.node == n.id then at[#at + 1] = i end end
+        for i, s in ipairs(d.steps) do
+            if s.node == n.id then
+                at[#at + 1] = i
+            end
+        end
         if #at > 0 then
             GameTooltip_AddBlankLineToTooltip(tip)
             local a, b = at[1], at[#at]
             local la, lb = self:StepLevel(a), self:StepLevel(b)
-            GameTooltip_AddNormalLine(tip, ("%s %s · %s %s"):format(plural(#at, "Step", "Steps"), a == b and a or (a .. "–" .. b),
-                plural(#at, "level", "levels"), la == lb and la or (la .. "–" .. lb)))
+            GameTooltip_AddNormalLine(
+                tip,
+                ("%s %s · %s %s"):format(
+                    plural(#at, "Step", "Steps"),
+                    a == b and a or (a .. "–" .. b),
+                    plural(#at, "level", "levels"),
+                    la == lb and la or (la .. "–" .. lb)
+                )
+            )
         end
         GameTooltip_AddBlankLineToTooltip(tip)
         local problem = n.problem
         if problem then
             GameTooltip_AddErrorLine(tip, problem)
         else
-            GameTooltip_AddInstructionLine(tip, ("Click: step %d, level %d"):format(#d.steps + 1, self:StepLevel(#d.steps + 1)))
+            GameTooltip_AddInstructionLine(
+                tip,
+                ("Click: step %d, level %d"):format(#d.steps + 1, self:StepLevel(#d.steps + 1))
+            )
         end
-        if n.rank > 0 then GameTooltip_AddDisabledLine(tip, "Right-click takes its last step back") end
+        if n.rank > 0 then
+            GameTooltip_AddDisabledLine(tip, "Right-click takes its last step back")
+        end
         tip:Show()
     end
 
@@ -1415,28 +1962,42 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             end
         end
         local want: { [number]: number } = {}
-        for _, s in ipairs(b.steps) do want[s.node] = (want[s.node] or 0) + 1 end
+        for _, s in ipairs(b.steps) do
+            want[s.node] = (want[s.node] or 0) + 1
+        end
         local conflicts: Conflict[] = {}
         for id, r in pairs(learned) do
             if r > (want[id] or 0) then
                 local n = tree and tree.byID[id]
-                conflicts[#conflicts + 1] = { node = id, name = n and n.name or "?", treeName = n and n.treeName or "",
-                    ranks = r - (want[id] or 0) }
+                conflicts[#conflicts + 1] = {
+                    node = id,
+                    name = n and n.name or "?",
+                    treeName = n and n.treeName or "",
+                    ranks = r - (want[id] or 0),
+                }
             end
         end
-        table.sort(conflicts, function(x: Conflict, y: Conflict): boolean return x.name < y.name end)
+        table.sort(conflicts, function(x: Conflict, y: Conflict): boolean
+            return x.name < y.name
+        end)
         local fits: TalentStep[] = {}
         local count: { [number]: number } = {}
         local seen: { [number]: number } = {}
         local points = data.available
-        for id, r in pairs(learned) do count[id] = r end
+        for id, r in pairs(learned) do
+            count[id] = r
+        end
         for _, s in ipairs(b.steps) do
             local had = (seen[s.node] or 0) + 1
             seen[s.node] = had
             if had > (learned[s.node] or 0) then
-                if points <= 0 then break end
+                if points <= 0 then
+                    break
+                end
                 local n = tree and tree.byID[s.node]
-                if not (tree and n) or UI.TalentStepProblem(tree, n, count, spent) then break end
+                if not (tree and n) or UI.TalentStepProblem(tree, n, count, spent) then
+                    break
+                end
                 fits[#fits + 1] = s
                 count[s.node] = (count[s.node] or 0) + 1
                 spent, points = spent + 1, points - 1
@@ -1447,10 +2008,14 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     -- Plans the steps that fit (the game's staging; Apply learns them).
     function StageFits(fits: TalentStep[], data: Collected): number
-        if data.staged then errors.tryValue(C_Traits.RollbackConfig, data.configID) end
+        if data.staged then
+            errors.tryValue(C_Traits.RollbackConfig, data.configID)
+        end
         local n = 0
         for _, s in ipairs(fits) do
-            if not errors.tryValue(C_Traits.PurchaseRank, data.configID, s.node) then break end
+            if not errors.tryValue(C_Traits.PurchaseRank, data.configID, s.node) then
+                break
+            end
             n = n + 1
         end
         return n
@@ -1458,14 +2023,22 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function UseBuild(id: string)
         local b = store().builds[id]
-        if not b then return end
+        if not b then
+            return
+        end
         local editable, why = self:Editable()
         if not editable then
-            UI.Confirm({ title = ("%s can't be used now"):format(b.name or "This build"), text = why or "Talents can't change right now.", cancel = false })
+            UI.Confirm({
+                title = ("%s can't be used now"):format(b.name or "This build"),
+                text = why or "Talents can't change right now.",
+                cancel = false,
+            })
             return
         end
         local data = self:Collect()
-        if not data then return end
+        if not data then
+            return
+        end
         local fits, conflicts, learned = self:Fit(b, data)
         local function go()
             local _, active = self:SpecGroups()
@@ -1487,17 +2060,29 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             self:StageFits(fits, data)
             self:Render()
         end
-        if #conflicts == 0 then go() return end
+        if #conflicts == 0 then
+            go()
+            return
+        end
         self:AskMismatch(b, fits, conflicts, learned, go)
     end
 
     function NotifyReset(b: SavedBuild, n: number, cost: number?)
         local my = self:Classes().byFile[CLASS]
-        SuuUI.Notify({ id = NOTE_RESET, kind = "until", category = "Talents", icon = { glyph = "tree" },
+        SuuUI.Notify({
+            id = NOTE_RESET,
+            kind = "until",
+            category = "Talents",
+            icon = { glyph = "tree" },
             title = "Reset at a trainer to use " .. (b.name or "your build"),
-            body = ("%d %s aren't in it. Any %s trainer can reset them%s."):format(n, plural(n, "talent", "talents"),
-                (my and my.name or "class"):lower(), cost and (" (" .. GetMoneyString(cost) .. ")") or ""),
-            ["until"] = "Goes when you reset, or pick another build" })
+            body = ("%d %s aren't in it. Any %s trainer can reset them%s."):format(
+                n,
+                plural(n, "talent", "talents"),
+                (my and my.name or "class"):lower(),
+                cost and (" (" .. GetMoneyString(cost) .. ")") or ""
+            ),
+            ["until"] = "Goes when you reset, or pick another build",
+        })
     end
 
     -- After a trainer's reset (every point back): the whole build is planned.
@@ -1506,59 +2091,94 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local _, group = self:SpecGroups()
         local mine = d.reset[charKey()]
         local id = mine and mine[group]
-        if not (mine and id) then return end
+        if not (mine and id) then
+            return
+        end
         local b = d.builds[id]
         if not b or self:ActiveID(group) ~= id then
             mine[group] = nil
             SuuUI.DismissNotification(NOTE_RESET)
             return
         end
-        if not self:Editable() then return end
+        if not self:Editable() then
+            return
+        end
         local configID = asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
-        if not configID then return end
+        if not configID then
+            return
+        end
         -- points Use build planned before the reset: dropped once the trainer
         -- offered it (the whole build is planned after it anyway)
         local wipeAt = self.wipeAt
-        if wipeAt and GetTime() - wipeAt < 120 and errors.tryValue(C_Traits.ConfigHasStagedChanges, configID) == true then
+        if wipeAt and GetTime() - wipeAt < 120 and
+            errors.tryValue(C_Traits.ConfigHasStagedChanges, configID) == true then
             errors.tryValue(C_Traits.RollbackConfig, configID)
         end
         local data = self:Collect(configID)
-        if not data or data.staged then return end
+        if not data or data.staged then
+            return
+        end
         for _, t in ipairs(data.trees) do
-            for _, n in ipairs(t.nodes) do if n.rank > 0 then return end end
+            for _, n in ipairs(t.nodes) do
+                if n.rank > 0 then
+                    return
+                end
+            end
         end
         mine[group] = nil
         SuuUI.DismissNotification(NOTE_RESET)
         local fits = self:Fit(b, data)
         local n = self:StageFits(fits, data)
-        SuuUI.Notify({ id = NOTE_PLANNED, kind = "until", category = "Talents", icon = { glyph = "tree" },
+        SuuUI.Notify({
+            id = NOTE_PLANNED,
+            kind = "until",
+            category = "Talents",
+            icon = { glyph = "tree" },
             title = (b.name or "Your build") .. " is planned",
             body = ("%d %s in its order. Nothing is learned until you apply."):format(n, plural(n, "point", "points")),
             ["until"] = "Goes when you apply or undo",
             actions = {
-                { label = "Apply", variant = "primary", onClick = function()
-                    self.data = self:Collect()
-                    self:Apply()
-                    SuuUI.DismissNotification(NOTE_PLANNED)
-                end },
-                { label = "Open talents", onClick = function()
-                    local window = self.window
-                    if window and not window:IsShown() then window:Show() end
-                end },
-            } })
+                {
+                    label = "Apply",
+                    variant = "primary",
+                    onClick = function()
+                        self.data = self:Collect()
+                        self:Apply()
+                        SuuUI.DismissNotification(NOTE_PLANNED)
+                    end,
+                },
+                {
+                    label = "Open talents",
+                    onClick = function()
+                        local window = self.window
+                        if window and not window:IsShown() then
+                            window:Show()
+                        end
+                    end,
+                },
+            },
+        })
         self:QueueRender()
     end
 
     -- Design M: what fits, what's in the way (and in which tree), what a reset
     -- does; nothing changes until you choose.
-    function AskMismatch(b: SavedBuild, fits: TalentStep[], conflicts: Conflict[], learned: { [number]: number }, onUse: () -> ())
+    function AskMismatch(
+        b: SavedBuild,
+        fits: TalentStep[],
+        conflicts: Conflict[],
+        learned: { [number]: number },
+        onUse: () -> ()
+    )
         local p = self.mismatch
         if not p then
             p = MismatchDialog.new()
             self.mismatch = p
         end
         local dialog = p
-        for _, l in ipairs(dialog.lines) do l:Hide() end
+        for _, l in ipairs(dialog.lines) do
+            l:Hide()
+        end
         local used, y = 0, 0
         local function line(style: string, color: string, text: string)
             used = used + 1
@@ -1582,28 +2202,47 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local tree = self:BuildTree(CLASS)
         -- the fits by talent: "Flurry, rank 1 · Enhancement"
         line("header", "gilt-text", "Fits now")
-        if #fits == 0 then line("body", "ink-muted", "Nothing yet: the talents in the way come first.") end
+        if #fits == 0 then
+            line("body", "ink-muted", "Nothing yet: the talents in the way come first.")
+        end
         local i = 1
         local seen: { [number]: number } = {}
         while i <= #fits do
             local id = fits[i].node
             local j = i
-            while fits[j + 1] and fits[j + 1].node == id do j = j + 1 end
+            while fits[j + 1] and fits[j + 1].node == id do
+                j = j + 1
+            end
             local n = tree and tree.byID[id]
             local a = (seen[id] or learned[id] or 0) + 1
             local z = a + (j - i)
             seen[id] = z
-            line("body", "ink", ("%s, %s · %s"):format(n and n.name or "?", a == z and ("rank " .. a) or ("ranks " .. a .. "–" .. z),
-                n and n.treeName or ""))
+            line(
+                "body",
+                "ink",
+                ("%s, %s · %s"):format(
+                    n and n.name or "?",
+                    a == z and ("rank " .. a) or ("ranks " .. a .. "–" .. z),
+                    n and n.treeName or ""
+                )
+            )
             i = j + 1
         end
         y = y + S["space-3"]
         line("header", "gilt-text", "Not in this build")
         for _, c in ipairs(conflicts) do
-            line("body", "ink", ("%s, %d %s · %s"):format(c.name, c.ranks, plural(c.ranks, "rank", "ranks"), c.treeName))
+            line(
+                "body",
+                "ink",
+                ("%s, %d %s · %s"):format(c.name, c.ranks, plural(c.ranks, "rank", "ranks"), c.treeName)
+            )
         end
         y = y + S["space-3"]
-        line("caption", "ink-muted", "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply.")
+        line(
+            "caption",
+            "ink-muted",
+            "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply."
+        )
         fitDialog(dialog, y)
         dialog:SetTitle(("Use %s?"):format(b.name or "this build"))
         local n = #fits
@@ -1618,10 +2257,14 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     -- A build just made: the window shows it, planning.
     function OpenNew(id: string?)
-        if not id then return end
+        if not id then
+            return
+        end
         -- (the window first: showing it goes back to your active build)
         local window = self.window
-        if window and not window:IsShown() then window:Show() end
+        if window and not window:IsShown() then
+            window:Show()
+        end
         self.draft = nil
         self.buildView, self.planning = id, true
         self:Render()
@@ -1648,16 +2291,24 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- game writes it), or nil.
     function GameString(b: SavedBuild): string?
         local tree = self:BuildTree(b.class)
-        if not tree then return nil end
+        if not tree then
+            return nil
+        end
         local version = errors.tryValue(C_Traits.GetLoadoutSerializationVersion)
         local hash = errors.tryValue(C_Traits.GetTreeHash, tree.treeID)
-        if not (version and hash) then return nil end
+        if not (version and hash) then
+            return nil
+        end
         local ranks: { [number]: number }, entries: { [number]: number } = {}, {}
         for _, s in ipairs(b.steps) do
             ranks[s.node] = (ranks[s.node] or 0) + 1
             local n = tree.byID[s.node]
             if n and n.choice and s.entry then
-                for i, e in ipairs(n.entryIDs or {}) do if e == s.entry then entries[s.node] = i end end
+                for i, e in ipairs(n.entryIDs or {}) do
+                    if e == s.entry then
+                        entries[s.node] = i
+                    end
+                end
             end
         end
         local ok, text = pcall(UI.WriteGameTalentString, version, tree.specID, hash, tree, ranks, entries)
@@ -1666,10 +2317,21 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function ShareText(b: SavedBuild): string?
         local tree = self:BuildTree(b.class)
-        return (UI.EncodeTalentBuild({ name = b.name, classID = b.classID, treeID = b.treeID, steps = b.steps }, function(s: TalentStep): number?
+        return (UI.EncodeTalentBuild({
+            name = b.name,
+            classID = b.classID,
+            treeID = b.treeID,
+            steps = b.steps,
+        }, function(s: TalentStep): number?
             local n = tree and tree.byID[s.node]
-            if not (n and n.choice) then return nil end
-            for i, e in ipairs(n.entryIDs or {}) do if e == s.entry then return i end end
+            if not (n and n.choice) then
+                return nil
+            end
+            for i, e in ipairs(n.entryIDs or {}) do
+                if e == s.entry then
+                    return i
+                end
+            end
             return nil
         end))
     end
@@ -1677,16 +2339,28 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- What was pasted: a build to preview, or nil and why not.
     function ReadPasted(given: string?): (Pasted?, string?)
         local text = strtrim(given or "")
-        if text == "" then return nil, nil end
+        if text == "" then
+            return nil, nil
+        end
         local classes = self:Classes().list
         if text:find("^SuuUI:") then
             local b, why = UI.DecodeTalentBuild(text)
-            if not b then return nil, why end
+            if not b then
+                return nil, why
+            end
             local class: ClassInfo? = nil
-            for _, c in ipairs(classes) do if c.classID == b.classID then class = c end end
-            if not class then return nil, "That class has no talents here." end
+            for _, c in ipairs(classes) do
+                if c.classID == b.classID then
+                    class = c
+                end
+            end
+            if not class then
+                return nil, "That class has no talents here."
+            end
             local tree = self:BuildTree(class.file)
-            if not tree then return nil, "That class's talents can't be read right now." end
+            if not tree then
+                return nil, "That class's talents can't be read right now."
+            end
             local steps: TalentStep[] = {}
             for i, s in ipairs(b.steps) do
                 local n = tree.byID[s.node]
@@ -1694,60 +2368,103 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                 steps[i] = { node = s.node, entry = n and index and (n.entryIDs or {})[index] or nil }
             end
             local ok, _, problem = UI.TalentOrderCheck(steps, tree)
-            return { name = b.name ~= "" and b.name or "Shared build", class = class.file, steps = steps,
-                note = (not ok) and ("Needs a look: " .. (problem or "")) or (b.treeID ~= tree.treeID and "Made for another version of the talents.") or nil }, nil
+            return {
+                    name = b.name ~= "" and b.name or "Shared build",
+                    class = class.file,
+                    steps = steps,
+                    note = (not ok) and ("Needs a look: " .. (problem or "")) or
+                        (b.treeID ~= tree.treeID and "Made for another version of the talents.") or
+                        nil,
+                },
+                nil
         end
         local version, specID = UI.ReadGameTalentHeader(text)
-        if not version then return nil, "This isn't SuuUI's text or the game's talent string." end
+        if not version then
+            return nil, "This isn't SuuUI's text or the game's talent string."
+        end
         local class: ClassInfo? = nil
-        for _, c in ipairs(classes) do if c.specID == specID then class = c end end
-        if not class then return nil, "This talent string is for a class without talents here." end
+        for _, c in ipairs(classes) do
+            if c.specID == specID then
+                class = c
+            end
+        end
+        if not class then
+            return nil, "This talent string is for a class without talents here."
+        end
         local tree = self:BuildTree(class.file)
-        if not tree then return nil, "That class's talents can't be read right now." end
+        if not tree then
+            return nil, "That class's talents can't be read right now."
+        end
         local read, why = UI.ReadGameTalentString(text, tree)
-        if not read then return nil, why end
+        if not read then
+            return nil, why
+        end
         local entries: { [number]: number } = {}
         for id, i in pairs(read.entries) do
             local n = tree.byID[id]
             local entry = n and (n.entryIDs or {})[i]
-            if entry then entries[id] = entry end
+            if entry then
+                entries[id] = entry
+            end
         end
         local steps, all = UI.TalentStepsFromRanks(read.ranks, tree, entries)
-        return { name = "Imported build", class = class.file, steps = steps, fromGame = true,
-            note = (not all) and "Some talents don't fit their rows or arrows; check the order." or nil }, nil
+        return {
+                name = "Imported build",
+                class = class.file,
+                steps = steps,
+                fromGame = true,
+                note = (not all) and "Some talents don't fit their rows or arrows; check the order." or nil,
+            },
+            nil
     end
 
     -- "36 points · Arcane 5, Fire 0, Frost 31 · levels 10–45, in order"
     function BuildSummary(file: string, steps: TalentStep[]): string
         local tree = self:BuildTree(file)
         local per: { name: string, n: number }[] = {}
-        for i, c in ipairs(tree and tree.trees or {}) do per[i] = { name = c.name, n = 0 } end
+        for i, c in ipairs(tree and tree.trees or {}) do
+            per[i] = { name = c.name, n = 0 }
+        end
         for _, s in ipairs(steps) do
             local n = tree and tree.byID[s.node]
             local index = n and n.treeIndex
             local t = index and per[index]
-            if t then t.n = t.n + 1 end
+            if t then
+                t.n = t.n + 1
+            end
         end
         local parts: string[] = {}
-        for _, t in ipairs(per) do parts[#parts + 1] = t.name .. " " .. t.n end
+        for _, t in ipairs(per) do
+            parts[#parts + 1] = t.name .. " " .. t.n
+        end
         local text = ("%d %s"):format(#steps, plural(#steps, "point", "points"))
-        if #parts > 0 then text = text .. " · " .. table.concat(parts, ", ") end
-        if #steps > 0 then text = text .. (" · levels %d–%d, in order"):format(self:StepLevel(1), self:StepLevel(#steps)) end
+        if #parts > 0 then
+            text = text .. " · " .. table.concat(parts, ", ")
+        end
+        if #steps > 0 then
+            text = text .. (" · levels %d–%d, in order"):format(self:StepLevel(1), self:StepLevel(#steps))
+        end
         return text
     end
 
     function ShowShare(asked: string)
         local p = self.share
         if not p then
-            p = ShareDialog.new(function(mode: string) self:ShowShare(mode) end,
-                function(text: string) self:PreviewPaste(text) end,
-                function() self:ShareDone() end)
+            p = ShareDialog.new(function(mode: string)
+                self:ShowShare(mode)
+            end, function(text: string)
+                self:PreviewPaste(text)
+            end, function()
+                self:ShareDone()
+            end)
             self.share = p
         end
         local dialog = p
         local b = self:Viewed()
         local mode = asked
-        if mode == "copy" and not b then mode = "import" end
+        if mode == "copy" and not b then
+            mode = "import"
+        end
         dialog.mode = mode
         dialog.switch:SetValue(mode)
         dialog.copy:SetShown(mode == "copy")
@@ -1770,8 +2487,8 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             dialog.ok:SetLabel("Done")
             dialog.ok:SetEnabledState(true)
             dialog.cancel:Hide()
-            height = 30 + S["space-5"] + 30 + S["space-2"] + 2 * T.type.caption.lineHeight
-                + (game and (S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30) or 0)
+            height = 30 + S["space-5"] + 30 + S["space-2"] + 2 * T.type.caption.lineHeight +
+                (game and (S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30) or 0)
         else
             dialog:SetTitle("Import a build")
             dialog.paste:SetValue("")
@@ -1796,10 +2513,14 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- The share dialog's Done: an import saved and shown; a copy closed.
     function ShareDone()
         local p = self.share
-        if not p then return end
+        if not p then
+            return
+        end
         if p.mode == "import" then
             local found = p.found
-            if not found then return end
+            if not found then
+                return
+            end
             p:Hide()
             self:OpenNew(self:AddBuild(found.name, found.class, found.steps))
         else
@@ -1809,7 +2530,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
 
     function PreviewPaste(text: string?)
         local p = self.share
-        if not p then return end
+        if not p then
+            return
+        end
         local found, why = self:ReadPasted(text)
         p.found = found
         p.ok:SetEnabledState(found ~= nil)
@@ -1826,7 +2549,8 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             p.previewLine:SetValue(self:BuildSummary(found.class, found.steps))
             local note = found.note
             if found.fromGame then
-                note = (note and (note .. " ") or "") .. "From the game's string the order can't come along: the points are ordered top to bottom, and it's named \"Imported build\"."
+                note = (note and (note .. " ") or "") ..
+                    "From the game's string the order can't come along: the points are ordered top to bottom, and it's named \"Imported build\"."
             end
             p.previewNote:SetValue(note or "")
         else
@@ -1850,7 +2574,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- replaces, and a build shown adds its order panel.
     function FitWindow()
         local w = self.window
-        if not w then return end
+        if not w then
+            return
+        end
         local builds = not self.inspectUnit
         local order = builds and self:Viewed() ~= nil
         local extra = builds and math.max(0, 30 - T.type.label.lineHeight) or 0
@@ -1858,7 +2584,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     end
 
     function BuildWindow()
-        if self.window then return end
+        if self.window then
+            return
+        end
         local f = CreateFrame("Frame", "SuuUITalents", UIParent)
         f:SetToplevel(true)
         f:EnableMouse(true)
@@ -1866,10 +2594,19 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         f:Hide()
         f:SetPoint("CENTER", UIParent, "CENTER", 0, -HEAD_RISE / 2)
         local close = CreateFrame("Button", nil, f)
-        close:SetScript("OnClick", function() f:Hide() end)
+        close:SetScript("OnClick", function()
+            f:Hide()
+        end)
         -- in the window row's middle group: beside the Legacy window when both
         -- are open (asked for in game)
-        self.chrome = UI.SkinWindow(f, { title = "Talents", icon = "tree", binding = "TOGGLETALENTS", close = close, topInset = 20, under = "microMenu" })
+        self.chrome = UI.SkinWindow(f, {
+            title = "Talents",
+            icon = "tree",
+            binding = "TOGGLETALENTS",
+            close = close,
+            topInset = 20,
+            under = "microMenu",
+        })
         UI.CenterWindow(f, true)
         local page = UI.TalentTree(f)
         page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -1901,14 +2638,18 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         tinsert(UISpecialFrames, "SuuUITalents")
         -- the key: N (whatever opens Blizzard's talents) opens this one instead
         local toggle = CreateFrame("Button", "SuuUITalentsToggle", UIParent)
-        toggle:SetScript("OnClick", function() self:Toggle() end)
+        toggle:SetScript("OnClick", function()
+            self:Toggle()
+        end)
         self.bindOwner = CreateFrame("Frame")
         self:BindKeys()
     end
 
     function Toggle()
         local window = self.window
-        if not window then return end
+        if not window then
+            return
+        end
         -- showing someone else's: the key goes back to yours
         if self.inspectUnit and window:IsShown() then
             self:SetInspect(nil)
@@ -1921,31 +2662,48 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- Whose talents the window shows: an inspected player's (read only), or
     -- nil for yours.
     function SetInspect(unit: string?)
-        if unit == nil and self.inspectUnit == nil then return end
+        if unit == nil and self.inspectUnit == nil then
+            return
+        end
         self.inspectUnit, self.inspectData = unit, nil
         local who = unit and asString(UnitName(unit))
         local chrome = self.chrome
-        if chrome then chrome:SetTitle(who and ("Talents · " .. who) or "Talents") end
+        if chrome then
+            chrome:SetTitle(who and ("Talents · " .. who) or "Talents")
+        end
     end
 
     -- View Talents on inspect: the window with their talents.
     function ShowInspect(unit: string?)
         local window = self.window
-        if not (window and unit) then return end
+        if not (window and unit) then
+            return
+        end
         self:SetInspect(unit)
-        if window:IsShown() then self:Render() else window:Show() end
+        if window:IsShown() then
+            self:Render()
+        else
+            window:Show()
+        end
     end
 
     -- The talents key as an override binding onto SuuUI's button (out of combat:
     -- bindings can't change in one).
     function BindKeys()
         local owner = self.bindOwner
-        if not owner then return end
-        if InCombatLockdown() then self.bindAfterCombat = true return end
+        if not owner then
+            return
+        end
+        if InCombatLockdown() then
+            self.bindAfterCombat = true
+            return
+        end
         ClearOverrideBindings(owner)
         for _, key in ipairs({ GetBindingKey("TOGGLETALENTS") }) do
             local name = asString(key)
-            if name then SetOverrideBindingClick(owner, false, name, "SuuUITalentsToggle") end
+            if name then
+                SetOverrideBindingClick(owner, false, name, "SuuUITalentsToggle")
+            end
         end
     end
 
@@ -1957,7 +2715,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- size back when another tab shows.
     function Size()
         local f = frames.find("PlayerSpellsFrame")
-        if not f or InCombatLockdown() then return end
+        if not f or InCombatLockdown() then
+            return
+        end
         local width = UI.TALENT_TREE_W + 40
         local groups = self:SpecGroups()
         local tall = 44 + PAGE_H + 16 + (groups > 1 and SPECS_H or 0)
@@ -1970,9 +2730,15 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             placer:SetTabSize("talents", width, tall)
         end
         local h, w = f:GetHeight(), f:GetWidth()
-        if math.abs(h - tall) < 1 and math.abs(w - width) < 1 then return end
-        if math.abs(h - tall) >= 1 then self.blizzHeight = h end
-        if math.abs(w - width) >= 1 then self.blizzWidth = w end
+        if math.abs(h - tall) < 1 and math.abs(w - width) < 1 then
+            return
+        end
+        if math.abs(h - tall) >= 1 then
+            self.blizzHeight = h
+        end
+        if math.abs(w - width) >= 1 then
+            self.blizzWidth = w
+        end
         self.sizing = true
         f:SetHeight(tall)
         f:SetWidth(width)
@@ -1982,10 +2748,16 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     function Restore()
         local f = frames.find("PlayerSpellsFrame")
         local height, width = self.blizzHeight, self.blizzWidth
-        if not f or InCombatLockdown() or not (height or width) then return end
+        if not f or InCombatLockdown() or not (height or width) then
+            return
+        end
         self.sizing = true
-        if height then f:SetHeight(height) end
-        if width then f:SetWidth(width) end
+        if height then
+            f:SetHeight(height)
+        end
+        if width then
+            f:SetWidth(width)
+        end
         self.sizing = false
         self.blizzHeight, self.blizzWidth = nil, nil
     end
@@ -1994,28 +2766,55 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         -- a build's talents (planning) or yours
         page.onClick = function(n: PageTalent)
             local plan = self.planNodes[n]
-            if plan then self:PlanAdd(plan) return end
+            if plan then
+                self:PlanAdd(plan)
+                return
+            end
             local node = self.pageNodes[n]
-            if node then self:Purchase(node) end
+            if node then
+                self:Purchase(node)
+            end
         end
         page.onRemove = function(n: PageTalent)
             local plan = self.planNodes[n]
-            if plan then self:PlanRemove(plan) return end
+            if plan then
+                self:PlanRemove(plan)
+                return
+            end
             local node = self.pageNodes[n]
-            if node then self:Refund(node) end
+            if node then
+                self:Refund(node)
+            end
         end
         page.onEnter = function(b: Button, n: PageTalent)
             local plan = self.planNodes[n]
-            if plan then self:ShowPlanTip(b, plan) return end
+            if plan then
+                self:ShowPlanTip(b, plan)
+                return
+            end
             local node = self.pageNodes[n]
-            if node then self:ShowTip(b, node, self:PageData(page)) end
+            if node then
+                self:ShowTip(b, node, self:PageData(page))
+            end
         end
-        page.onLeave = function() GameTooltip:Hide() end
-        page.onApply = function() self:Apply() end
-        page.onUndo = function() self:Undo() end
-        page.onOrderEnter = function(line: OrderLineData) page:MarkNode(line.node) end
-        page.onOrderLeave = function() page:MarkNode(nil) end
-        page.onOrderMove = function(from: number, before: number) self:MoveLine(page, from, before) end
+        page.onLeave = function()
+            GameTooltip:Hide()
+        end
+        page.onApply = function()
+            self:Apply()
+        end
+        page.onUndo = function()
+            self:Undo()
+        end
+        page.onOrderEnter = function(line: OrderLineData)
+            page:MarkNode(line.node)
+        end
+        page.onOrderLeave = function()
+            page:MarkNode(nil)
+        end
+        page.onOrderMove = function(from: number, before: number)
+            self:MoveLine(page, from, before)
+        end
         -- the other talent group: its own active build
         page.onSpec = function(i: number)
             self:Leave(function()
@@ -2026,11 +2825,15 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end
         page.onBack = function()
             local window = self.window
-            if window then window:Hide() end
+            if window then
+                window:Hide()
+            end
         end
         page.onActivate = function()
             local viewing = self.viewing
-            if InCombatLockdown() or not viewing then return end
+            if InCombatLockdown() or not viewing then
+                return
+            end
             try(field(C_SpecializationInfo, "SetActiveSpecGroup"), viewing)
         end
     end
@@ -2038,14 +2841,18 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
     -- The data a page shows (an inspected player's on the window while
     -- inspecting).
     function PageData(page: TalentTree): Collected?
-        if page == self.windowPage and self.inspectUnit then return self.inspectData end
+        if page == self.windowPage and self.inspectUnit then
+            return self.inspectData
+        end
         return self.data
     end
 
     function Build()
         local f = frames.find("PlayerSpellsFrame")
         local tab = f and frames.asFrame(field(f, "TalentsFrame"))
-        if not (f and tab) or self.page or InCombatLockdown() then return end
+        if not (f and tab) or self.page or InCombatLockdown() then
+            return
+        end
         -- Blizzard's tab out of sight: see-through and off screen, still shown
         -- (its OnShow and OnHide drive this page). Only see-through, its 1212 ×
         -- 681 stuck out of the smaller window, and its talent buttons took the
@@ -2054,7 +2861,10 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         -- protected).
         tab:SetAlpha(0)
         local function away()
-            if InCombatLockdown() then self.awayAfterCombat = true return end
+            if InCombatLockdown() then
+                self.awayAfterCombat = true
+                return
+            end
             self.placingTab = true
             tab:ClearAllPoints()
             tab:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
@@ -2063,7 +2873,9 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         self.away = away
         away()
         hook(tab, "SetPoint", function()
-            if not self.placingTab then after(0, away) end
+            if not self.placingTab then
+                after(0, away)
+            end
         end)
         local page = UI.TalentTree(f)
         page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
@@ -2090,16 +2902,29 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         end)
         -- Blizzard sets the window's size again right after it shows
         local function again()
-            if not self.sizing and tab:IsShown() then self:Size() end
+            if not self.sizing and tab:IsShown() then
+                self:Size()
+            end
         end
         -- into and out of another player's talents
         local spells: unknown = f
-        if type(field(spells, "SetInspecting")) == "function" then hook(spells, "SetInspecting", function() self:QueueRender() end) end
+        if type(field(spells, "SetInspecting")) == "function" then
+            hook(spells, "SetInspecting", function()
+                self:QueueRender()
+            end)
+        end
         hook(f, "SetHeight", again)
         hook(f, "SetWidth", again)
         hook(f, "SetSize", again)
-        page:HookScript("OnSizeChanged", function() if page:IsVisible() then self:QueueRender() end end)
-        if tab:IsShown() then self:Size(); UI.CenterWindow(f, true) end
+        page:HookScript("OnSizeChanged", function()
+            if page:IsVisible() then
+                self:QueueRender()
+            end
+        end)
+        if tab:IsShown() then
+            self:Size()
+            UI.CenterWindow(f, true)
+        end
         self:Render()
     end
 
@@ -2107,13 +2932,19 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         self:BuildWindow()
         self:Build()
         self:ProvideService(TALENTS, {
-            Toggle = function() self:Toggle() end,
-            ShowInspect = function(unit: string?) self:ShowInspect(unit) end,
+            Toggle = function()
+                self:Toggle()
+            end,
+            ShowInspect = function(unit: string?)
+                self:ShowInspect(unit)
+            end,
             IsShown = function(): boolean
                 local window = self.window
                 return window ~= nil and window:IsShown()
             end,
-            NextTalent = function(): TalentNext? return self:NextTalent() end,
+            NextTalent = function(): TalentNext?
+                return self:NextTalent()
+            end,
         })
         -- a trainer's reset offered: what it costs, on the reset notice
         self:OnGameEvent("CONFIRM_TALENT_WIPE", function(_, given)
@@ -2125,36 +2956,72 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             local cost = asNumber(given)
             if b and cost then
                 local data = self:Collect(asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID)))
-                if not data then return end
+                if not data then
+                    return
+                end
                 local _, conflicts = self:Fit(b, data)
                 self:NotifyReset(b, #conflicts, cost)
             end
         end)
         -- learned talents change the next one (the points notice asks again)
-        self:OnGameEvent("PLAYER_TALENT_UPDATE", function() self:Emit("SUUUI_TALENT_BUILD_CHANGED") end)
-        self:OnGameEvent("UPDATE_BINDINGS", function() self:BindKeys() end)
-        self:OnGameEvent("ADDON_LOADED", function() self:Build() end)
+        self:OnGameEvent("PLAYER_TALENT_UPDATE", function()
+            self:Emit("SUUUI_TALENT_BUILD_CHANGED")
+        end)
+        self:OnGameEvent("UPDATE_BINDINGS", function()
+            self:BindKeys()
+        end)
+        self:OnGameEvent("ADDON_LOADED", function()
+            self:Build()
+        end)
         -- another player's talents: drawn when they arrive
-        self:OnGameEvent("INSPECT_READY", function() if self:Inspecting() or self.inspectUnit then self:QueueRender() end end)
-        for _, e in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_NODE_CHANGED", "TRAIT_TREE_CURRENCY_INFO_UPDATED",
-                             "TRAIT_CONFIG_LIST_UPDATED", "ACTIVE_COMBAT_CONFIG_CHANGED", "PLAYER_TALENT_UPDATE",
-                             "CHARACTER_POINTS_CHANGED", "PLAYER_LEVEL_UP", "PLAYER_REGEN_DISABLED" }) do
-            self:OnGameEvent(e, function() self:QueueRender() end)
+        self:OnGameEvent("INSPECT_READY", function()
+            if self:Inspecting() or self.inspectUnit then
+                self:QueueRender()
+            end
+        end)
+        for _, e in ipairs({
+            "TRAIT_CONFIG_UPDATED",
+            "TRAIT_NODE_CHANGED",
+            "TRAIT_TREE_CURRENCY_INFO_UPDATED",
+            "TRAIT_CONFIG_LIST_UPDATED",
+            "ACTIVE_COMBAT_CONFIG_CHANGED",
+            "PLAYER_TALENT_UPDATE",
+            "CHARACTER_POINTS_CHANGED",
+            "PLAYER_LEVEL_UP",
+            "PLAYER_REGEN_DISABLED",
+        }) do
+            self:OnGameEvent(e, function()
+                self:QueueRender()
+            end)
         end
         -- a trainer's reset: the talents read 0 within half a second of its
         -- events (probed 2026-10-20), so a build waiting for it looks again then
         for _, e in ipairs({ "PLAYER_TALENT_UPDATE", "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED" }) do
             self:OnGameEvent(e, function()
-                if next(store().reset[charKey()] or {}) then after(0.5, function() self:CheckReset() end) end
+                if next(store().reset[charKey()] or {}) then
+                    after(0.5, function()
+                        self:CheckReset()
+                    end)
+                end
             end)
         end
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            if not self.page then self:Build() end
+            if not self.page then
+                self:Build()
+            end
             local away = self.away
-            if self.awayAfterCombat and away then self.awayAfterCombat = false; away() end
-            if self.bindAfterCombat then self.bindAfterCombat = false; self:BindKeys() end
+            if self.awayAfterCombat and away then
+                self.awayAfterCombat = false
+                away()
+            end
+            if self.bindAfterCombat then
+                self.bindAfterCombat = false
+                self:BindKeys()
+            end
             local page = self.page
-            if page and page:IsVisible() then self:Size() end
+            if page and page:IsVisible() then
+                self:Size()
+            end
             self:QueueRender()
         end)
     end

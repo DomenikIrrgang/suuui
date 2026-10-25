@@ -33,14 +33,14 @@ export type WhoResult = {
     name?: string,
     level?: number,
     race?: string,
-    class?: string,      -- the class file ("MAGE")
+    class?: string, -- the class file ("MAGE")
     className?: string,
     guild?: string,
     zone?: string,
 }
 
 export type WhoData = {
-    state: string,       -- "idle" (before a search), "results" or "none"
+    state: string, -- "idle" (before a search), "results" or "none"
     query?: string,
     total?: number,
     capped?: boolean,
@@ -64,7 +64,14 @@ local LEVEL_W = 44
 -- the columns' shares of what's left (Name, Race, Class, Guild, Zone)
 local SHARES: { [string]: number } = { name = 24, race = 14, class = 14, guild = 26, zone = 26 }
 local ORDER = { "name", "level", "race", "class", "guild", "zone" }
-local LABEL: { [string]: string } = { name = "Name", level = "Level", race = "Race", class = "Class", guild = "Guild", zone = "Zone" }
+local LABEL: { [string]: string } = {
+    name = "Name",
+    level = "Level",
+    race = "Race",
+    class = "Class",
+    guild = "Guild",
+    zone = "Zone",
+}
 
 -- Each column's x and width in a row this wide.
 -- the left: room for the class diamond before the name (the diamond sat on
@@ -77,7 +84,9 @@ local function columns(width: number): { [string]: WhoColumn }
     local gap = S["space-4"]
     local inner = width - LEFT - S["space-4"] - gap * 5 - S["space-4"] - LEVEL_W
     local total = 0
-    for _, v in pairs(SHARES) do total = total + v end
+    for _, v in pairs(SHARES) do
+        total = total + v
+    end
     local out: { [string]: WhoColumn }, x = {}, LEFT
     for _, key in ipairs(ORDER) do
         local w = key == "level" and LEVEL_W or math.floor(inner * (SHARES[key] or 0) / total)
@@ -153,13 +162,21 @@ export class WhoRow extends Button
         self.class = cell(self, "caption", "ink")
         self.guild = cell(self, "caption", "ink")
         self.zone = cell(self, "caption", "ink")
-        self:SetScript("OnEnter", function() self.hover:Show() end)
-        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
         self:SetScript("OnClick", function(_: WhoRow, button: string)
             local data = self.data
-            if not data then return end
+            if not data then
+                return
+            end
             if button == "RightButton" then
-                if w.onMenu then w.onMenu(data) end
+                if w.onMenu then
+                    w.onMenu(data)
+                end
             else
                 w.selected = self.index
                 w:Draw()
@@ -175,9 +192,12 @@ end
 -- What the bar says at the right: "24 players found" ("· showing the first
 -- 50" when the server caps it); nothing before a search.
 local function countText(d: WhoData): string
-    if d.state == "idle" then return "" end
+    if d.state == "idle" then
+        return ""
+    end
     local n = d.total or #(d.results or {})
-    return n .. (n == 1 and " player found" or " players found") .. ((d.capped or n > 50) and " · showing the first 50" or "")
+    return n ..
+        (n == 1 and " player found" or " players found") .. ((d.capped or n > 50) and " · showing the first 50" or "")
 end
 
 export class GroupFinderWho extends Frame
@@ -208,8 +228,16 @@ export class GroupFinderWho extends Frame
         super(nil, parent)
         self.rows, self.heads = {}, {}
         -- the bar
-        local function search() if self.onSearch then self.onSearch(self.query:GetValue()) end end
-        self.query = inputs.textField(self, { width = 300, placeholder = "Search Name, Guilds, Levels", onChange = function() end })
+        local function search()
+            if self.onSearch then
+                self.onSearch(self.query:GetValue())
+            end
+        end
+        self.query = inputs.textField(self, {
+            width = 300,
+            placeholder = "Search Name, Guilds, Levels",
+            onChange = function() end,
+        })
         self.query:SetPoint("TOPLEFT")
         self.query.edit:HookScript("OnEnterPressed", search)
         self.search = controls.button(self, { text = "Search", variant = "primary", icon = "search", onClick = search })
@@ -217,8 +245,15 @@ export class GroupFinderWho extends Frame
         self.search:SetPoint("LEFT", self.query, "RIGHT", S["space-4"], 0)
         -- Filter: the glyph, the word, a chevron, laid out left to right (the
         -- word centred between them overlapped the chevron, found in game)
-        self.filter = controls.button(self, { text = "Filter", width = 1,
-            onClick = function(obj: SuuButton) if self.onFilter then self.onFilter(obj) end end }) :: WhoFilterButton
+        self.filter = controls.button(self, {
+            text = "Filter",
+            width = 1,
+            onClick = function(obj: SuuButton)
+                if self.onFilter then
+                    self.onFilter(obj)
+                end
+            end,
+        }) :: WhoFilterButton
         self.filter:SetHeight(BAR_H)
         self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-4"], 0)
         local fg = self.filter:CreateTexture(nil, "ARTWORK")
@@ -231,7 +266,11 @@ export class GroupFinderWho extends Frame
         self.filter.chev = inputs.chevron(self.filter, "ink-muted")
         self.filter.chev:SetPoint("LEFT", self.filter.label, "RIGHT", S["space-3"], 0)
         local function fitFilter()
-            self.filter:SetWidth(S["space-5"] * 2 + 12 + S["space-3"] + math.ceil(self.filter.label:GetUnboundedStringWidth()) + S["space-3"] + 12)
+            self.filter:SetWidth(
+                S["space-5"] * 2 + 12 + S["space-3"] + math.ceil(self.filter.label:GetUnboundedStringWidth()) +
+                    S["space-3"] +
+                    12
+            )
         end
         fitFilter()
         self.filter:HookScript("OnShow", fitFilter) -- measured again once its font is in
@@ -255,14 +294,18 @@ export class GroupFinderWho extends Frame
         rule:SetPoint("BOTTOMRIGHT")
         for _, key in ipairs(ORDER) do
             local h = cell(self.headRow, "caption", "ink-muted")
-            if key == "level" then h:SetJustifyH("RIGHT") end
+            if key == "level" then
+                h:SetJustifyH("RIGHT")
+            end
             h:SetValue(LABEL[key])
             self.heads[key] = h
         end
         self.list = panel.scrollArea(self.box, 2)
         self.list:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT", 0, 0)
         self.list:SetPoint("BOTTOMRIGHT", -S["space-2"], S["space-2"])
-        self.list:HookScript("OnSizeChanged", function() self:Draw() end)
+        self.list:HookScript("OnSizeChanged", function()
+            self:Draw()
+        end)
         -- empty
         local e = WhoEmpty.new(self.box)
         e:SetPoint("CENTER", 0, -HEAD_H / 2)
@@ -271,27 +314,52 @@ export class GroupFinderWho extends Frame
         local function act(get: () -> ((row: WhoResult) -> ())?): () -> ()
             return function()
                 local c, fn = self:Chosen(), get()
-                if c and fn then fn(c) end
+                if c and fn then
+                    fn(c)
+                end
             end
         end
-        self.addFriend = controls.button(self, { text = "Add friend", icon = "userPlus", onClick = act(function() return self.onAddFriend end) })
+        self.addFriend = controls.button(self, {
+            text = "Add friend",
+            icon = "userPlus",
+            onClick = act(function()
+                return self.onAddFriend
+            end),
+        })
         self.addFriend:SetHeight(FOOT_H)
         self.addFriend:SetPoint("BOTTOMLEFT")
-        self.invite = controls.button(self, { text = "Invite", variant = "primary", icon = "plus", onClick = act(function() return self.onInvite end) })
+        self.invite = controls.button(self, {
+            text = "Invite",
+            variant = "primary",
+            icon = "plus",
+            onClick = act(function()
+                return self.onInvite
+            end),
+        })
         self.invite:SetHeight(FOOT_H)
         self.invite:SetPoint("BOTTOMRIGHT")
-        self.whisper = controls.button(self, { text = "Whisper", icon = "chat", onClick = act(function() return self.onWhisper end) })
+        self.whisper = controls.button(self, {
+            text = "Whisper",
+            icon = "chat",
+            onClick = act(function()
+                return self.onWhisper
+            end),
+        })
         self.whisper:SetHeight(FOOT_H)
         self.whisper:SetPoint("RIGHT", self.invite, "LEFT", -S["space-3"], 0)
         -- disabled, they still say why
-        for _, b in ipairs({ self.addFriend, self.whisper, self.invite }) do b:SetMotionScriptsWhileDisabled(true) end
+        for _, b in ipairs({ self.addFriend, self.whisper, self.invite }) do
+            b:SetMotionScriptsWhileDisabled(true)
+        end
         self:SetData({ state = "idle" })
     end
 
     function SetData(d: WhoData)
         self.data = d
         -- a new search: nothing chosen
-        if d.results ~= self.lastResults then self.selected = nil end
+        if d.results ~= self.lastResults then
+            self.selected = nil
+        end
         self.lastResults = d.results
         self.count:SetValue(countText(d))
         self:Draw()
@@ -339,7 +407,9 @@ export class GroupFinderWho extends Frame
             place(r.zone, "zone", row.zone)
             r:Show()
         end
-        for i = #rows + 1, #self.rows do self.rows[i]:Hide() end
+        for i = #rows + 1, #self.rows do
+            self.rows[i]:Hide()
+        end
         self.list.child:SetHeight(math.max(1, #rows * ROW_H))
         -- before a search, or nothing found
         local empty = d.state ~= "results"
@@ -347,9 +417,12 @@ export class GroupFinderWho extends Frame
         if empty then
             local none = d.state == "none"
             self.empty.title:SetValue(none and "No players found" or "Who is online?")
-            self.empty.text:SetValue(none
-                and ("Nobody online matches “" .. (d.query or "") .. "” and your filters. Try fewer words, or check the Filter menu.")
-                or "Search for players by name, guild, zone or level range, e.g. 20-30")
+            self.empty.text:SetValue(
+                none and
+                    ("Nobody online matches “" ..
+                        (d.query or "") .. "” and your filters. Try fewer words, or check the Filter menu.") or
+                    "Search for players by name, guild, zone or level range, e.g. 20-30"
+            )
         end
         -- the foot acts on the chosen player
         local chosen = self.selected and rows[self.selected]
@@ -361,7 +434,9 @@ export class GroupFinderWho extends Frame
 
     function Chosen(): WhoResult?
         local d = self.data
-        if not (d and d.state == "results" and self.selected and d.results) then return nil end
+        if not (d and d.state == "results" and self.selected and d.results) then
+            return nil
+        end
         return d.results[self.selected]
     end
 end

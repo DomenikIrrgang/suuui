@@ -23,14 +23,22 @@ type Map = { [string]: unknown }
 
 local function show(v: unknown, depth: number?): string
     depth = depth or 0
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
-        if depth > 2 then return "{…}" end
+        if depth > 2 then
+            return "{…}"
+        end
         local parts: string[] = {}
         for k, x in pairs(v) do
             parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
-            if #parts > 30 then break end
+            if #parts > 30 then
+                break
+            end
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -39,18 +47,28 @@ local function show(v: unknown, depth: number?): string
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 160)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 local function raw(fn: unknown, ...: unknown): (unknown, unknown, unknown)
-    if type(fn) ~= "function" then return nil end
+    if type(fn) ~= "function" then
+        return nil
+    end
     local ok, a, b, c = pcall(fn, ...)
-    if ok then return a, b, c end
+    if ok then
+        return a, b, c
+    end
 end
 
 local field = tbl.field
@@ -64,7 +82,9 @@ local function sampleTree(store: Map[], treeID: number)
     store[#store + 1] = t
     local configID = raw(C_Traits.GetConfigIDByTreeID, treeID)
     t.config = show(configID)
-    if not configID or isSecret(configID) then return end
+    if not configID or isSecret(configID) then
+        return
+    end
     t.configInfo = call(C_Traits.GetConfigInfo, configID)
     t.treeInfo = call(C_Traits.GetTreeInfo, configID, treeID)
     t.currency = call(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
@@ -76,31 +96,53 @@ local function sampleTree(store: Map[], treeID: number)
     t.nodes = {}
     local conds: { [unknown]: boolean } = {}
     for i, nodeID in ipairs(nodes) do
-        if i > 80 then break end
+        if i > 80 then
+            break
+        end
         local n = raw(C_Traits.GetNodeInfo, configID, nodeID)
         local line: Map = { id = nodeID }
         if n then
             line.pos = ("%s,%s"):format(show(field(n, "posX")), show(field(n, "posY")))
-            line.ranks = ("%s/%s purchased=%s active=%s"):format(show(field(n, "currentRank")), show(field(n, "maxRanks")),
-                show(field(n, "ranksPurchased")), show(field(n, "activeRank")))
+            line.ranks = ("%s/%s purchased=%s active=%s"):format(
+                show(field(n, "currentRank")),
+                show(field(n, "maxRanks")),
+                show(field(n, "ranksPurchased")),
+                show(field(n, "activeRank"))
+            )
             line.state = ("visible=%s available=%s canPurchase=%s canRefund=%s meetsEdges=%s type=%s flags=%s groups=%s"):format(
-                show(field(n, "isVisible")), show(field(n, "isAvailable")), show(field(n, "canPurchaseRank")), show(field(n, "canRefundRank")),
-                show(field(n, "meetsEdgeRequirements")), show(field(n, "type")), show(field(n, "flags")), show(field(n, "groupIDs")))
+                show(field(n, "isVisible")),
+                show(field(n, "isAvailable")),
+                show(field(n, "canPurchaseRank")),
+                show(field(n, "canRefundRank")),
+                show(field(n, "meetsEdgeRequirements")),
+                show(field(n, "type")),
+                show(field(n, "flags")),
+                show(field(n, "groupIDs"))
+            )
             local edges: string[] = {}
-            for _, e in ipairs(tbl.list(field(n, "visibleEdges"))) do edges[#edges + 1] = show(e) end
+            for _, e in ipairs(tbl.list(field(n, "visibleEdges"))) do
+                edges[#edges + 1] = show(e)
+            end
             line.edges = table.concat(edges, " ")
             line.conditions = show(field(n, "conditionIDs"))
-            for _, c in ipairs(tbl.list(field(n, "conditionIDs"))) do conds[c] = true end
+            for _, c in ipairs(tbl.list(field(n, "conditionIDs"))) do
+                conds[c] = true
+            end
             local entries: string[] = {}
             for _, entryID in ipairs(tbl.list(field(n, "entryIDs"))) do
                 local entry = raw(C_Traits.GetEntryInfo, configID, entryID)
                 local definitionID = field(entry, "definitionID")
                 local def = definitionID and raw(C_Traits.GetDefinitionInfo, definitionID)
                 local spellID = secret.asNumber(field(def, "spellID"))
-                entries[#entries + 1] = ("%s def=%s spell=%s name=%s icon=%s maxRanks=%s desc=%s"):format(show(entryID),
-                    show(definitionID), show(spellID), show(def and (field(def, "overrideName") or (spellID and C_Spell.GetSpellName(spellID)))),
-                    show(def and (field(def, "overrideIcon") or (spellID and C_Spell.GetSpellTexture(spellID)))), show(field(entry, "maxRanks")),
-                    show(C_Traits.GetTraitDescription and raw(C_Traits.GetTraitDescription, entryID, 1)):sub(1, 120))
+                entries[#entries + 1] = ("%s def=%s spell=%s name=%s icon=%s maxRanks=%s desc=%s"):format(
+                    show(entryID),
+                    show(definitionID),
+                    show(spellID),
+                    show(def and (field(def, "overrideName") or (spellID and C_Spell.GetSpellName(spellID)))),
+                    show(def and (field(def, "overrideIcon") or (spellID and C_Spell.GetSpellTexture(spellID)))),
+                    show(field(entry, "maxRanks")),
+                    show(C_Traits.GetTraitDescription and raw(C_Traits.GetTraitDescription, entryID, 1)):sub(1, 120)
+                )
             end
             line.entries = entries
         end
@@ -109,14 +151,20 @@ local function sampleTree(store: Map[], treeID: number)
     local conditions: string[] = {}
     t.conditions = conditions
     for c in pairs(conds) do
-        if #conditions < 30 then table.insert(conditions, show(c) .. " " .. call(C_Traits.GetConditionInfo, configID, c)) end
+        if #conditions < 30 then
+            table.insert(conditions, show(c) .. " " .. call(C_Traits.GetConditionInfo, configID, c))
+        end
     end
 end
 
 -- What a sample keeps (SuuUIProbe.legacy).
 type Sample = {
-    at: string, level: number, class: (string | Secret<string>)?,
-    points?: Map, trees: Map[], rewards: { faction: string, hidden: string, levels: string[] },
+    at: string,
+    level: number,
+    class: (string | Secret<string>)?,
+    points?: Map,
+    trees: Map[],
+    rewards: { faction: string, hidden: string, levels: string[] },
     challenges: { categories: Map[], count?: number },
 }
 
@@ -125,9 +173,18 @@ export function sample(): Sample
         pcall(C_AddOns.LoadAddOn, "Blizzard_LegacySystem")
     end
     local mf = C_MajorFactions
-    local store: Sample = { at = date("%Y-%m-%d %H:%M:%S"), level = UnitLevel("player"), class = select(2, UnitClass("player")),
-        trees = {}, challenges = { categories = {} },
-        rewards = { faction = call(mf and mf.GetMajorFactionData, FACTION), hidden = call(mf and mf.IsMajorFactionHiddenFromExpansionPage, FACTION), levels = {} } }
+    local store: Sample = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        level = UnitLevel("player"),
+        class = select(2, UnitClass("player")),
+        trees = {},
+        challenges = { categories = {} },
+        rewards = {
+            faction = call(mf and mf.GetMajorFactionData, FACTION),
+            hidden = call(mf and mf.IsMajorFactionHiddenFromExpansionPage, FACTION),
+            levels = {},
+        },
+    }
     DB.probe.legacy = store
     -- points
     local legacy = field(_G, "LegacySystem")
@@ -141,29 +198,49 @@ export function sample(): Sample
     -- the trees
     for _, id in ipairs(TREES) do
         local ok, err = pcall(sampleTree, store.trees, id)
-        if not ok then table.insert(store.trees, { id = id, error = tostring(err) }) end
+        if not ok then
+            table.insert(store.trees, { id = id, error = tostring(err) })
+        end
     end
     -- the reward track
     local levels = tbl.list(mf and raw(mf.GetRenownLevels, FACTION))
     for i, lv in ipairs(levels) do
-        if i > 40 then break end
-        table.insert(store.rewards.levels, show(lv) .. " REWARDS " .. call(mf and mf.GetRenownRewardsForLevel, FACTION, field(lv, "level")))
+        if i > 40 then
+            break
+        end
+        table.insert(
+            store.rewards.levels,
+            show(lv) .. " REWARDS " .. call(mf and mf.GetRenownRewardsForLevel, FACTION, field(lv, "level"))
+        )
     end
     -- the challenges (achievement categories)
     local cats = tbl.list(raw(GetCategoryList))
     store.challenges.count = #cats
     for i, cat in ipairs(cats) do
-        if i > 40 then break end
+        if i > 40 then
+            break
+        end
         local name, parent = raw(GetCategoryInfo, cat)
         local total, done, open = raw(GetCategoryNumAchievements, cat)
-        local c: Map = { id = cat, name = show(name), parent = show(parent), counts = ("%s total, %s done, %s open"):format(show(total), show(done), show(open)), items = {} }
+        local c: Map = {
+            id = cat,
+            name = show(name),
+            parent = show(parent),
+            counts = ("%s total, %s done, %s open"):format(show(total), show(done), show(open)),
+            items = {},
+        }
         for j = 1, math.min(4, secret.asNumber(total) or 0) do
             local info = call(GetAchievementInfo, cat, j)
             local id = raw(GetAchievementInfo, cat, j)
             local crit: string[] = {}
             local n = id and secret.asNumber(raw(GetAchievementNumCriteria, id)) or 0
-            for k = 1, math.min(3, n) do crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k) end
-            table.insert(tbl.listAt(c, "items"), info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300))
+            for k = 1, math.min(3, n) do
+                crit[#crit + 1] = call(GetAchievementCriteriaInfo, id, k)
+            end
+            table.insert(
+                tbl.listAt(c, "items"),
+                info:sub(1, 300) .. " CRITERIA(" .. tostring(n) .. ") " .. table.concat(crit, " ; "):sub(1, 300)
+            )
         end
         table.insert(store.challenges.categories, c)
     end
@@ -171,10 +248,21 @@ export function sample(): Sample
 end
 
 export function command(_rest: string?)
-    if InCombatLockdown() then print("Legacy probe: out of combat, please.") return end
+    if InCombatLockdown() then
+        print("Legacy probe: out of combat, please.")
+        return
+    end
     local store = sample()
     local nodes = 0
-    for _, t in ipairs(store.trees) do nodes = nodes + (secret.asNumber(t.nodeCount) or 0) end
-    print(("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
-        #store.trees, nodes, #store.rewards.levels, store.challenges.count or 0))
+    for _, t in ipairs(store.trees) do
+        nodes = nodes + (secret.asNumber(t.nodeCount) or 0)
+    end
+    print(
+        ("Legacy probe: %d trees (%d nodes), %d reward levels, %d challenge categories. /reload to save."):format(
+            #store.trees,
+            nodes,
+            #store.rewards.levels,
+            store.challenges.count or 0
+        )
+    )
 end

@@ -32,17 +32,16 @@ local UI = SuuUI.UI
 
 local DEFAULTS = {
     position = { point = "BOTTOMRIGHT", x = -292, y = 28 } :: Position,
-    shows = "always",  -- "off" | "combat" | "always"
-    who = "group",     -- "group" | "tanks" | "self"
-    marker = "role",   -- "role" | "class" | "none"
+    shows = "always", -- "off" | "combat" | "always"
+    who = "group", -- "group" | "tanks" | "self"
+    marker = "role", -- "role" | "class" | "none"
     raw = true,
     warnPull = true,
     aggroAlert = "pet", -- "off" | "group" | "pet" (in a group, or with your pet on the mob)
-    openWorld = true,  -- the alerts outside instances too
+    openWorld = true, -- the alerts outside instances too
 }
 
 local M: ThreatModule
-
 
 local TICK = 0.2
 
@@ -71,10 +70,16 @@ local dropReady: { [string]: boolean } = {}
 
 local function running(id: number): boolean?
     local cd = C_Spell.GetSpellCooldown(id) :: SpellCooldownInfo? -- a table; its fields may be secret
-    if not cd then return nil end
+    if not cd then
+        return nil
+    end
     local active = cd.isActive
-    if not secret.isSecret(active) and active ~= nil then return active and true or false end
-    if isNumber(cd.duration) then return cd.duration > 0 end
+    if not secret.isSecret(active) and active ~= nil then
+        return active and true or false
+    end
+    if isNumber(cd.duration) then
+        return cd.duration > 0
+    end
     return nil
 end
 
@@ -86,9 +91,13 @@ local function readyDrop(): string?
         if id and not secret.isSecret(id) and IsPlayerSpell(id) then
             if not gcd or dropReady[name] == nil then
                 local r = running(id)
-                if r ~= nil then dropReady[name] = not r end
+                if r ~= nil then
+                    dropReady[name] = not r
+                end
             end
-            if dropReady[name] then return name end
+            if dropReady[name] then
+                return name
+            end
         end
     end
     return nil
@@ -99,31 +108,54 @@ end
 --------------------------------------------------------------------------------
 
 local function roleOf(unit: string): string?
-    if unit == "player" then return (SuuUI.Role()) end
+    if unit == "player" then
+        return (SuuUI.Role())
+    end
     local role = UnitGroupRolesAssigned(unit)
-    if secret.isSecret(role) or role == "NONE" then return nil end
+    if secret.isSecret(role) or role == "NONE" then
+        return nil
+    end
     return role
 end
 
 -- A row of the threat table (the name and the % may be secret).
-type Row = { name?: string | Secret<string>, class?: string, role?: string, status?: number, percent?: number | Secret<number>,
-             raw?: number | Secret<number>, you: boolean, unit: string }
+type Row = {
+    name?: string | Secret<string>,
+    class?: string,
+    role?: string,
+    status?: number,
+    percent?: number | Secret<number>,
+    raw?: number | Secret<number>,
+    you: boolean,
+    unit: string,
+}
 
 -- One unit's row, or nil while it isn't on the target's threat table.
 local function sample(unit: string, pet: boolean?): Row?
-    if not UnitExists(unit) then return nil end
+    if not UnitExists(unit) then
+        return nil
+    end
     local given = UnitThreatSituation(unit, "target")
     local status = isNumber(given) and given or nil
     local ok, _, _, scaled, _, value = pcall(UnitDetailedThreatSituation, unit, "target")
-    if not ok then return nil end
+    if not ok then
+        return nil
+    end
     -- off the table: no status and no % (a secret % may still be someone's)
-    if status == nil and not secret.isSecret(scaled) and scaled == nil then return nil end
+    if status == nil and not secret.isSecret(scaled) and scaled == nil then
+        return nil
+    end
     local _, given = UnitClass(unit)
     local class = not secret.isSecret(given) and given or nil
     return {
-        name = (UnitName(unit)), class = (not pet) and class or nil,
-        role = pet and "PET" or roleOf(unit), status = status,
-        percent = scaled, raw = value, you = unit == "player", unit = unit,
+        name = (UnitName(unit)),
+        class = (not pet) and class or nil,
+        role = pet and "PET" or roleOf(unit),
+        status = status,
+        percent = scaled,
+        raw = value,
+        you = unit == "player",
+        unit = unit,
     }
 end
 
@@ -135,7 +167,9 @@ local function readRows(): (Row[], boolean)
         local r = sample(unit, pet)
         if r then
             rows[#rows + 1] = r
-            if secret.isSecret(r.percent) then hidden = true end
+            if secret.isSecret(r.percent) then
+                hidden = true
+            end
         end
     end
     add("player")
@@ -165,8 +199,9 @@ end
 -- totem (player-controlled: a tester in a battleground got aggro warnings
 -- from an enemy player's pet, 2026-10-18).
 local function hostileTarget(): boolean
-    return UnitExists("target") and secret.flag(UnitCanAttack("player", "target")) and not secret.flag(UnitIsDeadOrGhost("target"))
-        and not secret.flag(UnitPlayerControlled("target"))
+    return UnitExists("target") and secret.flag(UnitCanAttack("player", "target")) and
+        not secret.flag(UnitIsDeadOrGhost("target")) and
+        not secret.flag(UnitPlayerControlled("target"))
 end
 
 local function inCombat(): boolean
@@ -184,7 +219,9 @@ local function alert(key: string, tone: AlertTone, title: string, detail: string
 end
 
 local function unalert(key: string)
-    if not raised[key] then return end
+    if not raised[key] then
+        return
+    end
     raised[key] = nil
     SuuUI.HideAlert(key)
 end
@@ -192,7 +229,9 @@ end
 -- Rows as the meter takes them.
 local function entries(rows: Row[]): ThreatEntry[]
     local out: ThreatEntry[] = {}
-    for i, r in ipairs(rows) do out[i] = r end
+    for i, r in ipairs(rows) do
+        out[i] = r
+    end
     return out
 end
 
@@ -200,14 +239,20 @@ end
 -- yours or a group member's. Without one (two damage dealers questing
 -- together) the alerts fired at every pull (asked in game).
 local function groupHasHolder(): boolean
-    if UnitExists("pet") then return true end
+    if UnitExists("pet") then
+        return true
+    end
     local raid = secret.flag(IsInRaid())
     local n = raid and 40 or 4
     for i = 1, n do
         local unit = (raid and "raid" or "party") .. i
         if UnitExists(unit) then
-            if roleOf(unit) == "TANK" then return true end
-            if UnitExists(raid and ("raidpet" .. i) or ("partypet" .. i)) then return true end
+            if roleOf(unit) == "TANK" then
+                return true
+            end
+            if UnitExists(raid and ("raidpet" .. i) or ("partypet" .. i)) then
+                return true
+            end
         end
     end
     return false
@@ -238,28 +283,88 @@ local function meterOff(): (boolean, string)
 end
 
 local SECTION: SettingsSection = {
-    id = "threat", label = "Damage & threat", category = "Insights", order = 50, merge = "damagemeter",
-    preview = function(parent: Frame): ThreatMeter return M:PreviewView(parent) end,
+    id = "threat",
+    label = "Damage & threat",
+    category = "Insights",
+    order = 50,
+    merge = "damagemeter",
+    preview = function(parent: Frame): ThreatMeter
+        return M:PreviewView(parent)
+    end,
     previewTitle = "Live preview · Threat",
     groups = {
-        { title = "Threat meter", description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.", rows = {
-            { key = "shows", label = "Show", control = "segmented", stacked = true,
-              options = { { value = "off", label = "Off" }, { value = "combat", label = "In combat" }, { value = "always", label = "Always" } },
-              description = "In combat: while you fight a hostile target. Always: on screen all the time, empty without a hostile target." },
-            { key = "who", label = "Who", control = "segmented", stacked = true, disabled = meterOff,
-              options = { { value = "group", label = "Group" }, { value = "tanks", label = "Tanks and me" }, { value = "self", label = "Just me" } } },
-            { key = "marker", label = "Before the name", control = "segmented", disabled = meterOff,
-              options = { { value = "role", label = "Role icon" }, { value = "class", label = "Class icon" }, { value = "none", label = "None" } } },
-            { key = "raw", label = "Raw threat", control = "toggle", disabled = meterOff,
-              description = "The threat number before the percent (not on bosses: the client hides it there)." },
-            { key = "warnPull", label = "Warn me before I pull", control = "toggle",
-              description = "An alert as soon as you pass the tank's (or a pet's) threat, in a group with a tank or a pet. Works on bosses: it needs only the threat state. Needs the Alerts module." },
-            { key = "aggroAlert", label = "When I draw aggro", control = "segmented", stacked = true,
-              options = { { value = "off", label = "Off" }, { value = "group", label = "In a group" }, { value = "pet", label = "In a group or with my pet" } },
-              description = "An ember alert once a mob turns to you and you aren't the tank. In a group: one with a tank or a pet out (not two damage dealers questing together). With my pet: also solo, while your pet is on the mob (not when you open on it before your pet arrives)." },
-            { key = "openWorld", label = "In the open world", control = "toggle",
-              description = "Both alerts outside dungeons, raids and battlegrounds too. Off: only in instances." },
-        } },
+        {
+            title = "Threat meter",
+            description = "Your target, in combat. On bosses the client lets SuuUI show each player's threat but not compare it, so the list orders by threat state.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Show",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "off", label = "Off" },
+                        { value = "combat", label = "In combat" },
+                        { value = "always", label = "Always" },
+                    },
+                    description = "In combat: while you fight a hostile target. Always: on screen all the time, empty without a hostile target.",
+                },
+                {
+                    key = "who",
+                    label = "Who",
+                    control = "segmented",
+                    stacked = true,
+                    disabled = meterOff,
+                    options = {
+                        { value = "group", label = "Group" },
+                        { value = "tanks", label = "Tanks and me" },
+                        { value = "self", label = "Just me" },
+                    },
+                },
+                {
+                    key = "marker",
+                    label = "Before the name",
+                    control = "segmented",
+                    disabled = meterOff,
+                    options = {
+                        { value = "role", label = "Role icon" },
+                        { value = "class", label = "Class icon" },
+                        { value = "none", label = "None" },
+                    },
+                },
+                {
+                    key = "raw",
+                    label = "Raw threat",
+                    control = "toggle",
+                    disabled = meterOff,
+                    description = "The threat number before the percent (not on bosses: the client hides it there).",
+                },
+                {
+                    key = "warnPull",
+                    label = "Warn me before I pull",
+                    control = "toggle",
+                    description = "An alert as soon as you pass the tank's (or a pet's) threat, in a group with a tank or a pet. Works on bosses: it needs only the threat state. Needs the Alerts module.",
+                },
+                {
+                    key = "aggroAlert",
+                    label = "When I draw aggro",
+                    control = "segmented",
+                    stacked = true,
+                    options = {
+                        { value = "off", label = "Off" },
+                        { value = "group", label = "In a group" },
+                        { value = "pet", label = "In a group or with my pet" },
+                    },
+                    description = "An ember alert once a mob turns to you and you aren't the tank. In a group: one with a tank or a pet out (not two damage dealers questing together). With my pet: also solo, while your pet is on the mob (not when you open on it before your pet arrives).",
+                },
+                {
+                    key = "openWorld",
+                    label = "In the open world",
+                    control = "toggle",
+                    description = "Both alerts outside dungeons, raids and battlegrounds too. Off: only in instances.",
+                },
+            },
+        },
     },
 }
 
@@ -287,23 +392,37 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
     -- world on; in a group with someone to hold the mobs; solo (the aggro
     -- alert's With my pet) with your pet on the mob.
     function AlertsApply(rows: Row[], aggro: boolean?): boolean
-        if not self:Get("openWorld") and not secret.flag(IsInInstance()) then return false end
-        if secret.flag(IsInGroup()) then return groupHasHolder() end
-        if aggro and self:Get("aggroAlert") ~= "pet" then return false end
+        if not self:Get("openWorld") and not secret.flag(IsInInstance()) then
+            return false
+        end
+        if secret.flag(IsInGroup()) then
+            return groupHasHolder()
+        end
+        if aggro and self:Get("aggroAlert") ~= "pet" then
+            return false
+        end
         for _, r in ipairs(rows) do
-            if r.unit == "pet" then return true end
+            if r.unit == "pet" then
+                return true
+            end
         end
         return false
     end
 
     function AggroApplies(rows: Row[]): boolean
-        if self:Get("aggroAlert") == "off" then return false end
+        if self:Get("aggroAlert") == "off" then
+            return false
+        end
         return self:AlertsApply(rows, true)
     end
 
     function Warn(rows: Row[])
         local me: Row? = nil
-        for _, r in ipairs(rows) do if r.you then me = r end end
+        for _, r in ipairs(rows) do
+            if r.you then
+                me = r
+            end
+        end
         local status = me and me.status
         local tank = me and me.role == "TANK"
         if not isNumber(status) or tank then
@@ -318,11 +437,21 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
             -- whoever holds the mob: the first other row at 2-3
             local holder: Row? = nil
             for _, r in ipairs(rows) do
-                if not r.you and isNumber(r.status) and r.status >= 2 then holder = r break end
+                if not r.you and isNumber(r.status) and r.status >= 2 then
+                    holder = r
+                    break
+                end
             end
             if holder then
-                alert("threat-pull", "warning", "You're about to pull", "%s · over %s's threat%s",
-                    (UnitName("target")) or "", holder.name or "", dropText)
+                alert(
+                    "threat-pull",
+                    "warning",
+                    "You're about to pull",
+                    "%s · over %s's threat%s",
+                    (UnitName("target")) or "",
+                    holder.name or "",
+                    dropText
+                )
             else
                 alert("threat-pull", "warning", "You're about to pull", "%s%s", (UnitName("target")) or "", dropText)
             end
@@ -337,16 +466,24 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
 
     function Update()
         local meter = self.meter
-        if not meter then return end
+        if not meter then
+            return
+        end
         local hostile = hostileTarget()
         local fighting = hostile and inCombat()
         local shows = self:Get("shows")
         local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
         local rows: Row[], hidden = {}, false
-        if hostile then rows, hidden = readRows() end
+        if hostile then
+            rows, hidden = readRows()
+        end
         if wantMeter then
             -- the name may be secret: passed on, never tested
-            if hostile then meter:SetTarget((UnitName("target"))) else meter:SetTarget(nil) end
+            if hostile then
+                meter:SetTarget((UnitName("target")))
+            else
+                meter:SetTarget(nil)
+            end
             meter:SetRows(entries(rows), self:MeterOpts(hidden))
             meter:Show()
         else
@@ -364,7 +501,9 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
     -- and out of combat too while the meter always shows.
     function Refresh()
         local driver = self.driver
-        if driver then driver:SetShown(inCombat() or self:Get("shows") == "always") end
+        if driver then
+            driver:SetShown(inCombat() or self:Get("shows") == "always")
+        end
         self:Update()
     end
 
@@ -389,12 +528,21 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
 
     function RefreshPreview()
         local preview = self.preview
-        if not preview then return end
+        if not preview then
+            return
+        end
         -- you: the healer, or yourself by name with your class
         local rows: ThreatEntry[] = {}
         for i, r in ipairs(SAMPLE) do
-            rows[i] = { name = r.name, class = r.class, role = r.role, status = r.status, percent = r.percent, raw = r.raw,
-                        you = i == #SAMPLE }
+            rows[i] = {
+                name = r.name,
+                class = r.class,
+                role = r.role,
+                status = r.status,
+                percent = r.percent,
+                raw = r.raw,
+                you = i == #SAMPLE,
+            }
         end
         preview:SetRows(rows, self:MeterOpts(false))
     end
@@ -411,37 +559,74 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
             local wait = 0
             driver:SetScript("OnUpdate", function(_: Frame, elapsed: number)
                 wait = wait - elapsed
-                if wait > 0 then return end
+                if wait > 0 then
+                    return
+                end
                 wait = TICK
                 self:Update()
             end)
             self.driver = driver
         end
-        self:RegisterMover(meter, { key = "position", label = "Threat meter", managedShow = true,
-            enabled = function() return self:Get("shows") ~= "off" end })
+        self:RegisterMover(meter, {
+            key = "position",
+            label = "Threat meter",
+            managedShow = true,
+            enabled = function()
+                return self:Get("shows") ~= "off"
+            end,
+        })
         self:RegisterSettings(SECTION)
-        self:Watch("shows", function() SuuUI.EditMode.Refresh(); self:Refresh() end)
-        self:WatchAll({ "who", "marker", "raw" }, function() self:RefreshPreview(); if self:Driving() then self:Update() end end)
-        self:WatchAll({ "warnPull", "aggroAlert", "openWorld", "position" }, function() if self:Driving() then self:Update() end end)
+        self:Watch("shows", function()
+            SuuUI.EditMode.Refresh()
+            self:Refresh()
+        end)
+        self:WatchAll({ "who", "marker", "raw" }, function()
+            self:RefreshPreview()
+            if self:Driving() then
+                self:Update()
+            end
+        end)
+        self:WatchAll({ "warnPull", "aggroAlert", "openWorld", "position" }, function()
+            if self:Driving() then
+                self:Update()
+            end
+        end)
         -- as tall as the damage meter
         meter:SetMaxRows(meterRows())
         self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
             if namespace == "damagemeter" and key == "rows" then
                 meter:SetMaxRows(meterRows())
                 local preview = self.preview
-                if preview then preview:SetMaxRows(meterRows()); self:RefreshPreview() end
-                if self:Driving() then self:Update() end
+                if preview then
+                    preview:SetMaxRows(meterRows())
+                    self:RefreshPreview()
+                end
+                if self:Driving() then
+                    self:Update()
+                end
             end
         end)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function() self:Refresh() end)
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function() self:Refresh() end)
-        self:OnGameEvent("PLAYER_TARGET_CHANGED", function() if self:Driving() then self:Update() end end)
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:Refresh()
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:Refresh()
+        end)
+        self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
+            if self:Driving() then
+                self:Update()
+            end
+        end)
         self:Refresh()
     end
 
     override function OnDisable()
-        if self.driver then self.driver:Hide() end
-        if self.meter then self.meter:Hide() end
+        if self.driver then
+            self.driver:Hide()
+        end
+        if self.meter then
+            self.meter:Hide()
+        end
         unalert("threat-pull")
         unalert("threat-aggro")
     end

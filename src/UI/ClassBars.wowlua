@@ -62,7 +62,11 @@ type Game = {
     C_SpellBook?: { IsSpellInSpellBook?: typeof(C_SpellBook.IsSpellInSpellBook) },
     C_DurationUtil: { CreateDuration: typeof(C_DurationUtil.CreateDuration) },
 }
-local G = setmetatable({}, { __index = function(_: unknown, k: string): unknown return _G[k] end }) :: Game
+local G = setmetatable({}, {
+    __index = function(_: unknown, k: string): unknown
+        return _G[k]
+    end,
+}) :: Game
 
 -- A class bar's options: the header's name, the binding list's label, and
 -- what a layout or (totems) a set change calls.
@@ -117,22 +121,28 @@ export abstract class ClassBar<B extends ActionButton> extends ClassBarBase
 
     function SetHotkeysShown(shown: unknown)
         self.hotkeysShown = shown ~= nil and shown ~= false
-        for _, b in ipairs(self.buttons) do b:SetHotkeyShown(self.hotkeysShown) end
+        for _, b in ipairs(self.buttons) do
+            b:SetHotkeyShown(self.hotkeysShown)
+        end
     end
 
     function UpdateBindings()
-        combat.run("classbar:bind:" .. self.name, function()
-            ClearOverrideBindings(self.header)
-            for i, b in ipairs(self.buttons) do
-                local keys = { G.GetBindingKey(self.binding .. i) }
-                if self.enabled then
-                    for _, key in ipairs(keys) do
-                        SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
+        combat.run(
+            "classbar:bind:" .. self.name,
+            function()
+                ClearOverrideBindings(self.header)
+                for i, b in ipairs(self.buttons) do
+                    local keys = { G.GetBindingKey(self.binding .. i) }
+                    if self.enabled then
+                        for _, key in ipairs(keys) do
+                            SetOverrideBindingClick(self.header, false, key, b:GetName(), "LeftButton")
+                        end
                     end
+                    b:SetHotkey(actionButton.shortKey(keys[1]))
                 end
-                b:SetHotkey(actionButton.shortKey(keys[1]))
-            end
-        end, "Action bars")
+            end,
+            "Action bars"
+        )
     end
 
     -- The buttons' size (follows the dock's). Out of combat.
@@ -143,24 +153,32 @@ export abstract class ClassBar<B extends ActionButton> extends ClassBarBase
 
     -- One row, buttons space-1 apart; `count` of them shown.
     function Layout(count: number?)
-        combat.run("classbar:layout:" .. self.name, function()
-            local n = count or SLOTS
-            local px, gap = self.size or self.buttons[1]:GetWidth(), S["space-1"]
-            for i, b in ipairs(self.buttons) do
-                b:Resize(px)
-                b:ClearAllPoints()
-                b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), 0)
-                b:SetShown(i <= n)
-            end
-            local shown = math.max(n, 1)
-            self.header:SetSize(shown * px + (shown - 1) * gap, px)
-            self.count = n
-            if self.onLayout then self.onLayout(self) end
-        end, "Action bars")
+        combat.run(
+            "classbar:layout:" .. self.name,
+            function()
+                local n = count or SLOTS
+                local px, gap = self.size or self.buttons[1]:GetWidth(), S["space-1"]
+                for i, b in ipairs(self.buttons) do
+                    b:Resize(px)
+                    b:ClearAllPoints()
+                    b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), 0)
+                    b:SetShown(i <= n)
+                end
+                local shown = math.max(n, 1)
+                self.header:SetSize(shown * px + (shown - 1) * gap, px)
+                self.count = n
+                if self.onLayout then
+                    self.onLayout(self)
+                end
+            end,
+            "Action bars"
+        )
     end
 
     function UpdateAll()
-        for _, b in ipairs(self.buttons) do b:Update() end
+        for _, b in ipairs(self.buttons) do
+            b:Update()
+        end
     end
 
     -- Empty slots: with the setting, or while you drag something that fits.
@@ -219,18 +237,36 @@ end
 export class StanceBar extends ClassBar<StanceButton>
     constructor(parent: Frame, opts: ClassBarOptions)
         super(parent, opts, "SHAPESHIFTBUTTON")
-        self:addSlots(opts, "SHAPESHIFTBUTTON", function(name: string, i: number) return StanceButton.new(self.header, name, i) end)
-        local function forms() self:UpdateForms() end
-        local function all() self:UpdateAll() end
+        self:addSlots(opts, "SHAPESHIFTBUTTON", function(name: string, i: number)
+            return StanceButton.new(self.header, name, i)
+        end)
+        local function forms()
+            self:UpdateForms()
+        end
+        local function all()
+            self:UpdateAll()
+        end
         events.onGame("UPDATE_SHAPESHIFT_FORMS", forms, self)
         events.onGame("PLAYER_ENTERING_WORLD", forms, self)
         events.onGame("SPELLS_CHANGED", forms, self)
-        local gameEvents: EventName[] = { "UPDATE_SHAPESHIFT_FORM", "UPDATE_SHAPESHIFT_USABLE", "UPDATE_SHAPESHIFT_COOLDOWN",
-                                          "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_COOLDOWN" }
+        local gameEvents: EventName[] = {
+            "UPDATE_SHAPESHIFT_FORM",
+            "UPDATE_SHAPESHIFT_USABLE",
+            "UPDATE_SHAPESHIFT_COOLDOWN",
+            "SPELL_UPDATE_COOLDOWN",
+            "SPELL_UPDATE_USABLE",
+            "ACTIONBAR_UPDATE_COOLDOWN",
+        }
         for _, e in ipairs(gameEvents) do
             events.onGame(e, all, self)
         end
-        events.onGame("UPDATE_BINDINGS", function() self:UpdateBindings() end, self)
+        events.onGame(
+            "UPDATE_BINDINGS",
+            function()
+                self:UpdateBindings()
+            end,
+            self
+        )
         self:UpdateForms()
         self:UpdateBindings()
     end
@@ -239,15 +275,19 @@ export class StanceBar extends ClassBar<StanceButton>
     function UpdateForms()
         local count = G.GetNumShapeshiftForms
         local n = count and count() or 0
-        combat.run("classbar:forms:" .. self.name, function()
-            for i, b in ipairs(self.buttons) do
-                local spellID: number? = i <= n and select(4, G.GetShapeshiftFormInfo(i)) or nil
-                local name = spellID and G.C_Spell.GetSpellName(spellID)
-                b:SetAttribute("type", name and "spell" or nil)
-                b:SetAttribute("spell", name)
-            end
-            self.header:SetShown(self.enabled and n > 0)
-        end, "Action bars")
+        combat.run(
+            "classbar:forms:" .. self.name,
+            function()
+                for i, b in ipairs(self.buttons) do
+                    local spellID: number? = i <= n and select(4, G.GetShapeshiftFormInfo(i)) or nil
+                    local name = spellID and G.C_Spell.GetSpellName(spellID)
+                    b:SetAttribute("type", name and "spell" or nil)
+                    b:SetAttribute("spell", name)
+                end
+                self.header:SetShown(self.enabled and n > 0)
+            end,
+            "Action bars"
+        )
         self:Layout(n)
         self:UpdateAll()
     end
@@ -257,7 +297,6 @@ export class StanceBar extends ClassBar<StanceButton>
         self:UpdateForms()
         self:UpdateBindings()
     end
-
 end
 
 export function stanceBar(parent: Frame, opts: ClassBarOptions): StanceBar
@@ -281,13 +320,17 @@ class PetButton extends ActionButton
     end
 
     override function Update()
-        local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = G.GetPetActionInfo(self.index)
+        local name, texture, isToken, isActive, autoCastAllowed, autoCastEnabled, spellID, checksRange, inRange = G.GetPetActionInfo(
+            self.index
+        )
         self.hasAction = name ~= nil
         self.petName, self.autoCastAllowed = name, autoCastAllowed
         if self.hasAction then
             -- (a token names a global holding the texture's path)
             local art: unknown = texture
-            if isToken then art = _G[texture] end
+            if isToken then
+                art = _G[texture]
+            end
             self.art:SetTexture(type(art) == "string" and art or texture)
             self.art:Show()
             if spellID then
@@ -338,7 +381,9 @@ local PET_RECEIVE = [[ return "petaction", self:GetAttribute("action") ]]
 export class PetBar extends ClassBar<PetButton>
     constructor(parent: Frame, opts: ClassBarOptions)
         super(parent, opts, "BONUSACTIONBUTTON")
-        self:addSlots(opts, "BONUSACTIONBUTTON", function(name: string, i: number) return PetButton.new(self.header, name, i) end)
+        self:addSlots(opts, "BONUSACTIONBUTTON", function(name: string, i: number)
+            return PetButton.new(self.header, name, i)
+        end)
         for i, b in ipairs(self.buttons) do
             b:SetAttribute("type", "pet")
             b:SetAttribute("action", i)
@@ -348,65 +393,110 @@ export class PetBar extends ClassBar<PetButton>
         end
         self:Layout(SLOTS)
         local function lock()
-            combat.run("classbar:lock:" .. self.name, function()
-                local locked = G.GetCVarBool("lockActionBars") and true or false
-                for _, b in ipairs(self.buttons) do b:SetAttribute("suu-locked", locked) end
-            end, "Action bars")
+            combat.run(
+                "classbar:lock:" .. self.name,
+                function()
+                    local locked = G.GetCVarBool("lockActionBars") and true or false
+                    for _, b in ipairs(self.buttons) do
+                        b:SetAttribute("suu-locked", locked)
+                    end
+                end,
+                "Action bars"
+            )
         end
         lock()
         events.onGame("CVAR_UPDATE", lock, self)
         -- A pet ability on the cursor shows the empty slots it can go to.
-        events.onGame("CURSOR_CHANGED", function()
-            local on = G.GetCursorInfo() == "petaction"
-            for _, b in ipairs(self.buttons) do b:SetGrid(on) end
-        end, self)
+        events.onGame(
+            "CURSOR_CHANGED",
+            function()
+                local on = G.GetCursorInfo() == "petaction"
+                for _, b in ipairs(self.buttons) do
+                    b:SetGrid(on)
+                end
+            end,
+            self
+        )
 
         local function all()
             self:UpdateAll()
             self:UpdateAutocastClicks()
         end
-        local gameEvents: EventName[] = { "PET_BAR_UPDATE", "PET_UI_UPDATE", "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED",
-                                          "PLAYER_FARSIGHT_FOCUS_CHANGED", "PLAYER_ENTERING_WORLD", "PET_BAR_UPDATE_USABLE" }
+        local gameEvents: EventName[] = {
+            "PET_BAR_UPDATE",
+            "PET_UI_UPDATE",
+            "PLAYER_CONTROL_LOST",
+            "PLAYER_CONTROL_GAINED",
+            "PLAYER_FARSIGHT_FOCUS_CHANGED",
+            "PLAYER_ENTERING_WORLD",
+            "PET_BAR_UPDATE_USABLE",
+        }
         for _, e in ipairs(gameEvents) do
             events.onGame(e, all, self)
         end
-        events.onGame("PET_BAR_UPDATE_COOLDOWN", function() self:UpdateAll() end, self)
+        events.onGame(
+            "PET_BAR_UPDATE_COOLDOWN",
+            function()
+                self:UpdateAll()
+            end,
+            self
+        )
         events.onUnit("UNIT_PET", "player", all, self)
         events.onUnit("UNIT_FLAGS", "pet", all, self)
         events.onUnit("UNIT_AURA", "pet", all, self)
-        events.onGame("UPDATE_BINDINGS", function() self:UpdateBindings() end, self)
-        events.on("SUUUI_KEYBINDMODE_CHANGED", function() self:UpdateShown() end, self)
+        events.onGame(
+            "UPDATE_BINDINGS",
+            function()
+                self:UpdateBindings()
+            end,
+            self
+        )
+        events.on(
+            "SUUUI_KEYBINDMODE_CHANGED",
+            function()
+                self:UpdateShown()
+            end,
+            self
+        )
         self:SetEnabled(true)
         all()
     end
 
     -- Right click toggles autocast where the ability allows it. Out of combat.
     function UpdateAutocastClicks()
-        combat.run("classbar:autocast:" .. self.name, function()
-            for _, b in ipairs(self.buttons) do
-                local name = b.petName
-                local allowed = name ~= nil and uiText.flag(b.autoCastAllowed)
-                b:SetAttribute("type2", allowed and "macro" or "pet")
-                b:SetAttribute("macrotext2", allowed and ("/petautocasttoggle " .. (name or "")) or nil)
-            end
-        end, "Action bars")
+        combat.run(
+            "classbar:autocast:" .. self.name,
+            function()
+                for _, b in ipairs(self.buttons) do
+                    local name = b.petName
+                    local allowed = name ~= nil and uiText.flag(b.autoCastAllowed)
+                    b:SetAttribute("type2", allowed and "macro" or "pet")
+                    b:SetAttribute("macrotext2", allowed and ("/petautocasttoggle " .. (name or "")) or nil)
+                end
+            end,
+            "Action bars"
+        )
     end
 
     -- Shown by its state driver; keybind mode shows it even without a pet, so
     -- its keys can be bound (the driver comes back when the mode ends). Out of
     -- combat.
     function UpdateShown()
-        combat.run("classbar:shown:" .. self.name, function()
-            local binding = keybindMode.isActive()
-            UnregisterStateDriver(self.header, "visibility")
-            if not self.enabled then
-                self.header:Hide()
-            elseif binding then
-                self.header:Show()
-            else
-                RegisterStateDriver(self.header, "visibility", PET_VISIBILITY)
-            end
-        end, "Action bars")
+        combat.run(
+            "classbar:shown:" .. self.name,
+            function()
+                local binding = keybindMode.isActive()
+                UnregisterStateDriver(self.header, "visibility")
+                if not self.enabled then
+                    self.header:Hide()
+                elseif binding then
+                    self.header:Show()
+                else
+                    RegisterStateDriver(self.header, "visibility", PET_VISIBILITY)
+                end
+            end,
+            "Action bars"
+        )
     end
 
     override function SetEnabled(on: unknown)
@@ -414,7 +504,6 @@ export class PetBar extends ClassBar<PetButton>
         self:UpdateShown()
         self:UpdateBindings()
     end
-
 end
 
 export function petBar(parent: Frame, opts: ClassBarOptions): PetBar
@@ -470,12 +559,16 @@ local DIR = Enum.StatusBarTimerDirection or {}
 local IMMEDIATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.Immediate
 
 local function knows(spellID: number?): boolean
-    if not spellID then return false end
+    if not spellID then
+        return false
+    end
     local book = G.C_SpellBook
     local inBook = book and book.IsSpellInSpellBook
     if inBook then
         local ok, yes = pcall(inBook, spellID, Enum.SpellBookSpellBank.Player, false)
-        if ok then return yes and true or false end
+        if ok then
+            return yes and true or false
+        end
     end
     local isPlayerSpell = G.IsPlayerSpell
     return isPlayerSpell and isPlayerSpell(spellID) or false
@@ -483,7 +576,9 @@ end
 
 -- The totems you know for an element (the game's list for its slot).
 local function elementSpells(slot: number): number[]
-    local ok, list = pcall(function(): number[] return { G.GetMultiCastTotemSpells(slot) } end)
+    local ok, list = pcall(function(): number[]
+        return { G.GetMultiCastTotemSpells(slot) }
+    end)
     return ok and list or {}
 end
 
@@ -495,7 +590,9 @@ end
 -- The spell an element's slot holds in a set (readable in combat too).
 local function slotSpell(slot: number, page: number?): number?
     local kind, id = G.GetActionInfo(slotAction(slot, page))
-    if kind == "spell" and id and not secret.isSecret(id) then return id :: number end
+    if kind == "spell" and id and not secret.isSecret(id) then
+        return id :: number
+    end
     return nil
 end
 
@@ -570,17 +667,29 @@ class PickArrow extends Button
         self.icon:SetSize(10, 10)
         self.icon:SetPoint("CENTER")
         self:SetScript("OnClick", open)
-        self:SetScript("OnEnter", function() self.over = true end)
+        self:SetScript("OnEnter", function()
+            self.over = true
+        end)
         self:SetScript("OnLeave", function()
             self.over = false
-            after(0.3, function() if not (self.over or b:IsMouseOver()) then self:Hide() end end)
+            after(0.3, function()
+                if not (self.over or b:IsMouseOver()) then
+                    self:Hide()
+                end
+            end)
         end)
         self:Hide()
         b:HookScript("OnEnter", function()
-            if not InCombatLockdown() and wanted() then self:Show() end
+            if not InCombatLockdown() and wanted() then
+                self:Show()
+            end
         end)
         b:HookScript("OnLeave", function()
-            after(0.3, function() if not (self.over or b:IsMouseOver()) then self:Hide() end end)
+            after(0.3, function()
+                if not (self.over or b:IsMouseOver()) then
+                    self:Hide()
+                end
+            end)
         end)
     end
 end
@@ -643,7 +752,9 @@ class TotemButton extends ActionButton
     end
 
     override function ShowTooltip()
-        if self.spellID then GameTooltip:SetSpellByID(self.spellID) end
+        if self.spellID then
+            GameTooltip:SetSpellByID(self.spellID)
+        end
         if self.known then
             local cr, cg, cb = draw.rgba("ink-muted")
             GameTooltip:AddLine("Right click: dismiss it. The arrow: choose another.", cr, cg, cb, true)
@@ -666,7 +777,9 @@ class CallButton extends ActionButton
     override function Update() end
 
     override function ShowTooltip()
-        if self.spellID then GameTooltip:SetSpellByID(self.spellID) end
+        if self.spellID then
+            GameTooltip:SetSpellByID(self.spellID)
+        end
         if self.bar.knownSets > 1 then
             local cr, cg, cb = draw.rgba("ink-muted")
             GameTooltip:AddLine("The arrow: another set of totems.", cr, cg, cb, true)
@@ -683,7 +796,9 @@ class RecallButton extends ActionButton
 
     override function Update() end
 
-    override function ShowTooltip() GameTooltip:SetSpellByID(RECALL) end
+    override function ShowTooltip()
+        GameTooltip:SetSpellByID(RECALL)
+    end
 end
 
 -- A row of a list over the bar: its hover, icon, label and tick.
@@ -713,8 +828,12 @@ class PickRow extends Button
         draw.paint(self.check, "gilt-text")
         self.check:SetSize(10, 10)
         self.check:SetPoint("RIGHT", -6, 0)
-        self:SetScript("OnEnter", function() self.hover:Show() end)
-        self:SetScript("OnLeave", function() self.hover:Hide() end)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
     end
 end
 
@@ -754,7 +873,9 @@ local function totemIsChosen(b: TotemButton): boolean
     local slot = b.element.slot
     local ok, have, _, _, _, _, _, spellID = pcall(G.GetTotemInfo, slot)
     if not ok or secret.isSecret(have) or secret.isSecret(spellID) then
-        if b.castAt and GetTime() - b.castAt < 1 then b.chosen = true end
+        if b.castAt and GetTime() - b.castAt < 1 then
+            b.chosen = true
+        end
         return b.chosen ~= false
     end
     b.castAt = nil
@@ -763,8 +884,8 @@ local function totemIsChosen(b: TotemButton): boolean
         return true
     end
     local chosen = slotSpell(slot, b.bar.page)
-    local same = not chosen or spellID == chosen
-        or (G.C_Spell.GetSpellName(spellID :: number) or 1) == (G.C_Spell.GetSpellName(chosen) or 2)
+    local same = not chosen or spellID == chosen or
+        (G.C_Spell.GetSpellName(spellID :: number) or 1) == (G.C_Spell.GetSpellName(chosen) or 2)
     b.chosen = same and true or false
     return b.chosen == true
 end
@@ -792,8 +913,16 @@ export class TotemBar extends ClassBar<TotemButton>
             b:RegisterForClicks("AnyUp", "AnyDown")
             b.showEmpty = true
             b.bindLabel = (opts.label or opts.name) .. ": " .. element.word
-            b.arrow = PickArrow.new(b, function() self:OpenPicker(b) end, function() return #elementSpells(element.slot) > 1 end)
-            b:HookScript("OnClick", function(_: Button, button: string) if button == "LeftButton" then b.castAt = GetTime() end end)
+            b.arrow = PickArrow.new(b, function()
+                self:OpenPicker(b)
+            end, function()
+                return #elementSpells(element.slot) > 1
+            end)
+            b:HookScript("OnClick", function(_: Button, button: string)
+                if button == "LeftButton" then
+                    b.castAt = GetTime()
+                end
+            end)
             self.buttons[i] = b
         end
         -- Call of the Elements, after a hairline
@@ -803,35 +932,74 @@ export class TotemBar extends ClassBar<TotemButton>
         self.call = CallButton.new(self, opts.name .. "Call")
         self.call:SetID(0)
         self.call:RegisterForClicks("AnyUp", "AnyDown")
-        self.call.arrow = PickArrow.new(self.call, function() self:OpenSets() end, function() return self.knownSets > 1 end)
+        self.call.arrow = PickArrow.new(self.call, function()
+            self:OpenSets()
+        end, function()
+            return self.knownSets > 1
+        end)
         self.call:HookScript("OnClick", function()
-            for _, b in ipairs(self.buttons) do b.castAt = GetTime() end
+            for _, b in ipairs(self.buttons) do
+                b.castAt = GetTime()
+            end
         end)
         -- Totemic Recall: the last button, on the right of Call
         self.recall = RecallButton.new(self, opts.name .. "Recall")
         self.recall:SetID(0)
         self.recall:RegisterForClicks("AnyUp", "AnyDown")
 
-        local function refresh() self:Refresh() end
-        local function all() self:UpdateAll() end
-        local gameEvents: EventName[] = { "PLAYER_ENTERING_WORLD", "SPELLS_CHANGED", "UPDATE_MULTI_CAST_ACTIONBAR", "LEARNED_SPELL_IN_SKILL_LINE" }
+        local function refresh()
+            self:Refresh()
+        end
+        local function all()
+            self:UpdateAll()
+        end
+        local gameEvents: EventName[] = {
+            "PLAYER_ENTERING_WORLD",
+            "SPELLS_CHANGED",
+            "UPDATE_MULTI_CAST_ACTIONBAR",
+            "LEARNED_SPELL_IN_SKILL_LINE",
+        }
         for _, e in ipairs(gameEvents) do
             pcall(events.onGame, e, refresh, self)
         end
-        local updates: EventName[] = { "ACTIONBAR_SLOT_CHANGED", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_COOLDOWN" }
+        local updates: EventName[] = {
+            "ACTIONBAR_SLOT_CHANGED",
+            "SPELL_UPDATE_COOLDOWN",
+            "SPELL_UPDATE_USABLE",
+            "ACTIONBAR_UPDATE_COOLDOWN",
+        }
         for _, e in ipairs(updates) do
             events.onGame(e, all, self)
         end
-        events.onGame("PLAYER_TOTEM_UPDATE", function() self:UpdateTimers() end, self)
+        events.onGame(
+            "PLAYER_TOTEM_UPDATE",
+            function()
+                self:UpdateTimers()
+            end,
+            self
+        )
         -- out of a fight the slots' totems can be read again
-        events.onGame("PLAYER_REGEN_ENABLED", function() self:UpdateTimers() end, self)
+        events.onGame(
+            "PLAYER_REGEN_ENABLED",
+            function()
+                self:UpdateTimers()
+            end,
+            self
+        )
         -- a fight closes the list while it still may (the start of combat
         -- allows it)
-        events.onGame("PLAYER_REGEN_DISABLED", function()
-            self:ClosePicker()
-            local sets = self.sets
-            if sets and sets:IsShown() then sets:Hide(); sets.catcher:Hide() end
-        end, self)
+        events.onGame(
+            "PLAYER_REGEN_DISABLED",
+            function()
+                self:ClosePicker()
+                local sets = self.sets
+                if sets and sets:IsShown() then
+                    sets:Hide()
+                    sets.catcher:Hide()
+                end
+            end,
+            self
+        )
         self:Refresh()
         extend.add(extend.Kind.ActionBar, self, { name = opts.name, totems = true })
     end
@@ -844,7 +1012,9 @@ export class TotemBar extends ClassBar<TotemButton>
         for _, b in ipairs(self.buttons) do
             local s = b.segment
             local ok, d = pcall(G.GetTotemDuration, b.element.slot)
-            if ok and d then anyDown = true end
+            if ok and d then
+                anyDown = true
+            end
             if ok and d and totemIsChosen(b) then
                 pcall(s.drain.SetTimerDuration, s.drain, d, IMMEDIATE, DIR.RemainingTime)
                 s.drain:Show()
@@ -857,7 +1027,9 @@ export class TotemBar extends ClassBar<TotemButton>
             else
                 s.drain:Hide()
                 local binding = s.binding
-                if binding then pcall(binding.SetEnabled, binding, false) end
+                if binding then
+                    pcall(binding.SetEnabled, binding, false)
+                end
                 s.text:SetText("")
                 s.text:Hide()
             end
@@ -868,37 +1040,51 @@ export class TotemBar extends ClassBar<TotemButton>
 
     -- Which totem each button casts and what the bar holds: out of combat.
     function Refresh()
-        combat.run("classbar:totems:" .. self.name, function()
-            local anyKnown = false
-            -- the set: the chosen one while you know its summon spell, else the first
-            if self.page ~= 1 and not knows(SUMMONS[self.page]) then self.page = 1 end
-            for _, b in ipairs(self.buttons) do
-                local slot = b.element.slot
-                b:SetAttribute("type1", "action")
-                b:SetAttribute("action", slotAction(slot, self.page))
-                b:SetAttribute("type2", "destroytotem")
-                b:SetAttribute("totem-slot", slot)
-                if #elementSpells(slot) > 0 then anyKnown = true end
-            end
-            local summon = SUMMONS[self.page]
-            self.hasCall = knows(summon)
-            self.knownSets = 0
-            for _, id in ipairs(SUMMONS) do if knows(id) then self.knownSets = self.knownSets + 1 end end
-            self.call:SetAttribute("type", self.hasCall and "spell" or nil)
-            self.call:SetAttribute("spell", self.hasCall and summon or nil)
-            self.call.spellID = self.hasCall and summon or nil
-            self.hasRecall = knows(RECALL)
-            self.recall:SetAttribute("type", self.hasRecall and "spell" or nil)
-            self.recall:SetAttribute("spell", self.hasRecall and RECALL or nil)
-            self.header:SetShown(self.enabled and anyKnown)
-            self.anyKnown = anyKnown
-            self:Layout()
-        end, "Action bars")
+        combat.run(
+            "classbar:totems:" .. self.name,
+            function()
+                local anyKnown = false
+                -- the set: the chosen one while you know its summon spell, else the first
+                if self.page ~= 1 and not knows(SUMMONS[self.page]) then
+                    self.page = 1
+                end
+                for _, b in ipairs(self.buttons) do
+                    local slot = b.element.slot
+                    b:SetAttribute("type1", "action")
+                    b:SetAttribute("action", slotAction(slot, self.page))
+                    b:SetAttribute("type2", "destroytotem")
+                    b:SetAttribute("totem-slot", slot)
+                    if #elementSpells(slot) > 0 then
+                        anyKnown = true
+                    end
+                end
+                local summon = SUMMONS[self.page]
+                self.hasCall = knows(summon)
+                self.knownSets = 0
+                for _, id in ipairs(SUMMONS) do
+                    if knows(id) then
+                        self.knownSets = self.knownSets + 1
+                    end
+                end
+                self.call:SetAttribute("type", self.hasCall and "spell" or nil)
+                self.call:SetAttribute("spell", self.hasCall and summon or nil)
+                self.call.spellID = self.hasCall and summon or nil
+                self.hasRecall = knows(RECALL)
+                self.recall:SetAttribute("type", self.hasRecall and "spell" or nil)
+                self.recall:SetAttribute("spell", self.hasRecall and RECALL or nil)
+                self.header:SetShown(self.enabled and anyKnown)
+                self.anyKnown = anyKnown
+                self:Layout()
+            end,
+            "Action bars"
+        )
         self:UpdateAll()
     end
 
     override function UpdateAll()
-        for _, b in ipairs(self.buttons) do b:Update() end
+        for _, b in ipairs(self.buttons) do
+            b:Update()
+        end
         local c = self.call
         local spellID = c.spellID
         if spellID then
@@ -924,43 +1110,52 @@ export class TotemBar extends ClassBar<TotemButton>
     -- The row and the strip over it (Call of the Elements after a hairline),
     -- Call and Recall after a hairline.
     override function Layout(_count: number?)
-        combat.run("classbar:totemlayout:" .. self.name, function()
-            local px, gap = self.size or 18, S["space-2"]
-            local rowY = 0
-            local stripY = px + S["space-1"]
-            for i, b in ipairs(self.buttons) do
-                b:Resize(px)
-                b:ClearAllPoints()
-                b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), rowY)
-                b.empty.glyph:SetSize(math.floor(px * 0.55), math.floor(px * 0.55))
-                -- Resize draws the dashes again at a new size (in ink): gilt-faint
-                b:ShowEmptyLook()
-                local s = b.segment
-                s:ClearAllPoints()
-                s:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), stripY)
-                s:SetWidth(px)
-            end
-            local rowEnd = #self.buttons * (px + gap) - gap
-            self.rule:ClearAllPoints()
-            self.rule:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", rowEnd + 2, math.floor((px - 12) / 2))
-            self.rule:SetShown(self.hasCall or self.hasRecall)
-            -- after the hairline: Call, then Recall, each only once learned
-            local x = rowEnd + 5
-            local extras: { button: ActionButton, shown: boolean }[] = {
-                { button = self.call, shown = self.hasCall }, { button = self.recall, shown = self.hasRecall },
-            }
-            for _, extra in ipairs(extras) do
-                local b, shown = extra.button, extra.shown
-                b:Resize(px)
-                b:ClearAllPoints()
-                b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", x, rowY)
-                b:SetShown(shown)
-                if shown then x = x + px + gap end
-            end
-            local width = (self.hasCall or self.hasRecall) and (x - gap) or rowEnd
-            self.header:SetSize(width, stripY + STRIP_H)
-            if self.onLayout then self.onLayout(self) end
-        end, "Action bars")
+        combat.run(
+            "classbar:totemlayout:" .. self.name,
+            function()
+                local px, gap = self.size or 18, S["space-2"]
+                local rowY = 0
+                local stripY = px + S["space-1"]
+                for i, b in ipairs(self.buttons) do
+                    b:Resize(px)
+                    b:ClearAllPoints()
+                    b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), rowY)
+                    b.empty.glyph:SetSize(math.floor(px * 0.55), math.floor(px * 0.55))
+                    -- Resize draws the dashes again at a new size (in ink): gilt-faint
+                    b:ShowEmptyLook()
+                    local s = b.segment
+                    s:ClearAllPoints()
+                    s:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", (i - 1) * (px + gap), stripY)
+                    s:SetWidth(px)
+                end
+                local rowEnd = #self.buttons * (px + gap) - gap
+                self.rule:ClearAllPoints()
+                self.rule:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", rowEnd + 2, math.floor((px - 12) / 2))
+                self.rule:SetShown(self.hasCall or self.hasRecall)
+                -- after the hairline: Call, then Recall, each only once learned
+                local x = rowEnd + 5
+                local extras: { button: ActionButton, shown: boolean }[] = {
+                    { button = self.call, shown = self.hasCall },
+                    { button = self.recall, shown = self.hasRecall },
+                }
+                for _, extra in ipairs(extras) do
+                    local b, shown = extra.button, extra.shown
+                    b:Resize(px)
+                    b:ClearAllPoints()
+                    b:SetPoint("BOTTOMLEFT", self.header, "BOTTOMLEFT", x, rowY)
+                    b:SetShown(shown)
+                    if shown then
+                        x = x + px + gap
+                    end
+                end
+                local width = (self.hasCall or self.hasRecall) and (x - gap) or rowEnd
+                self.header:SetSize(width, stripY + STRIP_H)
+                if self.onLayout then
+                    self.onLayout(self)
+                end
+            end,
+            "Action bars"
+        )
     end
 
     override function SetButtonSize(px: number)
@@ -977,10 +1172,14 @@ export class TotemBar extends ClassBar<TotemButton>
     -- row each (the game's own way of choosing), the chosen one ticked. Out of
     -- combat only: it closes when a fight starts.
     function OpenPicker(b: TotemButton)
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         local p = self.picker
         if not p then
-            p = PickList.new(function() self:ClosePicker() end)
+            p = PickList.new(function()
+                self:ClosePicker()
+            end)
             p:SetSize(136, 40)
             self.picker = p
         end
@@ -995,7 +1194,10 @@ export class TotemBar extends ClassBar<TotemButton>
                 r = PickRow.new(p, "SecureActionButtonTemplate", 20, 14)
                 r:RegisterForClicks("AnyUp", "AnyDown")
                 r:HookScript("PostClick", function()
-                    after(0, function() self:ClosePicker(); self:UpdateAll() end)
+                    after(0, function()
+                        self:ClosePicker()
+                        self:UpdateAll()
+                    end)
                 end)
                 p.rows[i] = r
             end
@@ -1011,11 +1213,15 @@ export class TotemBar extends ClassBar<TotemButton>
             r:Show()
             y = y - 21
         end
-        for i = #spells + 1, #p.rows do p.rows[i]:Hide() end
+        for i = #spells + 1, #p.rows do
+            p.rows[i]:Hide()
+        end
         p:SetHeight(-y + 4)
         p:ClearAllPoints()
         p:SetPoint("BOTTOMLEFT", b, "TOPLEFT", 0, STRIP_H + S["space-1"] + 6)
-        for _, other in ipairs(self.buttons) do other.picking = other == b end
+        for _, other in ipairs(self.buttons) do
+            other.picking = other == b
+        end
         p.catcher:Show()
         p:Show()
         self:UpdateAll()
@@ -1023,30 +1229,43 @@ export class TotemBar extends ClassBar<TotemButton>
 
     function ClosePicker()
         local p = self.picker
-        if not p or InCombatLockdown() then return end
+        if not p or InCombatLockdown() then
+            return
+        end
         p:Hide()
         p.catcher:Hide()
-        for _, b in ipairs(self.buttons) do b.picking = false end
+        for _, b in ipairs(self.buttons) do
+            b.picking = false
+        end
         self:UpdateAll()
     end
 
     -- The set the bar works on (1-3: Call of the Elements, Ancestors,
     -- Spirits). Out of combat.
     function SetPage(page: number)
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         self.page = page
-        if self.onPage then self.onPage(page) end
+        if self.onPage then
+            self.onPage(page)
+        end
         self:Refresh()
     end
 
     -- The list of your sets over the Call button: each summon spell you know,
     -- its four chosen totems after it, the one in use ticked. Out of combat.
     function OpenSets()
-        if InCombatLockdown() then return end
+        if InCombatLockdown() then
+            return
+        end
         local p = self.sets
         if not p then
             local list: PickList
-            list = PickList.new(function() list:Hide(); list.catcher:Hide() end)
+            list = PickList.new(function()
+                list:Hide()
+                list.catcher:Hide()
+            end)
             list.title:SetValue("TOTEM SETS")
             self.sets = list
             p = list
@@ -1095,14 +1314,15 @@ export class TotemBar extends ClassBar<TotemButton>
                 y = y - 23
             end
         end
-        for i = n + 1, #p.rows do p.rows[i]:Hide() end
+        for i = n + 1, #p.rows do
+            p.rows[i]:Hide()
+        end
         p:SetSize(240, -y + 4)
         p:ClearAllPoints()
         p:SetPoint("BOTTOMLEFT", self.call, "TOPLEFT", 0, STRIP_H + S["space-1"] + 6)
         p.catcher:Show()
         p:Show()
     end
-
 end
 
 export function totemBar(parent: Frame, opts: ClassBarOptions): TotemBar

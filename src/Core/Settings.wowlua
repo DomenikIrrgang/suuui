@@ -42,7 +42,9 @@ import * as vision from "./Vision"
 
 -- The keys of `t` sorted as strings (plugin data may mix key types).
 local function sortedKeys<K, V>(t: { [K]: V }): K[]
-    return tbl.keys(t, function(a: K, b: K): boolean return tostring(a) < tostring(b) end)
+    return tbl.keys(t, function(a: K, b: K): boolean
+        return tostring(a) < tostring(b)
+    end)
 end
 
 local copy, equal, ownerName = tbl.copy, tbl.equal, util.ownerName
@@ -80,23 +82,24 @@ const MIGRATED = "__migrated"
 
 local function stored(p: Profile?, namespace: string, key: string): unknown
     local t = p and p[namespace]
-    if t then return t[key] end
+    if t then
+        return t[key]
+    end
     return nil
 end
 
 export class SettingsStore
-    private defaults: { [string]: Values } = {}  -- namespace -> { key -> default }
-    private watchers: { [string]: Hook<Watcher>[] } = {}  -- "namespace.key" -> { { fn, owner }, ... }
-    private vetoes: { [string]: Hook<Veto>[] } = {}    -- "namespace.key" -> { { fn, owner }, ... }
+    private defaults: { [string]: Values } = {} -- namespace -> { key -> default }
+    private watchers: { [string]: Hook<Watcher>[] } = {} -- "namespace.key" -> { { fn, owner }, ... }
+    private vetoes: { [string]: Hook<Veto>[] } = {} -- "namespace.key" -> { { fn, owner }, ... }
     private generation: { [string]: number } = {} -- "namespace.key" -> write count
-    private migrationList: Migration[] = {}      -- in the order they were registered
+    private migrationList: Migration[] = {} -- in the order they were registered
     -- bound when the saved data has loaded
     private db: SavedDB? = nil
     private profile: Profile? = nil
     private charKey: string? = nil
 
-    constructor(private reporter: fault.Reporter = fault.log, private notifier: events.Notifier = events.bus)
-    end
+    constructor(private reporter: fault.Reporter = fault.log, private notifier: events.Notifier = events.bus) end
 
     private function loadedDB(): SavedDB
         return (assert(self.db, "SuuUI Settings: saved settings have not loaded yet"))
@@ -122,9 +125,13 @@ export class SettingsStore
     -- (errors blame the caller of the module's function: level 4)
     private function default(namespace: string, key: string): unknown
         local d = self.defaults[namespace]
-        if not d then error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 4) end
+        if not d then
+            error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 4)
+        end
         local v = d[key]
-        if v == nil then error(("SuuUI Settings: %s has no setting %q"):format(namespace, tostring(key)), 4) end
+        if v == nil then
+            error(("SuuUI Settings: %s has no setting %q"):format(namespace, tostring(key)), 4)
+        end
         return v
     end
 
@@ -133,7 +140,9 @@ export class SettingsStore
     private function valueOf(namespace: string, key: string): unknown
         local d = self:default(namespace, key)
         local v = stored(self.profile, namespace, key)
-        if v == nil or type(v) ~= type(d) then return d end
+        if v == nil or type(v) ~= type(d) then
+            return d
+        end
         return v
     end
 
@@ -170,7 +179,9 @@ export class SettingsStore
     -- Whether a namespace has a setting called key.
     function has(namespace: string, key: string?): boolean
         local d = self.defaults[namespace]
-        if not d then return false end
+        if not d then
+            return false
+        end
         return key == nil or d[key] ~= nil
     end
 
@@ -210,7 +221,9 @@ export class SettingsStore
                         table.remove(hooks, i)
                     end
                 end
-                if #hooks == 0 then map[id] = nil end
+                if #hooks == 0 then
+                    map[id] = nil
+                end
             end
         end
     end
@@ -223,7 +236,9 @@ export class SettingsStore
         if hooks then
             local snapshot = { unpack(hooks) }
             for _, w in ipairs(snapshot) do
-                if self.generation[id] ~= gen then return end -- superseded by a watcher's own write
+                if self.generation[id] ~= gen then
+                    return
+                end -- superseded by a watcher's own write
                 if not w.dead then
                     self.reporter:call(ownerName(w.owner), w.fn, self:get(namespace, key), namespace, key)
                 end
@@ -244,7 +259,9 @@ export class SettingsStore
             local t = p[namespace]
             if t then
                 t[key] = nil
-                if next(t) == nil then p[namespace] = nil end
+                if next(t) == nil then
+                    p[namespace] = nil
+                end
             end
         else
             local t = p[namespace] or {}
@@ -260,13 +277,17 @@ export class SettingsStore
         end
         self:current()
         local old = self:valueOf(namespace, key)
-        if equal(old, value) then return true end
+        if equal(old, value) then
+            return true
+        end
 
         local hooks = self.vetoes[namespace .. "." .. key]
         if hooks then
             for _, v in ipairs({ unpack(hooks) }) do
                 local ok, allowed, reason = self.reporter:call(ownerName(v.owner), v.fn, copy(value), copy(old))
-                if ok and allowed == false then return false, reason end
+                if ok and allowed == false then
+                    return false, reason
+                end
             end
         end
 
@@ -284,7 +305,9 @@ export class SettingsStore
         local namespaces: string[] = namespace and { namespace } or sortedKeys(self.defaults)
         for _, n in ipairs(namespaces) do
             local defs = self.defaults[n]
-            if not defs then error(("SuuUI Settings: unknown namespace %q"):format(n), 3) end
+            if not defs then
+                error(("SuuUI Settings: unknown namespace %q"):format(n), 3)
+            end
             for _, k in ipairs(sortedKeys(defs)) do
                 self:set(n, k, copy(defs[k]))
             end
@@ -302,7 +325,9 @@ export class SettingsStore
     private function screen(p: Profile)
         for id, hooks in pairs(self.vetoes) do
             local namespace, key = id:match("^([^%.]+)%.(.+)$")
-            if not (namespace and key) then continue end
+            if not (namespace and key) then
+                continue
+            end
             local v, d = stored(p, namespace, key), (self.defaults[namespace] :: Values)[key]
             if v ~= nil and type(v) == type(d) then
                 for _, h in ipairs({ unpack(hooks) }) do
@@ -310,7 +335,9 @@ export class SettingsStore
                     local values = p[namespace]
                     if ok and allowed == false and values then
                         values[key] = nil
-                        if next(values) == nil then p[namespace] = nil end
+                        if next(values) == nil then
+                            p[namespace] = nil
+                        end
                         break
                     end
                 end
@@ -332,55 +359,83 @@ export class SettingsStore
     private function runMigration(p: Profile, m: Migration)
         local tag = m.namespace .. "/" .. m.id
         local done = p[MIGRATED]
-        if done and done[tag] then return end
+        if done and done[tag] then
+            return
+        end
         local values = p[m.namespace]
         if values then
-            if not self.reporter:call(m.owner, m.fn, values) then return end
+            if not self.reporter:call(m.owner, m.fn, values) then
+                return
+            end
             -- what the migration left at its default isn't stored
             local defs = self.defaults[m.namespace] :: Values
             for k, v in pairs(values) do
-                if defs[k] ~= nil and equal(v, defs[k]) then values[k] = nil end
+                if defs[k] ~= nil and equal(v, defs[k]) then
+                    values[k] = nil
+                end
             end
-            if next(values) == nil then p[m.namespace] = nil end
+            if next(values) == nil then
+                p[m.namespace] = nil
+            end
         end
-        if type(p[MIGRATED]) ~= "table" then p[MIGRATED] = {} end
+        if type(p[MIGRATED]) ~= "table" then
+            p[MIGRATED] = {}
+        end
         p[MIGRATED][tag] = true
     end
 
     -- Every migration profile data `p` hasn't had yet, in the order they
     -- came.
     private function migrateAll(p: Profile)
-        for _, m in ipairs(self.migrationList) do self:runMigration(p, m) end
+        for _, m in ipairs(self.migrationList) do
+            self:runMigration(p, m)
+        end
     end
 
     function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?)
         local defs = self.defaults[namespace]
-        if not defs then error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 3) end
-        assert(type(id) == "string" and id ~= "" and type(fn) == "function", "SuuUI Settings: a migration needs an id and a function")
+        if not defs then
+            error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 3)
+        end
+        assert(
+            type(id) == "string" and id ~= "" and type(fn) == "function",
+            "SuuUI Settings: a migration needs an id and a function"
+        )
         for _, m in ipairs(self.migrationList) do
-            assert(not (m.namespace == namespace and m.id == id), "SuuUI Settings: migration " .. namespace .. "/" .. id .. " is already registered")
+            assert(
+                not (m.namespace == namespace and m.id == id),
+                "SuuUI Settings: migration " .. namespace .. "/" .. id .. " is already registered"
+            )
         end
         local m: Migration = { namespace = namespace, id = id, fn = fn, owner = ownerName(owner or namespace) }
         self.migrationList[#self.migrationList + 1] = m
         local data = self.db
-        if not data then return end -- bind runs it on every profile
+        if not data then
+            return
+        end -- bind runs it on every profile
         -- Registered after the profiles loaded (a plugin's file): every
         -- profile now, and the watchers hear what changed in the current one.
         local p = self:current()
         local before = copy(p[namespace])
         for _, other in pairs(data.profiles) do
-            if type(other) == "table" then self:runMigration(other, m) end
+            if type(other) == "table" then
+                self:runMigration(other, m)
+            end
         end
         self:screen(p)
         for key in pairs(defs) do
-            if not equal(before and before[key], stored(p, namespace, key)) then self:notify(namespace, key) end
+            if not equal(before and before[key], stored(p, namespace, key)) then
+                self:notify(namespace, key)
+            end
         end
     end
 
     -- The migrations registered, in order (a copy of the list).
     function migrations(): Migration[]
         local out: Migration[] = {}
-        for i, m in ipairs(self.migrationList) do out[i] = m end
+        for i, m in ipairs(self.migrationList) do
+            out[i] = m
+        end
         return out
     end
 
@@ -404,22 +459,33 @@ export class SettingsStore
     function findProfile(text: string?): (string?, string?)
         local wanted = strtrim(text or "")
         local all = self:loadedDB().profiles
-        if all[wanted] then return wanted end
+        if all[wanted] then
+            return wanted
+        end
         local lower = wanted:lower()
         local exact: string? = nil
         local starts: string[] = {}
         for profileName in pairs(all) do
             local l = profileName:lower()
-            if l == lower then exact = profileName end
-            if wanted ~= "" and l:sub(1, #lower) == lower then starts[#starts + 1] = profileName end
+            if l == lower then
+                exact = profileName
+            end
+            if wanted ~= "" and l:sub(1, #lower) == lower then
+                starts[#starts + 1] = profileName
+            end
         end
-        if exact then return exact end
-        if #starts == 1 then return starts[1] end
+        if exact then
+            return exact
+        end
+        if #starts == 1 then
+            return starts[1]
+        end
         table.sort(starts)
         if #starts > 1 then
             return nil, ("\"%s\" could mean %s."):format(wanted, table.concat(starts, " or "))
         end
-        return nil, ("There is no profile called \"%s\". Profiles: %s."):format(wanted, table.concat(self:profileNames(), ", "))
+        return nil,
+            ("There is no profile called \"%s\". Profiles: %s."):format(wanted, table.concat(self:profileNames(), ", "))
     end
 
     private function changedBetween(a: Profile, b: Profile): Change[]
@@ -438,8 +504,12 @@ export class SettingsStore
     -- every registered setting whose value differs.
     function useProfile(text: string?): (boolean, string?)
         local profileName, err = self:findProfile(text)
-        if not profileName then return false, err end
-        if profileName == self:currentProfile() then return true end
+        if not profileName then
+            return false, err
+        end
+        if profileName == self:currentProfile() then
+            return true
+        end
         local data = self:loadedDB()
         local target = assert(data.profiles[profileName])
         self:migrateAll(target)
@@ -447,7 +517,9 @@ export class SettingsStore
         local changed = self:changedBetween(self:current(), target)
         data.chars[self.charKey :: string] = profileName
         self.profile = target
-        for _, c in ipairs(changed) do self:notify(c.namespace, c.key) end
+        for _, c in ipairs(changed) do
+            self:notify(c.namespace, c.key)
+        end
         self.notifier:emit("SUUUI_PROFILE_CHANGED", profileName)
         return true
     end
@@ -455,7 +527,9 @@ export class SettingsStore
     -- A new profile, copied from `from` (default: the current one).
     function createProfile(text: string?, from: string?): (boolean, string?)
         local profileName = strtrim(text or "")
-        if profileName == "" then return false, "A profile needs a name." end
+        if profileName == "" then
+            return false, "A profile needs a name."
+        end
         local data = self:loadedDB()
         for existing in pairs(data.profiles) do
             if existing:lower() == profileName:lower() then
@@ -465,7 +539,9 @@ export class SettingsStore
         local source = self:currentProfile()
         if from then
             local found, err = self:findProfile(from)
-            if not found then return false, err end
+            if not found then
+                return false, err
+            end
             source = found
         end
         data.profiles[profileName] = copy(assert(data.profiles[source :: string]))
@@ -478,22 +554,32 @@ export class SettingsStore
     -- login.
     function deleteProfile(text: string?): (boolean, string?)
         local profileName, err = self:findProfile(text)
-        if not profileName then return false, err end
-        if profileName == self:currentProfile() then return false, "You are using " .. profileName .. "; switch to another profile first." end
+        if not profileName then
+            return false, err
+        end
+        if profileName == self:currentProfile() then
+            return false, "You are using " .. profileName .. "; switch to another profile first."
+        end
         local data = self:loadedDB()
         data.profiles[profileName] = nil
         local unmapped = false
         local roles = data.roleProfiles
         if roles then
             for role, mapped in pairs(roles) do
-                if mapped == profileName then roles[role], unmapped = nil, true end
+                if mapped == profileName then
+                    roles[role], unmapped = nil, true
+                end
             end
         end
         for char, mapped in pairs(data.chars) do
-            if mapped == profileName then data.chars[char] = nil end
+            if mapped == profileName then
+                data.chars[char] = nil
+            end
         end
         self.notifier:emit("SUUUI_PROFILES_CHANGED")
-        if unmapped then self.notifier:emit("SUUUI_ROLE_PROFILES_CHANGED") end
+        if unmapped then
+            self.notifier:emit("SUUUI_ROLE_PROFILES_CHANGED")
+        end
         return true
     end
 
@@ -502,16 +588,24 @@ export class SettingsStore
     -- changed.
     function copyProfile(text: string?): (boolean, string?)
         local profileName, err = self:findProfile(text)
-        if not profileName then return false, err end
-        if profileName == self:currentProfile() then return true end
+        if not profileName then
+            return false, err
+        end
+        if profileName == self:currentProfile() then
+            return true
+        end
         local p = self:current()
         local data: Profile = copy(assert(self:loadedDB().profiles[profileName]))
         self:migrateAll(data)
         self:screen(data)
         local changed = self:changedBetween(p, data)
         wipe(p)
-        for k, v in pairs(data) do p[k] = v end
-        for _, c in ipairs(changed) do self:notify(c.namespace, c.key) end
+        for k, v in pairs(data) do
+            p[k] = v
+        end
+        for _, c in ipairs(changed) do
+            self:notify(c.namespace, c.key)
+        end
         self.notifier:emit("SUUUI_PROFILE_CHANGED", assert(self:currentProfile()))
         return true
     end
@@ -523,27 +617,35 @@ export class SettingsStore
     -- used.
     function setProfileValues(text: string?, entries: unknown[][]): (boolean, string?)
         local profileName = strtrim(text or "")
-        if profileName == "" then return false, "A profile needs a name." end
+        if profileName == "" then
+            return false, "A profile needs a name."
+        end
         local existing = self:findProfile(profileName)
         if existing and existing:lower() == profileName:lower() then
             profileName = existing
         else
             local ok, err = self:createProfile(profileName)
-            if not ok then return false, err end
+            if not ok then
+                return false, err
+            end
         end
         local target = assert(self:loadedDB().profiles[profileName])
         for _, e in ipairs(entries) do
             local namespace, key, value = e[1], e[2], e[3]
             local defs = type(namespace) == "string" and self.defaults[namespace] or nil
             if type(namespace) == "string" and type(key) == "string" and defs and defs[key] ~= nil then
-                if value == nil then value = defs[key] end
+                if value == nil then
+                    value = defs[key]
+                end
                 if target == self.profile then
                     self:set(namespace, key, copy(value))
                 elseif equal(value, defs[key]) then
                     local t = target[namespace]
                     if t then
                         t[key] = nil
-                        if next(t) == nil then target[namespace] = nil end
+                        if next(t) == nil then
+                            target[namespace] = nil
+                        end
                     end
                 else
                     local t = target[namespace] or {}
@@ -561,7 +663,9 @@ export class SettingsStore
     function roleProfile(role: string): string?
         local data = self.db
         local profileName = data and data.roleProfiles and data.roleProfiles[role]
-        if profileName and data and data.profiles[profileName] then return profileName end
+        if profileName and data and data.profiles[profileName] then
+            return profileName
+        end
         return nil
     end
 
@@ -608,7 +712,9 @@ export class SettingsStore
     -- A copy of a profile's stored values, for export.
     function exportProfile(text: string?): (Exported?, string?)
         local profileName, err = self:findProfile(text or self:currentProfile())
-        if not profileName then return nil, err end
+        if not profileName then
+            return nil, err
+        end
         return { name = profileName, data = copy(assert(self:loadedDB().profiles[profileName])) }
     end
 
@@ -618,7 +724,9 @@ export class SettingsStore
     -- installed here) are kept as they are.
     private function sanitize(data: unknown): Profile
         local out: Profile = {}
-        if type(data) ~= "table" then return out end
+        if type(data) ~= "table" then
+            return out
+        end
         for namespace, values in pairs(data) do
             if type(namespace) == "string" and type(values) == "table" then
                 for key, v in pairs(values) do
@@ -635,9 +743,13 @@ export class SettingsStore
             local defs = self.defaults[namespace]
             if defs then
                 for key, v in pairs(values) do
-                    if defs[key] ~= nil and type(v) ~= type(defs[key]) then values[key] = nil end
+                    if defs[key] ~= nil and type(v) ~= type(defs[key]) then
+                        values[key] = nil
+                    end
                 end
-                if next(values) == nil then out[namespace] = nil end
+                if next(values) == nil then
+                    out[namespace] = nil
+                end
             end
         end
         return out
@@ -646,7 +758,9 @@ export class SettingsStore
     -- A new profile from exported data; switches to it.
     function importProfile(text: string, data: unknown): (boolean, string?)
         local ok, err = self:createProfile(text)
-        if not ok then return false, err end
+        if not ok then
+            return false, err
+        end
         self:loadedDB().profiles[strtrim(text)] = self:sanitize(data)
         return self:useProfile(strtrim(text))
     end
@@ -677,7 +791,9 @@ export class SettingsStore
         local out: { [string]: Values } = {}
         for key, data in pairs(self:loadedDB().charData) do
             local values = type(data) == "table" and data[namespace]
-            if type(values) == "table" then out[key] = values end
+            if type(values) == "table" then
+                out[key] = values
+            end
         end
         return out
     end
@@ -704,11 +820,17 @@ export class SettingsStore
     -- put).
     function forgetCharData(namespace: string, key: string): boolean
         local all = self:loadedDB().charData
-        if key == self.charKey then return false end
+        if key == self.charKey then
+            return false
+        end
         local data = all[key]
-        if type(data) ~= "table" then return false end
+        if type(data) ~= "table" then
+            return false
+        end
         data[namespace] = nil
-        if next(data) == nil then all[key] = nil end
+        if next(data) == nil then
+            all[key] = nil
+        end
         return true
     end
 
@@ -728,13 +850,17 @@ export class SettingsStore
         self.db = data
         self.charKey = key
         local profileName = data.chars[key]
-        if not (profileName and data.profiles[profileName]) then profileName = key end
+        if not (profileName and data.profiles[profileName]) then
+            profileName = key
+        end
         data.chars[key] = profileName
         local p: Profile = data.profiles[profileName] or {}
         data.profiles[profileName] = p
         self.profile = p
         for _, other in pairs(data.profiles) do
-            if type(other) == "table" then self:migrateAll(other) end
+            if type(other) == "table" then
+                self:migrateAll(other)
+            end
         end
         self:screen(p)
         self.notifier:emit("SUUUI_SETTINGS_READY")
@@ -744,43 +870,87 @@ end
 -- SuuUI's settings, and its methods as the module's functions.
 export const store = SettingsStore.new()
 
-export function register(namespace: string, defs: Values) store:register(namespace, defs) end
-export function ready(): boolean return store:ready() end
-export function get(namespace: string, key: string): unknown return store:get(namespace, key) end
-export function peek(namespace: string, key: string): unknown return store:peek(namespace, key) end
-export function isDefault(namespace: string, key: string): boolean return store:isDefault(namespace, key) end
-export function list(): Listing[] return store:list() end
-export function has(namespace: string, key: string?): boolean return store:has(namespace, key) end
-export function defaultOf(namespace: string, key: string): unknown return store:defaultOf(namespace, key) end
-export function watch(namespace: string, key: string, fn: Watcher, owner: unknown) store:watch(namespace, key, fn, owner) end
-export function veto(namespace: string, key: string, fn: Veto, owner: unknown) store:veto(namespace, key, fn, owner) end
-export function unwatch(owner: unknown) store:unwatch(owner) end
-export function set(namespace: string, key: string, value: unknown): (boolean, string?) return store:set(namespace, key, value) end
-export function reset(namespace: string?, key: string?): boolean return store:reset(namespace, key) end
-export function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?) store:migrate(namespace, id, fn, owner) end
-export function migrations(): Migration[] return store:migrations() end
-export function charData(namespace: string): Values return store:charData(namespace) end
-export function allCharData(namespace: string): { [string]: Values } return store:allCharData(namespace) end
-export function getCharKey(): string? return store:getCharKey() end
-export function account(key: string): unknown return store:account(key) end
+export function register(namespace: string, defs: Values)
+    store:register(namespace, defs)
+end
+export function ready(): boolean
+    return store:ready()
+end
+export function get(namespace: string, key: string): unknown
+    return store:get(namespace, key)
+end
+export function peek(namespace: string, key: string): unknown
+    return store:peek(namespace, key)
+end
+export function isDefault(namespace: string, key: string): boolean
+    return store:isDefault(namespace, key)
+end
+export function list(): Listing[]
+    return store:list()
+end
+export function has(namespace: string, key: string?): boolean
+    return store:has(namespace, key)
+end
+export function defaultOf(namespace: string, key: string): unknown
+    return store:defaultOf(namespace, key)
+end
+export function watch(namespace: string, key: string, fn: Watcher, owner: unknown)
+    store:watch(namespace, key, fn, owner)
+end
+export function veto(namespace: string, key: string, fn: Veto, owner: unknown)
+    store:veto(namespace, key, fn, owner)
+end
+export function unwatch(owner: unknown)
+    store:unwatch(owner)
+end
+export function set(namespace: string, key: string, value: unknown): (boolean, string?)
+    return store:set(namespace, key, value)
+end
+export function reset(namespace: string?, key: string?): boolean
+    return store:reset(namespace, key)
+end
+export function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?)
+    store:migrate(namespace, id, fn, owner)
+end
+export function migrations(): Migration[]
+    return store:migrations()
+end
+export function charData(namespace: string): Values
+    return store:charData(namespace)
+end
+export function allCharData(namespace: string): { [string]: Values }
+    return store:allCharData(namespace)
+end
+export function getCharKey(): string?
+    return store:getCharKey()
+end
+export function account(key: string): unknown
+    return store:account(key)
+end
 
 -- A setting read as its default's type (the store keeps only values of
 -- that type, so these hold; a wrong namespace or key is an error).
 export function getNumber(namespace: string, key: string): number
     local v = store:get(namespace, key)
-    if type(v) ~= "number" then error(("SuuUI Settings: %s.%s isn't a number"):format(namespace, key), 2) end
+    if type(v) ~= "number" then
+        error(("SuuUI Settings: %s.%s isn't a number"):format(namespace, key), 2)
+    end
     return v
 end
 
 export function getString(namespace: string, key: string): string
     local v = store:get(namespace, key)
-    if type(v) ~= "string" then error(("SuuUI Settings: %s.%s isn't a string"):format(namespace, key), 2) end
+    if type(v) ~= "string" then
+        error(("SuuUI Settings: %s.%s isn't a string"):format(namespace, key), 2)
+    end
     return v
 end
 
 export function getTable(namespace: string, key: string): Values
     local v = store:get(namespace, key)
-    if type(v) ~= "table" then error(("SuuUI Settings: %s.%s isn't a table"):format(namespace, key), 2) end
+    if type(v) ~= "table" then
+        error(("SuuUI Settings: %s.%s isn't a table"):format(namespace, key), 2)
+    end
     return v :: Values
 end
 
@@ -789,26 +959,62 @@ export function accountString(key: string): string?
     local v = store:account(key)
     return type(v) == "string" and v or nil
 end
-export function setAccount(key: string, value: unknown) store:setAccount(key, value) end
-export function forgetCharData(namespace: string, key: string): boolean return store:forgetCharData(namespace, key) end
+export function setAccount(key: string, value: unknown)
+    store:setAccount(key, value)
+end
+export function forgetCharData(namespace: string, key: string): boolean
+    return store:forgetCharData(namespace, key)
+end
 
 export const profiles = {
-    current = function(): string? return store:currentProfile() end,
-    list = function(): string[] return store:profileNames() end,
-    find = function(text: string?): (string?, string?) return store:findProfile(text) end,
-    use = function(text: string?): (boolean, string?) return store:useProfile(text) end,
-    create = function(text: string?, from: string?): (boolean, string?) return store:createProfile(text, from) end,
-    delete = function(text: string?): (boolean, string?) return store:deleteProfile(text) end,
-    copyFrom = function(text: string?): (boolean, string?) return store:copyProfile(text) end,
-    setValues = function(text: string?, entries: unknown[][]): (boolean, string?) return store:setProfileValues(text, entries) end,
-    roleProfile = function(role: string): string? return store:roleProfile(role) end,
-    setRoleProfile = function(role: string, profileName: string?): boolean return store:setRoleProfile(role, profileName) end,
-    chosenRole = function(): string return store:chosenRole() end,
-    setChosenRole = function(role: string): boolean return store:setChosenRole(role) end,
-    lastRole = function(): string? return store:lastRole() end,
-    setLastRole = function(role: string) store:setLastRole(role) end,
-    export = function(text: string?): (Exported?, string?) return store:exportProfile(text) end,
-    import = function(text: string, data: unknown): (boolean, string?) return store:importProfile(text, data) end,
+    current = function(): string?
+        return store:currentProfile()
+    end,
+    list = function(): string[]
+        return store:profileNames()
+    end,
+    find = function(text: string?): (string?, string?)
+        return store:findProfile(text)
+    end,
+    use = function(text: string?): (boolean, string?)
+        return store:useProfile(text)
+    end,
+    create = function(text: string?, from: string?): (boolean, string?)
+        return store:createProfile(text, from)
+    end,
+    delete = function(text: string?): (boolean, string?)
+        return store:deleteProfile(text)
+    end,
+    copyFrom = function(text: string?): (boolean, string?)
+        return store:copyProfile(text)
+    end,
+    setValues = function(text: string?, entries: unknown[][]): (boolean, string?)
+        return store:setProfileValues(text, entries)
+    end,
+    roleProfile = function(role: string): string?
+        return store:roleProfile(role)
+    end,
+    setRoleProfile = function(role: string, profileName: string?): boolean
+        return store:setRoleProfile(role, profileName)
+    end,
+    chosenRole = function(): string
+        return store:chosenRole()
+    end,
+    setChosenRole = function(role: string): boolean
+        return store:setChosenRole(role)
+    end,
+    lastRole = function(): string?
+        return store:lastRole()
+    end,
+    setLastRole = function(role: string)
+        store:setLastRole(role)
+    end,
+    export = function(text: string?): (Exported?, string?)
+        return store:exportProfile(text)
+    end,
+    import = function(text: string, data: unknown): (boolean, string?)
+        return store:importProfile(text, data)
+    end,
 }
 
 -- The SavedVariables are in: the colour vision preset first, before
@@ -831,12 +1037,19 @@ register("core", {
 })
 
 export function debug(...: unknown)
-    if store:ready() and store:peek("core", "debug") then print("|cffa39b8b[debug]|r", ...) end
+    if store:ready() and store:peek("core", "debug") then
+        print("|cffa39b8b[debug]|r", ...)
+    end
 end
 
-watch("core", "debug", function(on: unknown)
-    print(on and "Debug lines on." or "Debug lines off.")
-end, "Core")
+watch(
+    "core",
+    "debug",
+    function(on: unknown)
+        print(on and "Debug lines on." or "Debug lines off.")
+    end,
+    "Core"
+)
 
 --------------------------------------------------------------------------------
 -- Chat commands
@@ -846,12 +1059,18 @@ local function parse(text: string, like: unknown): (unknown, string?)
     local t = type(like)
     if t == "boolean" then
         local l = text:lower()
-        if l == "true" or l == "on" or l == "yes" or l == "1" then return true end
-        if l == "false" or l == "off" or l == "no" or l == "0" then return false end
+        if l == "true" or l == "on" or l == "yes" or l == "1" then
+            return true
+        end
+        if l == "false" or l == "off" or l == "no" or l == "0" then
+            return false
+        end
         return nil, "expected on or off"
     elseif t == "number" then
         local n = tonumber(text)
-        if n then return n end
+        if n then
+            return n
+        end
         return nil, "expected a number"
     elseif t == "string" then
         return text
@@ -860,7 +1079,9 @@ local function parse(text: string, like: unknown): (unknown, string?)
 end
 
 local function show(v: unknown): string
-    if type(v) == "table" then return "(table)" end
+    if type(v) == "table" then
+        return "(table)"
+    end
     return tostring(v)
 end
 
@@ -869,33 +1090,50 @@ local function splitPath(path: string): (string?, string?)
 end
 
 registerCommand("get", "List every setting, or show one: /suu get core.debug", function(arg: string)
-    if not store:ready() then return print("Settings haven't loaded yet.") end
+    if not store:ready() then
+        return print("Settings haven't loaded yet.")
+    end
     if arg ~= "" then
         local namespace, key = splitPath(arg)
         if not (namespace and key and store:has(namespace, key)) then
             return print(("No setting called %s."):format(arg))
         end
-        return print(("%s = %s%s"):format(arg, show(store:peek(namespace, key)),
-            store:isDefault(namespace, key) and "" or "  (changed)"))
+        return print(
+            ("%s = %s%s"):format(
+                arg,
+                show(store:peek(namespace, key)),
+                store:isDefault(namespace, key) and "" or "  (changed)"
+            )
+        )
     end
     print(("Profile: %s"):format(tostring(store:currentProfile())))
     for _, entry in ipairs(store:list()) do
         for _, key in ipairs(entry.keys) do
-            _G.print(("  %s.%s = %s%s"):format(entry.namespace, key, show(store:peek(entry.namespace, key)),
-                store:isDefault(entry.namespace, key) and "" or "  (changed)"))
+            _G.print(
+                ("  %s.%s = %s%s"):format(
+                    entry.namespace,
+                    key,
+                    show(store:peek(entry.namespace, key)),
+                    store:isDefault(entry.namespace, key) and "" or "  (changed)"
+                )
+            )
         end
     end
 end)
 
 registerCommand("set", "Change a setting: /suu set core.debug on", function(arg: string)
-    if not store:ready() then return print("Settings haven't loaded yet.") end
+    if not store:ready() then
+        return print("Settings haven't loaded yet.")
+    end
     local path, text = arg:match("^(%S+)%s+(.+)$")
     local namespace, key = splitPath(path or "")
     if not (namespace and key and text and store:has(namespace, key)) then
         return print("Usage: /suu set <namespace.key> <value>. /suu get lists them.")
     end
     local value, err = parse(text, store:peek(namespace, key))
-    if value == nil then return print(("%s: %s."):format(tostring(path), tostring(err))) end
+    if value == nil then
+        return print(("%s: %s."):format(tostring(path), tostring(err)))
+    end
     local ok, reason = store:set(namespace, key, value)
     if ok then
         print(("%s = %s"):format(tostring(path), show(store:peek(namespace, key))))
@@ -904,8 +1142,12 @@ registerCommand("set", "Change a setting: /suu set core.debug on", function(arg:
     end
 end)
 
-registerCommand("reset", "Reset a setting, a namespace, or everything: /suu reset core.debug | core | all", function(arg: string)
-    if not store:ready() then return print("Settings haven't loaded yet.") end
+registerCommand("reset", "Reset a setting, a namespace, or everything: /suu reset core.debug | core | all", function(
+    arg: string
+)
+    if not store:ready() then
+        return print("Settings haven't loaded yet.")
+    end
     if arg == "all" then
         store:reset()
         return print("Every setting in " .. tostring(store:currentProfile()) .. " is back to its default.")
@@ -919,8 +1161,12 @@ registerCommand("reset", "Reset a setting, a namespace, or everything: /suu rese
     print(arg .. " is back to its default.")
 end)
 
-registerCommand("profile", "Show profiles; /suu profile use|new|delete <name> (unknown letter case, or the start of a name)", function(arg: string)
-    if not store:ready() then return print("Settings haven't loaded yet.") end
+registerCommand("profile", "Show profiles; /suu profile use|new|delete <name> (unknown letter case, or the start of a name)", function(
+    arg: string
+)
+    if not store:ready() then
+        return print("Settings haven't loaded yet.")
+    end
     local verb, text = arg:match("^(%S+)%s+(.+)$")
     local ok: boolean? = nil
     local err: string? = nil
@@ -928,15 +1174,21 @@ registerCommand("profile", "Show profiles; /suu profile use|new|delete <name> (u
         ok, err = store:useProfile(text)
     elseif verb == "new" then
         ok, err = store:createProfile(text)
-        if ok then ok, err = store:useProfile(text) end
+        if ok then
+            ok, err = store:useProfile(text)
+        end
     elseif verb == "delete" then
         local full = store:findProfile(text)
         ok, err = store:deleteProfile(text)
-        if ok then print("Deleted " .. tostring(full) .. ".") end
+        if ok then
+            print("Deleted " .. tostring(full) .. ".")
+        end
     elseif arg ~= "" then
         return print("Usage: /suu profile [use|new|delete <name>]")
     end
-    if err then return print(err) end
+    if err then
+        return print(err)
+    end
     local now = store:currentProfile()
     print("Profile: " .. tostring(now))
     for _, n in ipairs(store:profileNames()) do

@@ -28,25 +28,39 @@ type ButtonDef = { kind: string, value: unknown, label: string, action?: unknown
 type TestButton = { button: Button, icon: Texture, label: Text }
 
 local function show(v: unknown): string
-    if isSecret(v) then return "SECRET" end
-    if type(v) == "table" or type(v) == "userdata" then return type(v) end
+    if isSecret(v) then
+        return "SECRET"
+    end
+    if type(v) == "table" or type(v) == "userdata" then
+        return type(v)
+    end
     return tostring(v)
 end
 
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error " .. tostring(res[2]):sub(1, 120) end
+    if not res[1] then
+        return "error " .. tostring(res[2]):sub(1, 120)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, #res) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, #res) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, ", ")
 end
 
 -- `fn(...)`'s results as they are: an empty list when it's missing or raises.
 local function results(fn: unknown, ...: unknown): unknown[]
-    if type(fn) ~= "function" then return {} end
+    if type(fn) ~= "function" then
+        return {}
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return {} end
+    if not res[1] then
+        return {}
+    end
     table.remove(res, 1)
     return res
 end
@@ -54,9 +68,13 @@ end
 -- A global list of the game's, joined (or "missing").
 local function joined(name: string): string
     local list = tbl.field(_G, name)
-    if type(list) ~= "table" then return "missing" end
+    if type(list) ~= "table" then
+        return "missing"
+    end
     local parts: string[] = {}
-    for _, v in ipairs(tbl.list(list)) do parts[#parts + 1] = tostring(v) end
+    for _, v in ipairs(tbl.list(list)) do
+        parts[#parts + 1] = tostring(v)
+    end
     return table.concat(parts, ",")
 end
 
@@ -67,8 +85,15 @@ end
 
 local function frameInfo(name: string): string
     local f = wf.asRegion(tbl.field(_G, name))
-    if not f then return "missing" end
-    return ("%s shown=%s visible=%s protected=%s"):format(f:GetObjectType(), tostring(f:IsShown()), tostring(f:IsVisible()), tostring((f:IsProtected())))
+    if not f then
+        return "missing"
+    end
+    return ("%s shown=%s visible=%s protected=%s"):format(
+        f:GetObjectType(),
+        tostring(f:IsShown()),
+        tostring(f:IsVisible()),
+        tostring((f:IsProtected()))
+    )
 end
 
 -- The first slot button's action (nil when there is none).
@@ -89,8 +114,12 @@ local function record(): Map
     out.class, out.level = class, UnitLevel("player")
     out.numSlots = call(GetNumTotemSlots)
     out.maxTotems = tostring(tbl.field(_G, "MAX_TOTEMS"))
-    out.slotConstants = ("earth=%s fire=%s water=%s air=%s"):format(tostring(tbl.field(_G, "EARTH_TOTEM_SLOT")),
-        tostring(tbl.field(_G, "FIRE_TOTEM_SLOT")), tostring(tbl.field(_G, "WATER_TOTEM_SLOT")), tostring(tbl.field(_G, "AIR_TOTEM_SLOT")))
+    out.slotConstants = ("earth=%s fire=%s water=%s air=%s"):format(
+        tostring(tbl.field(_G, "EARTH_TOTEM_SLOT")),
+        tostring(tbl.field(_G, "FIRE_TOTEM_SLOT")),
+        tostring(tbl.field(_G, "WATER_TOTEM_SLOT")),
+        tostring(tbl.field(_G, "AIR_TOTEM_SLOT"))
+    )
     out.priorities = joined("SHAMAN_TOTEM_PRIORITIES")
     local slots: Map[] = {}
     out.slots = slots
@@ -101,8 +130,11 @@ local function record(): Map
         s.cannotDismiss = call(tbl.field(_G, "GetTotemCannotDismiss"), slot)
         local duration = tbl.field(_G, "GetTotemDuration")
         local ok, d = false, "missing" :: unknown
-        if type(duration) == "function" then ok, d = pcall(duration, slot) end
-        s.duration = ok and (d and (type(d) .. (isSecret(d) and " SECRET" or "")) or "nil") or ("error " .. tostring(d):sub(1, 80))
+        if type(duration) == "function" then
+            ok, d = pcall(duration, slot)
+        end
+        s.duration = ok and (d and (type(d) .. (isSecret(d) and " SECRET" or "")) or "nil") or
+            ("error " .. tostring(d):sub(1, 80))
         if ok and d and not isSecret(d) and (type(d) == "table" or type(d) == "userdata") then
             -- what a duration object answers (the cooldown sweep and the drain take it)
             s.durationRemaining = call(tbl.field(d, "GetRemainingDuration"), d)
@@ -112,21 +144,35 @@ local function record(): Map
     end
     local frameList: { [string]: string } = {}
     out.frames = frameList
-    for _, name in ipairs({ "TotemFrame", "MultiCastActionBarFrame", "MultiCastSlotButton1", "MultiCastSummonSpellButton",
-                            "StanceBar", "StanceButton1" }) do
+    for _, name in ipairs({
+        "TotemFrame",
+        "MultiCastActionBarFrame",
+        "MultiCastSlotButton1",
+        "MultiCastSummonSpellButton",
+        "StanceBar",
+        "StanceButton1",
+    }) do
         frameList[name] = frameInfo(name)
     end
     out.hasMultiCastBar = call(tbl.field(_G, "HasMultiCastActionBar"))
     out.multiCastActive = tostring(tbl.field(_G, "MultiCastActionBarFrame", "numActiveSlots"))
     local multiCast: unknown[] = {}
     out.multiCastSpells = multiCast
-    for slot = 1, 4 do multiCast[slot] = #slotSpells(slot) end
+    for slot = 1, 4 do
+        multiCast[slot] = #slotSpells(slot)
+    end
     out.forms = call(GetNumShapeshiftForms)
     for i = 1, 10 do
         local ok, icon, active, _, spellID = pcall(GetShapeshiftFormInfo, i)
-        if not ok or not icon then break end
+        if not ok or not icon then
+            break
+        end
         local id = asNumber(spellID)
-        out["form" .. i] = ("spell=%s active=%s %s"):format(show(spellID), show(active), id and (C_Spell.GetSpellName(id) or "") or "")
+        out["form" .. i] = ("spell=%s active=%s %s"):format(
+            show(spellID),
+            show(active),
+            id and (C_Spell.GetSpellName(id) or "") or ""
+        )
     end
     out.tooltipSetTotem = tbl.field(GameTooltip, "SetTotem") and "present" or "missing"
     -- the game's slot buttons: which action slots they cast
@@ -136,8 +182,13 @@ local function record(): Map
         local b = wf.asButton(tbl.field(_G, "MultiCastActionButton" .. i))
         if b then
             local slot = results(tbl.field(b, "CalculateAction"), b)[1]
-            actions[i] = ("id=%s action=%s shown=%s has=%s info=%s"):format(tostring(b:GetID()), show(slot), tostring(b:IsShown()),
-                slot ~= nil and call(HasAction, slot) or "-", slot ~= nil and call(GetActionInfo, slot) or "-")
+            actions[i] = ("id=%s action=%s shown=%s has=%s info=%s"):format(
+                tostring(b:GetID()),
+                show(slot),
+                tostring(b:IsShown()),
+                slot ~= nil and call(HasAction, slot) or "-",
+                slot ~= nil and call(GetActionInfo, slot) or "-"
+            )
         end
     end
     out.summonSpells = joined("TOTEM_MULTI_CAST_SUMMON_SPELLS")
@@ -148,7 +199,9 @@ local function record(): Map
     out.slotSpells = spells
     for slot = 1, 4 do
         local parts: string[] = {}
-        for _, id in ipairs(slotSpells(slot)) do parts[#parts + 1] = tostring(id) end
+        for _, id in ipairs(slotSpells(slot)) do
+            parts[#parts + 1] = tostring(id)
+        end
         spells[slot] = table.concat(parts, ",")
     end
     out.events = { count = events.count, slots = events.slots }
@@ -200,7 +253,8 @@ export function command(rest: string?)
         for _, e in ipairs(DB.list("blocked")) do
             local time = tbl.field(e, "time")
             if time and tostring(time) >= date("%Y-%m-%d ") .. since then
-                blocked[#blocked + 1] = tostring(time) .. " " .. tostring(tbl.field(e, "event")) .. " " .. tostring(tbl.field(e, "func"))
+                blocked[#blocked + 1] = tostring(time) ..
+                    " " .. tostring(tbl.field(e, "event")) .. " " .. tostring(tbl.field(e, "func"))
             end
         end
         print("Totem probe: checked. /reload to save it.")
@@ -208,16 +262,27 @@ export function command(rest: string?)
     end
     local out = record()
     all[out.combat and "inCombat" or "outOfCombat"] = out
-    print(("Totem probe: recorded %s (%s, %d totem events so far). Drop totems and run it again, once in a fight; /reload to save.")
-        :format(out.combat and "in combat" or "out of combat", tostring(out.class), events.count))
+    print(
+        ("Totem probe: recorded %s (%s, %d totem events so far). Drop totems and run it again, once in a fight; /reload to save."):format(
+            out.combat and "in combat" or "out of combat",
+            tostring(out.class),
+            events.count
+        )
+    )
 end
 
 -- A spell's or action's icon (the question mark when there is none).
 local function iconOf(d: ButtonDef): unknown
     local id = asNumber(d.value)
-    if not id then return 134400 end
-    if d.kind == "action" then return GetActionTexture(id) or 134400 end
-    if d.kind == "spell" or d.kind == "multispell" then return C_Spell.GetSpellTexture(id) or 134400 end
+    if not id then
+        return 134400
+    end
+    if d.kind == "action" then
+        return GetActionTexture(id) or 134400
+    end
+    if d.kind == "spell" or d.kind == "multispell" then
+        return C_Spell.GetSpellTexture(id) or 134400
+    end
     return 134400
 end
 
@@ -226,7 +291,10 @@ end
 -- spells. Click them out of combat and in a fight: does the totem go down?
 export function buttons()
     print("Totem probe: placing the test buttons…")
-    if InCombatLockdown() then print("Totem probe: out of combat, to place the buttons.") return end
+    if InCombatLockdown() then
+        print("Totem probe: out of combat, to place the buttons.")
+        return
+    end
     local p = probePanel or uiPanel(UIParent, { title = "Totem probe", width = 260, height = 120, solid = true })
     probePanel = p
     p:SetFrameStrata("DIALOG")
@@ -239,20 +307,31 @@ export function buttons()
     local action = asNumber(firstSlotAction())
     if action then
         local kind, id = GetActionInfo(action)
-        if kind == "spell" and id then defs[#defs + 1] = { kind = "spell", value = id, label = "Spell" } end
+        if kind == "spell" and id then
+            defs[#defs + 1] = { kind = "spell", value = id, label = "Spell" }
+        end
         defs[#defs + 1] = { kind = "action", value = action, label = "Act" }
         -- choosing securely: the game's multispell action puts another earth
         -- totem in the slot (watch the game's bar)
         local other: unknown = nil
         for _, sid in ipairs(slotSpells(earth)) do
-            if sid ~= id then other = sid break end
+            if sid ~= id then
+                other = sid
+                break
+            end
         end
-        if other ~= nil then defs[#defs + 1] = { kind = "multispell", value = other, action = action, label = "Pick" } end
+        if other ~= nil then
+            defs[#defs + 1] = { kind = "multispell", value = other, action = action, label = "Pick" }
+        end
     end
     local summon = tbl.field(_G, "MultiCastSummonSpellButton", "spellId")
     local recall = tbl.field(_G, "MultiCastRecallSpellButton", "spellId")
-    if summon then defs[#defs + 1] = { kind = "spell", value = summon, label = "Call" } end
-    if recall then defs[#defs + 1] = { kind = "spell", value = recall, label = "Recall" } end
+    if summon then
+        defs[#defs + 1] = { kind = "spell", value = summon, label = "Call" }
+    end
+    if recall then
+        defs[#defs + 1] = { kind = "spell", value = recall, label = "Recall" }
+    end
     -- the game's secure "destroy totem" action on the earth slot (DestroyTotem
     -- itself is forbidden to addon code: seen 2026-10-18)
     defs[#defs + 1] = { kind = "destroytotem", value = earth, label = "X earth" }
@@ -291,8 +370,14 @@ export function buttons()
         b:Show()
     end
     p:Show()
-    for i = #defs + 1, #testButtons do testButtons[i].button:Hide() end
-    print(("Totem probe: %d buttons: Spell casts the earth slot's totem as a spell, Act uses the slot's action, Pick puts another earth totem in the slot, X earth dismisses it. Click each, out of combat and in a fight."):format(#defs))
+    for i = #defs + 1, #testButtons do
+        testButtons[i].button:Hide()
+    end
+    print(
+        ("Totem probe: %d buttons: Spell casts the earth slot's totem as a spell, Act uses the slot's action, Pick puts another earth totem in the slot, X earth dismisses it. Click each, out of combat and in a fight."):format(
+            #defs
+        )
+    )
 end
 
 -- "/suu probe totems choose": puts another totem of the same element in the
@@ -302,7 +387,11 @@ export function choose(all: { [string]: unknown })
     local action = asNumber(firstSlotAction())
     local c: Map = { at = date("%H:%M:%S"), combat = InCombatLockdown() and true or false }
     all.choose = c
-    if not action then c.result = "no slot action" print("Totem probe: no slot to choose for.") return end
+    if not action then
+        c.result = "no slot action"
+        print("Totem probe: no slot to choose for.")
+        return
+    end
     local _, before = GetActionInfo(action)
     c.action, c.before = action, tostring(before)
     -- the slot's element: the action's own totem slot from the game's button
@@ -310,9 +399,18 @@ export function choose(all: { [string]: unknown })
     local slot = slotButton and slotButton:GetID()
     local spells = slot and slotSpells(slot) or {}
     local other: unknown = nil
-    for _, id in ipairs(spells) do if id ~= before then other = id break end end
+    for _, id in ipairs(spells) do
+        if id ~= before then
+            other = id
+            break
+        end
+    end
     c.slot, c.other = tostring(slot), tostring(other)
-    if other == nil then c.result = "only one totem known for that element" print("Totem probe: you know one totem of that element; nothing to swap to.") return end
+    if other == nil then
+        c.result = "only one totem known for that element"
+        print("Totem probe: you know one totem of that element; nothing to swap to.")
+        return
+    end
     local setSpell = tbl.field(_G, "SetMultiCastSpell")
     c.set = call(setSpell, action, other)
     local _, now = GetActionInfo(action)
@@ -322,5 +420,7 @@ export function choose(all: { [string]: unknown })
         local _, back = GetActionInfo(action)
         c.restored = tostring(back)
     end)
-    print("Totem probe: swapped the first slot's totem and puts it back in a second. Watch the game's bar, then /suu probe totems check and /reload.")
+    print(
+        "Totem probe: swapped the first slot's totem and puts it back in a second. Watch the game's bar, then /suu probe totems check and /reload."
+    )
 end

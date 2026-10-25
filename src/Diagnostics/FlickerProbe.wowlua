@@ -13,12 +13,18 @@ import * as wf from "wowlua:frames"
 
 local frameNo = 0
 local counter = CreateFrame("Frame")
-counter:SetScript("OnUpdate", function() frameNo = frameNo + 1 end)
+counter:SetScript("OnUpdate", function()
+    frameNo = frameNo + 1
+end)
 
 local function fmt(v: unknown): string
-    if type(v) == "number" then return ("%.1f"):format(v) end
+    if type(v) == "number" then
+        return ("%.1f"):format(v)
+    end
     local r = wf.asRegion(v)
-    if r then return r:GetName() or "frame" end
+    if r then
+        return r:GetName() or "frame"
+    end
     return tostring(v)
 end
 
@@ -27,7 +33,9 @@ local function caller(): string
     local lines: string[] = {}
     for line in stack:gmatch("[^\n]+") do
         lines[#lines + 1] = (line:gsub("^.*AddOns/", ""):gsub("^%[string \"(.-)\"%]", "%1"):sub(1, 90))
-        if #lines >= 2 then break end
+        if #lines >= 2 then
+            break
+        end
     end
     return table.concat(lines, " < ")
 end
@@ -37,15 +45,30 @@ local hooked: { [Frame]: boolean } = {}
 export function command(arg: string?)
     local name = (arg and arg ~= "") and arg or "PlayerSpellsFrame"
     local f = wf.find(name)
-    if not f then print("Flicker probe: no frame " .. name .. " (open it once first).") return end
+    if not f then
+        print("Flicker probe: no frame " .. name .. " (open it once first).")
+        return
+    end
     local log: string[] = {}
     DB.probe.flicker = { frame = name, at = date("%H:%M:%S"), log = log }
     local function note(s: string)
-        if #log < 600 then log[#log + 1] = ("#%d %s"):format(frameNo, s) end
+        if #log < 600 then
+            log[#log + 1] = ("#%d %s"):format(frameNo, s)
+        end
     end
     if not hooked[f] then
         hooked[f] = true
-        for _, m in ipairs({ "SetPoint", "ClearAllPoints", "SetSize", "SetWidth", "SetHeight", "SetScale", "SetAlpha", "Show", "Hide" }) do
+        for _, m in ipairs({
+            "SetPoint",
+            "ClearAllPoints",
+            "SetSize",
+            "SetWidth",
+            "SetHeight",
+            "SetScale",
+            "SetAlpha",
+            "Show",
+            "Hide",
+        }) do
             -- (every frame has these)
             hook(f, m, function(_: unknown, a: unknown, b: unknown, c: unknown, d: unknown, e: unknown)
                 note(("%s(%s, %s, %s, %s, %s) by %s"):format(m, fmt(a), fmt(b), fmt(c), fmt(d), fmt(e), caller()))
@@ -54,16 +77,29 @@ export function command(arg: string?)
         local sampling = 0
         local sampler = CreateFrame("Frame")
         sampler:SetScript("OnUpdate", function()
-            if sampling <= 0 then return end
+            if sampling <= 0 then
+                return
+            end
             sampling = sampling - 1
-            note(("sample left=%s bottom=%s w=%s h=%s scale=%s alpha=%s shown=%s"):format(fmt(f:GetLeft()), fmt(f:GetBottom()),
-                fmt(f:GetWidth()), fmt(f:GetHeight()), fmt(f:GetEffectiveScale()), fmt(f:GetEffectiveAlpha()), tostring(f:IsVisible())))
+            note(
+                ("sample left=%s bottom=%s w=%s h=%s scale=%s alpha=%s shown=%s"):format(
+                    fmt(f:GetLeft()),
+                    fmt(f:GetBottom()),
+                    fmt(f:GetWidth()),
+                    fmt(f:GetHeight()),
+                    fmt(f:GetEffectiveScale()),
+                    fmt(f:GetEffectiveAlpha()),
+                    tostring(f:IsVisible())
+                )
+            )
         end)
         hookScript(f, "OnShow", function()
             note("OnShow")
             sampling = 15
         end)
-        hookScript(f, "OnHide", function() note("OnHide") end)
+        hookScript(f, "OnHide", function()
+            note("OnHide")
+        end)
     end
     print("Flicker probe: watching " .. name .. ". Open and close it a couple of times, then /reload.")
 end

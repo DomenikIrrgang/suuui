@@ -37,21 +37,52 @@ local DEFAULTS = {}
 
 local M: InspectModule
 
-local function plainNumber(v: unknown): number? if secret.readable(v) and type(v) == "number" then return v end return nil end
+local function plainNumber(v: unknown): number?
+    if secret.readable(v) and type(v) == "number" then
+        return v
+    end
+    return nil
+end
 
 local SLOT = T.size["slot"]
 local SIDE_W = 230
 local MODEL_W = 300
-local QUALITY: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary", "legendary", "legendary" }
+local QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
 
 -- the paper doll: the Character window's columns, weapons under the model
 local LEFT = { "Head", "Neck", "Shoulder", "Back", "Chest", "Shirt", "Tabard", "Wrist" }
 local RIGHT = { "Hands", "Waist", "Legs", "Feet", "Finger0", "Finger1", "Trinket0", "Trinket1" }
 local WEAPONS = { "MainHand", "SecondaryHand", "Ranged" }
-local LABEL: { [string]: string } = { Head = "Head", Neck = "Neck", Shoulder = "Shoulder", Back = "Back", Chest = "Chest", Shirt = "Shirt",
-                Tabard = "Tabard", Wrist = "Wrist", Hands = "Hands", Waist = "Waist", Legs = "Legs", Feet = "Feet",
-                Finger0 = "Finger", Finger1 = "Finger", Trinket0 = "Trinket", Trinket1 = "Trinket",
-                MainHand = "Main hand", SecondaryHand = "Off hand", Ranged = "Ranged" }
+local LABEL: { [string]: string } = {
+    Head = "Head",
+    Neck = "Neck",
+    Shoulder = "Shoulder",
+    Back = "Back",
+    Chest = "Chest",
+    Shirt = "Shirt",
+    Tabard = "Tabard",
+    Wrist = "Wrist",
+    Hands = "Hands",
+    Waist = "Waist",
+    Legs = "Legs",
+    Feet = "Feet",
+    Finger0 = "Finger",
+    Finger1 = "Finger",
+    Trinket0 = "Trinket",
+    Trinket1 = "Trinket",
+    MainHand = "Main hand",
+    SecondaryHand = "Off hand",
+    Ranged = "Ranged",
+}
 
 -- The window fits what it holds: the identity line, the tools, the paper doll
 -- (eight slots high, the weapons under it) beside the side panel.
@@ -63,21 +94,27 @@ local WIDTH = S["space-5"] + DOLL_W + S["space-6"] + SIDE_W + S["space-5"]
 local HEIGHT = S["space-5"] + T.type.header.lineHeight + S["space-4"] + 1 + S["space-4"] + BODY_H + S["space-5"]
 
 local function itemLevel(link: unknown): number?
-    if not secret.readable(link) or type(link) ~= "string" then return nil end
+    if not secret.readable(link) or type(link) ~= "string" then
+        return nil
+    end
     local ok, lvl = pcall(C_Item.GetDetailedItemLevelInfo, link)
     return ok and secret.readable(lvl) and lvl and lvl > 0 and lvl or nil
 end
 
 -- the rank's name as the game's own inspect window words it
 local function rankName(unit: string, rank: number): string
-    if not rank or rank <= 0 then return PVP_RANK_0_NAME or "Civilian" end
+    if not rank or rank <= 0 then
+        return PVP_RANK_0_NAME or "Civilian"
+    end
     local affix = (UnitFactionGroup(unit) == "Alliance") and "_1" or "_0"
     local ranks = tbl.field(Enum, "PvPRanks")
     local first = plainNumber(tbl.field(ranks, "Rank_1")) or 5
     local key = "PVP_RANK_" .. tostring(first + rank - 1) .. affix
     local getText = GetText :: (token: string, gender: unknown) -> string
     local ok: boolean, name: unknown = pcall(getText, key, UnitSex(unit))
-    if not ok or not secret.readable(name) or type(name) ~= "string" then return tostring(rank) end
+    if not ok or not secret.readable(name) or type(name) ~= "string" then
+        return tostring(rank)
+    end
     return PVP_RANK_NUMBER_AND_TITLE and PVP_RANK_NUMBER_AND_TITLE:format(rank, name) or name
 end
 
@@ -86,8 +123,12 @@ end
 local function identityLine(level: unknown, race: unknown, className: unknown): string
     local lvl = plainNumber(level)
     local parts = { "Level " .. ((lvl and lvl > 0) and lvl or "??") }
-    if secret.readable(race) then parts[#parts + 1] = tostring(race) end
-    if secret.readable(className) then parts[#parts + 1] = tostring(className) end
+    if secret.readable(race) then
+        parts[#parts + 1] = tostring(race)
+    end
+    if secret.readable(className) then
+        parts[#parts + 1] = tostring(className)
+    end
     return table.concat(parts, " · ")
 end
 
@@ -95,7 +136,9 @@ end
 -- gilt; "▼2", ember), nil when they're the same or yours is unknown.
 local function deltaChip(level: number, mine: number?): (string?, string?)
     local d = mine and level - mine or 0
-    if d == 0 then return nil, nil end
+    if d == 0 then
+        return nil, nil
+    end
     return (d > 0 and "▲" or "▼") .. math.abs(d), d > 0 and "gilt-text" or "ember-text"
 end
 
@@ -104,7 +147,9 @@ end
 local function rankPoints(given: unknown, nextGiven: unknown): (string, number)
     local points = plainNumber(given) or 0
     local nextAt = plainNumber(nextGiven) or 0
-    if nextAt > 0 then return points .. " / " .. nextAt, math.min(1, points / nextAt) end
+    if nextAt > 0 then
+        return points .. " / " .. nextAt, math.min(1, points / nextAt)
+    end
     return tostring(points), 0
 end
 
@@ -120,9 +165,15 @@ end
 
 -- Why View Talents is off (nil: it's on).
 local function talentsWhy(loading: boolean, moduleOn: boolean, hasData: boolean): string?
-    if loading then return "Waiting for their gear." end
-    if not moduleOn then return "SuuUI's Talents module is off." end
-    if not hasData then return "Their talents aren't available." end
+    if loading then
+        return "Waiting for their gear."
+    end
+    if not moduleOn then
+        return "SuuUI's Talents module is off."
+    end
+    if not hasData then
+        return "Their talents aren't available."
+    end
     return nil
 end
 
@@ -249,11 +300,19 @@ class InspectModel extends PlayerModel
         self:SetPoint("BOTTOMRIGHT", -1, 1)
         self:EnableMouse(true)
         self:EnableMouseWheel(true)
-        self:SetScript("OnMouseDown", function(_: Frame, button: string) if button == "LeftButton" then self.turning = (GetCursorPosition()) end end)
-        self:SetScript("OnMouseUp", function() self.turning = nil end)
+        self:SetScript("OnMouseDown", function(_: Frame, button: string)
+            if button == "LeftButton" then
+                self.turning = (GetCursorPosition())
+            end
+        end)
+        self:SetScript("OnMouseUp", function()
+            self.turning = nil
+        end)
         self:SetScript("OnUpdate", function()
             local turning = self.turning
-            if not turning then return end
+            if not turning then
+                return
+            end
             local x = GetCursorPosition()
             self:SetFacing((self:GetFacing() or 0) + (x - turning) * 0.01)
             self.turning = x
@@ -331,21 +390,29 @@ class DollSlot extends ItemSlot
             end
             GameTooltip:Show()
         end)
-        self:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        self:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
         self:SetScript("OnClick", function()
             local unit = M.unit
             local link = unit and GetInventoryItemLink(unit, self.slotID)
-            if link then HandleModifiedItemClick(link) end
+            if link then
+                HandleModifiedItemClick(link)
+            end
         end)
     end
 end
 
 -- The game's inspect frame, once its addon is loaded.
-local function inspectFrame(): Frame? return frames.find("InspectFrame") end
+local function inspectFrame(): Frame?
+    return frames.find("InspectFrame")
+end
 -- The unit it inspects.
 local function inspectedUnit(f: Frame): string?
     local unit = tbl.field(f, "unit")
-    if type(unit) == "string" then return unit end
+    if type(unit) == "string" then
+        return unit
+    end
     return nil
 end
 
@@ -400,15 +467,24 @@ class InspectModule extends Module<typeof(DEFAULTS)>
 
     function Build()
         self.slots = {}
-        local w = UI.WindowFrame(SuuUI.Root, { name = "SuuUIInspectWindow", title = "Inspect", width = WIDTH, height = HEIGHT,
-            onClose = function(win: Panel) win:Hide() end })
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUIInspectWindow",
+            title = "Inspect",
+            width = WIDTH,
+            height = HEIGHT,
+            onClose = function(win: Panel)
+                win:Hide()
+            end,
+        })
         w:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
         w:Hide()
         w.scroll:Hide()
         self.window = w
         w:HookScript("OnHide", function()
             local f = inspectFrame()
-            if f and f:IsShown() then HideUIPanel(f) end
+            if f and f:IsShown() then
+                HideUIPanel(f)
+            end
             self.unit, self.loading = nil, nil
         end)
         local body = w.body
@@ -421,10 +497,13 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         tools:SetPoint("TOPLEFT", id, "BOTTOMLEFT", 0, -S["space-4"])
         tools:SetPoint("TOPRIGHT", id, "BOTTOMRIGHT", 0, -S["space-4"])
         tools:SetHeight(TOOLS_H)
-        local compare = UI.Toggle(tools, { value = self.compare, onChange = function(on: boolean)
-            self.compare = on
-            self:Draw()
-        end })
+        local compare = UI.Toggle(tools, {
+            value = self.compare,
+            onChange = function(on: boolean)
+                self.compare = on
+                self:Draw()
+            end,
+        })
         self.compareToggle = compare
         compare:SetPoint("LEFT")
         local cl = CreateFrame("Button", nil, tools)
@@ -433,17 +512,31 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         clText:SetValue("Compare with mine")
         cl:SetSize(UI.MeasureText("label", "Compare with mine"), TOOLS_H)
         cl:SetPoint("LEFT", compare, "RIGHT", S["space-4"], 0)
-        cl:SetScript("OnClick", function() compare:Click() end)
-        local talents = UI.Button(tools, { text = "View Talents", icon = "tree", onClick = function()
-            if self.unit then SuuUI.ShowTalentsOf(self.unit) end
-        end })
+        cl:SetScript("OnClick", function()
+            compare:Click()
+        end)
+        local talents = UI.Button(tools, {
+            text = "View Talents",
+            icon = "tree",
+            onClick = function()
+                if self.unit then
+                    SuuUI.ShowTalentsOf(self.unit)
+                end
+            end,
+        })
         self.talentsButton = talents
         talents:SetHeight(TOOLS_H)
         talents:SetPoint("RIGHT")
-        local dress = UI.Button(tools, { text = "View in Dressing Room", icon = "person", onClick = function()
-            local ok, list = pcall(C_TransmogCollection.GetInspectItemTransmogInfoList)
-            if ok and list then DressUpItemTransmogInfoList(list) end
-        end })
+        local dress = UI.Button(tools, {
+            text = "View in Dressing Room",
+            icon = "person",
+            onClick = function()
+                local ok, list = pcall(C_TransmogCollection.GetInspectItemTransmogInfoList)
+                if ok and list then
+                    DressUpItemTransmogInfoList(list)
+                end
+            end,
+        })
         self.dressButton = dress
         dress:SetHeight(TOOLS_H)
         dress:SetPoint("RIGHT", talents, "LEFT", -S["space-4"], 0)
@@ -475,13 +568,21 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         local prev: DollSlot? = nil
         for _, key in ipairs(LEFT) do
             local b = self:BuildSlot(doll, key)
-            if prev then b:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -S["space-2"]) else b:SetPoint("TOPLEFT", doll, "TOPLEFT", 0, 0) end
+            if prev then
+                b:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -S["space-2"])
+            else
+                b:SetPoint("TOPLEFT", doll, "TOPLEFT", 0, 0)
+            end
             prev = b
         end
         prev = nil
         for _, key in ipairs(RIGHT) do
             local b = self:BuildSlot(doll, key)
-            if prev then b:SetPoint("TOPRIGHT", prev, "BOTTOMRIGHT", 0, -S["space-2"]) else b:SetPoint("TOPRIGHT", doll, "TOPRIGHT", 0, 0) end
+            if prev then
+                b:SetPoint("TOPRIGHT", prev, "BOTTOMRIGHT", 0, -S["space-2"])
+            else
+                b:SetPoint("TOPRIGHT", doll, "TOPRIGHT", 0, 0)
+            end
             prev = b
         end
         local box = ModelBox.new(doll)
@@ -499,7 +600,11 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         prev = nil
         for _, key in ipairs(WEAPONS) do
             local b = self:BuildSlot(weapons, key)
-            if prev then b:SetPoint("LEFT", prev, "RIGHT", S["space-2"], 0) else b:SetPoint("LEFT", weapons, "LEFT", 0, 0) end
+            if prev then
+                b:SetPoint("LEFT", prev, "RIGHT", S["space-2"], 0)
+            else
+                b:SetPoint("LEFT", weapons, "LEFT", 0, 0)
+            end
             prev = b
         end
     end
@@ -520,7 +625,9 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         local quality = GetInventoryItemQuality(unit, b.slotID)
         s:SetItem({ icon = texture, quality = QUALITY[quality] })
         local level = itemLevel(GetInventoryItemLink(unit, b.slotID))
-        if level then b.level:SetValue(level) end
+        if level then
+            b.level:SetValue(level)
+        end
         if self.compare and level then
             local text, color = deltaChip(level, itemLevel(GetInventoryItemLink("player", b.slotID)))
             if text then
@@ -535,10 +642,15 @@ class InspectModule extends Module<typeof(DEFAULTS)>
 
     function Draw()
         local unit, w = self.unit, self.window
-        if not unit or not w then return end
+        if not unit or not w then
+            return
+        end
         -- (built with the window)
         local id, box, model, il = assert(self.idRow), assert(self.box), assert(self.model), assert(self.ilvl)
-        local pvp, g, dress, talents = assert(self.pvp), assert(self.guild), assert(self.dressButton), assert(self.talentsButton)
+        local pvp, g, dress, talents = assert(self.pvp),
+            assert(self.guild),
+            assert(self.dressButton),
+            assert(self.talentsButton)
         -- who
         local name: unknown = GetUnitName(unit, true)
         local _, class = UnitClass(unit)
@@ -550,12 +662,20 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         end
         id.name:SetValue(secret.readable(name) and type(name) == "string" and name or "")
         id.line:SetValue(identityLine(UnitLevel(unit), UnitRace(unit), (UnitClass(unit))))
-        local okGuild: boolean, _: unknown, members: unknown, guildRead: unknown = pcall(C_PaperDollInfo.GetInspectGuildInfo, unit)
+        local okGuild: boolean, _: unknown, members: unknown, guildRead: unknown = pcall(
+            C_PaperDollInfo.GetInspectGuildInfo,
+            unit
+        )
         local guildName: string? = nil
-        if okGuild and not self.loading and secret.readable(guildRead) and type(guildRead) == "string" and guildRead ~= "" then guildName = guildRead end
+        if okGuild and not self.loading and secret.readable(guildRead) and type(guildRead) == "string" and
+            guildRead ~= "" then
+            guildName = guildRead
+        end
         id.guild:SetValue(guildName and ("<" .. guildName .. ">") or "")
         -- gear
-        for _, b in ipairs(self.slots) do self:DrawSlot(b) end
+        for _, b in ipairs(self.slots) do
+            self:DrawSlot(b)
+        end
         -- the model, or why there's none
         if self.loading then
             model:Hide()
@@ -568,7 +688,9 @@ class InspectModule extends Module<typeof(DEFAULTS)>
             -- SetUnit says nothing on Forever: whether the game has them in sight does
             local visible = UnitIsVisible(unit)
             local near = not secret.readable(visible) or visible == true
-            if near then model:SetUnit(unit) end
+            if near then
+                model:SetUnit(unit)
+            end
             model:SetShown(near)
             box.note:SetValue(near and "" or "Too far away to show")
         end
@@ -588,11 +710,17 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         end
         -- Player vs. Player (Forever's honour data: today's kills first, the
         -- lifetime kills fifth, the rank, its points and the next rank's after)
-        local today: unknown, lifetime: unknown, rank: unknown, points: unknown, nextAt: unknown = nil, nil, nil, nil, nil
+        local today: unknown, lifetime: unknown, rank: unknown, points: unknown, nextAt: unknown = nil,
+            nil,
+            nil,
+            nil,
+            nil
         if not self.loading then
-            local honor = GetInspectHonorData :: () -> (...unknown)
+            local honor = GetInspectHonorData :: () -> ...unknown
             local ok, t, _, _, _, l, _, r, p, n = pcall(honor)
-            if ok then today, lifetime, rank, points, nextAt = t, l, r, p, n end
+            if ok then
+                today, lifetime, rank, points, nextAt = t, l, r, p, n
+            end
         end
         pvp.rank:SetValue(rankName(unit, plainNumber(rank) or 0))
         local pointsText, fill = rankPoints(points, nextAt)
@@ -623,8 +751,15 @@ class InspectModule extends Module<typeof(DEFAULTS)>
     -- The game's frame out of sight while the module is on: see-through and
     -- off screen, still shown (wowlua:frames' keepAway).
     function Away(frame: Frame)
-        if self.away then return end
-        self.away = frames.keepAway(frame, { fade = true, when = function(): boolean return self:IsEnabled() end })
+        if self.away then
+            return
+        end
+        self.away = frames.keepAway(frame, {
+            fade = true,
+            when = function(): boolean
+                return self:IsEnabled()
+            end,
+        })
     end
 
     -- Asked: the window opens at once, waiting for the gear.
@@ -632,7 +767,9 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         local f = inspectFrame()
         local unit = f and inspectedUnit(f)
         local w = self.window
-        if not f or not unit or not w then return end
+        if not f or not unit or not w then
+            return
+        end
         self.unit, self.loading = unit, true
         self:Away(f)
         w:Show()
@@ -650,40 +787,60 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         local f = inspectFrame()
         local unit = f and inspectedUnit(f)
         local w = self.window
-        if not f or not unit or not w then return end
+        if not f or not unit or not w then
+            return
+        end
         self.unit, self.loading = unit, false
         self:Away(f)
-        if not w:IsShown() then w:Show() end
+        if not w:IsShown() then
+            w:Show()
+        end
         self:Draw()
     end
 
     -- The window, while it's open.
     function Open(): WindowFrame?
         local w = self.window
-        if w and w:IsShown() then return w end
+        if w and w:IsShown() then
+            return w
+        end
         return nil
     end
 
     function HookInspect()
         local f = inspectFrame()
-        if not f or self.hooked then return end
+        if not f or self.hooked then
+            return
+        end
         self.hooked = true
         hook(_G, "InspectFrame_Show", function()
-            if self:IsEnabled() then self:Asked() end
+            if self:IsEnabled() then
+                self:Asked()
+            end
         end, { addon = "Blizzard_InspectUI" })
         hookScript(f, "OnShow", function()
-            if self:IsEnabled() then self:Ready() end
+            if self:IsEnabled() then
+                self:Ready()
+            end
         end)
         hookScript(f, "OnHide", function()
             local w = self:Open()
-            if self:IsEnabled() and w and not self.loading then w:Hide() end
+            if self:IsEnabled() and w and not self.loading then
+                w:Hide()
+            end
         end)
     end
 
     override function OnEnable()
-        if not self.window then self:Build() end
+        if not self.window then
+            self:Build()
+        end
         self:HookInspect()
-        self:OnGameEvent("ADDON_LOADED", function(_, name) if name == "Blizzard_InspectUI" then self:HookInspect() end end)
+        self:OnGameEvent("ADDON_LOADED", function(_, name)
+            if name == "Blizzard_InspectUI" then
+                self:HookInspect()
+            end
+        end)
         self:OnGameEvent("INSPECT_READY", function(_, guid)
             local g = self.unit and UnitGUID(self.unit)
             if self.unit and self:Open() and not isSecret(g) and g == guid then
@@ -694,22 +851,34 @@ class InspectModule extends Module<typeof(DEFAULTS)>
         -- a new target while waiting: the game drops the question, so does this
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
             local w = self:Open()
-            if self.unit == "target" and self.loading and w then w:Hide() end
+            if self.unit == "target" and self.loading and w then
+                w:Hide()
+            end
         end)
         for _, e in ipairs({ "UNIT_INVENTORY_CHANGED", "UNIT_MODEL_CHANGED", "UNIT_LEVEL" }) do
             self:OnGameEvent(e, function(_, unit: unknown)
-                if unit and unit == self.unit and self:Open() then self:Draw() end
+                if unit and unit == self.unit and self:Open() then
+                    self:Draw()
+                end
             end)
         end
         for _, e in ipairs({ "INSPECT_HONOR_UPDATE", "PLAYER_EQUIPMENT_CHANGED", "GET_ITEM_INFO_RECEIVED" }) do
-            self:OnGameEvent(e, function() if self:Open() then self:Draw() end end)
+            self:OnGameEvent(e, function()
+                if self:Open() then
+                    self:Draw()
+                end
+            end)
         end
-        self:On("SUUUI_THEME_CHANGED", function() self:SizeItemLevel() end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:SizeItemLevel()
+        end)
     end
 
     override function OnDisable()
         local w = self.window
-        if w then w:Hide() end
+        if w then
+            w:Hide()
+        end
     end
 end
 

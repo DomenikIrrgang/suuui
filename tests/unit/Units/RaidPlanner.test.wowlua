@@ -13,8 +13,7 @@ import internal M, Slot, Setup, Filled, Placed, Member from "/Units/RaidPlanner"
 import migrations as settingMigrations from "/Core/Settings"
 import type ConfirmOptions from "/UI/Panel"
 import type MenuDescription from "/UI/ContextMenu"
-import type RaidPlanner as PlannerWindow, PlannerListItem, PlannerChip, PlannerMoves, PlannerSlot, PlannerSetup, PaletteClass,
-    PlannerPerson, PlannerStat, PlannerButton from "/UI/RaidPlanner"
+import type RaidPlanner as PlannerWindow, PlannerListItem, PlannerChip, PlannerMoves, PlannerSlot, PlannerSetup, PaletteClass, PlannerPerson, PlannerStat, PlannerButton from "/UI/RaidPlanner"
 import field from "wowlua:table"
 import type FamilyChecks from "/Units/RaidPlanner"
 import expectNoErrors from "../../helpers"
@@ -24,7 +23,9 @@ local UI = SuuUI.UI
 -- Placeholder raiders, made once (the engine keeps them).
 local function raider(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
     local u = mock.spawnUnit({ name = name, player = true, class = class, level = 60, reaction = "friendly" })
-    if role then u:setRole(role) end
+    if role then
+        u:setRole(role)
+    end
     return u
 end
 
@@ -38,7 +39,9 @@ local shaman = raider("Raider Shaman", "SHAMAN")
 
 -- The raid: you and these, in their subgroups.
 local function raid(members: { { unit: mock.MockUnit, g: number } })
-    for i, e in ipairs(members) do mock.group:add(e.unit, { raid = true, subgroup = e.g, quiet = i < #members }) end
+    for i, e in ipairs(members) do
+        mock.group:add(e.unit, { raid = true, subgroup = e.g, quiet = i < #members })
+    end
     mock.advanceTime(0.6)
 end
 
@@ -51,8 +54,12 @@ end
 -- What UI.Confirm was asked (its onConfirm run by the test).
 local confirmed: ConfirmOptions? = nil
 local printed: string[] = {}
-local function asked(): ConfirmOptions return (assert(confirmed, "nothing asked")) end
-local function confirm(text: string?) assert(asked().onConfirm)(text) end
+local function asked(): ConfirmOptions
+    return (assert(confirmed, "nothing asked"))
+end
+local function confirm(text: string?)
+    assert(asked().onConfirm)(text)
+end
 
 -- What a context menu offered: its buttons by label.
 local menu: { [string]: () -> () } = {}
@@ -60,13 +67,19 @@ local enabled: { [string]: boolean } = {}
 type FakeButton = { SetEnabled: (self: FakeButton, on: boolean) -> () }
 local function captureMenus()
     mock.stub(UI, "ContextMenuFrom", function<O>(owner: O, describe: (owner: O, root: MenuDescription) -> ())
-        for k in pairs(menu) do menu[k] = nil end
+        for k in pairs(menu) do
+            menu[k] = nil
+        end
         local root = {
             CreateTitle = function(_: unknown, _: string) end,
             CreateDivider = function(_: unknown) end,
             CreateButton = function(_: unknown, label: string, fn: () -> ()): FakeButton
                 menu[label] = fn
-                return { SetEnabled = function(_: FakeButton, on: boolean) enabled[label] = on end }
+                return {
+                    SetEnabled = function(_: FakeButton, on: boolean)
+                        enabled[label] = on
+                    end,
+                }
             end,
         }
         describe(owner, root :: unknown :: MenuDescription)
@@ -83,7 +96,9 @@ end
 local function planner(): string[]
     local out: string[] = {}
     for _, m in ipairs(mock.sentAddonMessages()) do
-        if m.prefix == "SuuUI" and m.message:sub(1, 6) == "RPSPEC" then out[#out + 1] = m.message end
+        if m.prefix == "SuuUI" and m.message:sub(1, 6) == "RPSPEC" then
+            out[#out + 1] = m.message
+        end
     end
     return out
 end
@@ -94,15 +109,24 @@ local function setup()
     mock.player:setRole("DAMAGER")
     confirmed = nil
     printed = {}
-    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil confirmed = opts; return nil end)
-    mock.stub(M, "Print", function(_: unknown, text: string) printed[#printed + 1] = text end)
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil
+        confirmed = opts
+        return nil
+    end)
+    mock.stub(M, "Print", function(_: unknown, text: string)
+        printed[#printed + 1] = text
+    end)
     captureMenus()
 end
 
 @afterEach
 local function cleanup()
-    if InCombatLockdown() then mock.player:leaveCombat() end
-    if M.window then M.window:Hide() end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    if M.window then
+        M.window:Hide()
+    end
     mock.group:leave()
     mock.player:setRole(nil)
     M:ResetAll({ "preset", "tracked", "fill", "inspect", "flagDoubled", "shareSpec" })
@@ -121,36 +145,74 @@ local function slotIn(g: number, class: string?, spec: number?, role: string?): 
 end
 
 -- The fill, who fills a slot, a saved setup, a player read from the raid.
-local function filled(): Filled return assert(M.fill) end
-local function placed(s: Slot): Placed return (assert(filled().slot[s.id], "nobody in the slot")) end
-local function saved(id: number): Setup return assert(M:Data().setups[id]) end
-local function member(name: string): Member return assert(M.byKey[name]) end
-local function window(): PlannerWindow return assert(M.window) end
+local function filled(): Filled
+    return assert(M.fill)
+end
+local function placed(s: Slot): Placed
+    return (assert(filled().slot[s.id], "nobody in the slot"))
+end
+local function saved(id: number): Setup
+    return assert(M:Data().setups[id])
+end
+local function member(name: string): Member
+    return assert(M.byKey[name])
+end
+local function window(): PlannerWindow
+    return assert(M.window)
+end
 
 -- The window's data, its lists there.
 type ViewGroup = { slots: PlannerSlot[], chips: PlannerChip[], kind?: string }
 type View = {
-    meta: string, note: string, raidWideMeta?: string,
-    setups: PlannerSetup[], palette: PaletteClass[], groups: ViewGroup[], raidWide: { [string]: PlannerListItem },
-    open: PlannerListItem[], unplaced: PlannerPerson[], stats: PlannerStat[],
-    arrange: PlannerButton, inspect: PlannerButton, fill: PlannerButton,
+    meta: string,
+    note: string,
+    raidWideMeta?: string,
+    setups: PlannerSetup[],
+    palette: PaletteClass[],
+    groups: ViewGroup[],
+    raidWide: { [string]: PlannerListItem },
+    open: PlannerListItem[],
+    unplaced: PlannerPerson[],
+    stats: PlannerStat[],
+    arrange: PlannerButton,
+    inspect: PlannerButton,
+    fill: PlannerButton,
 }
 local function view(): View
     local v = M:ViewData()
     local groups: ViewGroup[] = {}
-    for i, g in ipairs(v.groups or {}) do groups[i] = { slots = g.slots or {}, chips = g.chips or {}, kind = g.kind } end
+    for i, g in ipairs(v.groups or {}) do
+        groups[i] = { slots = g.slots or {}, chips = g.chips or {}, kind = g.kind }
+    end
     local rows: { [string]: PlannerListItem } = {}
-    for _, r in ipairs(v.raidWide or {}) do rows[r.label or ""] = r end
+    for _, r in ipairs(v.raidWide or {}) do
+        rows[r.label or ""] = r
+    end
     return {
-        meta = v.meta or "", note = v.note or "", raidWideMeta = v.raidWideMeta,
-        setups = assert(v.setups), palette = assert(v.palette), groups = groups, raidWide = rows,
-        open = assert(v.open), unplaced = assert(v.unplaced), stats = assert(v.stats),
-        arrange = assert(v.arrange), inspect = assert(v.inspect), fill = assert(v.fill),
+        meta = v.meta or "",
+        note = v.note or "",
+        raidWideMeta = v.raidWideMeta,
+        setups = assert(v.setups),
+        palette = assert(v.palette),
+        groups = groups,
+        raidWide = rows,
+        open = assert(v.open),
+        unplaced = assert(v.unplaced),
+        stats = assert(v.stats),
+        arrange = assert(v.arrange),
+        inspect = assert(v.inspect),
+        fill = assert(v.fill),
     }
 end
-local function row(v: View, label: string): PlannerListItem return (assert(v.raidWide[label], label)) end
+local function row(v: View, label: string): PlannerListItem
+    return (assert(v.raidWide[label], label))
+end
 local function chip(v: View, g: number, start: string): PlannerChip
-    for _, c in ipairs(v.groups[g].chips) do if c.text:sub(1, #start) == start then return c end end
+    for _, c in ipairs(v.groups[g].chips) do
+        if c.text:sub(1, #start) == start then
+            return c
+        end
+    end
     error("no chip " .. start)
 end
 
@@ -274,7 +336,9 @@ end
 @test("slots: added up to five a group, changed (a spec brings its role), removed; a spec or a player dropped")
 local function slots()
     setup()
-    for _ = 1, 5 do expect(slot(1) ~= nil).toBe(true) end
+    for _ = 1, 5 do
+        expect(slot(1) ~= nil).toBe(true)
+    end
     expect(slot(1)).toBeNil()
     expect(slot(9)).toBeNil()
     local s = M:SlotsIn(1)[1]
@@ -389,7 +453,11 @@ local function pinned()
     expect(b.pin).toBeNil()
     local v = view()
     local found: PlannerPerson? = nil
-    for _, u in ipairs(v.unplaced) do if u.name == inA then found = u end end
+    for _, u in ipairs(v.unplaced) do
+        if u.name == inA then
+            found = u
+        end
+    end
     expect((assert(found).detail or ""):find("let go by hand", 1, true) ~= nil).toBe(true)
     -- dropped on a group: a slot asking for them, pinned
     M:Drop({ player = inA }, { group = 4 })
@@ -418,7 +486,9 @@ local function specMessages()
     mock.advanceTime(0.6)
     expect(M:KnownTree("Raider Priest", false)).toBeNil()
     -- asked by another: yours a moment later
-    mock.stub(SuuUI, "Spec", function() return 1 end)
+    mock.stub(SuuUI, "Spec", function()
+        return 1
+    end)
     local before = #planner()
     mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Warrior")
     mock.advanceTime(2.1)
@@ -541,7 +611,12 @@ local function viewData()
     expect((v.setups[2].meta or ""):sub(1, 24)).toBe("1 slots · 1 tank · 0 h")
     -- when saved: minutes, hours, days, weeks ago
     local copy = M:Data().setups[2]
-    for _, e in ipairs({ { s = 600, says = "10m ago" }, { s = 3 * 3600, says = "3h ago" }, { s = 2 * 86400, says = "2d ago" }, { s = 21 * 86400, says = "3w ago" } }) do
+    for _, e in ipairs({
+        { s = 600, says = "10m ago" },
+        { s = 3 * 3600, says = "3h ago" },
+        { s = 2 * 86400, says = "2d ago" },
+        { s = 21 * 86400, says = "3w ago" },
+    }) do
         copy.saved = time() - e.s
         local meta = view().setups[2].meta or ""
         expect(meta:sub(-#e.says)).toBe(e.says)
@@ -619,7 +694,9 @@ local function arrange()
     local shownMoves: PlannerMoves? = nil
     local run: (() -> ())? = nil
     M:Toggle()
-    mock.stub(window(), "ShowMoves", function(_: unknown, data: PlannerMoves, onConfirm: () -> ()) shownMoves, run = data, onConfirm end)
+    mock.stub(window(), "ShowMoves", function(_: unknown, data: PlannerMoves, onConfirm: () -> ())
+        shownMoves, run = data, onConfirm
+    end)
     M:Arrange()
     expect(#assert(assert(shownMoves).moves)).toBe(1)
     assert(run)()
@@ -634,7 +711,9 @@ local function arrange()
     expect(printed[#printed]).toBe("Not in combat.")
     mock.player:leaveCombat()
     -- not leading nor assisting: only they can move players
-    mock.fake("UnitIsGroupLeader", function(_: string) return false end)
+    mock.fake("UnitIsGroupLeader", function(_: string)
+        return false
+    end)
     assert(M.me).lead = false
     expect(select(2, M:CanArrange())).toBe("Only the raid leader or an assistant can move players.")
 end
@@ -644,7 +723,9 @@ local function arrangeSwap()
     setup()
     local five = { warrior, priest, mage, mage2, hunter }
     local list = {}
-    for i, u in ipairs(five) do list[i] = { unit = u, g = 1 } end
+    for i, u in ipairs(five) do
+        list[i] = { unit = u, g = 1 }
+    end
     list[#list + 1] = { unit = shaman, g = 2 }
     raid(list)
     -- (you: group 2 with the shaman)
@@ -667,14 +748,21 @@ local function inspecting()
     warrior:setInspect({ spec = 1491 })
     -- (the engine keeps no inspected talent groups: the points as the client gives them)
     mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
-        return { { groupID = 11, displayName = "Arms", icon = 132355 }, { groupID = 12, displayName = "Fury", icon = 132347 },
-                 { groupID = 13, displayName = "Protection", icon = 134952 } }
+        return {
+            { groupID = 11, displayName = "Arms", icon = 132355 },
+            { groupID = 12, displayName = "Fury", icon = 132347 },
+            { groupID = 13, displayName = "Protection", icon = 134952 },
+        }
     end)
     mock.fake("C_Traits.GetGroupCurrencyInfo", function(_: number, _ids: number[])
-        return { { traitNodeGroupID = 11, currencyInfos = { { spent = 5 } } },
-                 { traitNodeGroupID = 13, currencyInfos = { { spent = 31 } } } }
+        return {
+            { traitNodeGroupID = 11, currencyInfos = { { spent = 5 } } },
+            { traitNodeGroupID = 13, currencyInfos = { { spent = 31 } } },
+        }
     end)
-    mock.fake("C_Traits.GetConfigInfo", function(_: number) return { treeIDs = { 1117 } } end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number)
+        return { treeIDs = { 1117 } }
+    end)
     slot(1, "WARRIOR", 3, "TANK")
     M:Toggle()
     expect(window():IsShown()).toBe(true)
@@ -733,11 +821,18 @@ end
 local function ownIcons()
     setup()
     M.ownIconsRead = false
-    mock.fake("C_ClassTalents.GetActiveConfigID", function() return 7143862 end)
-    mock.fake("C_Traits.GetConfigInfo", function(_: number) return { treeIDs = { 1117 } } end)
+    mock.fake("C_ClassTalents.GetActiveConfigID", function()
+        return 7143862
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number)
+        return { treeIDs = { 1117 } }
+    end)
     mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
-        return { { groupID = 11, displayName = "Arms", icon = 132355 }, { groupID = 12, displayName = "Fury", icon = 134400 },
-                 { groupID = 13, displayName = "Nobody's", icon = 1 } }
+        return {
+            { groupID = 11, displayName = "Arms", icon = 132355 },
+            { groupID = 12, displayName = "Fury", icon = 134400 },
+            { groupID = 13, displayName = "Nobody's", icon = 1 },
+        }
     end)
     M:NoteOwnTreeIcons()
     expect(M.ownIconsRead).toBe(true)
@@ -760,7 +855,11 @@ local function fromRaid()
     expect(#w.slots).toBe(3)
     local s = M:SlotsIn(1)
     local tank: Slot? = nil
-    for _, x in ipairs(s) do if x.class == "WARRIOR" and x.spec == 3 then tank = x end end
+    for _, x in ipairs(s) do
+        if x.class == "WARRIOR" and x.spec == 3 then
+            tank = x
+        end
+    end
     expect(assert(tank).role).toBe("TANK")
     expect(M:SlotsIn(3)[1].class).toBe("PRIEST")
 end
@@ -773,7 +872,9 @@ local function menus()
     local s = slotIn(1, "MAGE")
     M:Refill()
     local whispered: string? = nil
-    mock.fake("ChatFrameUtil.SendTell", function(name: string) whispered = name end)
+    mock.fake("ChatFrameUtil.SendTell", function(name: string)
+        whispered = name
+    end)
     M:SlotMenu(s.id, window())
     choose("Whisper")
     expect(whispered).toBe("Raider Mage")
@@ -786,7 +887,9 @@ local function menus()
     s.pin = "Raider Somebody"
     M:Refill()
     local invited: string? = nil
-    mock.fake("C_PartyInfo.InviteUnit", function(name: string) invited = name end)
+    mock.fake("C_PartyInfo.InviteUnit", function(name: string)
+        invited = name
+    end)
     M:SlotMenu(s.id, window())
     choose("Invite Raider Somebody")
     expect(invited).toBe("Raider Somebody")
@@ -835,7 +938,11 @@ local function menus()
     expect(whispered).toBe("Raider Priest")
     choose("Add a slot for them")
     local mine: Slot? = nil
-    for _, x in ipairs(M:Work().slots) do if x.pin == "Raider Priest" then mine = x end end
+    for _, x in ipairs(M:Work().slots) do
+        if x.pin == "Raider Priest" then
+            mine = x
+        end
+    end
     expect(assert(mine).class).toBe("PRIEST")
 end
 
@@ -844,11 +951,17 @@ local function personFullGroup()
     setup()
     raid({ { unit = priest, g = 1 } })
     M:Toggle()
-    for _ = 1, 5 do slot(1) end
+    for _ = 1, 5 do
+        slot(1)
+    end
     M:PersonMenu("Raider Priest", window())
     choose("Add a slot for them")
     expect(M:SlotsIn(2)[1].pin).toBe("Raider Priest")
-    for g = 2, 8 do while #M:SlotsIn(g) < 5 do slot(g) end end
+    for g = 2, 8 do
+        while #M:SlotsIn(g) < 5 do
+            slot(g)
+        end
+    end
     M:PersonMenu("Raider Priest", window())
     choose("Add a slot for them")
     expect(printed[#printed]).toBe("Every group has five slots.")
@@ -953,7 +1066,10 @@ local function migration()
     local values: { [string]: unknown } = { tracked = { earth = true } }
     local ran = false
     for _, m in ipairs(settingMigrations()) do
-        if m.namespace == "raidplanner" and m.id == "graceOfAir" then m.fn(values); ran = true end
+        if m.namespace == "raidplanner" and m.id == "graceOfAir" then
+            m.fn(values)
+            ran = true
+        end
     end
     expect(ran).toBe(true)
     expect(field(values, "tracked", "graceOfAir")).toBe(true)

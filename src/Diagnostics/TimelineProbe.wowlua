@@ -33,12 +33,16 @@ local function isSecretTable(v: unknown): boolean
 end
 
 local function store(): Timeline
-    return DB.probeData("timeline", function(): Timeline return { samples = {} } end)
+    return DB.probeData("timeline", function(): Timeline
+        return { samples = {} }
+    end)
 end
 
 -- `fn(...)`, protected (false and "missing" when there is no such function).
 local function attempt(fn: unknown, ...: unknown): (boolean, unknown)
-    if type(fn) ~= "function" then return false, "missing" end
+    if type(fn) ~= "function" then
+        return false, "missing"
+    end
     return pcall(fn, ...)
 end
 local MAX_SAMPLES = 14
@@ -54,27 +58,50 @@ local lastEventSample = 0
 
 local function shape(v: unknown, depth: number?): unknown
     depth = depth or 0
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
-    if type(v) ~= "table" then return type(v) .. ": " .. tostring(v):sub(1, 80) end
-    if isSecretTable(v) then return "secret table" end
-    if depth >= 4 then return "table (deeper)" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    if type(v) ~= "table" then
+        return type(v) .. ": " .. tostring(v):sub(1, 80)
+    end
+    if isSecretTable(v) then
+        return "secret table"
+    end
+    if depth >= 4 then
+        return "table (deeper)"
+    end
     local out: Map, n = {}, 0
     local count = #v
-    if count > 0 then out["#"] = count end
+    if count > 0 then
+        out["#"] = count
+    end
     for k, x in pairs(v) do
         n = n + 1
-        if n > 40 then out["…"] = "more fields" break end
-        if not (type(k) == "number" and k > 3) then out[tostring(k)] = shape(x, depth + 1) end
+        if n > 40 then
+            out["…"] = "more fields"
+            break
+        end
+        if not (type(k) == "number" and k > 3) then
+            out[tostring(k)] = shape(x, depth + 1)
+        end
     end
     return out
 end
 
 local function call(fn: unknown, ...: unknown): unknown
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local ok, a, b, c = pcall(fn, ...)
-    if not ok then return "error: " .. tostring(a):sub(1, 160) end
-    if b ~= nil or c ~= nil or isSecret(b) or isSecret(c) then return { shape(a), shape(b), shape(c) } end
+    if not ok then
+        return "error: " .. tostring(a):sub(1, 160)
+    end
+    if b ~= nil or c ~= nil or isSecret(b) or isSecret(c) then
+        return { shape(a), shape(b), shape(c) }
+    end
     return shape(a)
 end
 
@@ -83,29 +110,45 @@ local function eventNames(): string[]
     for _, sys in ipairs(tbl.list(tbl.field(_G, "APIDocumentation", "systems"))) do
         for _, e in ipairs(tbl.list(tbl.field(sys, "Events"))) do
             local n = tbl.field(e, "LiteralName")
-            if type(n) == "string" and n:find("ENCOUNTER_TIMELINE") then names[#names + 1] = n end
+            if type(n) == "string" and n:find("ENCOUNTER_TIMELINE") then
+                names[#names + 1] = n
+            end
         end
     end
-    for _, n in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END", "BOSS_KILL" }) do names[#names + 1] = n end
+    for _, n in ipairs({ "ENCOUNTER_START", "ENCOUNTER_END", "BOSS_KILL" }) do
+        names[#names + 1] = n
+    end
     return names
 end
 
 local function watchEvents(): string[]?
-    if eventFrame then return nil end
+    if eventFrame then
+        return nil
+    end
     local f = CreateFrame("Frame")
     eventFrame = f
     local counts: { [string]: number }, payloads: Map = {}, {}
     eventCounts, eventPayloads = counts, payloads
     local registered: string[] = {}
     for _, n in ipairs(eventNames()) do
-        if pcall(f.RegisterEvent, f, n) then registered[#registered + 1] = n end
+        if pcall(f.RegisterEvent, f, n) then
+            registered[#registered + 1] = n
+        end
     end
     f:SetScript("OnEvent", function(_, event: string, ...: unknown)
         counts[event] = (counts[event] or 0) + 1
-        if not payloads[event] then payloads[event] = shape({ ... }) end
-        if not armed then return end
+        if not payloads[event] then
+            payloads[event] = shape({ ... })
+        end
+        if not armed then
+            return
+        end
         if event == "ENCOUNTER_START" then
-            after(3, function() if armed then sample("3s into the boss") end end)
+            after(3, function()
+                if armed then
+                    sample("3s into the boss")
+                end
+            end)
             after(10, function()
                 if armed then
                     sample("10s into the boss")
@@ -114,7 +157,11 @@ local function watchEvents(): string[]?
             end)
         elseif event:find("ENCOUNTER_TIMELINE") and GetTime() - lastEventSample > 5 then
             lastEventSample = GetTime()
-            after(0.5, function() if armed then sample("after " .. event) end end)
+            after(0.5, function()
+                if armed then
+                    sample("after " .. event)
+                end
+            end)
         end
     end)
     return registered
@@ -123,7 +170,9 @@ end
 local function enums(): Map
     local out: Map = {}
     for k, v in pairs(Enum) do
-        if type(k) == "string" and k:find("^EncounterTimeline") and not k:find("Meta$") then out[k] = shape(v) end
+        if type(k) == "string" and k:find("^EncounterTimeline") and not k:find("Meta$") then
+            out[k] = shape(v)
+        end
     end
     return out
 end
@@ -148,7 +197,8 @@ end
 export function sample(label: string?): Map
     local ET = tbl.field(_G, "C_EncounterTimeline")
     local s: Map = {
-        at = date("%H:%M:%S"), label = label,
+        at = date("%H:%M:%S"),
+        label = label,
         combat = InCombatLockdown() and "in combat" or "out of combat",
         instance = select(2, IsInInstance()) or "none",
         group = IsInRaid() and "raid" or (IsInGroup() and "party" or "solo"),
@@ -171,9 +221,15 @@ export function sample(label: string?): Map
         s.trackList = okT and shape(tracks) or ("error: " .. tostring(tracks))
         if okT and type(tracks) == "table" and not isSecretTable(tracks) then
             for i, t in ipairs(tbl.list(tracks)) do
-                if i > 6 then break end
-                trackList[i] = { id = shape(t), info = call(tbl.field(ET, "GetTrackInfo"), t), type = call(tbl.field(ET, "GetTrackType"), t),
-                    longest = call(tbl.field(ET, "GetTrackMaxEventDuration"), t) }
+                if i > 6 then
+                    break
+                end
+                trackList[i] = {
+                    id = shape(t),
+                    info = call(tbl.field(ET, "GetTrackInfo"), t),
+                    type = call(tbl.field(ET, "GetTrackType"), t),
+                    longest = call(tbl.field(ET, "GetTrackMaxEventDuration"), t),
+                }
             end
         end
         -- events
@@ -184,7 +240,9 @@ export function sample(label: string?): Map
         s.sortedList = call(tbl.field(ET, "GetSortedEventList"))
         if okE and type(list) == "table" and not isSecretTable(list) then
             for i, id in ipairs(tbl.list(list)) do
-                if i > MAX_EVENTS then break end
+                if i > MAX_EVENTS then
+                    break
+                end
                 events[i] = describeEvent(id)
             end
         end
@@ -193,7 +251,9 @@ export function sample(label: string?): Map
     s.eventCounts = counts and tbl.shallowCopy(counts) or nil
     local samples = store().samples
     table.insert(samples, s)
-    while #samples > MAX_SAMPLES do table.remove(samples, 1) end
+    while #samples > MAX_SAMPLES do
+        table.remove(samples, 1)
+    end
     return s
 end
 
@@ -201,9 +261,13 @@ end
 local function cvars(): unknown
     local out: { [string]: string } = {}
     local getAll = tbl.field(_G, "C_Console", "GetAllCommands")
-    if type(getAll) ~= "function" then return "no C_Console.GetAllCommands" end
+    if type(getAll) ~= "function" then
+        return "no C_Console.GetAllCommands"
+    end
     local ok, all = pcall(getAll)
-    if not ok or type(all) ~= "table" then return "error" end
+    if not ok or type(all) ~= "table" then
+        return "error"
+    end
     for _, c in ipairs(tbl.list(all)) do
         local name = tbl.field(c, "command")
         if type(name) == "string" then
@@ -237,11 +301,19 @@ export function command(arg: string?)
     local t = prepare()
     local ET = tbl.field(_G, "C_EncounterTimeline")
     if arg == "demo" then
-        if ET == nil then print("Timeline probe: no C_EncounterTimeline.") return end
+        if ET == nil then
+            print("Timeline probe: no C_EncounterTimeline.")
+            return
+        end
         sample("before the demo")
         t.demoAdd = call(tbl.field(ET, "AddEditModeEvents"))
         -- one event of our own: Shield Wall's spell and art, 10 seconds
-        local okS, id = attempt(tbl.field(ET, "AddScriptEvent"), { spellID = 871, iconFileID = 132362, duration = 10, overrideName = "SuuUI test" })
+        local okS, id = attempt(tbl.field(ET, "AddScriptEvent"), {
+            spellID = 871,
+            iconFileID = 132362,
+            duration = 10,
+            overrideName = "SuuUI test",
+        })
         t.scriptAdd = okS and shape(id) or ("error: " .. tostring(id))
         local scriptID = okS and not isSecret(id) and id or nil
         after(1, function()
@@ -249,7 +321,9 @@ export function command(arg: string?)
             after(3, function()
                 sample("demo, 4s")
                 t.demoCancel = call(tbl.field(ET, "CancelEditModeEvents"))
-                if scriptID then t.scriptCancel = call(tbl.field(ET, "CancelScriptEvent"), scriptID) end
+                if scriptID then
+                    t.scriptCancel = call(tbl.field(ET, "CancelScriptEvent"), scriptID)
+                end
                 print("Timeline probe: demo sampled. /reload to save.")
             end)
         end)
@@ -258,10 +332,20 @@ export function command(arg: string?)
     end
     if not armed then
         armed = true
-        Events.onGame("PLAYER_REGEN_DISABLED", function()
-            if not armed then return end
-            after(3, function() if armed then sample("3s into the fight") end end)
-        end, OWNER)
+        Events.onGame(
+            "PLAYER_REGEN_DISABLED",
+            function()
+                if not armed then
+                    return
+                end
+                after(3, function()
+                    if armed then
+                        sample("3s into the fight")
+                    end
+                end)
+            end,
+            OWNER
+        )
     end
     sample("on command")
     print("Timeline probe: armed. Fight a dungeon boss, then /reload. (Solo first look: /suu probe timeline demo)")

@@ -36,7 +36,9 @@ type Call = number[]
 -- the calls of a region's method after now (a post-hook)
 local function record(region: Region, method: string): Call[]
     local calls: Call[] = {}
-    hooksecurefunc(region, method, function(_: Region, ...: number) calls[#calls + 1] = { ... } end)
+    hooksecurefunc(region, method, function(_: Region, ...: number)
+        calls[#calls + 1] = { ... }
+    end)
     return calls
 end
 
@@ -55,7 +57,9 @@ end
 
 @test("rgba of an unknown token is an error")
 local function rgbaUnknown()
-    expect(function() draw.rgba("no-such-token") end).toThrow("unknown colour token no-such-token")
+    expect(function()
+        draw.rgba("no-such-token")
+    end).toThrow("unknown colour token no-such-token")
 end
 
 @test("size passes numbers through and reads size and space tokens")
@@ -63,7 +67,9 @@ local function sizes()
     expect(draw.size(17)).toBe(17)
     expect(draw.size("icon-md")).toBe(T.size["icon-md"])
     expect(draw.size("space-4")).toBe(T.space["space-4"])
-    expect(function() draw.size("nope") end).toThrow("unknown size token nope")
+    expect(function()
+        draw.size("nope")
+    end).toThrow("unknown size token nope")
 end
 
 --------------------------------------------------------------------------------
@@ -117,16 +123,14 @@ local function repaintFollows()
 end
 
 @test("setting a colour another way lets the kept one go")
-@cases({
-    { "FontString", "SetTextColor" },
-    { "Texture", "SetVertexColor" },
-    { "StatusBar", "SetStatusBarColor" },
-})
+@cases({ { "FontString", "SetTextColor" }, { "Texture", "SetVertexColor" }, { "StatusBar", "SetStatusBarColor" } })
 local function letsGo(kind: string, setter: string)
     local p = host()
     local region: Region
-    if kind == "FontString" then region = p:CreateFontString(nil, "OVERLAY")
-    elseif kind == "Texture" then region = p:CreateTexture()
+    if kind == "FontString" then
+        region = p:CreateFontString(nil, "OVERLAY")
+    elseif kind == "Texture" then
+        region = p:CreateTexture()
     else
         local bar = CreateFrame("StatusBar", nil, p)
         bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
@@ -134,7 +138,9 @@ local function letsGo(kind: string, setter: string)
     end
     draw.paint(region, "ink")
     local set = tbl.field(region, setter)
-    if type(set) == "function" then set(region, 1, 0, 0, 1) end
+    if type(set) == "function" then
+        set(region, 1, 0, 0, 1)
+    end
     expect(paintOf(region)).toBeNil()
     -- a repaint leaves the raw colour alone
     setToken("ink", 0.2, 0.4, 0.6)
@@ -142,7 +148,9 @@ local function letsGo(kind: string, setter: string)
     local get = kind == "FontString" and "GetTextColor" or kind == "Texture" and "GetVertexColor" or "GetStatusBarColor"
     local read = tbl.field(region, get)
     local r: unknown, g: unknown, b: unknown = nil, nil, nil
-    if type(read) == "function" then r, g, b = read(region) end
+    if type(read) == "function" then
+        r, g, b = read(region)
+    end
     expect({ r, g, b }).toEqual({ 1, 0, 0 })
 end
 
@@ -176,7 +184,14 @@ local function gradients()
         calls[#calls + 1] = { orientation = orientation, from = from, to = to }
     end)
     draw.paintGradient(t, "VERTICAL", "ink", "arcane", 0.2, 0.8)
-    expect(paintOf(t)).toEqual({ kind = "gradient", token = "ink", alpha = 0.2, token2 = "arcane", alpha2 = 0.8, orientation = "VERTICAL" })
+    expect(paintOf(t)).toEqual({
+        kind = "gradient",
+        token = "ink",
+        alpha = 0.2,
+        token2 = "arcane",
+        alpha2 = 0.8,
+        orientation = "VERTICAL",
+    })
     expect(#calls).toBe(1)
     expect(calls[1].orientation).toBe("VERTICAL")
     local from, to = calls[1].from, calls[1].to
@@ -210,7 +225,11 @@ end
 local function bindErrors()
     local p = host()
     local t = p:CreateTexture()
-    expect(function() draw.bind(t, function(_: Texture) error("boom") end) end).toThrow("boom")
+    expect(function()
+        draw.bind(t, function(_: Texture)
+            error("boom")
+        end)
+    end).toThrow("boom")
     expect(paintOf(t)).toBeNil()
 end
 
@@ -218,7 +237,9 @@ end
 local function paintErrors()
     local p = host()
     local t = p:CreateTexture()
-    expect(function() draw.paint(t, "no-such-token") end).toThrow("unknown colour token")
+    expect(function()
+        draw.paint(t, "no-such-token")
+    end).toThrow("unknown colour token")
     expect(paintOf(t)).toBeNil()
 end
 
@@ -227,7 +248,11 @@ local function repaintIsolates()
     local p = host()
     local bad, good = p:CreateTexture(), p:CreateFontString(nil, "OVERLAY")
     local fail = false
-    draw.bind(bad, function(_: Texture) if fail then error("bound failed") end end)
+    draw.bind(bad, function(_: Texture)
+        if fail then
+            error("bound failed")
+        end
+    end)
     draw.paint(good, "ink")
     fail = true
     setToken("ink", 0.3, 0.3, 0.3)
@@ -235,7 +260,9 @@ local function repaintIsolates()
     -- mock.errors() for the rest of the file
     local reported: string[] = {}
     mock.fake("geterrorhandler", function(): (err: unknown) -> ()
-        return function(err: unknown) reported[#reported + 1] = tostring(err) end
+        return function(err: unknown)
+            reported[#reported + 1] = tostring(err)
+        end
     end)
     draw.repaint()
     expect(#reported).toBe(1)
@@ -250,7 +277,9 @@ end
 local function repaintAddsRegions()
     local p = host()
     local a, b = p:CreateTexture(), p:CreateTexture()
-    draw.bind(a, function(_: Texture) draw.paint(b, "arcane") end)
+    draw.bind(a, function(_: Texture)
+        draw.paint(b, "arcane")
+    end)
     draw.repaint()
     expect(tokenOf(b)).toBe("arcane")
     expect(assert(paintOf(a)).kind).toBe("fn")
@@ -316,9 +345,13 @@ local function borderColors()
     b:SetColor(0, 1, 0, 1)
     expect(calls[2]).toEqual({ 0, 1, 0, 1 })
     b:SetShown(false)
-    for _, t in ipairs(b.parts) do expect(t).never.toBeShown() end
+    for _, t in ipairs(b.parts) do
+        expect(t).never.toBeShown()
+    end
     b:SetShown(true)
-    for _, t in ipairs(b.parts) do expect(t).toBeShown() end
+    for _, t in ipairs(b.parts) do
+        expect(t).toBeShown()
+    end
 end
 
 @test("a rescale lays borders and hairlines out again at one physical pixel")
@@ -350,7 +383,14 @@ local function hairlineOut()
     local line = draw.hairline(p, "gilt", "out")
     local regions = { line:GetRegions() }
     expect(#regions).toBe(1)
-    expect(paintOf(regions[1])).toEqual({ kind = "gradient", token = "gilt", alpha = 1, token2 = "gilt", alpha2 = 0, orientation = "HORIZONTAL" })
+    expect(paintOf(regions[1])).toEqual({
+        kind = "gradient",
+        token = "gilt",
+        alpha = 1,
+        token2 = "gilt",
+        alpha2 = 0,
+        orientation = "HORIZONTAL",
+    })
 end
 
 @test("a hairline fading both ways is two gradients meeting in the middle")
@@ -407,7 +447,13 @@ local function softEdgeBlur()
     e:SetBlur(4, 2, -3)
     expect(e.corners[4]).toHaveSize(6, 6)
     expect(pointOf(e.holder)).toEqual({ point = "TOPLEFT", relativeTo = p, relativePoint = "TOPLEFT", x = -4, y = 3 })
-    expect(pointOf(e.holder, 2)).toEqual({ point = "BOTTOMRIGHT", relativeTo = p, relativePoint = "BOTTOMRIGHT", x = 8, y = -9 })
+    expect(pointOf(e.holder, 2)).toEqual({
+        point = "BOTTOMRIGHT",
+        relativeTo = p,
+        relativePoint = "BOTTOMRIGHT",
+        x = 8,
+        y = -9,
+    })
     e:SetBlur(0)
     expect(e.corners[1]).toHaveSize(1, 1)
 end
@@ -458,8 +504,12 @@ end
 @test("shadow of an unknown token, or one with inset layers only, is an error")
 local function shadowErrors()
     local p = host()
-    expect(function() draw.shadow(p, "nope") end).toThrow("unknown shadow token nope")
-    expect(function() draw.shadow(p, "inset-anchor") end).toThrow()
+    expect(function()
+        draw.shadow(p, "nope")
+    end).toThrow("unknown shadow token nope")
+    expect(function()
+        draw.shadow(p, "inset-anchor")
+    end).toThrow()
 end
 
 @test("the cross is two crossed strokes in a square, recoloured together")

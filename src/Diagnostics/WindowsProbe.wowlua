@@ -36,17 +36,26 @@ local frame: Frame? = nil
 local journalHooked, dressHooked, inspectHooked, menuHooked = false, false, false, false
 local shownHooked: { [string]: boolean }? = nil
 
-
 local function show(v: unknown, depth: number?): string
     depth = depth or 0
-    if isSecret(v) then return "secret" end
-    if v == nil then return "nil" end
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
     if type(v) == "table" then
-        if depth > 2 then return "{…}" end
+        if depth > 2 then
+            return "{…}"
+        end
         local parts: string[] = {}
         for k, x in pairs(v) do
-            if type(x) ~= "function" then parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1) end
-            if #parts > 40 then break end
+            if type(x) ~= "function" then
+                parts[#parts + 1] = tostring(k) .. "=" .. show(x, depth + 1)
+            end
+            if #parts > 40 then
+                break
+            end
         end
         table.sort(parts)
         return "{" .. table.concat(parts, ", ") .. "}"
@@ -56,19 +65,29 @@ end
 
 -- a call's every result, or why it failed
 local function call(fn: unknown, ...: unknown): string
-    if type(fn) ~= "function" then return "missing" end
+    if type(fn) ~= "function" then
+        return "missing"
+    end
     local res = { pcall(fn, ...) }
-    if not res[1] then return "error: " .. tostring(res[2]):sub(1, 160) end
+    if not res[1] then
+        return "error: " .. tostring(res[2]):sub(1, 160)
+    end
     local parts: string[] = {}
-    for i = 2, math.max(2, select("#", unpack(res))) do parts[#parts + 1] = show(res[i]) end
+    for i = 2, math.max(2, select("#", unpack(res))) do
+        parts[#parts + 1] = show(res[i])
+    end
     return table.concat(parts, " | ")
 end
 
 -- a call's first result as it is (nil when it's missing or raises)
 local function raw(fn: unknown, ...: unknown): unknown
-    if type(fn) ~= "function" then return nil end
+    if type(fn) ~= "function" then
+        return nil
+    end
     local ok, a = pcall(fn, ...)
-    if ok then return a end
+    if ok then
+        return a
+    end
     return nil
 end
 
@@ -76,7 +95,9 @@ end
 local function resolve(path: string): unknown
     local t: unknown = _G
     for part in path:gmatch("[^%.]+") do
-        if type(t) ~= "table" then return nil end
+        if type(t) ~= "table" then
+            return nil
+        end
         t = tbl.field(t, part)
     end
     return t
@@ -87,32 +108,59 @@ local probeKeys: { [Region]: string } = tbl.weakKeys()
 
 local function anchorOf(r: Region): string
     local ok, point, rel, relPoint, x, y = pcall(r.GetPoint, r, 1)
-    if not ok or not point then return "" end
+    if not ok or not point then
+        return ""
+    end
     local relName = rel and (rel:GetName() or probeKeys[rel] or "?") or "nil"
-    return (" @%s>%s.%s %d,%d"):format(tostring(point), tostring(relName), tostring(relPoint), math.floor(x or 0), math.floor(y or 0))
+    return (" @%s>%s.%s %d,%d"):format(
+        tostring(point),
+        tostring(relName),
+        tostring(relPoint),
+        math.floor(x or 0),
+        math.floor(y or 0)
+    )
 end
 
 -- frames and texts (no textures: the trees are long enough), 700 lines at most
 local function tree(f: Frame, depth: number, out: string[], prefix: string)
-    if depth > 7 or #out >= 700 then return end
+    if depth > 7 or #out >= 700 then
+        return
+    end
     local keys: { [Region]: string } = {}
-    for k, part in pairs(wf.keyed(f)) do keys[part] = k end
+    for k, part in pairs(wf.keyed(f)) do
+        keys[part] = k
+    end
     for _, r in ipairs(wf.fontStrings(f)) do
         if #out < 700 then
             local text = r:GetText()
             if text and text ~= "" then
-                out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d \"%s\""):format(prefix, r:GetName() or keys[r] or "?",
-                    show(r:IsShown()), math.floor(r:GetWidth() or 0), math.floor(r:GetHeight() or 0), show(text):sub(1, 60))
+                out[#out + 1] = ("%s. %s [FS] shown=%s %dx%d \"%s\""):format(
+                    prefix,
+                    r:GetName() or keys[r] or "?",
+                    show(r:IsShown()),
+                    math.floor(r:GetWidth() or 0),
+                    math.floor(r:GetHeight() or 0),
+                    show(text):sub(1, 60)
+                )
             end
         end
     end
     for _, c in ipairs(wf.children(f)) do
-        if #out >= 700 then return end
+        if #out >= 700 then
+            return
+        end
         probeKeys[c] = keys[c]
         local okP, protected = pcall(c.IsProtected, c)
-        out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(prefix, c:GetName() or keys[c] or "?", c:GetObjectType(),
-            show(c:IsShown()), math.floor(c:GetWidth() or 0), math.floor(c:GetHeight() or 0), anchorOf(c),
-            (okP and protected) and " PROTECTED" or "")
+        out[#out + 1] = ("%s%s [%s] shown=%s %dx%d%s%s"):format(
+            prefix,
+            c:GetName() or keys[c] or "?",
+            c:GetObjectType(),
+            show(c:IsShown()),
+            math.floor(c:GetWidth() or 0),
+            math.floor(c:GetHeight() or 0),
+            anchorOf(c),
+            (okP and protected) and " PROTECTED" or ""
+        )
         tree(c, depth + 1, out, prefix .. "  ")
     end
 end
@@ -123,121 +171,386 @@ local WINDOWS: { [string]: Window } = {
     mail = {
         frames = { "MailFrame", "InboxFrame", "OpenMailFrame", "SendMailFrame" },
         events = { "MAIL_SHOW" },
-        apis = { "GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxItem", "GetInboxItemLink", "GetInboxText",
-                 "TakeInboxItem", "TakeInboxMoney", "AutoLootMailItem", "DeleteInboxItem", "ReturnInboxItem",
-                 "SendMail", "SetSendMailMoney", "SetSendMailCOD", "ClickSendMailItemButton", "GetSendMailPrice",
-                 "CheckInbox", "HasNewMail", "C_Mail.CanCheckInbox", "C_Mail.HasInboxMoney", "C_Mail.IsCommandPending" },
+        apis = {
+            "GetInboxNumItems",
+            "GetInboxHeaderInfo",
+            "GetInboxItem",
+            "GetInboxItemLink",
+            "GetInboxText",
+            "TakeInboxItem",
+            "TakeInboxMoney",
+            "AutoLootMailItem",
+            "DeleteInboxItem",
+            "ReturnInboxItem",
+            "SendMail",
+            "SetSendMailMoney",
+            "SetSendMailCOD",
+            "ClickSendMailItemButton",
+            "GetSendMailPrice",
+            "CheckInbox",
+            "HasNewMail",
+            "C_Mail.CanCheckInbox",
+            "C_Mail.HasInboxMoney",
+            "C_Mail.IsCommandPending",
+        },
     },
     merchant = {
-        frames = { "MerchantFrame", "MerchantBuyBackItem", "MerchantRepairAllButton", "MerchantRepairItemButton",
-                   "MerchantGuildBankRepairButton", "MerchantFrameLootFilter", "MerchantItem1" },
+        frames = {
+            "MerchantFrame",
+            "MerchantBuyBackItem",
+            "MerchantRepairAllButton",
+            "MerchantRepairItemButton",
+            "MerchantGuildBankRepairButton",
+            "MerchantFrameLootFilter",
+            "MerchantItem1",
+        },
         events = { "MERCHANT_SHOW" },
-        apis = { "GetMerchantNumItems", "GetMerchantItemInfo", "GetMerchantItemLink", "GetMerchantItemCostInfo",
-                 "GetMerchantItemCostItem", "GetMerchantItemMaxStack", "BuyMerchantItem", "BuybackItem",
-                 "GetNumBuybackItems", "GetBuybackItemInfo", "CanMerchantRepair", "RepairAllItems", "GetRepairAllCost",
-                 "CanGuildBankRepair", "GetMerchantFilter", "SetMerchantFilter", "C_MerchantFrame.GetItemInfo",
-                 "C_MerchantFrame.GetBuybackItemID", "C_MerchantFrame.IsMerchantItemRefundable", "C_Container.UseContainerItem" },
+        apis = {
+            "GetMerchantNumItems",
+            "GetMerchantItemInfo",
+            "GetMerchantItemLink",
+            "GetMerchantItemCostInfo",
+            "GetMerchantItemCostItem",
+            "GetMerchantItemMaxStack",
+            "BuyMerchantItem",
+            "BuybackItem",
+            "GetNumBuybackItems",
+            "GetBuybackItemInfo",
+            "CanMerchantRepair",
+            "RepairAllItems",
+            "GetRepairAllCost",
+            "CanGuildBankRepair",
+            "GetMerchantFilter",
+            "SetMerchantFilter",
+            "C_MerchantFrame.GetItemInfo",
+            "C_MerchantFrame.GetBuybackItemID",
+            "C_MerchantFrame.IsMerchantItemRefundable",
+            "C_Container.UseContainerItem",
+        },
     },
     trainer = {
-        frames = { "ClassTrainerFrame", "ClassTrainerFrameSkillStepButton", "ClassTrainerTrainButton",
-                   "ClassTrainerFrameFilterDropdown", "ClassTrainerFrameScrollFrame" },
+        frames = {
+            "ClassTrainerFrame",
+            "ClassTrainerFrameSkillStepButton",
+            "ClassTrainerTrainButton",
+            "ClassTrainerFrameFilterDropdown",
+            "ClassTrainerFrameScrollFrame",
+        },
         addons = { "Blizzard_TrainerUI" },
         events = { "TRAINER_SHOW" },
-        apis = { "GetNumTrainerServices", "GetTrainerServiceInfo", "GetTrainerServiceCost", "GetTrainerServiceDescription",
-                 "GetTrainerServiceIcon", "GetTrainerServiceLevelReq", "GetTrainerServiceSkillReq", "GetTrainerServiceItemLink",
-                 "GetTrainerServiceNumAbilityReq", "GetTrainerServiceAbilityReq", "GetTrainerServiceTypeFilter",
-                 "SetTrainerServiceTypeFilter", "BuyTrainerService", "SelectTrainerService", "GetTrainerSelectionIndex",
-                 "GetTrainerGreetingText", "IsTradeskillTrainer", "C_Trainer" },
+        apis = {
+            "GetNumTrainerServices",
+            "GetTrainerServiceInfo",
+            "GetTrainerServiceCost",
+            "GetTrainerServiceDescription",
+            "GetTrainerServiceIcon",
+            "GetTrainerServiceLevelReq",
+            "GetTrainerServiceSkillReq",
+            "GetTrainerServiceItemLink",
+            "GetTrainerServiceNumAbilityReq",
+            "GetTrainerServiceAbilityReq",
+            "GetTrainerServiceTypeFilter",
+            "SetTrainerServiceTypeFilter",
+            "BuyTrainerService",
+            "SelectTrainerService",
+            "GetTrainerSelectionIndex",
+            "GetTrainerGreetingText",
+            "IsTradeskillTrainer",
+            "C_Trainer",
+        },
     },
     auction = {
-        frames = { "AuctionFrame", "AuctionFrameBrowse", "AuctionFrameBid", "AuctionFrameAuctions",
-                   "AuctionHouseFrame", "AuctionHouseFrameBuyTab", "AuctionHouseFrameSellTab", "AuctionHouseFrameAuctionsTab" },
+        frames = {
+            "AuctionFrame",
+            "AuctionFrameBrowse",
+            "AuctionFrameBid",
+            "AuctionFrameAuctions",
+            "AuctionHouseFrame",
+            "AuctionHouseFrameBuyTab",
+            "AuctionHouseFrameSellTab",
+            "AuctionHouseFrameAuctionsTab",
+        },
         addons = { "Blizzard_AuctionUI", "Blizzard_AuctionHouseUI" },
         events = { "AUCTION_HOUSE_SHOW" },
-        apis = { "QueryAuctionItems", "CanSendAuctionQuery", "GetNumAuctionItems", "GetAuctionItemInfo", "GetAuctionItemLink",
-                 "PlaceAuctionBid", "PostAuction", "StartAuction", "CalculateAuctionDeposit", "GetAuctionSellItemInfo",
-                 "ClickAuctionSellItemButton", "SortAuctionItems", "GetOwnerAuctionItems",
-                 "C_AuctionHouse.SendBrowseQuery", "C_AuctionHouse.ReplicateItems", "C_AuctionHouse.GetNumReplicateItems",
-                 "C_AuctionHouse.PostItem", "C_AuctionHouse.PostCommodity", "C_AuctionHouse.PlaceBid",
-                 "C_AuctionHouse.StartCommoditiesPurchase", "C_AuctionHouse.GetBrowseResults",
-                 "C_AuctionHouse.IsThrottledMessageSystemReady", "C_AuctionHouse.GetAvailablePostCount",
-                 "C_AuctionHouse.CalculateItemDeposit", "C_AuctionHouse.QueryOwnedAuctions" },
+        apis = {
+            "QueryAuctionItems",
+            "CanSendAuctionQuery",
+            "GetNumAuctionItems",
+            "GetAuctionItemInfo",
+            "GetAuctionItemLink",
+            "PlaceAuctionBid",
+            "PostAuction",
+            "StartAuction",
+            "CalculateAuctionDeposit",
+            "GetAuctionSellItemInfo",
+            "ClickAuctionSellItemButton",
+            "SortAuctionItems",
+            "GetOwnerAuctionItems",
+            "C_AuctionHouse.SendBrowseQuery",
+            "C_AuctionHouse.ReplicateItems",
+            "C_AuctionHouse.GetNumReplicateItems",
+            "C_AuctionHouse.PostItem",
+            "C_AuctionHouse.PostCommodity",
+            "C_AuctionHouse.PlaceBid",
+            "C_AuctionHouse.StartCommoditiesPurchase",
+            "C_AuctionHouse.GetBrowseResults",
+            "C_AuctionHouse.IsThrottledMessageSystemReady",
+            "C_AuctionHouse.GetAvailablePostCount",
+            "C_AuctionHouse.CalculateItemDeposit",
+            "C_AuctionHouse.QueryOwnedAuctions",
+        },
     },
     collections = {
-        frames = { "CollectionsJournal", "MountJournal", "PetJournal", "ToyBox", "HeirloomsJournal", "WardrobeCollectionFrame",
-                   "CollectionsJournalTab1", "CollectionsJournalTab2", "CollectionsJournalTab3", "CollectionsJournalTab4",
-                   "CollectionsJournalTab5", "CollectionsJournalTab6" },
+        frames = {
+            "CollectionsJournal",
+            "MountJournal",
+            "PetJournal",
+            "ToyBox",
+            "HeirloomsJournal",
+            "WardrobeCollectionFrame",
+            "CollectionsJournalTab1",
+            "CollectionsJournalTab2",
+            "CollectionsJournalTab3",
+            "CollectionsJournalTab4",
+            "CollectionsJournalTab5",
+            "CollectionsJournalTab6",
+        },
         addons = { "Blizzard_Collections" },
-        apis = { "C_MountJournal.GetNumMounts", "C_MountJournal.GetNumDisplayedMounts", "C_MountJournal.GetMountIDs",
-                 "C_MountJournal.SummonByID", "C_PetJournal.GetNumPets", "C_PetJournal.SummonPetByGUID",
-                 "C_ToyBox.GetNumToys", "C_ToyBox.GetNumLearnedDisplayedToys", "C_Heirloom.GetNumHeirlooms",
-                 "C_TransmogCollection.GetAllAppearanceSources", "C_TransmogCollection.GetCategoryCollectedCount",
-                 "C_AccountStore", "C_MountJournal", "C_PetJournal", "C_ToyBox", "C_Heirloom", "C_TransmogCollection" },
+        apis = {
+            "C_MountJournal.GetNumMounts",
+            "C_MountJournal.GetNumDisplayedMounts",
+            "C_MountJournal.GetMountIDs",
+            "C_MountJournal.SummonByID",
+            "C_PetJournal.GetNumPets",
+            "C_PetJournal.SummonPetByGUID",
+            "C_ToyBox.GetNumToys",
+            "C_ToyBox.GetNumLearnedDisplayedToys",
+            "C_Heirloom.GetNumHeirlooms",
+            "C_TransmogCollection.GetAllAppearanceSources",
+            "C_TransmogCollection.GetCategoryCollectedCount",
+            "C_AccountStore",
+            "C_MountJournal",
+            "C_PetJournal",
+            "C_ToyBox",
+            "C_Heirloom",
+            "C_TransmogCollection",
+        },
     },
 }
 WINDOWS.gossip = {
     frames = { "GossipFrame", "GossipFrameGreetingPanel", "GossipGreetingText" },
     events = { "GOSSIP_SHOW" },
-    apis = { "C_GossipInfo.GetText", "C_GossipInfo.GetOptions", "C_GossipInfo.GetAvailableQuests", "C_GossipInfo.GetActiveQuests",
-             "C_GossipInfo.SelectOption", "C_GossipInfo.SelectAvailableQuest", "C_GossipInfo.SelectActiveQuest",
-             "C_GossipInfo.CloseGossip", "C_GossipInfo.GetNumOptions", "C_GossipInfo.GetFriendshipReputation" },
+    apis = {
+        "C_GossipInfo.GetText",
+        "C_GossipInfo.GetOptions",
+        "C_GossipInfo.GetAvailableQuests",
+        "C_GossipInfo.GetActiveQuests",
+        "C_GossipInfo.SelectOption",
+        "C_GossipInfo.SelectAvailableQuest",
+        "C_GossipInfo.SelectActiveQuest",
+        "C_GossipInfo.CloseGossip",
+        "C_GossipInfo.GetNumOptions",
+        "C_GossipInfo.GetFriendshipReputation",
+    },
 }
 WINDOWS.quest = {
-    frames = { "QuestFrame", "QuestFrameDetailPanel", "QuestFrameProgressPanel", "QuestFrameRewardPanel", "QuestFrameGreetingPanel",
-               "QuestModelScene", "QuestNPCModel" },
+    frames = {
+        "QuestFrame",
+        "QuestFrameDetailPanel",
+        "QuestFrameProgressPanel",
+        "QuestFrameRewardPanel",
+        "QuestFrameGreetingPanel",
+        "QuestModelScene",
+        "QuestNPCModel",
+    },
     events = { "QUEST_DETAIL", "QUEST_PROGRESS", "QUEST_COMPLETE", "QUEST_GREETING" },
-    apis = { "GetTitleText", "GetQuestText", "GetObjectiveText", "GetProgressText", "GetRewardText", "GetGreetingText",
-             "AcceptQuest", "DeclineQuest", "CompleteQuest", "GetQuestReward", "IsQuestCompletable", "GetNumQuestChoices",
-             "GetNumQuestRewards", "GetQuestItemInfo", "GetQuestItemLink", "GetRewardMoney", "GetRewardXP", "GetNumQuestItems",
-             "GetNumAvailableQuests", "GetNumActiveQuests", "GetAvailableTitle", "GetActiveTitle", "SelectAvailableQuest",
-             "SelectActiveQuest", "GetQuestPortraitGiver", "C_QuestOffer.GetQuestRewardCurrencyInfo" },
+    apis = {
+        "GetTitleText",
+        "GetQuestText",
+        "GetObjectiveText",
+        "GetProgressText",
+        "GetRewardText",
+        "GetGreetingText",
+        "AcceptQuest",
+        "DeclineQuest",
+        "CompleteQuest",
+        "GetQuestReward",
+        "IsQuestCompletable",
+        "GetNumQuestChoices",
+        "GetNumQuestRewards",
+        "GetQuestItemInfo",
+        "GetQuestItemLink",
+        "GetRewardMoney",
+        "GetRewardXP",
+        "GetNumQuestItems",
+        "GetNumAvailableQuests",
+        "GetNumActiveQuests",
+        "GetAvailableTitle",
+        "GetActiveTitle",
+        "SelectAvailableQuest",
+        "SelectActiveQuest",
+        "GetQuestPortraitGiver",
+        "C_QuestOffer.GetQuestRewardCurrencyInfo",
+    },
 }
 WINDOWS.dressup = {
-    frames = { "DressUpFrame", "DressUpFrameResetButton", "DressUpFrameCancelButton", "SideDressUpFrame", "DressUpFrameOutfitDropdown" },
+    frames = {
+        "DressUpFrame",
+        "DressUpFrameResetButton",
+        "DressUpFrameCancelButton",
+        "SideDressUpFrame",
+        "DressUpFrameOutfitDropdown",
+    },
     apis = { "DressUpItemLink", "DressUpVisual", "DressUpFrame_Show", "C_TransmogSets", "C_Transmog" },
 }
 WINDOWS.inspect = {
-    frames = { "InspectFrame", "InspectPaperDollFrame", "InspectPVPFrame", "InspectTalentFrame", "InspectGuildFrame",
-               "InspectFrameTab1", "InspectFrameTab2", "InspectFrameTab3", "InspectFrameTab4", "InspectModelFrame" },
+    frames = {
+        "InspectFrame",
+        "InspectPaperDollFrame",
+        "InspectPVPFrame",
+        "InspectTalentFrame",
+        "InspectGuildFrame",
+        "InspectFrameTab1",
+        "InspectFrameTab2",
+        "InspectFrameTab3",
+        "InspectFrameTab4",
+        "InspectModelFrame",
+    },
     addons = { "Blizzard_InspectUI" },
     events = {},
-    apis = { "NotifyInspect", "CanInspect", "ClearInspectPlayer", "GetInspectSpecialization", "C_PaperDollInfo.GetInspectItemLevel",
-             "GetInventoryItemLink", "C_Traits.GetConfigInfo", "C_ClassTalents", "GetTalentInfo", "GetNumTalentTabs",
-             "GetTalentTabInfo", "C_SpecializationInfo" },
+    apis = {
+        "NotifyInspect",
+        "CanInspect",
+        "ClearInspectPlayer",
+        "GetInspectSpecialization",
+        "C_PaperDollInfo.GetInspectItemLevel",
+        "GetInventoryItemLink",
+        "C_Traits.GetConfigInfo",
+        "C_ClassTalents",
+        "GetTalentInfo",
+        "GetNumTalentTabs",
+        "GetTalentTabInfo",
+        "C_SpecializationInfo",
+    },
 }
 WINDOWS.gamemenu = {
     frames = { "GameMenuFrame", "SettingsPanel", "KeyBindingFrame", "HelpFrame", "AddonList", "MacroFrame" },
-    apis = { "Logout", "Quit", "ForceQuit", "CancelLogout", "ToggleGameMenu", "ShowUIPanel", "HideUIPanel",
-             "Settings.OpenToCategory", "ToggleHelpFrame", "ShowMacroFrame", "StoreFrame_SetShown", "C_StorePublic.IsEnabled",
-             "C_SplashScreen.RequestLatestSplashScreen", "ReloadUI", "C_UI.Reload" },
+    apis = {
+        "Logout",
+        "Quit",
+        "ForceQuit",
+        "CancelLogout",
+        "ToggleGameMenu",
+        "ShowUIPanel",
+        "HideUIPanel",
+        "Settings.OpenToCategory",
+        "ToggleHelpFrame",
+        "ShowMacroFrame",
+        "StoreFrame_SetShown",
+        "C_StorePublic.IsEnabled",
+        "C_SplashScreen.RequestLatestSplashScreen",
+        "ReloadUI",
+        "C_UI.Reload",
+    },
 }
 -- the game menu's windows (asked 2026-10-17: Macros, AddOns and Support
 -- aren't styled yet)
 WINDOWS.macros = {
-    frames = { "MacroFrame", "MacroPopupFrame", "MacroFrameText", "MacroSaveButton", "MacroNewButton", "MacroDeleteButton" },
+    frames = {
+        "MacroFrame",
+        "MacroPopupFrame",
+        "MacroFrameText",
+        "MacroSaveButton",
+        "MacroNewButton",
+        "MacroDeleteButton",
+    },
     addons = { "Blizzard_MacroUI" },
-    apis = { "GetNumMacros", "GetMacroInfo", "GetMacroBody", "GetMacroIndexByName", "CreateMacro", "EditMacro", "DeleteMacro",
-             "PickupMacro", "GetMacroIcons", "GetMacroItemIcons", "GetLooseMacroIcons", "GetLooseMacroItemIcons",
-             "ShowMacroFrame", "C_Macro", "C_Macro.GetMacroName", "C_Macro.SetMacroExecuteLineCallback" },
+    apis = {
+        "GetNumMacros",
+        "GetMacroInfo",
+        "GetMacroBody",
+        "GetMacroIndexByName",
+        "CreateMacro",
+        "EditMacro",
+        "DeleteMacro",
+        "PickupMacro",
+        "GetMacroIcons",
+        "GetMacroItemIcons",
+        "GetLooseMacroIcons",
+        "GetLooseMacroItemIcons",
+        "ShowMacroFrame",
+        "C_Macro",
+        "C_Macro.GetMacroName",
+        "C_Macro.SetMacroExecuteLineCallback",
+    },
 }
 WINDOWS.addons = {
-    frames = { "AddonList", "AddonListEnableAllButton", "AddonListDisableAllButton", "AddonListOkayButton", "AddonListCancelButton",
-               "AddonCharacterDropdown", "AddonList.SearchBox", "AddonList.Performance" },
-    apis = { "C_AddOns.GetNumAddOns", "C_AddOns.GetAddOnInfo", "C_AddOns.EnableAddOn", "C_AddOns.DisableAddOn",
-             "C_AddOns.EnableAllAddOns", "C_AddOns.DisableAllAddOns", "C_AddOns.SaveAddOns", "C_AddOns.ResetAddOns",
-             "C_AddOns.GetAddOnDependencies", "C_AddOns.GetAddOnOptionalDependencies", "C_AddOns.GetAddOnEnableState",
-             "C_AddOns.GetAddOnMetadata", "C_AddOns.IsAddOnLoadOnDemand", "C_AddOns.IsAddOnLoaded", "C_AddOns.IsAddOnLoadable",
-             "C_AddOns.GetScriptsDisallowedForBeta", "C_AddOns.IsAddonVersionCheckEnabled", "C_AddOns.SetAddonVersionCheck",
-             "UpdateAddOnMemoryUsage", "GetAddOnMemoryUsage", "C_AddOnProfiler", "C_AddOnProfiler.GetAddOnMetric",
-             "C_AddOnProfiler.GetOverallMetric", "C_AddOnProfiler.IsEnabled" },
+    frames = {
+        "AddonList",
+        "AddonListEnableAllButton",
+        "AddonListDisableAllButton",
+        "AddonListOkayButton",
+        "AddonListCancelButton",
+        "AddonCharacterDropdown",
+        "AddonList.SearchBox",
+        "AddonList.Performance",
+    },
+    apis = {
+        "C_AddOns.GetNumAddOns",
+        "C_AddOns.GetAddOnInfo",
+        "C_AddOns.EnableAddOn",
+        "C_AddOns.DisableAddOn",
+        "C_AddOns.EnableAllAddOns",
+        "C_AddOns.DisableAllAddOns",
+        "C_AddOns.SaveAddOns",
+        "C_AddOns.ResetAddOns",
+        "C_AddOns.GetAddOnDependencies",
+        "C_AddOns.GetAddOnOptionalDependencies",
+        "C_AddOns.GetAddOnEnableState",
+        "C_AddOns.GetAddOnMetadata",
+        "C_AddOns.IsAddOnLoadOnDemand",
+        "C_AddOns.IsAddOnLoaded",
+        "C_AddOns.IsAddOnLoadable",
+        "C_AddOns.GetScriptsDisallowedForBeta",
+        "C_AddOns.IsAddonVersionCheckEnabled",
+        "C_AddOns.SetAddonVersionCheck",
+        "UpdateAddOnMemoryUsage",
+        "GetAddOnMemoryUsage",
+        "C_AddOnProfiler",
+        "C_AddOnProfiler.GetAddOnMetric",
+        "C_AddOnProfiler.GetOverallMetric",
+        "C_AddOnProfiler.IsEnabled",
+    },
 }
 WINDOWS.help = {
     frames = { "HelpFrame", "HelpBrowser", "HelpFrame.Browser", "BrowserSettingsTooltip", "TicketStatusFrame" },
-    apis = { "ToggleHelpFrame", "HelpFrame_ShowFrame", "C_UserFeedback", "C_ReportSystem", "GetGMTicket", "C_Support",
-             "C_SupportTicket", "LoadURLIndex", "C_ExternalEventURL" },
+    apis = {
+        "ToggleHelpFrame",
+        "HelpFrame_ShowFrame",
+        "C_UserFeedback",
+        "C_ReportSystem",
+        "GetGMTicket",
+        "C_Support",
+        "C_SupportTicket",
+        "LoadURLIndex",
+        "C_ExternalEventURL",
+    },
 }
-local ORDER = { "mail", "merchant", "trainer", "auction", "collections", "gossip", "quest", "dressup", "inspect", "gamemenu",
-                "macros", "addons", "help" }
+local ORDER = {
+    "mail",
+    "merchant",
+    "trainer",
+    "auction",
+    "collections",
+    "gossip",
+    "quest",
+    "dressup",
+    "inspect",
+    "gamemenu",
+    "macros",
+    "addons",
+    "help",
+}
 
 -- Every large window open now (named or by its parent's key), to find the
 -- ones the probe doesn't know by name (the inspected player's talents).
@@ -249,8 +562,13 @@ export function openWindows(): string[]
             local w, h = f:GetWidth() or 0, f:GetHeight() or 0
             if not (isSecret(w) or isSecret(h)) and w >= 250 and h >= 200 then
                 local okP, protected = pcall(f.IsProtected, f)
-                out[#out + 1] = ("%s [%s] %dx%d%s"):format(f:GetName() or "?", f:GetObjectType(), math.floor(w), math.floor(h),
-                    (okP and protected) and " PROTECTED" or "")
+                out[#out + 1] = ("%s [%s] %dx%d%s"):format(
+                    f:GetName() or "?",
+                    f:GetObjectType(),
+                    math.floor(w),
+                    math.floor(h),
+                    (okP and protected) and " PROTECTED" or ""
+                )
             end
         end
     end
@@ -261,21 +579,38 @@ end
 local function frameInfo(name: string): string
     -- "Parent.Key" for a child kept by key
     local v = tbl.field(_G, name:match("^[^.]+") or "")
-    for key in name:gmatch("%.([^.]+)") do v = tbl.field(v, key) end
-    if v == nil then return "missing" end
+    for key in name:gmatch("%.([^.]+)") do
+        v = tbl.field(v, key)
+    end
+    if v == nil then
+        return "missing"
+    end
     local f = wf.asRegion(v)
-    if not f then return "not a frame: " .. type(v) end
+    if not f then
+        return "not a frame: " .. type(v)
+    end
     local okP, protected = pcall(f.IsProtected, f)
-    return ("%s shown=%s protected=%s %dx%d"):format(f:GetObjectType(), show(f:IsShown()), show(okP and protected),
-        math.floor(f:GetWidth() or 0), math.floor(f:GetHeight() or 0))
+    return ("%s shown=%s protected=%s %dx%d"):format(
+        f:GetObjectType(),
+        show(f:IsShown()),
+        show(okP and protected),
+        math.floor(f:GetWidth() or 0),
+        math.floor(f:GetHeight() or 0)
+    )
 end
 
 local function apiInfo(path: string): string
     local v = resolve(path)
-    if v == nil then return "missing" end
+    if v == nil then
+        return "missing"
+    end
     if type(v) == "table" then
         local n: string[] = {}
-        for k, x in pairs(v) do if type(x) == "function" then n[#n + 1] = tostring(k) end end
+        for k, x in pairs(v) do
+            if type(x) == "function" then
+                n[#n + 1] = tostring(k)
+            end
+        end
         table.sort(n)
         return "namespace: " .. table.concat(n, ", ")
     end
@@ -285,15 +620,23 @@ end
 -- The client's API documentation for these functions: every flag on them
 -- (restrictions and the like), not their arguments.
 local function docFlags(names: string[]): string | { [string]: string }
-    for _, a in ipairs({ "Blizzard_APIDocumentationBasic", "Blizzard_APIDocumentation", "Blizzard_APIDocumentationGenerated" }) do
+    for _, a in ipairs({
+        "Blizzard_APIDocumentationBasic",
+        "Blizzard_APIDocumentation",
+        "Blizzard_APIDocumentationGenerated",
+    }) do
         if C_AddOns.DoesAddOnExist(a) and not C_AddOns.IsAddOnLoaded(a) then
             pcall(C_AddOns.LoadAddOn, a)
         end
     end
     local systems = tbl.field(_G, "APIDocumentation", "systems")
-    if systems == nil then return "no APIDocumentation" end
+    if systems == nil then
+        return "no APIDocumentation"
+    end
     local want: { [string]: boolean } = {}
-    for _, n in ipairs(names) do want[n] = true end
+    for _, n in ipairs(names) do
+        want[n] = true
+    end
     local out: { [string]: string } = {}
     for _, sys in ipairs(tbl.list(systems)) do
         local namespace = tbl.field(sys, "Namespace")
@@ -322,7 +665,9 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         s.inbox = call(GetInboxNumItems)
         local headers: string[] = {}
         s.headers = headers
-        for i = 1, math.min(3, n) do headers[i] = call(GetInboxHeaderInfo, i) end
+        for i = 1, math.min(3, n) do
+            headers[i] = call(GetInboxHeaderInfo, i)
+        end
         s.sendPrice = call(GetSendMailPrice)
     end,
     merchant = function(s)
@@ -353,7 +698,9 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         s.tradeskill = call(IsTradeskillTrainer)
         local filters: { [string]: string } = {}
         s.filters = filters
-        for _, f in ipairs({ "available", "unavailable", "used" }) do filters[f] = call(GetTrainerServiceTypeFilter, f) end
+        for _, f in ipairs({ "available", "unavailable", "used" }) do
+            filters[f] = call(GetTrainerServiceTypeFilter, f)
+        end
         local sample: Record[] = {}
         s.sample = sample
         for i = 1, math.min(4, n) do
@@ -407,8 +754,10 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         s.count = call(C_AddOns.GetNumAddOns)
         local list: string[] = {}
         for i = 1, math.min(C_AddOns.GetNumAddOns(), 20) do
-            list[i] = call(C_AddOns.GetAddOnInfo, i) .. " | state " .. call(C_AddOns.GetAddOnEnableState, i, UnitName("player"))
-                .. " | deps " .. call(C_AddOns.GetAddOnDependencies, i)
+            list[i] = call(C_AddOns.GetAddOnInfo, i) ..
+                " | state " ..
+                    call(C_AddOns.GetAddOnEnableState, i, UnitName("player")) ..
+                        " | deps " .. call(C_AddOns.GetAddOnDependencies, i)
         end
         s.list = list
         s.disallowed = call(C_AddOns.GetScriptsDisallowedForBeta)
@@ -418,7 +767,11 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
         local kinds: string[] = {}
         if f then
             for _, c in ipairs(wf.children(f)) do
-                kinds[#kinds + 1] = ("%s %s shown=%s"):format(c:GetObjectType(), c:GetName() or c:GetDebugName() or "?", show(c:IsShown()))
+                kinds[#kinds + 1] = ("%s %s shown=%s"):format(
+                    c:GetObjectType(),
+                    c:GetName() or c:GetDebugName() or "?",
+                    show(c:IsShown())
+                )
             end
         end
         s.children = kinds
@@ -431,7 +784,11 @@ local SAMPLES: { [string]: (s: Record) -> () } = {
             local c = wf.asButton(child)
             if c and c:IsShown() then
                 local okP, protected = pcall(c.IsProtected, c)
-                buttons[#buttons + 1] = ("%s \"%s\"%s"):format(c:GetName() or "?", show(c:GetText()), (okP and protected) and " PROTECTED" or "")
+                buttons[#buttons + 1] = ("%s \"%s\"%s"):format(
+                    c:GetName() or "?",
+                    show(c:GetText()),
+                    (okP and protected) and " PROTECTED" or ""
+                )
             end
         end
         s.buttons = buttons
@@ -473,11 +830,15 @@ export function snapshot(key: string)
     local s: Record = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown() }
     local frameList: { [string]: string } = {}
     s.frames = frameList
-    for _, name in ipairs(def.frames) do frameList[name] = frameInfo(name) end
+    for _, name in ipairs(def.frames) do
+        frameList[name] = frameInfo(name)
+    end
     local sampleFn = SAMPLES[key]
     if sampleFn then
         local ok, err = pcall(sampleFn, s)
-        if not ok then s.sampleError = tostring(err) end
+        if not ok then
+            s.sampleError = tostring(err)
+        end
     end
     s.openWindows = openWindows()
     -- the open window's tree: the first of its frames that shows
@@ -499,8 +860,12 @@ export function snapshot(key: string)
         local v = type(k) == "string" and k:find("^" .. prefix) and not k:find("%d$") and wf.asRegion(value)
         if type(k) == "string" and v then
             local okS, shown = pcall(v.IsShown, v)
-            if okS and shown then named[#named + 1] = k .. " [" .. v:GetObjectType() .. "]" end
-            if #named > 80 then break end
+            if okS and shown then
+                named[#named + 1] = k .. " [" .. v:GetObjectType() .. "]"
+            end
+            if #named > 80 then
+                break
+            end
         end
     end
     table.sort(named)
@@ -520,9 +885,14 @@ export function static()
         local frameList: { [string]: string }, apis: { [string]: string }, addons: { [string]: string } = {}, {}, {}
         for _, a in ipairs(def.addons or {}) do
             addons[a] = ("exists=%s loaded=%s lod=%s"):format(
-                show(C_AddOns.DoesAddOnExist(a)), show((C_AddOns.IsAddOnLoaded(a))), show(C_AddOns.IsAddOnLoadOnDemand(a)))
+                show(C_AddOns.DoesAddOnExist(a)),
+                show((C_AddOns.IsAddOnLoaded(a))),
+                show(C_AddOns.IsAddOnLoadOnDemand(a))
+            )
         end
-        for _, name in ipairs(def.frames) do frameList[name] = frameInfo(name) end
+        for _, name in ipairs(def.frames) do
+            frameList[name] = frameInfo(name)
+        end
         for _, api in ipairs(def.apis) do
             apis[api] = apiInfo(api)
             names[#names + 1] = api
@@ -547,16 +917,27 @@ export function arm()
     end
     local untilT = GetTime() + 30 * 60
     f:SetScript("OnEvent", function(_, event: string)
-        if GetTime() > untilT then f:UnregisterAllEvents() return end
+        if GetTime() > untilT then
+            f:UnregisterAllEvents()
+            return
+        end
         local key = byEvent[event]
-        if key then after(0.6, function() snapshot(key) end) end
+        if key then
+            after(0.6, function()
+                snapshot(key)
+            end)
+        end
     end)
     local function hookJournal()
         local j = wf.find("CollectionsJournal")
         if j and not journalHooked then
             journalHooked = true
             hookScript(j, "OnShow", function()
-                if GetTime() <= untilT then after(0.6, function() snapshot("collections") end) end
+                if GetTime() <= untilT then
+                    after(0.6, function()
+                        snapshot("collections")
+                    end)
+                end
             end)
         end
     end
@@ -565,7 +946,11 @@ export function arm()
     if d and not dressHooked then
         dressHooked = true
         hookScript(d, "OnShow", function()
-            if GetTime() <= untilT then after(0.6, function() snapshot("dressup") end) end
+            if GetTime() <= untilT then
+                after(0.6, function()
+                    snapshot("dressup")
+                end)
+            end
         end)
     end
     -- inspect: saved when its window shows (INSPECT_READY came before it did)
@@ -574,7 +959,11 @@ export function arm()
         if i and not inspectHooked then
             inspectHooked = true
             hookScript(i, "OnShow", function()
-                if GetTime() <= untilT then after(0.8, function() snapshot("inspect") end) end
+                if GetTime() <= untilT then
+                    after(0.8, function()
+                        snapshot("inspect")
+                    end)
+                end
             end)
         end
     end
@@ -586,7 +975,11 @@ export function arm()
     if g and not menuHooked then
         menuHooked = true
         hookScript(g, "OnShow", function()
-            if GetTime() <= untilT then after(0.3, function() snapshot("gamemenu") end) end
+            if GetTime() <= untilT then
+                after(0.3, function()
+                    snapshot("gamemenu")
+                end)
+            end
         end)
     end
     -- the game menu's windows, each when it shows
@@ -597,7 +990,11 @@ export function arm()
         if w and not hooked[key] then
             hooked[key] = true
             hookScript(w, "OnShow", function()
-                if GetTime() <= untilT then after(0.6, function() snapshot(key) end) end
+                if GetTime() <= untilT then
+                    after(0.6, function()
+                        snapshot(key)
+                    end)
+                end
             end)
         end
     end
@@ -605,7 +1002,9 @@ export function arm()
     hookShow("help", "HelpFrame")
     hookShow("macros", "MacroFrame")
     if not (shownHooked and shownHooked.macros) then
-        onAddonLoaded("Blizzard_MacroUI", function() hookShow("macros", "MacroFrame") end)
+        onAddonLoaded("Blizzard_MacroUI", function()
+            hookShow("macros", "MacroFrame")
+        end)
     end
     if not journalHooked then
         onAddonLoaded("Blizzard_Collections", hookJournal)
@@ -614,13 +1013,19 @@ end
 
 -- Whatever is open now: every large window and the tree of each.
 export function now()
-    local s = { at = date("%Y-%m-%d %H:%M:%S"), combat = InCombatLockdown(), openWindows = openWindows(), trees = {} :: { [string]: string[] } }
+    local s = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        combat = InCombatLockdown(),
+        openWindows = openWindows(),
+        trees = {} :: { [string]: string[] },
+    }
     for _, f in ipairs(wf.children(UIParent)) do
         local okS, shown = pcall(f.IsShown, f)
         local w, h = f:GetWidth() or 0, f:GetHeight() or 0
         local name = f:GetName()
-        if okS and shown and not f:IsForbidden() and not (isSecret(w) or isSecret(h))
-            and w >= 250 and h >= 200 and name and not name:find("^SuuUI") then
+        if okS and shown and not f:IsForbidden() and not (isSecret(w) or isSecret(h)) and w >= 250 and h >= 200 and
+            name and
+            not name:find("^SuuUI") then
             local out: string[] = {}
             tree(f, 1, out, "")
             s.trees[name] = out
@@ -631,8 +1036,12 @@ export function now()
 end
 
 export function command(rest: string?)
-    if rest == "now" then return now() end
+    if rest == "now" then
+        return now()
+    end
     static()
     arm()
-    print("Windows probe: the frames and APIs saved. For 30 minutes, each window is saved as it opens: visit a vendor, a mailbox, a class trainer, the auction house and open Collections, then /reload.")
+    print(
+        "Windows probe: the frames and APIs saved. For 30 minutes, each window is saved as it opens: visit a vendor, a mailbox, a class trainer, the auction house and open Collections, then /reload."
+    )
 end

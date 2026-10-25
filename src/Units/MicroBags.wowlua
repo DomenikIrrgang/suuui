@@ -29,12 +29,24 @@ local DEFAULTS = {
 
 local M: MicroBagsModule
 
-
-type Item = { frame: string, home?: string, key: "microPosition" | "bagsPosition", label: string, holder: string, holderFrame?: Frame }
+type Item = {
+    frame: string,
+    home?: string,
+    key: "microPosition" | "bagsPosition",
+    label: string,
+    holder: string,
+    holderFrame?: Frame,
+}
 
 -- What moves, where Blizzard keeps it when it's home, and its setting.
 local ITEMS: Item[] = {
-    { frame = "MicroMenu", home = "MicroMenuContainer", key = "microPosition", label = "Micro menu", holder = "SuuUIMicroHolder" },
+    {
+        frame = "MicroMenu",
+        home = "MicroMenuContainer",
+        key = "microPosition",
+        label = "Micro menu",
+        holder = "SuuUIMicroHolder",
+    },
     { frame = "BagsBar", key = "bagsPosition", label = "Bag bar", holder = "SuuUIBagsHolder" },
 }
 
@@ -44,7 +56,9 @@ local placing = false
 -- at its own scale).
 local function adopt(item: Item)
     local f, h = SuuUI.BlizzardFrame(item.frame), item.holderFrame
-    if not (f and h) then return end
+    if not (f and h) then
+        return
+    end
     placing = true
     f:SetParent(h)
     f:SetScale(UIParent:GetEffectiveScale() / h:GetEffectiveScale() * M:Get("scale"))
@@ -68,7 +82,9 @@ local function guard(item: Item, f: Frame)
         end
     end
     local function soon()
-        if placing or pending then return end
+        if placing or pending then
+            return
+        end
         pending = true
         after(0, again)
     end
@@ -77,15 +93,37 @@ local function guard(item: Item, f: Frame)
 end
 
 local SECTION: SettingsSection = {
-    id = "microbags", label = "Micro menu & bags", category = "Frames", order = 28,
+    id = "microbags",
+    label = "Micro menu & bags",
+    category = "Frames",
+    order = 28,
     groups = {
-        { title = "Bag bar", description = "Blizzard's bag bar while SuuUI's Bags module is off (with it on, your bag slots sit beside the bags window); Blizzard's micro menu too while SuuUI's micro menu is off. Move them in edit mode.", rows = {
-            { key = "shows", label = "Shows", control = "segmented", options = UI.VISIBILITY_OPTIONS, combat = true,
-              description = "Always, only in combat, or when the mouse is over it." },
-            { key = "scale", label = "Scale", control = "slider", min = 0.6, max = 1.4, step = 0.05,
-              format = function(v: number) return ("%d%%"):format(v * 100 + 0.5) end,
-              description = "From Blizzard's size." },
-        } },
+        {
+            title = "Bag bar",
+            description = "Blizzard's bag bar while SuuUI's Bags module is off (with it on, your bag slots sit beside the bags window); Blizzard's micro menu too while SuuUI's micro menu is off. Move them in edit mode.",
+            rows = {
+                {
+                    key = "shows",
+                    label = "Shows",
+                    control = "segmented",
+                    options = UI.VISIBILITY_OPTIONS,
+                    combat = true,
+                    description = "Always, only in combat, or when the mouse is over it.",
+                },
+                {
+                    key = "scale",
+                    label = "Scale",
+                    control = "slider",
+                    min = 0.6,
+                    max = 1.4,
+                    step = 0.05,
+                    format = function(v: number)
+                        return ("%d%%"):format(v * 100 + 0.5)
+                    end,
+                    description = "From Blizzard's size.",
+                },
+            },
+        },
     },
 }
 
@@ -108,17 +146,22 @@ local away = CreateFrame("Frame")
 away:Hide()
 local awayHooked: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 local function putAway(f: Frame)
-    if f:GetParent() ~= away then f:SetParent(away) end
+    if f:GetParent() ~= away then
+        f:SetParent(away)
+    end
     if not awayHooked[f] then
         awayHooked[f] = true
         hook(f, "SetParent", function(frame: Frame, parent: Region?)
-            if parent ~= away and ownBagSlots() then after(0, function() frame:SetParent(away) end) end
+            if parent ~= away and ownBagSlots() then
+                after(0, function()
+                    frame:SetParent(away)
+                end)
+            end
         end)
     end
 end
 
 class MicroBagsModule extends Module<typeof(DEFAULTS)>
-
     constructor()
         super({
             id = "microbags",
@@ -134,14 +177,18 @@ class MicroBagsModule extends Module<typeof(DEFAULTS)>
     function ApplyShows()
         for _, item in ipairs(ITEMS) do
             local h = item.holderFrame
-            if h then UI.SetVisibility(h, self:Get(item.key).hidden and "hidden" or self:Get("shows")) end
+            if h then
+                UI.SetVisibility(h, self:Get(item.key).hidden and "hidden" or self:Get("shows"))
+            end
         end
     end
 
     override function OnEnable()
         for _, item in ipairs(ITEMS) do
             local f = SuuUI.BlizzardFrame(item.frame)
-            if item.frame == "MicroMenu" and ownMicroMenu() then f = nil end
+            if item.frame == "MicroMenu" and ownMicroMenu() then
+                f = nil
+            end
             if item.frame == "BagsBar" and f and ownBagSlots() then
                 putAway(f)
                 f = nil
@@ -163,13 +210,23 @@ class MicroBagsModule extends Module<typeof(DEFAULTS)>
         end
         self:RegisterSettings(SECTION)
         self:ApplyShows()
-        self:WatchAll({ "shows", "microPosition", "bagsPosition" }, function() self:ApplyShows() end)
+        self:WatchAll({ "shows", "microPosition", "bagsPosition" }, function()
+            self:ApplyShows()
+        end)
         self:Watch("scale", function()
-            for _, item in ipairs(ITEMS) do if item.holderFrame then adopt(item) end end
+            for _, item in ipairs(ITEMS) do
+                if item.holderFrame then
+                    adopt(item)
+                end
+            end
         end)
         -- The root rescales with the UI scale: keep Blizzard's size.
         self:On("SUUUI_ROOT_SCALED", function()
-            for _, item in ipairs(ITEMS) do if item.holderFrame then adopt(item) end end
+            for _, item in ipairs(ITEMS) do
+                if item.holderFrame then
+                    adopt(item)
+                end
+            end
         end)
     end
 end
