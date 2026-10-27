@@ -171,7 +171,7 @@ SuuUI is meant to be extended. Every built-in module is written against the same
 
 - **Plugin API:** [`Docs/API.md`](Docs/API.md) — modules, settings and migrations, the settings window, edit mode, events, components (unit frames, cast bars, aura containers, …) and design tokens.
 - **Example plugin:** [`Examples/SuuUI_HelloPlugin`](Examples/SuuUI_HelloPlugin) — a minimal module with its own settings section.
-- **Group finder library:** [`Docs/ForeverLFG.md`](Docs/ForeverLFG.md): `SuuUI.LFG`, the game's group finder and public chat as one list, with events. SuuUI's Group Finder is built on it the way a plugin would be.
+- **Group finder library:** [foreverlfg](https://github.com/DomenikIrrgang/foreverlfg) (on the [wowlua registry](https://registry.wowlua.dev)): `SuuUI.LFG`, the game's group finder and public chat as one list, with events. SuuUI's Group Finder is built on it the way a plugin would be.
 - **Diagnostics:** `/suu probe` checks which client APIs SuuUI relies on. Further probes (`/suu probe <topic>`) record what the live client allows, from spells and talents to the group finder and the guild.
 
 <details>

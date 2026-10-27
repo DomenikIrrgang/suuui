@@ -695,9 +695,9 @@ Each step restyles Blizzard's own frames inside the `WindowFrame` shell. Keybind
     - The game's show-offline setting (communitiesShowOffline) is saved on every start, so offline members have rows; the very first time needs one more `/reload`. If the member isn't picked yet, Edit reads "Click again".
     - Confirmed in game, offline members too (`/suu probe social notelist`, `rows`).
   - **Menus:** `UI.ReskinMenu` restyles the game's dropdown menus while they're open and undoes it on close (the game reuses its menu frames). Menu rows forbid new textures, so the hover and checks are drawn on SuuUI's own panel. `UI.ReskinDropdown` does this for the menu its dropdown opens.
-- **Group Finder (2026-10-14):** see `Docs/ForeverLFG.md` for what the game allows (probed with `/suu probe lfg`) and the library's design.
+- **Group Finder (2026-10-14):** see foreverlfg's `docs/design.md` for what the game allows (probed with `/suu probe lfg`) and the library's design.
   - **What the game allows:** the tool searches only from a click or key press. Creating or changing a listing is blocked for addons; delisting works from a click. Forever has no sign-up: invite single players, whisper a group's leader. LookingForGroup can be joined from a timer, but the game adds it to a chat window each time.
-  - **ForeverLFG (built):** the library in `libs/ForeverLFG` (`SuuUI.LFG`; `src/Libs/ForeverLFG` before the wowlua port). It merges the tool's results and public chat (LookingForGroup, General, Trade, Services, Say and Yell) into one list keyed by the leader. The pieces:
+  - **ForeverLFG (built):** the library, since 2026-10-27 its own package [foreverlfg](https://github.com/DomenikIrrgang/foreverlfg) on the wowlua registry (`SuuUI.LFG`; `libs/ForeverLFG`, and `src/Libs/ForeverLFG` before the wowlua port). It merges the tool's results and public chat (LookingForGroup, General, Trade, Services, Say and Yell) into one list keyed by the leader. The pieces:
     - a language-free catalogue: the tool's activity IDs, raids, world bosses, zones;
     - a chat parser with language modules (English so far);
     - the store, with expiry;
