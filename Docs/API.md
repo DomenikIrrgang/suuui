@@ -566,7 +566,7 @@ SuuUI's own secure buttons: no Blizzard button template. Make them out of combat
 
 ## Group finder: ForeverLFG (0.13)
 
-`SuuUI.LFG` is a library with no UI: the game's group finder (the tool) and the public chat channels as one list of groups and players looking for groups. Its design, and what the game allows, is in `Docs/ForeverLFG.md`. It does nothing until `Start()` (SuuUI's Group Finder module calls it).
+`SuuUI.LFG` is a library with no UI: the game's group finder (the tool) and the public chat channels as one list of groups and players looking for groups. It is the [foreverlfg](https://github.com/DomenikIrrgang/foreverlfg) package from the wowlua registry; its design, and what the game allows, is in its `docs/design.md`. It does nothing until `Start()` (SuuUI's Group Finder module calls it).
 
 | | |
 |---|---|
