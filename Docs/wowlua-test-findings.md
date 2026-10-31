@@ -76,7 +76,6 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [R21](#r21) | mock | low | fixed 0.9.6 | Mock declarations lacked fields and methods the engine has |
 | [R22](#r22) | mock | medium | fixed after 0.9.6 (T246) | A test could not be listed in the group finder |
 | [R23](#r23) | mock | low | fixed after 0.9.6 (T257) | `mock.hover` doesn't move the cursor |
-| [R24](#r24) | mock | low | open (0.13.7) | A world profile's `character.realm` is ignored: the player's realm is always `Realm` |
 | [K4](#k4) | checker | medium | done 0.9.6 (W2061) | `a and nil or b` is always `b` |
 | [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40, S41) | A value read past what a function gives |
 | [K6](#k6) | checker | low | fixed after 0.9.6 (T259) | `GetCursorInfo` is declared without its results |
@@ -107,6 +106,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V35](#v35) | VM | high | fixed after 0.9.6 (T253) | An addon could pick up a spellbook spell in combat |
 | [V36](#v36) | VM | high | fixed after 0.9.6 (T254) | A frame holding a protected frame wasn't protected |
 | [V37](#v37) | VM | medium | fixed after 0.9.6 (T258) | `ClearPoint` did nothing |
+| [V38](#v38) | VM | medium | fixed after 0.13.7 (T537) | `GetRealmName` ignored the player's realm |
 
 ## Test runner and mock issues
 
@@ -382,14 +382,6 @@ An addon's `CreateListing` is blocked, and stubbing `C_LFGList.HasActiveEntryInf
 *Status: fixed after 0.9.6 (T257): `mock.hover` and `mock.click` put the cursor on the frame's middle (unless it is over it already); `mock.hover(nil)` takes it off every frame.*
 
 Code that reads the cursor over a hovered frame (`GetNormalizedCursorPosition`, the world map's coordinates) needs `mock.setCursorPosition` too; `IsMouseOver` follows the hover alone (see V13). (units-windows)
-
-<a id="r24"></a>
-
-### R24. A world profile's `character.realm` is ignored
-
-*Status: open (0.13.7).*
-
-`GetRealmName()` always returns `"Realm"` (`facts.rs`), whatever the profile's `character.realm` says; `character.name` and `character.class` are honoured. Saved variables keyed by character (`"Player - Realm"`) therefore match only for the realm `Realm`, and a profile that sets another realm loads as if it didn't. `tests/profiles/cooldowns-migrations.json` pins its name and class and leaves the realm out.
 
 ## Compiler and checker issues
 
@@ -857,6 +849,14 @@ A parent of a protected frame is protected too: a secure handle to it works in c
 *Status: fixed after 0.9.6 (T258).*
 
 `Region:ClearPoint(point)` wasn't modelled, so Blizzard's dropdown menus that open upward near the screen's bottom (they flip one point) kept both points and came out upside down. Found by wowlua's own settings test once `IsMouseOver` measured the menu (V13).
+
+<a id="v38"></a>
+
+### V38. `GetRealmName` ignored the player's realm
+
+*Status: fixed after 0.13.7 (T537, wowlua#134).*
+
+`GetRealmName()` and `GetNormalizedRealmName()` always answered `"Realm"`, while `UnitFullName("player")`, chat and guild names used the realm the world set (a profile's `character.realm`, `mock.setPlayer`). Saved variables keyed by character (`"Player - Realm"`) matched only the realm `Realm`. Now both give the player's realm, the normalized one without spaces and hyphens. (cooldowns: `tests/profiles/cooldowns-migrations.json` pins its name and class; it can pin the realm once SuuUI needs a wowlua with the fix.)
 
 ## Not bugs (for test writers)
 
