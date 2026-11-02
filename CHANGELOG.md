@@ -6,6 +6,13 @@
 
 - The flight map and the flight times follow WoW Forever's latest update (build 1.60.1.70707): the flight from Undercity to Kargath takes the game's new way, and the map's routes, area overlays and dungeon levels come from that build.
 - The Cooldown Manager's talent conditions know WoW Forever's reworked talents (build 1.60.1.70707 with its server's changes): the paladin's Shieldsworn, Oath of Light, Boundless Light, Stoicism and Turn Evil, the druid's Lacerate, Predatory Discipline and Bloom, the priest's Holy Binding and Dark Inspiration, the mage's Arcane Wrath, the shaman's Elemental Mastery and the warlock's Grim Reach; talents the game removed are gone from them.
+- The Cooldown Manager's class presets follow WoW Forever's ability changes since they were made:
+  - Paladin: the blessing reminder no longer counts Blessing of Salvation or Light (gone from the game). Holy loses Voice of Truth and tracks Light's Vigil as a cooldown (allies only now). Protection tracks Swift Judgement as the second judgement it now is, and shows Shieldsworn's spell block. Retribution's echoes cover every seal (Unsealed Wrath) and add Turn Undead with Turn Evil.
+  - Druid: Feral loses Berserk.
+  - Mage: Arcane gets Arcane Wrath, and Frost gets Ice Lance (an 8 sec cooldown now).
+  - Priest: Shadow Weaving shows on the target (where it now stacks), and Shadow shows Dark Inspiration.
+  - Shaman: Elemental gets Elemental Mastery.
+  - Hunter: Explosive Trap's burn is found again under its new name.
 
 ## 0.6.0-beta.1 (2026-10-25)
 

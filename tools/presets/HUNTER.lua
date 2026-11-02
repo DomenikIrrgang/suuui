@@ -39,7 +39,8 @@ local STINGS = { group = "Stings", source = "mine", max = 1, icon = "Serpent Sti
 local DEADLY_ASPECTS = { group = "Aspect Procs", source = "mine", max = 1, icon = "Quick Shots",
     members = { "Quick Shots", "Quick Strikes" } }
 -- your fire trap's burn on the target (one fire trap at a time); Explosive
--- Trap's burn is named "Explosive Trap Effect" in the client
+-- Trap's burn is named "Explosive Trap" too since 70707 (was "Explosive
+-- Trap Effect")
 -- Cooldowns sharing one icon: the last one you know shows (Aimed Shot and
 -- Multi-Shot share a cooldown, so do Summon Hawk and Arcane Shot; Explosive
 -- Trap replaces Immolation Trap, one fire trap at a time)
@@ -48,7 +49,7 @@ local HAWK = { group = "Summon Hawk", members = { "Arcane Shot", "Summon Hawk" }
 local FIRE_TRAP_CD = { group = "Fire Trap", members = { "Immolation Trap", "Explosive Trap" } }
 
 local FIRE_TRAPS = { group = "Fire Traps", source = "mine", max = 1, icon = "Immolation Trap", missing = "hide",
-    members = { "Immolation Trap", "Explosive Trap", "Explosive Trap Effect" } }
+    members = { "Immolation Trap", "Explosive Trap" } }
 
 local RAPID_FIRE = { "Rapid Fire", effect = "you" }
 local CONCUSSIVE = { "Concussive Shot", effect = "target" }

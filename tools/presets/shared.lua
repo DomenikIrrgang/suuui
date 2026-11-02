@@ -66,9 +66,10 @@ end
 -- Paladin groups: one slot for your seal, your blessing on yourself, your
 -- judgement, and other paladins' judgements.
 local SEALS = { "Seal of Righteousness", "Seal of the Crusader", "Seal of Wisdom", "Seal of Light", "Seal of Justice", "Seal of Command", "Seal of Fury" }
+-- (Salvation and Light, and their Greater Blessings, are gone since 70707's
+-- server changes)
 local BLESSINGS = { "Blessing of Might", "Greater Blessing of Might", "Blessing of Wisdom", "Greater Blessing of Wisdom",
-    "Blessing of Kings", "Greater Blessing of Kings", "Blessing of Salvation", "Greater Blessing of Salvation",
-    "Blessing of Light", "Greater Blessing of Light" }
+    "Blessing of Kings", "Greater Blessing of Kings" }
 -- the judgements that stay on the target (Righteousness and Command only
 -- deal damage). Judgement of Fury, Forever's taunt from Seal of Fury, is in
 -- the Taunts group instead.
