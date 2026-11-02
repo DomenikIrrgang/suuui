@@ -5,6 +5,7 @@
 ### Changed
 
 - The flight map and the flight times follow WoW Forever's latest update (build 1.60.1.70707): the flight from Undercity to Kargath takes the game's new way, and the map's routes, area overlays and dungeon levels come from that build.
+- The Cooldown Manager's talent conditions know WoW Forever's reworked talents (build 1.60.1.70707 with its server's changes): the paladin's Shieldsworn, Oath of Light, Boundless Light, Stoicism and Turn Evil, the druid's Lacerate, Predatory Discipline and Bloom, the priest's Holy Binding and Dark Inspiration, the mage's Arcane Wrath, the shaman's Elemental Mastery and the warlock's Grim Reach; talents the game removed are gone from them.
 
 ## 0.6.0-beta.1 (2026-10-25)
 
