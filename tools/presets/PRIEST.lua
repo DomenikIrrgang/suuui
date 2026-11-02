@@ -1,14 +1,17 @@
 -- tools/presets/PRIEST.lua
 -- The Priest presets (format: tools/presets_source.lua).
--- From Forever's own class data (trainer + talents, 2026-10-12): Penance,
+-- From Forever's own class data (trainer + talents, 2026-10-12; the talents
+-- as of 70707 with its server's changes, 2026-11-02): Penance,
 -- Power Infusion and Inner Focus are Discipline talents (Soul Warding takes
 -- Power Word: Shield's cooldown off, Martyrdom gives Focused Casting);
--- Prayer of Mending, Binding Heal and Holy Nova are Holy talents (Searing
--- Light: Holy Fire's dots make Holy Nova free; Inspiration, Blessed
--- Recovery); Shadowform, Silence, Vampiric Embrace (a 1-min cooldown here,
--- 30 sec on the target) and Mind Flay are Shadow talents, and Shadow Weaving
--- is a stacking buff on you (vanilla's Shadow Vulnerability is the warlock's
--- debuff, so it's not here). Every priest trains Fear Ward and Devouring
+-- Prayer of Mending and Holy Nova are Holy talents (Searing Light: Holy
+-- Fire's dots make Holy Nova free; Inspiration, Blessed Recovery; Binding
+-- Heal is gone since 70707); Shadowform, Silence, Vampiric Embrace (a 30 sec
+-- cooldown since 70707, 30 sec on the target) and Mind Flay are Shadow
+-- talents; Shadow Weaving stacks on the target since 70707 (your Shadow
+-- damage on it; vanilla's Shadow Vulnerability is the warlock's debuff, so
+-- it's not here); Dark Inspiration (Mind Blast and full Mind Flays: your
+-- and your party's Spirit, 10 sec) is new. Every priest trains Fear Ward and Devouring
 -- Plague (once racials; 3-min and 1-min cooldowns), Holy Fire, Shadow Word:
 -- Death and Divine Spirit/Prayer of Spirit. No Lightwell, Desperate Prayer
 -- or Prayer of Fortitude. Discipline's Power in Light makes Smite and Penance
@@ -100,6 +103,7 @@ return {
       debuffs = { { "Shadow Word: Pain", missing = "warn",
                     when = { conditions = { { type = "combat" },
                         { type = "target", kinds = { "boss", "elite", "normal", "player" } } } } },
-                  { "Mind Flay", missing = "hide" }, S.with(S.STUNS, { missing = "hide" }) },
-      procs = { "Shadow Weaving", "Spirit Tap" } },
+                  { "Mind Flay", missing = "hide" }, { "Shadow Weaving", missing = "hide" },
+                  S.with(S.STUNS, { missing = "hide" }) },
+      procs = { "Dark Inspiration", "Spirit Tap" } },
 }

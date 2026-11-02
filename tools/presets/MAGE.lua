@@ -1,7 +1,9 @@
 -- tools/presets/MAGE.lua
 -- The Mage presets (format: tools/presets_source.lua).
--- From Forever's own class data (trainer + talents, 2026-10-12): Arcane
--- Blast (Arcane) and Ice Lance (Frost) are new talents, also trained; Ice
+-- From Forever's own class data (trainer + talents, 2026-10-12; the talents
+-- as of 70707 with its server's changes, 2026-11-02): Arcane Wrath (Arcane,
+-- a 6 sec cooldown), Arcane Blast (Arcane) and Ice Lance (Frost, an 8 sec
+-- cooldown since 70707) are new talents, the last two also trained; Ice
 -- Block is a Frost talent; Frostfire Bolt is trained; new proc talents
 -- Missile Barrage, Heating Up (Hot Streak its instant Pyroblast), Fingers
 -- of Frost (their aura IDs in tools/data/found.tsv). No Arcane Brilliance,
@@ -64,10 +66,11 @@ return {
       debuffs = { "Frostbolt", { "Fireball", missing = "hide" }, POLYMORPH },
       procs = { "Clearcasting" } },
 
-    -- Arcane Blast stacks into Arcane Missiles (Missile Barrage) under
-    -- Clearcasting; Arcane Power and Presence of Mind are the spec's buttons.
+    -- Arcane Wrath and Arcane Blast stack into Arcane Missiles (Missile
+    -- Barrage) under Clearcasting; Arcane Power and Presence of Mind are the
+    -- spec's buttons.
     { id = "arcane", name = "Arcane", tree = 1,
-      essential = { "Fire Blast", { "Arcane Power", effect = "you" }, { "Presence of Mind", effect = "you" },
+      essential = { "Arcane Wrath", "Fire Blast", { "Arcane Power", effect = "you" }, { "Presence of Mind", effect = "you" },
                     FROST_NOVA,
                     -- Improved Counterspell's silence covers the icon
                     { "Counterspell", effect = "target", effectName = "Counterspell - Silenced" } },
@@ -76,7 +79,7 @@ return {
                   WARDS },
       buffs = { armor("Mage Armor"), INTELLECT },
       debuffs = { POLYMORPH },
-      -- Arcane Blast: the stacking buff on you (up to 4, 8 sec)
+      -- Arcane Blast: the stacking buff on you (up to 4, 18 sec since 70707)
       procs = { "Clearcasting", "Missile Barrage", "Arcane Blast" } },
 
     -- Scorch keeps Fire Vulnerability stacked; crits build Heating Up, then
@@ -94,9 +97,10 @@ return {
       procs = { { "Hot Streak", glow = true, soundAppear = "proc" }, "Heating Up", "Clearcasting" } },
 
     -- Frostbolt and Ice Lance on frozen targets (Frost Nova, Frostbite,
-    -- Fingers of Frost); Ice Barrier on cooldown.
+    -- Fingers of Frost; Ice Lance has an 8 sec cooldown since 70707); Ice
+    -- Barrier on cooldown.
     { id = "frost", name = "Frost", tree = 3,
-      essential = { { "Cone of Cold", effect = "target" }, "Fire Blast", FROST_NOVA,
+      essential = { "Ice Lance", { "Cone of Cold", effect = "target" }, "Fire Blast", FROST_NOVA,
                     { "Ice Barrier", effect = "you" }, "Counterspell" },
       utility = { "Blink", { "Ice Block", effect = "you" }, "Cold Snap", { "Evocation", effect = "you" },
                   WARDS },

@@ -1,17 +1,19 @@
 -- tools/presets/DRUID.lua
 -- The Druid presets (format: tools/presets_source.lua).
--- From Forever's own class data (trainer + talents, 2026-10-12): new
--- talents Berserk, Primal Bite, Shifting Power (Feral, instead of Tiger's
--- Fury, which no trainer teaches) and Wild Growth (Restoration); Eclipse is
--- a Balance talent (a stacking Starfire buff); Lacerate is trained; Feral
--- Charge is a Feral talent (the spell named "Feral Charge", bear only).
+-- From Forever's own class data (trainer + talents, 2026-10-12; the talents
+-- as of 70707 with its server's changes, 2026-11-02): new talents Primal
+-- Bite, Shifting Power (Feral, instead of Tiger's Fury, which no trainer
+-- teaches; an 8 sec cooldown now) and Wild Growth (Restoration); Eclipse is
+-- a Balance talent (a stacking Starfire buff); Lacerate is trained, and a
+-- Feral talent now too; Feral Charge is a Feral talent (the spell named
+-- "Feral Charge", bear only). Berserk is gone since 70707.
 -- Omen of Clarity is trained and, going by its tooltip (no duration), a
 -- passive, so only its Clearcasting is tracked.
 --
 -- Choices:
 --   forms (live conditions, in combat too): bear abilities and auras show in
 --   bear form, cat ones in cat form (Primal Bite is bear only, confirmed in
---   game), Berserk in either (it requires one), Barkskin in every form
+--   game), Barkskin in every form
 --   (confirmed in game), heals
 --   (Tranquility, Swiftmend, Wild Growth, Nature's Swiftness) in caster form
 --   only (Moonkin Form blocks healing), the other spells (Innervate, Rebirth, Hurricane, the DoTs) in caster or moonkin form.
@@ -21,7 +23,7 @@
 --   cat preset shows Bash and Feral Charge in bear form, the bear preset
 --   Dash in cat form, both their caster cooldowns in caster form.
 --   cooldowns whose buff or debuff only matters while it runs (Barkskin,
---   Dash, Innervate, Berserk, Enrage, Frenzied Regeneration, Nature's
+--   Dash, Innervate, Enrage, Frenzied Regeneration, Nature's
 --   Swiftness, Nature's Grasp, Prowl; Feral Charge on the target) show it on
 --   their own icon (effect) instead of a buff entry; Bash and Pounce are in
 --   the shared Stuns
@@ -81,7 +83,7 @@ return {
       procs = { "Clearcasting", "Nature's Grace", "Eclipse" } },
     { id = "feralcat", name = "Feral (cat)", tree = 2,
       -- Bash and Feral Charge for the times you shift to bear
-      essential = { cat("Shifting Power"), bear("Primal Bite"), feral(onYou("Berserk")), cat("Cower"), bear("Bash"), feralCharge() },
+      essential = { cat("Shifting Power"), bear("Primal Bite"), cat("Cower"), bear("Bash"), feralCharge() },
       -- Prowl's cooldown restarts when stealth breaks; its icon shows while you prowl
       utility = { cat(onYou("Prowl")), cat(onYou("Dash")), onYou("Barkskin"), casting(onYou("Innervate")), casting("Rebirth") },
       buffs = { remind("Mark of the Wild"), remind("Thorns") },
@@ -90,7 +92,7 @@ return {
           "Faerie Fire", S.physical({ druid = true }), S.STUNS },
       procs = { "Clearcasting" } },
     { id = "feralbear", name = "Feral (bear)", tree = 2,
-      essential = { bear("Primal Bite"), bear(onYou("Enrage")), feral(onYou("Berserk")), bear("Growl"), feralCharge(), bear("Bash") },
+      essential = { bear("Primal Bite"), bear(onYou("Enrage")), bear("Growl"), feralCharge(), bear("Bash") },
       -- Dash for the times you shift to cat
       utility = { bear(onYou("Frenzied Regeneration")), bear("Challenging Roar"), onYou("Barkskin"), casting(onYou("Innervate")),
           casting("Rebirth"), cat(onYou("Dash")) },
