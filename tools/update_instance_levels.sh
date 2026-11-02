@@ -7,7 +7,7 @@
 #   sh tools/update_instance_levels.sh [<build>]
 set -e
 cd "$(dirname "$0")/.."
-BUILD=${1:-1.60.1.70338}
+BUILD=${1:-1.60.1.70707}
 CACHE=${TMPDIR:-/tmp}/suuui-wago-$BUILD
 mkdir -p "$CACHE"
 for t in GroupFinderActivity; do
