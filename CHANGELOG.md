@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The flight map and the flight times follow WoW Forever's latest update (build 1.60.1.70707): the flight from Undercity to Kargath takes the game's new way, and the map's routes, area overlays and dungeon levels come from that build.
+
 ## 0.6.0-beta.1 (2026-10-25)
 
 ### New
