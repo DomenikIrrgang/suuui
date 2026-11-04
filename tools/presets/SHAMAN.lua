@@ -61,9 +61,10 @@ return {
       debuffs = { "Flame Shock", FROST_SHOCK, EARTHBIND },
       procs = {} },
     { id = "elemental", name = "Elemental", tree = 1,
-      -- Elemental Mastery (since 70707): faster Lightning Bolt and Lava
-      -- Burst, Chain Lightning without its cooldown, 15 sec
-      essential = { "Lava Burst", { "Elemental Mastery", effect = "you" }, SHOCKS, "Chain Lightning", "Fire Nova" },
+      -- Lightning Mastery (Elemental Mastery until 70755): faster Lightning
+      -- Bolt, Chain Lightning without its cooldown, 15 sec. Lava Burst gone
+      -- from the shaman in 70755 (no trainer rank, no talent).
+      essential = { { "Lightning Mastery", effect = "you" }, SHOCKS, "Chain Lightning", "Fire Nova" },
       utility = { "Grounding Totem", "Earthbind Totem", "Stoneclaw Totem", "Reincarnation" },
       buffs = { shields("Lightning Shield"), MAIN_HAND, totems(WATER, EARTH, air("Nature Resistance")) },
       -- Flame Shock kept up (Lava Burst crits on it)

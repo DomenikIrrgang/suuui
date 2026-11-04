@@ -107,5 +107,6 @@ return {
       buffs = { { "Slice and Dice", missing = "warn" }, MAIN_HAND, OFF_HAND },
       -- Hemorrhage feeds Rupture: grey while it's off
       debuffs = { "Hemorrhage", "Rupture", garrote, S.physical(), POISONS, S.STUNS, sap, HEALING_REDUCTION },
-      procs = { "Thousand Cuts", "Cutthroat" } },
+      -- (Thousand Cuts and Cutthroat gone from the rogue's tree in 70755)
+      procs = {} },
 }

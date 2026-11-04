@@ -13,6 +13,12 @@
   - Priest: Shadow Weaving shows on the target (where it now stacks), and Shadow shows Dark Inspiration.
   - Shaman: Elemental gets Elemental Mastery.
   - Hunter: Explosive Trap's burn is found again under its new name.
+- WoW Forever's update to build 1.60.1.70755:
+  - The flight map: the route between Powderfuse Port and Farholde Keep (Riverglades) is gone, as in the game.
+  - The world map's quest givers, dungeon entrances, town services, rares and treasure chests follow QuestieDB's latest WoW Forever data, and the collections window's item sources with them (the Al'Aketh on Zephras Isle show as hostile).
+  - The Cooldown Manager's talent conditions know the reworked rogue tree (Venom, Boot Knife, Flash of Steel, Composure, Blood Splatter, Death Mark; Murder, Cutthroat, Thousand Cuts and Improved Distract gone), the warrior's Reckless Swings and the shaman's Call of Thunder (Lava Burst gone), and the renamed talents (Lightning Mastery, Coup de Grace, Efficient Strikes, Quick Getaway, Accelerant, Precision, Improved Fire Blast, Unsealed Wrath, Trial by Fire, Improved Whirlwind) with their new cooldowns and texts.
+  - The Cooldown Manager's presets: Elemental tracks Lightning Mastery (Elemental Mastery's new name) and no longer Lava Burst; Subtlety no longer watches Thousand Cuts or Cutthroat.
+  - The spellbook's trainer lists no longer offer what the game stopped teaching (the paladin's Blessing of Light, Greater Blessing of Light, Salvation and Mass Salvation; the priest's Binding Heal; the shaman's Lava Burst and Totemic Projection; the mage's Frost Blast), and list Primal Bite from level 40 and Righteous Fury from level 10.
 
 ## 0.6.0-beta.1 (2026-10-25)
 

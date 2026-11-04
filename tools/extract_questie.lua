@@ -47,7 +47,10 @@ for name, i in pairs(QuestieDB.npcKeys) do fieldIndex.npc[name] = i end
 for name, i in pairs(QuestieDB.objectKeys) do fieldIndex.object[name] = i end
 local named = setmetatable({}, { __index = function(_, k) return k end })
 QuestieDB.itemKeys, QuestieDB.npcKeys, QuestieDB.objectKeys = named, named, named
-QuestieDB.itemClasses, QuestieDB.npcFlags, QuestieDB.waypointPresets = named, named, named
+QuestieDB.itemClasses, QuestieDB.waypointPresets = named, named
+-- (flags are added together, `npcFlags.QUEST_GIVER + npcFlags.VENDOR`: numbers,
+-- whatever they are, as nothing here reads an NPC's flags)
+QuestieDB.npcFlags = setmetatable({}, { __index = function() return 0 end })
 
 local function apply(db, kind, corrections, stats)
   local idx = fieldIndex[kind]
@@ -106,7 +109,11 @@ local function list(v)
   local t = {} for _, x in ipairs(v) do t[#t + 1] = tostring(x) end
   return table.concat(t, ",")
 end
-local function clean(s) return (tostring(s or ""):gsub("[\t\n]", " ")) end
+-- (a field a correction clears to `{}`, as the faction of hostile NPCs: none)
+local function clean(s)
+  if type(s) == "table" then s = table.concat(s, ",") end
+  return (tostring(s or ""):gsub("[\t\n]", " "))
+end
 
 local I = fieldIndex.item
 local f = assert(io.open(out .. "/questie_items.tsv", "w"))

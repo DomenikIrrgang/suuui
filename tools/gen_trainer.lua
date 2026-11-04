@@ -114,6 +114,38 @@ local function merge(class, list)
     return list
 end
 
+-- What the client's own tables changed since the trainers were recorded
+-- (1.60.1.70755, compared with every class's spells there: SkillLineAbility,
+-- SpellLevels): spells no longer taught (gone from the client, or no longer
+-- on the class's lines), ranks now at another level. Applied to every run
+-- until the trainers are recorded again (/suu probe class).
+local CHANGED = {
+    PALADIN = {
+        gone = { "Blessing of Light", "Greater Blessing of Light", "Salvation", "Mass Salvation" },
+        levels = { ["Righteous Fury"] = { [16] = 10 } },
+    },
+    PRIEST = { gone = { "Binding Heal" } },
+    SHAMAN = { gone = { "Lava Burst", "Totemic Projection" } },
+    MAGE = { gone = { "Frost Blast" } },
+    DRUID = { levels = { ["Primal Bite"] = { [36] = 40, [48] = 50 } } },
+}
+
+local function changed(class, list)
+    local c = CHANGED[class]
+    if not c then return list end
+    local gone = {}
+    for _, n in ipairs(c.gone or {}) do gone[n] = true end
+    local out = {}
+    for _, t in ipairs(list) do
+        if not gone[t.name] then
+            local moved = c.levels and c.levels[t.name] and c.levels[t.name][t.level]
+            if moved then t.level = moved end
+            out[#out + 1] = t
+        end
+    end
+    return out
+end
+
 for _, class in ipairs(classes) do
     local d = all[class]
     local list = {}
@@ -126,7 +158,7 @@ for _, class in ipairs(classes) do
                 text = t.description }
         end
     end
-    list = merge(class, list)
+    list = changed(class, merge(class, list))
     table.sort(list, function(a, b)
         if a.school ~= b.school then return a.school < b.school end
         if a.name ~= b.name then return a.name < b.name end
