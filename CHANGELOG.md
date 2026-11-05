@@ -18,6 +18,7 @@
 - A notification's button no longer runs its action twice per click.
 - The quest icons in the world map's quest log have a crisp, even ring (it was thinner than a pixel and broke up).
 - Tooltips show their whole gilt edge again: with SuuUI's scale different from the game's, the top and right lines were missing.
+- Talking to an NPC hides the minimap with the rest of the interface: your arrow, its icons and quest areas no longer stay on screen.
 
 ## 0.6.2 (2026-11-05)
 
