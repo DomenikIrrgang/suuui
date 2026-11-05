@@ -249,6 +249,13 @@ export class WindowChrome
     openedAt: number? = nil
     -- in the middle of the screen (centerWindow), out of the row
     centered: boolean? = nil
+    -- a window scaled up that should look its usual size (SetBody): the
+    -- frame the art and the header follow, the window's scale, the header's
+    -- rise and the unseen width on the right (the window's units)
+    body: Frame? = nil
+    bodyScale: number = 1
+    bodyRise: number = 0
+    cutW: number = 0
     -- a protected one to place once the fight ends
     placeAfterCombat: boolean? = nil
     -- its secure placer (securePlacement)
@@ -469,13 +476,35 @@ export class WindowChrome
         end
         local h = headH() + self.headExtra
         local rise = h - self.inset -- the header's height above the window's top
-        self.riseH, self.rise = rise, rise
-        local head = self.head
-        self.bg:SetPoint("TOPLEFT", 0, rise)
-        self.edgeHolder:SetPoint("TOPLEFT", 0, rise)
-        head:SetPoint("TOPLEFT", 0, rise)
-        head:SetPoint("TOPRIGHT", 0, rise)
+        local head, body, k = self.head, self.body, self.bodyScale
+        -- (a scaled window's header at its usual size: SetBody)
+        head:SetScale(1 / k)
+        if self.close then
+            self.close:SetScale(1 / k)
+        end
+        self.bg:ClearAllPoints()
+        self.edgeHolder:ClearAllPoints()
+        head:ClearAllPoints()
+        if body then
+            self.riseH, self.rise = self.bodyRise, self.bodyRise
+            self.bg:SetPoint("TOPLEFT", body, "TOPLEFT")
+            self.bg:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT")
+            self.edgeHolder:SetPoint("TOPLEFT", body, "TOPLEFT")
+            self.edgeHolder:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT")
+            head:SetPoint("TOPLEFT", body, "TOPLEFT")
+            head:SetPoint("TOPRIGHT", body, "TOPRIGHT")
+        else
+            self.riseH, self.rise = rise, rise
+            self.bg:SetPoint("TOPLEFT", 0, rise)
+            self.bg:SetPoint("BOTTOMRIGHT")
+            self.edgeHolder:SetPoint("TOPLEFT", 0, rise)
+            self.edgeHolder:SetPoint("BOTTOMRIGHT")
+            head:SetPoint("TOPLEFT", 0, rise)
+            head:SetPoint("TOPRIGHT", 0, rise)
+        end
         head:SetHeight(h)
+        -- (one physical pixel at the window's scale)
+        self.edge:Layout()
         local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
         if self.icon then
             self.icon:SetPoint("LEFT", head, "TOPLEFT", S["space-5"], lineY)
@@ -487,6 +516,20 @@ export class WindowChrome
         if self.key then
             self.key:SetPoint("RIGHT", head, "TOPRIGHT", -self.keyRight, lineY)
         end
+    end
+
+    -- A window scaled up by `k` that should look its usual size (the world
+    -- map enlarged by a scale: resized, the game refused its pins in combat):
+    -- the art and the header follow `body`, a frame on the part that shows,
+    -- the header at its usual size; `rise` is the header's top over the
+    -- window's (its units), `cutW` the window's unseen width on the right,
+    -- for centring. Nil: back to the window itself.
+    function SetBody(body: Frame?, k: number, rise: number?, cutW: number?)
+        self.body = body
+        self.bodyScale = body and k or 1
+        self.bodyRise = rise or 0
+        self.cutW = body and (cutW or 0) or 0
+        self:PlaceHead(true)
     end
 
     -- The title, and the key chip for another binding (a window whose tabs
@@ -541,19 +584,20 @@ local function centerAll(list: WindowChrome[])
     local us = UIParent:GetEffectiveScale()
     local gap = S["space-5"] * us
     local total = 0
+    -- (by the part that shows: a scaled window's unseen right is left out)
     for i, c in ipairs(list) do
-        total = total + c.frame:GetWidth() * c.frame:GetEffectiveScale() + (i > 1 and gap or 0)
+        total = total + (c.frame:GetWidth() - c.cutW) * c.frame:GetEffectiveScale() + (i > 1 and gap or 0)
     end
     local x = -total / 2
     for _, c in ipairs(list) do
         local f = c.frame
         local es = f:GetEffectiveScale()
-        local w = f:GetWidth() * es
+        local w = (f:GetWidth() - c.cutW) * es
         if InCombatLockdown() and c.protected then
             c.placeAfterCombat = true
         else
             f:ClearAllPoints()
-            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es, -c.rise / 2)
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es + c.cutW / 2, -c.rise / 2)
         end
         x = x + w + gap
     end

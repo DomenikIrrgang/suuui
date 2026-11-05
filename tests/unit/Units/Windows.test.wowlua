@@ -292,8 +292,18 @@ local function worldMap()
         end
     end
     local button = assert(up)
+    -- hovered: a secure button over it clicks the game's breadcrumb bar's
+    -- parent level (set from SuuUI's code the map's pins were taken by it)
     mock.hover(button)
+    local over = assert(M.upOver)
+    expect(over.button).toBeShown()
+    expect(over.button:GetAttribute("type1")).toBe("click")
+    mock.click(over.button)
+    expect(f:GetMapID()).toBe(1415)
+    mock.hover(over.button)
     mock.hover(nil)
+    expect(over.button).never.toBeShown()
+    -- its own click does nothing (in combat there is no secure button)
     mock.click(button)
     expect(f:GetMapID()).toBe(1415)
     -- the coordinates: yours off the map
@@ -301,19 +311,37 @@ local function worldMap()
     expect(assert(M.status):GetAlpha()).toBe(1)
 end
 
-@test("the world map enlarged, small, in a fight a theme change waits")
+@test(
+    "the world map enlarged by a scale, header and quest log at their usual size; small at the game's size; the map under the header"
+)
 local function mapSize()
     local f = WorldMapFrame
     ShowUIPanel(f)
     mock.advanceFrames(3)
-    local big = f:GetWidth()
+    -- (resized from SuuUI's code the map's zoom was written by it, and the
+    -- game refused its pins in combat: the size stays the game's)
+    local ui = UIParent:GetEffectiveScale()
+    local chrome = assert(M.worldMap)
+    expect(f:GetScale() > 1).toBe(true)
+    expect(chrome.head:GetEffectiveScale()).toBeCloseTo(ui)
+    local q = win("QuestMapFrame")
+    expect(q:GetEffectiveScale()).toBeCloseTo(ui)
+    local sc = part(f, "ScrollContainer")
+    if q:IsShown() then
+        -- right beside the map
+        expect(assert(q:GetLeft()) * ui).toBeCloseTo(assert(sc:GetRight()) * sc:GetEffectiveScale() + 3 * ui)
+    end
     local mm = frames.asFrame(field(f, "BorderFrame", "MaximizeMinimizeFrame"))
     if mm then
         mock.click(part(mm, "MinimizeButton"))
         expect(M:Get("mapEnlarged")).toBe(false)
-        expect(f:GetWidth() < big).toBe(true)
+        expect(f:GetScale()).toBe(1)
+        expect(f:GetHeight()).toBe(534)
+        -- the map right under the header: the game's 67 px band is the header's
+        expect(assert(f:GetTop()) - assert(sc:GetTop())).toBeCloseTo(67)
         mock.click(part(mm, "MaximizeButton"))
         expect(M:Get("mapEnlarged")).toBe(true)
+        expect(f:GetScale() > 1).toBe(true)
     end
     M:Emit("SUUUI_SETTING_CHANGED", "worldmap", "enlargedSize")
     M:Emit("SUUUI_THEME_CHANGED", "suuui")

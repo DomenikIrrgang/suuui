@@ -2,8 +2,22 @@
 
 ## Unreleased
 
+### New
+
+- Plugins: a notification's action can click one of the game's buttons the secure way (`click`, `skipClick`), a map pin can be drawn with a crisp one-pixel edge (`pin:Crisp()`) and a window's chrome can follow a scaled window (`SetBody`); API 0.20.
+
+### Changed
+
+- Clicking a quest in the objective tracker opens the world map with its quest log, that quest selected and focused (it opened the quest's page before); in combat the click focuses the quest. Its menu's "Open in quest log" is now "Select in quest log".
+- Clicking a group of pins on the world map no longer zooms in to them.
+- The world map's title goes up a level outside combat; in combat, right-click the map.
+
 ### Fixed
 
+- Opening the world map in combat no longer fails with "Interface action failed because of an AddOn" (SuuUI blocked from `SetPassThroughButtons`). SuuUI's World map button, the map's filters, the Damaged gear note's Show repairers and the objective tracker now open and redraw the map the game's own way, and the windowed map keeps the game's own size (it looks as before). The enlarged map looks as before too, but is the window scaled up with its header, quest log and SuuUI's pins kept at their usual size; only a few of the game's own map icons are a little bigger. If a block still happens, `/suu errors` now shows what touched the map.
+- A notification's button no longer runs its action twice per click.
+- The quest icons in the world map's quest log have a crisp, even ring (it was thinner than a pixel and broke up).
+- Tooltips show their whole gilt edge again: with SuuUI's scale different from the game's, the top and right lines were missing.
 - Talking to an NPC hides the minimap with the rest of the interface: your arrow, its icons and quest areas no longer stay on screen.
 
 ## 0.6.2 (2026-11-05)

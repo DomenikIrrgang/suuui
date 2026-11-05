@@ -293,15 +293,15 @@ local function gameSettings()
     C_CVar.SetCVar("showQuestDifficultyColor", "1")
 end
 
-@test("another module's \"show me\": the filter on and the map open")
+@test("another module's \"show me\": the filter on; the caller opens the map through a secure click")
 local function openWith()
-    M:OpenWith("services", "repair")
-    expect(M:Layers().services.repair).toBe(true)
-    expect(WorldMapFrame).toBeShown()
-    -- already on: the map only
     WorldMapFrame:Hide()
     M:OpenWith("services", "repair")
-    expect(WorldMapFrame).toBeShown()
+    expect(M:Layers().services.repair).toBe(true)
+    -- (opened from SuuUI's code, the map's pins were taken by it)
+    expect(WorldMapFrame).never.toBeShown()
+    M:OpenWith("services", "repair")
+    expect(M:Layers().services.repair).toBe(true)
 end
 
 --------------------------------------------------------------------------------
@@ -549,6 +549,20 @@ local function hovered()
     expect(giver.hl).never.toBeShown()
 end
 
+@test("the map window scaled (the enlarged map): SuuUI's pins at their usual size on screen")
+local function pinsScaled()
+    openMap()
+    local before = shownPin("Innkeeper Farley")
+    local size = before:GetWidth() * before:GetEffectiveScale()
+    local was = WorldMapFrame:GetScale()
+    WorldMapFrame:SetScale(was * 1.5)
+    M:Layout()
+    local after = shownPin("Innkeeper Farley")
+    expect(after:GetWidth() * after:GetEffectiveScale()).toBeCloseTo(size)
+    WorldMapFrame:SetScale(was)
+    M:Layout()
+end
+
 @test("a rare's pin hovered: its every spot ringed")
 local function rareHovered()
     openMap()
@@ -560,15 +574,14 @@ local function rareHovered()
     expect(M.routes).toBeShown()
 end
 
-@test("a click on a merged pin zooms to it; on a mark its card; on another nothing")
+@test("a click on a mark opens its card; on a merged pin or another nothing (no zoom from SuuUI's code)")
 local function clicks()
     openMap()
     local zoomed = mock.spy(function(_: unknown, _: number, _: number) end)
     mock.stub(WorldMapFrame, "PanAndZoomTo", zoomed)
     mock.click(shownPin("Mailbox"))
-    expect(zoomed).toHaveBeenCalledTimes(1)
     mock.click(shownPin("Innkeeper Farley"))
-    expect(zoomed).toHaveBeenCalledTimes(1)
+    expect(zoomed).never.toHaveBeenCalled()
     local mark = marks:Add(ELWYNN, 0.9, 0.9, { name = "Ore" })
     mock.advanceFrames(2)
     local opened = mock.spy(function(_: unknown, _: number, _: Region?) end)

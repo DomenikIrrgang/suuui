@@ -268,14 +268,16 @@ local function namedPieces()
     M:CheckDurability()
     n = note("suu:durability")
     expect(n.title).toBe("Your gear is badly damaged")
-    -- Show repairers: the world map
+    -- Show repairers: the world map through a secure click on the minimap's
+    -- zone button (its click is ToggleWorldMap), left out when the map is open
+    local a = assert(n.actions and n.actions[1])
+    expect(assert(a.click)() :: unknown).toBe(tbl.field(_G, "MinimapCluster", "ZoneTextButton"))
+    WorldMapFrame:Hide()
+    expect(assert(a.skipClick)()).toBe(false)
     local toggled = mock.spy(function() end)
     mock.stub(_G, "ToggleWorldMap", toggled)
-    mock.stub(SuuUI, "GetModule", function(_: string)
-        return nil
-    end)
     act(n)
-    expect(toggled).toHaveBeenCalled()
+    expect(toggled).never.toHaveBeenCalled()
 end
 
 @test("full bags: a note while no slot is free, gone when one is")
@@ -768,6 +770,51 @@ local function secureAction()
         expect(s:IsShown()).toBe(false)
         mock.player:leaveCombat()
     end
+    M:Dismiss(id)
+    M:SecureActions()
+end
+
+@test("a note's click action: a secure click on the game's button, left out when it says so")
+local function secureClick()
+    local target = CreateFrame("Button", "SuuUITestNoteTarget", UIParent)
+    local clicked = 0
+    target:SetScript("OnClick", function()
+        clicked = clicked + 1
+    end)
+    local skip, after = false, 0
+    local id = M:Notify({
+        kind = "sticky",
+        category = "Durability",
+        title = "Show me",
+        actions = {
+            {
+                label = "Show",
+                variant = "primary",
+                click = function(): Frame?
+                    return target
+                end,
+                skipClick = function(): boolean
+                    return skip
+                end,
+                onClick = function()
+                    after = after + 1
+                end,
+            },
+        },
+    }) :: string
+    M:SecureActions()
+    local s = assert(M.secure[id .. "#1"])
+    expect(s:GetAttribute("type1")).toBe("click")
+    expect(s:GetAttribute("clickbutton1")).toBe(target)
+    mock.click(s)
+    expect(clicked).toBe(1)
+    expect(after).toBe(1)
+    -- skipped: the onClick only, and the click is back for the next time
+    skip = true
+    mock.click(s)
+    expect(clicked).toBe(1)
+    expect(after).toBe(2)
+    expect(s:GetAttribute("type1")).toBe("click")
     M:Dismiss(id)
     M:SecureActions()
 end

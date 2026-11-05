@@ -344,7 +344,9 @@ local function collapsing()
     expect(M.pendingSecure).toBeNil()
 end
 
-@test("a quest's clicks: left for its details on the map; right: focus, share in a group, open, stop tracking")
+@test(
+    "a quest's clicks: left opens the quest log through a secure button, selected; right: focus, share in a group, select, stop tracking"
+)
 local function questClicks()
     captureMenus()
     take(WOLVES)
@@ -352,8 +354,37 @@ local function questClicks()
     local opened = mock.spy(function(_: number) end)
     mock.stub(_G, "QuestMapFrame_OpenToQuestDetails", opened)
     local r = assert(row("Wolves Across the Border"))
+    -- hovered out of combat: a secure button over it clicks the game's Quest
+    -- log button (opened from SuuUI's code, the map's pins were taken by it)
+    mock.hover(r)
+    local over = assert(M.logOver)
+    expect(over.button).toBeShown()
+    expect(over.button:GetAttribute("type1")).toBe("click")
+    expect(over.button:GetAttribute("clickbutton1")).toBe(QuestLogMicroButton)
+    local logClicks = 0
+    QuestLogMicroButton:HookScript("OnClick", function()
+        logClicks = logClicks + 1
+    end)
+    C_SuperTrack.SetSuperTrackedQuestID(0)
+    mock.click(over.button)
+    expect(logClicks).toBe(1)
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
+    if WorldMapFrame:IsShown() then
+        HideUIPanel(WorldMapFrame)
+    end
+    mock.hover(over.button)
+    mock.hover(nil)
+    expect(over.button).never.toBeShown()
+    -- in combat it can't come: a left click focuses only
+    mock.player:enterCombat()
+    mock.hover(r)
+    expect(over.button).never.toBeShown()
+    mock.hover(nil)
+    C_SuperTrack.SetSuperTrackedQuestID(0)
     M:QuestClick(WOLVES, "LeftButton", r)
-    expect(opened).toHaveBeenCalledWith(WOLVES)
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
+    mock.player:leaveCombat()
+    expect(opened).never.toHaveBeenCalled()
     M:QuestClick(WOLVES, "RightButton", r)
     expect(menu["Share"]).toBeNil()
     -- (the game focuses a quest you accept)
@@ -363,8 +394,9 @@ local function questClicks()
     M:QuestClick(WOLVES, "RightButton", r)
     choose("Focus")
     expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
-    choose("Open in quest log")
-    expect(opened).toHaveBeenCalledTimes(2)
+    choose("Select in quest log")
+    expect(opened).never.toHaveBeenCalled()
+    expect(C_SuperTrack.GetSuperTrackedQuestID()).toBe(WOLVES)
     -- in a group: share
     local friend = mock.spawnUnit({
         name = "Brannoc Ironhand",
