@@ -31,6 +31,7 @@ import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
 import * as events from "wowlua:events"
+import * as secure from "wowlua:secure"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -214,12 +215,15 @@ end
 local trackEyes: { [Frame]: Texture } = tbl.weakKeys()
 
 -- The map's top: the game keeps 67px over it for its breadcrumb bar
--- (TITLE_CANVAS_SPACER_FRAME_HEIGHT); SuuUI's starts it right under the
--- header, level with the quest log's top (the game's QuestMapFrame at -25,
--- moved down with it). The header's second row (filters, the log's search)
--- is ROW_EXTRA taller than other windows' (asked: a taller search box).
--- The window is as much shorter, so the map keeps its shape; the quest
--- log and its details run down to its bottom.
+-- (TITLE_CANVAS_SPACER_FRAME_HEIGHT), hidden here: SuuUI's header covers
+-- that band, so the map starts right under the header, level with the quest
+-- log's top (the game's QuestMapFrame at -25, moved down with it). The
+-- map keeps the game's own size: resized from SuuUI's code (the band cut
+-- out, the enlarged size), the map's zoom was written by it, and the game
+-- refused to place its pins in combat later ("Blocked in combat:
+-- SetPassThroughButtons", found in game). The header's second row
+-- (filters, the log's search) is ROW_EXTRA taller than other windows'
+-- (asked: a taller search box).
 local ROW_EXTRA = 8
 local GAME_MAP_TOP, MAP_TOP = 67, 25 + ROW_EXTRA
 local CUT = GAME_MAP_TOP - MAP_TOP
@@ -754,6 +758,8 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
     -- the group finder's gear, the world map's status line
     gear: Button? = nil
     status: Frame? = nil
+    -- the secure button over the map's title (its way up)
+    upOver: secure.Overlay? = nil
     -- the quest log's headers' font (label, in ink)
     questFont: Font? = nil
     -- SuuUI's stand-ins for the collections the game hides, by their ID
@@ -1604,7 +1610,8 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             icon = "map",
             binding = "TOGGLEWORLDMAP",
             close = button(b, "CloseButton") or button(_G, "WorldMapFrameCloseButton"),
-            topInset = 24 + ROW_EXTRA,
+            -- (over the game's band: the header's bottom where the map starts)
+            topInset = 24 + ROW_EXTRA + CUT,
             headExtra = ROW_EXTRA,
             under = "microMenu",
             hide = {
@@ -1628,15 +1635,53 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         up:SetPoint("TOPLEFT", title, "TOPLEFT", -2, 2)
         up:SetPoint("BOTTOMRIGHT", title, "BOTTOMRIGHT", 2, -2)
         up:SetFrameLevel(chrome.head:GetFrameLevel() + 2)
-        up:SetScript("OnClick", function()
-            local id = shownMap()
-            local info = id and C_Map.GetMapInfo(id)
-            local parent = info and info.parentMapID
-            if parent and parent > 0 then
-                f:SetMapID(parent)
+        -- the way up: a secure click on the game's breadcrumb bar's parent
+        -- level (its click sets the map, as the game's own), through a secure
+        -- button that comes over the title while the mouse is on it, out of
+        -- combat (asked 2026-11-05). Set from SuuUI's code, the map's pins were
+        -- taken by it, and the map opened in combat was refused later ("Blocked
+        -- in combat: SetPassThroughButtons", found in game). In combat the
+        -- title does nothing; a right-click on the map still goes up.
+        local function parentLevel(): Frame?
+            local nb = part(f, "NavBar")
+            local list = nb and tbl.list(field(nb, "navList"))
+            return list and #list > 1 and frames.asFrame(list[#list - 1]) or nil
+        end
+        local function upOff()
+            local over = self.upOver
+            if over and over.button:IsShown() then
+                over.hide()
             end
-        end)
+        end
+        local function upOn()
+            local target = parentLevel()
+            if InCombatLockdown() or not target then
+                return
+            end
+            local over = self.upOver
+            if over and over.button:IsShown() then
+                over.set("clickbutton1", target)
+                return
+            end
+            if not over then
+                local made = secure.overlay(up)
+                local holder = CreateFrame("Frame", nil, UIParent)
+                secure.visibility(holder, "[combat] hide; show")
+                made.button:SetParent(holder)
+                made.set("type1", "click")
+                made.button:HookScript("OnLeave", upOff)
+                -- the map changed under it: the new parent level next time
+                made.button:HookScript("PostClick", function()
+                    after(0, upOff)
+                end)
+                self.upOver = made
+                over = made
+            end
+            over.set("clickbutton1", target)
+            over.show()
+        end
         up:SetScript("OnEnter", function(self2: Button)
+            upOn()
             local id = shownMap()
             local info = id and C_Map.GetMapInfo(id)
             local parent = info and info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
@@ -1649,6 +1694,7 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             UI.HideTooltip()
             title:SetColor("gilt-text")
         end)
+        f:HookScript("OnHide", upOff)
         events.onRegistry(
             "MapCanvas.MapSet",
             function(mapID: unknown)
@@ -1683,27 +1729,8 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         end
         quietNav()
         hook(f, "OnMapChanged", quietNav)
-        -- the map right under the header (the game sets its top whenever the
-        -- quest log opens or closes)
-        local spacer = part(f, "TitleCanvasSpacerFrame")
-        local function logWidth(): number
-            return shows(field(f, "QuestLog")) and (asNumber(field(f, "questLogWidth")) or 0) or 0
-        end
-        if spacer and field(f, "UpdateSpacerFrameAnchoring") then
-            local function placeSpacer()
-                spacer:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", -3 - logWidth(), -MAP_TOP)
-                f:OnFrameSizeChanged()
-            end
-            hook(f, "UpdateSpacerFrameAnchoring", placeSpacer)
-            placeSpacer()
-            -- the breadcrumb bar measures itself between the spacer's top and
-            -- bottom (25px under its top): kept as tall as it was
-            local nb = part(f, "NavBar")
-            if nb then
-                local x = asNumber(field(_G, "WorldMapConstants", "NAVBAR_X_OFFSET")) or 0
-                nb:SetPoint("BOTTOMRIGHT", spacer, "BOTTOMRIGHT", x, 9 - CUT)
-            end
-        end
+        -- (the map stays where the game puts it, under its band: the header
+        -- covers the band; see GAME_MAP_TOP)
         -- the game's own coordinates (SuuUI's status line shows them)
         for _, o in ipairs(tbl.list(field(f, "overlayFrames"))) do
             local frame = frames.asFrame(o)
@@ -1751,7 +1778,7 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             -- the log's top level with the map's (the game's -25)
             local q = find("QuestMapFrame")
             if q and q:GetParent() == f then
-                q:SetPoint("TOPRIGHT", f, "TOPRIGHT", -3, -MAP_TOP)
+                q:SetPoint("TOPRIGHT", f, "TOPRIGHT", -3, -GAME_MAP_TOP)
             end
             -- the list starts level with the map (the search row was over it)
             list:SetPoint("TOPLEFT", 0, 0)
@@ -1888,12 +1915,14 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         return status
     end
 
-    -- The window's size around the map's new top: windowed, shorter by the
-    -- room the game kept over the map. Enlarged (the maximize button): the
-    -- same window larger, in the screen's middle, the quest log beside it as
-    -- you left it, the world around it seen and clickable (asked in game).
-    -- The game's own fullscreen isn't used: its black backdrop
-    -- blocks the world and it shows the map alone.
+    -- The window's size: windowed, the game's own (it sizes the map; see
+    -- GAME_MAP_TOP). Enlarged (the maximize button): the same window larger,
+    -- in the screen's middle, the quest log beside it as you left it, the
+    -- world around it seen and clickable (asked in game). A scale instead
+    -- (no resize from SuuUI's code) made the header, the log and the pins as
+    -- much bigger: the resize was asked for back (2026-11-05). The game's own
+    -- fullscreen isn't used: its black backdrop blocks the world and it shows
+    -- the map alone.
     function Enlarging(f: typeof(WorldMapFrame), chrome: WindowChrome, mm: Frame?)
         local function enlarged(): boolean
             return self:Get("mapEnlarged")
@@ -1910,35 +1939,86 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
                 tryMethod(mm, on and "SetMinimizedLook" or "SetMaximizedLook")
             end
         end
+        -- what keeps its usual size in the scaled window: the quest log, the
+        -- side toggle, the coordinates, the size and waypoint buttons (the
+        -- header with its controls: the chrome's SetBody)
+        local vis: Frame? = nil
+        local function usual(r: Region?, k: number)
+            if r then
+                r:SetScale(1 / k)
+            end
+        end
+        local function scaleTo(k: number)
+            f:SetScale(k)
+            local sc = part(f, "ScrollContainer")
+            local q = find("QuestMapFrame")
+            local logShown = logWidth() > 0
+            usual(mm, k)
+            usual(part(f, "SidePanelToggle"), k)
+            usual(frames.asFrame(field(f, "WorldMapTrackingPinButton")), k)
+            usual(self.status, k)
+            if q and q:GetParent() == f then
+                q:SetScale(1 / k)
+                q:ClearAllPoints()
+                if k == 1 then
+                    -- the game's place, its top level with the map's
+                    q:SetPoint("TOPRIGHT", f, "TOPRIGHT", -3, -GAME_MAP_TOP)
+                    q:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -3, 3)
+                else
+                    -- right beside the map, as tall
+                    q:SetPoint("TOPLEFT", sc, "TOPRIGHT", 3, 0)
+                    q:SetPoint("BOTTOMLEFT", sc, "BOTTOMRIGHT", 3, 0)
+                end
+            end
+            if k == 1 then
+                chrome:SetBody(nil, 1)
+                f:SetHitRectInsets(0, 0, 0, 0)
+            else
+                -- the part that shows: the header (its usual height) right on
+                -- the map, down to the map's (or the log's) bottom right
+                local h = chrome.head:GetHeight()
+                local v = vis or CreateFrame("Frame", nil, f)
+                vis = v
+                v:EnableMouse(false)
+                v:SetScale(1 / k)
+                v:ClearAllPoints()
+                v:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -((GAME_MAP_TOP - 1) * k - h))
+                v:SetPoint("BOTTOMRIGHT", (logShown and q) or sc, "BOTTOMRIGHT", 3, -2)
+                -- (the window's units: what's over the window's top, what's
+                -- unseen on its right; clicks only where it shows)
+                local rise = h / k - (GAME_MAP_TOP - 1)
+                local right = logShown and (3 + logWidth()) * (1 - 1 / k) or 3 * (1 - 1 / k)
+                chrome:SetBody(v, k, rise, right)
+                f:SetHitRectInsets(0, right, math.max(0, -rise), 0)
+            end
+            -- SuuUI's pins sized for the window's scale
+            local wm = SuuUI.GetModule("worldmap")
+            if wm then
+                tryMethod(wm, "QueueLayout")
+            end
+        end
         local function fit()
             if flag(tryMethod(f, "IsMaximized")) then
                 return
             end
-            local log = logWidth()
-            local minW, minH = asNumber(field(f, "minimizedWidth")), asNumber(field(f, "minimizedHeight"))
             if not enlarged() then
-                if minW then
-                    f:SetWidth(minW + log)
-                end
-                if minH then
-                    f:SetHeight(minH - CUT)
-                end
-                f:OnFrameSizeChanged()
+                scaleTo(1)
                 return
             end
-            -- the map keeps the windowed map's shape; the window, header
-            -- included, the setting's share of the screen's height, and narrower
-            -- than the screen
-            local w0, h0 = (minW or 702) - 5, (minH or 534) - GAME_MAP_TOP - 2
+            -- the map larger by a scale (resized from SuuUI's code, the game
+            -- refused its pins in combat after: asked 2026-11-05), all else at
+            -- its usual size; the window the setting's share of the screen's
+            -- height, header included, and narrower than the screen
+            local minW, minH = asNumber(field(f, "minimizedWidth")) or 702, asNumber(field(f, "minimizedHeight")) or 534
+            local w0, h0 = minW - 5, minH - GAME_MAP_TOP - 2
             local margin = S["space-3"]
-            local mapH = UIParent:GetHeight() * share() - (chrome.riseH or 0) - MAP_TOP - 2
-            local mapW = mapH * w0 / h0
-            local roomW = UIParent:GetWidth() - 2 * margin - 5 - log
-            if mapW > roomW then
-                mapW, mapH = roomW, roomW * h0 / w0
+            local h = chrome.head:GetHeight()
+            local k = (UIParent:GetHeight() * share() - h - 3) / h0
+            local roomW = UIParent:GetWidth() - 2 * margin - 5 - logWidth()
+            if w0 * k > roomW then
+                k = roomW / w0
             end
-            f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + MAP_TOP + 2))
-            f:OnFrameSizeChanged()
+            scaleTo(math.max(k, 1))
         end
         local function setEnlarged(on: boolean)
             self:Set("mapEnlarged", on)
