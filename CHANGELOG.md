@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Talking to an NPC hides the minimap with the rest of the interface: your arrow, its icons and quest areas no longer stay on screen.
+
 ## 0.6.2 (2026-11-05)
 
 ### Fixed
