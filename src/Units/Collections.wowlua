@@ -2054,7 +2054,8 @@ class CollectionsModule extends Module<{}>
         local model = MountModel.new(stage)
         -- the game's wrapped present: a click unwraps it
         local gift = CreateFrame("ModelScene", nil, stage, "WrappedModelSceneTemplate") :: ModelScene
-        gift:SetAllPoints(model)
+        gift:SetSize(MODEL_W, MODEL_H)
+        gift:SetPoint("CENTER", model, "CENTER")
         gift:SetFrameLevel(stage:GetFrameLevel() + 3)
         gift:EnableMouse(true)
         gift:HookScript("OnMouseUp", function()
@@ -2348,6 +2349,44 @@ class CollectionsModule extends Module<{}>
             return
         end
         gift:SetShown(presentIn(gift, e.scene))
+        -- (where the scene puts it is known once it shows)
+        if gift:IsShown() then
+            self:PlacePresent()
+            after(0, function()
+                self:PlacePresent()
+            end)
+        end
+    end
+
+    -- The present stood on the floor shadow's middle, as a mount: its
+    -- ground point (the actor's place) as the scene projects it, moved to
+    -- FEET_Y above the stage's bottom (the mount's scene put it under the
+    -- stage: found in game). Left where it is when the scene can't say.
+    function PlacePresent()
+        local ui = self.ui
+        if not ui then
+            return
+        end
+        local gift = ui.gift
+        local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+        if actor == nil then
+            return
+        end
+        local ax, ay, az = tryMethod(actor, "GetPosition")
+        local k = asNumber(tryMethod(actor, "GetScale")) or 1
+        local x, y = tryMethod(
+            gift,
+            "Transform3DPointTo2D",
+            (asNumber(ax) or 0) * k,
+            (asNumber(ay) or 0) * k,
+            (asNumber(az) or 0) * k
+        )
+        local px, py, s = asNumber(x), asNumber(y), gift:GetEffectiveScale()
+        if not (px and py and s and s > 0) then
+            return
+        end
+        gift:ClearAllPoints()
+        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - px / s, FEET_Y - py / s)
     end
 
     -- The chosen gift opened the game's way: the present unwraps, then the
