@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The chat input's text sits in the middle of its field again. With SuuUI's own scale different from the game's, the typed text and the cursor hung low, against the field's bottom edge.
+- Symbols SuuUI's fonts can't draw no longer show as empty boxes: quest rewards' Upgrade and Inspect's item level difference get SuuUI's arrows, Online in the chat command list and the guild list in Mail a green dot, Known at a merchant a check, a Cmd key binding on an action button shows M, and the Auction House says "No favourites yet." when you have none.
+
 ## 0.6.0 (2026-11-05)
 
 ### Changed
