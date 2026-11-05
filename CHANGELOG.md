@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Tooltips show their whole gilt edge again: with SuuUI's scale different from the game's, the top and right lines were missing.
+
 ## 0.6.2 (2026-11-05)
 
 ### Fixed
