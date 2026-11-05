@@ -931,6 +931,26 @@ local function wrappedRam(): { number }
     return cleared
 end
 
+-- The game's present in a mount's model scene (the tests' client has no
+-- model scenes): its "wrapped" actor, the unwrap playing 3 seconds.
+local function fakePresent()
+    local gift = ui().gift :: {}
+    local playing = false
+    mock.stub(gift, "GetActorByTag", function(_: unknown, tag: string): {}?
+        return tag == "wrapped" and {} or nil
+    end)
+    mock.stub(gift, "StartUnwrapAnimation", function(_: unknown, done: () -> ())
+        playing = true
+        C_Timer.After(3, function()
+            playing = false
+            done()
+        end)
+    end)
+    mock.stub(gift, "IsUnwrapAnimating", function(): boolean
+        return playing
+    end)
+end
+
 @test("gifts: wrapped mounts, toys and pets as the game says; counted")
 local function giftsRead()
     wrappedRam()
@@ -961,6 +981,7 @@ end
 @test("a wrapped mount: the gift in the strip, the present on the stage; Unwrap opens it and the mount shows")
 local function giftMount()
     local cleared = wrappedRam()
+    fakePresent()
     open()
     local e = assert(M.chosen)
     expect(e.name).toBe("Swift Ram")
@@ -975,7 +996,11 @@ local function giftMount()
     expect(act:GetAttribute("type")).toBeNil()
     expect(assert(ui().window.tabButtons)[1].countText).toBe("1")
     mock.click(act)
-    mock.advanceTime(3.1)
+    -- (the present unwraps first)
+    mock.advanceTime(1)
+    expect(cleared).toEqual({})
+    expect(ui().gift).toBeShown()
+    mock.advanceTime(2.1)
     expect(cleared).toEqual({ 102 })
     expect(ui().gift).never.toBeShown()
     expect(ui().model).toBeShown()
@@ -984,7 +1009,9 @@ local function giftMount()
     expect(assert(ui().window.tabButtons)[1].countText).toBeNil()
 end
 
-@test("a wrapped toy: its card shows the present and Unwrap; a click on the card opens it, Use after")
+@test(
+    "a wrapped toy: its card shows the gift (Forever has no present for toys) and Unwrap; a click opens it, Use after"
+)
 local function giftToy()
     toyData()
     mock.setToys({
@@ -996,7 +1023,8 @@ local function giftToy()
     local c = ui().shelf.cards[1]
     expect(c.name:GetText()).toBe("Toy Drum")
     expect(c.icon:GetTexture()).toBe(giftTexture())
-    expect(c.gift).toBeShown()
+    expect(c.icon).toBeShown()
+    expect(c.gift).never.toBeShown()
     expect(c.act.look.label:GetText()).toBe("Unwrap")
     expect(c.use:GetText()).toBe("A gift: click to unwrap it")
     expect(c.act:GetAttribute("type")).toBeNil()
@@ -1014,6 +1042,7 @@ end
 @test("a gift arriving: told, Open shows it chosen; the counts on the tabs and for the micro menu")
 local function giftArrives()
     wrappedRam()
+    toyData()
     local said: { [string]: unknown }[] = {}
     mock.stub(SuuUI, "Notify", function(def: { [string]: unknown })
         said[#said + 1] = def

@@ -60,8 +60,28 @@ local WORLD = 12
 --------------------------------------------------------------------------------
 
 export const GIFT_ICON = "Interface\\Icons\\Item_Shop_GiftBox01"
--- the toy box's wrapped present (its model scene)
+-- the toy box's wrapped present (its model scene; Forever has none: probed
+-- 2026-11-05, the game's own toy box shows nothing there either)
 local GIFT_SCENE = 253
+
+-- A model scene showing the game's wrapped present: `scene` (a mount's own:
+-- it holds the "wrapped" actor, as the game's mount journal uses it).
+-- Whether the present is there to show.
+local function presentIn(gift: ModelScene, scene: number?): boolean
+    if not scene then
+        return false
+    end
+    tryMethod(
+        gift,
+        "TransitionToModelSceneID",
+        scene,
+        CAMERA_TRANSITION_TYPE_IMMEDIATE,
+        CAMERA_MODIFICATION_TYPE_MAINTAIN,
+        true
+    )
+    tryMethod(gift, "PrepareForFanfare", true)
+    return tryMethod(gift, "GetActorByTag", "wrapped") ~= nil
+end
 
 -- Whether a mount (its ID), toy (its item) or pet (its GUID) is still
 -- wrapped.
@@ -2301,9 +2321,10 @@ class CollectionsModule extends Module<{}>
         self:DrawAction()
     end
 
-    -- A wrapped mount: the game's present on the stage, the mount hidden
-    -- until it is opened.
-    function ShowGift(_e: Entry)
+    -- A wrapped mount: the game's present on the stage (in the mount's own
+    -- model scene, as the game's journal: the toy box's scene isn't in
+    -- Forever, found in game), the mount hidden until it is opened.
+    function ShowGift(e: Entry)
         local ui = self.ui
         if not ui then
             return
@@ -2315,16 +2336,7 @@ class CollectionsModule extends Module<{}>
         if self.unwrapping then
             return
         end
-        tryMethod(
-            gift,
-            "TransitionToModelSceneID",
-            GIFT_SCENE,
-            CAMERA_TRANSITION_TYPE_IMMEDIATE,
-            CAMERA_MODIFICATION_TYPE_MAINTAIN,
-            true
-        )
-        tryMethod(gift, "PrepareForFanfare", true)
-        gift:Show()
+        gift:SetShown(presentIn(gift, e.scene))
     end
 
     -- The chosen gift opened the game's way: the present unwraps, then the
@@ -2939,21 +2951,14 @@ class CollectionsModule extends Module<{}>
             end
         end
         c.icon:SetTexture(e.wrapped and GIFT_ICON or e.icon)
-        -- a gift: the game's present over the icon (left while it unwraps)
+        -- a gift: the game's present over the icon where the game has its
+        -- scene, else the gift's icon (left while it unwraps)
         if e.wrapped and not c.unwrapping then
-            tryMethod(
-                c.gift,
-                "TransitionToModelSceneID",
-                GIFT_SCENE,
-                CAMERA_TRANSITION_TYPE_IMMEDIATE,
-                CAMERA_MODIFICATION_TYPE_MAINTAIN,
-                true
-            )
-            tryMethod(c.gift, "PrepareForFanfare", true)
-            c.gift:Show()
+            c.gift:SetShown(presentIn(c.gift, GIFT_SCENE))
         elseif not c.unwrapping then
             c.gift:Hide()
         end
+        c.icon:SetShown(not c.gift:IsShown())
         c.act.look.label:SetValue(e.wrapped and (UNWRAP or "Unwrap") or "Use")
         c.icon:SetDesaturated(not e.collected)
         local v = e.collected and 1 or 0.55
