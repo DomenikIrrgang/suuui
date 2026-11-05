@@ -4,7 +4,9 @@
 -- (a window that won't close in combat) and a bag slot's click
 -- (ContainerFrameItemButton_OnClick), and a slash command typed in the chat
 -- (the input's ParseText; "Forbidden: Invite()" seen in game with /ginvite,
--- the same session a bag item's use was refused). A value an addon wrote taints the
+-- the same session a bag item's use was refused), and a rank chosen in the
+-- guild control window's dropdowns ("Forbidden: GuildControlSetRank()",
+-- found in game right after a reload). A value an addon wrote taints the
 -- Blizzard code that reads it. The error log runs scan() when the game
 -- refuses or blocks an action, so the culprit is caught then;
 -- "/suu probe taint" (Diagnostics, dev builds) shows it on demand.
@@ -153,6 +155,15 @@ local FRAMES = {
     "C_PartyInfo",
     -- the world map: a pin placed reads its zoom (the scroll container's)
     "WorldMapFrame",
+    -- the guild control window, its pages and dropdowns (a rank picked runs
+    -- its SetSelected: StaticPopup_Hide, then GuildControlSetRank)
+    "GuildControlUI",
+    "GuildControlUIRankSettingsFrame",
+    "GuildControlUIRankBankFrame",
+    "GuildControlUIRankOrderFrame",
+    "GuildControlUINavigationDropdown",
+    "StaticPopup1",
+    "StaticPopup2",
 }
 
 -- Every value on those paths last written by addon code ("name (by X)"),
@@ -185,6 +196,20 @@ export function scan(): string[]
     end
     for _, fname in ipairs(FRAMES) do
         fields(fname, tbl.field(_G, fname))
+    end
+    -- the guild control's dropdowns (the menu a pick runs from) and the
+    -- menu open now (its rows' clicks)
+    for _, page in ipairs({ "GuildControlUIRankSettingsFrame", "GuildControlUIRankBankFrame" }) do
+        fields(page .. ".dropdown", tbl.field(_G, page, "dropdown"))
+    end
+    fields("GuildControlUI.dropdown", tbl.field(_G, "GuildControlUI", "dropdown"))
+    local menuManager = tbl.field(_G, "Menu")
+    local getManager = tbl.field(menuManager, "GetManager")
+    if type(getManager) == "function" then
+        local ok, manager = pcall(getManager)
+        if ok then
+            fields("Menu.GetManager()", manager)
+        end
     end
     -- the world map's zoom and its pins' pools (a pin placed in combat was
     -- refused once SuuUI had resized the map: "SetPassThroughButtons")

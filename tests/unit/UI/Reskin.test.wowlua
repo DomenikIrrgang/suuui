@@ -1190,6 +1190,36 @@ end
 
 local POPUP = "SUUUI_TEST_POPUP"
 
+@test("reskinMenu and reskinPopup leave the game's shared frames as they are: no hooks on their own functions")
+local function noHooksOnShared()
+    -- (hooks on the game's shared menu frames made its menus SuuUI's: a
+    -- choice doing a protected thing was refused, "Forbidden:
+    -- GuildControlSetRank()", found in game)
+    local owner = host()
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateButton("Whisper", function() end)
+        root:CreateButton("Invite", function() end)
+    end)
+    local menu = assert(openMenu())
+    local reinit = rawget(menu :: {}, "ReinitializeAll")
+    reskinMenu(menu)
+    expect(rawget(menu :: {}, "SetScript")).toBeNil()
+    expect(rawget(menu :: {}, "ReinitializeAll")).toBe(reinit)
+    for _, c in ipairs(frames.children(menu)) do
+        if c:GetObjectType() == "Button" then
+            expect(rawget(c :: {}, "SetScript")).toBeNil()
+        end
+    end
+    -- closed: the game's look back (SuuUI's panel hides with it)
+    Menu.GetManager():CloseMenus()
+    expect(openMenu()).toBeNil()
+    StaticPopupDialogs[POPUP] = { text = "Sure?", button1 = ACCEPT, button2 = CANCEL, timeout = 0, whileDead = true }
+    local dialog = assert(StaticPopup_Show(POPUP) :: PopupParts?)
+    reskinPopup(dialog)
+    expect(rawget(dialog :: {}, "SetScript")).toBeNil()
+    StaticPopup_Hide(POPUP)
+end
+
 @test("reskinPopup: the shared popup in SuuUI's look while it shows; undone after")
 local function popup()
     local accepted = mock.spy()

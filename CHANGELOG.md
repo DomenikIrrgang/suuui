@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Guild settings: changing a rank's permissions is no longer refused ("Forbidden: GuildControlSetRank()"). SuuUI's look on the game's dropdown menus and popups no longer hooks the game's shared menu and popup frames, which made a choice that does something protected (a guild rank, and the like in other menus and popups) count as SuuUI's.
+
 ## 0.6.3 (2026-11-05)
 
 ### New
