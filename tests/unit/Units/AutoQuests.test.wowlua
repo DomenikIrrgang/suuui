@@ -1,0 +1,313 @@
+-- Units/AutoQuests: quests accepted and turned in for you. An NPC's quest
+-- accepted and told in chat (the engine's NPC); Shift and the settings
+-- leave it to you; the NPC's list opened quest by quest (turn-ins first,
+-- grey, too low and repeatable ones left); a quest's page: shared and PvP
+-- quests left, a turn-in taking gold or items left, a reward to choose left.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M, tooLow from "/Units/AutoQuests"
+import expectNoErrors from "../../helpers"
+
+local giver = mock.spawnUnit({ name = "Scout Rolan", level = 30, reaction = "friendly", distance = 3 })
+local OFFERED = 9301
+mock.defineQuest(OFFERED, {
+    title = "Bones in the Barrow",
+    text = "Clear the barrow, $N.",
+    objective = "Kill 4 skeletons.",
+    giver = giver,
+    level = 5,
+    xp = 300,
+})
+
+-- what the module said in chat
+local said: string[] = {}
+
+-- (an accepted quest reaches the log a moment later, from the server)
+local function talkTo(npc: mock.MockUnit)
+    mock.player:interact(npc)
+    mock.advanceTime(2)
+    mock.advanceFrames(3)
+end
+
+local function capture()
+    said = {}
+    mock.stub(M, "Print", function(_: unknown, text: string)
+        said[#said + 1] = text
+    end)
+end
+
+local function inLog(id: number): boolean
+    return C_QuestLog.GetLogIndexForQuestID(id) ~= nil
+end
+
+@afterEach
+local function cleanup()
+    mock.setModifiers({})
+    M:Reset("accept")
+    M:Reset("turnIn")
+    M:Reset("levelRange")
+    M:Reset("repeatable")
+    M:Reset("shared")
+    M:Reset("gold")
+    M:Reset("items")
+    if inLog(OFFERED) then
+        C_QuestLog.SetSelectedQuest(OFFERED)
+        C_QuestLog.SetAbandonQuest()
+        C_QuestLog.AbandonQuest()
+    end
+    CloseQuest()
+    mock.advanceTime(1)
+    mock.advanceFrames(2)
+    M.npc = nil
+    expectNoErrors()
+end
+
+@test("tooLow: the game's grey ones; a range below your level when set")
+@cases({
+    { 10, true, 0, 30, true },
+    { 10, false, 0, 30, false },
+    { 25, false, 5, 30, true },
+    { 26, false, 5, 30, false },
+    { nil, false, 5, 30, false },
+})
+local function low(level: number?, trivial: boolean, range: number, mine: number, out: boolean)
+    expect(tooLow(level, trivial, range, mine)).toBe(out)
+end
+
+@test("a quest an NPC offers: accepted, told in chat")
+local function accepted()
+    capture()
+    talkTo(giver)
+    expect(inLog(OFFERED)).toBe(true)
+    expect(said).toEqual({ "Accepted: Bones in the Barrow" })
+end
+
+@test("Shift held as you talk, or Accept off: left to you")
+local function leftToYou()
+    capture()
+    mock.setModifiers({ shift = true })
+    talkTo(giver)
+    expect(inLog(OFFERED)).toBe(false)
+    mock.setModifiers({})
+    CloseQuest()
+    mock.advanceTime(1)
+    M:Set("accept", false)
+    talkTo(giver)
+    expect(inLog(OFFERED)).toBe(false)
+    expect(said).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- An NPC's list
+--------------------------------------------------------------------------------
+
+type Picked = { kind: string, id: number }
+
+-- The NPC's list as the game gives it; what was opened from it.
+local function list(active: { [string]: unknown }[], available: { [string]: unknown }[]): Picked[]
+    local picked: Picked[] = {}
+    mock.fake("C_GossipInfo.GetActiveQuests", function(): unknown
+        return active
+    end)
+    mock.fake("C_GossipInfo.GetAvailableQuests", function(): unknown
+        return available
+    end)
+    mock.fake("C_GossipInfo.SelectActiveQuest", function(id: number)
+        picked[#picked + 1] = { kind = "turn in", id = id }
+    end)
+    mock.fake("C_GossipInfo.SelectAvailableQuest", function(id: number)
+        picked[#picked + 1] = { kind = "take", id = id }
+    end)
+    return picked
+end
+
+@test("the NPC's list: a done quest first, then one to take; each opened once; grey, too low, repeatable left")
+local function gossipList()
+    mock.fake("UnitLevel", function(): number
+        return 30
+    end)
+    local picked = list({ { questID = 1, isComplete = false }, { questID = 2, isComplete = true } }, {
+        { questID = 10, questLevel = 28, isTrivial = true },
+        { questID = 11, questLevel = 29, frequency = 1 },
+        { questID = 12, questLevel = 20 },
+        { questID = 13, questLevel = 29, repeatable = true },
+        { questID = 14, questLevel = 30 },
+    })
+    M:OnGossip()
+    expect(picked).toEqual({ { kind = "turn in", id = 2 } })
+    -- back to the list: the next one (each opened once)
+    M:OnGossip()
+    expect(picked[2]).toEqual({ kind = "take", id = 12 })
+    M:OnGossip()
+    expect(picked[3]).toEqual({ kind = "take", id = 14 })
+    M:OnGossip()
+    expect(#picked).toBe(3)
+    -- the level range: 20 is 10 below 30
+    M.npc = nil
+    M:Set("levelRange", 10)
+    picked = list({}, { { questID = 12, questLevel = 20 } })
+    M:OnGossip()
+    expect(#picked).toBe(0)
+    -- repeatable ones allowed
+    M.npc = nil
+    M:Set("repeatable", true)
+    picked = list({}, { { questID = 11, questLevel = 29, frequency = 1 } })
+    M:OnGossip()
+    expect(picked).toEqual({ { kind = "take", id = 11 } })
+end
+
+@test("Shift on the NPC's list: nothing opened, the rest of that conversation too")
+local function gossipShift()
+    local picked = list({ { questID = 2, isComplete = true } }, { { questID = 12, questLevel = 29 } })
+    mock.setModifiers({ shift = true })
+    M:OnGossip()
+    mock.setModifiers({})
+    M:OnGossip()
+    expect(#picked).toBe(0)
+    -- turn-ins off: only the one to take
+    M.npc = nil
+    M:Set("turnIn", false)
+    M:OnGossip()
+    expect(picked).toEqual({ { kind = "take", id = 12 } })
+end
+
+--------------------------------------------------------------------------------
+-- A quest's page
+--------------------------------------------------------------------------------
+
+-- A page as the game answers it.
+local function page(opts: { [string]: unknown })
+    mock.fake("GetQuestID", function(): number
+        return 77
+    end)
+    mock.fake("GetTitleText", function(): string
+        return "A Page"
+    end)
+    for _, name in ipairs({
+        "QuestIsDaily",
+        "QuestIsWeekly",
+        "QuestGetAutoAccept",
+        "QuestFlagsPVP",
+        "C_QuestLog.IsRepeatableQuest",
+        "C_QuestLog.IsQuestTrivial",
+    }) do
+        local v = opts[name] or false
+        mock.fake(name, function(): unknown
+            return v
+        end)
+    end
+    mock.fake("UnitIsPlayer", function(): boolean
+        return opts.shared == true
+    end)
+    mock.fake("IsQuestCompletable", function(): boolean
+        return opts.completable ~= false
+    end)
+    mock.fake("GetQuestMoneyToGet", function(): number
+        return (opts.gold or 0) :: number
+    end)
+    mock.fake("GetNumQuestItems", function(): number
+        return (opts.items or 0) :: number
+    end)
+    mock.fake("GetNumQuestChoices", function(): number
+        return (opts.choices or 0) :: number
+    end)
+end
+
+@test("a quest's page: accepted unless shared, PvP, repeatable or grey")
+@cases({
+    { {}, true },
+    { { shared = true }, false },
+    { { QuestFlagsPVP = true }, false },
+    { { QuestIsDaily = true }, false },
+    { { ["C_QuestLog.IsRepeatableQuest"] = true }, false },
+    { { ["C_QuestLog.IsQuestTrivial"] = true }, false },
+    { { QuestGetAutoAccept = true }, false },
+})
+local function detail(opts: { [string]: unknown }, accepts: boolean)
+    capture()
+    page(opts)
+    local took = mock.spy(function() end)
+    mock.fake("AcceptQuest", took)
+    M:OnDetail()
+    if accepts then
+        expect(took).toHaveBeenCalled()
+        expect(said).toEqual({ "Accepted: A Page" })
+    else
+        expect(took).never.toHaveBeenCalled()
+    end
+end
+
+@test("shared quests accepted with the setting on")
+local function sharedOn()
+    page({ shared = true })
+    local took = mock.spy(function() end)
+    mock.fake("AcceptQuest", took)
+    M:Set("shared", true)
+    M:OnDetail()
+    expect(took).toHaveBeenCalled()
+end
+
+@test("a turn-in: on to the reward unless it takes gold or items; taken unless there's one to choose")
+@cases({
+    { {}, true, true },
+    { { gold = 500 }, false, false },
+    { { items = 1 }, false, false },
+    { { choices = 1 }, true, true },
+    { { choices = 3 }, true, false },
+})
+local function turnIn(opts: { [string]: unknown }, completes: boolean, rewards: boolean)
+    capture()
+    page(opts)
+    local completed = mock.spy(function() end)
+    local rewarded = mock.spy(function(_: number) end)
+    mock.fake("CompleteQuest", completed)
+    mock.fake("GetQuestReward", rewarded)
+    M:OnProgress()
+    if completes then
+        expect(completed).toHaveBeenCalled()
+    else
+        expect(completed).never.toHaveBeenCalled()
+    end
+    M:OnComplete()
+    if rewards then
+        expect(rewarded).toHaveBeenCalledWith((opts.choices == 1) and 1 or 0)
+        expect(said).toEqual({ "Turned in: A Page" })
+    else
+        expect(rewarded).never.toHaveBeenCalled()
+    end
+end
+
+@test("turn-ins taking gold or items with their settings on; turn-ins off: left")
+local function turnInSettings()
+    -- not done yet: nothing
+    page({ completable = false })
+    local completed = mock.spy(function() end)
+    mock.fake("CompleteQuest", completed)
+    M:OnProgress()
+    expect(completed).never.toHaveBeenCalled()
+    M.npc = nil
+    page({ gold = 500, items = 2 })
+    M:Set("gold", true)
+    M:OnProgress()
+    expect(completed).never.toHaveBeenCalled()
+    M.npc = nil
+    M:Set("items", true)
+    M:OnProgress()
+    expect(completed).toHaveBeenCalled()
+    M.npc = nil
+    M:Set("turnIn", false)
+    M:OnProgress()
+    expect(completed).toHaveBeenCalledTimes(1)
+end
+
+@test("an escort or a shared quest's question: answered only with the setting on")
+local function acceptConfirm()
+    local confirmed = mock.spy(function() end)
+    mock.fake("ConfirmAcceptQuest", confirmed)
+    M:OnAcceptConfirm()
+    expect(confirmed).never.toHaveBeenCalled()
+    M:Set("shared", true)
+    M:OnAcceptConfirm()
+    expect(confirmed).toHaveBeenCalled()
+end

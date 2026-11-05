@@ -1,0 +1,401 @@
+-- Units/AutoQuests.wowlua
+-- Quests accepted and turned in for you (asked 2026-11-05): talking to an
+-- NPC, the quests it offers are opened and accepted, the ones you've done
+-- opened and turned in, one after another, each told in chat. Left to you:
+-- low-level quests (the game's grey ones; also those a set number of
+-- levels below you, a setting that starts off), a turn-in with a reward to
+-- choose, a PvP quest (the game's own confirmation), and unless a setting
+-- allows them: daily and repeatable quests, quests a party member shares or
+-- an escort starting, turn-ins that take gold, turn-ins that hand in items.
+-- Holding Shift as you talk to an NPC leaves that conversation to you.
+-- Works with the game's quest and gossip frames, or SuuUI's NPC dialogue
+-- over them: the game's own quest functions, none protected.
+-- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SettingsSection from "/Core/Modules"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+
+local DEFAULTS = {
+    accept = true, -- quests offered: accepted
+    turnIn = true, -- quests done: turned in (no reward to choose)
+    levelRange = 0, -- also left: quests this many levels or more below you (0: only grey ones)
+    repeatable = false, -- daily and repeatable quests too
+    shared = false, -- quests a party member shares, an escort starting
+    gold = false, -- turn-ins that take gold
+    items = false, -- turn-ins that hand in items
+}
+
+local M: AutoQuestsModule
+
+local try, field, list = errors.try, tbl.field, tbl.list
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+-- Too low to take: the game's grey (trivial) ones, or `range` levels or
+-- more below `mine` (0: no range).
+export function tooLow(level: number?, trivial: boolean?, range: number, mine: number?): boolean
+    if trivial then
+        return true
+    end
+    if range > 0 and level and level > 0 and mine then
+        return mine - level >= range
+    end
+    return false
+end
+
+-- A quest's level from SuuUI's quest data (a quest that opens without a
+-- list to read it from).
+local function dataLevel(id: number): number?
+    local starts = SuuUI.QuestStarts()
+    local q = starts and starts.quests[id]
+    return q and asNumber(q[3]) or nil
+end
+
+local function shown(name: string): boolean
+    local f = frames.find(name)
+    return f ~= nil and f:IsShown()
+end
+
+--------------------------------------------------------------------------------
+-- Settings
+--------------------------------------------------------------------------------
+
+local SECTION: SettingsSection = {
+    id = "autoquests",
+    label = "Quests",
+    category = "General",
+    order = 23,
+    groups = {
+        {
+            title = "Accept and turn in",
+            description = "Talking to an NPC, SuuUI accepts the quests it offers and turns in the ones you've done, each told in chat. Hold Shift as you talk to it to do it yourself.",
+            rows = {
+                {
+                    key = "accept",
+                    label = "Accept quests",
+                    control = "toggle",
+                    description = "Quests an NPC offers are accepted, except grey ones (and those under the level range below) and PvP quests.",
+                },
+                {
+                    key = "turnIn",
+                    label = "Turn in quests",
+                    control = "toggle",
+                    description = "Quests you've done are turned in, except when there's a reward to choose.",
+                },
+                {
+                    key = "levelRange",
+                    label = "Leave quests below you",
+                    control = "slider",
+                    min = 0,
+                    max = 20,
+                    step = 1,
+                    format = function(v: number): string
+                        return v == 0 and "Grey ones only" or (v .. (v == 1 and " level" or " levels") .. " or more")
+                    end,
+                    description = "Besides the grey ones, quests this many levels or more below you aren't accepted.",
+                    disabled = function(): (boolean, string)
+                        return not M:Get("accept"), "Accept quests is off."
+                    end,
+                },
+            },
+        },
+        {
+            title = "Also",
+            description = "Left to you unless turned on here.",
+            rows = {
+                {
+                    key = "repeatable",
+                    label = "Daily and repeatable quests",
+                    control = "toggle",
+                    description = "Accepted and turned in like the others.",
+                },
+                {
+                    key = "shared",
+                    label = "Quests others share",
+                    control = "toggle",
+                    description = "A quest a party member shares, or an escort starting, is accepted.",
+                },
+                {
+                    key = "gold",
+                    label = "Turn-ins that take gold",
+                    control = "toggle",
+                    description = "A quest that asks for gold to turn it in is turned in.",
+                },
+                {
+                    key = "items",
+                    label = "Turn-ins that take items",
+                    control = "toggle",
+                    description = "A quest that takes items from your bags to turn it in (most collecting quests) is turned in.",
+                },
+            },
+        },
+    },
+}
+
+--------------------------------------------------------------------------------
+-- The module
+--------------------------------------------------------------------------------
+
+class AutoQuestsModule extends Module<typeof(DEFAULTS)>
+    -- the conversation: whose, left to you (Shift), the quests opened from
+    -- its list (each once), turn-ins left to you, levels read from its list
+    npc: string? = nil
+    paused: boolean = false
+    tried: { [string]: boolean } = {}
+    leftAlone: { [number]: boolean } = {}
+    levels: { [number]: number } = {}
+
+    constructor()
+        super({
+            id = "autoquests",
+            name = "Quests",
+            description = "Quests accepted and turned in for you; Shift as you talk to an NPC leaves it to you.",
+            api = "0.12",
+            defaults = DEFAULTS,
+        })
+    end
+
+    -- A step of a conversation: a new one starts afresh; Shift held leaves
+    -- it to you. Whether SuuUI may act.
+    function Begin(): boolean
+        local guid = asString(UnitGUID("npc")) or "?"
+        if guid ~= self.npc then
+            self.npc = guid
+            self.paused = false
+            self.tried, self.leftAlone, self.levels = {}, {}, {}
+        end
+        if IsShiftKeyDown() then
+            self.paused = true
+        end
+        return not self.paused
+    end
+
+    -- The conversation over (the game's frames closed, also under SuuUI's
+    -- dialogue): the next starts afresh.
+    function End()
+        after(0.5, function()
+            if not (shown("GossipFrame") or shown("QuestFrame")) then
+                self.npc = nil
+            end
+        end)
+    end
+
+    function Repeats(daily: boolean, repeatable: boolean): boolean
+        return (daily or repeatable) and not self:Get("repeatable")
+    end
+
+    function TooLow(level: number?, trivial: boolean?): boolean
+        return tooLow(level, trivial, self:Get("levelRange") or 0, asNumber(UnitLevel("player")))
+    end
+
+    -- Whether this quest (on its own page) is daily or repeatable.
+    function PageRepeats(id: number?): boolean
+        local daily = flag(try(QuestIsDaily)) or flag(try(QuestIsWeekly)) or false
+        local repeatable = id and flag(try(field(C_QuestLog, "IsRepeatableQuest"), id)) or false
+        return self:Repeats(daily, repeatable)
+    end
+
+    ----------------------------------------------------------------------------
+    -- An NPC's list: the next quest to open
+    ----------------------------------------------------------------------------
+
+    function OnGossip()
+        if not self:Begin() then
+            return
+        end
+        local G = C_GossipInfo
+        if self:Get("turnIn") then
+            for _, q in ipairs(list(try(field(G, "GetActiveQuests")))) do
+                local info = q :: { [string]: unknown }
+                local id = asNumber(info.questID)
+                local key = id and ("a" .. id)
+                if id and key and flag(info.isComplete) and not self.tried[key] and
+                    not self:Repeats(
+                        asNumber(info.frequency) ~= nil and asNumber(info.frequency) ~= 0,
+                        flag(info.repeatable) or false
+                    ) then
+                    self.tried[key] = true
+                    try(field(G, "SelectActiveQuest"), id)
+                    return
+                end
+            end
+        end
+        if self:Get("accept") then
+            for _, q in ipairs(list(try(field(G, "GetAvailableQuests")))) do
+                local info = q :: { [string]: unknown }
+                local id = asNumber(info.questID)
+                local key = id and ("v" .. id)
+                local level = asNumber(info.questLevel)
+                if id and key and not self.tried[key] and not self:TooLow(level, flag(info.isTrivial)) and
+                    not self:Repeats(
+                        asNumber(info.frequency) ~= nil and asNumber(info.frequency) ~= 0,
+                        flag(info.repeatable) or false
+                    ) then
+                    self.tried[key] = true
+                    if level then
+                        self.levels[id] = level
+                    end
+                    try(field(G, "SelectAvailableQuest"), id)
+                    return
+                end
+            end
+        end
+    end
+
+    -- The older list (QuestFrame's greeting): by index.
+    function OnGreeting()
+        if not self:Begin() then
+            return
+        end
+        if self:Get("turnIn") then
+            for i = 1, asNumber(try(GetNumActiveQuests)) or 0 do
+                local _, done = try(GetActiveTitle, i)
+                local id = asNumber(try(GetActiveQuestID, i))
+                local key = "a" .. (id or ("#" .. i))
+                if flag(done) and not self.tried[key] then
+                    self.tried[key] = true
+                    try(SelectActiveQuest, i)
+                    return
+                end
+            end
+        end
+        if self:Get("accept") then
+            for i = 1, asNumber(try(GetNumAvailableQuests)) or 0 do
+                local trivial, frequency, repeatable, _, idR = try(GetAvailableQuestInfo, i)
+                local id = asNumber(idR)
+                local key = "v" .. (id or ("#" .. i))
+                local level = asNumber(try(GetAvailableLevel, i))
+                local daily = asNumber(frequency) ~= nil and asNumber(frequency) ~= 0
+                if not self.tried[key] and not self:TooLow(level, flag(trivial)) and
+                    not self:Repeats(daily, flag(repeatable) or false) then
+                    self.tried[key] = true
+                    if id and level then
+                        self.levels[id] = level
+                    end
+                    try(SelectAvailableQuest, i)
+                    return
+                end
+            end
+        end
+    end
+
+    ----------------------------------------------------------------------------
+    -- A quest's page
+    ----------------------------------------------------------------------------
+
+    -- Offered: accepted unless it's left to you.
+    function OnDetail()
+        if not self:Begin() or not self:Get("accept") then
+            return
+        end
+        -- (accepted already by the game; a PvP quest keeps the game's question)
+        if flag(try(QuestGetAutoAccept)) or flag(try(QuestFlagsPVP)) then
+            return
+        end
+        if flag(try(UnitIsPlayer, "npc")) and not self:Get("shared") then
+            return
+        end
+        local id = asNumber(try(GetQuestID))
+        if self:PageRepeats(id) then
+            return
+        end
+        local level = id and (self.levels[id] or dataLevel(id))
+        local trivial = id and flag(try(field(C_QuestLog, "IsQuestTrivial"), id)) or false
+        if self:TooLow(level, trivial) then
+            return
+        end
+        local title = asString(try(GetTitleText))
+        try(AcceptQuest)
+        if title then
+            self:Print("Accepted: " .. title)
+        end
+    end
+
+    -- What it asks for: on to the reward, unless it takes gold or items
+    -- (left to you then, its reward too).
+    function OnProgress()
+        if not self:Begin() or not self:Get("turnIn") then
+            return
+        end
+        if not flag(try(IsQuestCompletable)) then
+            return
+        end
+        local id = asNumber(try(GetQuestID))
+        if self:PageRepeats(id) then
+            return
+        end
+        local gold = (asNumber(try(GetQuestMoneyToGet)) or 0) > 0 and not self:Get("gold")
+        local items = (asNumber(try(GetNumQuestItems)) or 0) > 0 and not self:Get("items")
+        if gold or items then
+            if id then
+                self.leftAlone[id] = true
+            end
+            return
+        end
+        try(CompleteQuest)
+    end
+
+    -- The reward: taken when there's none to choose.
+    function OnComplete()
+        if not self:Begin() or not self:Get("turnIn") then
+            return
+        end
+        local id = asNumber(try(GetQuestID))
+        if (id and self.leftAlone[id]) or self:PageRepeats(id) then
+            return
+        end
+        local choices = asNumber(try(GetNumQuestChoices)) or 0
+        if choices > 1 then
+            return
+        end
+        local title = asString(try(GetTitleText))
+        try(GetQuestReward, choices == 1 and 1 or 0)
+        if title then
+            self:Print("Turned in: " .. title)
+        end
+    end
+
+    -- An escort starting, or a quest shared (the game asks first).
+    function OnAcceptConfirm()
+        if not self:Get("shared") or not self:Get("accept") or IsShiftKeyDown() then
+            return
+        end
+        try(ConfirmAcceptQuest)
+        try(StaticPopup_Hide, "QUEST_ACCEPT")
+    end
+
+    override function OnEnable()
+        self:RegisterSettings(SECTION)
+        self:OnGameEvent("GOSSIP_SHOW", function()
+            self:OnGossip()
+        end)
+        self:OnGameEvent("QUEST_GREETING", function()
+            self:OnGreeting()
+        end)
+        self:OnGameEvent("QUEST_DETAIL", function()
+            self:OnDetail()
+        end)
+        self:OnGameEvent("QUEST_PROGRESS", function()
+            self:OnProgress()
+        end)
+        self:OnGameEvent("QUEST_COMPLETE", function()
+            self:OnComplete()
+        end)
+        self:OnGameEvent("QUEST_ACCEPT_CONFIRM", function()
+            self:OnAcceptConfirm()
+        end)
+        self:OnGameEvent("GOSSIP_CLOSED", function()
+            self:End()
+        end)
+        self:OnGameEvent("QUEST_FINISHED", function()
+            self:End()
+        end)
+    end
+end
+
+M = SuuUI.AddModule(AutoQuestsModule.new())
