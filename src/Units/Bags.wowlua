@@ -88,6 +88,27 @@ local function isBank(bag: number): boolean
     return bag >= BANK_FIRST and bag <= BANK_LAST
 end
 
+-- Blizzard's windows that take a bag item on a right click (its slot click
+-- checks these: sell, deposit, attach, trade, post)
+local ITEM_TAKERS = {
+    "MerchantFrame",
+    "BankFrame",
+    "GuildBankFrame",
+    "MailFrame",
+    "AuctionFrame",
+    "AuctionHouseFrame",
+    "TradeFrame",
+    "ItemUpgradeFrame",
+}
+
+-- The game's events for those places opening and closing.
+local PLACES = {
+    MAIL_SHOW = "MAIL_CLOSED",
+    TRADE_SHOW = "TRADE_CLOSED",
+    AUCTION_HOUSE_SHOW = "AUCTION_HOUSE_CLOSED",
+    GUILDBANKFRAME_OPENED = "GUILDBANKFRAME_CLOSED",
+}
+
 local function numSlots(bag: number): number
     return asNumber(C_Container.GetContainerNumSlots(bag)) or 0
 end
@@ -638,6 +659,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     refreshTimer: TimerHandle? = nil
     sorting: SortState? = nil
     sortDriver: Frame? = nil
+    -- Using an item: one secure button that comes over the slot under the
+    -- mouse, out of combat (see UseOn)
+    useOver: Overlay? = nil
+    useSlot: Button? = nil
+    -- the places open whose windows take a bag item (MAIL_SHOW: true, ...)
+    readonly placesOpen: { [string]: boolean } = {}
 
     constructor()
         super({
@@ -737,6 +764,11 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         assert(b, "no item button")
         b:SetID(slot)
         self.skins[b] = UI.SkinItemSlot(b)
+        if bag >= 0 and not isBank(bag) then
+            hookScript(b, "OnEnter", function()
+                self:UseOn(b, bag, slot)
+            end)
+        end
         list[slot] = b
         return b
     end
@@ -1188,6 +1220,116 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             over.show()
         else
             over.hide()
+        end
+    end
+
+    -- Using an item. In game Blizzard's own click on a bag slot was refused
+    -- after a while of playing ("Forbidden: UseContainerItem()": taint had
+    -- reached its path), so out of combat a right click uses the item through
+    -- a secure button: one, moved over the slot under the mouse (only there,
+    -- so it never covers a window in front of the bags), gone when the mouse
+    -- leaves. In combat it can't be moved or shown: the slot's own click then,
+    -- as before (a secure visibility driver hides it in combat whatever
+    -- happens). At a vendor, bank, mailbox, trade or auction house Blizzard's
+    -- click does what it does there (sell, deposit, attach, ...), so it stays
+    -- away. Every other click, the drag and the hover go on to the slot.
+    function PlainUse(): boolean
+        if self.atMerchant or self.atBank or next(self.placesOpen) ~= nil then
+            return false
+        end
+        for _, name in ipairs(ITEM_TAKERS) do
+            local f = frames.asFrame(field(_G, name))
+            if f and f:IsShown() then
+                return false
+            end
+        end
+        return true
+    end
+
+    function UseButton(slot: Button): Overlay
+        local made = self.useOver
+        if made then
+            return made
+        end
+        local over = secure.overlay(slot)
+        local b = over.button
+        -- hidden in combat by the client itself, also if it was showing
+        local holder = CreateFrame("Frame", nil, UIParent)
+        secure.visibility(holder, "[combat] hide; show")
+        b:SetParent(holder)
+        b:RegisterForClicks("AnyDown", "AnyUp")
+        b:RegisterForDrag("LeftButton")
+        -- a right click without Shift, Ctrl or Alt: /use <bag> <slot>
+        over.set("type2", "macro")
+        b:SetScript("PostClick", function(_, button: string, down: boolean?)
+            self:PassClick(button, down)
+        end)
+        b:SetScript("OnDragStart", function(_, button: string)
+            self:PassTo("OnDragStart", button)
+        end)
+        b:SetScript("OnReceiveDrag", function()
+            self:PassTo("OnReceiveDrag")
+        end)
+        b:HookScript("OnEnter", function()
+            local s = self.useSlot
+            if s then
+                s:LockHighlight()
+            end
+        end)
+        b:HookScript("OnLeave", function()
+            local s = self.useSlot
+            if s then
+                s:UnlockHighlight()
+            end
+            self:HideUse()
+        end)
+        self.useOver = over
+        return over
+    end
+
+    -- The mouse came onto a slot (bag, slot): the secure button over it.
+    function UseOn(b: Button, bag: number, slot: number)
+        if InCombatLockdown() or not self:IsEnabled() or not self:IsLive() then
+            return
+        end
+        local over = self.useOver
+        if over and self.useSlot == b and over.button:IsShown() then
+            return
+        end
+        if not self:PlainUse() then
+            self:HideUse()
+            return
+        end
+        over = self:UseButton(b)
+        over.set("macrotext2", ("/use %d %d"):format(bag, slot))
+        self.useSlot = b
+        over.show(b)
+    end
+
+    function HideUse()
+        local over = self.useOver
+        if over and over.button:IsShown() then
+            over.hide()
+        end
+    end
+
+    -- A click the secure button doesn't use itself goes on to the slot, on
+    -- the release (the slot's clicks are registered for the release).
+    function PassClick(button: string, down: boolean?)
+        if down then
+            return
+        end
+        if button == "RightButton" and not IsModifierKeyDown() then
+            return
+        end
+        self:PassTo("OnClick", button)
+    end
+
+    function PassTo(script: "OnClick" | "OnDragStart" | "OnReceiveDrag", button: string?)
+        local s = self.useSlot
+        local fn = s and s:GetScript(script)
+        if s and fn then
+            fn(s, button, false)
         end
     end
 
@@ -2200,6 +2342,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         -- back to your own bags when it closes
         inv:HookScript("OnHide", function()
             self.who, self.view, self.query = nil, "bags", ""
+            self:HideUse()
         end)
         inv:SetFrameStrata("MEDIUM")
         inv:SetToplevel(true)
@@ -2418,7 +2561,20 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             if over then
                 over.hide()
             end
+            self:HideUse()
         end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:HideUse()
+        end)
+        for open, closed in pairs(PLACES) do
+            self:OnGameEvent(open, function()
+                self.placesOpen[open] = true
+                self:HideUse()
+            end)
+            self:OnGameEvent(closed, function()
+                self.placesOpen[open] = nil
+            end)
+        end
         -- a sort: its waves land, combat or a refused move stops it
         self:OnGameEvent("BAG_UPDATE_DELAYED", function()
             local st = self.sorting
@@ -2481,6 +2637,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         self:OnGameEvent("MERCHANT_SHOW", function()
             self.atMerchant = true
+            self:HideUse()
             self:UpdateJunk()
         end)
         self:OnGameEvent("MERCHANT_CLOSED", function()
@@ -2515,6 +2672,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
+        self:HideUse()
         local inv, bank = self.inv, self.bank
         if inv then
             inv:Hide()

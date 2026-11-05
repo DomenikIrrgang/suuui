@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Using an item from the bags with a right click is no longer blocked after a while of playing ("SuuUI has been blocked from an action only available to the Blizzard UI"), outside combat. If it still happens, SuuUI's error log (`/suu errors`) now also names what touched the chat's and the bags' code, so the cause can be found.
+
 ## 0.6.1 (2026-11-05)
 
 ### Fixed

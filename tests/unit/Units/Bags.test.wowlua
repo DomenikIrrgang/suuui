@@ -267,6 +267,69 @@ local function updates()
     mock.fireEvent("ITEM_LOCK_CHANGED", 16) -- a worn item's: not a bag slot
 end
 
+@test(
+    "out of combat a right click uses the item through a secure button over the hovered slot; the rest goes on to the slot"
+)
+local function secureUse()
+    open()
+    local slot = assert(assert(M.buttons[0])[2])
+    mock.hover(slot)
+    local over = assert(M.useOver)
+    local b = over.button
+    expect(b).toBeShown()
+    expect(M.useSlot).toBe(slot)
+    expect(b:GetAttribute("type2")).toBe("macro")
+    expect(b:GetAttribute("macrotext2")).toBe("/use 0 2")
+    -- the mouse is on it now (it's over the slot): the slot lit, its tooltip
+    mock.hover(b)
+    expect(GameTooltip:IsOwned(slot)).toBe(true)
+    -- the right click: the game's /use of that slot, run by Blizzard's secure
+    -- button code (the emulated client's macros don't use items yet)
+    local ran = mock.spy(function(_: string, _: string) end)
+    mock.stub(C_Macro, "RunMacroText", ran)
+    mock.click(b, "RightButton")
+    expect(ran).toHaveBeenCalledWith("/use 0 2", "RightButton")
+    -- Shift and a right click: Blizzard's own (the secure button runs nothing)
+    mock.stub(C_Macro, "RunMacroText", function(_: string, _: string)
+        error("a macro ran")
+    end)
+    mock.setModifiers({ shift = true })
+    mock.click(b, "RightButton")
+    mock.setModifiers({})
+    -- a left click and a drag go on to the slot: the item picked up
+    mock.click(b)
+    expect(CursorHasItem()).toBe(true)
+    ClearCursor()
+    -- leaving it: gone
+    mock.hover(nil)
+    expect(b).never.toBeShown()
+    -- in combat it can't come: the slot's own click
+    mock.player:enterCombat()
+    mock.hover(slot)
+    expect(b).never.toBeShown()
+    mock.hover(nil)
+    mock.player:leaveCombat()
+    -- at a vendor or the mailbox, Blizzard's click (sell, attach)
+    mock.fireEvent("MERCHANT_SHOW")
+    mock.hover(slot)
+    expect(b).never.toBeShown()
+    mock.hover(nil)
+    mock.fireEvent("MERCHANT_CLOSED")
+    mock.fireEvent("MAIL_SHOW")
+    mock.hover(slot)
+    expect(b).never.toBeShown()
+    mock.hover(nil)
+    mock.fireEvent("MAIL_CLOSED")
+    -- shown, then combat starts: hidden
+    mock.hover(slot)
+    expect(b).toBeShown()
+    mock.player:enterCombat()
+    expect(b).never.toBeVisible()
+    mock.player:leaveCombat()
+    expect(b).never.toBeShown()
+    mock.hover(nil)
+end
+
 --------------------------------------------------------------------------------
 -- The bag rail
 --------------------------------------------------------------------------------
