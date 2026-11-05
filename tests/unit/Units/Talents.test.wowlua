@@ -1380,7 +1380,7 @@ local function planAdd()
         msgs[#msgs + 1] = text
     end)
     M:PlanAdd(planNode(12))
-    expect(msgs[1]).toBe("Arms Two needs 5 points spent before it; at step 2 only 1 is.")
+    expect(msgs[1]).toBe("Arms Two needs 5 points in Arms before it; at step 2 only 1 is.")
     -- a choice keeps its entry
     wt().nodes[3].choice = true
     wipe(M.buildTrees)
@@ -1391,7 +1391,10 @@ end
 @test("PlanRemove takes a talent's last step back, if the order allows")
 local function planRemove()
     M:PlanRemove(planNode(11))
-    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 21, 23, 12)))
+    -- (Arms Three with 4 ranks: Arms's 5 points for its second row)
+    wt().nodes[3].max = 4
+    wipe(M.buildTrees)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 13, 13, 12)))
     M.buildView = id
     M:PlanRemove(planNode(33))
     expect(#draft().steps).toBe(6)
@@ -1400,13 +1403,15 @@ local function planRemove()
     M:PlanRemove(planNode(11))
     expect(asked().title).toBe("That rank can't go")
     expect(#draft().steps).toBe(6)
+    -- (Arms Two needs Arms's 5 points)
     M:PlanRemove(planNode(13))
     expect(asked().title).toBe("That rank can't go")
     M:PlanRemove(planNode(12))
-    expect(draft().steps).toEqual(steps(11, 13, 13, 21, 23))
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13, 13))
     M:PlanRemove(planNode(13))
-    expect(draft().steps).toEqual(steps(11, 13, 21, 23))
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13))
     expect(draft().dirty).toBe(true)
+    wipe(M.buildTrees)
 end
 
 @test("MoveLine moves a run of steps, saving at once on your active build")
@@ -1429,23 +1434,26 @@ local function moveLine()
     expect(draft().steps).toEqual(steps(21, 11, 13, 13))
     M:MoveLine(p.page, 2, #lineData(p) + 1)
     expect(draft().steps).toEqual(steps(21, 13, 13, 11))
-    -- not allowed: 12 in front of what it needs
+    -- not allowed: 12 in front of what it needs (Arms Three with 4 ranks:
+    -- Arms's 5 points for its second row)
+    wt().nodes[3].max = 4
+    wipe(M.buildTrees)
     M.draft = nil
-    build(id).steps = steps(11, 13, 13, 21, 23, 12)
+    build(id).steps = steps(11, 13, 13, 13, 13, 21, 23, 12)
     M:Render()
     local asked = captureConfirm().last
     M:MoveLine(p.page, 5, 1)
     expect(asked().title).toBe("Arms Two can't go there")
     assert(asked().onConfirm)()
     assert(asked().onCancel)()
-    expect(draft().steps).toEqual(steps(11, 13, 13, 21, 23, 12))
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13, 13, 21, 23, 12))
     -- your active build shown on your talents: saved at once
     M.draft = nil
     M:SetActive(id)
     M:Render()
     heard = {}
     M:MoveLine(p.page, 4, 1)
-    expect(build(id).steps).toEqual(steps(23, 11, 13, 13, 21, 12))
+    expect(build(id).steps).toEqual(steps(23, 11, 13, 13, 13, 13, 21, 12))
     expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
     -- a class that can't be read: nothing
     wipe(M.buildTrees)
