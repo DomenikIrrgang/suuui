@@ -496,7 +496,9 @@ type MenuState = {
 
 local menus: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" })
 local rowMenu: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
-local hooked: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+-- a row: the game's OnEnter handler SuuUI's hooks sit on (the game sets a
+-- reused row's scripts again, dropping them: hooked again then)
+local hooked: { [Frame]: unknown } = setmetatable({}, { __mode = "k" })
 
 -- The open root menu, if the game has one open.
 export function openRoot(): Frame?
@@ -516,15 +518,6 @@ end
 -- reuses the frame (Menu.lua: SetScript("OnEnter", …) on each row it
 -- lays out, SetScript("OnHide", …) on each menu it opens), and SetScript
 -- drops the hooks on a script; the hook goes on again right after.
-local function lastingHookScript(f: Frame, script: string, fn: (self: Frame) -> ())
-    hookScript(f, script, fn)
-    hook(f, "SetScript", function(self: Frame, name: unknown)
-        if name == script then
-            hookScript(self, script, fn)
-        end
-    end)
-end
-
 local function restoreMenu(st: MenuState)
     for i = #st.undo, 1, -1 do
         pcall(st.undo[i])
@@ -629,11 +622,15 @@ local function menuRow(st: MenuState, row: Frame)
     -- SuuUI's hover and mark: on its own panel behind the rows (the game
     -- forbids new textures on its menu rows)
     rowMenu[row] = st
-    -- (lasting: the game sets a reused row's scripts again; the hover band
-    -- showed on a row's first menu only)
-    if not hooked[row] then
-        hooked[row] = true
-        lastingHookScript(row, "OnEnter", function(self: Frame)
+    -- (the game sets a reused row's scripts again: hooked again when its
+    -- handler is new. Not by hooking the row's SetScript: hooks on the game's
+    -- shared menu frames made its menus SuuUI's, and a choice that does a
+    -- protected thing was refused, "Forbidden: GuildControlSetRank()", found
+    -- in game)
+    local base = row:GetScript("OnEnter")
+    if hooked[row] == nil or hooked[row] ~= base then
+        hooked[row] = base or false
+        row:HookScript("OnEnter", function(self: Frame)
             local owner = rowMenu[self]
             if owner and owner.active then
                 owner.hover:ClearAllPoints()
@@ -641,11 +638,22 @@ local function menuRow(st: MenuState, row: Frame)
                 owner.hover:Show()
             end
         end)
-        lastingHookScript(row, "OnLeave", function(self: Frame)
+        row:HookScript("OnLeave", function(self: Frame)
             local owner = rowMenu[self]
             if owner then
                 owner.hover:Hide()
             end
+        end)
+        -- a choice that sets the menu's rows up again (a sort order): marked
+        -- again a frame later
+        row:HookScript("OnClick", function(self: Frame)
+            local owner = rowMenu[self]
+            local menu = owner and owner.panel:GetParent()
+            after(0, function()
+                if owner and owner.active and menu and menu:IsShown() then
+                    reskinMenu(menu)
+                end
+            end)
         end)
     end
     if chosen then
@@ -722,26 +730,14 @@ export function reskinMenu(given: unknown)
         }
         st = made
         menus[menu] = made
-        -- (lasting: the game sets a menu frame's OnHide again each time it
-        -- opens one; the look stayed on its shared frames)
-        lastingHookScript(menu, "OnHide", function()
-            if made.active then
+        -- the game's look back when it closes: SuuUI's panel, its child, hides
+        -- with it (no hooks on the game's shared menu frames: they made its
+        -- menus SuuUI's, and a protected choice was refused)
+        panel:SetScript("OnHide", function()
+            if made.active and not menu:IsShown() then
                 restoreMenu(made)
             end
         end)
-        -- a choice that refreshes the menu (a sort order) sets its rows up
-        -- again: marked again
-        if tbl.field(menu, "ReinitializeAll") then
-            hook(menu :: unknown, "ReinitializeAll", function()
-                if made.active then
-                    after(0, function()
-                        if made.active and menu:IsShown() then
-                            reskinMenu(menu)
-                        end
-                    end)
-                end
-            end)
-        end
     end
     -- a second pass (the rows came later) starts from the game's look again
     if st.active then
@@ -1765,9 +1761,12 @@ export function reskinPopup(given: unknown)
         local made: PopupState = { undo = {}, skins = { [dialog] = panel } }
         st = made
         popups[dialog] = made
-        -- (lasting: the game sets a popup's OnHide while it waits on events)
-        lastingHookScript(dialog, "OnHide", function()
-            if made.active then
+        -- the game's look back when it closes: SuuUI's panel, its child, hides
+        -- with it (no hooks on the game's shared popup frames: hooks on its
+        -- shared frames made its code SuuUI's, and a protected choice was
+        -- refused, found in game)
+        panel:SetScript("OnHide", function()
+            if made.active and not dialog:IsShown() then
                 restorePopup(made)
             end
         end)
