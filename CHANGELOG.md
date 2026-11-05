@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Loot rolls: a roll's card now goes a moment after the roll's time is up even when the game doesn't say the roll is over (it stayed after you'd rolled).
+- Loot rolls: a roll's card stays after you've chosen, showing the others' choices, and goes as soon as the roll is decided (the winner, everyone passed, or all of a loot's rolls done), with its result. Choosing made it stay for good.
 
 ## 0.6.8 (2026-11-05)
 

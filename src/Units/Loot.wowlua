@@ -132,6 +132,8 @@ export type Roll = {
     choice?: ChoiceKey,
     endedAt?: number,
     reported?: boolean,
+    -- the loot it's from (START_LOOT_ROLL's): LOOT_ROLLS_COMPLETE ends its rolls
+    lootHandle?: number,
 }
 
 -- The game's loot line formats as patterns: the pattern and the order of
@@ -688,12 +690,17 @@ class LootModule extends Module<typeof(DEFAULTS)>
             self:ShowRoll(roll)
             return
         end
-        RollOnLoot(roll.id, choice.type)
+        -- (chosen first: the game sends CANCEL_LOOT_ROLL from inside
+        -- RollOnLoot, its own roll frame done with you; found in game, the card
+        -- ended there and this redraw made it again, for good)
         roll.choice = choice.key
-        self:ShowRoll(roll)
+        RollOnLoot(roll.id, choice.type)
+        if self.rolls[roll.id] == roll then
+            self:ShowRoll(roll)
+        end
     end
 
-    function StartRoll(rollID: unknown, rollTime: unknown)
+    function StartRoll(rollID: unknown, rollTime: unknown, lootHandle: unknown)
         if not secret.readable(rollID) or type(rollID) ~= "number" then
             return
         end
@@ -736,8 +743,11 @@ class LootModule extends Module<typeof(DEFAULTS)>
             end,
         }
         roll.can.disenchant = roll.canDisenchant == true
+        roll.lootHandle = secret.asNumber(lootHandle)
         self.rolls[rollID] = roll
         self:ShowRoll(roll)
+        -- (the game says it's over: LOOT_ROLLS_COMPLETE, the loot history's
+        -- drop decided, the result line; this only if none of them comes)
         -- its time up and still open (no word from the game, no result line):
         -- gone a moment later (found in game: the card stayed at 0). Timed on
         -- SuuUI's own clock from the roll's start: once you've rolled the game
@@ -756,6 +766,49 @@ class LootModule extends Module<typeof(DEFAULTS)>
             self:EndRoll(rollID)
         end
         after(duration + ROLL_GRACE, overdue)
+    end
+
+    -- Every open roll of a loot that's done (LOOT_ROLLS_COMPLETE).
+    function RollsComplete(lootHandle: unknown)
+        local handle = secret.asNumber(lootHandle)
+        if not handle then
+            return
+        end
+        for id, roll in pairs(self.rolls) do
+            if roll.lootHandle == handle then
+                self:EndRoll(id)
+            end
+        end
+    end
+
+    -- One item's drop in the loot history: decided (a winner, or everyone
+    -- passed), its open roll ends, told if the loot line hasn't yet.
+    function DropDecided(encounterID: unknown, lootListKey: unknown)
+        local enc, key = secret.asNumber(encounterID), secret.asNumber(lootListKey)
+        if not (enc and key and C_LootHistory and C_LootHistory.GetSortedInfoForDrop) then
+            return
+        end
+        local ok, info = pcall(C_LootHistory.GetSortedInfoForDrop, enc, key)
+        if not ok or type(info) ~= "table" or not secret.readable(info) then
+            return
+        end
+        local drop = info :: { itemHyperlink?: unknown, winner?: { playerName?: unknown }, allPassed?: unknown }
+        local winner = drop.winner
+        local passed = drop.allPassed == true
+        if not (winner or passed) then
+            return
+        end
+        local roll = self:RollFor(secret.asString(drop.itemHyperlink))
+        if not roll then
+            return
+        end
+        if not roll.reported then
+            roll.reported = true
+            self:Result(roll, winner and secret.asString(winner.playerName) or nil)
+        end
+        if self.rolls[roll.id] == roll then
+            self:EndRoll(roll.id)
+        end
     end
 
     function EndRoll(rollID: number)
@@ -1127,13 +1180,29 @@ class LootModule extends Module<typeof(DEFAULTS)>
         end
         self.rollsWired = true
         self:HideBlizzardRolls()
-        self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime)
-            self:StartRoll(rollID, rollTime)
+        self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime, lootHandle)
+            self:StartRoll(rollID, rollTime, lootHandle)
         end)
+        -- the game says rolls are over: every roll of that loot done; one
+        -- item's drop decided in the loot history (once you've rolled no
+        -- CANCEL_LOOT_ROLL comes: found in game)
+        self:OnGameEvent("LOOT_ROLLS_COMPLETE", function(_, lootHandle)
+            self:RollsComplete(lootHandle)
+        end)
+        self:OnGameEvent("LOOT_HISTORY_UPDATE_DROP", function(_, encounterID, lootListKey)
+            self:DropDecided(encounterID, lootListKey)
+        end)
+        -- the game done with you on a roll: ended unless you rolled on it (then
+        -- it goes once it's decided: you see the others' choices till then)
         self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID)
-            if secret.readable(rollID) then
-                self:EndRoll(rollID)
+            if not secret.readable(rollID) then
+                return
             end
+            local roll = self.rolls[rollID]
+            if roll and roll.choice then
+                return
+            end
+            self:EndRoll(rollID)
         end)
         self:OnGameEvent("CANCEL_ALL_LOOT_ROLLS", function()
             for id in pairs(self.rolls) do

@@ -359,9 +359,11 @@ local function lines()
     expect(assert(M.rolls[7]).votes.pass[1] ~= "You").toBe(true)
     M:OnLootLine(line(LOOT_ROLL_ROLLED_NEED, 12, 87, ITEM_LINK, "Tamsin"))
     M:OnLootLine(line(LOOT_ROLL_ROLLED_GREED, 12, 42, ITEM_LINK, me))
+    -- (you rolled: the game done with you, the card stays till it's decided)
     mock.fireEvent("CANCEL_LOOT_ROLL", 7)
-    expect(notes["suu:roll:7"]).toBe(nil)
+    expect(notes["suu:roll:7"] ~= nil).toBe(true)
     M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(notes["suu:roll:7"]).toBe(nil)
     local r = assert(notes["suu:rollresult:7"])
     expect(r.title).toBe("Tamsin won Dusk Mantle")
     expect(r.body).toBe("Need 87 · you rolled Greed 42")
@@ -399,6 +401,50 @@ local function decided()
     M:StartRoll(9, 10000)
     mock.advanceTime(15.5)
     expect(notes["suu:roll:9"]).toBe(nil)
+end
+
+@test("your choice: the game's CANCEL_LOOT_ROLL from inside RollOnLoot keeps the card till the roll is decided")
+local function chooseCancels()
+    -- (found in game: the card ended there and the redraw made it again, for good)
+    fakeRoll()
+    M:StartRoll(31, 60000)
+    mock.stub(_G, "RollOnLoot", function(id: number, _: number)
+        mock.fireEvent("CANCEL_LOOT_ROLL", id)
+    end)
+    assert(action(card(31), "Greed")).onClick()
+    expect(M.rolls[31] ~= nil).toBe(true)
+    expect(assert(action(card(31), "Greed")).pressed).toBe(true)
+    -- decided: gone, for good
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(notes["suu:roll:31"]).toBe(nil)
+    expect(M.rolls[31]).toBe(nil)
+    -- not rolled on: the game's CANCEL_LOOT_ROLL ends it
+    M:StartRoll(32, 60000)
+    mock.fireEvent("CANCEL_LOOT_ROLL", 32)
+    expect(notes["suu:roll:32"]).toBe(nil)
+end
+
+@test("the game says rolls are over: every roll of a loot done; one item's drop decided in the loot history")
+local function gameSaysOver()
+    fakeRoll()
+    mock.fireEvent("START_LOOT_ROLL", 21, 60000, 7)
+    mock.fireEvent("START_LOOT_ROLL", 22, 60000, 7)
+    mock.fireEvent("START_LOOT_ROLL", 23, 60000, 8)
+    mock.fireEvent("LOOT_ROLLS_COMPLETE", 7)
+    expect(notes["suu:roll:21"]).toBe(nil)
+    expect(notes["suu:roll:22"]).toBe(nil)
+    expect(notes["suu:roll:23"] ~= nil).toBe(true)
+    -- one item's drop: still rolling, then won
+    local drop: { [string]: unknown } = { itemHyperlink = ITEM_LINK, allPassed = false }
+    mock.fake("C_LootHistory.GetSortedInfoForDrop", function(): unknown
+        return drop
+    end)
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 1, 5)
+    expect(notes["suu:roll:23"] ~= nil).toBe(true)
+    drop.winner = { playerName = "Tamsin" }
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 1, 5)
+    expect(notes["suu:roll:23"]).toBe(nil)
+    expect(assert(notes["suu:rollresult:23"]).title).toBe("Tamsin won Dusk Mantle")
 end
 
 @test("you won; everyone passed; a line about an item no roll is for")
