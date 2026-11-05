@@ -484,6 +484,58 @@ local function logAndSettings()
     expect(M.settingsCover).never.toBeShown()
 end
 
+@test(
+    "Settings: the game's guild control shown only by a secure click, moved away on another page; in a fight a note, after it a notification to open it"
+)
+local function settingsSecure()
+    joinGuild()
+    open()
+    local ui = assert(frames.find("GuildControlUI"))
+    if ui:IsShown() then
+        ui:Hide()
+    end
+    -- the page: never shown from SuuUI's code (the game refused its rank
+    -- changes after, found in game), a note until it is
+    M:GuildSettings()
+    expect(ui:IsShown()).toBe(false)
+    expect(assert(M.settingsNote)).toBeShown()
+    -- the Settings tab's secure button clicks the secure handler that shows it
+    local tab = CreateFrame("Button", nil, UIParent)
+    tab:SetSize(60, 20)
+    tab:SetPoint("CENTER")
+    M:SettingsHover(tab)
+    local secureOver = assert(M.settingsOver)
+    expect(secureOver.button).toBeShown()
+    expect(secureOver.button:GetAttribute("clickbutton1")).toBe(M:SettingsToggler(ui))
+    M:ShowOwn(nil)
+    mock.click(secureOver.button)
+    expect(ui:IsShown()).toBe(true)
+    expect(M.ownPage).toBe("settings")
+    expect(assert(M.settingsNote)).never.toBeShown()
+    -- another page: moved off the screen, not hidden
+    M:ShowOwn(nil)
+    expect(ui:IsShown()).toBe(true)
+    expect(assert(ui:GetTop()) < 0).toBe(true)
+    -- in a fight, hidden by the game: the note; after it, a notification
+    -- whose Open is a secure click on the same handler
+    ui:Hide()
+    mock.player:enterCombat()
+    M:ShowOwn("settings")
+    expect(assert(M.settingsNote):GetText()).toBe("Guild settings open after combat")
+    expect(ui:IsShown()).toBe(false)
+    local posted: { [string]: unknown }? = nil
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown }): string?
+        posted = def
+        return "suu:guildsettings"
+    end)
+    mock.player:leaveCombat()
+    local def = assert(posted)
+    local action = assert((def.actions :: { { click: () -> Frame? } })[1])
+    expect(action.click()).toBe(M:SettingsToggler(ui))
+    M:ShowOwn(nil)
+    tab:Hide()
+end
+
 @test("the picker: Join or create when the game has no such entry; another club leaves SuuUI's pages")
 local function picker()
     joinGuild()

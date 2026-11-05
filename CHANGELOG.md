@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Guild settings: changing a rank's permissions is no longer refused ("Forbidden: GuildControlSetRank()"). The Settings tab now opens the game's guild control the game's own way; in a fight it opens after it, from a notification's button.
+
+### New
+
+- Plugins: `UI.GuildControl` takes the frame the window goes onto and can move it away instead of hiding it (`SetAway`; API 0.20).
+
 ## 0.6.3 (2026-11-05)
 
 ### New

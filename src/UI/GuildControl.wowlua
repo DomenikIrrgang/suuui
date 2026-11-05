@@ -7,8 +7,16 @@
 -- headings, rules, cards and captions. Frame names from
 -- /suu probe social guildui (2026-10-14).
 --
---   local c = guildControl(host, GuildControlUI)  (SuuUI.UI.GuildControl)
+--   local c = guildControl(host, GuildControlUI[, parent])  (SuuUI.UI.GuildControl)
 --   c:Layout()   -- again, whenever the game may have redrawn a page
+--   c:SetAway(on) -- (0.20) off the screen while another page shows
+--
+-- The window is shown and hidden only by the game's own code (a secure
+-- click): shown or hidden from SuuUI's, its OnShow wrote its rank state as
+-- SuuUI's, and a rank picked after was refused ("Forbidden:
+-- GuildControlSetRank()", found in game). So it goes onto `parent` (the
+-- Communities window: it closes with it), never onto `host`, and is moved
+-- away instead of hidden.
 --
 -- Head row (30px, a gilt-faint rule under it): "Page" and the page dropdown;
 -- on the permission pages "Rank" and its dropdown; the page's extra at the
@@ -391,6 +399,7 @@ local cardHooked: { [CheckButton]: true } = setmetatable({}, { __mode = "k" })
 -- parts are the game's: read by name and key, checked to be what they should).
 export class GuildControl
     host: Frame
+    away: boolean = false
     ui: Frame
     head: Frame
     band: Frame
@@ -403,10 +412,13 @@ export class GuildControl
     linkedCard: LinkedCard? = nil
     discordDeco: DiscordDeco? = nil
 
-    constructor(host: Frame, ui: Frame)
+    constructor(host: Frame, ui: Frame, parent: Frame?)
         self.host = host
         self.ui = ui
-        ui:SetParent(host)
+        -- (while it's hidden: re-parented shown, its OnShow would run here)
+        if not ui:IsShown() then
+            ui:SetParent(parent or host)
+        end
         reskin.markOwn(ui)
         -- the window's own frame: away; its title and bar give way to the head row
         hideArt(ui)
@@ -481,6 +493,16 @@ export class GuildControl
         )
     end
 
+    -- (0.20) Off the screen while another page shows (instead of hidden:
+    -- hidden from SuuUI's code, the game refused its rank changes after).
+    function SetAway(on: boolean)
+        if self.away == on then
+            return
+        end
+        self.away = on
+        self:Layout()
+    end
+
     -- the dropdowns of the head row: Page, then Rank on the pages that have one
     function HeadRow(rankDropdown: Frame?)
         local ui = self.ui
@@ -518,6 +540,11 @@ export class GuildControl
         end
         self.busy = true
         ui:ClearAllPoints()
+        if self.away then
+            ui:SetPoint("TOPRIGHT", UIParent, "BOTTOMLEFT", -64, -64)
+            self.busy = false
+            return
+        end
         ui:SetAllPoints(self.host)
         for _, key in ipairs(PAGES) do
             local page = frames.asFrame(tbl.field(ui, key))
@@ -1086,6 +1113,6 @@ export class GuildControl
     end
 end
 
-export function guildControl(host: Frame, ui: Frame): GuildControl
-    return GuildControl.new(host, ui)
+export function guildControl(host: Frame, ui: Frame, parent: Frame?): GuildControl
+    return GuildControl.new(host, ui, parent)
 end

@@ -199,6 +199,11 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     selected: string? = nil
     -- SuuUI's own page over the window: "log", "settings", or nil
     ownPage: string? = nil
+    -- the guild settings: shown by the game's own code (SettingsToggler)
+    settingsToggler: Button? = nil
+    settingsOver: Overlay? = nil
+    settingsNote: Text? = nil
+    settingsPending: boolean = false
     onChat: boolean = false
     renderQueued: boolean = false
     placingList: boolean = false
@@ -741,13 +746,63 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         self:ShowOwn("settings")
     end
 
+    -- The window is shown only by the game's own code: a secure handler whose
+    -- click shows it (the Settings tab's secure button over it, or the note
+    -- after a fight clicks it). Loaded or shown from SuuUI's code, its rank
+    -- state was written as SuuUI's, and a rank picked was refused after
+    -- ("Forbidden: GuildControlSetRank()", found in game right after a
+    -- reload). It comes with the Communities window (that needs it), and
+    -- closes with it; on another page it is moved away, not hidden.
+    function SettingsToggler(ui: Frame): Button
+        local made = self.settingsToggler
+        if made then
+            return made
+        end
+        local b = CreateFrame("Button", nil, UIParent, "SecureHandlerClickTemplate")
+        local refs = b :: Button & { SetFrameRef: (self: Button, id: string, frame: Region) -> () }
+        refs:SetFrameRef("ui", ui)
+        b:SetAttribute("_onclick", [=[
+            local ui = self:GetFrameRef("ui")
+            if ui and not ui:IsShown() then
+                ui:Show()
+            end
+        ]=])
+        self.settingsToggler = b
+        return b
+    end
+
+    -- The mouse on the Settings tab, out of combat: a secure button over it
+    -- that clicks the toggler, then shows the page.
+    function SettingsHover(tab: Button)
+        local ui = frames.find("GuildControlUI")
+        if InCombatLockdown() or not ui then
+            return
+        end
+        local over = self.settingsOver
+        if not over then
+            over = secure.overlay(tab)
+            local o = over
+            o.set("type1", "click")
+            o.button:HookScript("PostClick", function(_: Button, _: string, down: boolean?)
+                if not down then
+                    self:ShowOwn("settings")
+                end
+            end)
+            o.button:HookScript("OnLeave", function()
+                if o.button:IsShown() then
+                    o.hide()
+                end
+            end)
+            self.settingsOver = over
+        end
+        over.set("clickbutton1", self:SettingsToggler(ui))
+        over.show(tab)
+    end
+
     function HostSettings(on: boolean)
         local f = self.frame
         if not f then
             return
-        end
-        if on and not frames.find("GuildControlUI") then
-            try(C_AddOns.LoadAddOn, "Blizzard_GuildControlUI")
         end
         local ui = frames.find("GuildControlUI")
         -- a cover over Blizzard's own page underneath
@@ -769,15 +824,74 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         if not ui then
             return
         end
-        if on then
-            ui:SetFrameLevel(cover:GetFrameLevel() + 5)
-            local hosted = self.hostedSettings or UI.GuildControl(cover, ui)
+        local hosted = self.hostedSettings
+        if on and not hosted then
+            hosted = UI.GuildControl(cover, ui, f)
             self.hostedSettings = hosted
-            ui:Show()
-            hosted:Layout()
-        elseif self.hostedSettings and ui:IsShown() then
-            ui:Hide()
         end
+        if not hosted then
+            return
+        end
+        hosted:SetAway(not on)
+        -- (not shown yet: in a fight the secure button can't come; the note
+        -- after it opens them)
+        local waiting = on and not ui:IsShown()
+        local note = self.settingsNote
+        if waiting and not note then
+            note = UI.Text(cover, "body", "ink-muted")
+            note:SetPoint("CENTER")
+            self.settingsNote = note
+        end
+        if note then
+            note:SetValue(InCombatLockdown() and "Guild settings open after combat" or "Click Settings to open them")
+            note:SetShown(waiting)
+        end
+        if waiting and InCombatLockdown() then
+            self.settingsPending = true
+        end
+        if on and ui:IsShown() then
+            ui:SetFrameStrata(cover:GetFrameStrata())
+            ui:SetFrameLevel(cover:GetFrameLevel() + 5)
+            hosted:Layout()
+        end
+    end
+
+    -- After a fight: the note with a secure Open button (its click is yours,
+    -- the game's own show; asked 2026-11-05).
+    function SettingsAfterCombat()
+        if not self.settingsPending then
+            return
+        end
+        self.settingsPending = false
+        local ui = frames.find("GuildControlUI")
+        if not ui or ui:IsShown() then
+            return
+        end
+        local toggler = self:SettingsToggler(ui)
+        SuuUI.Notify({
+            id = "suu:guildsettings",
+            kind = "sticky",
+            category = "Guild",
+            title = "Guild settings",
+            body = "The fight is over: open them now.",
+            icon = { glyph = "people" },
+            actions = {
+                {
+                    label = "Open guild settings",
+                    variant = "primary",
+                    click = function(): Frame?
+                        return toggler
+                    end,
+                    skipClick = function(): boolean
+                        return ui:IsShown()
+                    end,
+                    onClick = function()
+                        self:ShowOwn("settings")
+                        SuuUI.DismissNotification("suu:guildsettings")
+                    end,
+                },
+            },
+        })
     end
 
     -- Inviting to the guild is protected: the game takes it only from a click
@@ -1816,6 +1930,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self:QueueRender()
             self:RenderInfo()
+            self:SettingsAfterCombat()
         end)
         -- the details' "No note" colour code and their rows' heights, the
         -- banner's height: again with the theme
