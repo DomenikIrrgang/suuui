@@ -15,6 +15,7 @@ import type MicroMenu, MicroMenuItem from "/UI/MicroMenu"
 import type ToggleChips, ChipOption from "/UI/Pickers"
 import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 
@@ -410,6 +411,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         self:UpdateAlerts()
         self:UpdateBagCount()
         self:UpdateDurability()
+        self:UpdateGifts()
     end
 
     function UpdateActive()
@@ -494,6 +496,21 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
 
     -- The bags' free slots on the Bags button (asked 2026-10-18): the backpack
     -- and bags, not the reagent bag; ember when none are left.
+    -- Gifts waiting in the collections (the collections module's count; nil:
+    -- asked of it), on its button.
+    function UpdateGifts(count: number?)
+        local menu = self.menu
+        if not menu then
+            return
+        end
+        local n = count
+        if n == nil then
+            local c = SuuUI.GetModule("collections")
+            n = c and c:IsEnabled() and secret.asNumber(errors.tryMethod(c, "GiftCount")) or 0
+        end
+        menu:SetCount("collections", n > 0 and tostring(n) or nil, "gilt-text")
+    end
+
     function UpdateBagCount()
         local menu = self.menu
         if not (menu and C_Container) then
@@ -592,6 +609,10 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         end)
         self:On("SUUUI_DURABILITY_CHANGED", function()
             self:UpdateDurability()
+        end)
+        -- gifts waiting in the collections: a count on its button
+        self:On("SUUUI_GIFTS_CHANGED", function(_, count)
+            self:UpdateGifts(count)
         end)
         self:On("SUUUI_SERVICE_CHANGED", function(_, name)
             if name == "durability" then
