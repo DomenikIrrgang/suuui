@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Campfires on the world map go out: a fire you passed shows for 10 minutes after you last passed it, then it's gone.
+
 ## 0.6.4 (2026-11-05)
 
 ### Fixed

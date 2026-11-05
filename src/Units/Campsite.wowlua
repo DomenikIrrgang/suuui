@@ -11,7 +11,8 @@
 -- Camp Benefits wins over Welcoming Campfire (it comes back every minute
 -- while you stay seated). Combat alerts outrank these (info tone), and
 -- combat ending clears them. Fires you pass (not the ones you light: those
--- go out) are remembered per character for the world map (3.5).
+-- go out) are remembered per character for the world map (3.5), for 10
+-- minutes after you last passed them (they go out too).
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -32,6 +33,9 @@ local NEARBY, WELCOMING, BENEFITS = 1283391, 1229739, 1229741
 local LIGHT_FIRE = 1307227 -- Basic Campfire (the kit's spell)
 local BRIEF = 6 -- seconds a "nearby" or "benefits" alert stays
 local MAX_FIRES = 100
+-- a fire you passed stays on the map this long after you last saw it (fires
+-- go out; asked 2026-11-05: 10 minutes)
+local FIRE_LIFE = 10 * 60
 
 local function clock(s: number): string
     s = math.max(0, math.floor(s + 0.5))
@@ -132,6 +136,19 @@ export function firesOf(data: { [string]: unknown }): Fire[]
     local made: Fire[] = {}
     data.fires = made
     return made
+end
+
+-- The fires still burning (seen in the last FIRE_LIFE seconds); the older
+-- ones are dropped from the saved list.
+export function liveFires(data: { [string]: unknown }): Fire[]
+    local fires = firesOf(data)
+    local now = time()
+    for i = #fires, 1, -1 do
+        if now - (fires[i].seen or 0) > FIRE_LIFE then
+            table.remove(fires, i)
+        end
+    end
+    return fires
 end
 
 --------------------------------------------------------------------------------
@@ -325,7 +342,7 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         if not (not issecretvalue(x) and not issecretvalue(y) and x and y) then
             return
         end
-        local fires = firesOf(self:CharData())
+        local fires = liveFires(self:CharData())
         for _, f in ipairs(fires) do
             if f.map == map and math.abs(f.x - x) < 0.01 and math.abs(f.y - y) < 0.01 then
                 f.seen = time()
@@ -369,7 +386,7 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         self:ProvideService(CAMPFIRES, {
             Fires = function(): FoundFire[]
                 local out: FoundFire[] = {}
-                for i, f in ipairs(firesOf(self:CharData())) do
+                for i, f in ipairs(liveFires(self:CharData())) do
                     out[i] = { map = f.map, x = f.x, y = f.y }
                 end
                 return out
