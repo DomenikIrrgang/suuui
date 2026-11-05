@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Loot rolls: a roll's card now goes a moment after the roll's time is up even when the game doesn't say the roll is over (it stayed after you'd rolled).
+
 ## 0.6.8 (2026-11-05)
 
 ### New
