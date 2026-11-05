@@ -31,6 +31,7 @@ import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
 import * as events from "wowlua:events"
+import * as secure from "wowlua:secure"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -754,6 +755,8 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
     -- the group finder's gear, the world map's status line
     gear: Button? = nil
     status: Frame? = nil
+    -- the secure button over the map's title (its way up)
+    upOver: secure.Overlay? = nil
     -- the quest log's headers' font (label, in ink)
     questFont: Font? = nil
     -- SuuUI's stand-ins for the collections the game hides, by their ID
@@ -1628,15 +1631,53 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         up:SetPoint("TOPLEFT", title, "TOPLEFT", -2, 2)
         up:SetPoint("BOTTOMRIGHT", title, "BOTTOMRIGHT", 2, -2)
         up:SetFrameLevel(chrome.head:GetFrameLevel() + 2)
-        up:SetScript("OnClick", function()
-            local id = shownMap()
-            local info = id and C_Map.GetMapInfo(id)
-            local parent = info and info.parentMapID
-            if parent and parent > 0 then
-                f:SetMapID(parent)
+        -- the way up: a secure click on the game's breadcrumb bar's parent
+        -- level (its click sets the map, as the game's own), through a secure
+        -- button that comes over the title while the mouse is on it, out of
+        -- combat (asked 2026-11-05). Set from SuuUI's code, the map's pins were
+        -- taken by it, and the map opened in combat was refused later ("Blocked
+        -- in combat: SetPassThroughButtons", found in game). In combat the
+        -- title does nothing; a right-click on the map still goes up.
+        local function parentLevel(): Frame?
+            local nb = part(f, "NavBar")
+            local list = nb and tbl.list(field(nb, "navList"))
+            return list and #list > 1 and frames.asFrame(list[#list - 1]) or nil
+        end
+        local function upOff()
+            local over = self.upOver
+            if over and over.button:IsShown() then
+                over.hide()
             end
-        end)
+        end
+        local function upOn()
+            local target = parentLevel()
+            if InCombatLockdown() or not target then
+                return
+            end
+            local over = self.upOver
+            if over and over.button:IsShown() then
+                over.set("clickbutton1", target)
+                return
+            end
+            if not over then
+                local made = secure.overlay(up)
+                local holder = CreateFrame("Frame", nil, UIParent)
+                secure.visibility(holder, "[combat] hide; show")
+                made.button:SetParent(holder)
+                made.set("type1", "click")
+                made.button:HookScript("OnLeave", upOff)
+                -- the map changed under it: the new parent level next time
+                made.button:HookScript("PostClick", function()
+                    after(0, upOff)
+                end)
+                self.upOver = made
+                over = made
+            end
+            over.set("clickbutton1", target)
+            over.show()
+        end
         up:SetScript("OnEnter", function(self2: Button)
+            upOn()
             local id = shownMap()
             local info = id and C_Map.GetMapInfo(id)
             local parent = info and info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
@@ -1649,6 +1690,7 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             UI.HideTooltip()
             title:SetColor("gilt-text")
         end)
+        f:HookScript("OnHide", upOff)
         events.onRegistry(
             "MapCanvas.MapSet",
             function(mapID: unknown)

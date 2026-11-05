@@ -38,6 +38,9 @@ import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
 import * as errors from "wowlua:errors"
 import * as secret from "wowlua:secret"
+import * as secure from "wowlua:secure"
+import type Overlay from "wowlua:secure"
+import * as frames from "wowlua:frames"
 
 -- A secure handler frame (SecureHandler*Template): SetFrameRef from its template.
 type FrameRefs = { SetFrameRef: (self: Frame, id: string, frame: Region) -> () }
@@ -603,6 +606,9 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     quests: Quest[]? = nil
     refreshQueued: boolean? = nil
     waitingItems: boolean? = nil
+    -- the secure button over the hovered quest (QuestLogOn)
+    logOver: Overlay? = nil
+    logRow: QuestRow? = nil
 
     constructor()
         super({
@@ -746,9 +752,84 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     -- Clicks on a quest
     ----------------------------------------------------------------------------
 
+    -- The quest chosen: selected in the quest log and focused (super-tracked).
+    function SelectQuest(questID: number)
+        if C_QuestLog.SetSelectedQuest then
+            pcall(C_QuestLog.SetSelectedQuest, questID)
+        end
+        if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
+            pcall(C_SuperTrack.SetSuperTrackedQuestID, questID)
+        end
+    end
+
+    -- A left click on a quest opens the map with its quest log, the quest
+    -- selected and focused: through a secure button over the hovered quest
+    -- that clicks the game's Quest log button (asked 2026-11-05). Opened from
+    -- SuuUI's code (QuestMapFrame_OpenToQuestDetails, before), the map's pins
+    -- were taken by it, and the map opened in combat was refused later
+    -- ("Blocked in combat: SetPassThroughButtons", found in game). Out of
+    -- combat only (it can't move in combat): there the click focuses only.
+    -- With the quest log already open it selects only (the button would
+    -- close it). Right clicks and the hover go on to the row.
+    function QuestLogOn(row: QuestRow)
+        local q = row.quest
+        local target = frames.find("QuestLogMicroButton")
+        if InCombatLockdown() or not q or q.recipe or not target then
+            return
+        end
+        local over = self.logOver
+        if not over then
+            over = secure.overlay(row)
+            local b = over.button
+            -- hidden in combat by the client itself, also if it was showing
+            local holder = CreateFrame("Frame", nil, UIParent)
+            secure.visibility(holder, "[combat] hide; show")
+            b:SetParent(holder)
+            b:RegisterForClicks("AnyDown", "AnyUp")
+            over.set("type1", "click")
+            over.set("clickbutton1", target)
+            b:SetScript("PreClick", function(me: Button, button: string)
+                local quest = self.logRow and self.logRow.quest
+                if button ~= "LeftButton" or not quest then
+                    return
+                end
+                self:SelectQuest(quest.questID)
+                local log = frames.find("QuestMapFrame")
+                if log and log:IsVisible() and not InCombatLockdown() then
+                    me:SetAttribute("type1", nil)
+                end
+            end)
+            b:SetScript("PostClick", function(me: Button, button: string, down: boolean?)
+                if not InCombatLockdown() then
+                    me:SetAttribute("type1", "click")
+                end
+                local r = self.logRow
+                local fn = r and r:GetScript("OnClick")
+                if button ~= "LeftButton" and not down and r and fn then
+                    fn(r, button, false)
+                end
+            end)
+            b:HookScript("OnLeave", function()
+                self:QuestLogOff()
+            end)
+            self.logOver = over
+        end
+        self.logRow = row
+        over.show(row)
+    end
+
+    function QuestLogOff()
+        local over = self.logOver
+        if over and over.button:IsShown() then
+            over.hide()
+        end
+    end
+
     function QuestClick(questID: number, button: string, row: QuestRow)
         if button == "LeftButton" then
-            errors.try(QuestMapFrame_OpenToQuestDetails, questID)
+            -- (the secure button over the quest opens the map; without it, in
+            -- combat, the click focuses only)
+            self:SelectQuest(questID)
             return
         end
         -- SuuUI's menu, in the tooltip's look (asked for in game)
@@ -772,8 +853,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                     pcall(QuestLogPushQuest)
                 end)
             end
-            root:CreateButton("Open in quest log", function()
-                errors.try(QuestMapFrame_OpenToQuestDetails, questID)
+            -- (selects only: opened from SuuUI's menu, the map's pins were
+            -- taken by it; a left click on the quest opens it, asked 2026-11-05)
+            root:CreateButton("Select in quest log", function()
+                self:SelectQuest(questID)
             end)
             root:CreateButton("Stop tracking", function()
                 pcall(C_QuestLog.RemoveQuestWatch, questID)
@@ -859,6 +942,8 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
 
     -- The mouse onto a tracked recipe: the secure opener over it (out of combat).
     function RowEnter(row: QuestRow)
+        -- a quest: the secure button that opens the quest log
+        self:QuestLogOn(row)
         local quest = row.quest
         if not (quest and quest.recipe) or InCombatLockdown() then
             return
@@ -1161,8 +1246,10 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
                 opener:Hide()
             end
             tracker:SetScrollLocked(self.itemsShown > 0)
+            self:QuestLogOff()
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:QuestLogOff()
             tracker:SetScrollLocked(false)
             if self.pendingSecure then
                 self:ApplySecure()
@@ -1175,6 +1262,7 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
+        self:QuestLogOff()
         local parts = self.frame
         if parts then
             parts:Hide()

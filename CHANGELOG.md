@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Plugins: a notification's action can click one of the game's buttons the secure way (`click`, `skipClick`; API 0.20).
+
+### Changed
+
+- Clicking a quest in the objective tracker opens the world map with its quest log, that quest selected and focused (it opened the quest's page before); in combat the click focuses the quest. Its menu's "Open in quest log" is now "Select in quest log".
+- Clicking a group of pins on the world map no longer zooms in to them.
+- The world map's title goes up a level outside combat; in combat, right-click the map.
+
+### Fixed
+
+- Opening the world map in combat no longer fails with "Interface action failed because of an AddOn" (SuuUI blocked from `SetPassThroughButtons`). SuuUI's World map button, the map's filters, the Damaged gear note's Show repairers and the objective tracker now open and redraw the map the game's own way.
+- A notification's button no longer runs its action twice per click.
+
 ## 0.6.2 (2026-11-05)
 
 ### Fixed

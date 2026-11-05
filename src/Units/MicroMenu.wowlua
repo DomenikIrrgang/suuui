@@ -16,6 +16,7 @@ import type ToggleChips, ChipOption from "/UI/Pickers"
 import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -56,6 +57,16 @@ type Item = {
     onClick?: () -> (),
     open?: () -> boolean,
 }
+
+-- The game's frame an item clicks: a global's name, or a dotted path of
+-- keys from one ("MinimapCluster.ZoneTextButton").
+local function blizzardFrame(path: string): Frame?
+    local v: unknown = _G
+    for part in path:gmatch("[^%.]+") do
+        v = tbl.field(v, part)
+    end
+    return frames.asFrame(v)
+end
 
 -- The Talents button when SuuUI's Talents window is on.
 local TALENTS_OWN: Item = {
@@ -100,9 +111,11 @@ local ITEMS: Item[] = {
         key = "worldmap",
         glyph = "map",
         label = "World map",
-        onClick = function()
-            ToggleWorldMap()
-        end,
+        -- the minimap's zone button: its own click is ToggleWorldMap, so the
+        -- map opens as from the M key. Opened from SuuUI's code the map's
+        -- pins were taken by it, and opening the map in combat was refused
+        -- later ("Blocked in combat: SetPassThroughButtons", found in game).
+        click = "MinimapCluster.ZoneTextButton",
         bind = "TOGGLEWORLDMAP",
         open = function()
             return WorldMapFrame and WorldMapFrame:IsShown()
@@ -344,7 +357,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
                 end
             end
             local click = item.click
-            if chosen[item.key] and (not click or _G[click]) then
+            if chosen[item.key] and (not click or blizzardFrame(click)) then
                 out[#out + 1] = item
             end
         end

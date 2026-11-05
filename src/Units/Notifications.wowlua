@@ -216,20 +216,25 @@ local function worstDurability(): number?
 end
 
 -- The world map, for its Repair pins (the World map pins module's filter:
--- Map filters › Services › Repair).
+-- Map filters › Services › Repair). The map opens through a secure click
+-- on the minimap's zone button (its click is ToggleWorldMap, as the M key):
+-- opened from SuuUI's code, the map's pins were taken by it and the map
+-- opened in combat was refused later (found in game).
 local function showRepairers()
-    -- SuuUI's world map with its Repair pins on; else the game's map
     local map = SuuUI.UseService(WORLD_MAP)
     local openWith = map and map.OpenWith
     if openWith then
         openWith("services", "repair")
-        return
     end
+end
+
+local function zoneButton(): Frame?
+    return frames.asFrame(tbl.field(_G, "MinimapCluster", "ZoneTextButton"))
+end
+
+local function mapShown(): boolean
     local shown = frames.find("WorldMapFrame")
-    if shown and shown:IsShown() then
-        return
-    end
-    ToggleWorldMap()
+    return shown ~= nil and shown:IsShown()
 end
 
 -- "Legs 15% · Chest 18%": the worn pieces that aren't broken, lowest first.
@@ -828,12 +833,16 @@ local WINDOWS: Window[] = {
 -- A note's secure macro button
 --------------------------------------------------------------------------------
 
--- A note's action with `macro` (0.13): a secure button over its button
--- that runs the macro (SecureActions); hovering it hovers the button under
--- it, and the action's onClick runs after the macro.
+-- A note's action with `macro` (0.13) or `click` (0.20): a secure button
+-- over its button that runs the macro or clicks the game's button
+-- (SecureActions); hovering it hovers the button under it, and the action's
+-- onClick runs after it. `skip` says when the secure action is left out
+-- (the map already open: its button would close it).
 class MacroButton extends Button
     over: Button? = nil
     after: (() -> ())? = nil
+    kind: string? = nil
+    skip: (() -> boolean)? = nil
 
     constructor()
         super(nil, UIParent, "SecureActionButtonTemplate")
@@ -845,10 +854,24 @@ class MacroButton extends Button
         self:SetScript("OnLeave", function(me)
             me:Pass("OnLeave")
         end)
-        self:SetScript("PostClick", function(me)
+        self:SetScript("PreClick", function(me)
+            local skip = me.skip
+            if skip and skip() and not InCombatLockdown() then
+                me:SetAttribute("type1", nil)
+            end
+        end)
+        -- (a press and a release both come: once, on the release)
+        self:SetScript("PostClick", function(me, _: string, down: boolean?)
+            if down then
+                return
+            end
             local after = me.after
             if after then
                 after()
+            end
+            local kind = me.kind
+            if kind and not InCombatLockdown() then
+                me:SetAttribute("type1", kind)
             end
         end)
     end
@@ -865,7 +888,7 @@ class MacroButton extends Button
     function Release()
         self:Hide()
         self:ClearAllPoints()
-        self.over, self.after = nil, nil
+        self.over, self.after, self.kind, self.skip = nil, nil, nil, nil
     end
 end
 
@@ -1142,7 +1165,16 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             state = d.state
             if state ~= "fine" and d.parts.note then
                 title, body = namedNote(d)
-                actions = { { label = "Show repairers", variant = "primary", icon = "map", onClick = showRepairers } }
+                actions = {
+                    {
+                        label = "Show repairers",
+                        variant = "primary",
+                        icon = "map",
+                        click = zoneButton,
+                        skipClick = mapShown,
+                        onClick = showRepairers,
+                    },
+                }
             end
         else
             local worst = worstDurability()
@@ -2171,12 +2203,13 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         local ui = UIParent:GetEffectiveScale()
         for id, d in pairs(self.notes) do
             for i, a in ipairs(d.actions or {}) do
-                local macro = a.macro
-                local card = macro and stack:CardFor(id) or nil
+                local macro, click = a.macro, a.click
+                local target = click and click()
+                local card = (macro or target) and stack:CardFor(id) or nil
                 local pool = card and card.buttons[a.variant or "quiet"]
                 local b = pool and pool[i]
                 local left, bottom = b and b:GetLeft(), b and b:GetBottom()
-                if macro and card and b and b:IsVisible() and left and bottom then
+                if (macro or target) and card and b and b:IsVisible() and left and bottom then
                     local key = id .. "#" .. i
                     local s = self.secure[key]
                     if not s then
@@ -2187,14 +2220,22 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                     s:ClearAllPoints()
                     s:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left * scale, bottom * scale)
                     s:SetSize(b:GetWidth() * scale, b:GetHeight() * scale)
-                    local text: string
-                    if type(macro) == "function" then
-                        text = macro()
-                    else
-                        text = macro
+                    if target then
+                        s.kind = "click"
+                        s:SetAttribute("type1", "click")
+                        s:SetAttribute("clickbutton1", target)
+                    elseif macro then
+                        local text: string
+                        if type(macro) == "function" then
+                            text = macro()
+                        else
+                            text = macro
+                        end
+                        s.kind = "macro"
+                        s:SetAttribute("type1", "macro")
+                        s:SetAttribute("macrotext1", text)
                     end
-                    s:SetAttribute("type1", "macro")
-                    s:SetAttribute("macrotext1", text)
+                    s.skip = a.skipClick
                     local onClick, clicked = a.onClick, card
                     s.over, s.after = b,
                         onClick and

@@ -871,22 +871,15 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         for _, v in ipairs(value.quests or {}) do
             want[v] = true
         end
-        local changed = false
+        -- (the map's quest pins and the quest log redraw themselves on the
+        -- CVar's change, as for the game's own filter menu, which only sets
+        -- it: a redraw from SuuUI's code took the map's pins for it, and the
+        -- map opened in combat was refused later, found in game)
         if not InCombatLockdown() then
             for _, o in ipairs(GAME_SETTINGS) do
                 if (want[o.value] or false) ~= settingOn(o.cvar) then
                     errors.try(SetCVar, o.cvar, want[o.value] and "1" or "0")
-                    changed = true
                 end
-            end
-        end
-        -- the quest log and the map drawn again with them (the log redraws
-        -- itself only for some of them)
-        if changed then
-            errors.try(field(_G, "QuestMapFrame_UpdateAll"))
-            local map = self.map
-            if map then
-                errors.tryMethod(map, "RefreshAllDataProviders")
             end
         end
         local saved: SavedFilters = { v = FILTERS_VERSION }
@@ -897,9 +890,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
     end
 
-    -- The map open with one filter on (another module's "show me": the Damaged
-    -- gear note's Show repairers turns Services › Repair on, asked 2026-10-19),
-    -- at your zone; the menu shows it ticked. ("services", "repair")
+    -- One filter on for another module's "show me" (the Damaged gear note's
+    -- Show repairers turns Services › Repair on, asked 2026-10-19); the menu
+    -- shows it ticked. The caller opens the map, through a secure click (the
+    -- minimap's zone button): opened from SuuUI's code, the map's pins were
+    -- taken by it. ("services", "repair")
     function OpenWith(group: string, item: string)
         local value = self:MenuValue()
         local list = value[group]
@@ -910,10 +905,6 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             if menu then
                 menu:SetValue(menuValues(self:MenuValue()))
             end
-        end
-        local map = self.map
-        if map and not map:IsShown() then
-            ToggleWorldMap()
         end
     end
 
@@ -1526,15 +1517,9 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                     end
                     return
                 end
-                local map = self.map
-                if not (g and g.distinct > 1 and map) then
-                    return
-                end
-                local cx, cy = 0, 0
-                for _, it in ipairs(g.items) do
-                    cx, cy = cx + it.x, cy + it.y
-                end
-                map:PanAndZoomTo(cx / #g.items, cy / #g.items)
+                -- several of a kind: no zoom (asked 2026-11-05): zoomed from
+                -- SuuUI's code, the map's pins were taken by it and opening
+                -- the map in combat was refused later; the tooltip lists them
             end)
             -- a right-click goes through to the map (it zooms out)
             errors.tryMethod(made, "SetPassThroughButtons", "RightButton")
