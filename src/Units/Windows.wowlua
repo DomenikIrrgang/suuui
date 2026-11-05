@@ -1939,36 +1939,86 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
                 tryMethod(mm, on and "SetMinimizedLook" or "SetMaximizedLook")
             end
         end
+        -- what keeps its usual size in the scaled window: the quest log, the
+        -- side toggle, the coordinates, the size and waypoint buttons (the
+        -- header with its controls: the chrome's SetBody)
+        local vis: Frame? = nil
+        local function usual(r: Region?, k: number)
+            if r then
+                r:SetScale(1 / k)
+            end
+        end
+        local function scaleTo(k: number)
+            f:SetScale(k)
+            local sc = part(f, "ScrollContainer")
+            local q = find("QuestMapFrame")
+            local logShown = logWidth() > 0
+            usual(mm, k)
+            usual(part(f, "SidePanelToggle"), k)
+            usual(frames.asFrame(field(f, "WorldMapTrackingPinButton")), k)
+            usual(self.status, k)
+            if q and q:GetParent() == f then
+                q:SetScale(1 / k)
+                q:ClearAllPoints()
+                if k == 1 then
+                    -- the game's place, its top level with the map's
+                    q:SetPoint("TOPRIGHT", f, "TOPRIGHT", -3, -GAME_MAP_TOP)
+                    q:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -3, 3)
+                else
+                    -- right beside the map, as tall
+                    q:SetPoint("TOPLEFT", sc, "TOPRIGHT", 3, 0)
+                    q:SetPoint("BOTTOMLEFT", sc, "BOTTOMRIGHT", 3, 0)
+                end
+            end
+            if k == 1 then
+                chrome:SetBody(nil, 1)
+                f:SetHitRectInsets(0, 0, 0, 0)
+            else
+                -- the part that shows: the header (its usual height) right on
+                -- the map, down to the map's (or the log's) bottom right
+                local h = chrome.head:GetHeight()
+                local v = vis or CreateFrame("Frame", nil, f)
+                vis = v
+                v:EnableMouse(false)
+                v:SetScale(1 / k)
+                v:ClearAllPoints()
+                v:SetPoint("TOPLEFT", f, "TOPLEFT", 0, -((GAME_MAP_TOP - 1) * k - h))
+                v:SetPoint("BOTTOMRIGHT", (logShown and q) or sc, "BOTTOMRIGHT", 3, -2)
+                -- (the window's units: what's over the window's top, what's
+                -- unseen on its right; clicks only where it shows)
+                local rise = h / k - (GAME_MAP_TOP - 1)
+                local right = logShown and (3 + logWidth()) * (1 - 1 / k) or 3 * (1 - 1 / k)
+                chrome:SetBody(v, k, rise, right)
+                f:SetHitRectInsets(0, right, math.max(0, -rise), 0)
+            end
+            -- SuuUI's pins sized for the window's scale
+            local wm = SuuUI.GetModule("worldmap")
+            if wm then
+                tryMethod(wm, "QueueLayout")
+            end
+        end
         local function fit()
             if flag(tryMethod(f, "IsMaximized")) then
                 return
             end
-            local log = logWidth()
-            local minW, minH = asNumber(field(f, "minimizedWidth")) or 702, asNumber(field(f, "minimizedHeight")) or 534
             if not enlarged() then
-                -- the game's own size (it sets it itself on every open; back
-                -- from enlarged here, the buttons' own callbacks being away)
-                if math.abs(f:GetWidth() - (minW + log)) > 0.5 or math.abs(f:GetHeight() - minH) > 0.5 then
-                    f:SetSize(minW + log, minH)
-                    f:OnFrameSizeChanged()
-                end
+                scaleTo(1)
                 return
             end
-            -- the map keeps the windowed map's shape; the window, header
-            -- included, the setting's share of the screen's height, and
-            -- narrower than the screen. (Resized from SuuUI's code: the map's
-            -- zoom is written by it, and the game may refuse its pins in
-            -- combat after; asked 2026-11-05 to keep this look anyway.)
+            -- the map larger by a scale (resized from SuuUI's code, the game
+            -- refused its pins in combat after: asked 2026-11-05), all else at
+            -- its usual size; the window the setting's share of the screen's
+            -- height, header included, and narrower than the screen
+            local minW, minH = asNumber(field(f, "minimizedWidth")) or 702, asNumber(field(f, "minimizedHeight")) or 534
             local w0, h0 = minW - 5, minH - GAME_MAP_TOP - 2
             local margin = S["space-3"]
-            local mapH = UIParent:GetHeight() * share() - (chrome.riseH or 0) - GAME_MAP_TOP - 2
-            local mapW = mapH * w0 / h0
-            local roomW = UIParent:GetWidth() - 2 * margin - 5 - log
-            if mapW > roomW then
-                mapW, mapH = roomW, roomW * h0 / w0
+            local h = chrome.head:GetHeight()
+            local k = (UIParent:GetHeight() * share() - h - 3) / h0
+            local roomW = UIParent:GetWidth() - 2 * margin - 5 - logWidth()
+            if w0 * k > roomW then
+                k = roomW / w0
             end
-            f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + GAME_MAP_TOP + 2))
-            f:OnFrameSizeChanged()
+            scaleTo(math.max(k, 1))
         end
         local function setEnlarged(on: boolean)
             self:Set("mapEnlarged", on)

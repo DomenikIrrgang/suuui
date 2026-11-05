@@ -312,29 +312,36 @@ local function worldMap()
 end
 
 @test(
-    "the world map enlarged (larger, at scale 1), small at the game's size, the map under the header; in a fight a theme change waits"
+    "the world map enlarged by a scale, header and quest log at their usual size; small at the game's size; the map under the header"
 )
 local function mapSize()
     local f = WorldMapFrame
     ShowUIPanel(f)
     mock.advanceFrames(3)
-    local big = f:GetWidth()
-    expect(f:GetScale()).toBe(1)
-    -- the map right under the header: the game's 67 px band is the header's
+    -- (resized from SuuUI's code the map's zoom was written by it, and the
+    -- game refused its pins in combat: the size stays the game's)
+    local ui = UIParent:GetEffectiveScale()
+    local chrome = assert(M.worldMap)
+    expect(f:GetScale() > 1).toBe(true)
+    expect(chrome.head:GetEffectiveScale()).toBeCloseTo(ui)
+    local q = win("QuestMapFrame")
+    expect(q:GetEffectiveScale()).toBeCloseTo(ui)
     local sc = part(f, "ScrollContainer")
-    expect(assert(f:GetTop()) - assert(sc:GetTop())).toBeCloseTo(67)
+    if q:IsShown() then
+        -- right beside the map
+        expect(assert(q:GetLeft()) * ui).toBeCloseTo(assert(sc:GetRight()) * sc:GetEffectiveScale() + 3 * ui)
+    end
     local mm = frames.asFrame(field(f, "BorderFrame", "MaximizeMinimizeFrame"))
     if mm then
         mock.click(part(mm, "MinimizeButton"))
         expect(M:Get("mapEnlarged")).toBe(false)
-        -- the game's own size (not resized from SuuUI's code)
-        local log = part(f, "QuestLog"):IsShown() and 333 or 0
-        expect(f:GetWidth()).toBe(702 + log)
+        expect(f:GetScale()).toBe(1)
         expect(f:GetHeight()).toBe(534)
-        expect(f:GetWidth() < big).toBe(true)
+        -- the map right under the header: the game's 67 px band is the header's
+        expect(assert(f:GetTop()) - assert(sc:GetTop())).toBeCloseTo(67)
         mock.click(part(mm, "MaximizeButton"))
         expect(M:Get("mapEnlarged")).toBe(true)
-        expect(f:GetWidth()).toBe(big)
+        expect(f:GetScale() > 1).toBe(true)
     end
     M:Emit("SUUUI_SETTING_CHANGED", "worldmap", "enlargedSize")
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
