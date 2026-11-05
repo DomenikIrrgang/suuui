@@ -27,9 +27,10 @@
 --       ranks = { [nodeID] = n }, entries = { [nodeID] = index } }, or nil and why
 --   writeGameTalentString(version, specID, hash, tree, ranks, entries) -> text
 --
--- Forever's rows open by points spent in the whole tree: 5 a row
--- (TALENT_ROW_POINTS; /suu probe talentbuilds, every class), and a talent an
--- arrow points to needs the talent it starts from at full rank.
+-- Forever's rows open by points spent in their own tree: 5 a row
+-- (TALENT_ROW_POINTS; /suu probe talentbuilds, every class; in their own tree,
+-- not all three: found in game 2026-11-05), and a talent an arrow points to
+-- needs the talent it starts from at full rank.
 
 import * as serialize from "/Core/Serialize"
 
@@ -75,6 +76,22 @@ local function plural(n: number, one: string, many: string): string
     return n == 1 and one or many
 end
 
+-- The points in `n`'s own tree among `count` (its tree unknown: `spent`, all).
+local function spentInTree(tree: TalentTreeData, n: TalentNode, count: { [number]: number }, spent: number): number
+    local index = n.treeIndex
+    if index == nil then
+        return spent
+    end
+    local sum = 0
+    for id, r in pairs(count) do
+        local other = tree.byID[id]
+        if other and other.treeIndex == index then
+            sum = sum + r
+        end
+    end
+    return sum
+end
+
 --------------------------------------------------------------------------------
 -- The order check
 --------------------------------------------------------------------------------
@@ -99,13 +116,15 @@ local function stepProblem(
         )
     end
     local need = (n.row or 0) * TALENT_ROW_POINTS
-    if spent < need then
-        return ("%s needs %d points spent before it; at step %d only %d %s."):format(
+    local inTree = spentInTree(tree, n, count, spent)
+    if inTree < need then
+        return ("%s needs %d points in %s before it; at step %d only %d %s."):format(
             n.name or "?",
             need,
+            n.treeName or "its tree",
             step,
-            spent,
-            plural(spent, "is", "are")
+            inTree,
+            plural(inTree, "is", "are")
         )
     end
     local requires = n.requires
