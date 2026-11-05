@@ -6,7 +6,7 @@ import test, expect, beforeEach, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal clock, aura, effectOf, restLeft, SECTION, M from "/Units/Campsite"
-import firesOf from "/Units/Campsite"
+import firesOf, addFire, channels, fireMessage from "/Units/Campsite"
 import CAMPFIRES from "/Core/ServiceKeys"
 import expectNoErrors from "../../helpers"
 
@@ -52,7 +52,11 @@ local function undo()
     M:Alert(nil)
     M.phase, M.near, M.litAt, M.rested = nil, nil, nil, nil
     M:Reset("nearbyFor")
+    M:Reset("shareFires")
+    M:Reset("showShared")
     M:CharData().fires = nil
+    M.taken = {}
+    M.sentAt = setmetatable({}, { __mode = "k" })
     mock.advanceTime(20)
 end
 
@@ -382,6 +386,155 @@ local function firesGoOut()
     -- (the gone one is dropped from the saved list too)
     expect(#firesOf(M:CharData())).toBe(1)
     M:CharData().fires = nil
+end
+
+--------------------------------------------------------------------------------
+-- Sharing with your group and guild
+--------------------------------------------------------------------------------
+
+local function inGroup(group: string?, guild: boolean)
+    mock.fake("IsInGroup", function(category: number?): boolean
+        if category then
+            return group == "instance"
+        end
+        return group ~= nil
+    end)
+    mock.fake("IsInRaid", function(): boolean
+        return group == "raid"
+    end)
+    mock.fake("IsInGuild", function(): boolean
+        return guild
+    end)
+end
+
+local function shared(text: string, sender: string?)
+    M:OnMessage("SuuUI", text, "GUILD", sender or "Brannoc")
+end
+
+local function foundFires(): { x: number, by: string? }[]
+    return (SuuUI.UseService(CAMPFIRES) :: { Fires: () -> { x: number, by: string? }[] }).Fires()
+end
+
+@test("channels: your group's (party, raid or finder group) and your guild")
+@cases({
+    { nil, false, {} },
+    { "party", false, { "PARTY" } },
+    { "raid", true, { "RAID", "GUILD" } },
+    { "instance", true, { "INSTANCE_CHAT", "GUILD" } },
+    { nil, true, { "GUILD" } },
+})
+local function channelsFor(group: string?, guild: boolean, out: string[])
+    inGroup(group, guild)
+    expect(channels()).toEqual(out)
+end
+
+@test("addFire: a new one, the same seen again; one you found stays yours")
+local function addFires()
+    local data: { [string]: unknown } = {}
+    local f = addFire(data, 1412, 0.4, 0.6, "Brannoc")
+    expect(f.by).toBe("Brannoc")
+    f.seen = time() - 300
+    -- someone else saw it again: theirs now, its 10 minutes from now
+    expect(addFire(data, 1412, 0.405, 0.6, "Tam")).toBe(f)
+    expect(f.by).toBe("Tam")
+    expect(f.seen).toBe(time())
+    -- you did: yours
+    addFire(data, 1412, 0.4, 0.6)
+    expect(f.by).toBeNil()
+    addFire(data, 1412, 0.4, 0.6, "Tam")
+    expect(f.by).toBeNil()
+    expect(#firesOf(data)).toBe(1)
+end
+
+@test("a fire you pass goes to your group and guild, not again within a minute; not with Send off")
+local function sendFire()
+    inGroup("party", true)
+    local sent: string[][] = {}
+    mock.fake("C_ChatInfo.SendAddonMessage", function(prefix: string, text: string, channel: string)
+        sent[#sent + 1] = { prefix, text, channel }
+    end)
+    mock.moveTo({ mapID = 1412, x = 0.40, y = 0.60 })
+    M:RememberFire()
+    expect(sent).toEqual({
+        { "SuuUI", "FIRE\t1\t1412\t0.4000\t0.6000", "PARTY" },
+        { "SuuUI", "FIRE\t1\t1412\t0.4000\t0.6000", "GUILD" },
+    })
+    M:RememberFire()
+    expect(#sent).toBe(2)
+    mock.advanceTime(61)
+    M:RememberFire()
+    expect(#sent).toBe(4)
+    -- nobody to send to; Send off
+    mock.advanceTime(61)
+    inGroup(nil, false)
+    M:RememberFire()
+    expect(#sent).toBe(4)
+    inGroup("party", true)
+    M:Set("shareFires", false)
+    M:RememberFire()
+    expect(#sent).toBe(4)
+end
+
+@test("a shared fire shows with who found it; theirs again restarts its 10 minutes")
+local function receiveFire()
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Tirisfal Glades" }
+    end)
+    local changed = 0
+    M:On("SUUUI_CAMPFIRES_CHANGED", function()
+        changed += 1
+    end)
+    shared(fireMessage({ map = 1420, x = 0.6163, y = 0.507, seen = 0 }))
+    local found = foundFires()
+    expect(#found).toBe(1)
+    expect(found[1].x).toBeCloseTo(0.6163)
+    expect(found[1].by).toBe("Brannoc")
+    expect(changed).toBe(1)
+    local f = firesOf(M:CharData())[1]
+    f.seen = time() - 590
+    shared(fireMessage({ map = 1420, x = 0.6163, y = 0.507, seen = 0 }))
+    expect(f.seen).toBe(time())
+    -- Show off: theirs hidden, and new ones not taken
+    M:Set("showShared", false)
+    expect(#foundFires()).toBe(0)
+    shared(fireMessage({ map = 1420, x = 0.2, y = 0.2, seen = 0 }))
+    expect(#firesOf(M:CharData())).toBe(1)
+end
+
+@test("a shared fire is checked: not a fire, your own coming back, a bad place, too many from one sender")
+local function receiveChecked()
+    local maps = true
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return maps and { name = "Tirisfal Glades" } or nil
+    end)
+    mock.fake("UnitFullName", function(): (string, string)
+        return "Suu", "Camelot"
+    end)
+    shared("FIRE\t1\t1420\t0.5\t0.5", "Suu")
+    shared("FIRE\t1\t1420\t0.5\t0.5", "Suu-Camelot")
+    M:OnMessage("Other", "FIRE\t1\t1420\t0.5\t0.5", "GUILD", "Brannoc")
+    M:OnMessage("SuuUI", mock.secret("FIRE\t1\t1420\t0.5\t0.5"), "GUILD", "Brannoc")
+    M:OnMessage("SuuUI", "FIRE\t1\t1420\t0.5\t0.5", "GUILD", mock.secret("Brannoc"))
+    M:OnMessage("SuuUI", 5, "GUILD", "Brannoc")
+    shared("CONV\t1\t1420\t0.5\t0.5")
+    shared("FIRE\t2\t1420\t0.5\t0.5")
+    shared("FIRE\t1\t1420.5\t0.5\t0.5")
+    shared("FIRE\t1\t1420\t1.5\t0.5")
+    shared("FIRE\t1\t1420\tx\t0.5")
+    maps = false
+    shared("FIRE\t1\t1420\t0.5\t0.5")
+    expect(M:CharData().fires == nil or #firesOf(M:CharData()) == 0).toBe(true)
+    -- one sender: 10 a minute
+    maps = true
+    for i = 1, 12 do
+        shared(("FIRE\t1\t1420\t%.2f\t0.5"):format(i / 20))
+    end
+    expect(#firesOf(M:CharData())).toBe(10)
+    shared("FIRE\t1\t1420\t0.5\t0.9", "Tam")
+    expect(#firesOf(M:CharData())).toBe(11)
+    mock.advanceTime(61)
+    shared("FIRE\t1\t1420\t0.9\t0.9")
+    expect(#firesOf(M:CharData())).toBe(12)
 end
 
 @test("RememberFire: not your own fire, nor without a place")
