@@ -36,6 +36,7 @@ import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
 import MARKS, WORLD_MAP, CONVERGENCES, CAMPFIRES, FLIGHT_MAP from "/Core/ServiceKeys"
+
 import type MarkFilters from "/Core/ServiceKeys"
 import chromeOf from "/UI/WindowSkin"
 import MapPin from "/UI/MapPin"
@@ -55,6 +56,15 @@ import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
+
+-- A campfire's time left: m:ss, or out.
+export function fireLeft(s: number): string
+    if s <= 0 then
+        return "going out"
+    end
+    s = math.floor(s)
+    return ("%d:%02d"):format(s / 60, s % 60)
+end
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -1246,6 +1256,8 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             local fires = camp and camp.Fires
             for _, f in ipairs(fires and fires() or {}) do
                 if f.map == mapID then
+                    local detail = f.by and ("Found by " .. f.by) or "One you found"
+                    local out = f.out
                     items[#items + 1] = {
                         x = f.x,
                         y = f.y,
@@ -1253,7 +1265,17 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                         fixed = true,
                         pin = { glyph = "campfire", color = "ember-text" },
                         name = "Campfire",
-                        detail = f.by and ("Found by " .. f.by) or "One you found",
+                        detail = detail,
+                        -- how long it burns, read as you hover (asked 2026-11-05)
+                        tip = out and
+                            function(): TooltipData
+                                return {
+                                    title = "Campfire",
+                                    subtitle = detail,
+                                    lines = { { "Goes out in", fireLeft(out - time()) } },
+                                }
+                            end or
+                            nil,
                     }
                 end
             end

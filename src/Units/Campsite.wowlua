@@ -312,6 +312,8 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
     sentAt: { [Fire]: number } = setmetatable({}, { __mode = "k" })
     -- shared fires taken this minute, by sender: { minute's start, count }
     taken: { [string]: { number } } = {}
+    -- when the next fire goes out (the map told, so it leaves an open map)
+    expiry: TimerHandle? = nil
 
     constructor()
         super({
@@ -447,7 +449,32 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         end
         local f = addFire(self:CharData(), map, x, y)
         self:Emit("SUUUI_CAMPFIRES_CHANGED")
+        self:ScheduleExpiry()
         self:SendFire(f)
+    end
+
+    -- The map told when the next fire goes out (its pin leaves an open map),
+    -- then again for the one after.
+    function ScheduleExpiry()
+        if self.expiry then
+            self.expiry:Cancel()
+            self.expiry = nil
+        end
+        local soonest: number? = nil
+        for _, f in ipairs(liveFires(self:CharData())) do
+            local out = (f.seen or 0) + FIRE_LIFE
+            if not soonest or out < soonest then
+                soonest = out
+            end
+        end
+        if not soonest then
+            return
+        end
+        self.expiry = after(math.max(1, soonest - time() + 1), function()
+            self.expiry = nil
+            self:Emit("SUUUI_CAMPFIRES_CHANGED")
+            self:ScheduleExpiry()
+        end)
     end
 
     -- A fire you passed, to your group and guild (Sharing › Send on), not
@@ -504,6 +531,7 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         t[2] = t[2] + 1
         addFire(self:CharData(), map, x, y, finder(sender))
         self:Emit("SUUUI_CAMPFIRES_CHANGED")
+        self:ScheduleExpiry()
     end
 
     function Sample(phase: string?)
@@ -540,7 +568,7 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
                 local shared = self:Get("showShared")
                 for _, f in ipairs(liveFires(self:CharData())) do
                     if shared or not f.by then
-                        out[#out + 1] = { map = f.map, x = f.x, y = f.y, by = f.by }
+                        out[#out + 1] = { map = f.map, x = f.x, y = f.y, by = f.by, out = (f.seen or 0) + FIRE_LIFE }
                     end
                 end
                 return out
@@ -553,6 +581,8 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
             self:OnMessage(...)
         end)
+        -- the fires kept from before (a reload) go out on time too
+        self:ScheduleExpiry()
         self:OnUnitEvent("UNIT_AURA", { "player" }, function()
             local wasNear = self.near
             local near = aura(NEARBY)
@@ -608,6 +638,10 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
+        if self.expiry then
+            self.expiry:Cancel()
+            self.expiry = nil
+        end
         if self.ticker then
             self.ticker:Cancel()
             self.ticker = nil
