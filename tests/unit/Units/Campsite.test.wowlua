@@ -7,6 +7,7 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal clock, aura, effectOf, restLeft, SECTION, M from "/Units/Campsite"
 import firesOf from "/Units/Campsite"
+import CAMPFIRES from "/Core/ServiceKeys"
 import expectNoErrors from "../../helpers"
 
 const NEARBY = 1283391
@@ -361,13 +362,26 @@ local function rememberFire()
     expect(#fires).toBe(1)
     -- full: the oldest goes
     for i = 1, 100 do
-        fires[#fires + 1] = { map = 1, x = i / 1000, y = 0, seen = 0 }
+        fires[#fires + 1] = { map = 1, x = i / 1000, y = 0, seen = time() }
     end
     mock.moveTo({ mapID = 1412, x = 0.70, y = 0.20 })
     M:RememberFire()
     expect(#fires).toBe(100)
     expect(fires[100].x).toBeCloseTo(0.70)
     expect(fires[1].map).toBe(1)
+end
+
+@test("a fire passed stays on the map 10 minutes after you last saw it, then it's gone")
+local function firesGoOut()
+    local fires = firesOf(M:CharData())
+    fires[#fires + 1] = { map = 1412, x = 0.1, y = 0.1, seen = time() - 30 }
+    fires[#fires + 1] = { map = 1412, x = 0.2, y = 0.2, seen = time() - 601 }
+    local found = (SuuUI.UseService(CAMPFIRES) :: { Fires: () -> { x: number }[] }).Fires()
+    expect(#found).toBe(1)
+    expect(found[1].x).toBeCloseTo(0.1)
+    -- (the gone one is dropped from the saved list too)
+    expect(#firesOf(M:CharData())).toBe(1)
+    M:CharData().fires = nil
 end
 
 @test("RememberFire: not your own fire, nor without a place")
