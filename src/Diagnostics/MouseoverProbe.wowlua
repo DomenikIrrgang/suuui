@@ -1,0 +1,172 @@
+-- Diagnostics/MouseoverProbe.wowlua
+-- "/suu probe mouseover" (asked 2026-11-06: spellbook mouseover bindings,
+-- the design's "probe first"): test keys that come and go with the unit
+-- under the mouse, the way the bindings will, set by the client's secure
+-- code only:
+--   F8, Shift-Left click, Shift-Right click, the wheel up: in the world, by a
+--     state driver on [@mouseover,exists] (also nameplates);
+--   F9: over SuuUI's unit frames, by secure OnEnter / OnLeave snippets that
+--     set and clear the binding (the unit the frame's own).
+-- Each press runs a secure button whose action splits friendly from hostile
+-- units (helpbutton / harmbutton) and says which branch ran, the unit, its
+-- name (or SECRET) and whether you're in combat. Saved in
+-- SuuUIProbe.mouseover on /reload. "/suu probe mouseover off" takes it away.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import isSecret from "wowlua:secret"
+
+-- made on first use
+local worldButton: Button?
+local frameButton: Button?
+local worldOwner: Frame?
+local frameOwner: Frame?
+local wrapped: Frame[] = {}
+
+local WORLD_KEYS = { "F8", "SHIFT-BUTTON1", "SHIFT-BUTTON2", "MOUSEWHEELUP" }
+
+local function show(v: unknown): string
+    if isSecret(v) then
+        return "SECRET"
+    end
+    return tostring(v)
+end
+
+local function record(line: string)
+    local list = DB.probeData("mouseover", function(): string[]
+        return {}
+    end)
+    list[#list + 1] = date("%H:%M:%S") .. " " .. line
+    while #list > 60 do
+        table.remove(list, 1)
+    end
+    print("|cffffd24dmouseover probe|r " .. line)
+end
+
+-- What a press hit: called from the secure button's macro (its branch) and
+-- read with the unit the button acted on.
+local function hit(source: string, branch: string, unit: string)
+    local exists = UnitExists(unit)
+    local name = UnitName(unit)
+    record(
+        ("%s: %s branch, unit %s, exists %s, name %s, combat %s"):format(
+            source,
+            branch,
+            unit,
+            show(exists),
+            show(name),
+            tostring(InCombatLockdown())
+        )
+    )
+end
+
+-- A secure button whose click says which branch ran (friendly, hostile or
+-- neither) on `unit`.
+local function testButton(name: string, source: string): Button
+    local b = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate") :: Button
+    b:RegisterForClicks("AnyDown", "AnyUp")
+    b:SetAttribute("type", "macro")
+    b:SetAttribute("helpbutton", "heal")
+    b:SetAttribute("harmbutton", "harm")
+    local call = ("/run SuuUIProbeMouseoverHit(%q, %%q)"):format(source)
+    b:SetAttribute("macrotext", call:format("neither"))
+    b:SetAttribute("macrotext-heal", call:format("friendly"))
+    b:SetAttribute("macrotext-harm", call:format("hostile"))
+    return b
+end
+
+local function setUp()
+    if InCombatLockdown() then
+        print("mouseover probe: set it up out of combat.")
+        return
+    end
+    -- (the macros call this by name: global, probe only)
+    rawset(_G, "SuuUIProbeMouseoverHit", function(source: string, branch: string)
+        local b = source == "world" and worldButton or frameButton
+        local unit = b and b:GetAttribute("unit") or "mouseover"
+        hit(source, branch, tostring(unit))
+    end)
+    -- the world: bindings while a unit is under the mouse
+    local wb = worldButton or testButton("SuuUIProbeMouseoverWorld", "world")
+    worldButton = wb
+    wb:SetAttribute("unit", "mouseover")
+    local wo = worldOwner or CreateFrame("Frame", nil, UIParent, "SecureHandlerStateTemplate")
+    worldOwner = wo
+    wo:SetFrameRef("button", wb)
+    local keys = {}
+    for i, k in ipairs(WORLD_KEYS) do
+        keys[i] = ('self:SetBindingClick(true, %q, self:GetFrameRef("button"))'):format(k)
+    end
+    wo:SetAttribute("_onstate-mo", ([=[
+        if newstate == "on" then
+            %s
+        else
+            self:ClearBindings()
+        end
+    ]=]):format(table.concat(keys, "\n            ")))
+    RegisterStateDriver(wo, "mo", "[@mouseover,exists] on; off")
+    -- SuuUI's unit frames: F9 while one is under the mouse, its own unit
+    local fb = frameButton or testButton("SuuUIProbeMouseoverFrame", "frame")
+    frameButton = fb
+    local fo = frameOwner or CreateFrame("Frame", nil, UIParent, "SecureHandlerBaseTemplate")
+    frameOwner = fo
+    fo:SetFrameRef("button", fb)
+    local f = EnumerateFrames()
+    local n = 0
+    while f do
+        local name = f:GetName()
+        local unit = f:GetAttribute("unit")
+        if name and name:find("^SuuUI") and type(unit) == "string" and f:IsProtected() then
+            local already = false
+            for _, w in ipairs(wrapped) do
+                if w == f then
+                    already = true
+                end
+            end
+            if not already then
+                SecureHandlerWrapScript(f, "OnEnter", fo, [=[
+                    local b = owner:GetFrameRef("button")
+                    b:SetAttribute("unit", self:GetAttribute("unit"))
+                    owner:SetBindingClick(true, "F9", b)
+                ]=])
+                SecureHandlerWrapScript(f, "OnLeave", fo, [=[
+                    owner:ClearBindings()
+                ]=])
+                wrapped[#wrapped + 1] = f
+                n = n + 1
+            end
+        end
+        f = EnumerateFrames(f)
+    end
+    record(("set up: world keys %s; F9 on %d SuuUI unit frames"):format(table.concat(WORLD_KEYS, ", "), #wrapped))
+end
+
+local function takeDown()
+    if InCombatLockdown() then
+        print("mouseover probe: take it down out of combat.")
+        return
+    end
+    local wo = worldOwner
+    if wo then
+        UnregisterStateDriver(wo, "mo")
+        ClearOverrideBindings(wo)
+    end
+    for _, f in ipairs(wrapped) do
+        SecureHandlerUnwrapScript(f, "OnEnter")
+        SecureHandlerUnwrapScript(f, "OnLeave")
+    end
+    wrapped = {}
+    local fo = frameOwner
+    if fo then
+        ClearOverrideBindings(fo)
+    end
+    record("taken down")
+end
+
+export function command(arg: string?)
+    if arg == "off" then
+        takeDown()
+    else
+        setUp()
+    end
+end
