@@ -12,7 +12,9 @@
 -- while you stay seated). Combat alerts outrank these (info tone), and
 -- combat ending clears them. Fires you pass (not the ones you light: those
 -- go out) are remembered per character for the world map (3.5), for 10
--- minutes after you last passed them (they go out too).
+-- minutes after you last passed them (they go out too). They're shared with
+-- your group (party, raid or finder group) and your guild, and theirs show on
+-- your map with who found them (asked 2026-11-05), each setting its own.
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -21,9 +23,12 @@ import type SettingsSection from "/Core/Modules"
 import CAMPFIRES from "/Core/ServiceKeys"
 import type FoundFire from "/Core/ServiceKeys"
 import after, every from "wowlua:timer"
+import * as secret from "wowlua:secret"
 
 local DEFAULTS = {
     nearbyFor = 0, -- seconds the "Campfire nearby" alert stays; 0: until you rest or walk away
+    shareFires = true, -- the fires you pass go to your group and guild
+    showShared = true, -- the fires your group and guild pass show on your map
 }
 
 local M: CampsiteModule
@@ -36,6 +41,10 @@ local MAX_FIRES = 100
 -- a fire you passed stays on the map this long after you last saw it (fires
 -- go out; asked 2026-11-05: 10 minutes)
 local FIRE_LIFE = 10 * 60
+local PREFIX = "SuuUI"
+local TAG = "FIRE"
+local RESEND = 60 -- seconds before the same fire is sent again
+local PER_MINUTE = 10 -- shared fires taken from one sender a minute
 
 local function clock(s: number): string
     s = math.max(0, math.floor(s + 0.5))
@@ -124,8 +133,9 @@ end
 -- Fires you pass, for the map
 --------------------------------------------------------------------------------
 
--- A fire you passed (saved per character; the world map shows them).
-export type Fire = { map: number, x: number, y: number, seen: number }
+-- A fire you passed, or someone in your group or guild did (`by`: who;
+-- saved per character; the world map shows them).
+export type Fire = { map: number, x: number, y: number, seen: number, by?: string }
 
 -- The fires in a character's data (saved: made when missing).
 export function firesOf(data: { [string]: unknown }): Fire[]
@@ -149,6 +159,77 @@ export function liveFires(data: { [string]: unknown }): Fire[]
         end
     end
     return fires
+end
+
+-- A fire seen now, by you (`by` nil) or by someone else: the same fire (within
+-- 1% of the map) seen again, else a new one (the oldest dropped past
+-- MAX_FIRES). One you found yourself stays yours.
+export function addFire(data: { [string]: unknown }, map: number, x: number, y: number, by: string?): Fire
+    local fires = liveFires(data)
+    for _, f in ipairs(fires) do
+        if f.map == map and math.abs(f.x - x) < 0.01 and math.abs(f.y - y) < 0.01 then
+            f.seen = time()
+            if not by then
+                f.by = nil
+            elseif f.by then
+                f.by = by
+            end
+            return f
+        end
+    end
+    local f: Fire = { map = map, x = x, y = y, seen = time(), by = by }
+    table.insert(fires, f)
+    while #fires > MAX_FIRES do
+        table.remove(fires, 1)
+    end
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- Sharing: your group and your guild
+--------------------------------------------------------------------------------
+
+local function groupChannel(): string?
+    if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then
+        return "INSTANCE_CHAT"
+    end
+    if secret.flag(IsInRaid()) then
+        return "RAID"
+    end
+    if secret.flag(IsInGroup()) then
+        return "PARTY"
+    end
+end
+
+-- Where a fire goes: your group's channel and your guild.
+export function channels(): string[]
+    local list: string[] = {}
+    local g = groupChannel()
+    if g then
+        list[#list + 1] = g
+    end
+    if secret.flag(IsInGuild()) then
+        list[#list + 1] = "GUILD"
+    end
+    return list
+end
+
+export function fireMessage(f: Fire): string
+    return ("%s\t1\t%d\t%.4f\t%.4f"):format(TAG, f.map, f.x, f.y)
+end
+
+-- Whether a sender is you: "Name", "Name-Realm" or "Name Realm".
+local function fromMe(sender: string): boolean
+    local n, r = UnitFullName("player")
+    -- (your own name and realm: never secret; cast for strict mode)
+    local name, realm = n :: string, r :: string?
+    return sender == name or (realm ~= nil and (sender == name .. "-" .. realm or sender == name .. " " .. realm))
+end
+
+-- A sender's name as the tooltip shows it: without your own realm.
+local function finder(sender: string): string
+    local name = Ambiguate and Ambiguate(sender, "none") or sender
+    return (tostring(name):gsub("[\t\n\r|]", " "):sub(1, 40))
 end
 
 --------------------------------------------------------------------------------
@@ -194,6 +275,24 @@ local SECTION: SettingsSection = {
                 },
             },
         },
+        {
+            title = "Sharing",
+            description = "The campfires you walk up to show on the world map for 10 minutes. With SuuUI your group and guild see them too, and you see theirs.",
+            rows = {
+                {
+                    key = "shareFires",
+                    label = "Send the fires you find",
+                    control = "toggle",
+                    description = "A campfire you walk up to goes to your group (party, raid or finder group) and your guild.",
+                },
+                {
+                    key = "showShared",
+                    label = "Show shared fires",
+                    control = "toggle",
+                    description = "Campfires your group or guild found show on your map, the tooltip naming who found it, for 10 minutes after they last passed it.",
+                },
+            },
+        },
     },
 }
 
@@ -209,6 +308,10 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
     phase: string? = nil
     rested: { title: string, a: CampAura? }? = nil
     ticker: TickerHandle? = nil
+    -- when each fire was last sent (not saved)
+    sentAt: { [Fire]: number } = setmetatable({}, { __mode = "k" })
+    -- shared fires taken this minute, by sender: { minute's start, count }
+    taken: { [string]: { number } } = {}
 
     constructor()
         super({
@@ -342,17 +445,65 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         if not (not issecretvalue(x) and not issecretvalue(y) and x and y) then
             return
         end
-        local fires = liveFires(self:CharData())
-        for _, f in ipairs(fires) do
-            if f.map == map and math.abs(f.x - x) < 0.01 and math.abs(f.y - y) < 0.01 then
-                f.seen = time()
-                return
-            end
+        local f = addFire(self:CharData(), map, x, y)
+        self:Emit("SUUUI_CAMPFIRES_CHANGED")
+        self:SendFire(f)
+    end
+
+    -- A fire you passed, to your group and guild (Sharing › Send on), not
+    -- again within a minute.
+    function SendFire(f: Fire)
+        if not self:Get("shareFires") or not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then
+            return
         end
-        table.insert(fires, { map = map, x = x, y = y, seen = time() })
-        while #fires > MAX_FIRES do
-            table.remove(fires, 1)
+        local now = GetTime()
+        local last = self.sentAt[f]
+        if last and now - last < RESEND then
+            return
         end
+        local list = channels()
+        if #list == 0 then
+            return
+        end
+        self.sentAt[f] = now
+        local text = fireMessage(f)
+        for _, ch in ipairs(list) do
+            pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, ch)
+        end
+    end
+
+    -- A fire from someone else's SuuUI: untrusted, so checked before it's
+    -- kept (Sharing › Show on).
+    function OnMessage(prefix: unknown, text: unknown, _channel: unknown, sender: unknown)
+        if prefix ~= PREFIX or not (secret.readable(text) and secret.readable(sender)) or type(text) ~= "string" or
+            type(sender) ~= "string" then
+            return
+        end
+        local tag, version, mapText, xText, yText = strsplit("\t", text)
+        if tag ~= TAG or version ~= "1" or not self:Get("showShared") or fromMe(sender) then
+            return
+        end
+        local map, x, y = tonumber(mapText), tonumber(xText), tonumber(yText)
+        if not (map and x and y and map == math.floor(map) and map > 0 and map < 100000 and x >= 0 and x <= 1 and
+            y >= 0 and
+            y <= 1) then
+            return
+        end
+        if not C_Map.GetMapInfo(map) then
+            return
+        end
+        local now = GetTime()
+        local t = self.taken[sender]
+        if not t or now - t[1] >= 60 then
+            t = { now, 0 }
+            self.taken[sender] = t
+        end
+        if t[2] >= PER_MINUTE then
+            return
+        end
+        t[2] = t[2] + 1
+        addFire(self:CharData(), map, x, y, finder(sender))
+        self:Emit("SUUUI_CAMPFIRES_CHANGED")
     end
 
     function Sample(phase: string?)
@@ -386,13 +537,22 @@ class CampsiteModule extends Module<typeof(DEFAULTS)>
         self:ProvideService(CAMPFIRES, {
             Fires = function(): FoundFire[]
                 local out: FoundFire[] = {}
-                for i, f in ipairs(liveFires(self:CharData())) do
-                    out[i] = { map = f.map, x = f.x, y = f.y }
+                local shared = self:Get("showShared")
+                for _, f in ipairs(liveFires(self:CharData())) do
+                    if shared or not f.by then
+                        out[#out + 1] = { map = f.map, x = f.x, y = f.y, by = f.by }
+                    end
                 end
                 return out
             end,
         })
         self:RegisterSettings(SECTION)
+        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
+        end
+        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
+            self:OnMessage(...)
+        end)
         self:OnUnitEvent("UNIT_AURA", { "player" }, function()
             local wasNear = self.near
             local near = aura(NEARBY)

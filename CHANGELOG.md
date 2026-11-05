@@ -4,12 +4,15 @@
 
 ### New
 
+- **Shared campfires**: the campfires you walk up to go to your group (party, raid or finder group) and your guild, and theirs show on your world map, the tooltip naming who found it. A shared fire goes out 10 minutes after someone last passed it. Campfire settings › Sharing turns sending and showing off, each on its own.
 - **Gifts in the collections**: a mount or toy you're given or buy comes wrapped, as in the game's own journal. It shows as a gift until you open it: the wrapped present on the mount stage (click it or Unwrap) or on the toy's card (click it). The Mounts and Toys tabs and the Collections button on the micro menu count the gifts waiting, and a notification tells you when one arrives, its Open showing it.
-- Plugins: `SUUUI_GIFTS_CHANGED` (the gifts waiting) and a window's `SetTabCount`; API 0.21.
+- Plugins: the `campfires` service's fires carry who found them (`by`) and `SUUUI_CAMPFIRES_CHANGED` fires when one is passed; `SUUUI_GIFTS_CHANGED` tells the gifts waiting, and a window can show a count on a tab (`SetTabCount`); API 0.21.
 
 ### Fixed
 
 - Campfires on the world map go out: a fire you passed shows for 10 minutes after you last passed it, then it's gone.
+- World map quests: priests no longer see Desperate Prayer offered where only dwarves get it (human priests have Divine Grace), and once you've done Divine Grace or Confounding Flash at one trainer, the other trainers' copies no longer show.
+- World map: on the enlarged map a quest's Abandon, Share and Track buttons sit under its details again, not over the middle of the map.
 
 ## 0.6.4 (2026-11-05)
 
