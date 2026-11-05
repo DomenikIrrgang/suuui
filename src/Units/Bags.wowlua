@@ -663,6 +663,10 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- mouse, out of combat (see UseOn)
     useOver: Overlay? = nil
     useSlot: Button? = nil
+    -- the slot it's over (bag, slot), and whether its left click is a spell's
+    -- target (Disenchant, an enchant, a sharpening stone: used securely)
+    useAt: { number }? = nil
+    useTargets: boolean = false
     -- the places open whose windows take a bag item (MAIL_SHOW: true, ...)
     readonly placesOpen: { [string]: boolean } = {}
 
@@ -1303,7 +1307,25 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         over = self:UseButton(b)
         over.set("macrotext2", ("/use %d %d"):format(bag, slot))
         self.useSlot = b
+        self.useAt = { bag, slot }
+        self:DrawUseTarget()
         over.show(b)
+    end
+
+    -- A spell waiting for an item (Disenchant, an enchant, a sharpening
+    -- stone, a lockpick): the left click puts it on the item securely, as
+    -- Blizzard's slot does with UseContainerItem; passed on from SuuUI's code
+    -- that was refused ("Forbidden: UseContainerItem()", reported in game).
+    -- Else the left click goes on to the slot (picking the item up).
+    function DrawUseTarget()
+        local over, at = self.useOver, self.useAt
+        if not (over and at) or InCombatLockdown() then
+            return
+        end
+        local targets = flag(try(SpellCanTargetItem)) or flag(try(SpellCanTargetItemID)) or false
+        self.useTargets = targets
+        over.set("type1", targets and "macro" or nil)
+        over.set("macrotext1", targets and ("/use %d %d"):format(at[1], at[2]) or nil)
     end
 
     function HideUse()
@@ -1320,6 +1342,10 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             return
         end
         if button == "RightButton" and not IsModifierKeyDown() then
+            return
+        end
+        -- (a spell's target: the secure button put it on the item)
+        if button == "LeftButton" and self.useTargets and not IsModifierKeyDown() then
             return
         end
         self:PassTo("OnClick", button)
@@ -2635,6 +2661,14 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 end
             end)
         end
+        -- a spell starting or ending its wait for an item: the left click
+        -- over the slot under the mouse follows
+        self:OnGameEvent("CURRENT_SPELL_CAST_CHANGED", function()
+            self:DrawUseTarget()
+        end)
+        self:OnGameEvent("CURSOR_CHANGED", function()
+            self:DrawUseTarget()
+        end)
         self:OnGameEvent("MERCHANT_SHOW", function()
             self.atMerchant = true
             self:HideUse()

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Bags: Disenchant, an enchant, a sharpening stone or a lockpick put on an item in your bags by clicking it works again ("Forbidden: UseContainerItem()").
+
 ## 0.6.5 (2026-11-05)
 
 ### New

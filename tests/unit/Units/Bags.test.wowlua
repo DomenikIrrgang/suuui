@@ -267,6 +267,36 @@ local function updates()
     mock.fireEvent("ITEM_LOCK_CHANGED", 16) -- a worn item's: not a bag slot
 end
 
+@test("a spell waiting for an item (Disenchant): the left click puts it on the item through the secure button")
+local function spellTarget()
+    open()
+    local targeting = true
+    mock.fake("SpellCanTargetItem", function(): boolean
+        return targeting
+    end)
+    local slot = assert(assert(M.buttons[0])[2])
+    mock.hover(slot)
+    local b = assert(M.useOver).button
+    expect(b:GetAttribute("type1")).toBe("macro")
+    expect(b:GetAttribute("macrotext1")).toBe("/use 0 2")
+    -- the left click: the game's /use of that slot, from Blizzard's secure
+    -- code (passed on to the slot from SuuUI's, "Forbidden:
+    -- UseContainerItem()", reported in game); not passed on as well
+    local ran = mock.spy(function(_: string, _: string) end)
+    mock.stub(C_Macro, "RunMacroText", ran)
+    mock.click(b)
+    expect(ran).toHaveBeenCalledWith("/use 0 2", "LeftButton")
+    expect(CursorHasItem()).toBe(false)
+    -- the spell gone: the left click the slot's again (the item picked up)
+    targeting = false
+    mock.fireEvent("CURRENT_SPELL_CAST_CHANGED", false)
+    expect(b:GetAttribute("type1")).toBeNil()
+    mock.click(b)
+    expect(CursorHasItem()).toBe(true)
+    ClearCursor()
+    mock.hover(nil)
+end
+
 @test(
     "out of combat a right click uses the item through a secure button over the hovered slot; the rest goes on to the slot"
 )
