@@ -713,6 +713,53 @@ local function petWindow()
     expect(M.points).toHaveText("Training points: 0")
 end
 
+@test("Beast Training: Train is the secure click on the game's Train once it has the choice; no Train all")
+local function petTrain()
+    -- (the game refuses BuyTrainerService from SuuUI's code there: reported in game)
+    openTrainer()
+    petTrainer(10, 0)
+    fakeServices({ { name = "Bite", kind = "available", cost = 3 }, { name = "Dash", kind = "available", cost = 5 } })
+    local buy = mock.fake("BuyTrainerService", function() end)
+    local told: number[] = {}
+    local gameChoice: number? = nil
+    mock.fake("SelectTrainerService", function(i: number)
+        told[#told + 1] = i
+    end)
+    mock.fake("GetTrainerSelectionIndex", function(): number?
+        return gameChoice
+    end)
+    local frame = assert(frames.find("ClassTrainerFrame")) :: Frame
+        & { selectedService?: number, displayIndexToSkillIndex?: {} }
+    frame.displayIndexToSkillIndex = nil
+    -- chosen in SuuUI's list: the game told; Train waits for it to take it up
+    M.selected = 2
+    M:Refresh()
+    expect(told[#told]).toBe(2)
+    local over = M.trainOver
+    expect(over == nil or not over.button:IsShown()).toBe(true)
+    expect(M.trainAll).never.toBeShown()
+    -- the game has it (its frame's own choice too): the secure click on its Train
+    gameChoice = 2
+    frame.selectedService = 2
+    M:Refresh()
+    local b = assert(M.trainOver).button
+    expect(b).toBeShown()
+    expect(b:GetAttribute("type1")).toBe("click")
+    expect(b:GetAttribute("clickbutton1")).toBe(frames.find("ClassTrainerTrainButton"))
+    -- SuuUI's own buy never (a double click, Enter, Train all)
+    M:Train()
+    M:TrainAll()
+    expect(buy).never.toHaveBeenCalled()
+    -- an NPC trainer again: Train all back, no secure click
+    mock.fake("C_Trainer.GetTrainerType", function()
+        return Enum.TrainerType.Class or 0
+    end)
+    M:Refresh()
+    expect(M.trainAll).toBeShown()
+    expect(b).never.toBeShown()
+    frame.selectedService = nil
+end
+
 @test("a secret NPC name: the window says Trainer")
 local function secretName()
     openTrainer()

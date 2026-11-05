@@ -7,6 +7,12 @@
 -- is the game's BuyTrainerService; learning a profession asks first, as the
 -- game does. Asked for in game (2026-10-16): the design, not the game's
 -- layout restyled.
+-- A hunter's Beast Training is the same window for the pet (training points):
+-- there the game refuses BuyTrainerService from SuuUI's code ("Forbidden",
+-- reported in game), so Train is a secure click on the game's own Train
+-- button, which trains what the game has chosen: SuuUI's choice, told with
+-- SelectTrainerService (the game's frame takes it up in its own event,
+-- TRAINER_DESCRIPTION_UPDATE). No Train all there (asked 2026-11-05).
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -25,6 +31,8 @@ import hook, hookScript from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
+import * as secure from "wowlua:secure"
+import type Overlay from "wowlua:secure"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -402,6 +410,8 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     tools: Frame? = nil
     train: SuuButton? = nil
     trainAll: SuuButton? = nil
+    -- Beast Training: the secure click on the game's Train over SuuUI's
+    trainOver: Overlay? = nil
     window: WindowFrame? = nil
 
     constructor()
@@ -424,6 +434,10 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     function Train()
         local e = self:Selected()
         if not e or not learnable(e) then
+            return
+        end
+        -- (Beast Training: only the secure Train over the button trains)
+        if isPetTrainer() then
             return
         end
         if e.profession and IsTradeskillTrainer and IsTradeskillTrainer() then
@@ -467,6 +481,9 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     -- Learns them one at a time: the trainer's list changes after each one, so
     -- the next is looked up again once it has.
     function TrainAll()
+        if isPetTrainer() then
+            return
+        end
         local steps = 0
         local function next()
             steps = steps + 1
@@ -756,6 +773,63 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local all = self:TrainAllList()
         trainAll:SetEnabledState(#all > 0)
         trainAll.tooltip = { title = "Train all", description = trainAllText(all) }
+        local pet = isPetTrainer()
+        if not InCombatLockdown() then
+            trainAll:SetShown(not pet)
+        end
+        self:DrawPetTrain(pet and ok)
+    end
+
+    -- Whether the game has SuuUI's choice too: its selection and its own
+    -- frame's (what its Train button trains).
+    function GameHasChoice(): boolean
+        local sel = self.selected
+        if not sel then
+            return false
+        end
+        if secret.asNumber(errors.try(GetTrainerSelectionIndex)) ~= sel then
+            return false
+        end
+        local f = frames.find("ClassTrainerFrame") :: { selectedService?: unknown, displayIndexToSkillIndex?: unknown }?
+        local shown = f and secret.asNumber(f.selectedService)
+        if not shown then
+            return false
+        end
+        local map = f and f.displayIndexToSkillIndex
+        local skill = type(map) == "table" and secret.asNumber((map :: { [number]: unknown })[shown]) or shown
+        return skill == sel
+    end
+
+    -- Beast Training: Train is the secure click on the game's own Train
+    -- button while the game has SuuUI's choice; else the choice is told to
+    -- the game (it answers with TRAINER_DESCRIPTION_UPDATE) and Train waits.
+    function DrawPetTrain(on: boolean)
+        if InCombatLockdown() then
+            return
+        end
+        local over = self.trainOver
+        local blizz = frames.find("ClassTrainerTrainButton")
+        local train = self.train
+        if not (on and blizz and train) then
+            if over then
+                over.hide()
+            end
+            return
+        end
+        if not self:GameHasChoice() then
+            if over then
+                over.hide()
+            end
+            errors.try(SelectTrainerService, self.selected)
+            return
+        end
+        if not over then
+            over = secure.overlay(train)
+            over.set("type1", "click")
+            self.trainOver = over
+        end
+        over.set("clickbutton1", blizz)
+        over.show()
     end
 
     function QueueRefresh()
@@ -858,6 +932,10 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("TRAINER_CLOSED", function()
             self.open = false
             assert(self.window):Hide()
+            local over = self.trainOver
+            if over then
+                over.hide()
+            end
         end)
         for _, e in ipairs({
             "TRAINER_UPDATE",
@@ -865,6 +943,8 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             "PLAYER_MONEY",
             "UNIT_PET_TRAINING_POINTS",
             "SKILL_LINES_CHANGED",
+            -- (the game's frame has taken up a choice: Beast Training's Train)
+            "TRAINER_DESCRIPTION_UPDATE",
         }) do
             self:OnGameEvent(e, function()
                 self:QueueRefresh()

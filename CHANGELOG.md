@@ -9,6 +9,7 @@
 ### Fixed
 
 - Loot rolls: a roll's card goes once the roll is decided (who won, or everyone passed), or a moment after its time is up, instead of staying after you've rolled.
+- Hunters: training your pet at Beast Training works again ("Forbidden: BuyTrainerService()"). Train there goes through the game's own Train button; Train all isn't offered for pets.
 
 ## 0.6.7 (2026-11-05)
 
