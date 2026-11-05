@@ -7,6 +7,11 @@
 - World map: a campfire's tooltip says how long until it goes out, and a fire that goes out leaves the map while it's open.
 - Plugins: the `campfires` service's fires say when they go out (`out`); API 0.22.
 
+### Fixed
+
+- Flight map: on the enlarged world map the flight masters' pins, flight times, the destinations list and the Fly bar are their usual size again, as on the normal map.
+- Bags: Disenchant, an enchant, a sharpening stone or a lockpick put on an item in your bags by clicking it works again ("Forbidden: UseContainerItem()").
+
 ## 0.6.5 (2026-11-05)
 
 ### New
