@@ -933,11 +933,21 @@ end
 
 -- The game's present in a mount's model scene (the tests' client has no
 -- model scenes): its "wrapped" actor, the unwrap playing 3 seconds.
-local function fakePresent()
+local function fakePresent(): { file?: number }
     local gift = ui().gift :: {}
     local playing = false
+    -- (the game's display for it missing, as in Forever: no model)
+    local actor: { file?: number, GetModelFileID: () -> number?, SetModelByFileID: (unknown, number) -> () } = {
+        GetModelFileID = function(): number?
+            return nil
+        end,
+        SetModelByFileID = function(_: unknown, _id: number) end,
+    }
+    actor.SetModelByFileID = function(_: unknown, id: number)
+        actor.file = id
+    end
     mock.stub(gift, "GetActorByTag", function(_: unknown, tag: string): {}?
-        return tag == "wrapped" and {} or nil
+        return tag == "wrapped" and actor or nil
     end)
     mock.stub(gift, "StartUnwrapAnimation", function(_: unknown, done: () -> ())
         playing = true
@@ -949,6 +959,7 @@ local function fakePresent()
     mock.stub(gift, "IsUnwrapAnimating", function(): boolean
         return playing
     end)
+    return actor
 end
 
 @test("gifts: wrapped mounts, toys and pets as the game says; counted")
@@ -981,13 +992,15 @@ end
 @test("a wrapped mount: the gift in the strip, the present on the stage; Unwrap opens it and the mount shows")
 local function giftMount()
     local cleared = wrappedRam()
-    fakePresent()
+    local present = fakePresent()
     open()
     local e = assert(M.chosen)
     expect(e.name).toBe("Swift Ram")
     expect(cells()[1].icon:GetTexture()).toBe(giftTexture())
     expect(cells()[1].fresh).toBeShown()
     expect(ui().gift).toBeShown()
+    -- the present's model from Forever's files (its display isn't there)
+    expect(present.file).toBe(1401005)
     expect(ui().model).never.toBeShown()
     expect(ui().stage.hint:GetText()).toBe("Click the gift to unwrap it")
     -- Unwrap: the secure button's action left out, the click opens it
