@@ -933,16 +933,36 @@ end
 
 -- The game's present in a mount's model scene (the tests' client has no
 -- model scenes): its "wrapped" actor, the unwrap playing 3 seconds.
-local function fakePresent(): { file?: number }
+local function fakePresent(): { file?: number, scale?: number, z?: number }
     local gift = ui().gift :: {}
     local playing = false
     -- (the game's display for it missing, as in Forever: no model)
-    local actor: { file?: number, GetModelFileID: () -> number?, SetModelByFileID: (unknown, number) -> () } = {
+    local actor: {
+        file?: number,
+        scale?: number,
+        z?: number,
+        GetModelFileID: () -> number?,
+        SetModelByFileID: (unknown, number) -> (),
+        GetPosition: () -> (number, number, number),
+        SetPosition: (unknown, number, number, number) -> (),
+        SetScale: (unknown, number) -> (),
+    } = {
         GetModelFileID = function(): number?
             return nil
         end,
         SetModelByFileID = function(_: unknown, _id: number) end,
+        GetPosition = function(): (number, number, number)
+            return 0, 0, 0
+        end,
+        SetPosition = function(_: unknown, _x: number, _y: number, _z: number) end,
+        SetScale = function(_: unknown, _k: number) end,
     }
+    actor.SetPosition = function(_: unknown, _x: number, _y: number, z: number)
+        actor.z = z
+    end
+    actor.SetScale = function(_: unknown, k: number)
+        actor.scale = k
+    end
     actor.SetModelByFileID = function(_: unknown, id: number)
         actor.file = id
     end
@@ -1007,6 +1027,9 @@ local function giftMount()
     -- the present's model from Forever's files (its display isn't there),
     -- stood on the floor shadow (72 px over the stage's bottom) as a mount
     expect(present.file).toBe(1401005)
+    -- smaller, raised in its scene (its base off the scene's bottom edge)
+    expect(present.scale).toBe(0.6)
+    expect(present.z).toBeCloseTo(1 / 0.6)
     local gift, stage = ui().gift, ui().stage
     expect(assert(gift:GetBottom()) + 100).toBeCloseTo(assert(stage:GetBottom()) + 72)
     expect(assert(gift:GetLeft()) + 360).toBeCloseTo((assert(stage:GetLeft()) + assert(stage:GetRight())) / 2)
