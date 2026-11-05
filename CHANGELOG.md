@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The rested sign on the player frame no longer causes an error ("Unit frames hit an error … SetFromAlpha") when you leave a rest area; it disappears at once where it can't fade out.
+
 ## 0.6.1 (2026-11-05)
 
 ### Fixed
