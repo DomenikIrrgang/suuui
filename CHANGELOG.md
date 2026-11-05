@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Loot rolls: a roll's card goes once the roll is decided (who won, or everyone passed), or a moment after its time is up, instead of staying after you've rolled.
+
 ## 0.6.7 (2026-11-05)
 
 ### New
