@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The chat input's text sits in the middle of its field again. With SuuUI's own scale different from the game's, the typed text and the cursor hung low, against the field's bottom edge.
+
 ## 0.6.0 (2026-11-05)
 
 ### Changed
