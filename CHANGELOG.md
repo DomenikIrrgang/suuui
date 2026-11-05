@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Talents: a tree's next row opens only with points spent in that tree, not with points spent in the others; until then its talents say how many points the tree needs.
+
 ## 0.6.8 (2026-11-05)
 
 ### New

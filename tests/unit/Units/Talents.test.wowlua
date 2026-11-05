@@ -487,11 +487,17 @@ local function requires()
     wt().nodes[2].conditions = { 8, 7 }
     local d = assert(M:Collect())
     local two = nodeIn(d, 12)
+    -- (Arms with its 10 points: only the game's unmet one)
+    d.trees[1].points = 10
     expect(M:Requires(d.configID, two)).toBe("Requires 5 points in Arms")
     w.conditions[7].isMet = true
     expect(M:Requires(d.configID, two)).toBe("Requires 1 point in Arms One")
     nodeIn(d, 11).rank = 1
     expect(M:Requires(d.configID, two)).toBeNil()
+    -- the game met (it counts every tree's points), its own tree short
+    d.trees[1].points = 3
+    expect(M:Requires(d.configID, two)).toBe("Requires 10 points in Arms")
+    d.trees[1].points = 10
     -- a two-rank talent above
     two.requires = { nodeIn(d, 13) }
     expect(M:Requires(d.configID, two)).toBe("Requires 2 points in Arms Three")
@@ -665,6 +671,30 @@ local function fillSpells()
     M:Render()
     expect(drawn(p).name).toBe(secret.asString((UnitClass("player"))))
     expect(nodeIn(M.data, 13).canSpend).toBe(false)
+end
+
+@test("Fill: a row opens with points in its own tree, whatever the game says of the others")
+local function ownTree()
+    -- (found in game: points in Arms opened Fury's next row)
+    local p = fakePage(true)
+    M.windowPage, M.page = fakePage(false).page, p.page
+    w.conditions[9] = { isMet = true, spentAmountRequired = 3 }
+    local furyTwo = wt().nodes[5]
+    furyTwo.available, furyTwo.meetsEdges, furyTwo.canPurchase = true, true, true
+    furyTwo.conditions = { 9 }
+    wt().nodes[1].rank = 1
+    wt().nodes[3].rank = 2
+    M:Render()
+    local two = nodeIn(M.data, 22)
+    expect(two.locked).toBe(true)
+    expect(two.canSpend).toBe(false)
+    -- 3 points in Fury: open
+    wt().nodes[4].rank = 1
+    wt().nodes[6].rank = 2
+    M:Render()
+    two = nodeIn(M.data, 22)
+    expect(two.locked).toBe(false)
+    expect(two.canSpend).toBe(true)
 end
 
 @test("Fill: no talents yet, two talent groups, not editable")
