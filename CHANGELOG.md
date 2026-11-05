@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- **Shared campfires**: the campfires you walk up to go to your group (party, raid or finder group) and your guild, and theirs show on your world map, the tooltip naming who found it. A shared fire goes out 10 minutes after someone last passed it. Campfire settings › Sharing turns sending and showing off, each on its own.
+- Plugins: the `campfires` service's fires carry who found them (`by`), and `SUUUI_CAMPFIRES_CHANGED` fires when one is passed; API 0.21.
+
 ### Fixed
 
 - Campfires on the world map go out: a fire you passed shows for 10 minutes after you last passed it, then it's gone.
