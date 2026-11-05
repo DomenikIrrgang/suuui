@@ -33,23 +33,44 @@ end
 --   Delta 103 (1 rank, row 2, needs Alpha and Beta full),
 --   Eps 104 (2 ranks, row 1, needs Alpha or Beta full),
 --   Zeta 105 (a choice, row 0 of the second tree)
+-- (the first tree Arms, the second Fury: a row opens with points in its own)
 local function sample(): Tree
     return tree({
-        { id = 100, max = 5, row = 0, col = 0, treeIndex = 1, name = "Alpha" },
-        { id = 101, max = 1, row = 0, col = 1, treeIndex = 1, name = "Beta" },
-        { id = 102, max = 3, row = 1, col = 0, treeIndex = 1, name = "Gamma", requires = { 100 } },
+        { id = 100, max = 5, row = 0, col = 0, treeIndex = 1, treeName = "Arms", name = "Alpha" },
+        { id = 101, max = 1, row = 0, col = 1, treeIndex = 1, treeName = "Arms", name = "Beta" },
+        { id = 102, max = 3, row = 1, col = 0, treeIndex = 1, treeName = "Arms", name = "Gamma", requires = { 100 } },
         {
             id = 103,
             max = 1,
             row = 2,
             col = 1,
             treeIndex = 1,
+            treeName = "Arms",
             name = "Delta",
             requires = { 100, 101 },
             requiresAll = true,
         },
-        { id = 104, max = 2, row = 1, col = 2, treeIndex = 1, name = "Eps", requires = { 100, 101 } },
-        { id = 105, max = 1, row = 0, col = 0, treeIndex = 2, name = "Zeta", choice = true, entryIDs = { 9001, 9002 } },
+        {
+            id = 104,
+            max = 2,
+            row = 1,
+            col = 2,
+            treeIndex = 1,
+            treeName = "Arms",
+            name = "Eps",
+            requires = { 100, 101 },
+        },
+        {
+            id = 105,
+            max = 1,
+            row = 0,
+            col = 0,
+            treeIndex = 2,
+            treeName = "Fury",
+            name = "Zeta",
+            choice = true,
+            entryIDs = { 9001, 9002 },
+        },
     })
 end
 
@@ -90,8 +111,8 @@ end
 local function orderValid()
     local t = sample()
     expect(tb.talentOrderCheck(steps({ { 100, 5 }, { 101, 1 }, { 102, 3 }, { 104, 2 }, { 103, 1 } }), t)).toBe(true)
-    -- any one of Eps's arrows: Beta alone at full rank, then 4 points for row 1
-    expect(tb.talentOrderCheck(steps({ { 101, 1 }, { 105, 1 }, { 100, 3 }, { 104, 2 } }), t)).toBe(true)
+    -- any one of Eps's arrows: Beta alone at full rank, then 5 points in Arms for row 1
+    expect(tb.talentOrderCheck(steps({ { 101, 1 }, { 105, 1 }, { 100, 4 }, { 104, 2 } }), t)).toBe(true)
 end
 
 @test("more ranks than the talent has")
@@ -109,10 +130,19 @@ end
 local function orderRowLocked()
     local _, at, why = tb.talentOrderCheck(steps({ { 102, 1 } }), sample())
     expect(at).toBe(1)
-    expect(why).toBe("Gamma needs 5 points spent before it; at step 1 only 0 are.")
+    expect(why).toBe("Gamma needs 5 points in Arms before it; at step 1 only 0 are.")
     local _, at2, why2 = tb.talentOrderCheck(steps({ { 100, 1 }, { 103, 1 } }), sample())
     expect(at2).toBe(2)
-    expect(why2).toBe("Delta needs 10 points spent before it; at step 2 only 1 is.")
+    expect(why2).toBe("Delta needs 10 points in Arms before it; at step 2 only 1 is.")
+end
+
+@test("a row opens with points in its own tree, not another's")
+local function orderOwnTree()
+    -- (found in game: points in one tree opened the others' rows)
+    local t = sample()
+    local _, at, why = tb.talentOrderCheck(steps({ { 100, 4 }, { 105, 1 }, { 102, 1 } }), t)
+    expect(at).toBe(6)
+    expect(why).toBe("Gamma needs 5 points in Arms before it; at step 6 only 4 are.")
 end
 
 @test("an arrow's talent not at full rank yet")
@@ -123,19 +153,20 @@ local function orderArrowMissing()
     expect(at).toBe(6)
     expect(why).toBe("Gamma needs Alpha at 5/5 before it; at step 6 it has 4.")
     -- Delta needs both: Beta is missing (the first one missing is named)
-    local _, at2, why2 = tb.talentOrderCheck(steps({ { 100, 5 }, { 105, 1 }, { 102, 3 }, { 104, 1 }, { 103, 1 } }), t)
-    expect(at2).toBe(11)
-    expect(why2).toBe("Delta needs Beta at 1/1 before it; at step 11 it has 0.")
-    -- Eps needs either: neither is full, the first is named
-    local _, at3, why3 = tb.talentOrderCheck(steps({ { 100, 4 }, { 105, 1 }, { 104, 1 } }), t)
-    expect(at3).toBe(6)
-    expect(why3).toBe("Eps needs Alpha at 5/5 before it; at step 6 it has 4.")
+    local _, at2, why2 = tb.talentOrderCheck(steps({ { 100, 5 }, { 105, 1 }, { 102, 3 }, { 104, 2 }, { 103, 1 } }), t)
+    expect(at2).toBe(12)
+    expect(why2).toBe("Delta needs Beta at 1/1 before it; at step 12 it has 0.")
+    -- Eps needs either: neither is full, the first is named (Arms's points
+    -- counted as given)
+    expect(tb.talentStepProblem(t, nodeOf(t, 104), { [100] = 4, [102] = 1 }, 5)).toBe(
+        "Eps needs Alpha at 5/5 before it; at step 6 it has 4."
+    )
 end
 
 @test("both arrows of an all-of talent missing: the first is named")
 local function orderAllBothMissing()
     local t = sample()
-    local why = tb.talentStepProblem(t, nodeOf(t, 103), { [100] = 4 }, 10)
+    local why = tb.talentStepProblem(t, nodeOf(t, 103), { [100] = 4, [102] = 6 }, 10)
     expect(why).toBe("Delta needs Alpha at 5/5 before it; at step 11 it has 4.")
 end
 
@@ -166,7 +197,7 @@ local function orderDefaults()
     local _, _, why = tb.talentOrderCheck({ { node = 1 }, { node = 1 } }, t)
     expect(why).toBe("? has only 1 rank; step 2 would be rank 2.")
     local _, _, why2 = tb.talentOrderCheck({ { node = 2 } }, t)
-    expect(why2).toBe("? needs 5 points spent before it; at step 1 only 0 are.")
+    expect(why2).toBe("? needs 5 points in its tree before it; at step 1 only 0 are.")
 end
 
 @test("an arrow from an unnamed talent")
@@ -204,7 +235,7 @@ end
 local function nextProblem()
     local t = sample()
     expect(tb.talentNextProblem({}, t, 100)).toBeNil()
-    expect(tb.talentNextProblem({}, t, 102)).toBe("Gamma needs 5 points spent before it; at step 1 only 0 are.")
+    expect(tb.talentNextProblem({}, t, 102)).toBe("Gamma needs 5 points in Arms before it; at step 1 only 0 are.")
     expect(tb.talentNextProblem(steps({ { 100, 5 } }), t, 100)).toBe("Alpha has only 5 ranks; step 6 would be rank 6.")
     expect(tb.talentNextProblem(steps({ { 100, 5 } }), t, 102)).toBeNil()
     expect(tb.talentNextProblem({}, t, 999)).toBe("Not a talent of this tree.")
@@ -225,13 +256,17 @@ end
 local function stepProblem()
     local t = sample()
     expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5 }, 5)).toBeNil()
-    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5 }, 4)).toBe(
-        "Gamma needs 5 points spent before it; at step 5 only 4 are."
+    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 4 }, 4)).toBe(
+        "Gamma needs 5 points in Arms before it; at step 5 only 4 are."
+    )
+    -- a point in Fury doesn't open Arms's row
+    expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 4, [105] = 1 }, 5)).toBe(
+        "Gamma needs 5 points in Arms before it; at step 6 only 4 are."
     )
     expect(tb.talentStepProblem(t, nodeOf(t, 102), { [100] = 5, [102] = 3 }, 8)).toBe(
         "Gamma has only 3 ranks; step 9 would be rank 4."
     )
-    expect(tb.talentStepProblem(t, nodeOf(t, 104), { [101] = 1 }, 5)).toBeNil()
+    expect(tb.talentStepProblem(t, nodeOf(t, 104), { [101] = 1, [100] = 4 }, 5)).toBeNil()
 end
 
 --------------------------------------------------------------------------------
@@ -756,9 +791,14 @@ end
 @test("game string to steps: read, then placed as the rows allow")
 local function gameToSteps()
     local t = sample()
-    local text = tb.writeGameTalentString(1, 5, nil, t, { [100] = 5, [101] = 1, [102] = 3, [103] = 1, [105] = 1 }, {
+    local text = tb.writeGameTalentString(1, 5, nil, t, {
+        [100] = 5,
+        [101] = 1,
+        [102] = 3,
+        [104] = 1,
+        [103] = 1,
         [105] = 1,
-    })
+    }, { [105] = 1 })
     local g = tb.readGameTalentString(text, t) :: tb.GameTalents
     local entries: { [number]: number } = {}
     for id, index in pairs(g.entries) do

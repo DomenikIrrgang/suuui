@@ -11,7 +11,10 @@
 -- its groups (C_Traits.GetGroupDisplayInfoByTreeID: name, icon; their points
 -- from GetGroupCurrencyInfo), laid out left to right, 600 apart on a 4 × 7
 -- grid; tier requirements are node conditions ("spend 20 points"), the
--- arrows its edges. Planning uses the game's own staging, as Blizzard's page
+-- arrows its edges. A row opens with points spent in its own tree: the
+-- game's own answer counts every tree's (found in game: points in one tree
+-- opened the next rows of the others), so a node's gate is checked against
+-- its tree's points too. Planning uses the game's own staging, as Blizzard's page
 -- does: a click is C_Traits.PurchaseRank, a right-click RefundRank (planned
 -- ranks only: learned ones are unlearned at a trainer), Undo RollbackConfig,
 -- Apply C_ClassTalents.CommitConfig. Out of combat only.
@@ -65,6 +68,19 @@ local SPECS_H = 42
 -- A talent on your trees (or an inspected player's): where it is, its
 -- ranks learned and planned, what the game says it can do, its talent, its
 -- place in its tree's grid; drawn with what the page sets on it.
+-- The most points a node's conditions ask be spent (its row's gate; 0: none).
+local function gateOf(configID: number, conditions: number[]): number
+    local gate = 0
+    for _, condID in ipairs(conditions) do
+        local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
+        local need = c and asNumber(c.spentAmountRequired)
+        if need and need > gate then
+            gate = need
+        end
+    end
+    return gate
+end
+
 type PageNode = {
     id: number,
     x: number,
@@ -77,6 +93,8 @@ type PageNode = {
     open: boolean,
     meetsEdges: boolean,
     conditions: number[],
+    -- the points its tree needs before it opens (its row's gate; 0: none)
+    gate: number,
     edges: TraitOutEdgeInfo[],
     name: string,
     icon?: number | string,
@@ -699,6 +717,7 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
                     open = ni.isAvailable == true and ni.meetsEdgeRequirements == true,
                     meetsEdges = ni.meetsEdgeRequirements == true,
                     conditions = ni.conditionIDs or {},
+                    gate = gateOf(configID, ni.conditionIDs or {}),
                     edges = ni.visibleEdges or {},
                     name = talent.name,
                     icon = talent.icon,
@@ -800,7 +819,10 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
             local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
             local need = c and asNumber(c.spentAmountRequired)
             local tree = n.tree
-            if c and c.isMet == false and need and need > 0 then
+            -- (in its own tree: the game's isMet counts every tree's points)
+            local short = c ~= nil and need ~= nil and need > 0 and
+                (c.isMet == false or (tree ~= nil and tree.points < need))
+            if c and short then
                 return ("Requires %d points in %s"):format(need, tree and tree.name or "this tree")
             end
         end
@@ -922,8 +944,10 @@ class TalentsModule extends Module<typeof(DEFAULTS)>
         local nextTalent = builds and self:NextTalent(self.viewing, data.configID) or nil
         for _, t in ipairs(data.trees) do
             for _, n in ipairs(t.nodes) do
-                n.locked = not n.open and n.rank + n.pending == 0
-                n.canSpend = editable and n.canPurchase and data.available > 0
+                -- (its row opens with points in its own tree)
+                local open = n.open and t.points >= n.gate
+                n.locked = not open and n.rank + n.pending == 0
+                n.canSpend = editable and n.canPurchase and open and data.available > 0
                 n.next = nextTalent ~= nil and n.id == nextTalent.node
             end
         end

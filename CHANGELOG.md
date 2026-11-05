@@ -5,6 +5,8 @@
 ### Fixed
 
 - Loot rolls: a roll's card stays after you've chosen, showing the others' choices, and goes as soon as the roll is decided (the winner, everyone passed, or all of a loot's rolls done), with its result. Choosing made it stay for good.
+- Auction house: buying out a single auction (gear, recipes) works again ("Blocked: UNKNOWN()"). The game takes a buyout only from its own auction house, so SuuUI's window now goes through it: open the item and choose the auction in SuuUI's window, press Buy out, and the game's own confirmation asks. Only the first auctions of an item (the ones the game lists) can be bought out this way.
+- Talents and talent builds: a tree's next row opens only with points spent in that tree, not with points spent in the others; until then its talents say how many points the tree needs.
 
 ## 0.6.8 (2026-11-05)
 
