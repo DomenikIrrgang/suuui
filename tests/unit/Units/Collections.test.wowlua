@@ -18,6 +18,7 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import internal M, filterEntries, actionLabel, readyIn, toyWhy, day, status, toyCooldown from "/Units/Collections"
+import internal GIFT_ICON, wrapped, giftCounts from "/Units/Collections"
 import internal Entry, Parts, Cell, SlotButton from "/Units/Collections"
 import type CollectionSources from "/Data/CollectionSources"
 import type TooltipData from "/UI/Tooltip"
@@ -900,6 +901,153 @@ local function news()
     M.tab = "mounts"
     events.emit("SUUUI_THEME_CHANGED", "suuui")
     expect(refresh).toHaveBeenCalledTimes(3)
+end
+
+--------------------------------------------------------------------------------
+-- Gifts: what the game wraps
+--------------------------------------------------------------------------------
+
+-- The gift icon as a texture answers it (the game's file for the path).
+local function giftTexture(): number | string | nil
+    local probe = UIParent:CreateTexture()
+    probe:SetTexture(GIFT_ICON)
+    return probe:GetTexture()
+end
+
+-- Mount 102 (the Swift Ram) wrapped until the game is told it was opened.
+local function wrappedRam(): { number }
+    local cleared: { number } = {}
+    local unwrapped = false
+    mock.fake("C_MountJournal.NeedsFanfare", function(id: number): boolean
+        return id == 102 and not unwrapped
+    end)
+    mock.fake("C_MountJournal.GetNumMountsNeedingFanfare", function(): number
+        return unwrapped and 0 or 1
+    end)
+    mock.fake("C_MountJournal.ClearFanfare", function(id: number)
+        cleared[#cleared + 1] = id
+        unwrapped = true
+    end)
+    return cleared
+end
+
+@test("gifts: wrapped mounts, toys and pets as the game says; counted")
+local function giftsRead()
+    wrappedRam()
+    toyData()
+    mock.setToys({ [201] = { fanfare = true }, [202] = {}, [203] = { collected = false } })
+    mock.fake("C_PetJournal.PetNeedsFanfare", function(guid: string): boolean
+        return guid == "BattlePet-0-1"
+    end)
+    mock.fake("C_PetJournal.GetNumPetsNeedingFanfare", function(): number
+        return 1
+    end)
+    expect(wrapped("mount", 102)).toBe(true)
+    expect(wrapped("mount", 101)).toBe(false)
+    expect(wrapped("toy", 201)).toBe(true)
+    expect(wrapped("pet", "BattlePet-0-1")).toBe(true)
+    expect(wrapped("appearance", 1)).toBe(false)
+    expect(giftCounts({ 201, 202, 203 })).toEqual({ mounts = 1, toys = 1, pets = 1 })
+    -- yours first, the gifts first among them
+    local list = M:Mounts()
+    expect(list[1].name).toBe("Swift Ram")
+    expect(list[1].wrapped).toBe(true)
+    expect(list[2].wrapped).toBeNil()
+    expect(M:Toys()[1].wrapped).toBe(true)
+    expect((status(list[1]))).toBe("A gift · unwrap it")
+    expect((actionLabel(false, list[1]))).toBe("Unwrap")
+end
+
+@test("a wrapped mount: the gift in the strip, the present on the stage; Unwrap opens it and the mount shows")
+local function giftMount()
+    local cleared = wrappedRam()
+    open()
+    local e = assert(M.chosen)
+    expect(e.name).toBe("Swift Ram")
+    expect(cells()[1].icon:GetTexture()).toBe(giftTexture())
+    expect(cells()[1].fresh).toBeShown()
+    expect(ui().gift).toBeShown()
+    expect(ui().model).never.toBeShown()
+    expect(ui().stage.hint:GetText()).toBe("Click the gift to unwrap it")
+    -- Unwrap: the secure button's action left out, the click opens it
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Unwrap")
+    expect(act:GetAttribute("type")).toBeNil()
+    expect(assert(ui().window.tabButtons)[1].countText).toBe("1")
+    mock.click(act)
+    mock.advanceTime(3.1)
+    expect(cleared).toEqual({ 102 })
+    expect(ui().gift).never.toBeShown()
+    expect(ui().model).toBeShown()
+    expect(act.look.label:GetText()).toBe("Summon")
+    expect(act:GetAttribute("type")).toBe("spell")
+    expect(assert(ui().window.tabButtons)[1].countText).toBeNil()
+end
+
+@test("a wrapped toy: its card shows the present and Unwrap; a click on the card opens it, Use after")
+local function giftToy()
+    toyData()
+    mock.setToys({
+        [201] = { fanfare = true },
+        [202] = { favorite = true, usable = false },
+        [203] = { collected = false },
+    })
+    open("toys")
+    local c = ui().shelf.cards[1]
+    expect(c.name:GetText()).toBe("Toy Drum")
+    expect(c.icon:GetTexture()).toBe(giftTexture())
+    expect(c.gift).toBeShown()
+    expect(c.act.look.label:GetText()).toBe("Unwrap")
+    expect(c.use:GetText()).toBe("A gift: click to unwrap it")
+    expect(c.act:GetAttribute("type")).toBeNil()
+    mock.click(c)
+    mock.advanceTime(3.1)
+    expect(C_ToyBoxInfo.NeedsFanfare(201)).toBe(false)
+    -- (opened, it sorts with the others again)
+    local drum = ui().shelf.cards[2]
+    expect(drum.name:GetText()).toBe("Toy Drum")
+    expect(drum.gift).never.toBeShown()
+    expect(drum.act.look.label:GetText()).toBe("Use")
+    expect(drum.act:GetAttribute("type")).toBe("toy")
+end
+
+@test("a gift arriving: told, Open shows it chosen; the counts on the tabs and for the micro menu")
+local function giftArrives()
+    wrappedRam()
+    local said: { [string]: unknown }[] = {}
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown })
+        said[#said + 1] = def
+    end)
+    local counts: number[] = {}
+    local owner = {}
+    events.on(
+        "SUUUI_GIFTS_CHANGED",
+        function(_, n: number)
+            counts[#counts + 1] = n
+        end,
+        owner
+    )
+    mock.fireEvent("NEW_MOUNT_ADDED", 102)
+    expect(#said).toBe(1)
+    expect(said[1].title).toBe("A gift arrived")
+    expect(said[1].body).toBe("Swift Ram waits wrapped in your collections.")
+    expect(counts[#counts]).toBe(1)
+    expect(M:GiftCount()).toBe(1)
+    -- Open: the window (through its secure toggle), the gift chosen
+    local action = (said[1].actions :: { { onClick: () -> (), click: () -> Frame? } })[1]
+    expect(action.click()).toBe(M.toggleButton)
+    open()
+    action.onClick()
+    expect(assert(M.chosen).id).toBe(102)
+    -- not wrapped: noted, not told
+    mock.fireEvent("NEW_MOUNT_ADDED", 101)
+    expect(#said).toBe(1)
+    -- a toy arriving wrapped
+    toyData()
+    mock.fireEvent("TOYS_UPDATED", 201, true, true)
+    expect(#said).toBe(2)
+    expect(said[2].body).toBe("Toy Drum waits wrapped in your collections.")
+    events.offAll(owner)
 end
 
 @test("off: the window closes, the key goes back to the game's")

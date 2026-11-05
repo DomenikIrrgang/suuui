@@ -9,6 +9,11 @@
 -- Where something comes from is SuuUI's generated data
 -- (SuuUI.CollectionSources(): the game gives no source for mounts, only the
 -- kind for appearances, and won't list the toys you lack).
+-- Gifts: a mount, toy or pet bought or given comes wrapped (the game's
+-- fanfare); it shows as the game's gift until opened the game's way, the
+-- wrapped present on the stage or the toy's card unwrapping (asked
+-- 2026-11-05: the look and the opening as the game's, counts on the tabs and
+-- the micro menu, a notification when one arrives, pets ready for a tab).
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -50,6 +55,55 @@ local M: CollectionsModule
 
 local WORLD = 12
 
+--------------------------------------------------------------------------------
+-- Gifts: what the game wraps (its fanfare), its own functions
+--------------------------------------------------------------------------------
+
+export const GIFT_ICON = "Interface\\Icons\\Item_Shop_GiftBox01"
+-- the toy box's wrapped present (its model scene)
+local GIFT_SCENE = 253
+
+-- Whether a mount (its ID), toy (its item) or pet (its GUID) is still
+-- wrapped.
+export function wrapped(kind: string, id: number | string): boolean
+    if kind == "mount" then
+        return flag(try(field(C_MountJournal, "NeedsFanfare"), id)) or false
+    elseif kind == "toy" then
+        return flag(try(field(C_ToyBoxInfo, "NeedsFanfare"), id)) or false
+    elseif kind == "pet" then
+        return flag(try(field(C_PetJournal, "PetNeedsFanfare"), id)) or false
+    end
+    return false
+end
+
+-- Opened: the game told (its "new" goes with it).
+export function clearWrapped(kind: string, id: number | string)
+    if kind == "mount" then
+        try(field(C_MountJournal, "ClearFanfare"), id)
+    elseif kind == "toy" then
+        try(field(C_ToyBoxInfo, "ClearFanfare"), id)
+    elseif kind == "pet" then
+        try(field(C_PetJournal, "ClearFanfare"), id)
+    end
+end
+
+-- The gifts still wrapped: mounts and pets as the game counts them, toys of
+-- Forever's list one by one (the game has no count for those).
+export type GiftCounts = { mounts: number, toys: number, pets: number }
+export function giftCounts(toys: number[]): GiftCounts
+    local n = 0
+    for _, itemID in ipairs(toys) do
+        if wrapped("toy", itemID) then
+            n = n + 1
+        end
+    end
+    return {
+        mounts = asNumber(try(field(C_MountJournal, "GetNumMountsNeedingFanfare"))) or 0,
+        toys = n,
+        pets = asNumber(try(field(C_PetJournal, "GetNumPetsNeedingFanfare"))) or 0,
+    }
+end
+
 -- An entry the strip, the stage and the shelf show: a mount, a toy or an
 -- appearance, yours or not, with its source (a CollectionSources entry).
 type Entry = {
@@ -72,6 +126,8 @@ type Entry = {
     isSelf?: boolean,
     -- a toy's
     itemID?: number,
+    -- a gift still wrapped (a mount's or toy's)
+    wrapped?: boolean,
     -- an appearance's
     visualID?: number,
     sourceID?: number,
@@ -428,6 +484,9 @@ end
 local function status(e: Entry): (string, string)
     if not e.collected then
         return "Not collected", "ink-faint"
+    end
+    if e.wrapped then
+        return "A gift · unwrap it", "gilt-text"
     end
     local when = day(e.learned)
     return "Collected" .. (when and (" · " .. when) or ""), "gilt-text"
@@ -1324,6 +1383,9 @@ class ToyCard extends Frame
     readonly use: Text
     readonly src: Text
     readonly act: SecureAction
+    -- the game's wrapped present over the icon while the toy is a gift
+    readonly gift: ModelScene
+    unwrapping: boolean = false
     hover: boolean = false
     entry: Entry? = nil
 
@@ -1345,6 +1407,10 @@ class ToyCard extends Frame
         self.plateEdge = UI.Border(self.plate, "gilt-hairline", { layer = "OVERLAY" })
         self.cd = CreateFrame("Cooldown", nil, self.plate, "CooldownFrameTemplate")
         self.cd:SetAllPoints(self.icon)
+        self.gift = CreateFrame("ModelScene", nil, self.plate, "NonInteractableWrappedModelSceneTemplate") :: ModelScene
+        self.gift:SetSize(56, 56)
+        self.gift:SetPoint("CENTER")
+        self.gift:Hide()
         self.star = RoundButton.new(self, "star", favouriteTip, function()
             M:ToggleToyFavourite(self.entry)
         end)
@@ -1374,6 +1440,19 @@ class ToyCard extends Frame
         self.act = SecureAction.new("SuuUIToyUse" .. i, self, "Use", 56)
         self.act:SetSize(56, 22)
         self.act:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-3"])
+        -- a gift: Unwrap, and a click on the card too (as the game's toy box)
+        self.act:HookScript("PostClick", function(_: Frame, _button: string, down: boolean?)
+            local e = self.entry
+            if not down and e and e.wrapped then
+                M:UnwrapToy(self)
+            end
+        end)
+        self:SetScript("OnMouseUp", function()
+            local e = self.entry
+            if e and e.wrapped then
+                M:UnwrapToy(self)
+            end
+        end)
         self:SetScript("OnEnter", function()
             self.hover = true
             self:DrawState()
@@ -1430,7 +1509,7 @@ class ToyCard extends Frame
             self.src:SetValue(sourceLine(e.source, "toy", nil))
             self.src:SetColor(e.collected and "ink-muted" or "ink")
         end
-        local why = toyWhy(e, start, duration)
+        local why = not e.wrapped and toyWhy(e, start, duration) or nil
         self.act.look:SetEnabledState(why == nil)
         self.act.why = why
     end
@@ -1467,6 +1546,8 @@ type Parts = {
     tools: Tools,
     stage: Stage,
     model: MountModel,
+    -- the wrapped present over the model while the mount is a gift
+    gift: ModelScene,
     card: StageCard,
     act: SecureAction,
     wardrobe: Wardrobe,
@@ -1559,6 +1640,9 @@ local function actionLabel(mounted: boolean, e: Entry?): (string, string?)
     if not e.collected then
         return "Summon", "You don't have this mount yet."
     end
+    if e.wrapped then
+        return UNWRAP or "Unwrap", nil
+    end
     if not e.usable then
         return "Summon", "You can't ride this mount here."
     end
@@ -1604,6 +1688,8 @@ class CollectionsModule extends Module<{}>
     closeOverlay: Button? = nil
     journalHooked: boolean = false
     ticker: TickerHandle? = nil
+    -- the gift being unwrapped (its animation runs 3 seconds)
+    unwrapping: Entry? = nil
 
     constructor()
         super({
@@ -1664,12 +1750,17 @@ class CollectionsModule extends Module<{}>
                     isSelf = flag(isSelf),
                     source = data().mount[id],
                     learned = self:Learned("mount", id, collected),
+                    wrapped = collected and wrapped("mount", id) or nil,
                 }
             end
         end
         table.sort(out, function(a: Entry, b: Entry): boolean
             if a.collected ~= b.collected then
                 return a.collected
+            end
+            -- gifts still wrapped first (where a notification's Open leads)
+            if (a.wrapped and true or false) ~= (b.wrapped and true or false) then
+                return a.wrapped and true or false
             end
             if a.favourite ~= b.favourite then
                 return a.favourite and true or false
@@ -1698,6 +1789,7 @@ class CollectionsModule extends Module<{}>
                 usable = has and try(field(C_ToyBox, "IsToyUsable"), itemID) ~= false,
                 source = data().toy[itemID],
                 learned = self:Learned("toy", itemID, has),
+                wrapped = has and wrapped("toy", itemID) or nil,
             }
             if name:find("^Toy %d") then
                 self.namesPending = true
@@ -1706,6 +1798,9 @@ class CollectionsModule extends Module<{}>
         table.sort(out, function(a: Entry, b: Entry): boolean
             if a.collected ~= b.collected then
                 return a.collected
+            end
+            if (a.wrapped and true or false) ~= (b.wrapped and true or false) then
+                return a.wrapped and true or false
             end
             if (a.favourite and true or false) ~= (b.favourite and true or false) then
                 return a.favourite and true or false
@@ -1914,6 +2009,7 @@ class CollectionsModule extends Module<{}>
         -- choosing another and back): shown once more a frame later
         w:HookScript("OnShow", function()
             self:Refresh()
+            self:UpdateGifts()
             after(0, function()
                 self.showing = nil
                 self:Refresh()
@@ -1925,12 +2021,28 @@ class CollectionsModule extends Module<{}>
         local tools = Tools.new(body, strip)
         local stage = Stage.new(body, tools)
         local model = MountModel.new(stage)
+        -- the game's wrapped present: a click unwraps it
+        local gift = CreateFrame("ModelScene", nil, stage, "WrappedModelSceneTemplate") :: ModelScene
+        gift:SetAllPoints(model)
+        gift:SetFrameLevel(stage:GetFrameLevel() + 3)
+        gift:EnableMouse(true)
+        gift:HookScript("OnMouseUp", function()
+            self:Unwrap()
+        end)
+        gift:Hide()
         local card = StageCard.new(stage)
         -- Summon / Dismiss: SuuUI's own secure button; the look is a SuuUI button under it
         local act = SecureAction.new("SuuUICollectionsAction", stage, "Summon", 120, "primary")
         act:SetSize(120, 30)
         act:SetPoint("TOPRIGHT", -S["space-6"], -S["space-6"])
         act:SetFrameLevel(stage:GetFrameLevel() + 12)
+        -- a gift: Unwrap (its secure action left out)
+        act:HookScript("PostClick", function(_: Frame, _button: string, down: boolean?)
+            local e = self.chosen
+            if not down and e and e.wrapped then
+                self:Unwrap()
+            end
+        end)
         stage.star:SetPoint("RIGHT", act, "LEFT", -S["space-4"], 0)
         local wardrobe = Wardrobe.new(stage)
         local shelf = Shelf.new(body)
@@ -1946,6 +2058,7 @@ class CollectionsModule extends Module<{}>
             tools = tools,
             stage = stage,
             model = model,
+            gift = gift,
             card = card,
             act = act,
             wardrobe = wardrobe,
@@ -2019,7 +2132,7 @@ class CollectionsModule extends Module<{}>
             b:Hide()
             return
         end
-        b.icon:SetTexture(e.icon)
+        b.icon:SetTexture(e.wrapped and GIFT_ICON or e.icon)
         local missing = not e.collected
         b.icon:SetDesaturated(missing)
         local v = missing and (b.hover and 0.8 or 0.55) or 1
@@ -2028,7 +2141,7 @@ class CollectionsModule extends Module<{}>
         b.edge:SetColor((chosen or b.hover) and "gilt" or missing and "gilt-faint" or "gilt-hairline")
         b.star:SetShown(e.favourite and true or false)
         local learned = e.learned
-        b.fresh:SetShown(learned ~= nil and learned > 0 and time() - learned < 7 * 86400)
+        b.fresh:SetShown(e.wrapped or (learned ~= nil and learned > 0 and time() - learned < 7 * 86400))
         b.jewel:SetShown(chosen)
         b:Show()
     end
@@ -2175,9 +2288,159 @@ class CollectionsModule extends Module<{}>
         end
         stage.star.on = e.favourite and true or false
         stage.star:Draw(false)
-        self:ShowMount(e)
+        if e.wrapped then
+            self:ShowGift(e)
+        else
+            if not self.unwrapping then
+                ui.gift:Hide()
+            end
+            self:ShowMount(e)
+        end
+        stage.hint:SetValue(e.wrapped and "Click the gift to unwrap it" or "Drag to turn · Wheel to zoom")
         ui.card:Draw(e)
         self:DrawAction()
+    end
+
+    -- A wrapped mount: the game's present on the stage, the mount hidden
+    -- until it is opened.
+    function ShowGift(_e: Entry)
+        local ui = self.ui
+        if not ui then
+            return
+        end
+        ui.model:Hide()
+        ui.stage.loading:Hide()
+        self.showing, self.waiting = nil, nil
+        local gift = ui.gift
+        if self.unwrapping then
+            return
+        end
+        tryMethod(
+            gift,
+            "TransitionToModelSceneID",
+            GIFT_SCENE,
+            CAMERA_TRANSITION_TYPE_IMMEDIATE,
+            CAMERA_MODIFICATION_TYPE_MAINTAIN,
+            true
+        )
+        tryMethod(gift, "PrepareForFanfare", true)
+        gift:Show()
+    end
+
+    -- The chosen gift opened the game's way: the present unwraps, then the
+    -- game is told and the mount shows. (No present to play: opened at once.)
+    function Unwrap(given: Entry?)
+        local ui = self.ui
+        local e = given or self.chosen
+        if not (ui and e and e.wrapped) or self.unwrapping then
+            return
+        end
+        self.unwrapping = e
+        local function opened()
+            self.unwrapping = nil
+            clearWrapped(e.kind, e.id)
+            e.wrapped = nil
+            ui.gift:Hide()
+            self.showing = nil
+            self:Refresh()
+            self:UpdateGifts()
+        end
+        local gift = ui.gift
+        if gift:IsShown() then
+            tryMethod(gift, "StartUnwrapAnimation", opened)
+        end
+        if not flag(tryMethod(gift, "IsUnwrapAnimating")) then
+            opened()
+        end
+    end
+
+    -- A wrapped toy opened from its card: its present unwraps there.
+    function UnwrapToy(c: ToyCard)
+        local e = c.entry
+        if not (e and e.wrapped) or c.unwrapping then
+            return
+        end
+        c.unwrapping = true
+        local function opened()
+            c.unwrapping = false
+            clearWrapped("toy", e.id)
+            e.wrapped = nil
+            c.gift:Hide()
+            self:Refresh()
+            self:UpdateGifts()
+        end
+        if c.gift:IsShown() then
+            tryMethod(c.gift, "StartUnwrapAnimation", opened)
+        end
+        if not flag(tryMethod(c.gift, "IsUnwrapAnimating")) then
+            opened()
+        end
+    end
+
+    -- How many gifts wait (mounts and toys: what this window opens).
+    function GiftCount(): number
+        local n = giftCounts(data().toys)
+        return n.mounts + n.toys
+    end
+
+    -- The counts on the tabs and the micro menu's (SUUUI_GIFTS_CHANGED).
+    function UpdateGifts()
+        local n = giftCounts(data().toys)
+        local ui = self.ui
+        if ui then
+            ui.window:SetTabCount("mounts", n.mounts > 0 and tostring(n.mounts) or nil)
+            ui.window:SetTabCount("toys", n.toys > 0 and tostring(n.toys) or nil)
+        end
+        self:Emit("SUUUI_GIFTS_CHANGED", n.mounts + n.toys)
+    end
+
+    -- A gift arrived: told, Open shows it (the window through its secure
+    -- toggle: it is protected in a fight).
+    function GiftArrived(kind: string, id: number, name: string?)
+        local tab = kind == "toy" and "toys" or "mounts"
+        SuuUI.Notify({
+            id = "suu:gift:" .. kind .. ":" .. id,
+            kind = "timed",
+            category = "Collections",
+            icon = { texture = GIFT_ICON },
+            title = "A gift arrived",
+            body = (name or (kind == "toy" and "A toy" or "A mount")) .. " waits wrapped in your collections.",
+            actions = {
+                {
+                    label = "Open",
+                    variant = "primary",
+                    click = function(): Frame?
+                        return self.toggleButton
+                    end,
+                    skipClick = function(): boolean
+                        return self:Shown()
+                    end,
+                    onClick = function()
+                        self:ShowGiftIn(tab, id)
+                    end,
+                },
+            },
+        })
+        self:UpdateGifts()
+    end
+
+    -- The window on a gift's tab, the gift chosen (mounts: on its page).
+    function ShowGiftIn(tab: string, id: number)
+        local w = self:Window()
+        if not (w and w:IsShown()) then
+            return
+        end
+        w:SetTab(tab)
+        if tab ~= "mounts" then
+            return
+        end
+        for i, e in ipairs(self.entries) do
+            if e.id == id then
+                self.page = math.floor((i - 1) / (COLS * ROWS)) + 1
+                self:Choose(e)
+                return
+            end
+        end
     end
 
     -- The toys' cooldowns on the shelf: again every second while it shows
@@ -2364,6 +2627,20 @@ class CollectionsModule extends Module<{}>
             if not InCombatLockdown() then
                 act:Hide()
             end
+            return
+        end
+        local mountedNow = flag(try(field(_G, "IsMounted")))
+        if e and e.wrapped and not mountedNow then
+            local label = actionLabel(false, e)
+            act.look.label:SetValue(label)
+            act.look:SetEnabledState(true)
+            act.why = nil
+            if InCombatLockdown() then
+                self.actionAfterCombat = true
+                return
+            end
+            act:Show()
+            act:SetAttribute("type", nil)
             return
         end
         local mounted = flag(try(field(_G, "IsMounted")))
@@ -2661,7 +2938,23 @@ class CollectionsModule extends Module<{}>
                 c:Show()
             end
         end
-        c.icon:SetTexture(e.icon)
+        c.icon:SetTexture(e.wrapped and GIFT_ICON or e.icon)
+        -- a gift: the game's present over the icon (left while it unwraps)
+        if e.wrapped and not c.unwrapping then
+            tryMethod(
+                c.gift,
+                "TransitionToModelSceneID",
+                GIFT_SCENE,
+                CAMERA_TRANSITION_TYPE_IMMEDIATE,
+                CAMERA_MODIFICATION_TYPE_MAINTAIN,
+                true
+            )
+            tryMethod(c.gift, "PrepareForFanfare", true)
+            c.gift:Show()
+        elseif not c.unwrapping then
+            c.gift:Hide()
+        end
+        c.act.look.label:SetValue(e.wrapped and (UNWRAP or "Unwrap") or "Use")
         c.icon:SetDesaturated(not e.collected)
         local v = e.collected and 1 or 0.55
         c.icon:SetVertexColor(v, v, v)
@@ -2677,7 +2970,7 @@ class CollectionsModule extends Module<{}>
             0
         )
         c.check:SetShown(e.collected)
-        c.use:SetValue(toyUse(e.itemID) or "")
+        c.use:SetValue(e.wrapped and "A gift: click to unwrap it" or toyUse(e.itemID) or "")
         c.use:SetColor(e.collected and "ink-muted" or "ink-faint")
         c.star.on = e.favourite and true or false
         c.star:Draw(false)
@@ -2686,7 +2979,7 @@ class CollectionsModule extends Module<{}>
         -- the secure part: out of combat only
         if InCombatLockdown() then
             self.shelfAfterCombat = true
-        elseif e.collected then
+        elseif e.collected and not e.wrapped then
             c.act:SetAttribute("type", "toy")
             c.act:SetAttribute("toy", e.itemID)
         else
@@ -2902,6 +3195,10 @@ class CollectionsModule extends Module<{}>
             local name = id and asString(try(field(C_MountJournal, "GetMountInfoByID"), id))
             self:NoteLast(name, time())
             self:Refresh()
+            local mountID = asNumber(id)
+            if mountID and wrapped("mount", mountID) then
+                self:GiftArrived("mount", mountID, name)
+            end
         end)
         self:OnGameEvent("MOUNT_JOURNAL_USABILITY_CHANGED", function()
             self:DrawAction()
@@ -2912,10 +3209,23 @@ class CollectionsModule extends Module<{}>
             self:NoteLast(asString(name), time())
             self:Refresh()
         end)
-        self:OnGameEvent("TOYS_UPDATED", function()
+        -- (a toy arriving wrapped says so here: its item, new, fanfare)
+        self:OnGameEvent("TOYS_UPDATED", function(_, itemID, _new, fanfare)
             if self:Shown() then
                 self:Refresh()
             end
+            local id = asNumber(itemID)
+            if id and flag(fanfare) then
+                local _, name = try(field(C_ToyBox, "GetToyInfo"), id)
+                self:GiftArrived("toy", id, asString(name) or itemName(id))
+            end
+        end)
+        -- the gifts waiting, on the tabs and the micro menu: once the game has
+        -- the journals
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            after(1, function()
+                self:UpdateGifts()
+            end)
         end)
         self:OnGameEvent("SPELL_UPDATE_COOLDOWN", function()
             if self:Shown() then

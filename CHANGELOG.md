@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- **Gifts in the collections**: a mount or toy you're given or buy comes wrapped, as in the game's own journal. It shows as a gift until you open it: the wrapped present on the mount stage (click it or Unwrap) or on the toy's card (click it). The Mounts and Toys tabs and the Collections button on the micro menu count the gifts waiting, and a notification tells you when one arrives, its Open showing it.
+- Plugins: `SUUUI_GIFTS_CHANGED` (the gifts waiting) and a window's `SetTabCount`; API 0.21.
+
 ### Fixed
 
 - Campfires on the world map go out: a fire you passed shows for 10 minutes after you last passed it, then it's gone.
