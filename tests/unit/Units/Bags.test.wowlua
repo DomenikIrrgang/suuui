@@ -10,14 +10,14 @@
 -- tooltips; selling junk; sorting (SuuUI's waves, the game's sort, what
 -- stops one); the settings rows; Blizzard's bag frames kept hidden.
 
-import test, expect, beforeEach, afterEach from "wowlua:test"
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import * as secret from "wowlua:secret"
 import type Inventory, SlotItem, SlotSection from "/UI/Inventory"
 import type SortSlot from "/Units/Bags/Sort"
-import internal M, SECTION from "/Units/Bags"
+import internal M, SECTION, familyName from "/Units/Bags"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
@@ -248,6 +248,50 @@ local function sections()
     expect(laid[1].label).toBe("Reagents")
     expect(laid[1].meta).toBe("8 · 7 free")
     expect(laid[2].label).toBe("Keyring")
+end
+
+@test("a quiver, a soul or profession bag: a section of its own after your bags, not in the free count")
+local function specialBags()
+    local laid: SlotSection[] = {}
+    mock.stub(inv(), "LayoutSlots", function(_: unknown, _: unknown, s: SlotSection[]?)
+        laid = s or {}
+    end)
+    mock.setBag(1, { slots = 10 })
+    mock.setBag(2, { slots = 12, items = { [1] = { id = CLOTH, count = 2 } } })
+    local real = C_Container.GetContainerNumFreeSlots
+    -- (bag 2 a quiver: its family 1)
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number?, number?)
+        if bag == 2 then
+            return 11, 1
+        end
+        return real(bag)
+    end)
+    open()
+    local general = C_Container.GetContainerNumSlots(0) + 10 + C_Container.GetContainerNumSlots(3) +
+        C_Container.GetContainerNumSlots(4)
+    local quiver = laid[1]
+    expect(quiver.label).toBe("Quiver")
+    expect(quiver.meta).toBe("12 · 11 free")
+    -- after the general bags (bag 3 and 4 before it)
+    expect(quiver.at).toBe(general + 1)
+    -- the window's count: the general bags only
+    expect(metaText():find(" of " .. general, 1, true) ~= nil).toBe(true)
+    mock.setBag(1, nil)
+    mock.setBag(2, nil)
+end
+
+@test("familyName: each special bag's kind")
+@cases({
+    { 1, "Quiver" },
+    { 2, "Ammo pouch" },
+    { 4, "Soul bag" },
+    { 32, "Herb bag" },
+    { 64, "Enchanting bag" },
+    { 1024, "Mining bag" },
+    { 4096, "Special bag" },
+})
+local function families(family: number, out: string)
+    expect(familyName(family)).toBe(out)
 end
 
 @test("a bag's update, a lock and a cooldown redraw its slots")
