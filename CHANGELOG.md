@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Flight map: on the enlarged world map the flight masters' pins, flight times, the destinations list and the Fly bar are their usual size again, as on the normal map.
+
 ## 0.6.5 (2026-11-05)
 
 ### New
