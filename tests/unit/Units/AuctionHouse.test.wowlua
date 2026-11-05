@@ -71,6 +71,7 @@ type HouseAuction = {
     minBid?: number,
     buyoutAmount?: number,
     timeLeft?: number,
+    owners?: string[],
 }
 type House = {
     browse: BrowseResultInfo[],
@@ -165,9 +166,18 @@ local function house(): House
                     minBid = 21000,
                     buyoutAmount = 50000,
                     timeLeft = 2,
+                    owners = {},
                 },
-                { auctionID = 12, itemKey = key(BLADE, 20), quantity = 1, buyoutAmount = 60000, timeLeft = 3 },
-                { auctionID = 13, itemKey = key(BLADE, 20), quantity = 2, minBid = 5000, timeLeft = 0 },
+                -- (the game's own page reads who owns each: real auctions say)
+                {
+                    auctionID = 12,
+                    itemKey = key(BLADE, 20),
+                    quantity = 1,
+                    buyoutAmount = 60000,
+                    timeLeft = 3,
+                    owners = {},
+                },
+                { auctionID = 13, itemKey = key(BLADE, 20), quantity = 2, minBid = 5000, timeLeft = 0, owners = {} },
             },
             [RING] = { { auctionID = 21, itemKey = key(RING), quantity = 1, buyoutAmount = 3000 } },
         },
@@ -798,7 +808,7 @@ local function itemFoot()
     expect(tipText(v.buyout)).toBe("Not enough money.")
 end
 
-@test("Bid and Buy out: the game's bid placed; your bid remembered; Buy out asks first; the game's no")
+@test("Bid: the game's bid placed; your bid remembered; Buy out without the game's page says what to do; the game's no")
 local function itemBuy()
     openBlade()
     local v = buy().itemView
@@ -816,24 +826,55 @@ local function itemBuy()
     expect(placed[1]).toEqual({ 11, 21000 })
     expect(assert(M:Saved().bids)[11]).toBe(21000)
     expect(note():find("^Bid 2") ~= nil).toBe(true)
+    -- Buy out: Forever takes it only from the game's own page (the secure
+    -- click over the button when it has the auction): SuuUI's own never
     mock.click(v.buyout)
-    expect(asked().title).toBe("Buy out Test Blade?")
-    confirm(nil)
-    expect(placed[2]).toEqual({ 11, 50000 })
+    expect(note()).toBe("Go back and open the item again to buy it out.")
+    expect(#placed).toBe(1)
     -- the game's no
     mock.stub(AH, "PlaceBid", function()
         error("too low")
     end)
     mock.click(v.bidButton)
     expect(note():find("^Couldn't bid: ") ~= nil).toBe(true)
-    confirm(nil)
-    expect(note():find("^Couldn't buy out: ") ~= nil).toBe(true)
     -- bought: the auctions asked again, none chosen
     local again = mock.stub(AH, "SendSearchQuery", function() end)
     mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", 11)
     expect(note()).toBe("Bought.")
     expect(M.chosen).toBe(nil)
     expect(again).toHaveBeenCalled()
+end
+
+@test("a single auction bought through the game's own page: its result row, its auction row, its Buyout")
+local function secureBuyout()
+    -- (Forever takes PlaceBid only from the game's code: found in game)
+    open()
+    search("blade")
+    local row = resultNamed("Test Blade")
+    mock.hover(row)
+    local over = assert(M.overs.result, "no secure click over the result")
+    expect(over.button).toBeShown()
+    local target = assert(frames.asFrame(over.button:GetAttribute("clickbutton1")))
+    local data = (target :: { rowData?: { itemKey: ItemKey } }).rowData
+    expect(assert(data).itemKey.itemID).toBe(BLADE)
+    -- the click: the game's page opens on the item and asks; SuuUI's view too
+    mock.click(over.button)
+    mock.advanceTime(1)
+    expect(M.view).toBe("item")
+    expect(M:GameOnItem()).toBe(true)
+    mock.advanceFrames(3)
+    -- an auction: chosen on the game's page too
+    mock.hover(offers()[2])
+    local pick = assert(M.overs.auction, "no secure click over the auction")
+    mock.click(pick.button)
+    expect(M.chosen).toBe(2)
+    expect(field(gameFrame(), "ItemBuyFrame", "auctionID")).toBe(12)
+    -- Buy out: the game's own Buyout, its popup asks
+    local buyOver = assert(M.overs.buyout, "no secure click over Buy out")
+    expect(buyOver.button).toBeShown()
+    mock.click(buyOver.button)
+    expect(StaticPopup_Visible("BUYOUT_AUCTION")).toBeTruthy()
+    StaticPopup_Hide("BUYOUT_AUCTION")
 end
 
 @test("the item's slot shows its tooltip: the game's item key tooltip, or the item's")
