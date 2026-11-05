@@ -1915,13 +1915,14 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         return status
     end
 
-    -- The window's size: the game's own (it sizes the map; see GAME_MAP_TOP).
-    -- Enlarged (the maximize button): the same window scaled up, header and
-    -- quest log with it (asked 2026-11-05: a scale is no resize, so the map's
-    -- pins stay the game's), the setting's share of the screen's height, in
-    -- the screen's middle, the world around it seen and clickable (asked in
-    -- game). The game's own fullscreen isn't used: its black backdrop
-    -- blocks the world and it shows the map alone.
+    -- The window's size: windowed, the game's own (it sizes the map; see
+    -- GAME_MAP_TOP). Enlarged (the maximize button): the same window larger,
+    -- in the screen's middle, the quest log beside it as you left it, the
+    -- world around it seen and clickable (asked in game). A scale instead
+    -- (no resize from SuuUI's code) made the header, the log and the pins as
+    -- much bigger: the resize was asked for back (2026-11-05). The game's own
+    -- fullscreen isn't used: its black backdrop blocks the world and it shows
+    -- the map alone.
     function Enlarging(f: typeof(WorldMapFrame), chrome: WindowChrome, mm: Frame?)
         local function enlarged(): boolean
             return self:Get("mapEnlarged")
@@ -1942,23 +1943,32 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             if flag(tryMethod(f, "IsMaximized")) then
                 return
             end
+            local log = logWidth()
+            local minW, minH = asNumber(field(f, "minimizedWidth")) or 702, asNumber(field(f, "minimizedHeight")) or 534
             if not enlarged() then
-                f:SetScale(1)
+                -- the game's own size (it sets it itself on every open; back
+                -- from enlarged here, the buttons' own callbacks being away)
+                if math.abs(f:GetWidth() - (minW + log)) > 0.5 or math.abs(f:GetHeight() - minH) > 0.5 then
+                    f:SetSize(minW + log, minH)
+                    f:OnFrameSizeChanged()
+                end
                 return
             end
-            -- the window, header included, the setting's share of the
-            -- screen's height, and narrower than the screen (in UIParent's
-            -- units: the map's parent is UIParent)
-            local minW, minH = asNumber(field(f, "minimizedWidth")) or 702, asNumber(field(f, "minimizedHeight")) or 534
-            local w = minW + logWidth()
-            local h = minH + (chrome.riseH or 0)
+            -- the map keeps the windowed map's shape; the window, header
+            -- included, the setting's share of the screen's height, and
+            -- narrower than the screen. (Resized from SuuUI's code: the map's
+            -- zoom is written by it, and the game may refuse its pins in
+            -- combat after; asked 2026-11-05 to keep this look anyway.)
+            local w0, h0 = minW - 5, minH - GAME_MAP_TOP - 2
             local margin = S["space-3"]
-            local k = UIParent:GetHeight() * share() / h
-            local roomW = UIParent:GetWidth() - 2 * margin
-            if w * k > roomW then
-                k = roomW / w
+            local mapH = UIParent:GetHeight() * share() - (chrome.riseH or 0) - GAME_MAP_TOP - 2
+            local mapW = mapH * w0 / h0
+            local roomW = UIParent:GetWidth() - 2 * margin - 5 - log
+            if mapW > roomW then
+                mapW, mapH = roomW, roomW * h0 / w0
             end
-            f:SetScale(math.max(k, 0.5))
+            f:SetSize(math.floor(mapW + 5 + log), math.floor(mapH + GAME_MAP_TOP + 2))
+            f:OnFrameSizeChanged()
         end
         local function setEnlarged(on: boolean)
             self:Set("mapEnlarged", on)
