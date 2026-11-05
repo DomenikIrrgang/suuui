@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Bags: a quiver, an ammo pouch, a soul bag or a profession bag (herb, enchanting, engineering, mining, gem, leatherworking) shows as a section of its own after your other bags, as the reagent bag and the keyring do ("Quiver · 16 · 4 free"). Their slots no longer count as free space in your bags (the Bags button, the window's foot), as they only take their own kind.
+
 ## 0.6.7 (2026-11-05)
 
 ### New
