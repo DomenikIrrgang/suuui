@@ -117,6 +117,44 @@ local function freeSlots(bag: number): number?
     return asNumber((C_Container.GetContainerNumFreeSlots(bag)))
 end
 
+-- A bag's family: what it takes (0: anything).
+local function familyOf(bag: number): number
+    local _, f = C_Container.GetContainerNumFreeSlots(bag)
+    return asNumber(f) or 0
+end
+
+-- The special bags' kinds by their family bit (asked 2026-11-05: each a
+-- section of its own, like the reagent bag).
+local FAMILIES: { { number | string } } = {
+    { 1, "Quiver" },
+    { 2, "Ammo pouch" },
+    { 4, "Soul bag" },
+    { 8, "Leatherworking bag" },
+    { 16, "Inscription bag" },
+    { 32, "Herb bag" },
+    { 64, "Enchanting bag" },
+    { 128, "Engineering bag" },
+    { 512, "Gem bag" },
+    { 1024, "Mining bag" },
+}
+
+-- What a family's bag is called.
+export function familyName(family: number): string
+    for _, f in ipairs(FAMILIES) do
+        local bit = f[1] :: number
+        if family % (bit * 2) >= bit then
+            return f[2] :: string
+        end
+    end
+    return "Special bag"
+end
+
+-- One of bags 1-4 that takes only its own kind (a quiver, a soul bag, a
+-- herb bag, ...): a section of its own, its slots not in your free count.
+export function isSpecialBag(bag: number): boolean
+    return bag >= 1 and bag <= (NUM_BAG_SLOTS or 4) and familyOf(bag) ~= 0
+end
+
 -- A slot button's cooldown (its template's).
 local function cooldownOf(b: Frame): Cooldown?
     local name = b:GetName()
@@ -364,7 +402,7 @@ local function snapshot(bags: number[]): Snapshot
             end
             slots[#slots + 1] = e
         end
-        if bag ~= REAGENT and bag ~= KEYRING then
+        if bag ~= REAGENT and bag ~= KEYRING and not isSpecialBag(bag) then
             size = size + n
             free = free + (freeSlots(bag) or 0)
         end
@@ -833,17 +871,50 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- One window's slots laid out in order: returns its slot count and free count.
-    function Fill(inv: Inventory, bags: number[]): (number, number)
+    function Fill(inv: Inventory, given: number[]): (number, number)
         local list: Button[] = {}
         local shown: { [number]: boolean } = {}
         local total, free = 0, 0
-        -- the reagent bag and the keyring each as a section of their own
-        -- (design "Bags · reagent bag", direction A, chosen 2026-10-17)
+        local mine = inv == self.inv
+        -- your bags: the general ones, then the special ones (quivers, soul
+        -- and profession bags), then the reagent bag and the keyring
+        local bags: number[] = given
+        if mine then
+            local general: number[], special: number[], last: number[] = {}, {}, {}
+            for _, bag in ipairs(given) do
+                if bag == REAGENT or bag == KEYRING then
+                    last[#last + 1] = bag
+                elseif isSpecialBag(bag) then
+                    special[#special + 1] = bag
+                else
+                    general[#general + 1] = bag
+                end
+            end
+            bags = general
+            for _, bag in ipairs(special) do
+                bags[#bags + 1] = bag
+            end
+            for _, bag in ipairs(last) do
+                bags[#bags + 1] = bag
+            end
+        end
+        -- the reagent bag, the keyring and each special bag as a section of
+        -- its own (design "Bags · reagent bag", direction A, chosen 2026-10-17)
         local sections: SlotSection[]? = nil
         for _, bag in ipairs(bags) do
             shown[bag] = true
             local n = numSlots(bag)
-            if inv == self.inv and (bag == REAGENT or bag == KEYRING) then
+            local special = mine and isSpecialBag(bag)
+            if special and n > 0 then
+                local here = sections or {}
+                sections = here
+                here[#here + 1] = {
+                    at = #list + 1,
+                    label = familyName(familyOf(bag)),
+                    meta = ("%d · %d free"):format(n, freeSlots(bag) or 0),
+                }
+            end
+            if mine and (bag == REAGENT or bag == KEYRING) then
                 local here = sections or {}
                 sections = here
                 if bag == REAGENT and n == 0 then
@@ -867,7 +938,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             for slot = n + 1, #made do
                 made[slot]:Hide()
             end
-            if bag ~= REAGENT and bag ~= KEYRING then
+            if bag ~= REAGENT and bag ~= KEYRING and not special then
                 total = total + n
                 free = free + (freeSlots(bag) or 0)
             end
