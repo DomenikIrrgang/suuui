@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Hunters: training your pet at Beast Training works again ("Forbidden: BuyTrainerService()"). Train there goes through the game's own Train button; Train all isn't offered for pets.
+
 ## 0.6.7 (2026-11-05)
 
 ### New
