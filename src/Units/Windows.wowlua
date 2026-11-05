@@ -1557,18 +1557,24 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The quest details' buttons and rewards, centred between the map and the
-    -- window's edge with the same margin either side.
+    -- window's edge with the same margin either side. (Measured in the
+    -- details' units: the map is scaled with the enlarged window, the log
+    -- kept at its usual size; the window's edge is the log's, 3 px outside
+    -- it, as the scaled window runs on unseen past it: found in game.)
     function PlaceQuestDetails()
-        local f = find("WorldMapFrame")
-        local d = part(find("QuestMapFrame"), "DetailsFrame")
-        local container = part(f, "ScrollContainer")
-        if not (f and d and d:IsVisible() and container) then
+        local q = find("QuestMapFrame")
+        local d = part(q, "DetailsFrame")
+        local container = part(find("WorldMapFrame"), "ScrollContainer")
+        if not (q and d and d:IsVisible() and container) then
             return
         end
-        local mapRight, edge, left = container:GetRight(), f:GetRight(), d:GetLeft()
-        if not (mapRight and edge and left) then
+        local ds = d:GetEffectiveScale()
+        local mapRight, logRight, left = container:GetRight(), q:GetRight(), d:GetLeft()
+        if not (mapRight and logRight and left) then
             return
         end
+        mapRight = mapRight * container:GetEffectiveScale() / ds
+        local edge = logRight * q:GetEffectiveScale() / ds + 3
         local MARGIN, GAP = 11, 4
         local x0, x1 = mapRight + MARGIN - left, edge - MARGIN - left
         local ab, sh, tr = part(d, "AbandonButton"), part(d, "ShareButton"), part(d, "TrackButton")
@@ -1996,6 +2002,10 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
             if wm then
                 tryMethod(wm, "QueueLayout")
             end
+            -- the quest details' buttons between the map and the edge again
+            after(0, function()
+                self:PlaceQuestDetails()
+            end)
         end
         local function fit()
             if flag(tryMethod(f, "IsMaximized")) then
