@@ -374,6 +374,28 @@ local function lines()
     M:OnLootLine(mock.secret("hidden"))
 end
 
+@test("a roll the game doesn't end for you: its card stays until it's decided, by the result line or its time up")
+local function decided()
+    -- (CANCEL_LOOT_ROLL didn't come once you had rolled: the card stayed at 0, found in game)
+    fakeRoll()
+    M:StartRoll(7, 10000)
+    mock.stub(_G, "RollOnLoot", function(_: number, _: number) end)
+    assert(action(card(7), "Need")).onClick()
+    -- others still choosing: it stays
+    mock.advanceTime(9)
+    expect(notes["suu:roll:7"] ~= nil).toBe(true)
+    -- decided: the result line ends it
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(notes["suu:roll:7"]).toBe(nil)
+    expect(assert(notes["suu:rollresult:7"]).title).toBe("Tamsin won Dusk Mantle")
+    -- no word at all: gone a moment after its time is up, not before
+    M:StartRoll(8, 10000)
+    mock.advanceTime(14)
+    expect(notes["suu:roll:8"] ~= nil).toBe(true)
+    mock.advanceTime(1.5)
+    expect(notes["suu:roll:8"]).toBe(nil)
+end
+
 @test("you won; everyone passed; a line about an item no roll is for")
 local function results()
     fakeRoll()

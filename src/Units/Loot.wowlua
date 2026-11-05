@@ -348,6 +348,8 @@ local function roster(roll: Roll): string[]
 end
 
 local WAITING_SHOWN = 4
+-- s a roll's card stays past its time when the game hasn't said it's over
+local ROLL_GRACE = 5
 
 -- A made-up 40-player raid: 39 others, votes coming in over the roll.
 local RAID_NAMES: string[] = {
@@ -736,6 +738,20 @@ class LootModule extends Module<typeof(DEFAULTS)>
         roll.can.disenchant = roll.canDisenchant == true
         self.rolls[rollID] = roll
         self:ShowRoll(roll)
+        -- its time up and still open (no word from the game, no result line):
+        -- gone a moment later (found in game: the card stayed at 0)
+        local function overdue()
+            if self.rolls[rollID] ~= roll then
+                return
+            end
+            local left = roll.remaining()
+            if left > 0 then
+                after(left + ROLL_GRACE, overdue)
+                return
+            end
+            self:EndRoll(rollID)
+        end
+        after(roll.remaining() + ROLL_GRACE, overdue)
     end
 
     function EndRoll(rollID: number)
@@ -855,6 +871,11 @@ class LootModule extends Module<typeof(DEFAULTS)>
                     if roll and not roll.reported then
                         roll.reported = true
                         self:Result(roll, what == "won" and who or nil)
+                    end
+                    -- decided: its card goes (the game doesn't always say,
+                    -- CANCEL_LOOT_ROLL missing once you've rolled: found in game)
+                    if roll and self.rolls[roll.id] == roll then
+                        self:EndRoll(roll.id)
                     end
                 end
                 return
