@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- World map: a campfire's tooltip says how long until it goes out, and a fire that goes out leaves the map while it's open.
+- Plugins: the `campfires` service's fires say when they go out (`out`); API 0.22.
+
 ## 0.6.5 (2026-11-05)
 
 ### New
