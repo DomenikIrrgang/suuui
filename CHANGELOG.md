@@ -5,6 +5,7 @@
 ### Fixed
 
 - Campfires on the world map go out: a fire you passed shows for 10 minutes after you last passed it, then it's gone.
+- World map quests: priests no longer see Desperate Prayer offered where only dwarves get it (human priests have Divine Grace), and once you've done Divine Grace or Confounding Flash at one trainer, the other trainers' copies no longer show.
 
 ## 0.6.4 (2026-11-05)
 
