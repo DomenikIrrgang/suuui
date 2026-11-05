@@ -86,6 +86,7 @@ It is built for the realities of the modern client: values the game hides from a
 | **Notifications** | One stack for repairs, full bags, ready checks, loot rolls, requests, battlegrounds, and friends and guild members coming online. |
 | **Loot & tooltips** | The loot window and loot rolls, and the game's tooltips in SuuUI's look. |
 | **Campsite** | Alerts for Campfire's camp benefits. |
+| **Quests** | Quests accepted and turned in for you as you talk to an NPC, except grey ones, ones with a reward to choose and, unless you allow them, dailies, shared quests and turn-ins that take gold or items. Hold Shift to do it yourself. |
 | **Settings window** | Searchable, every change live, previews at real size, plain-language descriptions. |
 | **Edit mode** | Move every SuuUI frame on a snap grid; reset one frame or all of them. |
 | **Profiles** | Any number of profiles, switched automatically by your role, with import and export. |

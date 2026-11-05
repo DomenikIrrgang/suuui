@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Quests accepted and turned in for you**: talking to an NPC, SuuUI accepts the quests it offers and turns in the ones you've done, one after another, each told in chat. Left to you: grey quests (and, with General › Quests › Leave quests below you, those a set number of levels below you), PvP quests and a turn-in with a reward to choose; and unless you turn them on there: daily and repeatable quests, quests others share, turn-ins that take gold or items. Hold Shift as you talk to an NPC to do it yourself. Accept and turn in each have their own switch.
+
 ## 0.6.6 (2026-11-05)
 
 ### New
