@@ -97,7 +97,9 @@ local function presentIn(gift: ModelScene, scene: number?): boolean
     if actor == nil then
         return false
     end
-    if tryMethod(actor, "GetModelFileID") == nil then
+    -- (no model: nil from a mount's scene, 0 too, from a pet's)
+    local file = asNumber(tryMethod(actor, "GetModelFileID"))
+    if not file or file == 0 then
         tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
     end
     return true
@@ -1795,6 +1797,8 @@ class CollectionsModule extends Module<{}>
     namesPending: boolean = false
     -- pets: the journal's filters opened this session; a list update queued
     petListOpen: boolean = false
+    -- a mount's model scene, for a gift whose own scene has no present
+    mountScene: number? = nil
     petRefreshQueued: boolean = false
     namesTimer: TimerHandle? = nil
     -- what waits for the end of combat
@@ -1989,6 +1993,22 @@ class CollectionsModule extends Module<{}>
             return a.name < b.name
         end)
         return out
+    end
+
+    -- A mount's model scene (they hold the game's present): the first mount's
+    -- that has one, kept.
+    function MountScene(): number?
+        local known = self.mountScene
+        if known then
+            return known
+        end
+        for _, e in ipairs(self:Mounts()) do
+            if e.scene and e.scene ~= 0 then
+                self.mountScene = e.scene
+                return e.scene
+            end
+        end
+        return nil
     end
 
     -- A pet's link in chat (Forever's are the companion links, by its row).
@@ -2598,7 +2618,13 @@ class CollectionsModule extends Module<{}>
         if self.unwrapping then
             return
         end
-        gift:SetShown(presentIn(gift, e.scene))
+        -- (a pet's own scene may have no present: a mount's then, whose does;
+        -- found in game, the pet's gift didn't show)
+        local shown = presentIn(gift, e.scene)
+        if not shown and e.kind ~= "mount" then
+            shown = presentIn(gift, self:MountScene())
+        end
+        gift:SetShown(shown)
         -- (the scene's place for it set anew with the scene: smaller, raised)
         local actor = gift:IsShown() and tryMethod(gift, "GetActorByTag", "wrapped")
         if actor then
