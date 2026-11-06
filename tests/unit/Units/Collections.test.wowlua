@@ -1190,7 +1190,9 @@ local function petJournal(): PetCalls
             return nil
         end
         local source = r.species == 3 and "|cFFFFD200Vendor: |rNat Pagle|n|cFFFFD200Zone: |rDustwallow Marsh" or
+            r.species == 2 and "" or
             "|cFFFFD200Profession: |rEngineering"
+        local desc = r.species == 2 and "" or "A small friend."
         return r.guid,
             r.species,
             r.owned,
@@ -1203,7 +1205,7 @@ local function petJournal(): PetCalls
             1,
             0,
             source,
-            "A small friend.",
+            desc,
             false,
             false,
             true,
@@ -1211,7 +1213,7 @@ local function petJournal(): PetCalls
             true
     end)
     mock.fake(PJ .. "GetPetInfoBySpeciesID", function(s: number): ...unknown
-        return "", 0, 1, 0, "", "", false, false, true, false, true, 7000 + s
+        return "", 0, 1, 0, "|cFFFFD200Drop: |rA stray", "A cat.", false, false, true, false, true, 7000 + s
     end)
     mock.fake(PJ .. "GetPetModelSceneInfoBySpeciesID", function(_: number): (number, number)
         return 99, 98
@@ -1293,6 +1295,9 @@ local function petsRead()
     expect((status(squirrel)):find("^Collected ×2") ~= nil).toBe(true)
     expect(list[3].collected).toBe(false)
     expect(petSourceLines(list[3].sourceText)).toEqual({ "Vendor: Nat Pagle", "Zone: Dustwallow Marsh" })
+    -- a row without its source and description (found in game): the species'
+    expect(petSourceLines(list[2].sourceText)).toEqual({ "Drop: A stray" })
+    expect(list[2].description).toBe("A cat.")
     expect(calls.searchCleared).toBe(true)
     expect(#calls.filters).toBe(2)
     -- not yours: why its Summon is off
@@ -1354,7 +1359,16 @@ local function giftPet()
     local calls = petJournal()
     calls.wrapped = "Pet-C"
     local present = fakePresent()
+    -- (a pet's gift in a mount's scene: the pet's own showed it empty)
+    mock.stub(M, "MountScene", function(): number?
+        return 42
+    end)
+    local scenes: number[] = {}
+    mock.stub(ui().gift, "TransitionToModelSceneID", function(_: unknown, id: number)
+        scenes[#scenes + 1] = id
+    end)
     open("pets")
+    expect(scenes[1]).toBe(42)
     local e = assert(M.chosen)
     expect(e.name).toBe("Black Tabby Cat")
     expect(e.wrapped).toBe(true)

@@ -97,11 +97,9 @@ local function presentIn(gift: ModelScene, scene: number?): boolean
     if actor == nil then
         return false
     end
-    -- (no model: nil from a mount's scene, 0 too, from a pet's)
-    local file = asNumber(tryMethod(actor, "GetModelFileID"))
-    if not file or file == 0 then
-        tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
-    end
+    -- (always the present's model: the scene's own, where there is one,
+    -- isn't in Forever's files; a pet's scene showed an empty one)
+    tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
     return true
 end
 
@@ -1938,7 +1936,21 @@ class CollectionsModule extends Module<{}>
             if species and name then
                 local e = bySpecies[species]
                 if not e then
-                    local display = asNumber((select(12, try(field(PJ, "GetPetInfoBySpeciesID"), species))))
+                    local _, _, _, _, speciesSource, speciesDesc, _, _, _, _, _, displayR = try(
+                        field(PJ, "GetPetInfoBySpeciesID"),
+                        species
+                    )
+                    local display = asNumber(displayR)
+                    -- (an owned pet's row came without its source and
+                    -- description, found in game: the species' then)
+                    local sourceText = asString(sourceR)
+                    if not sourceText or sourceText == "" then
+                        sourceText = asString(speciesSource)
+                    end
+                    local description = asString(descR)
+                    if not description or description == "" then
+                        description = asString(speciesDesc)
+                    end
                     local made: Entry = {
                         kind = "pet",
                         id = species,
@@ -1947,8 +1959,8 @@ class CollectionsModule extends Module<{}>
                         collected = false,
                         display = display,
                         scene = asNumber(try(field(PJ, "GetPetModelSceneInfoBySpeciesID"), species)),
-                        sourceText = asString(sourceR),
-                        description = asString(descR),
+                        sourceText = sourceText,
+                        description = description,
                         linkIndex = i,
                     }
                     e = made
@@ -2620,9 +2632,12 @@ class CollectionsModule extends Module<{}>
         end
         -- (a pet's own scene may have no present: a mount's then, whose does;
         -- found in game, the pet's gift didn't show)
-        local shown = presentIn(gift, e.scene)
-        if not shown and e.kind ~= "mount" then
-            shown = presentIn(gift, self:MountScene())
+        -- (a pet's gift in a mount's scene: the present showed empty in the
+        -- pet's own, found in game; the mount's, with SuuUI's model, works)
+        local scene = e.kind == "mount" and e.scene or self:MountScene() or e.scene
+        local shown = presentIn(gift, scene)
+        if not shown and scene ~= e.scene then
+            shown = presentIn(gift, e.scene)
         end
         gift:SetShown(shown)
         -- (the scene's place for it set anew with the scene: smaller, raised)
