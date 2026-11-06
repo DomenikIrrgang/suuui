@@ -333,15 +333,55 @@ end
 
 @test("the game's micro menu alerts (\"unopened items in your collection\") off while SuuUI's menu is on")
 local function gameAlerts()
-    local enabled = rawget(_G, "MainMenuMicroButton_AreAlertsEnabled")
-    expect(type(enabled)).toBe("function")
-    expect((enabled :: () -> boolean)()).toBe(false)
+    -- the game's own switch left alone (an addon calling it taints the
+    -- Spellbook opened in a fight)
+    expect((rawget(_G, "MainMenuMicroButton_AreAlertsEnabled") :: () -> boolean)()).toBe(true)
+    local helpTip = rawget(_G, "HelpTip") :: {
+        Show: ({}, Frame, { text: string, system?: string }, Frame?) -> boolean,
+        HideAllSystem: ({}, string) -> (),
+        framePool: { EnumerateActive: ({}) -> ((unknown, unknown) -> Frame?, unknown, unknown) },
+    }
+    local function tipOf(system: string): Frame?
+        for tip in helpTip.framePool:EnumerateActive() do
+            if ((tip :: {}) :: { info: { system: string? }? }).info?.system == system then
+                return tip
+            end
+        end
+        return nil
+    end
+    local collections = rawget(_G, "CollectionsMicroButton") :: Frame
+    helpTip:Show(
+        UIParent,
+        { text = "You have unopened items in your collection.", system = "MicroButtons" },
+        collections
+    )
+    local tip = assert(tipOf("MicroButtons"))
+    expect(tip:GetAlpha()).toBe(0)
+    expect(tip:IsMouseEnabled()).toBe(false)
+    -- the frame given out again for another tip: seen as the game made it
+    helpTip:HideAllSystem("MicroButtons")
+    helpTip:Show(UIParent, { text = "Another tip." }, UIParent)
+    for t in helpTip.framePool:EnumerateActive() do
+        expect(t:GetAlpha()).toBe(1)
+    end
+    helpTip:HideAllSystem("")
+    -- one shown before: hidden once shown again while the menu is on
+    helpTip:Show(
+        UIParent,
+        { text = "You have unopened items in your collection.", system = "MicroButtons" },
+        collections
+    )
+    expect(assert(tipOf("MicroButtons")):GetAlpha()).toBe(0)
 end
 
 -- (last: the module off)
 @test("stopped: hidden, its anchor withdrawn")
 local function disabled()
     M:OnDisable()
-    expect((rawget(_G, "MainMenuMicroButton_AreAlertsEnabled") :: () -> boolean)()).toBe(true)
+    for tip in ((rawget(_G, "HelpTip") :: {}) :: {
+        framePool: { EnumerateActive: ({}) -> ((unknown, unknown) -> Frame?, unknown, unknown) },
+    }).framePool:EnumerateActive() do
+        expect(tip:GetAlpha()).toBe(1)
+    end
     expect(M.menu).never.toBeShown()
 end
