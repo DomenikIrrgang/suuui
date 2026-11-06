@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Collections: the Collections button on SuuUI's micro menu opens the window in combat again ("Blocked in combat: SuuUICollectionsWindow:Show()"), as its key does.
+- Collections in combat: the Collections button on SuuUI's micro menu opens the window again, as its key does, and Escape closes it, without "Blocked in combat" errors.
 
 ## 0.6.15 (2026-11-07)
 
