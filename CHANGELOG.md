@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Mouseover bindings**: bind spells to keys, clicks and the mouse wheel in the Spellbook, and they cast on the unit under the mouse: on SuuUI's unit frames (player, target, target of target, focus, pet, party, raid, boss) and on units in the world, nameplates too. Away from units a key keeps its usual job. Press Bind in the Spellbook's head (or type `/suu bind`), hover a spell and press a key, click or turn the wheel; Delete clears the spell, Esc or Done closes. Right-click a spell to bind it with more choices: the highest rank you know (it moves up as you learn one) or this rank only, unit frames, the world or both, and anyone, friends or enemies, so one key can heal a friend and hit an enemy. Each spell shows its bindings after its rank. The Bindings tab under the schools lists them all, and copies them from another talent tree: each tree keeps its own. SuuUI asks before a key takes over another spell's and before binding Left or Right click on unit frames, and won't bind a key that moves you. Shift, Ctrl, Alt and Cmd combine; unit frames take Shift, Ctrl and Alt clicks (a Cmd click works in the world). In combat your bindings still cast; changes wait for its end.
+
 ## 0.6.9 (2026-11-06)
 
 ### Fixed

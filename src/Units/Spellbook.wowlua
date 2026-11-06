@@ -19,6 +19,13 @@
 -- in combat too (asked for in game); the switches (Unlearned, All ranks)
 -- wait for the end of combat, as they change what the pages hold.
 --
+-- Mouseover bindings (the mousebindings service, asked 2026-11-06): the
+-- head's Bind button (and /suu bind) starts bind mode, a cover over each
+-- spell takes a key, click or the wheel; a right click on a spell opens its
+-- menu; the Bindings tab under the schools lists them all. A spell's
+-- bindings show as chips after its rank. Bind mode stays open in combat,
+-- locked (keys go back to the game until it ends).
+--
 -- A level-up shows what it brings: the level-up card (UI.LevelUp, through
 -- SuuUI.ShowLevelUp) in the alerts' place, out of combat (a level gained in
 -- combat waits for its end). /suu levelup [level] shows it without one.
@@ -29,6 +36,8 @@ import type SettingsSection from "/Core/Modules"
 import type Spellbook, SpellCell, BookSpell, BookSchool, BookAll from "/UI/Spellbook"
 import type LevelUpCard, LevelUpDef, LevelUpSpell from "/UI/LevelUp"
 import type TrainerSpell from "/Data/Trainer"
+import MOUSE_BINDINGS from "/Core/ServiceKeys"
+import type BindSpell from "/Core/ServiceKeys"
 import type Color from "/Core/Tokens"
 import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
@@ -230,6 +239,49 @@ end
 local LEVEL_UP = "suu:levelup"
 local SHOWN = 10
 
+-- A spell of the page to bind (learned, not passive), or nil.
+local function bindable(s: BookEntry?): BindSpell?
+    if not s or s.status ~= "learned" then
+        return nil
+    end
+    return { name = s.label, spellID = s.spellID, rank = s.rank, icon = s.icon }
+end
+
+-- Its bindings' chips ("Shift-F", "Ctrl-F R3").
+local function chipsOf(s: BookEntry?): string[]
+    local out: string[] = {}
+    local svc = SuuUI.UseService(MOUSE_BINDINGS)
+    local forSpell, chip = svc and svc.ForSpell, svc and svc.ChipText
+    if not s or s.status ~= "learned" or not forSpell or not chip then
+        return out
+    end
+    for _, b in ipairs(forSpell(s.label)) do
+        out[#out + 1] = chip(b)
+    end
+    return out
+end
+
+-- keys that are modifiers alone (bind mode waits past them)
+local LONE: { [string]: boolean } = {
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+    LMETA = true,
+    RMETA = true,
+    UNKNOWN = true,
+}
+
+local function modifiers(): string
+    return (IsAltKeyDown() and "ALT-" or "") ..
+        (IsControlKeyDown() and "CTRL-" or "") ..
+            (IsShiftKeyDown() and "SHIFT-" or "") .. ((IsMetaKeyDown and IsMetaKeyDown()) and "META-" or "")
+end
+
+local STRIP_IDLE = "Hover a spell, then press a key, click or turn the wheel. Delete clears it. Esc or Done closes."
+
 local function spells(n: number): string
     return n == 1 and "1 spell" or (n .. " spells")
 end
@@ -371,6 +423,12 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     slice: BookEntry[]? = nil
     toastsHooked: boolean? = nil
     wantWidth: number? = nil
+    -- mouseover bindings: bind mode, its key catcher, the spell hovered;
+    -- the Bindings tab shown
+    bindMode: boolean = false
+    catcher: Frame? = nil
+    hoverCell: number? = nil
+    bindingsShown: boolean = false
 
     constructor()
         super({
@@ -750,9 +808,11 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             for _, sp in ipairs(list) do
                 local name = (sp.label or "") ..
                     ((sp.status ~= "learned" and sp.status ~= "passive" and sp.rank) and ("  Rank " .. sp.rank) or "")
-                widest = math.max(widest, UI.MeasureText("label", name), UI.MeasureText("caption", sp.sub or ""))
+                -- (the rank line with its bindings' chips)
+                local line = UI.MeasureText("caption", sp.sub or "") + book:ChipsWidth(chipsOf(sp))
+                widest = math.max(widest, UI.MeasureText("label", name), line)
             end
-            tabs[i] = { label = s.name, icon = s.icon, trainable = n, active = i == chosen }
+            tabs[i] = { label = s.name, icon = s.icon, trainable = n, active = i == chosen and not self.bindingsShown }
             if i == chosen then
                 current, toTrain = list, n
             end
@@ -786,6 +846,15 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         self.slice = slice
         book:SetSpells(shown)
         book:SetPage(page, pages)
+        -- the bindings: chips, bind mode's covers, the Bindings tab
+        local live: boolean[] = {}
+        for i = 1, perPage do
+            book:SetChips(i, chipsOf(slice[i]))
+            live[i] = bindable(slice[i]) ~= nil
+        end
+        book:SetCovers(self.bindMode, live)
+        book:SetBindingsTab(self.bindingsShown)
+        book:SetBindEnabled(not combat and SuuUI.UseService(MOUSE_BINDINGS) ~= nil)
         self:UpdateCooldowns()
         -- what each button casts (learned spells only), on every school's
         -- pages: the router points the buttons at this one, in combat too
@@ -862,7 +931,42 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         -- (the secure router has already pointed the buttons at the new page)
         book.onSchool = function(i: number)
             self.school, self.page = i, 1
+            if self.bindingsShown then
+                self:ShowBindings(false)
+            end
             self:Render()
+        end
+        -- mouseover bindings
+        book.onBind = function()
+            self:BindMode(not self.bindMode)
+        end
+        book.onStripDone = function()
+            self:BindMode(false)
+        end
+        book.onMenu = function(i: number)
+            local spell = bindable(self.slice and self.slice[i])
+            local svc = SuuUI.UseService(MOUSE_BINDINGS)
+            local menu = svc and svc.Menu
+            if spell and menu and not self.bindMode then
+                menu(spell, function()
+                    self:ShowBindings(true)
+                end)
+            end
+        end
+        book.onCover = function(i: number, input: string)
+            self:BindPress(i, input)
+        end
+        book.onCoverEnter = function(i: number)
+            self.hoverCell = i
+            self:DrawStrip()
+        end
+        book.onCoverLeave = function(i: number)
+            if self.hoverCell == i then
+                self.hoverCell = nil
+            end
+        end
+        book.onBindingsTab = function()
+            self:ShowBindings(true)
         end
         book.onPage = function(delta: number)
             self.page = (self.page or 1) + delta
@@ -932,6 +1036,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         book:HookScript("OnHide", function()
             maxMin(true)
             self:Restore()
+            self:BindMode(false)
         end)
         -- Blizzard's UpdateSize sets the height again right after the window
         -- shows (in the same frame): shortened at once, so the tall one is never
@@ -951,6 +1056,159 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         end)
         -- filled now, while the window is still closed
         self:Render(true)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Mouseover bindings
+    ----------------------------------------------------------------------------
+
+    -- Bind mode on or off: a cover over each spell takes a click or the
+    -- wheel, the catcher every key (Esc closes, Delete clears the spell
+    -- hovered). In combat it stays, locked: the catcher lets keys go.
+    function BindMode(on: boolean)
+        local book = self.book
+        if not book or (on and SuuUI.UseService(MOUSE_BINDINGS) == nil) then
+            return
+        end
+        if on == self.bindMode then
+            return
+        end
+        self.bindMode = on
+        self.hoverCell = nil
+        if on and self.bindingsShown then
+            self:ShowBindings(false)
+        end
+        local catcher = self.catcher or self:BuildCatcher()
+        catcher:SetShown(on and not InCombatLockdown())
+        if on then
+            self:DrawStrip()
+        else
+            book:SetStrip(nil)
+        end
+        self:Render()
+    end
+
+    function BuildCatcher(): Frame
+        local c = CreateFrame("Frame", nil, UIParent)
+        -- (under the dialogs: a question asked first takes Esc)
+        c:SetFrameStrata("HIGH")
+        c:EnableKeyboard(true)
+        c:SetScript("OnKeyDown", function(frame, key)
+            if InCombatLockdown() then
+                return
+            end
+            frame:SetPropagateKeyboardInput(false)
+            if key == "ESCAPE" then
+                self:BindMode(false)
+            elseif key == "PRINTSCREEN" then
+                Screenshot()
+            elseif key == "DELETE" then
+                self:BindClear()
+            elseif not LONE[key] then
+                local i = self.hoverCell
+                if i then
+                    self:BindPress(i, modifiers() .. key)
+                else
+                    local book = self.book
+                    if book then
+                        book:SetStrip("Bind mode", "Hover a spell first, then press the key.", "gilt-text")
+                    end
+                end
+            end
+        end)
+        c:Hide()
+        self.catcher = c
+        return c
+    end
+
+    -- The strip: the spell hovered, or what to do. `combat`: a fight
+    -- starting (its event comes just before the lockdown).
+    function DrawStrip(combat: boolean?)
+        local book = self.book
+        if not book or not self.bindMode then
+            return
+        end
+        if combat or InCombatLockdown() then
+            book:SetStrip("Bind mode · in combat", "Bindings change when it ends. They still cast.", "gilt-text")
+            return
+        end
+        local i = self.hoverCell
+        local s = i and self.slice and self.slice[i]
+        local spell = bindable(s)
+        if spell then
+            book:SetStrip("Bind mode · " .. spell.name, STRIP_IDLE, "arcane")
+        elseif s then
+            book:SetStrip("Bind mode", s.label .. " can't be bound: only spells you know and cast.", "ink-muted")
+        else
+            book:SetStrip("Bind mode", STRIP_IDLE, "arcane")
+        end
+    end
+
+    -- An input pressed over cell i in bind mode: bound (the service asks
+    -- first when it must).
+    function BindPress(i: number, input: string)
+        local book = self.book
+        local svc = SuuUI.UseService(MOUSE_BINDINGS)
+        local press = svc and svc.Press
+        if not book or not press or InCombatLockdown() then
+            return
+        end
+        local s = self.slice and self.slice[i]
+        local spell = bindable(s)
+        if not spell then
+            book:SetStrip(
+                "Bind mode",
+                ((s and s.label) or "That") .. " can't be bound: only spells you know and cast.",
+                "ink-muted"
+            )
+            return
+        end
+        press(spell, input, function(title: string, detail: string?, tone: string?)
+            if self.bindMode then
+                book:SetStrip(title, detail, tone)
+            end
+        end)
+    end
+
+    -- Delete in bind mode: the hovered spell's bindings gone.
+    function BindClear()
+        local book = self.book
+        local svc = SuuUI.UseService(MOUSE_BINDINGS)
+        local clear = svc and svc.ClearSpell
+        local i = self.hoverCell
+        local spell = bindable(i and self.slice and self.slice[i])
+        if not book or not clear or not spell then
+            return
+        end
+        local n = clear(spell.name)
+        book:SetStrip(
+            spell.name,
+            n > 0 and (n == 1 and "Its binding is gone." or ("Its %d bindings are gone."):format(n)) or
+                "It had no bindings.",
+            "arcane"
+        )
+    end
+
+    -- The Bindings tab shown (the list over the page) or gone.
+    function ShowBindings(on: boolean)
+        local book = self.book
+        local svc = SuuUI.UseService(MOUSE_BINDINGS)
+        local list = svc and svc.List
+        if not book or (on and not list) then
+            return
+        end
+        self.bindingsShown = on
+        if on then
+            self:BindMode(false)
+            if list then
+                list(book.view, function()
+                    self:ShowBindings(false)
+                    self:BindMode(true)
+                end)
+            end
+        end
+        book:ShowView(on)
+        self:Render()
     end
 
     function Shorten()
@@ -1296,6 +1554,12 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         -- lockdown) if it never was: the window first opened in that fight
         -- takes the Spellbook's size, and its school and page buttons work
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            -- bind mode locked: keys go back to the game
+            local c = self.catcher
+            if c then
+                c:Hide()
+            end
+            self:DrawStrip(true)
             if not self.book then
                 return
             end
@@ -1359,7 +1623,36 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:SayToTrain()
+        -- mouseover bindings: the chips; bind mode locked in combat
+        self:On("SUUUI_MOUSE_BINDINGS_CHANGED", function()
+            local book = self.book
+            if book and book:IsVisible() then
+                self:Render()
+            end
+        end)
+        self:RegisterCommand("bind", "Bind spells to keys, clicks and the wheel that cast on the unit under the mouse: the Spellbook's bind mode.", function()
+            if InCombatLockdown() then
+                self:Print("Bind mode opens out of combat.")
+                return
+            end
+            local book = self.book
+            if not book or not book:IsVisible() then
+                local util = rawget(_G, "PlayerSpellsUtil")
+                local open = type(util) == "table" and rawget(util :: {}, "OpenToSpellBookTab")
+                if type(open) == "function" then
+                    pcall(open :: () -> ())
+                end
+            end
+            after(0, function()
+                self:BindMode(true)
+            end)
+        end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            local c = self.catcher
+            if c and self.bindMode then
+                c:Show()
+                self:DrawStrip()
+            end
             if self.levelTo then
                 self:LevelGained(self.levelTo)
             end

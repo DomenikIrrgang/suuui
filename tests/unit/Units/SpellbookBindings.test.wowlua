@@ -1,0 +1,232 @@
+-- Units/Spellbook's mouseover bindings: bind mode from the head's Bind
+-- button (a key over a spell, a click or the wheel on its cover; Left click
+-- asked first; Esc closes; in combat locked), the spell's chips after its
+-- rank, its right-click menu into the capture box, the Bindings tab and
+-- /suu bind. The bindings themselves are Units/MouseBindings' (its tests).
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as errors from "wowlua:errors"
+import SuuUI from "/Core/API"
+import expectNoErrors, captureMenus, choose, captureConfirm from "../../helpers"
+import internal M from "/Units/Spellbook"
+import internal M as Binds from "/Units/MouseBindings"
+import type Spellbook, SpellCell from "/UI/Spellbook"
+
+local function window(): Frame?
+    return frames.find("PlayerSpellsFrame")
+end
+local function book(): Spellbook
+    return (assert(M.book))
+end
+
+local function open()
+    -- (the first-run welcome over everything takes Esc first)
+    local welcome = SuuUI.GetModule("welcome")
+    if welcome then
+        errors.tryMethod(welcome, "Close")
+    end
+    local f = window()
+    if not f or not f:IsShown() then
+        mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    end
+    mock.advanceFrames(2)
+end
+
+-- The first spell on the page that can be bound: its cell, index, name.
+local function bindableCell(): (SpellCell, number, string)
+    for i, s in ipairs(M.slice or {}) do
+        if s.status == "learned" then
+            return book().cells[i], i, s.label
+        end
+    end
+    error("no learned spell on the page")
+end
+
+-- A cell's chips shown.
+local function chips(c: SpellCell): string[]
+    local out: string[] = {}
+    for _, chip in ipairs(c.chips) do
+        if chip:IsShown() then
+            out[#out + 1] = chip.text:GetText() or ""
+        end
+    end
+    return out
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    mock.setModifiers({})
+    M:BindMode(false)
+    if M.bindingsShown then
+        M:ShowBindings(false)
+    end
+    local f = window()
+    if f and f:IsShown() then
+        HideUIPanel(f)
+    end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    Binds:Store().specs = {}
+    Binds:Apply()
+    M.school, M.page = nil, nil
+    mock.advanceTime(5)
+    expectNoErrors()
+end
+
+@test("Bind starts bind mode: the strip over the head, a cover over each spell; Esc closes it")
+local function bindMode()
+    open()
+    mock.click(book().bindButton)
+    expect(M.bindMode).toBe(true)
+    expect(book().strip:IsShown()).toBe(true)
+    local c = bindableCell()
+    expect((assert(c.cover)):IsShown()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(M.bindMode).toBe(false)
+    expect(book().strip:IsShown()).toBe(false)
+    expect((assert(c.cover)):IsShown()).toBe(false)
+end
+
+@test("a key pressed over a spell binds it: the strip says so, the spell's chip shows after its rank")
+local function pressKey()
+    open()
+    mock.click(book().bindButton)
+    local c, _, name = bindableCell()
+    mock.hover(c.cover)
+    expect(book().stripTitle:GetText()).toBe("Bind mode · " .. name)
+    mock.setModifiers({ shift = true })
+    mock.pressKey("F")
+    mock.setModifiers({})
+    expect(#Binds:ForSpell(name)).toBe(1)
+    expect(Binds:ForSpell(name)[1].input).toBe("SHIFT-F")
+    expect(book().stripTitle:GetText()).toBe("Shift-F → " .. name)
+    expect(chips(c)).toEqual({ "Shift-F" })
+    -- Delete takes it away again
+    mock.pressKey("DELETE")
+    expect(#Binds:ForSpell(name)).toBe(0)
+    expect(chips(c)).toEqual({})
+end
+
+@test("a click or the wheel on a spell's cover binds it; Left click is asked first and works on unit frames only")
+local function clicks()
+    open()
+    mock.click(book().bindButton)
+    local c, _, name = bindableCell()
+    local cover = assert(c.cover)
+    mock.click(cover, "MiddleButton")
+    mock.wheel(cover, 1)
+    local inputs: string[] = {}
+    for _, b in ipairs(Binds:ForSpell(name)) do
+        inputs[#inputs + 1] = b.input
+    end
+    table.sort(inputs)
+    expect(inputs).toEqual({ "BUTTON3", "MOUSEWHEELUP" })
+    -- three bindings: two chips, then "+1"
+    local asked = captureConfirm()
+    mock.click(cover, "LeftButton")
+    local q = asked.last()
+    expect(q.title).toBe("Left click targets on unit frames")
+    assert(q.onConfirm)(nil)
+    local left = Binds:ForSpell(name)[3]
+    expect(left.input).toBe("BUTTON1")
+    expect(left.reach).toBe("frames")
+    expect(#chips(c)).toBe(3)
+    expect(chips(c)[3]).toBe("+1")
+end
+
+@test("a movement key is refused in the strip")
+local function refused()
+    open()
+    mock.click(book().bindButton)
+    local c, _, name = bindableCell()
+    mock.hover(c.cover)
+    mock.pressKey("W")
+    expect(#Binds:ForSpell(name)).toBe(0)
+    expect((book().stripTitle:GetText() or ""):find("Move Forward", 1, true) ~= nil).toBe(true)
+end
+
+@test("in combat bind mode stays, locked: keys go back to the game, covers bind nothing")
+local function combat()
+    open()
+    mock.click(book().bindButton)
+    local c, _, name = bindableCell()
+    mock.player:enterCombat()
+    expect(M.bindMode).toBe(true)
+    expect(book().stripTitle:GetText()).toBe("Bind mode · in combat")
+    expect((assert(M.catcher)):IsShown()).toBe(false)
+    mock.click(assert(c.cover), "MiddleButton")
+    expect(#Binds:ForSpell(name)).toBe(0)
+    mock.player:leaveCombat()
+    expect((assert(M.catcher)):IsShown()).toBe(true)
+end
+
+@test("a right click on a spell: its menu binds in the capture box, changes and removes")
+local function menu()
+    open()
+    local menuItems = captureMenus()
+    local c, _, name = bindableCell()
+    mock.click(c.button, "RightButton")
+    choose(menuItems, "Bind a key or click…")
+    local box = assert(Binds.box)
+    expect(box.panel:IsShown()).toBe(true)
+    expect(box.waiting).toBe(true)
+    -- every switch inside the box (Where's overflowed it: found in game)
+    for _, seg in ipairs({ box.reachSeg, box.reactSeg }) do
+        expect((seg:GetRight() or 0) <= (box.panel.body:GetRight() or 0) + 0.5).toBe(true)
+    end
+    mock.click(box.area, "MiddleButton")
+    expect(box.waiting).toBe(false)
+    expect(box.areaTop:GetText()).toBe("Middle click")
+    mock.click(box.reachSeg.buttons[2])
+    mock.click(box.ok)
+    expect(box.panel:IsShown()).toBe(false)
+    local b = Binds:ForSpell(name)[1]
+    expect(b.input).toBe("BUTTON3")
+    expect(b.reach).toBe("frames")
+    -- the menu again: change it, remove it
+    mock.click(c.button, "RightButton")
+    expect(menuItems["Change Middle click…"] ~= nil).toBe(true)
+    choose(menuItems, "Remove Middle click")
+    expect(#Binds:ForSpell(name)).toBe(0)
+end
+
+@test("the Bindings tab lists them by clicks, keys and the wheel; a row's remove takes it away")
+local function tab()
+    open()
+    local _, _, name = bindableCell()
+    Binds:Add({ input = "SHIFT-F", spell = name, rank = "highest", reach = "both", react = "any" }, nil)
+    Binds:Add({ input = "SHIFT-BUTTON1", spell = name, rank = "highest", reach = "both", react = "any" }, nil)
+    mock.click(book().bindTab)
+    expect(M.bindingsShown).toBe(true)
+    expect(book().view:IsShown()).toBe(true)
+    local list = assert(Binds.list)
+    local shown: string[] = {}
+    for _, r in ipairs(list.rows) do
+        if r.frame:IsShown() then
+            shown[#shown + 1] = r.name:GetText() or ""
+        end
+    end
+    -- the clicks: the frames' own Left and Right, then Shift-Left; the key
+    expect(shown).toEqual({ "Targets the unit", "Opens the unit's menu", name, name })
+    local row = list.rows[4]
+    mock.click(row.close)
+    expect(#Binds:Binds()).toBe(1)
+    -- a school takes the page back
+    assert(book().onSchool)(2)
+    expect(book().view:IsShown()).toBe(false)
+end
+
+@test("/suu bind opens the Spellbook in bind mode")
+local function slash()
+    mock.slash("/suu bind")
+    mock.advanceFrames(2)
+    expect(M.bindMode).toBe(true)
+    expect(book():IsVisible()).toBe(true)
+end
