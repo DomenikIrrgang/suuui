@@ -28,6 +28,7 @@
 
 import colorize from "wowlua:color"
 import hook from "wowlua:hooks"
+import after from "wowlua:timer"
 import tokens as T, Color from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as extend from "/Core/Extend"
@@ -565,6 +566,17 @@ export class Inventory extends Panel
         self.grid:SetHeight(SLOT)
         if o.characters then
             buildCharacters(self, body)
+            -- laid out again a frame after it opens: the first time, before
+            -- the window had its place, the row's parts were never placed
+            -- (shown, no position, not drawn) until it opened again (found
+            -- in game)
+            self:HookScript("OnShow", function()
+                after(0, function()
+                    if self:IsShown() then
+                        self:FitBody()
+                    end
+                end)
+            end)
         end
         -- the foot: a note and the money, over a gilt-faint rule
         self.rule = body:CreateTexture(nil, "ARTWORK")
@@ -747,8 +759,15 @@ export class Inventory extends Panel
     function FitBody()
         local y = ROW + S["space-4"]
         if self.view then
+            -- (anchored afresh, and what hangs off it: see the OnShow above)
             local pickRow = self.pickRow :: Frame
+            pickRow:ClearAllPoints()
             pickRow:SetPoint("TOPLEFT", 0, -y)
+            local all = self.all
+            if all then
+                all:ClearAllPoints()
+                all:SetPoint("RIGHT", pickRow, "LEFT", self:GridWidth(), 0)
+            end
             y = y + ROW + S["space-4"]
         end
         local banner = self.banner

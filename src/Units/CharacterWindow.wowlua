@@ -349,6 +349,8 @@ export type Sidebar = { row: Frame, tabs: SideTab[], marker: TabMarker }
 --------------------------------------------------------------------------------
 
 local PANES = { "ReputationFrame", "SkillsFrame", "PVPRankFrame", "TokenFrame", "StatisticsFrame" }
+-- a detail pane's rows that wrap (their text measured again)
+local SIDE_ROWS = { "CharacterFrameSidePaneWrappedRowTemplate", "CharacterFrameSidePaneIconRowTemplate" }
 
 class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     chrome: WindowChrome? = nil
@@ -1201,10 +1203,59 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self:SkinPanes()
     end
 
+    -- A detail pane's rows (a weapon skill's chances, a faction's, the PvP
+    -- rank's) in caption, measured again and laid out after the game lays
+    -- them out: measured for the game's font, SuuUI's larger one ran them
+    -- past the window's bottom (found in game; the pane doesn't scroll).
+    function FitSidePane(pane: Frame)
+        if not once(pane) then
+            return
+        end
+        local function fit()
+            local pools = tbl.field(pane, "rowPools")
+            local caption = SuuUI.Fonts.Get("caption")
+            for _, template in ipairs(SIDE_ROWS) do
+                local iter, state, init = errors.tryMethod(pools, "EnumerateActiveByTemplate", template)
+                if type(iter) == "function" then
+                    local step = iter :: (unknown, unknown) -> unknown
+                    local row = step(state, init)
+                    while row ~= nil do
+                        local r = frames.asFrame(row)
+                        local label = frames.asFontString(tbl.field(row, "Label"))
+                        if r and label then
+                            -- (SuuUI's pass leaves its font to this)
+                            leave(label, "text")
+                            label:SetFontObject(caption)
+                            local icon = frames.asRegion(tbl.field(row, "IconSlot"))
+                            -- (a secret height, the text a secret: the row as
+                            -- the game made it; found in game)
+                            local textH = secret.asNumber(label:GetStringHeight())
+                            local iconH = icon and secret.asNumber(icon:GetHeight()) or 0
+                            if textH and iconH then
+                                r:SetHeight(math.max(1, iconH, textH))
+                            end
+                        end
+                        row = step(state, row)
+                    end
+                end
+            end
+            errors.tryMethod(tbl.field(pane, "Content"), "Layout")
+        end
+        -- (the side pane mixin's method, not declared)
+        hook(pane :: unknown :: { [string]: unknown }, "LayoutRows", fit)
+        fit()
+    end
+
     function SkinPanes()
         local function watch(f: Frame?)
             if not f or not once(f) then
                 return
+            end
+            -- its detail pane's rows
+            for _, c in ipairs(frames.children(f)) do
+                if tbl.field(c, "rowPools") and type(tbl.field(c, "LayoutRows")) == "function" then
+                    self:FitSidePane(c)
+                end
             end
             hookScript(f, "OnShow", function()
                 after(0, function()

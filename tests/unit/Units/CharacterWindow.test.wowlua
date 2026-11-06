@@ -23,6 +23,7 @@ import type ItemSlotSkin from "/UI/Inventory"
 import type Sidebar from "/Units/CharacterWindow"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
 
 -- One of the game's frames by its global name.
 local function frame(name: string): Frame
@@ -345,6 +346,31 @@ local function panes()
     local reskin = mock.stub(SuuUI.UI, "Reskin", function() end)
     tab(2)
     expect(reskin).toHaveBeenCalledWith(frame("ReputationFrame"))
+    tab(1)
+end
+
+@test("a detail pane's wrapped rows: in caption, as tall as their text (SuuUI's font ran them past the window)")
+local function sidePaneRows()
+    open()
+    tab(3)
+    local pane = assert(frames.asFrame(tbl.field(frame("SkillsFrame"), "SkillDetailFrame")))
+    errors.tryMethod(pane, "ResetRows")
+    local text = "Chance to Hit, and to avoid being Dodged or Parried: -10.92%. Chance to Critically Hit: -10.92%. Glancing Blows occur 100% of the time and deal 89% less damage."
+    errors.tryMethod(pane, "AddWrappedRow", text)
+    errors.tryMethod(pane, "LayoutRows")
+    -- (as SuuUI's pass runs a frame after the pane shows)
+    mock.advanceFrames(2)
+    local pools = tbl.field(pane, "rowPools")
+    local iter, state, init = errors.tryMethod(
+        pools,
+        "EnumerateActiveByTemplate",
+        "CharacterFrameSidePaneWrappedRowTemplate"
+    )
+    local step = iter :: (unknown, unknown) -> unknown
+    local row = assert(frames.asFrame(step(state, init)))
+    local label = assert(frames.asFontString(tbl.field(row, "Label")))
+    expect(label:GetFontObject()).toBe(SuuUI.Fonts.Get("caption"))
+    expect(math.abs(row:GetHeight() - label:GetStringHeight()) < 0.5).toBe(true)
     tab(1)
 end
 

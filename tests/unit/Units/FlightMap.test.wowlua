@@ -434,6 +434,10 @@ local function cleanup()
     if WorldMapFrame:IsShown() then
         WorldMapFrame:Hide()
     end
+    local win = M.window
+    if win and win:IsShown() then
+        win:Hide()
+    end
     if frame("GossipFrame"):IsShown() then
         frame("GossipFrame"):Hide()
     end
@@ -459,7 +463,9 @@ end
 -- At the flight master
 --------------------------------------------------------------------------------
 
-@test("at the flight master: the world map on the continent, the game's map unseen underneath")
+@test(
+    "at the flight master: SuuUI's window on the continent, the game's map unseen underneath, the world map untouched"
+)
 local function atTheMaster()
     openMaster()
     expect(M:AtMaster()).toBe(true)
@@ -467,9 +473,13 @@ local function atTheMaster()
     expect(taxi).toBeShown()
     expect(taxi:GetAlpha()).toBe(0)
     expect(taxi:IsMouseEnabled()).toBe(false)
-    expect(WorldMapFrame).toBeShown()
-    expect(WorldMapFrame:GetMapID()).toBe(KALIMDOR)
-    local chrome = chromeOf(WorldMapFrame)
+    local win = assert(M.window)
+    expect(win).toBeShown()
+    expect((assert(M.own)).map:GetMapID()).toBe(KALIMDOR)
+    -- (opened or switched from SuuUI's code, the world map was refused in
+    -- combat later: found in game)
+    expect(WorldMapFrame).never.toBeShown()
+    local chrome = chromeOf(win)
     assert(chrome, "no window skin")
     expect(chrome.title).toHaveText("Flight master · Orgrimmar")
     expect(M.side).toBeShown()
@@ -607,10 +617,25 @@ local function confirmOff()
     expect(M.bar).never.toBeShown()
 end
 
-@test("the map closed at the flight master closes the master too")
+@test(
+    "after the flight master, the world map opened by its key keeps its zoom clean (opened in combat, the game took it)"
+)
+local function worldMapClean()
+    openMaster()
+    CloseTaxiMap()
+    mock.advanceTime(0.5)
+    mock.pressKey(GetBindingKey("TOGGLEWORLDMAP") :: string)
+    mock.advanceFrames(3)
+    expect(WorldMapFrame).toBeShown()
+    local sc = WorldMapFrame.ScrollContainer
+    expect(issecurevariable(sc, "targetScale")).toBe(true)
+    expect(issecurevariable(sc, "baseScale")).toBe(true)
+end
+
+@test("the window closed at the flight master closes the master too")
 local function closing()
     openMaster()
-    WorldMapFrame:Hide()
+    mock.click(assert((assert(chromeOf(M.window))).close))
     mock.advanceTime(0.5)
     expect(M:AtMaster()).toBe(false)
     expect(frame("TaxiFrame")).never.toBeShown()
@@ -665,7 +690,7 @@ local function landAt()
     expect(routes()["23>25>77"]).toBeNil()
 end
 
-@test("the map opened in the air: the continent with your route, the time left by the destination")
+@test("the map opened in the air: not switched; on the continent your route, the time left by the destination")
 local function routeInFlight()
     openMaster()
     mock.click(row("Crossroads"))
@@ -673,8 +698,13 @@ local function routeInFlight()
     expect(M.timer).toBeShown()
     ToggleWorldMap()
     mock.advanceFrames(3)
-    expect(WorldMapFrame:GetMapID()).toBe(KALIMDOR)
+    -- the game's map where you are, as it opened it (switched from SuuUI's
+    -- code, the map was refused in combat later: asked 2026-11-06)
+    expect(WorldMapFrame:GetMapID()).never.toBe(KALIMDOR)
     expect(M.timer).never.toBeShown()
+    -- the continent, as you go up to it
+    WorldMapFrame:SetMapID(KALIMDOR)
+    mock.advanceFrames(3)
     expect(ink().pools.ARTWORK.n > 0).toBe(true)
     expect(ink().left).toBeShown()
     expect(mock.textOf(ink().left.text):find("left$") ~= nil).toBe(true)
@@ -783,18 +813,17 @@ local function noNodes()
     CloseTaxiMap()
 end
 
-@test("the destinations beside the map while the quest log is closed; over it again when it opens")
+@test("the destinations in the window, right of the map and as tall")
 local function besideTheMap()
     openMaster()
-    WorldMapFrame:SetQuestLogPanelShown(false)
     mock.advanceFrames(2)
-    expect(side().edge.top).toBeShown()
+    local map = (assert(M.own)).map
     local _, rel, relPoint = side():GetPoint(1)
-    expect(rel).toBe(WorldMapFrame)
+    expect(rel).toBe(map)
     expect(relPoint).toBe("TOPRIGHT")
-    WorldMapFrame:SetQuestLogPanelShown(true)
-    mock.advanceFrames(2)
-    expect(side().edge.top).never.toBeShown()
+    local win = assert(M.window)
+    expect(math.abs((side():GetRight() or 0) - (win:GetRight() or 0)) <= 4).toBe(true)
+    expect(math.abs((side():GetHeight() or 0) - map:GetHeight()) < 1).toBe(true)
 end
 
 @test("a pin hovered: its route and tooltip; a click flies")

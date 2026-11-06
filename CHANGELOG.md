@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- `/rl` reloads the interface, the same as `/reload`.
+
+### Fixed
+
+- World map: opening it in combat after visiting a flight master works again ("Blocked: SetPassThroughButtons"). The flight master's map is now a window of its own that looks the same as before (SuuUI's world map look and size, the routes, times and destinations), so SuuUI no longer changes the world map. In the air the world map opens where you are, as the game opens it; your route shows on whichever map you look at.
+- Character window: a skill's details (a weapon skill's chances to hit and crit), a faction's and the PvP rank's fit their pane again instead of running past the window's bottom.
+- Bags: the Bags/Bank switch, All characters and the Bags toggle show the first time you open your bags after a reload, not only from the second time.
+- Collections: a toy's description no longer runs into its source line and Use button; the cards are a little taller for two lines, and a longer text ends in "…" (hover the card for all of it).
+- World map: opening it in a fight no longer shows "Blocked in combat": SuuUI's map pins made during a fight let right-clicks through to the map once it ends.
+- World map: the quest log's search box shows "Search Quest Log" after its magnifier instead of under it.
+
 ## 0.6.11 (2026-11-06)
 
 ### Fixed

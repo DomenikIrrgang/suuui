@@ -1,14 +1,15 @@
 -- Units/FlightMap.wowlua
--- The flight map (design "Flight paths", D: one map for flying): no window
--- of its own. At a flight master SuuUI's world map becomes the taxi map:
--- the continent with every flight master of yours (the ones you haven't
+-- The flight map (design "Flight paths", D: one map for flying). At a
+-- flight master a window of its own, made like SuuUI's world map (its
+-- chrome, its size, the game's map canvas in it), is the taxi map: the
+-- continent with every flight master of yours (the ones you haven't
 -- found faint, their edge dashed), the routes between those you have as
 -- faint lines, each destination's flight time beside it, and the
--- destinations listed in the side panel over the quest log. Hovering one
+-- destinations listed in the side panel on its right. Hovering one
 -- draws its route; clicking it flies there, or (Confirm before flying) puts
 -- where it stops, the cost, the time and Fly in a bar at the map's bottom.
--- In the air the same map shows your flight: the part flown solid, the rest
--- dashed, the time left at the destination; with the map closed, the flight
+-- In the air the world map shows your flight, on whichever map it shows:
+-- the part flown solid, the rest dashed, the time left at the destination; with the map closed, the flight
 -- bar at the top of the screen does (the time left, the stops passed and
 -- ahead, when you land), with Land at to come down at the next stop.
 -- Every route is drawn the way
@@ -18,10 +19,12 @@
 -- The game's own flight map (TaxiFrame) stays open underneath, unseen and
 -- without the mouse: hiding it ends the flight master's session, alpha 0
 -- keeps it, and TakeTaxiNode from SuuUI's click flies (probed 2026-10-19).
--- The world map is shown outside the game's panel manager: through it, it
--- would take TaxiFrame's place (both are "left" panels) and close it.
--- Closing the map closes the flight master too. In combat the game's own
--- flight map opens as it would.
+-- The flight master's window is SuuUI's own, not the world map: the world
+-- map opened and switched to the continent from SuuUI's code kept its zoom
+-- tainted, and opened in combat later the game refused it ("Blocked:
+-- SetPassThroughButtons", found in game; asked 2026-11-06). Nor is the
+-- world map switched in the air any more. Closing the window closes the
+-- flight master too. In combat the game's own flight map opens as it would.
 --
 -- Flight times: each flight is timed, from losing control to getting it
 -- back, and kept per route (the nodes it passes) for the whole account; a
@@ -56,7 +59,6 @@ import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
-import * as events from "wowlua:events"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -282,30 +284,6 @@ local function timed(): { [string]: RouteRecord }
     local routes = data.routes or {}
     data.routes = routes
     return routes
-end
-
---------------------------------------------------------------------------------
--- The header row's quest log controls (its search, count and settings) and
--- the waypoint pin: nothing to do at a flight master (asked 2026-10-19);
--- unseen and out of the mouse's way, back after. (The world map module
--- puts its own Map filters away.)
---------------------------------------------------------------------------------
-
-local function headerControls(): Region[]
-    local out: Region[] = {}
-    local found = {
-        field(_G, "QuestScrollFrame", "SearchBox"),
-        field(_G, "QuestLogCount"),
-        field(_G, "QuestScrollFrame", "SettingsDropdown"),
-        field(_G, "WorldMapFrame", "WorldMapTrackingPinButton"),
-    }
-    for i = 1, 4 do
-        local r = frames.asRegion(found[i])
-        if r then
-            out[#out + 1] = r
-        end
-    end
-    return out
 end
 
 -- Your quests' next steps (asked 2026-10-19): where the game's quest pins
@@ -691,13 +669,38 @@ local SECTION: SettingsSection = {
     },
 }
 
+-- Where the flight map draws: a map canvas with the layer over its art, the
+-- lines, the pins and the data provider that says when to draw again. The
+-- world map's (in the air), or the flight master window's.
+type Surface = {
+    map: typeof(WorldMapFrame),
+    layer: Frame,
+    ink: Ink,
+    provider: { [string]: unknown },
+    pins: FlightPin[],
+    free: FlightPin[],
+}
+
+-- The flight master window's map, in the world map's own measures: its
+-- minimized size less its frame, the map's top in it (Windows' GAME_MAP_TOP),
+-- the list beside it as wide as the quest log there.
+local MAP_W_LESS, MAP_TOP, SIDE_W = 5, 67 + 2, 333
+
 class FlightMapModule extends Module<typeof(DEFAULTS)>
+    -- the map drawn on now (the surface's), and the surfaces
     map: typeof(WorldMapFrame)? = nil
+    surface: Surface? = nil
+    world: Surface? = nil
+    own: Surface? = nil
+    -- the flight master's window (its canvas: own.map)
+    window: Frame? = nil
     layer: Frame? = nil
     ink: Ink? = nil
     provider: { [string]: unknown }? = nil
     pins: FlightPin[] = {}
     free: FlightPin[] = {}
+    -- pins made in combat, their right-click through after it
+    passLater: Frame[] = {}
     -- the map drawn on at the last layout
     view: View? = nil
     -- at a flight master: the session, the last one read, the destination
@@ -1064,8 +1067,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
     end
 
     function EnterMaster(retry: boolean)
-        local f = self.map
-        if not (self.gameQuiet and f) then
+        if not self.gameQuiet then
             return
         end
         local s = self:ReadSession()
@@ -1080,13 +1082,20 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             end
             return
         end
+        local own, win = self:BuildWindow(), self.window
+        if not (own and win) then
+            self:ShowGameMap()
+            return
+        end
         self.last = s
         -- its new buttons, made as it showed, without the mouse too
         self:HideGameMap()
         self.session, self.selected, self.hovered = s, nil, nil
-        if not f:IsShown() then
-            f:Show()
-        end
+        self:Use(own)
+        self:FitWindow()
+        win:Show()
+        win:Raise()
+        local f = own.map
         local continent = continentOf(bestMap())
         if continent and asNumber(f:GetMapID()) ~= continent then
             f:SetMapID(continent)
@@ -1096,14 +1105,15 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         side:Show()
         self:UpdateBar()
         self:SetTitle(true)
-        self:QuietHeader(true)
         self:RefreshPins()
         self:QueueLayout()
     end
 
-    -- The flight master closed (walked away, flown, or the map closed):
-    -- the game's map back as it was; the world map closed with it.
-    function LeaveMaster(closeMap: boolean)
+    -- The flight master closed (walked away, flown, or the window closed):
+    -- the game's map back as it was, the window closed, the drawing back on
+    -- the world map. (`closeMap`: kept for the callers; the window closes
+    -- either way.)
+    function LeaveMaster(_closeMap: boolean)
         local was = self.session ~= nil
         self.session, self.selected, self.hovered = nil, nil, nil
         self:ShowGameMap()
@@ -1117,46 +1127,115 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         if not was then
             return
         end
-        self:SetTitle(false)
-        self:QuietHeader(false)
-        local f = self.map
-        if closeMap and f and f:IsShown() then
+        local win = self.window
+        if win and win:IsShown() then
             self.closing = true
-            f:Hide()
+            win:Hide()
             self.closing = false
+        end
+        local world = self.world
+        if world then
+            self:Use(world)
         end
         self:RefreshPins()
         self:QueueLayout()
     end
 
-    -- the map's header: "Flight master · Thunder Bluff" while it's the flight
-    -- map, its usual "Kalimdor › Mulgore" after
+    -- The window's header: "Flight master · Thunder Bluff".
     function SetTitle(master: boolean)
-        local f = self.map
-        local chrome = f and chromeOf(f)
-        if not (f and chrome) then
-            return
-        end
+        local chrome = chromeOf(self.window)
         local current = self.session and self.session.current
-        if master and current then
+        if master and chrome and current then
             chrome:SetTitle("Flight master · " .. short(current.name))
-            return
         end
-        local mapID = asNumber(f:GetMapID())
-        local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID)
-        if not (mapID and info) then
-            return
-        end
-        local continent = continentOf(mapID)
-        local c = continent and continent ~= mapID and errors.tryValue(C_Map.GetMapInfo, continent) or nil
-        chrome:SetTitle(c and (c.name .. " › " .. info.name) or info.name)
     end
 
-    function QuietHeader(on: boolean)
-        for _, c in ipairs(headerControls()) do
-            c:SetAlpha(on and 0 or 1)
-            errors.tryMethod(c, "EnableMouse", not on)
+    --------------------------------------------------------------------------------
+    -- The flight master's window: SuuUI's window chrome round the game's map
+    -- canvas (MapCanvasMixin, as the game's own flight map), the world map's
+    -- size; the destinations on its right
+    --------------------------------------------------------------------------------
+
+    function BuildWindow(): Surface?
+        local own = self.own
+        if own then
+            return own
         end
+        local mixin = field(_G, "MapCanvasMixin")
+        local mix = field(_G, "Mixin")
+        if type(mixin) ~= "table" or type(mix) ~= "function" then
+            return nil
+        end
+        local win = CreateFrame("Frame", "SuuUIFlightMapWindow", UIParent)
+        win:SetFrameStrata("HIGH")
+        win:SetToplevel(true)
+        win:EnableMouse(true)
+        win:SetClampedToScreen(true)
+        win:Hide()
+        -- the canvas: its scroll container first (the canvas's code finds it
+        -- on load), then the game's canvas code on it
+        local canvas = CreateFrame("Frame", nil, win)
+        canvas:SetPoint("TOPLEFT", win, "TOPLEFT", 3, -3)
+        local sc = CreateFrame("ScrollFrame", nil, canvas, "MapCanvasFrameScrollContainerTemplate")
+        sc:ClearAllPoints()
+        sc:SetAllPoints(canvas)
+        rawset(canvas :: unknown :: { [string]: unknown }, "ScrollContainer", sc)
+        ;(mix :: (unknown, unknown) -> ())(canvas, mixin)
+        errors.tryMethod(canvas, "OnLoad")
+        canvas:SetScript("OnShow", function()
+            errors.tryMethod(canvas, "OnShow")
+        end)
+        canvas:SetScript("OnHide", function()
+            errors.tryMethod(canvas, "OnHide")
+        end)
+        canvas:SetScript("OnUpdate", function(_, elapsed)
+            errors.tryMethod(canvas, "OnUpdate", elapsed)
+        end)
+        canvas:SetScript("OnEvent", function(_, event, ...)
+            errors.tryMethod(canvas, "OnEvent", event, ...)
+        end)
+        canvas:SetScript("OnSizeChanged", function()
+            errors.tryMethod(canvas, "OnFrameSizeChanged")
+        end)
+        -- SuuUI's window chrome, as the world map's
+        local close = CreateFrame("Button", nil, win)
+        close:SetScript("OnClick", function()
+            win:Hide()
+        end)
+        UI.SkinWindow(win, { title = "Flight master", icon = "map", close = close, topInset = 3, under = "microMenu" })
+        -- closed: the flight master too
+        win:HookScript("OnHide", function()
+            if self.session and not self.closing then
+                self:LeaveMaster(false)
+                try(field(_G, "CloseTaxiMap"))
+            end
+        end)
+        local map = canvas :: unknown :: typeof(WorldMapFrame)
+        local made = self:MakeSurface(map)
+        if not made then
+            return nil
+        end
+        map:AddDataProvider(made.provider)
+        self.window, self.own = win, made
+        return made
+    end
+
+    -- The world map's map size (its scale, enlarged or not) and place
+    -- (centred when enlarged, else in the window row).
+    function FitWindow()
+        local win, own = self.window, self.own
+        if not (win and own) then
+            return
+        end
+        local wm = frames.find("WorldMapFrame")
+        local k = wm and wm:GetScale() or 1
+        local minW = asNumber(field(wm, "minimizedWidth")) or 702
+        local minH = asNumber(field(wm, "minimizedHeight")) or 534
+        local w, h = (minW - MAP_W_LESS) * k, (minH - MAP_TOP) * k
+        own.map:SetSize(w, h)
+        win:SetSize(3 + w + S["space-3"] + SIDE_W + 3, 3 + h + 3)
+        local windows = SuuUI.GetModule("windows")
+        UI.CenterWindow(win, windows ~= nil and windows:Get("mapEnlarged") == true)
     end
 
     function Select(node: TaxiNode?)
@@ -1286,7 +1365,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         if side then
             return side
         end
-        local made = Side.new(self.map or UIParent)
+        local made = Side.new(self.window or self.map or UIParent)
         self.side = made
         return made
     end
@@ -1386,30 +1465,21 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- Over the quest log while it's open (it's the map's side panel); beside
-    -- the window, as wide, while it's closed.
+    -- In the window, right of the map, as tall (where the world map's quest
+    -- log is).
     function PlaceSide()
-        local f, side = self.map, self.side
-        if not (f and side) then
+        local f, side, win = self.map, self.side, self.window
+        if not (f and side and win and self.session) then
             return
         end
-        local log = frames.asFrame(field(f, "QuestLog")) or frames.find("QuestMapFrame")
-        -- (its usual size in the scaled window, as the quest log under it)
-        side:SetScale(1 / f:GetScale())
+        side:SetScale(1)
         side:ClearAllPoints()
-        if log and log:IsShown() then
-            side:SetPoint("TOPLEFT", log, "TOPLEFT", 0, 0)
-            side:SetPoint("BOTTOMRIGHT", log, "BOTTOMRIGHT", 0, 0)
-            side:SetFrameStrata(log:GetFrameStrata())
-            side:SetFrameLevel(log:GetFrameLevel() + 100)
-            side.edge:SetShown(false)
-        else
-            side:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-3"], 0)
-            side:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", S["space-3"], 0)
-            side:SetWidth(asNumber(field(f, "questLogWidth")) or 333)
-            side:SetFrameLevel(f:GetFrameLevel() + 100)
-            side.edge:SetShown(true)
-        end
+        side:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-3"], 0)
+        side:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", S["space-3"], 0)
+        side:SetWidth(SIDE_W)
+        side:SetFrameStrata(win:GetFrameStrata())
+        side:SetFrameLevel(f:GetFrameLevel() + 100)
+        side.edge:SetShown(false)
         -- the rows as wide as the list, laid out again
         after(0, function()
             if self.session and side:IsShown() then
@@ -1485,6 +1555,25 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
     -- On the map's canvas: pins, routes, times
     --------------------------------------------------------------------------------
 
+    -- A right-click through a pin to the map (it zooms out). Refused in
+    -- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
+    -- a pin was made while the map opened in a fight, found in game): then
+    -- after it.
+    function PassThrough(pin: Frame)
+        if not InCombatLockdown() then
+            errors.tryMethod(pin, "SetPassThroughButtons", "RightButton")
+            return
+        end
+        self.passLater[#self.passLater + 1] = pin
+        self:RunOutOfCombat("passThrough", function()
+            local list = self.passLater
+            self.passLater = {}
+            for _, p in ipairs(list) do
+                errors.tryMethod(p, "SetPassThroughButtons", "RightButton")
+            end
+        end)
+    end
+
     function Pin(layer: Frame): FlightPin
         local pin = table.remove(self.free)
         if not pin then
@@ -1512,8 +1601,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             made:SetScript("OnClick", function(p)
                 self:Choose(p.node)
             end)
-            -- a right-click goes through to the map (it zooms out)
-            errors.tryMethod(made, "SetPassThroughButtons", "RightButton")
+            self:PassThrough(made)
             pin = made
         end
         pin:Show()
@@ -2263,7 +2351,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         local editing = SuuUI.EditMode.IsActive()
-        local map = self.map
+        local map = self.world and self.world.map
         local flying = self.flight ~= nil and not (map and map:IsShown())
         local shown = self:IsEnabled() and self:Get("timer") and not self:Get("timerPosition").hidden and
             (flying or editing) or
@@ -2283,28 +2371,20 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
     -- The map
     --------------------------------------------------------------------------------
 
-    function Attach()
-        if self.map or not frames.find("WorldMapFrame") then
-            return
-        end
-        local f = WorldMapFrame
+    -- A surface on a map canvas: the layer over its art (under the game's
+    -- own pins, as the world map module's), the lines on it, the provider.
+    function MakeSurface(f: typeof(WorldMapFrame)): Surface?
         local canvas = frames.asFrame(f:GetCanvas())
         if not canvas then
-            return
+            return nil
         end
-        self.map = f
-        -- over the map's art, under the game's own pins (as the world map
-        -- module's pins)
         local layer = CreateFrame("Frame", nil, canvas)
         layer:SetAllPoints(canvas)
         local levels = errors.tryMethod(f, "GetPinFrameLevelsManager")
         local above = asNumber(errors.tryMethod(levels, "GetFrameLevelStart", "PIN_FRAME_LEVEL_MAP_HIGHLIGHT"))
         layer:SetFrameLevel(above and (above + 1) or (canvas:GetFrameLevel() + 2))
-        self.layer = layer
-        self.pins, self.free = {}, {}
         local ink = Ink.new(layer)
         ink:SetFrameLevel(layer:GetFrameLevel())
-        self.ink = ink
         -- the clock in flight: the time left and where you are, every second
         local wait = 0
         ink:SetScript("OnUpdate", function(_, elapsed)
@@ -2313,7 +2393,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
                 return
             end
             wait = 1
-            if self.flight and not self.session and self:Get("inFlight") then
+            if self.ink == ink and self.flight and not self.session and self:Get("inFlight") then
                 self:DrawInk()
             end
         end)
@@ -2325,62 +2405,80 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
                 provider[k] = v
             end
         end
+        local function mine(): boolean
+            return self.map == f
+        end
         provider.RefreshAllData = function()
-            self:QueueLayout()
+            if mine() then
+                self:QueueLayout()
+            end
         end
         provider.RemoveAllData = function()
-            self:ClearDrawing()
+            if mine() then
+                self:ClearDrawing()
+            end
         end
         provider.OnCanvasScaleChanged = function()
-            self:QueueLayout()
+            if mine() then
+                self:QueueLayout()
+            end
         end
         provider.OnCanvasSizeChanged = function()
-            self:QueueLayout()
+            if mine() then
+                self:QueueLayout()
+            end
         end
-        self.provider = provider
-        -- the map closed at the flight master: the flight master too; in the
-        -- air the flight bar comes back
+        return { map = f, layer = layer, ink = ink, provider = provider, pins = {}, free = {} }
+    end
+
+    -- The surfaces made: the world map's, the flight master window's.
+    function Surfaces(): Surface[]
+        local out: Surface[] = {}
+        local world, own = self.world, self.own
+        if world then
+            out[#out + 1] = world
+        end
+        if own then
+            out[#out + 1] = own
+        end
+        return out
+    end
+
+    -- Drawing on this surface from now on (the other's drawing cleared).
+    function Use(s: Surface)
+        local cur = self.surface
+        if cur == s then
+            return
+        end
+        self:ClearDrawing()
+        if cur then
+            cur.pins, cur.free = self.pins, self.free
+        end
+        self.surface = s
+        self.map, self.layer, self.ink, self.provider = s.map, s.layer, s.ink, s.provider
+        self.pins, self.free = s.pins, s.free
+    end
+
+    -- The world map: the flight drawn on it in the air, on the map it shows
+    -- (no longer switched to the continent: from SuuUI's code that kept the
+    -- map tainted, asked 2026-11-06); the flight bar away while it's open.
+    function Attach()
+        if self.world or not frames.find("WorldMapFrame") then
+            return
+        end
+        local f = WorldMapFrame
+        local s = self:MakeSurface(f)
+        if not s then
+            return
+        end
+        self.world = s
+        self:Use(s)
         hookScript(f, "OnHide", function()
-            if self.session and not self.closing then
-                self:LeaveMaster(false)
-                try(field(_G, "CloseTaxiMap"))
-            end
             self:UpdateTimer()
         end)
-        -- opened in the air: the continent, where the route shows (the flight
-        -- bar away meanwhile)
         hookScript(f, "OnShow", function()
-            if self:IsEnabled() and self.flight and not self.session and self:Get("inFlight") then
-                after(0, function()
-                    local continent = continentOf(bestMap())
-                    if continent and f:IsShown() and asNumber(f:GetMapID()) ~= continent then
-                        f:SetMapID(continent)
-                    end
-                end)
-            end
             self:UpdateTimer()
         end)
-        -- the quest log opened or closed: the destinations go with it
-        if type(field(f, "SetQuestLogPanelShown")) == "function" then
-            hook(f, "SetQuestLogPanelShown", function()
-                if self.session then
-                    self:PlaceSide()
-                end
-            end)
-        end
-        -- the header keeps "Flight master" over map changes (the window skin
-        -- names the map on each)
-        events.onRegistry(
-            "MapCanvas.MapSet",
-            function()
-                if self.session then
-                    after(0, function()
-                        self:SetTitle(true)
-                    end)
-                end
-            end,
-            self
-        )
     end
 
     function TimesSummary(): string
@@ -2419,12 +2517,12 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             end,
         })
         self:Attach()
-        local f, layer, provider = self.map, self.layer, self.provider
-        if not (f and layer and provider) then
+        local world = self.world
+        if not world then
             self:OnGameEvent("ADDON_LOADED", function()
-                if not self.map and frames.find("WorldMapFrame") then
+                if not self.world and frames.find("WorldMapFrame") then
                     self:Attach()
-                    if self.map then
+                    if self.world then
                         self:OnEnable()
                     end
                 end
@@ -2442,8 +2540,11 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
                 return self:Get("timer")
             end,
         })
-        f:AddDataProvider(provider)
-        layer:Show()
+        -- (the flight master window's surface, made before a disable, too)
+        for _, s in ipairs(self:Surfaces()) do
+            s.map:AddDataProvider(s.provider)
+            s.layer:Show()
+        end
         -- every flight's route, whichever map took it (the hook stays; it
         -- does nothing while the module is off)
         if not self.takeHooked and type(field(_G, "TakeTaxiNode")) == "function" then
@@ -2533,16 +2634,10 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         if timer then
             timer:Hide()
         end
-        local f, provider, layer = self.map, self.provider, self.layer
-        if not f then
-            return
-        end
-        if provider then
-            f:RemoveDataProvider(provider)
-        end
         self:ClearDrawing()
-        if layer then
-            layer:Hide()
+        for _, s in ipairs(self:Surfaces()) do
+            s.map:RemoveDataProvider(s.provider)
+            s.layer:Hide()
         end
         self:RefreshPins()
     end
