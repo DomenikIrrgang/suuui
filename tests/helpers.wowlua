@@ -43,7 +43,8 @@ export function newParent(width: number = 400, height: number = 300): Frame
     return f
 end
 
--- What a context menu offered: its buttons by label (cleared at each menu).
+-- What a context menu offered: its buttons by label (cleared at each menu;
+-- a button turned off with SetEnabled(false) is left out).
 export function captureMenus(): { [string]: () -> () }
     local menu: { [string]: () -> () } = {}
     mock.stub(SuuUI.UI, "ContextMenuFrom", function<O>(owner: O, describe: (owner: O, root: MenuDescription) -> ())
@@ -53,8 +54,17 @@ export function captureMenus(): { [string]: () -> () }
         local root = {
             CreateTitle = function(_: unknown, _: string) end,
             CreateDivider = function(_: unknown) end,
-            CreateButton = function(_: unknown, label: string, fn: () -> ())
+            CreateButton = function(_: unknown, label: string, fn: () -> ()): {
+                SetEnabled: (self: unknown, on: boolean) -> (),
+            }
                 menu[label] = fn
+                return {
+                    SetEnabled = function(_: unknown, on: boolean)
+                        if not on then
+                            menu[label] = nil
+                        end
+                    end,
+                }
             end,
         }
         describe(owner, root :: unknown :: MenuDescription)

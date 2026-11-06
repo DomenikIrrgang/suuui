@@ -1,0 +1,1637 @@
+-- Units/MouseBindings.wowlua
+-- Spells bound to keys, clicks and the wheel that cast on the unit under the
+-- mouse (Clique-like; asked 2026-11-05, design board "Spellbook mouseover
+-- bindings", every choice asked 2026-11-06): on SuuUI's unit frames (the
+-- frame's own unit) and in the world (the game's mouseover unit, nameplates
+-- too). Away from units a bound key keeps its job.
+--
+-- Probed in game first (/suu probe mouseover): a state driver on
+-- [@mouseover,exists] and secure OnEnter / OnLeave snippets on the unit
+-- frames set priority override bindings to a secure button, in combat too;
+-- the button's friendly / hostile split (helpbutton / harmbutton) is the
+-- game's own. Clicks on a unit frame go to the frame, not to bindings: a
+-- click bound on frames is the frame's own click attribute (shift-type1, …).
+-- The secure buttons know Alt, Ctrl and Shift as click prefixes, not Cmd: a
+-- Cmd click works in the world only.
+--
+-- Kept per character and per spec (the talent tree with the most points;
+-- before any, the last one you had, and the first tree you pick takes what
+-- you bound before). A binding casts the highest rank you know (looked up
+-- again as you learn one) or one rank you chose. Everything secure changes
+-- out of combat only; what changes in a fight waits for its end.
+--
+-- The Spellbook binds (bind mode, a spell's right-click menu, the Bindings
+-- tab) through the mousebindings service: this module asks what it must
+-- (a key taken, Left or Right click on frames), refuses movement keys, and
+-- owns the capture box and the bindings list.
+-- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import MOUSE_BINDINGS from "/Core/ServiceKeys"
+import type MouseBind, BindSpell from "/Core/ServiceKeys"
+import type Panel, ScrollArea, KeyChip from "/UI/Panel"
+import type SuuButton from "/UI/Controls"
+import type Segmented from "/UI/Inputs"
+import type Text from "/UI/Text"
+import type Icon from "/UI/Icon"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import after from "wowlua:timer"
+
+local UI = SuuUI.UI
+local S = SuuUI.Tokens.space
+local try = errors.try
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+-- One binding (the service's MouseBind): the input as bindings spell it
+-- ("SHIFT-F", "ALT-BUTTON1", "MOUSEWHEELUP", "META-Q"), the spell (its
+-- name; a chosen rank's ID), where it works and on whom.
+export type Reach = "both" | "frames" | "world"
+export type React = "any" | "help" | "harm"
+export type Bind = MouseBind
+type Store = { specs?: { [string]: Bind[] }, last?: string }
+
+--------------------------------------------------------------------------------
+-- Inputs
+--------------------------------------------------------------------------------
+
+local MODS = { "ALT", "CTRL", "SHIFT", "META" }
+local MOD_NAMES: { [string]: string } = { ALT = "Alt", CTRL = "Ctrl", SHIFT = "Shift", META = "Cmd" }
+
+-- An input's modifiers and its key: "ALT-SHIFT-F" → { ALT, SHIFT }, "F".
+export function parseInput(input: string): ({ [string]: boolean }, string)
+    local mods: { [string]: boolean } = {}
+    local rest = input
+    local changed = true
+    while changed do
+        changed = false
+        for _, m in ipairs(MODS) do
+            local pre = m .. "-"
+            if rest:sub(1, #pre) == pre and #rest > #pre then
+                mods[m] = true
+                rest = rest:sub(#pre + 1)
+                changed = true
+            end
+        end
+    end
+    return mods, rest
+end
+
+-- The mouse button an input clicks ("BUTTON1" → 1), or nil.
+export function mouseButton(input: string): number?
+    local _, key = parseInput(input)
+    local n = key:match("^BUTTON(%d+)$")
+    return n and tonumber(n) or nil
+end
+
+-- Whether an input turns the wheel.
+export function isWheel(input: string): boolean
+    local _, key = parseInput(input)
+    return key == "MOUSEWHEELUP" or key == "MOUSEWHEELDOWN"
+end
+
+local KEY_NAMES: { [string]: string } = {
+    BUTTON1 = "Left click",
+    BUTTON2 = "Right click",
+    BUTTON3 = "Middle click",
+    MOUSEWHEELUP = "Wheel up",
+    MOUSEWHEELDOWN = "Wheel down",
+}
+local SHORT_KEYS: { [string]: string } = {
+    BUTTON1 = "Left",
+    BUTTON2 = "Right",
+    BUTTON3 = "Middle",
+    MOUSEWHEELUP = "Wheel up",
+    MOUSEWHEELDOWN = "Wheel down",
+}
+
+-- An input's parts for a person: { "Shift", "Left click" }.
+export function inputParts(input: string, short: boolean?): string[]
+    local mods, key = parseInput(input)
+    local parts: string[] = {}
+    for _, m in ipairs(MODS) do
+        if mods[m] then
+            parts[#parts + 1] = MOD_NAMES[m] or m
+        end
+    end
+    local n = key:match("^BUTTON(%d+)$")
+    local names = short and SHORT_KEYS or KEY_NAMES
+    parts[#parts + 1] = names[key] or (n and ("Button " .. n)) or asString(try(GetBindingText, key)) or key
+    return parts
+end
+
+-- What the input is called for a person ("Shift-Left click", "Cmd-Q").
+export function inputText(input: string): string
+    return table.concat(inputParts(input), "-")
+end
+
+-- A binding's chip on a spell cell: "Shift-F", "Ctrl-Left"; one rank's
+-- binding carries it ("Ctrl-F R3").
+export function chipText(b: Bind): string
+    local text = table.concat(inputParts(b.input, true), "-")
+    if b.rank == "fixed" and b.spellID then
+        local r = rankNumber(b.spellID)
+        if r then
+            text = text .. " R" .. r
+        end
+    end
+    return text
+end
+
+-- A click's attribute prefix on a unit frame ("ALT-SHIFT-BUTTON1" →
+-- "alt-shift-"; the secure buttons' own order), or nil with Cmd (they don't
+-- know it).
+export function clickPrefix(input: string): string?
+    local mods = parseInput(input)
+    if mods.META then
+        return nil
+    end
+    return (mods.ALT and "alt-" or "") .. (mods.CTRL and "ctrl-" or "") .. (mods.SHIFT and "shift-" or "")
+end
+
+-- Plain Left or Right click (no modifier): the frames' targeting and menu.
+export function isPlainClick(input: string): boolean
+    local n = mouseButton(input)
+    return (n == 1 or n == 2) and input == ("BUTTON" .. n)
+end
+
+-- Where an input can work: a plain Left or Right click on frames only (in
+-- the world they're the camera's and the game's), a Cmd click in the world
+-- only.
+export function reachFor(input: string, wanted: Reach): Reach?
+    local frames = not (mouseButton(input) ~= nil and clickPrefix(input) == nil)
+    local world = not isPlainClick(input)
+    if wanted == "both" then
+        return (frames and world) and "both" or frames and "frames" or world and "world" or nil
+    elseif wanted == "frames" then
+        return frames and "frames" or nil
+    end
+    return world and "world" or nil
+end
+
+-- The movement commands a key can't take from you (keys only: a mouse
+-- button's own job, Move and Steer on the middle one, is the game's away
+-- from units, and on a unit frame a click is the frame's).
+local MOVES: { [string]: boolean } = {
+    MOVEFORWARD = true,
+    MOVEBACKWARD = true,
+    STRAFELEFT = true,
+    STRAFERIGHT = true,
+    TURNLEFT = true,
+    TURNRIGHT = true,
+    JUMP = true,
+    TOGGLEAUTORUN = true,
+}
+
+-- What a key does in the game now (your own binding, SuuUI's bars' too),
+-- or nil.
+local function gameAction(input: string): string?
+    local action = asString(try(GetBindingAction, input, false))
+    return (action and action ~= "") and action or nil
+end
+
+-- A game binding's name for a person ("Move Forward", "Action Button 3").
+local function actionName(action: string): string
+    local name = asString(rawget(_G, "BINDING_NAME_" .. action))
+    return name or action
+end
+
+-- Whether an input moves you (its game binding a movement command).
+export function movesYou(input: string): boolean
+    if mouseButton(input) or isWheel(input) then
+        return false
+    end
+    local action = gameAction(input)
+    return action ~= nil and MOVES[action] == true
+end
+
+--------------------------------------------------------------------------------
+-- Conflicts
+--------------------------------------------------------------------------------
+
+-- Whether two reactions overlap (any with either; help with help).
+local function overlap(a: React, b: React): boolean
+    return a == "any" or b == "any" or a == b
+end
+
+-- The bindings `b` takes the input from (the same input, for the same units).
+export function takenBy(binds: Bind[], b: Bind, editing: Bind?): Bind[]
+    local out: Bind[] = {}
+    for _, x in ipairs(binds) do
+        if x ~= editing and x.input == b.input and overlap(x.react, b.react) then
+            out[#out + 1] = x
+        end
+    end
+    return out
+end
+
+-- What binding `b` comes to: refused (why), asked first (the question),
+-- what it says besides, where it ends up working (`reach`), and the
+-- bindings it replaces.
+export type Verdict = {
+    refuse?: string,
+    refuseDetail?: string,
+    ask?: { title: string, text: string, confirm: string },
+    info: string[],
+    reach?: Reach,
+    takes: Bind[],
+}
+
+export function judge(binds: Bind[], b: Bind, editing: Bind?): Verdict
+    local v: Verdict = { info = {}, takes = {} }
+    local name = inputText(b.input)
+    if movesYou(b.input) then
+        local action = gameAction(b.input) or ""
+        v.refuse = ("%s is %s"):format(name, actionName(action))
+        v.refuseDetail = "It can't cast on mouseover. Pick another key."
+        return v
+    end
+    local reach = reachFor(b.input, b.reach)
+    if not reach then
+        v.refuse = name .. " can't work there"
+        v.refuseDetail = isPlainClick(b.input) and
+            "In the world it moves the camera and acts on what you click. Bind it on unit frames." or
+            "Unit frames know Shift, Ctrl and Alt clicks, not Cmd. Bind it in the world."
+        return v
+    end
+    v.reach = reach
+    if reach ~= b.reach then
+        v.info[#v.info + 1] = reach == "frames" and (name .. " works on unit frames only.") or
+            (name .. " works in the world only: unit frames don't know Cmd clicks.")
+    end
+    -- taken by another spell: asked first
+    v.takes = takenBy(binds, b, editing)
+    local other: Bind? = nil
+    for _, x in ipairs(v.takes) do
+        if x.spell ~= b.spell then
+            other = x
+        end
+    end
+    if other then
+        v.ask = {
+            title = ("%s already casts %s"):format(name, other.spell),
+            text = ("Replace it with %s?"):format(b.spell),
+            confirm = "Replace",
+        }
+    elseif isPlainClick(b.input) and #v.takes == 0 then
+        -- the frames' own Left and Right click: asked first
+        local left = mouseButton(b.input) == 1
+        v.ask = {
+            title = left and "Left click targets on unit frames" or "Right click opens the unit's menu on unit frames",
+            text = ("Bound, it casts %s instead and no longer %s."):format(
+                b.spell,
+                left and "targets" or "opens the menu"
+            ),
+            confirm = "Bind",
+        }
+    end
+    -- what the input does away from units
+    if mouseButton(b.input) == nil then
+        local action = gameAction(b.input)
+        if action and not isWheel(b.input) then
+            v.info[#v.info + 1] = ("Away from units %s stays %s."):format(name, actionName(action))
+        elseif isWheel(b.input) then
+            v.info[#v.info + 1] = "Away from units the wheel does what it did before."
+        else
+            v.info[#v.info + 1] = ("Over a unit it casts; elsewhere %s does what it did before."):format(name)
+        end
+    end
+    return v
+end
+
+--------------------------------------------------------------------------------
+-- Ranks
+--------------------------------------------------------------------------------
+
+local BANK = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+
+-- A spell ID's rank ("Rank 3" → 3), or nil.
+export function rankNumber(id: number): number?
+    local sub = asString(try(C_Spell.GetSpellSubtext, id))
+    return sub and tonumber(sub:match("(%d+)")) or nil
+end
+
+-- Every learned rank of a spell in your spellbook: { id, rank } by rank.
+export function ranksOf(name: string): { id: number, rank: number }[]
+    local out: { id: number, rank: number }[] = {}
+    local lines = asNumber(try(C_SpellBook.GetNumSpellBookSkillLines)) or 0
+    for l = 1, lines do
+        local info = try(C_SpellBook.GetSpellBookSkillLineInfo, l) :: {
+            itemIndexOffset?: unknown,
+            numSpellBookItems?: unknown,
+        }?
+        local offset = info and asNumber(info.itemIndexOffset) or 0
+        local count = info and asNumber(info.numSpellBookItems) or 0
+        for slot = offset + 1, offset + count do
+            local item = try(C_SpellBook.GetSpellBookItemInfo, slot, BANK) :: {
+                name?: unknown,
+                spellID?: unknown,
+                subName?: unknown,
+                isPassive?: unknown,
+            }?
+            local n = item and asString(item.name)
+            local id = item and asNumber(item.spellID)
+            if n == name and id and not flag(item and item.isPassive) then
+                local sub = item and asString(item.subName) or ""
+                out[#out + 1] = { id = id, rank = tonumber(sub:match("(%d+)")) or 0 }
+            end
+        end
+    end
+    table.sort(out, function(a: { rank: number }, b: { rank: number }): boolean
+        return a.rank < b.rank
+    end)
+    return out
+end
+
+-- The spell ID a binding casts now: its rank, or the highest you know.
+export function castID(b: Bind): number?
+    if b.rank == "fixed" and b.spellID then
+        return b.spellID
+    end
+    local ranks = ranksOf(b.spell)
+    local top = ranks[#ranks]
+    return top and top.id or b.spellID
+end
+
+-- On whom a new binding of the spell casts: friends for a helpful spell,
+-- enemies for a harmful one, anyone otherwise.
+export function defaultReact(s: BindSpell): React
+    local id = s.spellID
+    local helpful = flag(try(rawget(C_Spell, "IsSpellHelpful"), id or s.name)) or
+        flag(try(rawget(_G, "IsHelpfulSpell"), s.name))
+    local harmful = flag(try(rawget(C_Spell, "IsSpellHarmful"), id or s.name)) or
+        flag(try(rawget(_G, "IsHarmfulSpell"), s.name))
+    if helpful and not harmful then
+        return "help"
+    elseif harmful and not helpful then
+        return "harm"
+    end
+    return "any"
+end
+
+-- A binding's line under its spell: its rank, where and on whom.
+export function bindLine(b: Bind): string
+    local parts: string[] = {}
+    if b.rank == "fixed" and b.spellID then
+        local r = rankNumber(b.spellID)
+        parts[#parts + 1] = r and ("Rank " .. r .. " only") or "This rank only"
+    else
+        local ranks = ranksOf(b.spell)
+        local top = ranks[#ranks]
+        if top and top.rank > 0 then
+            parts[#parts + 1] = "Highest rank · now Rank " .. top.rank
+        end
+    end
+    if b.reach == "frames" then
+        parts[#parts + 1] = "unit frames only"
+    elseif b.reach == "world" then
+        parts[#parts + 1] = "in the world only"
+    end
+    if b.react == "help" then
+        parts[#parts + 1] = "friends"
+    elseif b.react == "harm" then
+        parts[#parts + 1] = "enemies"
+    end
+    local line = table.concat(parts, " · ")
+    return line ~= "" and (line:sub(1, 1):upper() .. line:sub(2)) or ""
+end
+
+--------------------------------------------------------------------------------
+-- The secure part's attributes and snippets
+--------------------------------------------------------------------------------
+
+-- The virtual button of the n-th input ("mb3"); its friendly and hostile
+-- branches ("mb3h", "mb3x").
+local function vbutton(n: number): string
+    return "mb" .. n
+end
+
+-- The attributes input n's spells need on a button whose clicks come with
+-- `prefix` and `suffix` ("*" and "-mb3" for a binding's virtual button,
+-- "shift-" and "1" for a unit frame's click): { name, value } pairs. `any`,
+-- `help`, `harm` the spell IDs to cast on anyone, friends, enemies.
+export function castAttributes(prefix: string, suffix: string, n: number, any: number?, help: number?, harm: number?): {
+    string | number,
+}[]
+    local out: { string | number }[] = {}
+    if any then
+        out[#out + 1] = { prefix .. "type" .. suffix, "spell" }
+        out[#out + 1] = { prefix .. "spell" .. suffix, any }
+    end
+    if help then
+        out[#out + 1] = { prefix .. "helpbutton" .. suffix, vbutton(n) .. "h" }
+        out[#out + 1] = { "*type-" .. vbutton(n) .. "h", "spell" }
+        out[#out + 1] = { "*spell-" .. vbutton(n) .. "h", help }
+    end
+    if harm then
+        out[#out + 1] = { prefix .. "harmbutton" .. suffix, vbutton(n) .. "x" }
+        out[#out + 1] = { "*type-" .. vbutton(n) .. "x", "spell" }
+        out[#out + 1] = { "*spell-" .. vbutton(n) .. "x", harm }
+    end
+    return out
+end
+
+-- The restricted snippet that sets the bindings for where the mouse is: over
+-- a SuuUI unit frame (`frame` keys, its button) or a unit in the world
+-- (`world` keys, the mouseover button); none otherwise.
+export function refreshSnippet(frame: { string }[], world: { string }[]): string
+    local function lines(list: { string }[], ref: string): string
+        local out: string[] = {}
+        for _, kv in ipairs(list) do
+            out[#out + 1] = ("self:SetBindingClick(true, %q, self:GetFrameRef(%q), %q)"):format(kv[1], ref, kv[2])
+        end
+        return table.concat(out, "\n")
+    end
+    return ([=[
+self:ClearBindings()
+if self:GetAttribute("state-frame") == "on" then
+%s
+elseif self:GetAttribute("state-mo") == "on" then
+%s
+end
+]=]):format(lines(frame, "frameButton"), lines(world, "worldButton"))
+end
+
+-- A spec's name: its talent tree's.
+local function specName(key: string): string
+    local n = tonumber(key) or 0
+    if n == 0 then
+        return "No talents yet"
+    end
+    local _, class = UnitClass("player")
+    for _, t in ipairs(SuuUI.ClassTalents(class :: string) or {}) do
+        if t.tree == n and t.spec then
+            return t.spec
+        end
+    end
+    return "Tree " .. n
+end
+
+-- The groups of the list, in order: unit frame clicks, keys, the wheel.
+local function groupOf(input: string): number
+    if mouseButton(input) then
+        return 1
+    elseif isWheel(input) then
+        return 3
+    end
+    return 2
+end
+local GROUPS = { "Unit frame clicks", "Keys", "Mouse wheel" }
+
+-- The modifiers held, as bindings spell them ("ALT-CTRL-SHIFT-META-").
+local function modifiers(): string
+    return (IsAltKeyDown() and "ALT-" or "") ..
+        (IsControlKeyDown() and "CTRL-" or "") ..
+            (IsShiftKeyDown() and "SHIFT-" or "") .. ((IsMetaKeyDown and IsMetaKeyDown()) and "META-" or "")
+end
+local MOUSE: { [string]: string } = {
+    LeftButton = "BUTTON1",
+    RightButton = "BUTTON2",
+    MiddleButton = "BUTTON3",
+    Button4 = "BUTTON4",
+    Button5 = "BUTTON5",
+}
+-- keys that are modifiers alone (waited past)
+local LONE: { [string]: boolean } = {
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+    LMETA = true,
+    RMETA = true,
+    UNKNOWN = true,
+}
+
+--------------------------------------------------------------------------------
+-- The capture box
+--------------------------------------------------------------------------------
+
+local BOX_W = 300
+
+-- The box that binds a spell: press an input in it, pick the rank, where and
+-- on whom; what it comes to below, then Bind (Replace when it takes over).
+class CaptureBox
+    readonly panel: Panel
+    readonly sub: Text
+    readonly area: Button
+    readonly areaFill: Texture
+    readonly areaTop: Text
+    readonly areaBottom: Text
+    readonly reachSeg: Segmented<string>
+    readonly reactSeg: Segmented<string>
+    readonly reachLabel: Text
+    readonly reactLabel: Text
+    readonly rankLabel: Text
+    rankSeg: Segmented<string>? = nil
+    readonly lines: Text[]
+    readonly ok: SuuButton
+    readonly cancel: SuuButton
+    readonly remove: SuuButton
+    -- what it binds
+    spell: BindSpell = { name = "" }
+    editing: Bind? = nil
+    input: string? = nil
+    waiting: boolean = true
+    rank: string = "highest"
+    reach: string = "both"
+    react: string = "any"
+
+    constructor(private owner: MouseBindingsModule)
+        local p = UI.Panel(SuuUI.Root, {
+            title = "Bind",
+            width = BOX_W + S["space-5"] * 2,
+            solid = true,
+            closable = true,
+            onClose = function()
+                self:Close()
+            end,
+        })
+        self.panel = p
+        p:SetFrameStrata("DIALOG")
+        p:SetToplevel(true)
+        p:EnableMouse(true)
+        p:SetClampedToScreen(true)
+        local body = p.body
+        body:SetWidth(BOX_W)
+        self.sub = UI.Text(body, "caption", "ink-muted")
+        self.sub:SetPoint("TOPLEFT")
+        self.sub:SetWidth(BOX_W)
+        self.sub:SetJustifyH("LEFT")
+        -- the capture area
+        local area = CreateFrame("Button", nil, body)
+        area:SetSize(BOX_W, 64)
+        area:EnableMouseWheel(true)
+        self.areaFill = UI.Fill(area, "surface-sunk")
+        self.areaFill:SetAllPoints()
+        self.area = area
+        self.areaTop = UI.Text(area, "label", "arcane")
+        self.areaTop:SetPoint("BOTTOM", area, "CENTER", 0, 2)
+        self.areaBottom = UI.Text(area, "caption", "ink-muted")
+        self.areaBottom:SetPoint("TOP", area, "CENTER", 0, -2)
+        area:SetScript("OnMouseDown", function(_, mouse)
+            if self.waiting then
+                local key = MOUSE[mouse]
+                if key then
+                    self:Got(modifiers() .. key)
+                end
+            else
+                self.waiting = true
+                self:Draw()
+            end
+        end)
+        area:SetScript("OnMouseWheel", function(_, delta)
+            if self.waiting then
+                self:Got(modifiers() .. (delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN"))
+            end
+        end)
+        -- keys: while waiting, every key is the input (Esc cancels); else
+        -- Esc closes and the rest go on to the game
+        p:EnableKeyboard(true)
+        p:SetScript("OnKeyDown", function(frame, key)
+            if InCombatLockdown() then
+                return
+            end
+            if self.waiting then
+                frame:SetPropagateKeyboardInput(false)
+                if key == "ESCAPE" then
+                    if self.input then
+                        self.waiting = false
+                        self:Draw()
+                    else
+                        self:Close()
+                    end
+                elseif not LONE[key] then
+                    self:Got(modifiers() .. key)
+                end
+            elseif key == "ESCAPE" then
+                frame:SetPropagateKeyboardInput(false)
+                self:Close()
+            else
+                frame:SetPropagateKeyboardInput(true)
+            end
+        end)
+        -- the choices
+        local function label(t: string): Text
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetValue(t)
+            return l
+        end
+        self.rankLabel = label("Casts")
+        self.reachLabel = label("Where")
+        self.reactLabel = label("On")
+        self.reachSeg = UI.Segmented(body, {
+            options = {
+                { value = "both", label = "Frames & world" },
+                { value = "frames", label = "Unit frames" },
+                { value = "world", label = "World" },
+            },
+            value = "both",
+            onChange = function(v: string)
+                self.reach = v
+                self:Draw()
+            end,
+        })
+        self.reactSeg = UI.Segmented(body, {
+            options = {
+                { value = "any", label = "Anyone" },
+                { value = "help", label = "Friends" },
+                { value = "harm", label = "Enemies" },
+            },
+            value = "any",
+            onChange = function(v: string)
+                self.react = v
+                self:Draw()
+            end,
+        })
+        self.lines = {}
+        for i = 1, 4 do
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetWidth(BOX_W)
+            l:SetJustifyH("LEFT")
+            l:SetWordWrap(true)
+            self.lines[i] = l
+        end
+        self.ok = UI.Button(body, {
+            text = "Bind",
+            variant = "primary",
+            onClick = function()
+                self:Confirm()
+            end,
+        })
+        self.cancel = UI.Button(body, {
+            text = "Cancel",
+            onClick = function()
+                self:Close()
+            end,
+        })
+        self.remove = UI.Button(body, {
+            text = "Remove",
+            icon = "trash",
+            onClick = function()
+                local b = self.editing
+                if b then
+                    self.owner:Remove(b)
+                end
+                self:Close()
+            end,
+        })
+        p:Hide()
+    end
+
+    function Open(spell: BindSpell, editing: Bind?)
+        self.spell, self.editing = spell, editing
+        self.input = editing and editing.input or nil
+        self.waiting = editing == nil
+        self.rank = editing and editing.rank or "highest"
+        self.reach = editing and editing.reach or "both"
+        self.react = editing and editing.react or defaultReact(spell)
+        self.panel:SetTitle((editing and "Change " or "Bind ") .. spell.name)
+        self.sub:SetValue(specName(self.owner:SpecKey()) .. " · on the unit under the mouse")
+        -- the rank switch: this spell's rank (none without ranks)
+        if self.rankSeg then
+            self.rankSeg:Hide()
+            self.rankSeg = nil
+        end
+        local rank = editing and editing.spellID and rankNumber(editing.spellID) or spell.rank
+        if rank and rank > 0 then
+            self.rankSeg = UI.Segmented(self.panel.body, {
+                options = {
+                    { value = "highest", label = "Highest rank" },
+                    { value = "fixed", label = "Rank " .. rank .. " only" },
+                },
+                value = self.rank,
+                onChange = function(v: string)
+                    self.rank = v
+                    self:Draw()
+                end,
+            })
+        end
+        self.reachSeg:SetValue(self.reach)
+        self.reactSeg:SetValue(self.react)
+        local p = self.panel
+        p:ClearAllPoints()
+        p:SetPoint("CENTER", SuuUI.Root, "CENTER", 0, 60)
+        p:Show()
+        p:Raise()
+        self:Draw()
+    end
+
+    function Close()
+        self.panel:Hide()
+    end
+
+    function Got(input: string)
+        self.input = input
+        self.waiting = false
+        self:Draw()
+    end
+
+    -- The binding the box would make now.
+    function Current(): Bind?
+        local input = self.input
+        if not input then
+            return nil
+        end
+        local spellID = self.editing and self.editing.spellID or self.spell.spellID
+        return {
+            input = input,
+            spell = self.spell.name,
+            rank = self.rank == "fixed" and "fixed" or "highest",
+            spellID = spellID,
+            reach = (self.reach == "frames" and "frames") or (self.reach == "world" and "world") or "both",
+            react = (self.react == "help" and "help") or (self.react == "harm" and "harm") or "any",
+        }
+    end
+
+    function Draw()
+        local body = self.panel.body
+        local y = -(self.sub:GetStringHeight() + S["space-4"])
+        local area = self.area
+        area:ClearAllPoints()
+        area:SetPoint("TOPLEFT", 0, y)
+        y = y - 64 - S["space-4"]
+        local b = self:Current()
+        if self.waiting or not b then
+            UI.PaintFill(self.areaFill, "surface-sunk")
+            self.areaTop:SetValue("Press a key, or click or turn the wheel in here")
+            self.areaTop:SetColor("arcane")
+            self.areaBottom:SetValue(
+                self.input and "Shift, Ctrl, Alt and Cmd combine · Esc keeps " .. inputText(self.input) or
+                    "Shift, Ctrl, Alt and Cmd combine · Esc cancels"
+            )
+        else
+            UI.PaintFill(self.areaFill, "surface-raised")
+            self.areaTop:SetValue(inputText(b.input))
+            self.areaTop:SetColor("ink")
+            self.areaBottom:SetValue("Click here to pick another")
+        end
+        -- the switches
+        local function row(l: Text, seg: Frame?)
+            if not seg then
+                l:Hide()
+                return
+            end
+            l:Show()
+            l:ClearAllPoints()
+            l:SetPoint("TOPLEFT", 0, y - 8)
+            seg:ClearAllPoints()
+            seg:SetPoint("TOPLEFT", 52, y)
+            seg:Show()
+            y = y - 30 - S["space-3"]
+        end
+        row(self.rankLabel, self.rankSeg)
+        row(self.reachLabel, self.reachSeg)
+        row(self.reactLabel, self.reactSeg)
+        -- what it comes to
+        local shown: { text: string, tone: string }[] = {}
+        local verdict = b and not self.waiting and judge(self.owner:Binds(), b, self.editing) or nil
+        if verdict then
+            if verdict.refuse then
+                shown[#shown + 1] = {
+                    text = verdict.refuse .. ". " .. (verdict.refuseDetail or ""),
+                    tone = "ember-text",
+                }
+            end
+            local ask = verdict.ask
+            if ask then
+                shown[#shown + 1] = { text = ask.title .. ". " .. ask.text, tone = "gilt-text" }
+            end
+            for _, line in ipairs(verdict.info) do
+                shown[#shown + 1] = { text = line, tone = "ink-muted" }
+            end
+        end
+        y = y - S["space-2"]
+        for i, l in ipairs(self.lines) do
+            local s = shown[i]
+            if s then
+                l:SetValue(s.text)
+                l:SetColor(s.tone)
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", 0, y)
+                l:Show()
+                y = y - l:GetStringHeight() - S["space-2"]
+            else
+                l:Hide()
+            end
+        end
+        -- the buttons
+        y = y - S["space-3"]
+        self.ok:SetLabel(verdict and verdict.ask and verdict.ask.confirm or (self.editing and "Save" or "Bind"))
+        self.ok:SetEnabledState(verdict ~= nil and verdict.refuse == nil and not InCombatLockdown())
+        self.ok:ClearAllPoints()
+        self.ok:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+        self.cancel:ClearAllPoints()
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        self.remove:SetShown(self.editing ~= nil)
+        self.remove:ClearAllPoints()
+        self.remove:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+        y = y - 30
+        body:SetHeight(-y)
+    end
+
+    function Confirm()
+        local b = self:Current()
+        if not b or self.waiting or InCombatLockdown() then
+            return
+        end
+        local verdict = judge(self.owner:Binds(), b, self.editing)
+        if verdict.refuse then
+            return
+        end
+        b.reach = verdict.reach or b.reach
+        local gone = verdict.takes
+        if self.editing then
+            gone[#gone + 1] = self.editing :: Bind
+        end
+        self.owner:Add(b, gone)
+        self:Close()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The bindings list
+--------------------------------------------------------------------------------
+
+local ROW_H = 36
+
+-- A row of the list: the input's chips, the spell's icon, name and line, and
+-- its remove button.
+class ListRow
+    readonly frame: Button
+    readonly chips: KeyChip[] = {}
+    readonly icon: Icon
+    readonly name: Text
+    readonly line: Text
+    readonly close: Button
+    bind: Bind? = nil
+
+    constructor(parent: Frame, list: BindingsList)
+        local f = CreateFrame("Button", nil, parent)
+        f:SetHeight(ROW_H)
+        self.frame = f
+        local hover = UI.Fill(f, "surface-raised")
+        hover:SetAllPoints()
+        hover:Hide()
+        self.icon = UI.Icon(f, 28)
+        self.icon:SetPoint("LEFT", 170, 0)
+        self.icon:EnableMouse(false)
+        self.name = UI.Text(f, "label", "ink")
+        self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", S["space-4"], 0)
+        self.name:SetPoint("RIGHT", -36, 0)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self.line = UI.Text(f, "caption", "ink-muted")
+        self.line:SetPoint("BOTTOMLEFT", self.icon, "BOTTOMRIGHT", S["space-4"], 0)
+        self.line:SetPoint("RIGHT", -36, 0)
+        self.line:SetJustifyH("LEFT")
+        self.line:SetWordWrap(false)
+        self.close = UI.CloseButton(f, function()
+            local b = self.bind
+            if b and not InCombatLockdown() then
+                list.owner:Remove(b)
+            end
+        end)
+        self.close:SetPoint("RIGHT", -4, 0)
+        f:SetScript("OnEnter", function()
+            hover:SetShown(self.bind ~= nil)
+        end)
+        f:SetScript("OnLeave", function()
+            hover:Hide()
+        end)
+        f:SetScript("OnClick", function()
+            local b = self.bind
+            if b and not InCombatLockdown() then
+                list.owner:Edit({ name = b.spell, spellID = b.spellID, rank = b.spellID and rankNumber(b.spellID) }, b)
+            end
+        end)
+    end
+
+    function SetChips(parts: string[])
+        for i, p in ipairs(parts) do
+            local chip = self.chips[i] or UI.KeyChip(self.frame, "")
+            self.chips[i] = chip
+            chip:SetKey(p)
+            chip:ClearAllPoints()
+            local prev = self.chips[i - 1]
+            if i == 1 or not prev then
+                chip:SetPoint("LEFT", 4, 0)
+            else
+                chip:SetPoint("LEFT", prev, "RIGHT", 3, 0)
+            end
+            chip:Show()
+        end
+        for i = #parts + 1, #self.chips do
+            self.chips[i]:Hide()
+        end
+    end
+end
+
+-- The Bindings tab's list: this spec's bindings by unit frame clicks, keys
+-- and the wheel; Bind spells, Copy from another tree, Clear this spec.
+class BindingsList
+    readonly root: Frame
+    readonly title: Text
+    readonly count: Text
+    readonly note: Text
+    readonly lock: Text
+    readonly scroll: ScrollArea
+    readonly rows: ListRow[] = {}
+    readonly heads: Text[] = {}
+    readonly bindSpells: SuuButton
+    readonly copy: SuuButton
+    readonly clear: SuuButton
+
+    constructor(readonly owner: MouseBindingsModule, parent: Frame, onBindSpells: () -> ())
+        local root = CreateFrame("Frame", nil, parent)
+        root:SetAllPoints()
+        self.root = root
+        self.title = UI.Text(root, "header", "gilt-text")
+        self.title:SetPoint("TOPLEFT", 0, -6)
+        self.title:SetValue("Bindings")
+        self.count = UI.Text(root, "caption", "ink-muted")
+        self.count:SetPoint("LEFT", self.title, "RIGHT", S["space-5"], 0)
+        self.note = UI.Text(root, "caption", "ink-muted")
+        self.note:SetPoint("TOPLEFT", 0, -34)
+        self.note:SetPoint("RIGHT")
+        self.note:SetJustifyH("LEFT")
+        self.note:SetValue(
+            "Each talent tree keeps its own. Over a unit frame or a unit in the world, the input casts on that unit; elsewhere a key keeps its usual job."
+        )
+        self.lock = UI.Text(root, "caption", "gilt-text")
+        self.lock:SetPoint("TOPLEFT", self.note, "BOTTOMLEFT", 0, -S["space-3"])
+        self.lock:SetValue("In combat · bindings change when it ends. They still cast.")
+        -- the foot
+        self.bindSpells = UI.Button(root, {
+            text = "Bind spells",
+            onClick = function()
+                if not InCombatLockdown() then
+                    onBindSpells()
+                end
+            end,
+        })
+        self.bindSpells:SetPoint("BOTTOMLEFT", 0, 4)
+        self.copy = UI.Button(root, {
+            text = "Copy from…",
+            onClick = function()
+                self:CopyMenu()
+            end,
+        })
+        self.copy:SetPoint("LEFT", self.bindSpells, "RIGHT", S["space-3"], 0)
+        self.clear = UI.Button(root, {
+            text = "Clear this tree",
+            icon = "trash",
+            onClick = function()
+                local n = #owner:Binds()
+                if n == 0 or InCombatLockdown() then
+                    return
+                end
+                UI.Confirm({
+                    title = "Clear these bindings?",
+                    text = ("All %d of %s's mouseover bindings go."):format(n, specName(owner:SpecKey())),
+                    confirm = "Clear",
+                    onConfirm = function()
+                        owner:ClearAll()
+                    end,
+                })
+            end,
+        })
+        self.clear:SetPoint("BOTTOMRIGHT", 0, 4)
+        -- the rows
+        self.scroll = UI.ScrollArea(root, 6)
+        self.scroll:SetPoint("TOPLEFT", self.lock, "BOTTOMLEFT", 0, -S["space-3"])
+        self.scroll:SetPoint("BOTTOMRIGHT", self.clear, "TOPRIGHT", -8, S["space-4"])
+        self.scroll:HookScript("OnSizeChanged", function()
+            self:Draw()
+        end)
+    end
+
+    function CopyMenu()
+        if InCombatLockdown() then
+            return
+        end
+        local owner = self.owner
+        local here = owner:SpecKey()
+        UI.ContextMenuFrom(self.copy, function(_, root)
+            root:CreateTitle("Copy bindings from")
+            local any = false
+            for key, list in pairs(owner:Store().specs or {}) do
+                if key ~= here and #list > 0 then
+                    any = true
+                    root:CreateButton(("%s · %d"):format(specName(key), #list), function()
+                        local mine = #owner:Binds()
+                        local function copy()
+                            owner:CopyFrom(key)
+                        end
+                        if mine == 0 then
+                            copy()
+                            return
+                        end
+                        UI.Confirm({
+                            title = "Replace these bindings?",
+                            text = ("%s's %d bindings take the place of these %d."):format(specName(key), #list, mine),
+                            confirm = "Replace",
+                            onConfirm = copy,
+                        })
+                    end)
+                end
+            end
+            if not any then
+                root:CreateButton("No other tree has bindings", nil):SetEnabled(false)
+            end
+        end)
+    end
+
+    -- `combatArg`: a fight starting (its event comes just before the lockdown).
+    function Draw(combatArg: boolean?)
+        local owner = self.owner
+        local combat = combatArg or InCombatLockdown()
+        local binds = owner:Binds()
+        self.count:SetValue(
+            ("%s · %d %s"):format(specName(owner:SpecKey()), #binds, #binds == 1 and "binding" or "bindings")
+        )
+        self.lock:SetShown(combat)
+        self.bindSpells:SetEnabledState(not combat)
+        self.clear:SetEnabledState(not combat and #binds > 0)
+        local others = false
+        for key, list in pairs(owner:Store().specs or {}) do
+            if key ~= owner:SpecKey() and #list > 0 then
+                others = true
+            end
+        end
+        self.copy:SetShown(others)
+        self.copy:SetEnabledState(not combat)
+        -- grouped, each group by input
+        local groups: Bind[][] = { {}, {}, {} }
+        for _, b in ipairs(binds) do
+            local g = groups[groupOf(b.input)]
+            g[#g + 1] = b
+        end
+        for _, g in ipairs(groups) do
+            table.sort(g, function(a: Bind, b: Bind): boolean
+                return a.input < b.input
+            end)
+        end
+        local child = self.scroll.child
+        local width = math.max(1, self.scroll:GetWidth())
+        child:SetWidth(width)
+        local y, nRow, nHead = 0, 0, 0
+        local function row(): ListRow
+            nRow = nRow + 1
+            local r = self.rows[nRow] or ListRow.new(child, self)
+            self.rows[nRow] = r
+            r.frame:ClearAllPoints()
+            r.frame:SetPoint("TOPLEFT", 0, y)
+            r.frame:SetPoint("RIGHT", child, "RIGHT")
+            r.frame:Show()
+            y = y - ROW_H - 2
+            return r
+        end
+        for gi, g in ipairs(groups) do
+            -- the frames' own Left and Right click, while not bound
+            local own: { input: string, what: string }[] = {}
+            if gi == 1 then
+                local left, right = false, false
+                for _, b in ipairs(g) do
+                    left = left or b.input == "BUTTON1"
+                    right = right or b.input == "BUTTON2"
+                end
+                if not left then
+                    own[#own + 1] = { input = "BUTTON1", what = "Targets the unit" }
+                end
+                if not right then
+                    own[#own + 1] = { input = "BUTTON2", what = "Opens the unit's menu" }
+                end
+            end
+            if #g > 0 or (#own > 0 and #binds > 0) then
+                nHead = nHead + 1
+                local h = self.heads[nHead] or UI.Text(child, "caption", "ink-muted")
+                self.heads[nHead] = h
+                h:SetValue(GROUPS[gi])
+                h:ClearAllPoints()
+                h:SetPoint("TOPLEFT", 0, y - 4)
+                h:Show()
+                y = y - 22
+                for _, o in ipairs(own) do
+                    local r = row()
+                    r.bind = nil
+                    r:SetChips(inputParts(o.input))
+                    r.icon:SetArt(nil)
+                    r.name:SetValue(o.what)
+                    r.name:SetColor("ink-muted")
+                    r.line:SetValue("Not bound · the game's own")
+                    r.close:Hide()
+                end
+                for _, b in ipairs(g) do
+                    local r = row()
+                    r.bind = b
+                    r:SetChips(inputParts(b.input))
+                    local id = castID(b)
+                    r.icon:SetArt(id and asNumber(try(C_Spell.GetSpellTexture, id)) or nil)
+                    r.name:SetValue(b.spell)
+                    r.name:SetColor("ink")
+                    r.line:SetValue(bindLine(b))
+                    r.close:SetShown(not combat)
+                end
+            end
+        end
+        for i = nRow + 1, #self.rows do
+            self.rows[i].frame:Hide()
+        end
+        for i = nHead + 1, #self.heads do
+            self.heads[i]:Hide()
+        end
+        if #binds == 0 then
+            nHead = nHead + 1
+            local h = self.heads[nHead] or UI.Text(child, "caption", "ink-muted")
+            self.heads[nHead] = h
+            h:SetValue("No bindings yet. Bind spells, or right-click a spell in the book.")
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", 0, y - 4)
+            h:Show()
+            y = y - 22
+        end
+        child:SetHeight(math.max(1, -y))
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The module
+--------------------------------------------------------------------------------
+
+-- The attributes set on a unit frame (to take away again).
+type FrameAttrs = { [Frame]: string[] }
+
+export class MouseBindingsModule extends Module<{}>
+    owner: Frame? = nil
+    worldButton: Button? = nil
+    frameButton: Button? = nil
+    -- the unit frames wrapped, and the attributes set on each
+    wrapped: { [Frame]: boolean } = {}
+    frameAttrs: FrameAttrs = {}
+    buttonAttrs: string[] = {}
+    box: CaptureBox? = nil
+    list: BindingsList? = nil
+    -- an apply waiting (events come in bursts)
+    applySoon: boolean = false
+
+    constructor()
+        super({
+            id = "mousebindings",
+            name = "Mouseover bindings",
+            description = "Spells bound to keys, clicks and the wheel cast on the unit under the mouse: SuuUI's unit frames and the world. Bound from the Spellbook.",
+            api = "0.23",
+            defaults = {},
+        })
+    end
+
+    function Store(): Store
+        return self:CharData() :: unknown :: Store
+    end
+
+    -- The spec bindings are kept for: the talent tree with the most points.
+    -- Before any (or as the talents read empty after login): the last one;
+    -- the first tree you pick takes over what you bound before.
+    function SpecKey(): string
+        local store = self:Store()
+        local spec = SuuUI.Spec() or 0
+        if spec == 0 then
+            return store.last or "0"
+        end
+        local key = tostring(spec)
+        store.last = key
+        local specs = store.specs
+        if specs and specs[key] == nil and specs["0"] then
+            specs[key] = specs["0"]
+            specs["0"] = nil
+        end
+        return key
+    end
+
+    -- This spec's bindings (made when missing), or another spec's.
+    function Binds(spec: string?): Bind[]
+        local store = self:Store()
+        local specs = store.specs or {}
+        store.specs = specs
+        local key = spec or self:SpecKey()
+        local list = specs[key] or {}
+        specs[key] = list
+        return list
+    end
+
+    -- A spell's bindings in this spec.
+    function ForSpell(name: string): Bind[]
+        local out: Bind[] = {}
+        for _, b in ipairs(self:Binds()) do
+            if b.spell == name then
+                out[#out + 1] = b
+            end
+        end
+        return out
+    end
+
+    -- Adds a binding, the ones it takes over (`gone`) removed.
+    function Add(b: Bind, gone: Bind[]?)
+        local list = self:Binds()
+        for _, g in ipairs(gone or {}) do
+            for i = #list, 1, -1 do
+                if list[i] == g then
+                    table.remove(list, i)
+                end
+            end
+        end
+        list[#list + 1] = b
+        self:Changed()
+    end
+
+    function Remove(b: Bind)
+        local list = self:Binds()
+        for i = #list, 1, -1 do
+            if list[i] == b then
+                table.remove(list, i)
+            end
+        end
+        self:Changed()
+    end
+
+    -- A spell's bindings gone: how many there were.
+    function ClearSpell(name: string): number
+        local list = self:Binds()
+        local n = 0
+        for i = #list, 1, -1 do
+            if list[i].spell == name then
+                table.remove(list, i)
+                n = n + 1
+            end
+        end
+        if n > 0 then
+            self:Changed()
+        end
+        return n
+    end
+
+    function ClearAll()
+        local list = self:Binds()
+        for i = #list, 1, -1 do
+            table.remove(list, i)
+        end
+        self:Changed()
+    end
+
+    -- Another spec's bindings, copied over this one's.
+    function CopyFrom(spec: string)
+        local from = self:Binds(spec)
+        local list = self:Binds()
+        for i = #list, 1, -1 do
+            table.remove(list, i)
+        end
+        for _, b in ipairs(from) do
+            list[#list + 1] = {
+                input = b.input,
+                spell = b.spell,
+                rank = b.rank,
+                spellID = b.spellID,
+                reach = b.reach,
+                react = b.react,
+            }
+        end
+        self:Changed()
+    end
+
+    function Changed()
+        self:Emit("SUUUI_MOUSE_BINDINGS_CHANGED")
+        local list = self.list
+        if list and list.root:IsVisible() then
+            list:Draw()
+        end
+        self:Apply()
+    end
+
+    -- Bind mode: an input pressed over a spell, bound with the defaults
+    -- (the highest rank, frames and world, on whom the spell is for); asked
+    -- first when it takes another spell's input or the frames' Left or Right
+    -- click; refused for movement keys.
+    function Press(spell: BindSpell, input: string, done: (title: string, detail: string?, tone: string?) -> ())
+        if InCombatLockdown() then
+            done("In combat", "Bindings change when it ends.", "gilt-text")
+            return
+        end
+        local b: Bind = {
+            input = input,
+            spell = spell.name,
+            rank = "highest",
+            spellID = spell.spellID,
+            reach = "both",
+            react = defaultReact(spell),
+        }
+        local verdict = judge(self:Binds(), b, nil)
+        if verdict.refuse then
+            done(verdict.refuse, verdict.refuseDetail, "ember-text")
+            return
+        end
+        b.reach = verdict.reach or b.reach
+        local name = inputText(input)
+        local function commit()
+            if InCombatLockdown() then
+                return
+            end
+            self:Add(b, verdict.takes)
+            local detail = (spell.rank and "Highest rank. " or "") .. table.concat(verdict.info, " ")
+            done(name .. " → " .. spell.name, detail, "arcane")
+        end
+        local ask = verdict.ask
+        if ask then
+            UI.Confirm({
+                title = ask.title,
+                text = ask.text,
+                confirm = ask.confirm,
+                onConfirm = function()
+                    commit()
+                end,
+                onCancel = function()
+                    done("Not bound", name .. " stays as it was.", "ink-muted")
+                end,
+            })
+            return
+        end
+        commit()
+    end
+
+    -- The capture box for a spell (a binding of it to change).
+    function Edit(spell: BindSpell, bind: Bind?)
+        if InCombatLockdown() then
+            self:Print("Bindings change out of combat.")
+            return
+        end
+        local box = self.box or CaptureBox.new(self)
+        self.box = box
+        box:Open(spell, bind)
+    end
+
+    -- A spell's right-click menu: bind it, change or remove its bindings.
+    function Menu(spell: BindSpell, allBindings: (() -> ())?)
+        local combat = InCombatLockdown()
+        local mine = self:ForSpell(spell.name)
+        UI.ContextMenuFrom(nil, function(_, root)
+            root:CreateTitle(spell.name)
+            root:CreateButton("Bind a key or click…", function()
+                self:Edit(spell)
+            end):SetEnabled(not combat)
+            for _, b in ipairs(mine) do
+                root:CreateButton("Change " .. inputText(b.input) .. "…", function()
+                    self:Edit(spell, b)
+                end):SetEnabled(not combat)
+            end
+            if #mine > 0 then
+                root:CreateDivider()
+                for _, b in ipairs(mine) do
+                    root:CreateButton("Remove " .. inputText(b.input), function()
+                        self:Remove(b)
+                    end):SetEnabled(not combat)
+                end
+            end
+            if allBindings then
+                root:CreateDivider()
+                root:CreateButton("All bindings…", allBindings)
+            end
+        end)
+    end
+
+    -- The bindings list in `parent` (built the first time), drawn.
+    function List(parent: Frame, bindSpells: () -> ())
+        local list = self.list
+        if not list then
+            list = BindingsList.new(self, parent, bindSpells)
+            self.list = list
+        end
+        list:Draw()
+    end
+
+    ----------------------------------------------------------------------------
+    -- The secure part
+    ----------------------------------------------------------------------------
+
+    function Build()
+        if self.owner then
+            return
+        end
+        local function button(name: string): Button
+            local b = CreateFrame("Button", name, UIParent, "SecureActionButtonTemplate") :: Button
+            b:RegisterForClicks("AnyDown", "AnyUp")
+            return b
+        end
+        local world = button("SuuUIMouseBindingsWorld")
+        world:SetAttribute("unit", "mouseover")
+        local frame = button("SuuUIMouseBindingsFrame")
+        local owner = CreateFrame("Frame", "SuuUIMouseBindings", UIParent, "SecureHandlerStateTemplate")
+        owner:SetFrameRef("worldButton", world)
+        owner:SetFrameRef("frameButton", frame)
+        owner:SetAttribute("_onstate-mo", [=[ self:RunAttribute("_refresh") ]=])
+        owner:SetAttribute("_onstate-frame", [=[ self:RunAttribute("_refresh") ]=])
+        owner:SetAttribute("_refresh", "self:ClearBindings()")
+        RegisterStateDriver(owner, "mo", "[@mouseover,exists] on; off")
+        self.owner, self.worldButton, self.frameButton = owner, world, frame
+    end
+
+    -- SuuUI's secure unit frames (player, target, party, raid, boss, …): a
+    -- unit, or a raid button still waiting for one.
+    function UnitFrames(): Frame[]
+        local out: Frame[] = {}
+        local f = EnumerateFrames()
+        while f do
+            local okName, name = pcall(f.GetName, f)
+            local ours = okName and type(name) == "string" and not secret.isSecret(name) and
+                string.find(name, "^SuuUI") ~= nil and
+                string.find(name, "^SuuUIMouseBindings") == nil
+            if ours and f:IsProtected() then
+                local okUnit, unit = pcall(f.GetAttribute, f, "unit")
+                if (okUnit and type(unit) == "string") or string.find(name :: string, "UnitButton%d+$") then
+                    out[#out + 1] = f
+                end
+            end
+            f = EnumerateFrames(f)
+        end
+        return out
+    end
+
+    -- Everything secure set again from this spec's bindings (out of combat).
+    function Apply()
+        if InCombatLockdown() then
+            self:RunOutOfCombat("apply", function()
+                self:Apply()
+            end)
+            return
+        end
+        self:Build()
+        local owner, world, frameB = self.owner, self.worldButton, self.frameButton
+        if not (owner and world and frameB) then
+            return
+        end
+        -- the old attributes away
+        for _, name in ipairs(self.buttonAttrs) do
+            world:SetAttribute(name, nil)
+            frameB:SetAttribute(name, nil)
+        end
+        self.buttonAttrs = {}
+        for f, names in pairs(self.frameAttrs) do
+            for _, name in ipairs(names) do
+                f:SetAttribute(name, nil)
+            end
+        end
+        self.frameAttrs = {}
+        -- each input once: its spell for anyone, or for friends and foes
+        local byInput: { [string]: { any?: Bind, help?: Bind, harm?: Bind } } = {}
+        local order: string[] = {}
+        local on = self:IsEnabled()
+        for _, b in ipairs(on and self:Binds() or {}) do
+            local slot = byInput[b.input]
+            if not slot then
+                slot = {}
+                byInput[b.input] = slot
+                order[#order + 1] = b.input
+            end
+            slot[b.react] = b
+        end
+        local frameKeys: { string }[] = {}
+        local worldKeys: { string }[] = {}
+        -- (the frames looked for only with bindings to give them)
+        local frames = #order > 0 and self:UnitFrames() or {}
+        local function ids(slot: { any?: Bind, help?: Bind, harm?: Bind }, reach: Reach): (number?, number?, number?)
+            local function cast(b: Bind?): number?
+                if b and (b.reach == "both" or b.reach == reach) then
+                    return castID(b)
+                end
+                return nil
+            end
+            return cast(slot.any), cast(slot.help), cast(slot.harm)
+        end
+        for n, input in ipairs(order) do
+            local slot = byInput[input] or {}
+            local v = vbutton(n)
+            -- the world: a binding to the mouseover button
+            local wAny, wHelp, wHarm = ids(slot, "world")
+            if (wAny or wHelp or wHarm) and not isPlainClick(input) then
+                for _, kv in ipairs(castAttributes("*", "-" .. v, n, wAny, wHelp, wHarm)) do
+                    world:SetAttribute(kv[1] :: string, kv[2])
+                    self.buttonAttrs[#self.buttonAttrs + 1] = kv[1] :: string
+                end
+                worldKeys[#worldKeys + 1] = { input, v }
+            end
+            -- frames: a click is the frame's own attribute; a key or the
+            -- wheel a binding to the frame button
+            local fAny, fHelp, fHarm = ids(slot, "frames")
+            if fAny or fHelp or fHarm then
+                local m = mouseButton(input)
+                if m then
+                    local prefix = clickPrefix(input)
+                    if prefix then
+                        for _, f in ipairs(frames) do
+                            local names = self.frameAttrs[f] or {}
+                            self.frameAttrs[f] = names
+                            for _, kv in ipairs(castAttributes(prefix, tostring(m), n, fAny, fHelp, fHarm)) do
+                                f:SetAttribute(kv[1] :: string, kv[2])
+                                names[#names + 1] = kv[1] :: string
+                            end
+                        end
+                    end
+                else
+                    for _, kv in ipairs(castAttributes("*", "-" .. v, n, fAny, fHelp, fHarm)) do
+                        frameB:SetAttribute(kv[1] :: string, kv[2])
+                        self.buttonAttrs[#self.buttonAttrs + 1] = kv[1] :: string
+                    end
+                    frameKeys[#frameKeys + 1] = { input, v }
+                end
+            end
+        end
+        owner:SetAttribute("_refresh", refreshSnippet(frameKeys, worldKeys))
+        -- the unit frames: over one, its keys (its unit on the frame button)
+        for _, f in ipairs(frames) do
+            if not self.wrapped[f] then
+                self.wrapped[f] = true
+                SecureHandlerWrapScript(f, "OnEnter", owner, [=[
+                    owner:GetFrameRef("frameButton"):SetAttribute("unit", self:GetAttribute("unit"))
+                    owner:SetAttribute("state-frame", "on")
+                ]=])
+                SecureHandlerWrapScript(f, "OnLeave", owner, [=[
+                    owner:SetAttribute("state-frame", "off")
+                ]=])
+            end
+        end
+        SecureHandlerExecute(owner, [=[ self:RunAttribute("_refresh") ]=])
+    end
+
+    -- Apply in a moment, once for a burst of events.
+    function ApplySoon()
+        if self.applySoon then
+            return
+        end
+        self.applySoon = true
+        after(0.2, function()
+            self.applySoon = false
+            self:Apply()
+        end)
+    end
+
+    override function OnEnable()
+        self:ProvideService(MOUSE_BINDINGS, {
+            ForSpell = function(name: string): MouseBind[]
+                return self:ForSpell(name)
+            end,
+            ChipText = chipText,
+            Press = function(
+                spell: BindSpell,
+                input: string,
+                done: (title: string, detail: string?, tone: string?) -> ()
+            )
+                self:Press(spell, input, done)
+            end,
+            ClearSpell = function(name: string): number
+                return self:ClearSpell(name)
+            end,
+            Edit = function(spell: BindSpell, bind: MouseBind?)
+                self:Edit(spell, bind)
+            end,
+            Menu = function(spell: BindSpell, allBindings: (() -> ())?)
+                self:Menu(spell, allBindings)
+            end,
+            List = function(parent: Frame, bindSpells: () -> ())
+                self:List(parent, bindSpells)
+            end,
+        })
+        self:On("SUUUI_SPEC_CHANGED", function()
+            self:Changed()
+        end)
+        -- a new rank, a new frame (a group joined): set again
+        for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_ENTERING_WORLD", "GROUP_ROSTER_UPDATE" }) do
+            self:OnGameEvent(e, function()
+                self:ApplySoon()
+            end)
+        end
+        -- the box and the list: locked in combat
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            local box = self.box
+            if box then
+                box:Close()
+            end
+            local list = self.list
+            if list and list.root:IsVisible() then
+                list:Draw(true)
+            end
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            local list = self.list
+            if list and list.root:IsVisible() then
+                list:Draw()
+            end
+        end)
+        self:Apply()
+    end
+
+    override function OnDisable()
+        self:Apply()
+    end
+end
+
+export const M = SuuUI.AddModule(MouseBindingsModule.new())

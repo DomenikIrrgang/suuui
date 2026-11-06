@@ -1,0 +1,317 @@
+-- Units/MouseBindings: spells on keys, clicks and the wheel cast on the
+-- unit under the mouse. The inputs as a person reads them; what a binding
+-- comes to (movement keys refused, another spell's input and the frames'
+-- Left and Right click asked first, Cmd clicks in the world only); the
+-- secure part end to end: a key over a unit in the world and over a unit
+-- frame, a click on a frame, friends and enemies apart, combat waiting.
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior).
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import internal M, inputText, chipText, clickPrefix, reachFor, isPlainClick, judge, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
+import type Bind from "/Units/MouseBindings"
+import expectNoErrors from "../../helpers"
+
+-- A spell the character knows: its name and highest rank's ID.
+local function known(): (string, number)
+    for _, name in ipairs({ "Heroic Strike", "Battle Shout", "Attack" }) do
+        local ranks = ranksOf(name)
+        local top = ranks[#ranks]
+        if top then
+            return name, top.id
+        end
+    end
+    error("no known spell")
+end
+
+local function bind(input: string, spell: string, id: number, more: { reach?: string, react?: string }?): Bind
+    local o = more or {}
+    return {
+        input = input,
+        spell = spell,
+        rank = "highest",
+        spellID = id,
+        reach = (o.reach or "both") :: "both",
+        react = (o.react or "any") :: "any",
+    }
+end
+
+-- Whether a key casts a binding now (its override one of this module's).
+local function ours(key: string): boolean
+    local action = GetBindingAction(key, true) or ""
+    return action:find("SuuUIMouseBindings", 1, true) ~= nil
+end
+
+-- The casts the secure buttons make: { spell, unit }.
+local casts: { id: unknown, unit: unknown }[] = {}
+local hooked = false
+local function watchCasts()
+    casts = {}
+    if hooked then
+        return
+    end
+    hooked = true
+    hooksecurefunc("CastSpellByID", function(id, unit)
+        casts[#casts + 1] = { id = id, unit = unit }
+    end)
+end
+
+@afterEach
+local function cleanup()
+    mock.setModifiers({})
+    mock.player:mouseover(nil)
+    mock.hover(nil)
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:Store().specs = {}
+    M:Apply()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Inputs
+--------------------------------------------------------------------------------
+
+@test("an input as a person reads it, and as a chip")
+@cases({
+    { "SHIFT-F", "Shift-F", "Shift-F" },
+    { "ALT-CTRL-BUTTON1", "Alt-Ctrl-Left click", "Alt-Ctrl-Left" },
+    { "BUTTON2", "Right click", "Right" },
+    { "SHIFT-MOUSEWHEELUP", "Shift-Wheel up", "Shift-Wheel up" },
+    { "META-Q", "Cmd-Q", "Cmd-Q" },
+    { "BUTTON4", "Button 4", "Button 4" },
+})
+local function inputs(input: string, text: string, chip: string)
+    expect(inputText(input)).toBe(text)
+    expect(chipText(bind(input, "Heroic Strike", 1))).toBe(chip)
+end
+
+@test("a click's prefix on unit frames: Alt, Ctrl, Shift in the secure buttons' order; none with Cmd")
+local function prefixes()
+    expect(clickPrefix("ALT-SHIFT-BUTTON1")).toBe("alt-shift-")
+    expect(clickPrefix("CTRL-BUTTON2")).toBe("ctrl-")
+    expect(clickPrefix("BUTTON1")).toBe("")
+    expect(clickPrefix("META-BUTTON1")).toBe(nil)
+    expect(isPlainClick("BUTTON1")).toBe(true)
+    expect(isPlainClick("SHIFT-BUTTON1")).toBe(false)
+    expect(isPlainClick("BUTTON3")).toBe(false)
+end
+
+@test("where an input works: plain Left and Right on frames only, a Cmd click in the world only")
+@cases({
+    { "SHIFT-F", "both", "both" },
+    { "BUTTON1", "both", "frames" },
+    { "BUTTON1", "world", nil },
+    { "META-BUTTON1", "both", "world" },
+    { "META-BUTTON1", "frames", nil },
+    { "SHIFT-BUTTON1", "world", "world" },
+    { "MOUSEWHEELUP", "frames", "frames" },
+})
+local function reaches(input: string, wanted: string, out: string?)
+    expect(reachFor(input, wanted :: "both") :: string?).toBe(out)
+end
+
+--------------------------------------------------------------------------------
+-- What a binding comes to
+--------------------------------------------------------------------------------
+
+@test("a movement key is refused")
+local function movement()
+    SetBinding("SHIFT-W", "MOVEFORWARD")
+    local v = judge({}, bind("SHIFT-W", "Heroic Strike", 1), nil)
+    expect(v.refuse).toBe("Shift-W is Move Forward")
+    expect(v.refuseDetail).toBe("It can't cast on mouseover. Pick another key.")
+    SetBinding("SHIFT-W")
+end
+
+@test("another spell's input is asked first, and replaced; the same spell's is not asked")
+local function takenFirst()
+    local old = bind("SHIFT-F", "Battle Shout", 2)
+    local v = judge({ old }, bind("SHIFT-F", "Heroic Strike", 1), nil)
+    expect(v.ask and v.ask.title).toBe("Shift-F already casts Battle Shout")
+    expect(v.ask and v.ask.confirm).toBe("Replace")
+    expect(#v.takes).toBe(1)
+    -- friends and enemies apart: no overlap, nothing taken
+    local friendly = bind("SHIFT-F", "Battle Shout", 2, { react = "help" })
+    local w = judge({ friendly }, bind("SHIFT-F", "Heroic Strike", 1, { react = "harm" }), nil)
+    expect(w.ask).toBe(nil)
+    expect(#w.takes).toBe(0)
+    -- the same spell again
+    local same = judge({ bind("SHIFT-F", "Heroic Strike", 1) }, bind("SHIFT-F", "Heroic Strike", 1), nil)
+    expect(same.ask).toBe(nil)
+end
+
+@test("Left and Right click are asked first, and work on unit frames only")
+local function plainClicks()
+    local v = judge({}, bind("BUTTON1", "Heroic Strike", 1), nil)
+    expect(v.reach).toBe("frames")
+    expect(v.ask and v.ask.title).toBe("Left click targets on unit frames")
+    expect(v.ask and v.ask.text).toBe("Bound, it casts Heroic Strike instead and no longer targets.")
+    expect(v.info[1]).toBe("Left click works on unit frames only.")
+    local r = judge({}, bind("BUTTON2", "Heroic Strike", 1, { reach = "world" }), nil)
+    expect(r.refuse).toBe("Right click can't work there")
+end
+
+@test("a key with a job keeps it away from units, and says so")
+local function keepsJob()
+    SetBinding("SHIFT-E", "ACTIONBUTTON3")
+    local v = judge({}, bind("SHIFT-E", "Heroic Strike", 1), nil)
+    expect(v.info[#v.info]).toBe(
+        "Away from units Shift-E stays " .. (_G.BINDING_NAME_ACTIONBUTTON3 or "ACTIONBUTTON3") .. "."
+    )
+    SetBinding("SHIFT-E")
+end
+
+@test("a binding's line: its rank, where and on whom")
+local function lines()
+    local name, id = known()
+    local b = bind("SHIFT-F", name, id, { reach = "frames", react = "harm" })
+    expect(bindLine(b):find("unit frames only · enemies", 1, true) ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The secure part
+--------------------------------------------------------------------------------
+
+@test("the attributes of a binding: for anyone, or a friend's and an enemy's spell apart")
+local function attributes()
+    local a = castAttributes("*", "-mb1", 1, 78, nil, nil)
+    expect(a).toEqual({ { "*type-mb1", "spell" }, { "*spell-mb1", 78 } })
+    local b = castAttributes("shift-", "1", 2, nil, 10, 20)
+    expect(b).toEqual({
+        { "shift-helpbutton1", "mb2h" },
+        { "*type-mb2h", "spell" },
+        { "*spell-mb2h", 10 },
+        { "shift-harmbutton1", "mb2x" },
+        { "*type-mb2x", "spell" },
+        { "*spell-mb2x", 20 },
+    })
+    local s = refreshSnippet({ { "SHIFT-F", "mb1" } }, { { "ALT-Q", "mb2" } })
+    expect(
+        s:find('self:SetBindingClick(true, "SHIFT-F", self:GetFrameRef("frameButton"), "mb1")', 1, true) ~= nil
+    ).toBe(true)
+    expect(s:find('self:SetBindingClick(true, "ALT-Q", self:GetFrameRef("worldButton"), "mb2")', 1, true) ~= nil).toBe(
+        true
+    )
+end
+
+@test("a key over a unit in the world casts on it; away from units it does what it did")
+local function world()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("SHIFT-F", name, id), nil)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    -- away from units: no override
+    expect(ours("SHIFT-F")).toBe(false)
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-F", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb1")
+    mock.pressKey("SHIFT-F")
+    expect(casts[#casts] and casts[#casts].id).toBe(id)
+    expect(casts[#casts] and casts[#casts].unit).toBe("mouseover")
+    mock.player:mouseover(nil)
+    mock.advanceFrames(15, 20)
+    expect(ours("SHIFT-F")).toBe(false)
+end
+
+@test("a key over a SuuUI unit frame casts on the frame's unit; a frames-only key does nothing in the world")
+local function overFrame()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("SHIFT-G", name, id, { reach = "frames" }), nil)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    mock.hover(player)
+    mock.advanceFrames(1)
+    expect(GetBindingAction("SHIFT-G", true)).toBe("CLICK SuuUIMouseBindingsFrame:mb1")
+    mock.pressKey("SHIFT-G")
+    expect(casts[#casts] and casts[#casts].unit).toBe("player")
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(ours("SHIFT-G")).toBe(false)
+end
+
+@test("a modified click on a unit frame casts on its unit; the plain click still targets")
+local function frameClick()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("SHIFT-BUTTON1", name, id), nil)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    expect(player:GetAttribute("shift-type1")).toBe("spell")
+    mock.setModifiers({ shift = true })
+    mock.click(player, "LeftButton")
+    expect(casts[#casts] and casts[#casts].unit).toBe("player")
+    mock.setModifiers({})
+    local before = #casts
+    mock.click(player, "LeftButton")
+    expect(#casts).toBe(before)
+    expect(UnitIsUnit("target", "player")).toBe(true)
+end
+
+@test("one key, a friend's spell and an enemy's: each unit gets its own")
+local function friendFoe()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("CTRL-F", name, id, { react = "harm" }), nil)
+    M:Add(bind("CTRL-F", "Friendly Spell", 4242, { react = "help" }), nil)
+    -- (the friend's spell: one the client knows by ID)
+    expect(#M:Binds()).toBe(2)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    mock.pressKey("CTRL-F")
+    expect(casts[#casts] and casts[#casts].id).toBe(id)
+    local friend = mock.spawnUnit({ name = "Ally", reaction = "friendly", distance = 5 })
+    mock.player:mouseover(friend)
+    mock.advanceFrames(15, 20)
+    mock.pressKey("CTRL-F")
+    expect(casts[#casts] and casts[#casts].id).toBe(4242)
+end
+
+@test("in combat a new binding waits for its end; the old ones still cast")
+local function combat()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("SHIFT-F", name, id), nil)
+    mock.player:enterCombat()
+    M:Add(bind("SHIFT-H", name, id), nil)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-F", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb1")
+    expect(ours("SHIFT-H")).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-H", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb2")
+end
+
+@test("each talent tree keeps its own; bindings made before any tree go to the first one")
+local function specs()
+    local name, id = known()
+    local tree = 0
+    mock.stub(SuuUI, "Spec", function(): number
+        return tree
+    end)
+    M:Store().last = nil
+    M:Add(bind("SHIFT-F", name, id), nil)
+    expect(M:SpecKey()).toBe("0")
+    -- the first tree takes them over
+    tree = 2
+    expect(M:SpecKey()).toBe("2")
+    expect(#M:Binds()).toBe(1)
+    -- another tree: its own, copied over on demand
+    tree = 3
+    expect(#M:Binds()).toBe(0)
+    M:CopyFrom("2")
+    expect(#M:Binds()).toBe(1)
+    -- the talents read empty (after login): the last tree's
+    tree = 0
+    expect(M:SpecKey()).toBe("3")
+end

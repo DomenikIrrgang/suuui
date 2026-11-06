@@ -37,6 +37,20 @@
 --   book:SetCasts(schools, perPage)   -- schools[s][i] = spellID or false,
 --                          -- in the order SetSpells shows them; out of combat
 --   book:SetCastPage(school, page)    -- out of combat: the router to that page
+-- Mouseover bindings (0.23):
+--   book:SetChips(i, keys)  -- a cell's bindings as key chips after its rank
+--                          -- line: two at most, then "+N"; book:ChipsWidth(keys)
+--   book.onBind = fn()     -- the head's Bind button; book:SetBindEnabled(on)
+--   book.onMenu = fn(i, cell)   -- a right click on a cell
+--   book:SetCovers(on, live)    -- bind mode: a cover over each cell takes
+--                          -- keys aside, clicks and the wheel (live[i]: a
+--                          -- spell that can be bound); book.onCover(i, input),
+--                          -- book.onCoverEnter(i), book.onCoverLeave(i)
+--   book:SetStrip(title, detail, tone)  -- bind mode's strip over the head
+--                          -- (nil: gone); book.onStripDone = fn()
+--   book.onBindingsTab = fn()   -- the Bindings tab under the schools
+--   book:ShowView(on)      -- book.view over the page (the bindings list),
+--                          -- the spells and pager hidden under it
 
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
@@ -47,6 +61,7 @@ import type Toggle from "/UI/Inputs"
 import * as controls from "/UI/Controls"
 import type SuuButton from "/UI/Controls"
 import tabMarker, TabMarker from "/UI/TabMarker"
+import keyChip, KeyChip from "/UI/Panel"
 import showTooltip, hideTooltip from "/UI/Tooltip"
 
 -- A secure handler frame (SecureHandler*Template): SetFrameRef from its template.
@@ -81,6 +96,9 @@ export class SpellCell extends Frame
     readonly sub: Text
     readonly cooldown: Cooldown
     spell: BookSpell? = nil
+    -- its bindings' chips, and bind mode's cover
+    chips: KeyChip[] = {}
+    cover: Button? = nil
 
     constructor(book: Spellbook, i: number)
         super(nil, book.grid)
@@ -121,6 +139,13 @@ export class SpellCell extends Frame
             book:DrawCell(self)
             if book.onLeave then
                 book.onLeave(i, self)
+            end
+        end)
+        -- a right click: the owner's menu (the button casts on a left click
+        -- only; the hook runs after the game's own handling)
+        b:HookScript("OnMouseUp", function(_, mouse)
+            if mouse == "RightButton" and book.onMenu then
+                book.onMenu(i, self)
             end
         end)
         b:SetAttribute("_ondragstart", [=[
@@ -200,6 +225,63 @@ local function secureOver(
 end
 
 local hex = draw.hex
+
+-- A mouse button as bindings spell it.
+local MOUSE: { [string]: string } = {
+    LeftButton = "BUTTON1",
+    RightButton = "BUTTON2",
+    MiddleButton = "BUTTON3",
+    Button4 = "BUTTON4",
+    Button5 = "BUTTON5",
+}
+
+-- The modifiers held, as bindings spell them ("ALT-CTRL-SHIFT-META-").
+local function modifiers(): string
+    return (IsAltKeyDown() and "ALT-" or "") ..
+        (IsControlKeyDown() and "CTRL-" or "") ..
+            (IsShiftKeyDown() and "SHIFT-" or "") .. ((IsMetaKeyDown and IsMetaKeyDown()) and "META-" or "")
+end
+
+-- Bind mode's cover over a cell: a click, the wheel and the hover go to the
+-- owner (keys come from the owner's own catcher).
+local function makeCover(book: Spellbook, c: SpellCell, i: number): Button
+    local o = CreateFrame("Button", nil, book.main)
+    o:SetAllPoints(c)
+    o:SetFrameLevel(c.button:GetFrameLevel() + 10)
+    o:EnableMouseWheel(true)
+    local fill = draw.fill(o, "arcane-soft")
+    fill:SetAllPoints()
+    fill:Hide()
+    local edge = draw.border(o, "arcane")
+    edge:SetShown(false)
+    o:SetScript("OnEnter", function()
+        fill:Show()
+        edge:SetShown(true)
+        if book.onCoverEnter then
+            book.onCoverEnter(i)
+        end
+    end)
+    o:SetScript("OnLeave", function()
+        fill:Hide()
+        edge:SetShown(false)
+        if book.onCoverLeave then
+            book.onCoverLeave(i)
+        end
+    end)
+    o:SetScript("OnMouseDown", function(_, mouse)
+        local key = MOUSE[mouse]
+        if key and book.onCover then
+            book.onCover(i, modifiers() .. key)
+        end
+    end)
+    o:SetScript("OnMouseWheel", function(_, delta)
+        if book.onCover then
+            book.onCover(i, modifiers() .. (delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN"))
+        end
+    end)
+    o:Hide()
+    return o
+end
 
 -- 3g 20s: the digits in ink and the units in coin colours, or all of it in
 -- ember-text when you can't afford it.
@@ -305,6 +387,7 @@ export class Spellbook extends Frame
     allRanks: Toggle
     unlearned: Toggle
     unlearnedSwitch: BookSwitch
+    ranksSwitch: BookSwitch
     -- the pager's arrows' secure buttons
     prevSecure?: Button
     nextSecure?: Button
@@ -318,6 +401,24 @@ export class Spellbook extends Frame
     castKeys: string[]? = nil
     widest: number? = nil
     schoolMarker: TabMarker? = nil
+    -- mouseover bindings: the head's button, bind mode's strip, the tab and
+    -- the view over the page
+    bindButton: SuuButton
+    strip: Frame
+    stripTitle: Text
+    stripDetail: Text
+    stripDone: SuuButton
+    bindTab: Button
+    bindTabIcon: Icon
+    bindTabActive: boolean = false
+    view: Frame
+    onBind: (() -> ())? = nil
+    onMenu: ((i: number, cell: SpellCell) -> ())? = nil
+    onCover: ((i: number, input: string) -> ())? = nil
+    onCoverEnter: ((i: number) -> ())? = nil
+    onCoverLeave: ((i: number) -> ())? = nil
+    onStripDone: (() -> ())? = nil
+    onBindingsTab: (() -> ())? = nil
     -- what the owner hears: a cell entered or left, a school, a switch, a page
     onEnter: ((i: number, cell: SpellCell) -> ())? = nil
     onLeave: ((i: number, cell: SpellCell) -> ())? = nil
@@ -353,11 +454,57 @@ export class Spellbook extends Frame
         self.toTrain:SetPoint("LEFT", self.title, "RIGHT", S["space-5"], 0)
         local ranks = switch(self, main, "All ranks", "allRanks")
         self.allRanks = ranks.toggle
+        self.ranksSwitch = ranks
         ranks:SetPoint("TOPRIGHT", 0, -6)
         local unlearned = switch(self, main, "Unlearned spells", "unlearned")
         self.unlearned = unlearned.toggle
         self.unlearnedSwitch = unlearned
         unlearned:SetPoint("RIGHT", ranks, "LEFT", -S["space-5"], 0)
+        -- Bind: bind mode (mouseover bindings)
+        self.bindButton = controls.button(main, {
+            text = "Bind",
+            tooltip = {
+                title = "Mouseover bindings",
+                description = "Bind spells to keys, clicks and the wheel: they cast on the unit under the mouse, on unit frames and in the world.",
+            },
+            onClick = function()
+                if self.onBind then
+                    self.onBind()
+                end
+            end,
+        })
+        self.bindButton:SetHeight(24)
+        self.bindButton:SetPoint("RIGHT", unlearned, "LEFT", -S["space-5"], 0)
+        -- bind mode's strip, over the head
+        local strip = CreateFrame("Frame", nil, main)
+        strip:SetPoint("TOPLEFT", 0, 0)
+        strip:SetPoint("RIGHT")
+        strip:SetHeight(30)
+        strip:SetFrameLevel(main:GetFrameLevel() + 20)
+        strip:EnableMouse(true)
+        draw.fill(strip, "surface-raised"):SetAllPoints()
+        draw.border(strip, "arcane")
+        self.stripDone = controls.button(strip, {
+            text = "Done",
+            variant = "primary",
+            onClick = function()
+                if self.onStripDone then
+                    self.onStripDone()
+                end
+            end,
+        })
+        self.stripDone:SetHeight(22)
+        self.stripDone:SetPoint("RIGHT", -4, 0)
+        self.stripTitle = text(strip, "label", "arcane")
+        self.stripTitle:SetPoint("LEFT", S["space-4"], 0)
+        self.stripTitle:SetWordWrap(false)
+        self.stripDetail = text(strip, "caption", "ink-muted")
+        self.stripDetail:SetPoint("LEFT", self.stripTitle, "RIGHT", S["space-4"], 0)
+        self.stripDetail:SetPoint("RIGHT", self.stripDone, "LEFT", -S["space-4"], 0)
+        self.stripDetail:SetJustifyH("LEFT")
+        self.stripDetail:SetWordWrap(false)
+        strip:Hide()
+        self.strip = strip
         -- the grid
         self.grid = CreateFrame("Frame", nil, main)
         self.grid:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
@@ -413,6 +560,40 @@ export class Spellbook extends Frame
             draw.paint(g, "ink")
         end
         self.foot = foot
+        -- the view over the page (the bindings list): above the cells and
+        -- the pager's secure buttons, taking the mouse from them
+        local view = CreateFrame("Frame", nil, self)
+        view:SetPoint("TOPLEFT", main, "TOPLEFT")
+        view:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT")
+        view:SetFrameLevel(main:GetFrameLevel() + 60)
+        view:EnableMouse(true)
+        view:Hide()
+        self.view = view
+        -- the Bindings tab, under the schools (not a school: no secure button)
+        local tab = CreateFrame("Button", nil, self.tabColumn)
+        tab:SetSize(TAB, TAB)
+        self.bindTabIcon = icon(tab, TAB)
+        self.bindTabIcon:SetAllPoints()
+        self.bindTabIcon:EnableMouse(false)
+        self.bindTabIcon:SetArt("Interface\\Icons\\INV_Misc_Key_03")
+        tab:SetAlpha(0.6)
+        tab:SetScript("OnEnter", function()
+            tab:SetAlpha(1)
+            showTooltip(tab, {
+                title = "Bindings",
+                description = "Your mouseover bindings: spells on keys, clicks and the wheel.",
+            })
+        end)
+        tab:SetScript("OnLeave", function()
+            tab:SetAlpha(self.bindTabActive and 1 or 0.6)
+            hideTooltip()
+        end)
+        tab:SetScript("OnClick", function()
+            if self.onBindingsTab then
+                self.onBindingsTab()
+            end
+        end)
+        self.bindTab = tab
         -- the secure side: the router, and the pager's arrows' secure buttons
         self.router = CreateFrame("Frame", nil, self, "SecureHandlerAttributeTemplate") :: Frame & FrameRefs
         self.router:SetAttribute("_onattributechanged", ROUTE)
@@ -706,7 +887,116 @@ export class Spellbook extends Frame
                 end
             end
         end
-        marker:SetChosen(chosen)
+        -- the Bindings tab under the last school (a plain button: in combat too)
+        local x = (40 - self.edgeInset) / 2
+        self.bindTab:ClearAllPoints()
+        self.bindTab:SetPoint("TOP", self.tabColumn, "TOPLEFT", x, -#list * (TAB + S["space-3"]) - S["space-3"])
+        marker:SetChosen(self.bindTabActive and self.bindTab or chosen)
+    end
+
+    -- The Bindings tab chosen (the schools' marker by it) or not.
+    function SetBindingsTab(active: boolean)
+        self.bindTabActive = active
+        self.bindTab:SetAlpha(active and 1 or 0.6)
+        if active and self.schoolMarker then
+            self.schoolMarker:SetChosen(self.bindTab)
+        end
+    end
+
+    -- The view over the page shown (the spells, the head and the pager
+    -- see-through under it: they hold secure buttons, hidden only out of
+    -- combat) or gone.
+    function ShowView(on: boolean)
+        self.view:SetShown(on)
+        local a = on and 0 or 1
+        self.grid:SetAlpha(a)
+        self.foot:SetAlpha(a)
+        self.title:SetAlpha(a)
+        self.toTrain:SetAlpha(a)
+        self.unlearnedSwitch:SetAlpha(a)
+        self.ranksSwitch:SetAlpha(a)
+        self.bindButton:SetAlpha(a)
+        for _, c in ipairs(self.cells) do
+            if c.cover then
+                c.cover:SetAlpha(a)
+            end
+        end
+    end
+
+    -- A cell's bindings as chips after its rank line: two, then "+N".
+    function SetChips(i: number, keys: string[])
+        local c = self.cells[i]
+        if not c then
+            return
+        end
+        local shown: string[] = {}
+        for k = 1, math.min(#keys, 2) do
+            shown[#shown + 1] = keys[k]
+        end
+        if #keys > 2 then
+            shown[#shown + 1] = "+" .. (#keys - 2)
+        end
+        local subW = c.sub:GetUnboundedStringWidth()
+        for k, label in ipairs(shown) do
+            local chip = c.chips[k] or keyChip(c, "")
+            c.chips[k] = chip
+            chip:SetKey(label)
+            chip:SetHeight(14)
+            chip:ClearAllPoints()
+            local prev = c.chips[k - 1]
+            if k == 1 or not prev then
+                chip:SetPoint("LEFT", c.sub, "LEFT", subW > 0 and (subW + S["space-3"]) or 0, 0)
+            else
+                chip:SetPoint("LEFT", prev, "RIGHT", S["space-2"], 0)
+            end
+            chip:Show()
+        end
+        for k = #shown + 1, #c.chips do
+            c.chips[k]:Hide()
+        end
+    end
+
+    -- How wide a cell's chips are (the columns made room for them).
+    function ChipsWidth(keys: string[]): number
+        if #keys == 0 then
+            return 0
+        end
+        local w = 0
+        for k = 1, math.min(#keys, 2) do
+            w = w + math.max(20, measureText("micro", keys[k]) + S["space-2"] * 2) + S["space-2"]
+        end
+        if #keys > 2 then
+            w = w + math.max(20, measureText("micro", "+" .. (#keys - 2)) + S["space-2"] * 2)
+        end
+        return w + S["space-3"]
+    end
+
+    -- Bind mode's covers over the cells shown, or gone. live[i]: a spell
+    -- that can be bound (the others dimmed under theirs).
+    function SetCovers(on: boolean, live: boolean[]?)
+        for i, c in ipairs(self.cells) do
+            local cover = c.cover or makeCover(self, c, i)
+            c.cover = cover
+            cover:SetShown(on and c:IsShown())
+            local can = live and live[i] or false
+            c:SetAlpha(c.spell and ((not on or can) and 1 or 0.35) or 0)
+        end
+    end
+
+    -- Bind mode's strip over the head (nil: gone); `tone` the title's colour.
+    function SetStrip(title: string?, detail: string?, tone: string?)
+        if not title then
+            self.strip:Hide()
+            return
+        end
+        self.stripTitle:SetValue(title)
+        self.stripTitle:SetColor(tone or "arcane")
+        self.stripDetail:SetValue(detail or "")
+        self.strip:Show()
+    end
+
+    function SetBindEnabled(on: boolean)
+        self.bindButton:SetEnabledState(on)
     end
 
     function SetHead(title: string?, trainable: number?, all: BookAll?)
@@ -735,7 +1025,7 @@ export class Spellbook extends Frame
                 { "", count .. " to train elsewhere · " },
             }
         end
-        local switchLeft, textLeft = self.unlearnedSwitch:GetLeft(), self.toTrain:GetLeft()
+        local switchLeft, textLeft = self.bindButton:GetLeft(), self.toTrain:GetLeft()
         local room = (switchLeft and textLeft) and (switchLeft - textLeft - S["space-5"]) or math.huge
         local pick = forms[#forms]
         for _, f in ipairs(forms) do
