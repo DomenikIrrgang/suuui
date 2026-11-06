@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Pets in the collections**: the Pets tab shows every companion pet of WoW Forever, yours first (favourites first), each kind once with how many you have. Choose one to see it on the stage with where it comes from and what it is; Summon or Dismiss it, star it as a favourite, or summon a random favourite. Shift-click a pet to link it in chat. A pet you got as a gift comes wrapped, as mounts and toys do: open it on the stage; the tab and the micro menu count the gifts waiting.
+
 ## 0.6.13 (2026-11-06)
 
 ### New
