@@ -699,6 +699,8 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
     provider: { [string]: unknown }? = nil
     pins: FlightPin[] = {}
     free: FlightPin[] = {}
+    -- pins made in combat, their right-click through after it
+    passLater: Frame[] = {}
     -- the map drawn on at the last layout
     view: View? = nil
     -- at a flight master: the session, the last one read, the destination
@@ -1553,6 +1555,25 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
     -- On the map's canvas: pins, routes, times
     --------------------------------------------------------------------------------
 
+    -- A right-click through a pin to the map (it zooms out). Refused in
+    -- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
+    -- a pin was made while the map opened in a fight, found in game): then
+    -- after it.
+    function PassThrough(pin: Frame)
+        if not InCombatLockdown() then
+            errors.tryMethod(pin, "SetPassThroughButtons", "RightButton")
+            return
+        end
+        self.passLater[#self.passLater + 1] = pin
+        self:RunOutOfCombat("passThrough", function()
+            local list = self.passLater
+            self.passLater = {}
+            for _, p in ipairs(list) do
+                errors.tryMethod(p, "SetPassThroughButtons", "RightButton")
+            end
+        end)
+    end
+
     function Pin(layer: Frame): FlightPin
         local pin = table.remove(self.free)
         if not pin then
@@ -1580,8 +1601,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             made:SetScript("OnClick", function(p)
                 self:Choose(p.node)
             end)
-            -- a right-click goes through to the map (it zooms out)
-            errors.tryMethod(made, "SetPassThroughButtons", "RightButton")
+            self:PassThrough(made)
             pin = made
         end
         pin:Show()
