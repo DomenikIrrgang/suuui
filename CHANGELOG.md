@@ -5,6 +5,7 @@
 ### Fixed
 
 - World map: opening it in combat after visiting a flight master works again ("Blocked: SetPassThroughButtons"). The flight master's map is now a window of its own that looks the same as before (SuuUI's world map look and size, the routes, times and destinations), so SuuUI no longer changes the world map. In the air the world map opens where you are, as the game opens it; your route shows on whichever map you look at.
+- World map: the quest log's search box shows "Search Quest Log" after its magnifier instead of under it.
 
 ## 0.6.11 (2026-11-06)
 
