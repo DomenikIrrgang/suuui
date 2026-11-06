@@ -76,6 +76,10 @@ local PRESENT_FILE = 1401005
 -- (world units: the box is about 2.3 high) so its base isn't at the scene's
 -- bottom edge, where the box was cut off (found in game)
 local PRESENT_SCALE, PRESENT_LIFT = 0.6, 1.0
+-- the box's height in world units at scale 1, and the height it gets on the
+-- stage in any scene (a pet's gift in a mount's scene showed it huge, its
+-- top cut off: found in game)
+local PRESENT_H, PRESENT_PX = 2.3, 150
 
 -- A model scene showing the game's wrapped present: `scene` (a mount's own:
 -- it holds the "wrapped" actor, as the game's mount journal uses it).
@@ -2662,10 +2666,14 @@ class CollectionsModule extends Module<{}>
         end
     end
 
-    -- The present stood on the floor shadow's middle, as a mount: its
-    -- ground point (the actor's place) as the scene projects it, moved to
-    -- FEET_Y above the stage's bottom (the mount's scene put it under the
-    -- stage: found in game). Left where it is when the scene can't say.
+    -- The present stood on the floor shadow's middle, as a mount, the same
+    -- size in any scene: the scene's own measure read from two points it
+    -- projects (pixels per world unit, upward), the box scaled to
+    -- PRESENT_PX tall and moved in the scene until its base projects FEET_Y
+    -- above the stage's bottom; the scene's frame stays over the stage.
+    -- (Moving the frame instead cut the box off at its top in a scene that
+    -- showed it high: found in game with a pet's gift.) A scene that can't
+    -- project: the frame moved, as before.
     function PlacePresent()
         local ui = self.ui
         if not ui then
@@ -2676,21 +2684,50 @@ class CollectionsModule extends Module<{}>
         if actor == nil then
             return
         end
+        local s = gift:GetEffectiveScale()
+        if not (s and s > 0) then
+            return
+        end
+        -- a world point on the frame (pixels from its bottom left)
+        local function at(x: number, y: number, z: number): (number?, number?)
+            local px, py = tryMethod(gift, "Transform3DPointTo2D", x, y, z)
+            local a, b = asNumber(px), asNumber(py)
+            if not (a and b) then
+                return nil, nil
+            end
+            return a / s, b / s
+        end
         local ax, ay, az = tryMethod(actor, "GetPosition")
         local k = asNumber(tryMethod(actor, "GetScale")) or 1
-        local x, y = tryMethod(
-            gift,
-            "Transform3DPointTo2D",
-            (asNumber(ax) or 0) * k,
-            (asNumber(ay) or 0) * k,
-            (asNumber(az) or 0) * k
-        )
-        local px, py, s = asNumber(x), asNumber(y), gift:GetEffectiveScale()
-        if not (px and py and s and s > 0) then
+        local wx, wy, wz = (asNumber(ax) or 0) * k, (asNumber(ay) or 0) * k, (asNumber(az) or 0) * k
+        local bx, by = at(wx, wy, wz)
+        local _, uy = at(wx, wy, wz + 1)
+        if not (bx and by) then
+            return
+        end
+        local slope = uy and (uy - by) or 0
+        if slope < 0.5 then
+            -- (no measure: the frame moved so the base is on the floor)
+            gift:ClearAllPoints()
+            gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - bx, FEET_Y - by)
             return
         end
         gift:ClearAllPoints()
-        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - px / s, FEET_Y - py / s)
+        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", 0, 0)
+        -- the size, then the base on the floor (a few steps: the camera's
+        -- perspective bends the measure)
+        local k2 = math.max(0.05, math.min(5, PRESENT_PX / (slope * PRESENT_H)))
+        local z = wz
+        for _ = 1, 4 do
+            local _, y = at(wx, wy, z)
+            local _, y1 = at(wx, wy, z + 1)
+            if not (y and y1) or y1 - y < 0.01 then
+                break
+            end
+            z = z + (FEET_Y - y) / (y1 - y)
+        end
+        tryMethod(actor, "SetScale", k2)
+        tryMethod(actor, "SetPosition", wx / k2, wy / k2, z / k2)
     end
 
     -- The chosen gift opened the game's way: the present unwraps, then the
