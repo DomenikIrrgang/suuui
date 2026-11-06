@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Bags: sorting no longer tries to put items into a profession bag that can't hold them (a leatherworking bag in the reagent slot, for instance), which the game refused with an error. A profession bag in the reagent slot now gets only its own kind.
+
 ## 0.6.15 (2026-11-07)
 
 ### New
