@@ -20,6 +20,7 @@
 --       lowHealth = true,   -- the low-health fill (false: never)
 --       lowTint = false,    -- the low-health tint: the empty part of the bar warms
 --                           -- to ember from 70% down to 10% (the healer layout)
+--       tapped = false,     -- 0.24: a mob tagged by someone else grey (target, ToT, focus)
 --       incoming = true,    -- incoming heals and absorbs (false: never)
 --       powerFor = nil,     -- fn(unit, api) -> bool: which units get the power line
 --       frame = nil,        -- style this button instead of making one (a group
@@ -52,6 +53,7 @@
 -- engine, so no Lua code ever compares a value that might be secret.
 
 import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
 import * as timer from "wowlua:timer"
 import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
@@ -171,6 +173,8 @@ export type UnitApi = {
     GetRaidTargetIndex?: typeof(GetRaidTargetIndex),
     UnitIsBossMob?: typeof(UnitIsBossMob),
     UnitThreatSituation?: typeof(UnitThreatSituation),
+    UnitIsTapDenied?: typeof(UnitIsTapDenied),
+    UnitPlayerControlled?: typeof(UnitPlayerControlled),
 }
 
 -- Where the group is read from (the game's functions; stand-ins in tests).
@@ -930,6 +934,7 @@ export type UnitFrameOptions = {
     textOnSmall?: boolean,
     raidMarker?: boolean,
     api?: UnitApi,
+    tapped?: boolean,
 }
 
 -- A missing look shown now, and what decides it.
@@ -937,6 +942,8 @@ type MissingLook = { look: Frame, mode: string, ind: Indicator }
 
 export class UnitFrame extends Button
     unit: string? = nil
+    -- the health drawn grey: a mob tagged by someone else (opts.tapped)
+    tappedLook: boolean = false
     opts: UnitFrameOptions
     size: Size
     api: UnitApi
@@ -1163,6 +1170,29 @@ export class UnitFrame extends Button
         })
     end
 
+    -- 0.24: a mob tagged by someone else (you get nothing from it, asked
+    -- 2026-11-06): its health grey, the low-health colour away (opts.tapped;
+    -- as ElvUI's oUF: not a player's or a pet's, UnitIsTapDenied; the tag
+    -- changes with UNIT_FACTION, a tagger's death too). Whether it is.
+    function Tapped(): boolean
+        local A, u = self.api, self.unit
+        local tapped = false
+        if self.opts.tapped and u then
+            local denied, controlled = A.UnitIsTapDenied, A.UnitPlayerControlled
+            tapped = denied ~= nil and uiText.flag(errors.tryValue(denied, u)) == true and
+                not (controlled ~= nil and uiText.flag(errors.tryValue(controlled, u)) == true)
+        end
+        if tapped ~= self.tappedLook then
+            self.tappedLook = tapped
+            if tapped then
+                gradient(self.health, "unit-fill-tapped-deep", "unit-fill-tapped")
+            else
+                gradient(self.health, "unit-fill-deep", "unit-fill")
+            end
+        end
+        return tapped
+    end
+
     function UpdateHealth(instant: boolean?)
         local A = self.api
         local u = self.unit
@@ -1180,8 +1210,9 @@ export class UnitFrame extends Button
         local cur = gone and 0 or amount(A.UnitHealth(u))
         self.health:SetValue(cur)
         self.healthLow:SetValue(cur)
+        local tapped = self:Tapped()
         local percent = A.UnitHealthPercent
-        if self.opts.lowHealth == false or not percent then
+        if tapped or self.opts.lowHealth == false or not percent then
             self.healthLow:SetAlpha(0)
         else
             self.healthLow:SetAlpha(gone and 0 or curveAmount(percent(u, true, belowCurve(LOW_HEALTH))))
@@ -1847,6 +1878,10 @@ export class UnitFrame extends Button
         for _, e in ipairs(IDENTITY_EVENTS) do
             onUnit(self, u, e, function()
                 self:UpdateIdentity()
+                -- (a tag changed: the health's colour)
+                if e == "UNIT_FACTION" then
+                    self:UpdateHealth(true)
+                end
             end)
         end
         -- going offline or coming back: the bar, the text, the name and the power line

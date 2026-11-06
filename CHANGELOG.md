@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- A mob tagged by someone else has a grey health bar on the target, target of target and focus frames and on its nameplate, so you can see at once it won't give you anything. It turns back as soon as the tag goes, for instance when the player who tagged it dies.
+
 ## 0.6.12 (2026-11-06)
 
 ### New

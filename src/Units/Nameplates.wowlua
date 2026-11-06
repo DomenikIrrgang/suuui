@@ -315,6 +315,8 @@ export class Nameplate extends Frame
     unit: string? = nil
     friendly: boolean = false
     preview: boolean = false
+    -- the health drawn grey: a mob tagged by someone else
+    tappedLook: boolean = false
     previewRole: string? = nil
     previewQuest: string? = nil
     fakes: Fakes? = nil
@@ -562,9 +564,23 @@ export class Nameplate extends Frame
         end
         self.healthLow:SetMinMaxValues(0, amount(max, 1))
         self.healthLow:SetValue(amount(cur))
+        -- a mob tagged by someone else: grey, no low-health colour (asked
+        -- 2026-11-06; as ElvUI's oUF: not a player's or a pet's; the tag
+        -- changes with UNIT_FACTION, which rechecks the plate)
+        local denied, controlled = A.UnitIsTapDenied, A.UnitPlayerControlled
+        local tapped = not self.preview and denied ~= nil and flag(errors.tryValue(denied, u)) == true and
+            not (controlled ~= nil and flag(errors.tryValue(controlled, u)) == true)
+        if tapped ~= self.tappedLook then
+            self.tappedLook = tapped
+            if tapped then
+                gradient(self.health, "unit-fill-tapped-deep", "unit-fill-tapped")
+            else
+                gradient(self.health, "unit-fill-deep", "unit-fill")
+            end
+        end
         local curve = belowLow()
         local percent = A.UnitHealthPercent
-        if curve and percent then
+        if curve and percent and not tapped then
             self.healthLow:SetAlpha(curveAmount(percent(u, true, curve)))
         else
             self.healthLow:SetAlpha(0)
