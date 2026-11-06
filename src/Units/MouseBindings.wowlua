@@ -432,26 +432,57 @@ export function castAttributes(prefix: string, suffix: string, n: number, any: n
     return out
 end
 
+-- A key the secure part binds: the input, its virtual button, and over whom
+-- ("any"; "help", "harm": only a friend's or only an enemy's spell; "both").
+export type SnippetKey = { input: string, button: string, when: string }
+
+-- Over whom a key's spells cast: anyone, friends, enemies, or both apart.
+export function whenOf(any: boolean, help: boolean, harm: boolean): string
+    if any then
+        return "any"
+    elseif help and harm then
+        return "both"
+    end
+    return help and "help" or "harm"
+end
+
 -- The restricted snippet that sets the bindings for where the mouse is: over
 -- a SuuUI unit frame (`frame` keys, its button) or a unit in the world
--- (`world` keys, the mouseover button); none otherwise.
-export function refreshSnippet(frame: { string }[], world: { string }[]): string
-    local function lines(list: { string }[], ref: string): string
+-- (`world` keys, the mouseover button); none otherwise. The states say
+-- whom: "help" (a friend), "harm" (an enemy), "other", "off". A key with
+-- only a friend's spell is taken over friends only: over an enemy it keeps
+-- its job (found in game: an action bar key did nothing there).
+export function refreshSnippet(frame: SnippetKey[], world: SnippetKey[]): string
+    local GUARD: { [string]: string } = {
+        help = 'r == "help"',
+        harm = 'r == "harm"',
+        both = '(r == "help" or r == "harm")',
+    }
+    local function lines(list: SnippetKey[], ref: string): string
         local out: string[] = {}
-        for _, kv in ipairs(list) do
-            out[#out + 1] = ("self:SetBindingClick(true, %q, self:GetFrameRef(%q), %q)"):format(kv[1], ref, kv[2])
+        for _, k in ipairs(list) do
+            local line = ("self:SetBindingClick(true, %q, self:GetFrameRef(%q), %q)"):format(k.input, ref, k.button)
+            local guard = GUARD[k.when]
+            out[#out + 1] = guard and ("if " .. guard .. " then " .. line .. " end") or line
         end
         return table.concat(out, "\n")
     end
     return ([=[
 self:ClearBindings()
-if self:GetAttribute("state-frame") == "on" then
+local r = self:GetAttribute("state-frame")
+if r and r ~= "off" then
 %s
-elseif self:GetAttribute("state-mo") == "on" then
+else
+r = self:GetAttribute("state-mo")
+if r and r ~= "off" then
 %s
+end
 end
 ]=]):format(lines(frame, "frameButton"), lines(world, "worldButton"))
 end
+
+-- Whom a unit is to you, in restricted code: "help", "harm" or "other".
+local MOUSEOVER_STATE = "[@mouseover,help] help; [@mouseover,harm] harm; [@mouseover,exists] other; off"
 
 -- A spec's name: its talent tree's.
 local function specName(key: string): string
@@ -1450,7 +1481,7 @@ export class MouseBindingsModule extends Module<{}>
         owner:SetAttribute("_onstate-mo", [=[ self:RunAttribute("_refresh") ]=])
         owner:SetAttribute("_onstate-frame", [=[ self:RunAttribute("_refresh") ]=])
         owner:SetAttribute("_refresh", "self:ClearBindings()")
-        RegisterStateDriver(owner, "mo", "[@mouseover,exists] on; off")
+        RegisterStateDriver(owner, "mo", MOUSEOVER_STATE)
         self.owner, self.worldButton, self.frameButton = owner, world, frame
     end
 
@@ -1513,8 +1544,8 @@ export class MouseBindingsModule extends Module<{}>
             end
             slot[b.react] = b
         end
-        local frameKeys: { string }[] = {}
-        local worldKeys: { string }[] = {}
+        local frameKeys: SnippetKey[] = {}
+        local worldKeys: SnippetKey[] = {}
         -- (the frames looked for only with bindings to give them)
         local frames = #order > 0 and self:UnitFrames() or {}
         local function ids(slot: { any?: Bind, help?: Bind, harm?: Bind }, reach: Reach): (number?, number?, number?)
@@ -1536,7 +1567,11 @@ export class MouseBindingsModule extends Module<{}>
                     world:SetAttribute(kv[1] :: string, kv[2])
                     self.buttonAttrs[#self.buttonAttrs + 1] = kv[1] :: string
                 end
-                worldKeys[#worldKeys + 1] = { input, v }
+                worldKeys[#worldKeys + 1] = {
+                    input = input,
+                    button = v,
+                    when = whenOf(wAny ~= nil, wHelp ~= nil, wHarm ~= nil),
+                }
             end
             -- frames: a click is the frame's own attribute; a key or the
             -- wheel a binding to the frame button
@@ -1560,7 +1595,11 @@ export class MouseBindingsModule extends Module<{}>
                         frameB:SetAttribute(kv[1] :: string, kv[2])
                         self.buttonAttrs[#self.buttonAttrs + 1] = kv[1] :: string
                     end
-                    frameKeys[#frameKeys + 1] = { input, v }
+                    frameKeys[#frameKeys + 1] = {
+                        input = input,
+                        button = v,
+                        when = whenOf(fAny ~= nil, fHelp ~= nil, fHarm ~= nil),
+                    }
                 end
             end
         end
@@ -1570,8 +1609,13 @@ export class MouseBindingsModule extends Module<{}>
             if not self.wrapped[f] then
                 self.wrapped[f] = true
                 SecureHandlerWrapScript(f, "OnEnter", owner, [=[
-                    owner:GetFrameRef("frameButton"):SetAttribute("unit", self:GetAttribute("unit"))
-                    owner:SetAttribute("state-frame", "on")
+                    local unit = self:GetAttribute("unit")
+                    owner:GetFrameRef("frameButton"):SetAttribute("unit", unit)
+                    local r = "other"
+                    if unit then
+                        r = SecureCmdOptionParse("[@" .. unit .. ",help] help; [@" .. unit .. ",harm] harm; other") or "other"
+                    end
+                    owner:SetAttribute("state-frame", r)
                 ]=])
                 SecureHandlerWrapScript(f, "OnLeave", owner, [=[
                     owner:SetAttribute("state-frame", "off")

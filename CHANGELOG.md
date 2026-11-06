@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Mouseover bindings: a key with only a friend's spell (or only an enemy's) keeps its usual job over the other kind of unit. With Holy Light on friends on 2, 2 still pressed action button 2 over an enemy instead of doing nothing.
+
 ## 0.6.10 (2026-11-06)
 
 ### New
