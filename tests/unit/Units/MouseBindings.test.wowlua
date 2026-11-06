@@ -191,13 +191,21 @@ local function attributes()
         { "*type-mb2x", "spell" },
         { "*spell-mb2x", 20 },
     })
-    local s = refreshSnippet({ { "SHIFT-F", "mb1" } }, { { "ALT-Q", "mb2" } })
+    local s = refreshSnippet({ { input = "SHIFT-F", button = "mb1", when = "any" } }, {
+        { input = "ALT-Q", button = "mb2", when = "help" },
+    })
     expect(
         s:find('self:SetBindingClick(true, "SHIFT-F", self:GetFrameRef("frameButton"), "mb1")', 1, true) ~= nil
     ).toBe(true)
-    expect(s:find('self:SetBindingClick(true, "ALT-Q", self:GetFrameRef("worldButton"), "mb2")', 1, true) ~= nil).toBe(
-        true
-    )
+    -- a friend's spell alone: bound over friends only
+    expect(
+        s:find(
+            'if r == "help" then self:SetBindingClick(true, "ALT-Q", self:GetFrameRef("worldButton"), "mb2") end',
+            1,
+            true
+        ) ~=
+            nil
+    ).toBe(true)
 end
 
 @test("a key over a unit in the world casts on it; away from units it does what it did")
@@ -273,6 +281,35 @@ local function friendFoe()
     mock.advanceFrames(15, 20)
     mock.pressKey("CTRL-F")
     expect(casts[#casts] and casts[#casts].id).toBe(4242)
+end
+
+@test("a key with a friend's spell only keeps its job over an enemy, in the world and on frames")
+local function friendOnly()
+    local name, id = known()
+    watchCasts()
+    SetBinding("2", "ACTIONBUTTON2")
+    M:Add(bind("2", name, id, { react = "help" }), nil)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(ours("2")).toBe(false)
+    expect(GetBindingAction("2", true)).never.toBe("")
+    local friend = mock.spawnUnit({ name = "Ally", reaction = "friendly", distance = 5 })
+    mock.player:mouseover(friend)
+    mock.advanceFrames(15, 20)
+    expect(ours("2")).toBe(true)
+    mock.pressKey("2")
+    expect(casts[#casts] and casts[#casts].id).toBe(id)
+    mock.player:mouseover(nil)
+    mock.advanceFrames(15, 20)
+    -- your own frame: a friend
+    mock.hover(assert(frames.find("SuuUIPlayerFrame")))
+    mock.advanceFrames(1)
+    expect(ours("2")).toBe(true)
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(ours("2")).toBe(false)
+    SetBinding("2")
 end
 
 @test("in combat a new binding waits for its end; the old ones still cast")
