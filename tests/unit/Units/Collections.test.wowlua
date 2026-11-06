@@ -18,7 +18,7 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import internal M, filterEntries, actionLabel, readyIn, toyWhy, day, status, toyCooldown from "/Units/Collections"
-import internal GIFT_ICON, wrapped, giftCounts from "/Units/Collections"
+import internal GIFT_ICON, wrapped, giftCounts, petSourceLines, petActionLabel from "/Units/Collections"
 import internal Entry, Parts, Cell, SlotButton from "/Units/Collections"
 import type CollectionSources from "/Data/CollectionSources"
 import type TooltipData from "/UI/Tooltip"
@@ -951,6 +951,7 @@ local function fakePresent(): { file?: number, scale?: number, z?: number }
         GetPosition: () -> (number, number, number),
         SetPosition: (unknown, number, number, number) -> (),
         SetScale: (unknown, number) -> (),
+        GetScale: () -> number,
     } = {
         GetModelFileID = function(): number?
             return nil
@@ -961,12 +962,18 @@ local function fakePresent(): { file?: number, scale?: number, z?: number }
         end,
         SetPosition = function(_: unknown, _x: number, _y: number, _z: number) end,
         SetScale = function(_: unknown, _k: number) end,
+        GetScale = function(): number
+            return 1
+        end,
     }
     actor.SetPosition = function(_: unknown, _x: number, _y: number, z: number)
         actor.z = z
     end
     actor.SetScale = function(_: unknown, k: number)
         actor.scale = k
+    end
+    actor.GetScale = function(): number
+        return actor.scale or 1
     end
     actor.SetModelByFileID = function(_: unknown, id: number)
         actor.file = id
@@ -1145,4 +1152,298 @@ local function off()
     open()
     M:OnDisable()
     expect(ui().window).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The Pets tab
+--------------------------------------------------------------------------------
+
+-- The game's pet journal as the tests' client has none: its rows (a pet you
+-- own once a row, one you lack once), what was asked of it.
+type PetRow = { guid?: string, species: number, owned: boolean, fav?: boolean, name: string }
+type PetCalls = {
+    summoned?: string,
+    wrapped?: string,
+    cleared: string[],
+    favourite: { string | number }[],
+    random: boolean[],
+    links: string[],
+    searchCleared: boolean,
+    filters: number[],
+}
+local function petJournal(): PetCalls
+    M.petListOpen = false
+    local rows: PetRow[] = {
+        { guid = "Pet-A", species = 1, owned = true, name = "Mechanical Squirrel" },
+        { guid = "Pet-B", species = 1, owned = true, fav = true, name = "Mechanical Squirrel" },
+        { guid = "Pet-C", species = 2, owned = true, name = "Black Tabby Cat" },
+        { species = 3, owned = false, name = "Prairie Dog" },
+    }
+    local calls: PetCalls = {
+        cleared = {},
+        favourite = {},
+        random = {},
+        links = {},
+        searchCleared = false,
+        filters = {},
+    }
+    local PJ = "C_PetJournal."
+    mock.fake(PJ .. "GetNumPets", function(): (number, number)
+        return #rows, 3
+    end)
+    mock.fake(PJ .. "GetPetInfoByIndex", function(i: number): ...unknown
+        local r = rows[i]
+        if not r then
+            return nil
+        end
+        local source = r.species == 3 and "|cFFFFD200Vendor: |rNat Pagle|n|cFFFFD200Zone: |rDustwallow Marsh" or
+            r.species == 2 and "" or
+            "|cFFFFD200Profession: |rEngineering"
+        local desc = r.species == 2 and "" or "A small friend."
+        return r.guid,
+            r.species,
+            r.owned,
+            nil,
+            1,
+            r.fav or false,
+            false,
+            r.name,
+            130000 + r.species,
+            1,
+            0,
+            source,
+            desc,
+            false,
+            false,
+            true,
+            false,
+            true
+    end)
+    mock.fake(PJ .. "GetPetInfoBySpeciesID", function(s: number): ...unknown
+        return "", 0, 1, 0, "|cFFFFD200Drop: |rA stray", "A cat.", false, false, true, false, true, 7000 + s
+    end)
+    mock.fake(PJ .. "GetPetModelSceneInfoBySpeciesID", function(_: number): (number, number)
+        return 99, 98
+    end)
+    mock.fake(PJ .. "GetSummonedPetGUID", function(): string?
+        return calls.summoned
+    end)
+    mock.fake(PJ .. "SummonPetByGUID", function(g: string)
+        calls.summoned = g
+    end)
+    mock.fake(PJ .. "DismissSummonedPet", function(_: string)
+        calls.summoned = nil
+    end)
+    mock.fake(PJ .. "GetPetSummonInfo", function(_: string): (boolean, number, string)
+        return true, 0, ""
+    end)
+    mock.fake(PJ .. "SetFavorite", function(g: string, v: number)
+        calls.favourite[#calls.favourite + 1] = { g, v }
+    end)
+    mock.fake(PJ .. "HasFavoritePets", function(): boolean
+        return true
+    end)
+    mock.fake(PJ .. "SummonRandomPet", function(fav: boolean)
+        calls.random[#calls.random + 1] = fav
+    end)
+    mock.fake(PJ .. "GetNonBattlePetLinkByIndex", function(i: number): string
+        return "|cff1eff00|Hcompanion:" .. i .. "|h[pet]|h|r"
+    end)
+    mock.fake(PJ .. "PetNeedsFanfare", function(g: string): boolean
+        return calls.wrapped == g
+    end)
+    mock.fake(PJ .. "GetNumPetsNeedingFanfare", function(): number
+        return calls.wrapped and 1 or 0
+    end)
+    mock.fake(PJ .. "ClearFanfare", function(g: string)
+        calls.cleared[#calls.cleared + 1] = g
+        calls.wrapped = nil
+    end)
+    mock.fake(PJ .. "GetPetInfoByPetID", function(g: string): ...unknown
+        for _, r in ipairs(rows) do
+            if r.guid == g then
+                return r.species, nil, 1, 0, 0, 0, false, r.name
+            end
+        end
+        return nil
+    end)
+    -- the game's journal searched and filtered (SuuUI opens it up)
+    mock.fake(PJ .. "GetSearchFilter", function(): string
+        return calls.searchCleared and "" or "squ"
+    end)
+    mock.fake(PJ .. "ClearSearchFilter", function()
+        calls.searchCleared = true
+    end)
+    mock.fake(PJ .. "IsFilterChecked", function(_: number): boolean
+        return false
+    end)
+    mock.fake(PJ .. "SetFilterChecked", function(f: number, _: boolean)
+        calls.filters[#calls.filters + 1] = f
+    end)
+    mock.fake(PJ .. "SetAllPetTypesChecked", function(_: boolean) end)
+    mock.fake(PJ .. "SetAllPetSourcesChecked", function(_: boolean) end)
+    return calls
+end
+
+@test("pets: every kind once, yours first (favourites first), how many; the game journal's search and filters opened")
+local function petsRead()
+    local calls = petJournal()
+    local list = M:Pets()
+    local names: string[] = {}
+    for i, e in ipairs(list) do
+        names[i] = e.name
+    end
+    expect(names).toEqual({ "Mechanical Squirrel", "Black Tabby Cat", "Prairie Dog" })
+    local squirrel = list[1]
+    expect(squirrel.guids).toEqual({ "Pet-A", "Pet-B" })
+    expect(squirrel.favourite).toBe(true)
+    expect(squirrel.display).toBe(7001)
+    expect(squirrel.scene).toBe(99)
+    expect((status(squirrel)):find("^Collected ×2") ~= nil).toBe(true)
+    expect(list[3].collected).toBe(false)
+    expect(petSourceLines(list[3].sourceText)).toEqual({ "Vendor: Nat Pagle", "Zone: Dustwallow Marsh" })
+    -- a row without its source and description (found in game): the species'
+    expect(petSourceLines(list[2].sourceText)).toEqual({ "Drop: A stray" })
+    expect(list[2].description).toBe("A cat.")
+    expect(calls.searchCleared).toBe(true)
+    expect(#calls.filters).toBe(2)
+    -- not yours: why its Summon is off
+    expect(select(2, petActionLabel(list[3]))).toBe("You don't have this pet yet.")
+end
+
+@test(
+    "the Pets tab: the pet on the stage, its card; Summon and Dismiss; the star; a random favourite; shift-click links it"
+)
+local function petsTab()
+    local calls = petJournal()
+    open("pets")
+    local e = assert(M.chosen)
+    expect(e.name).toBe("Mechanical Squirrel")
+    expect(ui().model).toBeShown()
+    -- the card: where it comes from, what it is
+    local texts: string[] = {}
+    for _, t in ipairs(ui().card.texts) do
+        if t:IsShown() then
+            texts[#texts + 1] = t:GetText() or ""
+        end
+    end
+    expect(texts).toEqual({ "Where it comes from", "Profession: Engineering", "About", "A small friend." })
+    -- Summon (no secure action: not protected), then Dismiss
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Summon")
+    expect(act:GetAttribute("type")).toBeNil()
+    mock.click(act)
+    expect(calls.summoned).toBe("Pet-A")
+    mock.fireEvent("COMPANION_UPDATE", "CRITTER")
+    expect(act.look.label:GetText()).toBe("Dismiss")
+    mock.click(act)
+    expect(calls.summoned).toBeNil()
+    -- the star: a favourite (one of its copies) unmarked
+    mock.click(ui().stage.star)
+    expect(calls.favourite).toEqual({ { "Pet-A", 0 } })
+    mock.advanceTime(0.2)
+    -- a random favourite
+    expect(ui().random).toBeShown()
+    mock.click(ui().random)
+    expect(calls.random).toEqual({ true })
+    -- shift-click: its link in chat
+    mock.fake("IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    mock.fake("ChatFrameUtil.InsertLink", function(link: string)
+        calls.links[#calls.links + 1] = link
+    end)
+    mock.click(cells()[3])
+    expect(calls.links).toEqual({ "|cff1eff00|Hcompanion:4|h[pet]|h|r" })
+    expect(assert(M.chosen).name).toBe("Mechanical Squirrel")
+    -- (not on another tab)
+    open("mounts")
+    expect(ui().random).never.toBeShown()
+end
+
+@test("a wrapped pet: the gift in the strip, the present on the stage, the tab's count; Unwrap opens it by its GUID")
+local function giftPet()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    local present = fakePresent()
+    -- (a pet's gift in a mount's scene: the pet's own showed it empty)
+    mock.stub(M, "MountScene", function(): number?
+        return 42
+    end)
+    local scenes: number[] = {}
+    mock.stub(ui().gift, "TransitionToModelSceneID", function(_: unknown, id: number)
+        scenes[#scenes + 1] = id
+    end)
+    open("pets")
+    expect(scenes[1]).toBe(42)
+    local e = assert(M.chosen)
+    expect(e.name).toBe("Black Tabby Cat")
+    expect(e.wrapped).toBe(true)
+    expect(cells()[1].icon:GetTexture()).toBe(giftTexture())
+    expect(ui().gift).toBeShown()
+    expect(present.file).toBe(1401005)
+    expect(assert(ui().window.tabButtons)[2].countText).toBe("1")
+    expect(M:GiftCount()).toBe(1)
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Unwrap")
+    mock.click(act)
+    mock.advanceTime(3.1)
+    expect(calls.cleared).toEqual({ "Pet-C" })
+    mock.advanceFrames(1)
+    expect(ui().gift).never.toBeShown()
+    expect(assert(ui().window.tabButtons)[2].countText).toBeNil()
+end
+
+@test("a wrapped pet whose own scene shows no present: in a mount's scene; an empty model (0) given the present")
+local function giftPetScene()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    -- the pet's scene: none (as Forever may give)
+    mock.fake("C_PetJournal.GetPetModelSceneInfoBySpeciesID", function(_: number): number?
+        return nil
+    end)
+    mock.stub(M, "MountScene", function(): number?
+        return 42
+    end)
+    local present = fakePresent() :: { file?: number, GetModelFileID: () -> number? }
+    present.GetModelFileID = function(): number?
+        return 0
+    end
+    open("pets")
+    expect(assert(M.chosen).wrapped).toBe(true)
+    expect(ui().gift).toBeShown()
+    expect(present.file).toBe(1401005)
+end
+
+@test("the present in any scene: 150 px tall, its base on the floor shadow, the frame kept over the stage")
+local function presentPlaced()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    local present = fakePresent() :: { scale?: number, z?: number }
+    -- a scene showing the box high and large: 40 px a world unit upward,
+    -- the scene's origin 300 px over the frame's bottom (found in game: cut off)
+    local gift = ui().gift :: {}
+    mock.stub(gift, "Transform3DPointTo2D", function(_: unknown, _x: number, _y: number, z: number): (number, number)
+        local s = ui().gift:GetEffectiveScale()
+        return 380 * s, (300 + 40 * z) * s
+    end)
+    open("pets")
+    expect(ui().gift).toBeShown()
+    local k = assert(present.scale)
+    expect(k).toBeCloseTo(150 / (40 * 2.3))
+    -- its base (the actor's place times its scale) projects 72 px up
+    expect(300 + 40 * assert(present.z) * k).toBeCloseTo(72)
+    expect(assert(ui().gift:GetBottom())).toBeCloseTo(assert(ui().stage:GetBottom()))
+    -- unseen until it stands still (a frame or two), then shown, its fit kept
+    -- for the scene (another pet's gift shows at once, no flash: found in game)
+    mock.advanceFrames(3)
+    expect(ui().gift:GetAlpha()).toBe(1)
+    expect(next(M.presentFits) ~= nil).toBe(true)
+    -- the scene, loaded late, resets the box to its own size (found in game:
+    -- huge on first opening): hidden, placed again, shown
+    local fitted = assert(present.scale)
+    present.scale = 1
+    mock.advanceFrames(5)
+    expect(assert(present.scale)).toBeCloseTo(fitted)
+    expect(ui().gift:GetAlpha()).toBe(1)
 end

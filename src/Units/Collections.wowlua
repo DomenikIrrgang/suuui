@@ -14,6 +14,11 @@
 -- wrapped present on the stage or the toy's card unwrapping (asked
 -- 2026-11-05: the look and the opening as the game's, counts on the tabs and
 -- the micro menu, a notification when one arrives, pets ready for a tab).
+-- Pets (asked 2026-11-06: Forever has companion pets): a tab as Mounts, from
+-- the game's pet journal (C_PetJournal: every pet, yours first), one entry a
+-- kind of pet with how many you have, Summon / Dismiss (not protected: no
+-- secure button needed), the game's own source text and description on the
+-- card, a random favourite, a shift-click links it in chat; gifts as mounts.
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -71,6 +76,10 @@ local PRESENT_FILE = 1401005
 -- (world units: the box is about 2.3 high) so its base isn't at the scene's
 -- bottom edge, where the box was cut off (found in game)
 local PRESENT_SCALE, PRESENT_LIFT = 0.6, 1.0
+-- the box's height in world units at scale 1, and the height it gets on the
+-- stage in any scene (a pet's gift in a mount's scene showed it huge, its
+-- top cut off: found in game)
+local PRESENT_H, PRESENT_PX = 2.3, 150
 
 -- A model scene showing the game's wrapped present: `scene` (a mount's own:
 -- it holds the "wrapped" actor, as the game's mount journal uses it).
@@ -92,9 +101,9 @@ local function presentIn(gift: ModelScene, scene: number?): boolean
     if actor == nil then
         return false
     end
-    if tryMethod(actor, "GetModelFileID") == nil then
-        tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
-    end
+    -- (always the present's model: the scene's own, where there is one,
+    -- isn't in Forever's files; a pet's scene showed an empty one)
+    tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
     return true
 end
 
@@ -161,7 +170,16 @@ type Entry = {
     isSelf?: boolean,
     -- a toy's
     itemID?: number,
-    -- a gift still wrapped (a mount's or toy's)
+    -- a pet's (id: its kind, the species): your copies' GUIDs (summon the
+    -- first), the one summoned now, the one still wrapped, the game's source
+    -- text and description, its row in the journal (for its chat link)
+    guids?: string[],
+    summoned?: string,
+    giftGuid?: string,
+    sourceText?: string,
+    description?: string,
+    linkIndex?: number,
+    -- a gift still wrapped (a mount's, toy's or pet's)
     wrapped?: boolean,
     -- an appearance's
     visualID?: number,
@@ -524,7 +542,25 @@ local function status(e: Entry): (string, string)
         return "A gift · unwrap it", "gilt-text"
     end
     local when = day(e.learned)
-    return "Collected" .. (when and (" · " .. when) or ""), "gilt-text"
+    local n = e.guids and #e.guids or 1
+    return "Collected" .. (n > 1 and (" ×" .. n) or "") .. (when and (" · " .. when) or ""), "gilt-text"
+end
+
+-- A pet's source as the game words it ("|cFFFFD200Drop: |rRam|nZone: …"):
+-- its lines, colour codes out.
+export function petSourceLines(text: string?): string[]
+    local out: string[] = {}
+    if not text or text == "" then
+        return out
+    end
+    local plain = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    for line in (plain .. "|n"):gmatch("(.-)|n") do
+        local l = strtrim(line)
+        if l ~= "" then
+            out[#out + 1] = l
+        end
+    end
+    return out
 end
 
 -- A small round button (the stage's star, turn and zoom): a disc, a glyph.
@@ -643,6 +679,17 @@ class StageCard extends Frame
             t:Hide()
         end
         local card = sourceCard(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType)
+        if e.kind == "pet" then
+            card = {}
+            local lines = petSourceLines(e.sourceText)
+            if lines[1] then
+                card[#card + 1] = { title = "Where it comes from", lines = lines }
+            end
+            local about = e.description
+            if about and about ~= "" then
+                card[#card + 1] = { title = "About", lines = { about } }
+            end
+        end
         if not card[1] then
             card = { { title = "Source unknown", lines = {} } }
         end
@@ -717,7 +764,8 @@ class Cell extends Button
             UI.ShowTooltip(self, {
                 title = e.name,
                 subtitle = e.collected and (status(e)) or nil,
-                description = sourceLine(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType),
+                description = e.kind == "pet" and (petSourceLines(e.sourceText)[1] or "Source unknown") or
+                    sourceLine(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType),
             })
         end)
         self:SetScript("OnLeave", function()
@@ -726,7 +774,13 @@ class Cell extends Button
             UI.HideTooltip()
         end)
         self:SetScript("OnClick", function()
-            M:Choose(self.entry)
+            local e = self.entry
+            -- a pet shift-clicked: its link in chat (the game's journal's)
+            if e and e.kind == "pet" and IsModifiedClick("CHATLINK") then
+                M:LinkPet(e)
+                return
+            end
+            M:Choose(e)
         end)
         self:EnableMouseWheel(true)
         self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
@@ -1592,6 +1646,8 @@ type Parts = {
     gift: ModelScene,
     card: StageCard,
     act: SecureAction,
+    -- Pets: a random favourite summoned
+    random: SuuButton,
     wardrobe: Wardrobe,
     shelf: Shelf,
     foot: Text,
@@ -1671,6 +1727,28 @@ local function groundBelow(P: number[], aim: number[], lift: number): number?
     return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
 end
 
+-- A pet's action: its label and why it's off (nil: on).
+export function petActionLabel(e: Entry?): (string, string?)
+    if not e then
+        return "Summon", "Choose a pet."
+    end
+    if not e.collected or not (e.guids and e.guids[1]) then
+        return "Summon", "You don't have this pet yet."
+    end
+    if e.wrapped then
+        return UNWRAP or "Unwrap", nil
+    end
+    if e.summoned then
+        return "Dismiss", nil
+    end
+    local guid = e.guids[1]
+    local ok, _, errText = try(field(C_PetJournal, "GetPetSummonInfo"), guid)
+    if ok ~= nil and not flag(ok) then
+        return "Summon", asString(errText) or "You can't summon this pet now."
+    end
+    return "Summon", nil
+end
+
 -- The stage's action: its label and why it's off (nil: on).
 local function actionLabel(mounted: boolean, e: Entry?): (string, string?)
     if mounted then
@@ -1719,6 +1797,20 @@ class CollectionsModule extends Module<{}>
     slotTitle: string = ""
     -- names the game hasn't sent yet
     namesPending: boolean = false
+    -- pets: the journal's filters opened this session; a list update queued
+    petListOpen: boolean = false
+    -- a mount's model scene, for a gift whose own scene has no present
+    mountScene: number? = nil
+    -- the present's fit in each scene (scale, position), once it settled;
+    -- the present being settled now
+    presentFits: { [number]: { number } } = {}
+    presentToken: number = 0
+    -- the present being placed; the scale it was given and its scene (a
+    -- scene resetting it is seen by the change)
+    presentSettling: boolean = false
+    presentK: number? = nil
+    presentScene: number? = nil
+    petRefreshQueued: boolean = false
     namesTimer: TimerHandle? = nil
     -- what waits for the end of combat
     bindAfterCombat: boolean = false
@@ -1810,6 +1902,175 @@ class CollectionsModule extends Module<{}>
             return a.name < b.name
         end)
         return out
+    end
+
+    -- The pet journal's list with nothing filtered out: the game's journal
+    -- keeps its own search and filters, which SuuUI's window has no use for.
+    -- Once a session (each change makes the game send its list again).
+    function OpenPetList()
+        if self.petListOpen then
+            return
+        end
+        self.petListOpen = true
+        local PJ = C_PetJournal
+        if (asString(try(field(PJ, "GetSearchFilter"))) or "") ~= "" then
+            try(field(PJ, "ClearSearchFilter"))
+        end
+        local filters = {
+            asNumber(field(_G, "LE_PET_JOURNAL_FILTER_COLLECTED")) or 1,
+            asNumber(field(_G, "LE_PET_JOURNAL_FILTER_NOT_COLLECTED")) or 2,
+        }
+        for _, f in ipairs(filters) do
+            if not flag(try(field(PJ, "IsFilterChecked"), f)) then
+                try(field(PJ, "SetFilterChecked"), f, true)
+            end
+        end
+        try(field(PJ, "SetAllPetTypesChecked"), true)
+        try(field(PJ, "SetAllPetSourcesChecked"), true)
+    end
+
+    -- Every pet of Forever (the journal lists the ones you lack too), one
+    -- entry a kind with your copies; yours first, gifts, favourites.
+    function Pets(): Entry[]
+        local PJ = C_PetJournal
+        local out: Entry[] = {}
+        if PJ == nil then
+            return out
+        end
+        self:OpenPetList()
+        local bySpecies: { [number]: Entry } = {}
+        local summoned = asString(try(field(PJ, "GetSummonedPetGUID")))
+        for i = 1, asNumber(try(field(PJ, "GetNumPets"))) or 0 do
+            local petIDR, speciesR, ownedR, _, _, favR, revokedR, nameR, iconR, _, _, sourceR, descR = try(
+                field(PJ, "GetPetInfoByIndex"),
+                i
+            )
+            local species, name = asNumber(speciesR), asString(nameR)
+            if species and name then
+                local e = bySpecies[species]
+                if not e then
+                    local _, _, _, _, speciesSource, speciesDesc, _, _, _, _, _, displayR = try(
+                        field(PJ, "GetPetInfoBySpeciesID"),
+                        species
+                    )
+                    local display = asNumber(displayR)
+                    -- (an owned pet's row came without its source and
+                    -- description, found in game: the species' then)
+                    local sourceText = asString(sourceR)
+                    if not sourceText or sourceText == "" then
+                        sourceText = asString(speciesSource)
+                    end
+                    local description = asString(descR)
+                    if not description or description == "" then
+                        description = asString(speciesDesc)
+                    end
+                    local made: Entry = {
+                        kind = "pet",
+                        id = species,
+                        name = name,
+                        icon = asNumber(iconR),
+                        collected = false,
+                        display = display,
+                        scene = asNumber(try(field(PJ, "GetPetModelSceneInfoBySpeciesID"), species)),
+                        sourceText = sourceText,
+                        description = description,
+                        linkIndex = i,
+                    }
+                    e = made
+                    bySpecies[species] = made
+                    out[#out + 1] = made
+                end
+                local guid = asString(petIDR)
+                if guid and flag(ownedR) and not flag(revokedR) then
+                    local guids = e.guids or {}
+                    e.guids = guids
+                    if not guids[1] then
+                        e.linkIndex = i
+                    end
+                    guids[#guids + 1] = guid
+                    e.collected = true
+                    if flag(favR) then
+                        e.favourite = true
+                    end
+                    if summoned == guid then
+                        e.summoned = guid
+                    end
+                    if not e.giftGuid and wrapped("pet", guid) then
+                        e.giftGuid = guid
+                        e.wrapped = true
+                    end
+                end
+            end
+        end
+        for _, e in ipairs(out) do
+            e.learned = self:Learned("pet", e.id, e.collected)
+        end
+        table.sort(out, function(a: Entry, b: Entry): boolean
+            if a.collected ~= b.collected then
+                return a.collected
+            end
+            if (a.wrapped and true or false) ~= (b.wrapped and true or false) then
+                return a.wrapped and true or false
+            end
+            if (a.favourite and true or false) ~= (b.favourite and true or false) then
+                return a.favourite and true or false
+            end
+            return a.name < b.name
+        end)
+        return out
+    end
+
+    -- A mount's model scene (they hold the game's present): the first mount's
+    -- that has one, kept.
+    function MountScene(): number?
+        local known = self.mountScene
+        if known then
+            return known
+        end
+        for _, e in ipairs(self:Mounts()) do
+            if e.scene and e.scene ~= 0 then
+                self.mountScene = e.scene
+                return e.scene
+            end
+        end
+        return nil
+    end
+
+    -- A pet's link in chat (Forever's are the companion links, by its row).
+    function LinkPet(e: Entry)
+        local index = e.linkIndex
+        local link = index and asString(try(field(C_PetJournal, "GetNonBattlePetLinkByIndex"), index))
+        if not link then
+            return
+        end
+        local insert = field(_G, "ChatFrameUtil", "InsertLink") or field(_G, "ChatEdit_InsertLink")
+        try(insert, link)
+    end
+
+    -- Summon or dismiss the chosen pet (or open it, a gift).
+    function PetAction()
+        local e = self.chosen
+        if not (e and e.kind == "pet") then
+            return
+        end
+        local _, why = petActionLabel(e)
+        if why then
+            return
+        end
+        if e.wrapped then
+            self:Unwrap()
+        elseif e.summoned then
+            try(field(C_PetJournal, "DismissSummonedPet"), e.summoned)
+        elseif e.guids and e.guids[1] then
+            try(field(C_PetJournal, "SummonPetByGUID"), e.guids[1])
+        end
+    end
+
+    -- A random favourite summoned (the game's own pick).
+    function RandomPet()
+        if flag(try(field(C_PetJournal, "HasFavoritePets"))) then
+            try(field(C_PetJournal, "SummonRandomPet"), true)
+        end
     end
 
     -- Every toy of Forever (from the client's own list: the game won't list the
@@ -2025,7 +2286,7 @@ class CollectionsModule extends Module<{}>
             end,
             tabs = {
                 { key = "mounts", label = "Mounts" },
-                { key = "pets", label = "Pets", disabled = true, reason = "No pets on Forever yet" },
+                { key = "pets", label = "Pets", disabled = C_PetJournal == nil, reason = "No pets on this client" },
                 { key = "toys", label = "Toys" },
                 { key = "heirlooms", label = "Heirlooms", disabled = true, reason = "No heirlooms on Forever yet" },
                 { key = "wardrobe", label = "Appearances" },
@@ -2038,7 +2299,9 @@ class CollectionsModule extends Module<{}>
                 local ui = self.ui
                 local first = ui and ui.tools.list.buttons[1]
                 if first then
-                    first.label:SetValue(key == "toys" and "Toys" or key == "wardrobe" and "All" or "Mounts")
+                    first.label:SetValue(
+                        key == "toys" and "Toys" or key == "wardrobe" and "All" or key == "pets" and "Pets" or "Mounts"
+                    )
                 end
                 self:Refresh()
             end,
@@ -2072,6 +2335,10 @@ class CollectionsModule extends Module<{}>
         gift:HookScript("OnMouseUp", function()
             self:Unwrap()
         end)
+        -- (the scene loaded late resets the box: placed again)
+        gift:HookScript("OnUpdate", function()
+            self:WatchPresent()
+        end)
         gift:Hide()
         local card = StageCard.new(stage)
         -- Summon / Dismiss: SuuUI's own secure button; the look is a SuuUI button under it
@@ -2082,11 +2349,27 @@ class CollectionsModule extends Module<{}>
         -- a gift: Unwrap (its secure action left out)
         act:HookScript("PostClick", function(_: Frame, _button: string, down: boolean?)
             local e = self.chosen
-            if not down and e and e.wrapped then
+            if down or not e then
+                return
+            end
+            if e.kind == "pet" then
+                self:PetAction()
+            elseif e.wrapped then
                 self:Unwrap()
             end
         end)
         stage.star:SetPoint("RIGHT", act, "LEFT", -S["space-4"], 0)
+        -- Pets: a random favourite (not protected: a plain button)
+        local random = UI.Button(stage, {
+            text = "Random favourite",
+            tooltip = { title = "Random favourite", description = "Summon one of your favourite pets at random." },
+            onClick = function()
+                self:RandomPet()
+            end,
+        })
+        random:SetPoint("TOPRIGHT", act, "BOTTOMRIGHT", 0, -S["space-3"])
+        random:SetFrameLevel(stage:GetFrameLevel() + 12)
+        random:Hide()
         local wardrobe = Wardrobe.new(stage)
         local shelf = Shelf.new(body)
         -- the foot: the overview
@@ -2104,6 +2387,7 @@ class CollectionsModule extends Module<{}>
             gift = gift,
             card = card,
             act = act,
+            random = random,
             wardrobe = wardrobe,
             shelf = shelf,
             foot = foot,
@@ -2134,6 +2418,8 @@ class CollectionsModule extends Module<{}>
             all = self:WardrobeEntries()
         elseif self.tab == "toys" then
             all = self:Toys()
+        elseif self.tab == "pets" then
+            all = self:Pets()
         else
             all = self:Mounts()
         end
@@ -2222,7 +2508,9 @@ class CollectionsModule extends Module<{}>
         strip.pageText:SetValue(self.page .. " / " .. self.pages)
         strip.empty:SetShown(#entries == 0)
         strip.empty:SetValue(
-            self.tab == "toys" and "No toys match." or tiles and "No appearances match." or "No mounts match."
+            self.tab == "toys" and "No toys match." or tiles and "No appearances match." or
+                self.tab == "pets" and "No pets match." or
+                "No mounts match."
         )
     end
 
@@ -2321,7 +2609,7 @@ class CollectionsModule extends Module<{}>
         if not e then
             -- only when a search or filter leaves nothing (the first entry is
             -- chosen otherwise, also with none of your own)
-            stage.empty.title:SetValue("No mounts match")
+            stage.empty.title:SetValue(self.tab == "pets" and "No pets match" or "No mounts match")
             stage.empty.text:SetValue("Clear the search or show All.")
             ui.model:Hide()
             self.showing, self.waiting = nil, nil
@@ -2359,10 +2647,31 @@ class CollectionsModule extends Module<{}>
         if self.unwrapping then
             return
         end
-        gift:SetShown(presentIn(gift, e.scene))
-        -- (the scene's place for it set anew with the scene: smaller, raised)
+        -- (a pet's own scene may have no present: a mount's then, whose does;
+        -- found in game, the pet's gift didn't show)
+        -- (a pet's gift in a mount's scene: the present showed empty in the
+        -- pet's own, found in game; the mount's, with SuuUI's model, works)
+        local scene = e.kind == "mount" and e.scene or self:MountScene() or e.scene
+        local shown = presentIn(gift, scene)
+        if not shown and scene ~= e.scene then
+            shown = presentIn(gift, e.scene)
+        end
+        gift:SetShown(shown)
         local actor = gift:IsShown() and tryMethod(gift, "GetActorByTag", "wrapped")
-        if actor then
+        if not actor then
+            return
+        end
+        -- unseen until it stands right: the scene, set anew, shows the box at
+        -- its own size for a moment, and its camera reads wrong until laid out
+        -- (found in game: huge on opening the tab, a flash on changing pets)
+        gift:SetAlpha(0)
+        local fit = scene and self.presentFits[scene]
+        if fit then
+            -- (this scene's fit known: at once)
+            tryMethod(actor, "SetScale", fit[1])
+            tryMethod(actor, "SetPosition", fit[2], fit[3], fit[4])
+        else
+            -- (the scene's place for it: smaller, raised)
             local x, y, z = tryMethod(actor, "GetPosition")
             tryMethod(actor, "SetScale", PRESENT_SCALE)
             tryMethod(
@@ -2373,19 +2682,74 @@ class CollectionsModule extends Module<{}>
                 (asNumber(z) or 0) + PRESENT_LIFT / PRESENT_SCALE
             )
         end
-        -- (where the scene puts it is known once it shows)
-        if gift:IsShown() then
-            self:PlacePresent()
-            after(0, function()
-                self:PlacePresent()
-            end)
-        end
+        self.presentToken = self.presentToken + 1
+        self.presentSettling = true
+        self:SettlePresent(self.presentToken, scene, 0)
     end
 
-    -- The present stood on the floor shadow's middle, as a mount: its
-    -- ground point (the actor's place) as the scene projects it, moved to
-    -- FEET_Y above the stage's bottom (the mount's scene put it under the
-    -- stage: found in game). Left where it is when the scene can't say.
+    -- While the present shows: a scene that finished loading late resets the
+    -- box to its own size (found in game: huge on first opening the tab,
+    -- right once chosen again): hidden and placed again.
+    function WatchPresent()
+        local ui = self.ui
+        local k = self.presentK
+        if not ui or not k or self.presentSettling or self.unwrapping then
+            return
+        end
+        local actor = tryMethod(ui.gift, "GetActorByTag", "wrapped")
+        local now = actor ~= nil and asNumber(tryMethod(actor, "GetScale"))
+        if not now or math.abs(now - k) <= 0.01 * math.max(k, 0.01) then
+            return
+        end
+        ui.gift:SetAlpha(0)
+        self.presentToken = self.presentToken + 1
+        self.presentSettling = true
+        self:SettlePresent(self.presentToken, self.presentScene, 0)
+    end
+
+    -- The present placed again each frame until it stops changing (the
+    -- scene's camera laid out), then shown and its fit kept for the scene.
+    function SettlePresent(token: number, scene: number?, tries: number)
+        local ui = self.ui
+        if not ui or token ~= self.presentToken then
+            return
+        end
+        local gift = ui.gift
+        local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+        if actor == nil then
+            gift:SetAlpha(1)
+            self.presentSettling = false
+            return
+        end
+        local k0 = asNumber(tryMethod(actor, "GetScale")) or 1
+        local _, _, z0 = tryMethod(actor, "GetPosition")
+        self:PlacePresent()
+        local k1 = asNumber(tryMethod(actor, "GetScale")) or 1
+        local x1, y1, z1 = tryMethod(actor, "GetPosition")
+        local still = math.abs(k1 - k0) <= 0.01 * math.max(k0, 0.01) and
+            math.abs((asNumber(z1) or 0) - (asNumber(z0) or 0)) <= 0.01
+        if (still and tries >= 1) or tries >= 15 then
+            gift:SetAlpha(1)
+            self.presentSettling = false
+            self.presentK, self.presentScene = k1, scene
+            if scene and still then
+                self.presentFits[scene] = { k1, asNumber(x1) or 0, asNumber(y1) or 0, asNumber(z1) or 0 }
+            end
+            return
+        end
+        after(0, function()
+            self:SettlePresent(token, scene, tries + 1)
+        end)
+    end
+
+    -- The present stood on the floor shadow's middle, as a mount, the same
+    -- size in any scene: the scene's own measure read from two points it
+    -- projects (pixels per world unit, upward), the box scaled to
+    -- PRESENT_PX tall and moved in the scene until its base projects FEET_Y
+    -- above the stage's bottom; the scene's frame stays over the stage.
+    -- (Moving the frame instead cut the box off at its top in a scene that
+    -- showed it high: found in game with a pet's gift.) A scene that can't
+    -- project: the frame moved, as before.
     function PlacePresent()
         local ui = self.ui
         if not ui then
@@ -2396,21 +2760,50 @@ class CollectionsModule extends Module<{}>
         if actor == nil then
             return
         end
+        local s = gift:GetEffectiveScale()
+        if not (s and s > 0) then
+            return
+        end
+        -- a world point on the frame (pixels from its bottom left)
+        local function at(x: number, y: number, z: number): (number?, number?)
+            local px, py = tryMethod(gift, "Transform3DPointTo2D", x, y, z)
+            local a, b = asNumber(px), asNumber(py)
+            if not (a and b) then
+                return nil, nil
+            end
+            return a / s, b / s
+        end
         local ax, ay, az = tryMethod(actor, "GetPosition")
         local k = asNumber(tryMethod(actor, "GetScale")) or 1
-        local x, y = tryMethod(
-            gift,
-            "Transform3DPointTo2D",
-            (asNumber(ax) or 0) * k,
-            (asNumber(ay) or 0) * k,
-            (asNumber(az) or 0) * k
-        )
-        local px, py, s = asNumber(x), asNumber(y), gift:GetEffectiveScale()
-        if not (px and py and s and s > 0) then
+        local wx, wy, wz = (asNumber(ax) or 0) * k, (asNumber(ay) or 0) * k, (asNumber(az) or 0) * k
+        local bx, by = at(wx, wy, wz)
+        local _, uy = at(wx, wy, wz + 1)
+        if not (bx and by) then
+            return
+        end
+        local slope = uy and (uy - by) or 0
+        if slope < 0.5 then
+            -- (no measure: the frame moved so the base is on the floor)
+            gift:ClearAllPoints()
+            gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - bx, FEET_Y - by)
             return
         end
         gift:ClearAllPoints()
-        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - px / s, FEET_Y - py / s)
+        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", 0, 0)
+        -- the size, then the base on the floor (a few steps: the camera's
+        -- perspective bends the measure)
+        local k2 = math.max(0.05, math.min(5, PRESENT_PX / (slope * PRESENT_H)))
+        local z = wz
+        for _ = 1, 4 do
+            local _, y = at(wx, wy, z)
+            local _, y1 = at(wx, wy, z + 1)
+            if not (y and y1) or y1 - y < 0.01 then
+                break
+            end
+            z = z + (FEET_Y - y) / (y1 - y)
+        end
+        tryMethod(actor, "SetScale", k2)
+        tryMethod(actor, "SetPosition", wx / k2, wy / k2, z / k2)
     end
 
     -- The chosen gift opened the game's way: the present unwraps, then the
@@ -2424,7 +2817,7 @@ class CollectionsModule extends Module<{}>
         self.unwrapping = e
         local function opened()
             self.unwrapping = nil
-            clearWrapped(e.kind, e.id)
+            clearWrapped(e.kind, e.giftGuid or e.id)
             e.wrapped = nil
             ui.gift:Hide()
             self.showing = nil
@@ -2471,10 +2864,10 @@ class CollectionsModule extends Module<{}>
         end
     end
 
-    -- How many gifts wait (mounts and toys: what this window opens).
+    -- How many gifts wait (mounts, pets and toys: what this window opens).
     function GiftCount(): number
         local n = giftCounts(data().toys)
-        return n.mounts + n.toys
+        return n.mounts + n.toys + n.pets
     end
 
     -- The counts on the tabs and the micro menu's (SUUUI_GIFTS_CHANGED).
@@ -2484,21 +2877,23 @@ class CollectionsModule extends Module<{}>
         if ui then
             ui.window:SetTabCount("mounts", n.mounts > 0 and tostring(n.mounts) or nil)
             ui.window:SetTabCount("toys", n.toys > 0 and tostring(n.toys) or nil)
+            ui.window:SetTabCount("pets", n.pets > 0 and tostring(n.pets) or nil)
         end
-        self:Emit("SUUUI_GIFTS_CHANGED", n.mounts + n.toys)
+        self:Emit("SUUUI_GIFTS_CHANGED", n.mounts + n.toys + n.pets)
     end
 
     -- A gift arrived: told, Open shows it (the window through its secure
     -- toggle: it is protected in a fight).
     function GiftArrived(kind: string, id: number, name: string?)
-        local tab = kind == "toy" and "toys" or "mounts"
+        local tab = kind == "toy" and "toys" or kind == "pet" and "pets" or "mounts"
         SuuUI.Notify({
             id = "suu:gift:" .. kind .. ":" .. id,
             kind = "timed",
             category = "Collections",
             icon = { texture = GIFT_ICON },
             title = "A gift arrived",
-            body = (name or (kind == "toy" and "A toy" or "A mount")) .. " waits wrapped in your collections.",
+            body = (name or (kind == "toy" and "A toy" or kind == "pet" and "A pet" or "A mount")) ..
+                " waits wrapped in your collections.",
             actions = {
                 {
                     label = "Open",
@@ -2525,7 +2920,7 @@ class CollectionsModule extends Module<{}>
             return
         end
         w:SetTab(tab)
-        if tab ~= "mounts" then
+        if tab ~= "mounts" and tab ~= "pets" then
             return
         end
         for i, e in ipairs(self.entries) do
@@ -2694,6 +3089,16 @@ class CollectionsModule extends Module<{}>
             end)
             return
         end
+        if e and e.kind == "pet" then
+            local guid = e.guids and e.guids[1]
+            if guid then
+                try(field(C_PetJournal, "SetFavorite"), guid, e.favourite and 0 or 1)
+                after(0.1, function()
+                    self:Refresh()
+                end)
+            end
+            return
+        end
         if not (e and e.kind == "mount") then
             return
         end
@@ -2718,9 +3123,33 @@ class CollectionsModule extends Module<{}>
         end
         local act, e = ui.act, self.chosen
         if self.tab == "wardrobe" then
+            ui.random:Hide()
             if not InCombatLockdown() then
                 act:Hide()
             end
+            return
+        end
+        -- Pets: not protected, the click's PostClick does it (no secure action)
+        local pets = self.tab == "pets"
+        ui.random:SetShown(pets)
+        if pets then
+            local hasFav = flag(try(field(C_PetJournal, "HasFavoritePets")))
+            ui.random:SetEnabledState(hasFav)
+            ui.random.tooltip = {
+                title = "Random favourite",
+                description = hasFav and "Summon one of your favourite pets at random." or
+                    "Mark pets as favourites (the star) to summon one at random.",
+            }
+            local label, why = petActionLabel(e)
+            act.look.label:SetValue(label)
+            act.look:SetEnabledState(why == nil)
+            act.why = why
+            if InCombatLockdown() then
+                self.actionAfterCombat = true
+                return
+            end
+            act:SetShown(e ~= nil)
+            act:SetAttribute("type", nil)
             return
         end
         local mountedNow = flag(try(field(_G, "IsMounted")))
@@ -2767,6 +3196,7 @@ class CollectionsModule extends Module<{}>
         local parts: string[] = {}
         local kinds: { label: string, entries: Entry[] }[] = {
             { label = "Mounts", entries = self:Mounts() },
+            { label = "Pets", entries = self:Pets() },
             { label = "Toys", entries = self:Toys() },
         }
         for _, kind in ipairs(kinds) do
@@ -3275,7 +3705,35 @@ class CollectionsModule extends Module<{}>
             self:DrawAction()
         end)
         self:OnGameEvent("COMPANION_UPDATE", function()
-            self:DrawAction()
+            -- (a pet summoned or dismissed: the action says it)
+            if self.tab == "pets" and self:Shown() then
+                self:Refresh()
+            else
+                self:DrawAction()
+            end
+        end)
+        -- pets: a new one (noted, a gift said), the journal's list changed
+        self:OnGameEvent("NEW_PET_ADDED", function(_, guid)
+            local g = asString(guid)
+            local species, _, _, _, _, _, _, nameR = try(field(C_PetJournal, "GetPetInfoByPetID"), g)
+            local name = asString(nameR)
+            self:NoteLast(name, time())
+            if self:Shown() then
+                self:Refresh()
+            end
+            local id = asNumber(species)
+            if g and id and wrapped("pet", g) then
+                self:GiftArrived("pet", id, name)
+            end
+        end)
+        self:OnGameEvent("PET_JOURNAL_LIST_UPDATE", function()
+            if self.tab == "pets" and self:Shown() and not self.petRefreshQueued then
+                self.petRefreshQueued = true
+                after(0.1, function()
+                    self.petRefreshQueued = false
+                    self:Refresh()
+                end)
+            end
         end)
         -- something new: noted with today's date, the window redrawn
         self:OnGameEvent("NEW_MOUNT_ADDED", function(_, id)

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Pets in the collections**: the Pets tab shows every companion pet of WoW Forever, yours first (favourites first), each kind once with how many you have. Choose one to see it on the stage with where it comes from and what it is; Summon or Dismiss it, star it as a favourite, or summon a random favourite. Shift-click a pet to link it in chat. A pet you got as a gift comes wrapped, as mounts and toys do: open it on the stage; the tab and the micro menu count the gifts waiting.
+
+### Fixed
+
+- The game's own alerts over its micro menu ("You have unopened items in your collection" and the like) no longer pop up while SuuUI's micro menu is on: they pointed at the game's hidden buttons, and SuuUI's menu counts the gifts itself.
+
 ## 0.6.13 (2026-11-06)
 
 ### New
