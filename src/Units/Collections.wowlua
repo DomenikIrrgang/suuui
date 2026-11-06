@@ -1801,6 +1801,10 @@ class CollectionsModule extends Module<{}>
     petListOpen: boolean = false
     -- a mount's model scene, for a gift whose own scene has no present
     mountScene: number? = nil
+    -- the present's fit in each scene (scale, position), once it settled;
+    -- the present being settled now
+    presentFits: { [number]: { number } } = {}
+    presentToken: number = 0
     petRefreshQueued: boolean = false
     namesTimer: TimerHandle? = nil
     -- what waits for the end of combat
@@ -2644,9 +2648,21 @@ class CollectionsModule extends Module<{}>
             shown = presentIn(gift, e.scene)
         end
         gift:SetShown(shown)
-        -- (the scene's place for it set anew with the scene: smaller, raised)
         local actor = gift:IsShown() and tryMethod(gift, "GetActorByTag", "wrapped")
-        if actor then
+        if not actor then
+            return
+        end
+        -- unseen until it stands right: the scene, set anew, shows the box at
+        -- its own size for a moment, and its camera reads wrong until laid out
+        -- (found in game: huge on opening the tab, a flash on changing pets)
+        gift:SetAlpha(0)
+        local fit = scene and self.presentFits[scene]
+        if fit then
+            -- (this scene's fit known: at once)
+            tryMethod(actor, "SetScale", fit[1])
+            tryMethod(actor, "SetPosition", fit[2], fit[3], fit[4])
+        else
+            -- (the scene's place for it: smaller, raised)
             local x, y, z = tryMethod(actor, "GetPosition")
             tryMethod(actor, "SetScale", PRESENT_SCALE)
             tryMethod(
@@ -2657,13 +2673,40 @@ class CollectionsModule extends Module<{}>
                 (asNumber(z) or 0) + PRESENT_LIFT / PRESENT_SCALE
             )
         end
-        -- (where the scene puts it is known once it shows)
-        if gift:IsShown() then
-            self:PlacePresent()
-            after(0, function()
-                self:PlacePresent()
-            end)
+        self.presentToken = self.presentToken + 1
+        self:SettlePresent(self.presentToken, scene, 0)
+    end
+
+    -- The present placed again each frame until it stops changing (the
+    -- scene's camera laid out), then shown and its fit kept for the scene.
+    function SettlePresent(token: number, scene: number?, tries: number)
+        local ui = self.ui
+        if not ui or token ~= self.presentToken then
+            return
         end
+        local gift = ui.gift
+        local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+        if actor == nil then
+            gift:SetAlpha(1)
+            return
+        end
+        local k0 = asNumber(tryMethod(actor, "GetScale")) or 1
+        local _, _, z0 = tryMethod(actor, "GetPosition")
+        self:PlacePresent()
+        local k1 = asNumber(tryMethod(actor, "GetScale")) or 1
+        local x1, y1, z1 = tryMethod(actor, "GetPosition")
+        local still = math.abs(k1 - k0) <= 0.01 * math.max(k0, 0.01) and
+            math.abs((asNumber(z1) or 0) - (asNumber(z0) or 0)) <= 0.01
+        if (still and tries >= 1) or tries >= 15 then
+            gift:SetAlpha(1)
+            if scene and still then
+                self.presentFits[scene] = { k1, asNumber(x1) or 0, asNumber(y1) or 0, asNumber(z1) or 0 }
+            end
+            return
+        end
+        after(0, function()
+            self:SettlePresent(token, scene, tries + 1)
+        end)
     end
 
     -- The present stood on the floor shadow's middle, as a mount, the same
