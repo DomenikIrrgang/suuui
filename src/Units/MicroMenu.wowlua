@@ -18,6 +18,7 @@ import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import hook from "wowlua:hooks"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -568,18 +569,79 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The game's alerts over its micro menu's buttons ("You have unopened
-    -- items in your collection", reported 2026-11-06): its buttons are hidden
-    -- under SuuUI's, which counts what they'd tell (the gifts); off while
-    -- SuuUI's menu is on, through the game's own switch (its tutorials').
-    function GameAlerts(on: boolean)
-        local set = tbl.field(_G, "MainMenuMicroButton_SetAlertsEnabled")
-        if type(set) == "function" then
-            pcall(set :: (boolean, string) -> (), on, "SuuUI")
+    -- items in your collection", reported 2026-11-06) point at its buttons,
+    -- hidden under SuuUI's, which counts what they'd tell (the gifts): unseen
+    -- and not in the way while SuuUI's menu is on. Each help tip the game
+    -- shows, looked at after: the micro menu's see-through, any other (a
+    -- frame its pool gave out again) as the game made it. Nothing of the
+    -- game's is written: its own switch (MainMenuMicroButton_SetAlertsEnabled)
+    -- called by an addon tainted the Spellbook opened in a fight.
+    tipsHooked: boolean = false
+    -- the tips made see-through: whether each took the mouse, and its buttons
+    hiddenTips: { [Frame]: { boolean } } = {}
+
+    function HookGameAlerts()
+        local helpTip = tbl.field(_G, "HelpTip")
+        if self.tipsHooked or type(tbl.field(helpTip, "Show")) ~= "function" then
+            return
+        end
+        self.tipsHooked = true
+        hook(helpTip :: {}, "Show", function()
+            self:GameAlerts()
+        end)
+    end
+
+    function GameAlerts()
+        local pool = tbl.field(tbl.field(_G, "HelpTip"), "framePool")
+        local iter, state, init = errors.tryMethod(pool, "EnumerateActive")
+        if type(iter) ~= "function" then
+            return
+        end
+        local step = iter :: (unknown, unknown) -> unknown
+        local tip = step(state, init)
+        while tip ~= nil do
+            local f = frames.asFrame(tip)
+            if f then
+                local micro = tbl.field(tbl.field(tip, "info"), "system") == "MicroButtons"
+                self:SeeThrough(f, micro and self:IsEnabled())
+            end
+            tip = step(state, tip)
+        end
+    end
+
+    -- A help tip unseen and letting the mouse through, or back as it was.
+    function SeeThrough(tip: Frame, hide: boolean)
+        local was = self.hiddenTips[tip]
+        if hide == (was ~= nil) then
+            return
+        end
+        local parts: { Frame } = { tip }
+        for _, key in ipairs({ "CloseButton", "OkayButton" }) do
+            local b = frames.asFrame(tbl.field(tip, key))
+            if b then
+                parts[#parts + 1] = b
+            end
+        end
+        if hide then
+            local mouse: { boolean } = {}
+            for i, part in ipairs(parts) do
+                mouse[i] = part:IsMouseEnabled()
+                part:EnableMouse(false)
+            end
+            self.hiddenTips[tip] = mouse
+            tip:SetAlpha(0)
+        else
+            for i, part in ipairs(parts) do
+                part:EnableMouse(assert(was)[i] == true)
+            end
+            self.hiddenTips[tip] = nil
+            tip:SetAlpha(1)
         end
     end
 
     override function OnEnable()
-        self:GameAlerts(false)
+        self:HookGameAlerts()
+        self:GameAlerts()
         local menu = self.menu
         if not menu then
             menu = UI.MicroMenu(SuuUI.Root, { name = "SuuUIMicroMenu" })
@@ -668,7 +730,9 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
-        self:GameAlerts(true)
+        for tip in pairs(self.hiddenTips) do
+            self:SeeThrough(tip, false)
+        end
         SuuUI.PublishAnchor("microMenu", nil)
         if self.menu then
             self.menu:Hide()
