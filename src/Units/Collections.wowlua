@@ -1805,6 +1805,11 @@ class CollectionsModule extends Module<{}>
     -- the present being settled now
     presentFits: { [number]: { number } } = {}
     presentToken: number = 0
+    -- the present being placed; the scale it was given and its scene (a
+    -- scene resetting it is seen by the change)
+    presentSettling: boolean = false
+    presentK: number? = nil
+    presentScene: number? = nil
     petRefreshQueued: boolean = false
     namesTimer: TimerHandle? = nil
     -- what waits for the end of combat
@@ -2330,6 +2335,10 @@ class CollectionsModule extends Module<{}>
         gift:HookScript("OnMouseUp", function()
             self:Unwrap()
         end)
+        -- (the scene loaded late resets the box: placed again)
+        gift:HookScript("OnUpdate", function()
+            self:WatchPresent()
+        end)
         gift:Hide()
         local card = StageCard.new(stage)
         -- Summon / Dismiss: SuuUI's own secure button; the look is a SuuUI button under it
@@ -2674,7 +2683,28 @@ class CollectionsModule extends Module<{}>
             )
         end
         self.presentToken = self.presentToken + 1
+        self.presentSettling = true
         self:SettlePresent(self.presentToken, scene, 0)
+    end
+
+    -- While the present shows: a scene that finished loading late resets the
+    -- box to its own size (found in game: huge on first opening the tab,
+    -- right once chosen again): hidden and placed again.
+    function WatchPresent()
+        local ui = self.ui
+        local k = self.presentK
+        if not ui or not k or self.presentSettling or self.unwrapping then
+            return
+        end
+        local actor = tryMethod(ui.gift, "GetActorByTag", "wrapped")
+        local now = actor ~= nil and asNumber(tryMethod(actor, "GetScale"))
+        if not now or math.abs(now - k) <= 0.01 * math.max(k, 0.01) then
+            return
+        end
+        ui.gift:SetAlpha(0)
+        self.presentToken = self.presentToken + 1
+        self.presentSettling = true
+        self:SettlePresent(self.presentToken, self.presentScene, 0)
     end
 
     -- The present placed again each frame until it stops changing (the
@@ -2688,6 +2718,7 @@ class CollectionsModule extends Module<{}>
         local actor = tryMethod(gift, "GetActorByTag", "wrapped")
         if actor == nil then
             gift:SetAlpha(1)
+            self.presentSettling = false
             return
         end
         local k0 = asNumber(tryMethod(actor, "GetScale")) or 1
@@ -2699,6 +2730,8 @@ class CollectionsModule extends Module<{}>
             math.abs((asNumber(z1) or 0) - (asNumber(z0) or 0)) <= 0.01
         if (still and tries >= 1) or tries >= 15 then
             gift:SetAlpha(1)
+            self.presentSettling = false
+            self.presentK, self.presentScene = k1, scene
             if scene and still then
                 self.presentFits[scene] = { k1, asNumber(x1) or 0, asNumber(y1) or 0, asNumber(z1) or 0 }
             end
