@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Collections: the Collections button on SuuUI's micro menu opens the window in combat again ("Blocked in combat: SuuUICollectionsWindow:Show()"), as its key does.
+
 ## 0.6.15 (2026-11-07)
 
 ### New
