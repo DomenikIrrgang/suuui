@@ -133,6 +133,7 @@ wowlua install --release   # builds SuuUI and installs it into your game's AddOn
 |---|---|
 | `/suu` | Open or close the settings window |
 | `/suu edit` | Edit mode: move SuuUI's frames on a snap grid |
+| `/rl` | Reload the interface (the same as `/reload`) |
 | `/suu keybind` | Keybind mode: hover an action button and press a key |
 | `/suu bind` | Bind mode in the Spellbook: hover a spell and press a key, click or turn the wheel; it casts on the unit under the mouse |
 | `/suu pull [seconds]` | Start a pull countdown (`0` cancels) |
