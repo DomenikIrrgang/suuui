@@ -5,6 +5,7 @@
 ### Fixed
 
 - World map: opening it in combat after visiting a flight master works again ("Blocked: SetPassThroughButtons"). The flight master's map is now a window of its own that looks the same as before (SuuUI's world map look and size, the routes, times and destinations), so SuuUI no longer changes the world map. In the air the world map opens where you are, as the game opens it; your route shows on whichever map you look at.
+- Bags: the Bags/Bank switch, All characters and the Bags toggle show the first time you open your bags after a reload, not only from the second time.
 - Collections: a toy's description no longer runs into its source line and Use button; the cards are a little taller for two lines, and a longer text ends in "…" (hover the card for all of it).
 - World map: the quest log's search box shows "Search Quest Log" after its magnifier instead of under it.
 
