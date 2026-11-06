@@ -1,0 +1,84 @@
+-- Diagnostics/SlotsProbe.wowlua
+-- "/suu probe slots" (asked 2026-11-06: a bag item's use refused in game,
+-- "Blocked in combat: UseContainerItem()" and "Forbidden: ..."): watches
+-- SuuUI's bag slot buttons and says the moment one of their click's
+-- methods turns tainted. Right after a reload they read clean (probed in
+-- game: issecurevariable true for OnClick and GetBagID); at the refusals
+-- SuuUI's error log had them written by SuuUI. Every half second it reads
+-- the methods the game's click goes through on each slot; the first one
+-- tainted is printed and kept (time, slot, method, by whom), once per slot,
+-- in SuuUIProbe.slots after /reload. "/suu probe slots off" stops it.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+
+-- what the game's click reads on the slot before it uses the item
+local KEYS = { "OnClick", "GetBagID", "SetItem", "UpdateTooltip", "bagID" }
+
+local watcher: Frame? = nil
+local seen: { [string]: boolean } = {}
+
+local function record(line: string)
+    local list = DB.probeData("slots", function(): string[]
+        return {}
+    end)
+    list[#list + 1] = date("%H:%M:%S") .. " " .. line
+    while #list > 60 do
+        table.remove(list, 1)
+    end
+    print("|cffffd24dslots probe|r " .. line)
+end
+
+local function check()
+    for bag = -3, 12 do
+        for slot = 1, 40 do
+            local name = ("SuuUIBag%dSlot%d"):format(bag + 2, slot)
+            local b = rawget(_G, name)
+            if type(b) ~= "table" then
+                break
+            end
+            if not seen[name] then
+                for _, key in ipairs(KEYS) do
+                    local ok, secure, by = pcall(issecurevariable, b, key)
+                    if ok and not secure then
+                        seen[name] = true
+                        record(
+                            ("%s.%s tainted by %s (combat %s)"):format(
+                                name,
+                                key,
+                                tostring(by),
+                                tostring(InCombatLockdown())
+                            )
+                        )
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
+export function command(arg: string?)
+    if arg == "off" then
+        local w = watcher
+        if w then
+            w:SetScript("OnUpdate", nil)
+        end
+        record("stopped")
+        return
+    end
+    seen = {}
+    local w = watcher or CreateFrame("Frame")
+    watcher = w
+    local wait = 0
+    w:SetScript("OnUpdate", function(_, elapsed)
+        wait = wait - elapsed
+        if wait > 0 then
+            return
+        end
+        wait = 0.5
+        check()
+    end)
+    record("watching SuuUI's bag slots")
+    check()
+end
