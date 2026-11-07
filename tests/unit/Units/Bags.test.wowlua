@@ -378,6 +378,76 @@ local function spellTarget()
     mock.hover(nil)
 end
 
+@test("drag and drop: an item dragged onto another slot is put there, once (asked in game)")
+local function dragDrop()
+    open()
+    local slots = assert(M.buttons[0])
+    -- (what the slots ask the game: the emulated client doesn't move an item
+    -- onto an empty slot of its own bag yet, so the calls are what's checked)
+    local calls: string[] = {}
+    local real = C_Container.PickupContainerItem
+    mock.fake("C_Container.PickupContainerItem", function(bag: number, slot: number)
+        calls[#calls + 1] = bag .. "/" .. slot
+        real(bag, slot)
+    end)
+    mock.hover(slots[1])
+    local b = assert(M.useOver).button
+    mock.hover(b)
+    -- pressed and moved: picked up
+    assert(b:GetScript("OnDragStart"))(b, "LeftButton")
+    expect(calls).toEqual({ "0/1" })
+    -- the secure button follows the mouse to slot 3; let go there: the game
+    -- sends the release as the drop and as a click; put down once
+    mock.hover(slots[3])
+    mock.hover(b)
+    assert(b:GetScript("OnReceiveDrag"))(b)
+    assert(b:GetScript("PostClick"))(b, "LeftButton", false)
+    expect(calls).toEqual({ "0/1", "0/3" })
+    expect(CursorHasItem()).toBe(false)
+    -- (the click first, then the drop: the same)
+    mock.advanceFrames(2)
+    calls = {}
+    mock.hover(slots[1])
+    mock.hover(b)
+    assert(b:GetScript("OnDragStart"))(b, "LeftButton")
+    mock.hover(slots[4])
+    mock.hover(b)
+    assert(b:GetScript("PostClick"))(b, "LeftButton", false)
+    assert(b:GetScript("OnReceiveDrag"))(b)
+    expect(calls).toEqual({ "0/1", "0/4" })
+    -- the release reaching neither (as in game): the left button let go
+    -- over slot 3, the item put there by the watch
+    mock.advanceFrames(2)
+    calls = {}
+    local down = true
+    mock.fake("IsMouseButtonDown", function(_: string?): boolean
+        return down
+    end)
+    mock.hover(slots[1])
+    mock.hover(b)
+    assert(b:GetScript("OnDragStart"))(b, "LeftButton")
+    mock.advanceFrames(1)
+    expect(calls).toEqual({ "0/1" })
+    mock.hover(slots[3])
+    down = false
+    mock.advanceFrames(1)
+    expect(calls).toEqual({ "0/1", "0/3" })
+    expect(CursorHasItem()).toBe(false)
+    -- click and click still works: picked up, then put down
+    mock.advanceFrames(2)
+    calls = {}
+    mock.hover(slots[1])
+    mock.hover(b)
+    mock.click(b)
+    expect(CursorHasItem()).toBe(true)
+    mock.hover(slots[2])
+    mock.hover(b)
+    mock.click(b)
+    expect(calls).toEqual({ "0/1", "0/2" })
+    ClearCursor()
+    mock.hover(nil)
+end
+
 @test(
     "out of combat a right click uses the item through a secure button over the hovered slot; the rest goes on to the slot"
 )

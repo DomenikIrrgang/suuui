@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Bags: dragging an item onto another slot puts it there (press, move, let go), as well as click and click.
+
 ## 0.6.18 (2026-11-07)
 
 ### Changed
