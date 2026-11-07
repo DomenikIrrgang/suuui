@@ -6,6 +6,7 @@
 
 - Bags: dragging an item onto another slot puts it there (press, move, let go), as well as click and click.
 - Bags: a dragged item lands on the slot you let go over every time, not only now and then.
+- Group Finder: the Whisper and Invite buttons on a player's row show their icons again, and so does the search mark when nothing matches.
 
 ## 0.6.18 (2026-11-07)
 
