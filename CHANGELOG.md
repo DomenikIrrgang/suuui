@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The game's Quick Keybind Mode (Esc > Options > Keybindings) now opens SuuUI's keybind mode while SuuUI's action bars are on: hover a button and press a key, as with `/suu keybind`. Closing it takes you back to the Options. The game's own mode only knew the game's bars, so keys pressed over SuuUI's buttons did nothing.
+
 ## 0.6.17 (2026-11-07)
 
 ### Fixed

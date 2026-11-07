@@ -1102,6 +1102,43 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         GameTooltip:Show()
     end
 
+    -- The game's Quick Keybind mode (Options > Keybindings) knows only the
+    -- game's own action buttons, each telling it its command on hover: on
+    -- SuuUI's bars it bound nothing (reported by a player). While SuuUI's
+    -- bars are on it opens SuuUI's keybind mode instead, and closing that
+    -- goes back to the Options, as the game's does.
+    quickHooked: boolean = false
+    fromQuick: boolean = false
+
+    function TakeOverQuickKeybind()
+        local quick = frames.find("QuickKeybindFrame")
+        if self.quickHooked or not quick then
+            return
+        end
+        self.quickHooked = true
+        quick:HookScript("OnShow", function()
+            if not self:IsEnabled() or InCombatLockdown() then
+                return
+            end
+            quick:Hide()
+            -- (its OnHide opens the Options again: closed for the mode)
+            if SettingsPanel and SettingsPanel:IsShown() then
+                SettingsPanel:Close(true)
+            end
+            if SuuUI.KeybindMode.Enter() then
+                self.fromQuick = true
+            end
+        end)
+        self:On("SUUUI_KEYBINDMODE_CHANGED", function(_, active)
+            if not active and self.fromQuick then
+                self.fromQuick = false
+                if SettingsPanel and not InCombatLockdown() then
+                    SettingsPanel:Open()
+                end
+            end
+        end)
+    end
+
     override function OnEnable()
         local function start()
             standDownBlizzard()
@@ -1110,6 +1147,7 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
             end
             self:ApplyOptions()
         end
+        self:TakeOverQuickKeybind()
         -- Secure buttons can only be made out of combat (a reload mid-fight waits).
         if InCombatLockdown() then
             self:RunOutOfCombat("build", start)
