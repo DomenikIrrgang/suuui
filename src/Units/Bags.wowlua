@@ -1361,7 +1361,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             self:PassClick(button, down)
         end)
         b:SetScript("OnDragStart", function(_, button: string)
-            self:PassTo("OnDragStart", button)
+            -- (from the slot really under the mouse: the secure button can sit
+            -- over another one, and the drag picked up nothing from an empty
+            -- slot there, found in game)
+            local atBag, atSlot = self:SlotUnderMouse()
+            if atBag and atSlot and C_Container.GetContainerItemInfo(atBag, atSlot) then
+                try(C_Container.PickupContainerItem, atBag, atSlot)
+            else
+                self:PassTo("OnDragStart", button)
+            end
             self.dragging = CursorHasItem() and true or false
             if self.dragging then
                 self:WatchDrop()
@@ -1420,6 +1428,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         local targets = flag(try(SpellCanTargetItem)) or flag(try(SpellCanTargetItemID)) or false
         self.useTargets = targets
+        -- the left button goes through to the game's slot underneath (its
+        -- own pick up, drag and drop: SuuUI's button guessed the slot, and
+        -- near a cell's edge took the wrong one, found in game), except
+        -- while a spell waits for an item: then this button puts it on
+        if targets then
+            errors.tryMethod(over.button, "SetPassThroughButtons")
+        else
+            errors.tryMethod(over.button, "SetPassThroughButtons", "LeftButton")
+        end
         over.set("type1", targets and "macro" or nil)
         over.set("macrotext1", targets and ("/use %d %d"):format(at[1], at[2]) or nil)
     end
@@ -1495,7 +1512,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             return false
         end
         self.droppedAt = now
-        self:PassTo("OnReceiveDrag")
+        -- the slot really under the mouse (the secure button may still sit over
+        -- the slot the drag began on: then it went back there, found in game
+        -- as a drop that worked only now and then)
+        local bag, slot = self:SlotUnderMouse()
+        if bag and slot then
+            try(C_Container.PickupContainerItem, bag, slot)
+        else
+            self:PassTo("OnReceiveDrag")
+        end
         return true
     end
 
