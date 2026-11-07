@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Collections: while the game keeps your pet journal locked, the star on the Pets tab is greyed out and says so, instead of seeming to do nothing (the game takes no favourites then).
+- Collections: while your account is logged in more than once, the game locks your pet journal and takes no favourites; the star on the Pets tab is now greyed out and says so, instead of seeming to do nothing.
 
 ## 0.6.16 (2026-11-07)
 
