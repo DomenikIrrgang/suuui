@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Character window: opening it straight on Reputation (U) after a reload no longer shows a black box over the list.
 - Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
 
 ## 0.6.17 (2026-11-07)
