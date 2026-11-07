@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- XP bar: a "Rested colours" option (Settings › Action bars, off by default) shows your XP in the game's own colours, blue while you have rested XP and purple without.
+
 ## 0.6.21 (2026-11-07)
 
 ### New
