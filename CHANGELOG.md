@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Action bars: moving a spell while it was out of range no longer leaves its button tinted red until a reload.
+
 ## 0.6.17 (2026-11-07)
 
 ### Fixed
