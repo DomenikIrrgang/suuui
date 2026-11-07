@@ -5,6 +5,7 @@
 ### Fixed
 
 - Collections in combat: the Collections button on SuuUI's micro menu opens the window again, as its key does, and Escape closes it, without "Blocked in combat" errors.
+- Group finder: results the game hands over partly hidden no longer stop the list with an error (`bad argument #1 to 'ipairs'`); what can be read still shows.
 - Bags: sorting no longer tries to put items into a profession bag that can't hold them (a leatherworking bag in the reagent slot, for instance), which the game refused with an error. A profession bag in the reagent slot now gets only its own kind.
 
 ## 0.6.15 (2026-11-07)
