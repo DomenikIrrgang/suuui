@@ -3611,7 +3611,11 @@ class CollectionsModule extends Module<{}>
             local rows = math.ceil(#entries / SHELF_COLS)
             shelf.list.child:SetHeight(math.max(1, rows * CARD_H + math.max(0, rows - 1) * S["space-4"]))
         end
-        shelf.empty:SetShown(#entries == 0)
+        -- (no cards made yet in a fight: they come when it ends; said so
+        -- rather than an empty page, found in game)
+        local waiting = combat and #entries > 0 and #shelf.cards == 0
+        shelf.empty:SetValue(waiting and "Your toys show once this fight is over." or "No toys match.")
+        shelf.empty:SetShown(#entries == 0 or waiting)
     end
 
     function DrawShelfCooldowns()
@@ -3638,6 +3642,72 @@ class CollectionsModule extends Module<{}>
 
     -- The tab's layout: Toys the shelf with the tools on top; the others the
     -- stage, the tools above the strip.
+    -- The tabs in a fight: Toys' shelf and the others' stage hold secure
+    -- buttons, so SuuUI's code can't swap them then and the tab changed while
+    -- the page stayed (found in game: Pets to Toys in a fight). A secure
+    -- button over each tab swaps them through the game's secure code, in a
+    -- fight too; then the tab is chosen as before (its layout finds the page
+    -- already right; the tools follow once the fight is over). Hover goes on
+    -- to the tab.
+    secureTabs: { [string]: Button } = {}
+
+    function SecureTabs()
+        local ui = self.ui
+        local window = ui and ui.window
+        if not (ui and window and window.tabButtons) then
+            return
+        end
+        for _, tab in ipairs(window.tabButtons or {}) do
+            local key = tab.key
+            if not tab:IsOff() and not self.secureTabs[key] then
+                local o = CreateFrame("Button", nil, tab, "SecureHandlerClickTemplate") :: Button & FrameRefs
+                o:SetAllPoints(tab)
+                o:SetFrameLevel(tab:GetFrameLevel() + 3)
+                o:SetFrameRef("shelf", ui.shelf)
+                o:SetFrameRef("stage", ui.stage)
+                o:SetFrameRef("strip", ui.strip)
+                o:SetAttribute("toys", key == "toys")
+                -- (the strip too when the game counts it protected, in game it
+                -- stayed over Toys in a fight; else the layout shows it at once.
+                -- The tools move as before, after a fight: moved from here they
+                -- lost their anchors in game)
+                -- (each only while the game counts it protected: Toys' shelf
+                -- has no secure button till Toys was opened, and touching an
+                -- unprotected frame from here in a fight is an error, found
+                -- in game; the layout shows those at once instead)
+                o:SetAttribute("_onclick", [=[
+                    local toys = self:GetAttribute("toys")
+                    local shelf, stage, strip = self:GetFrameRef("shelf"), self:GetFrameRef("stage"), self:GetFrameRef("strip")
+                    if shelf:IsProtected() then
+                        if toys then shelf:Show() else shelf:Hide() end
+                    end
+                    if stage:IsProtected() then
+                        if toys then stage:Hide() else stage:Show() end
+                    end
+                    if strip:IsProtected() then
+                        if toys then strip:Hide() else strip:Show() end
+                    end
+                ]=])
+                o:HookScript("PostClick", function()
+                    window:SetTab(key)
+                end)
+                o:SetScript("OnEnter", function(_: Frame, motion: boolean)
+                    local fn = tab:GetScript("OnEnter")
+                    if fn then
+                        fn(tab, motion)
+                    end
+                end)
+                o:SetScript("OnLeave", function(_: Frame, motion: boolean)
+                    local fn = tab:GetScript("OnLeave")
+                    if fn then
+                        fn(tab, motion)
+                    end
+                end)
+                self.secureTabs[key] = o
+            end
+        end
+    end
+
     function LayoutTab()
         local ui = self.ui
         if not ui then
@@ -3655,7 +3725,8 @@ class CollectionsModule extends Module<{}>
         }
         for _, pair in ipairs(shown) do
             if pair.f:IsShown() ~= pair.on then
-                if InCombatLockdown() then
+                -- (one without secure buttons, the strip: at once, in a fight too)
+                if InCombatLockdown() and pair.f:IsProtected() then
                     self.layoutAfterCombat = true
                 else
                     pair.f:SetShown(pair.on)
@@ -3668,6 +3739,9 @@ class CollectionsModule extends Module<{}>
         if self.toolsFor ~= toys then
             if InCombatLockdown() then
                 self.layoutAfterCombat = true
+                -- (out of their place till the fight ends: unseen, rather than
+                -- over the shelf or the stage, found in game)
+                tools:SetAlpha(0)
             else
                 self.toolsFor = toys
                 tools:ClearAllPoints()
@@ -3679,6 +3753,10 @@ class CollectionsModule extends Module<{}>
                     tools:SetPoint("BOTTOMRIGHT", ui.strip, "TOPRIGHT", 0, S["space-5"])
                 end
             end
+        end
+        -- (seen again once in their place)
+        if self.toolsFor == toys then
+            tools:SetAlpha(1)
         end
         if toys and not InCombatLockdown() then
             ui.act:Hide()
@@ -3727,6 +3805,7 @@ class CollectionsModule extends Module<{}>
                 self.closeOverlay = o
             end
             self.bindOwner = CreateFrame("Frame")
+            self:SecureTabs()
             -- (the tab chosen before the first open, which may be in a fight)
             window:SetTab(self.tab)
         end
