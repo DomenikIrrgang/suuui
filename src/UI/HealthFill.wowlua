@@ -1,0 +1,83 @@
+-- UI/HealthFill.wowlua
+-- A unit's health fill (design "Health colours" option 1, chosen
+-- 2026-11-07), on unit frames and nameplates alike: the theme's unit-fill;
+-- grey for a mob tagged by someone else; or, with class colours on, a
+-- player's class colour toned as the damage meter's class bars (55% over
+-- surface-sunk, the deep end at 75% of it), so ink names stay readable. NPCs
+-- keep the theme's fill. Class colours come from the "Health colour" setting
+-- (Settings › General › Appearance) or a theme's `health = "class"`; the
+-- setting wins (Themes.health). Painted through draw.bind: a theme, colour
+-- vision or the setting changing repaints it.
+--
+--   healthFill.paint(bar, look)   -- look: "tapped", a class token
+--                                 -- ("class-mage"), or nil for the fill
+--   healthFill.classToken(class)  -- "MAGE" → "class-mage" (nil: none)
+--   healthFill.byClass()          -- class colours on?
+
+import * as secret from "wowlua:secret"
+import tokens as T from "/Core/Tokens"
+import * as themes from "/Core/Themes"
+import * as draw from "./Draw"
+
+-- what each health texture shows: "tapped", a class token, or false
+local looks: { [Texture]: string | false } = setmetatable({}, { __mode = "k" })
+
+-- (the share of the colour over surface-sunk; the damage meter's)
+local SHARE = 0.55
+local DEEP = 0.75
+
+local function toned(token: string): (number, number, number)
+    local r, g, b = draw.rgba(token)
+    local sr, sg, sb = draw.rgba("surface-sunk")
+    return r * SHARE + sr * (1 - SHARE), g * SHARE + sg * (1 - SHARE), b * SHARE + sb * (1 - SHARE)
+end
+
+-- Class colours on (the setting, else the theme)?
+export function byClass(): boolean
+    return themes.health() == "class"
+end
+
+-- A class's colour token ("MAGE" → "class-mage"); nil for none, an unknown
+-- class or a secret one.
+export function classToken(class: unknown): string?
+    if secret.isSecret(class) or type(class) ~= "string" then
+        return nil
+    end
+    local token = "class-" .. (class :: string):lower()
+    local colors: { [string]: unknown } = T.color
+    return colors[token] ~= nil and token or nil
+end
+
+local function drawFill(tex: Texture)
+    local look = looks[tex]
+    local r1: number, g1: number, b1: number, r2: number, g2: number, b2: number
+    if look == "tapped" then
+        r1, g1, b1 = draw.rgba("unit-fill-tapped-deep")
+        r2, g2, b2 = draw.rgba("unit-fill-tapped")
+    elseif look and byClass() then
+        r2, g2, b2 = toned(look)
+        r1, g1, b1 = r2 * DEEP, g2 * DEEP, b2 * DEEP
+    else
+        r1, g1, b1 = draw.rgba("unit-fill-deep")
+        r2, g2, b2 = draw.rgba("unit-fill")
+    end
+    tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
+end
+
+-- Paints a health bar: "tapped", a player's class token, or nil (the fill).
+export function paint(bar: StatusBar, look: string | false | nil)
+    local tex = bar:GetStatusBarTexture()
+    looks[tex] = look or false
+    draw.bind(tex, drawFill)
+end
+
+-- What a health bar was last painted as (tests).
+export function lookOf(bar: StatusBar): string | false | nil
+    return looks[bar:GetStatusBarTexture()]
+end
+
+-- The colours a class look draws now (tests): the deep end, then the fill.
+export function classColors(token: string): (number, number, number, number, number, number)
+    local r, g, b = toned(token)
+    return r * DEEP, g * DEEP, b * DEEP, r, g, b
+end

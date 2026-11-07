@@ -65,6 +65,7 @@ import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
 import * as iconModule from "/UI/Icon"
 import * as crest from "/UI/Crest"
+import * as healthFill from "/UI/HealthFill"
 import auraContainer, UnitAuras, AuraGroup, AuraOptions, AuraButton from "/UI/Auras"
 
 const S = T.space
@@ -944,6 +945,10 @@ export class UnitFrame extends Button
     unit: string? = nil
     -- the health drawn grey: a mob tagged by someone else (opts.tapped)
     tappedLook: boolean = false
+    -- a player's class token, for class-coloured health (UI/HealthFill)
+    fillClass: string? = nil
+    -- what the health fill was painted as: "tapped", a class token, or false
+    fillLook: string | false = false
     opts: UnitFrameOptions
     size: Size
     api: UnitApi
@@ -1067,7 +1072,7 @@ export class UnitFrame extends Button
             dragon:Hide()
             self.dragon = dragon
         end
-        gradient(self.health, "unit-fill-deep", "unit-fill")
+        healthFill.paint(self.health, nil)
         self.healthLow = bar(self, 3)
         self.healthLow:SetAllPoints(self.inner)
         gradient(self.healthLow, "unit-fill-low-deep", "unit-fill-low")
@@ -1184,13 +1189,19 @@ export class UnitFrame extends Button
         end
         if tapped ~= self.tappedLook then
             self.tappedLook = tapped
-            if tapped then
-                gradient(self.health, "unit-fill-tapped-deep", "unit-fill-tapped")
-            else
-                gradient(self.health, "unit-fill-deep", "unit-fill")
-            end
+            self:PaintHealth()
         end
         return tapped
+    end
+
+    -- The health fill: grey when tapped, a player's class colour (when class
+    -- colours are on: UI/HealthFill decides at paint time), else the fill.
+    function PaintHealth()
+        local look: string | false = self.tappedLook and "tapped" or self.fillClass or false
+        if look ~= self.fillLook then
+            self.fillLook = look
+            healthFill.paint(self.health, look)
+        end
     end
 
     function UpdateHealth(instant: boolean?)
@@ -1371,6 +1382,9 @@ export class UnitFrame extends Button
                 classColor = nil
             end
         end
+        -- (the health in it too, with class colours on)
+        self.fillClass = classColor
+        self:PaintHealth()
         self.role:Hide()
         self.classDot:Hide()
         local marker: Texture? = nil
@@ -1393,7 +1407,8 @@ export class UnitFrame extends Button
         elseif self.opts.nameColor == "ink" then
             self.name:SetColor("ink")
         elseif classColor then
-            self.name:SetColor(classColor)
+            -- (on a class-coloured bar the class name can't be read: ink)
+            self.name:SetColor(healthFill.byClass() and "ink" or classColor)
         else
             local r = A.UnitReaction(u, "player")
             if secret.isSecret(r) or not r then
@@ -1865,6 +1880,15 @@ export class UnitFrame extends Button
             return
         end
         self.active = true
+        -- class colours on or off (the setting or the theme): the name's
+        -- colour with it (the fill repaints itself)
+        events.on(
+            "SUUUI_THEME_CHANGED",
+            function()
+                self:UpdateIdentity()
+            end,
+            self
+        )
         for _, e in ipairs(HEALTH_EVENTS) do
             onUnit(self, u, e, function()
                 self:UpdateHealth()

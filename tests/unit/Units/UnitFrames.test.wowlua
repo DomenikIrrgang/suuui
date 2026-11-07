@@ -12,6 +12,9 @@ import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/UnitFrames"
 import expectNoErrors from "../../helpers"
 import * as frames from "wowlua:frames"
+import * as settings from "/Core/Settings"
+import * as themes from "/Core/Themes"
+import * as healthFill from "/UI/HealthFill"
 
 -- One of the game's frames, by name.
 local function game(name: string): Frame
@@ -407,6 +410,48 @@ local function petMood()
     expect(m:IsShown()).toBe(false)
     mock.setPlayer({ class = "WARRIOR" })
     beast:despawn()
+end
+
+-- A text drawn in a token's colour?
+local function inColor(fs: FontString, token: string): boolean
+    local r, g, b = fs:GetTextColor()
+    local tr, tg, tb = SuuUI.UI.RGBA(token)
+    return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
+end
+
+@test("class-coloured health: a player's in their class colour, the name in ink; NPCs as before; the setting off")
+local function classHealth()
+    local target = assert(M.frames).target
+    mock.player:target(tank)
+    mock.advanceFrames(1)
+    -- off (the default): the fill, the name in its class colour
+    expect(healthFill.byClass()).toBe(false)
+    expect(target.fillClass).toBe("class-warrior")
+    expect(inColor(target.name, "class-warrior")).toBe(true)
+    -- on: the class colour drawn, the name in ink
+    settings.setAccount("healthColor", "class")
+    themes.apply()
+    expect(healthFill.byClass()).toBe(true)
+    expect(healthFill.lookOf(target.health)).toBe("class-warrior")
+    expect(inColor(target.name, "ink")).toBe(true)
+    -- an NPC: the fill, its name in its reaction colour
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    expect(healthFill.lookOf(target.health)).toBe(false)
+    expect(inColor(target.name, "ink")).toBe(false)
+    -- off again: the name's class colour back
+    mock.player:target(tank)
+    mock.advanceFrames(1)
+    settings.setAccount("healthColor", nil)
+    themes.apply()
+    expect(healthFill.byClass()).toBe(false)
+    expect(inColor(target.name, "class-warrior")).toBe(true)
+    -- the toned colour: 55% over surface-sunk, the deep end at 75%
+    local r1, _, _, r2 = healthFill.classColors("class-warrior")
+    local cr = SuuUI.UI.RGBA("class-warrior")
+    local sr = SuuUI.UI.RGBA("surface-sunk")
+    expect(r2).toBeCloseTo(cr * 0.55 + sr * 0.45)
+    expect(r1).toBeCloseTo(r2 * 0.75)
 end
 
 @test("the settings rows: combo points for rogues and druids; the rested rows wait for the sign")

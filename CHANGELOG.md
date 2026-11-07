@@ -4,6 +4,7 @@
 
 ### New
 
+- **Class-coloured health**: Settings › General › Appearance › Health colour shows players' health in their class colour, toned, on every unit frame and nameplate (NPCs keep the theme's colour). Themes can turn it on too (`health = "class"`, API 0.26); the setting wins over the theme.
 - XP bar: a "Rested colours" option (Settings › Action bars, off by default) shows your XP in the game's own colours, blue while you have rested XP and purple without.
 
 ## 0.6.21 (2026-11-07)

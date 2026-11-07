@@ -172,6 +172,7 @@ SuuUI.RegisterTheme({
 - **When to call it:** at file load, not in `OnEnable`. Themes apply at login, before SuuUI builds its frames.
 - **Choosing it:** the player picks it under Settings › General › Appearance › Theme. A change takes a reload.
 - **What to change:** colour token names are the keys of `SuuUI.Tokens.color`, and text styles the keys of `SuuUI.Tokens.type`.
+- **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned; NPCs keep `unit-fill`. The player's "Health colour" setting on Class colours wins over your theme.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 
 ## 8. Everything else: raw access
