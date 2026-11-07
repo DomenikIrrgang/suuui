@@ -519,8 +519,6 @@ local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
 
 local TOOLS_H = 30
 local STRIP_H = CELL * ROWS + S["space-5"] + 8
--- the tools over the strip (which stands at the body's bottom), by the body
-local TOOLS_LIFT = STRIP_H + S["space-5"]
 local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local GLYPHS = MEDIA .. "Glyphs\\"
 local SOFT = MEDIA .. "CircleSoft.tga"
@@ -3635,9 +3633,10 @@ class CollectionsModule extends Module<{}>
     -- The tabs in a fight: Toys' shelf and the others' stage hold secure
     -- buttons, so SuuUI's code can't swap them then and the tab changed while
     -- the page stayed (found in game: Pets to Toys in a fight). A secure
-    -- button over each tab swaps them, and moves the tools, through the game's
-    -- secure code, in a fight too; then the tab is chosen as before (its
-    -- layout finds the page already right). Hover goes on to the tab.
+    -- button over each tab swaps them through the game's secure code, in a
+    -- fight too; then the tab is chosen as before (its layout finds the page
+    -- already right; the tools follow once the fight is over). Hover goes on
+    -- to the tab.
     secureTabs: { [string]: Button } = {}
 
     function SecureTabs()
@@ -3654,44 +3653,21 @@ class CollectionsModule extends Module<{}>
                 o:SetFrameLevel(tab:GetFrameLevel() + 3)
                 o:SetFrameRef("shelf", ui.shelf)
                 o:SetFrameRef("stage", ui.stage)
-                o:SetFrameRef("tools", ui.tools)
-                o:SetFrameRef("body", window.body)
                 o:SetAttribute("toys", key == "toys")
-                o:SetAttribute("lift", TOOLS_LIFT)
-                -- (the strip holds no secure button: not a frame a secure
-                -- snippet may touch in a fight; the layout shows it, and the
-                -- tools stand by the body, where the strip is)
+                -- (only these two: the strip holds no secure button, so the
+                -- layout shows it at once; the tools move as before, after a
+                -- fight: moved from here they lost their anchors in game)
                 o:SetAttribute("_onclick", [=[
                     local shelf, stage = self:GetFrameRef("shelf"), self:GetFrameRef("stage")
-                    local tools, body = self:GetFrameRef("tools"), self:GetFrameRef("body")
-                    local lift = self:GetAttribute("lift") or 0
-                    local toys = self:GetAttribute("toys")
-                    if toys then
+                    if self:GetAttribute("toys") then
                         shelf:Show()
                         stage:Hide()
                     else
                         shelf:Hide()
                         stage:Show()
                     end
-                    -- (only protected ones may be moved here in a fight; else
-                    -- the layout moves them, in a fight too)
-                    if tools:IsProtected() and body:IsProtected() then
-                        tools:ClearAllPoints()
-                        if toys then
-                            tools:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
-                            tools:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, 0)
-                        else
-                            tools:SetPoint("BOTTOMLEFT", body, "BOTTOMLEFT", 0, lift)
-                            tools:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", 0, lift)
-                        end
-                    end
                 ]=])
                 o:HookScript("PostClick", function()
-                    -- (the tools stand where the secure code put them, if it
-                    -- could move them)
-                    if ui.tools:IsProtected() and window.body:IsProtected() then
-                        self.toolsFor = key == "toys"
-                    end
                     window:SetTab(key)
                 end)
                 o:SetScript("OnEnter", function(_: Frame, motion: boolean)
@@ -3749,8 +3725,8 @@ class CollectionsModule extends Module<{}>
                     tools:SetPoint("TOPLEFT", ui.window.body, "TOPLEFT")
                     tools:SetPoint("TOPRIGHT", ui.window.body, "TOPRIGHT")
                 else
-                    tools:SetPoint("BOTTOMLEFT", ui.window.body, "BOTTOMLEFT", 0, TOOLS_LIFT)
-                    tools:SetPoint("BOTTOMRIGHT", ui.window.body, "BOTTOMRIGHT", 0, TOOLS_LIFT)
+                    tools:SetPoint("BOTTOMLEFT", ui.strip, "TOPLEFT", 0, S["space-5"])
+                    tools:SetPoint("BOTTOMRIGHT", ui.strip, "TOPRIGHT", 0, S["space-5"])
                 end
             end
         end
