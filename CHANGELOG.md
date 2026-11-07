@@ -9,6 +9,7 @@
 ### Fixed
 
 - Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
+- Group Finder: the Whisper and Invite buttons on a player's row show their icons again, and so does the search mark when nothing matches.
 
 ## 0.6.17 (2026-11-07)
 
