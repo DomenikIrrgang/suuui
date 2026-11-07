@@ -10,9 +10,9 @@
 --                          -- distance from the window's edge (the schools centre between)
 --   book:SetSchools({ { label, icon, trainable, active } }); book.onSchool = fn(i)
 --   book:SetHead(title, toTrain[, all])   -- all = { count, cost (copper),
---                          -- short (true: you can't afford it all) }: every
---                          -- school's spells to train and what they cost,
---                          -- after the school's count, as room allows
+--                          -- short (true: you can't afford it all) }: what
+--                          -- every school's spells to train cost, the counts
+--                          -- on hover; without it the school's count
 --   book:SetSwitches(showUnlearned, allRanks); book.onSwitch = fn(key, on)
 --   book:SetSpells(list)   -- { label, rank, sub, icon, status = "learned" |
 --                          -- "passive" | "trainable" | "future" }, a page's worth
@@ -63,6 +63,7 @@ import type SuuButton from "/UI/Controls"
 import tabMarker, TabMarker from "/UI/TabMarker"
 import keyChip, KeyChip from "/UI/Panel"
 import showTooltip, hideTooltip from "/UI/Tooltip"
+import type TooltipData, TooltipLine from "/UI/Tooltip"
 
 -- A secure handler frame (SecureHandler*Template): SetFrameRef from its template.
 type FrameRefs = { SetFrameRef: (self: Frame, id: string, frame: Region) -> () }
@@ -383,6 +384,9 @@ export class Spellbook extends Frame
     main: Frame
     title: Text
     toTrain: Text
+    -- over the cost: what is left to train, on hover (SetHead)
+    toTrainHover: Frame
+    trainTip: TooltipData? = nil
     allRanks: Toggle
     unlearned: Toggle
     unlearnedSwitch: BookSwitch
@@ -451,6 +455,19 @@ export class Spellbook extends Frame
         self.title:SetPoint("TOPLEFT", 0, -6)
         self.toTrain = text(main, "caption", "arcane")
         self.toTrain:SetPoint("LEFT", self.title, "RIGHT", S["space-5"], 0)
+        local hover = CreateFrame("Frame", nil, main)
+        hover:SetAllPoints(self.toTrain)
+        hover:EnableMouse(true)
+        hover:SetScript("OnEnter", function()
+            local tip = self.trainTip
+            if tip then
+                showTooltip(hover, tip)
+            end
+        end)
+        hover:SetScript("OnLeave", function()
+            hideTooltip()
+        end)
+        self.toTrainHover = hover
         local ranks = switch(self, main, "All ranks", "allRanks")
         self.allRanks = ranks.toggle
         self.ranksSwitch = ranks
@@ -914,6 +931,7 @@ export class Spellbook extends Frame
         self.foot:SetAlpha(a)
         self.title:SetAlpha(a)
         self.toTrain:SetAlpha(a)
+        self.toTrainHover:SetShown(not on)
         self.unlearnedSwitch:SetAlpha(a)
         self.ranksSwitch:SetAlpha(a)
         -- (a plain button: hidden, not see-through; its enabled state set
@@ -1007,39 +1025,26 @@ export class Spellbook extends Frame
         self.title:SetValue(title or "")
         local toTrain = trainable or 0
         local count = all and all.count or 0
+        self.trainTip = nil
         if count <= 0 then
             self.toTrain:SetValue(toTrain > 0 and (spells(toTrain) .. " to train") or "")
             return
         end
-        local cost, costPlain = coinText((all :: BookAll).cost, (all :: BookAll).short)
-        local muted = "|cff" .. hex("ink-muted")
-        -- the longest form that fits before the switches
-        local forms: string[][]
-        if toTrain == count then
-            forms = { { spells(toTrain) .. " to train", " · " }, { toTrain .. " to train", " · " } }
-        elseif toTrain > 0 then
-            forms = {
-                { spells(toTrain) .. " to train", " · " .. count .. " in all · " },
-                { toTrain .. " to train", " · " .. count .. " in all · " },
-                { count .. " to train in all", " · " },
-            }
-        else
-            forms = {
-                { "", spells(count) .. " to train in other schools · " },
-                { "", count .. " to train elsewhere · " },
-            }
-        end
-        local switchLeft, textLeft = self.bindButton:GetLeft(), self.toTrain:GetLeft()
-        local room = (switchLeft and textLeft) and (switchLeft - textLeft - S["space-5"]) or math.huge
-        local pick = forms[#forms]
-        for _, f in ipairs(forms) do
-            if measureText("caption", f[1] .. f[2] .. costPlain) <= room then
-                pick = f
-                break
-            end
-        end
-        self.toTrain:SetText(pick[1] .. muted .. pick[2] .. "|r" .. cost)
+        -- only what it all costs (asked 2026-11-07: the counts ran into the
+        -- Bind button); the counts on hover
+        local cost = coinText((all :: BookAll).cost, (all :: BookAll).short)
+        self.toTrain:SetText(cost)
         self.toTrain.value = nil
+        local lines: TooltipLine[] = {}
+        if toTrain > 0 then
+            lines[#lines + 1] = { spells(toTrain) .. " to train here" }
+        end
+        lines[#lines + 1] = { spells(count) .. " to train in all schools", cost }
+        self.trainTip = {
+            title = "To train",
+            lines = lines,
+            description = (all :: BookAll).short and "More than you have with you." or nil,
+        }
     end
 
     function SetSwitches(unlearned: boolean, allRanks: boolean)

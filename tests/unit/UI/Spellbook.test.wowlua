@@ -116,17 +116,34 @@ local function head()
     expect(b.toTrain).toHaveText("")
 end
 
-@test("the head with every school's: here and in all, what it costs, the longest form that fits")
+@test("the head with every school's: only what it costs; the counts on hover (asked: they ran into Bind)")
 @cases({
-    { 2, 2, "2 spells to train · 3g 20s" },
-    { 1, 3, "1 spell to train · 3 in all · 3g 20s" },
-    { 0, 3, "3 spells to train in other schools · 3g 20s" },
+    { 2, 2, { { "2 spells to train here" }, { "2 spells to train in all schools", "3g 20s" } } },
+    { 1, 3, { { "1 spell to train here" }, { "3 spells to train in all schools", "3g 20s" } } },
+    { 0, 3, { { "3 spells to train in all schools", "3g 20s" } } },
 })
-local function headAll(here: number, count: number, shown: string)
-    local b = make({}, 1200)
+local function headAll(here: number, count: number, lines: { { string } })
+    local b = make({}, 480)
     b:SetHead("Fire", here, { count = count, cost = 32000 })
-    expect(plain(b.toTrain:GetText())).toBe(shown)
+    expect(plain(b.toTrain:GetText())).toBe("3g 20s")
     expect(b.toTrain.value).toBeNil()
+    expect(assert(b.toTrain:GetRight()) <= assert(b.bindButton:GetLeft())).toBe(true)
+    local tip = assert(b.trainTip)
+    expect(tip.title).toBe("To train")
+    local got: { { string } } = {}
+    for _, l in ipairs(tip.lines or {}) do
+        local row: { string } = { l[1] or "" }
+        if l[2] then
+            row[2] = plain(l[2])
+        end
+        got[#got + 1] = row
+    end
+    expect(got).toEqual(lines)
+    expect(b.toTrainHover).toBeShown()
+    -- no cost from the owner: the school's count, no tooltip
+    b:SetHead("Fire", 2)
+    expect(b.toTrain).toHaveText("2 spells to train")
+    expect(b.trainTip).toBeNil()
 end
 
 @test("the head's cost: digits in ink, the units in coin colours; ember when you can't afford it")
@@ -134,27 +151,16 @@ local function cost()
     local b = make({}, 1200)
     b:SetHead("Fire", 1, { count = 1, cost = 10005 })
     local text = b.toTrain:GetText() :: string
-    expect(plain(text)).toBe("1 spell to train · 1g 0s 5c")
+    expect(plain(text)).toBe("1g 0s 5c")
     expect(text:find(T.color["coin-gold"].hex, 1, true) ~= nil).toBe(true)
     b:SetHead("Fire", 1, { count = 1, cost = 5, short = true })
     text = b.toTrain:GetText() :: string
-    expect(plain(text)).toBe("1 spell to train · 5c")
+    expect(plain(text)).toBe("5c")
     expect(text:find(T.color["ember-text"].hex, 1, true) ~= nil).toBe(true)
     expect(text:find(T.color["coin-copper"].hex, 1, true)).toBeNil()
+    expect(assert(b.trainTip).description).toBe("More than you have with you.")
     b:SetHead("Fire", 1, { count = 1 })
-    expect(plain(b.toTrain:GetText())).toBe("1 spell to train · 0c")
-end
-
-@test("a narrow head: the shorter forms")
-@cases({
-    { 1, 3, "3 to train in all · 3g 20s" },
-    { 2, 2, "2 to train · 3g 20s" },
-    { 0, 3, "3 to train elsewhere · 3g 20s" },
-})
-local function narrow(here: number, count: number, shown: string)
-    local b = make({}, 300)
-    b:SetHead("Fire", here, { count = count, cost = 32000 })
-    expect(plain(b.toTrain:GetText())).toBe(shown)
+    expect(plain(b.toTrain:GetText())).toBe("0c")
 end
 
 --------------------------------------------------------------------------------

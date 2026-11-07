@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Spellbook: the head shows only what the spells left to train cost; hover it for how many there are here and in all schools. The counts ran into the Bind button.
 - The game's Click Casting (Esc > Options > Keybindings) now opens the Spellbook on its Bindings tab, SuuUI's click casting, while SuuUI's mouseover bindings are on. Before, it opened the game's window and the Spellbook on whatever tab it was on last.
 - The game's Quick Keybind Mode (Esc > Options > Keybindings) now opens SuuUI's keybind mode while SuuUI's action bars are on: hover a button and press a key, as with `/suu keybind`. Closing it takes you back to the Options. The game's own mode only knew the game's bars, so keys pressed over SuuUI's buttons did nothing.
 
