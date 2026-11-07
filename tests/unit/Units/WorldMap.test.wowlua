@@ -482,6 +482,47 @@ local function questsFor()
     expect(M:QuestsFor(999)).toEqual({})
 end
 
+@test("an NPC's tooltip: the quests it gives you now, in their difficulty's colour with their level (asked in game)")
+local function questTooltip()
+    local giver = mock.spawnUnit({
+        name = "Marshal Test",
+        level = 25,
+        reaction = "friendly",
+        distance = 5,
+        npcID = 101,
+    })
+    local nobody = mock.spawnUnit({ name = "Quiet Test", level = 25, reaction = "friendly", distance = 5, npcID = 999 })
+    local function shown(): string[]
+        local out: string[] = {}
+        for i = 1, GameTooltip:NumLines() do
+            local l = frames.asFontString(tbl.field(_G, "GameTooltipTextLeft" .. i))
+            out[#out + 1] = l and l:GetText() or ""
+        end
+        return out
+    end
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(giver)
+    GameTooltip:SetUnit("target")
+    local got = shown()
+    local at: number? = nil
+    for i, l in ipairs(got) do
+        if l == "Quests" then
+            at = i
+        end
+    end
+    local i = assert(at, "no Quests line")
+    expect(got[i + 1]:find("^Wolves Across the Border %(%d+%)$") ~= nil).toBe(true)
+    -- one that gives nothing (or the module off): no Quests line
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(nobody)
+    GameTooltip:SetUnit("target")
+    for _, l in ipairs(shown()) do
+        expect(l).never.toBe("Quests")
+    end
+    GameTooltip:Hide()
+    mock.player:target(nil)
+end
+
 --------------------------------------------------------------------------------
 -- On the canvas
 --------------------------------------------------------------------------------
