@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Pet happiness**: three diamonds on the pet frame's top edge show your hunter pet's mood: one ember when unhappy, two amber when content, three green when happy. Settings › Unit frames turns them off.
+
 ## 0.6.20 (2026-11-07)
 
 ### New

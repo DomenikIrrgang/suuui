@@ -3,7 +3,7 @@
 -- attach to; each following its unit, off by its setting or hidden in
 -- edit mode (after a fight); the player and target size (after a fight);
 -- the options live; the out-of-combat fade; aggro on your frame in a
--- group; combo points; the rested sign and its tooltip lines; the
+-- group; combo points; pet happiness; the rested sign and its tooltip lines; the
 -- settings preview and rows; stopped.
 
 import test, expect, afterEach from "wowlua:test"
@@ -51,6 +51,7 @@ local function cleanup()
         "eliteDragon",
         "raidMarkers",
         "comboPoints",
+        "petHappiness",
         "width",
         "height",
         "debuffBadges",
@@ -359,9 +360,64 @@ local function preview()
     M:Emit("SUUUI_SETTING_CHANGED", "ui", "reducedMotion")
 end
 
+@test("pet happiness: your hunter pet's mood on the pet frame's edge, lit up to it; the setting off")
+local function petMood()
+    local m = assert(M.petMood)
+    local beast = mock.spawnUnit({ name = "Grimfang", level = 9, reaction = "friendly" })
+    mock.setPlayer({ class = "HUNTER" })
+    mock.setPet(beast, { hunter = true, happiness = 3 })
+    mock.advanceFrames(1)
+    expect(m:IsShown()).toBe(true)
+    -- on the top edge at the left end, over the frame's border
+    local pet = assert(M.frames).pet
+    local point, rel, relPoint, x, y = m:GetPoint(1)
+    expect(point).toBe("LEFT")
+    expect(rel).toBe(pet)
+    expect(relPoint).toBe("TOPLEFT")
+    expect(x).toBe(6)
+    expect(y).toBe(-0.5)
+    expect(m:GetFrameLevel() > pet:GetFrameLevel() + 9).toBe(true)
+    -- happy: all three, fel
+    expect(m.pips[3].lit:GetAlpha()).toBe(1)
+    local _, g = m.pips[3].lit:GetVertexColor()
+    expect(g).toBeCloseTo(T.color.fel[2])
+    -- unhappy (UNIT_HAPPINESS): one, ember
+    mock.setPet(beast, { hunter = true, happiness = 1 })
+    mock.advanceFrames(1)
+    expect(m.mood).toBe(1)
+    expect(m.pips[1].lit:GetAlpha()).toBe(1)
+    expect(m.pips[2].lit:GetAlpha()).toBe(0)
+    _, g = m.pips[1].lit:GetVertexColor()
+    expect(g).toBeCloseTo(T.color.ember[2])
+    -- the setting off
+    M:Set("petHappiness", false)
+    expect(m:IsShown()).toBe(false)
+    M:Set("petHappiness", true)
+    expect(m:IsShown()).toBe(true)
+    -- another class's pet has no mood
+    mock.setPlayer({ class = "WARLOCK" })
+    m:Update()
+    expect(m:IsShown()).toBe(false)
+    -- the pet dismissed (UNIT_PET)
+    mock.setPlayer({ class = "HUNTER" })
+    m:Update()
+    expect(m:IsShown()).toBe(true)
+    mock.setPet(nil)
+    mock.advanceFrames(1)
+    expect(m:IsShown()).toBe(false)
+    mock.setPlayer({ class = "WARRIOR" })
+    beast:despawn()
+end
+
 @test("the settings rows: combo points for rogues and druids; the rested rows wait for the sign")
 local function rowsWait()
     local r = rows()
+    local moodOff, moodWhy = disabled(r.petHappiness)
+    expect(moodOff).toBe(true)
+    expect(moodWhy).toBe("Only a hunter's pet has a mood.")
+    mock.setPlayer({ class = "HUNTER" })
+    expect((disabled(r.petHappiness))).toBe(false)
+    mock.setPlayer({ class = "WARRIOR" })
     local off, why = disabled(r.comboPoints)
     expect(off).toBe(true)
     expect(why).toBe("Only rogues and druids use combo points.")
