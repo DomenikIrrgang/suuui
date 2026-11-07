@@ -9,6 +9,7 @@
 ### Fixed
 
 - Character window: opening it straight on Reputation (U) after a reload no longer shows your name, level and class above the list; they belong to the Character tab.
+- Collections: the Appearances tiles show their models again after you visit another tab and come back.
 
 ## 0.6.19 (2026-11-07)
 
