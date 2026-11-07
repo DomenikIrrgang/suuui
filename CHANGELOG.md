@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.19 (2026-11-07)
+
+### New
+
+- Bags: drag an item onto another slot to move it (press, move, let go), as well as click and click.
 
 ### Fixed
 
-- Bags: dragging an item onto another slot puts it there (press, move, let go), as well as click and click.
-- Bags: a dragged item lands on the slot you let go over every time, not only now and then.
 - Group Finder: the Whisper and Invite buttons on a player's row show their icons again, and so does the search mark when nothing matches.
 - Bags: sorting no longer stops at a profession bag the game won't fill ("Only Skinning can be placed in that."): a bag in the reagent slot that only takes its own kind is read as such, and a bag the game refuses an item for is left as it is from then on while the rest gets sorted.
 
