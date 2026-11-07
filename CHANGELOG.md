@@ -11,6 +11,7 @@
 
 - Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
 - The Game menu button on SuuUI's micro menu opens the game menu in combat too ("Interface action failed because of an AddOn"), as Esc does.
+- Action bars: moving a spell while it was out of range no longer leaves its button tinted red until a reload.
 
 ## 0.6.17 (2026-11-07)
 
