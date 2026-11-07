@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The Game menu button on SuuUI's micro menu opens the game menu in combat too ("Interface action failed because of an AddOn"), as Esc does.
+
 ## 0.6.17 (2026-11-07)
 
 ### Fixed
