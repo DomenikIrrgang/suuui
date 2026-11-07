@@ -20,6 +20,9 @@ import showTooltip, hideTooltip from "./Tooltip"
 
 local S = T.space
 
+-- A secure handler frame (SecureHandler*Template): SetFrameRef from its template.
+type FrameRefs = { SetFrameRef: (self: Frame, id: string, frame: Region) -> () }
+
 --------------------------------------------------------------------------------
 -- Close button and key chip
 --------------------------------------------------------------------------------
@@ -782,6 +785,9 @@ export type WindowOptions = {
     footer?: boolean,
     tabs?: WindowTab[],
     onTab?: (key: string) -> (),
+    -- (0.25) a window holding secure buttons: Escape closes it through the
+    -- game's secure code, in a fight too
+    secure?: boolean,
 }
 
 -- A window tab: its key and label, what it was made from, and while it is
@@ -938,9 +944,28 @@ export class WindowFrame extends Panel
         self:PlaceBody()
 
         if opts.name then
-            tinsert(UISpecialFrames, opts.name)
+            if opts.secure then
+                self:SecureEscape(opts.name)
+            else
+                tinsert(UISpecialFrames, opts.name)
+            end
         end
         extend.add(extend.Kind.Window, self, { name = opts.name })
+    end
+
+    -- Escape for a window holding secure buttons (0.25): such a window is
+    -- protected, and the game's closing of UISpecialFrames, run tainted by
+    -- an addon's entry there, was blocked for it in a fight (found in game
+    -- with the Collections window). Instead Escape is bound while it shows,
+    -- through the game's secure code, to a secure button that hides it.
+    function SecureEscape(name: string)
+        local closer = CreateFrame("Button", name .. "Escape", self, "SecureHandlerClickTemplate") :: Button & FrameRefs
+        closer:SetFrameRef("window", self)
+        closer:SetAttribute("_onclick", [=[ self:GetFrameRef("window"):Hide() ]=])
+        local watch = CreateFrame("Frame", nil, self, "SecureHandlerShowHideTemplate") :: Frame & FrameRefs
+        watch:SetFrameRef("closer", closer)
+        watch:SetAttribute("_onshow", [=[ self:SetBindingClick(true, "ESCAPE", self:GetFrameRef("closer")) ]=])
+        watch:SetAttribute("_onhide", [=[ self:ClearBindings() ]=])
     end
 
     -- With tabs only (0.16): the tabs drawn again after what they depend on

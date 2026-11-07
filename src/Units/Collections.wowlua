@@ -1817,6 +1817,8 @@ class CollectionsModule extends Module<{}>
     actionAfterCombat: boolean = false
     shelfAfterCombat: boolean = false
     layoutAfterCombat: boolean = false
+    -- where the tools stand: over the shelf (Toys) or the strip (nil: not yet)
+    toolsFor: boolean? = nil
     bindOwner: Frame? = nil
     toggleButton: Button? = nil
     closeOverlay: Button? = nil
@@ -2278,6 +2280,8 @@ class CollectionsModule extends Module<{}>
         local w = UI.WindowFrame(SuuUI.Root, {
             name = "SuuUICollectionsWindow",
             title = "Collections",
+            -- (it holds secure buttons: Escape through the game's secure code)
+            secure = true,
             width = WIDTH,
             height = HEIGHT,
             footer = true,
@@ -3607,13 +3611,23 @@ class CollectionsModule extends Module<{}>
                 end
             end
         end
-        tools:ClearAllPoints()
-        if toys then
-            tools:SetPoint("TOPLEFT", ui.window.body, "TOPLEFT")
-            tools:SetPoint("TOPRIGHT", ui.window.body, "TOPRIGHT")
-        else
-            tools:SetPoint("BOTTOMLEFT", ui.strip, "TOPLEFT", 0, S["space-5"])
-            tools:SetPoint("BOTTOMRIGHT", ui.strip, "TOPRIGHT", 0, S["space-5"])
+        -- the tools too (secure buttons hang on them: moved out of combat
+        -- only, and only when their place changes; found in game: opened in
+        -- a fight, the game refused)
+        if self.toolsFor ~= toys then
+            if InCombatLockdown() then
+                self.layoutAfterCombat = true
+            else
+                self.toolsFor = toys
+                tools:ClearAllPoints()
+                if toys then
+                    tools:SetPoint("TOPLEFT", ui.window.body, "TOPLEFT")
+                    tools:SetPoint("TOPRIGHT", ui.window.body, "TOPRIGHT")
+                else
+                    tools:SetPoint("BOTTOMLEFT", ui.strip, "TOPLEFT", 0, S["space-5"])
+                    tools:SetPoint("BOTTOMRIGHT", ui.strip, "TOPRIGHT", 0, S["space-5"])
+                end
+            end
         end
         if toys and not InCombatLockdown() then
             ui.act:Hide()
@@ -3627,14 +3641,6 @@ class CollectionsModule extends Module<{}>
     override function OnEnable()
         local ui = self.ui or self:Build()
         local window = ui.window
-        self:ProvideService(COLLECTIONS, {
-            Toggle = function(tab: string?)
-                self:Toggle(tab)
-            end,
-            IsShown = function(): boolean
-                return self:Shown()
-            end,
-        })
         if not self.toggleButton then
             -- the key shows and hides the window through the game's secure code:
             -- the window holds secure buttons, so it is protected, and SuuUI's
@@ -3673,6 +3679,15 @@ class CollectionsModule extends Module<{}>
             -- (the tab chosen before the first open, which may be in a fight)
             window:SetTab(self.tab)
         end
+        -- (after its toggle: the micro menu clicks it)
+        self:ProvideService(COLLECTIONS, {
+            Toggle = function(tab: string?)
+                self:Toggle(tab)
+            end,
+            IsShown = function(): boolean
+                return self:Shown()
+            end,
+        })
         self:BindKeys()
         self:OnGameEvent("UPDATE_BINDINGS", function()
             self:BindKeys()

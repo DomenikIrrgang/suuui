@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Collections in combat: the Collections button on SuuUI's micro menu opens the window again, as its key does, and Escape closes it, without "Blocked in combat" errors.
+
 ## 0.6.15 (2026-11-07)
 
 ### New
