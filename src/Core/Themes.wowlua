@@ -9,6 +9,11 @@
 --                                             class: "MAGE", "DRUID", …)
 --   fonts = { [style] = { file, size, lineHeight } }  a text style's face,
 --                                             size and line height
+--   health = "class"                          (0.26) players' health in
+--                                             their class colour ("fill",
+--                                             the default: the unit-fill);
+--                                             the "Health colour" setting
+--                                             on Class colours wins
 -- Plugins load after SuuUI's saved settings, so a theme can't apply where
 -- colour vision does (Settings' bind); colour vision is applied again after
 -- it, so its signal colours always win. A change applies at once (asked
@@ -33,6 +38,7 @@ export type Theme = {
     description: string?,
     colors: ThemeColors | ((class: string?) -> ThemeColors),
     fonts: ThemeFonts,
+    health: "fill" | "class",
 }
 --- What a plugin passes SuuUI.RegisterTheme.
 export type ThemeDef = {
@@ -41,6 +47,7 @@ export type ThemeDef = {
     description?: string,
     colors?: ThemeColors | ((class: string?) -> ThemeColors),
     fonts?: ThemeFonts,
+    health?: "fill" | "class",
 }
 
 local colors: { [string]: Color } = T.color
@@ -72,7 +79,14 @@ end
 
 export const DEFAULT = "suuui"
 local list: Theme[] = {
-    { id = DEFAULT, name = "SuuUI", description = "SuuUI's own colours and type.", colors = {}, fonts = {} },
+    {
+        id = DEFAULT,
+        name = "SuuUI",
+        description = "SuuUI's own colours and type.",
+        colors = {},
+        fonts = {},
+        health = "fill",
+    },
 }
 local byId: { [string]: Theme } = { [DEFAULT] = list[1] }
 local applied: string = DEFAULT
@@ -94,12 +108,17 @@ export function register(value: unknown): Theme
             error(("SuuUI.RegisterTheme: %s has no text style %q"):format(def.id, tostring(style)), 2)
         end
     end
+    local given: unknown = def.health
+    if given ~= nil and given ~= "fill" and given ~= "class" then
+        error(("SuuUI.RegisterTheme: %s's health is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
+    end
     local theme: Theme = {
         id = def.id,
         name = def.name or def.id,
         description = def.description,
         colors = def.colors or {},
         fonts = def.fonts or {},
+        health = def.health == "class" and "class" or "fill",
     }
     list[#list + 1] = theme
     byId[def.id] = theme
@@ -117,6 +136,17 @@ end
 -- The theme in effect this session.
 export function appliedTheme(): string
     return applied
+end
+
+-- What colours unit health (design "Health colours", 2026-11-07): "class"
+-- (players in their class colour) when the "Health colour" setting says so,
+-- else the applied theme's choice ("fill": the unit-fill). The setting wins.
+export function health(): "fill" | "class"
+    if settings.accountString("healthColor") == "class" then
+        return "class"
+    end
+    local theme = byId[applied] or byId[DEFAULT] :: Theme
+    return theme.health
 end
 
 local function hex(r: number, g: number, b: number): string

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Class-coloured health**: Settings › General › Appearance › Health colour shows players' health in their class colour, toned, on every unit frame and nameplate (NPCs keep the theme's colour). Themes can turn it on too (`health = "class"`, API 0.26); the setting wins over the theme.
+
 ## 0.6.21 (2026-11-07)
 
 ### New

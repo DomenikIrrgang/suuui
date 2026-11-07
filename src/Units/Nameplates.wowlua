@@ -49,6 +49,7 @@ import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
+import * as healthFill from "/UI/HealthFill"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -317,6 +318,10 @@ export class Nameplate extends Frame
     preview: boolean = false
     -- the health drawn grey: a mob tagged by someone else
     tappedLook: boolean = false
+    -- a player's class token, for class-coloured health (UI/HealthFill)
+    fillClass: string? = nil
+    -- what the health fill was painted as: "tapped", a class token, or false
+    fillLook: string | false = false
     previewRole: string? = nil
     previewQuest: string? = nil
     fakes: Fakes? = nil
@@ -386,7 +391,7 @@ export class Nameplate extends Frame
         self.health:SetAllPoints()
         self.health:SetStatusBarTexture(WHITE)
         self.health:SetFrameLevel(self.ghost:GetFrameLevel() + 1)
-        gradient(self.health, "unit-fill-deep", "unit-fill")
+        healthFill.paint(self.health, nil)
         self.healthLow = CreateFrame("StatusBar", nil, inner)
         self.healthLow:SetAllPoints()
         self.healthLow:SetStatusBarTexture(WHITE)
@@ -572,11 +577,7 @@ export class Nameplate extends Frame
             not (controlled ~= nil and flag(errors.tryValue(controlled, u)) == true)
         if tapped ~= self.tappedLook then
             self.tappedLook = tapped
-            if tapped then
-                gradient(self.health, "unit-fill-tapped-deep", "unit-fill-tapped")
-            else
-                gradient(self.health, "unit-fill-deep", "unit-fill")
-            end
+            self:PaintHealth()
         end
         local curve = belowLow()
         local percent = A.UnitHealthPercent
@@ -622,12 +623,32 @@ export class Nameplate extends Frame
         self.pct:Show()
     end
 
+    -- The health fill: grey when tapped, a player's class colour (when class
+    -- colours are on: UI/HealthFill decides at paint time), else the fill.
+    function PaintHealth()
+        local look: string | false = self.tappedLook and "tapped" or self.fillClass or false
+        if look ~= self.fillLook then
+            self.fillLook = look
+            healthFill.paint(self.health, look)
+        end
+    end
+
     function UpdateName()
         local A, u = self.api, self.unit
         if not u then
             return
         end
         self.name:SetText(A.UnitName(u))
+        -- a player's class, for class-coloured health (UI/HealthFill; the
+        -- name stands above the bar, so it keeps its colour)
+        local okIs, isPlayer = pcall(A.UnitIsPlayer, u)
+        local fillClass: string? = nil
+        if okIs and flag(isPlayer) then
+            local _, class = A.UnitClass(u)
+            fillClass = healthFill.classToken(class)
+        end
+        self.fillClass = fillClass
+        self:PaintHealth()
         local r = asNumber(A.UnitReaction(u, "player"))
         self.name:SetColor(r and (REACTION[r] or "reaction-friendly") or "reaction-hostile")
         -- friendly players in their class colour (never tested: may be secret)
