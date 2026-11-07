@@ -1362,9 +1362,10 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end)
         b:SetScript("OnDragStart", function(_, button: string)
             self:PassTo("OnDragStart", button)
+            self.dragging = CursorHasItem() and true or false
         end)
         b:SetScript("OnReceiveDrag", function()
-            self:PassTo("OnReceiveDrag")
+            self:Drop()
         end)
         b:HookScript("OnEnter", function()
             local s = self.useSlot
@@ -1427,10 +1428,36 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- A drag let go over a slot: the item put there, once. The secure button
+    -- follows the mouse to the slot it is let go over, so the release comes
+    -- to it twice, as the drop and as a click: each passed on, the second
+    -- picked the item up again and a drag put nothing down (asked in game:
+    -- drag and drop as well as click and click).
+    dragging: boolean = false
+    droppedAt: number? = nil
+
+    function Drop(): boolean
+        local now = GetTime()
+        if self.droppedAt == now then
+            return true
+        end
+        self.dragging = false
+        if not CursorHasItem() then
+            return false
+        end
+        self.droppedAt = now
+        self:PassTo("OnReceiveDrag")
+        return true
+    end
+
     -- A click the secure button doesn't use itself goes on to the slot, on
     -- the release (the slot's clicks are registered for the release).
     function PassClick(button: string, down: boolean?)
         if down then
+            return
+        end
+        -- (the release of a drag: its drop)
+        if button == "LeftButton" and (self.dragging or self.droppedAt == GetTime()) and self:Drop() then
             return
         end
         if button == "RightButton" and not IsModifierKeyDown() then
