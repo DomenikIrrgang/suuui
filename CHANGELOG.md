@@ -4,12 +4,12 @@
 
 ### Changed
 
+- Spellbook: the head shows only what the spells left to train cost; hover it for how many there are here and in all schools. The counts ran into the Bind button.
 - The game's Click Casting (Esc > Options > Keybindings) now opens the Spellbook on its Bindings tab, SuuUI's click casting, while SuuUI's mouseover bindings are on. Before, it opened the game's window and the Spellbook on whatever tab it was on last.
 
 ### Fixed
 
 - Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
-- Spellbook: what is left to train and its cost no longer run into the Bind button when the head is short of room; the count stays and the cost gives way.
 
 ## 0.6.17 (2026-11-07)
 
