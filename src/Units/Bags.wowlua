@@ -1363,6 +1363,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         b:SetScript("OnDragStart", function(_, button: string)
             self:PassTo("OnDragStart", button)
             self.dragging = CursorHasItem() and true or false
+            if self.dragging then
+                self:WatchDrop()
+            end
         end)
         b:SetScript("OnReceiveDrag", function()
             self:Drop()
@@ -1435,6 +1438,52 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     -- drag and drop as well as click and click).
     dragging: boolean = false
     droppedAt: number? = nil
+
+    -- After a drag picked an item up: watched until the left button is let
+    -- go; the item still on the cursor then goes on the slot under the mouse.
+    -- (In game the release reached neither the drop nor the click: the item
+    -- stayed on the cursor, found in game.) Put down already: nothing.
+    dropWatch: Frame? = nil
+
+    function WatchDrop()
+        local w = self.dropWatch
+        if not w then
+            local made = CreateFrame("Frame")
+            self.dropWatch = made
+            made:SetScript("OnUpdate", function()
+                if IsMouseButtonDown("LeftButton") then
+                    return
+                end
+                made:Hide()
+                if not self.dragging then
+                    return
+                end
+                self.dragging = false
+                if not CursorHasItem() or self.droppedAt == GetTime() then
+                    return
+                end
+                local bag, slot = self:SlotUnderMouse()
+                if bag and slot then
+                    self.droppedAt = GetTime()
+                    try(C_Container.PickupContainerItem, bag, slot)
+                end
+            end)
+            w = made
+        end
+        w:Show()
+    end
+
+    -- The shown bag or bank slot under the mouse: its bag and slot.
+    function SlotUnderMouse(): (number?, number?)
+        for bag, list in pairs(self.buttons) do
+            for slot, b in pairs(list) do
+                if b:IsVisible() and b:IsMouseOver() then
+                    return bag, slot
+                end
+            end
+        end
+        return nil, nil
+    end
 
     function Drop(): boolean
         local now = GetTime()
