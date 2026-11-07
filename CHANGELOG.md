@@ -9,6 +9,7 @@
 ### Fixed
 
 - Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
+- Spellbook: what is left to train and its cost no longer run into the Bind button when the head is short of room; the count stays and the cost gives way.
 
 ## 0.6.17 (2026-11-07)
 
