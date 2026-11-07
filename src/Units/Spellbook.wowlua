@@ -1189,6 +1189,66 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         )
     end
 
+    -- The book opened (the game's spells window on its Spellbook tab, SuuUI's
+    -- page over it), unless it shows.
+    function OpenBook()
+        local book = self.book
+        if book and book:IsVisible() then
+            return
+        end
+        local util = rawget(_G, "PlayerSpellsUtil")
+        local open = type(util) == "table" and rawget(util :: {}, "OpenToSpellBookTab")
+        if type(open) == "function" then
+            pcall(open :: () -> ())
+        end
+    end
+
+    -- The game's Click Casting (Options > Keybindings) opened its window and,
+    -- beside it, the spells window, SuuUI's book on its last tab (reported by
+    -- a player). With SuuUI's mouseover bindings on, its window closes and the
+    -- book opens on its Bindings tab: SuuUI's click casting. In a fight the
+    -- game's stays.
+    clickHooked: boolean = false
+
+    function TakeOverClickCasting()
+        local function adopt()
+            local f = frames.find("ClickBindingFrame")
+            if self.clickHooked or not f then
+                return
+            end
+            self.clickHooked = true
+            -- (a frame later, each step: closed and opened again from inside
+            -- its showing, both stayed shut, found in game)
+            f:HookScript("OnShow", function()
+                after(0, function()
+                    if not f:IsShown() or InCombatLockdown() or not self:IsEnabled() or
+                        SuuUI.UseService(MOUSE_BINDINGS) == nil then
+                        return
+                    end
+                    -- (closing it closes the spells window it opened)
+                    HideUIPanel(f)
+                    after(0, function()
+                        if InCombatLockdown() then
+                            return
+                        end
+                        self:OpenBook()
+                        after(0, function()
+                            self:ShowBindings(true)
+                        end)
+                    end)
+                end)
+            end)
+        end
+        adopt()
+        if not self.clickHooked then
+            self:OnGameEvent("ADDON_LOADED", function(_, name)
+                if name == "Blizzard_ClickBindingUI" then
+                    adopt()
+                end
+            end)
+        end
+    end
+
     -- The Bindings tab shown (the list over the page) or gone.
     function ShowBindings(on: boolean)
         local book = self.book
@@ -1635,18 +1695,12 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 self:Print("Bind mode opens out of combat.")
                 return
             end
-            local book = self.book
-            if not book or not book:IsVisible() then
-                local util = rawget(_G, "PlayerSpellsUtil")
-                local open = type(util) == "table" and rawget(util :: {}, "OpenToSpellBookTab")
-                if type(open) == "function" then
-                    pcall(open :: () -> ())
-                end
-            end
+            self:OpenBook()
             after(0, function()
                 self:BindMode(true)
             end)
         end)
+        self:TakeOverClickCasting()
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             local c = self.catcher
             if c and self.bindMode then

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The game's Click Casting (Esc > Options > Keybindings) now opens the Spellbook on its Bindings tab, SuuUI's click casting, while SuuUI's mouseover bindings are on. Before, it opened the game's window and the Spellbook on whatever tab it was on last.
+
+### Fixed
+
+- Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
+
 ## 0.6.17 (2026-11-07)
 
 ### Fixed
