@@ -11,6 +11,7 @@
 - Character window: opening it straight on Reputation (U) after a reload no longer shows your name, level and class above the list; they belong to the Character tab.
 - Collections in combat: switching to or from the Toys tab changes the page too, not only the tab.
 - Collections: the Appearances tiles show their models again after you visit another tab and come back.
+- Character window: a skill's, faction's or the PvP rank's description uses the room its pane has instead of scrolling in a small box; the scroll bar shows only when the text doesn't fit.
 
 ## 0.6.19 (2026-11-07)
 
