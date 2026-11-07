@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- The game's Click Casting (Esc > Options > Keybindings) now opens the Spellbook on its Bindings tab, SuuUI's click casting, while SuuUI's mouseover bindings are on. Before, it opened the game's window and the Spellbook on whatever tab it was on last.
+- The game's Quick Keybind Mode (Esc > Options > Keybindings) now opens SuuUI's keybind mode while SuuUI's action bars are on: hover a button and press a key, as with `/suu keybind`. Closing it takes you back to the Options. The game's own mode only knew the game's bars, so keys pressed over SuuUI's buttons did nothing.
+
 ### Fixed
 
+- Spellbook: the Bind button no longer shows on the Bindings tab, which has its own Bind spells.
+- The Game menu button on SuuUI's micro menu opens the game menu in combat too ("Interface action failed because of an AddOn"), as Esc does.
 - Action bars: moving a spell while it was out of range no longer leaves its button tinted red until a reload.
 
 ## 0.6.17 (2026-11-07)

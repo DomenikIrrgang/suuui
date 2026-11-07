@@ -151,7 +151,9 @@ local ITEMS: Item[] = {
         end,
     },
     -- the game menu's Blizzard button doesn't answer a secure click on
-    -- Forever, so the frame is toggled
+    -- Forever (it acts only with the mouse over it), so the frame is toggled;
+    -- and the game's own button lies unseen over this one (AdoptMenuButton),
+    -- so in a fight the click is the game's
     {
         key = "menu",
         glyph = "menu",
@@ -410,6 +412,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.pendingLayout = nil
+        self:AdoptMenuButton()
         self:UpdateAlerts()
         self:UpdateBagCount()
         self:UpdateDurability()
@@ -460,6 +463,78 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     end
 
     -- Blizzard's micro menu out of sight (its buttons stay, for SuuUI's to click).
+    -- The Game menu button in a fight: the game opens its menu only from its
+    -- own code (Esc, a click on its own micro button); opened from SuuUI's
+    -- the game blocked its layout ("Interface action failed", found in
+    -- game). So the game's own menu button lies unseen over SuuUI's: the
+    -- click is the game's, SuuUI's button keeps the look and the tooltip.
+    -- (The game adds its micro buttons to its micro menu once and lays out
+    -- only the ones still there, so this one stays.)
+    menuHooked: boolean = false
+    menuHome: Frame? = nil
+
+    function AdoptMenuButton()
+        local blz = frames.asFrame(tbl.field(_G, "MainMenuMicroButton"))
+        local b = self.menu and self.menu.buttons["menu"]
+        if not blz or not b then
+            return
+        end
+        self.menuHome = self.menuHome or blz:GetParent()
+        blz:SetParent(b)
+        blz:ClearAllPoints()
+        blz:SetAllPoints(b)
+        blz:SetFrameLevel(b:GetFrameLevel() + 5)
+        blz:SetAlpha(0)
+        blz:Show()
+        if self.menuHooked then
+            return
+        end
+        self.menuHooked = true
+        local function own(): Frame?
+            local m = self.menu
+            return m and m.buttons["menu"]
+        end
+        -- (its own tooltip, the game's latency and frame rate, comes again
+        -- each moment while hovered: kept away, SuuUI's shows)
+        local function quiet()
+            if GameTooltip:IsOwned(blz) then
+                GameTooltip:Hide()
+            end
+        end
+        blz:HookScript("OnEnter", function(_, motion)
+            quiet()
+            local mine = own()
+            local fn = mine and mine:GetScript("OnEnter")
+            if mine and fn then
+                fn(mine, motion)
+            end
+        end)
+        blz:HookScript("OnLeave", function(_, motion)
+            local mine = own()
+            local fn = mine and mine:GetScript("OnLeave")
+            if mine and fn then
+                fn(mine, motion)
+            end
+        end)
+        blz:HookScript("OnUpdate", function()
+            if blz:IsMouseOver() then
+                quiet()
+            end
+        end)
+    end
+
+    -- The game's menu button back home (the module off).
+    function ReleaseMenuButton()
+        local blz = frames.asFrame(tbl.field(_G, "MainMenuMicroButton"))
+        local home = self.menuHome
+        if not blz or not home then
+            return
+        end
+        blz:SetParent(home)
+        blz:SetAlpha(1)
+        errors.tryMethod(home, "Layout")
+    end
+
     function HideBlizzard()
         local container = MicroMenuContainer
         if container and not self.blizzardHidden then
@@ -735,6 +810,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
+        self:ReleaseMenuButton()
         for tip in pairs(self.hiddenTips) do
             self:SeeThrough(tip, false)
         end
