@@ -568,6 +568,8 @@ class RoundButton extends Button
     readonly disc: Texture
     readonly glyph: Texture
     on: boolean = false
+    -- why it does nothing now (faint, its tooltip says why); nil: it works
+    why: string? = nil
 
     constructor(
         parent: Frame,
@@ -594,21 +596,45 @@ class RoundButton extends Button
             else
                 title = tip
             end
-            UI.ShowTooltip(self, { title = title })
+            UI.ShowTooltip(self, { title = title, description = self.why })
         end)
         self:SetScript("OnLeave", function()
             self:Draw(false)
             UI.HideTooltip()
         end)
         self:SetScript("OnClick", function()
-            onClick(self)
+            if not self.why then
+                onClick(self)
+            end
         end)
     end
 
     function Draw(hover: boolean)
-        UI.Paint(self.glyph, self.on and "gilt" or hover and "ink" or "ink-muted")
+        local tone = self.on and "gilt" or hover and "ink" or "ink-muted"
+        UI.Paint(self.glyph, self.why and "ink-faint" or tone)
     end
 end
+
+-- Whether the game takes changes to your pets now: it can keep the journal
+-- locked, while the account is logged in more than once (found in game on
+-- Forever: favourites taken without an error and dropped; the game's own
+-- journal greys its Favourite out then).
+local function petJournalUnlocked(): boolean
+    local unlocked = try(field(C_PetJournal, "IsJournalUnlocked"))
+    return unlocked == nil or flag(unlocked)
+end
+
+-- Whether the game lets this mount (by its place in the game's list) be
+-- made a favourite or not: the game's own Mounts tab greys its Favourite out
+-- otherwise.
+local function mountCanFavourite(i: number): boolean
+    local _, can = try(field(C_MountJournal, "GetIsFavorite"), i)
+    return can == nil or flag(can)
+end
+
+local MOUNT_NO_FAVOURITE = "The game takes no favourite for this mount right now."
+
+local PET_JOURNAL_LOCKED = "Your pet journal is locked because this account is logged in more than once: no favourites until it is logged in only here."
 
 local function favouriteTip(b: RoundButton): string
     return b.on and "Remove from favourites" or "Add to favourites"
@@ -2622,6 +2648,13 @@ class CollectionsModule extends Module<{}>
             return
         end
         stage.star.on = e.favourite and true or false
+        stage.star.why = e.kind == "pet" and e.collected and not petJournalUnlocked() and PET_JOURNAL_LOCKED or nil
+        if e.kind == "mount" and e.collected then
+            local i = self:MountIndex(e.id)
+            if i and not mountCanFavourite(i) then
+                stage.star.why = MOUNT_NO_FAVOURITE
+            end
+        end
         stage.star:Draw(false)
         if e.wrapped then
             self:ShowGift(e)
@@ -3095,7 +3128,9 @@ class CollectionsModule extends Module<{}>
         end
         if e and e.kind == "pet" then
             local guid = e.guids and e.guids[1]
-            if guid then
+            if guid and petJournalUnlocked() then
+                -- (1 or 0, as the game's own journal: Forever refuses true
+                -- with "Usage: SetFavorite(petID, bool)", found in game)
                 try(field(C_PetJournal, "SetFavorite"), guid, e.favourite and 0 or 1)
                 after(0.1, function()
                     self:Refresh()
@@ -3106,16 +3141,24 @@ class CollectionsModule extends Module<{}>
         if not (e and e.kind == "mount") then
             return
         end
+        local i = self:MountIndex(e.id)
+        if i and mountCanFavourite(i) then
+            try(field(C_MountJournal, "SetIsFavorite"), i, not e.favourite)
+            after(0.1, function()
+                self:Refresh()
+            end)
+        end
+    end
+
+    -- A mount's place in the game's list (the favourite is set by it).
+    function MountIndex(id: number): number?
         local MJ = C_MountJournal
         for i = 1, asNumber(try(field(MJ, "GetNumDisplayedMounts"))) or 0 do
-            if asNumber(try(field(MJ, "GetDisplayedMountID"), i)) == e.id then
-                try(field(MJ, "SetIsFavorite"), i, not e.favourite)
-                after(0.1, function()
-                    self:Refresh()
-                end)
-                return
+            if asNumber(try(field(MJ, "GetDisplayedMountID"), i)) == id then
+                return i
             end
         end
+        return nil
     end
 
     -- Summon or Dismiss: the secure button's job, set out of combat (in one it

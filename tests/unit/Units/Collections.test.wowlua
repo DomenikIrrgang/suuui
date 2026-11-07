@@ -626,6 +626,24 @@ local function favourites()
     mock.click(ui().stage.star)
     expect(select(7, C_MountJournal.GetMountInfoByID(101))).toBe(true)
     mock.advanceTime(0.2)
+    -- a mount the game takes no favourite for (as its own Mounts tab): the
+    -- star faint, saying why, its click nothing
+    local real = C_MountJournal.GetIsFavorite
+    local refuse = true
+    mock.fake("C_MountJournal.GetIsFavorite", function(i: number): (boolean, boolean)
+        if refuse then
+            return true, false
+        end
+        return real(i)
+    end)
+    M:Refresh()
+    expect(ui().stage.star.why).never.toBeNil()
+    mock.click(ui().stage.star)
+    mock.advanceTime(0.2)
+    expect(select(7, C_MountJournal.GetMountInfoByID(101))).toBe(true)
+    refuse = false
+    M:Refresh()
+    expect(ui().stage.star.why).toBeNil()
     toyData()
     M.chosen = entry({ kind = "toy", itemID = 201, favourite = false })
     M:ToggleFavourite()
@@ -1194,8 +1212,9 @@ type PetRow = { guid?: string, species: number, owned: boolean, fav?: boolean, n
 type PetCalls = {
     summoned?: string,
     wrapped?: string,
+    locked?: boolean,
     cleared: string[],
-    favourite: { string | number }[],
+    favourite: { unknown }[],
     random: boolean[],
     links: string[],
     searchCleared: boolean,
@@ -1267,8 +1286,15 @@ local function petJournal(): PetCalls
     mock.fake(PJ .. "GetPetSummonInfo", function(_: string): (boolean, number, string)
         return true, 0, ""
     end)
-    mock.fake(PJ .. "SetFavorite", function(g: string, v: number)
+    -- (as Forever: 1 or 0, true refused; found in game)
+    mock.fake(PJ .. "SetFavorite", function(g: string, v: unknown)
+        if type(v) ~= "number" then
+            error("Usage: SetFavorite(petID, bool)")
+        end
         calls.favourite[#calls.favourite + 1] = { g, v }
+    end)
+    mock.fake(PJ .. "IsJournalUnlocked", function(): boolean
+        return not calls.locked
     end)
     mock.fake(PJ .. "HasFavoritePets", function(): boolean
         return true
@@ -1372,6 +1398,16 @@ local function petsTab()
     mock.click(ui().stage.star)
     expect(calls.favourite).toEqual({ { "Pet-A", 0 } })
     mock.advanceTime(0.2)
+    -- the journal locked (found in game on Forever): the star faint, saying
+    -- why, its click nothing
+    calls.locked = true
+    M:Refresh()
+    expect(ui().stage.star.why).never.toBeNil()
+    mock.click(ui().stage.star)
+    expect(#calls.favourite).toBe(1)
+    calls.locked = false
+    M:Refresh()
+    expect(ui().stage.star.why).toBeNil()
     -- a random favourite
     expect(ui().random).toBeShown()
     mock.click(ui().random)
