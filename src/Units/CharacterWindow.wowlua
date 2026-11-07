@@ -466,16 +466,37 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             end
         end
         -- only on the Character tab
-        if paperDoll then
-            hookScript(paperDoll, "OnShow", function()
-                id:Show()
-                self:UpdateIdentity()
-            end)
-            hookScript(paperDoll, "OnHide", function()
-                id:Hide()
-            end)
-            id:SetShown(paperDoll:IsShown())
+        self:FollowCharacterTab(id, function()
+            self:UpdateIdentity()
+        end)
+    end
+
+    -- A frame shown only with the Character tab's pane. After a reload the
+    -- pane counts as shown in the closed window; U picks Reputation before the
+    -- window opens, so the pane is hidden unseen and sends no OnHide: the
+    -- model's box and the name line stayed over the Reputation tab (found in
+    -- game). So looked at again when the window opens and a tab is chosen,
+    -- not only on the pane's OnShow and OnHide. `onShown`: run when it shows.
+    function FollowCharacterTab(f: Frame, onShown: (() -> ())?)
+        local paperDoll = frame("PaperDollFrame")
+        if not paperDoll then
+            return
         end
+        local function sync()
+            local on = paperDoll:IsShown()
+            f:SetShown(on)
+            if on and onShown then
+                onShown()
+            end
+        end
+        hookScript(paperDoll, "OnShow", sync)
+        hookScript(paperDoll, "OnHide", sync)
+        local cf = frame("CharacterFrame")
+        if cf then
+            hookScript(cf, "OnShow", sync)
+        end
+        hook("ToggleCharacter", sync)
+        sync()
     end
 
     function UpdateIdentity()
@@ -774,29 +795,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
                 c:EnableMouse(false)
             end
         end
-        local paperDoll = frame("PaperDollFrame")
-        if paperDoll then
-            hookScript(paperDoll, "OnShow", function()
-                box:Show()
-            end)
-            hookScript(paperDoll, "OnHide", function()
-                box:Hide()
-            end)
-            box:SetShown(paperDoll:IsShown())
-            -- (after a reload the pane counts as shown in the closed window,
-            -- the box with it; U picks the Reputation tab before it opens the
-            -- window, and the pane hidden unseen sends no OnHide, so the box
-            -- stayed over the list, found in game: looked at again whenever
-            -- the window opens or a tab is chosen)
-            local function sync()
-                box:SetShown(paperDoll:IsShown())
-            end
-            local cf = frame("CharacterFrame")
-            if cf then
-                hookScript(cf, "OnShow", sync)
-            end
-            hook("ToggleCharacter", sync)
-        end
+        self:FollowCharacterTab(box)
     end
 
     -- A slot's piece as SuuUI.Durability() reads it, while the gear part is on.

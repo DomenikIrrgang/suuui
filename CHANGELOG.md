@@ -6,6 +6,10 @@
 
 - An NPC's tooltip lists the quests it gives that you can pick up now, in their difficulty's colour with their level, as the world map's quest pins show them.
 
+### Fixed
+
+- Character window: opening it straight on Reputation (U) after a reload no longer shows your name, level and class above the list; they belong to the Character tab.
+
 ## 0.6.19 (2026-11-07)
 
 ### New
