@@ -9,6 +9,7 @@
 ### Fixed
 
 - Character window: opening it straight on Reputation (U) after a reload no longer shows your name, level and class above the list; they belong to the Character tab.
+- Collections in combat: switching to or from the Toys tab changes the page too, not only the tab.
 
 ## 0.6.19 (2026-11-07)
 

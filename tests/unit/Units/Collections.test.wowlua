@@ -918,6 +918,52 @@ local function combatWindow()
     M.tab = "mounts"
 end
 
+@test(
+    "in a fight the tabs still swap the page: Pets or Mounts to Toys and back, through their secure buttons (found in game)"
+)
+local function combatTabs()
+    open("mounts")
+    expect(ui().stage).toBeShown()
+    expect(ui().shelf).never.toBeShown()
+    mock.player:enterCombat()
+    mock.click(assert(M.secureTabs.toys))
+    mock.advanceFrames(2)
+    expect(M.tab).toBe("toys")
+    expect(ui().shelf).toBeShown()
+    expect(ui().stage).never.toBeShown()
+    expect(ui().strip).never.toBeShown()
+    -- the tools can't move in a fight: unseen till they can
+    expect(ui().tools:GetAlpha()).toBe(0)
+    -- no toy cards made yet (their Use is secure: made after the fight): said so
+    local cards = ui().shelf.cards
+    rawset(ui().shelf :: {}, "cards", {})
+    M.entries = { entry({ kind = "toy", itemID = 201 }) }
+    M:DrawShelf()
+    expect(ui().shelf.empty).toBeShown()
+    expect(ui().shelf.empty).toHaveText("Your toys show once this fight is over.")
+    rawset(ui().shelf :: {}, "cards", cards)
+    mock.click(assert(M.secureTabs.mounts))
+    mock.advanceFrames(2)
+    expect(M.tab).toBe("mounts")
+    expect(ui().stage).toBeShown()
+    expect(ui().shelf).never.toBeShown()
+    mock.player:leaveCombat()
+    mock.advanceTime(0.1)
+    expect(ui().tools:GetAlpha()).toBe(1)
+    -- (a disabled tab gets none: its cover says why)
+    expect(M.secureTabs.heirlooms).toBeNil()
+    -- out of a fight too, through Pets and Appearances and back: the tools
+    -- keep their place and the stage its height (found in game: the tools lost
+    -- their anchors, the stage was 0 high)
+    for _, key in ipairs({ "pets", "wardrobe", "toys", "mounts" }) do
+        mock.click(assert(M.secureTabs[key]))
+        mock.advanceFrames(2)
+        expect(ui().tools:GetNumPoints() > 0).toBe(true)
+    end
+    expect(ui().stage:GetHeight() > 0).toBe(true)
+    expect(assert(ui().tools:GetBottom()) > assert(ui().strip:GetTop())).toBe(true)
+end
+
 @test("the game's news: a new mount or toy noted and drawn; names arriving; the wardrobe changing; a theme")
 local function news()
     open()
