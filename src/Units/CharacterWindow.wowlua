@@ -1252,10 +1252,43 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
                 end
             end
             errors.tryMethod(tbl.field(pane, "Content"), "Layout")
+            self:FitDescription(pane)
         end
-        -- (the side pane mixin's method, not declared)
+        -- (the side pane mixin's methods, not declared)
         hook(pane :: unknown :: { [string]: unknown }, "LayoutRows", fit)
+        hook(pane :: unknown :: { [string]: unknown }, "SetDescription", function()
+            self:FitDescription(pane)
+        end)
         fit()
+    end
+
+    -- A detail pane's description as tall as its text, in the room the pane
+    -- has below it: the game gives it a fixed height for its own font (120
+    -- for a skill, 40 for a weapon skill, 200 for a faction), and SuuUI's
+    -- larger one scrolled with room to spare (found in game). Its scroll bar
+    -- only when the text is taller than the room.
+    function FitDescription(pane: Frame)
+        local desc = frames.asFrame(tbl.field(pane, "Description"))
+        if not desc or not desc:IsShown() then
+            return
+        end
+        local text = frames.asFontString(errors.tryMethod(desc, "GetFontString"))
+        local textH = text and secret.asNumber(text:GetStringHeight())
+        local top = secret.asNumber(desc:GetTop())
+        local bottom = secret.asNumber(pane:GetBottom())
+        local content = frames.asFrame(tbl.field(pane, "Content"))
+        local contentH = content and secret.asNumber(content:GetHeight()) or 0
+        if not (textH and top and bottom and contentH) then
+            return
+        end
+        -- (the rows' frame stands 6 below it; a little air at the foot)
+        local room = top - bottom - contentH - 6 - S["space-4"]
+        local fits = textH + 2 <= room
+        desc:SetHeight(math.max(1, fits and (textH + 2) or room))
+        local bar = frames.asFrame(tbl.field(pane, "DescriptionScrollBar"))
+        if bar then
+            bar:SetShown(not fits)
+        end
     end
 
     function SkinPanes()
