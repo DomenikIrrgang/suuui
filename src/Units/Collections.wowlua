@@ -568,6 +568,8 @@ class RoundButton extends Button
     readonly disc: Texture
     readonly glyph: Texture
     on: boolean = false
+    -- why it does nothing now (faint, its tooltip says why); nil: it works
+    why: string? = nil
 
     constructor(
         parent: Frame,
@@ -594,21 +596,34 @@ class RoundButton extends Button
             else
                 title = tip
             end
-            UI.ShowTooltip(self, { title = title })
+            UI.ShowTooltip(self, { title = title, description = self.why })
         end)
         self:SetScript("OnLeave", function()
             self:Draw(false)
             UI.HideTooltip()
         end)
         self:SetScript("OnClick", function()
-            onClick(self)
+            if not self.why then
+                onClick(self)
+            end
         end)
     end
 
     function Draw(hover: boolean)
-        UI.Paint(self.glyph, self.on and "gilt" or hover and "ink" or "ink-muted")
+        local tone = self.on and "gilt" or hover and "ink" or "ink-muted"
+        UI.Paint(self.glyph, self.why and "ink-faint" or tone)
     end
 end
+
+-- Whether the game takes changes to your pets now: it can keep the journal
+-- locked (found in game on Forever: favourites taken without an error and
+-- dropped, the game's own journal greys its Favourite out then).
+local function petJournalUnlocked(): boolean
+    local unlocked = try(field(C_PetJournal, "IsJournalUnlocked"))
+    return unlocked == nil or flag(unlocked)
+end
+
+local PET_JOURNAL_LOCKED = "The game has your pet journal locked right now, so it takes no favourites."
 
 local function favouriteTip(b: RoundButton): string
     return b.on and "Remove from favourites" or "Add to favourites"
@@ -2622,6 +2637,7 @@ class CollectionsModule extends Module<{}>
             return
         end
         stage.star.on = e.favourite and true or false
+        stage.star.why = e.kind == "pet" and e.collected and not petJournalUnlocked() and PET_JOURNAL_LOCKED or nil
         stage.star:Draw(false)
         if e.wrapped then
             self:ShowGift(e)
@@ -3095,10 +3111,10 @@ class CollectionsModule extends Module<{}>
         end
         if e and e.kind == "pet" then
             local guid = e.guids and e.guids[1]
-            if guid then
-                -- (Forever wants a boolean: 0 or 1, as the game's own journal
-                -- passes, is refused with "Usage: SetFavorite(petID, bool)")
-                try(field(C_PetJournal, "SetFavorite"), guid, not e.favourite)
+            if guid and petJournalUnlocked() then
+                -- (1 or 0, as the game's own journal: Forever refuses true
+                -- with "Usage: SetFavorite(petID, bool)", found in game)
+                try(field(C_PetJournal, "SetFavorite"), guid, e.favourite and 0 or 1)
                 after(0.1, function()
                     self:Refresh()
                 end)

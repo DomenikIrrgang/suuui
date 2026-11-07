@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Collections: the star on the Pets tab marks a pet as a favourite again (and takes it off); WoW Forever refused what SuuUI sent it.
+- Collections: while the game keeps your pet journal locked, the star on the Pets tab is greyed out and says so, instead of seeming to do nothing (the game takes no favourites then).
 
 ## 0.6.16 (2026-11-07)
 
