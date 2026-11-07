@@ -6,6 +6,7 @@
 
 - Bags: dragging an item onto another slot puts it there (press, move, let go), as well as click and click.
 - Bags: a dragged item lands on the slot you let go over every time, not only now and then.
+- Character window: opening it straight on Reputation (U) after a reload no longer shows your name, level and class above the list; they belong to the Character tab.
 
 ## 0.6.18 (2026-11-07)
 
