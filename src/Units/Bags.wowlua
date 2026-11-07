@@ -1367,10 +1367,22 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             self:PassClick(button, down)
         end)
         b:SetScript("OnDragStart", function(_, button: string)
-            self:PassTo("OnDragStart", button)
+            -- (from the slot really under the mouse: the secure button can sit
+            -- over another one, and the drag picked up nothing from an empty
+            -- slot there, found in game)
+            local atBag, atSlot = self:SlotUnderMouse()
+            if atBag and atSlot and C_Container.GetContainerItemInfo(atBag, atSlot) then
+                try(C_Container.PickupContainerItem, atBag, atSlot)
+            else
+                self:PassTo("OnDragStart", button)
+            end
+            self.dragging = CursorHasItem() and true or false
+            if self.dragging then
+                self:WatchDrop()
+            end
         end)
         b:SetScript("OnReceiveDrag", function()
-            self:PassTo("OnReceiveDrag")
+            self:Drop()
         end)
         b:HookScript("OnEnter", function()
             local s = self.useSlot
@@ -1422,6 +1434,15 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         local targets = flag(try(SpellCanTargetItem)) or flag(try(SpellCanTargetItemID)) or false
         self.useTargets = targets
+        -- the left button goes through to the game's slot underneath (its
+        -- own pick up, drag and drop: SuuUI's button guessed the slot, and
+        -- near a cell's edge took the wrong one, found in game), except
+        -- while a spell waits for an item: then this button puts it on
+        if targets then
+            errors.tryMethod(over.button, "SetPassThroughButtons")
+        else
+            errors.tryMethod(over.button, "SetPassThroughButtons", "LeftButton")
+        end
         over.set("type1", targets and "macro" or nil)
         over.set("macrotext1", targets and ("/use %d %d"):format(at[1], at[2]) or nil)
     end
@@ -1433,10 +1454,90 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- A drag let go over a slot: the item put there, once. The secure button
+    -- follows the mouse to the slot it is let go over, so the release comes
+    -- to it twice, as the drop and as a click: each passed on, the second
+    -- picked the item up again and a drag put nothing down (asked in game:
+    -- drag and drop as well as click and click).
+    dragging: boolean = false
+    droppedAt: number? = nil
+
+    -- After a drag picked an item up: watched until the left button is let
+    -- go; the item still on the cursor then goes on the slot under the mouse.
+    -- (In game the release reached neither the drop nor the click: the item
+    -- stayed on the cursor, found in game.) Put down already: nothing.
+    dropWatch: Frame? = nil
+
+    function WatchDrop()
+        local w = self.dropWatch
+        if not w then
+            local made = CreateFrame("Frame")
+            self.dropWatch = made
+            made:SetScript("OnUpdate", function()
+                if IsMouseButtonDown("LeftButton") then
+                    return
+                end
+                made:Hide()
+                if not self.dragging then
+                    return
+                end
+                self.dragging = false
+                if not CursorHasItem() or self.droppedAt == GetTime() then
+                    return
+                end
+                local bag, slot = self:SlotUnderMouse()
+                if bag and slot then
+                    self.droppedAt = GetTime()
+                    try(C_Container.PickupContainerItem, bag, slot)
+                end
+            end)
+            w = made
+        end
+        w:Show()
+    end
+
+    -- The shown bag or bank slot under the mouse: its bag and slot.
+    function SlotUnderMouse(): (number?, number?)
+        for bag, list in pairs(self.buttons) do
+            for slot, b in pairs(list) do
+                if b:IsVisible() and b:IsMouseOver() then
+                    return bag, slot
+                end
+            end
+        end
+        return nil, nil
+    end
+
+    function Drop(): boolean
+        local now = GetTime()
+        if self.droppedAt == now then
+            return true
+        end
+        self.dragging = false
+        if not CursorHasItem() then
+            return false
+        end
+        self.droppedAt = now
+        -- the slot really under the mouse (the secure button may still sit over
+        -- the slot the drag began on: then it went back there, found in game
+        -- as a drop that worked only now and then)
+        local bag, slot = self:SlotUnderMouse()
+        if bag and slot then
+            try(C_Container.PickupContainerItem, bag, slot)
+        else
+            self:PassTo("OnReceiveDrag")
+        end
+        return true
+    end
+
     -- A click the secure button doesn't use itself goes on to the slot, on
     -- the release (the slot's clicks are registered for the release).
     function PassClick(button: string, down: boolean?)
         if down then
+            return
+        end
+        -- (the release of a drag: its drop)
+        if button == "LeftButton" and (self.dragging or self.droppedAt == GetTime()) and self:Drop() then
             return
         end
         if button == "RightButton" and not IsModifierKeyDown() then
