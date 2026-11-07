@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Collections: the star on the Pets tab marks a pet as a favourite again (and takes it off); WoW Forever refused what SuuUI sent it.
+
 ## 0.6.16 (2026-11-07)
 
 ### Fixed
