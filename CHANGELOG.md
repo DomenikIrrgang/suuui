@@ -12,6 +12,8 @@
 - Collections in combat: switching to or from the Toys tab changes the page too, not only the tab.
 - Collections: the Appearances tiles show their models again after you visit another tab and come back.
 - Settings: the minimap preview's clock shows the time now, as the game's clock settings show it (24-hour or AM/PM, local or realm time), and follows a change to those settings while it's open.
+- Character window: a skill's, faction's or the PvP rank's description uses the room its pane has instead of scrolling in a small box; the scroll bar shows only when the text doesn't fit.
+- Combo points sit on the target frame's top edge at its left end, where the target's debuffs no longer cover them.
 
 ## 0.6.19 (2026-11-07)
 

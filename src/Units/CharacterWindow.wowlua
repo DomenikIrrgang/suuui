@@ -1252,10 +1252,63 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
                 end
             end
             errors.tryMethod(tbl.field(pane, "Content"), "Layout")
+            self:FitDescription(pane)
         end
-        -- (the side pane mixin's method, not declared)
+        -- (the side pane mixin's methods, not declared)
         hook(pane :: unknown :: { [string]: unknown }, "LayoutRows", fit)
+        hook(pane :: unknown :: { [string]: unknown }, "SetDescription", function()
+            self:FitDescription(pane)
+        end)
+        -- (and whenever its font changes: SuuUI's pass gives it SuuUI's
+        -- larger font after the game set it; measured in the game's, the box
+        -- came out smaller, found in game)
+        local desc = frames.asFrame(tbl.field(pane, "Description"))
+        local text = desc and frames.asFontString(errors.tryMethod(desc, "GetFontString"))
+        if text then
+            local function refit()
+                self:FitDescription(pane)
+            end
+            hook(text :: unknown :: { [string]: unknown }, "SetFontObject", refit)
+            hook(text :: unknown :: { [string]: unknown }, "SetFont", refit)
+        end
         fit()
+    end
+
+    -- A detail pane's description as tall as its text, in the room the pane
+    -- has below it: the game gives it a fixed height for its own font (120
+    -- for a skill, 40 for a weapon skill, 200 for a faction), and SuuUI's
+    -- larger one scrolled with room to spare (found in game). Its scroll bar
+    -- only when the text is taller than the room.
+    function FitDescription(pane: Frame)
+        local desc = frames.asFrame(tbl.field(pane, "Description"))
+        if not desc or not desc:IsShown() then
+            return
+        end
+        local text = frames.asFontString(errors.tryMethod(desc, "GetFontString"))
+        if not text then
+            return
+        end
+        local textH = secret.asNumber(text:GetStringHeight())
+        local top = secret.asNumber(desc:GetTop())
+        local bottom = secret.asNumber(pane:GetBottom())
+        local content = frames.asFrame(tbl.field(pane, "Content"))
+        local contentH = content and secret.asNumber(content:GetHeight()) or 0
+        if not (textH and top and bottom and contentH) then
+            return
+        end
+        -- (the rows' frame stands 6 below it; a little air at the foot)
+        local room = top - bottom - contentH - 6 - S["space-4"]
+        -- the scroll box keeps half a line of its font below the text: with
+        -- less it still scrolled, its bar showing (found in game); the font's
+        -- now SuuUI's, larger than the one the box measured that by
+        local _, size = text:GetFont()
+        local need = textH + (secret.asNumber(size) or 14) * 0.5 + 2
+        local fits = need <= room
+        desc:SetHeight(math.max(1, fits and need or room))
+        local bar = frames.asFrame(tbl.field(pane, "DescriptionScrollBar"))
+        if bar then
+            bar:SetShown(not fits)
+        end
     end
 
     function SkinPanes()
