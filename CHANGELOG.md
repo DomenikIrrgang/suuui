@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Collections: while your account is logged in more than once, the game locks your pet journal and takes no favourites; the star on the Pets tab is now greyed out and says so, instead of seeming to do nothing.
+- Collections: while your account is logged in more than once, the game locks your pet journal and takes no favourites; the star on the Pets tab is now greyed out and says so, instead of seeming to do nothing. A mount the game takes no favourite for gets the same greyed-out star, as in the game's own Mounts tab.
 
 ## 0.6.16 (2026-11-07)
 
