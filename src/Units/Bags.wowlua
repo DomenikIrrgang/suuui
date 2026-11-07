@@ -117,10 +117,20 @@ local function freeSlots(bag: number): number?
     return asNumber((C_Container.GetContainerNumFreeSlots(bag)))
 end
 
--- A bag's family: what it takes (0: anything).
+-- A bag's family: what it takes (0: anything). The game's free count tells
+-- it; when that says 0, the bag's own item does (a profession bag sorted as
+-- an ordinary one got items the game refused: found in game).
 local function familyOf(bag: number): number
     local _, f = C_Container.GetContainerNumFreeSlots(bag)
-    return asNumber(f) or 0
+    local family = asNumber(f) or 0
+    if family == 0 and bag ~= 0 then
+        local slot = asNumber(errors.tryValue(C_Container.ContainerIDToInventoryID, bag))
+        local id = slot and asNumber(GetInventoryItemID("player", slot))
+        if id then
+            family = asNumber((try(field(C_Item, "GetItemFamily"), id))) or 0
+        end
+    end
+    return family
 end
 
 -- The special bags' kinds by their family bit (asked 2026-11-05: each a
@@ -137,6 +147,17 @@ local FAMILIES: { { number | string } } = {
     { 512, "Gem bag" },
     { 1024, "Mining bag" },
 }
+
+-- A family of a kind SuuUI knows (a profession bag, a quiver, ...).
+local function knownFamily(family: number): boolean
+    for _, f in ipairs(FAMILIES) do
+        local bit = f[1] :: number
+        if family % (bit * 2) >= bit then
+            return true
+        end
+    end
+    return false
+end
 
 -- What a family's bag is called.
 export function familyName(family: number): string
@@ -2072,10 +2093,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         for _, bag in ipairs(bags) do
             local family: Family = 0
             if bag == REAGENT then
-                family = "reagent"
+                -- a profession bag in the reagent slot (a leatherworking
+                -- bag, found in game): only its own kind, not every reagent
+                local f = familyOf(bag)
+                family = knownFamily(f) and f or "reagent"
             else
-                local _, f = C_Container.GetContainerNumFreeSlots(bag)
-                family = asNumber(f) or 0
+                family = familyOf(bag)
             end
             for slot = 1, numSlots(bag) do
                 local s: SortSlot = { bag = bag, slot = slot, family = family }

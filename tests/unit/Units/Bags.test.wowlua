@@ -18,6 +18,7 @@ import * as secret from "wowlua:secret"
 import type Inventory, SlotItem, SlotSection from "/UI/Inventory"
 import type SortSlot from "/Units/Bags/Sort"
 import internal M, SECTION, familyName from "/Units/Bags"
+import * as sort from "/Units/Bags/Sort"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
@@ -220,6 +221,42 @@ local function slots()
     mock.setBag(0, { slots = 12, items = { [1] = { id = CLOTH, count = 3 } } })
     mock.advanceTime(0.1)
     expect(button(0, 16)).never.toBeShown()
+end
+
+@test(
+    "a sort's bags by what they take: a profession bag in the reagent slot only its kind; a bag the game counts as any, by its own item"
+)
+local function sortFamilies()
+    local LEATHER, HERBS = 8, 32
+    mock.setBag(1, { slots = 4 })
+    mock.setBag(5, { slots = 4 })
+    local free: { [number]: number } = { [5] = LEATHER }
+    mock.fake("C_Container.GetContainerNumFreeSlots", function(bag: number): (number, number)
+        return 4, free[bag] or 0
+    end)
+    -- bag 1's item: a herb bag (the game's count says 0)
+    mock.fake("GetInventoryItemID", function(_: string, slot: number): number?
+        return slot == C_Container.ContainerIDToInventoryID(1) and 990090 or nil
+    end)
+    mock.fake("C_Item.GetItemFamily", function(id: unknown): number
+        return id == 990090 and HERBS or 0
+    end)
+    local function familyAt(bag: number): sort.Family?
+        for _, s in ipairs(M:SortSlots(false)) do
+            if s.bag == bag then
+                return s.family
+            end
+        end
+        return nil
+    end
+    expect(familyAt(5)).toBe(LEATHER)
+    expect(familyAt(1)).toBe(HERBS)
+    expect(familyAt(0)).toBe(0)
+    -- a reagent bag (no family of its own): any crafting reagent
+    free[5] = nil
+    expect(familyAt(5)).toBe("reagent")
+    mock.setBag(1, nil)
+    mock.setBag(5, nil)
 end
 
 @test("the reagent bag and the keyring as sections of their own; no reagent bag says where one goes")
