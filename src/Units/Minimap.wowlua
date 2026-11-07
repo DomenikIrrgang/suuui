@@ -300,6 +300,23 @@ local function alphaOff(v: unknown)
     end
 end
 
+-- The time as the game's clock settings show it: local or realm time
+-- (timeMgrUseLocalTime), 24-hour or with AM and PM (timeMgrUseMilitaryTime).
+local function clockText(): string
+    local h: number, m: number
+    if C_CVar.GetCVarBool("timeMgrUseLocalTime") then
+        local t = date("*t") :: { hour: number, min: number }
+        h, m = t.hour, t.min
+    else
+        h, m = GetGameTime()
+    end
+    if C_CVar.GetCVarBool("timeMgrUseMilitaryTime") then
+        return ("%02d:%02d"):format(h, m)
+    end
+    local suffix = h >= 12 and "PM" or "AM"
+    return ("%d:%02d %s"):format((h - 1) % 12 + 1, m, suffix)
+end
+
 -- Inside a dungeon or raid, a line under the zone: "Dungeon · 5 players",
 -- "Raid · 20 players" (Forever has no heroic modes: the kind and the size
 -- are what there is to say). Blizzard's difficulty badge stays in the
@@ -397,19 +414,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         if not block or not self:Get("clock") then
             return
         end
-        local h: number, m: number
-        if C_CVar.GetCVarBool("timeMgrUseLocalTime") then
-            local t = date("*t") :: { hour: number, min: number }
-            h, m = t.hour, t.min
-        else
-            h, m = GetGameTime()
-        end
-        if C_CVar.GetCVarBool("timeMgrUseMilitaryTime") then
-            block.time:SetValue(("%02d:%02d"):format(h, m))
-        else
-            local suffix = h >= 12 and "PM" or "AM"
-            block.time:SetValue(("%d:%02d %s"):format((h - 1) % 12 + 1, m, suffix))
-        end
+        block.time:SetValue(clockText())
     end
 
     function UpdateMail()
@@ -613,13 +618,27 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
             you:SetPoint("CENTER")
             f.zone:SetValue("Wailing Caverns")
             f.sub:SetValue("")
-            f.time:SetValue("21:40")
             f.deco.mail:Show()
             f.instance:SetValue(instanceLine("Dungeon", "5"))
+            -- its clock kept current while it shows (the minutes, and the
+            -- game's clock options changed with the settings open; asked in
+            -- game): read again once a second
+            local wait = 0
+            f:HookScript("OnUpdate", function(_, elapsed)
+                wait = wait - elapsed
+                if wait > 0 then
+                    return
+                end
+                wait = 1
+                f.time:SetValue(clockText())
+            end)
             preview = f
             self.preview = f
         end
         preview:SetParent(parent)
+        -- (the time now, as the game's clock settings show it: 24-hour or
+        -- not, local or realm time; asked in game)
+        preview.time:SetValue(clockText())
         preview:Layout(self:Get("size"), self:Get("zone"), self:Get("clock"))
         return preview
     end
