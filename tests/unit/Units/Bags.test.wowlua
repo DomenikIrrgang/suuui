@@ -252,11 +252,58 @@ local function sortFamilies()
     expect(familyAt(5)).toBe(LEATHER)
     expect(familyAt(1)).toBe(HERBS)
     expect(familyAt(0)).toBe(0)
-    -- a reagent bag (no family of its own): any crafting reagent
+    -- a family SuuUI has no name for (a skinning bag, reported by a
+    -- player): still only its own kind
+    free[5] = 0x200000
+    expect(familyAt(5)).toBe(0x200000)
+    -- a reagent bag (no family of its own, probed in game): any crafting reagent
     free[5] = nil
     expect(familyAt(5)).toBe("reagent")
     mock.setBag(1, nil)
     mock.setBag(5, nil)
+end
+
+@test(
+    "a move the game refused: the bag at its end that isn't a plain one is left out of sorts from then on, said once (reported by a player)"
+)
+local function refusedBag()
+    local SKIN = 990096
+    mock.setBag(1, { slots = 4 })
+    mock.fake("GetInventoryItemID", function(_: string, slot: number): number?
+        return slot == C_Container.ContainerIDToInventoryID(1) and SKIN or nil
+    end)
+    local real = C_Item.GetItemInfoInstant
+    mock.fake("C_Item.GetItemInfoInstant", function(id: number): ...unknown
+        if id == SKIN then
+            -- a container, not a plain bag (a profession bag)
+            return SKIN, "Container", "Leatherworking Bag", "INVTYPE_BAG", 133640, 1, 7
+        end
+        return real(id)
+    end)
+    local before = #mock.printed()
+    -- the backpack's cloth sent to bag 1; it didn't land there
+    local from: SortSlot = { bag = 0, slot = 1, family = 0, item = { id = CLOTH, count = 3 } :: sort.SortItem }
+    local to: SortSlot = { bag = 1, slot = 2, family = 0 }
+    expect(M:Refused({ { from = from, to = to } })).toBe(true)
+    expect(M.refusingBags[SKIN]).toBe(true)
+    expect(hasLine(printedSince(before), "leaves your")).toBe(true)
+    for _, s in ipairs(M:SortSlots(false)) do
+        expect(s.bag).never.toBe(1)
+    end
+    -- the same again: nothing more to blame, nothing said
+    before = #mock.printed()
+    expect(M:Refused({ { from = from, to = to } })).toBe(false)
+    expect(#printedSince(before)).toBe(0)
+    -- only plain bags at both ends: nobody to blame (the sort stops as before)
+    M.refusingBags = {}
+    mock.fake("C_Item.GetItemInfoInstant", function(id: number): ...unknown
+        if id == SKIN then
+            return SKIN, "Container", "Bag", "INVTYPE_BAG", 133640, 1, 0
+        end
+        return real(id)
+    end)
+    expect(M:Refused({ { from = from, to = to } })).toBe(false)
+    mock.setBag(1, nil)
 end
 
 @test("the reagent bag and the keyring as sections of their own; no reagent bag says where one goes")

@@ -148,15 +148,19 @@ local FAMILIES: { { number | string } } = {
     { 1024, "Mining bag" },
 }
 
--- A family of a kind SuuUI knows (a profession bag, a quiver, ...).
-local function knownFamily(family: number): boolean
-    for _, f in ipairs(FAMILIES) do
-        local bit = f[1] :: number
-        if family % (bit * 2) >= bit then
-            return true
-        end
+-- A bag's own item (nil: the backpack, an empty slot).
+local function bagItem(bag: number): number?
+    if bag == 0 then
+        return nil
     end
-    return false
+    local slot = asNumber(errors.tryValue(C_Container.ContainerIDToInventoryID, bag))
+    return slot and asNumber(GetInventoryItemID("player", slot))
+end
+
+-- A plain bag (Container, Bag): it takes anything.
+local function plainBag(id: number): boolean
+    local _, _, _, _, _, cls, sub = try(field(C_Item, "GetItemInfoInstant"), id)
+    return asNumber(cls) == 1 and asNumber(sub) == 0
 end
 
 -- What a family's bag is called.
@@ -557,6 +561,8 @@ type SortState = {
     total?: number,
     lastWrong?: number,
     lastUpdate?: number,
+    -- the game's refusal while a wave was on its way (looked at once it lands)
+    refused?: string,
 }
 
 local function locked(s: SortSlot): boolean
@@ -2194,14 +2200,18 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         for _, bag in ipairs(bags) do
             local family: Family = 0
             if bag == REAGENT then
-                -- a profession bag in the reagent slot (a leatherworking
-                -- bag, found in game): only its own kind, not every reagent
+                -- a profession bag in the reagent slot (a leatherworking or
+                -- skinning bag, found in game): only its own kind; a reagent
+                -- bag tells family 0 (probed in game), any crafting reagent
                 local f = familyOf(bag)
-                family = knownFamily(f) and f or "reagent"
+                family = f ~= 0 and f or "reagent"
             else
                 family = familyOf(bag)
             end
-            for slot = 1, numSlots(bag) do
+            local own = bagItem(bag)
+            -- (a bag the game refused a sorted item for: left as it is)
+            local n = (own and self.refusingBags[own]) and 0 or numSlots(bag)
+            for slot = 1, n do
                 local s: SortSlot = { bag = bag, slot = slot, family = family }
                 local info = C_Container.GetContainerItemInfo(bag, slot)
                 if info and asNumber(info.itemID) then
@@ -2212,6 +2222,37 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             end
         end
         return slots
+    end
+
+    -- Bags the game refused a sorted item for, by their own item: left out of
+    -- sorts from then on, their items where they are (a profession bag whose
+    -- kind the game doesn't tell: "Only Skinning can be placed in that.",
+    -- reported by a player).
+    refusingBags: { [number]: boolean } = {}
+
+    -- After a refused wave, the moves that didn't land: the bag at either end
+    -- that isn't a plain bag refused it. False: none to blame.
+    function Refused(moves: Move[]): boolean
+        local found = false
+        for _, m in ipairs(moves) do
+            local moved = m.from.item
+            local now = C_Container.GetContainerItemInfo(m.to.bag, m.to.slot)
+            local id = now and asNumber(now.itemID)
+            if moved and id ~= moved.id then
+                for _, bag in ipairs({ m.to.bag, m.from.bag }) do
+                    local own = bagItem(bag)
+                    if own and not plainBag(own) and not self.refusingBags[own] then
+                        self.refusingBags[own] = true
+                        found = true
+                        local name = asString((try(field(C_Item, "GetItemInfo"), own))) or "a bag"
+                        self:Print(
+                            ("Sorting leaves your %s as it is: the game takes only some items in it."):format(name)
+                        )
+                    end
+                end
+            end
+        end
+        return found
     end
 
     -- Part stacks of one item put together (Bags/Sort's planStacks).
@@ -2400,6 +2441,13 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         st.wait = nil
         if driver then
             driver:Hide()
+        end
+        local refused = st.refused
+        if refused then
+            st.refused = nil
+            if not self:Refused(w.moves) then
+                return self:StopSort("the game refused a move" .. (refused ~= "" and (" (" .. refused .. ")") or ""))
+            end
         end
         self:SortStep()
     end
@@ -2819,7 +2867,14 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 return
             end
             local text = asString(message)
-            self:StopSort("the game refused a move" .. (text and (" (" .. text .. ")") or ""))
+            -- the bank (tabs, no bag to blame): stopped at once, its first wave
+            -- the game's own bank sort instead
+            if st.bank then
+                self:StopSort("the game refused a move" .. (text and (" (" .. text .. ")") or ""))
+                return
+            end
+            -- (which move it was shows once the bags have updated: SortTick)
+            st.refused = text or ""
         end)
         self:OnGameEvent("BANKFRAME_OPENED", function()
             self.atBank = true
