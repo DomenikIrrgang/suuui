@@ -66,6 +66,8 @@ local DEFAULTS = {
     keyBars = { "1", "2", "3", "4", "5", "6", "7", "8", "stance", "pet" },
     showEmpty = true,
     showXP = true,
+    -- the XP fill in the game's own colours (blue rested, purple not)
+    xpGameColors = false,
     showStance = true,
     showPet = true,
     dockSize = 24,
@@ -136,6 +138,7 @@ export type OffKey = "off5" | "off6" | "off7" | "off8" | "offStance" | "offPet"
 export type Watched = "textSize"
     | "showEmpty"
     | "showXP"
+    | "xpGameColors"
     | "showStance"
     | "showTotem"
     | "showPet"
@@ -478,6 +481,19 @@ local SECTION: SettingsSection = {
                     description = "Along the dock's foot: your XP with rested XP after it, or your watched reputation at the level cap. Blizzard's own comes back after a reload.",
                 },
                 {
+                    key = "xpGameColors",
+                    label = "Rested colours",
+                    control = "toggle",
+                    combat = true,
+                    description = "Your XP in the game's colours: blue while you have rested XP, purple without. Off: SuuUI's bronze. Reputation keeps its colour.",
+                    disabled = function()
+                        if not M:Get("showXP") then
+                            return true, "The XP bar is off."
+                        end
+                        return false
+                    end,
+                },
+                {
                     key = "textSize",
                     label = "Text size",
                     control = "slider",
@@ -666,6 +682,8 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     totem: TotemBar? = nil
     xp: Bar? = nil
     xpShown: boolean? = nil
+    -- the XP fill's token now (repainted only when it changes)
+    xpFill: string? = nil
 
     constructor()
         super({
@@ -1060,6 +1078,18 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         end
         local xp = assert(self.xp)
         local ghost = assert(xp.ghost)
+        -- The game's colours (an option): blue while rested XP is left,
+        -- purple without, as its own XP bar. Reputation keeps SuuUI's.
+        local fill, run = "progress-fill", "progress-rested"
+        if kind == "xp" and self:Get("xpGameColors") then
+            local rests = not isSecret(rested) and rested > 0
+            fill, run = rests and "xp-rested" or "xp-normal", "xp-rested-run"
+        end
+        if fill ~= self.xpFill then
+            self.xpFill = fill
+            xp:SetFill(fill)
+            UI.Paint(ghost, run)
+        end
         xp:SetMinMax(0, max)
         xp:SetValueNow(cur)
         if isSecret(cur) or isSecret(rested) or isSecret(max) then
@@ -1160,6 +1190,7 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
             "textSize",
             "showEmpty",
             "showXP",
+            "xpGameColors",
             "showStance",
             "showTotem",
             "showPet",

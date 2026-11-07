@@ -43,6 +43,7 @@ local KEYS: Watched[] = {
     "keyBars",
     "showEmpty",
     "showXP",
+    "xpGameColors",
     "showStance",
     "showPet",
     "dockSize",
@@ -169,6 +170,37 @@ local function xp()
     expect(tipLine(3)).toBe("Rested 200")
     mock.hover(nil)
     expect(tip:IsShown()).toBe(false)
+end
+
+@test("the XP bar in the game's colours (an option): blue while rested, purple without; reputation keeps SuuUI's")
+local function xpColors()
+    mock.player:setStats({ xp = 300, xpMax = 1000, restedXP = 200 })
+    mock.advanceFrames(1)
+    -- off by default: SuuUI's bronze
+    expect(M:Get("xpGameColors")).toBe(false)
+    expect(M.xpFill).toBe("progress-fill")
+    M:Set("xpGameColors", true)
+    expect(M.xpFill).toBe("xp-rested")
+    -- the rested XP used up (UPDATE_EXHAUSTION): purple
+    mock.player:setStats({ restedXP = 0 })
+    mock.advanceFrames(1)
+    M:UpdateXP()
+    expect(M.xpFill).toBe("xp-normal")
+    -- at the level cap the reputation keeps its colour
+    mock.setPlayer({ level = 60 })
+    mock.stub(C_Reputation, "GetWatchedFactionData", function(): unknown
+        return {
+            name = "Stormwind",
+            currentStanding = 4500,
+            currentReactionThreshold = 3000,
+            nextReactionThreshold = 9000,
+        }
+    end)
+    M:UpdateXP()
+    expect(M.xpFill).toBe("progress-fill")
+    mock.setPlayer({ level = 1 })
+    M:Set("xpGameColors", false)
+    expect(M.xpFill).toBe("progress-fill")
 end
 
 @test("at the level cap: the watched reputation instead; none watched: no bar")
