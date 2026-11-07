@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Bags: sorting no longer stops at a profession bag the game won't fill ("Only Skinning can be placed in that."): a bag in the reagent slot that only takes its own kind is read as such, and a bag the game refuses an item for is left as it is from then on while the rest gets sorted.
+
 ## 0.6.18 (2026-11-07)
 
 ### Changed
