@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- An NPC's tooltip lists the quests it gives that you can pick up now, in their difficulty's colour with their level, as the world map's quest pins show them.
+
 ## 0.6.19 (2026-11-07)
 
 ### New

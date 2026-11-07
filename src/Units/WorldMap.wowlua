@@ -511,12 +511,16 @@ local function routeOf(routes: { [number]: { [number]: number[][] } }, id: numbe
     return byMap and byMap[mapID] or nil
 end
 
+-- A giver's place in the data: its map and the row there.
+type GiverPlace = { mapID: number, row: number[] }
+
 -- What an NPC should offer you now (QuestsFor), by the map's own checks.
 export type QuestOffer = {
     id: number,
     name?: string,
     state?: string,
     difficulty?: string,
+    level?: number,
     onQuest: boolean,
     done: boolean,
 }
@@ -995,35 +999,118 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local me, done = self:Player(), completedSet()
         local out: QuestOffer[] = {}
         local seen: { [number]: boolean } = {}
-        for mapID, rows in pairs(starts.maps) do
-            for _, row in ipairs(rows) do
-                if row[3] == npcID then
-                    me.mapID = mapID
-                    for i = 4, #row do
-                        local id = row[i]
-                        if not seen[id] then
-                            seen[id] = true
-                            local qrow = starts.quests[id]
-                            local q = qrow and quest(qrow)
-                            local state: string? = nil
-                            local difficulty: string? = nil
-                            if q then
-                                state, difficulty = questState(q, id, me, done)
-                            end
-                            out[#out + 1] = {
-                                id = id,
-                                name = q and questName(q, id) or nil,
-                                state = state,
-                                difficulty = difficulty,
-                                onQuest = onQuest(id),
-                                done = done[id] or false,
-                            }
-                        end
+        for _, place in ipairs(self:GiverPlaces(npcID)) do
+            local row = place.row
+            me.mapID = place.mapID
+            for i = 4, #row do
+                local id = row[i]
+                if not seen[id] then
+                    seen[id] = true
+                    local qrow = starts.quests[id]
+                    local q = qrow and quest(qrow)
+                    local state: string? = nil
+                    local difficulty: string? = nil
+                    local level: number? = nil
+                    if q then
+                        state, difficulty, level = questState(q, id, me, done)
                     end
+                    out[#out + 1] = {
+                        id = id,
+                        name = q and questName(q, id) or nil,
+                        state = state,
+                        difficulty = difficulty,
+                        level = level,
+                        onQuest = onQuest(id),
+                        done = done[id] or false,
+                    }
                 end
             end
         end
         return out, done
+    end
+
+    -- Where each giver stands in the data, made once (QuestsFor runs for
+    -- every NPC's tooltip): its rows, each with its map.
+    giverIndex: { [number]: GiverPlace[] }? = nil
+
+    function GiverPlaces(npcID: number): GiverPlace[]
+        local index = self.giverIndex
+        if not index then
+            local made: { [number]: GiverPlace[] } = {}
+            for mapID, rows in pairs(SuuUI.QuestStarts().maps) do
+                for _, row in ipairs(rows) do
+                    local giver = row[3]
+                    local list = made[giver] or {}
+                    made[giver] = list
+                    list[#list + 1] = { mapID = mapID, row = row }
+                end
+            end
+            index = made
+            self.giverIndex = made
+        end
+        return index[npcID] or {}
+    end
+
+    -- An NPC's tooltip: the quests it gives that you can pick up now, as the
+    -- map's quest pins would show them (asked 2026-11-07), in their
+    -- difficulty's colour with their level.
+    questTipsHooked: boolean = false
+
+    function HookQuestTips()
+        local add = tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
+        local kind = tbl.field(tbl.field(Enum, "TooltipDataType"), "Unit")
+        if self.questTipsHooked or type(add) ~= "function" or kind == nil then
+            return
+        end
+        self.questTipsHooked = true
+        ;(add :: (unknown, (GameTooltip, unknown) -> ()) -> ())(kind, function(tooltip: GameTooltip, _: unknown)
+            if tooltip == GameTooltip then
+                self:QuestTip(tooltip)
+            end
+        end)
+    end
+
+    function QuestTip(tooltip: GameTooltip)
+        if not self:IsEnabled() then
+            return
+        end
+        local ok: boolean, _: unknown, unit: unknown = pcall(tooltip.GetUnit, tooltip)
+        if not ok or not secret.readable(unit) or type(unit) ~= "string" then
+            return
+        end
+        local isPlayer = UnitIsPlayer(unit)
+        if not secret.readable(isPlayer) or isPlayer then
+            return
+        end
+        local guid = UnitGUID(unit)
+        if not secret.readable(guid) or type(guid) ~= "string" then
+            return
+        end
+        local kind, _, _, _, _, npcID = strsplit("-", guid)
+        local id = (kind == "Creature") and tonumber(npcID) or nil
+        if not id then
+            return
+        end
+        local on = self:Layers().quests
+        local shown: QuestOffer[] = {}
+        for _, o in ipairs((self:QuestsFor(id))) do
+            local state, difficulty = o.state, o.difficulty
+            if state and difficulty and on[state] and (difficulty ~= "trivial" or on.trivial) then
+                shown[#shown + 1] = o
+            end
+        end
+        if #shown == 0 then
+            return
+        end
+        local r, g, b = UI.RGBA("gilt-text")
+        tooltip:AddLine(" ")
+        tooltip:AddLine("Quests", r, g, b)
+        for _, o in ipairs(shown) do
+            local level = o.level
+            local qr, qg, qb = UI.RGBA("quest-" .. (o.difficulty or "standard"))
+            tooltip:AddLine((o.name or ("Quest " .. o.id)) .. (level and (" (" .. level .. ")") or ""), qr, qg, qb)
+        end
+        tooltip:Show()
     end
 
     -- every pin the map would show, before merging (Item)
@@ -2274,6 +2361,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnEnable()
+        self:HookQuestTips()
         -- the Marks filters and the marks' pins, for the marks module; the
         -- pins drawn again and a filter turned on, for the others
         self:ProvideService(WORLD_MAP, {
