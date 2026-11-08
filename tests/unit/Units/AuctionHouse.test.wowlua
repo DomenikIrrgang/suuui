@@ -20,6 +20,9 @@ import * as events from "/Core/Events"
 import expectNoErrors from "../../helpers"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import internal M, SECTION, TableRow, AuctionTable, ResultRow, OfferRow, AuctionRow, SellRow, CatButton, BuyPage, SellPage, AuctionsPage, Category from "/Units/AuctionHouse"
+import internal M as Bags from "/Units/Bags"
+import internal M as Professions from "/Units/Professions"
+import AUCTION_HOUSE from "/Core/ServiceKeys"
 import type ConfirmOptions, WindowFrame from "/UI/Panel"
 import type SuuButton from "/UI/Controls"
 import type TextField, MoneyInput from "/UI/Inputs"
@@ -1817,6 +1820,169 @@ local function settings()
     expect(assert(rows.tipMost)()).toBe(true)
     expect(assert(rows.tipOffered)()).toBe(true)
     expect(assert(rows.tipStack)()).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Shift-click on an item: searched
+--------------------------------------------------------------------------------
+
+local PEARL = 990207
+mock.defineItem(PEARL, { name = "Test Pearl", quality = 1, stackCount = 20, classID = 7, icon = 134122 }, {
+    cached = false,
+})
+
+local function chatLink(id: number, name: string): string
+    return "|cffffffff|Hitem:" .. id .. "::::::::1:::::::|h[" .. name .. "]|h|r"
+end
+
+-- An item link in chat Shift-clicked (the chat window's hyperlink click).
+local function shiftClickLink(id: number, name: string)
+    mock.setModifiers({ shift = true })
+    SetItemRef("item:" .. id .. "::::::::1:::::::", chatLink(id, name), "LeftButton", ChatFrame1)
+    mock.setModifiers({})
+end
+
+-- A bag item clicked in SuuUI's bags: on SuuUI's secure button over the
+-- slot where it is (it passes the left click on to the game's slot), else
+-- (at the auction house) on the game's slot itself.
+local function clickBag(bag: number, slot: number)
+    Bags:SetOpen(true)
+    mock.advanceTime(0.01)
+    local b = assert(assert(Bags.buttons[bag])[slot])
+    mock.hover(b)
+    local over = Bags.useOver
+    if over and over.button:IsShown() and Bags.useSlot == b then
+        mock.click(over.button)
+    else
+        mock.click(b)
+    end
+    mock.hover(nil)
+end
+
+local function shiftClickBag(bag: number, slot: number)
+    mock.setModifiers({ shift = true })
+    clickBag(bag, slot)
+    mock.setModifiers({})
+end
+
+local function searchedFor(): string?
+    local q = M.query
+    return q and q.searchString
+end
+
+@test("Shift-click on a bag item with the window open: its name searched on Buy, in all categories, from any tab")
+local function shiftBag()
+    open()
+    mock.click(assert(buy().catButtons[1]))
+    mock.advanceTime(1)
+    expect(M.category).never.toBe(nil)
+    win():SetTab("sell")
+    local sent = mock.spy(AH.SendBrowseQuery)
+    mock.stub(AH, "SendBrowseQuery", sent)
+    shiftClickBag(0, 1)
+    mock.advanceTime(1)
+    expect(M.tab).toBe("buy")
+    expect(buy()).toBeShown()
+    expect(buy().search.edit:GetText()).toBe("Test Ore")
+    expect(searchedFor()).toBe("Test Ore")
+    expect(M.category).toBe(nil)
+    expect(sent).toHaveBeenCalledTimes(1)
+    expect(resultNamed("Test Ore")).toBeShown()
+    -- (no stack split, no chat line opened)
+    expect(StackSplitFrame).never.toBeShown()
+    expect(ChatFrameUtil.GetActiveWindow()).toBe(nil)
+    -- a plain left click: the item picked up, nothing searched
+    clickBag(0, 2)
+    expect(CursorHasItem()).toBe(true)
+    expect(sent).toHaveBeenCalledTimes(1)
+    ClearCursor()
+    Bags:SetOpen(false)
+end
+
+@test("Shift-click on an item link in chat: searched; not loaded yet, once the client has the item")
+local function shiftChat()
+    open()
+    shiftClickLink(GEM, "Test Gem")
+    mock.advanceTime(1)
+    expect(searchedFor()).toBe("Test Gem")
+    expect(resultNamed("Test Gem")).toBeShown()
+    -- an item the client doesn't have yet: its name when it comes
+    expect(C_Item.GetItemInfo(PEARL)).toBe(nil)
+    shiftClickLink(PEARL, "Test Pearl")
+    expect(M.linkLoad ~= nil).toBe(true)
+    expect(searchedFor()).toBe("Test Gem")
+    mock.advanceTime(1)
+    expect(M.linkLoad).toBe(nil)
+    expect(searchedFor()).toBe("Test Pearl")
+    expect(buy().search.edit:GetText()).toBe("Test Pearl")
+end
+
+@test("typing in the chat line: the Shift-clicked link goes into it as always, nothing searched")
+local function shiftWhileTyping()
+    open()
+    ChatFrameUtil.OpenChat("")
+    local eb = assert(ChatFrameUtil.GetActiveWindow())
+    local sent = mock.spy(AH.SendBrowseQuery)
+    mock.stub(AH, "SendBrowseQuery", sent)
+    shiftClickLink(GEM, "Test Gem")
+    shiftClickBag(0, 1)
+    mock.advanceTime(1)
+    local typed = eb:GetText() or ""
+    expect(typed:find("[Test Gem]", 1, true) ~= nil).toBe(true)
+    expect(typed:find("[Test Ore]", 1, true) ~= nil).toBe(true)
+    expect(sent).never.toHaveBeenCalled()
+    expect(buy().search.edit:GetText()).toBe("")
+    eb:SetText("")
+    ChatFrameUtil.DeactivateChat(eb)
+    Bags:SetOpen(false)
+    -- typing in SuuUI's own search box: searched
+    buy().search.edit:SetFocus()
+    shiftClickLink(GEM, "Test Gem")
+    mock.advanceTime(1)
+    expect(sent).toHaveBeenCalledTimes(1)
+    buy().search.edit:ClearFocus()
+end
+
+@test("without the auction house: a Shift-click does what it always did, nothing searched")
+local function shiftWithoutHouse()
+    local sent = mock.spy(AH.SendBrowseQuery)
+    mock.stub(AH, "SendBrowseQuery", sent)
+    shiftClickLink(GEM, "Test Gem")
+    shiftClickBag(0, 1)
+    mock.advanceTime(1)
+    expect(sent).never.toHaveBeenCalled()
+    expect(win()).never.toBeShown()
+    expect(buy().search.edit:GetText()).toBe("")
+    expect(SuuUI.UseService(AUCTION_HOUSE)).never.toBe(nil)
+    expect(assert(assert(SuuUI.UseService(AUCTION_HOUSE)).SearchItem)(GEM)).toBe(false)
+    StackSplitFrame:Hide()
+    Bags:SetOpen(false)
+end
+
+@test("the Professions window: Shift-click on a recipe's product or a reagent searches it")
+local function shiftProfessions()
+    open()
+    mock.player:openTradeSkill(2018, "Blacksmithing")
+    mock.advanceTime(1)
+    Professions.mode = "crafting"
+    Professions:Render()
+    local view = assert(Professions.view)
+    local pane = view.recipe
+    -- the chosen recipe's product and first reagent, the game's own data
+    local sch = assert(C_TradeSkillUI.GetRecipeSchematic(assert(assert(view.craftData).selected), false))
+    local product = assert(sch.outputItemID)
+    local reagent = assert(sch.reagentSlotSchematics[1].reagents[1].itemID)
+    mock.setModifiers({ shift = true })
+    mock.click(pane.product)
+    mock.advanceTime(1)
+    expect(searchedFor()).toBe(C_Item.GetItemNameByID(product))
+    mock.click(pane.reagents[1].slot)
+    mock.advanceTime(1)
+    expect(searchedFor()).toBe(C_Item.GetItemNameByID(reagent))
+    expect(searchedFor() ~= nil).toBe(true)
+    mock.setModifiers({})
+    C_TradeSkillUI.CloseTradeSkill()
+    mock.advanceTime(0.5)
 end
 
 @test("turned off: the window closes, the wait's ticker stops")

@@ -16,7 +16,7 @@ import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import SuuUI from "/Core/API"
 import * as services from "/Core/Services"
-import PROFESSIONS from "/Core/ServiceKeys"
+import PROFESSIONS, AUCTION_HOUSE from "/Core/ServiceKeys"
 import type Professions, CraftingData, RecipeEntry, ProfessionCard from "/UI/Professions"
 import type RecipeSource from "/Data/RecipeSources"
 import type FilterValues from "/UI/FilterMenu"
@@ -212,6 +212,51 @@ local function actions()
     mock.player:enterCombat()
     M:Craft(1)
     expect(craft).toHaveBeenCalledTimes(2)
+end
+
+local BAR, BLADE = 990311, 990312
+mock.defineItem(BAR, { name = "Test Bar", quality = 1, stackCount = 20, classID = 7, icon = 133217 }, { cached = true })
+mock.defineItem(BLADE, { name = "Test Blade", quality = 2, stackCount = 1, classID = 2, icon = 135274 }, {
+    cached = true,
+})
+
+@test(
+    "Shift-click on the product or a reagent: searched in the auction house while it can; else the recipe linked, the reagent into the chat line"
+)
+local function auctionLinks()
+    openSmithing()
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return {
+            outputItemID = BLADE,
+            reagentSlotSchematics = { { reagents = { { itemID = BAR } }, quantityRequired = 2 } },
+        }
+    end)
+    local r = assert(M:Recipe(recipeAt(1).id))
+    local ah = assert(services.use(AUCTION_HOUSE))
+    local searches = true
+    local search = mock.stub(ah, "SearchItem", function(_: number | string): boolean
+        return searches
+    end)
+    local chat = tbl.field(_G, "ChatFrameUtil")
+    local inserted = mock.stub(chat, "InsertLink", function(_: string): boolean
+        return false
+    end)
+    expect(assert(r.onProductLink)()).toBe(true)
+    expect(search).toHaveBeenCalledWith(BLADE)
+    assert(r.onReagentLink)(1)
+    expect(search).toHaveBeenCalledWith(BAR)
+    expect(inserted).never.toHaveBeenCalled()
+    -- not searched: the product's click links the recipe; the reagent's link
+    -- offered to the chat line (which takes it only while typed in)
+    searches = false
+    expect(assert(r.onProductLink)()).toBe(false)
+    assert(r.onReagentLink)(1)
+    expect(inserted).toHaveBeenCalledTimes(1)
+    local _, barLink = C_Item.GetItemInfo(BAR)
+    expect(inserted).toHaveBeenCalledWith(barLink)
+    -- a slot past the reagents: nothing
+    assert(r.onReagentLink)(5)
+    expect(inserted).toHaveBeenCalledTimes(1)
 end
 
 @test("a recipe's details: makes how many, tools met or not, a cooldown, its product loading")
