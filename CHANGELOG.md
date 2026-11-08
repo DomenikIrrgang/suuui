@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Spellbook: right-clicking a pet spell turns its autocast on or off, in combat too, instead of giving a "Forbidden" error. It works through the pet bar: a pet spell that isn't on the pet bar says in its tooltip to right-click it there.
+
 ## 0.6.25 (2026-11-08)
 
 ### Fixed
