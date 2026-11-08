@@ -21,22 +21,32 @@
 #   tools/merge_trainer_records.lua): the game keeps those on the server.
 #   Recipes no trainer is recorded for yet take Classic's value from
 #   cMaNGOS (tools/data/cmangos_trainers.tsv, GPL-3.0); Forever's own new
-#   recipes have none until recorded.
+#   recipes have none until recorded. Recipe items a newer build no longer
+#   ships (the server sends them: the Tinker schematics) keep an older
+#   build's skill (--itemsparse-old).
 #   python3 -I tools/gen_recipe_sources.py tools/data/forever_recipes.json src/Data/RecipeSources.wowlua \
-#       [--itemsparse <wago>/ItemSparse.csv] [--trainers tools/data/trainer_records.tsv]
-#       [--cmangos tools/data/cmangos_trainers.tsv]
+#       [--itemsparse <wago>/ItemSparse.csv] [--itemsparse-old <older build's ItemSparse.csv>]
+#       [--trainers tools/data/trainer_records.tsv] [--cmangos tools/data/cmangos_trainers.tsv]
 import csv, json, os, sys
 
 SRC, OUT = sys.argv[1:3]
 OPTS = dict(zip(sys.argv[3::2], sys.argv[4::2]))
 
-# the skill a recipe item asks for
-itemSkill = {}
-if OPTS.get('--itemsparse'):
-    for r in csv.DictReader(open(OPTS['--itemsparse'], encoding='utf-8')):
+# the skill a recipe item asks for (an item the build has, as the build has it)
+itemSkill, shipped = {}, set()
+for opt in ('--itemsparse', '--itemsparse-old'):
+    if not OPTS.get(opt):
+        continue
+    seen = set()
+    for r in csv.DictReader(open(OPTS[opt], encoding='utf-8')):
+        item = int(r['ID'])
+        seen.add(item)
+        if item in shipped:
+            continue
         rank = int(r.get('RequiredSkillRank') or 0)
         if rank > 0:
-            itemSkill[int(r['ID'])] = rank
+            itemSkill[item] = rank
+    shipped |= seen
 
 # what the trainers SuuUI recorded teach: (profession, recipe name) -> skill, trainers
 taught = {}
