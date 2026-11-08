@@ -8,7 +8,7 @@
 
 ### Changed
 
-- Party and raid frames show other players' debuffs that have a type (Magic, Curse, Poison, Disease) and crowd control, in combat too, so typeless ones like Forbearance, Weakened Soul and Boosted Rest stay off. "Others' debuffs" in the party and raid frame settings brings every debuff back. Your own frame keeps all of yours.
+- Party and raid frames show only debuffs that have a type (Magic, Curse, Poison, Disease) and crowd control, yours too and in combat too, so typeless ones like Forbearance, Weakened Soul and Boosted Rest stay off. "Debuffs" in the party and raid frame settings brings every debuff back; your debuff row by the minimap keeps all of yours.
 
 ### Fixed
 

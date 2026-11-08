@@ -53,8 +53,9 @@ local DEFAULTS = {
     incoming = true,
     buffIcons = 2, -- defensives on them (the Defensives list)
     debuffIcons = 3, -- debuffs, the ones you can remove first
-    -- others' debuffs: "kinds" (typed ones and crowd control) or "all"
-    othersDebuffs = "kinds",
+    -- the debuffs shown, yours too: "kinds" (typed ones and crowd control)
+    -- or "all"
+    debuffKinds = "kinds",
     auraSide = "right", -- "right", "left" or "inside" (the bar's right end; for a row)
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
@@ -111,9 +112,9 @@ type PartyGroup = {
     drain?: string,
     dispel?: boolean,
     harmfulEdge?: boolean,
-    -- with othersDebuffs on "kinds": this filter instead
+    -- with debuffKinds on "kinds": this filter instead
     kinds?: string[],
-    -- shown only with othersDebuffs on "kinds"
+    -- shown only with debuffKinds on "kinds"
     kindsOnly?: boolean,
 }
 local AURA_GROUPS: PartyGroup[] = {
@@ -134,16 +135,18 @@ local AURA_GROUPS: PartyGroup[] = {
         dispel = true,
         harmfulEdge = true,
     },
-    -- every other debuff (Forbearance, Weakened Soul…)
+    -- every other debuff (Forbearance, Weakened Soul…); by kind, only the
+    -- typed ones you can't remove (crowd control has its group)
     {
         key = "debuffs",
         set = "debuffIcons",
         who = "me",
         filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" },
+        kinds = { "HARMFUL", "DISPELLABLE", "!RAID_PLAYER_DISPELLABLE" },
         dispel = true,
         harmfulEdge = true,
     },
-    -- everyone else's frames: all their debuffs, once; with othersDebuffs on
+    -- everyone else's frames: all their debuffs, once; with debuffKinds on
     -- "kinds" only the typed ones and (next group) crowd control. The game
     -- won't leave a debuff out by spell on a friendly unit unless the spell
     -- is never secret, and on Forever none of the noisy ones is (probed
@@ -159,10 +162,11 @@ local AURA_GROUPS: PartyGroup[] = {
         dispel = true,
         harmfulEdge = true,
     },
+    -- crowd control, yours and theirs (asked 2026-11-08: your own frame
+    -- without the typeless ones too)
     {
         key = "cc",
         set = "debuffIcons",
-        who = "others",
         filter = { "HARMFUL", "CROWD_CONTROL", "!DISPELLABLE" },
         kindsOnly = true,
         dispel = true,
@@ -186,7 +190,7 @@ end
 -- A group's filter: its own, or with others' debuffs by kind, its kinds one.
 local function groupFilter(g: PartyGroup): string[]
     local kinds = g.kinds
-    if kinds and M:Get("othersDebuffs") == "kinds" then
+    if kinds and M:Get("debuffKinds") == "kinds" then
         return kinds
     end
     return g.filter
@@ -194,7 +198,7 @@ end
 
 -- A group's count on a frame: its setting, on the frames it is for.
 local function groupMax(f: UnitFrame, g: PartyGroup): number
-    if g.kindsOnly and M:Get("othersDebuffs") ~= "kinds" then
+    if g.kindsOnly and M:Get("debuffKinds") ~= "kinds" then
         return 0
     end
     if g.who and g.who ~= (f.unit == "player" and "me" or "others") then
@@ -630,15 +634,15 @@ local SECTION: SettingsSection = {
                     description = "After the defensives: debuffs you can remove first, then the rest.",
                 },
                 {
-                    key = "othersDebuffs",
-                    label = "Others' debuffs",
+                    key = "debuffKinds",
+                    label = "Debuffs",
                     control = "segmented",
                     options = {
                         { value = "kinds", label = "Typed and crowd control" },
                         { value = "all", label = "Every debuff" },
                     },
                     combat = true,
-                    description = "Other players' debuffs: only those with a type (Magic, Curse, Poison, Disease, whoever can remove them) and crowd control, so the typeless ones (Forbearance, Weakened Soul, Boosted Rest, Resurrection Sickness…) stay off, in combat too. Typeless debuffs that matter (bleeds, healing reductions, many boss debuffs) go too. Yours always show every debuff.",
+                    description = "Everyone's debuffs, yours too: only those with a type (Magic, Curse, Poison, Disease, whoever can remove them) and crowd control, so the typeless ones (Forbearance, Weakened Soul, Boosted Rest, Resurrection Sickness…) stay off, in combat too. Typeless debuffs that matter (bleeds, healing reductions, many boss debuffs) go too. Your debuff row by the minimap keeps all of yours.",
                 },
                 {
                     key = "auraSide",
@@ -1213,7 +1217,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             "showSelf",
             "buffIcons",
             "debuffIcons",
-            "othersDebuffs",
+            "debuffKinds",
             "auraSide",
         }, function(key)
             self:RunOutOfCombat("layout", function()

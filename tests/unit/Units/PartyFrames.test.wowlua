@@ -58,7 +58,7 @@ local function cleanup()
     mock.group:leave()
     mock.player:target(nil)
     M:ResetAll({
-        "othersDebuffs",
+        "debuffKinds",
         "showSelf",
         "showSolo",
         "direction",
@@ -243,8 +243,12 @@ local function options()
     expect(f.opts.healthText).toBe("value")
 end
 
-@test("others' debuffs: by kind (typed and crowd control) by default, every debuff by the setting")
-local function othersDebuffs()
+-- (the filter strings as the aura row writes them)
+local KINDS_REST = "HARMFUL|!RAID_PLAYER_DISPELLABLE|DISPELLABLE"
+local REST_ALL = "HARMFUL|!RAID_PLAYER_DISPELLABLE"
+
+@test("debuffs by kind (typed and crowd control) by default, yours too; every debuff by the setting")
+local function debuffKinds()
     mock.group:add(tank)
     settle()
     local groups = assert(frame("party1").auras).groups
@@ -253,9 +257,16 @@ local function othersDebuffs()
     expect(assert(groups.all).filter).toBe("HARMFUL|DISPELLABLE")
     expect(assert(groups.cc).filter).toBe("HARMFUL|!DISPELLABLE|CROWD_CONTROL")
     expect(assert(groups.cc).max > 0).toBe(true)
-    M:Set("othersDebuffs", "all")
+    -- yours (the player's frame): the other typed ones, crowd control too
+    M:Set("showSelf", true)
+    settle()
+    local mine = assert(frame("player").auras).groups
+    expect(assert(mine.debuffs).filter).toBe(KINDS_REST)
+    expect(assert(mine.cc).max > 0).toBe(true)
+    M:Set("debuffKinds", "all")
     expect(assert(groups.all).filter).toBe("HARMFUL")
     expect(assert(groups.cc).max).toBe(0)
+    expect(assert(mine.debuffs).filter).toBe(REST_ALL)
 end
 
 @test("the settings' preview: a made-up party with every setting; edit mode's group preview on the frames' place")
