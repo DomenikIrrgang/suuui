@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- The Character window has a Pet tab next to Character while you have a pet: your pet's model, stats and experience in SuuUI's look, with its name, level, family, loyalty and (for a hunter's pet) its mood in the line at the top. It replaces the game's Pet button beside Stats, Sets and Titles.
+
 ### Changed
 
 - The game menu's SuuUI settings entry shows SuuUI's own mark, the icon from the addon list, instead of a plain diamond.

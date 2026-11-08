@@ -15,6 +15,9 @@
 --         box without Blizzard's zoom and turn buttons, the stats as a
 --         StatList (gilt-text heads, ink-muted labels, ink values, gilt-faint
 --         rules), the side buttons (Stats, Titles, Sets) as a segmented row.
+--   The Pet tab, after Character while you have a pet: the paper doll's pet
+--         view (the pet's model, stats and experience; the identity line
+--         the pet's), in place of Blizzard's Pet side button.
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -140,6 +143,24 @@ local function identityLine(level: number?, race: string?, className: string?): 
         parts[#parts + 1] = className
     end
     return table.concat(parts, " · ")
+end
+
+-- A hunter's pet's mood (C_PetInfo.GetPetHappiness: 1 to 3) by its colour,
+-- as on the pet frame (Units/UnitFrames).
+local MOODS: { [number]: string } = { [1] = "ember-text", [2] = "amber", [3] = "fel" }
+
+-- The pet's line: "Level 19 · Wolf · Loyalty Level 2 · Happy", its mood in
+-- the mood's colour (the game's own word: PET_HAPPINESS1-3).
+local function petLine(level: number?, family: string?, loyalty: string?, mood: number?): string
+    local line = identityLine(level, family, loyalty)
+    local token = mood and MOODS[mood]
+    local word = mood and tbl.field(_G, "PET_HAPPINESS" .. mood)
+    local colors: { [string]: Color } = T.color
+    local color = token and colors[token]
+    if type(word) == "string" and word ~= "" and color then
+        line = line .. " · |cff" .. color.hex .. word .. "|r"
+    end
+    return line
 end
 
 -- The arrows beside the slots in Sets mode (each slot's popout button): a
@@ -360,6 +381,9 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     readonly flyoutGlass: { [Frame]: Texture } = {}
     identity: Identity? = nil
     modelBox: Frame? = nil
+    -- the Pet tab (SuuUI's own button in the tab row), while choosing it
+    petTab: Button? = nil
+    choosingPet: boolean = false
     placingSide: boolean = false
     sideIndex: number? = nil
     sidebar: Sidebar? = nil
@@ -420,11 +444,16 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         for _, t in ipairs(TABS) do
             local button = frame("CharacterFrameModeTab" .. t.index)
             if button then
+                local character = t.pane == "PaperDollFrame"
                 list[#list + 1] = {
                     button = button,
                     label = t.label,
                     short = t.short,
                     selected = function(): boolean
+                        -- (the Character tab: not while the pet shows)
+                        if character and self:PetMode() then
+                            return false
+                        end
                         local sel = frames.asRegion(tbl.field(button, "SelectedTexture"))
                         if sel then
                             return sel:IsShown()
@@ -432,16 +461,38 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
                         return shown(t.pane)
                     end,
                 }
+                -- the Pet tab right after it, while there's a pet
+                if character then
+                    list[#list + 1] = {
+                        button = self:BuildPetTab(cf),
+                        label = "Pet",
+                        selected = function(): boolean
+                            return self:PetMode()
+                        end,
+                        hidden = function(): boolean
+                            return not HasPetUI()
+                        end,
+                    }
+                end
             end
         end
         chrome:SetTabs(list)
-        -- a tab switched: the selected look follows
-        hook("ToggleCharacter", function()
+        -- a tab switched: the selected look follows. The Character tab chosen
+        -- while the pet shows (Blizzard's click finds its pane shown and does
+        -- nothing): the stats again.
+        hook("ToggleCharacter", function(tab: unknown)
+            if tab == "PaperDollFrame" and not self.choosingPet and cf:IsShown() and self:PetMode() then
+                self:SetSidebar(1)
+            end
             chrome:UpdateTabs()
         end)
         hookScript(cf, "OnShow", function()
             chrome:LayoutTabs()
             self:UpdateIdentity()
+        end)
+        -- closed: Blizzard forgets the side pane, the pet's view is over
+        hookScript(cf, "OnHide", function()
+            self:UpdatePetView()
         end)
         self:SkinPaperDoll()
     end
@@ -509,6 +560,25 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         local colors: { [string]: Color } = T.color
         if token and colors[token] then
             UI.Paint(id.diamond, token)
+        end
+        -- the pet's (Blizzard's "Level 19 Wolf (Loyalty Level 2)" out of
+        -- sight): "Fang   Level 19 · Wolf · Loyalty Level 2 · Happy", a
+        -- hunter's pet's mood in its colour
+        if self:PetMode() then
+            local petName = UnitName("pet")
+            local family = UnitCreatureFamily("pet")
+            local loyalty = C_PetInfo and C_PetInfo.GetPetLoyalty and C_PetInfo.GetPetLoyalty()
+            local mood = C_PetInfo and C_PetInfo.GetPetHappiness and C_PetInfo.GetPetHappiness()
+            id.name:SetValue(type(petName) == "string" and not isSecret(petName) and petName or "")
+            id.line:SetValue(
+                petLine(
+                    secret.asNumber(UnitLevel("pet")),
+                    type(family) == "string" and not isSecret(family) and family ~= "" and family or nil,
+                    type(loyalty) == "string" and not isSecret(loyalty) and loyalty ~= "" and loyalty or nil,
+                    type(mood) == "number" and not isSecret(mood) and mood or nil
+                )
+            )
+            return
         end
         local name = SuuUI.FullName("player")
         id.name:SetValue(type(name) == "string" and not isSecret(name) and name or "")
@@ -1098,6 +1168,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         hook("PaperDollFrame_SetSidebar", function(_: unknown, index: unknown)
             self.sideIndex = index :: number?
             self:UpdateSidebar()
+            self:UpdatePetView()
         end)
         self.sideIndex = 1
         self:UpdateSidebar()
@@ -1118,6 +1189,136 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             t.label:SetColor(on and "arcane" or (t.button == hover and "ink" or "ink-muted"))
         end
         sidebar.marker:SetChosen(chosen)
+    end
+
+    ----------------------------------------------------------------------------
+    -- The Pet tab: the paper doll's pet view (Blizzard's fourth side pane: the
+    -- pet's model, stats and experience) as a tab of the window, shown while
+    -- you have a pet; Blizzard's own Pet side button out of sight.
+    -- (Its click calls Blizzard's ToggleCharacter and PaperDollFrame_SetSidebar
+    -- from SuuUI's code: nothing there is protected, and a closed window drops
+    -- the side pane it chose. The other tabs' clicks stay Blizzard's.)
+    ----------------------------------------------------------------------------
+
+    function BuildPetTab(cf: Frame): Button
+        local b = self.petTab
+        if b then
+            return b
+        end
+        b = CreateFrame("Button", nil, cf)
+        b:RegisterForClicks("LeftButtonUp")
+        b:SetScript("OnClick", function()
+            self:ShowPet()
+        end)
+        b:Hide()
+        self.petTab = b
+        return b
+    end
+
+    -- The paper doll showing the pet (its side pane the pet's).
+    function PetMode(): boolean
+        local pd, pane = frame("PaperDollFrame"), frame("CharacterStatsPanePetScrollBox")
+        return pd ~= nil and pane ~= nil and pd:IsShown() and tbl.field(pd, "currentSideBar") == pane
+    end
+
+    -- One of the paper doll's side panes (1 the stats, 4 the pet's).
+    function SetSidebar(index: number)
+        local set = tbl.field(_G, "PaperDollFrame_SetSidebar")
+        if type(set) == "function" then
+            (set :: (unknown, number) -> ())(tbl.field(_G, "PaperDollSidebarTabs"), index)
+        end
+    end
+
+    -- The Pet tab chosen: the Character pane, then its pet view. With the
+    -- right pane folded away the pet's stats stay hidden (Blizzard shows them
+    -- when it opens again).
+    function ShowPet()
+        if not HasPetUI() then
+            return
+        end
+        local pd = frame("PaperDollFrame")
+        if pd and not pd:IsShown() then
+            self.choosingPet = true
+            ToggleCharacter("PaperDollFrame", true)
+            self.choosingPet = false
+        end
+        self:SetSidebar(4)
+        local right, pane = frame("CharacterFrameRightPaneHost"), frame("CharacterStatsPanePetScrollBox")
+        if pane and right and not right:IsShown() then
+            pane:Hide()
+        end
+        self:UpdatePetView()
+    end
+
+    -- The pet came or went: the tab in or out of the row; gone while its
+    -- view showed, the Character tab's stats again (Blizzard does that too,
+    -- on UNIT_PET; looked at again a frame later).
+    function UpdatePetTab()
+        local chrome = self.chrome
+        if chrome then
+            chrome:LayoutTabs()
+        end
+        if not HasPetUI() then
+            after(0, function()
+                if not HasPetUI() and self:PetMode() then
+                    self:SetSidebar(1)
+                end
+                self:UpdatePetView()
+            end)
+        end
+        self:UpdatePetView()
+    end
+
+    -- Stats | Sets | Titles out of sight while the pet shows; Blizzard's
+    -- happiness face (a hunter's pet, on the model; its tooltip says the
+    -- diet) only then: it sat over the head slot. The tabs' look and the
+    -- identity line follow.
+    function UpdatePetView()
+        local pet = self:PetMode()
+        local sidebar = self.sidebar
+        if sidebar then
+            sidebar.row:SetShown(not pet)
+            for _, t in ipairs(sidebar.tabs) do
+                t.button:SetAlpha(pet and 0 or 1)
+                t.button:EnableMouse(not pet)
+            end
+        end
+        local face = frame("PetPaperDollPetHappinessInfo")
+        if face then
+            face:SetAlpha(pet and 1 or 0)
+            face:EnableMouse(pet)
+        end
+        if self.chrome then
+            assert(self.chrome):UpdateTabs()
+        end
+        self:UpdateIdentity()
+    end
+
+    -- Blizzard's Pet side button (the fourth) out of sight for good: the Pet
+    -- tab took its place (Blizzard shows it again as a pet comes); the pet's
+    -- experience bar in SuuUI's progress look.
+    function SkinPet()
+        local function hideButton()
+            local b = frames.asButton(tbl.field(_G, "PaperDollSidebarTab4"))
+            if b then
+                b:SetAlpha(0)
+                b:EnableMouse(false)
+            end
+        end
+        hideButton()
+        if type(tbl.field(_G, "PaperDollFrame_UpdateSidebarTabs")) == "function" then
+            hook("PaperDollFrame_UpdateSidebarTabs", hideButton)
+        end
+        local bar = frame("PetPaperDollFrameExpBar")
+        if bar and once(bar) then
+            UI.ReskinFillBar(bar)
+            -- (Blizzard's green: as the blue it is progress-fill)
+            local fill = frames.asTexture(tbl.field(bar, "Fill"))
+            if fill then
+                fill:SetAtlas("common-stat-bar-blue")
+            end
+        end
+        self:UpdatePetView()
     end
 
     -- New Set (its own button, centred above Equip and Save: probed 2026-10-13)
@@ -1161,6 +1362,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self:BuildWearBlock()
         self:UpdateWear()
         self:SkinSidebar()
+        self:SkinPet()
         -- the toggle for the right pane: a small square with SuuUI's edge and a
         -- chevron pointing the way the pane goes
         local toggle = frames.asButton(tbl.field(_G, "CharacterFrameRightPaneToggleButton"))
@@ -1346,6 +1548,19 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
             self:UpdateSlots()
         end)
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
+            self:UpdateIdentity()
+        end)
+        -- the pet came or went (the Pet tab), its level or loyalty changed
+        self:OnUnitEvent("UNIT_PET", "player", function()
+            self:UpdatePetTab()
+        end)
+        self:OnGameEvent("PET_UI_UPDATE", function()
+            self:UpdatePetTab()
+        end)
+        self:OnUnitEvent("UNIT_PET_EXPERIENCE", "player", function()
+            self:UpdateIdentity()
+        end)
+        self:OnUnitEvent("UNIT_HAPPINESS", "pet", function()
             self:UpdateIdentity()
         end)
         -- the Durability module's reading (it sends again on a theme change)
