@@ -5,6 +5,7 @@
 ### Fixed
 
 - Character window, Pet tab: the pet's model stays in a fight instead of turning into your character as you draw your weapons.
+- Pet bar: right-clicking an ability turns its autocast on and off again, in combat too.
 - Spellbook: your pet's spells were missing. They have a Pet school under your class's now, while you have a pet: a click casts them (in combat too), drag puts them on a bar, right click turns their autocast on or off; the ones that cast on their own show Autocast on.
 
 ## 0.6.24 (2026-11-08)

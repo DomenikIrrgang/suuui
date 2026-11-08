@@ -11,10 +11,12 @@
 -- you have forms (relaid out of combat when you learn one). The pet bar shows
 -- itself while you have a pet and no vehicle (a secure state driver, so it
 -- works in combat), and in keybind mode; right click toggles autocast
--- (/petautocasttoggle), shown as a dashed ink ring. Keys bound to the game's stance and pet commands
+-- (through the game's own pet button), shown as a dashed ink ring. Keys bound to the game's stance and pet commands
 -- click these buttons. Anything secure waits for the end of combat.
 
 import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
 import after from "wowlua:timer"
 import tokens as T from "/Core/Tokens"
 import * as combat from "/Core/Combat"
@@ -462,16 +464,20 @@ export class PetBar extends ClassBar<PetButton>
         all()
     end
 
-    -- Right click toggles autocast where the ability allows it. Out of combat.
+    -- Right click toggles autocast where the ability allows it, by clicking
+    -- the game's own pet button for the slot, whose secure code toggles it
+    -- (in combat too): /petautocasttoggle, which names the ability, does
+    -- nothing on WoW Forever (seen 2026-11-08; `/click PetActionButton4
+    -- RightButton` toggled it, in combat too). Out of combat.
     function UpdateAutocastClicks()
         combat.run(
             "classbar:autocast:" .. self.name,
             function()
-                for _, b in ipairs(self.buttons) do
-                    local name = b.petName
-                    local allowed = name ~= nil and uiText.flag(b.autoCastAllowed)
-                    b:SetAttribute("type2", allowed and "macro" or "pet")
-                    b:SetAttribute("macrotext2", allowed and ("/petautocasttoggle " .. (name or "")) or nil)
+                for i, b in ipairs(self.buttons) do
+                    local game = frames.asButton(tbl.field(_G, "PetActionButton" .. i))
+                    local allowed = b.petName ~= nil and uiText.flag(b.autoCastAllowed) and game ~= nil
+                    b:SetAttribute("type2", allowed and "click" or "pet")
+                    b:SetAttribute("clickbutton2", allowed and game or nil)
                 end
             end,
             "Action bars"
