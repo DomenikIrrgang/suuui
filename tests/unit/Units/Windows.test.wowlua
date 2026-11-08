@@ -16,6 +16,7 @@ import * as errors from "wowlua:errors"
 import SuuUI from "/Core/API"
 import internal M, WindowsModule, trackEyes, paneTabs, trainerRows from "/Units/Windows"
 import type WindowChrome, SkinTab from "/UI/WindowSkin"
+import moneyText as coinText from "/UI/Inventory"
 import expectNoErrors from "../../helpers"
 
 local field = tbl.field
@@ -47,6 +48,8 @@ mock.defineQuest(WOLVES, {
     giver = giver,
     level = 5,
     header = "Elwynn Forest",
+    xp = 2450,
+    money = 2500,
     objectives = {
         { text = "Prowler slain, a long objective that wraps onto a second line in the log", required = 5 },
     },
@@ -402,6 +405,22 @@ local function questLog()
         end
         expect(screen(ab, ab:GetLeft()) > screen(sc, sc:GetRight())).toBe(true)
         expect(screen(tr, tr:GetRight()) < screen(q, q:GetRight())).toBe(true)
+    end
+    -- the money reward as SuuUI's money, in numeric, level with the XP beside
+    -- it: no coin inline (it stood above the digits' middle in
+    -- SuuUI's font, found in game); again when the quest is shown again
+    local rewards = win("MapQuestInfoRewardsFrame")
+    local money = assert(frames.asFontString(field(rewards, "MoneyFrame", "Name")))
+    local xp = assert(frames.asFontString(field(rewards, "XPFrame", "Name")))
+    for _ = 1, 2 do
+        expect(money:GetText()).toBe(coinText(2500))
+        expect((money:GetText() or ""):find("|T", 1, true)).toBeNil()
+        expect(money:GetFontObject()).toBe(SuuUI.Fonts.Get("numeric"))
+        local _, my = money:GetCenter()
+        local _, xy = xp:GetCenter()
+        expect(assert(my)).toBeCloseTo(assert(xy))
+        errors.try(field(_G, "QuestMapFrame_ShowQuestDetails"), WOLVES)
+        mock.advanceFrames(3)
     end
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
 end
