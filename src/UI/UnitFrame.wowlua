@@ -28,6 +28,15 @@
 --       reserveRight = 0,   -- px kept free at the bar's right end (inline auras)
 --       textOnSmall = false, -- health text on an sm frame too (raid frames)
 --       raidMarker = true,  -- the raid target marker (skull, cross…) over the top edge
+--       badgeTop = false,   -- the state badges (Aggro, Warded, the debuff types)
+--                           -- on the top edge at the right, a little smaller,
+--                           -- instead of at the row's end (the healer frames:
+--                           -- design "Healer frame badges" 2, 2026-11-08);
+--                           -- f:PlaceBadges() after it changes
+--       nameUnderIcons = false, -- with no health text: the row (the name) runs
+--                           -- to the right end, under reserveRight's icons,
+--                           -- which cover its end when they show (the healer
+--                           -- frames, asked 2026-11-08); f:FitRow() after
 --       api = nil,          -- a stand-in for the game's Unit* functions (previews);
 --                           -- such a frame isn't activated, call :Refresh()
 --   })
@@ -856,6 +865,23 @@ end
 -- glow draws over the ward's.
 --------------------------------------------------------------------------------
 
+-- A state badge's place: at the row's end, or (opts.badgeTop, the healer
+-- frames) on the top edge at the right, a little smaller: in a 120 px frame
+-- with three icon slots inside, the row's end left the name a letter (seen in
+-- game, 2026-11-08).
+local BADGE_TOP_SCALE = 0.85
+local function placeBadge(owner: UnitFrame, badge: Frame)
+    badge:ClearAllPoints()
+    if owner.opts.badgeTop then
+        badge:SetScale(BADGE_TOP_SCALE)
+        -- (a scaled frame's offsets are in its own scale)
+        badge:SetPoint("RIGHT", owner, "TOPRIGHT", -owner.size.pad / BADGE_TOP_SCALE, 0)
+    else
+        badge:SetScale(1)
+        badge:SetPoint("RIGHT", owner.row, "RIGHT", 0, 0)
+    end
+end
+
 -- The ward border, badge and glow over a frame, on `parent` (the slot's
 -- button, or the frame itself in a preview, which shows and hides it with
 -- SetWarded).
@@ -868,7 +894,8 @@ export class WardDecoration extends Frame
         self:EnableMouse(false)
         draw.border(self, "ward")
         local badge = controls.stateBadge(self, "ward", "Warded")
-        badge:SetPoint("RIGHT", owner.row, "RIGHT", 0, 0)
+        owner.edgeBadges[#owner.edgeBadges + 1] = badge
+        placeBadge(owner, badge)
         -- at least as wide as the Aggro badge it covers
         badge:SetWidth(math.max(badge.knownWidth, uiText.measureText("badge", "Aggro") + 10))
         self:SetFrameLevel(owner.over:GetFrameLevel() + 2)
@@ -933,6 +960,8 @@ export type UnitFrameOptions = {
     frame?: Button,
     reserveRight?: number,
     textOnSmall?: boolean,
+    badgeTop?: boolean,
+    nameUnderIcons?: boolean,
     raidMarker?: boolean,
     api?: UnitApi,
     tapped?: boolean,
@@ -999,6 +1028,9 @@ export class UnitFrame extends Button
     wardSlot: UnitAuras? = nil
     -- a preview's ward look (the group frames' previews)
     wardDeco: WardDecoration? = nil
+    -- every state badge over this frame (its own, Warded's, the debuff
+    -- types'), placed together (placeBadge)
+    edgeBadges: Frame[] = {}
     active: boolean? = nil
     ticker: TickerHandle? = nil
     -- 0.17: adds lines to the frame's tooltip after the unit's
@@ -1151,7 +1183,8 @@ export class UnitFrame extends Button
         self.stateLayer:SetAllPoints(self)
         self.stateLayer:SetFrameLevel(o:GetFrameLevel() + 1)
         self.badge = controls.stateBadge(self.stateLayer, "danger", "")
-        self.badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+        self.edgeBadges[#self.edgeBadges + 1] = self.badge
+        placeBadge(self, self.badge)
         self.badge:Hide()
         self.you = controls.stateBadge(self.row, "neutral", "you")
         self.you:SetShown(opts.you == true or opts.youWhenPlayer == true)
@@ -1482,7 +1515,9 @@ export class UnitFrame extends Button
         if self.you:IsShown() then
             badges[#badges + 1] = self.you
         end
-        local endW = self.badge:IsShown() and (self.badge.knownWidth + size.gap) or 0
+        -- (on the top edge it takes none of the row)
+        local badgeInRow = self.badge:IsShown() and not self.opts.badgeTop
+        local endW = badgeInRow and (self.badge.knownWidth + size.gap) or 0
         -- Never read sizes back from the meta or the badges: they are anchored
         -- after the name, and a secret name makes their geometry secret too.
         local metaValue = tostring(self.meta.value or "")
@@ -1515,7 +1550,7 @@ export class UnitFrame extends Button
         if self.opts.size == "sm" or secretName then
             -- right to left from the row's end (after the state badge's spot, if
             -- it shows): the badges, then the meta
-            local after: Region? = self.badge:IsShown() and self.badge or nil
+            local after: Region? = badgeInRow and self.badge or nil
             local function place(region: Region)
                 region:ClearAllPoints()
                 if after then
@@ -1553,6 +1588,14 @@ export class UnitFrame extends Button
         end
     end
 
+    -- Every state badge again, after opts.badgeTop changed; the row with them.
+    function PlaceBadges()
+        for _, b in ipairs(self.edgeBadges) do
+            placeBadge(self, b)
+        end
+        self:LayoutRow(self:RowMarker())
+    end
+
     -- The marker the row starts with: the role icon or the class diamond.
     function RowMarker(): Texture?
         if self.role:IsShown() then
@@ -1584,9 +1627,16 @@ export class UnitFrame extends Button
         local size, opts = self.size, self.opts
         local textW = (opts.size == "sm" and not opts.textOnSmall) and 0 or (TEXT_W[opts.healthText or "percent"] or 34)
         local extra = opts.reserveRight or 0
-        self.row:SetPoint("BOTTOMRIGHT", -(size.pad + (textW > 0 and textW + size.gap or 0) + extra), 0)
+        -- (the healer frames: the name runs under the icons, which cover its
+        -- end when they show; a health text keeps the row before it)
+        local rowExtra = (opts.nameUnderIcons and textW == 0) and 0 or extra
+        self.row:SetPoint("BOTTOMRIGHT", -(size.pad + (textW > 0 and textW + size.gap or 0) + rowExtra), 0)
         self.right:ClearAllPoints()
         self.right:SetPoint("RIGHT", -(size.pad + extra), 0)
+        -- the name's room follows the row's
+        if self.unit then
+            self:LayoutRow(self:RowMarker())
+        end
     end
 
     function Resize(w: number, h: number)
@@ -1797,7 +1847,8 @@ export class UnitFrame extends Button
         deco:EnableMouse(false)
         draw.border(deco, "dispel-" .. tone)
         local badge = controls.stateBadge(deco, tone, kind)
-        badge:SetPoint("RIGHT", self.row, "RIGHT", 0, 0)
+        self.edgeBadges[#self.edgeBadges + 1] = badge
+        placeBadge(self, badge)
         -- at least as wide as the Aggro badge it covers, so none of it peeks out
         badge:SetWidth(math.max(badge.knownWidth, uiText.measureText("badge", "Aggro") + 10))
         -- over the frame's own border and text and over Warded; Magic on top,
