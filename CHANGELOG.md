@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Character window, Pet tab: the pet's model stays in a fight instead of turning into your character as you draw your weapons.
+
 ## 0.6.24 (2026-11-08)
 
 ### New
