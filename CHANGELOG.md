@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Unit frames: a shield (absorb) shows as even stripes after the health again, instead of stripes that stretch into lines across the bar.
+
 ## 0.6.23 (2026-11-08)
 
 ### New
