@@ -6,6 +6,10 @@
 
 - Auction house: Shift-click an item while the auction house is open to search for it on the Buy tab: an item link in chat, an item in your bags, or a recipe's product or reagent in the Professions window. While you're typing in the chat line, Shift-click still puts the link into your message. Plugins can search the same way (API 0.28).
 
+### Changed
+
+- Game data updated to WoW Forever 1.60.1.70862 and QuestieDB's latest database: quest chains and names on the world map (the priest's Dark Sacrifice quests), more places recipes and appearances come from with the trainers that teach them, and the Cooldown Manager presets know the build's new spell IDs.
+
 ### Fixed
 
 - Spellbook: right-clicking a pet spell turns its autocast on or off, in combat too, instead of giving a "Forbidden" error. It works through the pet bar: a pet spell that isn't on the pet bar says in its tooltip to right-click it there.
