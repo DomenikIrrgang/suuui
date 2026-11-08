@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Auction house: Shift-click an item while the auction house is open to search for it on the Buy tab: an item link in chat, an item in your bags, or a recipe's product or reagent in the Professions window. While you're typing in the chat line, Shift-click still puts the link into your message. Plugins can search the same way (API 0.28).
+
 ## 0.6.25 (2026-11-08)
 
 ### Fixed

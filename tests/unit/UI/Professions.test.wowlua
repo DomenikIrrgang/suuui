@@ -758,6 +758,44 @@ local function productLink()
     mock.hover(nil)
 end
 
+@test(
+    "Shift-click on the product: onProductLink first (true: done, else the recipe linked); on a reagent: onReagentLink"
+)
+local function itemLinks()
+    local p = make()
+    local linked = mock.spy(function(_id: number) end)
+    local handled = false
+    local productLink = mock.spy(function(): boolean
+        return handled
+    end)
+    local reagentLink = mock.spy(function(_i: number) end)
+    p:SetCrafting(craft())
+    p.onLinkRecipe = linked
+    p:SetRecipe(recipe({ onProductLink = productLink, onReagentLink = reagentLink }))
+    local v = p.recipe
+    -- a plain click: neither
+    mock.click(v.product)
+    mock.click(v.reagents[2].slot)
+    expect(productLink).never.toHaveBeenCalled()
+    expect(reagentLink).never.toHaveBeenCalled()
+    mock.setModifiers({ shift = true })
+    mock.click(v.product)
+    expect(productLink).toHaveBeenCalledTimes(1)
+    expect(linked).toHaveBeenCalledWith(2331)
+    handled = true
+    mock.click(v.product)
+    expect(productLink).toHaveBeenCalledTimes(2)
+    expect(linked).toHaveBeenCalledTimes(1)
+    mock.click(v.reagents[2].slot)
+    expect(reagentLink).toHaveBeenCalledWith(2)
+    -- without the callbacks: the recipe linked, a reagent nothing
+    p:SetRecipe(recipe())
+    mock.click(v.product)
+    mock.click(v.reagents[1].slot)
+    expect(linked).toHaveBeenCalledTimes(2)
+    expect(reagentLink).toHaveBeenCalledTimes(1)
+end
+
 --------------------------------------------------------------------------------
 -- Link, search, filters, sort
 --------------------------------------------------------------------------------
