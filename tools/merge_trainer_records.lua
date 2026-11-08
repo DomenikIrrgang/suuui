@@ -3,8 +3,9 @@
 -- TRAINER_SHOW: what each trainer teaches and the skill it needs) from one or
 -- more SavedVariables files, merged into tools/data/trainer_records.tsv: one
 -- line per trainer and recipe. Lines already in the file stay; a trainer
--- recorded again replaces its own lines. The SavedVariables run in an empty
--- sandbox (no io, no os).
+-- recorded again replaces its own lines for the recipes it listed (it leaves
+-- out what the character knows already: the others stay). The
+-- SavedVariables run in an empty sandbox (no io, no os).
 --   lua tools/merge_trainer_records.lua tools/data/trainer_records.tsv <SuuUI.lua> [<SuuUI.lua> ...]
 local out = arg[1]
 assert(out and arg[2], "usage: merge_trainer_records.lua <out.tsv> <SuuUI.lua> [...]")
@@ -44,7 +45,8 @@ if f then
     f:close()
 end
 
--- the recordings: a newer one of a trainer replaces what was kept
+-- the recordings: a newer one of a trainer replaces what was kept of the
+-- recipes it lists
 local added = 0
 for i = 2, #arg do
     local env = {}
@@ -64,6 +66,14 @@ for i = 2, #arg do
                         level = sv.level, item = sv.item, npcID = rec.npcID, npc = rec.npc, zone = rec.zone,
                         subzone = rec.subzone, faction = rec.faction, at = rec.at,
                     }
+                end
+                -- (a trainer leaves out what the recording character already
+                -- knows: the recipes only an older recording has stay, with
+                -- their own date)
+                local listed = {}
+                for _, row in ipairs(rows) do listed[row.recipe] = true end
+                for _, row in ipairs(old and old.rows or {}) do
+                    if not listed[row.recipe] then rows[#rows + 1] = row end
                 end
                 byTrainer[key] = { rows = rows, at = rec.at }
                 added = added + 1
