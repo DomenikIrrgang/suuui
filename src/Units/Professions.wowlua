@@ -16,7 +16,7 @@
 
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
-import PROFESSIONS from "/Core/ServiceKeys"
+import PROFESSIONS, AUCTION_HOUSE from "/Core/ServiceKeys"
 import type Professions, ProfessionCard, ProfessionSpell, ProfessionTab, CraftingData, RecipeEntry, RecipeCategory, RecipeDetail, RecipeReagent, RecipeSourceItem from "/UI/Professions"
 import type FilterValues, FilterChoice from "/UI/FilterMenu"
 import type RecipeSource from "/Data/RecipeSources"
@@ -223,6 +223,14 @@ local function itemTip(owner: Frame, itemID: number?)
     GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
     GameTooltip:SetItemByID(itemID)
     GameTooltip:Show()
+end
+
+-- An item searched in SuuUI's auction house window (the auctionhouse
+-- service): whether it was (the window open, nothing else typed in).
+local function searchAuctions(itemID: number): boolean
+    local ah = SuuUI.UseService(AUCTION_HOUSE)
+    local search = ah and ah.SearchItem
+    return search ~= nil and search(itemID)
 end
 
 -- Where a recipe not learned yet is learned, from SuuUI's recipe data (the
@@ -1024,6 +1032,11 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
             r.onProduct = function(owner: Frame)
                 itemTip(owner, out)
             end
+            -- Shift-click with the auction house open: searched there (else
+            -- the recipe's link, as before)
+            r.onProductLink = function(): boolean
+                return searchAuctions(out)
+            end
         else
             r.desc = tryValue(C_TradeSkillUI.GetRecipeDescription, id, {})
         end
@@ -1046,6 +1059,19 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         r.onReagent = function(i: number, owner: Frame)
             local g = reagents[i]
             itemTip(owner, g and g.itemID)
+        end
+        -- Shift-click: searched in the auction house while it is open, else
+        -- the reagent's link into the chat line being typed (only there)
+        r.onReagentLink = function(i: number)
+            local g = reagents[i]
+            local itemID = g and g.itemID
+            if not itemID or searchAuctions(itemID) then
+                return
+            end
+            local data = self:Item(itemID)
+            if data then
+                try(field(_G, "ChatFrameUtil", "InsertLink") or field(_G, "ChatEdit_InsertLink"), data.link)
+            end
         end
         local toolsMet = true
         -- one line per tool: the game can list one twice (Hoof-Shaped Foot

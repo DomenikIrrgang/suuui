@@ -35,7 +35,10 @@
 --       qualityName, have, need } }, cooldown (text), source (where to
 --       learn it: { item = { icon, name, quality, qualityName, note,
 --       onEnter(owner) }, lines = { text } }), tracked,
---       canMake, ready, why, onProduct(owner), onReagent(i, owner) }
+--       canMake, ready, why, onProduct(owner), onReagent(i, owner),
+--       onProductLink() (the product Shift-clicked: true when that did
+--       something, else onLinkRecipe), onReagentLink(i) (a reagent
+--       Shift-clicked) }
 --   p.onSelect(id), p.onRecipeEnter(recipe, owner), p.onSearch(text),
 --   p.onFilters({ show = "all" | "learned" | "unlearned", difficulty = { "optimal",
 --       "medium", "easy", "trivial" }, quality = { 0..4 }, other = { "materials",
@@ -185,6 +188,8 @@ export type RecipeDetail = {
     why?: string,
     onProduct?: (owner: Frame) -> (),
     onReagent?: (i: number, owner: Frame) -> (),
+    onProductLink?: () -> boolean,
+    onReagentLink?: (i: number) -> (),
 }
 
 export type ProfessionsOptions = { edgeInset?: number }
@@ -590,6 +595,12 @@ class ReagentRow extends Frame
         slot:SetScript("OnLeave", function()
             GameTooltip:Hide()
         end)
+        slot:SetScript("OnClick", function()
+            local link = view.recipeData and view.recipeData.onReagentLink
+            if link and IsModifiedClick("CHATLINK") then
+                link(slot.index)
+            end
+        end)
         self.count = uiText.text(self, "numeric", "ink")
         self.count:SetPoint("RIGHT")
         self.name = uiText.text(self, "label", "ink")
@@ -671,8 +682,15 @@ class RecipePane extends Frame
             end
         end)
         product:SetScript("OnClick", function()
+            if not IsModifiedClick("CHATLINK") then
+                return
+            end
+            local productLink = view.recipeData and view.recipeData.onProductLink
+            if productLink and productLink() then
+                return
+            end
             local selected = view.craftData and view.craftData.selected
-            if IsModifiedClick("CHATLINK") and view.onLinkRecipe and selected then
+            if view.onLinkRecipe and selected then
                 view.onLinkRecipe(selected)
             end
         end)
