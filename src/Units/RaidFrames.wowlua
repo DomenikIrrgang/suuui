@@ -54,6 +54,8 @@ local DEFAULTS = {
     incoming = true,
     buffIcons = 1, -- defensives (the Defensives list), inside the bar's right end
     debuffIcons = 2, -- debuffs at the very end, the ones you can remove first
+    -- others' debuffs: "kinds" (typed ones and crowd control) or "all"
+    othersDebuffs = "kinds",
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
 }
@@ -115,12 +117,29 @@ type RaidGroup = {
     dispel?: boolean,
     harmfulEdge?: boolean,
     gap?: number,
+    -- shown only with othersDebuffs on "kinds"
+    kindsOnly?: boolean,
 }
+-- others' debuffs by kind: the typed ones (crowd control has its group).
+-- The game won't leave a debuff out by spell on a friendly unit unless the
+-- spell is never secret; on Forever none of the noisy ones is (probed
+-- 2026-11-08); these filter words work in combat
+local OTHERS_BY_KIND = { "HARMFUL", "DISPELLABLE" }
 local AURA_GROUPS: RaidGroup[] = {
     {
         key = "debuffs",
         set = "debuffIcons",
         filters = { me = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, others = { "HARMFUL" } },
+        dispel = true,
+        harmfulEdge = true,
+    },
+    -- others' crowd control, with othersDebuffs on "kinds"
+    {
+        key = "cc",
+        set = "debuffIcons",
+        who = "others",
+        filter = { "HARMFUL", "CROWD_CONTROL", "!DISPELLABLE" },
+        kindsOnly = true,
         dispel = true,
         harmfulEdge = true,
     },
@@ -208,6 +227,9 @@ export class RaidButton extends UnitFrame
 
     -- A group's count on this button: its setting, on the frames it is for.
     function GroupMax(g: RaidGroup): number
+        if g.kindsOnly and M:Get("othersDebuffs") ~= "kinds" then
+            return 0
+        end
         if g.who and g.who ~= (self.isMe and "me" or "others") then
             return 0
         end
@@ -217,6 +239,9 @@ export class RaidButton extends UnitFrame
     -- A group's filter for whoever it shows now.
     function GroupFilter(g: RaidGroup): string[]?
         local filters = g.filters
+        if filters and not self.isMe and M:Get("othersDebuffs") == "kinds" then
+            return OTHERS_BY_KIND
+        end
         return filters and (self.isMe and filters.me or filters.others) or g.filter
     end
 
@@ -854,6 +879,17 @@ local SECTION: SettingsSection = {
                     combat = true,
                     description = "At the bar's very end, after the defensives: debuffs you can remove first, then the rest.",
                 },
+                {
+                    key = "othersDebuffs",
+                    label = "Others' debuffs",
+                    control = "segmented",
+                    options = {
+                        { value = "kinds", label = "Typed and crowd control" },
+                        { value = "all", label = "Every debuff" },
+                    },
+                    combat = true,
+                    description = "Other players' debuffs: only those with a type (Magic, Curse, Poison, Disease, whoever can remove them) and crowd control, so the typeless ones (Forbearance, Weakened Soul, Boosted Rest, Resurrection Sickness…) stay off, in combat too. Typeless debuffs that matter (bleeds, healing reductions, many boss debuffs) go too. Yours always show every debuff.",
+                },
             },
         },
         {
@@ -1059,6 +1095,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             f.opts.incoming = self:Get("incoming")
             f.opts.reserveRight = auraReserve(f:GetHeight())
             f:ApplyAuraCount()
+            -- (others' debuffs by kind or all: the filters with them)
+            f:ApplyWho()
             if f.active then
                 f:Refresh()
             end
@@ -1444,6 +1482,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             "groupGap",
             "buffIcons",
             "debuffIcons",
+            "othersDebuffs",
         }, function()
             self:DrawPreview()
             self:RunOutOfCombat("layout", function()

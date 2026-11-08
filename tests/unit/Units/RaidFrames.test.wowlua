@@ -84,6 +84,7 @@ local function cleanup()
     mock.group:leave()
     mock.player:target(nil)
     M:ResetAll({
+        "othersDebuffs",
         "showSolo",
         "arrangement",
         "sort",
@@ -260,6 +261,33 @@ local function options()
     M:Set("debuffIcons", 0)
     expect(myButton().auraClip).never.toBeShown()
     M:Set("debuffBadges", "off")
+end
+
+@test("others' debuffs: by kind (typed and crowd control) by default, every debuff by the setting; yours all")
+local function othersDebuffs()
+    raid(2)
+    local me = myButton()
+    local other: RaidButton? = nil
+    for _, f in ipairs(M.buttons) do
+        if f:IsShown() and not f.isMe and f.unit then
+            other = f
+        end
+    end
+    local o = assert(other)
+    local groups = assert(o.auras).groups
+    -- the game won't leave a friendly unit's debuff out by spell (probed):
+    -- by kind, the typed ones and crowd control
+    expect(assert(groups.debuffs).filter).toBe("HARMFUL|DISPELLABLE")
+    expect(assert(groups.cc).filter).toBe("HARMFUL|!DISPELLABLE|CROWD_CONTROL")
+    expect(assert(groups.cc).max > 0).toBe(true)
+    -- yours: what you can remove first, then the rest; no crowd control row
+    local mine = assert(me.auras).groups
+    expect(assert(mine.debuffs).filter).toBe("HARMFUL|RAID_PLAYER_DISPELLABLE")
+    expect(assert(mine.cc).max).toBe(0)
+    -- every debuff
+    M:Set("othersDebuffs", "all")
+    expect(assert(groups.debuffs).filter).toBe("HARMFUL")
+    expect(assert(groups.cc).max).toBe(0)
 end
 
 @test("the preview: 10, 20 or 40 made-up people; by role; edit mode's on the frames' place")

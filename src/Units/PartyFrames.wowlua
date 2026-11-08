@@ -53,6 +53,8 @@ local DEFAULTS = {
     incoming = true,
     buffIcons = 2, -- defensives on them (the Defensives list)
     debuffIcons = 3, -- debuffs, the ones you can remove first
+    -- others' debuffs: "kinds" (typed ones and crowd control) or "all"
+    othersDebuffs = "kinds",
     auraSide = "right", -- "right", "left" or "inside" (the bar's right end; for a row)
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
@@ -109,6 +111,10 @@ type PartyGroup = {
     drain?: string,
     dispel?: boolean,
     harmfulEdge?: boolean,
+    -- with othersDebuffs on "kinds": this filter instead
+    kinds?: string[],
+    -- shown only with othersDebuffs on "kinds"
+    kindsOnly?: boolean,
 }
 local AURA_GROUPS: PartyGroup[] = {
     {
@@ -137,13 +143,36 @@ local AURA_GROUPS: PartyGroup[] = {
         dispel = true,
         harmfulEdge = true,
     },
-    -- everyone else's frames: all their debuffs, once
-    { key = "all", set = "debuffIcons", who = "others", filter = { "HARMFUL" }, dispel = true, harmfulEdge = true },
+    -- everyone else's frames: all their debuffs, once; with othersDebuffs on
+    -- "kinds" only the typed ones and (next group) crowd control. The game
+    -- won't leave a debuff out by spell on a friendly unit unless the spell
+    -- is never secret, and on Forever none of the noisy ones is (probed
+    -- 2026-11-08: Forbearance, Weakened Soul, Boosted Rest… all contextually
+    -- secret; its raid-frame visibility rules are empty and RAID_IN_COMBAT
+    -- keeps no debuff); these filter words work in combat
+    {
+        key = "all",
+        set = "debuffIcons",
+        who = "others",
+        filter = { "HARMFUL" },
+        kinds = { "HARMFUL", "DISPELLABLE" },
+        dispel = true,
+        harmfulEdge = true,
+    },
+    {
+        key = "cc",
+        set = "debuffIcons",
+        who = "others",
+        filter = { "HARMFUL", "CROWD_CONTROL", "!DISPELLABLE" },
+        kindsOnly = true,
+        dispel = true,
+        harmfulEdge = true,
+    },
 }
 -- each group's place from the bar: defensives first on the right, last on the left
 local ORDER: { [string]: { [string]: number } } = {
-    right = { defensives = 1, dispel = 2, debuffs = 3, all = 4 },
-    left = { dispel = 1, debuffs = 2, all = 3, defensives = 4 },
+    right = { defensives = 1, dispel = 2, debuffs = 3, all = 4, cc = 5 },
+    left = { dispel = 1, debuffs = 2, all = 3, cc = 4, defensives = 5 },
 }
 
 -- A group's spells: its own list's (the Defensives list) and the aura
@@ -154,8 +183,20 @@ local function groupSpells(g: PartyGroup, d: GroupDefensives): (number[]?, numbe
     return SuuUI.AuraFilterSpells("party", g.set == "buffIcons" and "buffs" or "debuffs", list and d[list] or nil)
 end
 
+-- A group's filter: its own, or with others' debuffs by kind, its kinds one.
+local function groupFilter(g: PartyGroup): string[]
+    local kinds = g.kinds
+    if kinds and M:Get("othersDebuffs") == "kinds" then
+        return kinds
+    end
+    return g.filter
+end
+
 -- A group's count on a frame: its setting, on the frames it is for.
 local function groupMax(f: UnitFrame, g: PartyGroup): number
+    if g.kindsOnly and M:Get("othersDebuffs") ~= "kinds" then
+        return 0
+    end
     if g.who and g.who ~= (f.unit == "player" and "me" or "others") then
         return 0
     end
@@ -200,7 +241,7 @@ export class PartyFrame extends UnitFrame
             local include, exclude = groupSpells(g, defensives)
             groups[i] = {
                 key = g.key,
-                filter = g.filter,
+                filter = groupFilter(g),
                 max = groupMax(self, g),
                 dispel = g.dispel,
                 drain = g.drain,
@@ -589,6 +630,17 @@ local SECTION: SettingsSection = {
                     description = "After the defensives: debuffs you can remove first, then the rest.",
                 },
                 {
+                    key = "othersDebuffs",
+                    label = "Others' debuffs",
+                    control = "segmented",
+                    options = {
+                        { value = "kinds", label = "Typed and crowd control" },
+                        { value = "all", label = "Every debuff" },
+                    },
+                    combat = true,
+                    description = "Other players' debuffs: only those with a type (Magic, Curse, Poison, Disease, whoever can remove them) and crowd control, so the typeless ones (Forbearance, Weakened Soul, Boosted Rest, Resurrection Sickness…) stay off, in combat too. Typeless debuffs that matter (bleeds, healing reductions, many boss debuffs) go too. Yours always show every debuff.",
+                },
+                {
                     key = "auraSide",
                     label = "Aura side",
                     control = "segmented",
@@ -937,6 +989,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
                 for _, g in ipairs(AURA_GROUPS) do
                     local place = assert(order[g.key])
                     auras:SetGroupSize(g.key, size)
+                    auras:SetGroupFilter(g.key, groupFilter(g))
                     auras:SetGroupMax(g.key, groupMax(f, g))
                     auras:SetGroupPlace(g.key, place, place > 1 and (GAP_SETS - S["space-2"]) or nil)
                 end
@@ -1160,6 +1213,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             "showSelf",
             "buffIcons",
             "debuffIcons",
+            "othersDebuffs",
             "auraSide",
         }, function(key)
             self:RunOutOfCombat("layout", function()
