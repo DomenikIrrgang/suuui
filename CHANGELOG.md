@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.26 (2026-11-08)
 
 ### New
 
@@ -13,7 +13,7 @@
 ### Fixed
 
 - Spellbook: right-clicking a pet spell turns its autocast on or off, in combat too, instead of giving a "Forbidden" error. It works through the pet bar: a pet spell that isn't on the pet bar says in its tooltip to right-click it there.
-- World map: a quest's money reward lines up again, shown as SuuUI's money (25s) in the numbers' font like the XP beside it; its coin sat above the amount
+- World map: a quest's money reward lines up again, shown as SuuUI's money (25s) in the numbers' font like the XP beside it; its coin sat above the amount.
 - Raid planner: Salvation and Blessing of Light are gone (WoW Forever doesn't have them); paladins count for Kings and Might or Wisdom.
 
 ## 0.6.25 (2026-11-08)
