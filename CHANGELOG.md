@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The game menu's SuuUI settings entry shows SuuUI's own mark, the icon from the addon list, instead of a plain diamond.
+
 ## 0.6.23 (2026-11-08)
 
 ### New
