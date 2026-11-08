@@ -1,0 +1,388 @@
+-- Core/AuraFilters.wowlua
+-- Aura filter lists: named block and allow lists of spells and of other lists
+-- (a list inside another counts as its content), applied per frame kind to
+-- its buffs or its debuffs. SuuUI never reads auras (in combat it can't), so
+-- a filter becomes the spell IDs an aura group's candidates take: the engine
+-- matches them itself, in combat too.
+--
+-- On a frame kind's buffs (or debuffs): with an allow list attached, only the
+-- spells of the allow lists show; then the block lists take theirs out.
+-- Without one, everything shows but the blocked. An entry or a whole list
+-- can be "not for" classes: for a player of such a class it doesn't count
+-- (Weakened Soul stays visible to a priest). The debuff-type badges and
+-- borders never go through filters (they are no aura groups of these).
+--
+-- SuuUI's own lists and plugins' (register) are read-only; the player's own
+-- and what is attached where come from the Aura filters module (setState,
+-- per profile). Off, nothing is filtered.
+--
+--   register(def)                 a plugin's list (SuuUI.RegisterAuraFilter)
+--   all(), find(id)               every list (SuuUI's, plugins', yours), one list
+--   setState(state?)              the player's lists and attachments (the module)
+--   spellsOf(id, class?)          a list's spells as a set, for a class
+--   contains(outer, inner)        whether inner is outer or inside it
+--   filterFor(kind, set, class?)  the allow set (nil: none) and the block set
+--   groupSpells(kind, set, own?)  an aura group's include and exclude lists
+
+import * as events from "./Events"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+
+export type FilterKind = "block" | "allow"
+export type FilterSet = "buffs" | "debuffs"
+-- Where a list comes from: SuuUI, a plugin, or the player (this profile).
+export type FilterSource = "suuui" | "plugin" | "yours"
+
+-- A spell entry: its IDs (every rank, or one), its name if given, the
+-- classes it doesn't apply to.
+export type FilterSpell = { ids: number[], name?: string, notFor?: string[] }
+-- Another list inside this one.
+export type FilterRef = { id: string, notFor?: string[] }
+export type FilterList = {
+    id: string,
+    name: string,
+    kind: FilterKind,
+    spells: FilterSpell[],
+    lists: FilterRef[],
+    notFor?: string[],
+    description?: string,
+    source?: FilterSource,
+    addon?: string,
+}
+-- What a plugin registers: spells as entries or bare IDs, lists as IDs or refs.
+export type FilterDef = {
+    id: string,
+    name: string,
+    kind: string,
+    spells?: (number | FilterSpell)[],
+    lists?: (string | FilterRef)[],
+    notFor?: string[],
+    description?: string,
+    addon?: string,
+}
+-- The lists attached to each frame kind's buffs and debuffs, by list ID.
+export type Attachments = { [string]: { buffs?: string[], debuffs?: string[] } }
+-- The player's lists and attachments (the Aura filters module's settings).
+export type FilterState = { lists: FilterList[], attached: Attachments }
+
+-- The frames that show auras, and which sets they have.
+export type FrameKind = { id: string, label: string, sets: FilterSet[] }
+export const FRAME_KINDS: FrameKind[] = {
+    { id = "party", label = "Party", sets = { "buffs", "debuffs" } },
+    { id = "raid", label = "Raid", sets = { "buffs", "debuffs" } },
+    { id = "player", label = "Your frame", sets = { "buffs", "debuffs" } },
+    { id = "target", label = "Target", sets = { "buffs", "debuffs" } },
+    { id = "focus", label = "Focus", sets = { "buffs", "debuffs" } },
+    { id = "boss", label = "Boss", sets = { "debuffs" } },
+    { id = "nameplates", label = "Nameplates", sets = { "debuffs" } },
+}
+
+export const NOISE = "suuui:noise"
+
+-- SuuUI's lists. The IDs are checked against Forever's spell data
+-- (tools/data). Boosted Rest is Forever's camp reward that the client marks
+-- harmful.
+local function builtin(
+    id: string,
+    name: string,
+    description: string,
+    spells: FilterSpell[],
+    lists: FilterRef[]
+): FilterList
+    return {
+        id = id,
+        name = name,
+        kind = "block",
+        spells = spells,
+        lists = lists,
+        description = description,
+        source = "suuui",
+    }
+end
+local BUILTIN: FilterList[] = {
+    builtin(NOISE, "Noise debuffs", "Debuffs a healer needn't see: lockouts after a spell, recovering, battleground and camp debuffs. On party and raid frames by default.", {}, {
+        { id = "suuui:lockouts" },
+        { id = "suuui:recovery" },
+        { id = "suuui:battlegrounds" },
+        { id = "suuui:camping" },
+    }),
+    builtin("suuui:lockouts", "Class lockouts", "What a spell leaves behind so it can't be cast on them again soon.", {}, {
+        { id = "suuui:paladin" },
+        { id = "suuui:priest" },
+    }),
+    builtin("suuui:paladin", "Paladin", "Forbearance; a paladin still sees it.", {
+        { ids = { 25771 }, name = "Forbearance", notFor = { "PALADIN" } },
+    }, {}),
+    builtin("suuui:priest", "Priest", "Weakened Soul; a priest still sees it.", {
+        { ids = { 6788 }, name = "Weakened Soul", notFor = { "PRIEST" } },
+    }, {}),
+    builtin("suuui:recovery", "Recovery", "After dying or bandaging.", {
+        { ids = { 15007 }, name = "Resurrection Sickness" },
+        { ids = { 11196, 1305047 }, name = "Recently Bandaged" },
+        { ids = { 8326 }, name = "Ghost" },
+    }, {}),
+    builtin("suuui:battlegrounds", "Battlegrounds", "Leaving early, dropping the flag.", {
+        { ids = { 26013 }, name = "Deserter" },
+        { ids = { 301100, 301101, 1255229 }, name = "Recently Dropped Flag" },
+    }, {}),
+    builtin("suuui:camping", "Camping", "The camp's reward the game counts as a debuff.", {
+        { ids = { 1229451 }, name = "Boosted Rest" },
+    }, {}),
+}
+
+local byId: { [string]: FilterList } = {}
+for _, l in ipairs(BUILTIN) do
+    byId[l.id] = l
+end
+-- plugins' lists, in the order registered
+local plugins: FilterList[] = {}
+-- the player's lists and attachments (nil: the module is off)
+local current: FilterState? = nil
+local yours: { [string]: FilterList } = {}
+local version = 0
+
+local function changed()
+    version = version + 1
+    events.emit("SUUUI_AURA_FILTERS_CHANGED")
+end
+
+-- The player's class file ("PRIEST"), read when a filter is worked out.
+local function playerClass(): string
+    local _, classFile = UnitClass("player")
+    return secret.known(classFile, "")
+end
+
+local function excludes(notFor: string[]?, class: string): boolean
+    for _, c in ipairs(notFor or {}) do
+        if c == class then
+            return true
+        end
+    end
+    return false
+end
+
+export function find(id: string): FilterList?
+    return byId[id] or yours[id]
+end
+
+-- Every list: SuuUI's, then plugins', then yours.
+export function all(): FilterList[]
+    local out: FilterList[] = {}
+    for _, l in ipairs(BUILTIN) do
+        out[#out + 1] = l
+    end
+    for _, l in ipairs(plugins) do
+        out[#out + 1] = l
+    end
+    for _, l in ipairs(current and current.lists or {}) do
+        out[#out + 1] = l
+    end
+    return out
+end
+
+local function classList(value: unknown, what: string): string[]?
+    if value == nil then
+        return nil
+    end
+    assert(type(value) == "table", ("SuuUI.RegisterAuraFilter: %s's notFor is a list of classes"):format(what))
+    local out: string[] = {}
+    for _, c in ipairs(value :: unknown[]) do
+        assert(type(c) == "string", ("SuuUI.RegisterAuraFilter: %s's notFor is a list of classes"):format(what))
+        out[#out + 1] = c
+    end
+    return out
+end
+
+-- A plugin's list: { id, name, kind = "block" | "allow", spells = { id or
+-- { ids, name, notFor } }, lists = { id or { id, notFor } }, notFor,
+-- description }. Read-only in the settings; a list it names that isn't there
+-- (yet) counts as empty.
+export function register(value: unknown): FilterList
+    local def = type(value) == "table" and value :: FilterDef or nil
+    assert(def and type(def.id) == "string" and def.id ~= "", "SuuUI.RegisterAuraFilter: a list needs an id")
+    local id = def.id
+    assert(not byId[id], "SuuUI.RegisterAuraFilter: the list " .. id .. " is taken")
+    assert(
+        not (id:find("^suuui:") or id:find("^user:")),
+        "SuuUI.RegisterAuraFilter: list IDs starting suuui: or user: are SuuUI's"
+    )
+    assert(type(def.name) == "string" and def.name ~= "", "SuuUI.RegisterAuraFilter: " .. id .. " needs a name")
+    local kind: unknown = def.kind
+    assert(
+        kind == "block" or kind == "allow",
+        ("SuuUI.RegisterAuraFilter: %s's kind is \"block\" or \"allow\", not %q"):format(id, tostring(kind))
+    )
+    local spells: FilterSpell[] = {}
+    for _, s in ipairs(def.spells or {}) do
+        if type(s) == "number" then
+            spells[#spells + 1] = { ids = { s } }
+        else
+            local e = s :: FilterSpell
+            assert(
+                type(e) == "table" and type(e.ids) == "table",
+                "SuuUI.RegisterAuraFilter: " .. id .. ": a spell is an ID or { ids = { … } }"
+            )
+            local ids: number[] = {}
+            for _, n in ipairs(e.ids) do
+                assert(type(n) == "number", "SuuUI.RegisterAuraFilter: " .. id .. ": spell IDs are numbers")
+                ids[#ids + 1] = n
+            end
+            spells[#spells + 1] = { ids = ids, name = e.name, notFor = classList(e.notFor, id) }
+        end
+    end
+    local lists: FilterRef[] = {}
+    for _, r in ipairs(def.lists or {}) do
+        if type(r) == "string" then
+            lists[#lists + 1] = { id = r }
+        else
+            local ref = r :: FilterRef
+            assert(
+                type(ref) == "table" and type(ref.id) == "string",
+                "SuuUI.RegisterAuraFilter: " .. id .. ": a list is an ID or { id = … }"
+            )
+            lists[#lists + 1] = { id = ref.id, notFor = classList(ref.notFor, id) }
+        end
+    end
+    local list: FilterList = {
+        id = id,
+        name = def.name,
+        kind = kind == "allow" and "allow" or "block",
+        spells = spells,
+        lists = lists,
+        notFor = classList(def.notFor, id),
+        description = type(def.description) == "string" and def.description or nil,
+        source = "plugin",
+        addon = type(def.addon) == "string" and def.addon or nil,
+    }
+    plugins[#plugins + 1] = list
+    byId[id] = list
+    changed()
+    return list
+end
+
+-- The player's lists and attachments (nil: filters off), from the module.
+export function setState(given: FilterState?)
+    current = given
+    yours = {}
+    for _, l in ipairs(given and given.lists or {}) do
+        l.source = "yours"
+        yours[l.id] = l
+    end
+    changed()
+end
+
+export function state(): (FilterState?, number)
+    return current, version
+end
+
+-- A list's spells for a player of `class` (the player's by default), the
+-- lists inside it too. A list met again on the way (a cycle) adds nothing.
+local function collect(id: string, class: string, into: { [number]: boolean }, seen: { [string]: boolean })
+    local l = find(id)
+    if not l or seen[id] or excludes(l.notFor, class) then
+        return
+    end
+    seen[id] = true
+    for _, s in ipairs(l.spells) do
+        if not excludes(s.notFor, class) then
+            for _, n in ipairs(s.ids) do
+                into[n] = true
+            end
+        end
+    end
+    for _, r in ipairs(l.lists) do
+        if not excludes(r.notFor, class) then
+            collect(r.id, class, into, seen)
+        end
+    end
+    seen[id] = nil
+end
+
+export function spellsOf(id: string, class: string?): { [number]: boolean }
+    local out: { [number]: boolean } = {}
+    collect(id, class or playerClass(), out, {})
+    return out
+end
+
+-- Whether `inner` is `outer` or inside it (through other lists too): adding
+-- `outer` to `inner` would make a cycle.
+export function contains(outer: string, inner: string, seen: { [string]: boolean }?): boolean
+    if outer == inner then
+        return true
+    end
+    local visited = seen or {}
+    if visited[outer] then
+        return false
+    end
+    visited[outer] = true
+    local l = find(outer)
+    for _, r in ipairs(l and l.lists or {}) do
+        if contains(r.id, inner, visited) then
+            return true
+        end
+    end
+    return false
+end
+
+-- The lists attached to a frame kind's set (none while filters are off).
+export function attachedTo(kind: string, set: FilterSet): string[]
+    local cell = current and current.attached[kind]
+    return cell and cell[set] or {}
+end
+
+-- A frame kind's set: the spells its allow lists let through (nil: no allow
+-- list, everything) and those its block lists take out.
+export function filterFor(kind: string, set: FilterSet, class: string?): ({ [number]: boolean }?, { [number]: boolean })
+    local who = class or playerClass()
+    local allow: { [number]: boolean }? = nil
+    local block: { [number]: boolean } = {}
+    for _, id in ipairs(attachedTo(kind, set)) do
+        local l = find(id)
+        if l then
+            local into: { [number]: boolean }
+            if l.kind == "allow" then
+                into = allow or {}
+                allow = into
+            else
+                into = block
+            end
+            collect(id, who, into, {})
+        end
+    end
+    return allow, block
+end
+
+local function sorted(set: { [number]: boolean }): number[]
+    return tbl.keys(set, function(a: number, b: number): boolean
+        return a < b
+    end)
+end
+
+-- An aura group's candidates on a frame kind's set: `own` is the group's own
+-- spell list (the Defensives list) or nil. Returns the include list (only
+-- these; nil: no list) and the exclude list (never these; nil: none).
+export function groupSpells(kind: string, set: FilterSet, own: number[]?): (number[]?, number[]?)
+    local allow, block = filterFor(kind, set)
+    if own then
+        local out: number[] = {}
+        for _, n in ipairs(own) do
+            if (not allow or allow[n]) and not block[n] then
+                out[#out + 1] = n
+            end
+        end
+        return out, nil
+    end
+    if allow then
+        local out: { [number]: boolean } = {}
+        for n in pairs(allow) do
+            if not block[n] then
+                out[n] = true
+            end
+        end
+        return sorted(out), nil
+    end
+    if next(block) ~= nil then
+        return nil, sorted(block)
+    end
+    return nil, nil
+end

@@ -146,6 +146,14 @@ local AURA_GROUPS: RaidGroup[] = {
     },
 }
 
+-- A group's spells: its own list's (the Defensives list) and the aura
+-- filters' on raid frames, worked out together so neither overwrites the
+-- other. Include, exclude (each nil: none).
+local function groupSpells(g: RaidGroup, d: GroupDefensives): (number[]?, number[]?)
+    local list = g.list
+    return SuuUI.AuraFilterSpells("raid", g.set == "buffIcons" and "buffs" or "debuffs", list and d[list] or nil)
+end
+
 -- The row's width at a bar height: both sets' icons, and the gap when both
 -- have room.
 local function rowWidth(h: number): number
@@ -217,7 +225,7 @@ export class RaidButton extends UnitFrame
         local defensives = UI.GroupDefensives()
         local groups: AuraGroup[] = {}
         for i, g in ipairs(AURA_GROUPS) do
-            local list = g.list
+            local include, exclude = groupSpells(g, defensives)
             groups[i] = {
                 key = g.key,
                 filter = self:GroupFilter(g) or {},
@@ -228,7 +236,8 @@ export class RaidButton extends UnitFrame
                 harmfulEdge = g.harmfulEdge,
                 border = g.border,
                 gap = g.gap,
-                include = list and defensives[list],
+                include = include,
+                exclude = exclude,
             }
         end
         local auras = UI.AuraContainer(self.auraClip, "none", {
@@ -1105,17 +1114,15 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- The Defensives list: the inline icons' spells and Warded, out of combat.
+    -- The Defensives list and the aura filters: the inline icons' spells,
+    -- and Warded, out of combat.
     function ApplyDefensives()
         local d = UI.GroupDefensives()
         for _, f in ipairs(self.buttons) do
             local auras = f.auras
             if auras then
                 for _, g in ipairs(AURA_GROUPS) do
-                    local list = g.list
-                    if list then
-                        auras:SetGroupSpells(g.key, d[list])
-                    end
+                    auras:SetGroupSpells(g.key, groupSpells(g, d))
                 end
             end
             f:SetWardSpells(d.warded)
@@ -1484,6 +1491,11 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 self:ApplyDefensives()
             end)
             self:DrawPreview()
+        end)
+        self:On("SUUUI_AURA_FILTERS_CHANGED", function()
+            self:RunOutOfCombat("defensives", function()
+                self:ApplyDefensives()
+            end)
         end)
 
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
