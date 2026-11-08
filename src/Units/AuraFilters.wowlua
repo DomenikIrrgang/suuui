@@ -1,0 +1,1284 @@
+-- Units/AuraFilters.wowlua
+-- Aura filters: the player's own block and allow lists and where every list
+-- applies (per frame kind, its buffs and its debuffs), saved in the profile,
+-- with the settings page that edits them. The lists themselves, SuuUI's and
+-- plugins' (read-only), and how they become the spells each aura row takes
+-- live in Core/AuraFilters; this module hands it the profile's part through
+-- SuuUI.UI.SetAuraFilters, and the frames re-apply on
+-- SUUUI_AURA_FILTERS_CHANGED (out of combat: the engine's spell lists
+-- change only then). Turned off, nothing is filtered.
+--
+-- Party and raid debuffs start with SuuUI's Noise debuffs (lockouts,
+-- recovering, battleground and camp debuffs); everything else starts empty.
+
+import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SettingsSection from "/Core/Modules"
+import type SelectOption, Select from "/UI/Select"
+import type Segmented, TextField from "/UI/Inputs"
+import type SuuButton from "/UI/Controls"
+import type Border from "/UI/Draw"
+import type Text from "/UI/Text"
+import type Icon from "/UI/Icon"
+import type FilterList, FilterSpell, FilterRef, FilterSet, FilterKind, Attachments from "/Core/AuraFilters"
+import type AuraCatalog from "/Data/AuraCatalog"
+import * as secret from "wowlua:secret"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local NOISE = "suuui:noise"
+
+local DEFAULTS = {
+    -- the profile's own lists ({ id = "user:1", name, kind, spells, lists, notFor })
+    lists = {} :: FilterList[],
+    -- the lists on each frame kind's buffs and debuffs, by ID
+    attached = {
+        party = { buffs = {}, debuffs = { NOISE } },
+        raid = { buffs = {}, debuffs = { NOISE } },
+    } :: Attachments,
+}
+
+local M: AuraFiltersModule
+
+-- The classes "not for" offers (Forever's), and how a chip names them.
+type ClassInfo = { file: string, label: string, plural: string }
+local CLASSES: ClassInfo[] = {
+    { file = "WARRIOR", label = "Warrior", plural = "warriors" },
+    { file = "PALADIN", label = "Paladin", plural = "paladins" },
+    { file = "HUNTER", label = "Hunter", plural = "hunters" },
+    { file = "ROGUE", label = "Rogue", plural = "rogues" },
+    { file = "PRIEST", label = "Priest", plural = "priests" },
+    { file = "SHAMAN", label = "Shaman", plural = "shamans" },
+    { file = "MAGE", label = "Mage", plural = "mages" },
+    { file = "WARLOCK", label = "Warlock", plural = "warlocks" },
+    { file = "DRUID", label = "Druid", plural = "druids" },
+}
+local CLASS_OPTIONS: SelectOption<string>[] = {}
+for i, c in ipairs(CLASSES) do
+    CLASS_OPTIONS[i] = { value = c.file, label = c.label, diamond = "class-" .. c.file:lower() }
+end
+
+-- "Not for paladins, priests" (nil: for every class).
+local function notForText(notFor: string[]?): string?
+    if not notFor or #notFor == 0 then
+        return nil
+    end
+    local names: string[] = {}
+    for _, file in ipairs(notFor) do
+        local plural = file:lower() .. "s"
+        for _, c in ipairs(CLASSES) do
+            if c.file == file then
+                plural = c.plural
+            end
+        end
+        names[#names + 1] = plural
+    end
+    return "Not for " .. table.concat(names, ", ")
+end
+
+-- A class list as stored: nil when empty.
+local function classes(values: string[]?): string[]?
+    if not values or #values == 0 then
+        return nil
+    end
+    return { unpack(values) }
+end
+
+-- A spell's name: the entry's, else the game's, else its ID.
+local function spellName(s: FilterSpell): string
+    if s.name then
+        return s.name
+    end
+    local id = s.ids[1]
+    local name = id and C_Spell.GetSpellName(id)
+    if name and not secret.isSecret(name) then
+        return name
+    end
+    return id and ("Spell " .. id) or "?"
+end
+
+local function spellMeta(s: FilterSpell): string
+    local ids = s.ids
+    if #ids == 1 then
+        return "Spell " .. ids[1]
+    end
+    if #ids <= 3 then
+        local parts: string[] = {}
+        for i, id in ipairs(ids) do
+            parts[i] = tostring(id)
+        end
+        return "Spells " .. table.concat(parts, ", ")
+    end
+    return ("Spells %d · every rank (%d IDs)"):format(ids[1], #ids)
+end
+
+-- A list's entries counted for the library: "4 lists" when it holds only
+-- lists, else how many entries.
+local function countText(l: FilterList): string
+    if #l.spells == 0 and #l.lists > 0 then
+        return #l.lists == 1 and "1 list" or (#l.lists .. " lists")
+    end
+    return tostring(#l.spells + #l.lists)
+end
+
+-- What a list holds, by name: "Resurrection Sickness, Ghost".
+local function contentText(l: FilterList?, byId: { [string]: FilterList }): string
+    if not l then
+        return "Not there any more (its plugin is off?)"
+    end
+    local parts: string[] = {}
+    for _, r in ipairs(l.lists) do
+        local sub = byId[r.id]
+        parts[#parts + 1] = sub and sub.name or r.id
+    end
+    for _, s in ipairs(l.spells) do
+        parts[#parts + 1] = spellName(s)
+    end
+    return #parts > 0 and table.concat(parts, ", ") or "Empty"
+end
+
+local function sourceText(l: FilterList): string
+    if l.source == "suuui" then
+        return "SuuUI's · read-only"
+    end
+    if l.source == "plugin" then
+        return (l.addon or "A plugin") .. "'s · read-only"
+    end
+    return "Yours · this profile"
+end
+
+local function readOnly(l: FilterList): boolean
+    return l.source ~= "yours"
+end
+
+-- Copies of the profile's lists and attachments, changed by fn, saved.
+local function mutate(fn: (lists: FilterList[], attached: Attachments) -> ())
+    local lists, attached = M:Get("lists"), M:Get("attached")
+    fn(lists, attached)
+    M:Set("lists", lists)
+    M:Set("attached", attached)
+end
+
+local function ownList(lists: FilterList[], id: string): FilterList?
+    for _, l in ipairs(lists) do
+        if l.id == id then
+            return l
+        end
+    end
+    return nil
+end
+
+--------------------------------------------------------------------------------
+-- The editor: the library on the left, the chosen list on the right, then
+-- "Applied to", a grid of frame kinds by buffs and debuffs
+--------------------------------------------------------------------------------
+
+local WIDTH = 672
+local LIB_W = 210
+local DETAIL_X = LIB_W + S["space-5"]
+local DETAIL_W = WIDTH - DETAIL_X
+local LIB_ROW_H = 24
+local ROW_H = 36
+local KIND_COL = 110
+local ADD_W = 64
+local CELL_W = math.floor((WIDTH - KIND_COL) / 2)
+
+local KIND_OPTIONS = { { value = "block", label = "Block" }, { value = "allow", label = "Allow" } }
+
+-- What a typed number finds: "Name · ID 123" (value "id:123").
+local function spellLookup(query: string): SelectOption<string>[]?
+    local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
+    if not id then
+        return nil
+    end
+    local name = C_Spell.GetSpellName(id)
+    if secret.isSecret(name) or not name then
+        return nil
+    end
+    return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id) } }
+end
+
+-- A small "×" that removes something.
+local function cross(parent: Frame, onClick: () -> ()): Button
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(18, 18)
+    local t = UI.Text(b, "label", "ink-faint")
+    t:SetPoint("CENTER", 0, 0)
+    t:SetValue("×")
+    b:SetScript("OnClick", onClick)
+    b:SetScript("OnEnter", function()
+        UI.Paint(t, "ink")
+    end)
+    b:SetScript("OnLeave", function()
+        UI.Paint(t, "ink-faint")
+    end)
+    return b
+end
+
+-- A list's kind: a small square, B in ember or A in fel.
+export class KindMark extends Frame
+    readonly fill: Texture
+    readonly edge: Border
+    readonly glyph: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(14, 14)
+        self.fill = UI.Fill(self, "ember-soft")
+        self.fill:SetAllPoints()
+        self.edge = UI.Border(self, "ember")
+        self.glyph = UI.Text(self, "micro", "ember")
+        self.glyph:SetPoint("CENTER", 0, 0)
+    end
+
+    function SetKind(kind: FilterKind)
+        local token = kind == "allow" and "fel" or "ember"
+        UI.PaintFill(self.fill, kind == "allow" and "fel-incoming" or "ember-soft")
+        self.edge:SetColor(token)
+        UI.Paint(self.glyph, token)
+        self.glyph:SetValue(kind == "allow" and "A" or "B")
+    end
+end
+
+-- A list in the library: its kind, name and count; the chosen one lit.
+export class LibraryRow extends Button
+    readonly selected: Texture
+    readonly hover: Texture
+    readonly mark: KindMark
+    readonly name: Text
+    readonly count: Text
+    id: string = ""
+
+    constructor(parent: Frame, onClick: (row: LibraryRow) -> ())
+        super(nil, parent)
+        self:SetSize(LIB_W, LIB_ROW_H)
+        self.selected = UI.Fill(self, "gilt-faint")
+        self.selected:SetAllPoints()
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.mark = KindMark.new(self)
+        self.count = UI.Text(self, "caption", "ink-faint")
+        self.count:SetPoint("RIGHT", -S["space-3"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.mark, "RIGHT", S["space-3"], 0)
+        self.name:SetPoint("RIGHT", self.count, "LEFT", -S["space-2"], 0)
+        self.name:SetWordWrap(false)
+        self:SetScript("OnClick", function()
+            onClick(self)
+        end)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
+    end
+
+    function Set(l: FilterList, depth: number, chosen: boolean)
+        self.id = l.id
+        self.mark:SetKind(l.kind)
+        self.mark:ClearAllPoints()
+        self.mark:SetPoint("LEFT", S["space-3"] + depth * 16, 0)
+        self.name:SetValue(l.name)
+        self.count:SetValue(countText(l))
+        self.selected:SetShown(chosen)
+    end
+end
+
+-- An entry of the chosen list: a spell (its icon, name and IDs) or a list
+-- inside it (a gilt box, its name and what it holds); who it isn't for;
+-- remove (not on read-only lists).
+export class EntryRow extends Frame
+    readonly rule: Texture
+    readonly icon: Icon
+    readonly box: Frame
+    readonly name: Text
+    readonly meta: Text
+    readonly notForLabel: Text
+    readonly notFor: Select<string>
+    readonly notForText: Text
+    readonly remove: Button
+    -- "spell" or "list", and its place among those of the list
+    which: string = "spell"
+    index: number = 0
+    -- the list it is in, and the sub-list's ID (a list entry)
+    listId: string = ""
+    refId: string? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(DETAIL_W - 12, ROW_H)
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.rule:SetHeight(1)
+        self.icon = UI.Icon(self, 22)
+        self.icon:SetPoint("LEFT", 4, 0)
+        self.box = CreateFrame("Frame", nil, self)
+        self.box:SetSize(22, 22)
+        self.box:SetPoint("LEFT", 4, 0)
+        UI.Border(self.box, "gilt-line")
+        for i = 1, 3 do
+            local line = UI.Fill(self.box, "gilt", "ARTWORK")
+            line:SetSize(10, 1)
+            line:SetPoint("CENTER", 0, 4 - (i - 1) * 4)
+        end
+        self.remove = cross(self, function()
+            M:RemoveEntry(self.listId, self.which, self.index)
+        end)
+        self.remove:SetPoint("RIGHT", -2, 0)
+        self.notFor = UI.Select(self, {
+            width = 132,
+            multiple = true,
+            maxShown = 1,
+            placeholder = "Any class",
+            options = CLASS_OPTIONS,
+            onChangeAll = function(values: string[])
+                M:SetEntryNotFor(self.listId, self.which, self.index, values)
+            end,
+        })
+        self.notFor:SetPoint("RIGHT", self.remove, "LEFT", -S["space-2"], 0)
+        self.notForLabel = UI.Text(self, "caption", "ink-muted")
+        self.notForLabel:SetPoint("RIGHT", self.notFor, "LEFT", -S["space-3"], 0)
+        self.notForLabel:SetValue("Not for")
+        self.notForText = UI.Text(self, "caption", "gilt-text")
+        self.notForText:SetPoint("RIGHT", self.remove, "LEFT", -S["space-2"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", 8, 2)
+        self.meta = UI.Text(self, "caption", "ink-muted")
+        self.meta:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -2)
+        -- a list entry opens that list
+        self:EnableMouse(true)
+        self:SetScript("OnMouseUp", function()
+            local ref = self.refId
+            if ref then
+                M:Select(ref)
+            end
+        end)
+    end
+
+    -- Shows an entry; `editable`: the not-for select and remove.
+    function SetEntry(listId: string, which: string, index: number, editable: boolean, notFor: string[]?)
+        self.listId, self.which, self.index = listId, which, index
+        self.icon:SetShown(which == "spell")
+        self.box:SetShown(which == "list")
+        self.remove:SetShown(editable)
+        self.notFor:SetShown(editable)
+        self.notForLabel:SetShown(editable)
+        self.notFor:SetValue(notFor or {})
+        local text = notForText(notFor)
+        self.notForText:SetShown(not editable and text ~= nil)
+        self.notForText:SetValue(text or "")
+        -- the name and what it holds run up to the controls (or the chip)
+        local right = editable and 230 or (text and (UI.MeasureText("caption", text) + 30) or 12)
+        for _, t in ipairs({ self.name, self.meta }) do
+            t:SetPoint("RIGHT", self, "RIGHT", -right, 0)
+        end
+    end
+end
+
+-- A list on a frame kind's set: its name and × (detach).
+export class Chip extends Frame
+    readonly label: Text
+    readonly remove: Button
+    readonly mark: KindMark
+    kind: string = ""
+    set: FilterSet = "debuffs"
+    id: string = ""
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(22)
+        UI.Fill(self, "surface-raised"):SetAllPoints()
+        UI.Border(self, "gilt-hairline")
+        self.mark = KindMark.new(self)
+        self.mark:SetPoint("LEFT", 4, 0)
+        self.label = UI.Text(self, "caption", "ink")
+        self.label:SetPoint("LEFT", self.mark, "RIGHT", S["space-2"], 0)
+        self.label:SetWordWrap(false)
+        self.remove = cross(self, function()
+            M:Detach(self.kind, self.set, self.id)
+        end)
+        self.remove:SetPoint("RIGHT", -2, 0)
+    end
+
+    function SetList(kind: string, set: FilterSet, id: string, l: FilterList?, maxW: number)
+        self.kind, self.set, self.id = kind, set, id
+        local name = l and l.name or (id .. " (missing)")
+        self.mark:SetKind(l and l.kind or "block")
+        self.label:SetValue(name)
+        local w = math.min(maxW, UI.MeasureText("caption", name) + 14 + S["space-2"] + 4 + 22)
+        self:SetWidth(w)
+        self.label:SetWidth(w - (14 + S["space-2"] + 4 + 22))
+    end
+end
+
+-- A cell of the grid: the lists on a frame kind's set, and "+".
+export class Cell extends Frame
+    readonly chips: Chip[] = {}
+    readonly add: Select<string>
+    readonly empty: Text
+    kind: string = ""
+    set: FilterSet = "debuffs"
+
+    constructor(parent: Frame, kind: string, set: FilterSet)
+        super(nil, parent)
+        self.kind, self.set = kind, set
+        self:SetWidth(CELL_W)
+        self.empty = UI.Text(self, "caption", "ink-faint")
+        self.empty:SetValue("Everything")
+        self.add = UI.Select(self, {
+            width = ADD_W,
+            bare = true,
+            placeholder = "+ Add",
+            textColor = "ink-muted",
+            minListWidth = 220,
+            onChange = function(v: string)
+                M:Attach(kind, set, v)
+            end,
+        })
+    end
+
+    -- Lays out the attached lists' chips (wrapping), then "+"; returns the height.
+    function Fill(ids: string[], byId: { [string]: FilterList }, all: FilterList[]): number
+        for _, c in ipairs(self.chips) do
+            c:Hide()
+        end
+        local x, y, lineH = S["space-3"], S["space-3"], 30
+        local maxW = CELL_W - 2 * S["space-3"] - ADD_W - S["space-2"]
+        local present: { [string]: boolean } = {}
+        for i, id in ipairs(ids) do
+            present[id] = true
+            local c = self.chips[i] or Chip.new(self)
+            self.chips[i] = c
+            c:SetList(self.kind, self.set, id, byId[id], maxW)
+            local w = c:GetWidth()
+            if x > S["space-3"] and x + w > CELL_W - S["space-3"] then
+                x, y = S["space-3"], y + lineH
+            end
+            c:ClearAllPoints()
+            c:SetPoint("TOPLEFT", x, -(y + 4))
+            c:Show()
+            x = x + w + S["space-2"]
+        end
+        self.empty:SetShown(#ids == 0)
+        if #ids == 0 then
+            self.empty:ClearAllPoints()
+            self.empty:SetPoint("LEFT", self, "TOPLEFT", x, -(y + 15))
+            x = x + UI.MeasureText("caption", "Everything") + S["space-3"]
+        end
+        if x + ADD_W > CELL_W - S["space-3"] then
+            x, y = S["space-3"], y + lineH
+        end
+        local options: SelectOption<string>[] = {}
+        for _, l in ipairs(all) do
+            if not present[l.id] then
+                options[#options + 1] = {
+                    value = l.id,
+                    label = l.name,
+                    note = (l.kind == "allow" and "Allow" or "Block") .. " · " .. countText(l),
+                }
+            end
+        end
+        self.add:SetOptions(options)
+        self.add:SetValue(nil)
+        self.add:SetDisabled(#options == 0)
+        self.add:ClearAllPoints()
+        self.add:SetPoint("TOPLEFT", x, -(y + 3))
+        local h = y + lineH + S["space-3"]
+        self:SetHeight(h)
+        return h
+    end
+end
+
+-- The page's one control: library, list, grid.
+export class FilterEditor extends Frame
+    readonly library: Frame
+    readonly libRows: LibraryRow[] = {}
+    readonly heads: Text[] = {}
+    readonly newList: SuuButton
+    -- the chosen list
+    readonly detail: Frame
+    readonly title: Text
+    readonly nameField: TextField
+    readonly kindPill: Text
+    readonly kindPillEdge: Border
+    readonly kindPillFrame: Frame
+    readonly kind: Segmented<string>
+    readonly source: Text
+    readonly copy: SuuButton
+    readonly delete: SuuButton
+    readonly description: Text
+    readonly listNotForLabel: Text
+    readonly listNotFor: Select<string>
+    readonly listNotForText: Text
+    readonly well: Frame
+    readonly rows: EntryRow[] = {}
+    readonly emptyWell: Text
+    readonly addSpell: Select<string>
+    readonly addList: Select<string>
+    readonly message: Text
+    -- "Applied to"
+    readonly appliedTitle: Text
+    readonly appliedNote: Text
+    readonly grid: Frame
+    readonly gridHeads: Text[] = {}
+    readonly kindLabels: Text[] = {}
+    readonly cells: { [string]: Cell } = {}
+    readonly none: Text[] = {}
+    readonly rules: Texture[] = {}
+    -- the auras "+ Add a spell" offers by name
+    catalog: AuraCatalog = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(WIDTH, 400)
+        -- the library
+        self.library = CreateFrame("Frame", nil, self)
+        self.library:SetPoint("TOPLEFT")
+        self.library:SetWidth(LIB_W)
+        UI.Fill(self.library, "surface-sunk"):SetAllPoints()
+        UI.Border(self.library, "gilt-faint")
+        for i, label in ipairs({ "SuuUI's lists", "From plugins", "Yours · this profile" }) do
+            local h = UI.Text(self.library, "micro", "ink-faint")
+            h:SetValue(label:upper())
+            self.heads[i] = h
+        end
+        self.newList = UI.Button(self.library, {
+            text = "+ New list",
+            onClick = function()
+                M:NewList()
+            end,
+        })
+        -- the chosen list
+        self.detail = CreateFrame("Frame", nil, self)
+        self.detail:SetPoint("TOPLEFT", DETAIL_X, 0)
+        self.detail:SetWidth(DETAIL_W)
+        local d = self.detail
+        self.title = UI.Text(d, "header", "ink")
+        self.title:SetPoint("TOPLEFT", 0, -6)
+        self.title:SetWordWrap(false)
+        self.nameField = UI.TextField(d, {
+            width = 190,
+            placeholder = "Name",
+            onChange = function(text: string)
+                M:Rename(M.selected, text)
+            end,
+        })
+        self.nameField:SetPoint("TOPLEFT", 0, 0)
+        self.kindPillFrame = CreateFrame("Frame", nil, d)
+        self.kindPillFrame:SetHeight(18)
+        self.kindPillEdge = UI.Border(self.kindPillFrame, "ember")
+        self.kindPill = UI.Text(self.kindPillFrame, "micro", "ember")
+        self.kindPill:SetPoint("CENTER", 0, 0)
+        self.kind = UI.Segmented(d, {
+            options = KIND_OPTIONS,
+            onChange = function(v: string)
+                M:SetKind(M.selected, v == "allow" and "allow" or "block")
+            end,
+        })
+        self.source = UI.Text(d, "caption", "ink-muted")
+        self.copy = UI.Button(d, {
+            text = "Copy to edit",
+            tooltip = {
+                title = "Copy to edit",
+                description = "Makes a list of yours from this one, in this profile. The lists inside it stay as they are.",
+            },
+            onClick = function()
+                M:CopyList(M.selected)
+            end,
+        })
+        self.copy:SetPoint("TOPRIGHT", 0, 0)
+        self.delete = UI.Button(d, {
+            text = "Delete list",
+            onClick = function()
+                M:DeleteList(M.selected)
+            end,
+        })
+        self.delete:SetPoint("TOPRIGHT", 0, 0)
+        self.description = UI.Text(d, "caption", "ink-muted")
+        self.description:SetWordWrap(true)
+        self.description:SetFixedWidth(DETAIL_W)
+        self.listNotForLabel = UI.Text(d, "caption", "ink-muted")
+        self.listNotForLabel:SetValue("Whole list not for")
+        self.listNotFor = UI.Select(d, {
+            width = 160,
+            multiple = true,
+            maxShown = 2,
+            placeholder = "Any class",
+            options = CLASS_OPTIONS,
+            onChangeAll = function(values: string[])
+                M:SetListNotFor(M.selected, values)
+            end,
+        })
+        self.listNotForText = UI.Text(d, "caption", "gilt-text")
+        self.well = CreateFrame("Frame", nil, d)
+        self.well:SetWidth(DETAIL_W)
+        UI.Fill(self.well, "surface-sunk"):SetAllPoints()
+        UI.Border(self.well, "gilt-faint")
+        self.emptyWell = UI.Text(self.well, "caption", "ink-muted")
+        self.emptyWell:SetPoint("LEFT", 12, 0)
+        self.emptyWell:SetValue("Nothing in it yet. Add a spell or a list below.")
+        self.addSpell = UI.Select(d, {
+            width = 230,
+            placeholder = "+ Add a spell… (name or ID)",
+            lookup = spellLookup,
+            onChange = function(v: string)
+                M:AddSpell(M.selected, v)
+            end,
+        })
+        self.addList = UI.Select(d, {
+            width = 160,
+            placeholder = "+ Add a list…",
+            minListWidth = 220,
+            onChange = function(v: string)
+                M:AddList(M.selected, v)
+            end,
+        })
+        self.message = UI.Text(d, "caption", "ember-text")
+        self.message:SetWordWrap(true)
+        self.message:SetFixedWidth(DETAIL_W)
+        -- "Applied to"
+        self.appliedTitle = UI.Text(self, "header", "gilt-text")
+        self.appliedTitle:SetValue("Applied to")
+        self.appliedNote = UI.Text(self, "caption", "ink-muted")
+        self.appliedNote:SetWordWrap(true)
+        self.appliedNote:SetFixedWidth(WIDTH)
+        self.appliedNote:SetValue(
+            "Each frame, for its buffs and its debuffs: the lists on it; × takes one off, + adds one. With an allow list on it, only what an allow list has shows; then the block lists take theirs out. Debuff-type badges and borders always show. On players you can help (and for buffs on enemies), the game lets addons leave out only the spells it never keeps secret: the others show anyway, and an allow list there hides them."
+        )
+        self.grid = CreateFrame("Frame", nil, self)
+        self.grid:SetWidth(WIDTH)
+        UI.Border(self.grid, "gilt-line")
+        for i, label in ipairs({ "Frames", "Buffs", "Debuffs" }) do
+            local h = UI.Text(self.grid, "micro", "ink-faint")
+            h:SetValue(label:upper())
+            h:SetPoint(
+                "LEFT",
+                self.grid,
+                "TOPLEFT",
+                i == 1 and S["space-4"] or (KIND_COL + (i - 2) * CELL_W + S["space-3"]),
+                -12
+            )
+            self.gridHeads[i] = h
+        end
+        local headFill = UI.Fill(self.grid, "surface-sunk", "BACKGROUND")
+        headFill:SetPoint("TOPLEFT")
+        headFill:SetPoint("TOPRIGHT")
+        headFill:SetHeight(24)
+        for i, k in ipairs(SuuUI.AURA_FILTER_FRAMES) do
+            local label = UI.Text(self.grid, "label", "ink")
+            label:SetValue(k.label)
+            self.kindLabels[i] = label
+            local rule = UI.Fill(self.grid, "gilt-faint", "ARTWORK")
+            rule:SetHeight(1)
+            self.rules[i] = rule
+            for _, set in ipairs({ "buffs", "debuffs" } :: FilterSet[]) do
+                local has = false
+                for _, s in ipairs(k.sets) do
+                    has = has or s == set
+                end
+                if has then
+                    self.cells[k.id .. "." .. set] = Cell.new(self.grid, k.id, set)
+                else
+                    local none = UI.Text(self.grid, "caption", "ink-faint")
+                    none:SetValue("SuuUI shows none here")
+                    self.none[#self.none + 1] = none
+                end
+            end
+        end
+        self:Refresh()
+        self:HookScript("OnShow", function()
+            self:Refresh()
+        end)
+    end
+
+    function Refresh()
+        local all = SuuUI.AuraFilters()
+        local byId: { [string]: FilterList } = {}
+        for _, l in ipairs(all) do
+            byId[l.id] = l
+        end
+        if not byId[M.selected] then
+            M.selected = NOISE
+        end
+        local chosen = byId[M.selected] or all[1]
+        self.catalog = SuuUI.AuraCatalog()
+        local libH = self:LayoutLibrary(all, byId)
+        local detailH = self:LayoutDetail(chosen, all, byId)
+        local top = math.max(libH, detailH) + S["space-6"]
+        self.library:SetHeight(math.max(libH, detailH))
+        self.appliedTitle:ClearAllPoints()
+        self.appliedTitle:SetPoint("TOPLEFT", 0, -top)
+        self.appliedNote:ClearAllPoints()
+        self.appliedNote:SetPoint("TOPLEFT", self.appliedTitle, "BOTTOMLEFT", 0, -S["space-2"])
+        local gridTop = top + 20 + S["space-2"] + self.appliedNote:GetStringHeight() + S["space-4"]
+        self.grid:ClearAllPoints()
+        self.grid:SetPoint("TOPLEFT", 0, -gridTop)
+        local gridH = self:LayoutGrid(all, byId)
+        self:SetHeight(gridTop + gridH)
+    end
+
+    -- The library: SuuUI's lists as a tree, plugins', yours, "+ New list".
+    function LayoutLibrary(all: FilterList[], byId: { [string]: FilterList }): number
+        for _, r in ipairs(self.libRows) do
+            r:Hide()
+        end
+        local used, y = 0, S["space-3"]
+        local function row(l: FilterList, depth: number)
+            used = used + 1
+            local r = self.libRows[used] or
+                LibraryRow.new(self.library, function(lr: LibraryRow)
+                    M:Select(lr.id)
+                end)
+            self.libRows[used] = r
+            r:Set(l, depth, l.id == M.selected)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:Show()
+            y = y + LIB_ROW_H
+        end
+        local function head(i: number)
+            local h = self.heads[i]
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", S["space-4"], -(y + 4))
+            y = y + 20
+        end
+        -- SuuUI's: the lists inside another of SuuUI's under it, indented
+        local inside: { [string]: boolean } = {}
+        for _, l in ipairs(all) do
+            if l.source == "suuui" then
+                for _, r in ipairs(l.lists) do
+                    inside[r.id] = true
+                end
+            end
+        end
+        local function tree(l: FilterList, depth: number, seen: { [string]: boolean })
+            if seen[l.id] then
+                return
+            end
+            seen[l.id] = true
+            row(l, depth)
+            for _, r in ipairs(l.lists) do
+                local sub = byId[r.id]
+                if sub and sub.source == "suuui" then
+                    tree(sub, depth + 1, seen)
+                end
+            end
+            seen[l.id] = nil
+        end
+        head(1)
+        for _, l in ipairs(all) do
+            if l.source == "suuui" and not inside[l.id] then
+                tree(l, 0, {})
+            end
+        end
+        local plugins = 0
+        for _, l in ipairs(all) do
+            if l.source == "plugin" then
+                plugins = plugins + 1
+            end
+        end
+        self.heads[2]:SetShown(plugins > 0)
+        if plugins > 0 then
+            y = y + S["space-3"]
+            head(2)
+            for _, l in ipairs(all) do
+                if l.source == "plugin" then
+                    row(l, 0)
+                end
+            end
+        end
+        y = y + S["space-3"]
+        head(3)
+        for _, l in ipairs(all) do
+            if l.source == "yours" then
+                row(l, 0)
+            end
+        end
+        self.newList:ClearAllPoints()
+        self.newList:SetPoint("TOPLEFT", S["space-3"], -(y + S["space-2"]))
+        return y + S["space-2"] + 30 + S["space-3"]
+    end
+
+    -- The chosen list: head, description, not for, entries, adding.
+    function LayoutDetail(l: FilterList, all: FilterList[], byId: { [string]: FilterList }): number
+        local ro = readOnly(l)
+        self.title:SetShown(ro)
+        self.nameField:SetShown(not ro)
+        self.kind:SetShown(not ro)
+        self.kindPillFrame:SetShown(ro)
+        self.copy:SetShown(ro)
+        self.delete:SetShown(not ro)
+        self.title:SetValue(l.name)
+        self.nameField:SetValue(l.name)
+        local token = l.kind == "allow" and "fel" or "ember"
+        self.kindPill:SetValue(l.kind == "allow" and "ALLOW" or "BLOCK")
+        UI.Paint(self.kindPill, token)
+        self.kindPillEdge:SetColor(token)
+        self.kindPillFrame:SetWidth(UI.MeasureText("micro", self.kindPill:GetText() or "") + 12)
+        self.kind:SetValue(l.kind)
+        self.source:SetValue(sourceText(l))
+        -- (yours: the library says so; the head has no room beside Delete list)
+        self.source:SetShown(ro)
+        -- the head: name, kind, where from (the button on the right)
+        local nameW = ro and math.min(UI.MeasureText("header", l.name), DETAIL_W - 260) or 190
+        self.title:SetWidth(nameW)
+        local after: Region = ro and self.title or self.nameField
+        local kindW = ro and self.kindPillFrame:GetWidth() or self.kind:GetWidth()
+        if ro then
+            self.kindPillFrame:ClearAllPoints()
+            self.kindPillFrame:SetPoint("LEFT", after, "RIGHT", S["space-4"], 0)
+        else
+            self.kind:ClearAllPoints()
+            self.kind:SetPoint("LEFT", after, "RIGHT", S["space-4"], 0)
+        end
+        self.source:ClearAllPoints()
+        self.source:SetPoint("LEFT", after, "RIGHT", S["space-4"] + kindW + S["space-4"], 0)
+        local y = 30 + S["space-3"]
+        self.description:SetValue(
+            ro and (l.description or "") or
+                "Block: leaves these out. Allow: on a frame with an allow list, only what one of its allow lists has shows."
+        )
+        self.description:ClearAllPoints()
+        self.description:SetPoint("TOPLEFT", 0, -y)
+        local descH = self.description:GetStringHeight()
+        y = y + (descH > 0 and descH + S["space-4"] or 0)
+        -- not for: the whole list
+        local listNot = notForText(l.notFor)
+        self.listNotForLabel:SetShown(not ro)
+        self.listNotFor:SetShown(not ro)
+        self.listNotForText:SetShown(ro and listNot ~= nil)
+        self.listNotForText:SetValue(listNot and (listNot .. " (the whole list)") or "")
+        if not ro then
+            self.listNotForLabel:ClearAllPoints()
+            self.listNotForLabel:SetPoint("LEFT", self.detail, "TOPLEFT", 0, -(y + 15))
+            self.listNotFor:SetValue(l.notFor or {})
+            self.listNotFor:ClearAllPoints()
+            self.listNotFor:SetPoint("TOPLEFT", self.listNotForLabel, "TOPRIGHT", S["space-4"], 8)
+            y = y + 30 + S["space-4"]
+        elseif listNot then
+            self.listNotForText:ClearAllPoints()
+            self.listNotForText:SetPoint("TOPLEFT", 0, -y)
+            y = y + 14 + S["space-4"]
+        end
+        -- the entries: lists first, then spells
+        for _, r in ipairs(self.rows) do
+            r:Hide()
+        end
+        self.well:ClearAllPoints()
+        self.well:SetPoint("TOPLEFT", 0, -y)
+        local used, ry = 0, 4
+        local last: EntryRow? = nil
+        local function entry(): EntryRow
+            used = used + 1
+            local r = self.rows[used] or EntryRow.new(self.well)
+            self.rows[used] = r
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 6, -ry)
+            r.rule:Show()
+            r:Show()
+            ry = ry + ROW_H
+            last = r
+            return r
+        end
+        for i, ref in ipairs(l.lists) do
+            local r = entry()
+            local sub = byId[ref.id]
+            r:SetEntry(l.id, "list", i, not ro, ref.notFor)
+            r.refId = ref.id
+            r.name:SetValue(sub and sub.name or ref.id)
+            r.meta:SetValue(contentText(sub, byId))
+        end
+        for i, s in ipairs(l.spells) do
+            local r = entry()
+            r:SetEntry(l.id, "spell", i, not ro, s.notFor)
+            r.refId = nil
+            r.icon:SetArt(s.ids[1] and (C_Spell.GetSpellTexture(s.ids[1])) or nil)
+            r.name:SetValue(spellName(s))
+            r.meta:SetValue(spellMeta(s))
+        end
+        if last then
+            last.rule:Hide()
+        end
+        self.emptyWell:SetShown(used == 0)
+        local wellH = used == 0 and 40 or (ry + 4)
+        self.well:SetHeight(wellH)
+        y = y + wellH + S["space-4"]
+        -- adding (yours only)
+        self.addSpell:SetShown(not ro)
+        self.addList:SetShown(not ro)
+        if not ro then
+            local present: { [string]: boolean } = {}
+            for _, s in ipairs(l.spells) do
+                present[spellName(s)] = true
+            end
+            local spells: SelectOption<string>[] = {}
+            for name, aura in pairs(self.catalog) do
+                if not present[name] then
+                    spells[#spells + 1] = { value = name, label = name, icon = aura.icon }
+                end
+            end
+            table.sort(spells, function(a: SelectOption<string>, b: SelectOption<string>): boolean
+                return (a.label or "") < (b.label or "")
+            end)
+            self.addSpell:SetOptions(spells)
+            self.addSpell:SetValue(nil)
+            self.addSpell:ClearAllPoints()
+            self.addSpell:SetPoint("TOPLEFT", 0, -y)
+            local inList: { [string]: boolean } = {}
+            for _, ref in ipairs(l.lists) do
+                inList[ref.id] = true
+            end
+            local lists: SelectOption<string>[] = {}
+            for _, other in ipairs(all) do
+                if other.id ~= l.id and not inList[other.id] then
+                    lists[#lists + 1] = {
+                        value = other.id,
+                        label = other.name,
+                        note = (other.kind == "allow" and "Allow" or "Block") .. " · " .. countText(other),
+                    }
+                end
+            end
+            self.addList:SetOptions(lists)
+            self.addList:SetValue(nil)
+            self.addList:ClearAllPoints()
+            self.addList:SetPoint("LEFT", self.addSpell, "RIGHT", S["space-3"], 0)
+            y = y + 30 + S["space-3"]
+        end
+        local msg = M.message
+        self.message:SetShown(msg ~= nil)
+        self.message:SetValue(msg or "")
+        if msg then
+            self.message:ClearAllPoints()
+            self.message:SetPoint("TOPLEFT", 0, -y)
+            y = y + self.message:GetStringHeight() + S["space-3"]
+        end
+        self.detail:SetHeight(y)
+        return y
+    end
+
+    -- "Applied to": a row per frame kind, a cell per set.
+    function LayoutGrid(all: FilterList[], byId: { [string]: FilterList }): number
+        local y = 24
+        local state = M:Get("attached")
+        local noneUsed = 0
+        for i, k in ipairs(SuuUI.AURA_FILTER_FRAMES) do
+            local rule = self.rules[i]
+            rule:ClearAllPoints()
+            rule:SetPoint("TOPLEFT", 0, -y)
+            rule:SetPoint("TOPRIGHT", 0, -y)
+            local rowH = 30 + 2 * S["space-3"]
+            local cellsAt: { frame: Region, x: number, cell: boolean }[] = {}
+            for col, set in ipairs({ "buffs", "debuffs" } :: FilterSet[]) do
+                local x = KIND_COL + (col - 1) * CELL_W
+                local cell = self.cells[k.id .. "." .. set]
+                if cell then
+                    local ids = (state[k.id] or {})[set] or {}
+                    rowH = math.max(rowH, cell:Fill(ids, byId, all))
+                    cellsAt[#cellsAt + 1] = { frame = cell, x = x, cell = true }
+                else
+                    noneUsed = noneUsed + 1
+                    cellsAt[#cellsAt + 1] = { frame = self.none[noneUsed], x = x, cell = false }
+                end
+            end
+            for _, c in ipairs(cellsAt) do
+                c.frame:ClearAllPoints()
+                if c.cell then
+                    c.frame:SetPoint("TOPLEFT", self.grid, "TOPLEFT", c.x, -y)
+                else
+                    c.frame:SetPoint("LEFT", self.grid, "TOPLEFT", c.x + S["space-3"], -(y + rowH / 2))
+                end
+            end
+            local label = self.kindLabels[i]
+            label:ClearAllPoints()
+            label:SetPoint("LEFT", self.grid, "TOPLEFT", S["space-4"], -(y + rowH / 2))
+            y = y + rowH
+        end
+        self.grid:SetHeight(y)
+        return y
+    end
+end
+
+local function buildEditor(parent: Frame): FilterEditor
+    local f = FilterEditor.new(parent)
+    M.editor = f
+    return f
+end
+
+--------------------------------------------------------------------------------
+-- Settings and lifecycle
+--------------------------------------------------------------------------------
+
+local SECTION: SettingsSection = {
+    id = "aurafilters",
+    label = "Aura filters",
+    category = "Frames",
+    order = 20,
+    groups = {
+        {
+            title = "Aura filters",
+            description = "Lists of spells to leave out (block) or to show only (allow), and where each applies: every frame, its buffs and its debuffs, separately. SuuUI's lists and plugins' are read-only (Copy to edit makes one of yours); yours are saved in this profile. A spell you add by name brings every rank. The game matches the spells itself, in combat too; a change made in a fight applies when it ends.",
+            rows = { { label = "Lists", control = "custom", build = buildEditor, stacked = true } },
+        },
+    },
+}
+
+class AuraFiltersModule extends Module<typeof(DEFAULTS)>
+    editor: FilterEditor? = nil
+    -- the list the page shows, and what it last refused (a cycle)
+    selected: string = NOISE
+    message: string? = nil
+
+    constructor()
+        super({
+            id = "aurafilters",
+            name = "Aura filters",
+            description = "Block and allow lists of spells on party, raid, your, target, focus, boss frames and nameplates.",
+            api = "0.27",
+            defaults = DEFAULTS,
+        })
+    end
+
+    function Publish()
+        UI.SetAuraFilters({ lists = self:Get("lists"), attached = self:Get("attached") })
+    end
+
+    function Refresh()
+        if self.editor then
+            self.editor:Refresh()
+        end
+    end
+
+    function Select(id: string)
+        self.selected = id
+        self.message = nil
+        self:Refresh()
+    end
+
+    -- A new list of yours, chosen: "New list", "New list 2"…
+    function NewList(from: FilterList?): string
+        local id = ""
+        mutate(function(lists: FilterList[])
+            local n, names = 0, {} :: { [string]: boolean }
+            for _, l in ipairs(lists) do
+                n = math.max(n, tonumber(l.id:match("^user:(%d+)$")) or 0)
+                names[l.name] = true
+            end
+            id = "user:" .. (n + 1)
+            local base = from and (from.name .. " (copy)") or "New list"
+            local name, k = base, 1
+            while names[name] do
+                k = k + 1
+                name = base .. " " .. k
+            end
+            local spells: FilterSpell[], refs: FilterRef[] = {}, {}
+            for i, s in ipairs(from and from.spells or {}) do
+                spells[i] = { ids = { unpack(s.ids) }, name = s.name, notFor = classes(s.notFor) }
+            end
+            for i, r in ipairs(from and from.lists or {}) do
+                refs[i] = { id = r.id, notFor = classes(r.notFor) }
+            end
+            lists[#lists + 1] = {
+                id = id,
+                name = name,
+                kind = from and from.kind or "block",
+                spells = spells,
+                lists = refs,
+                notFor = classes(from and from.notFor),
+            }
+        end)
+        self:Select(id)
+        return id
+    end
+
+    -- "Copy to edit": a list of yours made from a read-only one.
+    function CopyList(id: string): string?
+        for _, l in ipairs(SuuUI.AuraFilters()) do
+            if l.id == id then
+                return self:NewList(l)
+            end
+        end
+        return nil
+    end
+
+    -- Deletes a list of yours: from the attachments and from your other lists too.
+    function DeleteList(id: string)
+        mutate(function(lists: FilterList[], attached: Attachments)
+            for i = #lists, 1, -1 do
+                if lists[i].id == id then
+                    table.remove(lists, i)
+                end
+            end
+            for _, l in ipairs(lists) do
+                for i = #l.lists, 1, -1 do
+                    if l.lists[i].id == id then
+                        table.remove(l.lists, i)
+                    end
+                end
+            end
+            for _, cell in pairs(attached) do
+                for _, set in ipairs({ "buffs", "debuffs" } :: FilterSet[]) do
+                    local ids = cell[set] or {}
+                    for i = #ids, 1, -1 do
+                        if ids[i] == id then
+                            table.remove(ids, i)
+                        end
+                    end
+                end
+            end
+        end)
+        self:Select(NOISE)
+    end
+
+    -- Changes a list of yours (nothing for one that isn't).
+    function Edit(id: string, fn: (l: FilterList) -> ())
+        mutate(function(lists: FilterList[])
+            local l = ownList(lists, id)
+            if l then
+                fn(l)
+            end
+        end)
+    end
+
+    function Rename(id: string, name: string)
+        local trimmed = (name or ""):match("^%s*(.-)%s*$") or ""
+        if trimmed == "" then
+            self:Refresh()
+            return
+        end
+        self:Edit(id, function(l: FilterList)
+            l.name = trimmed
+        end)
+    end
+
+    function SetKind(id: string, kind: FilterKind)
+        self:Edit(id, function(l: FilterList)
+            l.kind = kind
+        end)
+    end
+
+    function SetListNotFor(id: string, values: string[])
+        self:Edit(id, function(l: FilterList)
+            l.notFor = classes(values)
+        end)
+    end
+
+    function SetEntryNotFor(id: string, which: string, index: number, values: string[])
+        self:Edit(id, function(l: FilterList)
+            local e: { notFor?: string[] }? = which == "list" and l.lists[index] or l.spells[index]
+            if e then
+                e.notFor = classes(values)
+            end
+        end)
+    end
+
+    function RemoveEntry(id: string, which: string, index: number)
+        self:Edit(id, function(l: FilterList)
+            table.remove(which == "list" and l.lists or l.spells, index)
+        end)
+    end
+
+    -- "+ Add a spell"'s choice: an aura SuuUI knows by name (every rank), or
+    -- one spell by its ID ("id:123").
+    function AddSpell(id: string, value: string)
+        local n = tonumber(value:match("^id:(%d+)$"))
+        local entry: FilterSpell? = nil
+        if n then
+            local name = C_Spell.GetSpellName(n)
+            entry = { ids = { n }, name = (not secret.isSecret(name) and name) or nil }
+        else
+            local known = SuuUI.AuraCatalog()[value]
+            if known then
+                entry = { ids = { unpack(known.ids) }, name = value }
+            end
+        end
+        if not entry then
+            return
+        end
+        local added = entry
+        self.message = nil
+        self:Edit(id, function(l: FilterList)
+            l.spells[#l.spells + 1] = added
+        end)
+    end
+
+    -- "+ Add a list": refused when it would hold itself (directly or through
+    -- another list), with the reason on the page. Returns whether it went in.
+    function AddList(id: string, sub: string): boolean
+        local byId: { [string]: FilterList } = {}
+        for _, l in ipairs(SuuUI.AuraFilters()) do
+            byId[l.id] = l
+        end
+        local outer, inner = byId[id], byId[sub]
+        if not (outer and inner) then
+            return false
+        end
+        if SuuUI.AuraFilterContains(sub, id) then
+            self.message = ("%s can't go into %s: %s is inside %s already, and a list can't hold itself."):format(
+                inner.name,
+                outer.name,
+                outer.name,
+                inner.name
+            )
+            self:Refresh()
+            return false
+        end
+        self.message = nil
+        self:Edit(id, function(l: FilterList)
+            for _, r in ipairs(l.lists) do
+                if r.id == sub then
+                    return
+                end
+            end
+            l.lists[#l.lists + 1] = { id = sub }
+        end)
+        return true
+    end
+
+    function Attach(kind: string, set: FilterSet, id: string)
+        mutate(function(_, attached: Attachments)
+            local cell = attached[kind] or {}
+            attached[kind] = cell
+            local ids = cell[set] or {}
+            cell[set] = ids
+            for _, x in ipairs(ids) do
+                if x == id then
+                    return
+                end
+            end
+            ids[#ids + 1] = id
+        end)
+    end
+
+    function Detach(kind: string, set: FilterSet, id: string)
+        mutate(function(_, attached: Attachments)
+            local ids = (attached[kind] or {})[set] or {}
+            for i = #ids, 1, -1 do
+                if ids[i] == id then
+                    table.remove(ids, i)
+                end
+            end
+        end)
+    end
+
+    override function OnEnable()
+        self:RegisterSettings(SECTION)
+        self:Publish()
+        self:WatchAll({ "lists", "attached" }, function()
+            self:Publish()
+        end)
+        -- yours, a plugin's: the page follows
+        self:On("SUUUI_AURA_FILTERS_CHANGED", function()
+            self:Refresh()
+        end)
+    end
+
+    override function OnDisable()
+        UI.SetAuraFilters(nil)
+    end
+end
+
+M = SuuUI.AddModule(AuraFiltersModule.new())

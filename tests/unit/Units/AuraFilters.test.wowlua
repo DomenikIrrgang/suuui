@@ -1,0 +1,578 @@
+-- Units/AuraFilters: the profile's lists and where lists apply. The
+-- defaults (Noise debuffs on party and raid debuffs, nothing elsewhere),
+-- what reaches each aura row (party, raid, yours, the target, nameplates),
+-- "not for" by the player's class, the settings page (the library, a list
+-- of SuuUI's or a plugin's read-only, one of yours edited, a cycle refused,
+-- the "Applied to" grid), saved in the profile, turned off and on.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as settings from "/Core/Settings"
+import * as registry from "/SettingsUI/Registry"
+import type UnitAuras, AuraCandidates from "/UI/Auras"
+import type FilterList from "/Core/AuraFilters"
+import expectNoErrors, newParent from "../../helpers"
+import internal M from "/Units/AuraFilters"
+import type FilterEditor, EntryRow, LibraryRow, Cell, Chip from "/Units/AuraFilters"
+import internal M as party from "/Units/PartyFrames"
+import type PartyFrame from "/Units/PartyFrames"
+import internal M as raid from "/Units/RaidFrames"
+import type RaidButton from "/Units/RaidFrames"
+import internal M as auras from "/Units/Auras"
+import internal byUnit from "/Units/Nameplates"
+
+local NOISE = "suuui:noise"
+local FORBEARANCE, WEAKENED_SOUL, BOOSTED_REST = 25771, 6788, 1229451
+
+local function member(name: string, class: string): mock.MockUnit
+    return mock.spawnUnit({ name = name, player = true, class = class, level = 60, reaction = "friendly" })
+end
+local tank = member("Brannoc Ironhand", "WARRIOR")
+local healer = member("Tamsin Ashford", "PRIEST")
+local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
+
+@afterEach
+local function cleanup()
+    M:ResetAll({ "lists", "attached" })
+    M.selected = NOISE
+    M.message = nil
+    mock.group:leave()
+    mock.setPlayer({ class = "WARRIOR" })
+    M:Publish()
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+local function candidates(c: UnitAuras?, key: string): AuraCandidates
+    local g = assert(assert(c).groups[key])
+    return g.candidates or {}
+end
+
+local function partyFrame(unit: string): PartyFrame
+    for _, f in ipairs(party.frames) do
+        if f.unit == unit then
+            return f
+        end
+    end
+    error("no party frame " .. unit)
+end
+
+local function raidButton(unit: string): RaidButton
+    for _, f in ipairs(raid.buttons) do
+        if f.unit == unit and f:IsShown() then
+            return f
+        end
+    end
+    error("no raid button " .. unit)
+end
+
+local function inParty()
+    mock.group:add(tank)
+    mock.group:add(healer)
+    mock.advanceFrames(2)
+    mock.advanceTime(0.3)
+end
+
+local function inRaid()
+    mock.group:add(tank, { raid = true, subgroup = 1, quiet = true })
+    mock.group:add(healer, { raid = true, subgroup = 1 })
+    mock.advanceFrames(2)
+    mock.advanceTime(0.4)
+end
+
+-- A list of yours, saved.
+local function mine(name: string, kind: "block" | "allow", spells: number[]): string
+    local id = M:NewList()
+    M:Rename(id, name)
+    M:SetKind(id, kind)
+    for _, n in ipairs(spells) do
+        M:AddSpell(id, "id:" .. n)
+    end
+    return id
+end
+
+local function editor(): FilterEditor
+    local section = registry.get("aurafilters") :: registry.Section
+    local row = ((section.groups or {})[1]).rows[1]
+    assert(row.build)(newParent(700, 900), function() end, row)
+    return assert(M.editor)
+end
+
+local function libRow(f: FilterEditor, name: string): LibraryRow
+    for _, r in ipairs(f.libRows) do
+        if r:IsShown() and r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no library row " .. name)
+end
+
+local function entryRow(f: FilterEditor, name: string): EntryRow
+    for _, r in ipairs(f.rows) do
+        if r:IsShown() and r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no entry " .. name)
+end
+
+local function chip(c: Cell, name: string): Chip?
+    for _, ch in ipairs(c.chips) do
+        if ch:IsShown() and ch.label:GetText() == name then
+            return ch
+        end
+    end
+    return nil
+end
+
+-- The lists on a frame kind's set, as saved.
+local function cell(kind: string, set: "buffs" | "debuffs"): string[]?
+    local c = M:Get("attached")[kind]
+    return c and c[set]
+end
+
+local function own(id: string): FilterList
+    for _, l in ipairs(M:Get("lists")) do
+        if l.id == id then
+            return l
+        end
+    end
+    error("no list " .. id)
+end
+
+--------------------------------------------------------------------------------
+-- Defaults and what the frames get
+--------------------------------------------------------------------------------
+
+@test("the defaults: Noise debuffs on party and raid debuffs; nothing on yours, the target or anything else")
+local function defaults()
+    expect(cell("party", "debuffs")).toEqual({ NOISE })
+    expect(cell("raid", "debuffs")).toEqual({ NOISE })
+    expect(cell("party", "buffs")).toEqual({})
+    expect(cell("player", "debuffs")).toBeNil()
+    expect(cell("target", "buffs")).toBeNil()
+    local include, exclude = SuuUI.AuraFilterSpells("player", "debuffs")
+    expect(include).toBeNil()
+    expect(exclude).toBeNil()
+    expect(#M:Get("lists")).toBe(0)
+end
+
+@test("a party member's Boosted Rest and Forbearance: left out of the party frame's debuffs")
+local function partyLeavesOut()
+    inParty()
+    tank:applyAura({ spellId = BOOSTED_REST, name = "Boosted Rest", harmful = true, duration = 1800 })
+    tank:applyAura({ spellId = FORBEARANCE, name = "Forbearance", harmful = true, duration = 60 })
+    mock.advanceFrames(2)
+    local f = partyFrame("party1")
+    local excluded = assert(candidates(f.auras, "all").excludeSpellIDs)
+    expect(excluded[BOOSTED_REST]).toBe(true)
+    expect(excluded[FORBEARANCE]).toBe(true)
+    expect(excluded[WEAKENED_SOUL]).toBe(true)
+    -- your own frame's debuff groups too
+    party:Set("showSelf", true)
+    mock.advanceFrames(2)
+    local me = partyFrame("player")
+    expect(assert(candidates(me.auras, "debuffs").excludeSpellIDs)[BOOSTED_REST]).toBe(true)
+    expect(assert(candidates(me.auras, "dispel").excludeSpellIDs)[BOOSTED_REST]).toBe(true)
+    -- the defensives keep their own list
+    expect(candidates(f.auras, "defensives").includeSpellIDs).never.toBeNil()
+    party:Reset("showSelf")
+end
+
+@test("a raid member's Boosted Rest: left out of the raid frame's debuffs")
+local function raidLeavesOut()
+    inRaid()
+    tank:applyAura({ spellId = BOOSTED_REST, name = "Boosted Rest", harmful = true, duration = 1800 })
+    mock.advanceFrames(2)
+    local b = raidButton("raid1")
+    local excluded = assert(candidates(b.auras, "debuffs").excludeSpellIDs)
+    expect(excluded[BOOSTED_REST]).toBe(true)
+    expect(excluded[FORBEARANCE]).toBe(true)
+    expect(assert(candidates(b.auras, "rest").excludeSpellIDs)[BOOSTED_REST]).toBe(true)
+end
+
+@test("a paladin keeps seeing Forbearance, a priest Weakened Soul")
+local function notForMyClass()
+    inParty()
+    mock.setPlayer({ class = "PALADIN" })
+    M:Publish()
+    local excluded = assert(candidates(partyFrame("party1").auras, "all").excludeSpellIDs)
+    expect(excluded[FORBEARANCE]).toBeNil()
+    expect(excluded[WEAKENED_SOUL]).toBe(true)
+    mock.setPlayer({ class = "PRIEST" })
+    M:Publish()
+    local again = assert(candidates(partyFrame("party1").auras, "all").excludeSpellIDs)
+    expect(again[FORBEARANCE]).toBe(true)
+    expect(again[WEAKENED_SOUL]).toBeNil()
+end
+
+@test("an allow list on party buffs: the defensives within it, less the blocked; off: the whole Defensives list")
+local function partyBuffs()
+    inParty()
+    local f = partyFrame("party1")
+    local before = assert(candidates(f.auras, "defensives").includeSpellIDs)
+    expect(before[871]).toBe(true) -- Shield Wall
+    local allow = mine("Walls", "allow", { 871, 133 })
+    M:Attach("party", "buffs", allow)
+    expect(candidates(f.auras, "defensives").includeSpellIDs).toEqual({ [871] = true })
+    local block = mine("No walls", "block", { 871 })
+    M:Attach("party", "buffs", block)
+    expect(candidates(f.auras, "defensives").includeSpellIDs).toEqual({})
+    M:Detach("party", "buffs", allow)
+    M:Detach("party", "buffs", block)
+    expect(candidates(f.auras, "defensives").includeSpellIDs).toEqual(before)
+end
+
+@test("in combat a change waits for the fight to end")
+local function inCombat()
+    inParty()
+    local f = partyFrame("party1")
+    mock.player:enterCombat()
+    M:Detach("party", "debuffs", NOISE)
+    expect(assert(candidates(f.auras, "all").excludeSpellIDs)[FORBEARANCE]).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(candidates(f.auras, "all").excludeSpellIDs).toBeNil()
+end
+
+@test("your frame, the target, the focus, bosses: their containers take their lists")
+local function attachedContainers()
+    local id = mine("Sunder", "block", { 7386 })
+    M:Attach("target", "debuffs", id)
+    M:Attach("player", "buffs", id)
+    M:Attach("player", "debuffs", id)
+    M:Attach("focus", "buffs", id)
+    local a = auras.attached
+    expect(assert(candidates(a.targetDebuffs, "all").excludeSpellIDs)[7386]).toBe(true)
+    expect(assert(candidates(a.targetDebuffs, "mine").excludeSpellIDs)[7386]).toBe(true)
+    expect(candidates(a.targetBuffs, "theirBuffs").excludeSpellIDs).toBeNil()
+    expect(assert(candidates(a.player, "debuffs").excludeSpellIDs)[7386]).toBe(true)
+    local yours = assert(auras.own)
+    expect(assert(candidates(yours.buffs, "buffs").excludeSpellIDs)[7386]).toBe(true)
+    if a.focusBuffs then
+        expect(assert(candidates(a.focusBuffs, "buffs").excludeSpellIDs)[7386]).toBe(true)
+    end
+    M:Detach("target", "debuffs", id)
+    expect(candidates(a.targetDebuffs, "all").excludeSpellIDs).toBeNil()
+end
+
+@test("nameplates: your debuffs on an enemy's plate leave the blocked out")
+local function nameplates()
+    local id = mine("Sunder", "block", { 7386 })
+    M:Attach("nameplates", "debuffs", id)
+    wolf:showNameplate()
+    mock.advanceFrames(3)
+    local plate = assert(byUnit[wolf:token() :: string])
+    expect(assert(candidates(plate.auras, "mine").excludeSpellIDs)[7386]).toBe(true)
+    -- the engine leaves it out (an enemy's debuffs filter by spell)
+    wolf:applyAura({ spellId = 7386, name = "Sunder Armor", harmful = true, duration = 30, source = mock.player })
+    wolf:applyAura({ spellId = 772, name = "Rend", harmful = true, duration = 30, source = mock.player })
+    mock.advanceFrames(3)
+    local c = assert(plate.auras).container :: any
+    local shown: number[] = {}
+    for instance in pairs(c.auraGroupManager.auraGroupsByKey.mine.framesByAura) do
+        shown[#shown + 1] = c.aurasByInstanceID[instance].spellId
+    end
+    expect(shown).toEqual({ 772 })
+    -- detached: on every plate again, live and pooled
+    M:Detach("nameplates", "debuffs", id)
+    expect(candidates(plate.auras, "mine").excludeSpellIDs).toBeNil()
+    wolf:hideNameplate()
+    mock.advanceFrames(2)
+    M:Attach("nameplates", "debuffs", id)
+end
+
+@test("debuff-type badges and borders never go through filters")
+local function badgesUntouched()
+    inParty()
+    local f = partyFrame("party1")
+    f:SetDispelBadges("all")
+    M:Attach("party", "debuffs", mine("Magic", "allow", { 122 }))
+    for _, c in ipairs(assert(f.dispelSets.all)) do
+        for _, g in pairs(c.groups) do
+            local cand = g.candidates or {}
+            expect(cand.includeSpellIDs).toBeNil()
+            expect(cand.excludeSpellIDs).toBeNil()
+            expect(cand.includeDispelTypes).never.toBeNil()
+        end
+    end
+end
+
+@test("saved in the profile; turned off, nothing is filtered; on again, the lists")
+local function savedAndOff()
+    local id = mine("Mine", "block", { 1 })
+    M:Attach("target", "buffs", id)
+    local stored = settings.get("aurafilters", "lists") :: FilterList[]
+    expect(stored[1].name).toBe("Mine")
+    local saved = settings.get("aurafilters", "attached") :: { [string]: { buffs: string[] } }
+    expect(assert(saved.target).buffs).toEqual({ id })
+    settings.set("aurafilters", "enabled", false)
+    local _, e1 = SuuUI.AuraFilterSpells("party", "debuffs")
+    expect(e1).toBeNil()
+    settings.set("aurafilters", "enabled", true)
+    local _, e2 = SuuUI.AuraFilterSpells("party", "debuffs")
+    expect(assert(e2)[1] ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Lists of yours
+--------------------------------------------------------------------------------
+
+@test("new lists, named in turn; renamed (not to nothing); block or allow; not for a class")
+local function newLists()
+    local a = M:NewList()
+    local b = M:NewList()
+    expect(own(a).name).toBe("New list")
+    expect(own(b).name).toBe("New list 2")
+    expect(b).toBe("user:2")
+    expect(M.selected).toBe(b)
+    M:Rename(a, "  Heals  ")
+    expect(own(a).name).toBe("Heals")
+    M:Rename(a, "   ")
+    expect(own(a).name).toBe("Heals")
+    M:SetKind(a, "allow")
+    expect(own(a).kind).toBe("allow")
+    M:SetListNotFor(a, { "PRIEST" })
+    expect(own(a).notFor).toEqual({ "PRIEST" })
+    M:SetListNotFor(a, {})
+    expect(own(a).notFor).toBeNil()
+    -- SuuUI's can't be changed
+    M:Rename(NOISE, "Mine now")
+    expect(#M:Get("lists")).toBe(2)
+end
+
+@test("spells: by ID, by a name SuuUI knows (every rank); not for a class; removed")
+local function spells()
+    local id = M:NewList()
+    M:AddSpell(id, "id:133")
+    expect(own(id).spells[1].ids).toEqual({ 133 })
+    expect(own(id).spells[1].name).toBe(C_Spell.GetSpellName(133))
+    local catalog = SuuUI.AuraCatalog()
+    local name = assert(next(catalog))
+    M:AddSpell(id, name)
+    expect(own(id).spells[2].ids).toEqual(assert(catalog[name]).ids)
+    M:AddSpell(id, "Not a known aura")
+    expect(#own(id).spells).toBe(2)
+    M:SetEntryNotFor(id, "spell", 1, { "MAGE", "DRUID" })
+    expect(own(id).spells[1].notFor).toEqual({ "MAGE", "DRUID" })
+    M:SetEntryNotFor(id, "spell", 9, { "MAGE" }) -- nothing there
+    M:RemoveEntry(id, "spell", 1)
+    expect(#own(id).spells).toBe(1)
+end
+
+@test("lists in lists: in once; a cycle refused with the reason")
+local function nesting()
+    local outer = mine("Outer", "block", {})
+    local inner = mine("Inner", "block", {})
+    expect(M:AddList(outer, inner)).toBe(true)
+    expect(M:AddList(outer, inner)).toBe(true)
+    expect(#own(outer).lists).toBe(1)
+    expect(M:AddList(inner, outer)).toBe(false)
+    expect(M.message).toBe("Outer can't go into Inner: Inner is inside Outer already, and a list can't hold itself.")
+    expect(M:AddList(outer, outer)).toBe(false)
+    expect(M:AddList(outer, "test-nowhere")).toBe(false)
+    -- SuuUI's inside yours; its own lists can't take yours
+    expect(M:AddList(inner, NOISE)).toBe(true)
+    M:SetEntryNotFor(inner, "list", 1, { "PALADIN" })
+    expect(own(inner).lists[1].notFor).toEqual({ "PALADIN" })
+    M:Select(outer)
+    expect(M.message).toBeNil()
+end
+
+@test("Copy to edit: a list of yours with the same entries; delete takes it out of lists and frames")
+local function copyAndDelete()
+    local copy = assert(M:CopyList(NOISE))
+    local l = own(copy)
+    expect(l.name).toBe("Noise debuffs (copy)")
+    expect(#l.lists).toBe(4)
+    expect(M.selected).toBe(copy)
+    expect(M:CopyList("test-nowhere")).toBeNil()
+    local paladin = assert(M:CopyList("suuui:paladin"))
+    expect(own(paladin).spells[1].notFor).toEqual({ "PALADIN" })
+    local holder = mine("Holder", "block", {})
+    M:AddList(holder, copy)
+    M:Attach("raid", "debuffs", copy)
+    M:Attach("raid", "debuffs", copy) -- once
+    expect(cell("raid", "debuffs")).toEqual({ NOISE, copy })
+    M:DeleteList(copy)
+    expect(#own(holder).lists).toBe(0)
+    expect(cell("raid", "debuffs")).toEqual({ NOISE })
+    expect(M.selected).toBe(NOISE)
+end
+
+--------------------------------------------------------------------------------
+-- The page
+--------------------------------------------------------------------------------
+
+@test("the page: SuuUI's lists as a tree, read-only; a sub-list opens it; Copy to edit")
+local function pageBuiltIn()
+    local f = editor()
+    local noise = libRow(f, "Noise debuffs")
+    expect(noise.selected).toBeShown()
+    expect(noise.count:GetText()).toBe("4 lists")
+    -- Paladin sits under Class lockouts, under Noise debuffs
+    local _, _, _, x0 = noise.mark:GetPoint(1)
+    local _, _, _, x2 = libRow(f, "Paladin").mark:GetPoint(1)
+    expect(x2 - x0).toBe(32)
+    expect(f.heads[2]).never.toBeShown() -- no plugin lists yet
+    -- the chosen list: read-only
+    expect(f.title:GetText()).toBe("Noise debuffs")
+    expect(f.title).toBeShown()
+    expect(f.nameField).never.toBeShown()
+    expect(f.kindPill:GetText()).toBe("BLOCK")
+    expect(f.source:GetText()).toBe("SuuUI's · read-only")
+    expect(f.copy).toBeShown()
+    expect(f.delete).never.toBeShown()
+    expect(f.addSpell).never.toBeShown()
+    local lockouts = entryRow(f, "Class lockouts")
+    expect(lockouts.meta:GetText()).toBe("Paladin, Priest")
+    expect(lockouts.remove).never.toBeShown()
+    expect(lockouts.notFor).never.toBeShown()
+
+    ;
+    -- a sub-list opens; its spell says who it isn't for
+    (lockouts:GetScript("OnMouseUp") :: (self: Frame) -> ())(lockouts)
+    mock.click(libRow(f, "Priest"))
+    expect(M.selected).toBe("suuui:priest")
+    local ws = entryRow(f, "Weakened Soul")
+    expect(ws.meta:GetText()).toBe("Spell 6788")
+    expect(ws.notForText:GetText()).toBe("Not for priests")
+    expect(ws.notForText).toBeShown()
+    mock.click(libRow(f, "Recovery"))
+    expect(entryRow(f, "Recently Bandaged").meta:GetText()).toBe("Spells 11196, 1305047")
+    -- Copy to edit: yours, chosen, editable
+    mock.click(f.copy)
+    expect(f.nameField).toBeShown()
+    expect(f.nameField:GetValue()).toBe("Recovery (copy)")
+    expect(f.source).never.toBeShown()
+    expect(libRow(f, "Recovery (copy)").selected).toBeShown()
+    f:Hide()
+    f:Show()
+end
+
+@test("the page: one of yours edited; adding spells and lists; a cycle's reason shown")
+local function pageYours()
+    local f = editor()
+    mock.click(f.newList)
+    local id = M.selected
+    expect(f.emptyWell).toBeShown()
+    assert(f.nameField.onChange)("Dungeon noise")
+    expect(own(id).name).toBe("Dungeon noise")
+    assert(f.kind.onChange)("allow")
+    expect(own(id).kind).toBe("allow")
+    expect(f.kind.value).toBe("allow")
+    assert(f.kind.onChange)("block")
+    assert(f.listNotFor.onChangeAll)({ "ROGUE" })
+    expect(own(id).notFor).toEqual({ "ROGUE" })
+    -- spells: the lookup finds one by ID; the catalog offers the rest by name
+    local lookup = assert(f.addSpell.lookup)
+    expect(assert(lookup(" 133 "))[1].value).toBe("id:133")
+    expect(lookup("fire")).toBeNil()
+    expect(lookup("999999999")).toBeNil()
+    assert(f.addSpell.onChange)("id:133")
+    local catalog = SuuUI.AuraCatalog()
+    local many: string? = nil
+    for name, a in pairs(catalog) do
+        if #a.ids > 3 then
+            many = name
+            break
+        end
+    end
+    assert(f.addSpell.onChange)(assert(many))
+    expect((entryRow(f, assert(many)).meta:GetText() or ""):find("every rank") ~= nil).toBe(true)
+    local fireball = entryRow(f, C_Spell.GetSpellName(133) :: string)
+    expect(fireball.meta:GetText()).toBe("Spell 133")
+    expect(fireball.remove).toBeShown()
+    assert(fireball.notFor.onChangeAll)({ "MAGE" })
+    expect(own(id).spells[1].notFor).toEqual({ "MAGE" })
+    mock.click(entryRow(f, C_Spell.GetSpellName(133) :: string).remove)
+    expect(#own(id).spells).toBe(1)
+    -- lists: Noise debuffs inside it; then its own copy can't take it back
+    assert(f.addList.onChange)(NOISE)
+    expect(entryRow(f, "Noise debuffs").meta:GetText()).toBe("Class lockouts, Recovery, Battlegrounds, Camping")
+    local holder = mine("Holder", "block", {})
+    M:AddList(holder, id)
+    M:Select(id)
+    assert(f.addList.onChange)(holder)
+    expect(f.message).toBeShown()
+    expect(f.message:GetText()).toBe(
+        "Holder can't go into Dungeon noise: Dungeon noise is inside Holder already, and a list can't hold itself."
+    )
+    -- a list it holds that went away
+    M:Edit(id, function(l: FilterList)
+        l.lists[#l.lists + 1] = { id = "test-gone" }
+    end)
+    expect(entryRow(f, "test-gone").meta:GetText()).toBe("Not there any more (its plugin is off?)")
+    -- Delete list
+    mock.click(f.delete)
+    expect(M.selected).toBe(NOISE)
+    expect(f.title:GetText()).toBe("Noise debuffs")
+end
+
+@test("the page: Applied to, a grid of frames by buffs and debuffs; + adds a list, × takes it off")
+local function pageGrid()
+    local f = editor()
+    local partyDebuffs = assert(f.cells["party.debuffs"])
+    local partyBuffs = assert(f.cells["party.buffs"])
+    expect(chip(partyDebuffs, "Noise debuffs")).never.toBeNil()
+    expect(partyDebuffs.empty).never.toBeShown()
+    expect(partyBuffs.empty).toBeShown()
+    expect(partyBuffs.empty:GetText()).toBe("Everything")
+    expect(f.cells["boss.buffs"]).toBeNil() -- SuuUI shows no boss buffs
+    expect(f.cells["nameplates.buffs"]).toBeNil()
+    expect(#f.none).toBe(2)
+    -- + offers every list not on it yet
+    local offered = 0
+    for _, o in ipairs(partyDebuffs.add.options) do
+        expect(o.value ~= NOISE).toBe(true)
+        offered = offered + 1
+    end
+    expect(offered > 0).toBe(true)
+    assert(partyBuffs.add.onChange)("suuui:camping")
+    expect(cell("party", "buffs")).toEqual({ "suuui:camping" })
+    local camping = assert(chip(assert(f.cells["party.buffs"]), "Camping"))
+    mock.click(camping.remove)
+    expect(cell("party", "buffs")).toEqual({})
+    -- many lists wrap onto more lines; a missing one says so
+    local target = assert(f.cells["target.debuffs"])
+    for _, id in ipairs({ NOISE, "suuui:lockouts", "suuui:paladin", "suuui:priest", "suuui:recovery" }) do
+        M:Attach("target", "debuffs", id)
+    end
+    local h1 = target:GetHeight()
+    M:Attach("target", "debuffs", "test-gone")
+    expect(chip(target, "test-gone (missing)")).never.toBeNil()
+    expect(target:GetHeight() >= h1).toBe(true)
+    -- every list on it: nothing left to add
+    for _, l in ipairs(SuuUI.AuraFilters()) do
+        M:Attach("focus", "buffs", l.id)
+    end
+    expect(assert(f.cells["focus.buffs"]).add.disabled).toBe(true)
+end
+
+@test("a plugin's list: under From plugins, read-only, its addon named; copied to edit")
+local function pagePlugin()
+    SuuUI.RegisterAuraFilter({
+        id = "test-plugin-mechanics",
+        name = "Raid mechanics",
+        kind = "allow",
+        spells = { 133 },
+        addon = "SuuUI_Raid",
+    })
+    local f = editor()
+    expect(f.heads[2]).toBeShown()
+    local r = libRow(f, "Raid mechanics")
+    expect(r.count:GetText()).toBe("1")
+    mock.hover(r)
+    mock.hover(nil)
+    mock.click(r)
+    expect(f.source:GetText()).toBe("SuuUI_Raid's · read-only")
+    expect(f.kindPill:GetText()).toBe("ALLOW")
+    expect(entryRow(f, C_Spell.GetSpellName(133) :: string).remove).never.toBeShown()
+    -- what plugins get back is a copy: SuuUI's own stays as it is
+    local all = SuuUI.AuraFilters()
+    all[#all].name = "Changed"
+    expect(libRow(f, "Raid mechanics")).never.toBeNil()
+    mock.click(f.copy)
+    expect(own(M.selected).kind).toBe("allow")
+end

@@ -885,3 +885,8 @@ These match the game; the tests follow them:
   on Camelot), and your own health is secret to addons (`UnitHealth`).
 - A party forms a moment after the invite: wait before `joinGroup` and
   before `C_PartyInfo.ConvertToRaid`.
+- `C_Secrets.GetSpellAuraSecrecy` answers "contextually secret" for every
+  spell (there is no way to define one as never secret), so Blizzard's aura
+  containers never filter a debuff on a friendly unit (or a buff on an
+  enemy) by spell ID: test such filters by the group's candidates; on an
+  enemy's debuffs they render as in the game.

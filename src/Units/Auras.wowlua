@@ -24,10 +24,11 @@
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
-import type UnitAuras, AuraOptions, PreviewItem from "/UI/Auras"
+import type UnitAuras, AuraOptions, AuraGroup, PreviewItem from "/UI/Auras"
 import type WeaponEnchantIcon from "/UI/WeaponEnchants"
 import type Position from "/EditMode/EditMode"
 import type AuraPlace from "/UI/Auras"
+import type FilterSet from "/Core/AuraFilters"
 import after from "wowlua:timer"
 import isSecret from "wowlua:secret"
 import * as secret from "wowlua:secret"
@@ -63,11 +64,14 @@ local M: AurasModule
 -- name by default), the setting that shows it, where it sits (its point on
 -- the frame's), its options; `half`: half the frame wide.
 type At = { point: FramePoint, rel: FramePoint, x: number, y: number }
+-- `kind`, `set`: where the aura filters' lists for it are attached.
 type Attached = {
     anchor?: string,
     key: "showDebuffs" | "showTarget" | "showFocus" | "showBoss",
     half?: boolean,
     at: At,
+    kind: string,
+    set: FilterSet,
     opts: AuraOptions,
 }
 local function at(point: FramePoint, rel: FramePoint, x: number, y: number): At
@@ -78,6 +82,8 @@ local ATTACHED: { [string]: Attached } = {
     player = {
         key = "showDebuffs",
         at = at("BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"]),
+        kind = "player",
+        set = "debuffs",
         opts = {
             size = "icon-lg",
             anchor = "BOTTOMRIGHT",
@@ -95,6 +101,8 @@ local ATTACHED: { [string]: Attached } = {
         key = "showTarget",
         half = true,
         at = at("BOTTOMLEFT", "TOPLEFT", 0, S["space-4"]),
+        kind = "target",
+        set = "buffs",
         opts = {
             size = "icon-md",
             anchor = "BOTTOMLEFT",
@@ -114,6 +122,8 @@ local ATTACHED: { [string]: Attached } = {
         key = "showTarget",
         half = true,
         at = at("BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"]),
+        kind = "target",
+        set = "debuffs",
         opts = {
             size = "icon-md",
             anchor = "BOTTOMRIGHT",
@@ -131,6 +141,8 @@ local ATTACHED: { [string]: Attached } = {
         key = "showFocus",
         half = true,
         at = at("BOTTOMLEFT", "TOPLEFT", 0, S["space-4"]),
+        kind = "focus",
+        set = "buffs",
         opts = {
             size = "icon-md",
             anchor = "BOTTOMLEFT",
@@ -144,6 +156,8 @@ local ATTACHED: { [string]: Attached } = {
         key = "showFocus",
         half = true,
         at = at("BOTTOMRIGHT", "TOPRIGHT", 0, S["space-4"]),
+        kind = "focus",
+        set = "debuffs",
         opts = {
             size = "icon-md",
             anchor = "BOTTOMRIGHT",
@@ -157,6 +171,8 @@ for i = 1, 5 do
     ATTACHED["boss" .. i] = {
         key = "showBoss",
         at = at("RIGHT", "LEFT", -S["space-2"], 0),
+        kind = "boss",
+        set = "debuffs",
         opts = {
             size = "icon-md",
             anchor = "RIGHT",
@@ -171,6 +187,38 @@ end
 local function halfWidth(frame: Frame): number
     local w = frame:GetWidth() or 0
     return math.max(UI.Size("icon-md"), math.floor((w - S["space-4"]) / 2))
+end
+
+-- A container's groups with the aura filters' spells for its frame kind and
+-- set (the engine matches them, in combat too).
+local function filtered(opts: AuraOptions, kind: string, set: FilterSet): AuraOptions
+    local groups: AuraGroup[] = {}
+    for i, g in ipairs(opts.groups) do
+        local include, exclude = SuuUI.AuraFilterSpells(kind, set, g.include)
+        local copy: AuraGroup = { key = g.key, filter = g.filter }
+        for k, v in pairs(g) do
+            (copy :: { [string]: unknown })[k] = v
+        end
+        copy.include, copy.exclude = include, exclude
+        groups[i] = copy
+    end
+    local out: AuraOptions = { groups = groups }
+    for k, v in pairs(opts) do
+        if k ~= "groups" then
+            (out :: { [string]: unknown })[k] = v
+        end
+    end
+    return out
+end
+
+-- your buffs' group (right click cancels one)
+local OWN_BUFFS: AuraGroup[] = { { key = "buffs", filter = { "HELPFUL" }, max = 32, cancel = true } }
+
+-- The aura filters on a container: each group's spells again.
+local function applyFilters(c: UnitAuras, opts: AuraOptions, kind: string, set: FilterSet)
+    for _, g in ipairs(opts.groups) do
+        c:SetGroupSpells(g.key, SuuUI.AuraFilterSpells(kind, set, g.include))
+    end
 end
 
 -- Edit mode's "With buffs and debuffs": made-up auras in every container
@@ -392,7 +440,7 @@ class AurasModule extends Module<typeof(DEFAULTS)>
             if def.half then
                 def.opts.lineWidth = halfWidth(frame)
             end
-            c = UI.AuraContainer(frame, def.anchor or name, def.opts)
+            c = UI.AuraContainer(frame, def.anchor or name, filtered(def.opts, def.kind, def.set))
             if c then
                 self.attached[name] = c
             end
@@ -698,6 +746,21 @@ class AurasModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- The aura filters' lists on every container, out of combat.
+    function ApplyFilters()
+        self:RunOutOfCombat("filters", function()
+            for name, c in pairs(self.attached) do
+                local def = assert(ATTACHED[name])
+                applyFilters(c, def.opts, def.kind, def.set)
+            end
+            local own = self.own
+            local buffs = own and own.buffs
+            if buffs then
+                applyFilters(buffs, { groups = OWN_BUFFS }, "player", "buffs")
+            end
+        end)
+    end
+
     override function OnEnable()
         SuuUI.SuppressBlizzard("BuffFrame")
         SuuUI.SuppressBlizzard("DebuffFrame")
@@ -707,13 +770,21 @@ class AurasModule extends Module<typeof(DEFAULTS)>
             -- Your buffs: their own movable holder, top right.
             local holder = CreateFrame("Frame", "SuuUIPlayerBuffs", SuuUI.Root)
             holder:SetSize(16 * (UI.Size("icon-lg") + S["space-2"]), 2 * (UI.Size("icon-lg") + S["space-2"]))
-            local buffs = UI.AuraContainer(holder, "player", {
-                size = "icon-lg",
-                anchor = "TOPRIGHT",
-                growth = { "LEFT", "DOWN" },
-                lineWidth = holder:GetWidth(),
-                groups = { { key = "buffs", filter = { "HELPFUL" }, max = 32, cancel = true } },
-            })
+            local buffs = UI.AuraContainer(
+                holder,
+                "player",
+                filtered(
+                    {
+                        size = "icon-lg",
+                        anchor = "TOPRIGHT",
+                        growth = { "LEFT", "DOWN" },
+                        lineWidth = holder:GetWidth(),
+                        groups = OWN_BUFFS,
+                    },
+                    "player",
+                    "buffs"
+                )
+            )
             if buffs then
                 buffs.container:SetPoint("TOPRIGHT", holder, "TOPRIGHT")
             end
@@ -742,6 +813,7 @@ class AurasModule extends Module<typeof(DEFAULTS)>
         self:RegisterSettings(SECTION)
         self:ApplyOptions()
         self:ApplyLayout()
+        self:ApplyFilters()
 
         self:On("SUUUI_ANCHOR_CHANGED", function(_, name, frame)
             self:AttachAnchor(name, frame)
@@ -755,6 +827,9 @@ class AurasModule extends Module<typeof(DEFAULTS)>
         -- edit mode's "With buffs and debuffs"
         self:On("SUUUI_EDITMODE_GROUP_PREVIEW", function(_, _, auras)
             self:AuraPreview(auras and true or false)
+        end)
+        self:On("SUUUI_AURA_FILTERS_CHANGED", function()
+            self:ApplyFilters()
         end)
         self:On("SUUUI_WEAPON_ENCHANTS_CHANGED", function()
             self:LayoutEnchants()

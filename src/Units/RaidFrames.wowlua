@@ -54,6 +54,9 @@ local DEFAULTS = {
     incoming = true,
     buffIcons = 1, -- defensives (the Defensives list), inside the bar's right end
     debuffIcons = 2, -- debuffs at the very end, the ones you can remove first
+    -- the debuffs shown, yours too: "kinds" (typed ones and crowd control)
+    -- or "all"
+    debuffKinds = "kinds",
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
 }
@@ -115,12 +118,31 @@ type RaidGroup = {
     dispel?: boolean,
     harmfulEdge?: boolean,
     gap?: number,
+    -- shown only with debuffKinds on "kinds"
+    kindsOnly?: boolean,
+    -- with debuffKinds on "kinds": this filter instead
+    kinds?: string[],
 }
+-- others' debuffs by kind: the typed ones (crowd control has its group).
+-- The game won't leave a debuff out by spell on a friendly unit unless the
+-- spell is never secret; on Forever none of the noisy ones is (probed
+-- 2026-11-08); these filter words work in combat
+local OTHERS_BY_KIND = { "HARMFUL", "DISPELLABLE" }
 local AURA_GROUPS: RaidGroup[] = {
     {
         key = "debuffs",
         set = "debuffIcons",
         filters = { me = { "HARMFUL", "RAID_PLAYER_DISPELLABLE" }, others = { "HARMFUL" } },
+        dispel = true,
+        harmfulEdge = true,
+    },
+    -- crowd control, yours and theirs, with debuffKinds on "kinds" (asked
+    -- 2026-11-08: your own frame without the typeless ones too)
+    {
+        key = "cc",
+        set = "debuffIcons",
+        filter = { "HARMFUL", "CROWD_CONTROL", "!DISPELLABLE" },
+        kindsOnly = true,
         dispel = true,
         harmfulEdge = true,
     },
@@ -131,6 +153,9 @@ local AURA_GROUPS: RaidGroup[] = {
         set = "debuffIcons",
         who = "me",
         filter = { "HARMFUL", "!RAID_PLAYER_DISPELLABLE" },
+        -- by kind, only the typed ones you can't remove (crowd control has
+        -- its group)
+        kinds = { "HARMFUL", "DISPELLABLE", "!RAID_PLAYER_DISPELLABLE" },
         dispel = true,
         harmfulEdge = true,
         gap = GAP_SETS - S["space-1"],
@@ -145,6 +170,14 @@ local AURA_GROUPS: RaidGroup[] = {
         gap = GAP_SETS - S["space-1"],
     },
 }
+
+-- A group's spells: its own list's (the Defensives list) and the aura
+-- filters' on raid frames, worked out together so neither overwrites the
+-- other. Include, exclude (each nil: none).
+local function groupSpells(g: RaidGroup, d: GroupDefensives): (number[]?, number[]?)
+    local list = g.list
+    return SuuUI.AuraFilterSpells("raid", g.set == "buffIcons" and "buffs" or "debuffs", list and d[list] or nil)
+end
 
 -- The row's width at a bar height: both sets' icons, and the gap when both
 -- have room.
@@ -200,6 +233,9 @@ export class RaidButton extends UnitFrame
 
     -- A group's count on this button: its setting, on the frames it is for.
     function GroupMax(g: RaidGroup): number
+        if g.kindsOnly and M:Get("debuffKinds") ~= "kinds" then
+            return 0
+        end
         if g.who and g.who ~= (self.isMe and "me" or "others") then
             return 0
         end
@@ -209,6 +245,13 @@ export class RaidButton extends UnitFrame
     -- A group's filter for whoever it shows now.
     function GroupFilter(g: RaidGroup): string[]?
         local filters = g.filters
+        local byKind = M:Get("debuffKinds") == "kinds"
+        if filters and not self.isMe and byKind then
+            return OTHERS_BY_KIND
+        end
+        if g.kinds and byKind then
+            return g.kinds
+        end
         return filters and (self.isMe and filters.me or filters.others) or g.filter
     end
 
@@ -217,7 +260,7 @@ export class RaidButton extends UnitFrame
         local defensives = UI.GroupDefensives()
         local groups: AuraGroup[] = {}
         for i, g in ipairs(AURA_GROUPS) do
-            local list = g.list
+            local include, exclude = groupSpells(g, defensives)
             groups[i] = {
                 key = g.key,
                 filter = self:GroupFilter(g) or {},
@@ -228,7 +271,8 @@ export class RaidButton extends UnitFrame
                 harmfulEdge = g.harmfulEdge,
                 border = g.border,
                 gap = g.gap,
-                include = list and defensives[list],
+                include = include,
+                exclude = exclude,
             }
         end
         local auras = UI.AuraContainer(self.auraClip, "none", {
@@ -261,11 +305,11 @@ export class RaidButton extends UnitFrame
             return
         end
         for _, g in ipairs(AURA_GROUPS) do
-            local filter = g.filters and self:GroupFilter(g)
+            local filter = (g.filters or g.kinds) and self:GroupFilter(g)
             if filter then
                 auras:SetGroupFilter(g.key, filter)
             end
-            if g.who then
+            if g.who or g.kindsOnly then
                 auras:SetGroupMax(g.key, self:GroupMax(g))
             end
         end
@@ -845,6 +889,17 @@ local SECTION: SettingsSection = {
                     combat = true,
                     description = "At the bar's very end, after the defensives: debuffs you can remove first, then the rest.",
                 },
+                {
+                    key = "debuffKinds",
+                    label = "Debuffs",
+                    control = "segmented",
+                    options = {
+                        { value = "kinds", label = "Typed and crowd control" },
+                        { value = "all", label = "Every debuff" },
+                    },
+                    combat = true,
+                    description = "Everyone's debuffs, yours too: only those with a type (Magic, Curse, Poison, Disease, whoever can remove them) and crowd control, so the typeless ones (Forbearance, Weakened Soul, Boosted Rest, Resurrection Sickness…) stay off, in combat too. Typeless debuffs that matter (bleeds, healing reductions, many boss debuffs) go too. Your debuff row by the minimap keeps all of yours.",
+                },
             },
         },
         {
@@ -1050,6 +1105,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             f.opts.incoming = self:Get("incoming")
             f.opts.reserveRight = auraReserve(f:GetHeight())
             f:ApplyAuraCount()
+            -- (others' debuffs by kind or all: the filters with them)
+            f:ApplyWho()
             if f.active then
                 f:Refresh()
             end
@@ -1105,17 +1162,15 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- The Defensives list: the inline icons' spells and Warded, out of combat.
+    -- The Defensives list and the aura filters: the inline icons' spells,
+    -- and Warded, out of combat.
     function ApplyDefensives()
         local d = UI.GroupDefensives()
         for _, f in ipairs(self.buttons) do
             local auras = f.auras
             if auras then
                 for _, g in ipairs(AURA_GROUPS) do
-                    local list = g.list
-                    if list then
-                        auras:SetGroupSpells(g.key, d[list])
-                    end
+                    auras:SetGroupSpells(g.key, groupSpells(g, d))
                 end
             end
             f:SetWardSpells(d.warded)
@@ -1437,6 +1492,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             "groupGap",
             "buffIcons",
             "debuffIcons",
+            "debuffKinds",
         }, function()
             self:DrawPreview()
             self:RunOutOfCombat("layout", function()
@@ -1484,6 +1540,11 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 self:ApplyDefensives()
             end)
             self:DrawPreview()
+        end)
+        self:On("SUUUI_AURA_FILTERS_CHANGED", function()
+            self:RunOutOfCombat("defensives", function()
+                self:ApplyDefensives()
+            end)
         end)
 
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()

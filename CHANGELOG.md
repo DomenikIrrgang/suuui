@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### New
+
+- **Aura filters**: Settings › Frames › Aura filters lets you hide spells you don't need to see, or show only the ones you do, with block and allow lists you put on party, raid, your own, target, focus, boss frames and nameplates (buffs and debuffs separately). Party and raid debuffs now leave out SuuUI's Noise debuffs (Forbearance and Weakened Soul unless you're a paladin or priest, Resurrection Sickness, Recently Bandaged, Ghost, Deserter, Recently Dropped Flag, Boosted Rest) where the game allows it; you can take that off, copy SuuUI's lists to change them, or make your own. Plugins can bring lists too (API 0.27).
+
+### Changed
+
+- Party and raid frames show only debuffs that have a type (Magic, Curse, Poison, Disease) and crowd control, yours too and in combat too, so typeless ones like Forbearance, Weakened Soul and Boosted Rest stay off. "Debuffs" in the party and raid frame settings brings every debuff back; your debuff row by the minimap keeps all of yours.
+
 ### Fixed
 
 - Party and raid frames in the healer setup (icons inside the bar, raid frames in rows): Warded, Aggro and the debuff-type badges sit on the frame's top edge at the right, next to the icons, instead of in the middle over the name, and the name runs under the icon slots: its whole length shows while they are empty.

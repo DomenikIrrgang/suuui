@@ -175,7 +175,25 @@ SuuUI.RegisterTheme({
 - **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned; NPCs keep `unit-fill`. The player's "Health colour" setting on Class colours wins over your theme.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 
-## 8. Everything else: raw access
+## 8. Aura filter lists
+
+A plugin can bring lists of spells for the player to put on SuuUI's frames (Settings › Frames › Aura filters): a **block** list leaves its spells out, an **allow** list shows only them.
+
+```lua
+SuuUI.RegisterAuraFilter({
+    id = "myplugin:mechanics", name = "Raid mechanics", kind = "allow",
+    description = "The debuffs this raid's fights put on you.",
+    spells = { 12345, { ids = { 23456, 23457 }, name = "Doom", notFor = { "PALADIN" } } },
+    lists = { "suuui:camping" },
+})
+```
+
+- **When to call it:** at file load, like a theme.
+- **Where it goes:** nowhere until the player attaches it to a frame (party, raid, theirs, the target, focus, bosses, nameplates; buffs and debuffs separately). Your list is read-only for them; they can copy it to edit, and your list updates with your plugin.
+- **Entries:** spell IDs (every rank you list), other lists by ID (yours or SuuUI's, `suuui:noise` and the lists inside it), and `notFor`: classes it doesn't apply to, on an entry or the whole list.
+- **The game decides some of it:** on players you can help (their debuffs) and on enemies (their buffs) the game lets addons leave out only spells it never keeps secret.
+
+## 9. Everything else: raw access
 
 `SuuUI.Raw` reaches everything SuuUI is made of, for what the API doesn't cover:
 - `Raw.UI`: every component, including the ones not exported.

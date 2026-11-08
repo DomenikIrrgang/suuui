@@ -426,15 +426,24 @@ export class Nameplate extends Frame
         SuuUI.AddInstance("nameplate", self, { module = M.id, preview = api ~= nil or nil })
     end
 
-    -- Your debuffs on it, above the name (the engine fills them).
+    -- Your debuffs on it, above the name (the engine fills them), less what
+    -- the aura filters on nameplates leave out.
     function BuildAuras()
+        local include, exclude = SuuUI.AuraFilterSpells("nameplates", "debuffs")
         local auras = UI.AuraContainer(self, "none", {
             size = M:Get("auraSize"),
             spacing = S["space-1"],
             anchor = "BOTTOMLEFT",
             growth = { "RIGHT", "UP" },
             groups = {
-                { key = "mine", filter = { "HARMFUL", "PLAYER" }, max = 4, harmfulEdge = true },
+                {
+                    key = "mine",
+                    filter = { "HARMFUL", "PLAYER" },
+                    max = 4,
+                    harmfulEdge = true,
+                    include = include,
+                    exclude = exclude,
+                },
                 -- on friendly plates: what you can remove, with its type's border
                 {
                     key = "removable",
@@ -442,6 +451,8 @@ export class Nameplate extends Frame
                     max = 0,
                     dispel = true,
                     harmfulEdge = true,
+                    include = include,
+                    exclude = exclude,
                 },
             },
         })
@@ -1409,6 +1420,27 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- The aura filters on nameplates: every live and pooled plate's groups,
+    -- out of combat.
+    function ApplyFilters()
+        self:RunOutOfCombat("filters", function()
+            local include, exclude = SuuUI.AuraFilterSpells("nameplates", "debuffs")
+            local function each(f: Nameplate)
+                local auras = f.auras
+                if auras then
+                    auras:SetGroupSpells("mine", include, exclude)
+                    auras:SetGroupSpells("removable", include, exclude)
+                end
+            end
+            for _, f in pairs(byUnit) do
+                each(f)
+            end
+            for _, f in ipairs(pool) do
+                each(f)
+            end
+        end)
+    end
+
     function ApplyGameSettings()
         self:RunOutOfCombat("cvars", function()
             for k, v in pairs(CVARS) do
@@ -1685,6 +1717,9 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             self:ForEach(function(f: Nameplate)
                 f:UpdateThreat()
             end)
+        end)
+        self:On("SUUUI_AURA_FILTERS_CHANGED", function()
+            self:ApplyFilters()
         end)
         -- the preview's target line carries a colour code
         self:On("SUUUI_THEME_CHANGED", function()

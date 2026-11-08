@@ -1,0 +1,56 @@
+-- Diagnostics/AuraSecrecyProbe.wowlua
+-- "/suu probe aurasecrecy": which spells of the aura filter lists the game
+-- lets an aura group filter on friendly players. Blizzard's aura containers
+-- (AuraContainerUtil.DoesAuraPassCandidateFilters) match a debuff on someone
+-- you can assist, and a buff on someone you can't, by spell ID only when
+-- C_Secrets.GetSpellAuraSecrecy says the spell is never secret; otherwise
+-- the debuff shows anyway (and an allow list hides it). Prints each spell's
+-- level and saves them in SuuUIProbe.auraSecrecy on /reload.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as auraFilters from "/Core/AuraFilters"
+import isSecret from "wowlua:secret"
+
+local LEVELS: { [number]: string } = { [0] = "never secret", [1] = "always secret", [2] = "contextually secret" }
+
+export function command()
+    if not (C_Secrets and C_Secrets.GetSpellAuraSecrecy) then
+        print("Aura secrecy probe: this client has no C_Secrets.GetSpellAuraSecrecy (every spell filters).")
+        return
+    end
+    local out: { [number]: unknown } = {}
+    local seen: { [number]: boolean } = {}
+    local never, total = 0, 0
+    for _, l in ipairs(auraFilters.all()) do
+        for _, s in ipairs(l.spells) do
+            for _, id in ipairs(s.ids) do
+                if not seen[id] then
+                    seen[id] = true
+                    total = total + 1
+                    local ok, level = pcall(C_Secrets.GetSpellAuraSecrecy, id)
+                    local value: unknown = ok and not isSecret(level) and level or "?"
+                    out[id] = value
+                    if value == 0 then
+                        never = never + 1
+                    end
+                    print(
+                        ("  %s (%d, %s): %s"):format(
+                            s.name or "?",
+                            id,
+                            l.name,
+                            LEVELS[value :: number] or tostring(value)
+                        )
+                    )
+                end
+            end
+        end
+    end
+    DB.probe.auraSecrecy = { at = date("%Y-%m-%d %H:%M"), levels = out }
+    print(
+        ("Aura secrecy probe: %d of %d spells never secret (those filter on friendly players). /reload to save."):format(
+            never,
+            total
+        )
+    )
+end

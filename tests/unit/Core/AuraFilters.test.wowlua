@@ -1,0 +1,252 @@
+-- Core/AuraFilters: SuuUI's lists, plugins' lists (and what they may not
+-- be), lists inside lists, "not for" a class, allow and block together on a
+-- frame kind's set, an aura group's include and exclude lists, cycles.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as auraFilters from "/Core/AuraFilters"
+import type FilterList, FilterState from "/Core/AuraFilters"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../helpers"
+
+-- the Aura filters module's state, put back after each test
+local saved: FilterState? = auraFilters.state()
+
+@afterEach
+local function cleanup()
+    auraFilters.setState(saved)
+    expectNoErrors()
+end
+
+local function set(ids: { [number]: boolean }): number[]
+    local out: number[] = {}
+    for id in pairs(ids) do
+        out[#out + 1] = id
+    end
+    table.sort(out)
+    return out
+end
+
+-- A list of yours.
+local function mine(id: string, kind: "block" | "allow", spells: number[], lists: string[]?): FilterList
+    local entries = {}
+    for i, n in ipairs(spells) do
+        entries[i] = { ids = { n } }
+    end
+    local refs = {}
+    for i, r in ipairs(lists or {}) do
+        refs[i] = { id = r }
+    end
+    return { id = id, name = id, kind = kind, spells = entries, lists = refs }
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI's lists
+--------------------------------------------------------------------------------
+
+@test("Noise debuffs: lockouts, recovery, battlegrounds and camping, through its lists")
+local function noise()
+    local l = assert(auraFilters.find(auraFilters.NOISE))
+    expect(l.name).toBe("Noise debuffs")
+    expect(l.kind).toBe("block")
+    expect(l.source).toBe("suuui")
+    expect(#l.lists).toBe(4)
+    expect(set(auraFilters.spellsOf(auraFilters.NOISE, "MAGE"))).toEqual({
+        6788, -- Weakened Soul
+        8326, -- Ghost
+        11196, -- Recently Bandaged
+        15007, -- Resurrection Sickness
+        25771, -- Forbearance
+        26013, -- Deserter
+        301100, -- Recently Dropped Flag
+        301101,
+        1229451, -- Boosted Rest
+        1255229,
+        1305047,
+    })
+end
+
+@test("not for a class: Forbearance stays for a paladin, Weakened Soul for a priest")
+@cases({ { "PALADIN", 25771, 6788 }, { "PRIEST", 6788, 25771 } })
+local function notForClass(class: string, kept: number, blocked: number)
+    local ids = auraFilters.spellsOf(auraFilters.NOISE, class)
+    expect(ids[kept]).toBeNil()
+    expect(ids[blocked]).toBe(true)
+end
+
+@test("the player's class by default")
+local function playersClass()
+    mock.setPlayer({ class = "PALADIN" })
+    expect(auraFilters.spellsOf("suuui:paladin")[25771]).toBeNil()
+    mock.setPlayer({ class = "MAGE" })
+    expect(auraFilters.spellsOf("suuui:paladin")[25771]).toBe(true)
+end
+
+@test("every list: SuuUI's first, then plugins', then yours")
+local function everyList()
+    auraFilters.setState({ lists = { mine("user:1", "block", { 1 }) }, attached = {} })
+    local all = auraFilters.all()
+    expect(all[1].id).toBe(auraFilters.NOISE)
+    expect(all[#all].id).toBe("user:1")
+    expect(all[#all].source).toBe("yours")
+    expect(auraFilters.find("user:1")).toBe(all[#all])
+    auraFilters.setState(nil)
+    expect(auraFilters.find("user:1")).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Plugins
+--------------------------------------------------------------------------------
+
+@test("a plugin's list: spells as IDs or entries, lists as IDs or refs; announced")
+local function plugin()
+    local heard = mock.spy(function() end)
+    events.on("SUUUI_AURA_FILTERS_CHANGED", heard, "test")
+    local l = auraFilters.register({
+        id = "test-raid",
+        name = "Raid mechanics",
+        kind = "allow",
+        spells = { 100, { ids = { 200, 201 }, name = "Doom", notFor = { "MAGE" } } },
+        lists = { "suuui:camping", { id = "suuui:priest", notFor = { "WARRIOR" } } },
+        notFor = { "ROGUE" },
+        description = "Big hits",
+        addon = "SuuUI_Raid",
+    })
+    events.off("SUUUI_AURA_FILTERS_CHANGED", "test")
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(l.source).toBe("plugin")
+    expect(l.kind).toBe("allow")
+    expect(l.spells[1].ids).toEqual({ 100 })
+    expect(l.spells[2].notFor).toEqual({ "MAGE" })
+    expect(l.lists[1]).toEqual({ id = "suuui:camping" })
+    expect(l.lists[2].notFor).toEqual({ "WARRIOR" })
+    expect(l.addon).toBe("SuuUI_Raid")
+    expect(auraFilters.find("test-raid")).toBe(l)
+    expect(set(auraFilters.spellsOf("test-raid", "PRIEST"))).toEqual({ 100, 200, 201, 1229451 })
+    expect(set(auraFilters.spellsOf("test-raid", "MAGE"))).toEqual({ 100, 6788, 1229451 })
+    expect(set(auraFilters.spellsOf("test-raid", "WARRIOR"))).toEqual({ 100, 200, 201, 1229451 })
+    expect(set(auraFilters.spellsOf("test-raid", "ROGUE"))).toEqual({})
+    -- a list it names that isn't there counts as empty
+    auraFilters.register({ id = "test-later", name = "Later", kind = "block", lists = { "test-nowhere" } })
+    expect(set(auraFilters.spellsOf("test-later", "MAGE"))).toEqual({})
+end
+
+@test("a plugin's list refused")
+@cases({
+    { nil, "SuuUI.RegisterAuraFilter: a list needs an id" },
+    { { name = "x", kind = "block" }, "SuuUI.RegisterAuraFilter: a list needs an id" },
+    { { id = "suuui:noise", name = "x", kind = "block" }, "SuuUI.RegisterAuraFilter: the list suuui:noise is taken" },
+    {
+        { id = "user:9", name = "x", kind = "block" },
+        "SuuUI.RegisterAuraFilter: list IDs starting suuui: or user: are SuuUI's",
+    },
+    { { id = "test-noname", kind = "block" }, "SuuUI.RegisterAuraFilter: test-noname needs a name" },
+    {
+        { id = "test-kind", name = "x", kind = "hide" },
+        'SuuUI.RegisterAuraFilter: test-kind\'s kind is "block" or "allow", not "hide"',
+    },
+    {
+        { id = "test-spell", name = "x", kind = "block", spells = { "Doom" } },
+        "SuuUI.RegisterAuraFilter: test-spell: a spell is an ID or { ids = { … } }",
+    },
+    {
+        { id = "test-ids", name = "x", kind = "block", spells = { { ids = { "a" } } } },
+        "SuuUI.RegisterAuraFilter: test-ids: spell IDs are numbers",
+    },
+    {
+        { id = "test-ref", name = "x", kind = "block", lists = { 5 } },
+        "SuuUI.RegisterAuraFilter: test-ref: a list is an ID or { id = … }",
+    },
+    {
+        { id = "test-not", name = "x", kind = "block", notFor = "MAGE" },
+        "SuuUI.RegisterAuraFilter: test-not's notFor is a list of classes",
+    },
+    {
+        { id = "test-not2", name = "x", kind = "block", notFor = { 1 } },
+        "SuuUI.RegisterAuraFilter: test-not2's notFor is a list of classes",
+    },
+})
+local function refused(def: unknown, message: string)
+    expect(function()
+        auraFilters.register(def)
+    end).toThrow(message)
+end
+
+@test("a plugin's ID is taken once")
+local function takenOnce()
+    auraFilters.register({ id = "test-once", name = "Once", kind = "block" })
+    expect(function()
+        auraFilters.register({ id = "test-once", name = "Again", kind = "block" })
+    end).toThrow("SuuUI.RegisterAuraFilter: the list test-once is taken")
+end
+
+--------------------------------------------------------------------------------
+-- On a frame kind's set
+--------------------------------------------------------------------------------
+
+@test("block only: everything but the blocked, as the exclude list")
+local function blockOnly()
+    auraFilters.setState({
+        lists = { mine("user:1", "block", { 5, 3 }) },
+        attached = { target = { debuffs = { "user:1" } } },
+    })
+    local include, exclude = auraFilters.groupSpells("target", "debuffs")
+    expect(include).toBeNil()
+    expect(exclude).toEqual({ 3, 5 })
+    -- nothing attached: no lists at all
+    local i2, e2 = auraFilters.groupSpells("target", "buffs")
+    expect(i2).toBeNil()
+    expect(e2).toBeNil()
+end
+
+@test("allow and block: only the allowed, less the blocked, as the include list")
+local function allowAndBlock()
+    auraFilters.setState({
+        lists = {
+            mine("user:1", "allow", { 1, 2, 3 }),
+            mine("user:2", "allow", { 4 }),
+            mine("user:3", "block", { 2 }),
+        },
+        attached = { party = { buffs = { "user:1", "user:2", "user:3", "test-nowhere" } } },
+    })
+    local allow, block = auraFilters.filterFor("party", "buffs", "MAGE")
+    expect(set(assert(allow))).toEqual({ 1, 2, 3, 4 })
+    expect(set(block)).toEqual({ 2 })
+    local include, exclude = auraFilters.groupSpells("party", "buffs")
+    expect(include).toEqual({ 1, 3, 4 })
+    expect(exclude).toBeNil()
+end
+
+@test("a group's own list (the Defensives list): kept in its order, within the allowed, less the blocked")
+local function ownList()
+    auraFilters.setState({
+        lists = { mine("user:1", "block", { 871 }), mine("user:2", "allow", { 22812, 871, 498 }) },
+        attached = { raid = { buffs = { "user:1" }, debuffs = { "user:1", "user:2" } } },
+    })
+    local include, exclude = auraFilters.groupSpells("raid", "buffs", { 498, 871, 22812 })
+    expect(include).toEqual({ 498, 22812 })
+    expect(exclude).toBeNil()
+    expect((auraFilters.groupSpells("raid", "debuffs", { 1, 22812, 498, 871 }))).toEqual({ 22812, 498 })
+    -- filters off: the own list as it is
+    auraFilters.setState(nil)
+    expect((auraFilters.groupSpells("raid", "buffs", { 498, 871 }))).toEqual({ 498, 871 })
+    expect(auraFilters.attachedTo("raid", "buffs")).toEqual({})
+end
+
+@test("lists inside lists: a cycle adds nothing twice and is found")
+local function cycles()
+    auraFilters.setState({
+        lists = {
+            mine("user:1", "block", { 1 }, { "user:2" }),
+            mine("user:2", "block", { 2 }, { "user:3" }),
+            mine("user:3", "block", { 3 }, { "user:1" }),
+        },
+        attached = {},
+    })
+    expect(set(auraFilters.spellsOf("user:1", "MAGE"))).toEqual({ 1, 2, 3 })
+    expect(auraFilters.contains("user:1", "user:3")).toBe(true)
+    expect(auraFilters.contains("user:2", "user:2")).toBe(true)
+    expect(auraFilters.contains(auraFilters.NOISE, "suuui:priest")).toBe(true)
+    expect(auraFilters.contains("suuui:priest", auraFilters.NOISE)).toBe(false)
+    expect(auraFilters.contains("test-nowhere", auraFilters.NOISE)).toBe(false)
+end
