@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- World map: a quest's money reward lines up again, shown as SuuUI's money (25s) in the numbers' font like the XP beside it; its coin sat above the amount
+
 ## 0.6.25 (2026-11-08)
 
 ### Fixed
