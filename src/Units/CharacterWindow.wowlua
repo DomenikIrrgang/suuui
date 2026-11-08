@@ -1221,6 +1221,26 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         return pd ~= nil and pane ~= nil and pd:IsShown() and tbl.field(pd, "currentSideBar") == pane
     end
 
+    -- The pet's view as the game resets the model: in the middle of a switch
+    -- to another side pane that pane already shows while the pet's is still
+    -- the current one, so any other pane shown says no.
+    function PetShowing(): boolean
+        if not self:PetMode() then
+            return false
+        end
+        local get = tbl.field(_G, "GetPaperDollSideBarFrame")
+        if type(get) ~= "function" then
+            return true
+        end
+        for i = 1, 3 do
+            local f = frames.asFrame((get :: (number) -> unknown)(i))
+            if f and f:IsShown() then
+                return false
+            end
+        end
+        return true
+    end
+
     -- One of the paper doll's side panes (1 the stats, 4 the pet's).
     function SetSidebar(index: number)
         local set = tbl.field(_G, "PaperDollFrame_SetSidebar")
@@ -1308,6 +1328,17 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         hideButton()
         if type(tbl.field(_G, "PaperDollFrame_UpdateSidebarTabs")) == "function" then
             hook("PaperDollFrame_UpdateSidebarTabs", hideButton)
+        end
+        -- Your model changing (in a fight: the weapons drawn) makes the game
+        -- set the scene to you, the pet's view or not (seen in game,
+        -- 2026-11-08): the pet back while its view shows.
+        if type(tbl.field(_G, "PaperDollFrame_SetPlayer")) == "function" then
+            hook("PaperDollFrame_SetPlayer", function()
+                local setPet = tbl.field(_G, "PaperDollFrame_SetPet")
+                if HasPetUI() and type(setPet) == "function" and self:PetShowing() then
+                    (setPet :: () -> ())()
+                end
+            end)
         end
         local bar = frame("PetPaperDollFrameExpBar")
         if bar and once(bar) then
