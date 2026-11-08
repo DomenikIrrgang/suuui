@@ -8,7 +8,7 @@
 #   sh tools/update_flight_routes.sh [<build>]
 set -e
 cd "$(dirname "$0")/.."
-BUILD=${1:-1.60.1.70755}
+BUILD=${1:-1.60.1.70862}
 CACHE=${TMPDIR:-/tmp}/suuui-wago-$BUILD
 mkdir -p "$CACHE"
 for t in TaxiPath TaxiPathNode TaxiNodes; do

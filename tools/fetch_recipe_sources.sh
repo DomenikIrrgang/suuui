@@ -6,10 +6,10 @@
 #   <dir>/questiedb  QuestieDB's Forever items, NPCs, objects and corrections
 #                    (github.com/Questie/QuestieDB, no license stated)
 #   <dir>/SOURCES    the build and the QuestieDB commit, for the data's header
-#   sh tools/fetch_recipe_sources.sh <dir> [build]   (build: 1.60.1.70338)
+#   sh tools/fetch_recipe_sources.sh <dir> [build]   (build: 1.60.1.70862)
 set -e
 DIR=${1:?usage: fetch_recipe_sources.sh <dir> [build]}
-BUILD=${2:-1.60.1.70338}
+BUILD=${2:-1.60.1.70862}
 mkdir -p "$DIR/wago" "$DIR/questiedb"
 for t in SkillLine SkillLineAbility TradeSkillCategory SpellName SpellEffect SpellReagents \
          ItemEffect ItemXItemEffect ItemSparse AreaTable Mount Toy ItemModifiedAppearance; do
