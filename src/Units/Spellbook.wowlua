@@ -19,6 +19,16 @@
 -- in combat too (asked for in game); the switches (Unlearned, All ranks)
 -- wait for the end of combat, as they change what the pages hold.
 --
+-- Your pet's spells (reported by a player: they were missing): a Pet
+-- school after the class's, as the game's own book has its Pet category,
+-- while the pet's spellbook holds any (C_SpellBook.HasPetSpells). Its page
+-- lists what the pet's book holds, no trainer entries: a click casts (type
+-- "spell" by its name, as /cast casts a pet's spell), a drag puts it on a
+-- bar, a right click turns its autocast on or off (out of combat), an
+-- arcane border and "Autocast on" mark the ones that cast on their own. A
+-- pet that comes or goes in a fight changes the schools once it ends (the
+-- tabs are secure buttons).
+--
 -- Mouseover bindings (the mousebindings service, asked 2026-11-06): the
 -- head's Bind button (and /suu bind) starts bind mode, a cover over each
 -- spell takes a key, click or the wheel; a right click on a spell opens its
@@ -84,12 +94,17 @@ end
 
 local BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
 local SPELL, FLYOUT = 1, 4
+local PET_ACTION = 3
 if Enum.SpellBookItemType then
     SPELL, FLYOUT = Enum.SpellBookItemType.Spell, Enum.SpellBookItemType.Flyout
+    PET_ACTION = Enum.SpellBookItemType.PetAction
 end
+-- the pet's spellbook (the game's book: its Pet category)
+local PET_BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Pet or 1
 
--- A school of the page: its name, icon, and its spellbook slots.
-export type School = { name: string, icon: number | string, first: number, count: number }
+-- A school of the page: its name, icon, and its spellbook slots; pet: the
+-- pet's book.
+export type School = { name: string, icon: number | string, first: number, count: number, pet?: boolean }
 
 -- A spell on the page: learned (its spellbook slot or flyout spell), passive,
 -- or one to train ("trainable" now, "future" at its level), with its rank,
@@ -107,6 +122,11 @@ export type BookEntry = {
     text?: string,
     cost?: number,
     fresh?: boolean,
+    -- a pet's spell (slot: in the pet's book), whether it can cast on its
+    -- own and does
+    pet?: boolean,
+    canAutocast?: boolean,
+    autocast?: boolean,
 }
 
 -- A tree's school by the spellbook's (or the trainer's) name for it: the
@@ -241,7 +261,7 @@ local SHOWN = 10
 
 -- A spell of the page to bind (learned, not passive), or nil.
 local function bindable(s: BookEntry?): BindSpell?
-    if not s or s.status ~= "learned" then
+    if not s or s.status ~= "learned" or s.pet then
         return nil
     end
     return { name = s.label, spellID = s.spellID, rank = s.rank, icon = s.icon }
@@ -252,7 +272,7 @@ local function chipsOf(s: BookEntry?): string[]
     local out: string[] = {}
     local svc = SuuUI.UseService(MOUSE_BINDINGS)
     local forSpell, chip = svc and svc.ForSpell, svc and svc.ChipText
-    if not s or s.status ~= "learned" or not forSpell or not chip then
+    if not s or s.status ~= "learned" or s.pet or not forSpell or not chip then
         return out
     end
     for _, b in ipairs(forSpell(s.label)) do
@@ -429,6 +449,8 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     catcher: Frame? = nil
     hoverCell: number? = nil
     bindingsShown: boolean = false
+    -- the Pet school shown (decided out of combat)
+    petShown: boolean = false
 
     constructor()
         super({
@@ -580,6 +602,85 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             end
         end
         return list
+    end
+
+    -- The pet's school (the game's Pet category): while the pet's book holds
+    -- spells (and the pet has a book, as the game's asks). Decided out of
+    -- combat: a pet that comes or goes in a fight changes it once it ends.
+    function PetSchool(): School?
+        local n = tonumber((C_SpellBook.HasPetSpells())) or 0
+        local hasBook = rawget(_G, "PetHasSpellbook")
+        local has = n > 0 and (type(hasBook) ~= "function" or (hasBook :: () -> unknown)() and true or false)
+        if InCombatLockdown() then
+            if has ~= self.petShown then
+                self.renderAfterCombat = true
+            end
+            has = self.petShown
+        else
+            self.petShown = has
+        end
+        if not has then
+            return nil
+        end
+        -- the pet's own icon, else its first spell's
+        local petIcon = rawget(_G, "GetPetIcon")
+        local tex: unknown = type(petIcon) == "function" and (petIcon :: () -> unknown)() or nil
+        if type(tex) ~= "number" and type(tex) ~= "string" then
+            local first = n > 0 and C_SpellBook.GetSpellBookItemInfo(1, PET_BANK) or nil
+            tex = first and first.iconID or 134400
+        end
+        return { name = "Pet", icon = tex :: number | string, first = 1, count = n, pet = true }
+    end
+
+    -- The pet's spells, in its book's order: its rank or Passive under each,
+    -- and whether it casts on its own.
+    function PetLearned(school: School): BookEntry[]
+        local list: BookEntry[] = {}
+        for slot = school.first, school.first + school.count - 1 do
+            local info = C_SpellBook.GetSpellBookItemInfo(slot, PET_BANK)
+            if info and info.name and (info.itemType == PET_ACTION or info.itemType == SPELL) then
+                local passive = info.isPassive and true or false
+                local can, on = false, false
+                if not passive then
+                    local allowed, enabled = C_SpellBook.GetSpellBookItemAutoCast(slot, PET_BANK)
+                    can, on = allowed and true or false, enabled and true or false
+                end
+                local parts: string[] = {}
+                if passive then
+                    parts[#parts + 1] = "Passive"
+                elseif info.subName and info.subName ~= "" then
+                    parts[#parts + 1] = info.subName
+                end
+                if can then
+                    parts[#parts + 1] = on and ("|cff" .. hex("arcane") .. "Autocast on|r") or "Autocast off"
+                end
+                list[#list + 1] = {
+                    label = info.name,
+                    spellID = info.spellID,
+                    slot = slot,
+                    rank = rankOf(info.subName),
+                    sub = #parts > 0 and table.concat(parts, " · ") or nil,
+                    icon = info.iconID,
+                    status = passive and "passive" or "learned",
+                    level = 0,
+                    pet = true,
+                    canAutocast = can,
+                    autocast = can and on,
+                }
+            end
+        end
+        return list
+    end
+
+    -- A right click on a pet's spell: its autocast on or off, as the game's
+    -- book does. Out of combat (whether the game lets an addon toggle it in
+    -- a fight is unknown); the game tells the change with PET_BAR_UPDATE.
+    function ToggleAutocast(s: BookEntry)
+        local slot = s.slot
+        if not s.pet or not slot or not s.canAutocast or self.bindMode or InCombatLockdown() then
+            return
+        end
+        C_SpellBook.ToggleSpellBookItemAutoCast(slot, PET_BANK)
     end
 
     -- Trainer entries by school name (unknown schools go to General).
@@ -750,6 +851,10 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
 
     -- The list a school shows, with the switches applied.
     function SchoolList(school: School, trainer: { [string]: TrainerSpell[] }): (BookEntry[], number)
+        -- the pet's: its book only (no trainer, every rank it holds)
+        if school.pet then
+            return self:PetLearned(school), 0
+        end
         local learned = self:Learned(school)
         local shown = self:Get("allRanks") and learned or bestRanks(learned)
         local unlearned = self:Unlearned(trainer[school.name], learned)
@@ -791,18 +896,24 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if #schools == 0 then
             return
         end
+        local trainer = self:TrainerBySchool(schools)
+        -- the pet's after the class's
+        local pet = self:PetSchool()
+        if pet then
+            schools[#schools + 1] = pet
+        end
         local chosen = math.max(1, math.min(self.school or 2, #schools))
         self.school = chosen
-        local trainer = self:TrainerBySchool(schools)
         local tabs: BookSchool[] = {}
         local current: BookEntry[], toTrain = {}, 0
         local widest = 0
-        local casts: (number | false)[][] = {}
+        local casts: (number | string | false)[][] = {}
         for i, s in ipairs(schools) do
             local list, n = self:SchoolList(s, trainer)
-            local ids: (number | false)[] = {}
+            local ids: (number | string | false)[] = {}
             for k, sp in ipairs(list) do
-                ids[k] = (sp.status == "learned" and sp.spellID) or false
+                -- (a pet's spell by its name: /cast casts it so)
+                ids[k] = (sp.status == "learned" and (sp.pet and sp.label or sp.spellID)) or false
             end
             casts[i] = ids
             for _, sp in ipairs(list) do
@@ -944,7 +1055,13 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             self:BindMode(false)
         end
         book.onMenu = function(i: number)
-            local spell = bindable(self.slice and self.slice[i])
+            -- a pet's spell: its autocast
+            local s = self.slice and self.slice[i]
+            if s and s.pet then
+                self:ToggleAutocast(s)
+                return
+            end
+            local spell = bindable(s)
             local svc = SuuUI.UseService(MOUSE_BINDINGS)
             local menu = svc and svc.Menu
             if spell and menu and not self.bindMode then
@@ -968,6 +1085,16 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         book.onBindingsTab = function()
             self:ShowBindings(true)
         end
+        -- a pet's spell dragged: picked up from the pet's book when the game's
+        -- secure handler (by its name) didn't (out of combat: the pickup is
+        -- blocked in one)
+        book.onDragStart = function(i: number)
+            local s = self.slice and self.slice[i]
+            local slot = s and s.pet and s.status == "learned" and s.slot
+            if slot and not InCombatLockdown() and GetCursorInfo() == nil then
+                C_SpellBook.PickupSpellBookItem(slot, PET_BANK)
+            end
+        end
         book.onPage = function(delta: number)
             self.page = (self.page or 1) + delta
             self:Render()
@@ -990,7 +1117,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 GameTooltip:SetOwner(c.button, "ANCHOR_RIGHT")
                 local slot, spellID = s.slot, s.spellID
                 if slot then
-                    GameTooltip:SetSpellBookItem(slot, BANK)
+                    GameTooltip:SetSpellBookItem(slot, s.pet and PET_BANK or BANK)
                 elseif spellID then
                     GameTooltip:SetSpellByID(spellID)
                 end
@@ -1609,6 +1736,20 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         end
         self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
             self:SayToTrain()
+        end)
+        -- the Pet school: a pet came or went (its spells also with
+        -- SPELLS_CHANGED, above); its spells' autocast (the game's book
+        -- hears PET_BAR_UPDATE for it)
+        self:OnGameEvent("UNIT_PET", function(_, unit)
+            if unit == "player" and self.book then
+                self:Render(true)
+            end
+        end)
+        self:OnGameEvent("PET_BAR_UPDATE", function()
+            local book = self.book
+            if book and book:IsVisible() then
+                self:Render()
+            end
         end)
         -- the page made ready as a fight starts (the moment before the
         -- lockdown) if it never was: the window first opened in that fight
