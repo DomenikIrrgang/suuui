@@ -24,10 +24,15 @@
 -- while the pet's spellbook holds any (C_SpellBook.HasPetSpells). Its page
 -- lists what the pet's book holds, no trainer entries: a click casts (type
 -- "spell" by its name, as /cast casts a pet's spell), a drag puts it on a
--- bar, a right click turns its autocast on or off (out of combat), an
--- arcane border and "Autocast on" mark the ones that cast on their own. A
--- pet that comes or goes in a fight changes the schools once it ends (the
--- tabs are secure buttons).
+-- bar, an arcane border and "Autocast on" mark the ones that cast on their
+-- own. A right click turns its autocast on or off, in combat too, through
+-- the game's own pet bar: it clicks the PetActionButton of the pet bar slot
+-- holding the spell (as SuuUI's pet bar does: C_SpellBook's autocast toggle
+-- is forbidden to addons on Forever, found in game); a spell on no slot
+-- says in its tooltip to right click it on the pet bar. Which slot holds it
+-- is read out of combat (the right clicks are secure attributes). A pet
+-- that comes or goes in a fight changes the schools once it ends (the tabs
+-- are secure buttons).
 --
 -- Mouseover bindings (the mousebindings service, asked 2026-11-06): the
 -- head's Bind button (and /suu bind) starts bind mode, a cover over each
@@ -67,6 +72,9 @@ local DEFAULTS = {
 }
 
 local M: SpellbookModule
+
+-- A pet's spell on no pet bar slot: its tooltip's last line.
+local AUTOCAST_ON_BAR = "Autocast: right click it on the pet bar."
 
 local function coins(copperArg: unknown): string
     local copper = tonumber(copperArg) or 0
@@ -123,10 +131,12 @@ export type BookEntry = {
     cost?: number,
     fresh?: boolean,
     -- a pet's spell (slot: in the pet's book), whether it can cast on its
-    -- own and does
+    -- own and does; petBar: the pet bar slot holding it, whose button a
+    -- right click clicks (its autocast)
     pet?: boolean,
     canAutocast?: boolean,
     autocast?: boolean,
+    petBar?: number,
 }
 
 -- A tree's school by the spellbook's (or the trainer's) name for it: the
@@ -451,6 +461,8 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     bindingsShown: boolean = false
     -- the Pet school shown (decided out of combat)
     petShown: boolean = false
+    -- the pet bar's slots by the spell they hold (read out of combat)
+    petBar: { [number | string]: number } = {}
 
     constructor()
         super({
@@ -632,18 +644,54 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         return { name = "Pet", icon = tex :: number | string, first = 1, count = n, pet = true }
     end
 
+    -- The pet bar's slots that can cast on their own, by the spell each
+    -- holds: its ID, and its name (the bar may hold another rank of a
+    -- spell the book lists). Read out of combat: a right click on a pet's
+    -- spell clicks its slot's button (a secure attribute); in combat the
+    -- slots last read.
+    function PetBarSlots(): { [number | string]: number }
+        if InCombatLockdown() then
+            return self.petBar
+        end
+        local slots: { [number | string]: number } = {}
+        for slot = 1, tonumber(rawget(_G, "NUM_PET_ACTION_SLOTS")) or 10 do
+            local name, _, isToken, _, allowed, _, spellID = GetPetActionInfo(slot)
+            local spell = secret.asString(name)
+            if spell and not secret.flag(isToken) and secret.flag(allowed) then
+                local id = secret.asNumber(spellID)
+                if id and not slots[id] then
+                    slots[id] = slot
+                end
+                if not slots[spell] then
+                    slots[spell] = slot
+                end
+            end
+        end
+        self.petBar = slots
+        return slots
+    end
+
     -- The pet's spells, in its book's order: its rank or Passive under each,
-    -- and whether it casts on its own.
+    -- whether it casts on its own, and the pet bar slot holding it.
     function PetLearned(school: School): BookEntry[]
         local list: BookEntry[] = {}
+        local bar = self:PetBarSlots()
         for slot = school.first, school.first + school.count - 1 do
             local info = C_SpellBook.GetSpellBookItemInfo(slot, PET_BANK)
             if info and info.name and (info.itemType == PET_ACTION or info.itemType == SPELL) then
                 local passive = info.isPassive and true or false
                 local can, on = false, false
+                local barSlot: number? = nil
                 if not passive then
                     local allowed, enabled = C_SpellBook.GetSpellBookItemAutoCast(slot, PET_BANK)
                     can, on = allowed and true or false, enabled and true or false
+                    barSlot = info.spellID and bar[info.spellID] or bar[info.name]
+                    -- (on the bar: the bar's own word for it, the one its
+                    -- right click turns)
+                    if barSlot then
+                        local _, _, _, _, barAllowed, barOn = GetPetActionInfo(barSlot)
+                        can, on = can or secret.flag(barAllowed), secret.flag(barOn)
+                    end
                 end
                 local parts: string[] = {}
                 if passive then
@@ -666,21 +714,11 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                     pet = true,
                     canAutocast = can,
                     autocast = can and on,
+                    petBar = barSlot,
                 }
             end
         end
         return list
-    end
-
-    -- A right click on a pet's spell: its autocast on or off, as the game's
-    -- book does. Out of combat (whether the game lets an addon toggle it in
-    -- a fight is unknown); the game tells the change with PET_BAR_UPDATE.
-    function ToggleAutocast(s: BookEntry)
-        local slot = s.slot
-        if not s.pet or not slot or not s.canAutocast or self.bindMode or InCombatLockdown() then
-            return
-        end
-        C_SpellBook.ToggleSpellBookItemAutoCast(slot, PET_BANK)
     end
 
     -- Trainer entries by school name (unknown schools go to General).
@@ -908,14 +946,21 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         local current: BookEntry[], toTrain = {}, 0
         local widest = 0
         local casts: (number | string | false)[][] = {}
+        local clicks: (string | false)[][] = {}
         for i, s in ipairs(schools) do
             local list, n = self:SchoolList(s, trainer)
             local ids: (number | string | false)[] = {}
+            local rights: (string | false)[] = {}
             for k, sp in ipairs(list) do
                 -- (a pet's spell by its name: /cast casts it so)
                 ids[k] = (sp.status == "learned" and (sp.pet and sp.label or sp.spellID)) or false
+                -- a pet's spell on the pet bar: a right click clicks the
+                -- game's button for its slot (its autocast)
+                local barSlot = sp.pet and sp.status == "learned" and sp.petBar or nil
+                local name = barSlot and ("PetActionButton" .. barSlot) or nil
+                rights[k] = name and rawget(_G, name) ~= nil and name or false
             end
-            casts[i] = ids
+            casts[i], clicks[i] = ids, rights
             for _, sp in ipairs(list) do
                 local name = (sp.label or "") ..
                     ((sp.status ~= "learned" and sp.status ~= "passive" and sp.rank) and ("  Rank " .. sp.rank) or "")
@@ -970,7 +1015,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         -- what each button casts (learned spells only), on every school's
         -- pages: the router points the buttons at this one, in combat too
         if not combat then
-            book:SetCasts(casts, perPage)
+            book:SetCasts(casts, perPage, clicks)
             book:SetCastPage(chosen, page)
             self.prepared = true
         end
@@ -1055,10 +1100,10 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             self:BindMode(false)
         end
         book.onMenu = function(i: number)
-            -- a pet's spell: its autocast
+            -- a pet's spell: no menu (its button's right click turns its
+            -- autocast, through the pet bar)
             local s = self.slice and self.slice[i]
             if s and s.pet then
-                self:ToggleAutocast(s)
                 return
             end
             local spell = bindable(s)
@@ -1120,6 +1165,11 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                     GameTooltip:SetSpellBookItem(slot, s.pet and PET_BANK or BANK)
                 elseif spellID then
                     GameTooltip:SetSpellByID(spellID)
+                end
+                -- a pet's spell on no pet bar slot: its autocast is turned there
+                if s.pet and s.canAutocast and not s.petBar then
+                    local cr, cg, cb = UI.RGBA("ink-muted")
+                    GameTooltip:AddLine(AUTOCAST_ON_BAR, cr, cg, cb, true)
                 end
                 GameTooltip:Show()
             else
@@ -1738,8 +1788,9 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             self:SayToTrain()
         end)
         -- the Pet school: a pet came or went (its spells also with
-        -- SPELLS_CHANGED, above); its spells' autocast (the game's book
-        -- hears PET_BAR_UPDATE for it)
+        -- SPELLS_CHANGED, above); its spells' autocast and the pet bar's
+        -- slots (the game's book hears PET_BAR_UPDATE for it): what a right
+        -- click clicks, set out of combat (in a fight: once it ends)
         self:OnGameEvent("UNIT_PET", function(_, unit)
             if unit == "player" and self.book then
                 self:Render(true)
@@ -1747,8 +1798,16 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("PET_BAR_UPDATE", function()
             local book = self.book
-            if book and book:IsVisible() then
-                self:Render()
+            if not book then
+                return
+            end
+            if InCombatLockdown() then
+                self.renderAfterCombat = true
+                if book:IsVisible() then
+                    self:Render()
+                end
+            else
+                self:Render(true)
             end
         end)
         -- the page made ready as a fight starts (the moment before the

@@ -55,6 +55,16 @@ local function cellTexts(): string[]
     return out
 end
 
+-- The test's pet (the Pet school's tests), dismissed.
+local petUnit: mock.MockUnit? = nil
+local function noPetBar()
+    if petUnit then
+        mock.setPet(nil)
+        ;(petUnit :: mock.MockUnit):despawn()
+        petUnit = nil
+    end
+end
+
 @afterEach
 local function cleanup()
     mock.hover(nil)
@@ -72,6 +82,7 @@ local function cleanup()
     M:Reset("trainingCost")
     M:Reset("levelUpFor")
     M.school, M.page = nil, nil
+    noPetBar()
     mock.advanceTime(20)
     expectNoErrors()
 end
@@ -579,8 +590,9 @@ type PetSpell = {
 }
 
 -- A hunter's pet's book (the engine has no pet bank: the game's answers,
--- faked); `spells` nil: no pet. Returns the book and the autocast
--- toggle's spy.
+-- faked); `spells` nil: no pet. Returns the book and the book's autocast
+-- toggle's spy: forbidden to addons on Forever (found in game), it fails
+-- when called.
 type PetBook = { spells: PetSpell[]? }
 local function fakePet(spells: PetSpell[]?): (PetBook, (...unknown) -> ...unknown)
     local pet: PetBook = { spells = spells }
@@ -628,13 +640,11 @@ local function fakePet(spells: PetSpell[]?): (PetBook, (...unknown) -> ...unknow
         end
         return s.auto == true, s.on == true
     end)
-    -- (the game turns it and tells with PET_BAR_UPDATE)
-    local toggle = mock.fake("C_SpellBook.ToggleSpellBookItemAutoCast", function(slot: number, bank: SpellBookSpellBank)
-        local s = spell(slot, bank)
-        if s then
-            s.on = not s.on
-            mock.fireEvent("PET_BAR_UPDATE")
-        end
+    local toggle = mock.fake("C_SpellBook.ToggleSpellBookItemAutoCast", function(_: number, _: SpellBookSpellBank)
+        error("Forbidden: ToggleSpellBookItemAutoCast()")
+    end)
+    mock.fake("C_SpellBook.SetSpellBookItemAutoCastEnabled", function(_: number, _: SpellBookSpellBank, _: boolean)
+        error("Forbidden: SetSpellBookItemAutoCastEnabled()")
     end)
     return pet, toggle
 end
@@ -704,26 +714,157 @@ local function petSchool()
     assert(book().onLeave)(2, cells[2])
 end
 
-@test("a right click on a pet's spell turns its autocast on or off, out of combat; not on one that can't")
+-- The pet (a hunter's wolf) and its bar: `bar[slot]` the spell there
+-- (attack, follow and stay in 1 to 3, the modes in 8 to 10).
+local function petBar(bar: { [number]: PetSpell })
+    local actions: { [number]: mock.PetAction } = {}
+    for slot = 4, 7 do
+        local s = bar[slot]
+        -- (an empty slot: nothing in it)
+        actions[slot] = s and
+            {
+                spell = s.spellID,
+                name = s.name,
+                icon = s.icon,
+                autocast = s.on == true,
+                autocastAllowed = s.auto == true,
+            } or
+            {}
+    end
+    local unit = petUnit or mock.spawnUnit({ name = "Wolf", level = 10, reaction = "friendly" })
+    petUnit = unit
+    mock.setPet(unit, { hunter = true, actions = actions })
+    mock.advanceFrames(1)
+end
+-- What a right click on a cell runs: the macro's text, or "" (nothing).
+local function rightClick(i: number): string
+    local b = book().cells[i].button
+    if b:GetAttribute("type2") == "macro" then
+        return b:GetAttribute("macrotext2") :: string
+    end
+    return b:GetAttribute("type2") :: string
+end
+
+@test(
+    "a right click on a pet's spell clicks the pet bar's button for its slot: its autocast, in combat too; never the book's toggle"
+)
 local function petAutocast()
-    local _, toggle = fakePet(wolf())
+    local list = wolf()
+    local _, toggle = fakePet(list)
+    petBar({ [4] = list[1] })
     open()
     assert(book().onSchool)(assert(petTab()))
     local cells = book().cells
-    mock.click(cells[2].button, "RightButton")
-    expect(toggle).toHaveBeenCalledWith(2, Enum.SpellBookSpellBank.Pet)
-    -- the page shows it (PET_BAR_UPDATE)
-    expect((cells[2].sub:GetText() or ""):find("Autocast on", 1, true) ~= nil).toBe(true)
-    expect(cells[2].icon.borderToken).toBe("arcane")
-    -- a passive: nothing to turn; no bindings menu either
-    mock.click(cells[3].button, "RightButton")
-    expect(toggle).toHaveBeenCalledTimes(1)
-    -- in combat: not (left to the pet bar)
+    -- Bite on slot 4: the game's PetActionButton4 (as SuuUI's pet bar does)
+    expect(cells[1].button:GetAttribute("type2")).toBe("macro")
+    expect(rightClick(1)).toBe("/click PetActionButton4 RightButton")
+    -- Growl on no slot, the passive: a right click does nothing
+    expect(rightClick(2)).toBe("")
+    expect(rightClick(3)).toBe("")
+    -- right clicked: no menu, nothing of the book's; the macro's /click
+    -- (the engine runs no /click from a macro: here as /click does it, the
+    -- button clicked with the right button) has the game's pet bar button
+    -- turn it, as SuuUI's own pet bar does
+    local turned: unknown[] = {}
+    hooksecurefunc("TogglePetAutocast", function(slot: unknown)
+        turned[#turned + 1] = slot
+    end)
+    for i = 1, 3 do
+        mock.click(cells[i].button, "RightButton")
+    end
+    button("PetActionButton4"):Click("RightButton")
+    expect(turned).toEqual({ 4 })
+    -- the page shows it (the bar's word for it, PET_BAR_UPDATE)
+    expect((cells[1].sub:GetText() or ""):find("Autocast off", 1, true) ~= nil).toBe(true)
+    expect(cells[1].icon.borderToken).toBe("gilt-hairline")
+    -- in combat too: the right click stays, the page follows the bar
     mock.player:enterCombat()
     mock.advanceFrames(1)
     mock.click(cells[1].button, "RightButton")
-    expect(toggle).toHaveBeenCalledTimes(1)
+    expect(rightClick(1)).toBe("/click PetActionButton4 RightButton")
+    button("PetActionButton4"):Click("RightButton")
+    expect(turned).toEqual({ 4, 4 })
+    expect((cells[1].sub:GetText() or ""):find("Autocast on", 1, true) ~= nil).toBe(true)
+    expect(toggle).toHaveBeenCalledTimes(0)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    noPetBar()
     expectNoErrors()
+end
+
+@test("a pet's spell on no pet bar slot: its tooltip says to right click it on the pet bar")
+local function petAutocastTip()
+    local list = wolf()
+    fakePet(list)
+    petBar({ [4] = list[1] })
+    open()
+    assert(book().onSchool)(assert(petTab()))
+    local cells = book().cells
+    mock.stub(GameTooltip, "SetSpellBookItem", function(_: unknown, _: number, _: unknown) end)
+    local lines: string[] = {}
+    mock.stub(GameTooltip, "AddLine", function(_: unknown, text: unknown)
+        lines[#lines + 1] = tostring(text)
+    end)
+    -- Growl: on no slot
+    assert(book().onEnter)(2, cells[2])
+    expect(lines).toEqual({ "Autocast: right click it on the pet bar." })
+    assert(book().onLeave)(2, cells[2])
+    -- Bite (on the bar) and the passive: no such line
+    assert(book().onEnter)(1, cells[1])
+    assert(book().onEnter)(3, cells[3])
+    expect(#lines).toBe(1)
+    assert(book().onLeave)(3, cells[3])
+    noPetBar()
+end
+
+@test("the pet bar changed: the right click follows the spell to its slot; in combat once it ends")
+local function petAutocastFollows()
+    local list = wolf()
+    local _, toggle = fakePet(list)
+    petBar({ [4] = list[1] })
+    open()
+    assert(book().onSchool)(assert(petTab()))
+    expect(rightClick(1)).toBe("/click PetActionButton4 RightButton")
+    -- Bite moved to slot 6, Growl put on slot 4 (PET_BAR_UPDATE), the window closed too
+    HideUIPanel(assert(window()))
+    petBar({ [4] = list[2], [6] = list[1] })
+    expect(rightClick(1)).toBe("/click PetActionButton6 RightButton")
+    expect(rightClick(2)).toBe("/click PetActionButton4 RightButton")
+    open()
+    assert(book().onSchool)(assert(petTab()))
+    -- in combat the secure attributes stay; they follow once it ends
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    petBar({ [7] = list[1] })
+    expect(rightClick(1)).toBe("/click PetActionButton6 RightButton")
+    expect(M.renderAfterCombat).toBe(true)
+    -- switching schools in combat: the router carries the right clicks
+    mock.click(book().tabs[1].secure)
+    expect(rightClick(1)).toBe("")
+    mock.click(book().tabs[assert(petTab())].secure)
+    expect(rightClick(1)).toBe("/click PetActionButton6 RightButton")
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(rightClick(1)).toBe("/click PetActionButton7 RightButton")
+    expect(rightClick(2)).toBe("")
+    expect(toggle).toHaveBeenCalledTimes(0)
+    noPetBar()
+    expectNoErrors()
+end
+
+@test("a right click on a class spell casts nothing")
+local function classRightClick()
+    open()
+    assert(book().onSchool)(1)
+    local b = book().cells[1].button
+    expect(b:GetAttribute("type")).toBe("spell")
+    expect(b:GetAttribute("type2")).toBe("")
+    local casts = 0
+    hooksecurefunc("CastSpellByID", function()
+        casts = casts + 1
+    end)
+    mock.click(b, "RightButton")
+    expect(casts).toBe(0)
 end
 
 @test("a pet's spell dragged out of combat: picked up from the pet's book")
