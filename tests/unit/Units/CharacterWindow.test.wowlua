@@ -1,5 +1,6 @@
 -- Units/CharacterWindow: Blizzard's Character window restyled in place.
--- The header and the mode tabs; the identity line; the gear slots (quality,
+-- The header and the mode tabs; the identity line; the Pet tab (only with a
+-- pet: the paper doll's pet view); the gear slots (quality,
 -- empty), their popout arrows and the item flyout; the new-set popup; the
 -- stats as a StatList (heads, labels, values in their colours, resistance
 -- icons); the Stats | Sets | Titles row; New Set lined up with Equip and
@@ -15,8 +16,8 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
-import internal M, identityLine, statColor from "/Units/CharacterWindow"
-import expectNoErrors from "../../helpers"
+import internal M, identityLine, petLine, statColor from "/Units/CharacterWindow"
+import errorsSoFar from "../../helpers"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import type SkinTab from "/UI/WindowSkin"
 import type ItemSlotSkin from "/UI/Inventory"
@@ -68,6 +69,27 @@ local function tab(i: number)
     mock.advanceFrames(2)
 end
 
+-- wowlua 0.13.8 lacks the client's CR_PET_DODGE_BASE_STAT_TOOLTIP: with a
+-- hunter's pet, Blizzard's pet stats stop at their dodge row's format
+-- (newer wowlua has the string). Left out of the errors until then.
+local EMULATOR_GAPS = { "PaperDollFrame.lua:792: bad argument #1 to 'format'" }
+
+local function expectNoErrors()
+    local errs: string[] = {}
+    for _, e in ipairs(errorsSoFar()) do
+        local gap = false
+        for _, known in ipairs(EMULATOR_GAPS) do
+            if e:find(known, 1, true) then
+                gap = true
+            end
+        end
+        if not gap then
+            errs[#errs + 1] = e
+        end
+    end
+    expect(errs).toEqual({})
+end
+
 @afterEach
 local function cleanup()
     if frame("CharacterFrame"):IsShown() then
@@ -88,18 +110,27 @@ local function tabs()
     for _, t in ipairs(tabsOf()) do
         labels[#labels + 1] = t.label
     end
-    expect(labels).toEqual({ "Character", "Reputation", "Currency", "Player vs. Player", "Skills", "Statistics" })
+    -- (Pet: only while there's a pet, see below)
+    expect(labels).toEqual({
+        "Character",
+        "Pet",
+        "Reputation",
+        "Currency",
+        "Player vs. Player",
+        "Skills",
+        "Statistics",
+    })
     expect(chosen(tabsOf()[1])).toBe(true)
-    expect(chosen(tabsOf()[2])).toBe(false)
+    expect(chosen(tabsOf()[3])).toBe(false)
     -- a tab without Blizzard's selected texture: chosen while its pane shows
-    local rep = tabsOf()[2]
+    local rep = tabsOf()[3]
     mock.setField(rep.button, "SelectedTexture", nil)
     expect(chosen(rep)).toBe(false)
     tab(2)
     expect(chosen(rep)).toBe(true)
     tab(1)
     -- a pane the client lacks: not chosen
-    local gone = tabsOf()[6]
+    local gone = tabsOf()[7]
     mock.setField(gone.button, "SelectedTexture", nil)
     mock.setField(_G, "StatisticsFrame", nil)
     expect(chosen(gone)).toBe(false)
@@ -151,6 +182,170 @@ local function identity()
     expect(id).never.toBeShown()
     tab(1)
     expect(id).toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- The Pet tab
+--------------------------------------------------------------------------------
+
+local function petTab(): Button
+    return assert(M.petTab)
+end
+local function petPane(): Frame
+    return frame("CharacterStatsPanePetScrollBox")
+end
+-- Blizzard's own Pet side button: out of sight, not clickable
+local function expectGameButtonHidden()
+    local b = button("PaperDollSidebarTab4")
+    expect(b:GetAlpha()).toBe(0)
+    expect(b:IsMouseEnabled()).toBe(false)
+end
+
+-- A hunter's wolf (gone again: dismissPet).
+local function tamePet(): mock.MockUnit
+    local wolf = mock.spawnUnit({
+        name = "Fang",
+        level = 19,
+        reaction = "friendly",
+        health = 400,
+        maxHealth = 400,
+        creatureType = "Beast",
+        creatureFamily = "Wolf",
+        creatureFamilyID = 1,
+    })
+    mock.setPet(wolf, { hunter = true, happiness = 3, loyalty = "Loyalty Level 2", xp = 300, xpMax = 1200 })
+    mock.advanceFrames(2)
+    return wolf
+end
+local function dismissPet(wolf: mock.MockUnit)
+    mock.setPet(nil)
+    mock.advanceFrames(2)
+    wolf:despawn()
+end
+
+@test("the pet's line: level, family, loyalty, a hunter's pet's mood in its colour")
+local function petLines()
+    local c = SuuUI.Tokens.color
+    expect(petLine(19, "Wolf", nil, nil)).toBe("Level 19 · Wolf")
+    expect(petLine(nil, nil, nil, 1)).toBe("Level ? · |cff" .. c["ember-text"].hex .. PET_HAPPINESS1 .. "|r")
+    expect(petLine(5, "Imp", nil, 2)).toBe("Level 5 · Imp · |cff" .. c.amber.hex .. PET_HAPPINESS2 .. "|r")
+    -- no such mood: left out
+    expect(petLine(5, "Imp", nil, 7)).toBe("Level 5 · Imp")
+end
+
+@test("without a pet: no Pet tab; Blizzard's Pet side button out of sight")
+local function noPet()
+    open()
+    expect(HasPetUI()).toBe(false)
+    expect(petTab():IsShown()).toBe(false)
+    expect(chosen(tabsOf()[2])).toBe(false)
+    expectGameButtonHidden()
+end
+
+@test(
+    "a hunter's pet: the Pet tab after Character; chosen, the pet's view without Stats | Sets | Titles; Character again: the stats"
+)
+local function petView()
+    local wolf = tamePet()
+    open()
+    local pet = petTab()
+    expect(pet).toBeShown()
+    -- in the row right after Character
+    local point, rel, relPoint = pet:GetPoint(1)
+    expect(point).toBe("BOTTOMLEFT")
+    expect(rel).toBe(frame("CharacterFrameModeTab1"))
+    expect(relPoint).toBe("BOTTOMRIGHT")
+    expect(chosen(tabsOf()[2])).toBe(false)
+    -- chosen: Blizzard's pet side pane (the model, the stats, the experience)
+    mock.click(pet)
+    mock.advanceFrames(2)
+    expect(petPane()).toBeShown()
+    expect(frame("CharacterStatsPaneScrollBox"):IsShown()).toBe(false)
+    expect(tbl.field(frame("PaperDollFrame"), "selectedTab")).toBe(4)
+    expect(frame("PaperDollItemsFrame"):IsShown()).toBe(false)
+    expect(frame("PetPaperDollFrameExpBar")).toBeShown()
+    expect(chosen(tabsOf()[2])).toBe(true)
+    expect(chosen(tabsOf()[1])).toBe(false)
+    expect(sideRow().row:IsShown()).toBe(false)
+    expect(sideButton(1):GetAlpha()).toBe(0)
+    -- the identity line the pet's
+    local id = assert(M.identity)
+    expect(id.name:GetText()).toBe("Fang")
+    expect(id.line:GetText()).toBe(petLine(19, "Wolf", "Loyalty Level 2", 3))
+    expect(id.line:GetText()).toBe(
+        "Level 19 · Wolf · Loyalty Level 2 · |cff" .. SuuUI.Tokens.color.fel.hex .. PET_HAPPINESS3 .. "|r"
+    )
+    expectGameButtonHidden()
+    -- Blizzard's happiness face: here only
+    expect(frame("PetPaperDollPetHappinessInfo"):GetAlpha()).toBe(1)
+    -- the experience bar in SuuUI's progress look
+    local fill = assert(frames.asTexture(tbl.field(frame("PetPaperDollFrameExpBar"), "Fill")))
+    local r, g, b = fill:GetVertexColor()
+    local want = SuuUI.Tokens.color["progress-fill"]
+    expect(r).toBeCloseTo(want[1])
+    expect(g).toBeCloseTo(want[2])
+    expect(b).toBeCloseTo(want[3])
+    -- Character again: the stats, the row, the player's line
+    tab(1)
+    expect(frame("CharacterStatsPaneScrollBox")).toBeShown()
+    expect(petPane():IsShown()).toBe(false)
+    expect(frame("PaperDollItemsFrame")).toBeShown()
+    expect(chosen(tabsOf()[1])).toBe(true)
+    expect(chosen(tabsOf()[2])).toBe(false)
+    expect(sideRow().row).toBeShown()
+    expect(sideButton(1):GetAlpha()).toBe(1)
+    expect(id.name:GetText() :: unknown).toBe(SuuUI.FullName("player"))
+    expectGameButtonHidden()
+    -- (the face sat over the head slot)
+    expect(frame("PetPaperDollPetHappinessInfo"):GetAlpha()).toBe(0)
+    expect(frame("PetPaperDollPetHappinessInfo"):IsMouseEnabled()).toBe(false)
+    dismissPet(wolf)
+end
+
+@test("the Pet tab from another tab: the Character pane in its pet view")
+local function petFromReputation()
+    local wolf = tamePet()
+    open()
+    tab(2)
+    expect(frame("ReputationFrame")).toBeShown()
+    mock.click(petTab())
+    mock.advanceFrames(2)
+    expect(frame("ReputationFrame"):IsShown()).toBe(false)
+    expect(frame("PaperDollFrame")).toBeShown()
+    expect(petPane()).toBeShown()
+    expect(chosen(tabsOf()[2])).toBe(true)
+    -- closed: the pet's view over (Blizzard forgets its side pane), the row back
+    mock.pressBinding("TOGGLECHARACTER0")
+    mock.advanceFrames(2)
+    expect(M:PetMode()).toBe(false)
+    expect(sideRow().row).toBeShown()
+    open()
+    expect(chosen(tabsOf()[2])).toBe(false)
+    expect(chosen(tabsOf()[1])).toBe(true)
+    dismissPet(wolf)
+end
+
+@test("the pet dismissed while its tab shows: the tab goes, the Character tab's stats again")
+local function petDismissed()
+    local wolf = tamePet()
+    open()
+    mock.click(petTab())
+    mock.advanceFrames(2)
+    expect(petPane()).toBeShown()
+    dismissPet(wolf)
+    expect(petTab():IsShown()).toBe(false)
+    expect(petPane():IsShown()).toBe(false)
+    expect(frame("CharacterStatsPaneScrollBox")).toBeShown()
+    expect(chosen(tabsOf()[1])).toBe(true)
+    expect(sideRow().row).toBeShown()
+    expectGameButtonHidden()
+    -- a pet again (summoned in a fight: SuuUI's own button, shown in combat too)
+    mock.player:enterCombat()
+    local again = tamePet()
+    expect(petTab()).toBeShown()
+    expectGameButtonHidden()
+    mock.player:leaveCombat()
+    dismissPet(again)
 end
 
 --------------------------------------------------------------------------------

@@ -24,6 +24,9 @@
 --                      disabled = function() … end, reason = "…" }, … })   -- in order
 --   (a disabled tab: ink-faint at opacity-disabled, a cover takes its click
 --   and its tooltip says the reason; 0.17)
+--   (`hidden = function() … end`: while it returns true the tab is out of
+--   the row, its button hidden, and the others close up; chrome:LayoutTabs()
+--   after what it depends on changed)
 --   chrome:UpdateTabs()   -- after the window switched tab
 
 import after from "wowlua:timer"
@@ -75,8 +78,15 @@ export type SkinTab = {
     selected?: () -> unknown,
     disabled?: () -> unknown,
     reason?: string,
+    hidden?: () -> unknown,
     selectedTexture?: Region,
 }
+
+-- Whether a tab is out of the row now (its `hidden`).
+local function isHidden(def: SkinTab): boolean
+    local hidden = def.hidden
+    return hidden ~= nil and (hidden() or false) ~= false
+end
 
 local function hideRegions(f: Frame)
     for _, r in ipairs({ f:GetRegions() }) do
@@ -426,10 +436,24 @@ export class WindowChrome
             self.layoutAfterCombat = true
             return
         end
-        local short, gap = fitTabs(tabs, self.frame:GetWidth() - S["space-5"] * 2)
+        -- (a hidden tab out of the row, its button hidden; only the ones with
+        -- a `hidden` are shown or hidden here: the rest stay the window's)
+        local inRow: SkinTab[] = {}
+        for _, def in ipairs(tabs) do
+            if def.hidden then
+                local off = isHidden(def)
+                def.button:SetShown(not off)
+                if not off then
+                    inRow[#inRow + 1] = def
+                end
+            else
+                inRow[#inRow + 1] = def
+            end
+        end
+        local short, gap = fitTabs(inRow, self.frame:GetWidth() - S["space-5"] * 2)
         self.placing = true
         local prev: Frame? = nil
-        for _, def in ipairs(tabs) do
+        for _, def in ipairs(inRow) do
             local b = def.button
             local label = (short and def.short) or def.label
             skinTab(self, def).label:SetValue(label)
@@ -453,7 +477,7 @@ export class WindowChrome
             local t = skinTab(self, def)
             local disabled, selected = def.disabled, def.selected
             local off = disabled ~= nil and (disabled() or false) ~= false
-            local on = not off and selected ~= nil and (selected() or false) ~= false
+            local on = not off and not isHidden(def) and selected ~= nil and (selected() or false) ~= false
             t.label:SetColor(off and "ink-faint" or on and "gilt-text" or (t.hover and "ink" or "ink-muted"))
             t.label:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
             t.cover:SetShown(off)
