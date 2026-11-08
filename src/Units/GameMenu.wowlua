@@ -34,6 +34,8 @@ local M: GameMenuModule
 local WIDTH = 300
 local ITEM_H = 30
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+-- SuuUI's own mark (its icon in the addon list)
+local MARK = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Mark"
 
 -- Closes the game's menu (this panel follows), then does what was chosen.
 local function closeThen(fn: (() -> ())?, sound: number?): () -> ()
@@ -70,12 +72,13 @@ local function notInCombat(): string?
     return nil
 end
 
--- An entry: what it says, its glyph, what a click does, why it's blocked
--- now (nil: it isn't); the secure ones a slash command and a sound instead
--- of the click.
+-- An entry: what it says, its glyph (or a texture drawn in its own colours,
+-- untinted), what a click does, why it's blocked now (nil: it isn't); the
+-- secure ones a slash command and a sound instead of the click.
 export type Entry = {
     label: string,
     glyph: string,
+    texture?: string,
     onClick?: () -> (),
     blocked?: () -> string?,
     slash?: string,
@@ -129,6 +132,7 @@ local GROUPS: Group[] = {
             {
                 label = "SuuUI settings",
                 glyph = "markDiamond",
+                texture = MARK,
                 onClick = closeThen(function()
                     SuuUI.OpenSettings()
                 end),
@@ -213,8 +217,12 @@ export class MenuItem extends Button
         self.glyph = self:CreateTexture(nil, "ARTWORK")
         self.glyph:SetSize(14, 14)
         self.glyph:SetPoint("LEFT", S["space-4"], 0)
-        self.glyph:SetTexture(GLYPHS .. def.glyph)
-        UI.Paint(self.glyph, "ink-muted")
+        if def.texture then
+            self.glyph:SetTexture(def.texture)
+        else
+            self.glyph:SetTexture(GLYPHS .. def.glyph)
+            UI.Paint(self.glyph, "ink-muted")
+        end
         self.label = UI.Text(self, "label", "ink")
         self.label:SetPoint("LEFT", self.glyph, "RIGHT", S["space-4"], 0)
         self.label:SetValue(def.label)
@@ -223,13 +231,15 @@ export class MenuItem extends Button
             local blocked = self.blocked
             if blocked then
                 UI.ShowTooltip(self, { title = def.label, description = blocked })
-            else
+            elseif not def.texture then
                 UI.Paint(self.glyph, "gilt-text")
             end
         end)
         self:SetScript("OnLeave", function()
             self.hover:Hide()
-            UI.Paint(self.glyph, "ink-muted")
+            if not def.texture then
+                UI.Paint(self.glyph, "ink-muted")
+            end
             UI.HideTooltip()
         end)
         self:SetScript("OnClick", function()

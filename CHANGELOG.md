@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- The game menu's SuuUI settings entry shows SuuUI's own mark, the icon from the addon list, instead of a plain diamond.
+
 ### Fixed
 
 - Unit frames: a shield (absorb) shows as even stripes after the health again, instead of stripes that stretch into lines across the bar.
