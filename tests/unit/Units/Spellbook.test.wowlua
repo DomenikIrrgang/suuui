@@ -562,3 +562,206 @@ local function openedInCombat()
     expect(y2).toBeCloseTo(y)
     expectNoErrors()
 end
+
+--------------------------------------------------------------------------------
+-- The pet's school
+--------------------------------------------------------------------------------
+
+-- A pet's spell as its book holds it, and its autocast (allowed, on).
+type PetSpell = {
+    name: string,
+    spellID: number,
+    icon: number,
+    sub?: string,
+    passive?: boolean,
+    auto?: boolean,
+    on?: boolean,
+}
+
+-- A hunter's pet's book (the engine has no pet bank: the game's answers,
+-- faked); `spells` nil: no pet. Returns the book and the autocast
+-- toggle's spy.
+type PetBook = { spells: PetSpell[]? }
+local function fakePet(spells: PetSpell[]?): (PetBook, (...unknown) -> ...unknown)
+    local pet: PetBook = { spells = spells }
+    local realInfo, realAuto = C_SpellBook.GetSpellBookItemInfo, C_SpellBook.GetSpellBookItemAutoCast
+    local function spell(slot: number, bank: unknown): PetSpell?
+        local list = pet.spells
+        return bank == Enum.SpellBookSpellBank.Pet and list and list[slot] or nil
+    end
+    mock.fake("C_SpellBook.HasPetSpells", function(): (number?, string?)
+        local list = pet.spells
+        if list and #list > 0 then
+            return #list, "PET"
+        end
+        return nil, nil
+    end)
+    mock.fake("PetHasSpellbook", function(): boolean
+        return pet.spells ~= nil
+    end)
+    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, bank: SpellBookSpellBank): unknown
+        if bank ~= Enum.SpellBookSpellBank.Pet then
+            return realInfo(slot, bank)
+        end
+        local s = spell(slot, bank)
+        return s and
+            {
+                itemType = Enum.SpellBookItemType.PetAction,
+                name = s.name,
+                spellID = s.spellID,
+                iconID = s.icon,
+                subName = s.sub or "",
+                isPassive = s.passive == true,
+            } or
+            nil
+    end)
+    mock.fake("C_SpellBook.GetSpellBookItemAutoCast", function(
+        slot: number,
+        bank: SpellBookSpellBank
+    ): (boolean?, boolean?)
+        if bank ~= Enum.SpellBookSpellBank.Pet then
+            return realAuto(slot, bank)
+        end
+        local s = spell(slot, bank)
+        if not s then
+            return nil, nil
+        end
+        return s.auto == true, s.on == true
+    end)
+    -- (the game turns it and tells with PET_BAR_UPDATE)
+    local toggle = mock.fake("C_SpellBook.ToggleSpellBookItemAutoCast", function(slot: number, bank: SpellBookSpellBank)
+        local s = spell(slot, bank)
+        if s then
+            s.on = not s.on
+            mock.fireEvent("PET_BAR_UPDATE")
+        end
+    end)
+    return pet, toggle
+end
+
+local function wolf(): PetSpell[]
+    return {
+        { name = "Bite", spellID = 17253, icon = 132278, sub = "Rank 2", auto = true, on = true },
+        { name = "Growl", spellID = 2649, icon = 132270, sub = "Rank 1", auto = true, on = false },
+        { name = "Great Stamina", spellID = 4187, icon = 136112, passive = true },
+    }
+end
+
+-- The Pet school's tab (its index), when shown.
+local function petTab(): number?
+    for i, t in ipairs(book().tabs) do
+        if t:IsShown() and t.label == "Pet" then
+            return i
+        end
+    end
+    return nil
+end
+
+@test("no pet: no Pet school")
+local function noPet()
+    open()
+    expect(petTab()).toBeNil()
+    expect(M:PetSchool()).toBeNil()
+end
+
+@test(
+    "a pet's spells: the Pet school after the class's, its spells with their icons, ranks and autocast; a click casts"
+)
+local function petSchool()
+    fakePet(wolf())
+    open()
+    local i = assert(petTab())
+    expect(i).toBe(#M:Schools() + 1)
+    assert(book().onSchool)(i)
+    expect(book().title:GetText()).toBe("Pet")
+    expect(cellTexts()).toEqual({ "Bite", "Growl", "Great Stamina" })
+    local cells = book().cells
+    expect(cells[1].icon.art:GetTexture()).toBe(132278)
+    expect(cells[3].icon.art:GetTexture()).toBe(136112)
+    -- its rank, and whether it casts on its own (on: arcane, and the icon's border)
+    local bite = cells[1].sub:GetText() or ""
+    expect(bite:find("Rank 2 · ", 1, true) ~= nil).toBe(true)
+    expect(bite:find("Autocast on", 1, true) ~= nil).toBe(true)
+    expect(cells[1].icon.borderToken).toBe("arcane")
+    expect(cells[2].sub:GetText()).toBe("Rank 1 · Autocast off")
+    expect(cells[2].icon.borderToken).toBe("gilt-hairline")
+    expect(cells[3].sub:GetText()).toBe("Passive")
+    -- a click casts it (by its name, as /cast does); the passive casts nothing
+    expect(cells[1].button:GetAttribute("type")).toBe("spell")
+    expect(cells[1].button:GetAttribute("spell")).toBe("Bite")
+    expect(cells[3].button:GetAttribute("type")).toBeNil()
+    local cast: unknown = nil
+    hooksecurefunc("CastSpellByName", function(name: unknown)
+        cast = name
+    end)
+    mock.click(cells[1].button)
+    expect(cast).toBe("Bite")
+    -- the game's tooltip from the pet's book
+    local tip = mock.spy(function(_: unknown, _: number, _: unknown) end)
+    mock.stub(GameTooltip, "SetSpellBookItem", tip)
+    assert(book().onEnter)(2, cells[2])
+    expect(tip).toHaveBeenCalledWith(GameTooltip, 2, Enum.SpellBookSpellBank.Pet)
+    assert(book().onLeave)(2, cells[2])
+end
+
+@test("a right click on a pet's spell turns its autocast on or off, out of combat; not on one that can't")
+local function petAutocast()
+    local _, toggle = fakePet(wolf())
+    open()
+    assert(book().onSchool)(assert(petTab()))
+    local cells = book().cells
+    mock.click(cells[2].button, "RightButton")
+    expect(toggle).toHaveBeenCalledWith(2, Enum.SpellBookSpellBank.Pet)
+    -- the page shows it (PET_BAR_UPDATE)
+    expect((cells[2].sub:GetText() or ""):find("Autocast on", 1, true) ~= nil).toBe(true)
+    expect(cells[2].icon.borderToken).toBe("arcane")
+    -- a passive: nothing to turn; no bindings menu either
+    mock.click(cells[3].button, "RightButton")
+    expect(toggle).toHaveBeenCalledTimes(1)
+    -- in combat: not (left to the pet bar)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    mock.click(cells[1].button, "RightButton")
+    expect(toggle).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("a pet's spell dragged out of combat: picked up from the pet's book")
+local function petDrag()
+    fakePet(wolf())
+    open()
+    assert(book().onSchool)(assert(petTab()))
+    local pickup = mock.fake("C_SpellBook.PickupSpellBookItem", function(_: number, _: SpellBookSpellBank) end)
+    assert(book().onDragStart)(2, book().cells[2])
+    expect(pickup).toHaveBeenCalledWith(2, Enum.SpellBookSpellBank.Pet)
+    -- the passive: nothing
+    assert(book().onDragStart)(3, book().cells[3])
+    expect(pickup).toHaveBeenCalledTimes(1)
+end
+
+@test("the pet gone: its school goes; in a fight it waits for the end (the tabs are secure)")
+local function petGone()
+    local pet = fakePet(wolf())
+    open()
+    expect(petTab() ~= nil).toBe(true)
+    pet.spells = nil
+    mock.fireEvent("UNIT_PET", "player")
+    expect(petTab()).toBeNil()
+    -- back, then gone in a fight: there till it ends, its page empty
+    pet.spells = wolf()
+    mock.fireEvent("UNIT_PET", "player")
+    local i = assert(petTab())
+    assert(book().onSchool)(i)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    pet.spells = nil
+    mock.fireEvent("UNIT_PET", "player")
+    expect(petTab()).toBe(i)
+    expect(#cellTexts()).toBe(0)
+    expect(M.renderAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(petTab()).toBeNil()
+    expect(book().title:GetText() ~= "Pet").toBe(true)
+    expectNoErrors()
+end
