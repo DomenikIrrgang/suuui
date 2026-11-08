@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Party and raid frames in the healer setup (icons inside the bar, raid frames in rows): Warded, Aggro and the debuff-type badges sit on the frame's top edge at the right, next to the icons, instead of in the middle over the name.
+
 ## 0.6.22 (2026-11-07)
 
 ### New
