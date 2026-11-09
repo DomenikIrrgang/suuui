@@ -1,0 +1,150 @@
+-- Perf scenario: a dungeon boss with a party of five. The boss frames, the
+-- boss's casts, damage on everyone, the healer's heals with incoming heals,
+-- shields, magic debuffs to dispel, and the party frames following all of
+-- it; at the end the boss dies.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local party: mock.MockUnit[] = {}
+local boss: mock.MockUnit? = nil
+
+const MEMBERS = {
+    { name = "Perf Healer", class = "PRIEST", role = "HEALER" },
+    { name = "Perf Mage", class = "MAGE", role = "DAMAGER" },
+    { name = "Perf Rogue", class = "ROGUE", role = "DAMAGER" },
+    { name = "Perf Hunter", class = "HUNTER", role = "DAMAGER" },
+}
+
+@if(features.perf)
+@test("setup: login, the party, the dungeon")
+local function setup()
+    mock.player:setRole("TANK")
+    for i, m in ipairs(MEMBERS) do
+        local u = mock.spawnUnit({
+            name = m.name,
+            player = true,
+            class = m.class,
+            level = 60,
+            reaction = "friendly",
+            health = 4000,
+            healthMax = 4000,
+            distance = 10,
+        })
+        u:setRole(m.role :: "TANK" | "HEALER" | "DAMAGER")
+        mock.group:add(u, { quiet = i < #MEMBERS })
+        party[i] = u
+    end
+    mock.enterInstance("party", { name = "Perf Halls", instanceID = 389, difficultyID = 1, maxPlayers = 5 })
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("boss fight")
+local function bossFight()
+    local b = mock.spawnUnit({
+        name = "Perf Boss",
+        level = 62,
+        reaction = "hostile",
+        health = 400000,
+        healthMax = 400000,
+        classification = "worldboss",
+        distance = 5,
+    })
+    boss = b
+    local rnd = perf.random(11)
+    local debuffs: { [number]: number } = {}
+    local shields: { [number]: number } = {}
+    perf.run(480, function(n: number)
+        if n == 1 then
+            mock.player:enterCombat()
+            mock.startEncounter({ id = 1001, name = "Perf Boss", difficultyID = 1, groupSize = 5, bosses = { b } })
+            b:showNameplate()
+            b:setThreat(100)
+            mock.player:target(b)
+            mock.player:startAttack()
+            return
+        end
+        -- the boss: a melee swing at the tank every 1.5 s, a cast every 4 s
+        if n % 90 == 0 then
+            b:swing(mock.player, 900)
+        end
+        if n % 240 == 30 then
+            b:castSpell(11, { castTime = 2 })
+        end
+        -- raid damage every 2 s: everyone takes a hit
+        if n % 120 == 60 then
+            for _, u in ipairs(party) do
+                u:damage(600)
+            end
+            mock.player:damage(400)
+        end
+        -- the healer: a heal every 1.5 s on someone, with its incoming heal
+        if n % 90 == 20 then
+            local i = rnd(#party)
+            party[i]:setIncomingHeal(1200, party[1])
+        end
+        if n % 90 == 50 then
+            local i = rnd(#party)
+            party[i]:heal(1200)
+            party[i]:setIncomingHeal(0, party[1])
+        end
+        -- a shield every 3 s
+        if n % 180 == 10 then
+            local i = rnd(#party)
+            shields[i] = party[i]:applyAura({
+                spellId = 17,
+                name = "Power Word: Shield",
+                icon = 135940,
+                duration = 30,
+                source = "party1",
+            })
+            party[i]:setAbsorb(1000)
+        end
+        -- a magic debuff to dispel every 2.5 s, dispelled 1 s later
+        if n % 150 == 0 then
+            local i = rnd(#party)
+            debuffs[i] = party[i]:applyAura({
+                spellId = 118,
+                name = "Polymorph",
+                icon = 136071,
+                duration = 8,
+                harmful = true,
+                dispelName = "Magic",
+            })
+        end
+        if n % 150 == 60 then
+            for i, id in pairs(debuffs) do
+                party[i]:removeAura(id)
+                debuffs[i] = nil
+            end
+        end
+        -- the party's damage on the boss every 10 frames
+        if n % 10 == 0 then
+            mock.player:hit(b, 800, { spell = 12294 })
+        end
+        if n % 30 == 0 then
+            b:setThreat(1000 + n)
+            b:setThreat(800 + n, party[2])
+        end
+    end)
+end
+
+@if(features.perf)
+@test("boss dies")
+local function bossDies()
+    local b = boss :: mock.MockUnit
+    perf.run(90, function(n: number)
+        if n == 1 then
+            b:kill({ by = mock.player })
+            mock.endEncounter(true)
+        elseif n == 30 then
+            mock.player:leaveCombat()
+        end
+    end)
+end

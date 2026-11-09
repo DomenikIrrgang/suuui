@@ -1,0 +1,168 @@
+-- Perf scenario: a 40-player raid boss. Aura churn on the raid frames (buffs
+-- and debuffs on and off every frame), damage and heals on twenty members
+-- a second, incoming heals, threat on the boss; then a wipe (everyone dies
+-- within two seconds) and the mass resurrect.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const CLASSES = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "PALADIN", "HUNTER", "WARLOCK", "DRUID" }
+const ROLES: { [string]: "TANK" | "HEALER" | "DAMAGER" } = {
+    WARRIOR = "TANK",
+    PRIEST = "HEALER",
+    PALADIN = "HEALER",
+    DRUID = "HEALER",
+    MAGE = "DAMAGER",
+    ROGUE = "DAMAGER",
+    HUNTER = "DAMAGER",
+    WARLOCK = "DAMAGER",
+}
+const BUFFS = {
+    { spellId = 1243, name = "Power Word: Fortitude", icon = 135987, duration = 1800 },
+    { spellId = 1459, name = "Arcane Intellect", icon = 135932, duration = 1800 },
+    { spellId = 1126, name = "Mark of the Wild", icon = 136078, duration = 1800 },
+    { spellId = 774, name = "Rejuvenation", icon = 136081, duration = 12 },
+    { spellId = 139, name = "Renew", icon = 135953, duration = 15 },
+}
+const DEBUFFS = {
+    { spellId = 172, name = "Corruption", icon = 136118, duration = 18, harmful = true, dispelName = "Magic" },
+    {
+        spellId = 1490,
+        name = "Curse of the Elements",
+        icon = 136130,
+        duration = 300,
+        harmful = true,
+        dispelName = "Curse",
+    },
+    { spellId = 3600, name = "Earthbind", icon = 136102, duration = 5, harmful = true },
+    { spellId = 744, name = "Poison", icon = 136016, duration = 15, harmful = true, dispelName = "Poison" },
+}
+
+local raid: mock.MockUnit[] = {}
+local boss: mock.MockUnit? = nil
+
+@if(features.perf)
+@test("setup: login, the raid, the instance")
+local function setup()
+    for i = 1, 39 do
+        local class = CLASSES[(i - 1) % #CLASSES + 1]
+        local u = mock.spawnUnit({
+            name = "Raider " .. i,
+            player = true,
+            class = class,
+            level = 60,
+            reaction = "friendly",
+            health = 5000,
+            healthMax = 5000,
+            distance = 15,
+        })
+        u:setRole(ROLES[class])
+        mock.group:add(u, { raid = true, subgroup = (i // 5) + 1, quiet = i < 39 })
+        raid[i] = u
+    end
+    mock.enterInstance("raid", { name = "Perf Keep", instanceID = 409, difficultyID = 9, maxPlayers = 40 })
+    perf.settle(60)
+    -- everyone buffed, as at a pull
+    for _, u in ipairs(raid) do
+        for b = 1, 3 do
+            u:applyAura(BUFFS[b])
+        end
+    end
+    perf.settle(30)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("boss fight: aura churn")
+local function fight()
+    local b = mock.spawnUnit({
+        name = "Perf Raid Boss",
+        level = 63,
+        reaction = "hostile",
+        health = 2000000,
+        healthMax = 2000000,
+        classification = "worldboss",
+        distance = 5,
+    })
+    boss = b
+    local rnd = perf.random(42)
+    local auras: { [number]: { [number]: number } } = {}
+    perf.run(360, function(n: number)
+        if n == 1 then
+            mock.player:enterCombat()
+            mock.startEncounter({
+                id = 1002,
+                name = "Perf Raid Boss",
+                difficultyID = 9,
+                groupSize = 40,
+                bosses = { b },
+            })
+            b:setThreat(100, raid[1])
+            return
+        end
+        -- four aura changes a frame: a HoT or a debuff on, or an old one off
+        for _ = 1, 4 do
+            local i = rnd(#raid)
+            local mine = auras[i] or {}
+            auras[i] = mine
+            local slot = rnd(9)
+            local old = mine[slot]
+            if old then
+                raid[i]:removeAura(old)
+                mine[slot] = nil
+            elseif slot <= 5 then
+                mine[slot] = raid[i]:applyAura(BUFFS[slot])
+            else
+                mine[slot] = raid[i]:applyAura(DEBUFFS[slot - 5])
+            end
+        end
+        -- damage on a member every frame, heals every other frame (20 a second each)
+        raid[rnd(#raid)]:damage(300 + rnd(500))
+        if n % 3 == 0 then
+            local i = rnd(#raid)
+            raid[i]:heal(400)
+            raid[rnd(#raid)]:setIncomingHeal(rnd(2) == 1 and 800 or 0)
+        end
+        -- raid-wide damage every 3 s
+        if n % 180 == 90 then
+            for _, u in ipairs(raid) do
+                u:damage(700)
+            end
+        end
+        if n % 30 == 0 then
+            b:setThreat(1000 + n, raid[1])
+            b:setThreat(900 + n, raid[9])
+        end
+    end)
+end
+
+@if(features.perf)
+@test("wipe")
+local function wipe()
+    local b = boss :: mock.MockUnit
+    perf.run(150, function(n: number)
+        -- a member dies every 3 frames
+        if n % 3 == 0 and n // 3 <= #raid then
+            raid[n // 3]:kill({ by = b })
+        end
+        if n == 125 then
+            mock.player:die()
+            mock.endEncounter(false)
+        end
+    end)
+end
+
+@if(features.perf)
+@test("mass resurrect")
+local function resurrect()
+    perf.run(90, function(n: number)
+        -- a resurrect every 2 frames
+        if n % 2 == 0 and n // 2 <= #raid then
+            raid[1]:resurrect(raid[n // 2], { health = 2500 })
+        end
+    end)
+end

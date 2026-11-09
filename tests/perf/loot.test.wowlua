@@ -1,0 +1,84 @@
+-- Perf scenario: bags and loot. The bags open, a burst of kills with their
+-- loot (BAG_UPDATE storms: a stack changes every few frames), items moving,
+-- money and the bags closing again.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local corpses: mock.MockUnit[] = {}
+
+@if(features.perf)
+@test("setup: login, mobs to kill")
+local function setup()
+    for i = 1, 8 do
+        corpses[i] = mock.spawnUnit({
+            name = "Perf Kobold " .. i,
+            level = 58,
+            reaction = "hostile",
+            health = 100,
+            healthMax = 100,
+            distance = 3,
+        })
+    end
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("open the bags")
+local function openBags()
+    perf.run(30, function(n: number)
+        if n == 1 then
+            SuuUI.ToggleBags()
+        end
+    end)
+end
+
+@if(features.perf)
+@test("loot burst")
+local function lootBurst()
+    local money = 1234567
+    local count = 1
+    perf.run(360, function(n: number)
+        -- a kill and its loot every 45 frames
+        if n % 45 == 1 then
+            local i = n // 45 + 1
+            local mob = corpses[i]
+            if mob then
+                mob:kill({ by = mock.player, lootable = true })
+                mock.player:loot(mob, { auto = true })
+            end
+        end
+        -- a stack in the bags changes every 4 frames (looted, split, used)
+        if n % 4 == 0 then
+            count = count % 19 + 1
+            mock.setBag(4, {
+                slots = 16,
+                items = {
+                    [1] = { id = 4306, count = count },
+                    [2] = { id = 2589, count = 20 - count },
+                    [3] = { id = 858, count = 1 + count % 5 },
+                },
+            })
+        end
+        if n % 30 == 15 then
+            money += 1234
+            mock.player:setMoney(money)
+        end
+    end)
+end
+
+@if(features.perf)
+@test("close the bags")
+local function closeBags()
+    perf.run(30, function(n: number)
+        if n == 1 then
+            SuuUI.ToggleBags()
+        end
+    end)
+end

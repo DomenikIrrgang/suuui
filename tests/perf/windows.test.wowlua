@@ -1,0 +1,65 @@
+-- Perf scenario: opening the windows. Each window opened, left open for a
+-- moment and closed, the first time (built) and the second (shown again):
+-- the world map, the character window, the spellbook, the talents, the
+-- collections, the settings. Each open is one frame's work: the spikes.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+@if(features.perf)
+@test("setup: login")
+local function setup()
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+-- Each window: open, 20 frames, close, 20 frames.
+local OPENERS: { [number]: () -> () } = {
+    function()
+        mock.pressBinding("TOGGLEWORLDMAP")
+    end,
+    function()
+        mock.pressBinding("TOGGLECHARACTER0")
+    end,
+    function()
+        mock.pressBinding("TOGGLESPELLBOOK")
+    end,
+    function()
+        SuuUI.ToggleTalents()
+    end,
+    function()
+        SuuUI.ToggleCollections()
+    end,
+    function()
+        SuuUI.ToggleSettings()
+    end,
+}
+
+local function cycle()
+    perf.run(#OPENERS * 40, function(n: number)
+        local i = (n - 1) // 40 + 1
+        local step = (n - 1) % 40
+        local open = OPENERS[i]
+        if open and (step == 0 or step == 20) then
+            open()
+        end
+    end)
+end
+
+@if(features.perf)
+@test("first open")
+local function firstOpen()
+    cycle()
+end
+
+@if(features.perf)
+@test("second open")
+local function secondOpen()
+    cycle()
+    perf.record("memory after the windows", { kb = perf.memoryKB() })
+end

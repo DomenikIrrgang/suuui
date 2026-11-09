@@ -1,0 +1,119 @@
+-- Perf scenario: a hunter and the pet fighting. The pet frame, the pet bar
+-- (autocast, usability), happiness and the pet's experience, the pet
+-- tanking (its threat and health), the hunter's shots.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local pet: mock.MockUnit? = nil
+local mobs: mock.MockUnit[] = {}
+
+local PET_SPELLS: mock.PetSpell[] = {
+    { spell = 17253, name = "Bite", icon = 132278, autocast = true },
+    { spell = 2649, name = "Growl", icon = 132270, autocast = true },
+    { spell = 24450, name = "Prowl", icon = 132089, autocast = false },
+    { spell = 24604, name = "Furious Howl", icon = 132203, autocast = true },
+}
+
+@if(features.perf)
+@test("setup: login as a hunter with a pet")
+local function setup()
+    mock.setPlayer({ class = "HUNTER", level = 60, powerType = 0 })
+    local wolf = mock.spawnUnit({
+        name = "Perf Wolf",
+        level = 60,
+        reaction = "friendly",
+        health = 3000,
+        healthMax = 3000,
+    })
+    local actions: { [number]: mock.PetAction } = {}
+    for i, s in ipairs(PET_SPELLS) do
+        actions[i + 3] = {
+            spell = s.spell,
+            name = s.name,
+            icon = s.icon,
+            autocast = s.autocast,
+            autocastAllowed = true,
+        }
+    end
+    mock.setPet(wolf, {
+        hunter = true,
+        happiness = 3,
+        loyalty = "Loyal",
+        xp = 100,
+        xpMax = 5000,
+        actions = actions,
+        spells = PET_SPELLS,
+    })
+    pet = wolf
+    for i = 1, 3 do
+        mobs[i] = mock.spawnUnit({
+            name = "Perf Boar " .. i,
+            level = 59,
+            reaction = "hostile",
+            health = 6000,
+            healthMax = 6000,
+            distance = 25,
+        })
+    end
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("pet fights")
+local function fight()
+    local p = pet :: mock.MockUnit
+    local current = 1
+    local dealt = 0
+    local xp = 100
+    perf.run(480, function(n: number)
+        local mob = mobs[current]
+        if not mob then
+            return
+        end
+        if n == 1 or dealt == 0 then
+            mock.player:target(mob)
+            mob:showNameplate()
+            mob:setThreat(200, p)
+            mob:setThreat(50)
+            mob:target(p)
+            dealt = 1
+        end
+        -- the pet bites every 2 s, the mob hits the pet every 2 s
+        if n % 120 == 0 then
+            p:swing(mob, 400)
+            dealt += 400
+        end
+        if n % 120 == 60 then
+            mob:swing(p, 250)
+            mob:setThreat(200 + n, p)
+        end
+        -- the hunter's shots every 1.5 s (Arcane Shot), the auto shot every 2 s
+        if n % 90 == 30 then
+            mock.player:hit(mob, 700, { spell = 3044 })
+            dealt += 700
+            mob:setThreat(80 + n)
+        end
+        -- the pet's power (focus) ticks every 0.5 s
+        if n % 30 == 0 then
+            p:setPower(50 + (n % 50), { frequent = true })
+        end
+        -- happiness changes every 4 s, the pet's experience every kill
+        if n % 240 == 0 then
+            mock.setPet(p, { happiness = (n // 240) % 3 + 1 })
+        end
+        if dealt >= 6000 then
+            mob:kill({ by = mock.player })
+            mob:hideNameplate()
+            xp += 800
+            mock.setPet(p, { xp = xp })
+            current += 1
+            dealt = 0
+        end
+    end)
+end
