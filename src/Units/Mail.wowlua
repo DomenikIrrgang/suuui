@@ -1507,6 +1507,21 @@ class MailModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- The mailbox closed (walked away, or the game closed it): the window
+    -- with it, collecting stopped.
+    function Closed()
+        self.open = false
+        local collecting = self.collecting
+        if collecting then
+            collecting:Cancel()
+            self.collecting = nil
+        end
+        local window = self.window
+        if window then
+            window:Hide()
+        end
+    end
+
     override function OnEnable()
         if not self.window then
             self:Build()
@@ -1583,13 +1598,14 @@ class MailModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("MAIL_CLOSED", function()
-            self.open = false
-            local collecting = self.collecting
-            if collecting then
-                collecting:Cancel()
-                self.collecting = nil
+            self:Closed()
+        end)
+        -- the mailbox's interaction hidden: walked away from, or closed
+        -- (WoW Forever's CloseMail tells no MAIL_CLOSED)
+        self:OnGameEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", function(_, kind)
+            if kind == Enum.PlayerInteractionType.MailInfo then
+                self:Closed()
             end
-            assert(self.window):Hide()
         end)
         for _, e in ipairs({
             "MAIL_INBOX_UPDATE",
