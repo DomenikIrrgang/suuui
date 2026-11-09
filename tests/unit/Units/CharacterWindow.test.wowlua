@@ -677,7 +677,7 @@ local function itemLevelReading()
 end
 
 --------------------------------------------------------------------------------
--- The Gear category: after Blizzard's stat categories, in SuuUI's scroll area
+-- The Gear category: before Blizzard's stat categories, in SuuUI's scroll area
 --------------------------------------------------------------------------------
 
 local function statsPaneFrame(): Frame
@@ -717,11 +717,24 @@ end
 local function scrollArea(): ScrollArea
     return assert(M.statsScroll)
 end
--- The category right under Blizzard's last row (its list's 8 px padding).
-local function expectUnderLastRow(gear: Frame)
+-- The category on top of the area, Blizzard's list (a row for every stat)
+-- right under it.
+local function expectAboveList(gear: Frame)
     local rows = listRows()
     expect(#rows).toBe(listed())
-    expect(math.abs(assert(gear:GetTop()) - (lowestBottom(rows) - 8)) < 0.5).toBe(true)
+    expect(math.abs(assert(gear:GetTop()) - assert(scrollArea().child:GetTop())) < 0.5).toBe(true)
+    expect(math.abs(assert(statsList():GetTop()) - assert(gear:GetBottom())) < 0.5).toBe(true)
+    expect(lowestBottom(rows) < assert(gear:GetBottom())).toBe(true)
+end
+-- Blizzard's lowest row (the list's last)
+local function lastRow(): Frame
+    local low: Frame? = nil
+    for _, r in ipairs(listRows()) do
+        if not low or assert(r:GetBottom()) < assert(low:GetBottom()) then
+            low = r
+        end
+    end
+    return assert(low)
 end
 -- The area scrolled all the way with the wheel: its range, and the given
 -- row fully in sight (measured from the scroll child's top: wowlua 0.13.8
@@ -740,8 +753,8 @@ local function expectScrollsTo(row: Frame)
     local rowTop, rowBottom = top - assert(row:GetTop()), top - assert(row:GetBottom())
     expect(rowTop >= at - 0.5).toBe(true)
     expect(rowBottom <= at + scroll:GetHeight() + 0.5).toBe(true)
-    -- the very end: the row's foot within a row of the area's
-    expect(at + scroll:GetHeight() - rowBottom < 0.5).toBe(true)
+    -- the very end: Blizzard's last row, then its list's 8 px padding
+    expect(math.abs(at + scroll:GetHeight() - rowBottom - 8) < 0.5).toBe(true)
     for _ = 1, 80 do
         mock.wheel(scroll, 1)
     end
@@ -767,7 +780,7 @@ mock.defineItem(DAGGER, {
 })
 mock.defineItem(ROBE, { name = "Test Robe", quality = 2, equipLoc = "INVTYPE_CHEST", classID = 4, icon = 132644 })
 
-@test("the Gear category after Blizzard's last category: a row for every stat, the area's range reaching its last row")
+@test("the Gear category first, Blizzard's list under it: a row for every stat, the area's range reaching its last row")
 local function gearCategory()
     mock.fake("GetAverageItemLevel", function(): (number, number, number)
         return 58.2, 60.9, 58.2
@@ -785,15 +798,15 @@ local function gearCategory()
     -- Blizzard's list inside the area, every stat a row (it never scrolls itself)
     expect(statsList():GetParent()).toBe(scrollArea().child)
     expect(listed() > 10).toBe(true)
-    expectUnderLastRow(gear)
+    expectAboveList(gear)
     expect(statsList():IsMouseWheelEnabled()).toBe(false)
-    -- the range: Blizzard's rows and the category; the last row in sight at the end
-    expectScrollsTo(gear.level)
+    -- the range: the category and Blizzard's rows; its last row in sight at the end
+    expectScrollsTo(lastRow())
     expectListSecure()
     expectNoErrors()
 end
 
-@test("the Gear category follows the stats: a piece worn (its durability rows), an off-hand weapon, a level up")
+@test("the stats follow the Gear category: a piece worn (its durability rows), an off-hand weapon, a level up")
 local function gearFollows()
     open()
     local gear = assert(M.gear)
@@ -808,32 +821,32 @@ local function gearFollows()
     expect(gear.rows[2].label).toHaveText("Lowest")
     expect(gear.rows[3].label).toHaveText("Damaged")
     expect(gear.rows[2].value:GetText()).toContain("10%")
-    expectUnderLastRow(gear)
-    expectScrollsTo(gear.rows[3])
-    -- an off-hand weapon: Blizzard's list changes length; the category follows
+    expectAboveList(gear)
+    expectScrollsTo(lastRow())
+    -- an off-hand weapon: Blizzard's list changes length; the range follows
     local before = listed()
     mock.player:equip(17, DAGGER)
     mock.advanceTime(0.1)
     mock.advanceFrames(3)
     expect(listed()).never.toBe(before)
-    expectUnderLastRow(gear)
-    expectScrollsTo(gear.rows[3])
+    expectAboveList(gear)
+    expectScrollsTo(lastRow())
     mock.player:equip(17, nil)
     mock.advanceTime(0.1)
     mock.advanceFrames(3)
-    expectUnderLastRow(gear)
-    -- a level up: the stats again, the category still under them
+    expectAboveList(gear)
+    -- a level up: the stats again, still under the category
     mock.fireEvent("PLAYER_LEVEL_UP", 61, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     mock.fireEvent("UNIT_LEVEL", "player")
     mock.advanceFrames(3)
-    expectUnderLastRow(gear)
+    expectAboveList(gear)
     -- taken off: the item level alone again
     mock.player:equip(5, nil)
     mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
     mock.advanceTime(0.2)
     mock.advanceFrames(2)
     expect(gear.rows[1]).never.toBeShown()
-    expectScrollsTo(gear.level)
+    expectScrollsTo(lastRow())
     expectListSecure()
     expectNoErrors()
 end
@@ -849,11 +862,8 @@ local function itemLevelRow()
     expect(gear.carried).toBe(58)
     expect(gear.worn).toBe(60)
     expect(gear.level:IsMouseEnabled()).toBe(true)
-    expectScrollsTo(gear.level)
-    for _ = 1, 80 do
-        mock.wheel(scrollArea(), -1)
-    end
-    mock.advanceFrames(2)
+    expectScrollsTo(lastRow())
+    -- (back at the top: the category in sight)
     -- hovered: its tooltip, without errors (it once read a value Text hasn't got)
     mock.hover(gear.level)
     mock.advanceTime(0.5)
@@ -872,7 +882,7 @@ local function itemLevelRow()
     expectNoErrors()
 end
 
-@test("the pet's view keeps Blizzard's own scrolling list; Character again: the Gear category under the stats")
+@test("the pet's view keeps Blizzard's own scrolling list; Character again: the Gear category over the stats")
 local function gearPetView()
     local wolf = tamePet()
     open()
@@ -887,8 +897,8 @@ local function gearPetView()
     tab(1)
     local gear = assert(M.gear)
     expect(scrollArea():IsVisible()).toBe(true)
-    expectUnderLastRow(gear)
-    expectScrollsTo(gear.level)
+    expectAboveList(gear)
+    expectScrollsTo(lastRow())
     expectListSecure()
     dismissPet(wolf)
     expectNoErrors()

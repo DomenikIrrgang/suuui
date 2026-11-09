@@ -302,7 +302,7 @@ class WearOverlay extends Frame
     end
 end
 
--- The Gear category, after Blizzard's stat categories and scrolling with
+-- The Gear category, before Blizzard's stat categories and scrolling with
 -- them (asked for 2026-11-09, in place of a block under the stats): a head
 -- and rows as SuuUI skins Blizzard's (SkinStatRow): your item level
 -- (hovered: the average over all you carry), then, while the Durability
@@ -459,6 +459,8 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     statsScroll: ScrollArea? = nil
     statsBox: Frame? = nil
     gear: Gear? = nil
+    -- where Blizzard's list starts in the area (under the category)
+    statsTop: number? = nil
     -- a stat row's rule (stat rows have it shown, heads hidden)
     readonly statRules: { [Frame]: Texture } = {}
     -- the right pane toggle's chevron
@@ -976,16 +978,18 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self:UpdateSlots()
     end
 
-    -- The stats scroll as SuuUI's area, so the Gear category can follow
+    -- The stats scroll as SuuUI's area, so the Gear category can scroll with
     -- Blizzard's categories. Blizzard's list (its ScrollBox) goes into the
     -- area, taller than all its rows ever are, so it never scrolls itself
-    -- and makes a row for every stat (it makes rows for what fits); the
-    -- category hangs under its last row, and the area scrolls both.
+    -- and makes a row for every stat (it makes rows for what fits); it
+    -- hangs under the category, and the area scrolls both.
     -- Nothing of Blizzard's is called or written: Blizzard's own code fills
     -- the list (a row or category added there tainted its update, and its
     -- health and power bars then failed on secret values); SuuUI reads the
     -- list's height from its view after each update. The box is resized
     -- here once; its own size handler runs in the client's layout pass.
+    -- The category comes first (asked for 2026-11-09), the list under it:
+    -- the list moves only when the category's height changes.
     function BuildGear()
         local pane = frame("CharacterStatsPaneScrollBox")
         local box = frames.asFrame(tbl.field(pane, "ScrollBox"))
@@ -1013,6 +1017,8 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         local gear = Gear.new(child)
         gear:SetFrameLevel(box:GetFrameLevel() + 20)
+        gear:SetPoint("TOPLEFT", child, "TOPLEFT")
+        gear:SetPoint("TOPRIGHT", child, "TOPRIGHT")
         self.statsScroll, self.statsBox, self.gear = scroll, box, gear
         -- after each of the list's updates: its height read again
         -- the item level read again as the stats show
@@ -1028,20 +1034,25 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self:FitGear()
     end
 
-    -- Blizzard's list's height (its rows and padding, as its view counted
-    -- them in its last update; read, never asked for: calling its methods
-    -- runs them tainted), the category under it, the area's range both.
+    -- The category on top, Blizzard's list under it (moved only when the
+    -- category's height changed), the area's range both: the list's height
+    -- its rows and padding, as its view counted them in its last update
+    -- (read, never asked for: calling its methods runs them tainted).
     function FitGear()
-        local scroll, gear = self.statsScroll, self.gear
-        if not (scroll and gear) then
+        local scroll, gear, box = self.statsScroll, self.gear, self.statsBox
+        if not (scroll and gear and box) then
             return
         end
-        local extent = secret.asNumber(tbl.field(self.statsBox, "view", "extent")) or 0
+        local extent = secret.asNumber(tbl.field(box, "view", "extent")) or 0
         local child = scroll.child
-        gear:ClearAllPoints()
-        gear:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -extent)
-        gear:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -extent)
-        child:SetHeight(math.max(1, extent + (gear:IsShown() and gear.height or 0)))
+        local top = gear:IsShown() and gear.height or 0
+        if self.statsTop ~= top then
+            self.statsTop = top
+            box:ClearAllPoints()
+            box:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -top)
+            box:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -top)
+        end
+        child:SetHeight(math.max(1, top + extent))
     end
 
     function UpdateGear()
