@@ -162,3 +162,93 @@ export function command2()
     watch("F", D5)
     finish(made, "Anchors probe 2")
 end
+
+-- anchors3 (anchors2: plain Buttons anchored early are placed; in keybind
+-- mode's panel they stay unplaced): SuuUI's panel and stack copied with plain
+-- calls, one change each. G: a panel 320 wide; its body anchored TOPLEFT and
+-- TOPRIGHT, 1x1, its OnSizeChanged setting the panel's height; a Button 55x30
+-- in the body, its OnSizeChanged hooked (as the stack does); shown; on the
+-- next OnUpdate the Button anchored TOPLEFT to the body and the body made 30
+-- high (as the stack's flush does). H: G with a Frame. I: G without the
+-- body's OnSizeChanged. J: G with the OnUpdate's steps done at once.
+-- K: G with the Button's rect asked for before it's anchored. L: G without
+-- the hook on the Button.
+type Case = {
+    name: string,
+    kind: "Frame" | "Button",
+    noFit?: boolean,
+    atOnce?: boolean,
+    askEarly?: boolean,
+    noHook?: boolean,
+}
+
+local function replica(n: number, c: Case, made: Frame[])
+    local P = CreateFrame("Frame", nil, UIParent)
+    P:SetFrameStrata("FULLSCREEN_DIALOG")
+    local tex = P:CreateTexture()
+    tex:SetAllPoints()
+    tex:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    local body = CreateFrame("Frame", nil, P)
+    body:SetPoint("TOPLEFT", 12, -40)
+    body:SetSize(1, 1)
+    P:SetWidth(320)
+    body:SetPoint("TOPRIGHT", -12, -40)
+    if not c.noFit then
+        body:SetScript("OnSizeChanged", function()
+            local _, h = body:GetSize()
+            P:SetHeight(40 + h + 12)
+        end)
+    end
+    P:SetHeight(40 + 1 + 12)
+    local item = CreateFrame(c.kind, nil, body)
+    item:SetSize(55, 30)
+    local t = item:CreateTexture()
+    t:SetAllPoints()
+    t:SetColorTexture(1, 0, 0)
+    if not c.noHook then
+        item:HookScript("OnSizeChanged", function(_: Frame, w: number, h: number)
+            line(("%s item OnSizeChanged %s x %s"):format(c.name, tostring(w), tostring(h)))
+        end)
+    end
+    P:SetPoint("TOPLEFT", 20 + ((n - 1) % 3) * 340, -120 - math.floor((n - 1) / 3) * 160)
+    made[#made + 1] = P
+    P:Show()
+    if c.askEarly then
+        at(c.name, "before anchored", item)
+    end
+    local function place()
+        item:ClearAllPoints()
+        item:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
+        body:SetHeight(30)
+    end
+    if c.atOnce then
+        place()
+        watch(c.name, item)
+        return
+    end
+    local driver = CreateFrame("Frame")
+    driver:SetScript("OnUpdate", function(self: Frame)
+        self:Hide()
+        place()
+        watch(c.name, item)
+    end)
+end
+
+export function command3()
+    wipe(lines)
+    key = "anchors3"
+    line("anchors probe 3 (panel copies) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    local cases: Case[] = {
+        { name = "G", kind = "Button" },
+        { name = "H", kind = "Frame" },
+        { name = "I", kind = "Button", noFit = true },
+        { name = "J", kind = "Button", atOnce = true },
+        { name = "K", kind = "Button", askEarly = true },
+        { name = "L", kind = "Button", noHook = true },
+    }
+    for n, c in ipairs(cases) do
+        replica(n, c, made)
+    end
+    finish(made, "Anchors probe 3")
+end
