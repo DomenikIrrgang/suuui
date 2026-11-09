@@ -11,16 +11,22 @@
 --   D  a box anchored to a sized parent without points; the parent's point set
 --      a frame later
 -- Saved in SuuUIProbe.anchors on /reload; the test frames hide after 3 s.
+-- "/suu probe anchors2" (found by panelanchors2: in keybind mode's panel a
+-- Button stays unplaced where a plain frame gets placed): the same cases with
+-- each box a Button, and E a Button anchored to a parent already placed.
+-- Saved in SuuUIProbe.anchors2.
 
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
 import after from "wowlua:timer"
 
 local lines: string[] = {}
+local key = "anchors"
+local kind: "Frame" | "Button" = "Frame"
 
 local function line(s: string)
     lines[#lines + 1] = s
-    DB.probe.anchors = lines
+    DB.probe[key] = lines
 end
 
 local function at(name: string, when: string, f: Frame)
@@ -30,7 +36,7 @@ end
 
 -- a small coloured box (so it would show if placed)
 local function box(parent: Frame, r: number, g: number, b: number): Frame
-    local f = CreateFrame("Frame", nil, parent)
+    local f = CreateFrame(kind, nil, parent)
     f:SetSize(40, 20)
     local t = f:CreateTexture()
     t:SetAllPoints()
@@ -49,11 +55,7 @@ local function watch(name: string, f: Frame)
     end)
 end
 
-export function command()
-    wipe(lines)
-    line("anchors probe " .. date("%Y-%m-%d %H:%M"))
-    local made: Frame[] = {}
-
+local function run(made: Frame[])
     -- A: anchored before the row and its parent have points
     local P = CreateFrame("Frame", nil, UIParent)
     P:SetSize(200, 30)
@@ -108,11 +110,55 @@ export function command()
         P2:SetPoint("CENTER", -150, 100)
         watch("D", D3)
     end)
+end
 
+local function finish(made: Frame[], name: string)
     after(3, function()
         for _, f in ipairs(made) do
             f:Hide()
         end
-        print("Anchors probe saved: /reload to write it out.")
+        print(name .. " saved: /reload to write it out.")
     end)
+end
+
+export function command()
+    wipe(lines)
+    key = "anchors"
+    kind = "Frame"
+    line("anchors probe " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    run(made)
+    finish(made, "Anchors probe")
+end
+
+export function command2()
+    wipe(lines)
+    key = "anchors2"
+    kind = "Button"
+    line("anchors probe 2 (Buttons) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    run(made)
+    -- E: a Button anchored to a parent already placed
+    local P3 = CreateFrame("Frame", nil, UIParent)
+    P3:SetSize(100, 50)
+    P3:SetPoint("CENTER", 150, -100)
+    local D4 = box(P3, 1, 0, 1)
+    D4:SetPoint("TOPLEFT", P3, "TOPLEFT")
+    made[#made + 1] = P3
+    watch("E", D4)
+    -- F: as a SuuUI panel's body: anchored TOPLEFT and TOPRIGHT in a placed
+    -- parent, 1x1; the Button anchored to it, then the body's height set
+    local P4 = CreateFrame("Frame", nil, UIParent)
+    P4:SetSize(200, 80)
+    P4:SetPoint("CENTER", -150, -100)
+    local body = CreateFrame("Frame", nil, P4)
+    body:SetPoint("TOPLEFT", P4, "TOPLEFT", 10, -10)
+    body:SetPoint("TOPRIGHT", P4, "TOPRIGHT", -10, -10)
+    body:SetSize(1, 1)
+    local D5 = box(body, 0, 1, 1)
+    D5:SetPoint("TOPLEFT", body, "TOPLEFT")
+    body:SetHeight(30)
+    made[#made + 1] = P4
+    watch("F", D5)
+    finish(made, "Anchors probe 2")
 end
