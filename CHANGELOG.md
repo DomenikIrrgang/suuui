@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Upgrade spell ranks**: when you learn a new rank of a spell, it replaces the rank you had before on all your bars, forms and stances included, and a chat line says what changed. Lower ranks you placed on purpose stay and macros aren't touched. On by default; turn it off under Action bars → Spells.
+
 ## 0.6.27 (2026-11-09)
 
 ### Fixed
