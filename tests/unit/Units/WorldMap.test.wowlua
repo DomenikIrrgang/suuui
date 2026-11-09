@@ -20,7 +20,8 @@ import type PinsPreview from "/Units/WorldMap"
 import SuuUI from "/Core/API"
 import type QuestStarts from "/Data/QuestStarts"
 import type MapPlaces from "/Data/MapPlaces"
-import internal M, SECTION from "/Units/WorldMap"
+import internal M, SECTION, forgetQuests from "/Units/WorldMap"
+import * as lazyData from "/Core/Data"
 import internal M as marks from "/Units/Marks"
 import internal M as conv from "/Units/Convergences"
 import internal M as campsite from "/Units/Campsite"
@@ -189,8 +190,15 @@ local realStarts, realPlaces = SuuUI.QuestStarts, SuuUI.MapPlaces
 
 @beforeEach
 local function data()
+    -- (the real data built, as the map has it after its first open; the
+    -- stand-ins in its place)
+    lazyData.questStarts:Get()
+    lazyData.mapPlaces:Get()
+    lazyData.mapOverlays:Get()
     mock.stub(SuuUI, "QuestStarts", starts)
     mock.stub(SuuUI, "MapPlaces", places)
+    -- (the stand-ins and fakes change between tests without quest events)
+    forgetQuests()
 end
 
 @afterEach
@@ -307,6 +315,55 @@ end
 --------------------------------------------------------------------------------
 -- What's on a map
 --------------------------------------------------------------------------------
+
+@test("each quest is judged once until a quest event; the turned-in list read once")
+local function judgedOnce()
+    local asked = 0
+    mock.fake("C_QuestLog.IsOnQuest", function(_: number): boolean
+        asked = asked + 1
+        return false
+    end)
+    local reads = 0
+    mock.fake("C_QuestLog.GetAllCompletedQuestIDs", function(): number[]
+        reads = reads + 1
+        return {}
+    end)
+    collect()
+    local first = asked
+    expect(first > 0).toBe(true)
+    expect(reads).toBe(1)
+    -- the map drawn again (a pan, a zoom, three times as it opens): nothing read
+    collect()
+    collect()
+    expect(asked).toBe(first)
+    expect(reads).toBe(1)
+    -- a quest accepted: judged again
+    mock.fireEvent("QUEST_LOG_UPDATE")
+    collect()
+    expect(asked).toBe(2 * first)
+    expect(reads).toBe(2)
+    expectNoErrors()
+end
+
+@test("the first open: the map's data built a step a frame, the pins once it's there")
+local function dataFirst()
+    local ready = false
+    mock.stub(M, "DataReady", function(): boolean
+        return ready
+    end)
+    local prepared = mock.spy()
+    mock.stub(M, "PrepareData", prepared)
+    WorldMapFrame:Show()
+    mock.advanceFrames(2)
+    M:Refresh()
+    expect(prepared).toHaveBeenCalled()
+    expect(#(M.items or {})).toBe(0)
+    -- there: drawn
+    ready = true
+    M:Refresh()
+    expect(#(M.items or {}) > 0).toBe(true)
+    expectNoErrors()
+end
 
 @test("quests to pick up: a pin per giver, the best quest's colour, the others listed, a group's bar")
 local function questGivers()

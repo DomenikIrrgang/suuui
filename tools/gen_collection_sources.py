@@ -183,3 +183,7 @@ print('mounts', dict(mountStats))
 print('toys', len(toyList), 'with a source', sum(1 for t in toys.values() if t))
 print('appearance items', len(appearanceItems), dict(itemStats))
 print('npcs', len(npcsUsed), 'objects', len(objsUsed), 'bytes', os.path.getsize(OUT))
+
+# the table built on first use, in steps (tools/lazy_data.py)
+import subprocess
+subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lazy_data.py'), OUT], check=True)

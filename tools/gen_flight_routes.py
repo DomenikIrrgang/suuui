@@ -125,3 +125,7 @@ open(OUT_PATHS, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
 print('gen_flight_routes: %d routes from %d flight masters (%d paths left out, %d points drawn), build %s'
     % (sum(len(v) for v in routes.values()), len(routes), left,
        sum(len(l) for v in paths.values() for _, l in v.values()), BUILD))
+
+# the table built on first use, in steps (tools/lazy_data.py)
+import subprocess
+subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lazy_data.py'), OUT_PATHS], check=True)

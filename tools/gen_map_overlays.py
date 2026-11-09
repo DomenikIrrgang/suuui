@@ -45,3 +45,7 @@ o.append('}')
 o.append('')
 open(OUT, 'w', encoding='utf-8').write('\n'.join(o))
 print('gen_map_overlays: %d overlays on %d maps (%d left out) -> %s' % (total, len(byArt), skipped, OUT))
+
+# the table built on first use, in steps (tools/lazy_data.py)
+import subprocess
+subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lazy_data.py'), OUT], check=True)

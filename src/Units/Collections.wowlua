@@ -40,6 +40,7 @@ import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
+import * as lazyData from "/Core/Data"
 
 -- A secure handler frame (SecureHandler*Template): SetFrameRef from its template.
 type FrameRefs = { SetFrameRef: (self: Frame, id: string, frame: Region) -> () }
@@ -193,6 +194,15 @@ type CardSection = { title: string, lines: string[] }
 
 local function data(): CollectionSources
     return SuuUI.CollectionSources()
+end
+
+-- Forever's toys (the gifts' count at login and on the micro menu): only
+-- the data's first step, not its 2 MB of sources (Core/Data).
+local function toyList(): number[]
+    local t = lazyData.collectionSources:Until(function(c: CollectionSources): boolean
+        return c.toys ~= nil
+    end)
+    return t.toys or {}
 end
 
 -- "Name|Zone|Level|Faction" -> name, zone, level, faction
@@ -2911,13 +2921,13 @@ class CollectionsModule extends Module<{}>
 
     -- How many gifts wait (mounts, pets and toys: what this window opens).
     function GiftCount(): number
-        local n = giftCounts(data().toys)
+        local n = giftCounts(toyList())
         return n.mounts + n.toys + n.pets
     end
 
     -- The counts on the tabs and the micro menu's (SUUUI_GIFTS_CHANGED).
     function UpdateGifts()
-        local n = giftCounts(data().toys)
+        local n = giftCounts(toyList())
         local ui = self.ui
         if ui then
             ui.window:SetTabCount("mounts", n.mounts > 0 and tostring(n.mounts) or nil)

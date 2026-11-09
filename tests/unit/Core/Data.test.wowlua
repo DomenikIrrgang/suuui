@@ -1,0 +1,157 @@
+-- Core/Data: the big data tables built on first use, in steps: all at once
+-- (Get), a step a frame (Prepare, then whoever waited), each step let go
+-- once it ran, an error reported; the shipped tables the same as their
+-- steps make them.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as fault from "/Core/Fault"
+import * as data from "/Core/Data"
+import LazyData from "/Core/Data"
+import expectNoErrors from "../../helpers"
+
+type Parts = { a?: number, b?: number, c?: number }
+
+-- Three steps, each recorded in `log`.
+local function made(log: string[]): LazyData<Parts>
+    return LazyData.new("Test", {
+        function(t: Parts)
+            log[#log + 1] = "a"
+            t.a = 1
+        end,
+        function(t: Parts)
+            log[#log + 1] = "b"
+            t.b = 2
+        end,
+        function(t: Parts)
+            log[#log + 1] = "c"
+            t.c = 3
+        end,
+    })
+end
+
+@test("Get builds every step at once, once; the same table after")
+local function getAll()
+    local log: string[] = {}
+    local d = made(log)
+    expect(d:Ready()).toBe(false)
+    local t = d:Get()
+    expect(t).toEqual({ a = 1, b = 2, c = 3 })
+    expect(log).toEqual({ "a", "b", "c" })
+    expect(d:Ready()).toBe(true)
+    expect(d:Get()).toBe(t)
+    expect(log).toEqual({ "a", "b", "c" })
+end
+
+@test("Prepare builds a step a frame, then tells whoever waited; ready: at once")
+local function prepares()
+    local log: string[] = {}
+    local d = made(log)
+    local done = mock.spy()
+    d:Prepare(done)
+    d:Prepare(done) -- (asked twice: told twice, built once)
+    expect(log).toEqual({})
+    mock.advanceFrames(1)
+    expect(log).toEqual({ "a" })
+    mock.advanceFrames(1)
+    expect(log).toEqual({ "a", "b" })
+    expect(done).never.toHaveBeenCalled()
+    mock.advanceFrames(1)
+    expect(log).toEqual({ "a", "b", "c" })
+    expect(done).toHaveBeenCalledTimes(2)
+    local now = mock.spy()
+    d:Prepare(now)
+    expect(now).toHaveBeenCalledTimes(1)
+    mock.advanceFrames(2)
+    expect(log).toEqual({ "a", "b", "c" })
+    expectNoErrors()
+end
+
+@test("Get while it's being prepared finishes it and tells whoever waited")
+local function getWhilePreparing()
+    local log: string[] = {}
+    local d = made(log)
+    local done = mock.spy()
+    d:Prepare(done)
+    mock.advanceFrames(1)
+    expect(d:Get()).toEqual({ a = 1, b = 2, c = 3 })
+    expect(done).toHaveBeenCalledTimes(1)
+    mock.advanceFrames(2)
+    expect(log).toEqual({ "a", "b", "c" })
+    expect(done).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("Until builds only as far as asked; the rest later")
+local function untilAsked()
+    local log: string[] = {}
+    local d = made(log)
+    local t = d:Until(function(p: Parts): boolean
+        return p.a ~= nil
+    end)
+    expect(t.a).toBe(1)
+    expect(log).toEqual({ "a" })
+    expect(d:Ready()).toBe(false)
+    -- there already: nothing more
+    d:Until(function(p: Parts): boolean
+        return p.a ~= nil
+    end)
+    expect(log).toEqual({ "a" })
+    expect(d:Get()).toEqual({ a = 1, b = 2, c = 3 })
+    -- the shipped collections: the toys' list in the first step
+    local sources = data.collectionSources
+    sources:Until(function(c): boolean
+        return c.toys ~= nil
+    end)
+end
+
+@test("a step that ran is let go: the code that built the table is garbage after")
+local function letsGo()
+    local steps: ((t: Parts) -> ())[] = {
+        function(t: Parts)
+            t.a = 1
+        end,
+        function(t: Parts)
+            t.b = 2
+        end,
+    }
+    local d = LazyData.new("Test", steps)
+    d:Get()
+    expect(next(steps)).toBeNil()
+end
+
+@test("a step that errors while prepared: reported, the rest not built")
+local function stepErrors()
+    local d = LazyData.new("Broken", {
+        function(_: Parts)
+            error("data-step-broken")
+        end,
+        function(t: Parts)
+            t.b = 2
+        end,
+    })
+    d:Prepare()
+    mock.advanceFrames(2)
+    local found = false
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find("data-step-broken", 1, true) then
+            found = true
+        end
+    end
+    expect(found).toBe(true)
+    mock.slash("/suu errors clear")
+    expectNoErrors()
+end
+
+@test("the shipped tables: built on first use, with their data")
+local function shipped()
+    local starts = data.questStarts:Get()
+    expect(data.questStarts:Ready()).toBe(true)
+    expect(starts.quests[2] ~= nil).toBe(true)
+    expect(next(starts.maps) ~= nil).toBe(true)
+    expect(next(data.mapPlaces:Get().npcs) ~= nil).toBe(true)
+    expect(#data.collectionSources:Get().toys > 0).toBe(true)
+    expect(next(data.recipeSources:Get()) ~= nil).toBe(true)
+    expect(next(data.flightPaths:Get()) ~= nil).toBe(true)
+    expect(next(data.mapOverlays:Get()) ~= nil).toBe(true)
+end
