@@ -438,6 +438,19 @@ local function headHeight(): number
     return S["space-4"] + 1 + S["space-3"] + T.type.caption.lineHeight + S["space-3"]
 end
 
+-- A section head's label and meta (LayoutSlots).
+local function headText(h: SectionHead, sct: SlotSection)
+    if sct.note and not sct.label then
+        h.label:SetValue(sct.note)
+        h.label:SetColor("ink-muted")
+        h.meta:SetValue("")
+    else
+        h.label:SetValue(sct.label or "")
+        h.label:SetColor("gilt-text")
+        h.meta:SetValue(sct.meta or sct.note or "")
+    end
+end
+
 local function sectionHead(inv: Inventory, i: number): SectionHead
     local heads: SectionHead[] = inv.heads or {}
     inv.heads = heads
@@ -516,6 +529,9 @@ export class Inventory extends Panel
     action: SuuButton? = nil
     showResults: boolean? = nil
     heads: SectionHead[]? = nil
+    -- the buttons LayoutSlots last laid out (whoever laid them out knows
+    -- whether its layout still shows)
+    laidOut: Region[]? = nil
     onClose: (() -> ())? = nil
     who: Select<string>? = nil
     pickRow: Frame? = nil
@@ -619,15 +635,7 @@ export class Inventory extends Panel
                 h:ClearAllPoints()
                 h:SetPoint("TOPLEFT", self.grid, "TOPLEFT", 0, -y)
                 h:SetSize(w, headH)
-                if sct.note and not sct.label then
-                    h.label:SetValue(sct.note)
-                    h.label:SetColor("ink-muted")
-                    h.meta:SetValue("")
-                else
-                    h.label:SetValue(sct.label or "")
-                    h.label:SetColor("gilt-text")
-                    h.meta:SetValue(sct.meta or sct.note or "")
-                end
+                headText(h, sct)
                 h:Show()
                 y = y + headH
             end
@@ -650,6 +658,24 @@ export class Inventory extends Panel
         local h = col > 0 and (y + SLOT) or (y - GAP)
         self.grid:SetHeight(math.max(SLOT, h))
         self:FitBody()
+        self.laidOut = buttons :: Region[]
+    end
+
+    -- The buttons the last LayoutSlots laid out (nil: none yet).
+    function LaidOut(): Region[]?
+        return self.laidOut
+    end
+
+    -- The section heads' words again, for sections in the places the last
+    -- LayoutSlots gave them (the same sections, new counts): nothing moves.
+    function SetSectionMetas(sections: SlotSection[]?)
+        local heads = self.heads or {}
+        for i, sct in ipairs(sections or {}) do
+            local h = heads[i]
+            if h then
+                headText(h, sct)
+            end
+        end
     end
 
     function SetMeta(text: string?)
