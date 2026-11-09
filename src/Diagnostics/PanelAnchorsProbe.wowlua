@@ -1,0 +1,147 @@
+-- Diagnostics/PanelAnchorsProbe.wowlua
+-- "/suu probe panelanchors": what left keybind mode's Done button unplaced on
+-- its first open (2026-11-09: anchored to the panel's body, shown, no rect a
+-- second later)? "/suu probe anchors" showed plain frames anchored before
+-- their parent had a place get placed, so the cause is in the panel's build.
+-- With the layouts' re-anchoring off (UI/Layout setReanchor: the fix that
+-- hides it), builds the keybind panel six ways and records each panel's
+-- button (or box) now, a frame later and a second later (nil: no place):
+--   1 as keybind mode: a titled panel 320 wide, a stack (autoSize height) in
+--     its body with a wrapped text, a caption and a button, shown at once
+--   2 as 1 with a plain frame instead of the button
+--   3 as 1 with only the button (no texts)
+--   4 as 1 with the stack not sizing the body (the body a fixed 120 high)
+--   5 as 1 with a panel of fixed height (it doesn't fit its body)
+--   6 as 1 built hidden and shown a frame later
+-- Saved in SuuUIProbe.panelAnchors on /reload; the panels hide after 3 s
+-- and re-anchoring comes back on.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import root from "/Core/Root"
+import after from "wowlua:timer"
+import tokens as T from "/Core/Tokens"
+import text from "/UI/Text"
+import panel as uiPanel, Panel from "/UI/Panel"
+import button as uiButton from "/UI/Controls"
+import stack as layoutStack, setReanchor from "/UI/Layout"
+
+const S = T.space
+
+local lines: string[] = {}
+
+local function line(s: string)
+    lines[#lines + 1] = s
+    DB.probe.panelAnchors = lines
+end
+
+local function rect(f: Region): string
+    local l, b, w, h = f:GetRect()
+    return ("%sx%s at %s,%s"):format(tostring(w), tostring(h), tostring(l), tostring(b))
+end
+
+local function at(n: number, when: string, p: Panel, item: Region)
+    local point, _, relPoint, x, y = item:GetPoint(1)
+    line(
+        ("%d %s: item %s shown=%s visible=%s point=%s>%s %s,%s · body %s · panel %s"):format(
+            n,
+            when,
+            rect(item),
+            tostring(item:IsShown()),
+            tostring(item:IsVisible()),
+            tostring(point),
+            tostring(relPoint),
+            tostring(x),
+            tostring(y),
+            rect(p.body),
+            rect(p)
+        )
+    )
+end
+
+local function watch(n: number, p: Panel, item: Region)
+    at(n, "now", p, item)
+    after(0, function()
+        at(n, "next frame", p, item)
+    end)
+    after(1, function()
+        at(n, "1s", p, item)
+    end)
+end
+
+type Variant = { plain?: boolean, onlyButton?: boolean, fixedBody?: boolean, fixedPanel?: boolean }
+
+-- One panel built as keybind mode builds its own, with the variant's change.
+local function build(n: number, v: Variant): (Panel, Region)
+    local p = uiPanel(root, { title = "Probe " .. n, width = 320, height = v.fixedPanel and 170 or nil })
+    p:SetFrameStrata("FULLSCREEN_DIALOG")
+    -- side by side across the screen's top half
+    p:SetPoint("TOPLEFT", root, "TOPLEFT", 20 + ((n - 1) % 3) * 340, -120 - math.floor((n - 1) / 3) * 220)
+    p:EnableMouse(true)
+    local s = layoutStack(p.body, { gap = S["space-4"], autoSize = not v.fixedBody and "height" or false })
+    if v.fixedBody then
+        p.body:SetHeight(120)
+    end
+    if not v.onlyButton then
+        local hint = text(p.body, "body", "ink")
+        hint:SetWordWrap(true)
+        hint:SetJustifyH("LEFT")
+        hint:SetFixedWidth(296)
+        hint:SetValue("Hover a button and press a key, a mouse button or the wheel. Shift, Ctrl and Alt combine.")
+        s:Add(hint)
+        local status = text(p.body, "caption", "ink-muted")
+        status:SetWordWrap(true)
+        status:SetJustifyH("LEFT")
+        status:SetFixedWidth(296)
+        status:SetValue(" ")
+        s:Add(status)
+    end
+    local item: Region
+    if v.plain then
+        local f = CreateFrame("Frame", nil, p.body)
+        f:SetSize(55, 30)
+        local t = f:CreateTexture()
+        t:SetAllPoints()
+        t:SetColorTexture(1, 0, 0)
+        item = f
+    else
+        item = uiButton(p.body, { text = "Done", variant = "primary" })
+    end
+    s:Add(item)
+    return p, item
+end
+
+export function command()
+    wipe(lines)
+    line("panel anchors probe " .. date("%Y-%m-%d %H:%M"))
+    setReanchor(false)
+    local made: Panel[] = {}
+    local variants: Variant[] = {
+        {},
+        { plain = true },
+        { onlyButton = true },
+        { fixedBody = true },
+        { fixedPanel = true },
+    }
+    for n, v in ipairs(variants) do
+        local p, item = build(n, v)
+        made[#made + 1] = p
+        p:Show()
+        watch(n, p, item)
+    end
+    -- 6: built hidden, shown a frame later
+    local p6, item6 = build(6, {})
+    made[#made + 1] = p6
+    p6:Hide()
+    after(0, function()
+        p6:Show()
+        watch(6, p6, item6)
+    end)
+    after(3, function()
+        for _, p in ipairs(made) do
+            p:Hide()
+        end
+        setReanchor(true)
+        print("Panel anchors probe saved: /reload to write it out.")
+    end)
+end
