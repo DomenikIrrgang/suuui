@@ -4,7 +4,8 @@
 
 ### Fixed
 
-- Keybind mode: the Done button shows the first time you open it too. SuuUI's layouts place their contents once more after they grow, as the game leaves a frame unplaced that was anchored before its parent had a place.
+- Keybind mode: the Done button shows the first time you open it too.
+- The spellbook no longer lists a talent's trainer ranks as coming up when you haven't taken the talent, and numbers them from Rank 2 when you have (Light's Vigil showed "Rank 1, Level 50").
 
 ## 0.6.26 (2026-11-08)
 

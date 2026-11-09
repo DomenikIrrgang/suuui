@@ -771,6 +771,14 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             end
             table.insert(list, t)
         end
+        -- A talent's rank 1 is the talent; the trainer teaches the ranks after
+        -- it, and only to those who took it (Light's Vigil showed as "Rank 1,
+        -- Level 50" to a paladin without it: found in game).
+        local talents: { [string]: boolean } = {}
+        local _, class = UnitClass("player")
+        for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class :: string) or {}) do
+            talents[t.name] = true
+        end
         local out: BookEntry[], level = {}, levelArg or UnitLevel("player") or 1
         for _, name in ipairs(order) do
             local list = assert(byName[name])
@@ -778,18 +786,24 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 return a.level < b.level
             end)
             local have = known[name] ~= nil
+            local talent = talents[name] == true
+            if talent and not have then
+                list = {}
+            end
             local k: Known = known[name] or { levels = {}, maxRank = 0, maxLevel = 0 }
-            local ranked = k.ranked or #list > 1
-            local next = k.maxRank
+            local ranked = k.ranked or talent or #list > 1
+            local first = talent and 1 or 0
+            local next = math.max(k.maxRank, first)
             for i, t in ipairs(list) do
                 -- yours: a spell without ranks you know (a passive such as Parry:
                 -- the game gives it no level, found in game); a rank at or below
                 -- your best one's level (the game drops lower ranks from the book
                 -- once a higher one is learned: Devotion Aura Rank 3 alone at
                 -- level 21 made the level 1 and 10 ranks "Rank 4 and 5"); with no
-                -- levels to go by, as many ranks as your best one's number
+                -- levels to go by, as many ranks as your best one's number (a
+                -- talent's trainer ranks start at 2)
                 local mine = (have and not k.ranked) or k.levels[t.level] or t.level <= k.maxLevel or
-                    (k.maxLevel == 0 and i <= k.maxRank)
+                    (k.maxLevel == 0 and i + first <= k.maxRank)
                 if not mine then
                     next = next + 1
                     local trainable = t.level <= level
