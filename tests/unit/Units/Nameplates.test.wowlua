@@ -12,7 +12,7 @@ import SuuUI from "/Core/API"
 import * as tbl from "wowlua:table"
 import * as errors from "wowlua:errors"
 import * as secret from "wowlua:secret"
-import internal M, byUnit, SECTION from "/Units/Nameplates"
+import internal M, byUnit, SECTION, pool from "/Units/Nameplates"
 import type Nameplate from "/Units/Nameplates"
 import type UnitApi from "/UI/UnitFrame"
 import migrations as settingMigrations from "/Core/Settings"
@@ -327,6 +327,100 @@ local function released()
     expect(f:IsShown()).toBe(false)
     -- a plate SuuUI never laid: nothing to do
     M:OnPlateRemoved("nameplate40")
+end
+
+@test("the pool empty in a fight: one plate made a frame, the others a frame each")
+local function oneAFrame()
+    local boar = mock.spawnUnit({ name = "Old Boar", level = 10, reaction = "hostile", distance = 11 })
+    -- the pool emptied (a big pull took every plate made ahead)
+    local kept: Nameplate[] = {}
+    while #pool > 0 do
+        kept[#kept + 1] = assert(table.remove(pool))
+    end
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    wolf:showNameplate()
+    bear:showNameplate()
+    boar:showNameplate()
+    local function laid(): number
+        local n = 0
+        for _, u in ipairs({ wolf, bear, boar }) do
+            if byUnit[u:token() :: string] then
+                n = n + 1
+            end
+        end
+        return n
+    end
+    expect(laid()).toBe(1)
+    expect(#M.waiting).toBe(2)
+    mock.advanceFrames(1)
+    expect(laid()).toBe(2)
+    mock.advanceFrames(1)
+    expect(laid()).toBe(3)
+    expect(#M.waiting).toBe(0)
+    -- one gone while waiting: dropped
+    for _, u in ipairs({ wolf, bear, boar }) do
+        u:hideNameplate()
+    end
+    mock.advanceFrames(1)
+    while #pool > 0 do
+        kept[#kept + 1] = assert(table.remove(pool))
+    end
+    wolf:showNameplate()
+    bear:showNameplate()
+    expect(#M.waiting).toBe(1)
+    bear:hideNameplate()
+    expect(#M.waiting).toBe(0)
+    mock.advanceFrames(2)
+    expect(byUnit[bear:token() or "none"]).toBeNil()
+    mock.player:leaveCombat()
+    boar:despawn()
+    for _, f in ipairs(kept) do
+        pool[#pool + 1] = f
+    end
+    expectNoErrors()
+end
+
+@test(
+    "a plate's debuffs: only the group it shows is in the engine (an enemy's yours, a friendly one's what you can remove)"
+)
+local function lazyGroups()
+    local f = plateOf(wolf)
+    local auras = assert(f.auras)
+    expect(assert(auras.groups.mine).added).toBe(true)
+    expect(assert(auras.groups.removable).added).toBeFalsy()
+    expectNoErrors()
+end
+
+@test("a new target restyles only the plates whose look changed")
+local function targetChangedOnly()
+    local boar = mock.spawnUnit({ name = "Old Boar", level = 10, reaction = "hostile", distance = 11 })
+    local f, b, c = plateOf(wolf), plateOf(bear), plateOf(boar)
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    local borders = mock.spy(c.UpdateBorder)
+    mock.stub(c, "UpdateBorder", borders)
+    mock.player:target(bear)
+    mock.advanceFrames(1)
+    -- the boar stays dimmed: nothing for it
+    expect(borders).never.toHaveBeenCalled()
+    expect(c:GetAlpha()).toBeCloseTo(T.opacity["opacity-plate"])
+    expect(b.isTarget).toBe(true)
+    expect(f.isTarget).toBe(false)
+    expect(f:GetAlpha()).toBeCloseTo(T.opacity["opacity-plate"])
+    -- no target: every plate in full again (its border as it was)
+    mock.player:target(nil)
+    mock.advanceFrames(1)
+    expect(borders).never.toHaveBeenCalled()
+    expect(c:GetAlpha()).toBe(1)
+    -- the boar chosen: its border
+    mock.player:target(boar)
+    mock.advanceFrames(1)
+    expect(borders).toHaveBeenCalledTimes(1)
+    expect(c.isTarget).toBe(true)
+    boar:hideNameplate()
+    boar:despawn()
+    expectNoErrors()
 end
 
 @test("the game's nameplate settings: full alpha and scale; none at all; friendly players and NPCs in the open world")

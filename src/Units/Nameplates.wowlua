@@ -331,6 +331,8 @@ export class Nameplate extends Frame
     ghostTimer: TimerHandle? = nil
     state: string? = nil
     isTarget: boolean = false
+    -- dimmed for another target (UpdateTarget; nil: not drawn yet)
+    dimmed: boolean? = nil
 
     constructor(parent: Frame, api: UnitApi?)
         super(nil, parent)
@@ -435,6 +437,10 @@ export class Nameplate extends Frame
             spacing = S["space-1"],
             anchor = "BOTTOMLEFT",
             growth = { "RIGHT", "UP" },
+            -- a group joins the engine with its first count: an enemy's plate
+            -- never makes the removable group's buttons, a friendly one never
+            -- yours (the engine makes ten buttons a group up front)
+            lazy = true,
             groups = {
                 {
                     key = "mine",
@@ -730,16 +736,25 @@ export class Nameplate extends Frame
         self.glow:SetShown(self.state == "danger")
     end
 
-    -- Your target at full opacity with an ink border; with a target, the rest dim.
-    function UpdateTarget()
+    -- Your target at full opacity with an ink border; with a target, the rest
+    -- dim. `changedOnly` (a new target): nothing for a plate whose look stays.
+    function UpdateTarget(changedOnly: boolean?)
         local A, u = self.api, self.unit
         if not u then
             return
         end
-        self.isTarget = secret.asBoolean(A.UnitIsUnit(u, "target")) == true
-        local dim = M:Get("dimOthers") and not self.isTarget and (self.preview or UnitExists("target"))
+        local isTarget = secret.asBoolean(A.UnitIsUnit(u, "target")) == true
+        local dim = (M:Get("dimOthers") and not isTarget and (self.preview or UnitExists("target"))) and true or false
+        if changedOnly and isTarget == self.isTarget and dim == self.dimmed then
+            return
+        end
+        -- (dimmed or not: the border stays)
+        local border = not changedOnly or isTarget ~= self.isTarget
+        self.isTarget, self.dimmed = isTarget, dim
         self:SetAlpha(dim and T.opacity["opacity-plate"] or 1)
-        self:UpdateBorder()
+        if border then
+            self:UpdateBorder()
+        end
     end
 
     function UpdateRaidMarker()
@@ -799,14 +814,29 @@ local pool: Nameplate[] = {}
 
 -- Plates are made ahead (an aura container is dear: a plate built while
 -- they pour in took 6.8 ms, /suu perf): POOL ready out of combat, topped up
--- one a frame while the pool runs low.
-local POOL, POOL_LOW = 24, 8
+-- one a frame while the pool runs low. Never more than one plate is made in
+-- a frame: with the pool empty (a big pull), the rest wait a frame each
+-- (the module's queue).
+-- (32: a pull of thirty takes no plate made in the fight; the debuffs' lazy
+-- groups made a plate light enough for eight more)
+local POOL, POOL_LOW = 32, 8
+-- after a fight: a moment before topping the pool up (the fight's end has
+-- its own work)
+local REFILL_DELAY = 1
 local filling = false
+-- when the last plate was made (GetTime: one frame's)
+local builtAt: number? = nil
 
 local function newPlate(): Nameplate
+    builtAt = GetTime()
     local f = Nameplate.new(UIParent)
     f:BuildAuras()
     return f
+end
+
+-- Whether a plate was made in this frame already.
+local function builtThisFrame(): boolean
+    return builtAt == GetTime()
 end
 
 local function fill()
@@ -819,16 +849,26 @@ local function fill()
             filling = false
             return
         end
-        local f = newPlate()
-        f:Hide()
-        pool[#pool + 1] = f
+        if not builtThisFrame() then
+            local f = newPlate()
+            f:Hide()
+            pool[#pool + 1] = f
+        end
         after(0, step)
     end
     after(0, step)
 end
 
-local function acquire(): Nameplate
-    local f = table.remove(pool) or newPlate()
+-- A plate from the pool, or a new one; nil when the pool is empty and a
+-- plate was made in this frame already (the caller waits a frame).
+local function acquire(): Nameplate?
+    local f = table.remove(pool)
+    if not f then
+        if builtThisFrame() then
+            return nil
+        end
+        f = newPlate()
+    end
     if #pool < POOL_LOW then
         fill()
     end
@@ -1236,6 +1276,8 @@ local SECTION: SettingsSection = {
 class NameplatesModule extends Module<typeof(DEFAULTS)>
     -- a plate that read as friendly, looked at once more
     readonly recheck: { [string]: boolean } = {}
+    -- units waiting for a plate (none in the pool, one made this frame)
+    readonly waiting: string[] = {}
     previewView: Frame? = nil
     previewPlates: Nameplate[] = {}
 
@@ -1321,8 +1363,13 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         if uf and uf:IsForbidden() then
             return
         end
-        hideBlizzard(uf)
         local f = acquire()
+        if not f then
+            -- none left, one made this frame already: next frame
+            self:Queue(unit)
+            return
+        end
+        hideBlizzard(uf)
         f.unit, f.friendly = unit, friendly
         questCache[unit] = nil
         byUnit[unit] = f
@@ -1349,8 +1396,44 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         f:Show()
     end
 
+    -- A unit waiting for a plate: one more made each frame, in the order
+    -- they came; one gone meanwhile is dropped.
+    function Queue(unit: string)
+        local waiting = self.waiting
+        for _, u in ipairs(waiting) do
+            if u == unit then
+                return
+            end
+        end
+        waiting[#waiting + 1] = unit
+        if #waiting == 1 then
+            self:NextWaiting()
+        end
+    end
+
+    function NextWaiting()
+        after(0, function()
+            local unit = table.remove(self.waiting, 1)
+            if not unit then
+                return
+            end
+            if self:IsEnabled() and UnitExists(unit) and not byUnit[unit] then
+                self:OnPlateAdded(unit)
+            end
+            if #self.waiting > 0 then
+                self:NextWaiting()
+            end
+        end)
+    end
+
     function OnPlateRemoved(unit: string)
         questCache[unit] = nil
+        for i, u in ipairs(self.waiting) do
+            if u == unit then
+                table.remove(self.waiting, i)
+                break
+            end
+        end
         local f = byUnit[unit]
         if f then
             byUnit[unit] = nil
@@ -1671,9 +1754,11 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             fill()
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            if #pool < POOL then
-                fill()
-            end
+            after(REFILL_DELAY, function()
+                if self:IsEnabled() and #pool < POOL then
+                    fill()
+                end
+            end)
         end)
         -- plates already up (a reload next to mobs)
         for i = 1, 40 do
@@ -1690,7 +1775,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
             self:ForEach(function(f: Nameplate)
-                f:UpdateTarget()
+                f:UpdateTarget(true)
             end)
         end)
         self:OnGameEvent("RAID_TARGET_UPDATE", function()
