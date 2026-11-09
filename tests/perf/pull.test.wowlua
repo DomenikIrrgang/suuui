@@ -1,0 +1,158 @@
+-- Perf scenario: pulling a group. Twelve hostile mobs come into view (their
+-- nameplates appear one a frame), all attack, the player's debuffs land on
+-- them, threat moves between the player and a party member, the target
+-- switches every second, area hits, and they die one after the other (the
+-- plates go). Then a second wave of twelve (the plates reused), and a big
+-- pull of thirty: more plates than the pool holds ready, so plates are built
+-- in combat.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local wave: mock.MockUnit[] = {}
+local mate: mock.MockUnit? = nil
+
+local function spawnWave(prefix: string, count: number): mock.MockUnit[]
+    local out: mock.MockUnit[] = {}
+    for i = 1, count do
+        out[i] = mock.spawnUnit({
+            name = prefix .. " " .. i,
+            level = 60,
+            reaction = "hostile",
+            health = 20000,
+            healthMax = 20000,
+            creatureType = "Humanoid",
+            distance = 6 + i % 20,
+        })
+    end
+    return out
+end
+
+@if(features.perf)
+@test("setup: login, a party member, warm-up")
+local function setup()
+    local m = mock.spawnUnit({
+        name = "Perf Tank",
+        player = true,
+        class = "PALADIN",
+        level = 60,
+        reaction = "friendly",
+        health = 5000,
+        healthMax = 5000,
+    })
+    m:setRole("TANK")
+    mock.group:add(m)
+    mate = m
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+-- One wave: plates in, the fight, the deaths.
+local function fightWave(prefix: string, count: number)
+    local MOBS = count
+    local mobs = spawnWave(prefix, count)
+    wave = mobs
+    local rnd = perf.random(7)
+    local dead: { [number]: boolean } = {}
+    local aura: { [number]: number } = {}
+    perf.run(160, function(n: number)
+        -- the plates come in, one a frame
+        if n <= MOBS then
+            mobs[n]:showNameplate()
+            mobs[n]:setThreat(10 * n)
+            return
+        end
+        if n == MOBS + 1 then
+            mock.player:target(mobs[1])
+            mock.player:startAttack()
+        end
+        -- each living mob swings at the tank or the player every 2 s
+        for i = 1, MOBS do
+            if not dead[i] and (n + i * 11) % 120 == 0 then
+                local victim = (i % 3 == 0) and mock.player or (mate :: mock.MockUnit)
+                mobs[i]:swing(victim, 150)
+            end
+        end
+        -- threat churn: a mob's list changes every 3 frames
+        if n % 3 == 0 then
+            local i = rnd(MOBS)
+            if not dead[i] then
+                mobs[i]:setThreat(100 + n, (n % 2 == 0) and mate or nil)
+            end
+        end
+        -- target switch every second
+        if n % 60 == 0 then
+            local i = rnd(MOBS)
+            if not dead[i] then
+                mock.player:target(mobs[i])
+            end
+        end
+        -- the player's debuff (Rend) on a mob every 0.5 s, refreshed
+        if n % 30 == 0 then
+            local i = rnd(MOBS)
+            if not dead[i] then
+                local old = aura[i]
+                if old then
+                    mobs[i]:removeAura(old)
+                end
+                aura[i] = mobs[i]:applyAura({
+                    spellId = 772,
+                    name = "Rend",
+                    icon = 132155,
+                    duration = 21,
+                    harmful = true,
+                    source = "player",
+                })
+            end
+        end
+        -- an area hit (Whirlwind, Thunder Clap) every 1.5 s on four mobs
+        if n % 90 == 0 then
+            for _ = 1, 4 do
+                local i = rnd(MOBS)
+                if not dead[i] then
+                    mock.player:hit(mobs[i], 1500, { spell = 1680 })
+                end
+            end
+        end
+        -- from 1 s on, mobs die (all by the phase's end): their plates go
+        local every = MOBS > 12 and 3 or 8
+        if n > 60 and n % every == 0 then
+            local i = (n - 60) // every
+            if i >= 1 and i <= MOBS and not dead[i] then
+                dead[i] = true
+                mobs[i]:kill({ by = mock.player })
+                mobs[i]:hideNameplate()
+            end
+        end
+    end)
+end
+
+@if(features.perf)
+@test("first wave")
+local function firstWave()
+    mock.player:enterCombat()
+    fightWave("Perf Raider", 12)
+end
+
+@if(features.perf)
+@test("second wave")
+local function secondWave()
+    fightWave("Perf Brute", 12)
+    for _, m in ipairs(wave) do
+        m:despawn()
+    end
+end
+
+@if(features.perf)
+@test("big pull: thirty")
+local function bigPull()
+    fightWave("Perf Grunt", 30)
+    for _, m in ipairs(wave) do
+        m:despawn()
+    end
+    mock.player:leaveCombat()
+end

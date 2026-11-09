@@ -1,0 +1,85 @@
+-- Perf scenario: travelling. Running across zones (a zone change every two
+-- seconds, sub-zones in between, the minimap and the map position moving),
+-- quests in the log with their objectives moving (the tracker), mounting and
+-- dismounting.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const ZONES = {
+    { mapID = 1429, zone = "Elwynn Forest", subZone = "Goldshire" },
+    { mapID = 1436, zone = "Westfall", subZone = "Sentinel Hill" },
+    { mapID = 1433, zone = "Redridge Mountains", subZone = "Lakeshire" },
+    { mapID = 1431, zone = "Duskwood", subZone = "Darkshire" },
+}
+const QUESTS = 10
+
+@if(features.perf)
+@test("setup: login, quests in the log")
+local function setup()
+    for i = 1, QUESTS do
+        local id = 9000 + i
+        local giver = mock.spawnUnit({ name = "Perf Giver " .. i, level = 30, reaction = "friendly", distance = 3 })
+        mock.defineQuest(id, {
+            title = "Perf Quest " .. i,
+            text = "Go, $N.",
+            objective = "Slay boars.",
+            giver = giver,
+            level = 58,
+            header = ZONES[(i - 1) % #ZONES + 1].zone,
+            objectives = { { text = "Perf Boar slain", required = 10 } },
+        })
+        mock.player:interact(giver)
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+        AcceptQuest()
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+    end
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("running through zones")
+local function running()
+    local z = 1
+    perf.run(480, function(n: number)
+        if n == 1 then
+            mock.player:setMoving(true)
+        end
+        -- the position moves every frame
+        local zone = ZONES[z]
+        mock.moveTo({
+            mapID = zone.mapID,
+            zone = zone.zone,
+            subZone = zone.subZone,
+            x = 0.3 + (n % 120) / 400,
+            y = 0.5,
+        })
+        -- a new zone every 2 s
+        if n % 120 == 0 then
+            z = z % #ZONES + 1
+        end
+        -- a quest objective moves every second
+        if n % 60 == 30 then
+            local q = (n // 60) % QUESTS + 1
+            mock.fireEvent("QUEST_LOG_UPDATE")
+            mock.fireUnitEvent("UNIT_QUEST_LOG_CHANGED", "player")
+            mock.fireEvent("QUEST_WATCH_UPDATE", 9000 + q)
+        end
+        -- mount at 2 s, dismount at 6 s
+        if n == 120 then
+            mock.player:applyAura({ spellId = 23229, name = "Swift Brown Steed", icon = 132261, duration = 0 })
+            mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+        end
+        if n == 360 then
+            mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+        end
+    end)
+    mock.player:setMoving(false)
+end

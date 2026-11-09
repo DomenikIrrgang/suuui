@@ -1,0 +1,86 @@
+-- Perf scenario: what SuuUI's data holds in memory. The emulator's memory
+-- count is the whole client's (Blizzard's UI too), so the shipped data
+-- tables are sized here by walking them, as Lua 5.1 lays them out on a
+-- 64-bit client: a table 56 bytes, 16 per array slot, 40 per hash slot (a
+-- power of two), a string 25 bytes and its length, counted once. An
+-- estimate, but the same every run: it moves only when the data does.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as perf from "./util"
+import auraCatalog from "/Data/AuraCatalog"
+import collectionSources from "/Data/CollectionSources"
+import defensives from "/Data/Defensives"
+import flightPaths from "/Data/FlightPaths"
+import flightRoutes from "/Data/FlightRoutes"
+import instanceLevels from "/Data/InstanceLevels"
+import mapOverlays from "/Data/MapOverlays"
+import mapPlaces from "/Data/MapPlaces"
+import questStarts from "/Data/QuestStarts"
+import recipeSources from "/Data/RecipeSources"
+import classTalents from "/Data/Talents"
+import cooldownPresets from "/Data/Presets"
+import trainerSpells from "/Data/Trainer"
+
+config({ profile = "perf" })
+
+local function nextPow2(n: number): number
+    local p = 1
+    while p < n do
+        p = p * 2
+    end
+    return p
+end
+
+-- The bytes a value holds that `seen` hasn't counted yet.
+local function sizeOf(v: unknown, seen: { [unknown]: boolean }): number
+    if type(v) == "string" then
+        if seen[v] then
+            return 0
+        end
+        seen[v] = true
+        return 25 + #(v :: string)
+    end
+    if type(v) ~= "table" or seen[v] then
+        return 0
+    end
+    seen[v] = true
+    local t = v :: { [unknown]: unknown }
+    local array = #t
+    local hash = 0
+    local bytes = 56
+    for k, val in pairs(t) do
+        if not (type(k) == "number" and (k :: number) >= 1 and (k :: number) <= array and (k :: number) % 1 == 0) then
+            hash += 1
+        end
+        bytes += sizeOf(k, seen) + sizeOf(val, seen)
+    end
+    bytes += 16 * array
+    if hash > 0 then
+        bytes += 40 * nextPow2(hash)
+    end
+    return bytes
+end
+
+local function kbOf(v: unknown): number
+    return sizeOf(v, {}) / 1024
+end
+
+@if(features.perf)
+@test("setup: the data's size")
+local function dataSize()
+    perf.record("data QuestStarts", { kb = kbOf(questStarts) })
+    perf.record("data CollectionSources", { kb = kbOf(collectionSources) })
+    perf.record("data RecipeSources", { kb = kbOf(recipeSources) })
+    perf.record("data MapPlaces", { kb = kbOf(mapPlaces) })
+    perf.record("data FlightPaths", { kb = kbOf(flightPaths) })
+    perf.record("data FlightRoutes", { kb = kbOf(flightRoutes) })
+    perf.record("data MapOverlays", { kb = kbOf(mapOverlays) })
+    perf.record("data AuraCatalog", { kb = kbOf(auraCatalog) })
+    perf.record("data Talents", { kb = kbOf(classTalents) })
+    perf.record("data InstanceLevels", { kb = kbOf(instanceLevels) })
+    perf.record("data Defensives", { kb = kbOf(defensives) })
+    perf.record("data Presets (your class)", { kb = kbOf(cooldownPresets) })
+    perf.record("data Trainer (your class)", { kb = kbOf(trainerSpells) })
+    perf.record("saved SuuUIDB", { kb = kbOf(_G.SuuUIDB) })
+end

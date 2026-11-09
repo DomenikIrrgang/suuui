@@ -1,0 +1,77 @@
+-- tests/perf/util.wowlua
+-- The performance scenarios' helpers (tests/perf/README.md). A scenario is a
+-- test file whose tests run in order in one emulated client: a test named
+-- "setup …" prepares, every other test is a measured phase. A phase runs a
+-- fixed number of frames (60 a second) with `run`, its work done by a tick
+-- function inside each frame (a driver frame's OnUpdate), so the profile
+-- (`wowlua test --profile-out`) puts every event the work fires, and all
+-- SuuUI does about it, in that frame. tools/perf.py reads the profiles: the
+-- frames of each phase are those its test function ran.
+--
+-- Everything is fixed: the frame count and length, the units, and the
+-- "random" choices (`random`, a seeded generator), so two runs of the same
+-- code do the same work and their instruction counts match.
+
+import * as mock from "wowlua:mock"
+import expect from "wowlua:test"
+
+export const FRAME_MS = 1000 / 60
+
+local driver = CreateFrame("Frame")
+local tickFn: ((frame: number) -> ())? = nil
+local tickNo = 0
+driver:SetScript("OnUpdate", function()
+    local fn = tickFn
+    if fn then
+        tickNo += 1
+        fn(tickNo)
+    end
+end)
+
+--- Runs `frames` game frames; `tick(n)` (n from 1) runs inside each frame,
+--- before the frame's other OnUpdate scripts that come after the driver.
+export function run(frames: number, tick: ((frame: number) -> ())?)
+    tickNo = 0
+    tickFn = tick
+    mock.advanceFrames(frames, FRAME_MS)
+    tickFn = nil
+end
+
+--- Settles: frames with nothing driven (timers, OnUpdate code, warm-ups).
+export function settle(frames: number)
+    run(frames, nil)
+end
+
+--- A seeded generator (a linear congruential one), the same numbers every
+--- run: `random(n)` 1..n.
+export function random(seed: number): (n: number) -> number
+    local state = seed
+    return function(n: number): number
+        state = (state * 1103515245 + 12345) % 2147483648
+        return state % n + 1
+    end
+end
+
+--- Memory after a full collection, in KB: the emulated client's whole Lua
+--- state (Blizzard's UI included; the emulator does not split it per addon).
+export function memoryKB(): number
+    collectgarbage("collect")
+    return math.floor(((collectgarbage("count") :: unknown) :: number) + 0.5)
+end
+
+--- Records measurements tools/perf.py reads: a snapshot file
+--- (tests/perf/__snapshots__, not in git), written on each run with -u.
+export function record(name: string, values: { [string]: number })
+    local keys: string[] = {}
+    local byKey: { [string]: number } = {}
+    for k, v in pairs(values) do
+        keys[#keys + 1] = k
+        byKey[k] = v
+    end
+    table.sort(keys)
+    local lines: string[] = {}
+    for _, k in ipairs(keys) do
+        lines[#lines + 1] = ("%s=%d"):format(k, math.floor((byKey[k] or 0) + 0.5))
+    end
+    expect(table.concat(lines, "\n")).toMatchSnapshot(name)
+end

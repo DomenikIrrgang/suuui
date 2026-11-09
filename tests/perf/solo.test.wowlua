@@ -1,0 +1,118 @@
+-- Perf scenario: solo combat. A level 59 warrior fights three mobs one after
+-- the other: auto attack, a rotation on the action bars (cooldowns, rage,
+-- usability), the mobs hitting back, threat, kills with experience and loot,
+-- and the level up to 60 at the last kill.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const MOB_HEALTH = 9000
+const ROTATION = { 772, 12294, 7384, 6343, 1680, 7386, 78, 1715 }
+
+local mobs: mock.MockUnit[] = {}
+
+@if(features.perf)
+@test("setup: login, warm-up")
+local function setup()
+    mock.setPlayer({ level = 59 })
+    for i = 1, 3 do
+        mobs[i] = mock.spawnUnit({
+            name = "Perf Mob " .. i,
+            level = 59,
+            reaction = "hostile",
+            health = MOB_HEALTH,
+            healthMax = MOB_HEALTH,
+            creatureType = "Humanoid",
+            distance = 4 + i,
+        })
+        mobs[i]:showNameplate()
+    end
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("fight three mobs")
+local function fight()
+    local current = 1
+    local dealt = 0
+    local rage = 0
+    local spell = 0
+    local engaged = false
+    perf.run(480, function(n: number)
+        local mob = mobs[current]
+        if not mob then
+            return
+        end
+        if not engaged then
+            engaged = true
+            mock.player:target(mob)
+            mock.player:startAttack()
+            mob:setThreat(100)
+            mob:target(mock.player)
+        end
+        -- the mobs hit back, each every two seconds, staggered
+        for i = current, #mobs do
+            if (n + i * 37) % 120 == 0 then
+                mobs[i]:swing(mock.player, 180, { victimPower = math.min(100, rage + 5) })
+                mobs[i]:setThreat(100 + n)
+            end
+        end
+        -- the player's swing every 2.6 s
+        local hit = 0
+        local spellID: number? = nil
+        if n % 156 == 0 then
+            hit = 900
+        end
+        -- a spell on each global cooldown
+        if n % 90 == 45 then
+            spell = spell % #ROTATION + 1
+            spellID = ROTATION[spell]
+            hit = hit + 1100
+        end
+        if hit == 0 then
+            if n % 30 == 0 then
+                rage = math.max(0, rage - 2)
+                mock.player:setPower(rage)
+            end
+            return
+        end
+        if dealt + hit >= MOB_HEALTH then
+            -- the kill: experience, loot; the last one levels up
+            mock.player:swing(mob, MOB_HEALTH - dealt, { power = rage, kill = { xp = 900, loot = { { id = 7074 } } } })
+            mob:setThreat(nil)
+            if current == #mobs then
+                mock.setPlayer({ level = 60 }, { events = true })
+                mock.player:stopAttack()
+            end
+            current += 1
+            dealt = 0
+            engaged = false
+            return
+        end
+        dealt += hit
+        rage = math.min(100, rage + 12)
+        if spellID then
+            mock.player:useSpell(spellID)
+            mock.player:hit(mob, hit, { spell = spellID })
+        else
+            mock.player:swing(mob, hit, { power = rage })
+        end
+    end)
+end
+
+@if(features.perf)
+@test("after the fight: leave combat, loot")
+local function after()
+    perf.run(90, function(n: number)
+        if n == 1 then
+            mock.player:leaveCombat()
+        elseif n == 20 then
+            mock.player:loot(mobs[3], { auto = true })
+        end
+    end)
+end

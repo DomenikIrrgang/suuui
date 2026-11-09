@@ -1,0 +1,104 @@
+-- Perf scenario: a busy chat. Trade and general channel spam, guild and say
+-- lines, whispers and system messages: twelve lines a second for eight
+-- seconds, an item link in some of them.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const SENDERS = { "Perfa", "Perfb", "Perfc", "Perfd", "Perfe", "Perff" }
+const LINES = {
+    "LF tank for the keep, need 2 more",
+    "WTS |cff1eff00|Hitem:12345::::::::60:::::|h[Test Blade]|h|r 50g, whisper me",
+    "anyone up for the boss?",
+    "selling silk cloth, cheap",
+    "lol",
+    "guild recruiting, all welcome, ask for info",
+}
+
+-- A message that isn't from Discord.
+local NO_DISCORD = {
+    userID = 0,
+    globalName = "",
+    lastOnlineGUID = "",
+    lastOnlineName = "",
+    hasAttachment = false,
+    hasPoll = false,
+    hasEmbed = false,
+    hasSticker = false,
+    hasEmoji = false,
+    hasError = false,
+    hasForwardedMessage = false,
+    forwardedMessage = "",
+    fromDiscord = false,
+}
+
+-- A chat event with every argument the client sends.
+local function chatEvent(
+    event: string,
+    text: string,
+    sender: string,
+    channel: string,
+    base: string,
+    index: number,
+    lineID: number
+)
+    mock.fireEvent(
+        event,
+        text,
+        sender,
+        "",
+        channel,
+        sender,
+        "",
+        0,
+        index,
+        base,
+        0,
+        lineID,
+        "",
+        0,
+        false,
+        false,
+        false,
+        false,
+        NO_DISCORD
+    )
+end
+
+@if(features.perf)
+@test("setup: login")
+local function setup()
+    perf.settle(90)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+end
+
+@if(features.perf)
+@test("chat spam")
+local function spam()
+    local rnd = perf.random(5)
+    perf.run(480, function(n: number)
+        if n % 5 ~= 0 then
+            return
+        end
+        local who = SENDERS[rnd(#SENDERS)] .. "-PerfRealm"
+        local text = LINES[rnd(#LINES)]
+        local kind = rnd(8)
+        if kind <= 3 then
+            chatEvent("CHAT_MSG_CHANNEL", text, who, "2. Trade - City", "Trade - City", 2, n)
+        elseif kind == 4 then
+            chatEvent("CHAT_MSG_CHANNEL", text, who, "1. General - Elwynn Forest", "General - Elwynn Forest", 1, n)
+        elseif kind == 5 then
+            chatEvent("CHAT_MSG_GUILD", text, who, "", "", 0, n)
+        elseif kind == 6 then
+            chatEvent("CHAT_MSG_SAY", text, who, "", "", 0, n)
+        elseif kind == 7 then
+            chatEvent("CHAT_MSG_WHISPER", text, who, "", "", 0, n)
+        else
+            mock.systemMessage("Perfa has come online.")
+        end
+    end)
+end
