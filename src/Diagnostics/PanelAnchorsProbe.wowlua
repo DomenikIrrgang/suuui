@@ -15,6 +15,12 @@
 --   6 as 1 built hidden and shown a frame later
 -- Saved in SuuUIProbe.panelAnchors on /reload; the panels hide after 3 s
 -- and re-anchoring comes back on.
+-- "/suu probe panelanchors2" (found: only 1 and 3 lost the button, so a SuuUI
+-- button in a self-sizing body of a panel fitting it, shown at once): as 3
+-- with the item A a plain Button 55x30, B a SuuUI button of fixed width,
+-- C a quiet SuuUI button (no glow), D a plain frame whose width is set right
+-- after the layout takes it, E a plain frame with SuuUI's glow (hidden), F a
+-- primary SuuUI button again (as 3). Saved in SuuUIProbe.panelAnchors2.
 
 import print from "/Core/Init"
 import * as DB from "/Core/DB"
@@ -25,14 +31,16 @@ import text from "/UI/Text"
 import panel as uiPanel, Panel from "/UI/Panel"
 import button as uiButton from "/UI/Controls"
 import stack as layoutStack, setReanchor from "/UI/Layout"
+import * as draw from "/UI/Draw"
 
 const S = T.space
 
 local lines: string[] = {}
+local key = "panelAnchors"
 
 local function line(s: string)
     lines[#lines + 1] = s
-    DB.probe.panelAnchors = lines
+    DB.probe[key] = lines
 end
 
 local function rect(f: Region): string
@@ -113,6 +121,7 @@ end
 
 export function command()
     wipe(lines)
+    key = "panelAnchors"
     line("panel anchors probe " .. date("%Y-%m-%d %H:%M"))
     setReanchor(false)
     local made: Panel[] = {}
@@ -143,5 +152,76 @@ export function command()
         end
         setReanchor(true)
         print("Panel anchors probe saved: /reload to write it out.")
+    end)
+end
+
+-- a red plain frame (or Button) w wide, 30 high
+local function plainBox(parent: Frame, kind: "Frame" | "Button", w: number): Frame
+    local f = CreateFrame(kind, nil, parent)
+    f:SetSize(w, 30)
+    local tex = f:CreateTexture()
+    tex:SetAllPoints()
+    tex:SetColorTexture(1, 0, 0)
+    return f
+end
+
+-- As 3 (only the item in a self-sizing body of a panel fitting it, shown at
+-- once), the item made by `make`; `afterAdd` runs right after the layout takes it.
+local function buildWith(
+    n: number,
+    label: string,
+    make: (body: Frame) -> Frame,
+    afterAdd: ((item: Frame) -> ())?
+): Panel
+    local p = uiPanel(root, { title = label, width = 320 })
+    p:SetFrameStrata("FULLSCREEN_DIALOG")
+    p:SetPoint("TOPLEFT", root, "TOPLEFT", 20 + ((n - 1) % 3) * 340, -120 - math.floor((n - 1) / 3) * 220)
+    p:EnableMouse(true)
+    local s = layoutStack(p.body, { gap = S["space-4"], autoSize = "height" })
+    local item = make(p.body)
+    s:Add(item)
+    if afterAdd then
+        afterAdd(item)
+    end
+    p:Show()
+    watch(n, p, item)
+    return p
+end
+
+export function command2()
+    wipe(lines)
+    key = "panelAnchors2"
+    line("panel anchors probe 2 " .. date("%Y-%m-%d %H:%M"))
+    setReanchor(false)
+    local made: Panel[] = {}
+    made[#made + 1] = buildWith(1, "A Button", function(body: Frame): Frame
+        return plainBox(body, "Button", 55)
+    end)
+    made[#made + 1] = buildWith(2, "B fixed width", function(body: Frame): Frame
+        return uiButton(body, { text = "Done", variant = "primary", width = 55 })
+    end)
+    made[#made + 1] = buildWith(3, "C quiet", function(body: Frame): Frame
+        return uiButton(body, { text = "Done" })
+    end)
+    made[#made + 1] = buildWith(4, "D width after", function(body: Frame): Frame
+        return plainBox(body, "Frame", 1)
+    end, function(item: Frame)
+        item:SetWidth(55)
+    end)
+    made[#made + 1] = buildWith(5, "E glow", function(body: Frame): Frame
+        local f = plainBox(body, "Frame", 55)
+        local glow = draw.shadow(f, "glow-arcane")
+        glow.holder:Hide()
+        return f
+    end)
+    made[#made + 1] = buildWith(6, "F primary", function(body: Frame): Frame
+        return uiButton(body, { text = "Done", variant = "primary" })
+    end)
+    after(3, function()
+        for _, p in ipairs(made) do
+            p:Hide()
+        end
+        setReanchor(true)
+        print("Panel anchors probe 2 saved: /reload to write it out.")
     end)
 end
