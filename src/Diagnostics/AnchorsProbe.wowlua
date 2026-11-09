@@ -180,6 +180,10 @@ type Case = {
     atOnce?: boolean,
     askEarly?: boolean,
     noHook?: boolean,
+    directResize?: boolean,
+    emptyScript?: boolean,
+    heightFirst?: boolean,
+    deferFit?: boolean,
 }
 
 local function replica(n: number, c: Case, made: Frame[])
@@ -193,11 +197,18 @@ local function replica(n: number, c: Case, made: Frame[])
     body:SetSize(1, 1)
     P:SetWidth(320)
     body:SetPoint("TOPRIGHT", -12, -40)
-    if not c.noFit then
+    local function fit()
+        local _, h = body:GetSize()
+        P:SetHeight(40 + h + 12)
+    end
+    if c.emptyScript then
+        body:SetScript("OnSizeChanged", function() end)
+    elseif c.deferFit then
         body:SetScript("OnSizeChanged", function()
-            local _, h = body:GetSize()
-            P:SetHeight(40 + h + 12)
+            after(0, fit)
         end)
+    elseif not c.noFit then
+        body:SetScript("OnSizeChanged", fit)
     end
     P:SetHeight(40 + 1 + 12)
     local item = CreateFrame(c.kind, nil, body)
@@ -217,9 +228,17 @@ local function replica(n: number, c: Case, made: Frame[])
         at(c.name, "before anchored", item)
     end
     local function place()
+        if c.heightFirst then
+            body:SetHeight(30)
+        end
         item:ClearAllPoints()
         item:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
-        body:SetHeight(30)
+        if not c.heightFirst then
+            body:SetHeight(30)
+        end
+        if c.directResize then
+            fit()
+        end
     end
     if c.atOnce then
         place()
@@ -251,4 +270,27 @@ export function command3()
         replica(n, c, made)
     end
     finish(made, "Anchors probe 3")
+end
+
+-- anchors4 (anchors3: G, H, K, L lost the item, I without the body's
+-- OnSizeChanged kept it, J all at once kept it): which part of the fit does
+-- it? G again; M no script, the panel's height set right after the body's;
+-- N an OnSizeChanged doing nothing; O the body's height set before the item
+-- is anchored; P the fit a frame after the OnSizeChanged.
+export function command4()
+    wipe(lines)
+    key = "anchors4"
+    line("anchors probe 4 (the fit) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    local cases: Case[] = {
+        { name = "G", kind = "Button" },
+        { name = "M", kind = "Button", noFit = true, directResize = true },
+        { name = "N", kind = "Button", emptyScript = true },
+        { name = "O", kind = "Button", heightFirst = true },
+        { name = "P", kind = "Button", deferFit = true },
+    }
+    for n, c in ipairs(cases) do
+        replica(n, c, made)
+    end
+    finish(made, "Anchors probe 4")
 end
