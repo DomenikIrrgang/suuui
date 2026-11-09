@@ -16,7 +16,7 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
-import internal M, identityLine, petLine, statColor from "/Units/CharacterWindow"
+import internal M, identityLine, petLine, statColor, itemLevels from "/Units/CharacterWindow"
 import errorsSoFar from "../../helpers"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import type SkinTab from "/UI/WindowSkin"
@@ -655,4 +655,46 @@ local function lateWindow()
     mock.setField(_G, "CharacterFrame", cf)
     mock.fireEvent("ADDON_LOADED", "Blizzard_CharacterUI", false)
     expect(skin).toHaveBeenCalled()
+end
+
+@test("your item level: what you wear (at least the game's minimum), and over all you carry, whole")
+local function itemLevelReading()
+    mock.fake("GetAverageItemLevel", function(): (number, number, number)
+        return 61.7, 63.4, 61.7
+    end)
+    local worn, carried = itemLevels()
+    expect(worn).toBe(63)
+    expect(carried).toBe(61)
+    mock.fake("C_PaperDollInfo.GetMinItemLevel", function(): number
+        return 70
+    end)
+    expect(itemLevels()).toBe(70)
+    mock.fake("GetAverageItemLevel", function(): (unknown, unknown, unknown)
+        return mock.secret(5), mock.secret(5), mock.secret(5)
+    end)
+    expect(itemLevels()).toBeNil()
+end
+
+@test("the item level under the stats, above Durability; without Durability alone")
+local function itemLevelRow()
+    mock.fake("GetAverageItemLevel", function(): (number, number, number)
+        return 58.2, 60.9, 58.2
+    end)
+    open()
+    mock.fireEvent("PLAYER_AVG_ITEM_LEVEL_UPDATE")
+    local blk = assert(M.wearBlock)
+    expect(blk).toBeShown()
+    expect(blk.level.label).toHaveText("Item level")
+    expect(blk.level.value).toHaveText("60")
+    expect(blk.carried).toBe(58)
+    expect(blk.levelHover:IsMouseEnabled()).toBe(true)
+    -- the Durability module off: the item level alone
+    mock.stub(SuuUI, "Durability", function(): unknown
+        return nil
+    end)
+    M:UpdateWearBlock()
+    expect(blk).toBeShown()
+    expect(blk.head).never.toBeShown()
+    expect(blk.level.value).toHaveText("60")
+    expectNoErrors()
 end

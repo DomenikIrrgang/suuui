@@ -28,6 +28,7 @@ import type WindowChrome, SkinTab from "/UI/WindowSkin"
 import type ItemSlotSkin from "/UI/Inventory"
 import type Text from "/UI/Text"
 import type Color from "/Core/Tokens"
+import type TooltipData from "/UI/Tooltip"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
@@ -254,6 +255,24 @@ export function wearRows(d: DurabilityInfo): (string, string, string)
         (d.average or 0) .. "%"
 end
 
+-- Your average item level (asked for 2026-11-09), as the game's own stat
+-- reads it: what you wear (at least the game's minimum), and over all you
+-- carry, whole numbers. nil when unreadable. (Blizzard's General list has the
+-- stat but no row for it; a row added there tainted its update.)
+export function itemLevels(): (number?, number?)
+    local ok, all, equipped = pcall(GetAverageItemLevel)
+    if not ok or not secret.readable(all) or not secret.readable(equipped) then
+        return nil, nil
+    end
+    local okMin, least = pcall(C_PaperDollInfo.GetMinItemLevel)
+    local floor = okMin and secret.readable(least) and tonumber(least) or 0
+    local worn, carried = tonumber(equipped), tonumber(all)
+    if not worn or not carried then
+        return nil, nil
+    end
+    return math.floor(math.max(floor, worn)), math.floor(carried)
+end
+
 -- A gear slot's wear bar and percent, over the slot.
 class WearOverlay extends Frame
     readonly bar: Frame
@@ -281,12 +300,19 @@ class WearOverlay extends Frame
     end
 end
 
--- The Durability block under the stats; the stats' list ends above it.
+-- The block under the stats; the stats' list ends above it: your item level
+-- (hovered: the average over all you carry), then Durability while the
+-- Durability module shows wear on your gear.
 class WearBlock extends Frame
     readonly box: Frame
     readonly rule: Frame
     readonly head: Text
     readonly rows: { label: Text, value: Text }[] = {}
+    readonly level: { label: Text, value: Text }
+    -- the item level row's mouse area (its tooltip)
+    readonly levelHover: Frame
+    -- the average over all you carry, for the tooltip
+    carried: number? = nil
 
     constructor(pane: Frame, box: Frame)
         super(nil, pane)
@@ -296,6 +322,21 @@ class WearBlock extends Frame
         self.rule = UI.Hairline(self, "gilt-faint")
         self.rule:SetPoint("TOPLEFT")
         self.rule:SetPoint("TOPRIGHT")
+        local levelLabel = UI.Text(self, "body", "ink-muted")
+        levelLabel:SetValue("Item level")
+        local levelValue = UI.Text(self, "body", "ink")
+        levelValue:SetJustifyH("RIGHT")
+        levelValue:SetWordWrap(false)
+        self.level = { label = levelLabel, value = levelValue }
+        self.levelHover = CreateFrame("Frame", nil, self)
+        self.levelHover:EnableMouse(true)
+        UI.AttachTooltip(self.levelHover, function(): TooltipData
+            return {
+                title = "Item level " .. tostring(self.level.value:GetValue()),
+                lines = { { "All your items", self.carried and tostring(self.carried) or "–" } },
+                description = "The average item level of the gear you wear. All your items counts the best pieces in your bags too.",
+            }
+        end)
         self.head = UI.Text(self, "header", "gilt-text")
         self.head:SetValue("Durability")
         for i, label in ipairs(WEAR_ROWS) do
@@ -309,20 +350,40 @@ class WearBlock extends Frame
         self:Hide()
     end
 
-    -- Laid out by the text styles' line heights (again after a theme change).
-    function Layout(): number
-        local y = S["space-3"]
-        self.head:ClearAllPoints()
-        self.head:SetPoint("TOPLEFT", 0, -y)
-        y = y + T.type.header.lineHeight + S["space-2"]
+    -- Laid out by the text styles' line heights (again after a theme change),
+    -- with or without the Durability rows.
+    function Layout(wear: boolean): number
         local lh = T.type.body.lineHeight
+        local y = S["space-3"]
+        local l = self.level
+        l.label:ClearAllPoints()
+        l.label:SetPoint("TOPLEFT", 0, -y)
+        l.value:ClearAllPoints()
+        l.value:SetPoint("TOPRIGHT", 0, -y)
+        l.value:SetPoint("LEFT", l.label, "RIGHT", S["space-3"], 0)
+        self.levelHover:ClearAllPoints()
+        self.levelHover:SetPoint("TOPLEFT", 0, -y)
+        self.levelHover:SetPoint("TOPRIGHT", 0, -y)
+        self.levelHover:SetHeight(lh)
+        y = y + lh + S["space-1"]
+        self.head:SetShown(wear)
         for _, r in ipairs(self.rows) do
-            r.label:ClearAllPoints()
-            r.label:SetPoint("TOPLEFT", 0, -y)
-            r.value:ClearAllPoints()
-            r.value:SetPoint("TOPRIGHT", 0, -y)
-            r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
-            y = y + lh + S["space-1"]
+            r.label:SetShown(wear)
+            r.value:SetShown(wear)
+        end
+        if wear then
+            y = y + S["space-2"]
+            self.head:ClearAllPoints()
+            self.head:SetPoint("TOPLEFT", 0, -y)
+            y = y + T.type.header.lineHeight + S["space-2"]
+            for _, r in ipairs(self.rows) do
+                r.label:ClearAllPoints()
+                r.label:SetPoint("TOPLEFT", 0, -y)
+                r.value:ClearAllPoints()
+                r.value:SetPoint("TOPRIGHT", 0, -y)
+                r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
+                y = y + lh + S["space-1"]
+            end
         end
         self:SetHeight(y)
         return y
@@ -924,18 +985,24 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         local box = blk.box
         local d = SuuUI.Durability()
-        if not (d and d.parts.gear and d.lowest) then
+        local wear = d ~= nil and d.parts.gear == true and d.lowest ~= nil
+        local worn, carried = itemLevels()
+        if not wear and not worn then
             blk:Hide()
             box:SetPoint("BOTTOMRIGHT", -30, 30)
             return
         end
-        local h = blk:Layout()
+        local h = blk:Layout(wear)
         box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
         blk:Show()
-        local lowest, damaged, average = wearRows(d)
-        blk.rows[1].value:SetValue(lowest)
-        blk.rows[2].value:SetValue(damaged)
-        blk.rows[3].value:SetValue(average)
+        blk.level.value:SetValue(worn and tostring(worn) or "–")
+        blk.carried = carried
+        if d and wear then
+            local lowest, damaged, average = wearRows(d)
+            blk.rows[1].value:SetValue(lowest)
+            blk.rows[2].value:SetValue(damaged)
+            blk.rows[3].value:SetValue(average)
+        end
     end
 
     -- A row of the stats pane: a category head (one text, a banner) or a stat
@@ -1577,6 +1644,11 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     override function OnEnable()
         self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function()
             self:UpdateSlots()
+            self:UpdateWearBlock()
+        end)
+        -- the item level under the stats
+        self:OnGameEvent("PLAYER_AVG_ITEM_LEVEL_UPDATE", function()
+            self:UpdateWearBlock()
         end)
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
             self:UpdateIdentity()
