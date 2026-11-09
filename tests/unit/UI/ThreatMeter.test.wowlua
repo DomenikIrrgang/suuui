@@ -108,6 +108,31 @@ local function maxRows()
     expect(m.maxRows).toBe(2)
 end
 
+@test("rows made ahead: one a call, hidden, up to the most shown; SetRows uses them, its lists kept")
+local function builtAhead()
+    local m = meter({ rows = 3 })
+    expect(m:BuildAhead()).toBe(true)
+    expect(m:BuildAhead()).toBe(true)
+    expect(m:BuildAhead()).toBe(false)
+    expect(m:BuildAhead()).toBe(false)
+    expect(#m.rows).toBe(3)
+    local made = m.rows[1]
+    expect(made).never.toBeShown()
+    m:SetRows({ { name = "A", percent = 10 }, { name = "B", percent = 90 } }, {})
+    expect(m.rows[1]).toBe(made)
+    expect(m.rows[1].name).toHaveText("B")
+    expect(m.rows[3]).never.toBeShown()
+    -- the next call reuses SetRows' tables, fewer rows drop the rest
+    local sorted, entry = m.sorted, m.entries[1]
+    m:SetRows({ { name = "C", percent = 5 } }, { byState = true })
+    expect(m.sorted).toBe(sorted)
+    expect(m.entries[1]).toBe(entry)
+    expect(#m.sorted).toBe(1)
+    expect(m.rows[1].name).toHaveText("C")
+    expect(m.rows[2]).never.toBeShown()
+    expectNoErrors()
+end
+
 @test("by %: sorted, ranked, with the % and the edge of your row")
 local function byPercent()
     local m = meter()

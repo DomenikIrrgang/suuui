@@ -25,6 +25,7 @@ import type ThreatMeter, ThreatEntry, ThreatOptions from "/UI/ThreatMeter"
 import type AlertTone, FormatArg from "/UI/Alert"
 import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
+import * as ahead from "/Core/Ahead"
 
 local isNumber = secret.isNumber
 
@@ -130,65 +131,88 @@ type Row = {
     unit: string,
 }
 
--- One unit's row, or nil while it isn't on the target's threat table.
-local function sample(unit: string, pet: boolean?): Row?
+-- One unit's row written into `r`; false while it isn't on the target's
+-- threat table.
+local function sample(unit: string, pet: boolean?, r: Row): boolean
     if not UnitExists(unit) then
-        return nil
+        return false
     end
     local given = UnitThreatSituation(unit, "target")
     local status = isNumber(given) and given or nil
     local ok, _, _, scaled, _, value = pcall(UnitDetailedThreatSituation, unit, "target")
     if not ok then
-        return nil
+        return false
     end
     -- off the table: no status and no % (a secret % may still be someone's)
     if status == nil and not secret.isSecret(scaled) and scaled == nil then
-        return nil
+        return false
     end
     local _, given = UnitClass(unit)
     local class = not secret.isSecret(given) and given or nil
-    return {
-        name = (UnitName(unit)),
-        class = (not pet) and class or nil,
-        role = pet and "PET" or roleOf(unit),
-        status = status,
-        percent = scaled,
-        raw = value,
-        you = unit == "player",
-        unit = unit,
-    }
+    r.name = (UnitName(unit))
+    r.class = (not pet) and class or nil
+    r.role = pet and "PET" or roleOf(unit)
+    r.status = status
+    r.percent = scaled
+    r.raw = value
+    r.you = unit == "player"
+    r.unit = unit
+    return true
+end
+
+-- The rows read on each tick, their tables kept from tick to tick (the
+-- driver reads the table five times a second in a fight: new tables each
+-- time were garbage), and the unit tokens made once.
+local rowPool: Row[] = {}
+local rowList: Row[] = {}
+local rowCount, anyHidden = 0, false
+local RAID: string[], RAID_PET: string[], PARTY: string[], PARTY_PET: string[] = {}, {}, {}, {}
+for i = 1, 40 do
+    RAID[i], RAID_PET[i] = "raid" .. i, "raidpet" .. i
+end
+for i = 1, 4 do
+    PARTY[i], PARTY_PET[i] = "party" .. i, "partypet" .. i
+end
+
+local function add(unit: string, pet: boolean?)
+    local r = rowPool[rowCount + 1]
+    if not r then
+        r = { you = false, unit = unit }
+        rowPool[rowCount + 1] = r
+    end
+    if sample(unit, pet, r) then
+        rowCount = rowCount + 1
+        rowList[rowCount] = r
+        if secret.isSecret(r.percent) then
+            anyHidden = true
+        end
+    end
 end
 
 -- Every row of the group (you first, pets after their owners), and whether
--- any % is secret.
+-- any % is secret. (The list and its rows are the next tick's again.)
 local function readRows(): (Row[], boolean)
-    local rows: Row[], hidden = {}, false
-    local function add(unit: string, pet: boolean?)
-        local r = sample(unit, pet)
-        if r then
-            rows[#rows + 1] = r
-            if secret.isSecret(r.percent) then
-                hidden = true
-            end
-        end
-    end
+    rowCount, anyHidden = 0, false
     add("player")
     add("pet", true)
     if secret.flag(IsInRaid()) then
         for i = 1, 40 do
-            local u = "raid" .. i
+            local u = RAID[i]
             if UnitExists(u) and not secret.flag(UnitIsUnit(u, "player")) then
                 add(u)
-                add("raidpet" .. i, true)
+                add(RAID_PET[i], true)
             end
         end
     else
         for i = 1, 4 do
-            add("party" .. i)
-            add("partypet" .. i, true)
+            add(PARTY[i])
+            add(PARTY_PET[i], true)
         end
     end
-    return rows, hidden
+    for _ = rowCount + 1, #rowList do
+        table.remove(rowList)
+    end
+    return rowList, anyHidden
 end
 
 --------------------------------------------------------------------------------
@@ -226,14 +250,21 @@ local function unalert(key: string)
     SuuUI.HideAlert(key)
 end
 
--- Rows as the meter takes them.
+-- Rows as the meter takes them (one list, kept from tick to tick).
+local entryList: ThreatEntry[] = {}
 local function entries(rows: Row[]): ThreatEntry[]
-    local out: ThreatEntry[] = {}
+    local out = entryList
     for i, r in ipairs(rows) do
         out[i] = r
     end
+    for _ = #rows + 1, #out do
+        table.remove(out)
+    end
     return out
 end
+
+-- No rows (no hostile target).
+local NO_ROWS: Row[] = {}
 
 -- Someone in your group meant to hold the mobs: a tank (by role) or a pet,
 -- yours or a group member's. Without one (two damage dealers questing
@@ -473,7 +504,7 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
         local fighting = hostile and inCombat()
         local shows = self:Get("shows")
         local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
-        local rows: Row[], hidden = {}, false
+        local rows: Row[], hidden = NO_ROWS, false
         if hostile then
             rows, hidden = readRows()
         end
@@ -567,6 +598,11 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
             end)
             self.driver = driver
         end
+        -- the meter's rows made ahead, out of combat (made in the first
+        -- fight they cost 70 KB in one frame)
+        ahead.schedule("threat: meter rows", function(): boolean
+            return self:IsEnabled() and meter:BuildAhead()
+        end)
         self:RegisterMover(meter, {
             key = "position",
             label = "Threat meter",
