@@ -52,6 +52,9 @@ type Spot = { p?: number, s?: number }
 type Mark = { at: Spot, from: Spot, to: Spot, placed?: boolean, start?: number }
 
 local GLIDE = T.duration["dur-base"]
+-- frames a shown row's marks wait for its layout before waiting for a show
+-- or a size instead
+local RETRIES = 5
 local EASE = T.easing["ease-in-out"].bezier :: number[]
 
 -- cubic-bezier(x1, y1, x2, y2) at time t: x solved for t by halving, then y
@@ -133,7 +136,9 @@ export class TabMarker
     jewel?: Texture
     chosen?: Region
     hovered?: Region
-    waiting?: boolean
+    -- not laid out yet: the frames waited (nil: placed), a retry pending
+    waiting?: number
+    retrying?: boolean
 
     constructor(row: Frame, opts: TabMarkerOptions)
         self.row, self.y, self.vertical, self.side, self.x = row,
@@ -146,9 +151,19 @@ export class TabMarker
         self.holder = holder
         holder:SetAllPoints()
         holder:SetFrameLevel(row:GetFrameLevel() + (opts.level or 2))
-        -- shown again after a change while hidden: placed at once
+        -- shown again after a change while hidden: placed at once; laid out
+        -- at last (a size of its own): placed
         row:HookScript("OnShow", function()
+            if self.waiting then
+                self.waiting = 0
+            end
             self:Aim()
+        end)
+        row:HookScript("OnSizeChanged", function()
+            if self.waiting then
+                self.waiting = 0
+                self:Aim()
+            end
         end)
         local boxOpts = opts.box
         if boxOpts then
@@ -240,16 +255,23 @@ export class TabMarker
         end
         local left, bottom, width, height = self:Place(chosen)
         if not left then
-            -- not laid out yet: next frame
-            if not self.waiting then
-                self.waiting = true
+            -- not laid out yet: a few frames more while the row shows; a
+            -- hidden row (its window closed) waits for its OnShow or a size
+            -- (never a timer every frame while it stays hidden)
+            local waited = self.waiting or 0
+            if not self.retrying and waited < RETRIES and self.row:IsVisible() then
+                self.retrying = true
+                self.waiting = waited + 1
                 after(0, function()
-                    self.waiting = false
+                    self.retrying = nil
                     self:Aim()
                 end)
+            elseif self.waiting == nil then
+                self.waiting = 0
             end
             return
         end
+        self.waiting = nil
         local now = motion.reduced() or not self.row:IsVisible()
         local over = self.hovered
         local ol, ob, ow, oh = left, bottom, width, height
