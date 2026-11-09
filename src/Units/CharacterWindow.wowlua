@@ -29,6 +29,7 @@ import type ItemSlotSkin from "/UI/Inventory"
 import type Text from "/UI/Text"
 import type Color from "/Core/Tokens"
 import type TooltipData from "/UI/Tooltip"
+import type ScrollArea from "/UI/Panel"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
@@ -205,8 +206,8 @@ end
 -- Durability (the Durability module's "On your gear", design board
 -- "Durability" C): a 3 px bar inside each gear slot's foot (ink-muted, amber
 -- with the percent at or below the line, all ember with "0%" and the icon
--- dimmed once broken; none on pieces that never wear), and a Durability
--- block under the stats: the lowest piece, the damaged ones, the average.
+-- dimmed once broken; none on pieces that never wear), and the Gear
+-- category after the stats: the average, the lowest piece, the damaged ones.
 --------------------------------------------------------------------------------
 
 -- A slot's bar for its piece: broken (all ember, no fill), the fill's token
@@ -229,10 +230,11 @@ export function wearView(p: DurabilityPiece?, gearBars: string?, barW: number?):
     }
 end
 
--- The block at the foot of the stats (the stats' list ends above it).
-local WEAR_ROWS = { "Lowest", "Damaged", "Average" }
+-- The Gear category's durability rows, under the item level: the average,
+-- the lowest piece, the damaged ones.
+local WEAR_ROWS = { "Durability", "Lowest", "Damaged" }
 
--- The block's Lowest, Damaged and Average values for a reading.
+-- The Lowest, Damaged and Average values for a reading.
 export function wearRows(d: DurabilityInfo): (string, string, string)
     local colors: { [string]: Color } = T.color
     local function c(token: string, text: string): string
@@ -300,93 +302,93 @@ class WearOverlay extends Frame
     end
 end
 
--- The block under the stats; the stats' list ends above it: your item level
--- (hovered: the average over all you carry), then Durability while the
--- Durability module shows wear on your gear.
-class WearBlock extends Frame
-    readonly box: Frame
-    readonly rule: Frame
+-- The Gear category, after Blizzard's stat categories and scrolling with
+-- them (asked for 2026-11-09, in place of a block under the stats): a head
+-- and rows as SuuUI skins Blizzard's (SkinStatRow): your item level
+-- (hovered: the average over all you carry), then, while the Durability
+-- module shows wear on your gear, the average, the lowest piece and the
+-- damaged ones.
+-- Blizzard's rows' heights (CharacterStatFrameCategoryTemplate,
+-- CharacterStatFrameScrollBoxBaseElementTemplate).
+local GEAR_HEAD_H, GEAR_ROW_H = 40, 23
+-- Blizzard's list's height in SuuUI's area: more than all its rows (a
+-- player's are about 1000 px), so it shows them all and never scrolls.
+local STATS_BOX_H = 3000
+
+-- A stat row in SuuUI's skin: a gilt-faint rule on top, the label ink-muted
+-- left, the value right (where Blizzard's are).
+class GearRow extends Frame
+    readonly label: Text
+    readonly value: Text
+
+    constructor(parent: Frame, text: string)
+        super(nil, parent)
+        self:SetHeight(GEAR_ROW_H)
+        local rule = self:CreateTexture(nil, "ARTWORK")
+        UI.PaintFill(rule, "gilt-faint")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        self.label = UI.Text(self, "body", "ink-muted")
+        self.label:SetValue(text)
+        self.label:SetPoint("LEFT", 11, 0)
+        self.value = UI.Text(self, "numeric", "ink")
+        self.value:SetJustifyH("RIGHT")
+        self.value:SetWordWrap(false)
+        self.value:SetPoint("RIGHT", -8, 0)
+        self.value:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+    end
+end
+
+class Gear extends Frame
     readonly head: Text
-    readonly rows: { label: Text, value: Text }[] = {}
-    readonly level: { label: Text, value: Text }
-    -- the item level row's mouse area (its tooltip)
-    readonly levelHover: Frame
+    readonly level: GearRow
+    readonly rows: GearRow[] = {}
     -- what you wear and the average over all you carry, for the tooltip
     worn: number? = nil
     carried: number? = nil
+    -- its height as laid out
+    height: number = 0
 
-    constructor(pane: Frame, box: Frame)
-        super(nil, pane)
-        self.box = box
-        self:SetPoint("BOTTOMLEFT", 10, 8)
-        self:SetPoint("BOTTOMRIGHT", -12, 8)
-        self.rule = UI.Hairline(self, "gilt-faint")
-        self.rule:SetPoint("TOPLEFT")
-        self.rule:SetPoint("TOPRIGHT")
-        local levelLabel = UI.Text(self, "body", "ink-muted")
-        levelLabel:SetValue("Item level")
-        local levelValue = UI.Text(self, "body", "ink")
-        levelValue:SetJustifyH("RIGHT")
-        levelValue:SetWordWrap(false)
-        self.level = { label = levelLabel, value = levelValue }
-        self.levelHover = CreateFrame("Frame", nil, self)
-        self.levelHover:EnableMouse(true)
-        UI.AttachTooltip(self.levelHover, function(): TooltipData
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.head = UI.Text(self, "header", "gilt-text")
+        self.head:SetValue("Gear")
+        self.head:SetPoint("CENTER", self, "TOP", 0, 1 - GEAR_HEAD_H / 2)
+        self.level = GearRow.new(self, "Item level")
+        self.level:EnableMouse(true)
+        UI.AttachTooltip(self.level, function(): TooltipData
             return {
                 title = "Item level " .. (self.worn and tostring(self.worn) or "–"),
                 lines = { { "All your items", self.carried and tostring(self.carried) or "–" } },
                 description = "The average item level of the gear you wear. All your items counts the best pieces in your bags too.",
             }
         end)
-        self.head = UI.Text(self, "header", "gilt-text")
-        self.head:SetValue("Durability")
         for i, label in ipairs(WEAR_ROWS) do
-            local name = UI.Text(self, "body", "ink-muted")
-            name:SetValue(label)
-            local value = UI.Text(self, "body", "ink")
-            value:SetJustifyH("RIGHT")
-            value:SetWordWrap(false)
-            self.rows[i] = { label = name, value = value }
+            self.rows[i] = GearRow.new(self, label)
         end
         self:Hide()
     end
 
-    -- Laid out by the text styles' line heights (again after a theme change),
-    -- with or without the Durability rows.
+    -- The head, the item level, the durability rows while `wear`: stacked as
+    -- Blizzard stacks its rows. Its height.
     function Layout(wear: boolean): number
-        local lh = T.type.body.lineHeight
-        local y = S["space-3"]
-        local l = self.level
-        l.label:ClearAllPoints()
-        l.label:SetPoint("TOPLEFT", 0, -y)
-        l.value:ClearAllPoints()
-        l.value:SetPoint("TOPRIGHT", 0, -y)
-        l.value:SetPoint("LEFT", l.label, "RIGHT", S["space-3"], 0)
-        self.levelHover:ClearAllPoints()
-        self.levelHover:SetPoint("TOPLEFT", 0, -y)
-        self.levelHover:SetPoint("TOPRIGHT", 0, -y)
-        self.levelHover:SetHeight(lh)
-        y = y + lh + S["space-1"]
-        self.head:SetShown(wear)
-        for _, r in ipairs(self.rows) do
-            r.label:SetShown(wear)
-            r.value:SetShown(wear)
+        local y = GEAR_HEAD_H
+        local function place(r: GearRow)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:SetPoint("TOPRIGHT", 0, -y)
+            y = y + GEAR_ROW_H
         end
-        if wear then
-            y = y + S["space-2"]
-            self.head:ClearAllPoints()
-            self.head:SetPoint("TOPLEFT", 0, -y)
-            y = y + T.type.header.lineHeight + S["space-2"]
-            for _, r in ipairs(self.rows) do
-                r.label:ClearAllPoints()
-                r.label:SetPoint("TOPLEFT", 0, -y)
-                r.value:ClearAllPoints()
-                r.value:SetPoint("TOPRIGHT", 0, -y)
-                r.value:SetPoint("LEFT", r.label, "RIGHT", S["space-3"], 0)
-                y = y + lh + S["space-1"]
+        place(self.level)
+        for _, r in ipairs(self.rows) do
+            r:SetShown(wear)
+            if wear then
+                place(r)
             end
         end
         self:SetHeight(y)
+        self.height = y
         return y
     end
 end
@@ -452,7 +454,11 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     readonly slotSkins: { [Frame]: ItemSlotSkin } = {}
     readonly slotUpdates: (() -> ())[] = {}
     readonly wear: { [Frame]: WearOverlay } = {}
-    wearBlock: WearBlock? = nil
+    -- the stats' scroll area (Blizzard's list and the Gear category in it),
+    -- Blizzard's list, the category
+    statsScroll: ScrollArea? = nil
+    statsBox: Frame? = nil
+    gear: Gear? = nil
     -- a stat row's rule (stat rows have it shown, heads hidden)
     readonly statRules: { [Frame]: Texture } = {}
     -- the right pane toggle's chevron
@@ -966,44 +972,102 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
                 o.pct:SetShown(v.pct ~= nil)
             end
         end
-        self:UpdateWearBlock()
+        self:UpdateGear()
         self:UpdateSlots()
     end
 
-    function BuildWearBlock()
+    -- The stats scroll as SuuUI's area, so the Gear category can follow
+    -- Blizzard's categories. Blizzard's list (its ScrollBox) goes into the
+    -- area, taller than all its rows ever are, so it never scrolls itself
+    -- and makes a row for every stat (it makes rows for what fits); the
+    -- category hangs under its last row, and the area scrolls both.
+    -- Nothing of Blizzard's is called or written: Blizzard's own code fills
+    -- the list (a row or category added there tainted its update, and its
+    -- health and power bars then failed on secret values); SuuUI reads the
+    -- list's height from its view after each update. The box is resized
+    -- here once; its own size handler runs in the client's layout pass.
+    function BuildGear()
         local pane = frame("CharacterStatsPaneScrollBox")
         local box = frames.asFrame(tbl.field(pane, "ScrollBox"))
-        if not (pane and box) or self.wearBlock then
+        if not (pane and box) or self.gear then
             return
         end
-        self.wearBlock = WearBlock.new(pane, box)
+        local scroll = UI.ScrollArea(pane, S["space-2"])
+        scroll:SetPoint("TOPLEFT", 10, -8)
+        scroll:SetPoint("BOTTOMRIGHT", -(14 + S["space-2"]), 8)
+        local child = scroll.child
+        scroll:HookScript("OnSizeChanged", function(_: Frame, w: number)
+            child:SetWidth(w)
+        end)
+        box:SetParent(child)
+        box:ClearAllPoints()
+        box:SetPoint("TOPLEFT", child, "TOPLEFT")
+        box:SetPoint("TOPRIGHT", child, "TOPRIGHT")
+        box:SetHeight(STATS_BOX_H)
+        -- the wheel over Blizzard's rows scrolls the area (the box has
+        -- nothing to scroll)
+        box:EnableMouseWheel(false)
+        local bar = frames.asFrame(tbl.field(pane, "ScrollBar"))
+        if bar then
+            bar:Hide()
+        end
+        local gear = Gear.new(child)
+        gear:SetFrameLevel(box:GetFrameLevel() + 20)
+        self.statsScroll, self.statsBox, self.gear = scroll, box, gear
+        -- after each of the list's updates: its height read again
+        -- the item level read again as the stats show
+        hookScript(pane, "OnShow", function()
+            self:UpdateGear()
+        end)
+        local list = tbl.field(pane, "ScrollBox")
+        if tbl.field(list, "Update") then
+            hook(list, "Update", function()
+                self:FitGear()
+            end)
+        end
+        self:FitGear()
     end
 
-    function UpdateWearBlock()
-        local blk = self.wearBlock
-        if not blk then
+    -- Blizzard's list's height (its rows and padding, as its view counted
+    -- them in its last update; read, never asked for: calling its methods
+    -- runs them tainted), the category under it, the area's range both.
+    function FitGear()
+        local scroll, gear = self.statsScroll, self.gear
+        if not (scroll and gear) then
             return
         end
-        local box = blk.box
+        local extent = secret.asNumber(tbl.field(self.statsBox, "view", "extent")) or 0
+        local child = scroll.child
+        gear:ClearAllPoints()
+        gear:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -extent)
+        gear:SetPoint("TOPRIGHT", child, "TOPRIGHT", 0, -extent)
+        child:SetHeight(math.max(1, extent + (gear:IsShown() and gear.height or 0)))
+    end
+
+    function UpdateGear()
+        local gear = self.gear
+        if not gear then
+            return
+        end
         local d = SuuUI.Durability()
         local wear = d ~= nil and d.parts.gear == true and d.lowest ~= nil
         local worn, carried = itemLevels()
         if not wear and not worn then
-            blk:Hide()
-            box:SetPoint("BOTTOMRIGHT", -30, 30)
+            gear:Hide()
+            self:FitGear()
             return
         end
-        local h = blk:Layout(wear)
-        box:SetPoint("BOTTOMRIGHT", -30, 8 + h + S["space-4"])
-        blk:Show()
-        blk.level.value:SetValue(worn and tostring(worn) or "–")
-        blk.worn, blk.carried = worn, carried
+        gear:Layout(wear)
+        gear:Show()
+        gear.level.value:SetValue(worn and tostring(worn) or "–")
+        gear.worn, gear.carried = worn, carried
         if d and wear then
             local lowest, damaged, average = wearRows(d)
-            blk.rows[1].value:SetValue(lowest)
-            blk.rows[2].value:SetValue(damaged)
-            blk.rows[3].value:SetValue(average)
+            gear.rows[1].value:SetValue(average)
+            gear.rows[2].value:SetValue(lowest)
+            gear.rows[3].value:SetValue(damaged)
         end
+        self:FitGear()
     end
 
     -- A row of the stats pane: a category head (one text, a banner) or a stat
@@ -1458,7 +1522,7 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         end
         self:SkinModel()
         self:SkinStatsPane()
-        self:BuildWearBlock()
+        self:BuildGear()
         self:UpdateWear()
         self:SkinSidebar()
         self:SkinPet()
@@ -1645,11 +1709,11 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     override function OnEnable()
         self:OnGameEvent("PLAYER_EQUIPMENT_CHANGED", function()
             self:UpdateSlots()
-            self:UpdateWearBlock()
+            self:UpdateGear()
         end)
-        -- the item level under the stats
+        -- the item level in the Gear category
         self:OnGameEvent("PLAYER_AVG_ITEM_LEVEL_UPDATE", function()
-            self:UpdateWearBlock()
+            self:UpdateGear()
         end)
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
             self:UpdateIdentity()

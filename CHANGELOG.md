@@ -4,7 +4,7 @@
 
 ### New
 
-- The character window shows your average item level under the stats, above Durability; hover it for the average over all the items you carry.
+- The character window's stats end with a Gear category: your average item level (hover it for the average over all the items you carry) and, with Durability on, your gear's durability. It scrolls with the other stats instead of sitting under them.
 
 ## 0.6.28 (2026-11-09)
 
