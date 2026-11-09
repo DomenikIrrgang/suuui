@@ -1,0 +1,137 @@
+-- Units/RankUpgrade: a learned rank replaces your best rank before it on
+-- every action slot (lower ranks stay), says so once, waits for the end of
+-- combat and an empty cursor; off, nothing changes.
+
+import test, expect, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import RankUpgrader from "/Units/RankUpgrade"
+import expectNoErrors from "../../helpers"
+
+-- Test Bolt, ranks 1 to 4 (made up)
+local R1, R2, R3, R4 = 990001, 990002, 990003, 990004
+-- slots: the main bar, its second page, a form bar's, bar 5's
+local MAIN, PAGE2, FORM, BAR5 = 1, 13, 75, 50
+
+local said: string[] = {}
+local on = true
+
+local function upgrader(): RankUpgrader
+    local u = RankUpgrader.new(function(text: string)
+        said[#said + 1] = text
+    end, function(): boolean
+        return on
+    end)
+    u.best["Test Bolt"] = 3
+    return u
+end
+
+local function slot(n: number): unknown
+    local _, id = GetActionInfo(n)
+    return id
+end
+
+@beforeEach
+local function fresh()
+    said = {}
+    on = true
+    for i, id in ipairs({ R1, R2, R3, R4 }) do
+        mock.defineSpell(id, { name = "Test Bolt", subtext = "Rank " .. i })
+    end
+    mock.defineSpell(990100, { name = "Other Bolt", subtext = "Rank 3" })
+    for _, n in ipairs({ MAIN, PAGE2, FORM, BAR5, 2, 3 }) do
+        mock.setAction(n, nil)
+    end
+    mock.setAction(MAIN, { type = "spell", id = R3 })
+    mock.setAction(PAGE2, { type = "spell", id = R3 })
+    mock.setAction(FORM, { type = "spell", id = R3 })
+    mock.setAction(BAR5, { type = "spell", id = R1 })
+    mock.setAction(2, { type = "spell", id = 990100 })
+    mock.setAction(3, { type = "spell", id = R2 })
+end
+
+@test("a learned rank replaces your best before it on every bar; lower ranks and other spells stay")
+local function upgrades()
+    local u = upgrader()
+    u:Learned(R4)
+    expect(slot(MAIN)).toBe(R4)
+    expect(slot(PAGE2)).toBe(R4)
+    expect(slot(FORM)).toBe(R4)
+    expect(slot(BAR5)).toBe(R1)
+    expect(slot(3)).toBe(R2)
+    expect(slot(2)).toBe(990100)
+    expect(GetCursorInfo()).toBeNil()
+    expect(#said).toBe(1)
+    expect(said[1]:find("Rank 4 replaced Rank 3 on 3 buttons.", 1, true) ~= nil).toBe(true)
+    expect(u.best["Test Bolt"]).toBe(4)
+    expectNoErrors()
+end
+
+@test("a rank skipped: your best before is still the one replaced")
+local function skipped()
+    local u = upgrader()
+    u.best["Test Bolt"] = 2
+    u:Learned(R4)
+    expect(slot(3)).toBe(R4)
+    expect(slot(MAIN)).toBe(R3)
+    expect(said[1]:find("on 1 button.", 1, true) ~= nil).toBe(true)
+end
+
+@test("two ranks learned one after the other: each replaces the one before")
+local function twoRanks()
+    local u = upgrader()
+    u.best["Test Bolt"] = 2
+    u:Learned(R3)
+    u:Learned(R4)
+    expect(slot(3)).toBe(R4)
+    expect(slot(MAIN)).toBe(R4)
+    expect(slot(BAR5)).toBe(R1)
+    expect(#said).toBe(2)
+end
+
+@test("off: nothing changes, but the best rank is still kept")
+local function off()
+    on = false
+    local u = upgrader()
+    u:Learned(R4)
+    expect(slot(MAIN)).toBe(R3)
+    expect(#said).toBe(0)
+    expect(u.best["Test Bolt"]).toBe(4)
+end
+
+@test("a new spell or a lower rank learned: nothing to replace")
+local function nothingBefore()
+    local u = upgrader()
+    u.best["Test Bolt"] = nil
+    u:Learned(R4)
+    expect(slot(MAIN)).toBe(R3)
+    u.best["Test Bolt"] = 3
+    u:Learned(R2)
+    expect(slot(3)).toBe(R2)
+    expect(#said).toBe(0)
+end
+
+@test("in combat it waits for the end of combat")
+local function combat()
+    local u = upgrader()
+    mock.player:enterCombat()
+    u:Learned(R4)
+    expect(slot(MAIN)).toBe(R3)
+    mock.player:leaveCombat()
+    u:Apply()
+    expect(slot(MAIN)).toBe(R4)
+    expect(#said).toBe(1)
+end
+
+@test("with something on the cursor it waits until the cursor is empty")
+local function cursorBusy()
+    local u = upgrader()
+    C_Spell.PickupSpell(990100)
+    u:Learned(R4)
+    expect(slot(MAIN)).toBe(R3)
+    mock.advanceTime(1.1)
+    expect(slot(MAIN)).toBe(R3)
+    ClearCursor()
+    mock.advanceTime(1.1)
+    expect(slot(MAIN)).toBe(R4)
+    expect(GetCursorInfo()).toBeNil()
+end

@@ -48,6 +48,7 @@ import type Panel from "/UI/Panel"
 import type Position from "/EditMode/EditMode"
 import type ActionBar from "/UI/ActionBar"
 import type ToggleChips from "/UI/Pickers"
+import RankUpgrader from "/Units/RankUpgrade"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -64,6 +65,8 @@ local DEFAULTS = {
     -- ("1" to "8", "stance", "pet"), in KEY_BARS order.
     showKeys = true,
     keyBars = { "1", "2", "3", "4", "5", "6", "7", "8", "stance", "pet" },
+    -- a learned rank replaces the one before it on the bars (Units/RankUpgrade)
+    upgradeRanks = true,
     showEmpty = true,
     showXP = true,
     -- the XP fill in the game's own colours (blue rested, purple not)
@@ -534,6 +537,17 @@ local SECTION: SettingsSection = {
                 },
             },
         },
+        {
+            title = "Spells",
+            rows = {
+                {
+                    key = "upgradeRanks",
+                    label = "Upgrade spell ranks",
+                    control = "toggle",
+                    description = "When you learn a new rank, it replaces the rank you had before on every bar (forms and stances too). Lower ranks you placed on purpose stay; macros aren't changed. A chat line says what changed.",
+                },
+            },
+        },
     },
 }
 
@@ -684,6 +698,8 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     xpShown: boolean? = nil
     -- the XP fill's token now (repainted only when it changes)
     xpFill: string? = nil
+    -- learned ranks onto the bars
+    ranks: RankUpgrader? = nil
 
     constructor()
         super({
@@ -1240,6 +1256,21 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         if self:Get("showXP") then
             self:OnGameEvent("PLAYER_ENTERING_WORLD", suppressTracking)
         end
+        local ranks = RankUpgrader.new(function(text: string)
+            self:Print(text)
+        end, function(): boolean
+            return self:Get("upgradeRanks") == true
+        end)
+        self.ranks = ranks
+        self:OnGameEvent("LEARNED_SPELL_IN_SKILL_LINE", function(_, spellID: number)
+            ranks:Learned(spellID)
+        end)
+        self:OnGameEvent("SPELLS_CHANGED", function()
+            ranks:BookChanged()
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            ranks:Apply()
+        end)
     end
 end
 
