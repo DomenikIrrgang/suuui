@@ -1,0 +1,118 @@
+-- Diagnostics/AnchorsProbe.wowlua
+-- "/suu probe anchors": does the game leave a frame unplaced that was anchored
+-- before what it hangs on had a place (SuuUI's bag row, wowlua PROBES item 1;
+-- keybind mode's Done, 2026-11-09)? Runs four cases by itself and records each
+-- box's GetLeft/GetTop now, a frame later and a second later (nil: no place):
+--   A  a box anchored to a row before the row and its parent have points;
+--      then they get points; then the row is anchored again
+--   B  a box anchored to a parent with a width but no height; the height set
+--      in the same frame
+--   C  as B, the height set a frame later
+--   D  a box anchored to a sized parent without points; the parent's point set
+--      a frame later
+-- Saved in SuuUIProbe.anchors on /reload; the test frames hide after 3 s.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import after from "wowlua:timer"
+
+local lines: string[] = {}
+
+local function line(s: string)
+    lines[#lines + 1] = s
+    DB.probe.anchors = lines
+end
+
+local function at(name: string, when: string, f: Frame)
+    local l, t = f:GetLeft(), f:GetTop()
+    line(("%s %s: left=%s top=%s visible=%s"):format(name, when, tostring(l), tostring(t), tostring(f:IsVisible())))
+end
+
+-- a small coloured box (so it would show if placed)
+local function box(parent: Frame, r: number, g: number, b: number): Frame
+    local f = CreateFrame("Frame", nil, parent)
+    f:SetSize(40, 20)
+    local t = f:CreateTexture()
+    t:SetAllPoints()
+    t:SetColorTexture(r, g, b)
+    return f
+end
+
+-- now, a frame later and a second later
+local function watch(name: string, f: Frame)
+    at(name, "now", f)
+    after(0, function()
+        at(name, "next frame", f)
+    end)
+    after(1, function()
+        at(name, "1s", f)
+    end)
+end
+
+export function command()
+    wipe(lines)
+    line("anchors probe " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+
+    -- A: anchored before the row and its parent have points
+    local P = CreateFrame("Frame", nil, UIParent)
+    P:SetSize(200, 30)
+    local R = CreateFrame("Frame", nil, P)
+    R:SetSize(1, 30)
+    local C = box(R, 1, 0, 0)
+    C:SetPoint("LEFT", R, "LEFT", 50, 0)
+    R:SetPoint("TOPLEFT", P, "TOPLEFT")
+    P:SetPoint("CENTER", 0, -100)
+    made[#made + 1] = P
+    watch("A", C)
+    after(1.5, function()
+        R:ClearAllPoints()
+        R:SetPoint("TOPLEFT", P, "TOPLEFT")
+        at("A", "row anchored again", C)
+        after(0, function()
+            at("A", "row anchored again, next frame", C)
+        end)
+    end)
+
+    -- B: a parent with no height yet, the height set in the same frame
+    local B = CreateFrame("Frame", nil, UIParent)
+    B:SetPoint("CENTER", 0, 100)
+    B:SetWidth(100)
+    local D = box(B, 0, 1, 0)
+    D:SetPoint("TOPLEFT", B, "TOPLEFT")
+    B:SetHeight(50)
+    made[#made + 1] = B
+    watch("B", D)
+
+    -- C: as B, the height set a frame later
+    local B2 = CreateFrame("Frame", nil, UIParent)
+    B2:SetPoint("CENTER", 150, 100)
+    B2:SetWidth(100)
+    local D2 = box(B2, 0, 0, 1)
+    D2:SetPoint("TOPLEFT", B2, "TOPLEFT")
+    made[#made + 1] = B2
+    at("C", "before height", D2)
+    after(0, function()
+        B2:SetHeight(50)
+        watch("C", D2)
+    end)
+
+    -- D: a sized parent whose point comes a frame later
+    local P2 = CreateFrame("Frame", nil, UIParent)
+    P2:SetSize(100, 50)
+    local D3 = box(P2, 1, 1, 0)
+    D3:SetPoint("TOPLEFT", P2, "TOPLEFT")
+    made[#made + 1] = P2
+    at("D", "before point", D3)
+    after(0, function()
+        P2:SetPoint("CENTER", -150, 100)
+        watch("D", D3)
+    end)
+
+    after(3, function()
+        for _, f in ipairs(made) do
+            f:Hide()
+        end
+        print("Anchors probe saved: /reload to write it out.")
+    end)
+end
