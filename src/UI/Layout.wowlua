@@ -68,6 +68,8 @@ export function isHooked(child: Region): boolean
 end
 
 local pending: { [Layout]: boolean } = {}
+-- layouts whose container changed size: anchored again on the next frame's flush
+local again: { [Layout]: boolean } = {}
 local flusher = CreateFrame("Frame")
 flusher:Hide()
 
@@ -270,6 +272,15 @@ export abstract class Layout
         if changed and outer then
             outer.layout:Invalidate()
         end
+        -- ... and anchors its children once more on the next frame: in the game a
+        -- frame anchored while what it hangs on has no place yet is never
+        -- placed until anchored again (keybind mode's Done, missing on its
+        -- first open, probed 2026-11-09: anchored, shown, no rect after a
+        -- second; the bags' row the same, wowlua PROBES item 1)
+        if changed then
+            again[self] = true
+            flusher:Show()
+        end
     end
 
     -- the size it was laid out at, kept to ignore its echo
@@ -283,6 +294,12 @@ end
 
 flusher:SetScript("OnUpdate", function(self)
     self:Hide()
+    -- (last frame's grown containers, placed by now: their children anchored again)
+    local redo = again
+    again = {}
+    for l in pairs(redo) do
+        pending[l] = true
+    end
     -- A container that grows dirties the layout it sits in; settle in a few passes.
     for _ = 1, 8 do
         if not next(pending) then

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Keybind mode: the Done button shows the first time you open it too (buttons measure their label again a moment after they appear).
+- Keybind mode: the Done button shows the first time you open it too. SuuUI's layouts place their contents once more after they grow, as the game leaves a frame unplaced that was anchored before its parent had a place.
 
 ## 0.6.26 (2026-11-08)
 
