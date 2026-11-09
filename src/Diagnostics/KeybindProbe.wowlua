@@ -1,0 +1,83 @@
+-- Diagnostics/KeybindProbe.wowlua
+-- "/suu probe keybind": keybind mode's Done button was missing on the mode's
+-- first open in game (2026-11-09), there on the second; the emulator draws it
+-- on the first. Opens keybind mode and prints the panel and every frame in
+-- its body (shown, visible, alpha, size, place, a button's label width) now,
+-- a frame later and a second later: while the mode is open the keyboard is
+-- the mode's, so nothing can be typed. Esc closes it as usual. Saved in
+-- SuuUIProbe.keybind on /reload (each run appends: the first open, then the
+-- next).
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as keybindMode from "/UI/KeybindMode"
+
+-- the lines of this session's runs, saved with SuuUIProbe
+local lines: string[] = {}
+
+local function line(s: string)
+    lines[#lines + 1] = s
+    DB.probe.keybind = lines
+end
+
+local function report(when: string)
+    local p = keybindMode.currentPanel()
+    if not p then
+        line(("%s: no panel"):format(when))
+        return
+    end
+    local l, b, w, h = p:GetRect()
+    line(
+        ("%s: panel visible=%s %sx%s at %s,%s"):format(
+            when,
+            tostring(p:IsVisible()),
+            tostring(w),
+            tostring(h),
+            tostring(l),
+            tostring(b)
+        )
+    )
+    local bl, bb, bw, bh = p.body:GetRect()
+    line(("  body %sx%s at %s,%s"):format(tostring(bw), tostring(bh), tostring(bl), tostring(bb)))
+    for i, c in ipairs({ p.body:GetChildren() }) do
+        local cl, cb, cw, ch = c:GetRect()
+        local point, _, relPoint, x, y = c:GetPoint(1)
+        local label = frames.asFontString(tbl.field(c, "label"))
+        line(
+            ("  %d %s shown=%s visible=%s alpha=%s %sx%s at %s,%s point=%s>%s %s,%s label=%s"):format(
+                i,
+                c:GetObjectType(),
+                tostring(c:IsShown()),
+                tostring(c:IsVisible()),
+                tostring(c:GetEffectiveAlpha()),
+                tostring(cw),
+                tostring(ch),
+                tostring(cl),
+                tostring(cb),
+                tostring(point),
+                tostring(relPoint),
+                tostring(x),
+                tostring(y),
+                label and tostring(label:GetUnboundedStringWidth()) or "-"
+            )
+        )
+    end
+end
+
+export function command()
+    if not keybindMode.enter() then
+        return
+    end
+    line(("run %d"):format(#lines == 0 and 1 or 2))
+    report("now")
+    after(0, function()
+        report("next frame")
+    end)
+    after(1, function()
+        report("1s")
+        print("Keybind probe saved: /reload to write it out.")
+    end)
+end

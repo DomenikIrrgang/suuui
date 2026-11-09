@@ -1,0 +1,296 @@
+-- Diagnostics/AnchorsProbe.wowlua
+-- "/suu probe anchors": does the game leave a frame unplaced that was anchored
+-- before what it hangs on had a place (SuuUI's bag row, wowlua PROBES item 1;
+-- keybind mode's Done, 2026-11-09)? Runs four cases by itself and records each
+-- box's GetLeft/GetTop now, a frame later and a second later (nil: no place):
+--   A  a box anchored to a row before the row and its parent have points;
+--      then they get points; then the row is anchored again
+--   B  a box anchored to a parent with a width but no height; the height set
+--      in the same frame
+--   C  as B, the height set a frame later
+--   D  a box anchored to a sized parent without points; the parent's point set
+--      a frame later
+-- Saved in SuuUIProbe.anchors on /reload; the test frames hide after 3 s.
+-- "/suu probe anchors2" (found by panelanchors2: in keybind mode's panel a
+-- Button stays unplaced where a plain frame gets placed): the same cases with
+-- each box a Button, and E a Button anchored to a parent already placed.
+-- Saved in SuuUIProbe.anchors2.
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import after from "wowlua:timer"
+
+local lines: string[] = {}
+local key = "anchors"
+local kind: "Frame" | "Button" = "Frame"
+
+local function line(s: string)
+    lines[#lines + 1] = s
+    DB.probe[key] = lines
+end
+
+local function at(name: string, when: string, f: Frame)
+    local l, t = f:GetLeft(), f:GetTop()
+    line(("%s %s: left=%s top=%s visible=%s"):format(name, when, tostring(l), tostring(t), tostring(f:IsVisible())))
+end
+
+-- a small coloured box (so it would show if placed)
+local function box(parent: Frame, r: number, g: number, b: number): Frame
+    local f = CreateFrame(kind, nil, parent)
+    f:SetSize(40, 20)
+    local t = f:CreateTexture()
+    t:SetAllPoints()
+    t:SetColorTexture(r, g, b)
+    return f
+end
+
+-- now, a frame later and a second later
+local function watch(name: string, f: Frame)
+    at(name, "now", f)
+    after(0, function()
+        at(name, "next frame", f)
+    end)
+    after(1, function()
+        at(name, "1s", f)
+    end)
+end
+
+local function run(made: Frame[])
+    -- A: anchored before the row and its parent have points
+    local P = CreateFrame("Frame", nil, UIParent)
+    P:SetSize(200, 30)
+    local R = CreateFrame("Frame", nil, P)
+    R:SetSize(1, 30)
+    local C = box(R, 1, 0, 0)
+    C:SetPoint("LEFT", R, "LEFT", 50, 0)
+    R:SetPoint("TOPLEFT", P, "TOPLEFT")
+    P:SetPoint("CENTER", 0, -100)
+    made[#made + 1] = P
+    watch("A", C)
+    after(1.5, function()
+        R:ClearAllPoints()
+        R:SetPoint("TOPLEFT", P, "TOPLEFT")
+        at("A", "row anchored again", C)
+        after(0, function()
+            at("A", "row anchored again, next frame", C)
+        end)
+    end)
+
+    -- B: a parent with no height yet, the height set in the same frame
+    local B = CreateFrame("Frame", nil, UIParent)
+    B:SetPoint("CENTER", 0, 100)
+    B:SetWidth(100)
+    local D = box(B, 0, 1, 0)
+    D:SetPoint("TOPLEFT", B, "TOPLEFT")
+    B:SetHeight(50)
+    made[#made + 1] = B
+    watch("B", D)
+
+    -- C: as B, the height set a frame later
+    local B2 = CreateFrame("Frame", nil, UIParent)
+    B2:SetPoint("CENTER", 150, 100)
+    B2:SetWidth(100)
+    local D2 = box(B2, 0, 0, 1)
+    D2:SetPoint("TOPLEFT", B2, "TOPLEFT")
+    made[#made + 1] = B2
+    at("C", "before height", D2)
+    after(0, function()
+        B2:SetHeight(50)
+        watch("C", D2)
+    end)
+
+    -- D: a sized parent whose point comes a frame later
+    local P2 = CreateFrame("Frame", nil, UIParent)
+    P2:SetSize(100, 50)
+    local D3 = box(P2, 1, 1, 0)
+    D3:SetPoint("TOPLEFT", P2, "TOPLEFT")
+    made[#made + 1] = P2
+    at("D", "before point", D3)
+    after(0, function()
+        P2:SetPoint("CENTER", -150, 100)
+        watch("D", D3)
+    end)
+end
+
+local function finish(made: Frame[], name: string)
+    after(3, function()
+        for _, f in ipairs(made) do
+            f:Hide()
+        end
+        print(name .. " saved: /reload to write it out.")
+    end)
+end
+
+export function command()
+    wipe(lines)
+    key = "anchors"
+    kind = "Frame"
+    line("anchors probe " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    run(made)
+    finish(made, "Anchors probe")
+end
+
+export function command2()
+    wipe(lines)
+    key = "anchors2"
+    kind = "Button"
+    line("anchors probe 2 (Buttons) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    run(made)
+    -- E: a Button anchored to a parent already placed
+    local P3 = CreateFrame("Frame", nil, UIParent)
+    P3:SetSize(100, 50)
+    P3:SetPoint("CENTER", 150, -100)
+    local D4 = box(P3, 1, 0, 1)
+    D4:SetPoint("TOPLEFT", P3, "TOPLEFT")
+    made[#made + 1] = P3
+    watch("E", D4)
+    -- F: as a SuuUI panel's body: anchored TOPLEFT and TOPRIGHT in a placed
+    -- parent, 1x1; the Button anchored to it, then the body's height set
+    local P4 = CreateFrame("Frame", nil, UIParent)
+    P4:SetSize(200, 80)
+    P4:SetPoint("CENTER", -150, -100)
+    local body = CreateFrame("Frame", nil, P4)
+    body:SetPoint("TOPLEFT", P4, "TOPLEFT", 10, -10)
+    body:SetPoint("TOPRIGHT", P4, "TOPRIGHT", -10, -10)
+    body:SetSize(1, 1)
+    local D5 = box(body, 0, 1, 1)
+    D5:SetPoint("TOPLEFT", body, "TOPLEFT")
+    body:SetHeight(30)
+    made[#made + 1] = P4
+    watch("F", D5)
+    finish(made, "Anchors probe 2")
+end
+
+-- anchors3 (anchors2: plain Buttons anchored early are placed; in keybind
+-- mode's panel they stay unplaced): SuuUI's panel and stack copied with plain
+-- calls, one change each. G: a panel 320 wide; its body anchored TOPLEFT and
+-- TOPRIGHT, 1x1, its OnSizeChanged setting the panel's height; a Button 55x30
+-- in the body, its OnSizeChanged hooked (as the stack does); shown; on the
+-- next OnUpdate the Button anchored TOPLEFT to the body and the body made 30
+-- high (as the stack's flush does). H: G with a Frame. I: G without the
+-- body's OnSizeChanged. J: G with the OnUpdate's steps done at once.
+-- K: G with the Button's rect asked for before it's anchored. L: G without
+-- the hook on the Button.
+type Case = {
+    name: string,
+    kind: "Frame" | "Button",
+    noFit?: boolean,
+    atOnce?: boolean,
+    askEarly?: boolean,
+    noHook?: boolean,
+    directResize?: boolean,
+    emptyScript?: boolean,
+    heightFirst?: boolean,
+    deferFit?: boolean,
+}
+
+local function replica(n: number, c: Case, made: Frame[])
+    local P = CreateFrame("Frame", nil, UIParent)
+    P:SetFrameStrata("FULLSCREEN_DIALOG")
+    local tex = P:CreateTexture()
+    tex:SetAllPoints()
+    tex:SetColorTexture(0.1, 0.1, 0.1, 0.8)
+    local body = CreateFrame("Frame", nil, P)
+    body:SetPoint("TOPLEFT", 12, -40)
+    body:SetSize(1, 1)
+    P:SetWidth(320)
+    body:SetPoint("TOPRIGHT", -12, -40)
+    local function fit()
+        local _, h = body:GetSize()
+        P:SetHeight(40 + h + 12)
+    end
+    if c.emptyScript then
+        body:SetScript("OnSizeChanged", function() end)
+    elseif c.deferFit then
+        body:SetScript("OnSizeChanged", function()
+            after(0, fit)
+        end)
+    elseif not c.noFit then
+        body:SetScript("OnSizeChanged", fit)
+    end
+    P:SetHeight(40 + 1 + 12)
+    local item = CreateFrame(c.kind, nil, body)
+    item:SetSize(55, 30)
+    local t = item:CreateTexture()
+    t:SetAllPoints()
+    t:SetColorTexture(1, 0, 0)
+    if not c.noHook then
+        item:HookScript("OnSizeChanged", function(_: Frame, w: number, h: number)
+            line(("%s item OnSizeChanged %s x %s"):format(c.name, tostring(w), tostring(h)))
+        end)
+    end
+    P:SetPoint("TOPLEFT", 20 + ((n - 1) % 3) * 340, -120 - math.floor((n - 1) / 3) * 160)
+    made[#made + 1] = P
+    P:Show()
+    if c.askEarly then
+        at(c.name, "before anchored", item)
+    end
+    local function place()
+        if c.heightFirst then
+            body:SetHeight(30)
+        end
+        item:ClearAllPoints()
+        item:SetPoint("TOPLEFT", body, "TOPLEFT", 0, 0)
+        if not c.heightFirst then
+            body:SetHeight(30)
+        end
+        if c.directResize then
+            fit()
+        end
+    end
+    if c.atOnce then
+        place()
+        watch(c.name, item)
+        return
+    end
+    local driver = CreateFrame("Frame")
+    driver:SetScript("OnUpdate", function(self: Frame)
+        self:Hide()
+        place()
+        watch(c.name, item)
+    end)
+end
+
+export function command3()
+    wipe(lines)
+    key = "anchors3"
+    line("anchors probe 3 (panel copies) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    local cases: Case[] = {
+        { name = "G", kind = "Button" },
+        { name = "H", kind = "Frame" },
+        { name = "I", kind = "Button", noFit = true },
+        { name = "J", kind = "Button", atOnce = true },
+        { name = "K", kind = "Button", askEarly = true },
+        { name = "L", kind = "Button", noHook = true },
+    }
+    for n, c in ipairs(cases) do
+        replica(n, c, made)
+    end
+    finish(made, "Anchors probe 3")
+end
+
+-- anchors4 (anchors3: G, H, K, L lost the item, I without the body's
+-- OnSizeChanged kept it, J all at once kept it): which part of the fit does
+-- it? G again; M no script, the panel's height set right after the body's;
+-- N an OnSizeChanged doing nothing; O the body's height set before the item
+-- is anchored; P the fit a frame after the OnSizeChanged.
+export function command4()
+    wipe(lines)
+    key = "anchors4"
+    line("anchors probe 4 (the fit) " .. date("%Y-%m-%d %H:%M"))
+    local made: Frame[] = {}
+    local cases: Case[] = {
+        { name = "G", kind = "Button" },
+        { name = "M", kind = "Button", noFit = true, directResize = true },
+        { name = "N", kind = "Button", emptyScript = true },
+        { name = "O", kind = "Button", heightFirst = true },
+        { name = "P", kind = "Button", deferFit = true },
+    }
+    for n, c in ipairs(cases) do
+        replica(n, c, made)
+    end
+    finish(made, "Anchors probe 4")
+end
