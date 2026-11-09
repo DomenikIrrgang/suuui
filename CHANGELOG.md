@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keybind mode: the Done button shows the first time you open it too (buttons measure their label again a moment after they appear).
+
 ## 0.6.26 (2026-11-08)
 
 ### New
