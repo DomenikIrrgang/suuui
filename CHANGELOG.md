@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The mail window closes when you walk away from the mailbox.
+
 ## 0.6.28 (2026-11-09)
 
 ### New
