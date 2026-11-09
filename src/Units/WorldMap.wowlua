@@ -57,6 +57,8 @@ import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
 import * as lazyData from "/Core/Data"
+import type QuestStarts from "/Data/QuestStarts"
+import type MapPlaces from "/Data/MapPlaces"
 
 -- A campfire's time left: m:ss, or out.
 export function fireLeft(s: number): string
@@ -475,6 +477,21 @@ local function judge(qrow: unknown[], id: number, me: Me, done: { [number]: bool
     end
     return j
 end
+
+-- No quests and no places: the map's pins while the data is being built.
+const NO_STARTS: QuestStarts = {
+    quests = {},
+    objectives = {},
+    tags = {},
+    group = {},
+    maps = {},
+    drops = {},
+    items = {},
+    givers = {},
+    entrances = {},
+    routes = {},
+}
+const NO_PLACES: MapPlaces = { npcs = {}, services = {}, rares = {}, mailboxes = {}, treasures = {}, routes = {} }
 
 local function forgetQuests()
     judged = {}
@@ -1158,10 +1175,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local on = self:Layers()
         local me = self:Player()
         me.mapID = mapID
-        local starts = SuuUI.QuestStarts()
+        -- (the quest and place data not built yet: the other pins now,
+        -- these once it's there; Refresh)
+        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
         local info = errors.tryValue(C_Map.GetMapInfo, mapID)
         local mapName = info and info.name
-        local places = SuuUI.MapPlaces()
+        local places = lazyData.mapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
         local muted = "|cff" .. T.color["ink-muted"].hex
         local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
 
@@ -2242,12 +2261,10 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         -- the quest and place data, built a step a frame the first time
-        -- (3 MB in one frame was a stutter): the pins once it's there
+        -- (3 MB in one frame was a stutter): their pins once it's there,
+        -- the others (marks, flight masters, …) now
         if not self:DataReady() then
-            self.items = {}
-            self:ClearPins()
             self:PrepareData()
-            return
         end
         local mapID = asNumber(f:GetMapID())
         readCalendar()
