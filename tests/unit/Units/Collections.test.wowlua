@@ -19,8 +19,9 @@ import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import internal M, filterEntries, actionLabel, readyIn, toyWhy, day, status, toyCooldown from "/Units/Collections"
 import internal GIFT_ICON, wrapped, giftCounts, petSourceLines, petActionLabel from "/Units/Collections"
-import internal Entry, Parts, Cell, SlotButton from "/Units/Collections"
+import internal Entry, Parts, Cell, SlotButton, data from "/Units/Collections"
 import type CollectionSources from "/Data/CollectionSources"
+import * as lazyData from "/Core/Data"
 import type TooltipData from "/UI/Tooltip"
 import * as frames from "wowlua:frames"
 import expectNoErrors from "../../helpers"
@@ -70,6 +71,9 @@ local function start()
     mount(105, "Night Saber", { usable = false })
     mock.setMounts(MOUNTS)
     mounted = false
+    -- (the real sources built, as after the window's first open; the
+    -- test's in their place)
+    lazyData.collectionSources:Get()
     mock.stub(SuuUI, "CollectionSources", function()
         return SOURCES
     end)
@@ -163,6 +167,24 @@ local function sourceLines()
     expect(M:SourceLine(nil, "appearance", 1)).toBe(TRANSMOG_SOURCE_1)
     expect(M:SourceLine(nil, "mount", nil)).toBe("Source unknown")
     expect(M:SourceLine(nil, "mount", 999)).toBe("Source unknown")
+end
+
+@test("the sources not built yet: none for now, built a step a frame, the window drawn again then")
+local function sourcesLater()
+    mock.stub(lazyData.collectionSources, "Ready", function(): boolean
+        return false
+    end)
+    local waiting: (() -> ())? = nil
+    mock.stub(lazyData.collectionSources, "Prepare", function(_: unknown, done: (() -> ())?)
+        waiting = done
+    end)
+    local d = data()
+    expect(next(d.mount)).toBeNil()
+    expect(#d.toys).toBe(0)
+    local refresh = mock.spy()
+    mock.stub(M, "Refresh", refresh)
+    assert(waiting, "nothing waits for the sources")()
+    expect(refresh).toHaveBeenCalledTimes(1)
 end
 
 @test("a source as a card: every kind with its places, a world drop, more dropping it, the item, the game's kind")

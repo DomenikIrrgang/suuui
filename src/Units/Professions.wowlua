@@ -30,6 +30,7 @@ import * as frames from "wowlua:frames"
 import * as items from "wowlua:item"
 import * as spells from "wowlua:spell"
 import * as chat from "wowlua:chat"
+import * as lazyData from "/Core/Data"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -41,6 +42,22 @@ local asString, asNumber, flag, field = secret.asString, secret.asNumber, secret
 local DEFAULTS = {}
 
 local M: ProfessionsModule
+
+-- Where a recipe is learned (Data/RecipeSources, 1 MB): built on first use,
+-- a step a frame (Core/Data), the window drawn again once it's there; until
+-- then nothing is known.
+local function recipeSources(id: number): RecipeSource[]?
+    local sources = lazyData.recipeSources
+    if sources:Ready() then
+        return SuuUI.RecipeSources(id)
+    end
+    sources:Prepare(function()
+        if M and M:IsEnabled() then
+            M:QueueRender()
+        end
+    end)
+    return nil
+end
 
 local W, H = 720, 600
 local BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
@@ -607,7 +624,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local need: number? = nil
         local mine = self:Recorded(profession, name)
         local mySkill = mine and mine.skill
-        for _, src in ipairs(SuuUI.RecipeSources(id) or {}) do
+        for _, src in ipairs(recipeSources(id) or {}) do
             local skill = src.s
             if src.t == "t" and mySkill then
                 skill = mySkill
@@ -864,7 +881,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local profession = craft and craft.name
         -- the shipped data, with what this account's own characters recorded
         -- at trainers on top (it shows at once, before any update)
-        local list = SuuUI.RecipeSources(id)
+        local list = recipeSources(id)
         local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
         local mine = self:Recorded(profession, info and info.name)
         if mine then
