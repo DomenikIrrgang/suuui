@@ -5,6 +5,7 @@
 
 import after from "wowlua:timer"
 import hook from "wowlua:hooks"
+import * as secret from "wowlua:secret"
 import tokens as T from "/Core/Tokens"
 import * as motion from "/Core/Motion"
 import * as events from "/Core/Events"
@@ -497,11 +498,18 @@ export function scrollArea(parent: Frame, bar: number?): ScrollArea
     -- content that got shorter (or a taller area) pulls the scroll back, so
     -- no empty space stays at the bottom. A frame later: the sizes settle
     -- only after the change (a panel that shrinks with its content), and the
-    -- game's own range is then the truth.
+    -- game's own range is then the truth. In combat the game can give the
+    -- range as a secret (the character window's stats, found in game
+    -- 2026-11-09; their heights stayed plain): then the heights tell it.
     local pending = false
     local function settle()
         pending = false
-        local max = math.max(0, scroll:GetVerticalScrollRange())
+        local range = scroll:GetVerticalScrollRange()
+        local max = math.max(
+            0,
+            secret.readable(range) and range or
+                (secret.asNumber(child:GetHeight()) or 0) - (secret.asNumber(scroll:GetHeight()) or 0)
+        )
         if scroll:GetVerticalScroll() > max then
             scroll:SetVerticalScroll(max)
         end
