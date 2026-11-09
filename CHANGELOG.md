@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The spellbook no longer lists a talent's trainer ranks as coming up when you haven't taken the talent, and numbers them from Rank 2 when you have (Light's Vigil showed "Rank 1, Level 50").
+
 ## 0.6.26 (2026-11-08)
 
 ### New
