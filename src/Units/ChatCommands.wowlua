@@ -89,6 +89,14 @@ local CHIP_H, ROW_H, HEAD_H, MORE_H, NONE_H, TOPIC_H, USAGE_H, FOOT_H = 20, 24, 
 local CMD_W, ALIAS_W, NAME_W = 96, 64, 120
 local CHIPS_H = S["space-2"] + S["space-2"] + CHIP_H + S["space-3"] -- the chip row and its padding
 local TOPIC_COLS = 3
+-- Rows drawn at once for a new text, then each frame while the rest wait:
+-- the whole list (every command for a lone /, hundreds) drawn in one frame
+-- took up to 250 ms in game (dev profiler, 2026-11-10). A palette shows
+-- about a dozen rows; the rest come in over the next frames, and a key
+-- pressed meanwhile starts a new list.
+local ROWS_NOW, ROWS_PER_FRAME = 14, 12
+-- each command's width in the label font, measured once
+local cmdWidths: { [string]: number } = {}
 
 --------------------------------------------------------------------------------
 -- The commands
@@ -649,6 +657,11 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     mark: number = 1
     flat: Entry[] = {}
     drawY: number = 0
+    -- rows waiting for a later frame (ROWS_NOW), in order, from pendingAt
+    pending: (() -> ())[] = {}
+    pendingAt: number = 1
+    drawnNow: number = 0
+    draining: boolean = false
     catalog: Item[]? = nil
     byName: { [string]: Item } = {}
     builtAt: number = 0
@@ -1131,6 +1144,44 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         self:Pal():ClearRows()
         self.flat = {}
         self.drawY = S["space-1"]
+        self.pending, self.pendingAt, self.drawnNow = {}, 1, 0
+    end
+
+    -- Whether a row waits for a later frame (`row` draws it then): the first
+    -- ROWS_NOW rows are drawn at once, the rest ROWS_PER_FRAME a frame.
+    function Defer(row: () -> ()): boolean
+        if self.draining then
+            return false
+        end
+        if #self.pending == 0 and self.drawnNow < ROWS_NOW then
+            self.drawnNow += 1
+            return false
+        end
+        self.pending[#self.pending + 1] = row
+        return true
+    end
+
+    -- The next waiting rows (each frame, while the palette shows).
+    function DrainRows()
+        local list = self.pending
+        local p = self.palette
+        if #list == 0 or not p then
+            return
+        end
+        self.draining = true
+        local i, n = self.pendingAt, 0
+        while i <= #list and n < ROWS_PER_FRAME do
+            list[i]()
+            i += 1
+            n += 1
+        end
+        self.draining = false
+        if i > #list then
+            self.pending, self.pendingAt = {}, 1
+        else
+            self.pendingAt = i
+        end
+        p.scroll.child:SetHeight(self.drawY + S["space-2"])
     end
 
     -- A row Up and Down reach, at the current place.
@@ -1140,6 +1191,11 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawHead(text: string, meta: string?)
+        if self:Defer(function()
+            self:DrawHead(text, meta)
+        end) then
+            return
+        end
         local p = self:Pal()
         local f = p.heads:Take(p.scroll.child, self.drawY, HEAD_H)
         f.text:SetValue(text)
@@ -1148,6 +1204,11 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawLine(text: string, color: string?, h: number?)
+        if self:Defer(function()
+            self:DrawLine(text, color, h)
+        end) then
+            return
+        end
         local p = self:Pal()
         local f = p.lines:Take(p.scroll.child, self.drawY, h or MORE_H)
         f.text:SetValue(text)
@@ -1156,10 +1217,20 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawCommand(item: Shown, typed: string, put: string?)
+        if self:Defer(function()
+            self:DrawCommand(item, typed, put)
+        end) then
+            return
+        end
         local p = self:Pal()
         local r = p.commands:Take(p.scroll.child, self.drawY, ROW_H)
         r.cmd:SetValue(hit(item.cmd, typed))
-        local w = math.max(CMD_W, math.ceil(UI.MeasureText("label", item.cmd)) + 2)
+        local measured = cmdWidths[item.cmd]
+        if not measured then
+            measured = math.ceil(UI.MeasureText("label", item.cmd))
+            cmdWidths[item.cmd] = measured
+        end
+        local w = math.max(CMD_W, measured + 2)
         r.cmd:SetWidth(w)
         local alias = aliasText(item, typed)
         r.alias:SetValue(alias)
@@ -1242,25 +1313,34 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawNames(groups: Group[], prefix: string)
-        local p = self:Pal()
         for _, g in ipairs(groups) do
             self:DrawHead(g.title)
             for _, row in ipairs(g.rows) do
-                local r = p.names:Take(p.scroll.child, self.drawY, ROW_H)
-                r.dot:SetShown(row.diamond == true)
-                if row.diamond then
-                    UI.Paint(r.dot, row.color or "ink")
-                end
-                r.name:ClearAllPoints()
-                r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
-                r.name:SetValue(row.value)
-                r.name:SetColor(row.color or "ink")
-                r.note:SetValue(row.note or "")
-                r.right:SetValue(row.right or "")
-                self:Pickable(r, prefix .. row.value, self.drawY, ROW_H)
-                self.drawY = self.drawY + ROW_H
+                self:DrawName(row, prefix)
             end
         end
+    end
+
+    function DrawName(row: Row, prefix: string)
+        if self:Defer(function()
+            self:DrawName(row, prefix)
+        end) then
+            return
+        end
+        local p = self:Pal()
+        local r = p.names:Take(p.scroll.child, self.drawY, ROW_H)
+        r.dot:SetShown(row.diamond == true)
+        if row.diamond then
+            UI.Paint(r.dot, row.color or "ink")
+        end
+        r.name:ClearAllPoints()
+        r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
+        r.name:SetValue(row.value)
+        r.name:SetColor(row.color or "ink")
+        r.note:SetValue(row.note or "")
+        r.right:SetValue(row.right or "")
+        self:Pickable(r, prefix .. row.value, self.drawY, ROW_H)
+        self.drawY = self.drawY + ROW_H
     end
 
     function DrawArgs(q: Query): string[][]
@@ -1577,6 +1657,8 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
             self:Refresh()
         elseif p and p:IsShown() and self:GameListOn(box) then
             self:Refresh()
+        elseif p and p:IsShown() then
+            self:DrainRows()
         end
     end
 
