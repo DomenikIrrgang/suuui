@@ -1,0 +1,80 @@
+-- Perf scenario: typing a chat command. A / alone (the palette lists every
+-- command), then /i, /in, /inv as the keys come, back to / and on to /s,
+-- /sa, /say and a line: the command palette drawn for each text. In game
+-- the list for a lone / took up to 250 ms in one frame (the dev profiler,
+-- 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local box: EditBox? = nil
+
+local function trigger(name: string, b: Frame)
+    errors.tryMethod(tbl.field(_G, "EventRegistry"), "TriggerEvent", name, b)
+end
+
+local function setText(text: string)
+    local b = assert(box)
+    b:SetText(text)
+    b:SetCursorPosition(#text)
+end
+
+@if(features.perf)
+@test("setup: login, the chat's input focused")
+local function setup()
+    perf.settle(perf.AFTER_LOGIN)
+    local b = CreateFrame("EditBox", nil, UIParent)
+    b:SetSize(300, 24)
+    b:SetPoint("BOTTOMLEFT", 40, 40)
+    b:SetAutoFocus(false)
+    b:Show()
+    b:SetFocus()
+    trigger("ChatFrame.OnEditBoxFocusGained", b)
+    box = b
+    perf.settle(10)
+end
+
+-- the text from a frame on: a / and a pause (the whole list read), then a
+-- key every 8 frames (about 7 a second)
+const KEYS: { [number]: string } = {
+    [1] = "/",
+    [60] = "/i",
+    [68] = "/in",
+    [76] = "/inv",
+    [84] = "/in",
+    [92] = "/i",
+    [100] = "/",
+    [108] = "",
+    [116] = "/",
+    [124] = "/s",
+    [132] = "/sa",
+    [140] = "/say",
+    [148] = "/say h",
+    [156] = "/say hi",
+}
+
+@if(features.perf)
+@test("typing a command")
+local function typing()
+    perf.run(180, function(n: number)
+        local k = KEYS[n]
+        if k then
+            setText(k)
+        end
+    end)
+end
+
+@if(features.perf)
+@test("setup: the input closed")
+local function close()
+    local b = assert(box)
+    b:ClearFocus()
+    trigger("ChatFrame.OnEditBoxFocusLost", b)
+    b:Hide()
+    perf.settle(10)
+end

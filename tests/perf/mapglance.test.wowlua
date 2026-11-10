@@ -1,0 +1,58 @@
+-- Perf scenario: glancing at the map while questing. Eight quests in the
+-- log, the player running; the world map opened (M) every two seconds and
+-- closed half a second later. In game each open was SuuUI's longest frame
+-- of its second, every 10-15 s (13-15 ms; the fifth recording, 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const QUESTS = 8
+
+@if(features.perf)
+@test("setup: login, quests in the log, the map's data built")
+local function setup()
+    mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", subZone = "Goldshire", x = 0.42, y = 0.65 })
+    for i = 1, QUESTS do
+        local id = 9200 + i
+        local giver = mock.spawnUnit({ name = "Map Giver " .. i, level = 30, reaction = "friendly", distance = 3 })
+        mock.defineQuest(id, {
+            title = "Map Quest " .. i,
+            text = "Go, $N.",
+            objective = "Slay mobs.",
+            giver = giver,
+            level = 10,
+            header = "Elwynn Forest",
+            objectives = { { text = "Mob slain", required = 10 } },
+        })
+        mock.player:interact(giver)
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+        AcceptQuest()
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+        giver:despawn()
+    end
+    perf.settle(perf.AFTER_LOGIN)
+    -- opened once (its data built a step a frame), closed
+    ToggleWorldMap()
+    perf.settle(240)
+    ToggleWorldMap()
+    perf.settle(30)
+end
+
+@if(features.perf)
+@test("glancing at the map while running")
+local function glancing()
+    mock.player:setMoving(true)
+    perf.run(480, function(n: number)
+        mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", x = 0.42 + n * 0.0000334, y = 0.65 })
+        if n % 120 == 1 or n % 120 == 31 then
+            ToggleWorldMap()
+        end
+    end)
+    mock.player:setMoving(false)
+end

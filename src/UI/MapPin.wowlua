@@ -97,6 +97,29 @@ export type MapPinData = {
     glow?: string,
 }
 
+-- A pin's data as one string (SetData's same-again check).
+local function dataKey(d: MapPinData): string
+    local arcs = d.arcs
+    return table.concat(
+        {
+            d.glyph or "",
+            d.char or "",
+            d.color or "",
+            d.edge or "",
+            tostring(d.edgeWidth or ""),
+            d.small and "s" or "",
+            d.ring or "",
+            tostring(d.count or ""),
+            d.spin and "p" or "",
+            d.outline and "o" or "",
+            arcs and table.concat(arcs, ",") or "",
+            d.bar or "",
+            d.glow or "",
+        },
+        "|"
+    )
+end
+
 export class MapPin extends Button
     glow: Texture
     hl: Texture
@@ -178,6 +201,8 @@ export class MapPin extends Button
         local box = math.max(4 * px, math.floor(self.size / px + 0.5) * px)
         fit(self.edge, box)
         fit(self.fill, box - 2 * px)
+        -- (its sizes changed: the next SetData draws them again)
+        self.drawnKey = nil
     end
 
     function SetHighlight(state: (boolean | string)?)
@@ -195,7 +220,17 @@ export class MapPin extends Button
         self:SetAlpha(a)
     end
 
+    -- what it was last drawn with (dataKey): the same again draws nothing
+    -- (the world map gives every pin its data on each draw: 300 pins a time,
+    -- most the same, 8 ms in game as the map opened)
+    drawnKey: string? = nil
+
     function SetData(d: MapPinData)
+        local key = dataKey(d)
+        if key == self.drawnKey then
+            return
+        end
+        self.drawnKey = key
         local size = d.small and SMALL or SIZE
         self.size = size
         self:SetSize(size, size)

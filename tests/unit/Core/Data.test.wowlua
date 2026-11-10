@@ -12,18 +12,23 @@ import expectNoErrors from "../../helpers"
 
 type Parts = { a?: number, b?: number, c?: number }
 
--- Three steps, each recorded in `log`.
-local function made(log: string[]): LazyData<Parts>
+-- Three steps, each recorded in `log`; each as long as `ms` (2 by default:
+-- one a frame within the frame's budget).
+local function made(log: string[], ms: number?): LazyData<Parts>
+    local cost = ms or 2
     return LazyData.new("Test", {
         function(t: Parts)
+            mock.spend(cost)
             log[#log + 1] = "a"
             t.a = 1
         end,
         function(t: Parts)
+            mock.spend(cost)
             log[#log + 1] = "b"
             t.b = 2
         end,
         function(t: Parts)
+            mock.spend(cost)
             log[#log + 1] = "c"
             t.c = 3
         end,
@@ -58,12 +63,30 @@ local function prepares()
     expect(done).never.toHaveBeenCalled()
     mock.advanceFrames(1)
     expect(log).toEqual({ "a", "b", "c" })
+    -- (told on a timer of its own, not inside the last step)
+    mock.advanceFrames(1)
     expect(done).toHaveBeenCalledTimes(2)
     local now = mock.spy()
     d:Prepare(now)
     expect(now).toHaveBeenCalledTimes(1)
     mock.advanceFrames(2)
     expect(log).toEqual({ "a", "b", "c" })
+    expectNoErrors()
+end
+
+@test("Prepare: steps a frame within 1.5 ms, four at most; one waiter per key")
+local function budget()
+    local log: string[] = {}
+    local d = made(log, 0.5)
+    local keyed = mock.spy()
+    for _ = 1, 5 do
+        d:Prepare(keyed, "window")
+    end
+    mock.advanceFrames(1)
+    -- 0.5 ms each: all three fit in the budget
+    expect(log).toEqual({ "a", "b", "c" })
+    mock.advanceFrames(2)
+    expect(keyed).toHaveBeenCalledTimes(1)
     expectNoErrors()
 end
 

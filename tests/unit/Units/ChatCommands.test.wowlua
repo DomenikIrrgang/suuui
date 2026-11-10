@@ -154,6 +154,13 @@ end
 local function everything()
     typed("/")
     expect(palette()).toBeShown()
+    -- the first rows at once (a palette's worth), the rest a dozen a frame:
+    -- the whole list in one frame took up to 250 ms in game
+    local first = #shown(pal().commands.list) + #heads()
+    expect(first <= 14).toBe(true)
+    expect(heads()[1]).toBe("Group")
+    mock.advanceFrames(40)
+    expect(#shown(pal().commands.list) > first).toBe(true)
     local h = heads()
     expect(h[1]).toBe("Group")
     expect(has(h, "Chat")).toBe(true)
@@ -165,6 +172,22 @@ local function everything()
     -- the rows show their source
     local row = assert(shown(pal().commands.list)[1])
     expect(row.badge.text:GetText()).toBe("Group")
+end
+
+@test("the rows a frame stop at the frame's time budget: 1.5 ms for a new list, 1 ms a frame after")
+local function timeBudget()
+    -- each row as dear as 0.4 ms
+    local draw: any = M.DrawCommandNow
+    mock.stub(M, "DrawCommandNow", function(...: any)
+        mock.spend(0.4)
+        return draw(...)
+    end)
+    typed("/")
+    local first = #shown(pal().commands.list)
+    expect(first >= 1 and first <= 4).toBe(true)
+    mock.advanceFrames(1)
+    local second = #shown(pal().commands.list)
+    expect(second > first and second - first <= 3).toBe(true)
 end
 
 @test("what's typed narrows the list, marked in gilt; a long command takes the alias column")
@@ -516,15 +539,41 @@ local function place()
     expect(p).toBeShown()
 end
 
-@test("the catalog: built once a minute at most, again after an addon loads")
+@test("the catalog: built once a minute at most, again after an addon loads, on a later frame")
 local function catalog()
     local first = M:Catalog()
     expect(M:Catalog()).toBe(first)
+    -- an addon loaded: the old one until it's built again, a few keys a
+    -- frame over the next frames
     mock.fireEvent("ADDON_LOADED", "Some_Addon", false)
-    expect(M.catalog).toBe(nil)
+    expect(M:Catalog()).toBe(first)
+    mock.advanceFrames(40)
     local second = M:Catalog()
+    expect(second ~= first).toBe(true)
+    -- a minute on: the same, built again after the frame that asked
     mock.advanceTime(61)
+    expect(M:Catalog()).toBe(second)
+    mock.advanceFrames(40)
     expect(M:Catalog() ~= second).toBe(true)
+end
+
+@test("the game's emotes read once: a rebuild has them without reading the globals again")
+local function emotesOnce()
+    local function emotes(): number
+        local n = 0
+        for _, item in ipairs(M:Catalog()) do
+            if item.cat == "emote" then
+                n += 1
+            end
+        end
+        return n
+    end
+    local first = emotes()
+    expect(first > 0).toBe(true)
+    mock.setField(_G, "MAXEMOTEINDEX", 0)
+    mock.fireEvent("ADDON_LOADED", "Some_Addon", false)
+    mock.advanceFrames(40)
+    expect(emotes()).toBe(first)
 end
 
 @test("turned off: the palette closes and the inputs are left alone; on again it works")

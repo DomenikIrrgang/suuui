@@ -1102,6 +1102,52 @@ local function scrollBox()
     reskinScrollBox(nil)
 end
 
+@test("reskinScrollBox: updates restyle once a frame, and nothing while the box is hidden")
+local function scrollBoxQuiet()
+    local p = host()
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: ScrollBoxList
+    box:SetSize(200, 200)
+    box:SetPoint("CENTER")
+    local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
+    local view = linearView()
+    view:SetElementExtent(20)
+    local inits = 0
+    view:SetElementInitializer("Button", function(row: ListRow, data: { name: string })
+        inits += 1
+        local label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label = label
+        label:SetAllPoints()
+        label:SetTextColor(1, 0.82, 0)
+        label:SetText(data.name)
+    end)
+    scrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
+    box:SetDataProvider(provider)
+    reskinScrollBox(box)
+    local passes = 0
+    box:ForEachFrame(function(row)
+        local label = row.label
+        mock.stub(label, "SetTextColor", function(...: any)
+            passes += 1
+        end)
+    end)
+    -- hidden: its updates restyle nothing
+    box:Hide()
+    provider:Insert({ name = "Gamma" })
+    mock.advanceFrames(2)
+    local hiddenPasses = passes
+    -- shown: restyled, once for several updates in one frame
+    box:Show()
+    box:Update()
+    box:Update()
+    mock.advanceFrames(2)
+    expect(passes > hiddenPasses).toBe(true)
+    box:ForEachFrame(function(row)
+        expect(row.label).never.toBeNil()
+    end)
+    expectNoErrors()
+end
+
 @test("reskinScrollBox: a box without ForEachFrame walks its target's children")
 local function scrollBoxPlain()
     local box = CreateFrame("Frame", nil, host()) :: Frame & { ScrollTarget: Frame, Shadows: Frame }

@@ -341,11 +341,9 @@ local function makeInitializer(
     sizes: { [string]: number },
     buttons: StyledButton[]
 ): (button: AuraButton) -> ()
-    return function(button: AuraButton)
+    local function build(button: AuraButton)
         -- the group's size now (SetGroupSize may have changed it)
         size = sizes[group.key] or size
-        -- The engine's layout only anchors its buttons; their size is ours to
-        -- set, and an unsized button renders nothing.
         pcall(button.SetSize, button, size, size)
 
         -- Regions first, styled, and only then registered with the button:
@@ -482,6 +480,26 @@ local function makeInitializer(
                 end
             end
         end
+    end
+    -- The engine makes every button of a group up front (ten), most never
+    -- shown: a button's art is made when it first shows (a group with all
+    -- of it made at once took 7-8 ms in game, as a nameplate came).
+    return function(button: AuraButton)
+        -- The engine's layout only anchors its buttons; their size is ours to
+        -- set, and an unsized button renders nothing.
+        size = sizes[group.key] or size
+        pcall(button.SetSize, button, size, size)
+        if button:IsShown() then
+            build(button)
+            return
+        end
+        local built = false
+        button:HookScript("OnShow", function()
+            if not built then
+                built = true
+                build(button)
+            end
+        end)
     end
 end
 

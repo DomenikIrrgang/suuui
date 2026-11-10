@@ -665,20 +665,48 @@ end
 @test("a unit event the client lacks is skipped")
 local function missingEvent()
     local b = bar("target")
-    local real = events.onUnit
-    mock.stub(events, "onUnit", function(
-        event: EventName,
-        unit: UnitToken | UnitToken[],
-        fn: events.Listener,
-        owner: unknown
-    )
+    b:Activate()
+    local f = assert(b.unitEvents)
+    local real = f.RegisterUnitEvent
+    mock.stub(f, "RegisterUnitEvent", function(self: Frame, event: EventName, ...: UnitToken)
         if event == "UNIT_SPELLCAST_DELAYED" then
             error("no such event")
         end
-        return real(event, unit, fn, owner)
+        return real(self, event, ...)
     end)
-    b:Activate()
+    b:SetUnit("focus")
     expect(b.active).toBe(true)
+    expect(f:IsEventRegistered("UNIT_SPELLCAST_START")).toBe(true)
+    expect(f:IsEventRegistered("UNIT_SPELLCAST_DELAYED")).toBe(false)
+end
+
+@test("a plate's bar given another unit: that unit's casts only, no listener on the bus")
+local function plateUnits()
+    local a = mock.spawnUnit({ name = "Caster One", level = 60, reaction = "hostile", distance = 10 })
+    local c = mock.spawnUnit({ name = "Caster Two", level = 60, reaction = "hostile", distance = 12 })
+    a:showNameplate()
+    c:showNameplate()
+    local b = bar("none", { size = "plate" })
+    b:SetUnit(a:token())
+    b:Activate()
+    expect(events.bus:count(b)).toBe(0)
+    local start = mock.stub(b, "Start")
+    c:castSpell(133, { castTime = 2 })
+    expect(start).toHaveBeenCalledTimes(0)
+    -- (the new unit's cast under way picked up)
+    b:SetUnit(c:token())
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(events.bus:count(b)).toBe(0)
+    a:castSpell(133, { castTime = 2 })
+    expect(start).toHaveBeenCalledTimes(1)
+    mock.advanceTime(2.5)
+    c:castSpell(116, { castTime = 2 })
+    expect(start).toHaveBeenCalledTimes(2)
+    b:Deactivate()
+    expect(assert(b.unitEvents):IsEventRegistered("UNIT_SPELLCAST_START")).toBe(false)
+    a:despawn()
+    c:despawn()
+    mock.advanceTime(2.5)
 end
 
 @test("in combat: secret casts draw without errors")

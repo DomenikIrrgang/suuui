@@ -27,10 +27,12 @@ local function smoothing(easing: keyof Easings): SmoothingType
     return T.easing[easing].smoothing :: SmoothingType
 end
 
-type Fade = { from: number, to: number, start: number, duration: number }
+type Fade = { from: number, to: number, start: number, duration: number, shown?: number }
 
 -- Running alphaTo fades.
 local fades: { [Region]: Fade } = {}
+-- the smallest alpha step a fade sets
+local ALPHA_STEP = 0.03
 
 -- A preset's AnimationGroup on a frame, and the animations a later play
 -- adjusts (their duration).
@@ -130,7 +132,15 @@ driver:SetScript("OnUpdate", function(self: Frame)
     for frame, f in pairs(fades) do
         local t = math.min(1, (now - f.start) / f.duration)
         local e = 1 - (1 - t) ^ 3
-        frame:SetAlpha(f.from + (f.to - f.from) * e)
+        local a = f.from + (f.to - f.from) * e
+        -- (a step of less than 3% isn't seen: a big frame's alpha is dear to
+        -- set, and a fight's end fades the bars and frames together, up to
+        -- 11 ms a frame in game)
+        local shown = f.shown
+        if t >= 1 or not shown or math.abs(a - shown) >= ALPHA_STEP then
+            frame:SetAlpha(a)
+            f.shown = a
+        end
         if t >= 1 then
             fades[frame] = nil
         else
@@ -157,7 +167,7 @@ export function alphaTo(frame: Region, to: number, duration: number?)
     if f and f.to == to then
         return
     end
-    fades[frame] = { from = from, to = to, start = GetTime(), duration = d }
+    fades[frame] = { from = from, to = to, start = GetTime(), duration = d, shown = from }
     driver:Show()
 end
 

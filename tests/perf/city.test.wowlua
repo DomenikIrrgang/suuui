@@ -1,0 +1,86 @@
+-- Perf scenario: a busy city. Stormwind's Trade District at launch: eighty
+-- players and a score of guards and vendors in range, someone coming and
+-- going every five frames, players casting and mounting, the mouse over
+-- someone every quarter second (their tooltips), Trade, General and
+-- LookingForGroup talking ten lines a second, the player walking from the
+-- street into a building and out again.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+import * as world from "./world"
+
+config({ profile = "perf" })
+
+const CITY = { mapID = 1453, zone = "Stormwind City" }
+local people = world.Crowd.new({ seed = 31, prefix = "Citizen", hostile = 0, creatures = 20 })
+local chatNo = 0
+
+@if(features.perf)
+@test("setup: login in the city, the crowd around")
+local function setup()
+    mock.moveTo({ mapID = CITY.mapID, zone = CITY.zone, subZone = "Trade District", x = 0.6, y = 0.65 })
+    mock.setResting(true)
+    perf.settle(perf.AFTER_LOGIN)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+    perf.run(100, function(n: number)
+        people:Tick(n)
+        people:Arrive()
+    end)
+    perf.run(20, function(n: number)
+        people:Tick(100 + n)
+    end)
+end
+
+@if(features.perf)
+@test("the trade district")
+local function trade()
+    local rnd = perf.random(9)
+    local inside = false
+    perf.run(480, function(n: number)
+        people:Tick(200 + n)
+        -- walking (into the bank at 3 s, out at 5 s)
+        if n == 180 or n == 300 then
+            inside = n == 180
+            mock.moveTo({
+                mapID = CITY.mapID,
+                zone = CITY.zone,
+                subZone = inside and "Stormwind Counting House" or "Trade District",
+                wmo = true,
+                indoors = inside,
+            })
+        elseif n % 2 == 0 then
+            mock.moveTo({ mapID = CITY.mapID, zone = CITY.zone, x = 0.6 + n * 0.00003, y = 0.65 })
+        end
+        if n % 5 == 0 then
+            people:Arrive()
+            people:LeaveAny()
+        end
+        if n % 4 == 2 then
+            people:Cast()
+        end
+        if n % 20 == 3 then
+            people:Mount()
+        end
+        if n % 15 == 0 then
+            people:Hover()
+        end
+        if n % 120 == 90 then
+            mock.player:target(people:Any())
+        end
+        -- Trade, General and LookingForGroup: ten lines a second
+        if n % 6 == 0 then
+            chatNo += 1
+            world.channelLine(chatNo, rnd, CITY.zone)
+        end
+    end)
+end
+
+@if(features.perf)
+@test("setup: memory after the city")
+local function after()
+    people:Clear()
+    perf.settle(30)
+    perf.record("memory after the city", { kb = perf.memoryKB() })
+end

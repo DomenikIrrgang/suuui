@@ -1525,6 +1525,9 @@ local function reskinRow(given: unknown)
     pass(row, 0, ctx)
 end
 
+-- a scroll box's rows restyled for at most this many ms a frame
+local ROWS_MS = 1.5
+
 export function reskinScrollBox(given: unknown)
     local box = frames.asFrame(given)
     if not box then
@@ -1535,21 +1538,65 @@ export function reskinScrollBox(given: unknown)
         return
     end
     s.scrollBox = true
-    local function all()
-        -- (no view yet: the box updates as it is sized, before its list is set)
-        if tbl.field(box, "ForEachFrame") then
-            if tbl.field(box, "GetView") and not errors.tryMethod(box, "GetView") then
-                return
+    -- Each update restyled every row at once (up to 30 ms in game for a
+    -- guild's roster, also while the window was closed): now once a frame at
+    -- most, only while the box shows (when it shows again otherwise), and a
+    -- frame's rows within a time budget, the rest on the next frames.
+    local queued = false
+    local function rows(): Frame[]
+        local out: Frame[] = {}
+        local function add(item: unknown)
+            local r = frames.asFrame(item)
+            if r then
+                out[#out + 1] = r
             end
-            errors.tryMethod(box, "ForEachFrame", reskinRow)
+        end
+        if tbl.field(box, "ForEachFrame") then
+            -- (no view yet: the box updates as it is sized, before its list is set)
+            if tbl.field(box, "GetView") and not errors.tryMethod(box, "GetView") then
+                return out
+            end
+            errors.tryMethod(box, "ForEachFrame", add)
         else
             local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
             if target then
-                for _, row in ipairs(frames.children(target)) do
-                    reskinRow(row)
+                for _, child in ipairs(frames.children(target)) do
+                    add(child)
                 end
             end
         end
+        return out
+    end
+    local function drain(list: Frame[], from: number)
+        local stop = debugprofilestop() + ROWS_MS
+        local i = from
+        while i <= #list do
+            reskinRow(list[i])
+            i += 1
+            if debugprofilestop() > stop then
+                break
+            end
+        end
+        if i <= #list then
+            after(0, function()
+                if box:IsVisible() then
+                    drain(list, i)
+                end
+            end)
+        end
+    end
+    -- (closed: nothing; its OnShow restyles it)
+    local function all()
+        if queued or not box:IsVisible() then
+            return
+        end
+        queued = true
+        after(0, function()
+            queued = false
+            if box:IsVisible() then
+                drain(rows(), 1)
+            end
+        end)
     end
     if tbl.field(box, "Update") then
         hook(box :: unknown, "Update", all)
@@ -1562,7 +1609,8 @@ export function reskinScrollBox(given: unknown)
         after(0, all)
     end)
     fade(tbl.field(box, "Shadows"))
-    all()
+    -- the rows it has now: at once (within the budget)
+    drain(rows(), 1)
 end
 
 -- One of Blizzard's small dialogs (the guild's text editor for the message

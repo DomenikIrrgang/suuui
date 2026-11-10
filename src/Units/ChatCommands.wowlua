@@ -49,6 +49,7 @@ import type KeyChip, ScrollArea from "/UI/Panel"
 import hookScript from "wowlua:hooks"
 -- the matching (what's typed against the catalog) in a module of its own
 import * as match from "./ChatCommands/Match"
+import * as ahead from "/Core/Ahead"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -89,6 +90,21 @@ local CHIP_H, ROW_H, HEAD_H, MORE_H, NONE_H, TOPIC_H, USAGE_H, FOOT_H = 20, 24, 
 local CMD_W, ALIAS_W, NAME_W = 96, 64, 120
 local CHIPS_H = S["space-2"] + S["space-2"] + CHIP_H + S["space-3"] -- the chip row and its padding
 local TOPIC_COLS = 3
+-- Rows drawn at once for a new text, then each frame while the rest wait:
+-- the whole list (every command for a lone /, hundreds) drawn in one frame
+-- took up to 250 ms in game (dev profiler, 2026-11-10). A palette shows
+-- about a dozen rows; the rest come in over the next frames, and a key
+-- pressed meanwhile starts a new list.
+local ROWS_NOW, ROWS_PER_FRAME = 14, 12
+-- and no more than this many milliseconds of rows a frame (debugprofilestop):
+-- a dozen rows made for the first time took 7 ms in game (2026-11-10)
+local NOW_MS, FRAME_MS = 1.5, 1
+-- the catalog's commands read a step a frame when built ahead
+local CATALOG_STEP = 40
+-- A catalog being built in steps.
+type CatalogBuild = { keys: string[], at: number, items: Item[], byName: { [string]: Item } }
+-- each command's width in the label font, measured once
+local cmdWidths: { [string]: number } = {}
 
 --------------------------------------------------------------------------------
 -- The commands
@@ -595,6 +611,42 @@ local elsewhere = match.elsewhere
 
 local FOCUS_EVENTS = { "ChatFrame.OnEditBoxFocusGained", "ChatFrame.OnEditBoxFocusLost" }
 
+-- The game's emotes, EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m>
+-- (lower case, each once), read the first time they're asked for.
+local emoteCache: { n: number, names: string[] }[]? = nil
+
+local function emoteNames(): { n: number, names: string[] }[]
+    local cached = emoteCache
+    if cached then
+        return cached
+    end
+    local out: { n: number, names: string[] }[] = {}
+    local max = asNumber(field(_G, "MAXEMOTEINDEX")) or 1000
+    for n = 1, max do
+        if field(_G, "EMOTE" .. n .. "_TOKEN") ~= nil then
+            local names: string[], seen: { [string]: boolean }, m = {}, {}, 1
+            while m <= 20 do
+                local raw = field(_G, "EMOTE" .. n .. "_CMD" .. m)
+                if raw == nil then
+                    break
+                end
+                local str = asString(raw)
+                local low = str and str:lower()
+                if low and low:sub(1, 1) == "/" and not seen[low] then
+                    seen[low] = true
+                    names[#names + 1] = low
+                end
+                m = m + 1
+            end
+            if #names > 0 then
+                out[#out + 1] = { n = n, names = names }
+            end
+        end
+    end
+    emoteCache = out
+    return out
+end
+
 local function suggestOff(): (boolean, string)
     return not M:Get("suggest"), "Turn Suggest commands on first."
 end
@@ -649,6 +701,15 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     mark: number = 1
     flat: Entry[] = {}
     drawY: number = 0
+    -- what waits for a later frame, in order from pendingAt: each part
+    -- draws while there's room and says whether it's done (a list goes on
+    -- from where it stopped)
+    pending: (() -> boolean)[] = {}
+    pendingAt: number = 1
+    -- rows that may still be drawn in this frame, until when, and how many were
+    room: number = 0
+    deadline: number = 0
+    drawnHere: number = 0
     catalog: Item[]? = nil
     byName: { [string]: Item } = {}
     builtAt: number = 0
@@ -677,6 +738,15 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     -- Every command: { cmd, aliases, names, desc, cat, src, key, arg, usage,
     -- chatType, rank }, by category order, rank and name.
     function BuildCatalog()
+        local b = self:CatalogStart()
+        self:CatalogStep(b, #b.keys)
+        self:CatalogFinish(b)
+    end
+
+    -- The catalog in parts: the commands' keys now, then `n` keys' commands
+    -- a step (CatalogStep), then the emotes and the order (CatalogFinish):
+    -- all in one frame took 5.6 ms in game, built ahead after login.
+    function CatalogStart(): CatalogBuild
         local keys: { [string]: boolean } = {}
         local function take(k: unknown)
             local key = asString(k)
@@ -699,8 +769,20 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
                 take(k)
             end
         end
-        local items: Item[], byName: { [string]: Item } = {}, {}
+        local list: string[] = {}
         for key in pairs(keys) do
+            list[#list + 1] = key
+        end
+        table.sort(list)
+        return { keys = list, at = 1, items = {}, byName = {} }
+    end
+
+    -- The next `n` keys' commands; whether keys are left.
+    function CatalogStep(b: CatalogBuild, count: number): boolean
+        local items, byName = b.items, b.byName
+        local stop = math.min(#b.keys, b.at + count - 1)
+        for k = b.at, stop do
+            local key = b.keys[k]
             local names = aliasesOf(key)
             if #names > 0 then
                 local info = INFO[key]
@@ -771,50 +853,38 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
-        -- the emotes: EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m>
-        local max = asNumber(field(_G, "MAXEMOTEINDEX")) or 1000
-        for n = 1, max do
-            if field(_G, "EMOTE" .. n .. "_TOKEN") ~= nil then
-                local names: string[], m = {}, 1
-                while m <= 20 do
-                    local raw = field(_G, "EMOTE" .. n .. "_CMD" .. m)
-                    if raw == nil then
-                        break
-                    end
-                    local s = asString(raw)
-                    if s then
-                        local low = s:lower()
-                        if low:sub(1, 1) == "/" and not byName[low] then
-                            local dup = false
-                            for _, x in ipairs(names) do
-                                if x == low then
-                                    dup = true
-                                end
-                            end
-                            if not dup then
-                                names[#names + 1] = low
-                            end
-                        end
-                    end
-                    m = m + 1
+        b.at = stop + 1
+        return b.at <= #b.keys
+    end
+
+    function CatalogFinish(build: CatalogBuild)
+        local items, byName = build.items, build.byName
+        -- the emotes: EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m> (the
+        -- game's own, read once: thousands of globals looked up, most of the
+        -- catalog's cost)
+        for _, emote in ipairs(emoteNames()) do
+            local names: string[] = {}
+            for _, low in ipairs(emote.names) do
+                if not byName[low] then
+                    names[#names + 1] = low
                 end
-                if #names > 0 then
-                    local aliases: string[] = {}
-                    for i = 2, #names do
-                        aliases[#aliases + 1] = names[i]
-                    end
-                    local item: Item = {
-                        cmd = names[1],
-                        aliases = aliases,
-                        names = names,
-                        cat = "emote",
-                        src = "Emote",
-                        rank = 1000 + n,
-                    }
-                    items[#items + 1] = item
-                    for _, x in ipairs(names) do
-                        byName[x] = item
-                    end
+            end
+            if #names > 0 then
+                local aliases: string[] = {}
+                for i = 2, #names do
+                    aliases[#aliases + 1] = names[i]
+                end
+                local item: Item = {
+                    cmd = names[1],
+                    aliases = aliases,
+                    names = names,
+                    cat = "emote",
+                    src = "Emote",
+                    rank = 1000 + emote.n,
+                }
+                items[#items + 1] = item
+                for _, x in ipairs(names) do
+                    byName[x] = item
                 end
             end
         end
@@ -835,9 +905,38 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The catalog, built again once a minute at most (addons add commands late).
+    -- The catalog built again over the next frames (Core/Ahead: out of
+    -- combat), CATALOG_STEP keys a frame.
+    function RebuildSoon()
+        local b: CatalogBuild? = nil
+        ahead.schedule("chat commands: catalog", function(): boolean
+            if not self:IsEnabled() then
+                return false
+            end
+            if not b then
+                if self.catalog and GetTime() - self.builtAt <= 60 then
+                    return false
+                end
+                b = self:CatalogStart()
+                return true
+            end
+            local build = b :: CatalogBuild
+            if self:CatalogStep(build, CATALOG_STEP) then
+                return true
+            end
+            self:CatalogFinish(build)
+            return false
+        end)
+    end
+
     function Catalog(): Item[]
         local catalog = self.catalog
-        if catalog and GetTime() - self.builtAt <= 60 then
+        if catalog then
+            -- a minute old or an addon loaded since: built again after this
+            -- frame, out of combat (5.6 ms in game), the old one meanwhile
+            if GetTime() - self.builtAt > 60 then
+                self:RebuildSoon()
+            end
             return catalog
         end
         self:BuildCatalog()
@@ -1118,8 +1217,21 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The commands that start with `typed`: by category, and in all.
+    -- (a key more than last time: the last matches narrowed, not the whole
+    -- catalog read again; 2-3 ms a key in game)
+    lastMatch: { catalog: Item[], typed: string, emotes: boolean, byCat: { [string]: Match[] }, total: number }? = nil
+
     function Matches(typed: string): ({ [string]: Match[] }, number)
-        return match.matches(self:Catalog(), typed, self:Get("emotes") == true)
+        local catalog, emotes = self:Catalog(), self:Get("emotes") == true
+        local last = self.lastMatch
+        local byCat: { [string]: Match[] }, total: number
+        if last and last.catalog == catalog and last.emotes == emotes and typed:sub(1, #last.typed) == last.typed then
+            byCat, total = match.narrow(last.byCat, typed)
+        else
+            byCat, total = match.matches(catalog, typed, emotes)
+        end
+        self.lastMatch = { catalog = catalog, typed = typed, emotes = emotes, byCat = byCat, total = total }
+        return byCat, total
     end
 
     -- The closest commands to a typed word nothing starts with.
@@ -1131,6 +1243,59 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         self:Pal():ClearRows()
         self.flat = {}
         self.drawY = S["space-1"]
+        self.pending, self.pendingAt, self.room = {}, 1, ROWS_NOW
+        self.deadline, self.drawnHere = debugprofilestop() + NOW_MS, 0
+    end
+
+    -- One more row in this frame, if there's room for it.
+    function Room(): boolean
+        if self.room <= 0 or (self.drawnHere > 0 and debugprofilestop() > self.deadline) then
+            return false
+        end
+        self.room -= 1
+        self.drawnHere += 1
+        return true
+    end
+
+    -- A part of the list: drawn now while nothing waits and there's room,
+    -- else (or what's left of it) on the next frames, in order.
+    function Add(part: () -> boolean)
+        if self.pendingAt > #self.pending and part() then
+            return
+        end
+        self.pending[#self.pending + 1] = part
+    end
+
+    -- The next waiting rows (each frame, while the palette shows).
+    function DrainRows()
+        local list = self.pending
+        local p = self.palette
+        if self.pendingAt > #list or not p then
+            return
+        end
+        self.room = ROWS_PER_FRAME
+        self.deadline, self.drawnHere = debugprofilestop() + FRAME_MS, 0
+        local i = self.pendingAt
+        while i <= #list and list[i]() do
+            i += 1
+        end
+        if i > #list then
+            self.pending, self.pendingAt = {}, 1
+        else
+            self.pendingAt = i
+        end
+        p.scroll.child:SetHeight(self.drawY + S["space-2"])
+    end
+
+    -- A single row (a head, a line, a name): now or later.
+    function AddRow(draw: () -> ())
+        self:Add(function(): boolean
+            if not self:Room() then
+                return false
+            end
+            draw()
+            return true
+        end)
     end
 
     -- A row Up and Down reach, at the current place.
@@ -1140,6 +1305,12 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawHead(text: string, meta: string?)
+        self:AddRow(function()
+            self:DrawHeadNow(text, meta)
+        end)
+    end
+
+    function DrawHeadNow(text: string, meta: string?)
         local p = self:Pal()
         local f = p.heads:Take(p.scroll.child, self.drawY, HEAD_H)
         f.text:SetValue(text)
@@ -1148,6 +1319,12 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawLine(text: string, color: string?, h: number?)
+        self:AddRow(function()
+            self:DrawLineNow(text, color, h)
+        end)
+    end
+
+    function DrawLineNow(text: string, color: string?, h: number?)
         local p = self:Pal()
         local f = p.lines:Take(p.scroll.child, self.drawY, h or MORE_H)
         f.text:SetValue(text)
@@ -1156,10 +1333,21 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawCommand(item: Shown, typed: string, put: string?)
+        self:AddRow(function()
+            self:DrawCommandNow(item, typed, put)
+        end)
+    end
+
+    function DrawCommandNow(item: Shown, typed: string, put: string?)
         local p = self:Pal()
         local r = p.commands:Take(p.scroll.child, self.drawY, ROW_H)
         r.cmd:SetValue(hit(item.cmd, typed))
-        local w = math.max(CMD_W, math.ceil(UI.MeasureText("label", item.cmd)) + 2)
+        local measured = cmdWidths[item.cmd]
+        if not measured then
+            measured = math.ceil(UI.MeasureText("label", item.cmd))
+            cmdWidths[item.cmd] = measured
+        end
+        local w = math.max(CMD_W, measured + 2)
         r.cmd:SetWidth(w)
         local alias = aliasText(item, typed)
         r.alias:SetValue(alias)
@@ -1172,13 +1360,20 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         self.drawY = self.drawY + ROW_H
     end
 
+    -- (one part for the whole list, not one a row: a lone / lists hundreds)
     function DrawCommandList(list: Match[], typed: string, most: number?)
-        for i, m in ipairs(list) do
-            if most and i > most then
-                break
+        local last = most and math.min(most, #list) or #list
+        local i = 1
+        self:Add(function(): boolean
+            while i <= last do
+                if not self:Room() then
+                    return false
+                end
+                self:DrawCommandNow(list[i].item, typed)
+                i += 1
             end
-            self:DrawCommand(m.item, typed)
-        end
+            return true
+        end)
     end
 
     function DrawCommands(typed: string): string[][]
@@ -1242,25 +1437,37 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     function DrawNames(groups: Group[], prefix: string)
-        local p = self:Pal()
         for _, g in ipairs(groups) do
             self:DrawHead(g.title)
-            for _, row in ipairs(g.rows) do
-                local r = p.names:Take(p.scroll.child, self.drawY, ROW_H)
-                r.dot:SetShown(row.diamond == true)
-                if row.diamond then
-                    UI.Paint(r.dot, row.color or "ink")
+            local rows, i = g.rows, 1
+            self:Add(function(): boolean
+                while i <= #rows do
+                    if not self:Room() then
+                        return false
+                    end
+                    self:DrawName(rows[i], prefix)
+                    i += 1
                 end
-                r.name:ClearAllPoints()
-                r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
-                r.name:SetValue(row.value)
-                r.name:SetColor(row.color or "ink")
-                r.note:SetValue(row.note or "")
-                r.right:SetValue(row.right or "")
-                self:Pickable(r, prefix .. row.value, self.drawY, ROW_H)
-                self.drawY = self.drawY + ROW_H
-            end
+                return true
+            end)
         end
+    end
+
+    function DrawName(row: Row, prefix: string)
+        local p = self:Pal()
+        local r = p.names:Take(p.scroll.child, self.drawY, ROW_H)
+        r.dot:SetShown(row.diamond == true)
+        if row.diamond then
+            UI.Paint(r.dot, row.color or "ink")
+        end
+        r.name:ClearAllPoints()
+        r.name:SetPoint("LEFT", row.diamond and (PAD + 10) or PAD, 0)
+        r.name:SetValue(row.value)
+        r.name:SetColor(row.color or "ink")
+        r.note:SetValue(row.note or "")
+        r.right:SetValue(row.right or "")
+        self:Pickable(r, prefix .. row.value, self.drawY, ROW_H)
+        self.drawY = self.drawY + ROW_H
     end
 
     function DrawArgs(q: Query): string[][]
@@ -1577,6 +1784,8 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
             self:Refresh()
         elseif p and p:IsShown() and self:GameListOn(box) then
             self:Refresh()
+        elseif p and p:IsShown() then
+            self:DrainRows()
         end
     end
 
@@ -1630,7 +1839,22 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         end)
         -- addons that load later add commands
         self:OnGameEvent("ADDON_LOADED", function()
-            self.catalog = nil
+            self.builtAt = -math.huge
+            self:RebuildSoon()
+        end)
+        -- the catalog (the game's emotes above all) and the palette built after
+        -- login, out of combat, so the first / doesn't build them (10 ms and
+        -- 2.5 ms in game)
+        self:RebuildSoon()
+        ahead.schedule("chat commands: palette", function(): boolean
+            if self:IsEnabled() and not self.palette then
+                self:Build()
+                local p = self.palette
+                if p then
+                    p:Hide()
+                end
+            end
+            return false
         end)
     end
 

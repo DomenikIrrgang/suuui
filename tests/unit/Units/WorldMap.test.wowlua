@@ -27,6 +27,7 @@ import internal M as conv from "/Units/Convergences"
 import internal M as campsite from "/Units/Campsite"
 import internal M as flightMap from "/Units/FlightMap"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
+import forgetCompleted, completedSet from "/Units/WorldMap/Quests"
 import expectNoErrors from "../../helpers"
 
 local ELWYNN = 1429
@@ -259,6 +260,22 @@ local function defaults()
     expect(M:MarksShown()).toEqual({ yours = true, shared = true })
 end
 
+@test("the filters read once while they stay: the same tables; a change reads them again")
+local function filtersCached()
+    local on = M:Layers()
+    expect(M:Layers()).toBe(on)
+    expect(M:MarksShown()).toBe(M:MarksShown())
+    local value = M:MenuValue()
+    value.marks = { "yours" }
+    M:OnFilters(value)
+    local after = M:Layers()
+    expect(after ~= on).toBe(true)
+    expect(M:MarksShown()).toEqual({ yours = true })
+    M:ResetAll({ "filters" })
+    expect(M:MarksShown()).toEqual({ yours = true, shared = true })
+    expectNoErrors()
+end
+
 @test("an earlier layout's choices carried over: mailboxes and trainers moved, new options on once")
 local function carriedOver()
     M:Set("filters", { services = { "inn", "classTrainer", "trainers", "mail" }, quests = { "available" } })
@@ -316,8 +333,9 @@ end
 -- What's on a map
 --------------------------------------------------------------------------------
 
-@test("each quest is judged once until a quest event; the turned-in list read once")
+@test("each quest is judged once until a quest event; the turned-in list read once, a turn-in added to it")
 local function judgedOnce()
+    forgetCompleted()
     local asked = 0
     mock.fake("C_QuestLog.IsOnQuest", function(_: number): boolean
         asked = asked + 1
@@ -341,7 +359,11 @@ local function judgedOnce()
     mock.fireEvent("QUEST_LOG_UPDATE")
     collect()
     expect(asked).toBe(2 * first)
-    expect(reads).toBe(2)
+    -- (the turned-in list isn't read again: only a turn-in changes it)
+    expect(reads).toBe(1)
+    mock.fireEvent("QUEST_TURNED_IN", 4242, 0, 0)
+    expect(completedSet()[4242]).toBe(true)
+    expect(reads).toBe(1)
     expectNoErrors()
 end
 
@@ -919,6 +941,10 @@ local function questLooks()
     expect(lookOf(progress)).toBeShown()
     expect(progress.NormalTexture:GetAlpha()).toBe(0)
     expect(lookOf(progress).glow).never.toBeShown()
+    -- the same look again (the game restyles often): nothing drawn again
+    local data = mock.stub(lookOf(progress).pin, "SetData")
+    M:StyleQuestPin(progress)
+    expect(data).toHaveBeenCalledTimes(0)
     local turnIn = gamePin("QuestComplete")
     M:StyleQuestPin(turnIn)
     expect(lookOf(turnIn).glow).toBeShown()

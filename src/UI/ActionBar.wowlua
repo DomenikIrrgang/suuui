@@ -413,18 +413,29 @@ local PASSES: { [string]: (b: ActionButton) -> () } = {
     active = function(b: ActionButton)
         b:UpdateActive()
     end,
+    range = rangeNow,
 }
 local due: { [string]: boolean } = {}
 local flusher = CreateFrame("Frame")
 flusher:Hide()
+-- One kind of pass a frame (each reads every button: 2.3 ms in game for
+-- all three in one frame), the cooldowns first, the others on the next.
+local ORDER = { "cooldown", "range", "usable", "active" }
 flusher:SetScript("OnUpdate", function(self)
-    self:Hide()
-    for kind, fn in pairs(PASSES) do
+    for _, kind in ipairs(ORDER) do
         if due[kind] then
             due[kind] = nil
-            fault.call("Action bars", eachButton, fn)
+            local fn = PASSES[kind]
+            if fn then
+                fault.call("Action bars", eachButton, fn)
+            end
+            if not next(due) then
+                self:Hide()
+            end
+            return
         end
     end
+    self:Hide()
 end)
 local function later(kind: string): () -> ()
     return function()
@@ -520,9 +531,9 @@ on("ACTION_RANGE_CHECK_UPDATE", function(slot, inRange, checksRange)
         b:SetOutOfRange(out)
     end)
 end)
-on("PLAYER_TARGET_CHANGED", function()
-    eachButton(rangeNow)
-end)
+-- (the range of every button: in the frame's pass, not in the target's
+-- event with everything else that follows a new target)
+on("PLAYER_TARGET_CHANGED", later("range"))
 on("UPDATE_BINDINGS", function()
     for _, bar in ipairs(bars) do
         bar:UpdateBindings()
@@ -558,12 +569,13 @@ end)
 -- Paging: the Lua side follows the same conditions as the secure driver.
 on("ACTIONBAR_PAGE_CHANGED", updatePages)
 on("UPDATE_BONUS_ACTIONBAR", updatePages)
+-- (the buttons' usability and state in the frame's one pass: the form's
+-- event comes with others that ask for the same)
+local formUsable, formActive = later("usable"), later("active")
 on("UPDATE_SHAPESHIFT_FORM", function()
     updatePages()
-    eachButton(function(b)
-        b:UpdateUsable()
-        b:UpdateActive()
-    end)
+    formUsable()
+    formActive()
 end)
 on("UPDATE_SHAPESHIFT_FORMS", updatePages)
 on("UPDATE_OVERRIDE_ACTIONBAR", updatePages)

@@ -1,0 +1,74 @@
+-- Perf scenario: riding fast across zones. Mounted (the epic mount's
+-- speed, 14 yards a second), a new zone every 1.5 s and a new subzone every
+-- half second, mobs, NPCs and other travellers flashing past (a plate shown
+-- for some 30 frames, a new one every 6 frames), the map's points of
+-- interest updating with each zone, then the dismount.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+import * as world from "./world"
+
+config({ profile = "perf" })
+
+const ZONES = {
+    { mapID = 1429, zone = "Elwynn Forest", subs = { "Eastvale Logging Camp", "Ridgepoint Tower", "Tower of Azora" } },
+    { mapID = 1431, zone = "Duskwood", subs = { "Darkshire", "Twilight Grove", "Raven Hill" } },
+    { mapID = 1436, zone = "Westfall", subs = { "Sentinel Hill", "Moonbrook", "Saldean's Farm" } },
+    { mapID = 1433, zone = "Redridge Mountains", subs = { "Lakeshire", "Three Corners", "Lake Everstill" } },
+}
+local mount = 0
+local passing = world.Crowd.new({ seed = 41, prefix = "Passer", hostile = 20, creatures = 60 })
+
+@if(features.perf)
+@test("setup: login, mounted")
+local function setup()
+    mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", subZone = "Eastvale Logging Camp", x = 0.8, y = 0.7 })
+    perf.settle(perf.AFTER_LOGIN)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+    mount = mock.player:applyAura({ spellId = 23229, name = "Swift Brown Steed", icon = 132261, duration = 0 })
+    mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+    mock.player:setMoving(true)
+    perf.settle(10)
+end
+
+@if(features.perf)
+@test("riding across zones")
+local function riding()
+    perf.run(480, function(n: number)
+        passing:Tick(n)
+        local z = ZONES[(n // 90) % #ZONES + 1]
+        local sub = z.subs[(n // 30) % #z.subs + 1]
+        mock.moveTo({ mapID = z.mapID, zone = z.zone, subZone = sub, x = 0.2 + (n % 90) * 0.0000667, y = 0.5 })
+        if n % 6 == 0 then
+            passing:Arrive()
+        end
+        if #passing.people > 5 then
+            passing:LeaveOldest()
+        end
+        if n % 90 == 2 then
+            mock.fireEvent("AREA_POIS_UPDATED")
+            mock.fireEvent("VIGNETTES_UPDATED")
+        end
+        if n % 10 == 5 then
+            mock.fireEvent("ACTIONBAR_UPDATE_USABLE")
+        end
+    end)
+end
+
+@if(features.perf)
+@test("dismount")
+local function dismount()
+    perf.run(60, function(n: number)
+        passing:Tick(480 + n)
+        if n == 1 then
+            mock.player:setMoving(false)
+            mock.player:removeAura(mount)
+            mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+        end
+        if n == 2 then
+            passing:Clear()
+        end
+    end)
+end

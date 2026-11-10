@@ -1,0 +1,147 @@
+-- Perf scenario: running through a zone, questing. The player runs on (its
+-- place every frame, starting and stopping), mobs and NPCs come into
+-- nameplate range and leave it (a dozen in range), the quest mobs' plates
+-- get a debuff, the mouse runs over them (their tooltips), the target
+-- changes to a mob now and then, the subzone changes (once into a building),
+-- the quest log and its objectives update, the map's points of interest and
+-- vignettes update, the action bars' usability and the player's form change,
+-- and the player turns around once.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+import * as world from "./world"
+
+config({ profile = "perf" })
+
+const SUBZONES = { "Goldshire", "Lion's Pride Inn", "Fargodeep Mine", "Jerod's Landing", "Brackwell Pumpkin Patch" }
+const QUESTS = 8
+-- mobs and NPCs: creatures only, some friendly
+local around = world.Crowd.new({ seed = 21, prefix = "Mob", creatures = 100 })
+
+@if(features.perf)
+@test("setup: login, quests in the log, mobs around")
+local function setup()
+    mock.moveTo({ mapID = 1429, zone = "Elwynn Forest", subZone = SUBZONES[1], x = 0.42, y = 0.65 })
+    for i = 1, QUESTS do
+        local id = 9100 + i
+        local giver = mock.spawnUnit({ name = "World Giver " .. i, level = 30, reaction = "friendly", distance = 3 })
+        mock.defineQuest(id, {
+            title = "World Quest " .. i,
+            text = "Go, $N.",
+            objective = "Slay mobs.",
+            giver = giver,
+            level = 10,
+            header = "Elwynn Forest",
+            objectives = { { text = "Mob slain", required = 10 } },
+        })
+        mock.player:interact(giver)
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+        AcceptQuest()
+        mock.advanceTime(0.5)
+        mock.advanceFrames(3)
+        giver:despawn()
+    end
+    perf.settle(perf.AFTER_LOGIN)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+    perf.run(12, function(n: number)
+        around:Tick(n)
+        around:Arrive()
+    end)
+end
+
+@if(features.perf)
+@test("running through a zone")
+local function running()
+    local rnd = perf.random(3)
+    local facing = 0
+    local moving = false
+    local sub = 1
+    perf.run(480, function(n: number)
+        around:Tick(20 + n)
+        -- running (stopping for half a second at 4 s), 7 yards a second
+        if n == 1 or n == 270 then
+            mock.player:setMoving(true)
+            moving = true
+        elseif n == 240 then
+            mock.player:setMoving(false)
+            moving = false
+        end
+        if n >= 360 and n < 375 then
+            facing += math.pi / 15
+        end
+        -- the subzone every 2 s; into the inn (a building) once
+        if n % 120 == 0 then
+            sub = sub % #SUBZONES + 1
+        end
+        mock.moveTo({
+            mapID = 1429,
+            zone = "Elwynn Forest",
+            subZone = SUBZONES[sub],
+            x = 0.42 + (moving and n * 0.0000334 or 0),
+            y = 0.65,
+            facing = facing,
+            wmo = SUBZONES[sub] == "Lion's Pride Inn",
+            indoors = SUBZONES[sub] == "Lion's Pride Inn",
+        })
+        -- a mob or NPC comes into range every 20 frames, the oldest leaves
+        if n % 20 == 0 then
+            around:Arrive()
+            around:LeaveOldest()
+        end
+        -- a debuff on a mob's plate, a buff on an NPC's
+        if n % 15 == 7 then
+            local u = around:Any()
+            if u then
+                u:applyAura({ spellId = 772, name = "Rend", icon = 132155, duration = 15, sourceUnit = "player" })
+            end
+        end
+        if n % 30 == 0 then
+            around:Hover()
+        end
+        if n % 120 == 60 then
+            mock.player:target(around:Any())
+        end
+        -- quest progress every 1.5 s (the log, the watch, the plates' marks)
+        if n % 90 == 45 then
+            mock.fireEvent("QUEST_LOG_UPDATE")
+            mock.fireUnitEvent("UNIT_QUEST_LOG_CHANGED", "player")
+            mock.fireEvent("QUEST_WATCH_UPDATE", 9100 + (n // 90) % QUESTS + 1)
+        end
+        -- the map's points of interest and vignettes, the minimap's tracking
+        if n % 60 == 20 then
+            mock.fireEvent("AREA_POIS_UPDATED")
+            mock.fireEvent("VIGNETTES_UPDATED")
+            mock.fireEvent("VIGNETTE_MINIMAP_UPDATED", "Vignette-" .. n, true)
+        end
+        if n == 200 then
+            mock.fireEvent("MINIMAP_UPDATE_TRACKING")
+        end
+        -- usability and range (the target's distance, rage ticks)
+        if n % 10 == 5 then
+            mock.fireEvent("ACTIONBAR_UPDATE_USABLE")
+            mock.fireEvent("SPELL_UPDATE_USABLE")
+        end
+        if n % 30 == 3 then
+            local u = around:Any()
+            if u then
+                u:setDistance(5 + rnd(35))
+            end
+        end
+        if n == 300 then
+            mock.fireEvent("UPDATE_SHAPESHIFT_FORM")
+            mock.fireEvent("UPDATE_SHAPESHIFT_FORMS")
+        end
+    end)
+    mock.player:setMoving(false)
+end
+
+@if(features.perf)
+@test("setup: memory after running")
+local function after()
+    around:Clear()
+    perf.settle(30)
+    perf.record("memory after running", { kb = perf.memoryKB() })
+end
