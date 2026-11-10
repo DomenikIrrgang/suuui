@@ -381,38 +381,10 @@ local function oneAFrame()
     expectNoErrors()
 end
 
-@test("the pool made a step a frame out of combat: the plate, its auras, then the friendly plates' group")
+@test("the pool made a step a frame out of combat: the plate, then its aura container")
 local function poolSteps()
-    -- a warrior removes nothing from a friend: no friendly group, ever
-    local _, class = UnitClass("player")
-    expect(class).toBe("WARRIOR")
-    mock.advanceFrames(120)
-    for _, f in ipairs(pool) do
-        expect(assert(assert(f.auras).groups.removable).added).toBeFalsy()
-    end
-    guard:showNameplate()
-    mock.advanceFrames(2)
-    local g = plateOf(guard)
-    expect(assert(assert(g.auras).groups.removable).added).toBeFalsy()
-    guard:hideNameplate()
-    mock.advanceFrames(2)
-    -- a priest: the pool made ahead with both groups in the engine, so a
-    -- plate laid on a friendly unit adds none (7-11 ms each in game)
-    mock.player:update({ class = "PRIEST" })
-    expect(select(2, UnitClass("player"))).toBe("PRIEST")
-    -- (the last plate gone: the pool goes on)
-    guard:showNameplate()
-    mock.advanceFrames(2)
-    guard:hideNameplate()
     mock.advanceFrames(120)
     expect(#pool >= 32).toBe(true)
-    for _, f in ipairs(pool) do
-        local auras = assert(f.auras)
-        expect(assert(auras.groups.mine).added).toBe(true)
-        expect(assert(auras.groups.removable).added).toBe(true)
-    end
-    -- the pool topped up: one step a frame, a plate first, its auras on a
-    -- later frame
     local kept: Nameplate[] = {}
     for _ = 1, 30 do
         kept[#kept + 1] = assert(table.remove(pool))
@@ -428,25 +400,41 @@ local function poolSteps()
         end
     end
     expect(sawBare).toBe(true)
-    -- the friendly groups wait while a plate shows (a crowd needs the
-    -- frames for plates), and come once nobody is around
-    mock.advanceFrames(120)
-    local waiting = false
-    for _, f in ipairs(pool) do
-        if not assert(assert(f.auras).groups.removable).added then
-            waiting = true
-        end
-    end
-    expect(waiting).toBe(true)
-    wolf:hideNameplate()
     mock.advanceFrames(120)
     for _, f in ipairs(pool) do
-        expect(assert(assert(f.auras).groups.removable).added).toBe(true)
+        expect(f.aurasTried).toBe(true)
     end
-    mock.player:update({ class = "WARRIOR" })
     for _, f in ipairs(kept) do
         pool[#pool + 1] = f
     end
+    expectNoErrors()
+end
+
+@test("a plate's debuff group made only once its unit has such a debuff; a warrior's friends never")
+local function lazyGroups()
+    -- an enemy without your debuff: no group in the engine, waiting
+    local f = plateOf(wolf)
+    local auras = assert(f.auras)
+    expect(assert(auras.groups.mine).added).toBeFalsy()
+    expect(f.auraWait).toBe(true)
+    -- your debuff lands: the group made
+    wolf:applyAura({
+        spellId = 772,
+        name = "Rend",
+        icon = 132155,
+        duration = 15,
+        sourceUnit = "player",
+        harmful = true,
+    })
+    mock.advanceFrames(2)
+    expect(assert(auras.groups.mine).added).toBe(true)
+    expect(f.auraWait).toBe(false)
+    -- a friend of a warrior: nothing to remove, no group, no waiting
+    guard:showNameplate()
+    mock.advanceFrames(2)
+    local g = plateOf(guard)
+    expect(assert(assert(g.auras).groups.removable).added).toBeFalsy()
+    expect(g.auraWait).toBe(false)
     expectNoErrors()
 end
 

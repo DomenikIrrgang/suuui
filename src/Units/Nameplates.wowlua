@@ -272,7 +272,13 @@ local REACTION: { [number]: string } = {
 }
 
 -- What a plate hears for its unit.
-local PLATE_EVENTS: EventName[] = { "UNIT_HEALTH", "UNIT_MAXHEALTH", "UNIT_NAME_UPDATE", "UNIT_THREAT_LIST_UPDATE" }
+local PLATE_EVENTS: EventName[] = {
+    "UNIT_HEALTH",
+    "UNIT_MAXHEALTH",
+    "UNIT_NAME_UPDATE",
+    "UNIT_THREAT_LIST_UPDATE",
+    "UNIT_AURA",
+}
 
 -- The preview's drawn parts (the engine draws the real casts and debuffs).
 type Fakes = {
@@ -314,6 +320,8 @@ export class Nameplate extends Frame
     auras: UnitAuras? = nil
     -- its aura container made (or tried: a client without them)
     aurasTried: boolean = false
+    -- its debuff group waits for the unit's first such aura (ApplyAuraCount)
+    auraWait: boolean = false
     -- the plate's unit while it's on one ("nameplateN"; a preview's "plateN")
     unit: string? = nil
     friendly: boolean = false
@@ -448,7 +456,7 @@ export class Nameplate extends Frame
                 {
                     key = "mine",
                     filter = { "HARMFUL", "PLAYER" },
-                    max = 4,
+                    max = 0,
                     harmfulEdge = true,
                     include = include,
                     exclude = exclude,
@@ -787,7 +795,13 @@ export class Nameplate extends Frame
                 if not self.unit then
                     return
                 end
-                if event == "UNIT_NAME_UPDATE" then
+                if event == "UNIT_AURA" then
+                    -- (only while its group isn't in the engine yet: the first
+                    -- aura it would show makes it)
+                    if self.auraWait then
+                        M:ApplyAuraCount(self)
+                    end
+                elseif event == "UNIT_NAME_UPDATE" then
                     self:UpdateName()
                 elseif event == "UNIT_THREAT_LIST_UPDATE" then
                     self:UpdateThreat()
@@ -858,36 +872,15 @@ local function canRemove(): boolean
     return type(class) == "string" and REMOVERS[class] == true
 end
 
--- The friendly group only while no plate shows (nobody around: it's as
--- dear as the plate, and in a crowd it would take the frames plates need).
-local function unfinished(): (Nameplate?, string?)
-    local wantRemovable = (M:Get("auras") :: number) > 0 and next(byUnit) == nil and canRemove()
-    local later: Nameplate? = nil
+-- A pooled plate still without its aura container (its debuff groups wait
+-- for their first aura: ApplyAuraCount).
+local function unfinished(): Nameplate?
     for _, f in ipairs(pool) do
         if not f.aurasTried then
-            return f, "auras"
-        end
-        local a = f.auras
-        local g = a and a.groups["removable"]
-        if not later and wantRemovable and g and not g.added then
-            later = f
+            return f
         end
     end
-    return later, later and "removable" or nil
-end
-
-local function finish(f: Nameplate, what: string)
-    builtAt = GetTime()
-    if what == "auras" then
-        f:BuildAuras()
-        return
-    end
-    -- in the engine now, shown with no icons until a friendly plate asks
-    local a = f.auras
-    if a then
-        a:SetGroupMax("removable", M:Get("auras"))
-        a:SetGroupMax("removable", 0)
-    end
+    return nil
 end
 
 -- Whether a plate was made in this frame already.
@@ -906,12 +899,13 @@ local function fill()
             return
         end
         if not builtThisFrame() then
-            -- a plate's auras, then plates enough, then the friendly groups;
+            -- a plate's aura container, then plates enough;
             -- with the pool low (plates going out as fast as they come: a
             -- crowd), a whole plate a frame, as fast as one a frame can be
-            local f, what = unfinished()
-            if f and what == "auras" then
-                finish(f, what)
+            local f = unfinished()
+            if f then
+                builtAt = GetTime()
+                f:BuildAuras()
             elseif #pool < POOL_LOW then
                 local made = newPlate()
                 made:Hide()
@@ -922,8 +916,6 @@ local function fill()
                 local made = Nameplate.new(UIParent)
                 made:Hide()
                 pool[#pool + 1] = made
-            elseif f and what then
-                finish(f, what)
             else
                 filling = false
                 return
@@ -1530,24 +1522,41 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- A plate's debuffs: yours on an enemy, what you can remove on a friend.
+    -- Each group goes into the engine (its ten buttons: 3-10 ms in game, 462
+    -- times in a recording) only once the unit has such an aura: most plates
+    -- never do. Till then the plate waits for UNIT_AURA (auraWait).
     function ApplyAuraCount(f: Nameplate)
         local auras = f.auras
         if not auras then
             return
         end
         local n: number = self:Get("auras")
-        auras:SetGroupMax("mine", f.friendly and 0 or n)
-        -- what you can remove from a friend: nothing for a class that removes
-        -- nothing (the group never made)
-        local removable = (f.friendly and canRemove()) and n or 0
-        local g = auras.groups["removable"]
-        if removable > 0 and g and not g.added then
-            -- the group isn't in the engine yet (7 ms in game): one such a
-            -- frame, the rest on the next frames
+        local key = f.friendly and "removable" or "mine"
+        local other = f.friendly and "mine" or "removable"
+        auras:SetGroupMax(other, 0)
+        local g = auras.groups[key]
+        local wanted = n > 0 and (not f.friendly or canRemove())
+        if not wanted then
+            auras:SetGroupMax(key, 0)
+            f.auraWait = false
+            return
+        end
+        if g and not g.added and not f.preview then
+            local unit = f.unit
+            local filter = f.friendly and "HARMFUL|RAID_PLAYER_DISPELLABLE" or "HARMFUL|PLAYER"
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit or "none", 1, filter)
+            -- (a secret answer: there is one)
+            local has = ok and (isSecret(a) or a ~= nil)
+            if not has then
+                f.auraWait = true
+                return
+            end
+            -- one group made a frame: the next plate's on the next frame
             if builtThisFrame() then
-                local unit = f.unit
+                f.auraWait = true
                 after(0, function()
-                    if f.unit == unit and f.friendly then
+                    if f.unit == unit and f.auraWait then
                         self:ApplyAuraCount(f)
                     end
                 end)
@@ -1555,7 +1564,8 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             end
             builtAt = GetTime()
         end
-        auras:SetGroupMax("removable", removable)
+        f.auraWait = false
+        auras:SetGroupMax(key, n)
     end
 
     function ForEach(fn: (f: Nameplate) -> ())
