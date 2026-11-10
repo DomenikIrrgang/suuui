@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Mouseover bindings: Target and Menu moved to a click with Shift, Ctrl, Alt or Cmd (Spellbook › Bindings) now work: SuuUI moves them in the game's own click bindings too, which the game's unit frames need. The game's other click bindings stay as they were.
+
 ## 0.6.36 (2026-11-10)
 
 ### New
