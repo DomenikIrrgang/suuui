@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The quest log's zone headers stay white after you hover them, instead of turning grey until the log is opened again.
+
 ## 0.6.34 (2026-11-10)
 
 ### New
