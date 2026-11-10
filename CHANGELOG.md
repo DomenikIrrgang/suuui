@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.35 (2026-11-10)
 
 ### New
 
-- Auction house: the categories open into the game's own subcategories, down to an armour type's slots (Armor › Plate › Head), as in the game's list, and scroll when they are long.
-- Auction house: a Required level range in the Filter menu, with the other filters (Enter in it searches).
-- Auction house: click a column's header (Name, Item level, Available, Lowest price) to sort the results by it, and again to reverse the order.
+- Auction house: the categories open into the same subcategories as in the game's own auction house, down to an armour type's slots (Armor › Plate › Head), and the list scrolls when it is long.
+- Auction house: the Filter menu has a Required level range, a lowest and a highest level, to find only items for those levels. Press Enter in it to search.
+- Auction house: click a column's header (Name, Item level, Available, Lowest price) to sort the results by it; click it again to reverse the order.
 - For plugin authors (API 0.31): FilterMenu's `range` groups (a minimum and a maximum), its `onSubmit`, and `SuuUI.UI.FilterRange(choice)`.
 
 ### Fixed
