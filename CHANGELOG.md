@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.30 (2026-11-10)
 
 ### New
 
@@ -12,22 +12,13 @@
 
 ### Fixed
 
-- Less stutter: opening the bags, the world map and its quest log, the first fight after logging in, big pulls with many nameplates, the end of a fight and switching targets no longer make the game hitch for a moment, and loot no longer redraws all of your bags each time.
-- SuuUI does far less work while nothing happens (the chat no longer checks its windows five times a second, the minimap marks only move when you do).
-- About 9 MB less memory after logging in: the quest, collection, recipe and map data load the first time they're needed.
-- Less stutter while running around among many players: nameplates coming and going (a crowded starting zone or city, turning your camera in a crowd) cost far less, and a friendly player's plate no longer makes the game hitch the first time a plate is used for one.
-- Typing `/` in chat no longer freezes the game for a moment: the command list shows its first rows at once and the rest right after.
-- The end of a fight in a group with mouse bindings no longer hitches (up to 40 ms before), nor does a raid's roster changing during a fight.
-- A big guild or many Battle.net friends logging in and out no longer cost a hitch each time (the group finder's chat reading).
-- Less stutter while questing and running about: the objective tracker redraws only when what it shows changes, the action bars spread their updates over frames, your gear's wear waits for the character window to open, and hovering an NPC no longer rereads every quest you've turned in.
-- Warriors, rogues and hunters no longer make the "debuffs you can remove" icons on friendly nameplates, which they can't use.
-- The guild window no longer restyles itself while it's closed, and its member list restyles only what changed, a little each frame, instead of every row at once.
-- Using an item or casting with the bags open only updates the cooldown swipes, not every slot.
-- Aura icons on nameplates and frames are drawn when first shown instead of all up front, so new nameplates no longer hitch, and the objective tracker redraws only the quest that changed.
-- The first time you open the collections in a session the game no longer freezes for a few seconds while their sources load; the world map and the professions load theirs the same gentle way.
-- Opening the world map is quicker, and the minimap's marks no longer make a constant stream of garbage (a cause of random hitches when the game cleans up).
-- Nameplates make their debuff icons only once a unit has such a debuff, so nameplates coming into view no longer hitch.
-- A level up or a new spell no longer redraws the closed spellbook, fades no longer redo every tiny step, and layouts whose contents keep their size are left alone.
+- **Much less stutter**: crowds of nameplates (cities, busy starting zones, big pulls, turning your camera in a crowd), the start and end of a fight, switching targets, looting and questing no longer make the game hitch, and neither does a raid's roster changing mid-fight.
+- Windows open faster: the bags, the world map and its quest log, and glancing at the map while running cost far less, and the spellbook and guild window do no work while they're closed.
+- The first time you open the collections in a session, the game no longer freezes for a few seconds.
+- Typing `/` in chat no longer freezes the game for a moment.
+- A big guild or many Battle.net friends logging in and out no longer cause a hitch each time.
+- About 9 MB less memory after logging in, far less garbage while you play (a cause of random hitches), and almost no work while nothing happens.
+- Warriors, rogues and hunters no longer get the "debuffs you can remove" icons on friendly nameplates, which they can't use.
 
 ## 0.6.29 (2026-11-09)
 
