@@ -842,19 +842,21 @@ end
 -- group. Each is a few milliseconds in game; the friendly group made when a
 -- plate first went on a friendly unit cost 7-11 ms in NAME_PLATE_UNIT_ADDED
 -- while running about (the dev profiler, 2026-11-10).
+-- (a plate without its auras first: it's what a unit would wait for)
 local function unfinished(): (Nameplate?, string?)
     local wantRemovable = (M:Get("auras") :: number) > 0
+    local later: Nameplate? = nil
     for _, f in ipairs(pool) do
         if not f.aurasTried then
             return f, "auras"
         end
         local a = f.auras
         local g = a and a.groups["removable"]
-        if wantRemovable and g and not g.added then
-            return f, "removable"
+        if not later and wantRemovable and g and not g.added then
+            later = f
         end
     end
-    return nil, nil
+    return later, later and "removable" or nil
 end
 
 local function finish(f: Nameplate, what: string)
@@ -887,8 +889,9 @@ local function fill()
             return
         end
         if not builtThisFrame() then
+            -- a plate's auras, then plates enough, then the friendly groups
             local f, what = unfinished()
-            if f and what then
+            if f and what == "auras" then
                 finish(f, what)
             elseif #pool < POOL then
                 -- the plate alone this frame, its auras the next
@@ -896,6 +899,8 @@ local function fill()
                 local made = Nameplate.new(UIParent)
                 made:Hide()
                 pool[#pool + 1] = made
+            elseif f and what then
+                finish(f, what)
             else
                 filling = false
                 return
