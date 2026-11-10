@@ -619,3 +619,39 @@ local function cmdClick()
     expect(player:GetAttribute("suuui-cmd-shift-RightButton")).toBe(nil)
     expect(player:GetAttribute("*type1")).toBe("target")
 end
+
+@test("on a Mac with Cmd-Left as Right click, both boxes say so and turn the setting off")
+local function macCmdLeft()
+    local CVAR = "MacUseCommandLeftClickAsRightClick"
+    local cvar = "1"
+    local realMac = rawget(_G, "IsMacClient")
+    rawset(_G, "IsMacClient", function(): boolean
+        return true
+    end)
+    mock.stub(C_CVar, "GetCVar", function(name: string): string?
+        return name == CVAR and cvar or nil
+    end)
+    local set = mock.stub(C_CVar, "SetCVar", function(name: string, value: string): boolean
+        if name == CVAR then
+            cvar = value
+        end
+        return true
+    end)
+    M:EditClick("target")
+    local box = assert(M.clickBox)
+    expect(box.mac.text:IsShown()).toBe(true)
+    mock.click(box.mac.button)
+    expect(set).toHaveBeenCalledWith(CVAR, "0")
+    expect(box.mac.text:IsShown()).toBe(false)
+    box:Close()
+    -- the spell's box too; with the setting off, no note
+    local name, id = known()
+    cvar = "1"
+    M:Edit({ name = name, spellID = id })
+    local spellBox = assert(M.box)
+    expect(spellBox.mac.text:IsShown()).toBe(true)
+    cvar = "0"
+    spellBox:Draw()
+    expect(spellBox.mac.text:IsShown()).toBe(false)
+    rawset(_G, "IsMacClient", realMac)
+end

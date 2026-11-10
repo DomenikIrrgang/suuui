@@ -715,6 +715,71 @@ local LONE: { [string]: boolean } = {
 }
 
 --------------------------------------------------------------------------------
+-- The Mac's Cmd-Left click
+--------------------------------------------------------------------------------
+
+-- The game's Mac setting (Options › Mac, "Use Command + Left Click as Right
+-- Click"): on, a Cmd-Left click comes as a plain right click, so it can't be
+-- bound (found in game, 2026-11-10: the box read "Right click").
+local MAC_CMD_CVAR = "MacUseCommandLeftClickAsRightClick"
+
+-- Whether Cmd-Left click is a right click here (a Mac with the setting on).
+export function cmdLeftIsRight(): boolean
+    local mac = rawget(_G, "IsMacClient")
+    if type(mac) ~= "function" or not mac() then
+        return false
+    end
+    return asString(try(C_CVar.GetCVar, MAC_CMD_CVAR)) == "1"
+end
+
+-- A box's note while it is: what happens, and the setting turned off
+-- (asked 2026-11-10: explain, offer to turn it off).
+class MacNote
+    readonly text: Text
+    readonly button: SuuButton
+
+    constructor(body: Frame, redraw: () -> ())
+        self.text = UI.Text(body, "caption", "gilt-text")
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(true)
+        self.text:SetValue(
+            "Cmd-Left click is Right click in your Mac settings (Use Command + Left Click as Right Click), so it can't be bound."
+        )
+        self.button = UI.Button(body, {
+            text = "Turn it off",
+            variant = "quiet",
+            onClick = function()
+                if not InCombatLockdown() then
+                    try(C_CVar.SetCVar, MAC_CMD_CVAR, "0")
+                end
+                redraw()
+            end,
+        })
+        self.text:Hide()
+        self.button:Hide()
+    end
+
+    -- Placed at `y` (`w` wide) while the setting is on: the next free `y`.
+    function Place(y: number, w: number): number
+        if not cmdLeftIsRight() then
+            self.text:Hide()
+            self.button:Hide()
+            return y
+        end
+        self.text:SetWidth(w)
+        self.text:ClearAllPoints()
+        self.text:SetPoint("TOPLEFT", 0, y)
+        self.text:Show()
+        y = y - self.text:GetStringHeight() - S["space-2"]
+        self.button:ClearAllPoints()
+        self.button:SetPoint("TOPLEFT", 0, y)
+        self.button:SetEnabledState(not InCombatLockdown())
+        self.button:Show()
+        return y - self.button:GetHeight() - S["space-4"]
+    end
+end
+
+--------------------------------------------------------------------------------
 -- The capture box
 --------------------------------------------------------------------------------
 
@@ -741,6 +806,7 @@ class CaptureBox
     readonly ok: SuuButton
     readonly cancel: SuuButton
     readonly remove: SuuButton
+    readonly mac: MacNote
     -- what it binds
     spell: BindSpell = { name = "" }
     editing: Bind? = nil
@@ -889,6 +955,9 @@ class CaptureBox
                 self:Close()
             end,
         })
+        self.mac = MacNote.new(body, function()
+            self:Draw()
+        end)
         p:Hide()
     end
 
@@ -981,6 +1050,7 @@ class CaptureBox
         area:ClearAllPoints()
         area:SetPoint("TOPLEFT", 0, y)
         y = y - 64 - S["space-4"]
+        y = self.mac:Place(y, w)
         local b = self:Current()
         if self.waiting or not b then
             UI.PaintFill(self.areaFill, "surface-sunk")
@@ -1110,6 +1180,7 @@ class ClickBox
     readonly ok: SuuButton
     readonly cancel: SuuButton
     readonly reset: SuuButton
+    readonly mac: MacNote
     kind: ClickKind = "target"
     input: string? = nil
     waiting: boolean = true
@@ -1205,6 +1276,9 @@ class ClickBox
                 self:Draw()
             end,
         })
+        self.mac = MacNote.new(body, function()
+            self:Draw()
+        end)
         p:Hide()
     end
 
@@ -1256,6 +1330,7 @@ class ClickBox
         area:ClearAllPoints()
         area:SetPoint("TOPLEFT", 0, y)
         y = y - 64 - S["space-4"]
+        y = self.mac:Place(y, BOX_W)
         local input = self.input
         if self.waiting or not input then
             UI.PaintFill(self.areaFill, "surface-sunk")
