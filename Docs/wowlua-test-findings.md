@@ -107,6 +107,9 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V36](#v36) | VM | high | fixed after 0.9.6 (T254) | A frame holding a protected frame wasn't protected |
 | [V37](#v37) | VM | medium | fixed after 0.9.6 (T258) | `ClearPoint` did nothing |
 | [V38](#v38) | VM | medium | fixed after 0.13.7 (T537) | `GetRealmName` ignored the player's realm |
+| [V39](#v39) | VM | medium | open | `Button:Click()` on a disabled button runs its `OnClick` |
+| [V40](#v40) | VM | low | open | `SelectTrainerService` sends no `TRAINER_DESCRIPTION_UPDATE` |
+| [V41](#v41) | VM | medium | open | No pet trainer (Beast Training) |
 
 ## Test runner and mock issues
 
@@ -857,6 +860,30 @@ A parent of a protected frame is protected too: a secure handle to it works in c
 *Status: fixed after 0.13.7 (T537, wowlua#134).*
 
 `GetRealmName()` and `GetNormalizedRealmName()` always answered `"Realm"`, while `UnitFullName("player")`, chat and guild names used the realm the world set (a profile's `character.realm`, `mock.setPlayer`). Saved variables keyed by character (`"Player - Realm"`) matched only the realm `Realm`. Now both give the player's realm, the normalized one without spaces and hyphens. (cooldowns: `tests/profiles/cooldowns-migrations.json` pins its name and class; it can pin the realm once SuuUI needs a wowlua with the fix.)
+
+<a id="v39"></a>
+
+### V39. `Button:Click()` on a disabled button runs its `OnClick`
+
+*Status: open (0.13.9).*
+
+In the game a disabled button ignores clicks, a script's `Click()` and a secure `click` action's too. The engine ran the game's Train button's `OnClick` while Blizzard's trainer had it disabled, so a test could not see Beast Training's Train do nothing (reported in game). The Trainer test's `BuyTrainerService` fake checks the button's state instead. (units-trade)
+
+<a id="v40"></a>
+
+### V40. `SelectTrainerService` sends no `TRAINER_DESCRIPTION_UPDATE`
+
+*Status: open (0.13.9).*
+
+Blizzard's trainer frame takes up a new selection in `TRAINER_DESCRIPTION_UPDATE` (Beast Training's Train depends on it), and its handler selects again, so the game sends it only for a change. The engine never sends it; the Trainer tests fake `SelectTrainerService` to send it on a change. (units-trade)
+
+<a id="v41"></a>
+
+### V41. No pet trainer (Beast Training)
+
+*Status: open (0.13.9).*
+
+`mock.defineTrainer` is a class trainer only: no `C_Trainer.GetTrainerType()` of `Enum.TrainerType.Pet`, no training points (`C_PetInfo.GetPetTrainingPoints`, `UNIT_PET_TRAINING_POINTS`), no services taught to the pet (its spellbook), and no recording of what Forever lists there. In game the pet's known abilities come as learnable with no cost (reported 2026-11-10, a hunter's screenshot), not as used. The Trainer tests fake the trainer's answers over the engine's class trainer. (units-trade)
 
 ## Not bugs (for test writers)
 

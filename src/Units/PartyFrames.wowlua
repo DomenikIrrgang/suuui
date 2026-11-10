@@ -720,7 +720,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             id = "party",
             name = "Party frames",
             description = "You and your party: health, power, auras you can remove, aggro and range.",
-            api = "0.17",
+            api = "0.30",
             reloadToToggle = true,
             defaults = DEFAULTS,
         })
@@ -894,7 +894,9 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             local list, version = UI.GroupIndicators()
             if f.indicatorVersion ~= version then
                 f.indicatorVersion = version
-                f:SetPreviewIndicators((i >= 2 and i <= 4) and UI.IndicatorsFor(list, "5") or nil)
+                f:SetPreviewIndicators(
+                    (i >= 2 and i <= 4) and UI.IndicatorsForRole(UI.IndicatorsFor(list, "5"), d.role) or nil
+                )
             end
             -- the row from the bar outward, as the engine lays it out
             local parts = split(d)
@@ -1274,7 +1276,8 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             self:UpdateSelected()
             self:UpdateRange()
             self:UpdateOffline()
-            -- someone changed raid group: "my group" missing looks follow
+            -- someone changed raid group or role: "my group" and role-limited
+            -- indicators follow
             for _, f in ipairs(self.frames) do
                 f:UpdateIndicatorPresence()
             end
@@ -1283,6 +1286,16 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
                 self:QueueIndicators()
             end
         end)
+
+        -- a role chosen or changed: indicators limited to roles follow, on
+        -- the frames whose person's role changed
+        local function rolesChanged()
+            for _, f in ipairs(self.frames) do
+                f:UpdateIndicatorRole()
+            end
+        end
+        self:OnGameEvent("PLAYER_ROLES_ASSIGNED", rolesChanged)
+        self:OnGameEvent("ROLE_CHANGED_INFORM", rolesChanged)
 
         -- the game event: a unit event registers at most two units
         self:OnGameEvent("UNIT_THREAT_SITUATION_UPDATE", function(_, unit)

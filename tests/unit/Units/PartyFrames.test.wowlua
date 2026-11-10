@@ -10,6 +10,8 @@ import internal M, powerFor from "/Units/PartyFrames"
 import type PartyFrame from "/Units/PartyFrames"
 import expectNoErrors, expectPingable from "../../helpers"
 import migrations as settingMigrations from "/Core/Settings"
+import SuuUI from "/Core/API"
+import type Indicator from "/UI/UnitFrame"
 
 -- Placeholder party members.
 local function member(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
@@ -337,6 +339,65 @@ local function presence()
     mock.advanceFrames(1)
     mock.player:leaveCombat()
     expect(read).toHaveBeenCalledTimes(3)
+end
+
+-- Whether each of a party frame's live indicators shows.
+local function indicatorsShown(unit: string): boolean[]
+    local out: boolean[] = {}
+    for i, c in ipairs(frame(unit).indicatorContainers) do
+        out[i] = c.container:IsShown()
+    end
+    return out
+end
+
+@test("buff indicators limited to roles: on those roles only; a role change moves them; no role is Damage")
+local function indicatorRoles()
+    local before = SuuUI.UI.GroupIndicators()
+    local dps = member("Kaelith Dawnmere", "MAGE", "DAMAGER")
+    local none = member("Morrow Fenwick", "DRUID")
+    mock.group:add(tank)
+    mock.group:add(dps)
+    mock.group:add(none)
+    settle()
+    local list: Indicator[] = {
+        { name = "Tanks", kind = "square", ids = { 139 }, roles = { TANK = true } },
+        { name = "Damage", kind = "border", ids = { 17 }, roles = { DAMAGER = true } },
+        { name = "Old", kind = "icon", ids = { 774 } }, -- saved before roles: everyone
+    }
+    SuuUI.UI.SetGroupIndicators(list)
+    mock.advanceTime(1.1)
+    expect(indicatorsShown("party1")).toEqual({ true, false, true }) -- the tank
+    expect(indicatorsShown("party2")).toEqual({ false, true, true }) -- damage
+    expect(indicatorsShown("party3")).toEqual({ false, true, true }) -- no role: damage
+    -- a role change (the roster update) moves them
+    tank:setRole("DAMAGER")
+    dps:setRole("TANK")
+    expect(indicatorsShown("party1")).toEqual({ false, true, true })
+    expect(indicatorsShown("party2")).toEqual({ true, false, true })
+    -- no role (the game answers "NONE") is Damage
+    dps:setRole(nil)
+    expect(indicatorsShown("party2")).toEqual({ false, true, true })
+    -- in combat the live ones keep the last answer; after it they follow
+    mock.player:enterCombat()
+    dps:setRole("TANK")
+    expect(indicatorsShown("party2")).toEqual({ false, true, true })
+    mock.player:leaveCombat()
+    expect(indicatorsShown("party2")).toEqual({ true, false, true })
+    -- the roles events: only a frame whose role changed is read again
+    local first = mock.spy(function(_: unknown) end)
+    local second = mock.spy(function(_: unknown) end)
+    frame("party1").indicatorRole = "HEALER" -- (as if it had changed since)
+    mock.stub(frame("party1"), "UpdateIndicatorPresence", first)
+    mock.stub(frame("party2"), "UpdateIndicatorPresence", second)
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(0)
+    mock.fireEvent("ROLE_CHANGED_INFORM", "Brannoc Ironhand", "Kaelith Dawnmere", "HEALER", "DAMAGER")
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(0)
+    tank:setRole("TANK")
+    SuuUI.UI.SetGroupIndicators(before)
+    mock.advanceTime(1.1)
 end
 
 @test("your target in combat: ringed by the engine from a secret answer")

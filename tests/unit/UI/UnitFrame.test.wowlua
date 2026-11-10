@@ -292,6 +292,29 @@ local function indicatorsForTier()
     expect(uf.indicatorsFor(nil, "5")).toEqual({})
 end
 
+@test("indicatorsForRole: by role; NONE or anything else is Damage; none or an empty set is everyone")
+local function indicatorsForRoles()
+    expect(uf.INDICATOR_ROLES).toEqual({ "TANK", "HEALER", "DAMAGER" })
+    expect(uf.indicatorRole("TANK")).toBe("TANK")
+    expect(uf.indicatorRole("HEALER")).toBe("HEALER")
+    expect(uf.indicatorRole("DAMAGER")).toBe("DAMAGER")
+    expect(uf.indicatorRole("NONE")).toBe("DAMAGER")
+    expect(uf.indicatorRole("SOMETHING")).toBe("DAMAGER")
+    expect(uf.indicatorRole(nil)).toBe("DAMAGER")
+    local old: uf.Indicator = { name = "old" } -- saved before roles
+    local empty: uf.Indicator = { name = "empty", roles = {} }
+    local tanks: uf.Indicator = { name = "tanks", roles = { TANK = true } }
+    local others: uf.Indicator = { name = "others", roles = { DAMAGER = true, HEALER = true } }
+    local list = { old, empty, tanks, others }
+    expect(uf.indicatorsForRole(list, "TANK")).toEqual({ old, empty, tanks })
+    expect(uf.indicatorsForRole(list, "HEALER")).toEqual({ old, empty, others })
+    expect(uf.indicatorsForRole(list, "NONE")).toEqual({ old, empty, others })
+    expect(uf.indicatorsForRole(list, nil)).toEqual({ old, empty, others })
+    expect(uf.indicatorsForRole(nil, "TANK")).toEqual({})
+    expect(uf.indicatorShowsOn(tanks, "TANK")).toBe(true)
+    expect(uf.indicatorShowsOn(tanks, "DAMAGER")).toBe(false)
+end
+
 @test("group indicators and defensives: set, versioned, announced")
 local function groupLists()
     local list0, v0 = uf.groupIndicators()
@@ -1403,6 +1426,43 @@ local function combatSecrets()
     w:setPower(10)
     f:Refresh()
     f:SetState("danger", "Aggro")
+    expectNoErrors()
+end
+
+@test("the role role-limited indicators go by: read, kept through a secret answer, read anew for another unit")
+local function indicatorRoleRead()
+    local answer: unknown = "TANK"
+    local a = api(priest())
+    a.UnitGroupRolesAssigned = function(_: string): unknown
+        return answer
+    end
+    local f = preview(priest(), { secure = false }, a)
+    -- no indicator limited to roles: a role event reads nothing
+    f:SetIndicators({ { kind = "square", ids = { 139 } } })
+    expect(f.roleLimited).toBe(false)
+    f:UpdateIndicatorRole()
+    expect(f.indicatorRole).toBeNil()
+    f:SetIndicators({ { kind = "square", ids = { 139 }, roles = { TANK = true } } })
+    expect(f.roleLimited).toBe(true)
+    expect(f:ReadIndicatorRole()).toBe("TANK")
+    -- a secret answer (in a fight): the last role read stays
+    answer = mock.secret("HEALER")
+    expect(f:ReadIndicatorRole()).toBe("TANK")
+    answer = "NONE"
+    expect(f:ReadIndicatorRole()).toBe("DAMAGER")
+    -- the presence again only when the role changed
+    local presence = mock.spy(function(_: unknown) end)
+    mock.stub(f, "UpdateIndicatorPresence", presence)
+    f:UpdateIndicatorRole()
+    expect(presence).toHaveBeenCalledTimes(0)
+    answer = "HEALER"
+    f:UpdateIndicatorRole()
+    expect(presence).toHaveBeenCalledTimes(1)
+    -- another unit: no role kept; a secret answer is Damage
+    f:SetUnit("party2")
+    expect(f.indicatorRole).toBeNil()
+    answer = mock.secret("TANK")
+    expect(f:ReadIndicatorRole()).toBe("DAMAGER")
     expectNoErrors()
 end
 

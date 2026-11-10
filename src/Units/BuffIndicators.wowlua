@@ -115,6 +115,14 @@ local SIZE_OPTIONS: ChipOption[] = {
     { value = "40", label = "40" },
 }
 
+-- The roles an indicator can be limited to (UI.INDICATOR_ROLES); someone
+-- without a role counts as Damage.
+local ROLE_OPTIONS: ChipOption[] = {
+    { value = "TANK", label = "Tank" },
+    { value = "HEALER", label = "Healer" },
+    { value = "DAMAGER", label = "Damage" },
+}
+
 local MISSING_COLORS: ChipOption[] = {
     { value = "ember", label = "Red" },
     { value = "amber", label = "Amber" },
@@ -122,17 +130,21 @@ local MISSING_COLORS: ChipOption[] = {
     { value = "arcane", label = "Blue" },
 }
 
--- An indicator, its spells and group sizes its own (an edit leaves the saved one alone).
-local function copyIndicator(e: Indicator): Indicator
-    local sizes: { [string]: boolean }? = nil
-    local given = e.sizes
-    if given then
-        local set: { [string]: boolean } = {}
-        for k, v in pairs(given) do
-            set[k] = v
-        end
-        sizes = set
+-- A set's own copy (nil stays nil).
+local function copySet(given: { [string]: boolean }?): { [string]: boolean }?
+    if not given then
+        return nil
     end
+    local set: { [string]: boolean } = {}
+    for k, v in pairs(given) do
+        set[k] = v
+    end
+    return set
+end
+
+-- An indicator, its spells, group sizes and roles its own (an edit leaves
+-- the saved one alone).
+local function copyIndicator(e: Indicator): Indicator
     local ids = e.ids
     return {
         name = e.name,
@@ -146,7 +158,8 @@ local function copyIndicator(e: Indicator): Indicator
         missingColor = e.missingColor,
         on = e.on,
         missingOn = e.missingOn,
-        sizes = sizes,
+        sizes = copySet(e.sizes),
+        roles = copySet(e.roles),
     }
 end
 local function copyList(list: Indicator[]): Indicator[]
@@ -342,7 +355,7 @@ local function showOf(e: Indicator): string
 end
 
 -- One caption line, in the modal's order: "Square · Top left · 8px · Pale
--- gold · Up or missing (red) · My group · Party, 10".
+-- gold · Up or missing (red) · My group · Party, 10 · Tank, Healer".
 local function summary(e: Indicator): string
     local parts: string[] = { KIND_LABEL[e.kind or "icon"] or "Icon" }
     if placed(e) then
@@ -378,6 +391,18 @@ local function summary(e: Indicator): string
             end
         end
         if #on < #SIZE_OPTIONS then
+            parts[#parts + 1] = table.concat(on, ", ")
+        end
+    end
+    local roles = e.roles
+    if roles and next(roles) then
+        local on: string[] = {}
+        for _, o in ipairs(ROLE_OPTIONS) do
+            if roles[o.value] then
+                on[#on + 1] = o.label
+            end
+        end
+        if #on < #ROLE_OPTIONS then
             parts[#parts + 1] = table.concat(on, ", ")
         end
     end
@@ -456,11 +481,12 @@ export class IndicatorEditPanel extends Panel
     readonly source: Field<Segmented<string>>
     readonly on: Field<Segmented<string>>
     readonly sizes: Field<ToggleChips>
+    readonly roles: Field<ToggleChips>
     readonly reset: SuuButton
     readonly done: SuuButton
 
     constructor(owner: BuffIndicatorsModule)
-        super(SuuUI.Root, { title = "Edit indicator", width = EP_W, height = 640, solid = true })
+        super(SuuUI.Root, { title = "Edit indicator", width = EP_W, height = 712, solid = true })
         UI.MakeModal(self)
         local body = self.body
         local function edit(fn: (e: Indicator) -> ())
@@ -501,10 +527,10 @@ export class IndicatorEditPanel extends Panel
 
         local left = CreateFrame("Frame", nil, body)
         left:SetPoint("TOPLEFT", 0, -(64 + 16))
-        left:SetSize(COL_W, 420)
+        left:SetSize(COL_W, 492)
         local right = CreateFrame("Frame", nil, body)
         right:SetPoint("TOPLEFT", COL_W + 40, -(64 + 16))
-        right:SetSize(COL_W, 420)
+        right:SetSize(COL_W, 492)
 
         -- Look
         UI.SectionHeader(left, "Look", nil, COL_W):SetPoint("TOPLEFT")
@@ -646,7 +672,7 @@ export class IndicatorEditPanel extends Panel
                 end)
             end,
         })
-        self.sizes = (field(
+        self.sizes, y = field(
             right,
             y,
             "Group sizes",
@@ -655,8 +681,32 @@ export class IndicatorEditPanel extends Panel
                 sizes:SetDisabled(off)
             end,
             26
-        ))
+        )
         self.sizes.note = "All on: every size. A party (or no group) is Party; a raid the smallest size it fits."
+        local roles = UI.ToggleChips(right, {
+            options = ROLE_OPTIONS,
+            onChange = function(values: string[])
+                edit(function(e: Indicator)
+                    local set: { [string]: boolean }, n = {}, 0
+                    for _, t in ipairs(values) do
+                        set[t] = true
+                        n = n + 1
+                    end
+                    e.roles = (n > 0 and n < #ROLE_OPTIONS) and set or nil
+                end)
+            end,
+        })
+        self.roles = (field(
+            right,
+            y + 12, -- (under the sizes' two-line note)
+            "Roles",
+            roles,
+            function(off: boolean)
+                roles:SetDisabled(off)
+            end,
+            26
+        ))
+        self.roles.note = "All on: everyone. Someone without a role counts as Damage."
 
         -- foot
         self.reset = UI.Button(body, {
@@ -666,6 +716,7 @@ export class IndicatorEditPanel extends Panel
                 edit(function(e: Indicator)
                     e.kind, e.point, e.size, e.color, e.source = "icon", "TOPRIGHT", 12, "fel", "mine"
                     e.show, e.missingColor, e.missingOn, e.on, e.sizes = nil, nil, nil, nil, nil
+                    e.roles = nil
                 end)
             end,
         })
@@ -1050,7 +1101,7 @@ class BuffIndicatorsModule extends Module<typeof(DEFAULTS)>
             id = "indicators",
             name = "Buff indicators",
             description = "Your heals over time and shields on party and raid frames, in combat too.",
-            api = "0.9",
+            api = "0.30",
             defaults = DEFAULTS,
         })
     end
@@ -1203,6 +1254,15 @@ class BuffIndicatorsModule extends Module<typeof(DEFAULTS)>
         end
         p.sizes.control:SetValue(sizes)
         setApplies(p.sizes, true)
+        local roles: string[] = {}
+        local limited = e.roles
+        for _, o in ipairs(ROLE_OPTIONS) do
+            if not limited or next(limited) == nil or limited[o.value] then
+                roles[#roles + 1] = o.value
+            end
+        end
+        p.roles.control:SetValue(roles)
+        setApplies(p.roles, true)
     end
 
     function OpenEdit(index: number)
@@ -1245,9 +1305,11 @@ class BuffIndicatorsModule extends Module<typeof(DEFAULTS)>
             return
         end
         local list = self:List(self:EditSpec())
-        for _, f in ipairs(self.previewFrames) do
+        for i, f in ipairs(self.previewFrames) do
             f:Refresh()
-            f:SetPreviewIndicators(list)
+            -- each made-up person shows the indicators of their role
+            local person = PEOPLE[i]
+            f:SetPreviewIndicators(UI.IndicatorsForRole(list, person and person.role))
         end
     end
 
