@@ -155,7 +155,7 @@ end
 @beforeEach
 local function reset()
     mock.player:setMoney(500)
-    M.selected = nil
+    M:ResetChoice()
     M.collapsed = {}
 end
 
@@ -348,10 +348,10 @@ local function train()
     fakeServices({ { name = "A", kind = "available", cost = 100 }, { name = "B", kind = "used", cost = 0 } })
     local buy = mock.fake("BuyTrainerService", function() end)
     M:Train()
-    M.selected = 2
+    M:Choose(2)
     M:Train()
     expect(buy).never.toHaveBeenCalled()
-    M.selected = 1
+    M:Choose(1)
     M:Train()
     expect(buy).toHaveBeenCalledWith(1)
 end
@@ -367,7 +367,7 @@ local function trainProfession()
     end)
     local buy = mock.fake("BuyTrainerService", function() end)
     stubConfirm()
-    M.selected = 1
+    M:Choose(1)
     M:Train()
     expect(buy).never.toHaveBeenCalled()
     local opts = confirmOpts()
@@ -376,7 +376,7 @@ local function trainProfession()
     assert(opts.onConfirm)()
     expect(buy).toHaveBeenCalledWith(1)
     -- no skill line: the service's name
-    M.selected = 2
+    M:Choose(2)
     M:Train()
     expect(confirmOpts().title).toBe("Learn Journeyman?")
 end
@@ -541,7 +541,7 @@ local function trainState()
     expect(assert(M.train):IsEnabled()).toBe(false)
     expect(tipOf(assert(M.train))).toBe("Choose what to learn.")
     mock.player:setMoney(50)
-    M.selected = 1
+    M:Choose(1)
     M:Refresh()
     expect(tipOf(assert(M.train))).toBe("You can't afford it.")
     -- the price in ember when short
@@ -732,7 +732,7 @@ local function petTrain()
         & { selectedService?: number, displayIndexToSkillIndex?: {} }
     frame.displayIndexToSkillIndex = nil
     -- chosen in SuuUI's list: the game told; Train waits for it to take it up
-    M.selected = 2
+    M:Choose(2)
     M:Refresh()
     expect(told[#told]).toBe(2)
     local over = M.trainOver
@@ -758,6 +758,257 @@ local function petTrain()
     expect(M.trainAll).toBeShown()
     expect(b).never.toBeShown()
     frame.selectedService = nil
+end
+
+-- A Beast Training list for the game's own frame too: `list` (faked), the
+-- game's selection kept as the game keeps it (SelectTrainerService tells
+-- its frame, TRAINER_DESCRIPTION_UPDATE at once), BuyTrainerService teaching
+-- the service (it leaves the list, as the game's Used filter hides it, so
+-- the ones after it move up; TRAINER_UPDATE), as the game's Train button
+-- does it: nothing while that button is disabled (the game's Click on a
+-- disabled button does nothing; the engine's runs it, so the fake checks).
+-- What was bought, by name, in order.
+local function beastTraining(list: FakeService[], points: number): string[]
+    petTrainer(points, 0)
+    fakeServices(list)
+    local gameChoice: number? = nil
+    mock.fake("SelectTrainerService", function(i: number)
+        local was = gameChoice
+        gameChoice = (i >= 1 and i <= #list) and i or nil
+        -- (only a change: the game's own handler selects again)
+        if gameChoice ~= was then
+            mock.fireEvent("TRAINER_DESCRIPTION_UPDATE")
+        end
+    end)
+    mock.fake("GetTrainerSelectionIndex", function(): number?
+        return gameChoice
+    end)
+    local bought: string[] = {}
+    local gameTrain = assert(frames.find("ClassTrainerTrainButton")) :: Button
+    mock.fake("BuyTrainerService", function(i: number)
+        local s = list[i]
+        if not (gameTrain:IsEnabled() and s and s.kind == "available") then
+            return
+        end
+        bought[#bought + 1] = s.name
+        table.remove(list, i)
+        mock.fireEvent("TRAINER_UPDATE")
+    end)
+    -- the game's frame lists them too
+    mock.fireEvent("TRAINER_UPDATE")
+    mock.advanceTime(0.1)
+    return bought
+end
+
+-- Fifteen of a pet's abilities, more than the game's own list shows at once.
+local function petAbilities(): FakeService[]
+    local list: FakeService[] = {}
+    for i = 1, 15 do
+        list[i] = { name = "Ability " .. i, kind = "available", rank = "Rank 1", cost = 1, texture = 132140 }
+    end
+    return list
+end
+
+-- A row of SuuUI's list by its service's name.
+local function rowOf(name: string)
+    for _, r in ipairs(M.rows) do
+        if r:IsShown() and r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no row " .. name)
+end
+
+-- Train at a pet trainer: chooses `name` in SuuUI's list, then clicks Train
+-- (the secure click on the game's Train while it has the choice).
+local function petTrainClick(name: string)
+    mock.click(rowOf(name))
+    mock.advanceTime(0.1)
+    local over = M.trainOver
+    if over and over.button:IsShown() then
+        mock.click(over.button)
+    else
+        mock.click(M.train)
+    end
+    mock.advanceTime(0.1)
+end
+
+@test("Beast Training: Train trains every time, wherever the choice sits in the list")
+local function petTrainTwice()
+    -- (reported: half the time Train did nothing until a reload. The game
+    -- enables its Train only from its own list's row of the choice, which
+    -- exists only while scrolled into sight)
+    openTrainer()
+    local list = petAbilities()
+    -- (one the pet can't pay for: the game's own row of it turns its Train off)
+    list[2].cost = 99
+    local bought = beastTraining(list, 30)
+    -- the first, then one far down (out of the game's own list's sight)
+    -- after looking at the one it can't pay for, then one the list moved up
+    petTrainClick("Ability 1")
+    expect(bought).toEqual({ "Ability 1" })
+    mock.click(rowOf("Ability 2"))
+    mock.advanceTime(0.1)
+    expect(assert(M.train):IsEnabled()).toBe(false)
+    petTrainClick("Ability 14")
+    expect(bought).toEqual({ "Ability 1", "Ability 14" })
+    petTrainClick("Ability 3")
+    expect(bought).toEqual({ "Ability 1", "Ability 14", "Ability 3" })
+    -- the trained one gone from the list: nothing chosen, not the next one
+    expect(M.selected).toBeNil()
+    expect(tipOf(assert(M.train))).toBe("Choose what to learn.")
+    -- closed and opened again: nothing chosen, Train still trains
+    CloseTrainer()
+    mock.advanceTime(0.5)
+    openTrainer()
+    expect(M.selected).toBeNil()
+    bought = beastTraining(petAbilities(), 30)
+    petTrainClick("Ability 12")
+    expect(bought).toEqual({ "Ability 12" })
+    -- a class trainer, then Beast Training again
+    CloseTrainer()
+    mock.advanceTime(0.5)
+    mock.fake("C_Trainer.GetTrainerType", function()
+        return Enum.TrainerType.Class or 0
+    end)
+    openTrainer()
+    expect(M.trainAll).toBeShown()
+    expect(M.trainOver == nil or not assert(M.trainOver).button:IsShown()).toBe(true)
+    CloseTrainer()
+    mock.advanceTime(0.5)
+    openTrainer()
+    bought = beastTraining(petAbilities(), 30)
+    petTrainClick("Ability 15")
+    petTrainClick("Ability 2")
+    petTrainClick("Ability 9")
+    expect(bought).toEqual({ "Ability 15", "Ability 2", "Ability 9" })
+    expectNoErrors()
+end
+
+@test("Beast Training: the game's selection already the choice but its frame lost it: told again")
+local function petTellAgain()
+    openTrainer()
+    beastTraining(petAbilities(), 30)
+    local told: number[] = {}
+    hooksecurefunc("SelectTrainerService", function(i: number)
+        told[#told + 1] = i
+    end)
+    mock.click(rowOf("Ability 4"))
+    mock.advanceTime(0.1)
+    expect(M:GameHasChoice()).toBe(true)
+    -- the game's frame forgets it (its list rebuilt), its selection stays
+    local frame = game() :: Frame & { selectedService?: number }
+    frame.selectedService = nil
+    told = {}
+    mock.fireEvent("TRAINER_UPDATE")
+    mock.advanceTime(0.1)
+    -- past the end, then the choice: a change the game's frame takes up
+    -- (the game's own handler selects too)
+    expect(told[1]).toBe(16)
+    expect(told[#told]).toBe(4)
+    expect(M:GameHasChoice()).toBe(true)
+    expect(assert(M.trainOver).button).toBeShown()
+    -- told once until the list changes again (no loop)
+    told = {}
+    M:Refresh()
+    M:Refresh()
+    expect(#told).toBe(0)
+    expectNoErrors()
+end
+
+@test("Beast Training: what the pet knows is Used: hidden with Used off, dimmed with it on")
+local function petKnown()
+    -- (reported: the spells already taught to the pet in the list. The game
+    -- lists them learnable with no cost)
+    openTrainer()
+    local wolf = mock.spawnUnit({ name = "Wolf", level = 40, reaction = "friendly" })
+    mock.setPet(wolf, {
+        hunter = true,
+        spells = {
+            { spell = 91001, name = "Growl", subName = "Rank 4" },
+            { spell = 91002, name = "Fire Resistance", subName = "Passive", passive = true },
+            { spell = 91003, name = "Great Stamina", subName = "Rank 5", passive = true },
+        },
+    })
+    mock.advanceFrames(1)
+    local list: FakeService[] = {
+        { name = "Fire Resistance", kind = "available", rank = "Rank 2", cost = 0 },
+        { name = "Great Stamina", kind = "available", rank = "Rank 5", cost = 0 },
+        { name = "Growl", kind = "available", rank = "Rank 4", cost = 0 },
+        { name = "Bite", kind = "available", rank = "Rank 5", cost = 13 },
+        { name = "Great Stamina", kind = "available", rank = "Rank 6", cost = 25 },
+        { name = "Growl", kind = "available", rank = "Rank 3", cost = 0 },
+    }
+    -- the services' spells (Fire Resistance's the pet's)
+    local spells = { 91002, 92002, 92003, 92004, 92005, 92006 }
+    mock.fake("C_TooltipInfo.GetTrainerService", function(i: number)
+        return { id = spells[i], lines = {} }
+    end)
+    local used = false
+    mock.fake("GetTrainerServiceTypeFilter", function(kind: string)
+        return kind ~= "used" or used
+    end)
+    beastTraining(list, 30)
+    M:Refresh()
+    -- Used off (the default): Bite and Great Stamina's next rank only
+    expect(M.rows[1].name).toHaveText("Bite")
+    expect(M.rows[2].name).toHaveText("Great Stamina")
+    expect(M.rows[2].sub).toHaveText("(Rank 6)")
+    expect(M.rows[3]).never.toBeShown()
+    local fire, bite = assert(service(1)), assert(service(4))
+    expect(fire.kind).toBe("used")
+    expect(fire.petKnows).toBe(true)
+    expect(bite.kind).toBe("available")
+    expect(bite.petKnows).toBeNil()
+    -- Used on: listed, dimmed, Train off for them
+    used = true
+    M:Refresh()
+    expect(M.rows[6]).toBeShown()
+    expect(M.rows[1].name).toHaveText("Fire Resistance")
+    expect(M.rows[1]:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
+    expect(M.rows[4]:GetAlpha()).toBe(1)
+    mock.click(M.rows[3])
+    expect(assert(M.train):IsEnabled()).toBe(false)
+    expect(tipOf(assert(M.train))).toBe("Your pet knows this.")
+    -- a known one chosen, then Used off: the choice goes with it
+    used = false
+    M:Refresh()
+    expect(M.selected).toBeNil()
+    mock.setPet(nil)
+    wolf:despawn()
+    expectNoErrors()
+end
+
+@test("the choice follows its service when the list moves; gone, nothing is chosen")
+local function choiceFollows()
+    openTrainer()
+    local list: FakeService[] = {
+        { name = "Charge", kind = "available", rank = "Rank 1", cost = 10 },
+        { name = "Rend", kind = "available", rank = "Rank 1", cost = 10 },
+        { name = "Rend", kind = "available", rank = "Rank 2", cost = 10 },
+    }
+    fakeServices(list)
+    M:Refresh()
+    mock.click(M.rows[3])
+    expect(M.selected).toBe(3)
+    -- Charge learned and gone: Rend 2 is the second now
+    table.remove(list, 1)
+    M:Refresh()
+    expect(M.selected).toBe(2)
+    expect(M.rows[2].sel).toBeShown()
+    expect(M.rows[1].sel).never.toBeShown()
+    local buy = mock.fake("BuyTrainerService", function() end)
+    M:Train()
+    expect(buy).toHaveBeenCalledWith(2)
+    -- moved without a refresh: Train finds it where it is at the click
+    table.insert(list, 1, { name = "Battle Shout", kind = "available", rank = "Rank 1", cost = 10 })
+    M:Train()
+    expect(buy).toHaveBeenCalledWith(3)
+    -- gone: nothing chosen, nothing bought
+    table.remove(list, 3)
+    M:Train()
+    expect(buy).toHaveBeenCalledTimes(2)
+    expect(M.selected).toBeNil()
 end
 
 @test("a secret NPC name: the window says Trainer")

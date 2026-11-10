@@ -13,6 +13,17 @@
 -- button, which trains what the game has chosen: SuuUI's choice, told with
 -- SelectTrainerService (the game's frame takes it up in its own event,
 -- TRAINER_DESCRIPTION_UPDATE). No Train all there (asked 2026-11-05).
+-- The game enables its Train button only from its own list's row of the
+-- choice, and that list builds rows only for what it scrolls into sight: a
+-- choice further down left its Train disabled, and the click did nothing
+-- (reported 2026-11-10: "half the time nothing happens"). So SuuUI enables
+-- it once the game has a choice SuuUI can learn, and tells the game again
+-- (a change of its selection, which is what its frame takes up) when its
+-- frame lost the choice. The choice is kept by name and rank, not by its
+-- place in the list, which moves when something is learned.
+-- What the pet already knows comes as learnable with no cost (reported
+-- 2026-11-10: known pet abilities in the list): SuuUI asks the pet's
+-- spellbook and counts those as known (Used), as the game's filter would.
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
@@ -65,7 +76,8 @@ end
 -- The services
 --------------------------------------------------------------------------------
 
--- A service as the window draws it.
+-- A service as the window draws it. `rank` is the game's rank text ("Rank
+-- 2"); `petKnows`: the game called it learnable, but the pet knows it.
 export type Service = {
     index: number,
     name: string,
@@ -75,9 +87,75 @@ export type Service = {
     category: string?,
     cost: number,
     profession: boolean,
+    rank?: string,
+    petKnows?: boolean,
 }
 
-local function service(i: number): Service?
+-- A service's identity: its name and rank (its index moves when the list
+-- changes).
+local function keyOf(e: Service): string
+    return e.name .. "\n" .. (e.rank or "")
+end
+
+-- A rank's number ("Rank 5": 5).
+local function rankNumber(text: string?): number?
+    local n = text and text:match("(%d+)")
+    return n and tonumber(n) or nil
+end
+
+-- The pet's spellbook: its spells' IDs, and by name the highest rank it
+-- knows (0: a spell without a rank).
+export type PetBook = { ids: { [number]: boolean }, ranks: { [string]: number } }
+local PET_BANK = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Pet or 1
+
+local function petBook(): PetBook
+    local book: PetBook = { ids = {}, ranks = {} }
+    if not (C_SpellBook and C_SpellBook.HasPetSpells and C_SpellBook.GetSpellBookItemInfo) then
+        return book
+    end
+    for slot = 1, secret.asNumber(errors.try(C_SpellBook.HasPetSpells)) or 0 do
+        local info = errors.try(C_SpellBook.GetSpellBookItemInfo, slot, PET_BANK)
+        if type(info) == "table" then
+            local id = secret.asNumber(info.spellID)
+            if id then
+                book.ids[id] = true
+            end
+            local name = secret.asString(info.name)
+            if name then
+                local rank = rankNumber(secret.asString(info.subName)) or 0
+                book.ranks[name] = math.max(book.ranks[name] or 0, rank)
+            end
+        end
+    end
+    return book
+end
+
+-- The spell a service teaches (its tooltip's).
+local function serviceSpell(i: number): number?
+    if not (C_TooltipInfo and C_TooltipInfo.GetTrainerService) then
+        return nil
+    end
+    local data = errors.try(C_TooltipInfo.GetTrainerService, i)
+    return type(data) == "table" and secret.asNumber(data.id) or nil
+end
+
+-- Whether the pet knows a service: its spell, or the spell at that rank or
+-- a higher one in the pet's spellbook.
+local function petKnows(i: number, name: string, rankText: string?, book: PetBook): boolean
+    local id = serviceSpell(i)
+    if id then
+        if book.ids[id] then
+            return true
+        end
+        if C_SpellBook and C_SpellBook.IsSpellKnown and errors.try(C_SpellBook.IsSpellKnown, id, PET_BANK) == true then
+            return true
+        end
+    end
+    local mine = book.ranks[name]
+    return mine ~= nil and (rankNumber(rankText) or 0) <= mine
+end
+
+local function service(i: number, book: PetBook?): Service?
     local nameR, kindR, textureR, reqLevelR, rankTextR, categoryR = errors.try(GetTrainerServiceInfo, i)
     local name = secret.asString(nameR)
     if not name then
@@ -87,7 +165,13 @@ local function service(i: number): Service?
         secret.asNumber(reqLevelR),
         secret.asString(rankTextR),
         secret.asString(categoryR)
-    local unit = isPetTrainer() and "pet" or "player"
+    local pet = isPetTrainer()
+    -- (Beast Training: the game calls what the pet knows learnable)
+    local known = pet and kind ~= "used" and petKnows(i, name, rankText, book or petBook())
+    if known then
+        kind = "used"
+    end
+    local unit = pet and "pet" or "player"
     local parts: string[] = {}
     if rankText and rankText ~= "" then
         parts[#parts + 1] = "(" .. rankText .. ")"
@@ -120,6 +204,8 @@ local function service(i: number): Service?
         category = category ~= "" and category or nil,
         cost = secret.asNumber(cost) or 0,
         profession = not not isProfession,
+        rank = rankText ~= "" and rankText or nil,
+        petKnows = known or nil,
     }
 end
 
@@ -135,7 +221,7 @@ local function learnable(e: Service?): (boolean, string?)
         return false, nil
     end
     if e.kind == "used" then
-        return false, "You know this."
+        return false, isPetTrainer() and "Your pet knows this." or "You know this."
     end
     if e.kind ~= "available" then
         return false, e.sub ~= "" and e.sub or "You can't learn this yet."
@@ -289,12 +375,12 @@ class TrainerRow extends Button
             GameTooltip:Hide()
         end)
         self:SetScript("OnClick", function()
-            owner.selected = self.index
+            owner:Choose(self.index)
             errors.try(SelectTrainerService, self.index)
             owner:Refresh()
         end)
         self:SetScript("OnDoubleClick", function()
-            owner.selected = self.index
+            owner:Choose(self.index)
             owner:Train()
         end)
     end
@@ -405,8 +491,13 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     rank: RankRow? = nil
     refreshPending: boolean? = nil
     rows: TrainerRow[] = {}
-    -- the service chosen (its index)
+    -- the service chosen: its index, and its name and rank (`keyOf`), by
+    -- which it is found again when the list changes
     selected: number? = nil
+    selectedKey: string? = nil
+    -- Beast Training: the choice told to the game (SelectTrainerService)
+    -- since its list last changed
+    told: number? = nil
     tools: Frame? = nil
     train: SuuButton? = nil
     trainAll: SuuButton? = nil
@@ -425,10 +516,54 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         })
     end
 
-    -- The chosen service, read again.
-    function Selected(): Service?
-        local selected = self.selected
-        return selected and service(selected) or nil
+    -- Chooses the service at `index` (nil: none).
+    function Choose(index: number?)
+        local e = index and service(index) or nil
+        self.selected = e and e.index or nil
+        self.selectedKey = e and keyOf(e) or nil
+        self.told = nil
+    end
+
+    -- The chosen service, read again: where it is now (by its name and
+    -- rank), or nil once it is gone from the list.
+    function Selected(book: PetBook?): Service?
+        local selected, key = self.selected, self.selectedKey
+        if not selected then
+            return nil
+        end
+        local e = service(selected, book)
+        if not key then
+            -- (chosen by index alone: that one, and from now on by name)
+            self.selectedKey = e and keyOf(e) or nil
+            return e
+        end
+        if e and keyOf(e) == key then
+            return e
+        end
+        for i = 1, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) do
+            local other = service(i, book)
+            if other and keyOf(other) == key then
+                self.selected = i
+                self.told = nil
+                return other
+            end
+        end
+        self.selected, self.selectedKey, self.told = nil, nil, nil
+        return nil
+    end
+
+    -- Forgets the choice and what the game was told (each trainer opened
+    -- starts from nothing chosen).
+    function ResetChoice()
+        self.selected, self.selectedKey, self.told = nil, nil, nil
+        self:HideTrainOver()
+    end
+
+    function HideTrainOver()
+        local over = self.trainOver
+        if over and not InCombatLockdown() then
+            over.hide()
+        end
     end
 
     function Train()
@@ -462,12 +597,14 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     -- leaving every marked one out left nothing at a profession trainer).
     function TrainAllList(): (Service[], number)
         local list: Service[], money = {}, GetMoney() or 0
+        local book: PetBook? = nil
         if isPetTrainer() then
             money = trainingPoints()
+            book = petBook()
         end
         local mine = yourProfessions()
         for i = 1, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) do
-            local e = service(i)
+            local e = service(i, book)
             if e and e.kind == "available" and learnable(e) then
                 local line = e.profession and secret.asString(errors.try(GetTrainerServiceSkillLine, i))
                 if not e.profession or (line and mine[line]) then
@@ -700,11 +837,18 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
+        -- (what the pet knows hidden with Used off, as the game's filter
+        -- hides what it calls used)
+        local book = pet and petBook() or nil
+        local showUsed = errors.try(GetTrainerServiceTypeFilter, "used") and true or false
         local services: Service[] = {}
+        local chosen = self:Selected(book)
         for i = 1, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) do
-            local e = service(i)
-            if e then
+            local e = service(i, book)
+            if e and not (e.petKnows and not showUsed) then
                 services[#services + 1] = e
+            elseif e and chosen and chosen.index == i then
+                self:ResetChoice()
             end
         end
         local list, groups = arrange(
@@ -765,7 +909,7 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         c:SetHeight(math.max(1, y))
         -- the foot
         money:SetCopper(GetMoney() or 0)
-        local ok, why = learnable(self:Selected())
+        local ok, why = learnable(self:Selected(book))
         train:SetEnabledState(ok)
         train.tooltip = (not ok) and
             { title = "Train", description = self.selected and why or "Choose what to learn." } or
@@ -800,28 +944,47 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         return skill == sel
     end
 
+    -- Tells the game SuuUI's choice, once until its list changes: a change
+    -- of its selection is what its frame takes up (TRAINER_DESCRIPTION_UPDATE),
+    -- so when the game's selection is this one already (its frame lost it
+    -- when its list changed) it is set past the end first, as the game's own
+    -- code clears it.
+    function TellGame(sel: number)
+        if self.told == sel then
+            return
+        end
+        self.told = sel
+        if secret.asNumber(errors.try(GetTrainerSelectionIndex)) == sel then
+            errors.try(SelectTrainerService, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) + 1)
+        end
+        errors.try(SelectTrainerService, sel)
+    end
+
     -- Beast Training: Train is the secure click on the game's own Train
     -- button while the game has SuuUI's choice; else the choice is told to
     -- the game (it answers with TRAINER_DESCRIPTION_UPDATE) and Train waits.
+    -- The game's Train is enabled for it: the game does that only from its
+    -- list's row of the choice, which exists only while scrolled into sight
+    -- (SuuUI enables it only for what it found learnable, as the game would).
     function DrawPetTrain(on: boolean)
         if InCombatLockdown() then
             return
         end
         local over = self.trainOver
-        local blizz = frames.find("ClassTrainerTrainButton")
+        local blizz = frames.find("ClassTrainerTrainButton") :: Button?
         local train = self.train
-        if not (on and blizz and train) then
-            if over then
-                over.hide()
-            end
+        local sel = self.selected
+        if not (on and blizz and train and sel) then
+            self:HideTrainOver()
             return
         end
         if not self:GameHasChoice() then
-            if over then
-                over.hide()
-            end
-            errors.try(SelectTrainerService, self.selected)
+            self:HideTrainOver()
+            self:TellGame(sel)
             return
+        end
+        if not blizz:IsEnabled() then
+            blizz:Enable()
         end
         if not over then
             over = secure.overlay(train)
@@ -906,6 +1069,16 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
                         why or ""
                     )
                 )
+                -- (Beast Training: what the pet's spellbook said, to report)
+                if isPetTrainer() then
+                    self:Print(
+                        ("   rank=%s spell=%s petKnows=%s"):format(
+                            tostring(e.rank),
+                            tostring(serviceSpell(i)),
+                            tostring(e.petKnows == true)
+                        )
+                    )
+                end
             end
         end
         local list, total = self:TrainAllList()
@@ -921,7 +1094,7 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         end
         self:OnGameEvent("TRAINER_SHOW", function()
             self.open = true
-            self.selected = nil
+            self:ResetChoice()
             after(0, function()
                 self:Away(frames.find("ClassTrainerFrame"))
             end)
@@ -932,17 +1105,23 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("TRAINER_CLOSED", function()
             self.open = false
             assert(self.window):Hide()
-            local over = self.trainOver
-            if over then
-                over.hide()
-            end
+            self:ResetChoice()
+        end)
+        -- The list changed (something learned, a filter): the game's Train
+        -- may now stand for another service, so the secure click waits for
+        -- the choice to be found again and the game told once more.
+        self:OnGameEvent("TRAINER_UPDATE", function()
+            self.told = nil
+            self:HideTrainOver()
+            self:QueueRefresh()
         end)
         for _, e in ipairs({
-            "TRAINER_UPDATE",
             "TRAINER_SERVICE_INFO_NAME_UPDATE",
             "PLAYER_MONEY",
             "UNIT_PET_TRAINING_POINTS",
             "SKILL_LINES_CHANGED",
+            -- (the pet's spellbook: what it knows)
+            "SPELLS_CHANGED",
             -- (the game's frame has taken up a choice: Beast Training's Train)
             "TRAINER_DESCRIPTION_UPDATE",
         }) do

@@ -7,6 +7,11 @@
 - Aura indicators can be limited to roles: each indicator has Tank, Healer and Damage chips beside its group sizes. Someone without a role counts as Damage.
 - For plugin authors (API 0.30): a buff indicator's `roles`, `SuuUI.UI.INDICATOR_ROLES`, `SuuUI.UI.IndicatorsForRole(list, role)` and a unit frame's `UpdateIndicatorRole()`.
 
+### Fixed
+
+- Hunters: Beast Training no longer lists the abilities your pet already knows (they show only with the Used filter on, dimmed, and can't be trained).
+- Hunters: Train at Beast Training now trains every time; it sometimes did nothing until a /reload. The trainer window also keeps your choice on the same ability when the list changes after training.
+
 ## 0.6.32 (2026-11-10)
 
 ### Fixed
