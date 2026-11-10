@@ -313,8 +313,42 @@ export function rankNumber(id: number): number?
 end
 
 -- Every learned rank of a spell in your spellbook: { id, rank } by rank.
-export function ranksOf(name: string): { id: number, rank: number }[]
-    local out: { id: number, rank: number }[] = {}
+-- Every spell's ranks in your book, by name: read once until the book
+-- changes (each binding's lookup read the whole book, 80 KB of garbage a
+-- time, on every apply).
+type Ranks = { id: number, rank: number }[]
+local rankIndex: { [string]: Ranks }? = nil
+local bookWatch = CreateFrame("Frame")
+bookWatch:RegisterEvent("SPELLS_CHANGED")
+bookWatch:SetScript("OnEvent", function()
+    rankIndex = nil
+end)
+
+export function ranksOf(name: string): Ranks
+    local index = rankIndex
+    if not index then
+        index = readRanks()
+        rankIndex = index
+    end
+    local list = index[name]
+    if not list then
+        return {}
+    end
+    -- (a copy: the caller's to keep)
+    local out: Ranks = {}
+    for i, r in ipairs(list) do
+        out[i] = r
+    end
+    return out
+end
+
+-- Forget the book's ranks (a test's spells changed without the game's event).
+export function forgetRanks()
+    rankIndex = nil
+end
+
+function readRanks(): { [string]: Ranks }
+    local byName: { [string]: Ranks } = {}
     local lines = asNumber(try(C_SpellBook.GetNumSpellBookSkillLines)) or 0
     for l = 1, lines do
         local info = try(C_SpellBook.GetSpellBookSkillLineInfo, l) :: {
@@ -332,16 +366,20 @@ export function ranksOf(name: string): { id: number, rank: number }[]
             }?
             local n = item and asString(item.name)
             local id = item and asNumber(item.spellID)
-            if n == name and id and not flag(item and item.isPassive) then
+            if n and id and not flag(item and item.isPassive) then
                 local sub = item and asString(item.subName) or ""
-                out[#out + 1] = { id = id, rank = tonumber(sub:match("(%d+)")) or 0 }
+                local list = byName[n] or {}
+                byName[n] = list
+                list[#list + 1] = { id = id, rank = tonumber(sub:match("(%d+)")) or 0 }
             end
         end
     end
-    table.sort(out, function(a: { rank: number }, b: { rank: number }): boolean
-        return a.rank < b.rank
-    end)
-    return out
+    for _, list in pairs(byName) do
+        table.sort(list, function(a: { rank: number }, b: { rank: number }): boolean
+            return a.rank < b.rank
+        end)
+    end
+    return byName
 end
 
 -- The spell ID a binding casts now: its rank, or the highest you know.
