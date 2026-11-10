@@ -171,6 +171,9 @@ export abstract class Layout
     readonly autoSize: AutoSize
     readonly depth: number
     applying?: boolean
+    -- anchor every child again even if no size changed (the flusher's
+    -- second pass after a container grew)
+    reanchor: boolean = false
     -- stacks
     direction?: "vertical" | "horizontal"
     align?: Align
@@ -306,6 +309,7 @@ flusher:SetScript("OnUpdate", function(self)
     again = {}
     for l in pairs(redo) do
         pending[l] = true
+        l.reanchor = true
     end
     -- A container that grows dirties the layout it sits in; settle in a few passes.
     for _ = 1, 8 do
@@ -338,14 +342,37 @@ export class Stack extends Layout
         self.stretches = self.align == "stretch"
     end
 
+    -- what the last arrangement placed: the shown children and their sizes,
+    -- the cross size, its result (a text in a stack that changes every frame,
+    -- a timer's, asked for a new arrangement each frame: 34,000 a recording,
+    -- 13 MB of garbage; the same sizes are now left where they are)
+    private lastChildren: Region[] = {}
+    private lastW: number[] = {}
+    private lastH: number[] = {}
+    private lastCross: number = -1
+    private lastResult: { w: number, h: number }? = nil
+
     override function Arrange(): (number, number)
         local c, p, vertical = self.container, self.padding, self.direction == "vertical"
-        local items: { child: Region, w: number, h: number }[], cross = {}, 0
+        local kids, ws, hs = self.lastChildren, self.lastW, self.lastH
+        local n, cross, same = 0, 0, self.lastResult ~= nil
         for _, child in ipairs(self.children) do
             if child:IsShown() then
                 local w, h = measure(child)
-                items[#items + 1] = { child = child, w = w, h = h }
+                n += 1
+                if kids[n] ~= child or ws[n] ~= w or hs[n] ~= h then
+                    same = false
+                    kids[n], ws[n], hs[n] = child, w, h
+                end
                 cross = math.max(cross, vertical and w or h)
+            end
+        end
+        if #kids ~= n then
+            same = false
+            for i = #kids, n + 1, -1 do
+                table.remove(kids, i)
+                table.remove(ws, i)
+                table.remove(hs, i)
             end
         end
         -- With a fixed cross size, align against it rather than the widest child.
@@ -355,10 +382,16 @@ export class Stack extends Layout
         elseif not vertical and not (a == true or a == "height") then
             cross = number(c:GetHeight()) - p.top - p.bottom
         end
+        local last = self.lastResult
+        if same and last and cross == self.lastCross and not self.reanchor then
+            return last.w, last.h
+        end
+        self.reanchor = false
+        self.lastCross = cross
 
         local pos = 0
-        for i, it in ipairs(items) do
-            local child, w, h = it.child, it.w, it.h
+        for i = 1, n do
+            local child, w, h = kids[i], ws[i], hs[i]
             if i > 1 then
                 local placed = placements[child]
                 local o = placed and placed.opts
@@ -388,10 +421,14 @@ export class Stack extends Layout
             self:Placed(child, w, h)
         end
 
+        local rw: number, rh: number = 0, 0
         if vertical then
-            return cross + p.left + p.right, pos + p.top + p.bottom
+            rw, rh = cross + p.left + p.right, pos + p.top + p.bottom
+        else
+            rw, rh = pos + p.left + p.right, cross + p.top + p.bottom
         end
-        return pos + p.left + p.right, cross + p.top + p.bottom
+        self.lastResult = { w = rw, h = rh }
+        return rw, rh
     end
 end
 
