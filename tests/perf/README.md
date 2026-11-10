@@ -29,6 +29,7 @@ them.
 | `social` | A guild of two hundred and Battle.net friends coming and going, the windows closed |
 | `guild` | A guild of two hundred whose roster keeps updating, the communities window closed, then open (the emulator's Blizzard window doesn't refresh its list as the game's does: a guard more than a measure) |
 | `bagcooldown` | Casting with the bags open: `BAG_UPDATE_COOLDOWN` four times a second, a potion's cooldown |
+| `mapglance` | Running with eight quests in the log, the world map opened every two seconds and closed half a second later |
 
 ## Run
 
