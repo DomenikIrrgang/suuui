@@ -96,6 +96,9 @@ local TOPIC_COLS = 3
 -- about a dozen rows; the rest come in over the next frames, and a key
 -- pressed meanwhile starts a new list.
 local ROWS_NOW, ROWS_PER_FRAME = 14, 12
+-- and no more than this many milliseconds of rows a frame (debugprofilestop):
+-- a dozen rows made for the first time took 7 ms in game (2026-11-10)
+local NOW_MS, FRAME_MS = 1.5, 1
 -- each command's width in the label font, measured once
 local cmdWidths: { [string]: number } = {}
 
@@ -699,8 +702,10 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     -- from where it stopped)
     pending: (() -> boolean)[] = {}
     pendingAt: number = 1
-    -- rows that may still be drawn in this frame
+    -- rows that may still be drawn in this frame, until when, and how many were
     room: number = 0
+    deadline: number = 0
+    drawnHere: number = 0
     catalog: Item[]? = nil
     byName: { [string]: Item } = {}
     builtAt: number = 0
@@ -869,9 +874,24 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The catalog, built again once a minute at most (addons add commands late).
+    -- The catalog built again on a later frame (Core/Ahead: out of combat).
+    function RebuildSoon()
+        ahead.schedule("chat commands: catalog", function(): boolean
+            if self:IsEnabled() and (not self.catalog or GetTime() - self.builtAt > 60) then
+                self:BuildCatalog()
+            end
+            return false
+        end)
+    end
+
     function Catalog(): Item[]
         local catalog = self.catalog
-        if catalog and GetTime() - self.builtAt <= 60 then
+        if catalog then
+            -- a minute old or an addon loaded since: built again after this
+            -- frame, out of combat (5.6 ms in game), the old one meanwhile
+            if GetTime() - self.builtAt > 60 then
+                self:RebuildSoon()
+            end
             return catalog
         end
         self:BuildCatalog()
@@ -1166,14 +1186,16 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         self.flat = {}
         self.drawY = S["space-1"]
         self.pending, self.pendingAt, self.room = {}, 1, ROWS_NOW
+        self.deadline, self.drawnHere = debugprofilestop() + NOW_MS, 0
     end
 
     -- One more row in this frame, if there's room for it.
     function Room(): boolean
-        if self.room <= 0 then
+        if self.room <= 0 or (self.drawnHere > 0 and debugprofilestop() > self.deadline) then
             return false
         end
         self.room -= 1
+        self.drawnHere += 1
         return true
     end
 
@@ -1194,6 +1216,7 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.room = ROWS_PER_FRAME
+        self.deadline, self.drawnHere = debugprofilestop() + FRAME_MS, 0
         local i = self.pendingAt
         while i <= #list and list[i]() do
             i += 1
@@ -1758,13 +1781,20 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
         end)
         -- addons that load later add commands
         self:OnGameEvent("ADDON_LOADED", function()
-            self.catalog = nil
+            self.builtAt = -math.huge
+            self:RebuildSoon()
         end)
-        -- the catalog (the game's emotes above all) built after login, out of
-        -- combat, so the first / doesn't build it (10 ms in game)
-        ahead.schedule("chat commands: catalog", function(): boolean
-            if self:IsEnabled() and not self.catalog then
-                self:BuildCatalog()
+        -- the catalog (the game's emotes above all) and the palette built after
+        -- login, out of combat, so the first / doesn't build them (10 ms and
+        -- 2.5 ms in game)
+        self:RebuildSoon()
+        ahead.schedule("chat commands: palette", function(): boolean
+            if self:IsEnabled() and not self.palette then
+                self:Build()
+                local p = self.palette
+                if p then
+                    p:Hide()
+                end
             end
             return false
         end)
