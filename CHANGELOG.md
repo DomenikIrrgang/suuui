@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Auction house: the lowest buyout from a search is right for items listed many times at one price (32 at 20s showed as 62c).
+- Auction house: the lowest buyout is right for items listed several times at one price, in Buy and in Sell (32 at 20s showed as 62c, and Sell suggested a third of the real price).
 
 ## 0.6.33 (2026-11-10)
 
