@@ -843,10 +843,25 @@ end
 -- plate first went on a friendly unit cost 7-11 ms in NAME_PLATE_UNIT_ADDED
 -- while running about (the dev profiler, 2026-11-10).
 -- (a plate without its auras first: it's what a unit would wait for)
+-- Whether your class removes anything from a friend (a curse, a poison,
+-- a disease, magic): without, friendly plates show no debuffs to remove.
+local REMOVERS: { [string]: boolean } = {
+    PRIEST = true,
+    PALADIN = true,
+    DRUID = true,
+    SHAMAN = true,
+    MAGE = true,
+    WARLOCK = true,
+}
+local function canRemove(): boolean
+    local _, class = UnitClass("player")
+    return type(class) == "string" and REMOVERS[class] == true
+end
+
 -- The friendly group only while no plate shows (nobody around: it's as
 -- dear as the plate, and in a crowd it would take the frames plates need).
 local function unfinished(): (Nameplate?, string?)
-    local wantRemovable = (M:Get("auras") :: number) > 0 and next(byUnit) == nil
+    local wantRemovable = (M:Get("auras") :: number) > 0 and next(byUnit) == nil and canRemove()
     local later: Nameplate? = nil
     for _, f in ipairs(pool) do
         if not f.aurasTried then
@@ -1522,7 +1537,25 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end
         local n: number = self:Get("auras")
         auras:SetGroupMax("mine", f.friendly and 0 or n)
-        auras:SetGroupMax("removable", f.friendly and n or 0)
+        -- what you can remove from a friend: nothing for a class that removes
+        -- nothing (the group never made)
+        local removable = (f.friendly and canRemove()) and n or 0
+        local g = auras.groups["removable"]
+        if removable > 0 and g and not g.added then
+            -- the group isn't in the engine yet (7 ms in game): one such a
+            -- frame, the rest on the next frames
+            if builtThisFrame() then
+                local unit = f.unit
+                after(0, function()
+                    if f.unit == unit and f.friendly then
+                        self:ApplyAuraCount(f)
+                    end
+                end)
+                return
+            end
+            builtAt = GetTime()
+        end
+        auras:SetGroupMax("removable", removable)
     end
 
     function ForEach(fn: (f: Nameplate) -> ())
