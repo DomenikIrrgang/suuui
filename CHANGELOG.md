@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Aura indicators' + Add now offers every spell in your spellbook (Wild Growth, Prayer of Mending, Riptide, Blessing of Sanctuary, Soulstone…), a paladin's auras and blessings, and other classes' buffs (marked with their class), each with its icon as in the Cooldown Manager.
+- Aura indicators' + Add now offers every spell in your spellbook (Wild Growth, Prayer of Mending, Riptide, Blessing of Sanctuary, Soulstone…) and a paladin's auras and blessings, each with its icon as in the Cooldown Manager.
 
 ## 0.6.32 (2026-11-10)
 
