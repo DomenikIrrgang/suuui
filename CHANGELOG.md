@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Aura indicators can track every buff your class's presets know, including grouped ones like a paladin's auras and blessings, and buffs you put on others like Blessing of Protection.
+
 ## 0.6.32 (2026-11-10)
 
 ### Fixed

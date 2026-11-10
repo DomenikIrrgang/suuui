@@ -13,6 +13,7 @@ import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
 import type SelectOption, Select from "/UI/Select"
 import type Indicator, UnitFrame from "/UI/UnitFrame"
+import type TrackerEntry from "/UI/CooldownTracker"
 import type SuuButton from "/UI/Controls"
 import type Segmented, SegmentedOption, Stepper from "/UI/Inputs"
 import type AnchorPicker, SwatchRow, ToggleChips, ChipOption from "/UI/Pickers"
@@ -156,16 +157,44 @@ local function copyList(list: Indicator[]): Indicator[]
     return out
 end
 
--- Every buff the Cooldown Manager's presets know for your class, by name.
+-- Every buff the Cooldown Manager's presets know for your class, by name:
+-- the buffs and procs, a group's members one by one (a paladin's auras and
+-- blessings are groups there: missing here until 2026-11-10, found in game),
+-- and the utility spells that put a buff on someone (Blessing of
+-- Protection, Freedom) by the buff they give.
 local function knownBuffs(): { [string]: number[] }
     local byName: { [string]: number[] } = {}
+    local function add(name: string?, ids: number[]?)
+        if name and ids and #ids > 0 and not byName[name] then
+            byName[name] = ids
+        end
+    end
+    local function take(e: TrackerEntry)
+        if e.enchant then
+            return
+        end
+        if e.group then
+            for _, m in ipairs(e.members or {}) do
+                take(m)
+            end
+            return
+        end
+        add(e.name, e.ids)
+    end
     local presets = SuuUI.CooldownPresets and SuuUI.CooldownPresets() or {}
     for _, p in ipairs(presets) do
         for _, entries in ipairs({ p.lists.buffs, p.lists.procs }) do
             for _, e in ipairs(entries or {}) do
-                local ids = e.ids
-                if not e.group and not e.enchant and e.name and ids then
-                    byName[e.name] = byName[e.name] or ids
+                take(e)
+            end
+        end
+        for _, e in ipairs(p.lists.utility or {}) do
+            -- a utility spell's buff: its own effect IDs, else its IDs
+            if not e.enchant and e.effect then
+                if e.effectIDs then
+                    add(e.effectName or e.name, e.effectIDs)
+                elseif not e.group then
+                    add(e.name, e.ids)
                 end
             end
         end
