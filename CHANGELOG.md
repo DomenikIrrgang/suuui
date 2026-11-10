@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
+
 ## 0.6.36 (2026-11-10)
 
 ### New
@@ -8,10 +14,6 @@
 - Mouseover bindings: when you bind a spell to the click that Target or Menu uses, SuuUI offers to move Target or Menu to another click first.
 - Mouseover bindings: Cmd clicks now work on unit frames too.
 - Mouseover bindings: on a Mac where Cmd + Left click counts as a right click (the game's Mac option "Use Command + Left Click as Right Click"), the binding boxes say so and offer to turn that option off, so Cmd + Left click can be bound.
-
-### Fixed
-
-- Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
 
 ## 0.6.35 (2026-11-10)
 
