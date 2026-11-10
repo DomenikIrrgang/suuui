@@ -11,6 +11,7 @@
 
 - Hunters: Beast Training no longer lists the abilities your pet already knows (they show only with the Used filter on, dimmed, and can't be trained).
 - Hunters: Train at Beast Training now trains every time; it sometimes did nothing until a /reload. The trainer window also keeps your choice on the same ability when the list changes after training.
+- Aura indicators' + Add now offers every spell in your spellbook (Wild Growth, Prayer of Mending, Riptide, Blessing of Sanctuary, Soulstone…) and a paladin's auras and blessings, each with its icon as in the Cooldown Manager.
 
 ## 0.6.32 (2026-11-10)
 
