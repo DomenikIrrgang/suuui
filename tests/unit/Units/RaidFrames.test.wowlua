@@ -11,6 +11,9 @@ import migrations as settingMigrations from "/Core/Settings"
 import expectNoErrors, expectPingable from "../../helpers"
 import type RaidButton from "/Units/RaidFrames"
 import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import type Indicator from "/UI/UnitFrame"
 
 -- The raid frames' holder, a group's header (by their global names).
 local function holder(): Frame
@@ -360,6 +363,56 @@ local function applied()
     M:ApplyIndicators()
     M:ApplyDefensives()
     expect(M.indicatorTier ~= nil).toBe(true)
+end
+
+@test("indicators limited to roles: on the buttons of those roles; a role change and sorting by role follow")
+local function indicatorRoles()
+    local before = SuuUI.UI.GroupIndicators()
+    raid(5)
+    local list: Indicator[] = {
+        { name = "Tanks", kind = "square", ids = { 139 }, roles = { TANK = true } },
+        { name = "Old", kind = "icon", ids = { 774 } }, -- saved before roles: everyone
+    }
+    SuuUI.UI.SetGroupIndicators(list)
+    mock.advanceTime(1.1)
+    -- every button with a unit: the Tanks one on tanks only, the old one on
+    -- all; counts the tanks and the others
+    local function check(): (number, number)
+        local tanks, others = 0, 0
+        for _, f in ipairs(M.buttons) do
+            local unit = f.unit
+            if unit and f:IsShown() and UnitExists(unit) then
+                local tank = secret.known(UnitGroupRolesAssigned(unit), "NONE") == "TANK"
+                local cs = f.indicatorContainers
+                expect(#cs).toBe(2)
+                expect(cs[1].container:IsShown()).toBe(tank)
+                expect(cs[2].container:IsShown()).toBe(true)
+                if tank then
+                    tanks = tanks + 1
+                else
+                    others = others + 1
+                end
+            end
+        end
+        return tanks, others
+    end
+    local tanks, others = check()
+    expect(tanks).toBe(1) -- Raider 1, a warrior
+    expect(others).toBe(5) -- healers, damage and you (no role: Damage)
+    -- a role change (the roster update) moves it
+    assert(raiders[3]):setRole("TANK")
+    tanks, others = check()
+    expect(tanks).toBe(2)
+    expect(others).toBe(4)
+    -- sorted by role: the buttons get other units, their indicators follow
+    M:Set("sort", "role")
+    mock.advanceFrames(2)
+    tanks, others = check()
+    expect(tanks).toBe(2)
+    expect(others).toBe(4)
+    assert(raiders[3]):setRole("DAMAGER")
+    SuuUI.UI.SetGroupIndicators(before)
+    mock.advanceTime(1.1)
 end
 
 @test("auras change: the missing-buff indicators read again, after combat too")

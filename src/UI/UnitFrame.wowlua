@@ -516,6 +516,9 @@ export type Indicator = {
     missingOn?: string,
     -- the group sizes it shows at ("5", "10", "20", "40"; none: every size)
     sizes?: { [string]: boolean },
+    -- 0.30: the roles it shows on ("TANK", "HEALER", "DAMAGER"; none, or
+    -- all three: every role). Someone without a role counts as Damage.
+    roles?: { [string]: boolean },
 }
 
 export const INDICATOR_POINTS: FramePoint[] = {
@@ -661,6 +664,50 @@ export function indicatorsFor(list: Indicator[]?, tier: string): Indicator[]
     for _, ind in ipairs(list or {}) do
         local sizes = ind.sizes
         if not sizes or next(sizes) == nil or sizes[tier] then
+            out[#out + 1] = ind
+        end
+    end
+    return out
+end
+
+-- Roles an indicator can be limited to (ind.roles = { TANK = true, … };
+-- nil, empty or all three: every role). Everyone has one: no role ("NONE")
+-- or any other answer counts as Damage.
+export const INDICATOR_ROLES: string[] = { "TANK", "HEALER", "DAMAGER" }
+
+-- The role indicators go by for a UnitGroupRolesAssigned answer (not a
+-- secret one): TANK, HEALER, else DAMAGER.
+export function indicatorRole(answer: string?): string
+    if answer == "TANK" or answer == "HEALER" then
+        return answer
+    end
+    return "DAMAGER"
+end
+
+-- Whether indicator `ind` shows on someone of `role` (an indicatorRole).
+export function indicatorShowsOn(ind: Indicator, role: string): boolean
+    local roles = ind.roles
+    return not roles or next(roles) == nil or roles[role] == true
+end
+
+-- Whether any indicator of `list` is limited to some roles.
+local function anyRoleLimited(list: Indicator[]?): boolean
+    for _, ind in ipairs(list or {}) do
+        local roles = ind.roles
+        if roles and next(roles) ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+-- The indicators of `list` that show on someone of `role` (previews: a live
+-- frame goes by its own unit's role).
+export function indicatorsForRole(list: Indicator[]?, role: string?): Indicator[]
+    local out: Indicator[] = {}
+    local r = indicatorRole(role)
+    for _, ind in ipairs(list or {}) do
+        if indicatorShowsOn(ind, r) then
             out[#out + 1] = ind
         end
     end
@@ -1028,6 +1075,10 @@ export class UnitFrame extends Button
     -- missing looks by identity, and those in use
     missingCache: { [string]: Frame } = {}
     missingLooks: MissingLook[] = {}
+    -- whether an indicator in use is limited to some roles, and the unit's
+    -- role they went by last (nil: not read since the unit came)
+    roleLimited: boolean = false
+    indicatorRole: string? = nil
     previewCache: { [string]: Frame } = {}
     previewLooks: Frame[] = {}
     -- the debuff-type slots per set ("all", "removable")
@@ -1671,6 +1722,7 @@ export class UnitFrame extends Button
     -- going back to an earlier look reuses the old one. Unused ones are unbound
     -- and hidden.
     function SetIndicators(list: Indicator[]?)
+        self.roleLimited = anyRoleLimited(list)
         for _, c in ipairs(self.indicatorContainers) do
             c.container:Hide()
             c:SetUnit("none")
@@ -1744,19 +1796,62 @@ export class UnitFrame extends Button
         self:UpdateIndicatorPresence()
     end
 
+    -- The role role-limited indicators go by for this frame's unit, read now
+    -- (and kept): TANK, HEALER, else DAMAGER. A secret answer keeps the last
+    -- one read for this unit (Damage if none).
+    function ReadIndicatorRole(): string
+        local u = self.unit
+        local answer = u and UnitGroupRolesAssigned and self.api.UnitGroupRolesAssigned(u)
+        local role: string
+        if secret.isSecret(answer) then
+            role = self.indicatorRole or "DAMAGER"
+        else
+            role = indicatorRole(answer or nil)
+        end
+        self.indicatorRole = role
+        return role
+    end
+
+    -- A role may have changed (PLAYER_ROLES_ASSIGNED, ROLE_CHANGED_INFORM):
+    -- with indicators limited to roles, their presence again, and only when
+    -- this frame's unit's role did change.
+    function UpdateIndicatorRole()
+        if not self.roleLimited or not self.unit then
+            return
+        end
+        local before = self.indicatorRole
+        if self:ReadIndicatorRole() ~= before then
+            self:UpdateIndicatorPresence()
+        end
+    end
+
     -- The missing looks: "both" shows whenever the unit is there (the live look
     -- covers it); "missing" only out of combat, while none of its spells is up.
-    -- "on = group" limits them, and the live looks, to your own raid group: the
-    -- live containers of everyone else are hidden, out of combat (who is in
-    -- your group is known before a fight; the engine still shows the aura).
+    -- "on = group" limits them, and the live looks, to your own raid group, and
+    -- "roles" to some roles: the live containers of everyone else are hidden,
+    -- out of combat (who is in your group and their roles are known before a
+    -- fight; the engine still shows the aura).
     function UpdateIndicatorPresence()
         local u = self.unit
         local exists = u ~= nil and UnitExists(u)
         local fight = InCombatLockdown()
         local mine: boolean? = nil
-        -- whether an indicator shows here: everywhere, or in your own group
+        local role: string? = nil
+        -- whether an indicator shows here: everywhere, or in your own group,
+        -- on the roles it is limited to
         local function inScope(ind: Indicator): boolean
-            if not (u and exists) or (ind.on or ind.missingOn) ~= "group" then
+            if not (u and exists) then
+                return true
+            end
+            local roles = ind.roles
+            if roles and next(roles) ~= nil then
+                local r = role or self:ReadIndicatorRole()
+                role = r
+                if not indicatorShowsOn(ind, r) then
+                    return false
+                end
+            end
+            if (ind.on or ind.missingOn) ~= "group" then
                 return true
             end
             if mine == nil then
@@ -1834,6 +1929,8 @@ export class UnitFrame extends Button
             self:Deactivate()
         end
         self.unit = unit
+        -- another person: their role is read anew
+        self.indicatorRole = nil
         if self.opts.secure ~= false and not keepAttribute then
             self:SetAttribute("unit", unit)
         end

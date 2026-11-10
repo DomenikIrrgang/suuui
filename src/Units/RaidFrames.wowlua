@@ -970,7 +970,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             id = "raid",
             name = "Raid frames",
             description = "Your raid by group: health, roles, debuffs you can remove, aggro and range.",
-            api = "0.9",
+            api = "0.30",
             reloadToToggle = true,
             defaults = DEFAULTS,
         })
@@ -1411,9 +1411,12 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 -- indicators on every third person, as if their auras were up
                 local list, version = UI.GroupIndicators()
                 local tier = UI.GroupTier(count)
-                if f.indicatorVersion ~= version .. tier then
-                    f.indicatorVersion = version .. tier
-                    f:SetPreviewIndicators((i % 3 == 1) and UI.IndicatorsFor(list, tier) or nil)
+                local key = version .. tier .. (d.role or "")
+                if f.indicatorVersion ~= key then
+                    f.indicatorVersion = key
+                    f:SetPreviewIndicators(
+                        (i % 3 == 1) and UI.IndicatorsForRole(UI.IndicatorsFor(list, tier), d.role) or nil
+                    )
                 end
                 -- debuffs (a dispel edge) at the end, listed defensives before
                 -- them; other buffs don't show
@@ -1587,7 +1590,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             self:UpdateStates()
             self:UpdateSelected()
             self:UpdateRange()
-            -- someone changed raid group: "my group" missing looks follow
+            -- someone changed raid group or role: "my group" and role-limited
+            -- indicators follow
             for _, f in ipairs(self.buttons) do
                 f:UpdateIndicatorPresence()
             end
@@ -1603,6 +1607,16 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 end)
             end
         end)
+        -- a role chosen or changed: indicators limited to roles follow, on
+        -- the buttons whose person's role changed (a roster change reads
+        -- every button's above)
+        local function rolesChanged()
+            for _, f in ipairs(self.buttons) do
+                f:UpdateIndicatorRole()
+            end
+        end
+        self:OnGameEvent("PLAYER_ROLES_ASSIGNED", rolesChanged)
+        self:OnGameEvent("ROLE_CHANGED_INFORM", rolesChanged)
         self:OnGameEvent("UNIT_THREAT_SITUATION_UPDATE", function(_, unit)
             for _, f in ipairs(self.buttons) do
                 if f.unit == unit then
