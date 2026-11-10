@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Collections: drag a mount, pet or toy of yours from the Mounts, Pets or Toys tab onto an action bar.
+
 ## 0.6.36 (2026-11-10)
 
 ### New
