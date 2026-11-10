@@ -454,6 +454,8 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
     readonly slotSkins: { [Frame]: ItemSlotSkin } = {}
     readonly slotUpdates: (() -> ())[] = {}
     readonly wear: { [Frame]: WearOverlay } = {}
+    -- a wear change while the window was closed: drawn when it opens
+    wearDirty: boolean = false
     -- the stats' scroll area (Blizzard's list and the Gear category in it),
     -- Blizzard's list, the category
     statsScroll: ScrollArea? = nil
@@ -559,6 +561,9 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         hookScript(cf, "OnShow", function()
             chrome:LayoutTabs()
             self:UpdateIdentity()
+            if self.wearDirty then
+                self:UpdateWear()
+            end
         end)
         -- closed: Blizzard forgets the side pane, the pet's view is over
         hookScript(cf, "OnHide", function()
@@ -954,7 +959,15 @@ class CharacterWindowModule extends Module<typeof(DEFAULTS)>
         self.wear[b] = WearOverlay.new(b)
     end
 
+    -- (the window closed: drawn when it opens; each wear tick redrew the slots
+    -- and the stats' Gear rows, 2-3 ms in game, while you ran about)
     function UpdateWear()
+        local cf = frame("CharacterFrame")
+        if cf and not cf:IsShown() then
+            self.wearDirty = true
+            return
+        end
+        self.wearDirty = false
         for b, o in pairs(self.wear) do
             local p, d = self:WearOf(b:GetID())
             local v = wearView(p, p and d and d.parts.gearBars, p and o.bar:GetWidth())
