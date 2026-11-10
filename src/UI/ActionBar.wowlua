@@ -413,13 +413,14 @@ local PASSES: { [string]: (b: ActionButton) -> () } = {
     active = function(b: ActionButton)
         b:UpdateActive()
     end,
+    range = rangeNow,
 }
 local due: { [string]: boolean } = {}
 local flusher = CreateFrame("Frame")
 flusher:Hide()
 -- One kind of pass a frame (each reads every button: 2.3 ms in game for
 -- all three in one frame), the cooldowns first, the others on the next.
-local ORDER = { "cooldown", "usable", "active" }
+local ORDER = { "cooldown", "range", "usable", "active" }
 flusher:SetScript("OnUpdate", function(self)
     for _, kind in ipairs(ORDER) do
         if due[kind] then
@@ -428,7 +429,7 @@ flusher:SetScript("OnUpdate", function(self)
             if fn then
                 fault.call("Action bars", eachButton, fn)
             end
-            if not (due.cooldown or due.usable or due.active) then
+            if not next(due) then
                 self:Hide()
             end
             return
@@ -530,9 +531,9 @@ on("ACTION_RANGE_CHECK_UPDATE", function(slot, inRange, checksRange)
         b:SetOutOfRange(out)
     end)
 end)
-on("PLAYER_TARGET_CHANGED", function()
-    eachButton(rangeNow)
-end)
+-- (the range of every button: in the frame's pass, not in the target's
+-- event with everything else that follows a new target)
+on("PLAYER_TARGET_CHANGED", later("range"))
 on("UPDATE_BINDINGS", function()
     for _, bar in ipairs(bars) do
         bar:UpdateBindings()
