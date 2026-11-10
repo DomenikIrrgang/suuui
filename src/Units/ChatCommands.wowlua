@@ -99,6 +99,10 @@ local ROWS_NOW, ROWS_PER_FRAME = 14, 12
 -- and no more than this many milliseconds of rows a frame (debugprofilestop):
 -- a dozen rows made for the first time took 7 ms in game (2026-11-10)
 local NOW_MS, FRAME_MS = 1.5, 1
+-- the catalog's commands read a step a frame when built ahead
+local CATALOG_STEP = 40
+-- A catalog being built in steps.
+type CatalogBuild = { keys: string[], at: number, items: Item[], byName: { [string]: Item } }
 -- each command's width in the label font, measured once
 local cmdWidths: { [string]: number } = {}
 
@@ -734,6 +738,15 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     -- Every command: { cmd, aliases, names, desc, cat, src, key, arg, usage,
     -- chatType, rank }, by category order, rank and name.
     function BuildCatalog()
+        local b = self:CatalogStart()
+        self:CatalogStep(b, #b.keys)
+        self:CatalogFinish(b)
+    end
+
+    -- The catalog in parts: the commands' keys now, then `n` keys' commands
+    -- a step (CatalogStep), then the emotes and the order (CatalogFinish):
+    -- all in one frame took 5.6 ms in game, built ahead after login.
+    function CatalogStart(): CatalogBuild
         local keys: { [string]: boolean } = {}
         local function take(k: unknown)
             local key = asString(k)
@@ -756,8 +769,20 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
                 take(k)
             end
         end
-        local items: Item[], byName: { [string]: Item } = {}, {}
+        local list: string[] = {}
         for key in pairs(keys) do
+            list[#list + 1] = key
+        end
+        table.sort(list)
+        return { keys = list, at = 1, items = {}, byName = {} }
+    end
+
+    -- The next `n` keys' commands; whether keys are left.
+    function CatalogStep(b: CatalogBuild, count: number): boolean
+        local items, byName = b.items, b.byName
+        local stop = math.min(#b.keys, b.at + count - 1)
+        for k = b.at, stop do
+            local key = b.keys[k]
             local names = aliasesOf(key)
             if #names > 0 then
                 local info = INFO[key]
@@ -828,6 +853,12 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
+        b.at = stop + 1
+        return b.at <= #b.keys
+    end
+
+    function CatalogFinish(build: CatalogBuild)
+        local items, byName = build.items, build.byName
         -- the emotes: EMOTE<n>_TOKEN with its commands EMOTE<n>_CMD<m> (the
         -- game's own, read once: thousands of globals looked up, most of the
         -- catalog's cost)
@@ -874,12 +905,26 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The catalog, built again once a minute at most (addons add commands late).
-    -- The catalog built again on a later frame (Core/Ahead: out of combat).
+    -- The catalog built again over the next frames (Core/Ahead: out of
+    -- combat), CATALOG_STEP keys a frame.
     function RebuildSoon()
+        local b: CatalogBuild? = nil
         ahead.schedule("chat commands: catalog", function(): boolean
-            if self:IsEnabled() and (not self.catalog or GetTime() - self.builtAt > 60) then
-                self:BuildCatalog()
+            if not self:IsEnabled() then
+                return false
             end
+            if not b then
+                if self.catalog and GetTime() - self.builtAt <= 60 then
+                    return false
+                end
+                b = self:CatalogStart()
+                return true
+            end
+            local build = b :: CatalogBuild
+            if self:CatalogStep(build, CATALOG_STEP) then
+                return true
+            end
+            self:CatalogFinish(build)
             return false
         end)
     end
@@ -1172,8 +1217,21 @@ class ChatCommandsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- The commands that start with `typed`: by category, and in all.
+    -- (a key more than last time: the last matches narrowed, not the whole
+    -- catalog read again; 2-3 ms a key in game)
+    lastMatch: { catalog: Item[], typed: string, emotes: boolean, byCat: { [string]: Match[] }, total: number }? = nil
+
     function Matches(typed: string): ({ [string]: Match[] }, number)
-        return match.matches(self:Catalog(), typed, self:Get("emotes") == true)
+        local catalog, emotes = self:Catalog(), self:Get("emotes") == true
+        local last = self.lastMatch
+        local byCat: { [string]: Match[] }, total: number
+        if last and last.catalog == catalog and last.emotes == emotes and typed:sub(1, #last.typed) == last.typed then
+            byCat, total = match.narrow(last.byCat, typed)
+        else
+            byCat, total = match.matches(catalog, typed, emotes)
+        end
+        self.lastMatch = { catalog = catalog, typed = typed, emotes = emotes, byCat = byCat, total = total }
+        return byCat, total
     end
 
     -- The closest commands to a typed word nothing starts with.
