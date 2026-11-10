@@ -9,6 +9,10 @@
 - Auction house: click a column's header (Name, Item level, Available, Lowest price) to sort the results by it, and again to reverse the order.
 - For plugin authors (API 0.31): FilterMenu's `range` groups (a minimum and a maximum), its `onSubmit`, and `SuuUI.UI.FilterRange(choice)`.
 
+### Fixed
+
+- The quest log's zone headers stay white after you hover them, instead of turning grey until the log is opened again.
+
 ## 0.6.34 (2026-11-10)
 
 ### New
