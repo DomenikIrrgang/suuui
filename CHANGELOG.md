@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The world map's quest details are readable again: their text was drawn dark on SuuUI's dark background since 0.6.30.
+
 ## 0.6.30 (2026-11-10)
 
 ### New
