@@ -25,6 +25,9 @@
 - Using an item or casting with the bags open only updates the cooldown swipes, not every slot.
 - Aura icons on nameplates and frames are drawn when first shown instead of all up front, so new nameplates no longer hitch, and the objective tracker redraws only the quest that changed.
 - The first time you open the collections in a session the game no longer freezes for a few seconds while their sources load; the world map and the professions load theirs the same gentle way.
+- Opening the world map is quicker, and the minimap's marks no longer make a constant stream of garbage (a cause of random hitches when the game cleans up).
+- Nameplates make their debuff icons only once a unit has such a debuff, so nameplates coming into view no longer hitch.
+- A level up or a new spell no longer redraws the closed spellbook, fades no longer redo every tiny step, and layouts whose contents keep their size are left alone.
 
 ## 0.6.29 (2026-11-09)
 
