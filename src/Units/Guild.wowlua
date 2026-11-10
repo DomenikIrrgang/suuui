@@ -224,6 +224,10 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     rowOver: Overlay? = nil
     rowOverRow: RosterRow? = nil
     readonly away: { [Frame]: AwayHandle } = {}
+    -- the window restyled, and its buttons hidden, once per display mode
+    readonly reskinned: { [string]: boolean } = {}
+    readonly buttonsHidden: { [string]: boolean } = {}
+    reskinQueued: boolean = false
     chatBox: Texture? = nil
     skinnedEdit: boolean = false
 
@@ -1436,8 +1440,13 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             hook(list, "SetPoint", again)
         end
         -- Blizzard's View Log and Invite Member: the Log tab and the roster
-        -- (Invite to guild) have their jobs (asked for in game)
-        self:HideButtons(f, 0)
+        -- (Invite to guild) have their jobs (asked for in game); looked for
+        -- once a mode (a walk over the window, 6 ms in game)
+        local mode = tostring(self:Mode())
+        if not self.buttonsHidden[mode] then
+            self.buttonsHidden[mode] = true
+            self:HideButtons(f, 0)
+        end
         -- and by their keys, whatever their labels say (Invite Member was still
         -- there by label alone, found in game); off screen, and kept there
         -- (only see-through, the game showed it again)
@@ -1613,6 +1622,12 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         if not (f and roster) then
             return
         end
+        -- closed: nothing to follow until it opens (OnShow follows then);
+        -- Blizzard selects clubs and modes while it's closed too
+        if not f:IsShown() then
+            self.ownPage = nil
+            return
+        end
         local mode = self:Mode()
         local club = asNumber(tryMethod(f, "GetSelectedClubId"))
         local guild = asNumber(try(field(C_Club, "GetGuildClubId")))
@@ -1652,12 +1667,21 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 self:InfoOverlays()
             end
         end
-        -- the rest in SuuUI's look: Blizzard's own parts restyled in place
-        after(0, function()
-            if f:IsShown() then
-                UI.Reskin(f)
-            end
-        end)
+        -- the rest in SuuUI's look: Blizzard's own parts restyled in place,
+        -- once for each of the window's modes (its lists restyle their own
+        -- rows as they come); a whole pass took 2.5-5 ms in game, again on
+        -- every club and mode change
+        local key = tostring(mode)
+        if not self.reskinned[key] and not self.reskinQueued then
+            self.reskinQueued = true
+            after(0, function()
+                self.reskinQueued = false
+                if f:IsShown() and not self.reskinned[key] then
+                    self.reskinned[key] = true
+                    UI.Reskin(f)
+                end
+            end)
+        end
         roster:SetShown(onRoster)
         if not onRoster then
             for _, over in pairs(self.overs) do
