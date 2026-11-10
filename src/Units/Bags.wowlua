@@ -898,15 +898,51 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 skin:SetItem(nil)
             end
         end
+        self:SlotCooldown(b, bag, slot, info ~= nil)
+    end
+
+    -- A slot's cooldown sweep (`has`: an item there).
+    function SlotCooldown(b: Frame, bag: number, slot: number, has: boolean)
         local cd = cooldownOf(b)
-        if cd then
-            local start, duration, enable = try(C_Container.GetContainerItemCooldown, bag, slot)
-            local length = asNumber(duration)
-            if length and length > 0 and enable ~= 0 and enable ~= false then
-                errors.tryMethod(cd, "SetCooldown", start, length)
-            else
-                cd:Clear()
+        if not cd then
+            return
+        end
+        if not has then
+            cd:Clear()
+            return
+        end
+        local start, duration, enable = try(C_Container.GetContainerItemCooldown, bag, slot)
+        local length = asNumber(duration)
+        if length and length > 0 and enable ~= 0 and enable ~= false then
+            errors.tryMethod(cd, "SetCooldown", start, length)
+        else
+            cd:Clear()
+        end
+    end
+
+    -- Only the cooldowns of the shown windows' slots that hold an item
+    -- (BAG_UPDATE_COOLDOWN comes with casts: a whole redraw of every slot
+    -- took 5 ms in game).
+    function UpdateCooldowns()
+        local function each(bags: number[])
+            for _, bag in ipairs(bags) do
+                local list = self.buttons[bag]
+                if list then
+                    for slot = 1, numSlots(bag) do
+                        local b = list[slot]
+                        if b and C_Container.GetContainerItemID(bag, slot) then
+                            self:SlotCooldown(b, bag, slot, true)
+                        end
+                    end
+                end
             end
+        end
+        local inv, bank = self.inv, self.bank
+        if inv and inv:IsShown() then
+            each(self:Bags())
+        end
+        if bank and bank:IsShown() then
+            each(self:BankBags())
         end
     end
 
@@ -3009,11 +3045,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 self:UpdateSlot(bag, slot)
             end
         end)
-        for _, e in ipairs({ "BAG_UPDATE_COOLDOWN", "INVENTORY_SEARCH_UPDATE" }) do
-            self:OnGameEvent(e, function()
-                self:UpdateShown()
-            end)
-        end
+        self:OnGameEvent("BAG_UPDATE_COOLDOWN", function()
+            self:UpdateCooldowns()
+        end)
+        self:OnGameEvent("INVENTORY_SEARCH_UPDATE", function()
+            self:UpdateShown()
+        end)
         self:OnGameEvent("PLAYER_MONEY", function()
             self:Char().money = GetMoney()
             if inv:IsShown() then
