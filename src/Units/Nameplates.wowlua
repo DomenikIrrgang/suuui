@@ -1544,16 +1544,30 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end
         if g and not g.added and not f.preview then
             local unit = f.unit
-            local filter = f.friendly and "HARMFUL|RAID_PLAYER_DISPELLABLE" or "HARMFUL|PLAYER"
-            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit or "none", 1, filter)
-            -- (a secret answer: there is one)
-            local has = ok and (isSecret(a) or a ~= nil)
-            if not has then
-                f.auraWait = true
-                return
+            -- A friend's group waits for a removable debuff: crowds of friendly
+            -- players were the plates' cost (cities), and the filter words
+            -- read in combat (probed 2026-11-06). An enemy's group goes in at
+            -- once (a frame each): reading "HARMFUL|PLAYER" from Lua found
+            -- nothing in game, so the group never came and no debuffs showed
+            -- (0.6.30, reported 2026-11-10); the engine shows them by itself.
+            if f.friendly then
+                local ok, a = pcall(
+                    C_UnitAuras.GetAuraDataByIndex,
+                    unit or "none",
+                    1,
+                    "HARMFUL|RAID_PLAYER_DISPELLABLE"
+                )
+                -- (a secret answer: there is one)
+                local has = ok and (isSecret(a) or a ~= nil)
+                if not has then
+                    f.auraWait = true
+                    return
+                end
             end
-            -- one group made a frame: the next plate's on the next frame
-            if builtThisFrame() then
+            -- one group made a frame: the next plate's on the next frame; and
+            -- plates still waiting to be made come first (a plate not shown
+            -- at all matters more than its debuffs)
+            if builtThisFrame() or #self.waiting > 0 then
                 f.auraWait = true
                 after(0, function()
                     if f.unit == unit and f.auraWait then
