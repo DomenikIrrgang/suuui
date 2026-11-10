@@ -143,6 +143,63 @@ local function physical(opts)
     return { collection = "Physical Debuffs", entries = entries }
 end
 
+-- Racials: every playable race's active racials with a cooldown, from WoW
+-- Forever 1.60.1.70862's client tables (ChrRaces and CharBaseInfo for the
+-- races and their classes, SkillLineAbility for the racial skill lines'
+-- spells, SpellCooldowns for the cooldowns; passives and Find Treasure, which
+-- has none, left out). Forever reworked them: each race has two (Skyborne
+-- three, one of them per faction). A collection in Utility, after the
+-- class's own cooldowns: the tracker draws only the ones you know, so each
+-- character sees its own race's. Their buffs show on their icon while up
+-- (effect); Cultivation (15 min, herbs) ships hidden.
+local RACES = {
+    { race = "Human", classes = "WARRIOR PALADIN PRIEST ROGUE MAGE WARLOCK HUNTER",
+      spells = { { "Perception", effect = "you" }, "Will to Survive" } },
+    { race = "Dwarf", classes = "WARRIOR PALADIN PRIEST SHAMAN ROGUE HUNTER",
+      spells = { { "Stoneform", effect = "you" } } },
+    { race = "Night Elf", classes = "WARRIOR PRIEST DRUID ROGUE HUNTER",
+      spells = { { "Shadowmeld", effect = "you" }, { "Elune's Light", effect = "you" } } },
+    { race = "Gnome", classes = "WARRIOR PRIEST ROGUE MAGE WARLOCK",
+      spells = { { "Escape Artist", effect = "you" }, { "Eureka!", effect = "you" } } },
+    { race = "Orc", classes = "WARRIOR SHAMAN ROGUE MAGE WARLOCK HUNTER",
+      spells = { { "Blood Fury", effect = "you" }, { "Shatter Curse", effect = "you" } } },
+    { race = "Undead", classes = "WARRIOR PALADIN PRIEST ROGUE MAGE WARLOCK",
+      spells = { { "Will of the Forsaken", effect = "you" }, { "Cannibalize", effect = "you" } } },
+    { race = "Tauren", classes = "WARRIOR SHAMAN DRUID HUNTER",
+      -- (War Stomp's stun is in the Stuns debuff slot already: no effect)
+      spells = { "War Stomp", { "Cultivation", hidden = true } } },
+    { race = "Troll", classes = "WARRIOR PRIEST SHAMAN ROGUE MAGE WARLOCK HUNTER",
+      spells = { { "Berserking", effect = "you" }, { "Rapid Regeneration", effect = "you" } } },
+    -- (High Order Skyborne, Alliance, and Windshaper Skyborne, Horde: Walk
+    -- on Air both, Read Leyline the Alliance's, Skysight the Horde's; Read
+    -- Leyline's buff, Energized, shares its name with an unrelated aura, so
+    -- it has no effect)
+    { race = "Skyborne", classes = "WARRIOR DRUID ROGUE MAGE HUNTER SHAMAN",
+      spells = { { "Walk on Air", effect = "you" } } },
+    { race = "High Order Skyborne", classes = "WARRIOR DRUID ROGUE MAGE HUNTER",
+      spells = { "Read Leyline" } },
+    { race = "Windshaper Skyborne", classes = "WARRIOR SHAMAN DRUID ROGUE HUNTER",
+      spells = { { "Skysight", effect = "you", effectName = "Elemental Blessing" } } },
+}
+
+-- The Racials collection for a class: the racials of the races it can be.
+local function racials(class)
+    local entries = {}
+    for _, r in ipairs(RACES) do
+        if (" " .. r.classes .. " "):find(" " .. class .. " ", 1, true) then
+            for _, s in ipairs(r.spells) do
+                local e = s
+                if type(s) == "table" then
+                    e = {}
+                    for k, v in pairs(s) do e[k] = v end
+                end
+                entries[#entries + 1] = e
+            end
+        end
+    end
+    return { collection = "Racials", entries = entries }
+end
+
 -- A copy of a group (or entry) with other fields: with(AP_REDUCTION, { missing = "grey" }).
 local function with(t, fields)
     local out = {}
@@ -158,4 +215,5 @@ return {
     ARMOR_REDUCTION = ARMOR_REDUCTION, AP_REDUCTION = AP_REDUCTION, ATTACK_SLOWS = ATTACK_SLOWS,
     HEALING_REDUCTION = HEALING_REDUCTION, STUNS = STUNS, with = with,
     withClass = withClass, physical = physical, by = by, learned = learned, members = members,
+    racials = racials,
 }

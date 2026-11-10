@@ -29,6 +29,7 @@ import type ToggleChips from "/UI/Pickers"
 import type CooldownTracker from "/UI/CooldownTracker"
 import type ResourceBar from "/UI/ResourceBar"
 import type CooldownPreset from "/Data/Presets"
+import type Values from "/Core/Settings"
 import Panel as PanelClass from "/UI/Panel"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -1055,6 +1056,16 @@ class EntryRow extends RailedFrame
         -- the summary, in words
         if kind == "collection" then
             add("collection · " .. #(e.entries or {}))
+            -- cooldowns: how many you know (only those show: the Racials)
+            if cooldown then
+                local known = 0
+                for _, x in ipairs(e.entries or {}) do
+                    if (x.group and knownMember(x)) or (not x.group and rankText(x) ~= "Not learned") then
+                        known = known + 1
+                    end
+                end
+                add(known .. " learned")
+            end
             if not c.open then
                 for _, x in ipairs(e.entries or {}) do
                     strip[#strip + 1] = artOf(x, cooldown) or false
@@ -1203,7 +1214,7 @@ class ListHead extends Frame
 end
 
 -- The list's foot: "+ Add…" (a Select of candidates; a typed number finds
--- any spell by its ID), "+ Shared slot" and (aura lists) "+ Collection".
+-- any spell by its ID), "+ Shared slot" and "+ Collection".
 class AddRow extends Frame
     readonly select: Select<string>
     readonly newSlot: SuuButton
@@ -2785,6 +2796,14 @@ class ListEditor extends Frame
         for _, a in ipairs(self.addTos) do
             a:Hide()
         end
+        -- the Cooldowns/Auras switch anchored anew each time, as the rows are:
+        -- in the game a frame laid out while a size script resizes what its
+        -- anchor hangs on (this editor's height resizes its settings row) is
+        -- never placed until anchored again (wowlua PROBES "Found with SuuUI"
+        -- item 1). Anchored once, in the constructor, it was missing in game:
+        -- an empty gap under "Lists" (seen 2026-11-10)
+        self.tabs:ClearAllPoints()
+        self.tabs:SetPoint("TOPLEFT")
         local lists = M:Lists(M:EditSpec())
         local y = -(30 + 12)
         local rowN, addN = 0, 0
@@ -2941,7 +2960,6 @@ class ListEditor extends Frame
             local a = self.adds[i] or AddRow.new(self)
             self.adds[i] = a
             a.key = key
-            a.newCollection:SetShown(not cooldown) -- collections are for auras
             a.byName, a.groups = byName, groups
             a.select:SetOptions(addOptions(info.kind, key, byName, groups, present, true))
             a.select:SetValue(nil)
@@ -2991,7 +3009,7 @@ local SECTION: SettingsSection = {
     groups = {
         {
             title = "What it shows",
-            description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. A shared slot puts several spells in one icon; a collection (auras) keeps entries together. Each entry decides for itself: shown or hidden, and what happens while it isn't up (auras): hidden (the others close up), grey in its place (debuffs: or only with a target), or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).",
+            description = "Per specialization. A preset of your class fills the lists with its spells, every rank included. A shared slot puts several spells in one icon; a collection keeps entries together (Racials: only the ones you know show). Each entry decides for itself: shown or hidden, and what happens while it isn't up (auras): hidden (the others close up), grey in its place (debuffs: or only with a target), or Remind: grey only while it's missing and gone once it's up, out of combat (in combat the game hides which auras are up).",
             rows = {
                 {
                     label = "Your lists",
@@ -3488,3 +3506,7 @@ M:Migrate("slot-uids", migrations.slotUids)
 M:Migrate("missing-per-entry", migrations.missingPerEntry)
 M:Migrate("shaman-shields-auto", migrations.shamanShieldsAuto)
 M:Migrate("short-buffs-warn", migrations.shortBuffsWarn)
+-- (per class: a profile shared across classes gets each one's when it logs in)
+M:Migrate("racials-" .. CLASS, function(values: Values)
+    migrations.addRacials(values, CLASS, presets())
+end)
