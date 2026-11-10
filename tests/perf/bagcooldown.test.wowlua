@@ -1,0 +1,35 @@
+-- Perf scenario: casting with the bags open. Every cast sends
+-- BAG_UPDATE_COOLDOWN (four a second here, as a fight's casts and the global
+-- cooldown do), a potion's cooldown starts and ends. In game each one
+-- redrew every slot of the open bags (5 ms; the dev profiler, 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const POTION = 858
+
+@if(features.perf)
+@test("setup: login, the bags open")
+local function setup()
+    perf.settle(perf.AFTER_LOGIN)
+    SuuUI.ToggleBags()
+    perf.settle(30)
+end
+
+@if(features.perf)
+@test("casting with the bags open")
+local function casting()
+    perf.run(360, function(n: number)
+        if n == 60 then
+            mock.setItemCooldown(POTION, 60, 120)
+        end
+        if n % 15 == 0 then
+            mock.fireEvent("BAG_UPDATE_COOLDOWN")
+        end
+    end)
+end

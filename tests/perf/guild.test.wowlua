@@ -1,0 +1,69 @@
+-- Perf scenario: the guild window. A guild of two hundred whose roster
+-- keeps updating (members online and offline, GUILD_ROSTER_UPDATE), first
+-- with the communities window closed, then open on the roster. In game the
+-- window was followed and restyled while closed (6 ms and 2.5-5 ms a time)
+-- and its list's update restyled every row (up to 30 ms; the dev profiler,
+-- 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local handles: number[] = {}
+
+local function churn(rnd: (n: number) -> number, n: number)
+    if n % 20 == 0 then
+        mock.updateGuildMember(handles[rnd(#handles)], { online = rnd(2) == 1 })
+    end
+    if n % 60 == 30 then
+        mock.fireEvent("GUILD_ROSTER_UPDATE", false)
+        mock.fireEvent("CLUB_UPDATED", 1)
+    end
+end
+
+@if(features.perf)
+@test("setup: login, a guild of two hundred")
+local function setup()
+    mock.joinGuild({ name = "Perf Guild", rank = 1, motd = "Welcome" })
+    for i = 1, 200 do
+        handles[i] = mock.defineGuildMember({
+            name = "Member" .. i,
+            class = CLASSES[(i - 1) % #CLASSES + 1],
+            level = 1 + i % 60,
+            rank = 1 + i % 4,
+            zone = "Elwynn Forest",
+            online = i % 3 == 0,
+        })
+    end
+    perf.settle(perf.AFTER_LOGIN)
+    -- opened once and closed (its skin and pages made)
+    mock.pressKey("J")
+    perf.settle(30)
+    mock.pressKey("J")
+    perf.settle(30)
+end
+
+@if(features.perf)
+@test("window closed: the roster updates")
+local function closed()
+    local rnd = perf.random(23)
+    perf.run(240, function(n: number)
+        churn(rnd, n)
+    end)
+end
+
+@if(features.perf)
+@test("window open: the roster updates")
+local function open()
+    local rnd = perf.random(29)
+    perf.run(240, function(n: number)
+        if n == 1 then
+            mock.pressKey("J")
+        end
+        churn(rnd, n)
+    end)
+end

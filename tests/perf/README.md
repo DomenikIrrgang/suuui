@@ -27,6 +27,8 @@ them.
 | `typing` | Typing a chat command: a lone / (the command palette lists every command), then key by key |
 | `combatend` | A raid fight's end with mouse bindings: someone joins and leaves in the fight, the bindings applied at its end |
 | `social` | A guild of two hundred and Battle.net friends coming and going, the windows closed |
+| `guild` | A guild of two hundred whose roster keeps updating, the communities window closed, then open (the emulator's Blizzard window doesn't refresh its list as the game's does: a guard more than a measure) |
+| `bagcooldown` | Casting with the bags open: `BAG_UPDATE_COOLDOWN` four times a second, a potion's cooldown |
 
 ## Run
 
