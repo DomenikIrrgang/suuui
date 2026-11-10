@@ -312,6 +312,8 @@ export class Nameplate extends Frame
     glow: SoftEdge
     cast: CastBar
     auras: UnitAuras? = nil
+    -- its aura container made (or tried: a client without them)
+    aurasTried: boolean = false
     -- the plate's unit while it's on one ("nameplateN"; a preview's "plateN")
     unit: string? = nil
     friendly: boolean = false
@@ -431,6 +433,7 @@ export class Nameplate extends Frame
     -- Your debuffs on it, above the name (the engine fills them), less what
     -- the aura filters on nameplates leave out.
     function BuildAuras()
+        self.aurasTried = true
         local include, exclude = SuuUI.AuraFilterSpells("nameplates", "debuffs")
         local auras = UI.AuraContainer(self, "none", {
             size = M:Get("auraSize"),
@@ -834,6 +837,40 @@ local function newPlate(): Nameplate
     return f
 end
 
+-- What a pooled plate still lacks, made a step a frame out of combat: its
+-- aura container (with your debuffs' group), then the friendly plates'
+-- group. Each is a few milliseconds in game; the friendly group made when a
+-- plate first went on a friendly unit cost 7-11 ms in NAME_PLATE_UNIT_ADDED
+-- while running about (the dev profiler, 2026-11-10).
+local function unfinished(): (Nameplate?, string?)
+    local wantRemovable = (M:Get("auras") :: number) > 0
+    for _, f in ipairs(pool) do
+        if not f.aurasTried then
+            return f, "auras"
+        end
+        local a = f.auras
+        local g = a and a.groups["removable"]
+        if wantRemovable and g and not g.added then
+            return f, "removable"
+        end
+    end
+    return nil, nil
+end
+
+local function finish(f: Nameplate, what: string)
+    builtAt = GetTime()
+    if what == "auras" then
+        f:BuildAuras()
+        return
+    end
+    -- in the engine now, shown with no icons until a friendly plate asks
+    local a = f.auras
+    if a then
+        a:SetGroupMax("removable", M:Get("auras"))
+        a:SetGroupMax("removable", 0)
+    end
+end
+
 -- Whether a plate was made in this frame already.
 local function builtThisFrame(): boolean
     return builtAt == GetTime()
@@ -845,14 +882,24 @@ local function fill()
     end
     filling = true
     local function step()
-        if InCombatLockdown() or #pool >= POOL then
+        if InCombatLockdown() then
             filling = false
             return
         end
         if not builtThisFrame() then
-            local f = newPlate()
-            f:Hide()
-            pool[#pool + 1] = f
+            local f, what = unfinished()
+            if f and what then
+                finish(f, what)
+            elseif #pool < POOL then
+                -- the plate alone this frame, its auras the next
+                builtAt = GetTime()
+                local made = Nameplate.new(UIParent)
+                made:Hide()
+                pool[#pool + 1] = made
+            else
+                filling = false
+                return
+            end
         end
         after(0, step)
     end
@@ -868,6 +915,8 @@ local function acquire(): Nameplate?
             return nil
         end
         f = newPlate()
+    elseif not f.aurasTried then
+        f:BuildAuras()
     end
     if #pool < POOL_LOW then
         fill()
@@ -1755,7 +1804,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             after(REFILL_DELAY, function()
-                if self:IsEnabled() and #pool < POOL then
+                if self:IsEnabled() then
                     fill()
                 end
             end)

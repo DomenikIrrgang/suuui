@@ -381,14 +381,41 @@ local function oneAFrame()
     expectNoErrors()
 end
 
-@test(
-    "a plate's debuffs: only the group it shows is in the engine (an enemy's yours, a friendly one's what you can remove)"
-)
-local function lazyGroups()
-    local f = plateOf(wolf)
-    local auras = assert(f.auras)
-    expect(assert(auras.groups.mine).added).toBe(true)
-    expect(assert(auras.groups.removable).added).toBeFalsy()
+@test("the pool made a step a frame out of combat: the plate, its auras, then the friendly plates' group")
+local function poolSteps()
+    -- the pool made ahead: every plate with both groups in the engine, so a
+    -- plate laid on a friendly unit adds none (7-11 ms each in game)
+    mock.advanceFrames(120)
+    expect(#pool >= 32).toBe(true)
+    for _, f in ipairs(pool) do
+        local auras = assert(f.auras)
+        expect(assert(auras.groups.mine).added).toBe(true)
+        expect(assert(auras.groups.removable).added).toBe(true)
+    end
+    -- the pool topped up: one step a frame, a plate first, its auras on a
+    -- later frame
+    local kept: Nameplate[] = {}
+    for _ = 1, 30 do
+        kept[#kept + 1] = assert(table.remove(pool))
+    end
+    wolf:showNameplate()
+    local sawBare = false
+    for _ = 1, 10 do
+        mock.advanceFrames(1)
+        for _, f in ipairs(pool) do
+            if not f.aurasTried then
+                sawBare = true
+            end
+        end
+    end
+    expect(sawBare).toBe(true)
+    mock.advanceFrames(120)
+    for _, f in ipairs(pool) do
+        expect(assert(assert(f.auras).groups.removable).added).toBe(true)
+    end
+    for _, f in ipairs(kept) do
+        pool[#pool + 1] = f
+    end
     expectNoErrors()
 end
 
