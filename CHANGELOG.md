@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- For plugin authors (API 0.29): `SuuUI.UI.SecureUnitFrames()` lists SuuUI's secure unit frames, the ones a click binding goes on.
+
 ### Changed
 
 - The first time in a session you open the world map, the collections or a profession, their quest pins and sources show a moment after the window does.
