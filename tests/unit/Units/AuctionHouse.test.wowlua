@@ -253,8 +253,7 @@ local function cleanup()
     if M.buy then
         M.buy.filter:SetValue(nil)
         M.buy.search:SetValue("")
-        M.buy.minLevel:SetValue("")
-        M.buy.maxLevel:SetValue("")
+        M.buy.filter:Close()
     end
     ClearCursor()
     local d = M:CharData()
@@ -693,32 +692,51 @@ local function moreAndFilters()
     expect(note():find("^The search didn't go out: ") ~= nil).toBe(true)
 end
 
-@test("the level range goes with the search, the category and the filters; numbers only; empty is no limit")
+@test(
+    "the level range is in the Filter menu and goes with the search, the category and the filters; numbers only; empty is no limit"
+)
 local function levelRange()
     open()
     local sent = recordQueries()
     search("")
     expect(sent[#sent].minLevel).toBe(0)
     expect(sent[#sent].maxLevel).toBe(0)
+    -- the Filter menu's Required level: two number boxes (asked: in the
+    -- Filter menu with the other filters, as the game's own)
+    local menu = buy().filter
+    mock.click(menu)
+    local panel = assert(menu.panel)
+    local fields: { TextField }? = nil
+    for _, row in ipairs(panel.rows) do
+        if row.group.key == "level" then
+            fields = row.range
+        end
+    end
+    local lo, hi = assert(fields)[1], assert(fields)[2]
+    expect(lo:IsVisible()).toBe(true)
     -- numbers only, two digits (as the game's own range)
-    local lo, hi = buy().minLevel, buy().maxLevel
     expect(lo.edit:IsNumeric()).toBe(true)
     expect(hi.edit:GetMaxLetters()).toBe(2)
-    lo:SetValue("10")
-    hi:SetValue("25")
+    mock.typeText(lo.edit, "10")
+    mock.typeText(hi.edit, "25")
+    expect(menu:Count()).toBe(1)
+    menu:Close()
     mock.click(buy().searchButton)
     mock.advanceTime(0.5)
     expect(sent[#sent].minLevel).toBe(10)
     expect(sent[#sent].maxLevel).toBe(25)
-    -- Enter in a level box searches; with a category, the text and the filter menu
-    buy().filter:SetValue({ only = { "usable" } })
-    buy().filter:Changed()
+    -- Enter in a level box searches and closes the menu; with a category,
+    -- the text and the menu's other filters
+    menu:SetValue({ level = { 10, 30 }, only = { "usable" } })
+    menu:Changed()
     buy().search:SetValue("blade")
     mock.click(assert(buy().catButtons[1]))
     mock.advanceTime(0.5)
-    hi:SetValue("30")
+    mock.click(menu)
+    expect(hi:GetValue()).toBe("30")
     mock.script(hi.edit, "OnEnterPressed")
     mock.advanceTime(0.5)
+    expect(panel:IsShown()).toBe(false)
     local q = sent[#sent]
     expect(q.minLevel).toBe(10)
     expect(q.maxLevel).toBe(30)
@@ -726,10 +744,18 @@ local function levelRange()
     expect(q.filters).toEqual({ Enum.AuctionHouseFilter.UsableOnly })
     expect(#assert(q.itemClassFilters) > 0).toBe(true)
     -- only a lower bound
-    hi:SetValue("")
-    mock.script(lo.edit, "OnEnterPressed")
-    mock.advanceTime(0.5)
+    menu:SetValue({ level = { 10, 0 } })
+    menu:Changed()
+    search("")
     expect(sent[#sent].minLevel).toBe(10)
+    expect(sent[#sent].maxLevel).toBe(0)
+    -- Reset empties the boxes: no limit
+    mock.click(menu)
+    mock.click(assert(panel.reset))
+    expect(lo:GetValue()).toBe("")
+    menu:Close()
+    search("")
+    expect(sent[#sent].minLevel).toBe(0)
     expect(sent[#sent].maxLevel).toBe(0)
 end
 

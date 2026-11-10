@@ -836,8 +836,6 @@ end
 class BuyPage extends Frame
     readonly fav: FavButton
     readonly search: TextField
-    readonly minLevel: TextField
-    readonly maxLevel: TextField
     readonly filter: FilterMenu
     readonly searchButton: SuuButton
     readonly scanButton: SuuButton
@@ -864,31 +862,22 @@ class BuyPage extends Frame
         bar:SetPoint("TOPRIGHT")
         bar:SetHeight(30)
         self.fav = FavButton.new(bar)
-        self.search = UI.TextField(bar, { width = 190, placeholder = "Search" })
+        self.search = UI.TextField(bar, { width = 300, placeholder = "Search" })
         self.search:SetPoint("LEFT", self.fav, "RIGHT", S["space-2"], 0)
         self.search.edit:HookScript("OnEnterPressed", function()
             M:Search()
         end)
-        -- the required level range, as the game's own: numbers only, two
-        -- digits; empty is no limit
-        local function levelBox(placeholder: string): TextField
-            local f = UI.TextField(bar, { width = 52, placeholder = placeholder })
-            f.edit:SetNumeric(true)
-            f.edit:SetMaxLetters(2)
-            f.edit:HookScript("OnEnterPressed", function()
-                M:Search()
-            end)
-            return f
-        end
-        self.minLevel = levelBox("Lv min")
-        self.minLevel:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
-        local dash = UI.Text(bar, "caption", "ink-muted")
-        dash:SetValue("–")
-        dash:SetPoint("LEFT", self.minLevel, "RIGHT", S["space-2"], 0)
-        self.maxLevel = levelBox("Lv max")
-        self.maxLevel:SetPoint("LEFT", dash, "RIGHT", S["space-2"], 0)
         self.filter = UI.FilterMenu(bar, {
             groups = {
+                -- the required level range, as the game's own (in its filter
+                -- menu too): numbers only, two digits; empty is no limit
+                {
+                    key = "level",
+                    label = "Required level",
+                    kind = "range",
+                    placeholders = { "Min", "Max" },
+                    digits = 2,
+                },
                 {
                     key = "only",
                     label = "Show",
@@ -908,14 +897,19 @@ class BuyPage extends Frame
                     },
                 },
             },
-            defaults = { only = {}, rarity = {} },
+            defaults = { level = {}, only = {}, rarity = {} },
             placeholder = "Filter",
             width = 110,
             onChange = function(v: FilterValues)
                 M.filterValue = v
             end,
+            -- Enter in a level box searches, as in the search box
+            onSubmit = function()
+                self.filter:Close()
+                M:Search()
+            end,
         })
-        self.filter:SetPoint("LEFT", self.maxLevel, "RIGHT", S["space-2"], 0)
+        self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
         self.searchButton = UI.Button(bar, {
             text = "Search",
             variant = "primary",
@@ -1692,14 +1686,10 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
     end
 
-    -- The level boxes: the required levels searched (0: no limit, as the
-    -- game's own range sends).
+    -- The Filter menu's level range: the required levels searched (0: no
+    -- limit, as the game's own range sends).
     function LevelRange(): (number, number)
-        local buy = self.buy
-        if not buy then
-            return 0, 0
-        end
-        return tonumber(buy.minLevel.edit:GetText()) or 0, tonumber(buy.maxLevel.edit:GetText()) or 0
+        return UI.FilterRange((self.filterValue or {}).level)
     end
 
     -- The house's order for the results: the chosen column's, then price or
@@ -2645,7 +2635,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return count and ("Received %s of about %s auctions…"):format(thousands(got), thousands(count)) or
                 ("Received %s auctions…"):format(thousands(got))
         end
-        local took = math.floor(GetTime() - sc.started)
+        -- (a millisecond's leeway: on a whole second the difference of two
+        -- clock readings can be 1.999…)
+        local took = math.floor(GetTime() - sc.started + 0.001)
         if seconds then
             local left = math.ceil(seconds - (GetTime() - sc.started))
             return "Asking the house for every auction… " ..
