@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Mouseover bindings: a spell for friends only (or enemies only) on a Shift, Ctrl or Alt click now casts when you click a unit frame (Ctrl-Left with Purify did nothing).
+
 ## 0.6.36 (2026-11-10)
 
 ### New
