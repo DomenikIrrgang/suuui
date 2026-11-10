@@ -1598,3 +1598,59 @@ local function presentPlaced()
     expect(assert(present.scale)).toBeCloseTo(fitted)
     expect(ui().gift:GetAlpha()).toBe(1)
 end
+
+--------------------------------------------------------------------------------
+-- Onto the action bars
+--------------------------------------------------------------------------------
+
+-- The cell of the entry named so on the strip.
+local function cellNamed(name: string): Cell
+    for _, c in ipairs(cells()) do
+        local e = c.entry
+        if e and e.name == name then
+            return c
+        end
+    end
+    error("no cell " .. name)
+end
+
+@test("a mount, a toy and a pet of yours dragged: picked up as the game's journals do; one you haven't got, nothing")
+local function dragToBar()
+    toyData()
+    open()
+    -- (the tests' client puts none of them on the cursor: what's asked)
+    local mounts: (number?)[], toys: number[], pets: string[] = {}, {}, {}
+    mock.fake("C_MountJournal.Pickup", function(i: number)
+        mounts[#mounts + 1] = C_MountJournal.GetDisplayedMountID(i)
+    end)
+    mock.fake("C_ToyBox.PickupToyBoxItem", function(id: number)
+        toys[#toys + 1] = id
+    end)
+    mock.fake("C_PetJournal.PickupPet", function(guid: string)
+        pets[#pets + 1] = guid
+    end)
+    local target = assert(frames.asButton(frames.find("SuuUIActionBar1Button12")))
+    -- a mount: by its place in the game's list
+    mock.dragTo(cellNamed("Brown Horse"), target)
+    expect(mounts).toEqual({ 101 })
+    -- one you haven't got: nothing
+    mock.dragTo(cellNamed("Zebra"), target)
+    expect(mounts).toEqual({ 101 })
+    -- the game's list searched for something else: cleared, then found
+    C_MountJournal.SetSearch("zzz")
+    mock.dragTo(cellNamed("Swift Ram"), target)
+    expect(mounts).toEqual({ 101, 102 })
+    -- a toy; one you haven't got
+    open("toys")
+    local cards = ui().shelf.cards
+    mock.dragTo(cards[2], target)
+    mock.dragTo(cards[3], target)
+    expect(toys).toEqual({ 201 })
+    -- a pet by its GUID; one you haven't got
+    petJournal()
+    open("pets")
+    mock.dragTo(cellNamed("Black Tabby Cat"), target)
+    mock.dragTo(cellNamed("Prairie Dog"), target)
+    expect(pets).toEqual({ "Pet-C" })
+    ClearCursor()
+end

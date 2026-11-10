@@ -835,6 +835,11 @@ class Cell extends Button
             end
             M:Choose(e)
         end)
+        -- a mount or pet of yours dragged: onto an action bar (asked 2026-11-10)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            M:Pickup(self.entry)
+        end)
         self:EnableMouseWheel(true)
         self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
             M:Page(-delta)
@@ -1609,6 +1614,11 @@ class ToyCard extends Frame
             if e and e.wrapped then
                 M:UnwrapToy(self)
             end
+        end)
+        -- a toy of yours dragged: onto an action bar (asked 2026-11-10)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            M:Pickup(self.entry)
         end)
         self:SetScript("OnEnter", function()
             self.hover = true
@@ -3196,6 +3206,36 @@ class CollectionsModule extends Module<{}>
             end
         end
         return nil
+    end
+
+    -- An entry of yours on the cursor, for an action bar, as the game's own
+    -- journals pick it up: a mount by its place in the game's list (that
+    -- list's search and filters cleared when they hide it: SuuUI's window
+    -- has no use for them, as with the pets'), a pet by its GUID, a toy by
+    -- its item. Not one you haven't got, nor a gift still wrapped.
+    function Pickup(e: Entry?)
+        if not e or not e.collected or e.wrapped then
+            return
+        end
+        if e.kind == "mount" then
+            local MJ = C_MountJournal
+            local i = self:MountIndex(e.id)
+            if not i then
+                try(field(MJ, "SetSearch"), "")
+                try(field(MJ, "SetDefaultFilters"))
+                i = self:MountIndex(e.id)
+            end
+            if i then
+                try(field(MJ, "Pickup"), i)
+            end
+        elseif e.kind == "pet" then
+            local guid = e.summoned or (e.guids or {})[1]
+            if guid then
+                try(field(C_PetJournal, "PickupPet"), guid)
+            end
+        elseif e.kind == "toy" and e.itemID then
+            try(field(C_ToyBox, "PickupToyBoxItem"), e.itemID)
+        end
     end
 
     -- Summon or Dismiss: the secure button's job, set out of combat (in one it

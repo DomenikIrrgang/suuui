@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Cooldown Manager: Travel Form counts as caster form, so a druid's caster spells (Innervate, Hurricane, Rebirth, heals) show while you travel.
+
+### Fixed
+
+- Cooldown Manager: Balance's Eclipse proc shows when it's up (the game's Eclipse buff wasn't known). Your saved lists get it too.
+
+## 0.6.37 (2026-11-10)
+
+### Fixed
+
+- Auction house: the items in your reagent bag now show in the Sell list, and the merchant window's Sell junk button sells the junk in your reagent bag too.
+- Collections: you can drag a mount, pet or toy you own from the Mounts, Pets or Toys tab onto an action bar, as in the game's own collections window.
+- Mouseover bindings: a spell bound for friends only or enemies only to a click with Shift, Ctrl or Alt now casts when you click a unit frame. Before, the click did nothing (for example Purify on Ctrl + Left click).
+- Mouseover bindings: when you move the unit frames' Target or Menu click to another click (Spellbook › Bindings, the Target and Menu rows), the new click now works, also with Shift, Ctrl, Alt or Cmd. SuuUI now keeps the game's own click bindings in step with yours; your other click bindings in the game stay as they were.
+
+## 0.6.36 (2026-11-10)
+
+### New
+
+- Mouseover bindings: you can move the unit frames' Target and Menu clicks to another mouse button, with or without Shift, Ctrl, Alt or Cmd. Find them in Spellbook › Bindings, the Target and Menu rows at the top; each talent tree keeps its own, and Default puts the game's click back. This frees plain Left and Right click to cast spells on unit frames. Clicking units in the world works as before.
+- Mouseover bindings: when you bind a spell to the click that Target or Menu uses, SuuUI offers to move Target or Menu to another click first.
+- Mouseover bindings: Cmd clicks now work on unit frames too.
+- Mouseover bindings: on a Mac where Cmd + Left click counts as a right click (the game's Mac option "Use Command + Left Click as Right Click"), the binding boxes say so and offer to turn that option off, so Cmd + Left click can be bound.
+
 ## 0.6.35 (2026-11-10)
 
 ### New

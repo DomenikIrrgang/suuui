@@ -1,7 +1,8 @@
 -- Units/MouseBindings: spells on keys, clicks and the wheel cast on the
 -- unit under the mouse. The inputs as a person reads them; what a binding
 -- comes to (movement keys refused, another spell's input and the frames'
--- Left and Right click asked first, Cmd clicks in the world only); the
+-- Target's and Menu's clicks offered to move); the unit frames' Target and
+-- Menu clicks moved, swapped, per tree; a Cmd click on a unit frame; the
 -- secure part end to end: a key over a unit in the world and over a unit
 -- frame, a click on a frame, friends and enemies apart, combat waiting.
 --
@@ -12,7 +13,7 @@ import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
-import internal M, inputText, chipText, clickPrefix, reachFor, isPlainClick, judge, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
+import internal M, inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
 import type Bind from "/Units/MouseBindings"
 import expectNoErrors from "../../helpers"
 
@@ -69,6 +70,17 @@ local function cleanup()
         mock.player:leaveCombat()
     end
     M:Store().specs = {}
+    M:Store().clicks = {}
+    M:Store().clickSynced = nil
+    local box = M.box
+    if box then
+        box:Close()
+    end
+    local clickBox = M.clickBox
+    if clickBox and clickBox.panel:IsShown() then
+        clickBox.cancelled, clickBox.after = nil, nil
+        clickBox:Close()
+    end
     M:Apply()
     expectNoErrors()
 end
@@ -107,24 +119,30 @@ local function ranksOnce()
     expect(reads).toHaveBeenCalledTimes(2)
 end
 
-@test("a click's prefix on unit frames: Alt, Ctrl, Shift in the secure buttons' order; none with Cmd")
+@test("a click's attributes on unit frames: Alt, Ctrl, Shift in the secure buttons' order; Cmd a renamed button")
 local function prefixes()
     expect(clickPrefix("ALT-SHIFT-BUTTON1")).toBe("alt-shift-")
     expect(clickPrefix("CTRL-BUTTON2")).toBe("ctrl-")
     expect(clickPrefix("BUTTON1")).toBe("")
-    expect(clickPrefix("META-BUTTON1")).toBe(nil)
+    expect(clickSuffix("SHIFT-BUTTON3")).toBe("3")
+    -- Cmd: not a prefix the secure buttons know; the frame's wrap renames it
+    expect(clickPrefix("META-SHIFT-BUTTON1")).toBe("shift-")
+    expect(clickSuffix("META-SHIFT-BUTTON1")).toBe("-cmd-LeftButton")
+    expect(clickSuffix("META-BUTTON2")).toBe("-cmd-RightButton")
+    expect(cmdMark("ALT-META-BUTTON4")).toBe("suuui-cmd-alt-Button4")
+    expect(cmdMark("SHIFT-BUTTON1")).toBe(nil)
     expect(isPlainClick("BUTTON1")).toBe(true)
     expect(isPlainClick("SHIFT-BUTTON1")).toBe(false)
     expect(isPlainClick("BUTTON3")).toBe(false)
 end
 
-@test("where an input works: plain Left and Right on frames only, a Cmd click in the world only")
+@test("where an input works: plain Left and Right on frames only; a Cmd click anywhere")
 @cases({
     { "SHIFT-F", "both", "both" },
     { "BUTTON1", "both", "frames" },
     { "BUTTON1", "world", nil },
-    { "META-BUTTON1", "both", "world" },
-    { "META-BUTTON1", "frames", nil },
+    { "META-BUTTON1", "both", "both" },
+    { "META-BUTTON1", "frames", "frames" },
     { "SHIFT-BUTTON1", "world", "world" },
     { "MOUSEWHEELUP", "frames", "frames" },
 })
@@ -162,15 +180,66 @@ local function takenFirst()
     expect(same.ask).toBe(nil)
 end
 
-@test("Left and Right click are asked first, and work on unit frames only")
+@test("Target's and Menu's clicks offer to move them first; a click they've left is free; plain clicks on frames only")
 local function plainClicks()
     local v = judge({}, bind("BUTTON1", "Heroic Strike", 1), nil)
     expect(v.reach).toBe("frames")
     expect(v.ask and v.ask.title).toBe("Left click targets on unit frames")
-    expect(v.ask and v.ask.text).toBe("Bound, it casts Heroic Strike instead and no longer targets.")
+    expect(v.ask and v.ask.text).toBe("Move Target to another click? Then Left click casts Heroic Strike there.")
+    expect(v.ask and v.ask.confirm).toBe("Move Target…")
+    expect(v.ask and v.ask.move).toBe("target")
     expect(v.info[1]).toBe("Left click works on unit frames only.")
     local r = judge({}, bind("BUTTON2", "Heroic Strike", 1, { reach = "world" }), nil)
     expect(r.refuse).toBe("Right click can't work there")
+    -- Target moved to Shift-Left: Left is free, Shift-Left offered to move
+    local moved = { target = "SHIFT-BUTTON1", menu = "BUTTON2" }
+    local free = judge({}, bind("BUTTON1", "Heroic Strike", 1), nil, moved)
+    expect(free.ask).toBe(nil)
+    local shift = judge({}, bind("SHIFT-BUTTON1", "Heroic Strike", 1), nil, moved)
+    expect(shift.ask and shift.ask.move).toBe("target")
+    -- in the world only: the frames' click isn't in its way
+    local world = judge({}, bind("SHIFT-BUTTON1", "Heroic Strike", 1, { reach = "world" }), nil, moved)
+    expect(world.ask).toBe(nil)
+    local menu = judge({}, bind("BUTTON2", "Heroic Strike", 1), nil, moved)
+    expect(menu.ask and menu.ask.title).toBe("Right click opens the unit's menu on unit frames")
+    expect(menu.ask and menu.ask.move).toBe("menu")
+end
+
+@test(
+    "a click for Target or Menu: a mouse button with Shift, Ctrl, Alt or Cmd; the other's click swapped; a spell's taken"
+)
+local function clickVerdicts()
+    local clicks = { target = "BUTTON1", menu = "BUTTON2" }
+    local key = judgeClick({}, clicks, "target", "SHIFT-F")
+    expect(key.refuse).toBe("Shift-F isn't a mouse click")
+    expect(key.refuseDetail).toBe("Target takes a mouse button, with Shift, Ctrl, Alt or Cmd.")
+    expect(judgeClick({}, clicks, "target", "MOUSEWHEELUP").refuse).toBe("Wheel up isn't a mouse click")
+    local cmd = judgeClick({}, clicks, "menu", "META-BUTTON2")
+    expect(cmd.refuse).toBe(nil)
+    -- the other's click: swapped
+    local swap = judgeClick({}, clicks, "target", "BUTTON2")
+    expect(swap.swap).toBe(true)
+    expect(swap.ask and swap.ask.title).toBe("Right click opens the unit's menu on unit frames")
+    expect(swap.ask and swap.ask.text).toBe("Swap them? Menu moves to Left click.")
+    -- a spell's: taken, kept in the world where it can be
+    local both = bind("SHIFT-BUTTON1", "Battle Shout", 2)
+    local taken = judgeClick({ both }, clicks, "target", "SHIFT-BUTTON1")
+    expect(taken.ask and taken.ask.title).toBe("Shift-Left click casts Battle Shout on unit frames")
+    expect(taken.ask and taken.ask.text).toBe("Target takes it; Battle Shout keeps working in the world.")
+    expect(taken.takes).toEqual({ both })
+    expect(taken.info).toEqual({ "Left click on unit frames does nothing until you bind a spell to it." })
+    local framesOnly = bind("BUTTON3", "Battle Shout", 2, { reach = "frames" })
+    local gone = judgeClick({ framesOnly }, clicks, "menu", "BUTTON3")
+    expect(gone.ask and gone.ask.text).toBe("Menu takes it; Battle Shout's binding goes.")
+    -- a world-only spell on that click: nothing taken
+    local world = judgeClick(
+        { bind("CTRL-BUTTON1", "Battle Shout", 2, { reach = "world" }) },
+        clicks,
+        "target",
+        "CTRL-BUTTON1"
+    )
+    expect(world.ask).toBe(nil)
+    expect(#world.takes).toBe(0)
 end
 
 @test("a key with a job keeps it away from units, and says so")
@@ -200,6 +269,8 @@ local function attributes()
     expect(a).toEqual({ { "*type-mb1", "spell" }, { "*spell-mb1", 78 } })
     local b = castAttributes("shift-", "1", 2, nil, 10, 20)
     expect(b).toEqual({
+        -- (the click's own type no action: not the frame's wildcard target)
+        { "shift-type1", "" },
         { "shift-helpbutton1", "mb2h" },
         { "*type-mb2h", "spell" },
         { "*spell-mb2h", 10 },
@@ -367,4 +438,283 @@ local function specs()
     -- the talents read empty (after login): the last tree's
     tree = 0
     expect(M:SpecKey()).toBe("3")
+end
+
+--------------------------------------------------------------------------------
+-- The unit frames' Target and Menu clicks
+--------------------------------------------------------------------------------
+
+@test("each tree keeps its own Target and Menu clicks; copied with its bindings")
+local function clicksPerSpec()
+    local tree = 2
+    mock.stub(SuuUI, "Spec", function(): number
+        return tree
+    end)
+    M:SetClick("target", "SHIFT-BUTTON1")
+    tree = 3
+    expect(M:Clicks()).toEqual({ target = "BUTTON1", menu = "BUTTON2" })
+    M:CopyFrom("2")
+    expect(M:Clicks().target).toBe("SHIFT-BUTTON1")
+    tree = 2
+    expect(M:Clicks().target).toBe("SHIFT-BUTTON1")
+end
+
+@test("the list shows Target and Menu first; a click on one opens its click box")
+local function listRows()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(600, 400)
+    parent:SetPoint("CENTER")
+    M:List(parent, function() end)
+    local list = assert(M.list)
+    local target, menu = list.rows[1], list.rows[2]
+    expect(target.name:GetText()).toBe("Target")
+    expect(target.line:GetText()).toBe("Targets the unit · the game's own click")
+    expect(menu.name:GetText()).toBe("Menu")
+    expect(menu.line:GetText()).toBe("Opens the unit's menu · the game's own click")
+    mock.click(target.frame)
+    local box = assert(M.clickBox)
+    expect(box.panel:IsShown()).toBe(true)
+    expect(box.kind).toBe("target")
+    -- a click picked in the box, saved: the row says so
+    box:Got("CTRL-BUTTON1")
+    box:Confirm()
+    expect(box.panel:IsShown()).toBe(false)
+    expect(list.rows[1].line:GetText()).toBe("Targets the unit · click to change")
+    parent:Hide()
+end
+
+@test(
+    "binding a spell to Target's click moves Target first: in the capture box and in bind mode; cancelled, nothing changes"
+)
+local function moveForSpell()
+    local name, id = known()
+    -- the capture box: Bind asks for Target's new click, then binds
+    M:Edit({ name = name, spellID = id })
+    local box = assert(M.box)
+    box:Got("BUTTON1")
+    expect(box.ok.label:GetText()).toBe("Move Target…")
+    box:Confirm()
+    local clickBox = assert(M.clickBox)
+    expect(clickBox.panel:IsShown()).toBe(true)
+    expect(clickBox.waiting).toBe(true)
+    -- its own click again is no move
+    clickBox:Got("BUTTON1")
+    expect(clickBox.ok:IsEnabled()).toBe(false)
+    clickBox:Got("SHIFT-BUTTON1")
+    clickBox:Confirm()
+    expect(M:Clicks().target).toBe("SHIFT-BUTTON1")
+    expect(#M:Binds()).toBe(1)
+    expect(M:Binds()[1].input).toBe("BUTTON1")
+    expect(box.panel:IsShown()).toBe(false)
+    -- bind mode: Menu's click; the box cancelled, not bound
+    local said: string? = nil
+    mock.stub(SuuUI.UI, "Confirm", function(opts: { onConfirm?: () -> () }): nil
+        local confirm = opts.onConfirm
+        if confirm then
+            confirm()
+        end
+        return nil
+    end)
+    M:Press({ name = name, spellID = id }, "BUTTON2", function(title: string)
+        said = title
+    end)
+    expect(clickBox.panel:IsShown()).toBe(true)
+    expect(clickBox.kind).toBe("menu")
+    clickBox:Close()
+    expect(said).toBe("Not bound")
+    expect(#M:Binds()).toBe(1)
+    -- and saved: bound
+    M:Press({ name = name, spellID = id }, "BUTTON2", function(title: string)
+        said = title
+    end)
+    clickBox:Got("CTRL-BUTTON2")
+    clickBox:Confirm()
+    expect(said).toBe("Right click → " .. name)
+    expect(M:Clicks().menu).toBe("CTRL-BUTTON2")
+    expect(#M:Binds()).toBe(2)
+end
+
+@test("on a Mac with Cmd-Left as Right click, both boxes say so and turn the setting off")
+local function macCmdLeft()
+    local CVAR = "MacUseCommandLeftClickAsRightClick"
+    local cvar = "1"
+    local realMac = rawget(_G, "IsMacClient")
+    rawset(_G, "IsMacClient", function(): boolean
+        return true
+    end)
+    mock.stub(C_CVar, "GetCVar", function(name: string): string?
+        return name == CVAR and cvar or nil
+    end)
+    local set = mock.stub(C_CVar, "SetCVar", function(name: string, value: string): boolean
+        if name == CVAR then
+            cvar = value
+        end
+        return true
+    end)
+    M:EditClick("target")
+    local box = assert(M.clickBox)
+    expect(box.mac.text:IsShown()).toBe(true)
+    mock.click(box.mac.button)
+    expect(set).toHaveBeenCalledWith(CVAR, "0")
+    expect(box.mac.text:IsShown()).toBe(false)
+    box:Close()
+    -- the spell's box too; with the setting off, no note
+    local name, id = known()
+    cvar = "1"
+    M:Edit({ name = name, spellID = id })
+    local spellBox = assert(M.box)
+    expect(spellBox.mac.text:IsShown()).toBe(true)
+    cvar = "0"
+    spellBox:Draw()
+    expect(spellBox.mac.text:IsShown()).toBe(false)
+    rawset(_G, "IsMacClient", realMac)
+end
+
+-- The game's click bindings as Forever's (probed 2026-11-10): Target on Left
+-- and the menu on Right without modifiers, the modifiers' bits by name (each
+-- two, the left and the right key); what SuuUI writes to them.
+type ClickBinding = { type: number, actionID: number, button: string, modifiers: number }
+local function clickBindings(extra: ClickBinding[]?): ClickBinding[]
+    local profile: ClickBinding[] = {
+        { type = 3, actionID = 1, button = "LeftButton", modifiers = 0 },
+        { type = 3, actionID = 2, button = "RightButton", modifiers = 0 },
+    }
+    for _, e in ipairs(extra or {}) do
+        profile[#profile + 1] = e
+    end
+    local names: { [number]: string } = {
+        [1] = "SHIFT",
+        [2] = "SHIFT",
+        [4] = "CTRL",
+        [8] = "CTRL",
+        [16] = "ALT",
+        [32] = "ALT",
+        [64] = "META",
+        [128] = "META",
+    }
+    mock.fake("GetStringFromModifiers", function(m: number): string
+        return names[m] or ""
+    end)
+    mock.fake("C_ClickBindings.GetProfileInfo", function(): ClickBinding[]
+        return profile
+    end)
+    mock.fake("C_ClickBindings.SetProfileByInfo", function(info: ClickBinding[])
+        for i = #profile, 1, -1 do
+            table.remove(profile, i)
+        end
+        for i, e in ipairs(info) do
+            profile[i] = e
+        end
+    end)
+    return profile
+end
+
+-- An interaction's click in the game's click bindings: its button, modifiers.
+local function interaction(profile: ClickBinding[], id: number): (string?, number?)
+    for _, e in ipairs(profile) do
+        if e.type == 3 and e.actionID == id then
+            return e.button, e.modifiers
+        end
+    end
+    return nil, nil
+end
+
+@test(
+    "Target moved to Shift-Left: the game's click bindings' Target there, its other bindings kept, the frames' own attributes; back on Left, the game's again"
+)
+local function targetMoved()
+    local name, id = known()
+    local profile = clickBindings({ { type = 1, actionID = 139, button = "MiddleButton", modifiers = 0 } })
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    -- (Shift as the game read it while the click was picked: both its bits)
+    M:SetClick("target", "SHIFT-BUTTON1", 3)
+    expect(M:Clicks()).toEqual({ target = "SHIFT-BUTTON1", menu = "BUTTON2" })
+    local button, mods = interaction(profile, 1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(3)
+    button, mods = interaction(profile, 2)
+    expect(button).toBe("RightButton")
+    expect(mods).toBe(0)
+    expect(#profile).toBe(3)
+    expect(player:GetAttribute("*type1")).toBe("target")
+    expect(player:GetAttribute("shift-type1")).toBe(nil)
+    -- plain Left is free: bound without a question
+    expect(judge(M:Binds(), bind("BUTTON1", name, id), nil, M:Clicks()).ask).toBe(nil)
+    -- back on Left: the game's own again, no longer SuuUI's to keep
+    M:SetClick("target", "BUTTON1", 0)
+    button, mods = interaction(profile, 1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(0)
+    expect(M:Store().clickSynced).toBe(nil)
+    expect(#profile).toBe(3)
+end
+
+@test("never moved: the game's click bindings stay as its own window left them")
+local function clicksUntouched()
+    local profile = clickBindings()
+    profile[1].modifiers = 48
+    M:Apply()
+    local _, mods = interaction(profile, 1)
+    expect(mods).toBe(48)
+end
+
+@test("Target on Right swaps Menu onto Left, in the game's click bindings")
+local function swapped()
+    local profile = clickBindings()
+    M:SetClick("target", "BUTTON2", 0)
+    expect(M:Clicks()).toEqual({ target = "BUTTON2", menu = "BUTTON1" })
+    expect(interaction(profile, 1)).toBe("RightButton")
+    expect(interaction(profile, 2)).toBe("LeftButton")
+    M:SetClick("target", "BUTTON1", 0)
+    expect(interaction(profile, 1)).toBe("LeftButton")
+    expect(interaction(profile, 2)).toBe("RightButton")
+end
+
+@test("a spell on Menu's new click keeps working in the world; a click's modifiers from the game's names when not read")
+local function takenKeepsWorld()
+    local name, id = known()
+    local profile = clickBindings()
+    M:Add(bind("ALT-BUTTON1", name, id), nil)
+    M:SetClick("menu", "ALT-BUTTON1")
+    local b = M:Binds()[1]
+    expect(b and b.reach).toBe("world")
+    local button, mods = interaction(profile, 2)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(48)
+    -- Cmd-Shift-Right for Target: Cmd's and Shift's bits
+    M:SetClick("target", "META-SHIFT-BUTTON2")
+    button, mods = interaction(profile, 1)
+    expect(button).toBe("RightButton")
+    expect(mods).toBe(195)
+end
+
+@test("a Cmd click on a unit frame: its spell's attributes on the renamed click, marked for the frame's wrap")
+local function cmdClick()
+    local name, id = known()
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    M:Add(bind("META-BUTTON1", name, id), nil)
+    expect(player:GetAttribute("type-cmd-LeftButton")).toBe("spell")
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe("1")
+    M:Store().specs = {}
+    M:Apply()
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe(nil)
+end
+
+@test(
+    "a friend's spell on a modified click casts on a friendly frame; the click doesn't fall back to the frame's target"
+)
+local function friendClick()
+    local name, id = known()
+    watchCasts()
+    -- (Purify on Ctrl-Left did nothing in game: the click read as the frame's
+    -- target, which the game's click bindings didn't have for it)
+    M:Add(bind("CTRL-BUTTON1", name, id, { react = "help" }), nil)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    expect(player:GetAttribute("ctrl-type1")).toBe("")
+    expect(player:GetAttribute("ctrl-helpbutton1")).toBe("mb1h")
+    mock.setModifiers({ ctrl = true })
+    mock.click(player, "LeftButton")
+    mock.setModifiers({})
+    expect(casts[#casts] and casts[#casts].id).toBe(id)
+    expect(casts[#casts] and casts[#casts].unit).toBe("player")
 end
