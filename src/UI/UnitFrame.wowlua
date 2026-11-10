@@ -970,6 +970,13 @@ export type UnitFrameOptions = {
 -- A missing look shown now, and what decides it.
 type MissingLook = { look: Frame, mode: string, ind: Indicator }
 
+-- SuuUI's secure unit frames (SecureUnitButtonTemplate, made or adopted),
+-- in the order they came: what the mouse bindings set their clicks on,
+-- without walking every frame of the game (EnumerateFrames took up to 39 ms
+-- at a fight's end, the dev profiler, 2026-11-10).
+local secureFrames: UnitFrame[] = {}
+local secureSeen: { [UnitFrame]: boolean } = {}
+
 export class UnitFrame extends Button
     unit: string? = nil
     -- the health drawn grey: a mob tagged by someone else (opts.tapped)
@@ -1045,6 +1052,10 @@ export class UnitFrame extends Button
         -- the header owns its unit, its attributes are set when it is made
         super(opts.name, parent, opts.secure ~= false and "SecureUnitButtonTemplate" or nil)
         self.unit, self.opts, self.size = unit, opts, size
+        if opts.secure ~= false and not secureSeen[self] then
+            secureSeen[self] = true
+            secureFrames[#secureFrames + 1] = self
+        end
         self.api = opts.api or GAME
         local w, h = draw.size(opts.width or size.width), draw.size(opts.height or size.height)
         if not (opts.frame and InCombatLockdown()) then
@@ -2084,6 +2095,16 @@ export class UnitFrame extends Button
     end
 end
 mixins.UnitFrame = UnitFrame
+
+-- 0.29: SuuUI's secure unit frames (a copy of the list), in the order they
+-- were made: the frames a secure click binding goes on.
+export function secureUnitFrames(): UnitFrame[]
+    local out: UnitFrame[] = {}
+    for i, f in ipairs(secureFrames) do
+        out[i] = f
+    end
+    return out
+end
 
 -- A unit frame (Raw.Mixins.UnitFrame is the class). opts.frame: a button a
 -- group header made (SecureUnitButtonTemplate), which becomes the frame.
