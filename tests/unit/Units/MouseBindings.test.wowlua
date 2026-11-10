@@ -269,6 +269,8 @@ local function attributes()
     expect(a).toEqual({ { "*type-mb1", "spell" }, { "*spell-mb1", 78 } })
     local b = castAttributes("shift-", "1", 2, nil, 10, 20)
     expect(b).toEqual({
+        -- (the click's own type no action: not the frame's wildcard target)
+        { "shift-type1", "" },
         { "shift-helpbutton1", "mb2h" },
         { "*type-mb2h", "spell" },
         { "*spell-mb2h", 10 },
@@ -696,4 +698,23 @@ local function cmdClick()
     M:Store().specs = {}
     M:Apply()
     expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe(nil)
+end
+
+@test(
+    "a friend's spell on a modified click casts on a friendly frame; the click doesn't fall back to the frame's target"
+)
+local function friendClick()
+    local name, id = known()
+    watchCasts()
+    -- (Purify on Ctrl-Left did nothing in game: the click read as the frame's
+    -- target, which the game's click bindings didn't have for it)
+    M:Add(bind("CTRL-BUTTON1", name, id, { react = "help" }), nil)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    expect(player:GetAttribute("ctrl-type1")).toBe("")
+    expect(player:GetAttribute("ctrl-helpbutton1")).toBe("mb1h")
+    mock.setModifiers({ ctrl = true })
+    mock.click(player, "LeftButton")
+    mock.setModifiers({})
+    expect(casts[#casts] and casts[#casts].id).toBe(id)
+    expect(casts[#casts] and casts[#casts].unit).toBe("player")
 end
