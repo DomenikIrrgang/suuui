@@ -185,7 +185,7 @@ end
 
 -- The quest log's heading over a quest (its zone, or a group such as a
 -- class or "Dungeon").
-local function zoneOf(questID: number, logIndex: number): string?
+local function readZone(questID: number, logIndex: number): string?
     local header: number? = C_QuestLog.GetHeaderIndexForQuest and C_QuestLog.GetHeaderIndexForQuest(questID)
     if not (secret.readable(header) and header) then
         -- walk up the log to the heading above
@@ -199,6 +199,25 @@ local function zoneOf(questID: number, logIndex: number): string?
     end
     local info = header and C_QuestLog.GetInfo(header)
     return type(info) == "table" and secret.readable(info.title) and info.title or nil
+end
+
+-- (each quest's heading kept until a quest comes or goes: every redraw
+-- walked up the log for each, a table read per line, 3 MB of garbage in a
+-- 5-minute recording)
+local questZones: { [number]: string | false } = {}
+
+export function forgetZones()
+    questZones = {}
+end
+
+local function zoneOf(questID: number, logIndex: number): string?
+    local known = questZones[questID]
+    if known ~= nil then
+        return known or nil
+    end
+    local zone = readZone(questID, logIndex)
+    questZones[questID] = zone or false
+    return zone
 end
 
 -- How far a quest is (squared), when it's on your continent; nil otherwise.
@@ -1281,6 +1300,12 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         }) do
             self:OnGameEvent(e, function()
                 self:QueueRefresh()
+            end)
+        end
+        -- a quest come or gone: the headings read again
+        for _, e in ipairs({ "QUEST_ACCEPTED", "QUEST_REMOVED", "QUEST_TURNED_IN", "PLAYER_ENTERING_WORLD" }) do
+            self:OnGameEvent(e, function()
+                forgetZones()
             end)
         end
         -- an item's cooldown: only the quest items' own (it comes with every
