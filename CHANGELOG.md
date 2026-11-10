@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Clicking a player's name in chat starts a whisper to them again, as in the game's own chat. Shift-click still puts the name into chat.
+
 ## 0.6.31 (2026-11-10)
 
 ### Fixed
