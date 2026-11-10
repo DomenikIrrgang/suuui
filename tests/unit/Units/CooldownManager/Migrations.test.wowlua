@@ -431,3 +431,64 @@ local function oldLists()
     expect(assert(debuffs[2]).missing).toBe("hide")
     expect(M:PresetId(3)).toBe("arms")
 end
+
+--------------------------------------------------------------------------------
+-- preset-ids-<fix>-<CLASS>
+--------------------------------------------------------------------------------
+
+local DRUID_PRESETS: CooldownPreset[] = {
+    {
+        id = "balance",
+        name = "Balance",
+        tree = 1,
+        lists = {
+            procs = { { name = "Eclipse", ids = { 408255, 1286115 } } },
+            utility = {
+                {
+                    group = true,
+                    name = "Forms",
+                    members = { { name = "Moonkin Form", ids = { 24858, 999 } } },
+                    ids = { 24858, 999 },
+                },
+            },
+        },
+    },
+}
+
+@test("preset IDs: a saved entry of a preset's name gets the IDs it lacks, in groups and collections too; others stay")
+local function presetIDs()
+    local v: Values = {
+        setups = {
+            DRUID = {
+                ["1"] = {
+                    preset = "balance",
+                    lists = {
+                        procs = { { name = "Eclipse", ids = { 1286115 } }, { name = "My Own", ids = { 5 } } },
+                        essential = {
+                            {
+                                collection = true,
+                                name = "Mine",
+                                entries = { { name = "Moonkin Form", ids = { 24858 } } },
+                            },
+                        },
+                    },
+                },
+            },
+            -- another class's entry of that name: not this class's to mend
+            MAGE = { ["1"] = { lists = { procs = { { name = "Eclipse", ids = { 1286115 } } } } } },
+        },
+    }
+    migrations.presetIDs(v, "DRUID", DRUID_PRESETS)
+    local procs = storedList(v, "DRUID", "1", "procs")
+    expect(assert(procs[1]).ids).toEqual({ 1286115, 408255 })
+    expect(assert(procs[2]).ids).toEqual({ 5 })
+    local inMine = inside(storedList(v, "DRUID", "1", "essential")[1])
+    expect(assert(inMine[1]).ids).toEqual({ 24858, 999 })
+    expect(assert(storedList(v, "MAGE", "1", "procs")[1]).ids).toEqual({ 1286115 })
+    -- again: nothing more
+    migrations.presetIDs(v, "DRUID", DRUID_PRESETS)
+    expect(assert(storedList(v, "DRUID", "1", "procs")[1]).ids).toEqual({ 1286115, 408255 })
+    local none: Values = {}
+    migrations.presetIDs(none, "DRUID", DRUID_PRESETS)
+    expect(none).toEqual({})
+end
