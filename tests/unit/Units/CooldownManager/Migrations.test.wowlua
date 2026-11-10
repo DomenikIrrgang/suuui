@@ -8,6 +8,8 @@
 import test, expect, config from "wowlua:test"
 import * as DB from "/Core/DB"
 import type Values from "/Core/Settings"
+import type CooldownPreset from "/Data/Presets"
+import SuuUI from "/Core/API"
 import field from "wowlua:table"
 import * as migrations from "/Units/CooldownManager/Migrations"
 import * as Lists from "/Units/CooldownManager/Lists"
@@ -297,6 +299,84 @@ local function shortBuffsNone()
 end
 
 --------------------------------------------------------------------------------
+-- racials-<CLASS>
+--------------------------------------------------------------------------------
+
+local RACIALS: Lists.Entry = {
+    collection = true,
+    name = "Racials",
+    entries = { { name = "Berserking", ids = { 20554 }, effect = "you" }, { name = "War Stomp", ids = { 20549 } } },
+}
+local PRESETS: CooldownPreset[] = {
+    { id = "arms", name = "Arms", tree = 1, lists = { utility = { { name = "Charge", ids = { 100 } }, RACIALS } } },
+}
+
+@test("racials: the preset's Racials at the end of Utility, with its uid; what the lists hold stays out of it")
+local function racials()
+    local v: Values = {
+        setups = {
+            WARRIOR = {
+                ["1"] = { preset = "arms", lists = { utility = { { name = "Intercept", ids = { 20252 } } } } },
+                -- War Stomp already in Essential: left there, not added twice
+                ["2"] = { preset = "arms", lists = { essential = { { name = "War Stomp", ids = { 20549 } } } } },
+            },
+        },
+    }
+    migrations.addRacials(v, "WARRIOR", PRESETS)
+    local u1 = storedList(v, "WARRIOR", "1", "utility")
+    expect(#u1).toBe(2)
+    expect(assert(u1[1]).name).toBe("Intercept")
+    local r = assert(u1[2])
+    expect(r.collection).toBe(true)
+    expect(r.uid).toBe("armsutility2")
+    expect(#inside(r)).toBe(2)
+    expect(assert(inside(r)[1]).effect).toBe("you")
+    -- a copy: the preset's own stays as it was
+    expect(r).never.toBe(RACIALS)
+    local u2 = storedList(v, "WARRIOR", "2", "utility")
+    expect(#inside(u2[1])).toBe(1)
+    expect(assert(inside(u2[1])[1]).name).toBe("Berserking")
+    expect(#storedList(v, "WARRIOR", "2", "essential")).toBe(1)
+end
+
+@test("racials: nothing for another class, an unknown preset, or lists that have Racials")
+local function racialsLeft()
+    local mine: Lists.Entry = { collection = true, name = "Racials", entries = {} }
+    local v: Values = {
+        setups = {
+            SHAMAN = { ["1"] = { preset = "arms", lists = {} } },
+            WARRIOR = {
+                ["1"] = { preset = "gone", lists = {} },
+                ["2"] = { preset = "arms", lists = { buffs = { mine } } },
+            },
+        },
+    }
+    migrations.addRacials(v, "WARRIOR", PRESETS)
+    expect(stored(v, "SHAMAN", "1").utility).toBeNil()
+    expect(stored(v, "WARRIOR", "1").utility).toBeNil()
+    expect(stored(v, "WARRIOR", "2").utility).toBeNil()
+    local none: Values = {}
+    migrations.addRacials(none, "WARRIOR", PRESETS)
+    expect(none).toEqual({})
+end
+
+@test("racials: a setup from before them counts no change from its preset once they're in")
+local function racialsNoChange()
+    local presets = SuuUI.CooldownPresets()
+    local p = assert(presets[2])
+    local lists = Lists.copyLists(p)
+    local utility = assert(lists.utility)
+    local last = assert(utility[#utility])
+    expect(last.name).toBe("Racials")
+    table.remove(utility)
+    -- without it: the collection and each racial in it read as removed
+    expect(Lists.countChanges(p, lists)).toBe(1 + #inside(last))
+    local v: Values = { setups = { WARRIOR = { ["1"] = { preset = p.id, lists = lists } } } }
+    migrations.addRacials(v, "WARRIOR", presets)
+    expect(Lists.countChanges(p, stored(v, "WARRIOR", "1"))).toBe(0)
+end
+
+--------------------------------------------------------------------------------
 -- An old profile, as it loads
 --------------------------------------------------------------------------------
 
@@ -309,6 +389,7 @@ local function oldProfile()
         "missing-per-entry",
         "shaman-shields-auto",
         "short-buffs-warn",
+        "racials-WARRIOR",
     }) do
         expect(field(p, "__migrated", "cooldowns/" .. id)).toBe(true)
     end
@@ -326,6 +407,12 @@ local function oldProfile()
     expect(assert(wa[1]).missing).toBe("warn")
     expect(assert(wa[2]).uid).toBe("mWARRIORabuffs2")
     expect(assert(assert(assert(wa[2]).entries)[1]).missing).toBe("remind")
+    -- the warrior's setup got Arms' Racials at the end of Utility; the
+    -- shaman's waits for a shaman to log in
+    local wu = list("WARRIOR", "a", "utility")
+    expect(assert(wu[#wu]).name).toBe("Racials")
+    expect(setup("SHAMAN", "r").lists.utility).toBeNil()
+    expect(field(p, "__migrated", "cooldowns/racials-SHAMAN")).toBeNil()
     expectNoErrors()
 end
 

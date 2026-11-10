@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+### New
+
+- Cooldown Manager: a Racials collection at the end of Utility in every class's presets, with every race's racials (Perception, Will to Survive, Stoneform, Shadowmeld, Elune's Light, Escape Artist, Eureka!, Blood Fury, Shatter Curse, Will of the Forsaken, Cannibalize, War Stomp, Berserking, Rapid Regeneration, Walk on Air, Read Leyline, Skysight). Only your own race's show, with their cooldowns, and their buffs (Berserking, Blood Fury, Stoneform…) cover the icon while they're up. Your saved lists get it too, at the end of Utility; Cultivation starts switched off.
+- Cooldown Manager: a collection now works in Essential and Utility too (+ Collection there): each spell in it shows once you know it.
+
 ### Fixed
 
+- Cooldown Manager settings: the switch between your spell lists and your aura lists (Cooldowns / Auras, under Lists) shows again; it left an empty gap there.
 - Auction house: the lowest buyout is right for items listed several times at one price, in Buy and in Sell (32 at 20s showed as 62c, and Sell suggested a third of the real price).
 
 ## 0.6.33 (2026-11-10)

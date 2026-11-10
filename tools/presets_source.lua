@@ -33,11 +33,12 @@
 -- shows Divine Shield once learned); behaviour as for a cooldown, its effect
 -- the shown member's own aura unless effectName says otherwise. Its members
 -- keep passive talents' IDs and get the trainer check each.
--- In buffs, debuffs and procs, a collection: { collection = "Physical
--- Debuffs", hidden = true?, entries = { "Name", { "Name", missing = "hide" },
--- { group = ... } } }, entries shown side by side, each with its own
--- behaviour; hidden applies to all. One level: a collection in a collection,
--- or one in essential or utility, stops the generator.
+-- A collection: { collection = "Physical Debuffs", hidden = true?, entries =
+-- { "Name", { "Name", missing = "hide" }, { group = ... } } }, entries shown
+-- side by side, each with its own behaviour; hidden applies to all. In
+-- essential and utility its entries are cooldowns, each drawn once you know
+-- it (the Racials). One level: a collection in a collection stops the
+-- generator.
 --
 -- Conditions (optional, `when = { ... }` on a { "Name", ... } entry, a
 -- group, a { "Name", ... } member or a collection; copied as they are, see
@@ -115,11 +116,21 @@
 -- groups they share in tools/presets/shared.lua.
 
 local CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local S = dofile("tools/presets/shared.lua")
 local out = {}
 -- a class file that doesn't load is reported and left out (the others still
--- generate)
+-- generate). Every preset ends its Utility with its class's Racials
+-- collection (tools/presets/shared.lua).
 for _, class in ipairs(CLASSES) do
     local ok, presets = pcall(dofile, ("tools/presets/%s.lua"):format(class))
-    if ok then out[class] = presets else io.stderr:write(("presets of %s don't load: %s\n"):format(class, tostring(presets))) end
+    if ok then
+        for _, p in ipairs(presets) do
+            p.utility = p.utility or {}
+            p.utility[#p.utility + 1] = S.racials(class)
+        end
+        out[class] = presets
+    else
+        io.stderr:write(("presets of %s don't load: %s\n"):format(class, tostring(presets)))
+    end
 end
 return out
