@@ -236,6 +236,51 @@ type ZoneKeys = { here: boolean, first: number, nearest?: number }
 -- zones by their nearest quest, then the rest (another continent, nothing
 -- to point at) in quest log order; inside a zone the nearest first. Sorts
 -- `list` in place (each quest: zone, distance, logIndex).
+-- What a refresh would draw, as one string (the quests in order with all
+-- they show, the recipes, and the tracker's state): a refresh that would
+-- draw the same skips the redraw.
+local function keyOf(v: unknown, out: string[])
+    local t = type(v)
+    if t == "table" then
+        local tab = v :: { [unknown]: unknown }
+        local keys: string[] = {}
+        for k in pairs(tab) do
+            -- (the distance only orders the quests: the order is in the key)
+            if type(k) == "string" and k ~= "distance" and k ~= "tooltip" then
+                keys[#keys + 1] = k :: string
+            end
+        end
+        table.sort(keys)
+        out[#out + 1] = "{"
+        for i = 1, #tab do
+            keyOf(tab[i], out)
+            out[#out + 1] = ","
+        end
+        for _, k in ipairs(keys) do
+            out[#out + 1] = k
+            out[#out + 1] = "="
+            keyOf(tab[k], out)
+            out[#out + 1] = ";"
+        end
+        out[#out + 1] = "}"
+    elseif t == "string" or t == "number" or t == "boolean" then
+        out[#out + 1] = tostring(v)
+    else
+        out[#out + 1] = t
+    end
+end
+
+export function drawnKey(quests: unknown, recipes: unknown, ...: unknown): string
+    local out: string[] = {}
+    keyOf(quests, out)
+    keyOf(recipes, out)
+    for i = 1, select("#", ...) do
+        out[#out + 1] = "|"
+        keyOf((select(i, ...)), out)
+    end
+    return table.concat(out)
+end
+
 export function sortQuests<Q extends QuestPlace>(list: Q[], here: { [string]: boolean })
     local zones: { [string]: ZoneKeys } = {}
     for _, q in ipairs(list) do
@@ -605,6 +650,8 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     preview: ObjectiveTracker? = nil
     quests: Quest[]? = nil
     refreshQueued: boolean? = nil
+    -- what the last redraw drew (drawnKey): a quiet refresh that would draw the same is skipped
+    drawnSig: string? = nil
     waitingItems: boolean? = nil
     -- the secure button over the hovered quest (QuestLogOn)
     logOver: Overlay? = nil
@@ -999,7 +1046,11 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
     -- Drawing
     ----------------------------------------------------------------------------
 
-    function Refresh()
+    -- `quiet` (the quest and bag events'): nothing redrawn when what the
+    -- tracker would draw is what it shows (QUEST_LOG_UPDATE, BAG_UPDATE_DELAYED
+    -- and the zone's changes mostly change nothing it shows; each redraw was
+    -- 3 ms in game, the most frequent of SuuUI's slow calls, 2026-11-10).
+    function Refresh(quiet: boolean?)
         self.refreshQueued = nil
         local parts = self.frame
         if not parts then
@@ -1014,6 +1065,12 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         -- list, so they scroll together within the tracker's height (asked for
         -- in game: a block of their own sat too low on the screen)
         local recipes = self:TrackedRecipes()
+        local sig = drawnKey(quests, recipes, freeze, self:Get("recipesCollapsed"), combat)
+        if quiet and sig == self.drawnSig then
+            self.quests = quests
+            return
+        end
+        self.drawnSig = sig
         tracker:SetRecipes(
             recipes,
             self:Get("recipesCollapsed"),
@@ -1054,7 +1111,7 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         self.refreshQueued = true
         after(0, function()
             if self:IsEnabled() then
-                self:Refresh()
+                self:Refresh(true)
             end
         end)
     end
