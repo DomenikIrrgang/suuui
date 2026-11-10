@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Mouseover bindings: the unit frames' Target and Menu clicks can move to any mouse button with Shift, Ctrl or Alt (Spellbook › Bindings, the two rows at the top, kept per talent tree), so plain Left and Right click can cast spells on unit frames too. Binding a spell to Target's or Menu's click offers to move it first.
+
 ## 0.6.35 (2026-11-10)
 
 ### New

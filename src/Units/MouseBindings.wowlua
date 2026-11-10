@@ -20,9 +20,16 @@
 -- again as you learn one) or one rank you chose. Everything secure changes
 -- out of combat only; what changes in a fight waits for its end.
 --
+-- The unit frames' own Target and Menu clicks (Left and Right by default)
+-- are yours to move, per spec (asked 2026-11-10): to any mouse button with
+-- Shift, Ctrl or Alt, so plain Left and Right can cast too. A moved one is
+-- the frame's exact click attribute, its own wildcard (*type1) taken away;
+-- the frames' own attributes come back with the default.
+--
 -- The Spellbook binds (bind mode, a spell's right-click menu, the Bindings
 -- tab) through the mousebindings service: this module asks what it must
--- (a key taken, Left or Right click on frames), refuses movement keys, and
+-- (a key taken; the unit frames' Target or Menu click, moved first),
+-- refuses movement keys, and
 -- owns the capture box and the bindings list.
 -- A built-in module written against the public API only.
 
@@ -50,7 +57,40 @@ local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
 export type Reach = "both" | "frames" | "world"
 export type React = "any" | "help" | "harm"
 export type Bind = MouseBind
-type Store = { specs?: { [string]: Bind[] }, last?: string }
+-- The unit frames' own clicks, per spec (asked 2026-11-10: one mouse click
+-- each, unit frames only, so Left and Right with any modifier can cast):
+-- the click that targets the unit and the one that opens its menu.
+export type ClickKind = "target" | "menu"
+export type Clicks = { target: string, menu: string }
+type StoredClicks = { target?: string, menu?: string }
+type Store = { specs?: { [string]: Bind[] }, clicks?: { [string]: StoredClicks }, last?: string }
+
+-- Each click's action on a unit frame: the attribute's value, the frames'
+-- own wildcard attribute for its default button, its default, its names.
+type ClickAction = { value: string, wild: string, default: string, name: string, does: string, line: string }
+export const CLICK_ACTIONS: { target: ClickAction, menu: ClickAction } = {
+    target = {
+        value = "target",
+        wild = "*type1",
+        default = "BUTTON1",
+        name = "Target",
+        does = "targets",
+        line = "Targets the unit",
+    },
+    menu = {
+        value = "togglemenu",
+        wild = "*type2",
+        default = "BUTTON2",
+        name = "Menu",
+        does = "opens the unit's menu",
+        line = "Opens the unit's menu",
+    },
+}
+local CLICK_KINDS: ClickKind[] = { "target", "menu" }
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+-- each one's glyph in the list, where a spell's icon is
+local CLICK_GLYPHS: { [string]: string } = { target = "person", menu = "menu" }
+export const DEFAULT_CLICKS: Clicks = { target = "BUTTON1", menu = "BUTTON2" }
 
 --------------------------------------------------------------------------------
 -- Inputs
@@ -150,7 +190,8 @@ export function clickPrefix(input: string): string?
     return (mods.ALT and "alt-" or "") .. (mods.CTRL and "ctrl-" or "") .. (mods.SHIFT and "shift-" or "")
 end
 
--- Plain Left or Right click (no modifier): the frames' targeting and menu.
+-- Plain Left or Right click (no modifier): the camera's and the game's in
+-- the world (the frames' Target and Menu by default).
 export function isPlainClick(input: string): boolean
     local n = mouseButton(input)
     return (n == 1 or n == 2) and input == ("BUTTON" .. n)
@@ -232,13 +273,26 @@ end
 export type Verdict = {
     refuse?: string,
     refuseDetail?: string,
-    ask?: { title: string, text: string, confirm: string },
+    -- (`move`: the unit frames' Target or Menu click it would take, moved
+    -- first)
+    ask?: { title: string, text: string, confirm: string, move?: ClickKind },
     info: string[],
     reach?: Reach,
     takes: Bind[],
 }
 
-export function judge(binds: Bind[], b: Bind, editing: Bind?): Verdict
+-- The unit frames' click action an input is (with these clicks), or nil.
+export function clickKindOf(clicks: Clicks, input: string): ClickKind?
+    for _, kind in ipairs(CLICK_KINDS) do
+        if clicks[kind] == input then
+            return kind
+        end
+    end
+    return nil
+end
+
+export function judge(binds: Bind[], b: Bind, editing: Bind?, clicksArg: Clicks?): Verdict
+    local clicks = clicksArg or DEFAULT_CLICKS
     local v: Verdict = { info = {}, takes = {} }
     local name = inputText(b.input)
     if movesYou(b.input) then
@@ -274,17 +328,19 @@ export function judge(binds: Bind[], b: Bind, editing: Bind?): Verdict
             text = ("Replace it with %s?"):format(b.spell),
             confirm = "Replace",
         }
-    elseif isPlainClick(b.input) and #v.takes == 0 then
-        -- the frames' own Left and Right click: asked first
-        local left = mouseButton(b.input) == 1
-        v.ask = {
-            title = left and "Left click targets on unit frames" or "Right click opens the unit's menu on unit frames",
-            text = ("Bound, it casts %s instead and no longer %s."):format(
-                b.spell,
-                left and "targets" or "opens the menu"
-            ),
-            confirm = "Bind",
-        }
+    elseif reach ~= "world" then
+        -- the frames' Target or Menu click: moved to another click first
+        -- (asked 2026-11-10)
+        local kind = clickKindOf(clicks, b.input)
+        if kind then
+            local action = CLICK_ACTIONS[kind]
+            v.ask = {
+                title = ("%s %s on unit frames"):format(name, action.does),
+                text = ("Move %s to another click? Then %s casts %s there."):format(action.name, name, b.spell),
+                confirm = "Move " .. action.name .. "…",
+                move = kind,
+            }
+        end
     end
     -- what the input does away from units
     if mouseButton(b.input) == nil then
@@ -296,6 +352,75 @@ export function judge(binds: Bind[], b: Bind, editing: Bind?): Verdict
         else
             v.info[#v.info + 1] = ("Over a unit it casts; elsewhere %s does what it did before."):format(name)
         end
+    end
+    return v
+end
+
+-- What giving the frames' Target or Menu click `input` comes to: refused
+-- (a key, the wheel, a Cmd click: the frames know mouse buttons with
+-- Shift, Ctrl and Alt), asked first (the other action's click: swapped; a
+-- spell's click on frames: taken, the spell kept in the world where it can
+-- be), what it says besides, and the spell bindings it takes.
+export type ClickVerdict = {
+    refuse?: string,
+    refuseDetail?: string,
+    ask?: { title: string, text: string, confirm: string },
+    info: string[],
+    swap: boolean,
+    takes: Bind[],
+}
+
+export function judgeClick(binds: Bind[], clicks: Clicks, kind: ClickKind, input: string): ClickVerdict
+    local v: ClickVerdict = { info = {}, swap = false, takes = {} }
+    local name = inputText(input)
+    local action = CLICK_ACTIONS[kind]
+    if not mouseButton(input) then
+        v.refuse = name .. " isn't a mouse click"
+        v.refuseDetail = action.name .. " takes a mouse button, with Shift, Ctrl or Alt."
+        return v
+    end
+    if not clickPrefix(input) then
+        v.refuse = name .. " can't work there"
+        v.refuseDetail = "Unit frames know Shift, Ctrl and Alt clicks, not Cmd."
+        return v
+    end
+    local current = clicks[kind]
+    if input == current then
+        return v
+    end
+    local other: ClickKind = kind == "target" and "menu" or "target"
+    if clicks[other] == input then
+        local otherAction = CLICK_ACTIONS[other]
+        v.swap = true
+        v.ask = {
+            title = ("%s %s on unit frames"):format(name, otherAction.does),
+            text = ("Swap them? %s moves to %s."):format(otherAction.name, inputText(current)),
+            confirm = "Swap",
+        }
+        return v
+    end
+    -- the spells it takes on frames (one kept in the world where it can be)
+    for _, b in ipairs(binds) do
+        if b.input == input and b.reach ~= "world" then
+            v.takes[#v.takes + 1] = b
+        end
+    end
+    local first = v.takes[1]
+    if first then
+        local keeps = first.reach == "both" and reachFor(input, "world") == "world"
+        v.ask = {
+            title = ("%s casts %s on unit frames"):format(name, first.spell),
+            text = keeps and ("%s takes it; %s keeps working in the world."):format(action.name, first.spell) or
+                ("%s takes it; %s's binding goes."):format(action.name, first.spell),
+            confirm = "Replace",
+        }
+    end
+    -- the click it leaves: free for a spell (the default's, with any
+    -- modifier no spell has, comes back with the default)
+    if current == action.default then
+        v.info[#v.info + 1] = ("%s on unit frames does nothing until you bind a spell to it."):format(
+            inputText(current)
+        )
     end
     return v
 end
@@ -875,7 +1000,8 @@ class CaptureBox
         row(self.reactLabel, self.reactSeg)
         -- what it comes to
         local shown: { text: string, tone: string }[] = {}
-        local verdict = b and not self.waiting and judge(self.owner:Binds(), b, self.editing) or nil
+        local verdict = b and not self.waiting and judge(self.owner:Binds(), b, self.editing, self.owner:Clicks()) or
+            nil
         if verdict then
             if verdict.refuse then
                 shown[#shown + 1] = {
@@ -925,7 +1051,7 @@ class CaptureBox
         if not b or self.waiting or InCombatLockdown() then
             return
         end
-        local verdict = judge(self.owner:Binds(), b, self.editing)
+        local verdict = judge(self.owner:Binds(), b, self.editing, self.owner:Clicks())
         if verdict.refuse then
             return
         end
@@ -934,8 +1060,274 @@ class CaptureBox
         if self.editing then
             gone[#gone + 1] = self.editing :: Bind
         end
+        local ask = verdict.ask
+        local move = ask and ask.move
+        if ask and move then
+            -- the frames' Target or Menu click moved first, then bound
+            self.owner:EditClick(move :: ClickKind, function()
+                self.owner:Add(b, gone)
+                self:Close()
+            end)
+            return
+        end
         self.owner:Add(b, gone)
         self:Close()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The click box
+--------------------------------------------------------------------------------
+
+-- The box that gives the unit frames' Target or Menu its click: click in it
+-- (Shift, Ctrl and Alt combine), what it comes to below, then Save (Swap or
+-- Replace when it takes something over); Default puts the frames' own click
+-- back. `after` runs once it's saved (a spell waiting for the click),
+-- `cancelled` when it closes unsaved.
+class ClickBox
+    readonly panel: Panel
+    readonly sub: Text
+    readonly area: Button
+    readonly areaFill: Texture
+    readonly areaTop: Text
+    readonly areaBottom: Text
+    readonly lines: Text[]
+    readonly ok: SuuButton
+    readonly cancel: SuuButton
+    readonly reset: SuuButton
+    kind: ClickKind = "target"
+    input: string? = nil
+    waiting: boolean = true
+    after: (() -> ())? = nil
+    cancelled: (() -> ())? = nil
+
+    constructor(private owner: MouseBindingsModule)
+        local p = UI.Panel(SuuUI.Root, {
+            title = "Target click",
+            width = BOX_W + S["space-5"] * 2,
+            solid = true,
+            closable = true,
+            onClose = function()
+                self:Close()
+            end,
+        })
+        self.panel = p
+        p:SetFrameStrata("DIALOG")
+        p:SetToplevel(true)
+        p:EnableMouse(true)
+        p:SetClampedToScreen(true)
+        local body = p.body
+        body:SetWidth(BOX_W)
+        self.sub = UI.Text(body, "caption", "ink-muted")
+        self.sub:SetPoint("TOPLEFT")
+        self.sub:SetWidth(BOX_W)
+        self.sub:SetJustifyH("LEFT")
+        self.sub:SetWordWrap(true)
+        local area = CreateFrame("Button", nil, body)
+        area:SetSize(BOX_W, 64)
+        self.areaFill = UI.Fill(area, "surface-sunk")
+        self.areaFill:SetAllPoints()
+        self.area = area
+        self.areaTop = UI.Text(area, "label", "arcane")
+        self.areaTop:SetPoint("BOTTOM", area, "CENTER", 0, 2)
+        self.areaBottom = UI.Text(area, "caption", "ink-muted")
+        self.areaBottom:SetPoint("TOP", area, "CENTER", 0, -2)
+        area:SetScript("OnMouseDown", function(_, mouse)
+            if self.waiting then
+                local key = MOUSE[mouse]
+                if key then
+                    self:Got(modifiers() .. key)
+                end
+            else
+                self.waiting = true
+                self:Draw()
+            end
+        end)
+        -- Esc: back to the click it had, or closed; keys go on to the game
+        p:EnableKeyboard(true)
+        p:SetScript("OnKeyDown", function(frame, key)
+            if InCombatLockdown() then
+                return
+            end
+            if key ~= "ESCAPE" then
+                frame:SetPropagateKeyboardInput(true)
+                return
+            end
+            frame:SetPropagateKeyboardInput(false)
+            if self.waiting and self.input then
+                self.waiting = false
+                self:Draw()
+            else
+                self:Close()
+            end
+        end)
+        self.lines = {}
+        for i = 1, 3 do
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetWidth(BOX_W)
+            l:SetJustifyH("LEFT")
+            l:SetWordWrap(true)
+            self.lines[i] = l
+        end
+        self.ok = UI.Button(body, {
+            text = "Save",
+            variant = "primary",
+            onClick = function()
+                self:Confirm()
+            end,
+        })
+        self.cancel = UI.Button(body, {
+            text = "Cancel",
+            onClick = function()
+                self:Close()
+            end,
+        })
+        self.reset = UI.Button(body, {
+            text = "Default",
+            onClick = function()
+                self.input = CLICK_ACTIONS[self.kind].default
+                self.waiting = false
+                self:Draw()
+            end,
+        })
+        p:Hide()
+    end
+
+    function Open(kind: ClickKind, onSaved: (() -> ())?, cancelled: (() -> ())?)
+        local pending = self.cancelled
+        self.cancelled = nil
+        if pending and self.panel:IsShown() then
+            pending()
+        end
+        self.kind, self.after, self.cancelled = kind, onSaved, cancelled
+        self.input = self.owner:Clicks()[kind]
+        -- moving it for a spell: a new click wanted at once
+        self.waiting = onSaved ~= nil
+        local action = CLICK_ACTIONS[kind]
+        self.panel:SetTitle(action.name .. " click")
+        self.sub:SetValue(
+            ("%s · the click that %s on unit frames. In the world the game's own clicks stay."):format(
+                specName(self.owner:SpecKey()),
+                action.does
+            )
+        )
+        local p = self.panel
+        p:ClearAllPoints()
+        p:SetPoint("CENTER", SuuUI.Root, "CENTER", 0, 40)
+        p:Show()
+        p:Raise()
+        self:Draw()
+    end
+
+    function Close()
+        local cancelled = self.cancelled
+        self.cancelled, self.after = nil, nil
+        self.panel:Hide()
+        if cancelled then
+            cancelled()
+        end
+    end
+
+    function Got(input: string)
+        self.input = input
+        self.waiting = false
+        self:Draw()
+    end
+
+    function Draw()
+        local body = self.panel.body
+        local y = -(self.sub:GetStringHeight() + S["space-4"])
+        local area = self.area
+        area:ClearAllPoints()
+        area:SetPoint("TOPLEFT", 0, y)
+        y = y - 64 - S["space-4"]
+        local input = self.input
+        if self.waiting or not input then
+            UI.PaintFill(self.areaFill, "surface-sunk")
+            self.areaTop:SetValue("Click in here")
+            self.areaTop:SetColor("arcane")
+            self.areaBottom:SetValue(
+                input and "Shift, Ctrl and Alt combine · Esc keeps " .. inputText(input) or
+                    "Shift, Ctrl and Alt combine · Esc cancels"
+            )
+        else
+            UI.PaintFill(self.areaFill, "surface-raised")
+            self.areaTop:SetValue(inputText(input))
+            self.areaTop:SetColor("ink")
+            self.areaBottom:SetValue("Click here to pick another")
+        end
+        local verdict = (input and not self.waiting) and
+            judgeClick(self.owner:Binds(), self.owner:Clicks(), self.kind, input) or
+            nil
+        local shown: { text: string, tone: string }[] = {}
+        if verdict and self:Stays() then
+            -- moved for a spell: its own click again is no move
+            verdict.refuse = inputText(input or "") .. " is the click the spell takes"
+            verdict.refuseDetail = "Pick another one for " .. CLICK_ACTIONS[self.kind].name .. "."
+        end
+        if verdict then
+            if verdict.refuse then
+                shown[#shown + 1] = {
+                    text = verdict.refuse .. ". " .. (verdict.refuseDetail or ""),
+                    tone = "ember-text",
+                }
+            end
+            local ask = verdict.ask
+            if ask then
+                shown[#shown + 1] = { text = ask.title .. ". " .. ask.text, tone = "gilt-text" }
+            end
+            for _, line in ipairs(verdict.info) do
+                shown[#shown + 1] = { text = line, tone = "ink-muted" }
+            end
+        end
+        for i, l in ipairs(self.lines) do
+            local s = shown[i]
+            if s then
+                l:SetValue(s.text)
+                l:SetColor(s.tone)
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", 0, y)
+                l:Show()
+                y = y - l:GetStringHeight() - S["space-2"]
+            else
+                l:Hide()
+            end
+        end
+        y = y - S["space-3"]
+        self.ok:SetLabel(verdict and verdict.ask and verdict.ask.confirm or "Save")
+        self.ok:SetEnabledState(verdict ~= nil and verdict.refuse == nil and not InCombatLockdown())
+        self.ok:ClearAllPoints()
+        self.ok:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+        self.cancel:ClearAllPoints()
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        self.reset:SetEnabledState(input ~= CLICK_ACTIONS[self.kind].default)
+        self.reset:ClearAllPoints()
+        self.reset:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+        y = y - 30
+        body:SetHeight(-y)
+    end
+
+    -- Moved for a spell, but to the click it has now.
+    function Stays(): boolean
+        return self.after ~= nil and self.input == self.owner:Clicks()[self.kind]
+    end
+
+    function Confirm()
+        local input = self.input
+        if not input or self.waiting or InCombatLockdown() or self:Stays() then
+            return
+        end
+        local verdict = judgeClick(self.owner:Binds(), self.owner:Clicks(), self.kind, input)
+        if verdict.refuse then
+            return
+        end
+        local saved = self.after
+        self.cancelled, self.after = nil, nil
+        self.owner:SetClick(self.kind, input)
+        self:Close()
+        if saved then
+            saved()
+        end
     end
 end
 
@@ -951,10 +1343,13 @@ class ListRow
     readonly frame: Button
     readonly chips: KeyChip[] = {}
     readonly icon: Icon
+    readonly glyph: Texture
     readonly name: Text
     readonly line: Text
     readonly close: Button
     bind: Bind? = nil
+    -- a fixed row's own click (Target, Menu)
+    onClick: (() -> ())? = nil
 
     constructor(parent: Frame, list: BindingsList)
         local f = CreateFrame("Button", nil, parent)
@@ -966,6 +1361,12 @@ class ListRow
         self.icon = UI.Icon(f, 28)
         self.icon:SetPoint("LEFT", 170, 0)
         self.icon:EnableMouse(false)
+        -- a fixed row's glyph in the icon's place (Target, Menu)
+        self.glyph = f:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(16, 16)
+        self.glyph:SetPoint("CENTER", self.icon, "CENTER")
+        UI.Paint(self.glyph, "ink-muted")
+        self.glyph:Hide()
         self.name = UI.Text(f, "label", "ink")
         self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", S["space-4"], 0)
         self.name:SetPoint("RIGHT", -36, 0)
@@ -984,14 +1385,19 @@ class ListRow
         end)
         self.close:SetPoint("RIGHT", -4, 0)
         f:SetScript("OnEnter", function()
-            hover:SetShown(self.bind ~= nil)
+            hover:SetShown((self.bind ~= nil or self.onClick ~= nil) and not InCombatLockdown())
         end)
         f:SetScript("OnLeave", function()
             hover:Hide()
         end)
         f:SetScript("OnClick", function()
             local b = self.bind
-            if b and not InCombatLockdown() then
+            local own = self.onClick
+            if own then
+                if not InCombatLockdown() then
+                    own()
+                end
+            elseif b and not InCombatLockdown() then
                 list.owner:Edit({ name = b.spell, spellID = b.spellID, rank = b.spellID and rankNumber(b.spellID) }, b)
             end
         end)
@@ -1177,44 +1583,61 @@ class BindingsList
             y = y - ROW_H - 2
             return r
         end
-        for gi, g in ipairs(groups) do
-            -- the frames' own Left and Right click, while not bound
-            local own: { input: string, what: string }[] = {}
-            if gi == 1 then
-                local left, right = false, false
-                for _, b in ipairs(g) do
-                    left = left or b.input == "BUTTON1"
-                    right = right or b.input == "BUTTON2"
-                end
-                if not left then
-                    own[#own + 1] = { input = "BUTTON1", what = "Targets the unit" }
-                end
-                if not right then
-                    own[#own + 1] = { input = "BUTTON2", what = "Opens the unit's menu" }
+        local function head(text: string)
+            nHead = nHead + 1
+            local h = self.heads[nHead] or UI.Text(child, "caption", "ink-muted")
+            self.heads[nHead] = h
+            h:SetValue(text)
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", 0, y - 4)
+            h:Show()
+            y = y - 22
+        end
+        -- the unit frames' Target and Menu clicks first, always (asked
+        -- 2026-11-10): a click on one picks its click
+        head("Target and menu on unit frames")
+        local clicks = owner:Clicks()
+        for _, kind in ipairs(CLICK_KINDS) do
+            local action = CLICK_ACTIONS[kind]
+            local input = clicks[kind]
+            local r = row()
+            r.bind = nil
+            r.onClick = function()
+                owner:EditClick(kind)
+            end
+            r:SetChips(inputParts(input))
+            r.icon:Hide()
+            r.glyph:SetTexture(GLYPHS .. (CLICK_GLYPHS[kind] or "person") .. ".tga")
+            r.glyph:Show()
+            r.name:SetValue(action.name)
+            r.name:SetColor("ink")
+            -- a spell on its click (bound before Target could move): it casts
+            local taker: Bind? = nil
+            for _, b in ipairs(binds) do
+                if b.input == input and b.reach ~= "world" then
+                    taker = b
                 end
             end
-            if #g > 0 or (#own > 0 and #binds > 0) then
-                nHead = nHead + 1
-                local h = self.heads[nHead] or UI.Text(child, "caption", "ink-muted")
-                self.heads[nHead] = h
-                h:SetValue(GROUPS[gi])
-                h:ClearAllPoints()
-                h:SetPoint("TOPLEFT", 0, y - 4)
-                h:Show()
-                y = y - 22
-                for _, o in ipairs(own) do
-                    local r = row()
-                    r.bind = nil
-                    r:SetChips(inputParts(o.input))
-                    r.icon:SetArt(nil)
-                    r.name:SetValue(o.what)
-                    r.name:SetColor("ink-muted")
-                    r.line:SetValue("Not bound · the game's own")
-                    r.close:Hide()
-                end
+            if taker then
+                r.line:SetValue(
+                    ("%s casts %s instead · click to move %s"):format(inputText(input), taker.spell, action.name)
+                )
+            else
+                r.line:SetValue(
+                    action.line .. (input == action.default and " · the game's own click" or " · click to change")
+                )
+            end
+            r.close:Hide()
+        end
+        for gi, g in ipairs(groups) do
+            if #g > 0 then
+                head(GROUPS[gi])
                 for _, b in ipairs(g) do
                     local r = row()
                     r.bind = b
+                    r.onClick = nil
+                    r.icon:Show()
+                    r.glyph:Hide()
                     r:SetChips(inputParts(b.input))
                     local id = castID(b)
                     r.icon:SetArt(id and asNumber(try(C_Spell.GetSpellTexture, id)) or nil)
@@ -1261,7 +1684,11 @@ export class MouseBindingsModule extends Module<{}>
     frameAttrs: FrameAttrs = {}
     buttonAttrs: string[] = {}
     box: CaptureBox? = nil
+    clickBox: ClickBox? = nil
     list: BindingsList? = nil
+    -- the unit frames' own click attributes Target and Menu changed, with
+    -- their own values (put back before each apply)
+    clickSaved: { [Frame]: { name: string, value: unknown }[] } = {}
     -- an apply waiting (events come in bursts)
     applySoon: boolean = false
 
@@ -1295,7 +1722,71 @@ export class MouseBindingsModule extends Module<{}>
             specs[key] = specs["0"]
             specs["0"] = nil
         end
+        local clicks = store.clicks
+        if clicks and clicks[key] == nil and clicks["0"] then
+            clicks[key] = clicks["0"]
+            clicks["0"] = nil
+        end
         return key
+    end
+
+    -- This spec's (or another's) Target and Menu clicks on unit frames.
+    function Clicks(spec: string?): Clicks
+        local stored = (self:Store().clicks or {})[spec or self:SpecKey()] or {}
+        return { target = stored.target or DEFAULT_CLICKS.target, menu = stored.menu or DEFAULT_CLICKS.menu }
+    end
+
+    -- Target or Menu given `input` (as judgeClick allows): the other one
+    -- swapped onto its old click, a spell's click taken (the spell kept in
+    -- the world where it can be).
+    function SetClick(kind: ClickKind, input: string)
+        if InCombatLockdown() then
+            return
+        end
+        local clicks = self:Clicks()
+        local verdict = judgeClick(self:Binds(), clicks, kind, input)
+        if verdict.refuse then
+            return
+        end
+        local other: ClickKind = kind == "target" and "menu" or "target"
+        local new: Clicks = { target = clicks.target, menu = clicks.menu }
+        if verdict.swap then
+            new[other] = clicks[kind]
+        end
+        new[kind] = input
+        local list = self:Binds()
+        for _, b in ipairs(verdict.takes) do
+            if b.reach == "both" and reachFor(input, "world") == "world" then
+                b.reach = "world"
+            else
+                for i = #list, 1, -1 do
+                    if list[i] == b then
+                        table.remove(list, i)
+                    end
+                end
+            end
+        end
+        local store = self:Store()
+        local all = store.clicks or {}
+        store.clicks = all
+        -- (the defaults not kept: a default changed later reaches everyone)
+        all[self:SpecKey()] = {
+            target = new.target ~= DEFAULT_CLICKS.target and new.target or nil,
+            menu = new.menu ~= DEFAULT_CLICKS.menu and new.menu or nil,
+        }
+        self:Changed()
+    end
+
+    -- The click box for Target or Menu; `after` once it's saved, `cancelled`
+    -- when it closes unsaved.
+    function EditClick(kind: ClickKind, onSaved: (() -> ())?, cancelled: (() -> ())?)
+        if InCombatLockdown() then
+            self:Print("Bindings change out of combat.")
+            return
+        end
+        local box = self.clickBox or ClickBox.new(self)
+        self.clickBox = box
+        box:Open(kind, onSaved, cancelled)
     end
 
     -- This spec's bindings (made when missing), or another spec's.
@@ -1385,6 +1876,12 @@ export class MouseBindingsModule extends Module<{}>
                 react = b.react,
             }
         end
+        -- its Target and Menu clicks too
+        local store = self:Store()
+        local all = store.clicks or {}
+        store.clicks = all
+        local theirs = all[spec]
+        all[self:SpecKey()] = theirs and { target = theirs.target, menu = theirs.menu } or nil
         self:Changed()
     end
 
@@ -1414,7 +1911,7 @@ export class MouseBindingsModule extends Module<{}>
             reach = "both",
             react = defaultReact(spell),
         }
-        local verdict = judge(self:Binds(), b, nil)
+        local verdict = judge(self:Binds(), b, nil, self:Clicks())
         if verdict.refuse then
             done(verdict.refuse, verdict.refuseDetail, "ember-text")
             return
@@ -1430,17 +1927,24 @@ export class MouseBindingsModule extends Module<{}>
             done(name .. " → " .. spell.name, detail, "arcane")
         end
         local ask = verdict.ask
+        local function notBound()
+            done("Not bound", name .. " stays as it was.", "ink-muted")
+        end
         if ask then
+            local move = ask.move
             UI.Confirm({
                 title = ask.title,
                 text = ask.text,
                 confirm = ask.confirm,
                 onConfirm = function()
-                    commit()
+                    if move then
+                        -- the frames' click moved first, then bound
+                        self:EditClick(move, commit, notBound)
+                    else
+                        commit()
+                    end
                 end,
-                onCancel = function()
-                    done("Not bound", name .. " stays as it was.", "ink-muted")
-                end,
+                onCancel = notBound,
             })
             return
         end
@@ -1567,6 +2071,13 @@ export class MouseBindingsModule extends Module<{}>
             end
         end
         self.frameAttrs = {}
+        -- the frames' own Target and Menu clicks back as they were
+        for f, saved in pairs(self.clickSaved) do
+            for _, kv in ipairs(saved) do
+                f:SetAttribute(kv.name, kv.value)
+            end
+        end
+        self.clickSaved = {}
         -- each input once: its spell for anyone, or for friends and foes
         local byInput: { [string]: { any?: Bind, help?: Bind, harm?: Bind } } = {}
         local order: string[] = {}
@@ -1582,8 +2093,48 @@ export class MouseBindingsModule extends Module<{}>
         end
         local frameKeys: SnippetKey[] = {}
         local worldKeys: SnippetKey[] = {}
-        -- (the frames looked for only with bindings to give them)
-        local frames = #order > 0 and self:UnitFrames() or {}
+        -- Target and Menu moved off their default click (asked 2026-11-10)
+        local clicks = self:Clicks()
+        local moved = on and (clicks.target ~= DEFAULT_CLICKS.target or clicks.menu ~= DEFAULT_CLICKS.menu)
+        -- (the frames looked for only with something to give them)
+        local frames = (#order > 0 or moved) and self:UnitFrames() or {}
+        if moved then
+            for _, f in ipairs(frames) do
+                local saved: { name: string, value: unknown }[] = {}
+                local seen: { [string]: boolean } = {}
+                local function set(name: string, value: string?)
+                    if not seen[name] then
+                        seen[name] = true
+                        saved[#saved + 1] = { name = name, value = f:GetAttribute(name) }
+                    end
+                    f:SetAttribute(name, value)
+                end
+                -- (a frame that doesn't target or open a menu on a click
+                -- keeps it so: only the frames' own wildcard is moved)
+                local own: { [string]: boolean } = {}
+                for _, kind in ipairs(CLICK_KINDS) do
+                    local action = CLICK_ACTIONS[kind]
+                    own[kind] = f:GetAttribute(action.wild) == action.value
+                end
+                for _, kind in ipairs(CLICK_KINDS) do
+                    local action = CLICK_ACTIONS[kind]
+                    local input = clicks[kind]
+                    if own[kind] and input ~= action.default then
+                        if f:GetAttribute(action.wild) == action.value then
+                            set(action.wild, nil)
+                        end
+                        local prefix = clickPrefix(input)
+                        local m = mouseButton(input)
+                        if prefix and m then
+                            set(prefix .. "type" .. m, action.value)
+                        end
+                    end
+                end
+                if #saved > 0 then
+                    self.clickSaved[f] = saved
+                end
+            end
+        end
         local function ids(slot: { any?: Bind, help?: Bind, harm?: Bind }, reach: Reach): (number?, number?, number?)
             local function cast(b: Bind?): number?
                 if b and (b.reach == "both" or b.reach == reach) then
@@ -1713,6 +2264,10 @@ export class MouseBindingsModule extends Module<{}>
             local box = self.box
             if box then
                 box:Close()
+            end
+            local clickBox = self.clickBox
+            if clickBox and clickBox.panel:IsShown() then
+                clickBox:Close()
             end
             local list = self.list
             if list and list.root:IsVisible() then

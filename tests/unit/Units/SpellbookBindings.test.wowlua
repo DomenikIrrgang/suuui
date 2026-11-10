@@ -74,6 +74,7 @@ local function cleanup()
         mock.player:leaveCombat()
     end
     Binds:Store().specs = {}
+    Binds:Store().clicks = {}
     Binds:Apply()
     M.school, M.page = nil, nil
     mock.advanceTime(5)
@@ -114,7 +115,7 @@ local function pressKey()
     expect(chips(c)).toEqual({})
 end
 
-@test("a click or the wheel on a spell's cover binds it; Left click is asked first and works on unit frames only")
+@test("a click or the wheel on a spell's cover binds it; Left click moves Target first and works on unit frames only")
 local function clicks()
     open()
     mock.click(book().bindButton)
@@ -134,6 +135,11 @@ local function clicks()
     local q = asked.last()
     expect(q.title).toBe("Left click targets on unit frames")
     assert(q.onConfirm)(nil)
+    -- Target's new click picked, then bound
+    local clickBox = assert(Binds.clickBox)
+    clickBox:Got("SHIFT-BUTTON1")
+    clickBox:Confirm()
+    expect(Binds:Clicks().target).toBe("SHIFT-BUTTON1")
     local left = Binds:ForSpell(name)[3]
     expect(left.input).toBe("BUTTON1")
     expect(left.reach).toBe("frames")
@@ -217,8 +223,8 @@ local function tab()
             shown[#shown + 1] = r.name:GetText() or ""
         end
     end
-    -- the clicks: the frames' own Left and Right, then Shift-Left; the key
-    expect(shown).toEqual({ "Targets the unit", "Opens the unit's menu", name, name })
+    -- the frames' Target and Menu first, then the clicks (Shift-Left); the key
+    expect(shown).toEqual({ "Target", "Menu", name, name })
     local row = list.rows[4]
     mock.click(row.close)
     expect(#Binds:Binds()).toBe(1)
