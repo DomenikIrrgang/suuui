@@ -16,6 +16,7 @@ import type TabMarker from "/UI/TabMarker"
 import internal shade from "/UI/Panel"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
+import type Point from "./PrimitivesHelpers"
 
 local S = T.space
 local HEADER_LINE = T.type.header.lineHeight
@@ -58,6 +59,18 @@ end
 
 local function y(r: Region?, i: number?): number
     return assert(pointOf(r, i)).y
+end
+
+-- A region's point by its name: the game lists them in Enum.FramePoint's
+-- order (TOPLEFT first), not the order they were set in (wowlua T337).
+local function pointNamed(r: Region, name: string): Point
+    for i = 1, r:GetNumPoints() do
+        local p = pointOf(r, i)
+        if p and p.point == name then
+            return p
+        end
+    end
+    error("no point " .. name)
 end
 
 --------------------------------------------------------------------------------
@@ -740,14 +753,14 @@ local function window()
     expect(w.footer).toBeNil()
     expect(w.tabRow).toBeNil()
     expect(w.scroll:GetScrollChild()).toBe(w.content)
-    expect(pointOf(w.body)).toEqual({
+    expect(pointNamed(w.body, "BOTTOMRIGHT")).toEqual({
         point = "BOTTOMRIGHT",
         relativeTo = w,
         relativePoint = "BOTTOMRIGHT",
         x = -S["space-5"],
         y = S["space-5"],
     })
-    expect(y(w.body, 2)).toBe(-w:BodyTop())
+    expect(pointNamed(w.body, "TOPLEFT").y).toBe(-w:BodyTop())
     mock.click(w.close)
     expect(w).never.toBeShown()
     w:Show()
@@ -797,7 +810,7 @@ local function footer()
         x = S["space-5"],
         y = 0,
     })
-    expect(y(w.body)).toBe(S["space-5"] + footH - S["space-5"] + S["space-4"])
+    expect(pointNamed(w.body, "BOTTOMRIGHT").y).toBe(S["space-5"] + footH - S["space-5"] + S["space-4"])
 end
 
 @test("tabs: laid out under the head, SetTab chooses one and calls onTab")
@@ -820,7 +833,7 @@ local function tabs()
         measureText("header", "Buyback") + 2 * S["space-4"],
     })
     expect(y(w.tabRow)).toBe(-w:BodyTop())
-    expect(y(w.body, 2)).toBe(-(w:BodyTop() + 28 + S["space-4"]))
+    expect(pointNamed(w.body, "TOPLEFT").y).toBe(-(w:BodyTop() + 28 + S["space-4"]))
     expect(tokenOf(a.label)).toBe("ink-muted")
     w:SetTab("back")
     expect(w.tab).toBe("back")
@@ -918,7 +931,7 @@ local function tabsTheme()
     T.type.header.lineHeight = HEADER_LINE + 6
     themeChanged()
     expect(y(w.tabRow)).toBe(-w:BodyTop())
-    expect(y(w.body, 2)).toBe(-(w:BodyTop() + 28 + S["space-4"]))
+    expect(pointNamed(w.body, "TOPLEFT").y).toBe(-(w:BodyTop() + 28 + S["space-4"]))
 end
 
 @test("with reduced motion a window just shows")
