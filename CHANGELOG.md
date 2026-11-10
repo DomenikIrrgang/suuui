@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
+
 ## 0.6.36 (2026-11-10)
 
 ### New
