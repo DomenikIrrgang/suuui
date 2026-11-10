@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Your debuffs show on enemy nameplates again (they stopped showing in 0.6.30).
+
 ## 0.6.31 (2026-11-10)
 
 ### Fixed

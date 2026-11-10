@@ -410,23 +410,17 @@ local function poolSteps()
     expectNoErrors()
 end
 
-@test("a plate's debuff group made only once its unit has such a debuff; a warrior's friends never")
+@test("an enemy plate's debuff group goes in without reading its auras; a warrior's friends never get one")
 local function lazyGroups()
-    -- an enemy without your debuff: no group in the engine, waiting
+    -- reading your debuffs from Lua finds nothing in game (0.6.30's plates
+    -- then never showed any): an enemy's group goes into the engine anyway,
+    -- a frame each, and the engine shows what it has
+    mock.fake("C_UnitAuras.GetAuraDataByIndex", function(...: unknown): unknown
+        return nil
+    end)
     local f = plateOf(wolf)
+    mock.advanceFrames(3)
     local auras = assert(f.auras)
-    expect(assert(auras.groups.mine).added).toBeFalsy()
-    expect(f.auraWait).toBe(true)
-    -- your debuff lands: the group made
-    wolf:applyAura({
-        spellId = 772,
-        name = "Rend",
-        icon = 132155,
-        duration = 15,
-        sourceUnit = "player",
-        harmful = true,
-    })
-    mock.advanceFrames(2)
     expect(assert(auras.groups.mine).added).toBe(true)
     expect(f.auraWait).toBe(false)
     -- a friend of a warrior: nothing to remove, no group, no waiting
