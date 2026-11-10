@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.34 (2026-11-10)
 
 ### New
 
@@ -10,7 +10,7 @@
 ### Fixed
 
 - Cooldown Manager settings: the switch between your spell lists and your aura lists (Cooldowns / Auras, under Lists) shows again; it left an empty gap there.
-- Auction house: the lowest buyout is right for items listed several times at one price, in Buy and in Sell (32 at 20s showed as 62c, and Sell suggested a third of the real price).
+- Auction house: the lowest buyout is right for items listed several times at one price, in Buy and in Sell (32 auctions at 20s each showed as 62c, and Sell suggested a third of the real price). A wrong price SuuUI already remembered is corrected the next time you search the item or use Scan all.
 
 ## 0.6.33 (2026-11-10)
 
