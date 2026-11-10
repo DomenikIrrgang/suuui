@@ -11,6 +11,10 @@
 - Less stutter: opening the bags, the world map and its quest log, the first fight after logging in, big pulls with many nameplates, the end of a fight and switching targets no longer make the game hitch for a moment, and loot no longer redraws all of your bags each time.
 - SuuUI does far less work while nothing happens (the chat no longer checks its windows five times a second, the minimap marks only move when you do).
 - About 9 MB less memory after logging in: the quest, collection, recipe and map data load the first time they're needed.
+- Less stutter while running around among many players: nameplates coming and going (a crowded starting zone or city, turning your camera in a crowd) cost far less, and a friendly player's plate no longer makes the game hitch the first time a plate is used for one.
+- Typing `/` in chat no longer freezes the game for a moment: the command list shows its first rows at once and the rest right after.
+- The end of a fight in a group with mouse bindings no longer hitches (up to 40 ms before), nor does a raid's roster changing during a fight.
+- A big guild or many Battle.net friends logging in and out no longer cost a hitch each time (the group finder's chat reading).
 
 ## 0.6.29 (2026-11-09)
 
