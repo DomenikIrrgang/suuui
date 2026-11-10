@@ -5,6 +5,7 @@
 ### Fixed
 
 - The world map's quest details are readable again: their text was drawn dark on SuuUI's dark background since 0.6.30.
+- Pinging over SuuUI's unit frames (player, target, target of target, focus, pet, boss, party and raid) pings that unit instead of going through to the world behind them.
 
 ## 0.6.30 (2026-11-10)
 

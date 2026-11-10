@@ -10,7 +10,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/UnitFrames"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, expectPingable from "../../helpers"
 import * as frames from "wowlua:frames"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
@@ -131,6 +131,30 @@ local function follow()
     M:Set("showBoss", false)
     M:Set("showFocus", false)
     M:Set("showPet", false)
+end
+
+@test("pingable: a ping over each frame pings its unit, as over the game's frames")
+local function pingable()
+    local f = assert(M.frames)
+    local beast = mock.spawnUnit({ name = "Grimfang", level = 9, reaction = "friendly" })
+    mock.setPet(beast)
+    mock.player:target(wolf)
+    mock.player:focus(wolf)
+    wolf:target(mock.player)
+    mock.advanceFrames(12)
+    expectPingable(f.player, "player")
+    expectPingable(f.target, "target")
+    expectPingable(f.tot, "targettarget")
+    expectPingable(f.focus, "focus")
+    expectPingable(f.pet, "pet")
+    expect(UnitGUID("target")).toBe(UnitGUID("focus"))
+    -- the boss frames too (no boss here: the attribute alone)
+    for _, b in ipairs(M.bosses) do
+        expect(b:GetAttribute("ping-receiver")).toBe(true)
+    end
+    mock.player:focus(nil)
+    mock.setPet(nil)
+    beast:despawn()
 end
 
 @test("the player and target size, after a fight")
