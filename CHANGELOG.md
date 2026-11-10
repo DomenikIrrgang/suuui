@@ -6,6 +6,9 @@
 
 - Cooldown Manager: a Racials collection at the end of Utility in every class's presets, with every race's racials (Perception, Will to Survive, Stoneform, Shadowmeld, Elune's Light, Escape Artist, Eureka!, Blood Fury, Shatter Curse, Will of the Forsaken, Cannibalize, War Stomp, Berserking, Rapid Regeneration, Walk on Air, Read Leyline, Skysight). Only your own race's show, with their cooldowns, and their buffs (Berserking, Blood Fury, Stoneform…) cover the icon while they're up. Your saved lists get it too, at the end of Utility; Cultivation starts switched off.
 - Cooldown Manager: a collection now works in Essential and Utility too (+ Collection there): each spell in it shows once you know it.
+- Auction house: the categories open into the game's own subcategories, down to an armour type's slots (Armor › Plate › Head), as in the game's list, and scroll when they are long.
+- Auction house: a level range next to the search, for the items' required level.
+- Auction house: click a column's header (Name, Item level, Available, Lowest price) to sort the results by it, and again to reverse the order.
 
 ### Fixed
 

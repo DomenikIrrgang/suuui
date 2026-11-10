@@ -157,6 +157,7 @@ export const SECTION: SettingsSection = {
 local AH = C_AuctionHouse
 local WIDTH, HEIGHT = 840, 580
 local CAT_W = 170
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local ROW_H = 32
 local QUALITY: { [number]: string } = {
     [0] = "poor",
@@ -196,6 +197,16 @@ local function sorts(): AuctionHouseSortType[]
     }
 end
 
+-- The results' columns the house sorts itself (Enum.AuctionHouseSortOrder).
+-- Its Level order goes with the game's required level column on Forever,
+-- not the item level: item level and Available are sorted here.
+local SERVER_SORT: { [string]: AuctionHouseSortOrder } = {
+    name = Enum.AuctionHouseSortOrder.Name,
+    price = Enum.AuctionHouseSortOrder.Price,
+}
+-- A result sorted here: its value, its place in the house's order.
+type SortEntry = { r: BrowseResultInfo, v: number, i: number }
+
 -- An item key's name, icon, quality and kind (nil until the game has it:
 -- ITEM_KEY_ITEM_INFO_RECEIVED).
 local function keyInfo(key: ItemKey?): ItemKeyInfo?
@@ -228,8 +239,9 @@ local TONE: { [string]: string } = { info = "ink-muted", ok = "fel", error = "em
 -- Tables: a header row of captions, then rows of cells
 --------------------------------------------------------------------------------
 
--- A column: its caption, its width (nil: the rest), right-aligned.
-type Col = { label?: string, w?: number, right?: boolean }
+-- A column: its caption, its width (nil: the rest), right-aligned; the key
+-- its header sorts by (clickable when set).
+type Col = { label?: string, w?: number, right?: boolean, sort?: string }
 -- A column's place in a row.
 type Place = { x: number, w: number }
 
@@ -374,9 +386,16 @@ class AuctionTable<R extends TableRow> extends Frame
     readonly rows: R[] = {}
     readonly head: Frame
     readonly headCells: Text[] = {}
+    readonly headButtons: { [number]: Button } = {}
+    -- the sorted column's arrow: up in order, down reversed
+    readonly arrow: Texture
     readonly list: ScrollArea
     readonly empty: Text
     readonly make: (parent: Frame) -> R
+    sortKey: string? = nil
+    sortReverse: boolean = false
+    -- a sortable header clicked: its column's key
+    onSort: ((key: string) -> ())? = nil
 
     constructor(parent: Frame, cols: Col[], make: (parent: Frame) -> R)
         super(nil, parent)
@@ -385,6 +404,10 @@ class AuctionTable<R extends TableRow> extends Frame
         self.head:SetPoint("TOPLEFT")
         self.head:SetPoint("TOPRIGHT")
         self.head:SetHeight(20)
+        self.arrow = self.head:CreateTexture(nil, "ARTWORK")
+        self.arrow:SetSize(8, 8)
+        UI.Paint(self.arrow, "ink")
+        self.arrow:Hide()
         self.list = UI.ScrollArea(self, S["space-3"])
         self.list:SetPoint("TOPLEFT", 0, -22)
         self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
@@ -407,6 +430,9 @@ class AuctionTable<R extends TableRow> extends Frame
         for i, h in ipairs(self.headCells) do
             h:SetShown(c[i] ~= nil)
         end
+        for _, b in pairs(self.headButtons) do
+            b:Hide()
+        end
         for i, col in ipairs(c) do
             local h = self.headCells[i]
             if not h then
@@ -416,8 +442,61 @@ class AuctionTable<R extends TableRow> extends Frame
             h:SetValue(col.label or "")
             h:SetJustifyH(col.right and "RIGHT" or "LEFT")
             h:Show()
+            if col.sort then
+                self:HeadButton(i):Show()
+            end
         end
         self:LayoutCols()
+    end
+
+    -- Column i's header button (made on first use): a click sorts by the
+    -- column, the hover lights its caption.
+    function HeadButton(i: number): Button
+        local b = self.headButtons[i]
+        if b then
+            return b
+        end
+        local made = CreateFrame("Button", nil, self.head)
+        self.headButtons[i] = made
+        made:SetScript("OnClick", function()
+            local col = self.cols[i]
+            local onSort = self.onSort
+            if col and col.sort and onSort then
+                onSort(col.sort)
+            end
+        end)
+        made:SetScript("OnEnter", function()
+            self.headCells[i]:SetColor("ink")
+        end)
+        made:SetScript("OnLeave", function()
+            self:ShowSort(self.sortKey, self.sortReverse)
+        end)
+        return made
+    end
+
+    -- The sorted column: its caption lit, the arrow by it.
+    function ShowSort(key: string?, reverse: boolean)
+        self.sortKey, self.sortReverse = key, reverse
+        local places = self:Places(self.list:GetWidth())
+        self.arrow:Hide()
+        for i, col in ipairs(self.cols) do
+            local h, p = self.headCells[i], places[i]
+            local on = key ~= nil and col.sort == key
+            if h then
+                h:SetColor(on and "ink" or "ink-muted")
+            end
+            if on and h and p then
+                local w = math.min(p.w, h:GetStringWidth())
+                self.arrow:ClearAllPoints()
+                if col.right then
+                    self.arrow:SetPoint("RIGHT", self.head, "LEFT", p.x + p.w - w - S["space-2"], 0)
+                else
+                    self.arrow:SetPoint("LEFT", self.head, "LEFT", p.x + w + S["space-2"], 0)
+                end
+                self.arrow:SetTexture(GLYPHS .. (reverse and "chevronDown" or "chevronUp") .. ".tga")
+                self.arrow:Show()
+            end
+        end
     end
 
     -- each column's x and width in a row of width w
@@ -444,7 +523,16 @@ class AuctionTable<R extends TableRow> extends Frame
                 h:ClearAllPoints()
                 h:SetPoint("LEFT", self.head, "LEFT", p.x, 0)
                 h:SetWidth(p.w)
+                local b = self.headButtons[i]
+                if b then
+                    b:ClearAllPoints()
+                    b:SetPoint("TOPLEFT", self.head, "TOPLEFT", p.x, 0)
+                    b:SetSize(p.w, 20)
+                end
             end
+        end
+        if self.sortKey then
+            self:ShowSort(self.sortKey, self.sortReverse)
         end
     end
 
@@ -502,10 +590,13 @@ end
 -- Buy: the search bar, the categories, the results
 --------------------------------------------------------------------------------
 
--- One of the game's categories (AuctionCategories, from its auction house UI).
+-- One of the game's categories (AuctionCategories, from its auction house UI:
+-- Blizzard_AuctionHouseUI's Camelot/Blizzard_AuctionData.lua builds the tree;
+-- read here, never written). Up to three levels deep: Armor, Plate, Head.
 type Category = {
     name?: string,
     filters?: AuctionHouseItemClassFilter[],
+    implicitFilter?: AuctionHouseFilter,
     subCategories?: Category[],
     flags?: { WOW_TOKEN_FLAG?: boolean },
 }
@@ -532,13 +623,17 @@ local function choices(c: FilterChoice?): FilterValue[]
     return {}
 end
 
--- A category's button: its name, the chosen fill, the hover.
+-- A category's button: its name, the chosen fill, the hover; a chevron when
+-- it has subcategories (right: closed, down: open).
 class CatButton extends Button
     readonly sel: Texture
     readonly hover: Texture
     readonly text: Text
+    readonly chevron: Texture
     depth: number = 0
     chosen: boolean = false
+    -- on the way to the chosen one (its subcategories shown)
+    opened: boolean = false
 
     constructor(parent: Frame)
         super(nil, parent)
@@ -551,9 +646,14 @@ class CatButton extends Button
         self.hover:SetAllPoints()
         self.hover:SetAlpha(0.6)
         self.hover:Hide()
+        self.chevron = self:CreateTexture(nil, "ARTWORK")
+        self.chevron:SetSize(10, 10)
+        self.chevron:SetPoint("RIGHT", -S["space-2"], 0)
+        UI.Paint(self.chevron, "ink-muted")
+        self.chevron:Hide()
         self.text = UI.Text(self, "body", "ink")
         self.text:SetPoint("LEFT", S["space-3"], 0)
-        self.text:SetPoint("RIGHT", -S["space-2"], 0)
+        self.text:SetPoint("RIGHT", self.chevron, "LEFT", -S["space-1"], 0)
         self.text:SetWordWrap(false)
         self:SetScript("OnEnter", function()
             if self.chosen then
@@ -565,9 +665,14 @@ class CatButton extends Button
         self:SetScript("OnLeave", function()
             self.hover:Hide()
             if not self.chosen then
-                self.text:SetColor(self.depth > 0 and "ink-muted" or "ink")
+                self.text:SetColor(self:Ink())
             end
         end)
+    end
+
+    -- The text's colour when not chosen: a subcategory's muted, unless open.
+    function Ink(): string
+        return (self.depth > 0 and not self.opened) and "ink-muted" or "ink"
     end
 end
 
@@ -583,7 +688,7 @@ class FavButton extends Button
         UI.Fill(self, "surface-sunk"):SetAllPoints()
         self.edge = UI.Border(self, "gilt-line")
         self.glyph = self:CreateTexture(nil, "ARTWORK")
-        self.glyph:SetTexture("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\star.tga")
+        self.glyph:SetTexture(GLYPHS .. "star.tga")
         self.glyph:SetSize(14, 14)
         self.glyph:SetPoint("CENTER")
         UI.Paint(self.glyph, "gilt")
@@ -731,6 +836,8 @@ end
 class BuyPage extends Frame
     readonly fav: FavButton
     readonly search: TextField
+    readonly minLevel: TextField
+    readonly maxLevel: TextField
     readonly filter: FilterMenu
     readonly searchButton: SuuButton
     readonly scanButton: SuuButton
@@ -757,11 +864,29 @@ class BuyPage extends Frame
         bar:SetPoint("TOPRIGHT")
         bar:SetHeight(30)
         self.fav = FavButton.new(bar)
-        self.search = UI.TextField(bar, { width = 300, placeholder = "Search" })
+        self.search = UI.TextField(bar, { width = 190, placeholder = "Search" })
         self.search:SetPoint("LEFT", self.fav, "RIGHT", S["space-2"], 0)
         self.search.edit:HookScript("OnEnterPressed", function()
             M:Search()
         end)
+        -- the required level range, as the game's own: numbers only, two
+        -- digits; empty is no limit
+        local function levelBox(placeholder: string): TextField
+            local f = UI.TextField(bar, { width = 52, placeholder = placeholder })
+            f.edit:SetNumeric(true)
+            f.edit:SetMaxLetters(2)
+            f.edit:HookScript("OnEnterPressed", function()
+                M:Search()
+            end)
+            return f
+        end
+        self.minLevel = levelBox("Lv min")
+        self.minLevel:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
+        local dash = UI.Text(bar, "caption", "ink-muted")
+        dash:SetValue("–")
+        dash:SetPoint("LEFT", self.minLevel, "RIGHT", S["space-2"], 0)
+        self.maxLevel = levelBox("Lv max")
+        self.maxLevel:SetPoint("LEFT", dash, "RIGHT", S["space-2"], 0)
         self.filter = UI.FilterMenu(bar, {
             groups = {
                 {
@@ -790,7 +915,7 @@ class BuyPage extends Frame
                 M.filterValue = v
             end,
         })
-        self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
+        self.filter:SetPoint("LEFT", self.maxLevel, "RIGHT", S["space-2"], 0)
         self.searchButton = UI.Button(bar, {
             text = "Search",
             variant = "primary",
@@ -827,14 +952,17 @@ class BuyPage extends Frame
         main:SetPoint("BOTTOMRIGHT")
         self.main = main
         self.results = AuctionTable.new(main, {
-            { label = "Name" },
-            { label = "Item level", w = 70, right = true },
-            { label = "Available", w = 70, right = true },
-            { label = "Lowest price", w = 120, right = true },
+            { label = "Name", sort = "name" },
+            { label = "Item level", w = 70, right = true, sort = "ilvl" },
+            { label = "Available", w = 70, right = true, sort = "qty" },
+            { label = "Lowest price", w = 120, right = true, sort = "price" },
         }, function(p: Frame): ResultRow
             return ResultRow.new(p)
         end)
         self.results:SetAllPoints()
+        self.results.onSort = function(key: string)
+            M:SortBy(key)
+        end
         self.empty = UI.Text(main, "body", "ink-muted")
         self.empty:SetPoint("TOP", 0, -60)
         self.more = UI.Button(main, {
@@ -1456,10 +1584,12 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     view: string = "browse"
     query: AuctionHouseBrowseQuery? = nil
     searched: boolean = false
-    category: Category? = nil
-    subcategory: Category? = nil
-    catFilters: AuctionHouseItemClassFilter[]? = nil
+    -- the chosen category and those above it, top first (Armor, Plate, Head)
+    catPath: Category[] = {}
     filterValue: FilterValues? = nil
+    -- the results' sort (a column's key, reversed): for this session
+    sortKey: string = "price"
+    sortReverse: boolean = false
     -- an item's view: its key, the chosen auction, its auctions or offers
     itemKey: ItemKey? = nil
     chosen: number? = nil
@@ -1528,17 +1658,32 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- Buy
     ----------------------------------------------------------------------------
 
+    -- A search, as the game's own: the text, the level range, the filter
+    -- menu's filters and the chosen category's (its implicit filter too).
     function Search(text: string?)
         local buy = self.buy
         self.view = "browse"
+        local node: Category? = self.catPath[#self.catPath]
+        local filters = self:QueryFilters()
+        local implicit = node and node.implicitFilter
+        if implicit then
+            filters[#filters + 1] = implicit
+        end
+        local minLevel, maxLevel = self:LevelRange()
         local query: AuctionHouseBrowseQuery = {
             searchString = text or (buy and buy.search.edit:GetText()) or "",
-            sorts = sorts(),
-            filters = self:QueryFilters(),
-            itemClassFilters = self.catFilters or {},
+            minLevel = minLevel,
+            maxLevel = maxLevel,
+            sorts = self:BrowseSorts(),
+            filters = filters,
+            itemClassFilters = node and node.filters or {},
         }
         self.query = query
         self.searched = true
+        self:SendBrowse(query)
+    end
+
+    function SendBrowse(query: AuctionHouseBrowseQuery)
         self:Note("Searching…", nil, true)
         local ok, err = pcall(AH.SendBrowseQuery, query)
         if not ok then
@@ -1547,12 +1692,59 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
     end
 
+    -- The level boxes: the required levels searched (0: no limit, as the
+    -- game's own range sends).
+    function LevelRange(): (number, number)
+        local buy = self.buy
+        if not buy then
+            return 0, 0
+        end
+        return tonumber(buy.minLevel.edit:GetText()) or 0, tonumber(buy.maxLevel.edit:GetText()) or 0
+    end
+
+    -- The house's order for the results: the chosen column's, then price or
+    -- name; item level and Available have none (sorted here, DrawResults).
+    function BrowseSorts(): AuctionHouseSortType[]
+        local first = SERVER_SORT[self.sortKey]
+        if not first then
+            return sorts()
+        end
+        local O = Enum.AuctionHouseSortOrder
+        return {
+            { sortOrder = first, reverseSort = self.sortReverse },
+            { sortOrder = first == O.Price and O.Name or O.Price, reverseSort = false },
+        }
+    end
+
+    -- A column's header clicked: the results sorted by it, again reversed.
+    -- The house's own orders send the search again; the others sort what
+    -- it gave.
+    function SortBy(key: string)
+        if self.sortKey == key then
+            self.sortReverse = not self.sortReverse
+        else
+            self.sortKey, self.sortReverse = key, false
+        end
+        local query = self.query
+        if SERVER_SORT[key] and query and self.searched and not self.scanning then
+            if query.searchString == "★" then
+                self:Favorites()
+                return
+            end
+            query.sorts = self:BrowseSorts()
+            self:SendBrowse(query)
+            return
+        end
+        self:Refresh()
+    end
+
     function Favorites()
         self.view = "browse"
         self.searched = true
-        self.query = { searchString = "★", sorts = sorts() }
+        local order = self:BrowseSorts()
+        self.query = { searchString = "★", sorts = order }
         self:Note("Your favourites…", nil, true)
-        try(AH.SearchForFavorites, sorts())
+        try(AH.SearchForFavorites, order)
         self:Refresh()
     end
 
@@ -1619,7 +1811,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             window:SetTab("buy")
         end
         buy.search:SetValue(name)
-        self.category, self.subcategory, self.catFilters = nil, nil, nil
+        self.catPath = {}
         if self.scanning then
             self:Refresh()
             return
@@ -1653,59 +1845,106 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         return out
     end
 
-    -- The category tree: top categories, the chosen one's subcategories under it.
+    -- A category clicked, as in the game's own list: one on the chosen path
+    -- (the chosen one or one above it) closes, back to the one above it;
+    -- any other is chosen, under the ones above it. Then the search, with
+    -- the chosen one's filters (none chosen: all categories).
+    function ChooseCategory(node: Category, depth: number)
+        local path: Category[] = {}
+        for i = 1, depth do
+            path[i] = self.catPath[i]
+        end
+        if self.catPath[depth + 1] ~= node then
+            path[depth + 1] = node
+        end
+        self.catPath = path
+        self:Search()
+    end
+
+    -- The category tree, as the game's list: the top categories; under the
+    -- chosen one (or one on the way to it) its subcategories, a level
+    -- further in (Armor, Plate, Head). The chosen one is marked.
     function DrawCategories()
         local buy = self.buy
         if not buy then
             return
         end
         local c = buy.catList.child
+        local path = self.catPath
         local y, n = 0, 0
-        local function button(label: string, depth: number, chosen: boolean, onClick: () -> ())
-            n = n + 1
-            local b = buy.catButtons[n]
-            if not b then
-                b = CatButton.new(c)
-                buy.catButtons[n] = b
-            end
-            b.depth, b.chosen = depth, chosen
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", depth * S["space-4"], -y)
-            b:SetPoint("RIGHT", c, "RIGHT")
-            b.text:SetStyle(depth > 0 and "caption" or "body")
-            b.text:SetValue(label)
-            b.text:SetColor(chosen and "arcane" or (depth > 0 and "ink-muted" or "ink"))
-            b.sel:SetShown(chosen)
-            b.hover:SetShown(not chosen and b:IsMouseOver() and b:IsVisible())
-            b:SetScript("OnClick", function()
-                onClick()
-            end)
-            b:Show()
-            y = y + 24
-        end
-        for _, cat in ipairs(categories()) do
-            local open = self.category == cat
-            button(cat.name or "?", 0, open and not self.subcategory, function()
-                if self.category == cat and not self.subcategory then
-                    self.category, self.catFilters = nil, nil
-                else
-                    self.category, self.subcategory, self.catFilters = cat, nil, cat.filters
+        local function draw(nodes: Category[], depth: number)
+            for _, node in ipairs(nodes) do
+                local opened = path[depth + 1] == node
+                local chosen = opened and #path == depth + 1
+                local kids = node.subCategories
+                n = n + 1
+                local b = buy.catButtons[n]
+                if not b then
+                    b = CatButton.new(c)
+                    buy.catButtons[n] = b
                 end
-                self:Search()
-            end)
-            if open then
-                for _, sub in ipairs(cat.subCategories or {}) do
-                    button(sub.name or "?", 1, self.subcategory == sub, function()
-                        self.subcategory, self.catFilters = sub, sub.filters
-                        self:Search()
-                    end)
+                b.depth, b.chosen, b.opened = depth, chosen, opened
+                b:ClearAllPoints()
+                b:SetPoint("TOPLEFT", depth * S["space-4"], -y)
+                b:SetPoint("RIGHT", c, "RIGHT")
+                b.text:SetStyle(depth > 0 and "caption" or "body")
+                b.text:SetValue(node.name or "?")
+                b.text:SetColor(chosen and "arcane" or b:Ink())
+                b.sel:SetShown(chosen)
+                b.hover:SetShown(not chosen and b:IsMouseOver() and b:IsVisible())
+                b.chevron:SetShown(kids ~= nil and #kids > 0)
+                b.chevron:SetTexture(GLYPHS .. (opened and "chevronDown" or "chevronRight") .. ".tga")
+                b:SetScript("OnClick", function()
+                    self:ChooseCategory(node, depth)
+                end)
+                b:Show()
+                y = y + 24
+                if opened and kids then
+                    draw(kids, depth + 1)
                 end
             end
         end
+        draw(categories(), 0)
         for i = n + 1, #buy.catButtons do
             buy.catButtons[i]:Hide()
         end
         c:SetHeight(math.max(1, y))
+    end
+
+    -- The results in the chosen order: the house's own for name and price
+    -- (as it gave them); by item level (gear's, the rest as none) or by how
+    -- many are offered here, the house's order kept among equals.
+    function SortedResults(results: BrowseResultInfo[]): BrowseResultInfo[]
+        local key = self.sortKey
+        if SERVER_SORT[key] then
+            return results
+        end
+        local entries: SortEntry[] = {}
+        for i, r in ipairs(results) do
+            local v = 0
+            if key == "ilvl" then
+                local info = keyInfo(r.itemKey)
+                v = info and info.isEquipment and r.itemKey.itemLevel or 0
+            else
+                v = r.totalQuantity or 0
+            end
+            entries[i] = { r = r, v = v, i = i }
+        end
+        local reverse = self.sortReverse
+        table.sort(entries, function(a: SortEntry, b: SortEntry): boolean
+            if a.v ~= b.v then
+                if reverse then
+                    return a.v > b.v
+                end
+                return a.v < b.v
+            end
+            return a.i < b.i
+        end)
+        local out: BrowseResultInfo[] = {}
+        for i, e in ipairs(entries) do
+            out[i] = e.r
+        end
+        return out
     end
 
     function DrawResults()
@@ -1714,7 +1953,8 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         local t = buy.results
-        local results = tryValue(AH.GetBrowseResults) or {}
+        t:ShowSort(self.sortKey, self.sortReverse)
+        local results = self:SortedResults(tryValue(AH.GetBrowseResults) or {})
         local n = 0
         for i, r in ipairs(results) do
             n = i
@@ -3444,7 +3684,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         local window = self.window or self:Build()
         self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
             self.open = true
-            self.view, self.searched, self.category, self.subcategory, self.catFilters = "browse", false, nil, nil, nil
+            self.view, self.searched, self.catPath = "browse", false, {}
             after(0, function()
                 local f = frames.find("AuctionHouseFrame")
                 self:Away(f)

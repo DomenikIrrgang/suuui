@@ -110,6 +110,8 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V39](#v39) | VM | medium | open | `Button:Click()` on a disabled button runs its `OnClick` |
 | [V40](#v40) | VM | low | open | `SelectTrainerService` sends no `TRAINER_DESCRIPTION_UPDATE` |
 | [V41](#v41) | VM | medium | open | No pet trainer (Beast Training) |
+| [V42](#v42) | VM | medium | open | The auction house's browse ignores categories, levels, filters and sorts |
+| [V43](#v43) | VM | low | open | *Unverified:* `wowlua screenshot` doesn't draw SuuUI's auction house window |
 
 ## Test runner and mock issues
 
@@ -884,6 +886,22 @@ Blizzard's trainer frame takes up a new selection in `TRAINER_DESCRIPTION_UPDATE
 *Status: open (0.13.9).*
 
 `mock.defineTrainer` is a class trainer only: no `C_Trainer.GetTrainerType()` of `Enum.TrainerType.Pet`, no training points (`C_PetInfo.GetPetTrainingPoints`, `UNIT_PET_TRAINING_POINTS`), no services taught to the pet (its spellbook), and no recording of what Forever lists there. In game the pet's known abilities come as learnable with no cost (reported 2026-11-10, a hunter's screenshot), not as used. The Trainer tests fake the trainer's answers over the engine's class trainer. (units-trade)
+
+<a id="v42"></a>
+
+### V42. The auction house's browse ignores categories, levels, filters and sorts
+
+*Status: open (0.13.9).*
+
+`C_AuctionHouse.SendBrowseQuery` answers with the house's rows whose name holds `searchString`; its `itemClassFilters` (a category: class, subclass, slot), `minLevel` and `maxLevel`, `filters` (usable, rarity) and `sorts` change nothing. The AuctionHouse tests check the query SuuUI sends (the categories' filters, the level range, the sort) instead of what comes back. (units-trade)
+
+<a id="v43"></a>
+
+### V43. *Unverified:* `wowlua screenshot` doesn't draw SuuUI's auction house window
+
+*Status: open (0.13.9).*
+
+A test that leaves the window open (shown, visible, alpha 1, at its place on screen, the house still open when the next test starts) gets a screenshot without it; the bags opened with it are drawn, and so is SuuUI's welcome window. (units-trade)
 
 ## Not bugs (for test writers)
 

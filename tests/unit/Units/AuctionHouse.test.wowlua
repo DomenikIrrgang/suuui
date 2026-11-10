@@ -249,9 +249,12 @@ local function cleanup()
     end
     M.posting, M.buying = nil, nil
     M.filterValue = nil
+    M.sortKey, M.sortReverse = "price", false
     if M.buy then
         M.buy.filter:SetValue(nil)
         M.buy.search:SetValue("")
+        M.buy.minLevel:SetValue("")
+        M.buy.maxLevel:SetValue("")
     end
     ClearCursor()
     local d = M:CharData()
@@ -389,6 +392,7 @@ end
 -- Buy: the categories, a search, the results
 --------------------------------------------------------------------------------
 
+local PLATE_HEAD: AuctionHouseItemClassFilter[] = { { classID = 4, subClassID = 4, inventoryType = 1 } }
 local CATS: Category[] = {
     {
         name = "Weapons",
@@ -398,7 +402,22 @@ local CATS: Category[] = {
             { name = "Axes", filters = { { classID = 2, subClassID = 0 } } },
         },
     },
-    { name = "Gems", filters = { { classID = 3 } } },
+    {
+        name = "Armor",
+        filters = { { classID = 4 } },
+        subCategories = {
+            {
+                name = "Plate",
+                filters = { { classID = 4, subClassID = 4 } },
+                subCategories = {
+                    { name = "Head", filters = PLATE_HEAD },
+                    { name = "Chest", filters = { { classID = 4, subClassID = 4, inventoryType = 5 } } },
+                },
+            },
+            { name = "Cloth", filters = { { classID = 4, subClassID = 1 } } },
+        },
+    },
+    { name = "Gems", filters = { { classID = 3 } }, implicitFilter = Enum.AuctionHouseFilter.UncommonQuality },
     { name = "WoW Token", flags = { WOW_TOKEN_FLAG = true } },
     {},
 }
@@ -412,48 +431,69 @@ local function catButton(label: string): CatButton
     error("no category " .. label)
 end
 
-@test(
-    "the game's categories down the left, the token's left out; a category searches with its filters, its subcategories under it"
-)
-local function categories()
-    open()
-    realCats = rawget(_G, "AuctionCategories")
-    rawset(_G, "AuctionCategories", CATS)
-    local sent: AuctionHouseBrowseQuery[] = {}
-    local send = AH.SendBrowseQuery
-    mock.stub(AH, "SendBrowseQuery", function(q: AuctionHouseBrowseQuery)
-        sent[#sent + 1] = q
-        send(q)
-    end)
-    M:Refresh()
+-- The category rows shown, top to bottom.
+local function catLabels(): string[]
     local labels: string[] = {}
     for _, b in ipairs(buy().catButtons) do
         if b:IsShown() then
             labels[#labels + 1] = mock.textOf(b.text)
         end
     end
-    expect(labels).toEqual({ "Weapons", "Gems", "?" })
-    -- a top category: chosen, searched with its filters, its subcategories shown
-    mock.click(catButton("Weapons"))
+    return labels
+end
+
+-- SendBrowseQuery recorded (and passed on to the engine's house).
+local function recordQueries(): AuctionHouseBrowseQuery[]
+    local sent: AuctionHouseBrowseQuery[] = {}
+    local send = AH.SendBrowseQuery
+    mock.stub(AH, "SendBrowseQuery", function(q: AuctionHouseBrowseQuery)
+        sent[#sent + 1] = q
+        send(q)
+    end)
+    return sent
+end
+
+local function clickCat(label: string)
+    mock.click(catButton(label))
     mock.advanceTime(0.5)
+end
+
+@test(
+    "the game's categories down the left, the token's left out; a category searches with its filters, its subcategories under it, a level further in"
+)
+local function categories()
+    open()
+    realCats = rawget(_G, "AuctionCategories")
+    rawset(_G, "AuctionCategories", CATS)
+    local sent = recordQueries()
+    M:Refresh()
+    expect(catLabels()).toEqual({ "Weapons", "Armor", "Gems", "?" })
+    expect(catButton("Weapons").chevron).toBeShown()
+    expect(catButton("Gems").chevron).never.toBeShown()
+    -- a top category: chosen, searched with its filters, its subcategories shown
+    clickCat("Weapons")
     expect(sent[#sent].itemClassFilters).toBe(CATS[1].filters)
     expect(catButton("Weapons").sel:IsShown()).toBe(true)
     expect(catButton("Swords").depth).toBe(1)
+    expect(catLabels()).toEqual({ "Weapons", "Swords", "Axes", "Armor", "Gems", "?" })
     -- a subcategory
-    mock.click(catButton("Swords"))
-    mock.advanceTime(0.5)
+    clickCat("Swords")
     expect(sent[#sent].itemClassFilters).toBe(assert(CATS[1].subCategories)[1].filters)
     expect(catButton("Swords").sel:IsShown()).toBe(true)
     expect(catButton("Weapons").sel:IsShown()).toBe(false)
-    -- the top one again (its subcategory chosen): back to it alone
-    mock.click(catButton("Weapons"))
-    mock.advanceTime(0.5)
-    expect(sent[#sent].itemClassFilters).toBe(CATS[1].filters)
-    -- and again: none chosen, the subcategories gone
-    mock.click(catButton("Weapons"))
-    mock.advanceTime(0.5)
+    -- another subcategory: chosen instead
+    clickCat("Axes")
+    expect(sent[#sent].itemClassFilters).toBe(assert(CATS[1].subCategories)[2].filters)
+    expect(catButton("Swords").sel:IsShown()).toBe(false)
+    -- the open top one again (as the game's list): closed, none chosen
+    clickCat("Weapons")
     expect(#assert(sent[#sent].itemClassFilters)).toBe(0)
-    expect(M.category).toBe(nil)
+    expect(#M.catPath).toBe(0)
+    expect(catLabels()).toEqual({ "Weapons", "Armor", "Gems", "?" })
+    -- a category's implicit filter goes with the filter menu's
+    clickCat("Gems")
+    expect(sent[#sent].filters).toEqual({ Enum.AuctionHouseFilter.UncommonQuality })
+    clickCat("Gems")
     -- hovering: a row lifts (not the chosen one); leaving drops it
     mock.click(catButton("Gems"))
     mock.advanceTime(0.5)
@@ -470,6 +510,108 @@ local function categories()
     expect(tokenOf(catButton("Swords").text)).toBe("ink")
     mock.hover(nil)
     expect(tokenOf(catButton("Swords").text)).toBe("ink-muted")
+end
+
+@test("a subcategory's own subcategories (an armour type's slots): chosen, marked, closed as in the game's list")
+local function subSubCategories()
+    open()
+    realCats = rawget(_G, "AuctionCategories")
+    rawset(_G, "AuctionCategories", CATS)
+    local sent = recordQueries()
+    M:Refresh()
+    clickCat("Armor")
+    clickCat("Plate")
+    expect(catLabels()).toEqual({ "Weapons", "Armor", "Plate", "Head", "Chest", "Cloth", "Gems", "?" })
+    expect(catButton("Head").depth).toBe(2)
+    expect(catButton("Head"):GetLeft() > catButton("Plate"):GetLeft()).toBe(true)
+    expect(catButton("Plate"):GetLeft() > catButton("Armor"):GetLeft()).toBe(true)
+    -- a slot: searched with its filters, marked; those above it open, not marked
+    clickCat("Head")
+    expect(sent[#sent].itemClassFilters).toBe(PLATE_HEAD)
+    expect(catButton("Head").sel:IsShown()).toBe(true)
+    expect(tokenOf(catButton("Head").text)).toBe("arcane")
+    expect(catButton("Plate").sel:IsShown()).toBe(false)
+    expect(catButton("Armor").sel:IsShown()).toBe(false)
+    expect(tokenOf(catButton("Plate").text)).toBe("ink")
+    expect(tokenOf(catButton("Cloth").text)).toBe("ink-muted")
+    -- the slot again: back to Plate
+    clickCat("Head")
+    expect(sent[#sent].itemClassFilters).toBe(assert(assert(CATS[2].subCategories)[1]).filters)
+    expect(catButton("Plate").sel:IsShown()).toBe(true)
+    expect(catButton("Head")).toBeShown()
+    -- Plate (open) again: closed, back to Armor; its slots gone
+    clickCat("Head")
+    clickCat("Plate")
+    expect(sent[#sent].itemClassFilters).toBe(CATS[2].filters)
+    expect(catLabels()).toEqual({ "Weapons", "Armor", "Plate", "Cloth", "Gems", "?" })
+    expect(catButton("Armor").sel:IsShown()).toBe(true)
+    -- a slot chosen, then Armor: all closed
+    clickCat("Plate")
+    clickCat("Chest")
+    clickCat("Armor")
+    expect(#M.catPath).toBe(0)
+    expect(catLabels()).toEqual({ "Weapons", "Armor", "Gems", "?" })
+end
+
+-- The game's own categories (the token's left out) by name, at a level.
+local function gameNames(cats: unknown): string[]
+    local out: string[] = {}
+    for _, c in ipairs(cats :: Category[]) do
+        local flags = c.flags
+        if not (flags and flags.WOW_TOKEN_FLAG) then
+            out[#out + 1] = c.name or "?"
+        end
+    end
+    return out
+end
+
+local function gameCat(cats: unknown, name: string): Category
+    for _, c in ipairs(cats :: Category[]) do
+        if c.name == name then
+            return c
+        end
+    end
+    error("the game has no category " .. name)
+end
+
+@test("the game's own tree: its top categories; Armor's types, Plate's slots; a slot searches with the game's filters")
+local function gameCategories()
+    open()
+    local game = rawget(_G, "AuctionCategories")
+    local tops = gameNames(game)
+    expect(#tops > 5).toBe(true)
+    expect(catLabels()).toEqual(tops)
+    local sent = recordQueries()
+    -- Armor: its types under it
+    local armor = gameCat(game, tops[2])
+    clickCat(assert(armor.name))
+    expect(sent[#sent].itemClassFilters).toBe(armor.filters)
+    local types = gameNames(armor.subCategories)
+    local plate = gameCat(armor.subCategories, types[1])
+    local slots = gameNames(plate.subCategories)
+    expect(#slots >= 8).toBe(true)
+    -- Plate: its slots under it, Head first
+    clickCat(assert(plate.name))
+    local rows = catLabels()
+    expect(rows[3]).toBe(assert(plate.name))
+    for i, s in ipairs(slots) do
+        expect(rows[3 + i]).toBe(s)
+    end
+    expect(rows[4 + #slots]).toBe(types[2])
+    -- a slot: the game's own filters for it (plate, the head slot)
+    local head = gameCat(plate.subCategories, slots[1])
+    clickCat(assert(head.name))
+    local q = sent[#sent]
+    expect(q.itemClassFilters).toBe(head.filters)
+    expect(assert(q.itemClassFilters)[1]).toEqual({
+        classID = Enum.ItemClass.Armor,
+        subClassID = Enum.ItemArmorSubclass.Plate,
+        inventoryType = Enum.InventoryType.IndexHeadType,
+    })
+    expect(catButton(assert(head.name)).sel:IsShown()).toBe(true)
+    -- the tree taller than its column: it scrolls
+    local list = buy().catList
+    expect(list.child:GetHeight() > list:GetHeight()).toBe(true)
 end
 
 @test(
@@ -549,6 +691,131 @@ local function moreAndFilters()
     end)
     search("ore")
     expect(note():find("^The search didn't go out: ") ~= nil).toBe(true)
+end
+
+@test("the level range goes with the search, the category and the filters; numbers only; empty is no limit")
+local function levelRange()
+    open()
+    local sent = recordQueries()
+    search("")
+    expect(sent[#sent].minLevel).toBe(0)
+    expect(sent[#sent].maxLevel).toBe(0)
+    -- numbers only, two digits (as the game's own range)
+    local lo, hi = buy().minLevel, buy().maxLevel
+    expect(lo.edit:IsNumeric()).toBe(true)
+    expect(hi.edit:GetMaxLetters()).toBe(2)
+    lo:SetValue("10")
+    hi:SetValue("25")
+    mock.click(buy().searchButton)
+    mock.advanceTime(0.5)
+    expect(sent[#sent].minLevel).toBe(10)
+    expect(sent[#sent].maxLevel).toBe(25)
+    -- Enter in a level box searches; with a category, the text and the filter menu
+    buy().filter:SetValue({ only = { "usable" } })
+    buy().filter:Changed()
+    buy().search:SetValue("blade")
+    mock.click(assert(buy().catButtons[1]))
+    mock.advanceTime(0.5)
+    hi:SetValue("30")
+    mock.script(hi.edit, "OnEnterPressed")
+    mock.advanceTime(0.5)
+    local q = sent[#sent]
+    expect(q.minLevel).toBe(10)
+    expect(q.maxLevel).toBe(30)
+    expect(q.searchString).toBe("blade")
+    expect(q.filters).toEqual({ Enum.AuctionHouseFilter.UsableOnly })
+    expect(#assert(q.itemClassFilters) > 0).toBe(true)
+    -- only a lower bound
+    hi:SetValue("")
+    mock.script(lo.edit, "OnEnterPressed")
+    mock.advanceTime(0.5)
+    expect(sent[#sent].minLevel).toBe(10)
+    expect(sent[#sent].maxLevel).toBe(0)
+end
+
+-- The results' names, top to bottom.
+local function resultNames(): string[]
+    local out: string[] = {}
+    for _, r in ipairs(shown(buy().results)) do
+        out[#out + 1] = r.name:GetText() or ""
+    end
+    return out
+end
+
+local function clickHeader(i: number)
+    mock.click(assert(buy().results.headButtons[i]))
+    mock.advanceTime(0.5)
+end
+
+@test(
+    "the results' headers sort: name and price by the house (again: reversed), item level and Available here; the arrow by the sorted one; kept for the session"
+)
+local function sorting()
+    open()
+    local sent = recordQueries()
+    search("")
+    local O = Enum.AuctionHouseSortOrder
+    local t = buy().results
+    -- by price at first: its arrow, its caption lit
+    expect(sent[#sent].sorts).toEqual({
+        { sortOrder = O.Price, reverseSort = false },
+        { sortOrder = O.Name, reverseSort = false },
+    })
+    expect(t.arrow).toBeShown()
+    expect(tokenOf(t.headCells[4])).toBe("ink")
+    expect(tokenOf(t.headCells[1])).toBe("ink-muted")
+    -- Name: the search sent again, sorted by name; again: reversed
+    local n = #sent
+    clickHeader(1)
+    expect(#sent).toBe(n + 1)
+    expect(sent[#sent].searchString).toBe("")
+    expect(sent[#sent].sorts).toEqual({
+        { sortOrder = O.Name, reverseSort = false },
+        { sortOrder = O.Price, reverseSort = false },
+    })
+    expect(tokenOf(t.headCells[1])).toBe("ink")
+    expect(tokenOf(t.headCells[4])).toBe("ink-muted")
+    clickHeader(1)
+    expect(sent[#sent].sorts).toEqual({
+        { sortOrder = O.Name, reverseSort = true },
+        { sortOrder = O.Price, reverseSort = false },
+    })
+    expect(M.sortReverse).toBe(true)
+    -- Price: in order again, then reversed
+    clickHeader(4)
+    expect(sent[#sent].sorts).toEqual({
+        { sortOrder = O.Price, reverseSort = false },
+        { sortOrder = O.Name, reverseSort = false },
+    })
+    clickHeader(4)
+    expect(assert(sent[#sent].sorts)[1].reverseSort).toBe(true)
+    -- item level: the house has no such order; sorted here (gear by its
+    -- level, the rest as none), nothing sent
+    n = #sent
+    clickHeader(2)
+    expect(#sent).toBe(n)
+    expect(resultNames()).toEqual({ "Test Ore", "Test Ring", "Test Gem", "Test Blade" })
+    clickHeader(2)
+    expect(resultNames()).toEqual({ "Test Blade", "Test Ore", "Test Ring", "Test Gem" })
+    -- Available: how many offered
+    clickHeader(3)
+    expect(resultNames()).toEqual({ "Test Ring", "Test Blade", "Test Gem", "Test Ore" })
+    clickHeader(3)
+    expect(resultNames()).toEqual({ "Test Ore", "Test Gem", "Test Blade", "Test Ring" })
+    expect(#sent).toBe(n)
+    -- a header's hover lights its caption; leaving puts it back
+    mock.hover(t.headButtons[1])
+    expect(tokenOf(t.headCells[1])).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(t.headCells[1])).toBe("ink-muted")
+    expect(tokenOf(t.headCells[3])).toBe("ink")
+    -- kept when the house is opened again (not saved)
+    AH.CloseAuctionHouse()
+    mock.advanceTime(1)
+    open()
+    search("")
+    expect(M.sortKey).toBe("qty")
+    expect(resultNames()).toEqual({ "Test Ore", "Test Gem", "Test Blade", "Test Ring" })
 end
 
 @test("favourites: the game's favourites search; the button's tooltip")
@@ -1912,7 +2179,7 @@ local function shiftBag()
     open()
     mock.click(assert(buy().catButtons[1]))
     mock.advanceTime(1)
-    expect(M.category).never.toBe(nil)
+    expect(#M.catPath).toBe(1)
     win():SetTab("sell")
     local sent = mock.spy(AH.SendBrowseQuery)
     mock.stub(AH, "SendBrowseQuery", sent)
@@ -1922,7 +2189,7 @@ local function shiftBag()
     expect(buy()).toBeShown()
     expect(buy().search.edit:GetText()).toBe("Test Ore")
     expect(searchedFor()).toBe("Test Ore")
-    expect(M.category).toBe(nil)
+    expect(#M.catPath).toBe(0)
     expect(sent).toHaveBeenCalledTimes(1)
     expect(resultNamed("Test Ore")).toBeShown()
     -- (no stack split, no chat line opened)
