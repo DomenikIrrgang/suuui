@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.36 (2026-11-10)
 
 ### New
 
-- Mouseover bindings: the unit frames' Target and Menu clicks can move to any mouse button with Shift, Ctrl, Alt or Cmd (Spellbook › Bindings, the two rows at the top, kept per talent tree), so plain Left and Right click can cast spells on unit frames too. Binding a spell to Target's or Menu's click offers to move it first. Cmd-clicks now work on unit frames too.
+- Mouseover bindings: you can move the unit frames' Target and Menu clicks to another mouse button, with or without Shift, Ctrl, Alt or Cmd. Find them in Spellbook › Bindings, the Target and Menu rows at the top; each talent tree keeps its own, and Default puts the game's click back. This frees plain Left and Right click to cast spells on unit frames. Clicking units in the world works as before.
+- Mouseover bindings: when you bind a spell to the click that Target or Menu uses, SuuUI offers to move Target or Menu to another click first.
+- Mouseover bindings: Cmd clicks now work on unit frames too.
+- Mouseover bindings: on a Mac where Cmd + Left click counts as a right click (the game's Mac option "Use Command + Left Click as Right Click"), the binding boxes say so and offer to turn that option off, so Cmd + Left click can be bound.
 
 ## 0.6.35 (2026-11-10)
 
