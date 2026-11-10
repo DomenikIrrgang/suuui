@@ -71,6 +71,7 @@ local function cleanup()
     end
     M:Store().specs = {}
     M:Store().clicks = {}
+    M:Store().clickSynced = nil
     local box = M.box
     if box then
         box:Close()
@@ -443,74 +444,6 @@ end
 -- The unit frames' Target and Menu clicks
 --------------------------------------------------------------------------------
 
-@test(
-    "Target moved to Shift-Left: a plain Left click casts its spell, Shift-Left targets; back on Left, the frame's own click again"
-)
-local function targetMoved()
-    local name, id = known()
-    watchCasts()
-    local player = assert(frames.find("SuuUIPlayerFrame"))
-    expect(player:GetAttribute("*type1")).toBe("target")
-    M:SetClick("target", "SHIFT-BUTTON1")
-    expect(M:Clicks()).toEqual({ target = "SHIFT-BUTTON1", menu = "BUTTON2" })
-    expect(player:GetAttribute("*type1")).toBe(nil)
-    expect(player:GetAttribute("shift-type1")).toBe("target")
-    expect(player:GetAttribute("*type2")).toBe("togglemenu")
-    -- Left is free: bound without a question, it casts on the frame's unit
-    local v = judge(M:Binds(), bind("BUTTON1", name, id), nil, M:Clicks())
-    expect(v.ask).toBe(nil)
-    M:Add(bind("BUTTON1", name, id, { reach = "frames" }), nil)
-    mock.click(player, "LeftButton")
-    expect(casts[#casts] and casts[#casts].id).toBe(id)
-    expect(casts[#casts] and casts[#casts].unit).toBe("player")
-    -- (someone else targeted first: the click's target is seen)
-    mock.player:target(mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 }))
-    expect(UnitIsUnit("target", "player")).toBe(false)
-    mock.click(player, "LeftButton")
-    expect(UnitIsUnit("target", "player")).toBe(false)
-    local before = #casts
-    mock.setModifiers({ shift = true })
-    mock.click(player, "LeftButton")
-    expect(#casts).toBe(before)
-    expect(UnitIsUnit("target", "player")).toBe(true)
-    mock.setModifiers({})
-    -- back on Left: it takes the spell's click, the frame's own attributes back
-    M:SetClick("target", "BUTTON1")
-    expect(#M:Binds()).toBe(0)
-    expect(player:GetAttribute("*type1")).toBe("target")
-    expect(player:GetAttribute("shift-type1")).toBe(nil)
-    expect(player:GetAttribute("type1")).toBe(nil)
-end
-
-@test("Target on Right swaps Menu onto Left")
-local function swapped()
-    local player = assert(frames.find("SuuUIPlayerFrame"))
-    M:SetClick("target", "BUTTON2")
-    expect(M:Clicks()).toEqual({ target = "BUTTON2", menu = "BUTTON1" })
-    expect(player:GetAttribute("type2")).toBe("target")
-    expect(player:GetAttribute("type1")).toBe("togglemenu")
-    expect(player:GetAttribute("*type1")).toBe(nil)
-    expect(player:GetAttribute("*type2")).toBe(nil)
-    -- the defaults again: nothing kept
-    M:SetClick("target", "BUTTON1")
-    expect(M:Clicks()).toEqual({ target = "BUTTON1", menu = "BUTTON2" })
-    expect(player:GetAttribute("*type1")).toBe("target")
-    expect(player:GetAttribute("*type2")).toBe("togglemenu")
-    expect(player:GetAttribute("type1")).toBe(nil)
-    expect(player:GetAttribute("type2")).toBe(nil)
-end
-
-@test("a spell on Target's click keeps working in the world when Target takes it")
-local function takenKeepsWorld()
-    local name, id = known()
-    M:Add(bind("ALT-BUTTON1", name, id), nil)
-    M:SetClick("menu", "ALT-BUTTON1")
-    local b = M:Binds()[1]
-    expect(b and b.reach).toBe("world")
-    local player = assert(frames.find("SuuUIPlayerFrame"))
-    expect(player:GetAttribute("alt-type1")).toBe("togglemenu")
-end
-
 @test("each tree keeps its own Target and Menu clicks; copied with its bindings")
 local function clicksPerSpec()
     local tree = 2
@@ -601,27 +534,6 @@ local function moveForSpell()
     expect(#M:Binds()).toBe(2)
 end
 
-@test(
-    "a Cmd click on a unit frame: its spell's and Target's attributes on the renamed click, marked for the frame's wrap"
-)
-local function cmdClick()
-    local name, id = known()
-    local player = assert(frames.find("SuuUIPlayerFrame"))
-    M:Add(bind("META-BUTTON1", name, id), nil)
-    expect(player:GetAttribute("type-cmd-LeftButton")).toBe("spell")
-    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe("1")
-    M:SetClick("target", "META-SHIFT-BUTTON2")
-    expect(player:GetAttribute("shift-type-cmd-RightButton")).toBe("target")
-    expect(player:GetAttribute("suuui-cmd-shift-RightButton")).toBe("1")
-    -- gone again: the marks too
-    M:SetClick("target", "BUTTON1")
-    M:Store().specs = {}
-    M:Apply()
-    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe(nil)
-    expect(player:GetAttribute("suuui-cmd-shift-RightButton")).toBe(nil)
-    expect(player:GetAttribute("*type1")).toBe("target")
-end
-
 @test("on a Mac with Cmd-Left as Right click, both boxes say so and turn the setting off")
 local function macCmdLeft()
     local CVAR = "MacUseCommandLeftClickAsRightClick"
@@ -656,6 +568,136 @@ local function macCmdLeft()
     spellBox:Draw()
     expect(spellBox.mac.text:IsShown()).toBe(false)
     rawset(_G, "IsMacClient", realMac)
+end
+
+-- The game's click bindings as Forever's (probed 2026-11-10): Target on Left
+-- and the menu on Right without modifiers, the modifiers' bits by name (each
+-- two, the left and the right key); what SuuUI writes to them.
+type ClickBinding = { type: number, actionID: number, button: string, modifiers: number }
+local function clickBindings(extra: ClickBinding[]?): ClickBinding[]
+    local profile: ClickBinding[] = {
+        { type = 3, actionID = 1, button = "LeftButton", modifiers = 0 },
+        { type = 3, actionID = 2, button = "RightButton", modifiers = 0 },
+    }
+    for _, e in ipairs(extra or {}) do
+        profile[#profile + 1] = e
+    end
+    local names: { [number]: string } = {
+        [1] = "SHIFT",
+        [2] = "SHIFT",
+        [4] = "CTRL",
+        [8] = "CTRL",
+        [16] = "ALT",
+        [32] = "ALT",
+        [64] = "META",
+        [128] = "META",
+    }
+    mock.fake("GetStringFromModifiers", function(m: number): string
+        return names[m] or ""
+    end)
+    mock.fake("C_ClickBindings.GetProfileInfo", function(): ClickBinding[]
+        return profile
+    end)
+    mock.fake("C_ClickBindings.SetProfileByInfo", function(info: ClickBinding[])
+        for i = #profile, 1, -1 do
+            table.remove(profile, i)
+        end
+        for i, e in ipairs(info) do
+            profile[i] = e
+        end
+    end)
+    return profile
+end
+
+-- An interaction's click in the game's click bindings: its button, modifiers.
+local function interaction(profile: ClickBinding[], id: number): (string?, number?)
+    for _, e in ipairs(profile) do
+        if e.type == 3 and e.actionID == id then
+            return e.button, e.modifiers
+        end
+    end
+    return nil, nil
+end
+
+@test(
+    "Target moved to Shift-Left: the game's click bindings' Target there, its other bindings kept, the frames' own attributes; back on Left, the game's again"
+)
+local function targetMoved()
+    local name, id = known()
+    local profile = clickBindings({ { type = 1, actionID = 139, button = "MiddleButton", modifiers = 0 } })
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    -- (Shift as the game read it while the click was picked: both its bits)
+    M:SetClick("target", "SHIFT-BUTTON1", 3)
+    expect(M:Clicks()).toEqual({ target = "SHIFT-BUTTON1", menu = "BUTTON2" })
+    local button, mods = interaction(profile, 1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(3)
+    button, mods = interaction(profile, 2)
+    expect(button).toBe("RightButton")
+    expect(mods).toBe(0)
+    expect(#profile).toBe(3)
+    expect(player:GetAttribute("*type1")).toBe("target")
+    expect(player:GetAttribute("shift-type1")).toBe(nil)
+    -- plain Left is free: bound without a question
+    expect(judge(M:Binds(), bind("BUTTON1", name, id), nil, M:Clicks()).ask).toBe(nil)
+    -- back on Left: the game's own again, no longer SuuUI's to keep
+    M:SetClick("target", "BUTTON1", 0)
+    button, mods = interaction(profile, 1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(0)
+    expect(M:Store().clickSynced).toBe(nil)
+    expect(#profile).toBe(3)
+end
+
+@test("never moved: the game's click bindings stay as its own window left them")
+local function clicksUntouched()
+    local profile = clickBindings()
+    profile[1].modifiers = 48
+    M:Apply()
+    local _, mods = interaction(profile, 1)
+    expect(mods).toBe(48)
+end
+
+@test("Target on Right swaps Menu onto Left, in the game's click bindings")
+local function swapped()
+    local profile = clickBindings()
+    M:SetClick("target", "BUTTON2", 0)
+    expect(M:Clicks()).toEqual({ target = "BUTTON2", menu = "BUTTON1" })
+    expect(interaction(profile, 1)).toBe("RightButton")
+    expect(interaction(profile, 2)).toBe("LeftButton")
+    M:SetClick("target", "BUTTON1", 0)
+    expect(interaction(profile, 1)).toBe("LeftButton")
+    expect(interaction(profile, 2)).toBe("RightButton")
+end
+
+@test("a spell on Menu's new click keeps working in the world; a click's modifiers from the game's names when not read")
+local function takenKeepsWorld()
+    local name, id = known()
+    local profile = clickBindings()
+    M:Add(bind("ALT-BUTTON1", name, id), nil)
+    M:SetClick("menu", "ALT-BUTTON1")
+    local b = M:Binds()[1]
+    expect(b and b.reach).toBe("world")
+    local button, mods = interaction(profile, 2)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(48)
+    -- Cmd-Shift-Right for Target: Cmd's and Shift's bits
+    M:SetClick("target", "META-SHIFT-BUTTON2")
+    button, mods = interaction(profile, 1)
+    expect(button).toBe("RightButton")
+    expect(mods).toBe(195)
+end
+
+@test("a Cmd click on a unit frame: its spell's attributes on the renamed click, marked for the frame's wrap")
+local function cmdClick()
+    local name, id = known()
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    M:Add(bind("META-BUTTON1", name, id), nil)
+    expect(player:GetAttribute("type-cmd-LeftButton")).toBe("spell")
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe("1")
+    M:Store().specs = {}
+    M:Apply()
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe(nil)
 end
 
 @test(

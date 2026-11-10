@@ -26,9 +26,13 @@
 --
 -- The unit frames' own Target and Menu clicks (Left and Right by default)
 -- are yours to move, per spec (asked 2026-11-10): to any mouse button with
--- Shift, Ctrl or Alt, so plain Left and Right can cast too. A moved one is
--- the frame's exact click attribute, its own wildcard (*type1) taken away;
--- the frames' own attributes come back with the default.
+-- Shift, Ctrl, Alt or Cmd, so plain Left and Right can cast too. They are
+-- the game's click bindings' Target and Open menu interactions, moved there:
+-- the game's unit button targets or opens the menu only on a click its
+-- click bindings have for that (SecureUnitButton_OnClick; a frame's
+-- attributes alone did nothing: Target on Shift-Left or Alt-Left, found in
+-- game 2026-11-10). The frames keep their own attributes (*type1 target,
+-- *type2 togglemenu): the game hands the moved click to them as theirs.
 --
 -- The Spellbook binds (bind mode, a spell's right-click menu, the Bindings
 -- tab) through the mousebindings service: this module asks what it must
@@ -49,10 +53,11 @@ import type Icon from "/UI/Icon"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import after from "wowlua:timer"
+import * as tbl from "wowlua:table"
 
 local UI = SuuUI.UI
 local S = SuuUI.Tokens.space
-local try = errors.try
+local try, field, asList = errors.try, tbl.field, tbl.list
 local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
 
 -- One binding (the service's MouseBind): the input as bindings spell it
@@ -66,8 +71,11 @@ export type Bind = MouseBind
 -- the click that targets the unit and the one that opens its menu.
 export type ClickKind = "target" | "menu"
 export type Clicks = { target: string, menu: string }
-type StoredClicks = { target?: string, menu?: string }
-type Store = { specs?: { [string]: Bind[] }, clicks?: { [string]: StoredClicks }, last?: string }
+-- (each click's modifiers as the game's click bindings keep them, read
+-- with MakeModifiers as it was picked)
+type StoredClicks = { target?: string, menu?: string, targetMods?: number, menuMods?: number }
+-- (`clickSynced`: the game's click bindings hold SuuUI's moved clicks)
+type Store = { specs?: { [string]: Bind[] }, clicks?: { [string]: StoredClicks }, last?: string, clickSynced?: boolean }
 
 -- Each click's action on a unit frame: the attribute's value, the frames'
 -- own wildcard attribute for its default button, its default, its names.
@@ -95,6 +103,48 @@ local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 -- each one's glyph in the list, where a spell's icon is
 local CLICK_GLYPHS: { [string]: string } = { target = "person", menu = "menu" }
 export const DEFAULT_CLICKS: Clicks = { target = "BUTTON1", menu = "BUTTON2" }
+
+-- The game's modifier bits by name, from its own names for them
+-- (GetStringFromModifiers; Forever: 1, 2 SHIFT, 4, 8 CTRL, 16, 32 ALT,
+-- 64, 128 META): for a click saved before its bits were kept.
+local function bitsByName(): { [string]: number }
+    local out: { [string]: number } = {}
+    local names: { { string } } = { { "SHIFT" }, { "CTRL" }, { "ALT" }, { "META", "CMD", "COMMAND" } }
+    for i = 0, 15 do
+        local bit = math.floor(2 ^ i)
+        local text = asString(try(GetStringFromModifiers, bit))
+        if text then
+            text = text:upper()
+            for _, group in ipairs(names) do
+                local key = group[1]
+                local hit = false
+                for _, n in ipairs(group) do
+                    hit = hit or text:find(n, 1, true) ~= nil
+                end
+                -- (each modifier two bits, its left and right key: the
+                -- game's own MakeModifiers holds both, Shift 3; probed in
+                -- game 2026-11-10)
+                if hit then
+                    out[key] = (out[key] or 0) + bit
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- An input's modifiers as the game's click bindings keep them (0: none).
+export function modifierMask(input: string): number
+    local mods = parseInput(input)
+    local bits = bitsByName()
+    local mask = 0
+    for _, name in ipairs({ "SHIFT", "CTRL", "ALT", "META" }) do
+        if mods[name] then
+            mask = mask + (bits[name] or 0)
+        end
+    end
+    return mask
+end
 
 --------------------------------------------------------------------------------
 -- Inputs
@@ -1191,6 +1241,8 @@ class ClickBox
     readonly mac: MacNote
     kind: ClickKind = "target"
     input: string? = nil
+    -- its modifiers as the game read them (MakeModifiers), as it was picked
+    mods: number? = nil
     waiting: boolean = true
     after: (() -> ())? = nil
     cancelled: (() -> ())? = nil
@@ -1230,6 +1282,7 @@ class ClickBox
             if self.waiting then
                 local key = MOUSE[mouse]
                 if key then
+                    self.mods = asNumber(try(rawget(_G, "MakeModifiers")))
                     self:Got(modifiers() .. key)
                 end
             else
@@ -1280,6 +1333,7 @@ class ClickBox
             text = "Default",
             onClick = function()
                 self.input = CLICK_ACTIONS[self.kind].default
+                self.mods = 0
                 self.waiting = false
                 self:Draw()
             end,
@@ -1298,6 +1352,7 @@ class ClickBox
         end
         self.kind, self.after, self.cancelled = kind, onSaved, cancelled
         self.input = self.owner:Clicks()[kind]
+        self.mods = nil
         -- moving it for a spell: a new click wanted at once
         self.waiting = onSaved ~= nil
         local action = CLICK_ACTIONS[kind]
@@ -1421,7 +1476,7 @@ class ClickBox
         end
         local saved = self.after
         self.cancelled, self.after = nil, nil
-        self.owner:SetClick(self.kind, input)
+        self.owner:SetClick(self.kind, input, self.mods)
         self:Close()
         if saved then
             saved()
@@ -1784,9 +1839,7 @@ export class MouseBindingsModule extends Module<{}>
     box: CaptureBox? = nil
     clickBox: ClickBox? = nil
     list: BindingsList? = nil
-    -- the unit frames' own click attributes Target and Menu changed, with
-    -- their own values (put back before each apply)
-    clickSaved: { [Frame]: { name: string, value: unknown }[] } = {}
+
     -- an apply waiting (events come in bursts)
     applySoon: boolean = false
 
@@ -1834,10 +1887,22 @@ export class MouseBindingsModule extends Module<{}>
         return { target = stored.target or DEFAULT_CLICKS.target, menu = stored.menu or DEFAULT_CLICKS.menu }
     end
 
-    -- Target or Menu given `input` (as judgeClick allows): the other one
-    -- swapped onto its old click, a spell's click taken (the spell kept in
-    -- the world where it can be).
-    function SetClick(kind: ClickKind, input: string)
+    -- This spec's Target and Menu clicks' modifiers as the game's click
+    -- bindings keep them.
+    function ClickMods(): { target: number, menu: number }
+        local stored = (self:Store().clicks or {})[self:SpecKey()] or {}
+        local clicks = self:Clicks()
+        return {
+            target = stored.targetMods or modifierMask(clicks.target),
+            menu = stored.menuMods or modifierMask(clicks.menu),
+        }
+    end
+
+    -- Target or Menu given `input` (as judgeClick allows; `mods` its
+    -- modifiers as the game read them): the other one swapped onto its old
+    -- click, a spell's click taken (the spell kept in the world where it can
+    -- be).
+    function SetClick(kind: ClickKind, input: string, mods: number?)
         if InCombatLockdown() then
             return
         end
@@ -1848,10 +1913,14 @@ export class MouseBindingsModule extends Module<{}>
         end
         local other: ClickKind = kind == "target" and "menu" or "target"
         local new: Clicks = { target = clicks.target, menu = clicks.menu }
+        local oldMods = self:ClickMods()
+        local newMods = { target = oldMods.target, menu = oldMods.menu }
         if verdict.swap then
             new[other] = clicks[kind]
+            newMods[other] = oldMods[kind]
         end
         new[kind] = input
+        newMods[kind] = mods or modifierMask(input)
         local list = self:Binds()
         for _, b in ipairs(verdict.takes) do
             if b.reach == "both" and reachFor(input, "world") == "world" then
@@ -1868,10 +1937,15 @@ export class MouseBindingsModule extends Module<{}>
         local all = store.clicks or {}
         store.clicks = all
         -- (the defaults not kept: a default changed later reaches everyone)
-        all[self:SpecKey()] = {
-            target = new.target ~= DEFAULT_CLICKS.target and new.target or nil,
-            menu = new.menu ~= DEFAULT_CLICKS.menu and new.menu or nil,
-        }
+        local moved = new.target ~= DEFAULT_CLICKS.target or new.menu ~= DEFAULT_CLICKS.menu
+        all[self:SpecKey()] = moved and
+            {
+                target = new.target ~= DEFAULT_CLICKS.target and new.target or nil,
+                menu = new.menu ~= DEFAULT_CLICKS.menu and new.menu or nil,
+                targetMods = new.target ~= DEFAULT_CLICKS.target and newMods.target or nil,
+                menuMods = new.menu ~= DEFAULT_CLICKS.menu and newMods.menu or nil,
+            } or
+            nil
         self:Changed()
     end
 
@@ -1979,7 +2053,14 @@ export class MouseBindingsModule extends Module<{}>
         local all = store.clicks or {}
         store.clicks = all
         local theirs = all[spec]
-        all[self:SpecKey()] = theirs and { target = theirs.target, menu = theirs.menu } or nil
+        all[self:SpecKey()] = theirs and
+            {
+                target = theirs.target,
+                menu = theirs.menu,
+                targetMods = theirs.targetMods,
+                menuMods = theirs.menuMods,
+            } or
+            nil
         self:Changed()
     end
 
@@ -2144,6 +2225,66 @@ export class MouseBindingsModule extends Module<{}>
         return out
     end
 
+    -- The game's click bindings' Target and Open menu interactions on this
+    -- spec's Target and Menu clicks (the default ones with the module off),
+    -- the rest of them as they are. Only once SuuUI has moved them: until
+    -- then the game's own (its Click Casting window's) stay.
+    function SyncClickBindings()
+        local CB = rawget(_G, "C_ClickBindings")
+        if type(CB) ~= "table" or InCombatLockdown() then
+            return
+        end
+        local store = self:Store()
+        local clicks, mods = self:Clicks(), self:ClickMods()
+        if not self:IsEnabled() then
+            clicks, mods = DEFAULT_CLICKS, { target = 0, menu = 0 }
+        end
+        local moved = clicks.target ~= DEFAULT_CLICKS.target or clicks.menu ~= DEFAULT_CLICKS.menu
+        if not moved and not store.clickSynced then
+            return
+        end
+        local E = rawget(_G, "Enum")
+        local interaction = asNumber(field(E, "ClickBindingType", "Interaction")) or 3
+        local targetID = asNumber(field(E, "ClickBindingInteraction", "Target")) or 1
+        local menuID = asNumber(field(E, "ClickBindingInteraction", "OpenContextMenu")) or 2
+        local function button(input: string): string
+            local m = mouseButton(input) or 1
+            return BUTTON_NAMES[m] or ("Button" .. m)
+        end
+        local want: { [number]: { button: string, modifiers: number } } = {
+            [targetID] = { button = button(clicks.target), modifiers = mods.target },
+            [menuID] = { button = button(clicks.menu), modifiers = mods.menu },
+        }
+        local out: { [string]: unknown }[] = {}
+        local same, found = true, 0
+        for _, b in ipairs(asList(try(field(CB, "GetProfileInfo")))) do
+            local kind, id = asNumber(field(b, "type")), asNumber(field(b, "actionID"))
+            local w = id and want[id]
+            if kind == interaction and w then
+                found = found + 1
+                if field(b, "button") ~= w.button or asNumber(field(b, "modifiers")) ~= w.modifiers then
+                    same = false
+                end
+            else
+                out[#out + 1] = {
+                    type = kind,
+                    actionID = id,
+                    button = field(b, "button"),
+                    modifiers = field(b, "modifiers"),
+                }
+            end
+        end
+        if same and found == 2 then
+            store.clickSynced = moved or nil
+            return
+        end
+        for id, w in pairs(want) do
+            out[#out + 1] = { type = interaction, actionID = id, button = w.button, modifiers = w.modifiers }
+        end
+        try(field(CB, "SetProfileByInfo"), out)
+        store.clickSynced = moved or nil
+    end
+
     -- Everything secure set again from this spec's bindings (out of combat).
     function Apply()
         if InCombatLockdown() then
@@ -2169,13 +2310,6 @@ export class MouseBindingsModule extends Module<{}>
             end
         end
         self.frameAttrs = {}
-        -- the frames' own Target and Menu clicks back as they were
-        for f, saved in pairs(self.clickSaved) do
-            for _, kv in ipairs(saved) do
-                f:SetAttribute(kv.name, kv.value)
-            end
-        end
-        self.clickSaved = {}
         -- each input once: its spell for anyone, or for friends and foes
         local byInput: { [string]: { any?: Bind, help?: Bind, harm?: Bind } } = {}
         local order: string[] = {}
@@ -2191,48 +2325,10 @@ export class MouseBindingsModule extends Module<{}>
         end
         local frameKeys: SnippetKey[] = {}
         local worldKeys: SnippetKey[] = {}
-        -- Target and Menu moved off their default click (asked 2026-11-10)
-        local clicks = self:Clicks()
-        local moved = on and (clicks.target ~= DEFAULT_CLICKS.target or clicks.menu ~= DEFAULT_CLICKS.menu)
-        -- (the frames looked for only with something to give them)
-        local frames = (#order > 0 or moved) and self:UnitFrames() or {}
-        if moved then
-            for _, f in ipairs(frames) do
-                local saved: { name: string, value: unknown }[] = {}
-                local seen: { [string]: boolean } = {}
-                local function set(name: string, value: string?)
-                    if not seen[name] then
-                        seen[name] = true
-                        saved[#saved + 1] = { name = name, value = f:GetAttribute(name) }
-                    end
-                    f:SetAttribute(name, value)
-                end
-                -- (a frame that doesn't target or open a menu on a click
-                -- keeps it so: only the frames' own wildcard is moved)
-                local own: { [string]: boolean } = {}
-                for _, kind in ipairs(CLICK_KINDS) do
-                    local action = CLICK_ACTIONS[kind]
-                    own[kind] = f:GetAttribute(action.wild) == action.value
-                end
-                for _, kind in ipairs(CLICK_KINDS) do
-                    local action = CLICK_ACTIONS[kind]
-                    local input = clicks[kind]
-                    if own[kind] and input ~= action.default then
-                        if f:GetAttribute(action.wild) == action.value then
-                            set(action.wild, nil)
-                        end
-                        set(clickPrefix(input) .. "type" .. clickSuffix(input), action.value)
-                        local mark = cmdMark(input)
-                        if mark then
-                            set(mark, "1")
-                        end
-                    end
-                end
-                if #saved > 0 then
-                    self.clickSaved[f] = saved
-                end
-            end
-        end
+        -- Target and Menu: the game's click bindings' (asked 2026-11-10)
+        self:SyncClickBindings()
+        -- (the frames looked for only with bindings to give them)
+        local frames = #order > 0 and self:UnitFrames() or {}
         local function ids(slot: { any?: Bind, help?: Bind, harm?: Bind }, reach: Reach): (number?, number?, number?)
             local function cast(b: Bind?): number?
                 if b and (b.reach == "both" or b.reach == reach) then
