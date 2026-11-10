@@ -106,9 +106,13 @@ warrior with bars, bags and gear: `tests/profiles/perf.json`). Its tests run
 in order in one client. A test whose name starts with `setup` prepares and
 isn't measured; every other one is a phase. Drive a phase with
 `perf.run(frames, function(n) … end)` (`util.wowlua`): the function runs
-inside each frame, so what it fires lands in that frame. Keep a file's frames
-under 600 (the profiler keeps the newest 600), use `perf.random(seed)` for
-choices, and `perf.record(name, { kb = … })` for a memory figure.
+inside each frame, so what it fires lands in that frame. Keep a file's
+measured frames under 600 (the profiler keeps the newest 600), use
+`perf.random(seed)` for choices, and `perf.record(name, { kb = … })` for a
+memory figure. Start with `perf.settle(perf.AFTER_LOGIN)`: five seconds, so
+what SuuUI builds ahead after a login (the nameplate pool, the bags' buttons,
+the command catalog) is done before the first phase, as it is by the time you
+move in game.
 
 The open world's helpers are in `world.wowlua`: `Crowd` brings people and
 creatures into nameplate range and lets them go (each a new unit, its name
