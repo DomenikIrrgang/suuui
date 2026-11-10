@@ -843,8 +843,10 @@ end
 -- plate first went on a friendly unit cost 7-11 ms in NAME_PLATE_UNIT_ADDED
 -- while running about (the dev profiler, 2026-11-10).
 -- (a plate without its auras first: it's what a unit would wait for)
+-- The friendly group only while no plate shows (nobody around: it's as
+-- dear as the plate, and in a crowd it would take the frames plates need).
 local function unfinished(): (Nameplate?, string?)
-    local wantRemovable = (M:Get("auras") :: number) > 0
+    local wantRemovable = (M:Get("auras") :: number) > 0 and next(byUnit) == nil
     local later: Nameplate? = nil
     for _, f in ipairs(pool) do
         if not f.aurasTried then
@@ -889,10 +891,16 @@ local function fill()
             return
         end
         if not builtThisFrame() then
-            -- a plate's auras, then plates enough, then the friendly groups
+            -- a plate's auras, then plates enough, then the friendly groups;
+            -- with the pool low (plates going out as fast as they come: a
+            -- crowd), a whole plate a frame, as fast as one a frame can be
             local f, what = unfinished()
             if f and what == "auras" then
                 finish(f, what)
+            elseif #pool < POOL_LOW then
+                local made = newPlate()
+                made:Hide()
+                pool[#pool + 1] = made
             elseif #pool < POOL then
                 -- the plate alone this frame, its auras the next
                 builtAt = GetTime()
@@ -914,7 +922,15 @@ end
 -- A plate from the pool, or a new one; nil when the pool is empty and a
 -- plate was made in this frame already (the caller waits a frame).
 local function acquire(): Nameplate?
-    local f = table.remove(pool)
+    -- a finished plate first (one made a step ago may lack its auras yet)
+    local at = #pool
+    for i = #pool, 1, -1 do
+        if pool[i].aurasTried then
+            at = i
+            break
+        end
+    end
+    local f = at > 0 and table.remove(pool, at) or nil
     if not f then
         if builtThisFrame() then
             return nil
@@ -1492,6 +1508,10 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         if f then
             byUnit[unit] = nil
             release(f)
+            -- nobody around any more: the pool's friendly groups now
+            if next(byUnit) == nil and not InCombatLockdown() then
+                fill()
+            end
         end
     end
 
