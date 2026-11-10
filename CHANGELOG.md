@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.37 (2026-11-10)
 
 ### Fixed
 
-- Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
-- Collections: drag a mount, pet or toy of yours from the Mounts, Pets or Toys tab onto an action bar.
-- Mouseover bindings: a spell for friends only (or enemies only) on a Shift, Ctrl or Alt click now casts when you click a unit frame (Ctrl-Left with Purify did nothing).
-- Mouseover bindings: Target and Menu moved to a click with Shift, Ctrl, Alt or Cmd (Spellbook › Bindings) now work: SuuUI moves them in the game's own click bindings too, which the game's unit frames need. The game's other click bindings stay as they were.
+- Auction house: the items in your reagent bag now show in the Sell list, and the merchant window's Sell junk button sells the junk in your reagent bag too.
+- Collections: you can drag a mount, pet or toy you own from the Mounts, Pets or Toys tab onto an action bar, as in the game's own collections window.
+- Mouseover bindings: a spell bound for friends only or enemies only to a click with Shift, Ctrl or Alt now casts when you click a unit frame. Before, the click did nothing (for example Purify on Ctrl + Left click).
+- Mouseover bindings: when you move the unit frames' Target or Menu click to another click (Spellbook › Bindings, the Target and Menu rows), the new click now works, also with Shift, Ctrl, Alt or Cmd. SuuUI now keeps the game's own click bindings in step with yours; your other click bindings in the game stay as they were.
 
 ## 0.6.36 (2026-11-10)
 
