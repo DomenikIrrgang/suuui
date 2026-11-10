@@ -157,17 +157,62 @@ local function copyList(list: Indicator[]): Indicator[]
     return out
 end
 
--- Every buff the Cooldown Manager's presets know for your class, by name:
--- the buffs and procs, a group's members one by one (a paladin's auras and
--- blessings are groups there: missing here until 2026-11-10, found in game),
--- and the utility spells that put a buff on someone (Blessing of
--- Protection, Freedom) by the buff they give.
-local function knownBuffs(): { [string]: number[] }
-    local byName: { [string]: number[] } = {}
-    local function add(name: string?, ids: number[]?)
-        if name and ids and #ids > 0 and not byName[name] then
-            byName[name] = ids
+-- What "+ Add" offers, by name (asked 2026-11-10: many group buffs were
+-- missing, the Cooldown Manager presets alone know too few): the IDs, the
+-- art to show, and for another class's aura its class.
+type KnownBuffs = { ids: { [string]: number[] }, icon: { [string]: number }, note: { [string]: string } }
+
+-- Every spell you can cast, by name, with every rank's IDs (the book may
+-- hold only the best rank; the trainer data has them all).
+local function spellbookByName(): { [string]: number[] }
+    local out: { [string]: number[] } = {}
+    local okLines, lines = pcall(C_SpellBook.GetNumSpellBookSkillLines)
+    local bank = Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+    local allIDs = SuuUI.TrainerSpellIDs and SuuUI.TrainerSpellIDs() or {}
+    for line = 1, (okLines and secret.readable(lines) and tonumber(lines)) or 0 do
+        local okLine, li = pcall(C_SpellBook.GetSpellBookSkillLineInfo, line)
+        local offset = okLine and li and tonumber(li.itemIndexOffset)
+        local count = okLine and li and tonumber(li.numSpellBookItems)
+        if offset and count then
+            for i = offset + 1, offset + count do
+                local okItem, it = pcall(C_SpellBook.GetSpellBookItemInfo, i, bank)
+                local id = okItem and it and secret.readable(it.spellID) and tonumber(it.spellID)
+                local name = okItem and it and secret.readable(it.name) and it.name
+                if id and type(name) == "string" and not it.isPassive then
+                    local ids = out[name] or {}
+                    out[name] = ids
+                    local seen: { [number]: boolean } = {}
+                    for _, x in ipairs(ids) do
+                        seen[x] = true
+                    end
+                    for _, x in ipairs({ id, unpack(allIDs[name] or {}) }) do
+                        if not seen[x] then
+                            seen[x] = true
+                            ids[#ids + 1] = x
+                        end
+                    end
+                end
+            end
         end
+    end
+    return out
+end
+
+-- Every buff "+ Add" can offer, by name: your class's presets (the buffs
+-- and procs, a group's members one by one: a paladin's auras and blessings
+-- are groups there; the utility spells that put a buff on someone, as
+-- Blessing of Protection, by the buff they give), every spell in your
+-- spellbook, and every other class's preset auras (shown on "Anyone's":
+-- a priest's indicator for a paladin's blessing), noted with their class.
+local function knownBuffs(): KnownBuffs
+    local known: KnownBuffs = { ids = {}, icon = {}, note = {} }
+    local function add(name: string?, ids: number[]?, icon: number?, note: string?)
+        if not name or not ids or #ids == 0 or known.ids[name] then
+            return
+        end
+        known.ids[name] = ids
+        known.icon[name] = icon or ids[1]
+        known.note[name] = note
     end
     local function take(e: TrackerEntry)
         if e.enchant then
@@ -179,7 +224,7 @@ local function knownBuffs(): { [string]: number[] }
             end
             return
         end
-        add(e.name, e.ids)
+        add(e.name, e.ids, e.icon)
     end
     local presets = SuuUI.CooldownPresets and SuuUI.CooldownPresets() or {}
     for _, p in ipairs(presets) do
@@ -192,14 +237,20 @@ local function knownBuffs(): { [string]: number[] }
             -- a utility spell's buff: its own effect IDs, else its IDs
             if not e.enchant and e.effect then
                 if e.effectIDs then
-                    add(e.effectName or e.name, e.effectIDs)
+                    add(e.effectName or e.name, e.effectIDs, e.icon)
                 elseif not e.group then
-                    add(e.name, e.ids)
+                    add(e.name, e.ids, e.icon)
                 end
             end
         end
     end
-    return byName
+    for name, ids in pairs(spellbookByName()) do
+        add(name, ids)
+    end
+    for name, a in pairs(SuuUI.AuraCatalog and SuuUI.AuraCatalog() or {}) do
+        add(name, a.ids, a.icon, a.classes)
+    end
+    return known
 end
 
 -- The spec whose list the frames use, and the one the editor shows.
@@ -734,6 +785,9 @@ export class IndicatorEditor extends Frame
     readonly hint: Text
     readonly empty: Text
     buffs: { [string]: number[] } = {}
+    -- (each offered buff's art and, for another class's, its class)
+    buffIcons: { [string]: number } = {}
+    buffNotes: { [string]: string } = {}
     count: number = 0
     dragFrom: number? = nil
     dropTo: number? = nil
@@ -898,15 +952,28 @@ export class IndicatorEditor extends Frame
         self.empty:SetShown(#list == 0)
         local wellH = #list == 0 and 40 or (y + 6)
         self.well:SetSize(WIDTH, wellH)
-        -- "+ Add": the presets' buffs not on the list yet
-        self.buffs = knownBuffs()
+        -- "+ Add": every known buff not on the list yet, with its icon (as the
+        -- Cooldown Manager's) and another class's noted
+        local known = knownBuffs()
+        self.buffs, self.buffIcons, self.buffNotes = known.ids, known.icon, known.note
         local present: { [string]: boolean }, options: SelectOption<string>[] = {}, {}
         for _, e in ipairs(list) do
             present[e.name or ""] = true
         end
         for name in pairs(self.buffs) do
             if not present[name] then
-                options[#options + 1] = { value = name, label = name }
+                local art = known.icon[name]
+                local tex: unknown = nil
+                if art then
+                    local okTex, t = pcall(C_Spell.GetSpellTexture, art)
+                    tex = okTex and secret.readable(t) and t or nil
+                end
+                options[#options + 1] = {
+                    value = name,
+                    label = name,
+                    icon = type(tex) == "number" and tex or nil,
+                    note = known.note[name],
+                }
             end
         end
         table.sort(options, function(a: SelectOption<string>, b: SelectOption<string>): boolean
@@ -1006,7 +1073,7 @@ class BuffIndicatorsModule extends Module<typeof(DEFAULTS)>
             return saved
         end
         -- first time for this spec: the class's defaults, with their spells
-        local buffs: { [string]: number[] }, list: Indicator[] = knownBuffs(), {}
+        local buffs: { [string]: number[] }, list: Indicator[] = knownBuffs().ids, {}
         local bySpec = STARTING_BY_SPEC[CLASS]
         for _, d in ipairs(STARTING_ALL[CLASS] or (bySpec and bySpec[specKey(spec)]) or {}) do
             local ids = d.name and buffs[d.name]

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Aura indicators can track every buff your class's presets know, including grouped ones like a paladin's auras and blessings, and buffs you put on others like Blessing of Protection.
+- Aura indicators' + Add now offers every spell in your spellbook (Wild Growth, Prayer of Mending, Riptide, Blessing of Sanctuary, Soulstone…), a paladin's auras and blessings, and other classes' buffs (marked with their class), each with its icon as in the Cooldown Manager.
 
 ## 0.6.32 (2026-11-10)
 
