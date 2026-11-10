@@ -24,6 +24,7 @@
 - The guild window no longer restyles itself while it's closed, and its member list restyles only what changed, a little each frame, instead of every row at once.
 - Using an item or casting with the bags open only updates the cooldown swipes, not every slot.
 - Aura icons on nameplates and frames are drawn when first shown instead of all up front, so new nameplates no longer hitch, and the objective tracker redraws only the quest that changed.
+- The first time you open the collections in a session the game no longer freezes for a few seconds while their sources load; the world map and the professions load theirs the same gentle way.
 
 ## 0.6.29 (2026-11-09)
 
