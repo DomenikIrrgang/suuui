@@ -28,6 +28,7 @@ import recipeSourcesSteps from "/Data/RecipeSources"
 import flightPathsSteps from "/Data/FlightPaths"
 import mapOverlaysSteps from "/Data/MapOverlays"
 import * as fault from "./Fault"
+import after from "wowlua:timer"
 
 -- What the frame driver steps (any LazyData).
 interface Stepped
@@ -48,8 +49,9 @@ export class LazyData<T> implements Stepped
     private nextStep: number = 1
     -- the table so far
     private value: T
-    -- who waits for Prepare
+    -- who waits for Prepare, and the keys of those that gave one
     private waiting: (() -> ())[]? = nil
+    private waitingKeys: { [string]: boolean } = {}
 
     constructor(readonly name: string, steps: ((t: T) -> ())[])
         self.steps = steps :: unknown :: { [number]: ((t: T) -> ())? }
@@ -100,14 +102,23 @@ export class LazyData<T> implements Stepped
     end
 
     -- Built a step a frame, then `done` (at once when it's there already).
-    function Prepare(done: (() -> ())?)
+    -- `key`: one waiter per key (a window that asks on every draw while it
+    -- waits is told once: the collections asked 374 times, and all 374
+    -- redraws ran in the frame the data was there, 2.8 s in game).
+    function Prepare(done: (() -> ())?, key: string?)
         if self:Ready() then
             if done then
                 done()
             end
             return
         end
+        if done and key and self.waitingKeys[key] then
+            done = nil
+        end
         if done then
+            if key then
+                self.waitingKeys[key] = true
+            end
             local waiting = self.waiting or {}
             self.waiting = waiting
             waiting[#waiting + 1] = done
@@ -125,27 +136,45 @@ export class LazyData<T> implements Stepped
     function Done()
         local waiting = self.waiting
         self.waiting = nil
+        self.waitingKeys = {}
         for _, fn in ipairs(waiting or {}) do
             fault.call("Data: " .. self.name, fn)
         end
     end
 end
 
+-- Steps a frame for as long as this many ms (debugprofilestop), at least
+-- one and at most STEPS_MAX (a step is about 48 KB of source: 0.35 ms in game).
+local STEP_MS, STEPS_MAX = 1.5, 4
+
 driver:SetScript("OnUpdate", function()
-    local d = preparing[1]
-    if not d then
-        driver:Hide()
-        return
-    end
-    local ok, more = fault.call("Data: " .. d.name, function(): boolean
-        return d:Step()
-    end)
-    if not ok or not more then
-        table.remove(preparing, 1)
-        if ok then
-            d:Done()
+    local stop = debugprofilestop() + STEP_MS
+    local n = 0
+    repeat
+        n += 1
+        local d = preparing[1]
+        if not d then
+            driver:Hide()
+            return
         end
-    end
+        local ok, more = fault.call("Data: " .. d.name, function(): boolean
+            return d:Step()
+        end)
+        if not ok or not more then
+            table.remove(preparing, 1)
+            if ok then
+                -- (who waited: the next frame, not on top of this one's steps)
+                driver:Hide()
+                after(0, function()
+                    d:Done()
+                    if #preparing > 0 then
+                        driver:Show()
+                    end
+                end)
+                return
+            end
+        end
+    until n >= STEPS_MAX or debugprofilestop() > stop
     if #preparing == 0 then
         driver:Hide()
     end
