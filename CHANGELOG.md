@@ -6,6 +6,7 @@
 
 - Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
 - Collections: drag a mount, pet or toy of yours from the Mounts, Pets or Toys tab onto an action bar.
+- Mouseover bindings: a spell for friends only (or enemies only) on a Shift, Ctrl or Alt click now casts when you click a unit frame (Ctrl-Left with Purify did nothing).
 
 ## 0.6.36 (2026-11-10)
 
