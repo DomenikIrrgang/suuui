@@ -1,0 +1,87 @@
+-- Perf scenario: a big guild and Battle.net friends at launch. Two hundred
+-- guild members, a dozen logging in and out (their roster updates and the
+-- system lines), Battle.net friends coming online, going offline and
+-- changing what they play (BN_FRIEND_INFO_CHANGED in bursts). The windows
+-- stay closed: what SuuUI does in the world for it. In game a burst of
+-- BN_FRIEND_INFO_CHANGED cost up to 21 ms and a GUILD_ROSTER_UPDATE 6.9 ms
+-- (the dev profiler, 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+import * as world from "./world"
+
+config({ profile = "perf" })
+
+const CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+local handles: number[] = {}
+
+@if(features.perf)
+@test("setup: login, a guild of two hundred")
+local function setup()
+    mock.joinGuild({ name = "Perf Guild", rank = 1, motd = "Welcome to the launch" })
+    for i = 1, 200 do
+        handles[i] = mock.defineGuildMember({
+            name = "Member" .. i,
+            class = CLASSES[(i - 1) % #CLASSES + 1],
+            level = 1 + i % 60,
+            rank = 1 + i % 4,
+            zone = "Elwynn Forest",
+            online = i % 3 == 0,
+        })
+    end
+    perf.settle(90)
+end
+
+@if(features.perf)
+@test("members and friends come and go")
+local function churn()
+    local rnd = perf.random(17)
+    perf.run(360, function(n: number)
+        -- a guild member logs in or out every 30 frames
+        if n % 30 == 0 then
+            local i = rnd(#handles)
+            local online = rnd(2) == 1
+            mock.updateGuildMember(handles[i], { online = online })
+            local line = ("Member%d has %s."):format(i, online and "come online" or "gone offline")
+            mock.fireEvent(
+                "CHAT_MSG_SYSTEM",
+                line,
+                "",
+                "",
+                "",
+                "",
+                "",
+                0,
+                0,
+                "",
+                0,
+                n,
+                "",
+                0,
+                false,
+                false,
+                false,
+                false,
+                world.NO_DISCORD
+            )
+        end
+        -- Battle.net friends: a burst of info changes every second, someone
+        -- online or offline every 2 s
+        if n % 60 == 10 then
+            for k = 1, 8 do
+                mock.fireEvent("BN_FRIEND_INFO_CHANGED", k)
+            end
+        end
+        if n % 120 == 40 then
+            mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", rnd(20), false)
+        end
+        if n % 120 == 100 then
+            mock.fireEvent("BN_FRIEND_ACCOUNT_OFFLINE", rnd(20), false)
+        end
+        if n % 90 == 50 then
+            mock.fireEvent("FRIENDLIST_UPDATE")
+        end
+    end)
+end

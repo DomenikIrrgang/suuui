@@ -1,0 +1,108 @@
+-- Perf scenario: a fight's end in a raid with mouse bindings. Twenty in the
+-- raid, mouse bindings on the unit frames; in the fight someone joins and
+-- someone leaves (GROUP_ROSTER_UPDATE in combat, the bindings applied when
+-- it ends), spells are learned meanwhile (SPELLS_CHANGED), then the fight
+-- ends: what SuuUI does at PLAYER_REGEN_ENABLED. In game the bindings'
+-- frame search took up to 39 ms at each fight's end (the dev profiler,
+-- 2026-11-10).
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import internal M, ranksOf from "/Units/MouseBindings"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local mates: mock.MockUnit[] = {}
+const CLASSES = { "PRIEST", "PALADIN", "WARRIOR", "MAGE", "DRUID", "ROGUE", "HUNTER", "WARLOCK" }
+
+local function member(i: number): mock.MockUnit
+    return mock.spawnUnit({
+        name = "Raider" .. i,
+        player = true,
+        class = CLASSES[(i - 1) % #CLASSES + 1],
+        level = 60,
+        reaction = "friendly",
+        health = 5000,
+        healthMax = 5000,
+        distance = 10,
+    })
+end
+
+@if(features.perf)
+@test("setup: login, a raid of twenty, mouse bindings")
+local function setup()
+    for i = 1, 19 do
+        local m = member(i)
+        mates[i] = m
+        mock.group:add(m, { raid = true, quiet = i > 1 })
+    end
+    perf.settle(90)
+    -- a binding on Shift-Left and one on a side button
+    local name, id = "Heroic Strike", 0
+    local ranks = ranksOf(name)
+    local top = ranks[#ranks]
+    if top then
+        id = top.id
+    end
+    local binds = M:Binds()
+    binds[#binds + 1] = {
+        input = "SHIFT-BUTTON1",
+        spell = name,
+        rank = "highest",
+        spellID = id,
+        reach = "both",
+        react = "any",
+    }
+    binds[#binds + 1] = {
+        input = "BUTTON4",
+        spell = name,
+        rank = "highest",
+        spellID = id,
+        reach = "both",
+        react = "any",
+    }
+    M:Apply()
+    perf.settle(30)
+end
+
+@if(features.perf)
+@test("a fight: the roster changes, the fight ends")
+local function fight()
+    local boss = mock.spawnUnit({
+        name = "Perf Boss",
+        level = 63,
+        reaction = "hostile",
+        health = 900000,
+        healthMax = 900000,
+        distance = 5,
+    })
+    local late = member(20)
+    perf.run(240, function(n: number)
+        if n == 1 then
+            mock.player:target(boss)
+            mock.player:enterCombat()
+            mock.player:startAttack()
+        end
+        if n % 30 == 15 then
+            mock.player:swing(boss, 400)
+        end
+        -- someone joins, someone leaves, a spell learned: in the fight
+        if n == 40 then
+            mock.group:add(late, { raid = true })
+        end
+        if n == 80 then
+            mock.group:remove(mates[3])
+        end
+        if n == 100 then
+            mock.fireEvent("SPELLS_CHANGED")
+        end
+        -- the fight ends
+        if n == 150 then
+            mock.player:stopAttack()
+            mock.player:target(nil)
+            mock.player:leaveCombat()
+        end
+    end)
+end

@@ -1,0 +1,240 @@
+-- tests/perf/world.wowlua
+-- The open world's helpers for the running-around scenarios (crowd, city,
+-- world, ride, churn): people and creatures coming into nameplate range and
+-- leaving it, each a new unit (a new GUID) as in the game, and the chat of a
+-- crowded zone. Everything is seeded, so two runs do the same work.
+
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+const CLASSES = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+const ALLIANCE = { "Human", "Dwarf", "NightElf", "Gnome" }
+const HORDE = { "Orc", "Scourge", "Tauren", "Troll" }
+-- buffs a player arrives with (UNIT_AURA on its plate)
+const BUFFS = {
+    { spellId = 1243, name = "Power Word: Fortitude", icon = 135987, duration = 1800 },
+    { spellId = 1126, name = "Mark of the Wild", icon = 136078, duration = 1800 },
+    { spellId = 1459, name = "Arcane Intellect", icon = 135932, duration = 1800 },
+    { spellId = 19740, name = "Blessing of Might", icon = 135906, duration = 300 },
+}
+const MOUNT = { spellId = 23229, name = "Swift Brown Steed", icon = 132261, duration = 0 }
+-- casts seen around a crowd (a cast bar on the plate when SuuUI shows them)
+const CASTS = { 2061, 133, 116, 331, 5185, 686 }
+
+export type Person = {
+    unit: mock.MockUnit,
+    name: string,
+    -- the frame it came (the person's name is told a few frames later)
+    came: number,
+    named: boolean,
+}
+
+--- A crowd: people coming into range (a new unit each), staying, leaving.
+export class Crowd
+    readonly people: Person[] = {}
+    rnd: (n: number) -> number
+    prefix: string
+    -- share of other-faction (hostile) players, in percent
+    hostile: number
+    -- share of creatures (NPCs, pets), in percent
+    creatures: number
+    seen: number = 0
+    frame: number = 0
+
+    constructor(opts: { seed: number, prefix: string, hostile?: number, creatures?: number })
+        self.rnd = perf.random(opts.seed)
+        self.prefix = opts.prefix
+        self.hostile = opts.hostile or 0
+        self.creatures = opts.creatures or 0
+    end
+
+    --- Someone new comes into range: a player (its name told a few frames
+    --- later, as the game's name query answers) with a buff or two, or a
+    --- creature; its plate appears.
+    function Arrive(): Person
+        local rnd = self.rnd
+        self.seen += 1
+        local n = self.seen
+        local name = self.prefix .. n
+        local u: mock.MockUnit
+        if rnd(100) <= self.creatures then
+            local friendly = rnd(2) == 1
+            u = mock.spawnUnit({
+                name = name,
+                level = 50 + rnd(10),
+                reaction = friendly and "friendly" or "hostile",
+                creatureType = friendly and "Humanoid" or "Beast",
+                health = 3000,
+                healthMax = 3000,
+                distance = 10 + rnd(30),
+            })
+        else
+            local hostile = rnd(100) <= self.hostile
+            local races = hostile and HORDE or ALLIANCE
+            u = mock.spawnUnit({
+                name = "Unknown",
+                player = true,
+                class = CLASSES[rnd(#CLASSES)],
+                race = races[rnd(#races)],
+                level = 1 + rnd(60),
+                reaction = hostile and "hostile" or "friendly",
+                factionGroup = hostile and "Horde" or "Alliance",
+                pvp = hostile and rnd(3) == 1,
+                health = 2000 + rnd(3000),
+                healthMax = 5000,
+                distance = 10 + rnd(30),
+            })
+        end
+        local p: Person = { unit = u, name = name, came = self.frame, named = false }
+        self.people[#self.people + 1] = p
+        u:showNameplate()
+        return p
+    end
+
+    --- The one in range longest leaves (out of range, or logged out).
+    function LeaveOldest()
+        local p = table.remove(self.people, 1)
+        if p then
+            p.unit:hideNameplate()
+            p.unit:despawn()
+        end
+    end
+
+    --- Someone at random leaves.
+    function LeaveAny()
+        local n = #self.people
+        if n == 0 then
+            return
+        end
+        local p = table.remove(self.people, self.rnd(n))
+        if p then
+            p.unit:hideNameplate()
+            p.unit:despawn()
+        end
+    end
+
+    --- Someone in range, at random.
+    function Any(): mock.MockUnit?
+        local n = #self.people
+        if n == 0 then
+            return nil
+        end
+        return self.people[self.rnd(n)].unit
+    end
+
+    --- A frame of the crowd: names told for the newly seen (UNIT_NAME_UPDATE
+    --- 6 frames after they came, with their buffs: UNIT_AURA).
+    function Tick(frame: number)
+        self.frame = frame
+        for _, p in ipairs(self.people) do
+            if not p.named and frame - p.came >= 6 then
+                p.named = true
+                p.unit:setName(p.name)
+                local b = BUFFS[self.rnd(#BUFFS)]
+                p.unit:applyAura({ spellId = b.spellId, name = b.name, icon = b.icon, duration = b.duration })
+            end
+        end
+    end
+
+    --- Someone casts (a heal, a bolt, a hearthstone: UNIT_SPELLCAST_*).
+    function Cast()
+        local u = self:Any()
+        if u then
+            u:castSpell(CASTS[self.rnd(#CASTS)], { castTime = 1.5 })
+        end
+    end
+
+    --- Someone mounts (an aura: UNIT_AURA).
+    function Mount()
+        local u = self:Any()
+        if u then
+            u:applyAura({ spellId = MOUNT.spellId, name = MOUNT.name, icon = MOUNT.icon, duration = 0 })
+        end
+    end
+
+    --- The player's mouse runs over someone: UPDATE_MOUSEOVER_UNIT and its
+    --- tooltip (SuuUI's tooltip hooks).
+    function Hover()
+        local u = self:Any()
+        if u then
+            mock.player:mouseover(u)
+            mock.showTooltip("unit", { unit = "mouseover" })
+        end
+    end
+
+    --- Everyone leaves.
+    function Clear()
+        while #self.people > 0 do
+            self:LeaveOldest()
+        end
+    end
+end
+
+-- A message that isn't from Discord.
+export const NO_DISCORD = {
+    userID = 0,
+    globalName = "",
+    lastOnlineGUID = "",
+    lastOnlineName = "",
+    hasAttachment = false,
+    hasPoll = false,
+    hasEmbed = false,
+    hasSticker = false,
+    hasEmoji = false,
+    hasError = false,
+    hasForwardedMessage = false,
+    forwardedMessage = "",
+    fromDiscord = false,
+}
+
+-- What a crowded zone's channels say (the group finder's parser reads them).
+const CHANNEL_LINES = {
+    "LF2M Deadmines need tank and healer",
+    "LFG Wailing Caverns, mage 20",
+    "anyone know where the wolves are?",
+    "LFM Stockade 2 dps, then go",
+    "WTB linen cloth",
+    "where is the flight master",
+    "tank LF Ragefire Chasm",
+    "how do I get to Goldshire",
+    "lol the queue",
+    "LF1M SFK need heals",
+}
+
+--- One line in a crowded zone's General or LookingForGroup channel.
+export function channelLine(lineID: number, rnd: (n: number) -> number, zone: string)
+    local sender = "Talker" .. rnd(400)
+    local lfg = rnd(2) == 1
+    local channel = lfg and "4. LookingForGroup" or ("1. General - " .. zone)
+    local base = lfg and "LookingForGroup" or ("General - " .. zone)
+    mock.fireEvent(
+        "CHAT_MSG_CHANNEL",
+        CHANNEL_LINES[rnd(#CHANNEL_LINES)],
+        sender,
+        "",
+        channel,
+        sender,
+        "",
+        0,
+        lfg and 4 or 1,
+        base,
+        0,
+        lineID,
+        "",
+        0,
+        false,
+        false,
+        false,
+        false,
+        NO_DISCORD
+    )
+end
+
+--- SuuUI's own memory (KB) after a full collection: the addon's in a
+--- wowlua that measures it per addon (T610, after 0.13.9), the whole
+--- emulated client's before.
+export function addonKB(): number
+    collectgarbage("collect")
+    UpdateAddOnMemoryUsage()
+    return math.floor(GetAddOnMemoryUsage("SuuUI") + 0.5)
+end

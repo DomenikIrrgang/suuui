@@ -19,6 +19,14 @@ them.
 | `chat` | Trade, general, guild, say, whispers and system lines, twelve a second |
 | `windows` | The world map, character, spellbook, talents, collections and settings, opened twice |
 | `memory` | The size of SuuUI's data tables (QuestStarts, CollectionSources, …) |
+| `crowd` | A launch crowd in a starting zone: someone new in nameplate range every three frames (sixty in range, players with their names told a moment later and their buffs, some of the other faction, creatures and pets), casts, mounts, mouseover tooltips, target changes, General and LookingForGroup, two turns; then a hundred more within a second (more plates than the pool) |
+| `zone` | Running through a zone, questing: the place every frame, mobs and NPCs in and out of plate range, debuffs on their plates, mouseover tooltips, subzones (one indoors), quest log and watch updates, points of interest and vignettes, usability and range, a stop and a turn |
+| `city` | A busy city: a hundred players and NPCs, someone coming and going every five frames, casts and mounts, mouseover every quarter second, ten channel lines a second, into a building and out |
+| `ride` | Riding across zones mounted: a zone every 1.5 s, a subzone every half second, plates flashing past, then the dismount |
+| `churn` | The leak check: over 10,000 players seen (twelve new ones a frame, each its own GUID), the memory before, after 3,600 and after 10,800; then running on in a crowd |
+| `typing` | Typing a chat command: a lone / (the command palette lists every command), then key by key |
+| `combatend` | A raid fight's end with mouse bindings: someone joins and leaves in the fight, the bindings applied at its end |
+| `social` | A guild of two hundred and Battle.net friends coming and going, the windows closed |
 
 ## Run
 
@@ -101,3 +109,12 @@ isn't measured; every other one is a phase. Drive a phase with
 inside each frame, so what it fires lands in that frame. Keep a file's frames
 under 600 (the profiler keeps the newest 600), use `perf.random(seed)` for
 choices, and `perf.record(name, { kb = … })` for a memory figure.
+
+The open world's helpers are in `world.wowlua`: `Crowd` brings people and
+creatures into nameplate range and lets them go (each a new unit, its name
+told a few frames later, as the game's name query answers), and makes them
+cast, mount and catch the mouse; `channelLine` says a line in General or
+LookingForGroup; `addonKB` is SuuUI's own memory where wowlua measures it per
+addon (after 0.13.9; the whole client's before). A memory record that grows
+from one point of a scenario to the next (`churn`) is memory SuuUI keeps per
+player it has seen.

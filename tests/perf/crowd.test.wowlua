@@ -1,0 +1,125 @@
+-- Perf scenario: a launch crowd. A starting zone full of players running
+-- about: someone new comes into nameplate range every three frames and the
+-- one there longest leaves (sixty in range), each a player never seen
+-- before (its name told a few frames later, its buffs with it); some of the
+-- other faction, some creatures and pets among them. They cast and mount,
+-- the mouse runs over them (their tooltips), the target changes, the
+-- General and LookingForGroup channels talk, and the player runs on. Then a
+-- hundred more arrive within a second (more plates than the pool holds) and
+-- leave again.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+import * as world from "./world"
+
+config({ profile = "perf" })
+
+const ZONE = { mapID = 1429, zone = "Elwynn Forest", subZone = "Northshire Valley" }
+const IN_RANGE = 60
+
+local crowd = world.Crowd.new({ seed = 11, prefix = "Crowd", hostile = 15, creatures = 15 })
+local chatNo = 0
+
+-- The player runs on (7 yards a second, a zone some 3500 yards across) and
+-- turns around twice (the camera with it: the plates behind come into
+-- sight, those in front leave it).
+local facing = 0
+local function run(n: number)
+    if n >= 300 and n < 315 then
+        facing += math.pi / 15
+    elseif n >= 420 and n < 435 then
+        facing -= math.pi / 15
+    end
+    mock.moveTo({
+        mapID = ZONE.mapID,
+        zone = ZONE.zone,
+        subZone = ZONE.subZone,
+        x = 0.4 + n * 0.0000334,
+        y = 0.5,
+        facing = facing,
+    })
+end
+
+-- What happens around the player every frame, whatever the arrivals.
+local function life(n: number, rnd: (n: number) -> number)
+    crowd:Tick(n)
+    run(n)
+    if n % 4 == 0 then
+        crowd:Cast()
+    end
+    if n % 30 == 15 then
+        crowd:Mount()
+    end
+    if n % 20 == 10 then
+        crowd:Hover()
+    end
+    if n % 90 == 45 then
+        mock.player:target(crowd:Any())
+    end
+    -- the channels: six lines a second
+    if n % 10 == 0 or n % 10 == 5 then
+        chatNo += 1
+        world.channelLine(chatNo, rnd, ZONE.zone)
+    end
+end
+
+@if(features.perf)
+@test("setup: login, the crowd around")
+local function setup()
+    mock.moveTo({ mapID = ZONE.mapID, zone = ZONE.zone, subZone = ZONE.subZone, x = 0.4, y = 0.5 })
+    perf.settle(60)
+    perf.record("memory after login", { kb = perf.memoryKB() })
+    perf.record("addon memory after login", { kb = world.addonKB() })
+    -- the crowd already there (one a frame, while the pool fills)
+    perf.run(IN_RANGE, function(n: number)
+        crowd:Tick(n)
+        crowd:Arrive()
+    end)
+    perf.run(30, function(n: number)
+        crowd:Tick(IN_RANGE + n)
+    end)
+    mock.player:setMoving(true)
+end
+
+@if(features.perf)
+@test("launch crowd: players come and go")
+local function churn()
+    local rnd = perf.random(5)
+    perf.run(360, function(n: number)
+        life(100 + n, rnd)
+        -- someone new every 3 frames, the one longest here leaves
+        if n % 3 == 0 then
+            crowd:Arrive()
+            crowd:LeaveOldest()
+        end
+    end)
+end
+
+@if(features.perf)
+@test("a hundred more arrive and leave")
+local function wave()
+    local rnd = perf.random(6)
+    perf.run(180, function(n: number)
+        life(500 + n, rnd)
+        -- a hundred within 50 frames (two a frame), then they leave
+        if n <= 50 then
+            crowd:Arrive()
+            crowd:Arrive()
+        elseif n > 70 and #crowd.people > IN_RANGE then
+            crowd:LeaveOldest()
+            crowd:LeaveOldest()
+        end
+    end)
+end
+
+@if(features.perf)
+@test("setup: memory after the crowd")
+local function after()
+    mock.player:setMoving(false)
+    crowd:Clear()
+    perf.settle(30)
+    perf.record("memory after the crowd", { kb = perf.memoryKB() })
+    perf.record("addon memory after the crowd", { kb = world.addonKB() })
+end
