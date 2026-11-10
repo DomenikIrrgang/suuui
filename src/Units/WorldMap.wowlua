@@ -647,6 +647,8 @@ class QuestLook extends Frame
     readonly pin: MapPin
     hovered: boolean = false
     grow: number = 1
+    -- what it was last drawn as (StyleQuestPin)
+    drawnKey: string? = nil
 
     constructor(owner: Frame)
         super(nil, owner)
@@ -841,8 +843,22 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     -- The filters
     --------------------------------------------------------------------------------
 
+    -- (the saved filters read once for each saved table: the marks' minimap
+    -- asked on every update, 11 KB of tables each, 30 MB of SuuUI's garbage
+    -- in a 5-minute recording)
+    savedFor: unknown = nil
+    savedCache: FilterChoice? = nil
+    layersCache: Layers? = nil
+
     function Saved(): FilterChoice
-        local saved = self:Get("filters")
+        -- (the stored table itself, read only: a new one whenever it's set,
+        -- reset or another profile's)
+        local saved = self:Peek("filters")
+        local cached = self.savedCache
+        if cached and self.savedFor == saved then
+            return cached
+        end
+        self.savedFor, self.layersCache = saved, nil
         local owner: { [string]: string } = {}
         for _, g in ipairs(GROUPS) do
             for _, o in ipairs(g.options) do
@@ -875,12 +891,17 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
+        self.savedCache = out
         return out
     end
 
     -- on[group][value] from the saved filters
     function Layers(): Layers
         local saved = self:Saved()
+        local cached = self.layersCache
+        if cached then
+            return cached
+        end
         local function set(key: string): On
             local s: On = {}
             for _, v in ipairs(saved[key] or {}) do
@@ -888,7 +909,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             end
             return s
         end
-        return {
+        local layers: Layers = {
             quests = set("quests"),
             places = set("places"),
             services = set("services"),
@@ -898,12 +919,25 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             marks = set("marks"),
             skyborne = set("skyborne"),
         }
+        self.layersCache = layers
+        return layers
     end
 
-    -- The Marks filters, for the marks module's minimap too: { yours, shared }.
+    -- The Marks filters, for the marks module's minimap too: { yours, shared }
+    -- (the same table while the filters stay).
+    marksShown: MarkFilters? = nil
+    marksFor: Layers? = nil
+
     function MarksShown(): MarkFilters
-        local marks = self:Layers().marks
-        return { yours = marks.yours, shared = marks.shared }
+        local layers = self:Layers()
+        local shown = self.marksShown
+        if shown and self.marksFor == layers then
+            return shown
+        end
+        local marks = layers.marks
+        local made: MarkFilters = { yours = marks.yours, shared = marks.shared }
+        self.marksShown, self.marksFor = made, layers
+        return made
     end
 
     function MenuValue(): FilterChoice
@@ -2005,12 +2039,33 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         setArtAlpha(pin, 0)
         if kind == "disabled" then
             o:Hide()
+            o.drawnKey = nil
             return
         end
         o:Show()
         local tracked = flag(errors.tryMethod(pin, "IsSelected"))
         local highlight = frames.asRegion(field(pin, "HighlightTexture"))
         local lit = highlight ~= nil and highlight:IsShown()
+        local inLogNow = self.logPins[pin] == true
+        -- the same look as last time (the game calls its restyles often: 8,500
+        -- in a recording): only the size, which follows the zoom
+        local questIDNow = asNumber(field(pin, "questID"))
+        local key = kind ..
+            (tracked and "t" or "") ..
+                (lit and "l" or "") ..
+                    (inLogNow and "g" or "") ..
+                        (o.hovered and "h" or "") ..
+                            tostring(questIDNow) ..
+                                ":" ..
+                                    tostring(self:Get("pinAlpha")) ..
+                                        ((kind == "complete" and questIDNow ~= nil and isGroupQuest(questIDNow)) and
+                                            "G" or
+                                            "")
+        if o.drawnKey == key then
+            self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
+            return
+        end
+        o.drawnKey = key
         local data: MapPinData
         if kind == "complete" then
             -- a group quest to turn in: the arcane bar under it (design D)

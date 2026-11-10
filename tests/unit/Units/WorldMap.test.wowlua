@@ -260,6 +260,22 @@ local function defaults()
     expect(M:MarksShown()).toEqual({ yours = true, shared = true })
 end
 
+@test("the filters read once while they stay: the same tables; a change reads them again")
+local function filtersCached()
+    local on = M:Layers()
+    expect(M:Layers()).toBe(on)
+    expect(M:MarksShown()).toBe(M:MarksShown())
+    local value = M:MenuValue()
+    value.marks = { "yours" }
+    M:OnFilters(value)
+    local after = M:Layers()
+    expect(after ~= on).toBe(true)
+    expect(M:MarksShown()).toEqual({ yours = true })
+    M:ResetAll({ "filters" })
+    expect(M:MarksShown()).toEqual({ yours = true, shared = true })
+    expectNoErrors()
+end
+
 @test("an earlier layout's choices carried over: mailboxes and trainers moved, new options on once")
 local function carriedOver()
     M:Set("filters", { services = { "inn", "classTrainer", "trainers", "mail" }, quests = { "available" } })
@@ -925,6 +941,10 @@ local function questLooks()
     expect(lookOf(progress)).toBeShown()
     expect(progress.NormalTexture:GetAlpha()).toBe(0)
     expect(lookOf(progress).glow).never.toBeShown()
+    -- the same look again (the game restyles often): nothing drawn again
+    local data = mock.stub(lookOf(progress).pin, "SetData")
+    M:StyleQuestPin(progress)
+    expect(data).toHaveBeenCalledTimes(0)
     local turnIn = gamePin("QuestComplete")
     M:StyleQuestPin(turnIn)
     expect(lookOf(turnIn).glow).toBeShown()
