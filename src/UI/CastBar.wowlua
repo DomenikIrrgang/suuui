@@ -35,6 +35,7 @@ import * as secret from "wowlua:secret"
 import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
 import * as extend from "/Core/Extend"
 import debug from "/Core/Settings"
 import * as draw from "/UI/Draw"
@@ -323,15 +324,19 @@ local STOP: string[] = {
     "UNIT_SPELLCAST_CHANNEL_STOP",
 }
 
-local function onUnit(self: CastBar, event: string, fn: events.Listener)
-    local unit = self.unit
-    if not unit then
-        return
-    end
-    local ok = pcall(events.onUnit, event, unit, fn, self)
-    if not ok then
-        debug("CastBar: no event", event)
-    end
+-- What each of the unit's cast events does to the bar.
+local ON_EVENT: { [string]: string } = {
+    UNIT_SPELLCAST_INTERRUPTIBLE = "interruptible",
+    UNIT_SPELLCAST_NOT_INTERRUPTIBLE = "locked",
+}
+for _, e in ipairs(START) do
+    ON_EVENT[e] = "start"
+end
+for _, e in ipairs(CHANNEL) do
+    ON_EVENT[e] = "channel"
+end
+for _, e in ipairs(STOP) do
+    ON_EVENT[e] = "stop"
 end
 
 -- A plate's target line: "› name", or the "you" badge in the name's place.
@@ -420,6 +425,11 @@ export class CastBar extends Frame
     duration: LuaDurationObject? = nil
     spellName: (string | Secret<string>)? = nil
     active: boolean? = nil
+    -- the unit's cast events, on a frame of its own (Activate): a plate's bar
+    -- takes another unit with each plate laid, and ten subscriptions on the
+    -- bus a time (tables and closures each) were most of what a plate cost
+    -- in a crowd
+    unitEvents: Frame? = nil
 
     constructor(parent: Frame, unit: string, options: CastBarOptions?)
         local opts = options or {}
@@ -894,27 +904,7 @@ export class CastBar extends Frame
         end
         self.active = true
         interrupt.bars[self] = true
-        for _, e in ipairs(START) do
-            onUnit(self, e, function()
-                self:Start(false)
-            end)
-        end
-        for _, e in ipairs(CHANNEL) do
-            onUnit(self, e, function()
-                self:Start(true)
-            end)
-        end
-        for _, e in ipairs(STOP) do
-            onUnit(self, e, function()
-                self:Refresh()
-            end)
-        end
-        onUnit(self, "UNIT_SPELLCAST_INTERRUPTIBLE", function()
-            self:SetInterruptible(false)
-        end)
-        onUnit(self, "UNIT_SPELLCAST_NOT_INTERRUPTIBLE", function()
-            self:SetInterruptible(true)
-        end)
+        self:ListenUnit()
         if self.unit == "target" then
             events.onGame(
                 "PLAYER_TARGET_CHANGED",
@@ -949,8 +939,50 @@ export class CastBar extends Frame
         end
         self.active = false
         interrupt.bars[self] = nil
+        local f = self.unitEvents
+        if f then
+            f:UnregisterAllEvents()
+        end
         events.offAll(self)
         self:Stop()
+    end
+
+    -- Its unit's cast events (registered for that unit only).
+    function ListenUnit()
+        local u = self.unit
+        if not u then
+            return
+        end
+        local f = self.unitEvents
+        if not f then
+            local made = CreateFrame("Frame")
+            made:SetScript("OnEvent", function(_: Frame, event: string)
+                fault.call("CastBar", self.OnUnitEvent, self, event)
+            end)
+            self.unitEvents = made
+            f = made
+        end
+        f:UnregisterAllEvents()
+        for e in pairs(ON_EVENT) do
+            if not pcall(f.RegisterUnitEvent, f, e, u) then
+                debug("CastBar: no event", e)
+            end
+        end
+    end
+
+    function OnUnitEvent(event: string)
+        local what = ON_EVENT[event]
+        if what == "start" then
+            self:Start(false)
+        elseif what == "channel" then
+            self:Start(true)
+        elseif what == "stop" then
+            self:Refresh()
+        elseif what == "interruptible" then
+            self:SetInterruptible(false)
+        elseif what == "locked" then
+            self:SetInterruptible(true)
+        end
     end
 
     function SetUnit(unit: string?)
