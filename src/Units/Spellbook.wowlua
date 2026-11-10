@@ -935,11 +935,26 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
 
     -- force: also while the window is closed (out of combat), so the page and
     -- its buttons are ready before a fight: the buttons can't change in one.
+    -- Drawn now while the book shows; closed, drawn when it opens or as a
+    -- fight starts (each spell or pet change drew the closed book, 7-14 ms in
+    -- game, a level up among them).
+    stale: boolean = false
+
+    function RenderOrMark()
+        local book = self.book
+        if book and book:IsVisible() then
+            self:Render(true)
+        else
+            self.stale = true
+        end
+    end
+
     function Render(force: boolean?)
         local book = self.book
         if not book or not (force or book:IsVisible()) then
             return
         end
+        self.stale = false
         -- in combat: only the look of a school or page the router already points
         -- the buttons at (prepared out of combat)
         local combat = InCombatLockdown()
@@ -1805,7 +1820,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         for _, e in ipairs({ "SPELLS_CHANGED", "PLAYER_LEVEL_UP" }) do
             self:OnGameEvent(e, function()
                 if self.book then
-                    self:Render(true)
+                    self:RenderOrMark()
                 end
                 self:SayToTrain()
             end)
@@ -1849,7 +1864,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             if not self.book then
                 return
             end
-            if not self.prepared then
+            if not self.prepared or self.stale then
                 self:Render(true)
             end
             self:Place()
