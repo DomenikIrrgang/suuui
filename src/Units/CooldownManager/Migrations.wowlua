@@ -4,8 +4,9 @@
 -- registers them in this order (M:Migrate); tests call them directly.
 
 import type Values from "/Core/Settings"
+import type CooldownPreset from "/Data/Presets"
 import type Entry from "./Lists"
-import list, field from "wowlua:table"
+import list, field, copy from "wowlua:table"
 
 -- A stored table to change in place (a list, an entry, a setup), when `v`
 -- is one; nil otherwise.
@@ -161,4 +162,71 @@ export function shortBuffsWarn(values: Values)
             fix(field(lists, "buffs"), name)
         end
     end)
+end
+
+-- The presets' Racials collection (every race's active racials; only the
+-- ones you know show) goes at the end of Utility in this class's saved
+-- setups: a copy of the one in the preset the setup is based on, with the
+-- uid that preset's copies get, so "Based on …" counts no change. Nothing
+-- else in the lists changes. Left out: a setup that has a collection named
+-- Racials already, or whose preset isn't known; a racial the setup's
+-- cooldown lists already hold stays where it is, out of the copy. Run once
+-- per class (the profile may hold other classes' setups: theirs when one
+-- of them logs in).
+export function addRacials(values: Values, class: string, presets: CooldownPreset[])
+    local setups = tableOf(values.setups)
+    local bySpec = setups and tableOf(setups[class])
+    if not bySpec then
+        return
+    end
+    for _, s in pairs(bySpec) do
+        local setup = tableOf(s)
+        local lists = setup and tableOf(setup.lists)
+        local presetId = setup and setup.preset
+        local p: CooldownPreset? = nil
+        for _, x in ipairs(presets) do
+            if x.id == presetId then
+                p = x
+            end
+        end
+        local base: Entry? = nil
+        local uid = ""
+        for i, e in ipairs(p and p.lists.utility or {}) do
+            if e.collection and e.name == "Racials" then
+                base, uid = e, (p and p.id or "") .. "utility" .. i
+            end
+        end
+        -- what the setup has: a Racials collection, the cooldowns' names
+        local has, names = false, {} :: { [string]: boolean }
+        for _, key in ipairs({ "essential", "utility", "buffs", "debuffs", "procs" }) do
+            for _, raw in ipairs(list(lists and lists[key])) do
+                local e = entryOf(raw)
+                if e and e.collection and e.name == "Racials" then
+                    has = true
+                end
+                if e and (key == "essential" or key == "utility") then
+                    for _, x in ipairs(e.collection and list(e.entries) or { raw }) do
+                        local name = entryOf(x) and (x :: Entry).name
+                        if name then
+                            names[name] = true
+                        end
+                    end
+                end
+            end
+        end
+        if lists and base and not has then
+            local c: Entry = copy(base, { shared = false })
+            c.uid = uid
+            local kept: Entry[] = {}
+            for _, x in ipairs(c.entries or {}) do
+                if not names[x.name or ""] then
+                    kept[#kept + 1] = x
+                end
+            end
+            c.entries = kept
+            local utility = list(lists.utility)
+            utility[#utility + 1] = c
+            lists.utility = utility
+        end
+    end
 end

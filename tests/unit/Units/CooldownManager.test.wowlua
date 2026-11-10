@@ -451,7 +451,81 @@ local function cooldownRows()
     expect(contains(row(f, "Bloodrage").rank, "shows its effect")).toBe(true)
     mock.hover(overpower)
     mock.hover(nil)
-    expect(f.adds[1].newCollection).never.toBeShown() -- collections are for auras
+    expect(f.adds[1].newCollection).toBeShown() -- (the Racials are one)
+end
+
+@test("the Cooldowns/Auras switch: at the top of the lists, anchored anew on every refresh; it switches the lists")
+local function listSwitch()
+    local f = editor()
+    local tabs = f.tabs
+    expect(tabs).toBeShown()
+    expect(#tabs.buttons).toBe(2)
+    expect(tabs.value).toBe("cooldowns")
+    expect(math.abs((tabs:GetTop() or 0) - (f:GetTop() or 1)) < 0.01).toBe(true)
+    -- the heads start under it
+    expect((f.heads[1]:GetTop() or 0) <= (tabs:GetBottom() or 0)).toBe(true)
+    -- the game leaves a frame unplaced when what it hangs on resizes while
+    -- it's laid out (in the settings window: this editor's row); a refresh
+    -- anchors it again (it was anchored once and missing in game)
+    tabs:ClearAllPoints()
+    f:Refresh()
+    expect(tabs:GetNumPoints()).toBe(1)
+    local point, relativeTo = tabs:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(relativeTo).toBe(f)
+    expect(tabs:GetLeft()).never.toBeNil()
+    -- it switches between the spell lists and the aura lists
+    auras(f)
+    expect(f.tab).toBe("auras")
+    expect(f.heads[1].title:GetText()).toBe("Buffs on you")
+    expect(hasRow(f, "Overpower")).toBe(false)
+    click(tabs, "cooldowns")
+    expect(f.heads[1].title:GetText()).toBe("Essential")
+    expect(hasRow(f, "Overpower")).toBe(true)
+    expect(tabs:GetNumPoints()).toBe(1)
+    expectNoErrors()
+end
+
+@test("Utility ends with the Racials: a collection of every race's racial for the class, only the known ones learned")
+local function racialRows()
+    local f = editor()
+    local utility = listOf("utility")
+    local racials = assert(utility[#utility])
+    expect(racials.collection).toBe(true)
+    expect(racials.name).toBe("Racials")
+    local found: { [string]: boolean } = {}
+    for _, e in ipairs(inside(racials)) do
+        found[e.name or ""] = true
+    end
+    -- a warrior can be every race: all of them, and the Skyborne's
+    for _, n in ipairs({
+        "Perception",
+        "Stoneform",
+        "Shadowmeld",
+        "Escape Artist",
+        "Blood Fury",
+        "Will of the Forsaken",
+        "War Stomp",
+        "Berserking",
+        "Walk on Air",
+        "Read Leyline",
+        "Skysight",
+    }) do
+        expect(found[n]).toBe(true)
+    end
+    -- their buffs show on their icons while up
+    for _, e in ipairs(inside(racials)) do
+        if e.name == "Berserking" or e.name == "Blood Fury" or e.name == "Stoneform" then
+            expect(e.effect).toBe("you")
+        end
+    end
+    local coll = row(f, "Racials")
+    expect(coll.folder).toBeShown()
+    expect(contains(coll.rank, "collection · " .. #inside(racials))).toBe(true)
+    expect(contains(coll.rank, " learned")).toBe(true)
+    expect(hasRow(f, "Berserking")).toBe(true)
+    expect(row(f, "Cultivation").shown.value).toBe(false) -- (shipped hidden)
+    expectNoErrors()
 end
 
 @test("Auras: a collection open with its entries, a shared slot folded with its members' icons; folds toggle")

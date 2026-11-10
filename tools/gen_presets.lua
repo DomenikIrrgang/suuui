@@ -388,8 +388,9 @@ local function resolveSingle(entry, key, where, class)
              icon = haveIcons and iconID(class, ids) or nil }
 end
 
--- Any entry of a list: a collection (aura lists only, one level: its
--- entries are single entries and groups), a group, or a single entry.
+-- Any entry of a list: a collection (one level: its entries are single
+-- entries and groups; in a cooldown list cooldowns), a group, or a single
+-- entry.
 local ENCHANT_NAME = { main = "Main-hand enchant", off = "Off-hand enchant", ranged = "Ranged enchant" }
 local function resolveEntry(entry, key, where, class, inCollection)
     if type(entry) == "table" and entry.enchant then
@@ -407,11 +408,7 @@ local function resolveEntry(entry, key, where, class, inCollection)
             invalid[#invalid + 1] = cwhere .. ": a collection inside a collection"
             return nil
         end
-        if not AURA_LISTS[key] then
-            invalid[#invalid + 1] = cwhere .. ": collections go in buffs, debuffs or procs only"
-            return nil
-        end
-        local c = { collection = true, name = entry.collection, hidden = entry.hidden, entries = {},
+        local c ={ collection = true, name = entry.collection, hidden = entry.hidden, entries = {},
                     when = checkWhen(entry.when, cwhere, class) }
         for _, sub in ipairs(entry.entries or {}) do
             c.entries[#c.entries + 1] = resolveEntry(sub, key, cwhere, class, true)
@@ -501,8 +498,8 @@ for _, class in ipairs(classes) do
         for _, preset in ipairs(source[class]) do
             for _, key in ipairs({ "essential", "utility" }) do
                 for _, entry in ipairs(preset[key] or {}) do
-                    -- a group: each member (a collection here is reported
-                    -- as misplaced)
+                    -- a group: each member; a collection (the Racials:
+                    -- the race's, not the class's) isn't checked
                     local names = { type(entry) == "table" and entry[1] or entry }
                     if type(entry) == "table" and entry.collection then
                         names = {}
@@ -710,17 +707,23 @@ if not arg[1] then
             end
             -- cooldowns whose buff or debuff shows on their icon (Power Word:
             -- Shield is a priest cooldown, its shield an aura worth tracking)
-            for _, key in ipairs({ "essential", "utility" }) do
-                for _, e in ipairs(p.lists[key]) do
-                    local b = e.behaviour
-                    if b and b.effect then
-                        if e.group and not b.effectName then
-                            for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids, m.icon) end
-                        else
-                            note(class, b.effectName or e.name, b.effectIDs or e.ids, not b.effectName and e.icon or nil)
-                        end
+            -- (a collection's entries each)
+            local function effectOf(e)
+                if e.collection then
+                    for _, x in ipairs(e.entries or {}) do effectOf(x) end
+                    return
+                end
+                local b = e.behaviour
+                if b and b.effect then
+                    if e.group and not b.effectName then
+                        for _, m in ipairs(e.members or {}) do note(class, m.name, m.ids, m.icon) end
+                    else
+                        note(class, b.effectName or e.name, b.effectIDs or e.ids, not b.effectName and e.icon or nil)
                     end
                 end
+            end
+            for _, key in ipairs({ "essential", "utility" }) do
+                for _, e in ipairs(p.lists[key]) do effectOf(e) end
             end
         end
     end
