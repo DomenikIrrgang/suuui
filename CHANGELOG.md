@@ -4,7 +4,7 @@
 
 ### New
 
-- For plugin authors (API 0.29): `SuuUI.UI.SecureUnitFrames()` lists SuuUI's secure unit frames, the ones a click binding goes on.
+- For plugin authors (API 0.29): `SuuUI.UI.SecureUnitFrames()` lists SuuUI's secure unit frames, the ones a click binding goes on; the objective tracker draws only the quests whose rows change, with `t:QuestKey(quest)` and `t:Invalidate()`.
 
 ### Changed
 
@@ -21,6 +21,9 @@
 - A big guild or many Battle.net friends logging in and out no longer cost a hitch each time (the group finder's chat reading).
 - Less stutter while questing and running about: the objective tracker redraws only when what it shows changes, the action bars spread their updates over frames, your gear's wear waits for the character window to open, and hovering an NPC no longer rereads every quest you've turned in.
 - Warriors, rogues and hunters no longer make the "debuffs you can remove" icons on friendly nameplates, which they can't use.
+- The guild window no longer restyles itself while it's closed, and its member list restyles only what changed, a little each frame, instead of every row at once.
+- Using an item or casting with the bags open only updates the cooldown swipes, not every slot.
+- Aura icons on nameplates and frames are drawn when first shown instead of all up front, so new nameplates no longer hitch, and the objective tracker redraws only the quest that changed.
 
 ## 0.6.29 (2026-11-09)
 
