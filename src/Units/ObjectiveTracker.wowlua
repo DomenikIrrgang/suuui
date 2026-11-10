@@ -270,9 +270,19 @@ local function keyOf(v: unknown, out: string[])
     end
 end
 
-export function drawnKey(quests: unknown, recipes: unknown, ...: unknown): string
+export function drawnKey(tracker: ObjectiveTracker, quests: Quest[], recipes: unknown, ...: unknown): string
     local out: string[] = {}
-    keyOf(quests, out)
+    -- (the quests by what their rows show, and what places them: cheaper than
+    -- walking each table)
+    for _, q in ipairs(quests) do
+        local item = q.item
+        out[#out + 1] = q.questID ..
+            "\3" ..
+                (q.zone or "") ..
+                    "\3" ..
+                        tracker:QuestKey(q :: TrackerQuest) ..
+                            "\3" .. (item and (item.link .. "\3" .. item.charges) or "")
+    end
     keyOf(recipes, out)
     for i = 1, select("#", ...) do
         out[#out + 1] = "|"
@@ -1065,12 +1075,16 @@ class ObjectiveTrackerModule extends Module<typeof(DEFAULTS)>
         -- list, so they scroll together within the tracker's height (asked for
         -- in game: a block of their own sat too low on the screen)
         local recipes = self:TrackedRecipes()
-        local sig = drawnKey(quests, recipes, freeze, self:Get("recipesCollapsed"), combat)
+        local sig = drawnKey(tracker, quests, recipes, freeze, self:Get("recipesCollapsed"), combat)
         if quiet and sig == self.drawnSig then
             self.quests = quests
             return
         end
         self.drawnSig = sig
+        -- (a refresh of its own, a setting's or a theme's: every row again)
+        if not quiet then
+            tracker:Invalidate()
+        end
         tracker:SetRecipes(
             recipes,
             self:Get("recipesCollapsed"),

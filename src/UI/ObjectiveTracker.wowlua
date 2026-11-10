@@ -105,6 +105,30 @@ export type TrackerQuest = {
     recipe?: boolean,
 }
 
+-- What a quest's row shows, as one string: a row drawn with the same is
+-- left as it is (each redraw drew every quest: 3-4 ms in game, while only
+-- the one you made progress on changed).
+export function questKey(q: TrackerQuest): string
+    local parts: string[] = {
+        q.title or "",
+        q.color or "",
+        q.difficulty or "",
+        tostring(q.icon or ""),
+        q.count or "",
+        q.complete and "c" or "",
+        q.failed and "f" or "",
+        q.turnIn or "",
+    }
+    local item = q.item
+    if item then
+        parts[#parts + 1] = (item.preview and "p" or "") .. tostring(item.icon or "")
+    end
+    for _, o in ipairs(q.objectives or {}) do
+        parts[#parts + 1] = (o.text or "") .. "\1" .. (o.progress or "") .. (o.done and "\1d" or "")
+    end
+    return table.concat(parts, "\2")
+end
+
 export type ObjectiveTrackerOptions = {
     name?: string,
     width?: number,
@@ -172,6 +196,11 @@ export class QuestRow extends Button
     top: number = 0
     height: number = 0
     inUse: boolean = false
+    -- what it was last drawn with (questKey), at which width, and the height
+    -- that gave: drawn again only when one of them changes
+    drawnKey: string? = nil
+    drawnWidth: number = 0
+    drawnHeight: number = 0
 
     constructor(t: ObjectiveTracker)
         super(nil, t.list)
@@ -517,6 +546,19 @@ export class ObjectiveTracker extends Frame
         return y
     end
 
+    -- What a quest's row shows, as one string (questKey).
+    function QuestKey(q: TrackerQuest): string
+        return questKey(q)
+    end
+
+    -- Every quest drawn again on the next SetQuests (a theme, a font, a
+    -- setting changed what the same quest looks like).
+    function Invalidate()
+        for _, r in ipairs(self.rows) do
+            r.drawnKey = nil
+        end
+    end
+
     -- The recipes section (shown after the quests): t:SetRecipes(list, collapsed, meta)
     function SetRecipes(list: TrackerQuest[]?, collapsed: unknown, meta: string?)
         self.recipes = list or {}
@@ -641,6 +683,7 @@ export class ObjectiveTracker extends Frame
                 local rcp = assert(byRecipe[recipe])
                 rcp.recipe = true
                 local h = self:DrawQuest(r, rcp)
+                r.drawnKey = nil
                 if prev == "quest" then
                     y = y + S["space-4"]
                 elseif prev == "section" then
@@ -655,7 +698,18 @@ export class ObjectiveTracker extends Frame
                 local r = self.rows[nQuest] or QuestRow.new(self)
                 self.rows[nQuest] = r
                 local q = byID[id]
-                local h = q and self:DrawQuest(r, q) or 0
+                local h = 0
+                if q then
+                    -- (a quest drawn as it is in this row already: only placed)
+                    local key = questKey(q)
+                    if r.drawnKey == key and r.drawnWidth == width then
+                        r.quest = q
+                        h = r.drawnHeight
+                    else
+                        h = self:DrawQuest(r, q)
+                        r.drawnKey, r.drawnWidth, r.drawnHeight = key, width, h
+                    end
+                end
                 if freeze then
                     h = math.max(h, self.heights[id] or 0)
                 end
