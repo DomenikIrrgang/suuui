@@ -111,7 +111,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V40](#v40) | VM | low | open | `SelectTrainerService` sends no `TRAINER_DESCRIPTION_UPDATE` |
 | [V41](#v41) | VM | medium | open | No pet trainer (Beast Training) |
 | [V42](#v42) | VM | medium | open | The auction house's browse ignores categories, levels, filters and sorts |
-| [V43](#v43) | VM | low | open | *Unverified:* `wowlua screenshot` doesn't draw SuuUI's auction house window |
+| [V43](#v43) | VM | medium | open | `mock.advanceTime` doesn't move animations: a window's fade-in stays at its start (the auction house looked undrawn) |
 
 ## Test runner and mock issues
 
@@ -897,11 +897,11 @@ Blizzard's trainer frame takes up a new selection in `TRAINER_DESCRIPTION_UPDATE
 
 <a id="v43"></a>
 
-### V43. *Unverified:* `wowlua screenshot` doesn't draw SuuUI's auction house window
+### V43. `mock.advanceTime` doesn't move animations: a window's fade-in stays at its start
 
 *Status: open (0.13.9).*
 
-A test that leaves the window open (shown, visible, alpha 1, at its place on screen, the house still open when the next test starts) gets a screenshot without it; the bags opened with it are drawn, and so is SuuUI's welcome window. (units-trade)
+The auction house window seemed missing from a screenshot: it is drawn, at its `motion.enter` fade's first frame (alpha about 0). Its group (0.12 s) still plays a second later: `mock.advanceTime(0.5)` leaves its progress at 0, three `mock.advanceFrames` take it to 0.42. The engine moves animations by each frame's own milliseconds only (`animations::tick` in `advance_frames`), so the time `advanceTime` passes never reaches them; in the game an animation follows the clock (a long frame jumps it ahead). Lua's `GetAlpha` says 1 all along (the animation's alpha is the renderer's). (units-trade)
 
 ## Not bugs (for test writers)
 
