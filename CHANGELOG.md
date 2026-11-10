@@ -19,6 +19,8 @@
 - Typing `/` in chat no longer freezes the game for a moment: the command list shows its first rows at once and the rest right after.
 - The end of a fight in a group with mouse bindings no longer hitches (up to 40 ms before), nor does a raid's roster changing during a fight.
 - A big guild or many Battle.net friends logging in and out no longer cost a hitch each time (the group finder's chat reading).
+- Less stutter while questing and running about: the objective tracker redraws only when what it shows changes, the action bars spread their updates over frames, your gear's wear waits for the character window to open, and hovering an NPC no longer rereads every quest you've turned in.
+- Warriors, rogues and hunters no longer make the "debuffs you can remove" icons on friendly nameplates, which they can't use.
 
 ## 0.6.29 (2026-11-09)
 
