@@ -645,62 +645,38 @@ type PetSpell = {
     on?: boolean,
 }
 
--- A hunter's pet's book (the engine has no pet bank: the game's answers,
--- faked); `spells` nil: no pet. Returns the book and the book's autocast
--- toggle's spy: forbidden to addons on Forever (found in game), it fails
--- when called.
+-- A hunter's pet (a wolf) with `spells` in its book, the engine's pet bank
+-- (`mock.setPet`'s spells; faking the game's answers tainted Blizzard's
+-- spellbook and pet bar); `spells` nil: no pet. Returns the book's
+-- spells and a spy on the book's autocast toggle: forbidden to addons on
+-- Forever (found in game; the engine refuses it, which fails the test).
 type PetBook = { spells: PetSpell[]? }
 local function fakePet(spells: PetSpell[]?): (PetBook, (...unknown) -> ...unknown)
     local pet: PetBook = { spells = spells }
-    local realInfo, realAuto = C_SpellBook.GetSpellBookItemInfo, C_SpellBook.GetSpellBookItemAutoCast
-    local function spell(slot: number, bank: unknown): PetSpell?
-        local list = pet.spells
-        return bank == Enum.SpellBookSpellBank.Pet and list and list[slot] or nil
-    end
-    mock.fake("C_SpellBook.HasPetSpells", function(): (number?, string?)
-        local list = pet.spells
-        if list and #list > 0 then
-            return #list, "PET"
-        end
-        return nil, nil
-    end)
-    mock.fake("PetHasSpellbook", function(): boolean
-        return pet.spells ~= nil
-    end)
-    mock.fake("C_SpellBook.GetSpellBookItemInfo", function(slot: number, bank: SpellBookSpellBank): unknown
-        if bank ~= Enum.SpellBookSpellBank.Pet then
-            return realInfo(slot, bank)
-        end
-        local s = spell(slot, bank)
-        return s and
-            {
-                itemType = Enum.SpellBookItemType.PetAction,
+    if spells then
+        local bank: mock.PetSpell[] = {}
+        for i, s in ipairs(spells) do
+            bank[i] = {
+                spell = s.spellID,
                 name = s.name,
-                spellID = s.spellID,
-                iconID = s.icon,
-                subName = s.sub or "",
-                isPassive = s.passive == true,
-            } or
-            nil
-    end)
-    mock.fake("C_SpellBook.GetSpellBookItemAutoCast", function(
-        slot: number,
-        bank: SpellBookSpellBank
-    ): (boolean?, boolean?)
-        if bank ~= Enum.SpellBookSpellBank.Pet then
-            return realAuto(slot, bank)
+                subName = s.sub,
+                icon = s.icon,
+                passive = s.passive == true,
+                autocast = s.auto and s.on == true or nil,
+                autocastAllowed = s.auto == true,
+            }
         end
-        local s = spell(slot, bank)
-        if not s then
-            return nil, nil
-        end
-        return s.auto == true, s.on == true
+        local unit = petUnit or mock.spawnUnit({ name = "Wolf", level = 10, reaction = "friendly" })
+        petUnit = unit
+        mock.setPet(unit, { hunter = true, spells = bank })
+        mock.advanceFrames(1)
+    end
+    local toggle = mock.spy()
+    hooksecurefunc(C_SpellBook, "ToggleSpellBookItemAutoCast", function(...: unknown)
+        toggle(...)
     end)
-    local toggle = mock.fake("C_SpellBook.ToggleSpellBookItemAutoCast", function(_: number, _: SpellBookSpellBank)
-        error("Forbidden: ToggleSpellBookItemAutoCast()")
-    end)
-    mock.fake("C_SpellBook.SetSpellBookItemAutoCastEnabled", function(_: number, _: SpellBookSpellBank, _: boolean)
-        error("Forbidden: SetSpellBookItemAutoCastEnabled()")
+    hooksecurefunc(C_SpellBook, "SetSpellBookItemAutoCastEnabled", function(...: unknown)
+        toggle(...)
     end)
     return pet, toggle
 end
@@ -817,10 +793,8 @@ local function petAutocast()
     -- Growl on no slot, the passive: a right click does nothing
     expect(rightClick(2)).toBe("")
     expect(rightClick(3)).toBe("")
-    -- right clicked: no menu, nothing of the book's; the macro's /click
-    -- (the engine runs no /click from a macro: here as /click does it, the
-    -- button clicked with the right button) has the game's pet bar button
-    -- turn it, as SuuUI's own pet bar does
+    -- right clicked: no menu, nothing of the book's; the macro's /click has
+    -- the game's pet bar button turn it, as SuuUI's own pet bar does
     local turned: unknown[] = {}
     hooksecurefunc("TogglePetAutocast", function(slot: unknown)
         turned[#turned + 1] = slot
@@ -828,7 +802,6 @@ local function petAutocast()
     for i = 1, 3 do
         mock.click(cells[i].button, "RightButton")
     end
-    button("PetActionButton4"):Click("RightButton")
     expect(turned).toEqual({ 4 })
     -- the page shows it (the bar's word for it, PET_BAR_UPDATE)
     expect((cells[1].sub:GetText() or ""):find("Autocast off", 1, true) ~= nil).toBe(true)
@@ -838,7 +811,6 @@ local function petAutocast()
     mock.advanceFrames(1)
     mock.click(cells[1].button, "RightButton")
     expect(rightClick(1)).toBe("/click PetActionButton4 RightButton")
-    button("PetActionButton4"):Click("RightButton")
     expect(turned).toEqual({ 4, 4 })
     expect((cells[1].sub:GetText() or ""):find("Autocast on", 1, true) ~= nil).toBe(true)
     expect(toggle).toHaveBeenCalledTimes(0)
@@ -938,21 +910,20 @@ end
 
 @test("the pet gone: its school goes; in a fight it waits for the end (the tabs are secure)")
 local function petGone()
-    local pet = fakePet(wolf())
+    fakePet(wolf())
     open()
     expect(petTab() ~= nil).toBe(true)
-    pet.spells = nil
-    mock.fireEvent("UNIT_PET", "player")
+    mock.setPet(nil)
+    mock.advanceFrames(1)
     expect(petTab()).toBeNil()
     -- back, then gone in a fight: there till it ends, its page empty
-    pet.spells = wolf()
-    mock.fireEvent("UNIT_PET", "player")
+    fakePet(wolf())
     local i = assert(petTab())
     assert(book().onSchool)(i)
     mock.player:enterCombat()
     mock.advanceFrames(1)
-    pet.spells = nil
-    mock.fireEvent("UNIT_PET", "player")
+    mock.setPet(nil)
+    mock.advanceFrames(1)
     expect(petTab()).toBe(i)
     expect(#cellTexts()).toBe(0)
     expect(M.renderAfterCombat).toBe(true)
