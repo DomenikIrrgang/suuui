@@ -1,8 +1,8 @@
 -- Units/MouseBindings: spells on keys, clicks and the wheel cast on the
 -- unit under the mouse. The inputs as a person reads them; what a binding
 -- comes to (movement keys refused, another spell's input and the frames'
--- Target's and Menu's clicks offered to move, Cmd clicks in the world
--- only); the unit frames' Target and Menu clicks moved, swapped, per tree; the
+-- Target's and Menu's clicks offered to move); the unit frames' Target and
+-- Menu clicks moved, swapped, per tree; a Cmd click on a unit frame; the
 -- secure part end to end: a key over a unit in the world and over a unit
 -- frame, a click on a frame, friends and enemies apart, combat waiting.
 --
@@ -13,7 +13,7 @@ import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
-import internal M, inputText, chipText, clickPrefix, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
+import internal M, inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
 import type Bind from "/Units/MouseBindings"
 import expectNoErrors from "../../helpers"
 
@@ -118,24 +118,30 @@ local function ranksOnce()
     expect(reads).toHaveBeenCalledTimes(2)
 end
 
-@test("a click's prefix on unit frames: Alt, Ctrl, Shift in the secure buttons' order; none with Cmd")
+@test("a click's attributes on unit frames: Alt, Ctrl, Shift in the secure buttons' order; Cmd a renamed button")
 local function prefixes()
     expect(clickPrefix("ALT-SHIFT-BUTTON1")).toBe("alt-shift-")
     expect(clickPrefix("CTRL-BUTTON2")).toBe("ctrl-")
     expect(clickPrefix("BUTTON1")).toBe("")
-    expect(clickPrefix("META-BUTTON1")).toBe(nil)
+    expect(clickSuffix("SHIFT-BUTTON3")).toBe("3")
+    -- Cmd: not a prefix the secure buttons know; the frame's wrap renames it
+    expect(clickPrefix("META-SHIFT-BUTTON1")).toBe("shift-")
+    expect(clickSuffix("META-SHIFT-BUTTON1")).toBe("-cmd-LeftButton")
+    expect(clickSuffix("META-BUTTON2")).toBe("-cmd-RightButton")
+    expect(cmdMark("ALT-META-BUTTON4")).toBe("suuui-cmd-alt-Button4")
+    expect(cmdMark("SHIFT-BUTTON1")).toBe(nil)
     expect(isPlainClick("BUTTON1")).toBe(true)
     expect(isPlainClick("SHIFT-BUTTON1")).toBe(false)
     expect(isPlainClick("BUTTON3")).toBe(false)
 end
 
-@test("where an input works: plain Left and Right on frames only, a Cmd click in the world only")
+@test("where an input works: plain Left and Right on frames only; a Cmd click anywhere")
 @cases({
     { "SHIFT-F", "both", "both" },
     { "BUTTON1", "both", "frames" },
     { "BUTTON1", "world", nil },
-    { "META-BUTTON1", "both", "world" },
-    { "META-BUTTON1", "frames", nil },
+    { "META-BUTTON1", "both", "both" },
+    { "META-BUTTON1", "frames", "frames" },
     { "SHIFT-BUTTON1", "world", "world" },
     { "MOUSEWHEELUP", "frames", "frames" },
 })
@@ -198,15 +204,17 @@ local function plainClicks()
     expect(menu.ask and menu.ask.move).toBe("menu")
 end
 
-@test("a click for Target or Menu: a mouse button with Shift, Ctrl or Alt; the other's click swapped; a spell's taken")
+@test(
+    "a click for Target or Menu: a mouse button with Shift, Ctrl, Alt or Cmd; the other's click swapped; a spell's taken"
+)
 local function clickVerdicts()
     local clicks = { target = "BUTTON1", menu = "BUTTON2" }
     local key = judgeClick({}, clicks, "target", "SHIFT-F")
     expect(key.refuse).toBe("Shift-F isn't a mouse click")
-    expect(key.refuseDetail).toBe("Target takes a mouse button, with Shift, Ctrl or Alt.")
+    expect(key.refuseDetail).toBe("Target takes a mouse button, with Shift, Ctrl, Alt or Cmd.")
     expect(judgeClick({}, clicks, "target", "MOUSEWHEELUP").refuse).toBe("Wheel up isn't a mouse click")
     local cmd = judgeClick({}, clicks, "menu", "META-BUTTON2")
-    expect(cmd.refuse).toBe("Cmd-Right click can't work there")
+    expect(cmd.refuse).toBe(nil)
     -- the other's click: swapped
     local swap = judgeClick({}, clicks, "target", "BUTTON2")
     expect(swap.swap).toBe(true)
@@ -589,4 +597,25 @@ local function moveForSpell()
     expect(said).toBe("Right click → " .. name)
     expect(M:Clicks().menu).toBe("CTRL-BUTTON2")
     expect(#M:Binds()).toBe(2)
+end
+
+@test(
+    "a Cmd click on a unit frame: its spell's and Target's attributes on the renamed click, marked for the frame's wrap"
+)
+local function cmdClick()
+    local name, id = known()
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    M:Add(bind("META-BUTTON1", name, id), nil)
+    expect(player:GetAttribute("type-cmd-LeftButton")).toBe("spell")
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe("1")
+    M:SetClick("target", "META-SHIFT-BUTTON2")
+    expect(player:GetAttribute("shift-type-cmd-RightButton")).toBe("target")
+    expect(player:GetAttribute("suuui-cmd-shift-RightButton")).toBe("1")
+    -- gone again: the marks too
+    M:SetClick("target", "BUTTON1")
+    M:Store().specs = {}
+    M:Apply()
+    expect(player:GetAttribute("suuui-cmd-LeftButton")).toBe(nil)
+    expect(player:GetAttribute("suuui-cmd-shift-RightButton")).toBe(nil)
+    expect(player:GetAttribute("*type1")).toBe("target")
 end

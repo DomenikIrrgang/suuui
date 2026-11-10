@@ -12,7 +12,11 @@
 -- game's own. Clicks on a unit frame go to the frame, not to bindings: a
 -- click bound on frames is the frame's own click attribute (shift-type1, …).
 -- The secure buttons know Alt, Ctrl and Shift as click prefixes, not Cmd: a
--- Cmd click works in the world only.
+-- Cmd click bound on frames is renamed by a secure wrap of the frame's
+-- OnClick ("cmd-LeftButton", its attributes "type-cmd-LeftButton", …); the
+-- restricted code sees Cmd through [mod:meta] (probed in game 2026-11-10:
+-- SecureCmdOptionParse("[mod:meta] meta; none") answers "meta" with Cmd held,
+-- "none" with Shift or nothing).
 --
 -- Kept per character and per spec (the talent tree with the most points;
 -- before any, the last one you had, and the first tree you pick takes what
@@ -180,14 +184,34 @@ export function chipText(b: Bind): string
 end
 
 -- A click's attribute prefix on a unit frame ("ALT-SHIFT-BUTTON1" →
--- "alt-shift-"; the secure buttons' own order), or nil with Cmd (they don't
--- know it).
-export function clickPrefix(input: string): string?
+-- "alt-shift-"; the secure buttons' own order; Cmd isn't one: see
+-- clickSuffix).
+export function clickPrefix(input: string): string
     local mods = parseInput(input)
-    if mods.META then
+    return (mods.ALT and "alt-" or "") .. (mods.CTRL and "ctrl-" or "") .. (mods.SHIFT and "shift-" or "")
+end
+
+-- The secure buttons' names of the mouse buttons.
+local BUTTON_NAMES = { "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5" }
+
+-- A click's attribute suffix on a unit frame: its button's number ("1"), or
+-- with Cmd the button the frame's wrap renames it to ("-cmd-LeftButton").
+export function clickSuffix(input: string): string
+    local m = mouseButton(input) or 1
+    if parseInput(input).META then
+        return "-cmd-" .. (BUTTON_NAMES[m] or ("Button" .. m))
+    end
+    return tostring(m)
+end
+
+-- The attribute that tells a unit frame's wrap to rename a Cmd click (none
+-- without Cmd): "suuui-cmd-shift-LeftButton".
+export function cmdMark(input: string): string?
+    if not parseInput(input).META then
         return nil
     end
-    return (mods.ALT and "alt-" or "") .. (mods.CTRL and "ctrl-" or "") .. (mods.SHIFT and "shift-" or "")
+    local m = mouseButton(input) or 1
+    return "suuui-cmd-" .. clickPrefix(input) .. (BUTTON_NAMES[m] or ("Button" .. m))
 end
 
 -- Plain Left or Right click (no modifier): the camera's and the game's in
@@ -198,10 +222,9 @@ export function isPlainClick(input: string): boolean
 end
 
 -- Where an input can work: a plain Left or Right click on frames only (in
--- the world they're the camera's and the game's), a Cmd click in the world
--- only.
+-- the world they're the camera's and the game's).
 export function reachFor(input: string, wanted: Reach): Reach?
-    local frames = not (mouseButton(input) ~= nil and clickPrefix(input) == nil)
+    local frames = true
     local world = not isPlainClick(input)
     if wanted == "both" then
         return (frames and world) and "both" or frames and "frames" or world and "world" or nil
@@ -304,15 +327,12 @@ export function judge(binds: Bind[], b: Bind, editing: Bind?, clicksArg: Clicks?
     local reach = reachFor(b.input, b.reach)
     if not reach then
         v.refuse = name .. " can't work there"
-        v.refuseDetail = isPlainClick(b.input) and
-            "In the world it moves the camera and acts on what you click. Bind it on unit frames." or
-            "Unit frames know Shift, Ctrl and Alt clicks, not Cmd. Bind it in the world."
+        v.refuseDetail = "In the world it moves the camera and acts on what you click. Bind it on unit frames."
         return v
     end
     v.reach = reach
     if reach ~= b.reach then
-        v.info[#v.info + 1] = reach == "frames" and (name .. " works on unit frames only.") or
-            (name .. " works in the world only: unit frames don't know Cmd clicks.")
+        v.info[#v.info + 1] = name .. " works on unit frames only."
     end
     -- taken by another spell: asked first
     v.takes = takenBy(binds, b, editing)
@@ -357,8 +377,8 @@ export function judge(binds: Bind[], b: Bind, editing: Bind?, clicksArg: Clicks?
 end
 
 -- What giving the frames' Target or Menu click `input` comes to: refused
--- (a key, the wheel, a Cmd click: the frames know mouse buttons with
--- Shift, Ctrl and Alt), asked first (the other action's click: swapped; a
+-- (a key, the wheel: the frames know mouse buttons, with Shift, Ctrl, Alt
+-- and Cmd), asked first (the other action's click: swapped; a
 -- spell's click on frames: taken, the spell kept in the world where it can
 -- be), what it says besides, and the spell bindings it takes.
 export type ClickVerdict = {
@@ -376,12 +396,7 @@ export function judgeClick(binds: Bind[], clicks: Clicks, kind: ClickKind, input
     local action = CLICK_ACTIONS[kind]
     if not mouseButton(input) then
         v.refuse = name .. " isn't a mouse click"
-        v.refuseDetail = action.name .. " takes a mouse button, with Shift, Ctrl or Alt."
-        return v
-    end
-    if not clickPrefix(input) then
-        v.refuse = name .. " can't work there"
-        v.refuseDetail = "Unit frames know Shift, Ctrl and Alt clicks, not Cmd."
+        v.refuseDetail = action.name .. " takes a mouse button, with Shift, Ctrl, Alt or Cmd."
         return v
     end
     local current = clicks[kind]
@@ -1247,8 +1262,8 @@ class ClickBox
             self.areaTop:SetValue("Click in here")
             self.areaTop:SetColor("arcane")
             self.areaBottom:SetValue(
-                input and "Shift, Ctrl and Alt combine · Esc keeps " .. inputText(input) or
-                    "Shift, Ctrl and Alt combine · Esc cancels"
+                input and "Shift, Ctrl, Alt and Cmd combine · Esc keeps " .. inputText(input) or
+                    "Shift, Ctrl, Alt and Cmd combine · Esc cancels"
             )
         else
             UI.PaintFill(self.areaFill, "surface-raised")
@@ -2123,10 +2138,10 @@ export class MouseBindingsModule extends Module<{}>
                         if f:GetAttribute(action.wild) == action.value then
                             set(action.wild, nil)
                         end
-                        local prefix = clickPrefix(input)
-                        local m = mouseButton(input)
-                        if prefix and m then
-                            set(prefix .. "type" .. m, action.value)
+                        set(clickPrefix(input) .. "type" .. clickSuffix(input), action.value)
+                        local mark = cmdMark(input)
+                        if mark then
+                            set(mark, "1")
                         end
                     end
                 end
@@ -2166,15 +2181,18 @@ export class MouseBindingsModule extends Module<{}>
             if fAny or fHelp or fHarm then
                 local m = mouseButton(input)
                 if m then
-                    local prefix = clickPrefix(input)
-                    if prefix then
-                        for _, f in ipairs(frames) do
-                            local names = self.frameAttrs[f] or {}
-                            self.frameAttrs[f] = names
-                            for _, kv in ipairs(castAttributes(prefix, tostring(m), n, fAny, fHelp, fHarm)) do
-                                f:SetAttribute(kv[1] :: string, kv[2])
-                                names[#names + 1] = kv[1] :: string
-                            end
+                    local prefix, suffix, mark = clickPrefix(input), clickSuffix(input), cmdMark(input)
+                    for _, f in ipairs(frames) do
+                        local names = self.frameAttrs[f] or {}
+                        self.frameAttrs[f] = names
+                        for _, kv in ipairs(castAttributes(prefix, suffix, n, fAny, fHelp, fHarm)) do
+                            f:SetAttribute(kv[1] :: string, kv[2])
+                            names[#names + 1] = kv[1] :: string
+                        end
+                        -- a Cmd click: the frame's wrap renames it
+                        if mark then
+                            f:SetAttribute(mark, "1")
+                            names[#names + 1] = mark
                         end
                     end
                 else
@@ -2206,6 +2224,18 @@ export class MouseBindingsModule extends Module<{}>
                 ]=])
                 SecureHandlerWrapScript(f, "OnLeave", owner, [=[
                     owner:SetAttribute("state-frame", "off")
+                ]=])
+                -- a Cmd click with something bound: renamed ("cmd-LeftButton"),
+                -- so the frame's attributes for it answer (the secure buttons'
+                -- prefixes don't know Cmd)
+                SecureHandlerWrapScript(f, "OnClick", owner, [=[
+                    if SecureCmdOptionParse("[mod:meta] 1") then
+                        local p = (IsAltKeyDown() and "alt-" or "") .. (IsControlKeyDown() and "ctrl-" or "") ..
+                            (IsShiftKeyDown() and "shift-" or "")
+                        if self:GetAttribute("suuui-cmd-" .. p .. button) then
+                            return "cmd-" .. button
+                        end
+                    end
                 ]=])
             end
         end
