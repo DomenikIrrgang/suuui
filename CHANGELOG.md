@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### New
+
+- Auction house: the categories open into the game's own subcategories, down to an armour type's slots (Armor › Plate › Head), as in the game's list, and scroll when they are long.
+- Auction house: a Required level range in the Filter menu, with the other filters (Enter in it searches).
+- Auction house: click a column's header (Name, Item level, Available, Lowest price) to sort the results by it, and again to reverse the order.
+- For plugin authors (API 0.31): FilterMenu's `range` groups (a minimum and a maximum), its `onSubmit`, and `SuuUI.UI.FilterRange(choice)`.
+
 ### Fixed
 
 - The quest log's zone headers stay white after you hover them, instead of turning grey until the log is opened again.

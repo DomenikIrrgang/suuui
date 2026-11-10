@@ -110,6 +110,8 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V39](#v39) | VM | medium | open | `Button:Click()` on a disabled button runs its `OnClick` |
 | [V40](#v40) | VM | low | open | `SelectTrainerService` sends no `TRAINER_DESCRIPTION_UPDATE` |
 | [V41](#v41) | VM | medium | open | No pet trainer (Beast Training) |
+| [V42](#v42) | VM | medium | open | The auction house's browse ignores categories, levels, filters and sorts |
+| [V43](#v43) | VM | medium | open | `mock.advanceTime` doesn't move animations: a window's fade-in stays at its start (the auction house looked undrawn) |
 
 ## Test runner and mock issues
 
@@ -884,6 +886,22 @@ Blizzard's trainer frame takes up a new selection in `TRAINER_DESCRIPTION_UPDATE
 *Status: open (0.13.9).*
 
 `mock.defineTrainer` is a class trainer only: no `C_Trainer.GetTrainerType()` of `Enum.TrainerType.Pet`, no training points (`C_PetInfo.GetPetTrainingPoints`, `UNIT_PET_TRAINING_POINTS`), no services taught to the pet (its spellbook), and no recording of what Forever lists there. In game the pet's known abilities come as learnable with no cost (reported 2026-11-10, a hunter's screenshot), not as used. The Trainer tests fake the trainer's answers over the engine's class trainer. (units-trade)
+
+<a id="v42"></a>
+
+### V42. The auction house's browse ignores categories, levels, filters and sorts
+
+*Status: open (0.13.9).*
+
+`C_AuctionHouse.SendBrowseQuery` answers with the house's rows whose name holds `searchString`; its `itemClassFilters` (a category: class, subclass, slot), `minLevel` and `maxLevel`, `filters` (usable, rarity) and `sorts` change nothing. The AuctionHouse tests check the query SuuUI sends (the categories' filters, the level range, the sort) instead of what comes back. (units-trade)
+
+<a id="v43"></a>
+
+### V43. `mock.advanceTime` doesn't move animations: a window's fade-in stays at its start
+
+*Status: open (0.13.9).*
+
+The auction house window seemed missing from a screenshot: it is drawn, at its `motion.enter` fade's first frame (alpha about 0). Its group (0.12 s) still plays a second later: `mock.advanceTime(0.5)` leaves its progress at 0, three `mock.advanceFrames` take it to 0.42. The engine moves animations by each frame's own milliseconds only (`animations::tick` in `advance_frames`), so the time `advanceTime` passes never reaches them; in the game an animation follows the clock (a long frame jumps it ahead). Lua's `GetAlpha` says 1 all along (the animation's alpha is the renderer's). (units-trade)
 
 ## Not bugs (for test writers)
 
