@@ -5,6 +5,7 @@
 ### Fixed
 
 - Auction house: items in the reagent bag show in the Sell list too, and selling junk at a vendor includes the reagent bag.
+- Collections: drag a mount, pet or toy of yours from the Mounts, Pets or Toys tab onto an action bar.
 
 ## 0.6.36 (2026-11-10)
 
