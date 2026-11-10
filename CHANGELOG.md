@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Cooldown Manager: Travel Form counts as caster form, so a druid's caster spells (Innervate, Hurricane, Rebirth, heals) show while you travel.
+
+### Fixed
+
+- Cooldown Manager: Balance's Eclipse proc shows when it's up (the game's Eclipse buff wasn't known). Your saved lists get it too.
+
 ## 0.6.37 (2026-11-10)
 
 ### Fixed

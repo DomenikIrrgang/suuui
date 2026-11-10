@@ -230,3 +230,79 @@ export function addRacials(values: Values, class: string, presets: CooldownPrese
         end
     end
 end
+
+-- A preset's spell found with more IDs (an aura's own the game gives, found
+-- in game: Balance's Eclipse buff is 408255, the presets knew only 1286115,
+-- 2026-11-10): your setups' entries of that name (a shared slot's members
+-- and a collection's entries too) get the IDs they lack. Nothing else
+-- changes; an entry SuuUI's presets don't name stays as it is. Run once per
+-- class and fix (the profile may hold other classes' setups).
+export function presetIDs(values: Values, class: string, presets: CooldownPreset[])
+    -- every name's IDs in this class's presets
+    local known: { [string]: number[] } = {}
+    local function learn(e: Entry)
+        local name = e.name
+        if name and e.ids then
+            local ids = known[name] or {}
+            known[name] = ids
+            for _, id in ipairs(e.ids) do
+                local has = false
+                for _, x in ipairs(ids) do
+                    has = has or x == id
+                end
+                if not has then
+                    ids[#ids + 1] = id
+                end
+            end
+        end
+        for _, m in ipairs(e.members or {}) do
+            learn(m)
+        end
+        for _, c in ipairs(e.entries or {}) do
+            learn(c)
+        end
+    end
+    for _, preset in ipairs(presets) do
+        for _, entries in pairs(preset.lists) do
+            for _, e in ipairs(entries) do
+                learn(e)
+            end
+        end
+    end
+    local function mend(raw: unknown)
+        local e = entryOf(raw)
+        if not e then
+            return
+        end
+        local wanted = e.name and known[e.name]
+        local ids = e.ids
+        if wanted and ids then
+            for _, id in ipairs(wanted) do
+                local has = false
+                for _, x in ipairs(ids) do
+                    has = has or x == id
+                end
+                if not has then
+                    ids[#ids + 1] = id
+                end
+            end
+        end
+        for _, m in ipairs(list(e.members)) do
+            mend(m)
+        end
+        for _, c in ipairs(list(e.entries)) do
+            mend(c)
+        end
+    end
+    eachSetup(values, function(lists: unknown, owner: string)
+        if owner ~= class then
+            return
+        end
+        local l = tableOf(lists)
+        for _, key in ipairs({ "essential", "utility", "buffs", "debuffs", "procs" }) do
+            for _, raw in ipairs(list(l and l[key])) do
+                mend(raw)
+            end
+        end
+    end)
+end
