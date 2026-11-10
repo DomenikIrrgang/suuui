@@ -238,6 +238,37 @@ local SEARCH_H = 26
 local styledSearch: { [Frame]: boolean } = tbl.weakKeys()
 local styledDetails: { [Frame]: boolean } = tbl.weakKeys()
 local placedList: { [Frame]: boolean } = tbl.weakKeys()
+local hookedHeaders: { [Frame]: boolean } = tbl.weakKeys()
+
+-- A zone header in SuuUI's label font and ink.
+local function inkHeader(row: Frame, label: Font)
+    local b = frames.asButton(row)
+    if b then
+        b:SetNormalFontObject(label)
+        b:SetHighlightFontObject(label)
+        b:SetDisabledFontObject(label)
+    end
+    for _, fs in ipairs(frames.fontStrings(row)) do
+        fs:SetFontObject(label)
+        UI.Paint(fs, "ink")
+    end
+    local text = frames.asFontString(field(row, "ButtonText") or (b and b:GetFontString()))
+    if text then
+        text:SetFontObject(label)
+        UI.Paint(text, "ink")
+    end
+    -- the game colours a header's title on hover and back to its grey when
+    -- the mouse leaves (ListHeaderMixin:CheckHighlightTitle): in ink again
+    -- after it (a header hovered once stayed grey: found in game)
+    if not hookedHeaders[row] then
+        hookedHeaders[row] = true
+        local function again()
+            inkHeader(row, label)
+        end
+        row:HookScript("OnEnter", again)
+        row:HookScript("OnLeave", again)
+    end
+end
 -- The quest log's restyle (the performance work of 2026-11-09): the whole
 -- window walked once (reskinned), then only the list's rows the game made
 -- since (its pools'); a walk of the whole window took 333k instructions,
@@ -1511,21 +1542,7 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         end
         for _, poolKey in ipairs({ "headerFramePool", "campaignHeaderMinimalFramePool" }) do
             for _, row in ipairs(frames.rows(field(list, poolKey))) do
-                local b = frames.asButton(row)
-                if b then
-                    b:SetNormalFontObject(label)
-                    b:SetHighlightFontObject(label)
-                    b:SetDisabledFontObject(label)
-                end
-                for _, fs in ipairs(frames.fontStrings(row)) do
-                    fs:SetFontObject(label)
-                    UI.Paint(fs, "ink")
-                end
-                local text = frames.asFontString(field(row, "ButtonText") or (b and b:GetFontString()))
-                if text then
-                    text:SetFontObject(label)
-                    UI.Paint(text, "ink")
-                end
+                inkHeader(row, label)
             end
         end
         -- a tracked quest: the drawing's eye, not the game's yellow tick
