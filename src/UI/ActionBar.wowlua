@@ -417,14 +417,24 @@ local PASSES: { [string]: (b: ActionButton) -> () } = {
 local due: { [string]: boolean } = {}
 local flusher = CreateFrame("Frame")
 flusher:Hide()
+-- One kind of pass a frame (each reads every button: 2.3 ms in game for
+-- all three in one frame), the cooldowns first, the others on the next.
+local ORDER = { "cooldown", "usable", "active" }
 flusher:SetScript("OnUpdate", function(self)
-    self:Hide()
-    for kind, fn in pairs(PASSES) do
+    for _, kind in ipairs(ORDER) do
         if due[kind] then
             due[kind] = nil
-            fault.call("Action bars", eachButton, fn)
+            local fn = PASSES[kind]
+            if fn then
+                fault.call("Action bars", eachButton, fn)
+            end
+            if not (due.cooldown or due.usable or due.active) then
+                self:Hide()
+            end
+            return
         end
     end
+    self:Hide()
 end)
 local function later(kind: string): () -> ()
     return function()

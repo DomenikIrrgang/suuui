@@ -501,6 +501,47 @@ local function passes()
     expectNoErrors()
 end
 
+@test("all three passes due in one frame: the cooldowns first, the others one a frame after")
+local function passesSpread()
+    local b = bar()
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    local first = b.buttons[1]
+    mock.advanceFrames(2)
+    local cd, usable, active = 0, 0, 0
+    mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): unknown
+        if slot == BASE then
+            cd += 1
+        end
+        return nil
+    end)
+    mock.fake("C_ActionBar.IsUsableAction", function(slot: number): (boolean, boolean)
+        if slot == BASE then
+            usable += 1
+        end
+        return true, false
+    end)
+    mock.fake("IsCurrentAction", function(slot: number): boolean
+        if slot == BASE then
+            active += 1
+        end
+        return false
+    end)
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.fireEvent("SPELL_UPDATE_USABLE")
+    mock.fireEvent("ACTIONBAR_UPDATE_STATE")
+    local c0, u0, a0 = cd, usable, active
+    mock.advanceFrames(1)
+    expect({ cd - c0, usable - u0, active - a0 }).toEqual({ 1, 0, 0 })
+    mock.advanceFrames(1)
+    expect({ cd - c0, usable - u0, active - a0 }).toEqual({ 1, 1, 0 })
+    mock.advanceFrames(1)
+    expect({ cd - c0, usable - u0, active - a0 }).toEqual({ 1, 1, 1 })
+    mock.advanceFrames(2)
+    expect({ cd - c0, usable - u0, active - a0 }).toEqual({ 1, 1, 1 })
+    expect(first.unusable).toBe(false)
+    expectNoErrors()
+end
+
 @test("counts follow charges and bags")
 local function counts()
     local b = bar()
