@@ -170,7 +170,7 @@ local function rows()
     expect(f.spec.options[2].label).toBe("Tree 1")
 end
 
-@test("summaries: each kind, colour, show mode, missing colour and group sizes")
+@test("summaries: each kind, colour, show mode, missing colour, group sizes and roles")
 local function summaries()
     M:SetList(
         {
@@ -191,6 +191,7 @@ local function summaries()
                 color = "nonesuch",
                 show = "missing",
                 sizes = { ["5"] = true, ["10"] = true },
+                roles = { TANK = true, HEALER = true },
             },
             {
                 name = "C",
@@ -198,6 +199,7 @@ local function summaries()
                 kind = "fill",
                 show = "both",
                 sizes = { ["5"] = true, ["10"] = true, ["20"] = true, ["40"] = true },
+                roles = { TANK = true, HEALER = true, DAMAGER = true },
             },
             { name = "D", ids = { 139 } },
         },
@@ -206,7 +208,7 @@ local function summaries()
     local f = editor()
     local r = shownRows(f)
     expect(r[1].summary:GetText()).toBe("Square · Top left · 8px · Pale gold · Up or missing (amber)")
-    expect(r[2].summary:GetText()).toBe("Border · nonesuch · While missing (red) · Party, 10")
+    expect(r[2].summary:GetText()).toBe("Border · nonesuch · While missing (red) · Party, 10 · Tank, Healer")
     expect(r[3].summary:GetText()).toBe("Bar colour · Green · While up")
     expect(r[4].summary:GetText()).toBe("Icon · Top right · 10px · While up")
     expect(f.hint).toBeShown()
@@ -334,8 +336,24 @@ local function editing()
     expect(M:List(0)[1].sizes).toEqual({ ["5"] = true, ["10"] = true })
     assert(p.sizes.control.onChange)({ "5", "10", "20", "40" })
     expect(M:List(0)[1].sizes).toBe(nil)
+    -- roles: all on at first (an indicator saved without them is on everyone)
+    expect(p.roles.control:GetValue()).toEqual({ "TANK", "HEALER", "DAMAGER" })
+    expect(p.roles.reason:GetText()).toBe("All on: everyone. Someone without a role counts as Damage.")
+    -- a chip turned off saves the rest
+    mock.click(assert(p.roles.control.chips[3]))
+    expect(M:List(0)[1].roles).toEqual({ TANK = true, HEALER = true })
+    expect(p.roles.control:GetValue()).toEqual({ "TANK", "HEALER" })
+    mock.click(assert(p.roles.control.chips[2]))
+    expect(M:List(0)[1].roles).toEqual({ TANK = true })
+    -- the last one off: everyone again, all on
+    mock.click(assert(p.roles.control.chips[1]))
+    expect(M:List(0)[1].roles).toBe(nil)
+    expect(p.roles.control:GetValue()).toEqual({ "TANK", "HEALER", "DAMAGER" })
+    assert(p.roles.control.onChange)({ "HEALER" })
+    expect(M:List(0)[1].roles).toEqual({ HEALER = true })
     mock.click(p.reset)
     local e = M:List(0)[1]
+    expect(e.roles).toBe(nil)
     expect(e.kind).toBe("icon")
     expect(e.show).toBe(nil)
     expect(e.source).toBe("mine")
@@ -392,4 +410,28 @@ local function preview()
     M:SetList({}, 0)
     expect(draw).toHaveBeenCalledTimes(1)
     M:PreviewView(newParent(300, 200))
+end
+
+@test(
+    "roles: the preview's made-up tank, healer and damage dealer each show their role's; the Edit modal's Roles chips"
+)
+local function previewRoles()
+    M:SetList(
+        {
+            { name = "Renewal", ids = { 139 }, kind = "square", color = "fel", roles = { TANK = true } },
+            { name = "Shielding", ids = { 17 }, kind = "border", color = "ward" }, -- everyone
+        },
+        0
+    )
+    M:PreviewView(newParent(300, 200))
+    local tank, healer, damage = assert(M.previewFrames[1]), assert(M.previewFrames[2]), assert(M.previewFrames[3])
+    expect(#tank.previewLooks).toBe(2)
+    expect(#healer.previewLooks).toBe(1)
+    expect(#damage.previewLooks).toBe(1)
+    -- the Edit modal shows the set: Tank on, Healer and Damage off
+    local f = editor()
+    expect(shownRows(f)[1].summary:GetText()).toBe("Square · Top right · 10px · Green · While up · Tank")
+    local p = editPanel(f, 1)
+    expect(p.roles.control:GetValue()).toEqual({ "TANK" })
+    -- (the modal stays open: `wowlua screenshot` of this test shows the row)
 end

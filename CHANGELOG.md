@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Aura indicators can be limited to roles: each indicator has Tank, Healer and Damage chips beside its group sizes. Someone without a role counts as Damage.
+- For plugin authors (API 0.30): a buff indicator's `roles`, `SuuUI.UI.INDICATOR_ROLES`, `SuuUI.UI.IndicatorsForRole(list, role)` and a unit frame's `UpdateIndicatorRole()`.
+
 ## 0.6.32 (2026-11-10)
 
 ### Fixed
