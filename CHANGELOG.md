@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Auction house: the lowest buyout from a search is right for items listed many times at one price (32 at 20s showed as 62c).
+
 ## 0.6.33 (2026-11-10)
 
 ### New
