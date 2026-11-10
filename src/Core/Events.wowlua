@@ -69,8 +69,12 @@ local function checked(fn: unknown, owner: unknown)
 end
 
 export class EventBus implements Notifier
-    -- every subscription made here, so off(name, owner) finds them
-    private entries: Entry[] = {}
+    -- every subscription made here, by owner, so off(name, owner) and
+    -- offAll(owner) look only at the owner's: a walk over all of them (a few
+    -- thousand) for each plate's cast bar let go took 8,000 instructions,
+    -- and a turn in a crowd lets dozens go in one frame
+    private byOwner: { [unknown]: Entry[] } = {}
+    private total: number = 0
 
     constructor(private dispatcher: Dispatcher = StdDispatcher.new(), private reporter: fault.Reporter = fault.log) end
 
@@ -92,7 +96,17 @@ export class EventBus implements Notifier
         checked(fn, owner)
         local entry: Entry = { name = name, owner = owner, sub = nil }
         entry.sub = self.dispatcher:on(name, self:guarded(entry, ownerName(owner), fn, name), owner)
-        self.entries[#self.entries + 1] = entry
+        self:keep(entry)
+    end
+
+    private function keep(entry: Entry)
+        local list = self.byOwner[entry.owner]
+        if not list then
+            list = {}
+            self.byOwner[entry.owner] = list
+        end
+        list[#list + 1] = entry
+        self.total += 1
     end
 
     -- A SuuUI message. Names carry a prefix so they never collide with a
@@ -134,19 +148,30 @@ export class EventBus implements Notifier
             local pair: UnitToken[] = list[i + 1] and { list[i], list[i + 1] } or { list[i] }
             local entry: Entry = { name = event, owner = owner, sub = nil }
             entry.sub = self.dispatcher:onUnit(event, pair, self:guarded(entry, source, listener, event), owner)
-            self.entries[#self.entries + 1] = entry
+            self:keep(entry)
         end
     end
 
     function off(name: string, owner: unknown)
-        for i = #self.entries, 1, -1 do
-            local e = self.entries[i]
-            if e.name == name and e.owner == owner then
+        if owner == nil then
+            return
+        end
+        local list = self.byOwner[owner]
+        if not list then
+            return
+        end
+        for i = #list, 1, -1 do
+            local e = list[i]
+            if e.name == name then
                 if e.sub then
                     e.sub:cancel()
                 end
-                table.remove(self.entries, i)
+                table.remove(list, i)
+                self.total -= 1
             end
+        end
+        if #list == 0 then
+            self.byOwner[owner] = nil
         end
     end
 
@@ -154,13 +179,16 @@ export class EventBus implements Notifier
         if owner == nil then
             return
         end
-        for i = #self.entries, 1, -1 do
-            local e = self.entries[i]
-            if e.owner == owner then
-                if e.sub then
-                    e.sub:cancel()
-                end
-                table.remove(self.entries, i)
+        local list = self.byOwner[owner]
+        if not list then
+            return
+        end
+        self.byOwner[owner] = nil
+        self.total -= #list
+        for i = #list, 1, -1 do
+            local sub = list[i].sub
+            if sub then
+                sub:cancel()
             end
         end
     end
@@ -168,15 +196,10 @@ export class EventBus implements Notifier
     -- How many listeners the bus holds (for an owner, or all).
     function count(owner: unknown?): number
         if owner == nil then
-            return #self.entries
+            return self.total
         end
-        local n = 0
-        for _, e in ipairs(self.entries) do
-            if e.owner == owner then
-                n += 1
-            end
-        end
-        return n
+        local list = self.byOwner[owner]
+        return list and #list or 0
     end
 end
 

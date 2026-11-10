@@ -349,6 +349,34 @@ local function ownRemoval()
     expect(bus:count()).toBe(0)
 end
 
+@test("a bus of its own: removal looks only at the owner's listeners; the others stay, counted")
+local function ownManyOwners()
+    local d = FakeDispatcher.new()
+    local bus = events.EventBus.new(d, FakeReporter.new())
+    local owners: { name: string }[] = {}
+    for i = 1, 200 do
+        local o = { name = "Owner " .. i }
+        owners[i] = o
+        bus:onGame("PLAYER_LOGIN", function() end, o)
+        bus:onGame("PLAYER_LOGOUT", function() end, o)
+        bus:onUnit("UNIT_HEALTH", "nameplate" .. i, function() end, o)
+    end
+    expect(bus:count()).toBe(600)
+    bus:offAll(owners[7])
+    expect(bus:count(owners[7])).toBe(0)
+    expect(bus:count(owners[8])).toBe(3)
+    expect(bus:count()).toBe(597)
+    bus:off("PLAYER_LOGOUT", owners[9])
+    expect(bus:count(owners[9])).toBe(2)
+    expect(bus:count()).toBe(596)
+    -- an owner without listeners, or none: nothing
+    bus:offAll(owners[7])
+    bus:off("PLAYER_LOGIN", { name = "nobody" })
+    bus:offAll(nil)
+    expect(bus:count()).toBe(596)
+    expect(d:active()).toBe(596)
+end
+
 @test("a bus of its own: a listener removed during a dispatch is skipped from then on")
 local function ownRemovedDuring()
     local d = FakeDispatcher.new()
