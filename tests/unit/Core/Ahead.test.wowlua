@@ -1,0 +1,113 @@
+-- Core/Ahead: work built ahead, one step a frame, out of combat: the order,
+-- a key queued once, combat pausing it (on again a moment after), a step's
+-- error dropping its job, finish.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as ahead from "/Core/Ahead"
+import * as fault from "/Core/Fault"
+import expectNoErrors from "../../helpers"
+
+local FRAME = 1000 / 60
+
+@beforeEach
+local function start()
+    -- what the login queued (the bags' slots …) out of the way
+    ahead.finish()
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    ahead.finish()
+end
+
+-- A job of `steps` steps recording what ran into `log`.
+local function job(log: string[], name: string, steps: number): () -> boolean
+    local n = 0
+    return function(): boolean
+        n = n + 1
+        log[#log + 1] = name .. n
+        return n < steps
+    end
+end
+
+@test("one step a frame, first queued first, until a step says it's done")
+local function order()
+    local log: string[] = {}
+    ahead.schedule("test: a", job(log, "a", 2))
+    ahead.schedule("test: b", job(log, "b", 1))
+    -- queued again while waiting: once
+    ahead.schedule("test: a", job(log, "x", 5))
+    expect(log).toEqual({})
+    mock.advanceFrames(1, FRAME)
+    expect(log).toEqual({ "a1" })
+    mock.advanceFrames(1, FRAME)
+    expect(log).toEqual({ "a1", "a2" })
+    expect(ahead.pending("test: a")).toBe(false)
+    mock.advanceFrames(3, FRAME)
+    expect(log).toEqual({ "a1", "a2", "b1" })
+    expect(ahead.pending("test: b")).toBe(false)
+    -- done: queued again, it runs again
+    ahead.schedule("test: b", job(log, "c", 1))
+    mock.advanceFrames(1, FRAME)
+    expect(log).toEqual({ "a1", "a2", "b1", "c1" })
+    expectNoErrors()
+end
+
+@test("nothing in combat; on again a moment after it ends")
+local function combat()
+    local log: string[] = {}
+    mock.player:enterCombat()
+    ahead.schedule("test: fight", job(log, "f", 2))
+    mock.advanceFrames(10, FRAME)
+    expect(log).toEqual({})
+    mock.player:leaveCombat()
+    -- (not in the frames the fight's end has its own work in)
+    mock.advanceFrames(10, FRAME)
+    expect(log).toEqual({})
+    mock.advanceFrames(60, FRAME)
+    expect(log).toEqual({ "f1", "f2" })
+    -- a fight mid-job: the rest waits for its end
+    ahead.schedule("test: fight", job(log, "g", 3))
+    mock.advanceFrames(1, FRAME)
+    mock.player:enterCombat()
+    mock.advanceFrames(5, FRAME)
+    expect(log).toEqual({ "f1", "f2", "g1" })
+    mock.player:leaveCombat()
+    mock.advanceFrames(80, FRAME)
+    expect(log).toEqual({ "f1", "f2", "g1", "g2", "g3" })
+    expectNoErrors()
+end
+
+@test("a step that errors is reported and its job dropped; the next goes on")
+local function errors()
+    local log: string[] = {}
+    ahead.schedule("test: broken", function(): boolean
+        error("ahead-broken-step")
+    end)
+    ahead.schedule("test: after", job(log, "n", 1))
+    mock.advanceFrames(3, FRAME)
+    expect(log).toEqual({ "n1" })
+    expect(ahead.pending("test: broken")).toBe(false)
+    local found = false
+    for _, e in ipairs(fault.entries()) do
+        if e.message:find("ahead-broken-step", 1, true) then
+            found = true
+        end
+    end
+    expect(found).toBe(true)
+    mock.slash("/suu errors clear")
+    expectNoErrors()
+end
+
+@test("finish runs every job to its end at once")
+local function finishes()
+    local log: string[] = {}
+    ahead.schedule("test: all", job(log, "s", 3))
+    ahead.finish()
+    expect(log).toEqual({ "s1", "s2", "s3" })
+    expect(ahead.pending("test: all")).toBe(false)
+end

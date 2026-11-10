@@ -183,3 +183,7 @@ for r in sorted(data['recipes'], key=lambda r: r['recipeID']):
 lines.append('}')
 open(OUT, 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
 print('%d recipes into %s' % (len(lines) - HEAD - 1, OUT))
+
+# the table built on first use, in steps (tools/lazy_data.py)
+import subprocess
+subprocess.run([sys.executable, '-I', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lazy_data.py'), OUT], check=True)

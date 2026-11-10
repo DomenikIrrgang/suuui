@@ -17,6 +17,7 @@ import type SettingsSection from "/Core/Modules"
 import type DamageMeter, MeterApi, RecapApi, RecapEvent, MeterSession, MeterView from "/UI/DamageMeter"
 import type Position from "/EditMode/EditMode"
 import after from "wowlua:timer"
+import * as ahead from "/Core/Ahead"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 
@@ -569,6 +570,23 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         frame:SetSize(width, math.max(1, y - GAP))
     end
 
+    -- The windows' rows made after login, out of combat, one a frame
+    -- (Core/Ahead).
+    function BuildAhead()
+        ahead.schedule("damage meter: rows", function(): boolean
+            if not self:IsEnabled() then
+                return false
+            end
+            for i = 1, math.min(3, self:Get("windowCount")) do
+                local w = self.windows[i]
+                if w and w:BuildAhead() then
+                    return true
+                end
+            end
+            return false
+        end)
+    end
+
     function Refresh()
         for i = 1, math.min(3, self:Get("windowCount")) do
             local w = self.windows[i]
@@ -664,6 +682,7 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         end
         self:BlizzardOff()
         self:Layout()
+        self:BuildAhead()
         self:RegisterMover(frame, {
             key = "position",
             label = "Damage meter",
@@ -692,6 +711,7 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         end)
         self:WatchAll({ "rows", "windowCount" }, function()
             self:Layout()
+            self:BuildAhead()
             local preview = self.previewMeter
             if preview then
                 preview:SetMaxRows(self:Get("rows"))

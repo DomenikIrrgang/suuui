@@ -444,6 +444,9 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     levelTo: number? = nil
     page: number? = nil
     prepared: boolean = false
+    -- the page's size when Render last drew it (an unchanged size draws nothing)
+    drawnW: number? = nil
+    drawnH: number? = nil
     previewView: LevelUpPreview? = nil
     renderAfterCombat: boolean = false
     sayTimer: TimerHandle? = nil
@@ -1033,6 +1036,13 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             book:SetCastPage(chosen, page)
             self.prepared = true
         end
+        self.drawnW, self.drawnH = book:GetWidth(), book:GetHeight()
+    end
+
+    -- Whether the last Render drew the page at the size it has now.
+    function DrawnAtSize(): boolean
+        local book = self.book
+        return book ~= nil and self.drawnW == book:GetWidth() and self.drawnH == book:GetHeight()
     end
 
     function UpdateCooldowns()
@@ -1240,8 +1250,10 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         hook(f, "SetHeight", again)
         hook(f, "SetWidth", again)
         hook(f, "SetSize", again)
+        -- a new size: drawn again, unless the page was drawn at this size
+        -- already (opening shortens the window, then draws: once, not twice)
         book:HookScript("OnSizeChanged", function()
-            if book:IsVisible() then
+            if book:IsVisible() and not self:DrawnAtSize() then
                 self:Render()
             end
         end)

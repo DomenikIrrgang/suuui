@@ -969,3 +969,5 @@ local nq = 0
 for _ in pairs(used) do nq = nq + 1 end
 print(string.format("gen_quest_starts: %d quests (%d with objectives, %d tags corrected, %d for a group), %d pins on %d maps, %d entrances, %d drop pins, %d routes of %d givers -> %s", nq, nObjectives, nTags, nGroup, total, #maps, nEntrances, nDrops, nRoutes, nRouteGivers, out))
 print(string.format("gen_quest_starts: %d service spawns, %d rare spawns, %d mailboxes, %d chest spawns, %d holiday NPCs, %d walking rares and service NPCs -> %s", nServices, nRares, nMail, nChests, nEventNpcs, nRareRoutes, placesOut))
+-- both tables built on first use, in steps (tools/lazy_data.py)
+assert(os.execute(string.format("python3 -I tools/lazy_data.py %q %q", out, placesOut)))

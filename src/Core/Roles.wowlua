@@ -83,8 +83,51 @@ local function treePoints(): (number[], number)
     return pts, total
 end
 
+-- The trees' points as last read, until the talents change (the threat
+-- meter and the plates ask for the role on every target change and threat
+-- update: reading every node each time took 3.7k instructions and 35 KB).
+-- Nothing spent yet (or not readable yet, right after login) is read again
+-- each time.
+local known: { pts: number[], total: number }? = nil
+
+-- The talents changed: read them again when next asked.
+export function talentsChanged()
+    known = nil
+end
+
+local TALENT_EVENTS = {
+    "PLAYER_ENTERING_WORLD",
+    "PLAYER_LEVEL_UP",
+    "TRAIT_CONFIG_UPDATED",
+    "TRAIT_CONFIG_LIST_UPDATED",
+    "TRAIT_NODE_CHANGED",
+    "PLAYER_TALENT_UPDATE",
+    "CHARACTER_POINTS_CHANGED",
+    "ACTIVE_PLAYER_SPECIALIZATION_CHANGED",
+    "ACTIVE_COMBAT_CONFIG_CHANGED",
+}
+-- (a frame of its own, registered as this file loads: before any module's
+-- handler of the same events asks for the spec)
+local talentWatch = CreateFrame("Frame")
+for _, e in ipairs(TALENT_EVENTS) do
+    pcall(talentWatch.RegisterEvent, talentWatch, e)
+end
+talentWatch:SetScript("OnEvent", talentsChanged)
+
+local function points(): (number[], number)
+    local k = known
+    if k then
+        return { k.pts[1], k.pts[2], k.pts[3] }, k.total
+    end
+    local pts, total = treePoints()
+    if total > 0 then
+        known = { pts = { pts[1], pts[2], pts[3] }, total = total }
+    end
+    return pts, total
+end
+
 export function spec(): (number, number[])
-    local ok, pts, total = pcall(treePoints)
+    local ok, pts, total = pcall(points)
     if not ok or total == 0 then
         return 0, ok and pts or { 0, 0, 0 }
     end

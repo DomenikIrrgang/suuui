@@ -19,6 +19,7 @@ import type Inventory, SlotItem, SlotSection from "/UI/Inventory"
 import type SortSlot from "/Units/Bags/Sort"
 import internal M, SECTION, familyName from "/Units/Bags"
 import * as sort from "/Units/Bags/Sort"
+import * as ahead from "/Core/Ahead"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
@@ -393,6 +394,53 @@ local function updates()
     mock.fireEvent("BAG_UPDATE_COOLDOWN")
     mock.fireEvent("BAG_UPDATE", mock.secret(0)) -- unreadable: nothing
     mock.fireEvent("ITEM_LOCK_CHANGED", 16) -- a worn item's: not a bag slot
+end
+
+@test("an item looted: its slot and the counts drawn, the slots not laid out again; a new size lays them out")
+local function lightUpdate()
+    open()
+    local before = metaText()
+    local layouts = mock.spy(inv().LayoutSlots)
+    mock.stub(inv(), "LayoutSlots", layouts)
+    mock.setBag(0, {
+        slots = 16,
+        items = { [1] = { id = CLOTH, count = 3 }, [2] = { id = POTION, count = 2 }, [3] = { id = HERB, count = 4 } },
+    })
+    expect(shown(0, 3).count).toBe(4)
+    expect(metaText()).never.toBe(before)
+    expect(layouts).never.toHaveBeenCalled()
+    -- a bigger backpack: every slot laid out again
+    mock.setBag(0, { slots = 20, items = { [1] = { id = CLOTH, count = 3 } } })
+    expect(layouts).toHaveBeenCalledTimes(1)
+    expect(button(0, 20)).toBeShown()
+    expect(itemAt(0, 3)).toBe(nil)
+end
+
+@test("a new bag's slot buttons are made ahead while the window is closed: a few a frame, none in combat")
+local function slotsAhead()
+    -- (what the login queued to build ahead, done: the bags' job alone)
+    ahead.finish()
+    local had = C_Container.GetContainerNumSlots(4)
+    mock.setBag(4, nil)
+    local made = #(M.buttons[4] or {})
+    mock.player:enterCombat()
+    mock.setBag(4, { slots = made + 7 })
+    mock.advanceFrames(5, 1000 / 60)
+    expect(#(M.buttons[4] or {})).toBe(made)
+    mock.player:leaveCombat()
+    -- on again a moment after the fight: three a frame
+    mock.advanceFrames(70, 1000 / 60)
+    expect(#(M.buttons[4] or {})).toBe(made + 7)
+    -- (out of combat at once: the first frame makes three)
+    mock.setBag(4, nil)
+    mock.setBag(4, { slots = made + 11 })
+    mock.advanceFrames(1, 1000 / 60)
+    expect(#(M.buttons[4] or {})).toBe(made + 10)
+    mock.advanceFrames(1, 1000 / 60)
+    expect(#(M.buttons[4] or {})).toBe(made + 11)
+    -- (bag 4 as it was)
+    mock.setBag(4, had > 0 and { slots = had } or nil)
+    expectNoErrors()
 end
 
 @test("a spell waiting for an item (Disenchant): the left click puts it on the item through the secure button")

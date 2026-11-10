@@ -49,13 +49,16 @@ import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
-import QUEST_RANK, questPin, raceBit, completedSet, onQuest, readCalendar, eventOn, questName, questState from "/Units/WorldMap/Quests"
+import QUEST_RANK, questPin, raceBit, completedSet, forgetCompleted, onQuest, readCalendar, eventOn, questName, questState from "/Units/WorldMap/Quests"
 import type Me, Offer from "/Units/WorldMap/Quests"
 import quest, npc, entrance, instanceLevels from "/Units/WorldMap/Rows"
 import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import tipFor from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
+import * as lazyData from "/Core/Data"
+import type QuestStarts from "/Data/QuestStarts"
+import type MapPlaces from "/Data/MapPlaces"
 
 -- A campfire's time left: m:ss, or out.
 export function fireLeft(s: number): string
@@ -452,7 +455,54 @@ askAgain = function(final: boolean)
     end
 end
 
+-- What each quest is for you (questState, and its name), kept until
+-- something it depends on changes: a quest turned in, accepted or
+-- abandoned, your level, skills or reputation (forgetQuests). The map read
+-- every quest on it again at each refresh: 320k instructions and 357 KB, three
+-- times as it opened. An event's quest is judged each time (the holidays and
+-- the map it's on decide).
+type Judged = { state?: string, difficulty?: string, level?: number, name: string }
+local judged: { [number]: Judged } = {}
+
+local function judge(qrow: unknown[], id: number, me: Me, done: { [number]: boolean }): Judged
+    local known = judged[id]
+    if known then
+        return known
+    end
+    local q = quest(qrow)
+    local state, difficulty, level = questState(q, id, me, done)
+    local j: Judged = { state = state, difficulty = difficulty, level = level, name = questName(q, id) }
+    if not q.event then
+        judged[id] = j
+    end
+    return j
+end
+
+-- No quests and no places: the map's pins while the data is being built.
+const NO_STARTS: QuestStarts = {
+    quests = {},
+    objectives = {},
+    tags = {},
+    group = {},
+    maps = {},
+    drops = {},
+    items = {},
+    givers = {},
+    entrances = {},
+    routes = {},
+}
+const NO_PLACES: MapPlaces = { npcs = {}, services = {}, rares = {}, mailboxes = {}, treasures = {}, routes = {} }
+
+local function forgetQuests()
+    judged = {}
+    forgetCompleted()
+end
+
 local function isGroupQuest(id: number): boolean
+    -- (the data not built yet: no group bar until it is)
+    if not lazyData.questStarts:Ready() then
+        return false
+    end
     local starts = SuuUI.QuestStarts()
     local fixed = starts.tags[id]
     if fixed then
@@ -1007,16 +1057,16 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 if not seen[id] then
                     seen[id] = true
                     local qrow = starts.quests[id]
-                    local q = qrow and quest(qrow)
+                    local j = qrow and judge(qrow, id, me, done)
                     local state: string? = nil
                     local difficulty: string? = nil
                     local level: number? = nil
-                    if q then
-                        state, difficulty, level = questState(q, id, me, done)
+                    if j then
+                        state, difficulty, level = j.state, j.difficulty, j.level
                     end
                     out[#out + 1] = {
                         id = id,
-                        name = q and questName(q, id) or nil,
+                        name = j and j.name or nil,
                         state = state,
                         difficulty = difficulty,
                         level = level,
@@ -1091,6 +1141,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         if not id then
             return
         end
+        -- (the quest data built a step a frame the first time: its lines from
+        -- the next hover on)
+        if not lazyData.questStarts:Ready() then
+            lazyData.questStarts:Prepare()
+            return
+        end
         local on = self:Layers().quests
         local shown: QuestOffer[] = {}
         for _, o in ipairs((self:QuestsFor(id))) do
@@ -1119,10 +1175,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local on = self:Layers()
         local me = self:Player()
         me.mapID = mapID
-        local starts = SuuUI.QuestStarts()
+        -- (the quest and place data not built yet: the other pins now,
+        -- these once it's there; Refresh)
+        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
         local info = errors.tryValue(C_Map.GetMapInfo, mapID)
         local mapName = info and info.name
-        local places = SuuUI.MapPlaces()
+        local places = lazyData.mapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
         local muted = "|cff" .. T.color["ink-muted"].hex
         local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
 
@@ -1137,12 +1195,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                     local id = row[i]
                     local qrow = starts.quests[id]
                     if qrow then
-                        local q = quest(qrow)
-                        local state, difficulty, level = questState(q, id, me, done)
+                        local j = judge(qrow, id, me, done)
+                        local state, difficulty, level = j.state, j.difficulty, j.level
                         if state and difficulty and level and on.quests[state] and
                             (difficulty ~= "trivial" or on.quests.trivial) then
                             list[#list + 1] = {
-                                name = questName(q, id),
+                                name = j.name,
                                 level = level,
                                 difficulty = difficulty,
                                 state = state,
@@ -1207,11 +1265,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                     local id = row[i]
                     local qrow = starts.quests[id]
                     if qrow then
-                        local q = quest(qrow)
-                        local state, difficulty, level = questState(q, id, me, done)
+                        local j = judge(qrow, id, me, done)
+                        local state, difficulty, level = j.state, j.difficulty, j.level
                         if state and difficulty and level and (difficulty ~= "trivial" or on.quests.trivial) then
                             list[#list + 1] = {
-                                name = questName(q, id),
+                                name = j.name,
                                 level = level,
                                 difficulty = difficulty,
                                 group = isGroupQuest(id),
@@ -2138,6 +2196,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         if layerIndex ~= 1 then
             return
         end
+        -- (the overlays' data built a step a frame the first time: Refresh
+        -- reveals again once it's there)
+        if not lazyData.mapOverlays:Ready() then
+            return
+        end
         local art = errors.tryValue(C_Map.GetMapArtID, mapID)
         local overlays = art and SuuUI.MapOverlays()[art]
         local layers = errors.tryValue(C_Map.GetMapArtLayers, mapID)
@@ -2159,6 +2222,24 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- Whether the map's data is built (Core/Data).
+    function DataReady(): boolean
+        return lazyData.questStarts:Ready() and lazyData.mapPlaces:Ready() and lazyData.mapOverlays:Ready()
+    end
+
+    -- The map's data built a step a frame, then the map drawn again.
+    function PrepareData()
+        local function done()
+            local f = self.map
+            if self:IsEnabled() and f and f:IsShown() and self:DataReady() then
+                self:Refresh()
+            end
+        end
+        lazyData.mapOverlays:Prepare(done)
+        lazyData.mapPlaces:Prepare(done)
+        lazyData.questStarts:Prepare(done)
+    end
+
     function Refresh()
         local f = self.map
         if not (f and self:IsEnabled()) then
@@ -2178,6 +2259,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             self.items = nil
             self:ClearPins()
             return
+        end
+        -- the quest and place data, built a step a frame the first time
+        -- (3 MB in one frame was a stutter): their pins once it's there,
+        -- the others (marks, flight masters, …) now
+        if not self:DataReady() then
+            self:PrepareData()
         end
         local mapID = asNumber(f:GetMapID())
         readCalendar()
@@ -2431,6 +2518,18 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         menu:Show()
         menu:SetValue(menuValues(self:MenuValue()))
         self:PlaceFilters()
+        -- what each quest is for you: judged again after any of these
+        for _, event in ipairs({
+            "QUEST_TURNED_IN",
+            "QUEST_ACCEPTED",
+            "QUEST_REMOVED",
+            "QUEST_LOG_UPDATE",
+            "PLAYER_LEVEL_UP",
+            "SKILL_LINES_CHANGED",
+            "UPDATE_FACTION",
+        }) do
+            self:OnGameEvent(event, forgetQuests)
+        end
         -- what you can pick up changes as you level and turn quests in
         for _, event in ipairs({
             "QUEST_TURNED_IN",

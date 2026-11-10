@@ -55,6 +55,7 @@ import * as frames from "wowlua:frames"
 import * as secure from "wowlua:secure"
 import * as sort from "./Bags/Sort"
 import * as chars from "./Bags/Characters"
+import * as ahead from "/Core/Ahead"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -682,6 +683,9 @@ export const SECTION: SettingsSection = {
     },
 }
 
+-- slot buttons made a frame while they're built ahead (BuildAhead)
+local SLOTS_AHEAD = 3
+
 class BagsModule extends Module<typeof(DEFAULTS)>
     inv: Inventory? = nil
     bank: Inventory? = nil
@@ -691,6 +695,9 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     readonly bagFrames: { [number]: Frame } = {}
     readonly buttons: { [number]: Button[] } = {}
     readonly skins: { [Frame]: ItemSlotSkin } = {}
+    -- each window's last layout of the live bags (Fill): its bags and sizes,
+    -- the buttons it laid out
+    readonly laid: { [Inventory]: { key: string, list: Button[] } } = {}
     readonly savedSlots: SavedSlot[] = {}
     -- Blizzard's frames kept under the hidden parent
     readonly parentHooked: { [Frame]: boolean } = {}
@@ -842,6 +849,33 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         return b
     end
 
+    -- Your bags' slot buttons made after login, out of combat, a few a
+    -- frame (Core/Ahead), so the first open only lays them out: all of them
+    -- in that frame took 340k instructions and 2.4 MB (the perf scenarios).
+    -- The first open makes whatever is still missing.
+    function BuildAhead()
+        ahead.schedule("bags: slot buttons", function(): boolean
+            if not (self:IsEnabled() and self.inv) then
+                return false
+            end
+            local made = 0
+            for _, bag in ipairs(self:Bags()) do
+                local list = self.buttons[bag]
+                for slot = 1, numSlots(bag) do
+                    if not (list and list[slot]) then
+                        self:SlotButton(bag, slot)
+                        list = self.buttons[bag]
+                        made = made + 1
+                        if made >= SLOTS_AHEAD then
+                            return true
+                        end
+                    end
+                end
+            end
+            return false
+        end)
+    end
+
     function UpdateSlot(bag: number, slot: number)
         local list = self.buttons[bag]
         local b = list and list[slot]
@@ -897,10 +931,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- One window's slots laid out in order: returns its slot count and free count.
-    function Fill(inv: Inventory, given: number[]): (number, number)
-        local list: Button[] = {}
-        local shown: { [number]: boolean } = {}
+    -- One window's slots laid out in order: returns its slot count and free
+    -- count. `light` (a bag update): when the bags, their sizes and kinds are
+    -- what the last layout of this window had and nothing else laid it out
+    -- since, only the counts are written again (BAG_UPDATE drew the slots
+    -- that changed); otherwise every slot is drawn and laid out.
+    function Fill(inv: Inventory, given: number[], light: boolean?): (number, number, boolean)
         local total, free = 0, 0
         local mine = inv == self.inv
         -- your bags: the general ones, then the special ones (quivers, soul
@@ -928,15 +964,20 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         -- the reagent bag, the keyring and each special bag as a section of
         -- its own (design "Bags · reagent bag", direction A, chosen 2026-10-17)
         local sections: SlotSection[]? = nil
-        for _, bag in ipairs(bags) do
-            shown[bag] = true
+        local sizes: number[] = {}
+        local keyParts: string[] = {}
+        local slotCount = 0
+        for i, bag in ipairs(bags) do
             local n = numSlots(bag)
+            sizes[i] = n
+            slotCount = slotCount + n
             local special = mine and isSpecialBag(bag)
+            keyParts[i] = ("%d:%d:%s"):format(bag, n, special and "s" or "")
             if special and n > 0 then
                 local here = sections or {}
                 sections = here
                 here[#here + 1] = {
-                    at = #list + 1,
+                    at = slotCount - n + 1,
                     label = familyName(familyOf(bag)),
                     meta = ("%d · %d free"):format(n, freeSlots(bag) or 0),
                 }
@@ -945,17 +986,35 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 local here = sections or {}
                 sections = here
                 if bag == REAGENT and n == 0 then
-                    here[#here + 1] = { at = #list + 1, note = "No reagent bag · the reagent slot takes one" }
+                    here[#here + 1] = { at = slotCount - n + 1, note = "No reagent bag · the reagent slot takes one" }
                 elseif bag == REAGENT then
                     here[#here + 1] = {
-                        at = #list + 1,
+                        at = slotCount - n + 1,
                         label = "Reagents",
                         meta = ("%d · %d free"):format(n, freeSlots(bag) or 0),
                     }
                 elseif n > 0 then
-                    here[#here + 1] = { at = #list + 1, label = "Keyring", meta = tostring(n) }
+                    here[#here + 1] = { at = slotCount - n + 1, label = "Keyring", meta = tostring(n) }
                 end
             end
+            if bag ~= REAGENT and bag ~= KEYRING and not special then
+                total = total + n
+                free = free + (freeSlots(bag) or 0)
+            end
+        end
+        local meta = ("%d free of %d"):format(free, total)
+        local key = table.concat(keyParts, " ")
+        local laid = self.laid[inv]
+        if light and laid and laid.key == key and inv:LaidOut() == laid.list then
+            inv:SetSectionMetas(sections)
+            inv:SetMeta(meta)
+            return total, free, true
+        end
+        local list: Button[] = {}
+        local shown: { [number]: boolean } = {}
+        for i, bag in ipairs(bags) do
+            shown[bag] = true
+            local n = sizes[i]
             for slot = 1, n do
                 list[#list + 1] = self:SlotButton(bag, slot)
                 self:UpdateSlot(bag, slot)
@@ -964,10 +1023,6 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             local made = self.buttons[bag] or {}
             for slot = n + 1, #made do
                 made[slot]:Hide()
-            end
-            if bag ~= REAGENT and bag ~= KEYRING and not special then
-                total = total + n
-                free = free + (freeSlots(bag) or 0)
             end
         end
         for bag, slots in pairs(self.buttons) do
@@ -978,30 +1033,39 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             end
         end
         inv:LayoutSlots(list, sections)
-        inv:SetMeta(("%d free of %d"):format(free, total))
-        return total, free
+        self.laid[inv] = { key = key, list = list }
+        inv:SetMeta(meta)
+        return total, free, false
     end
 
     -- Every slot laid out again (bags or sizes changed), the counts, the money.
-    function Rebuild()
+    -- `light` (a bag update): only the counts and the money when the layout
+    -- holds (Fill).
+    function Rebuild(light: boolean?)
         local inv = self.inv
         if not (inv and self:IsLive()) then
             return
         end
-        self:Fill(inv, self:Bags())
+        local _, _, kept = self:Fill(inv, self:Bags(), light)
         self:Foot()
-        self:DrawBagRail()
+        -- (the rail follows the bags' sizes, in the layout, and the bags
+        -- equipped: UNIT_INVENTORY_CHANGED)
+        if not kept then
+            self:DrawBagRail()
+        end
     end
 
-    function RebuildBank()
+    function RebuildBank(light: boolean?)
         local bank = self.bank
         if not (bank and bank:IsShown()) then
             return
         end
         local tabs = self:BankBags()
-        local total = self:Fill(bank, tabs)
+        local total, _, kept = self:Fill(bank, tabs, light)
         bank:SetNote(("%s · %d slots"):format(#tabs > 1 and (#tabs .. " tabs") or "Bank", total))
-        self:DrawBankRail()
+        if not kept then
+            self:DrawBankRail()
+        end
     end
 
     --------------------------------------------------------------------------------
@@ -2724,6 +2788,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end
         self:HideBlizzardBags()
         self:HideBlizzardBank()
+        self:BuildAhead()
         -- (the bags follow Blizzard's bags, the bank shows at a banker: not edit mode)
         self:RegisterMover(inv, { key = "position", label = "Bags", managedShow = true })
         self:RegisterMover(bank, { key = "bankPosition", label = "Bank", managedShow = true })
@@ -2797,13 +2862,19 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 self:UpdateBag(bag)
             end
         end)
+        -- (an item moved, looted or used: the slots BAG_UPDATE drew and the
+        -- counts; a bag put in, taken out or of another size: all laid out)
         for _, e in ipairs({ "BAG_UPDATE_DELAYED", "BAG_CONTAINER_UPDATE", "PLAYER_ENTERING_WORLD" }) do
+            local light = e == "BAG_UPDATE_DELAYED"
             self:OnGameEvent(e, function()
                 if inv:IsShown() then
-                    self:Rebuild()
+                    self:Rebuild(light)
                     self:UpdateJunk()
+                elseif not light then
+                    -- (a new bag's slots, or the bags known at last)
+                    self:BuildAhead()
                 end
-                self:RebuildBank()
+                self:RebuildBank(light)
                 if e ~= "PLAYER_ENTERING_WORLD" then
                     self:QueueSave()
                 end

@@ -1,0 +1,101 @@
+-- Core/Ahead.wowlua
+-- Work built ahead (the performance work of 2026-11-09): what would
+-- otherwise be made the first time it's needed (the bags' slot buttons on
+-- their first open, the damage meter's rows and the threat meter's in the
+-- first fight, a world map's quest data on its first open) is made after
+-- login, out of combat, one step a frame, so no frame carries all of it.
+--
+--   ahead.schedule("bags: slots", function()
+--       -- build a few; true while there's more
+--       return more
+--   end)
+--
+-- One step of one job a frame, first queued first; nothing in combat (the
+-- jobs wait, and go on a moment after it ends). A step that errors is
+-- reported and its job dropped. Whoever needs the thing before its job is
+-- done makes the rest itself: built ahead is only ever sooner.
+
+import after from "wowlua:timer"
+import * as fault from "./Fault"
+
+type Job = { key: string, step: () -> boolean? }
+
+-- after combat: a moment before going on (the end of a fight has its own work)
+local RESUME = 1
+
+local jobs: Job[] = {}
+local queued: { [string]: boolean } = {}
+local runner = CreateFrame("Frame")
+runner:Hide()
+
+local function drop(job: Job)
+    for i, j in ipairs(jobs) do
+        if j == job then
+            table.remove(jobs, i)
+            break
+        end
+    end
+    queued[job.key] = nil
+end
+
+local function stepOnce()
+    if InCombatLockdown() then
+        -- (on again after the fight: PLAYER_REGEN_ENABLED below)
+        runner:Hide()
+        return
+    end
+    local job = jobs[1]
+    if not job then
+        runner:Hide()
+        return
+    end
+    local ok, more = fault.call("Ahead: " .. job.key, job.step)
+    if not ok or not more then
+        drop(job)
+    end
+    if #jobs == 0 then
+        runner:Hide()
+    end
+end
+
+runner:SetScript("OnUpdate", stepOnce)
+runner:RegisterEvent("PLAYER_REGEN_ENABLED")
+runner:SetScript("OnEvent", function()
+    if #jobs > 0 then
+        after(RESUME, function()
+            if #jobs > 0 and not InCombatLockdown() then
+                runner:Show()
+            end
+        end)
+    end
+end)
+
+--- Queues `step` under `key` (once: a key already queued is left as it
+--- is). It runs one call a frame, out of combat, until it returns false.
+export function schedule(key: string, step: () -> boolean?)
+    if queued[key] then
+        return
+    end
+    queued[key] = true
+    jobs[#jobs + 1] = { key = key, step = step }
+    if not InCombatLockdown() then
+        runner:Show()
+    end
+end
+
+--- Whether a job is still queued.
+export function pending(key: string): boolean
+    return queued[key] == true
+end
+
+--- Runs every queued job to its end now (tests; nothing in game).
+export function finish()
+    while #jobs > 0 do
+        local job = jobs[1]
+        local ok, more = fault.call("Ahead: " .. job.key, job.step)
+        if not ok or not more then
+            drop(job)
+        end
+    end
+    runner:Hide()
+end

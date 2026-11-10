@@ -596,6 +596,8 @@ class MarksModule extends Module<typeof(DEFAULTS)>
     cardMark: number? = nil
     clickHandler: ((map: Frame, button: string, cx: unknown, cy: unknown) -> boolean)? = nil
     following: number? = nil
+    -- where the minimap pins were last placed from (MinimapMoved)
+    mmAt: unknown[]? = nil
     hint: Text? = nil
     lastSymbol: string? = nil
     mmLayer: MinimapLayer? = nil
@@ -853,12 +855,47 @@ class MarksModule extends Module<typeof(DEFAULTS)>
                     return
                 end
                 wait = 0.1
-                self:PlaceMinimapPins()
+                -- (standing still, the pins stay where they are)
+                if self:MinimapMoved() then
+                    self:PlaceMinimapPins()
+                end
             end)
             self.mmLayer = layer
         end
         layer:SetShown(self:IsEnabled())
         self:PlaceMinimapPins()
+    end
+
+    -- Whether you, the way the minimap faces, its zoom or its place changed
+    -- since the last tick (anything not readable counts as a change).
+    function MinimapMoved(): boolean
+        local mm = Minimap
+        if not mm then
+            return true
+        end
+        local okP, north, west, _, instance = pcall(UnitPosition, "player")
+        if not (okP and secret.readable(north) and secret.readable(west) and secret.readable(instance)) then
+            return true
+        end
+        local yards = C_Minimap and C_Minimap.GetViewRadius and C_Minimap.GetViewRadius()
+        local facing: unknown = 0
+        if GetCVar("rotateMinimap") == "1" and GetPlayerFacing then
+            facing = GetPlayerFacing()
+        end
+        if not (secret.readable(yards) and secret.readable(facing)) then
+            return true
+        end
+        local cx, cy = mm:GetCenter()
+        local w = mm:GetWidth()
+        local at = self.mmAt
+        if at and at[1] == north and at[2] == west and at[3] == instance and at[4] == yards and at[5] == facing and
+            at[6] == cx and
+            at[7] == cy and
+            at[8] == w then
+            return false
+        end
+        self.mmAt = { north, west, instance, yards, facing, cx, cy, w }
+        return true
     end
 
     function PlaceMinimapPins()
@@ -1097,6 +1134,13 @@ class MarksModule extends Module<typeof(DEFAULTS)>
     override function OnEnable()
         self:On("SUUUI_MARKS_CHANGED", function()
             self:UpdateMinimap()
+        end)
+        -- the map's Marks filters: the minimap's pins follow (they're placed
+        -- again only when something moved, MinimapMoved)
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "worldmap" and key == "filters" then
+                self:PlaceMinimapPins()
+            end
         end)
         -- your marks for the world map
         self:ProvideService(MARKS, {

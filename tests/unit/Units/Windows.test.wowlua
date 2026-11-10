@@ -14,7 +14,7 @@ import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import * as errors from "wowlua:errors"
 import SuuUI from "/Core/API"
-import internal M, WindowsModule, trackEyes, paneTabs, trainerRows from "/Units/Windows"
+import internal M, WindowsModule, trackEyes, paneTabs, trainerRows, reskinnedRows from "/Units/Windows"
 import type WindowChrome, SkinTab from "/UI/WindowSkin"
 import moneyText as coinText from "/UI/Inventory"
 import expectNoErrors from "../../helpers"
@@ -423,6 +423,42 @@ local function questLog()
         mock.advanceFrames(3)
     end
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
+end
+
+@test("the quest log's restyle: the window walked once, then only the rows made since; once a frame")
+local function questLogOnce()
+    takeQuest()
+    local f = WorldMapFrame
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    f:SetMapID(1429)
+    errors.tryMethod(f, "SetQuestLogPanelShown", true)
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    mock.advanceFrames(2)
+    -- the window had its walk: laying the list out again doesn't walk it
+    local walks = mock.spy(SuuUI.UI.Reskin)
+    mock.stub(SuuUI.UI, "Reskin", walks)
+    -- three in one frame: one now, one more the next frame
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    expect(M.questRestylePending).toBeFalsy()
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    expect(M.questRestylePending).toBe(true)
+    mock.advanceFrames(1)
+    expect(M.questRestylePending).toBeFalsy()
+    expect(walks).never.toHaveBeenCalled()
+    -- every row the list shows had its pass
+    local list = win("QuestScrollFrame")
+    local rows = 0
+    for _, key in ipairs({ "titleFramePool", "headerFramePool", "objectiveFramePool" }) do
+        for _, row in ipairs(frames.rows(field(list, key))) do
+            rows = rows + 1
+            expect(reskinnedRows[row]).toBe(true)
+        end
+    end
+    expect(rows > 0).toBe(true)
+    expectNoErrors()
 end
 
 @test("the map's status line: the cursor's spot over the map, yours off it")

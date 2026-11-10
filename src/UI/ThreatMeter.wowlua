@@ -261,6 +261,25 @@ end
 
 type Entry = { r: ThreatEntry, i: number }
 
+-- The rows' order (SetRows runs five times a second in a fight: the
+-- comparator made once, told by `sortByState` how to sort).
+local sortByState = false
+local function sortsBefore(a: Entry, b: Entry): boolean
+    if sortByState then
+        local sa, sb = STATUS_RANK(a.r), STATUS_RANK(b.r)
+        if sa ~= sb then
+            return sa > sb
+        end
+    else
+        local pa = isNumber(a.r.percent) and a.r.percent or -1
+        local pb = isNumber(b.r.percent) and b.r.percent or -1
+        if pa ~= pb then
+            return pa > pb
+        end
+    end
+    return a.i < b.i
+end
+
 export class ThreatMeter extends Frame
     maxRows: number
     innerW: number
@@ -268,6 +287,9 @@ export class ThreatMeter extends Frame
     target: Text
     body: Frame
     rows: ThreatRow[]
+    -- SetRows' list and entries, kept from call to call
+    sorted: Entry[] = {}
+    entries: Entry[] = {}
     pinLine: Texture
     note: Text
     empty: Text
@@ -347,28 +369,27 @@ export class ThreatMeter extends Frame
     function SetRows(list: ThreatEntry[]?, options: ThreatOptions?)
         local opts = options or {}
         local show = opts.show or "group"
-        local rows: Entry[] = {}
+        local rows, pool = self.sorted, self.entries
+        local count = 0
         for i, r in ipairs(list or {}) do
             if show == "group" or r.you or (show == "tanks" and holder(r.role)) then
-                rows[#rows + 1] = { r = r, i = i }
+                count = count + 1
+                local e = pool[count]
+                if e then
+                    e.r, e.i = r, i
+                else
+                    e = { r = r, i = i }
+                    pool[count] = e
+                end
+                rows[count] = e
             end
         end
+        for _ = count + 1, #rows do
+            table.remove(rows)
+        end
         local byState = opts.byState
-        table.sort(rows, function(a: Entry, b: Entry): boolean
-            if byState then
-                local sa, sb = STATUS_RANK(a.r), STATUS_RANK(b.r)
-                if sa ~= sb then
-                    return sa > sb
-                end
-            else
-                local pa = isNumber(a.r.percent) and a.r.percent or -1
-                local pb = isNumber(b.r.percent) and b.r.percent or -1
-                if pa ~= pb then
-                    return pa > pb
-                end
-            end
-            return a.i < b.i
-        end)
+        sortByState = byState and true or false
+        table.sort(rows, sortsBefore)
         local max = self.maxRows
         local note = byState and show ~= "self" and #rows > 0
         local slots = note and max - 1 or max
@@ -410,6 +431,19 @@ export class ThreatMeter extends Frame
         end
         self.note:SetVisible(note and true or false)
         self.empty:SetVisible(#rows == 0)
+    end
+
+    -- One row more made ahead (Core/Ahead: out of combat, before the first
+    -- fight needs them), hidden; true while rows are still missing.
+    function BuildAhead(): boolean
+        local i = #self.rows + 1
+        if i > self.maxRows then
+            return false
+        end
+        local row = buildRow(self)
+        row:Hide()
+        self.rows[i] = row
+        return i < self.maxRows
     end
 end
 mixins.ThreatMeter = ThreatMeter

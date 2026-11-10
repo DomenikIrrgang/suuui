@@ -9,15 +9,10 @@ import test, config from "wowlua:test"
 import features from "wowlua:meta"
 import * as perf from "./util"
 import auraCatalog from "/Data/AuraCatalog"
-import collectionSources from "/Data/CollectionSources"
 import defensives from "/Data/Defensives"
-import flightPaths from "/Data/FlightPaths"
 import flightRoutes from "/Data/FlightRoutes"
 import instanceLevels from "/Data/InstanceLevels"
-import mapOverlays from "/Data/MapOverlays"
-import mapPlaces from "/Data/MapPlaces"
-import questStarts from "/Data/QuestStarts"
-import recipeSources from "/Data/RecipeSources"
+import * as data from "/Core/Data"
 import classTalents from "/Data/Talents"
 import cooldownPresets from "/Data/Presets"
 import trainerSpells from "/Data/Trainer"
@@ -69,13 +64,30 @@ end
 @if(features.perf)
 @test("setup: the data's size")
 local function dataSize()
-    perf.record("data QuestStarts", { kb = kbOf(questStarts) })
-    perf.record("data CollectionSources", { kb = kbOf(collectionSources) })
-    perf.record("data RecipeSources", { kb = kbOf(recipeSources) })
-    perf.record("data MapPlaces", { kb = kbOf(mapPlaces) })
-    perf.record("data FlightPaths", { kb = kbOf(flightPaths) })
+    -- the tables built on first use (Core/Data): how much of them a login
+    -- built, then each one's size once built
+    local lazy: { [string]: data.LazyData<unknown> } = {
+        QuestStarts = data.questStarts :: unknown :: data.LazyData<unknown>,
+        CollectionSources = data.collectionSources :: unknown :: data.LazyData<unknown>,
+        RecipeSources = data.recipeSources :: unknown :: data.LazyData<unknown>,
+        MapPlaces = data.mapPlaces :: unknown :: data.LazyData<unknown>,
+        FlightPaths = data.flightPaths :: unknown :: data.LazyData<unknown>,
+        MapOverlays = data.mapOverlays :: unknown :: data.LazyData<unknown>,
+    }
+    local atLogin = 0
+    for _, d in pairs(lazy) do
+        if d:Ready() then
+            atLogin += kbOf(d:Get())
+        end
+    end
+    perf.record("data built at login (of those built on first use)", { kb = atLogin })
+    perf.record("data QuestStarts", { kb = kbOf(data.questStarts:Get()) })
+    perf.record("data CollectionSources", { kb = kbOf(data.collectionSources:Get()) })
+    perf.record("data RecipeSources", { kb = kbOf(data.recipeSources:Get()) })
+    perf.record("data MapPlaces", { kb = kbOf(data.mapPlaces:Get()) })
+    perf.record("data FlightPaths", { kb = kbOf(data.flightPaths:Get()) })
     perf.record("data FlightRoutes", { kb = kbOf(flightRoutes) })
-    perf.record("data MapOverlays", { kb = kbOf(mapOverlays) })
+    perf.record("data MapOverlays", { kb = kbOf(data.mapOverlays:Get()) })
     perf.record("data AuraCatalog", { kb = kbOf(auraCatalog) })
     perf.record("data Talents", { kb = kbOf(classTalents) })
     perf.record("data InstanceLevels", { kb = kbOf(instanceLevels) })

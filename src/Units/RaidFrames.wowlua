@@ -222,6 +222,8 @@ export class RaidButton extends UnitFrame
     readonly selected: Frame
     auras: UnitAuras? = nil
     isMe: boolean = false
+    -- whom ApplyWho last set the groups for (nil: never)
+    appliedIsMe: boolean? = nil
 
     constructor(parent: Frame?, unit: string?, opts: UnitFrameOptions)
         super(parent, unit, opts)
@@ -304,6 +306,7 @@ export class RaidButton extends UnitFrame
         if not auras then
             return
         end
+        self.appliedIsMe = self.isMe
         for _, g in ipairs(AURA_GROUPS) do
             local filter = (g.filters or g.kinds) and self:GroupFilter(g)
             if filter then
@@ -1620,9 +1623,14 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             presence()
+            -- (who a frame shows can't be read in a fight: the groups again
+            -- for a frame that turned out to show you, or no longer does;
+            -- a setting changed in the fight applied itself already)
             for _, f in ipairs(self.buttons) do
                 f:UpdateIsMe()
-                f:ApplyWho()
+                if f.isMe ~= f.appliedIsMe then
+                    f:ApplyWho()
+                end
             end
         end)
         self.rangeTicker = every(0.3, function()

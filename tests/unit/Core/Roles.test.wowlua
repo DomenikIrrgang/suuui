@@ -16,8 +16,10 @@ local profiles = settings.profiles
 
 type Node = { posX?: number, ranksPurchased?: unknown, activeRank?: number, currentRank?: number }
 
--- A talent config of these nodes (by node ID) in one tree.
+-- A talent config of these nodes (by node ID) in one tree (the talents
+-- changed: read again).
 local function talents(nodes: { [number]: Node })
+    roles.talentsChanged()
     mock.fake("C_ClassTalents.GetActiveConfigID", function(): number
         return CONFIG
     end)
@@ -50,6 +52,7 @@ local function points(a: number, b: number, c: number)
 end
 
 local function noTalents()
+    roles.talentsChanged()
     mock.fake("C_ClassTalents.GetActiveConfigID", function(): number?
         return nil
     end)
@@ -123,6 +126,30 @@ local function spec()
     expect(pts).toEqual({ 3, 11, 2 })
     points(0, 0, 5)
     expect(roles.spec()).toBe(3)
+end
+
+@test("the talents are read once until a talent event: the spec asked again reads nothing")
+local function readOnce()
+    points(3, 11, 2)
+    local read = C_Traits.GetNodeInfo
+    local reads = 0
+    mock.fake("C_Traits.GetNodeInfo", function(cfg: number, nodeID: number): unknown
+        reads = reads + 1
+        return read(cfg, nodeID)
+    end)
+    expect(roles.spec()).toBe(2)
+    local n = reads
+    expect(n > 0).toBe(true)
+    local _, pts = roles.spec()
+    pts[1] = 99 -- (the caller's copy)
+    expect(roles.spec()).toBe(2)
+    expect(reads).toBe(n)
+    -- a talent learned: read again
+    mock.fireEvent("TRAIT_CONFIG_UPDATED", CONFIG)
+    local before = reads
+    expect(roles.spec()).toBe(2)
+    expect(reads).toBe(before + n)
+    expectNoErrors()
 end
 
 @test("a tie goes to the leftmost tree")

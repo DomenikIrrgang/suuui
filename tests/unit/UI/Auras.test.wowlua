@@ -391,6 +391,34 @@ local function groupMax()
     expect(assert(lazy.groups.buffs).added).toBe(true)
 end
 
+@test("a group's count or filter set again unchanged: nothing for the engine")
+local function sameAgain()
+    local c = container("player", { groups = { buffs() } })
+    local count = mock.stub(c.container, "SetAuraGroupMaxFrameCount")
+    local set = mock.stub(c.container, "SetAuraGroupFilterString")
+    c:SetGroupMax("buffs", 4)
+    c:SetGroupFilter("buffs", { "HELPFUL" })
+    expect(count).never.toHaveBeenCalled()
+    expect(set).never.toHaveBeenCalled()
+    c:SetGroupMax("buffs", 6)
+    c:SetGroupMax("buffs", 6)
+    expect(count).toHaveBeenCalledTimes(1)
+    c:SetGroupFilter("buffs", { "PLAYER", "HELPFUL" })
+    c:SetGroupFilter("buffs", { "HELPFUL", "PLAYER" })
+    expect(set).toHaveBeenCalledTimes(1)
+    -- a lazy group at 0 stays out of the engine
+    local lazy = container("player", {
+        lazy = true,
+        groups = {
+            buffs(function(g: AuraGroup)
+                g.max = 0
+            end),
+        },
+    })
+    lazy:SetGroupMax("buffs", 0)
+    expect(assert(lazy.groups.buffs).added).toBeFalsy()
+end
+
 @test("a group the engine refuses is reported and tried again later")
 local function groupRefused()
     local report = mock.stub(fault, "report")

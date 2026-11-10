@@ -1,0 +1,159 @@
+-- Core/Data.wowlua
+-- SuuUI's big data tables, built on first use (the performance work of
+-- 2026-11-09): about 8 MB were built at login for everyone (QuestStarts
+-- 3 MB, CollectionSources 2.1, RecipeSources 1.1, MapPlaces 0.9,
+-- FlightPaths and MapOverlays 0.2 each), whether the map, the collections,
+-- the professions or a flight master were ever used. Each data file is
+-- written as steps that fill its table a part at a time
+-- (tools/lazy_data.py); a LazyData runs them:
+--
+--   data.questStarts:Get()         the table, built now if it isn't
+--   data.questStarts:Ready()       built already?
+--   data.collectionSources:Until(fn)  the table built only until fn(t)
+--                                  holds (the fields written whole come
+--                                  first: a small list without the rest)
+--   data.questStarts:Prepare(fn)   built a step a frame (about 48 KB of
+--                                  source each), then fn(); in combat too:
+--                                  a step is small
+--
+-- Whoever shows the data as something opens (the world map, an NPC's
+-- tooltip) prepares it and draws what needs it once it's there, so no
+-- frame builds all of it. Each step goes once it ran: after the last, the
+-- code that built the table is garbage too.
+
+import questStartsSteps from "/Data/QuestStarts"
+import mapPlacesSteps from "/Data/MapPlaces"
+import collectionSourcesSteps from "/Data/CollectionSources"
+import recipeSourcesSteps from "/Data/RecipeSources"
+import flightPathsSteps from "/Data/FlightPaths"
+import mapOverlaysSteps from "/Data/MapOverlays"
+import * as fault from "./Fault"
+
+-- What the frame driver steps (any LazyData).
+interface Stepped
+    readonly name: string
+    function Step(): boolean
+    function Done()
+end
+
+-- the tables being prepared, a step a frame
+local preparing: Stepped[] = {}
+local driver = CreateFrame("Frame")
+driver:Hide()
+
+export class LazyData<T> implements Stepped
+    -- the steps (each let go once it ran), how many, the next to run
+    private steps: { [number]: ((t: T) -> ())? }
+    private count: number
+    private nextStep: number = 1
+    -- the table so far
+    private value: T
+    -- who waits for Prepare
+    private waiting: (() -> ())[]? = nil
+
+    constructor(readonly name: string, steps: ((t: T) -> ())[])
+        self.steps = steps :: unknown :: { [number]: ((t: T) -> ())? }
+        self.count = #steps
+        self.value = {} :: unknown :: T
+    end
+
+    -- Whether every step ran.
+    function Ready(): boolean
+        return self.nextStep > self.count
+    end
+
+    -- One step more; false once none is left after it.
+    function Step(): boolean
+        local i = self.nextStep
+        local step = self.steps[i]
+        if not step then
+            return false
+        end
+        self.nextStep = i + 1
+        -- (the step's code goes: nothing else holds it)
+        self.steps[i] = nil
+        step(self.value)
+        return self.nextStep <= self.count
+    end
+
+    -- The table: whatever is still missing built now.
+    function Get(): T
+        if not self:Ready() then
+            while self:Step() do
+            end
+            if self.waiting then
+                self:Done()
+            end
+        end
+        return self.value
+    end
+
+    -- The table built only as far as `has` needs (the rest later): the
+    -- fields written whole come in the first steps (tools/lazy_data.py).
+    function Until(has: (t: T) -> boolean): T
+        while not has(self.value) and self:Step() do
+        end
+        if self:Ready() and self.waiting then
+            self:Done()
+        end
+        return self.value
+    end
+
+    -- Built a step a frame, then `done` (at once when it's there already).
+    function Prepare(done: (() -> ())?)
+        if self:Ready() then
+            if done then
+                done()
+            end
+            return
+        end
+        if done then
+            local waiting = self.waiting or {}
+            self.waiting = waiting
+            waiting[#waiting + 1] = done
+        end
+        for _, d in ipairs(preparing) do
+            if d == self then
+                return
+            end
+        end
+        preparing[#preparing + 1] = self
+        driver:Show()
+    end
+
+    -- After the last step: whoever waited.
+    function Done()
+        local waiting = self.waiting
+        self.waiting = nil
+        for _, fn in ipairs(waiting or {}) do
+            fault.call("Data: " .. self.name, fn)
+        end
+    end
+end
+
+driver:SetScript("OnUpdate", function()
+    local d = preparing[1]
+    if not d then
+        driver:Hide()
+        return
+    end
+    local ok, more = fault.call("Data: " .. d.name, function(): boolean
+        return d:Step()
+    end)
+    if not ok or not more then
+        table.remove(preparing, 1)
+        if ok then
+            d:Done()
+        end
+    end
+    if #preparing == 0 then
+        driver:Hide()
+    end
+end)
+
+export const questStarts = LazyData.new("QuestStarts", questStartsSteps)
+export const mapPlaces = LazyData.new("MapPlaces", mapPlacesSteps)
+export const collectionSources = LazyData.new("CollectionSources", collectionSourcesSteps)
+export const recipeSources = LazyData.new("RecipeSources", recipeSourcesSteps)
+export const flightPaths = LazyData.new("FlightPaths", flightPathsSteps)
+export const mapOverlays = LazyData.new("MapOverlays", mapOverlaysSteps)

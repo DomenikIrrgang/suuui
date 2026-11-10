@@ -100,12 +100,13 @@ local paints: { [Paintable]: Paint } = setmetatable({}, { __mode = "k" }) -- reg
 local watched: { [Paintable]: { [string]: boolean } } = setmetatable({}, { __mode = "k" }) -- region -> { [setter] = true }
 local painting = false
 
--- the setters that take a colour away from each kind of paint
+-- the setters that take a colour away from each kind of paint (a font
+-- object brings its own colour; a bar's new texture may come without one)
 local LETS_GO: { [PaintKind]: string[] } = {
     fill = { "SetColorTexture", "SetTexture", "SetAtlas", "SetGradient" },
     vertex = { "SetVertexColor", "SetGradient" },
-    text = { "SetTextColor" },
-    bar = { "SetStatusBarColor" },
+    text = { "SetTextColor", "SetFontObject" },
+    bar = { "SetStatusBarColor", "SetStatusBarTexture" },
     gradient = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTexture", "SetAtlas" },
     fn = { "SetColorTexture", "SetVertexColor", "SetGradient", "SetTextColor", "SetStatusBarColor" },
 }
@@ -161,8 +162,15 @@ local function draw(region: Paintable, p: Paint)
     end
 end
 
+-- A colour kept and set. The same kind, token and alpha as kept already
+-- set nothing: the region shows them still (anything that set its colour
+-- since let the paint go, and a theme's repaint set the token's new value).
+-- Painting is done on every draw of a button or a slot: most change nothing.
 local function keep(region: Paintable, kind: PaintKind, token: string, alpha: number?): Paint
     local p = paints[region]
+    if p and kind ~= "gradient" and p.kind == kind and p.token == token and p.alpha == alpha then
+        return p
+    end
     if not p then
         p = {}
         paints[region] = p
@@ -202,6 +210,10 @@ export function paintGradient(
     toAlpha: number?
 )
     local p: Paint = paints[texture] or {}
+    if p.kind == "gradient" and p.token == from and p.alpha == fromAlpha and p.token2 == to and p.alpha2 == toAlpha and
+        p.orientation == orientation then
+        return
+    end
     paints[texture] = p
     p.token2, p.alpha2, p.orientation = to, toAlpha, orientation
     keep(texture, "gradient", from, fromAlpha)

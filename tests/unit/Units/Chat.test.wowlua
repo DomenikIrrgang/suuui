@@ -1017,6 +1017,37 @@ local function idle()
     mock.advanceFrames(5, 50)
 end
 
+@test("the driver's tick only checks the fade; the windows refresh a frame after what changes them")
+local function refreshOnChange()
+    ready()
+    local refresh = mock.spy(M.RefreshWindows)
+    mock.stub(M, "RefreshWindows", refresh)
+    -- ten seconds of ticks: the windows aren't walked
+    mock.advanceFrames(50, 200)
+    expect(refresh).never.toHaveBeenCalled()
+    -- Blizzard's tab menu: a font size, a name
+    FCF_SetChatWindowFontSize(nil, CF1, 17)
+    local global = windowOf("Global")
+    FCF_SetWindowName(global, "Worldwide")
+    expect(refresh).never.toHaveBeenCalled()
+    mock.advanceFrames(1)
+    -- once for both
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(select(2, frameOf(CF1):GetFont())).toBeCloseTo(17)
+    expect(findTab("Worldwide") ~= nil).toBe(true)
+    FCF_SetWindowName(global, "Global")
+    FCF_SetChatWindowFontSize(nil, CF1, 14)
+    mock.advanceFrames(1)
+    expect(findTab("Global") ~= nil).toBe(true)
+    -- a line in another tab: its unread mark a frame later
+    global:AddMessage("news")
+    mock.advanceFrames(1)
+    expect(tab("Global").unread).toBeShown()
+    mock.click(tab("Global"))
+    mock.click(tab("General"))
+    expectNoErrors()
+end
+
 --------------------------------------------------------------------------------
 -- The Global tab
 --------------------------------------------------------------------------------

@@ -1325,28 +1325,8 @@ local function isMe(key: string): boolean
     return (me ~= nil and me:lower() == key) or (name ~= nil and name:lower() == key)
 end
 
-local function editBoxes(): EditBox[]
-    local out: EditBox[] = {}
-    for _, cf in ipairs(chatFrames()) do
-        local eb = chat.editBox(cf)
-        if eb then
-            out[#out + 1] = eb
-        end
-    end
-    return out
-end
-
 local function hasFocus(eb: EditBox): boolean
     return errors.try(eb.HasFocus, eb) == true
-end
-
-local function editBoxFocused(): boolean
-    for _, eb in ipairs(editBoxes()) do
-        if hasFocus(eb) then
-            return true
-        end
-    end
-    return false
 end
 
 -- Global channels in their own tab (Blizzard's own chat settings, as its
@@ -1450,6 +1430,20 @@ local WHISPER_EVENTS: EventName[] = {
     "CHAT_MSG_BN_WHISPER",
     "CHAT_MSG_BN_WHISPER_INFORM",
 }
+-- Blizzard's window code that changes the windows or their tabs (its tab
+-- menu, new and whisper windows, the dock): the windows looked at again
+local WINDOW_CODE = {
+    "FCF_SetWindowName",
+    "FCF_SetChatWindowFontSize",
+    "FCF_OpenNewWindow",
+    "FCF_OpenTemporaryWindow",
+    "FCF_SetTemporaryWindowType",
+    "FCF_Close",
+    "FCF_DockFrame",
+    "FCF_UnDockFrame",
+    "FCF_DockUpdate",
+    "FCF_ResetChatWindows",
+}
 -- the channels' changes
 local CHANNEL_EVENTS: EventName[] = { "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOTICE" }
 
@@ -1486,6 +1480,12 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     awake: boolean? = nil
     lastActive: number = 0
     frameCount: number = 0
+    -- the windows' refresh: waiting for the next frame, the windows and
+    -- Blizzard's code watched, the edit boxes as last seen
+    windowsPending: boolean? = nil
+    watchedWindows: { [Window]: boolean } = {}
+    windowCodeHooked: boolean? = nil
+    boxes: EditBox[] = {}
     -- kept chat
     historyLoaded: boolean? = nil
     loggedOutAt: number? = nil
@@ -1664,8 +1664,8 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     end
 
     -- SuuUI's body face at Blizzard's size for the window (its own setting),
-    -- with the design's shadow. Checked again on each tick: the window's menu
-    -- changes the size.
+    -- with the design's shadow. Checked again when the windows change
+    -- (RefreshWindows): the window's menu changes the size.
     function ApplyFont(cf: Window): boolean
         local size = fontSize(cf)
         local was = self.fontSizes[cf]
@@ -1943,8 +1943,10 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:Put(m, text, r, g, b)
             -- whisper windows' too (Blizzard may show a whisper only there)
             self:KeepWhisper(text, r, g, b, (select(4, ...)))
-            if m ~= self.activeMirror and cf ~= ChatFrame2 then
+            if m ~= self.activeMirror and cf ~= ChatFrame2 and not self.unread[cf] then
                 self.unread[cf] = true
+                -- the tab's unread mark
+                self:WindowsChanged()
             end
         end)
     end
@@ -3227,29 +3229,111 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         self.lastActive = GetTime()
     end
 
-    function Tick()
-        local p = self.panel
-        if not p then
+    -- The windows looked at again: a new one (a whisper tab) skinned, a font
+    -- size changed in a window's menu applied, the tabs laid out (names,
+    -- docking, whisper windows opened or closed, unread marks). Run when
+    -- something changed them (WindowsChanged), never on a timer.
+    function RefreshWindows()
+        if not self.panel then
             return
         end
-        -- a new window (a whisper tab): skinned
         local windows = chatFrames()
         if #windows ~= self.frameCount then
             self.frameCount = #windows
             self:SkinAll()
         end
-        -- the window's own font size may have changed in its menu
+        local boxes: EditBox[] = {}
         for _, cf in ipairs(windows) do
+            self:WatchWindow(cf)
             if self:ApplyFont(cf) then
                 self:ApplyMirrorFont(cf)
             end
+            local eb = chat.editBox(cf)
+            if eb then
+                boxes[#boxes + 1] = eb
+            end
         end
+        self.boxes = boxes
         self:UpdateTabs()
+    end
+
+    -- Something changed the windows: refreshed a frame later, once however
+    -- many changes come in that frame.
+    function WindowsChanged()
+        if self.windowsPending then
+            return
+        end
+        self.windowsPending = true
+        after(0, function()
+            self.windowsPending = nil
+            if self:IsEnabled() then
+                self:RefreshWindows()
+            end
+        end)
+    end
+
+    -- A window shown or hidden (a whisper window opened or closed): the tabs
+    -- again.
+    function WatchWindow(cf: Window)
+        if self.watchedWindows[cf] then
+            return
+        end
+        self.watchedWindows[cf] = true
+        for _, script in ipairs({ "OnShow", "OnHide" }) do
+            hookScript(cf, script, function()
+                if self:IsEnabled() then
+                    self:WindowsChanged()
+                end
+            end)
+        end
+    end
+
+    -- Blizzard's own window code (its tab menu: rename, font size, new
+    -- window, close, dock and undock, a whisper window): the windows again.
+    function HookWindowCode()
+        if self.windowCodeHooked then
+            return
+        end
+        self.windowCodeHooked = true
+        for _, name in ipairs(WINDOW_CODE) do
+            if type(field(_G, name)) == "function" then
+                hook(name, function()
+                    if self:IsEnabled() then
+                        self:WindowsChanged()
+                    end
+                end)
+            end
+        end
+    end
+
+    -- Whether one of the chat's inputs has the keyboard: Blizzard's edit
+    -- boxes (as last refreshed) or the Search tab's field.
+    function InputFocused(): boolean
+        local search = self.search
+        if search ~= nil and search.field.edit:HasFocus() then
+            return true
+        end
+        for _, eb in ipairs(self.boxes) do
+            if hasFocus(eb) then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- The idle fade, checked every TICK: cheap (the mouse over the panel, an
+    -- input's focus). The windows and tabs are refreshed by what changes
+    -- them (RefreshWindows), not here.
+    function Tick()
+        local p = self.panel
+        if not p then
+            return
+        end
         local awake = true
         local search = self.search
         if self:Get("fadeIdle") then
             local hovered = p:IsMouseOver() and true or false
-            local focused = editBoxFocused() or (search ~= nil and search.field.edit:HasFocus())
+            local focused = self:InputFocused()
             if hovered or focused or self.drag or SuuUI.EditMode.IsActive() then
                 self:Wake()
             end
@@ -3266,7 +3350,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 SuuUI.Motion.AlphaTo(search.head, a, awake and 0.2 or 1.2)
             end
             -- Blizzard's edit boxes: hidden while idle and unfocused
-            for _, eb in ipairs(editBoxes()) do
+            for _, eb in ipairs(self.boxes) do
                 if not hasFocus(eb) then
                     eb:SetAlpha(a)
                 end
@@ -3401,6 +3485,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             end
             self:SkinAll()
             self:PlaceChat()
+            self:RefreshWindows()
         end)
     end
 
@@ -3434,6 +3519,8 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 end)
             end)
         end
+        -- the windows and tabs refreshed when Blizzard's code changes them
+        self:HookWindowCode()
         -- new windows (whispers, a new tab): skinned a frame later
         for _, e in ipairs(WINDOW_EVENTS) do
             self:OnGameEvent(e, function()
@@ -3451,6 +3538,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 after(0, function()
                     if self:IsEnabled() then
                         self:SkinAll()
+                        self:RefreshWindows()
                     end
                 end)
             end)
@@ -3462,6 +3550,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             if self.pendingSkin then
                 self.pendingSkin = nil
                 self:SkinAll()
+                self:WindowsChanged()
             end
             self:ApplyGlobalTab()
         end)

@@ -20,7 +20,7 @@ import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import chromeOf from "/UI/WindowSkin"
 import type WindowChrome, SkinTab from "/UI/WindowSkin"
-import markOwn, leave from "/UI/Reskin"
+import markOwn, leave, reskinPart from "/UI/Reskin"
 import type Money from "/UI/Inventory"
 import moneyText from "/UI/Inventory"
 import type TabMarker from "/UI/TabMarker"
@@ -238,6 +238,31 @@ local SEARCH_H = 26
 local styledSearch: { [Frame]: boolean } = tbl.weakKeys()
 local styledDetails: { [Frame]: boolean } = tbl.weakKeys()
 local placedList: { [Frame]: boolean } = tbl.weakKeys()
+-- The quest log's restyle (the performance work of 2026-11-09): the whole
+-- window walked once (reskinned), then only the list's rows the game made
+-- since (its pools'); a walk of the whole window took 333k instructions,
+-- and the game lays the list out several times when it opens.
+local reskinnedLog: { [Frame]: boolean } = tbl.weakKeys()
+local reskinnedRows: { [Frame]: boolean } = tbl.weakKeys()
+local QUEST_POOLS = {
+    "titleFramePool",
+    "objectiveFramePool",
+    "headerFramePool",
+    "campaignHeaderFramePool",
+    "campaignHeaderMinimalFramePool",
+    "covenantCallingsHeaderFramePool",
+}
+
+-- How many parents a frame has up to `top` (nil: `top` isn't one of them).
+local function depthBelow(f: Frame, top: Frame): number?
+    local n = 0
+    local p: Frame? = f
+    while p and p ~= top do
+        n = n + 1
+        p = frames.asFrame(p:GetParent())
+    end
+    return p == top and n or nil
+end
 
 -- The quest log's search box in the header's second row: as tall as the
 -- row's controls allow, SuuUI's search glyph in front (the reskin hid the
@@ -779,6 +804,9 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
     upOver: secure.Overlay? = nil
     -- the quest log's headers' font (label, in ink)
     questFont: Font? = nil
+    -- the quest log restyled in this frame (GetTime), once more next frame
+    questRestyledAt: number? = nil
+    questRestylePending: boolean? = nil
     -- SuuUI's stand-ins for the collections the game hides, by their ID
     readonly standIns: { [number]: Button } = {}
     -- the group finder's size (wide: the Group Finder module's Browse page)
@@ -1376,7 +1404,23 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
     -- the micro menu; maximized, SuuUI's enlarged map in the screen's middle.
     --------------------------------------------------------------------------------
 
+    -- At most once a frame: called again in the same frame (the game lays
+    -- the list out several times as it opens), once more on the next.
     function RestyleQuestLog()
+        local now = GetTime()
+        if self.questRestyledAt == now then
+            if not self.questRestylePending then
+                self.questRestylePending = true
+                after(0, function()
+                    self.questRestylePending = nil
+                    if self:IsEnabled() then
+                        self:RestyleQuestLog()
+                    end
+                end)
+            end
+            return
+        end
+        self.questRestyledAt = now
         local q = find("QuestMapFrame")
         if not q then
             return
@@ -1388,7 +1432,29 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         if clear then
             leave(clear, "button")
         end
-        UI.Reskin(q)
+        if not reskinnedLog[q] then
+            reskinnedLog[q] = true
+            UI.Reskin(q)
+            -- (every row there now had its pass with the window's)
+            for _, poolKey in ipairs(QUEST_POOLS) do
+                for _, row in ipairs(frames.rows(field(list, poolKey))) do
+                    reskinnedRows[row] = true
+                end
+            end
+        else
+            -- the rows the game made since: as the window's pass would
+            for _, poolKey in ipairs(QUEST_POOLS) do
+                for _, row in ipairs(frames.rows(field(list, poolKey))) do
+                    if not reskinnedRows[row] then
+                        reskinnedRows[row] = true
+                        local depth = depthBelow(row, q)
+                        if depth then
+                            reskinPart(row, depth)
+                        end
+                    end
+                end
+            end
+        end
         if sb and not styledSearch[sb] then
             styleQuestSearch(sb)
         end
