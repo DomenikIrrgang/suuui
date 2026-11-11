@@ -9,7 +9,7 @@
 #   (default: the SavedVariables of every WoW Forever account)
 set -e
 cd "$(dirname "$0")/.."
-BUILD=1.60.1.70862
+BUILD=1.60.1.70888
 OLD=1.60.1.70338
 CACHE=${TMPDIR:-/tmp}/suuui-wago-$BUILD
 OLDCACHE=${TMPDIR:-/tmp}/suuui-wago-$OLD
