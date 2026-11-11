@@ -7,8 +7,8 @@
 -- hovering the row), your choice pressed in arcane. A choice the game won't let you
 -- take is dimmed with its reason. WoW Forever has no Disenchant: Need, Greed
 -- and Pass only. "Pass on all" answers every roll you haven't; "Greed on
--- all" asks once first. Results under the rows keep who won what until
--- you close the tray, or 10 s after the last roll (held in combat). The tray opens
+-- all" asks once first. Results under the rows show who won what, each
+-- for 5 s once its roll is decided (or until you close them). The tray opens
 -- by itself when a roll starts, in combat too, and folds into a one-line
 -- tab. A built-in module written against the public API only.
 --
@@ -44,7 +44,7 @@ local DEFAULTS = {
     -- its own place when this changes)
     position = { point = "TOP", x = 0, y = -80 } :: Position,
     unfold = true, -- a new roll opens the folded tray
-    results = true, -- who won what stays a moment after the last roll
+    results = true, -- who won what, each 5 s after its roll
 }
 
 local QUALITY: { [number]: string } = {
@@ -58,8 +58,10 @@ local QUALITY: { [number]: string } = {
     "legendary",
 }
 
--- s results stay once no roll is open and you're out of combat
-local RESULTS_STAY = 10
+-- s each result stays after its roll was decided, on its own (asked
+-- 2026-11-11: "a done roll should only stay 5 seconds after it was rolled
+-- out, then disappear and not wait for other rolls")
+local RESULTS_STAY = 5
 -- results kept (the oldest go)
 local RESULTS_KEPT = 8
 -- s a roll stays past its time when the game hasn't said it's over
@@ -121,7 +123,7 @@ export type Roll = {
 }
 
 -- A decided roll: who won it (nil: everyone passed).
-export type Result = { roll: Roll, winner?: string }
+export type Result = { roll: Roll, winner?: string, at: number }
 
 -- The game's loot line formats as patterns: the pattern and the order of
 -- its captures.
@@ -564,7 +566,7 @@ local SECTION: SettingsSection = {
                     key = "results",
                     label = "Keep the results",
                     control = "toggle",
-                    description = "Who won what stays under the rolls until you close the tray, or 10 seconds after the last roll ends (while you're in combat, until 10 seconds after it).",
+                    description = "Who won what shows under the rolls for 5 seconds after each roll is decided (the cross closes them sooner).",
                 },
             },
         },
@@ -587,8 +589,6 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
     -- Greed on all asking; the tray folded into its tab
     asking: boolean = false
     folded: boolean = false
-    -- since when no roll is open (out of combat): the results go after RESULTS_STAY
-    idleSince: number? = nil
     host: Host? = nil
     -- the popup just closed: the roll it asked about and its OK
     lastHosted: number? = nil
@@ -843,37 +843,35 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         self:SyncHost()
     end
 
-    -- Every tick while the tray shows: the seconds, and the results going
-    -- once no roll is open for a while out of combat.
+    -- Every tick while the tray shows: the seconds, and each result going
+    -- RESULTS_STAY s after its roll was decided (each on its own, open rolls
+    -- or not, in combat too).
     function Tick()
         local tray = self.tray
         if not tray then
             return
         end
         if next(self.rolls) ~= nil then
-            self.idleSince = nil
             local times: { [number]: number } = {}
             for id, roll in pairs(self.rolls) do
                 times[id] = roll.remaining()
             end
             tray:SetRemaining(times)
-            return
         end
-        if InCombatLockdown() then
-            self.idleSince = nil
-            return
+        local now, kept = GetTime(), {} :: Result[]
+        for _, r in ipairs(self.results) do
+            if now - r.at < RESULTS_STAY then
+                kept[#kept + 1] = r
+            end
         end
-        local since = self.idleSince
-        if not since then
-            self.idleSince = GetTime()
-        elseif GetTime() - since >= RESULTS_STAY then
-            self:ClearResults()
+        if #kept < #self.results then
+            self.results = kept
+            self:Refresh()
         end
     end
 
     function ClearResults()
         self.results = {}
-        self.idleSince = nil
         self:Refresh()
     end
 
@@ -1358,7 +1356,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
                 return
             end
         end
-        self.results[#self.results + 1] = { roll = roll, winner = winner }
+        self.results[#self.results + 1] = { roll = roll, winner = winner, at = GetTime() }
         while #self.results > RESULTS_KEPT do
             table.remove(self.results, 1)
         end
@@ -1752,9 +1750,6 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("CHAT_MSG_LOOT", function(_, text)
             self:OnLootLine(text)
-        end)
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            self.idleSince = nil
         end)
         -- rolls already running (a /reload mid-roll)
         if GetActiveLootRollIDs then

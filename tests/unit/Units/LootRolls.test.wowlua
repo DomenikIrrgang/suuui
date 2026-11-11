@@ -4,7 +4,7 @@
 -- game's popup hosted: its own OK answers), the others' choices from the
 -- loot lines (counts, who always under the row), the timer and its urgency, several
 -- rolls in order, Pass on all and Greed on all (asked once), the results
--- (kept 10 s after the last roll, held in combat), folding into the tab, cancelled and timed-out rolls,
+-- (each kept 5 s after its roll), folding into the tab, cancelled and timed-out rolls,
 -- the game saying rolls are over, the test rolls, a reload mid-roll, and no
 -- notification for a roll any more.
 -- The engine has no group loot (no START_LOOT_ROLL of its own, an empty
@@ -414,9 +414,7 @@ local function onAll()
     expect(M.asking).toBe(false)
 end
 
-@test(
-    "the results: you won, someone else won (your roll), everyone passed; kept 10 s after the last roll, longer in combat"
-)
+@test("the results: you won, someone else won (your roll), everyone passed; each gone 5 s after its roll, on its own")
 local function results()
     roll(7)
     roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
@@ -466,24 +464,28 @@ local function results()
     -- none open: the results stay, with a close button
     expect(tray()).toBeShown()
     expect(tray().meta:GetText()).toBe("none open")
-    -- in combat they stay; 10 s after it they go
+    -- each goes 5 s after its roll was decided, on its own: not waiting for
+    -- the others, in combat too (asked)
     -- (the tray's tick runs on frames: ten a second)
     mock.player:enterCombat()
-    mock.advanceFrames(400, 100)
-    expect(tray()).toBeShown()
-    mock.player:leaveCombat()
-    mock.advanceFrames(90, 100)
-    expect(tray()).toBeShown()
-    mock.advanceFrames(20, 100)
-    expect(tray()).never.toBeShown()
+    mock.advanceFrames(45, 100)
+    expect(#M.results).toBe(3)
+    mock.advanceFrames(10, 100)
     expect(#M.results).toBe(0)
-    -- out of combat: 10 s after the last roll ends
+    expect(tray()).never.toBeShown()
+    mock.player:leaveCombat()
+    -- one decided while another is still open: it goes, the open one stays
     roll(10)
+    roll(11, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
     M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
-    mock.advanceFrames(90, 100)
-    expect(tray()).toBeShown()
     expect(#M.results).toBe(1)
-    mock.advanceFrames(20, 100)
+    mock.advanceFrames(30, 100)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", OTHER_LINK))
+    mock.advanceFrames(25, 100)
+    expect(#M.results).toBe(1)
+    expect(assert(M.results[1]).roll.name).toBe("Ember Pants")
+    mock.advanceFrames(30, 100)
+    expect(#M.results).toBe(0)
     expect(tray()).never.toBeShown()
 end
 
