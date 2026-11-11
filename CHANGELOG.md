@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
