@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Chat: clicking an item link in combat no longer prints "Interface action failed because of an AddOn".
+
 ## 0.6.39 (2026-11-11)
 
 ### New
