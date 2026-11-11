@@ -126,6 +126,18 @@ the secret paths:
    imports as reads.
 6. `mock.player:setName` fires no `UNIT_NAME_UPDATE`; the test fires it.
 
+## Power cost prediction (UI/PowerCost, 2026-11-11)
+
+`tests/unit/UI/PowerCost.test.wowlua` drives the cast tracker with a
+`CostApi` stand-in (costs, `UnitChannelInfo`, `GetTime`) and the emulated
+player's own casts (`mock.player:castSpell`, `interruptCast`; FAILED and
+STOP fired with the cast's GUID from `UnitCastingInfo`). The ResourceBar
+tests answer `C_Spell.GetSpellPowerCost` through the bar's `api`; the
+UnitFrame tests use the game's (Frostbolt's recorded 25 mana) on a real
+player made a mage, in combat too. The band's size is measured from the
+fills' edges (wowlua V45), and the power is set by the tests (V44: a cast
+spends nothing in the emulator).
+
 ## Not tested, and why
 
 - What the engine draws inside aura containers (icons, timers, dispel

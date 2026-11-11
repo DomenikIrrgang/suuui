@@ -7,7 +7,8 @@
 --   local r = resourceBar(parent, { width = 340, height = 14 })
 --   r:SetOptions({ show = "both"|"power"|"off", number = "value"|"pct"|"none",
 --                  low = true, druidMana = true, ooc = "show"|"fade"|"hide",
---                  points = "over"|"under", width = 340, height = 14 })
+--                  points = "over"|"under", width = 340, height = 14,
+--                  cost = true })   -- 0.34: your cast's cost faded at the fill's end
 --   r:Start(), r:Stop()       -- events on and off; a new bar starts stopped
 --   r.onResize = fn(r)        -- its height changed (points or mana line came
 --                             -- or went, or the options)
@@ -23,8 +24,13 @@
 -- count would still light them.
 -- Out of combat "hide" keeps the bar's place (alpha 0), so the Cooldown
 -- Manager over it never jumps when a fight starts.
+-- While you cast a spell that costs the bar's power, the part of the fill the
+-- cast will spend fades (opts.cost, on by default; UI/PowerCost): the fill
+-- shows what stays, a see-through bar under it what you have now.
 
 import * as secret from "wowlua:secret"
+import * as powerCost from "/UI/PowerCost"
+import type CastCost, CostApi from "/UI/PowerCost"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
 import * as editMode from "/EditMode/EditMode"
@@ -101,11 +107,16 @@ export type ResourceApi = {
     UnitCanAttack: typeof(UnitCanAttack),
     UnitAffectingCombat: typeof(UnitAffectingCombat),
     GetComboPoints?: typeof(GetComboPoints),
+    -- a cast's cost (UI/PowerCost)
+    C_Spell?: { GetSpellPowerCost: typeof(C_Spell.GetSpellPowerCost) },
+    UnitChannelInfo?: typeof(UnitChannelInfo),
+    GetTime?: typeof(GetTime),
 }
 
 -- What shows: both (the bar and the points), the bar, or nothing; the number
 -- (value, pct or none); the amber under 25%; a druid's mana line; out of
--- combat (as it is, fade or hide); the points over or under the bar; its size.
+-- combat (as it is, fade or hide); the points over or under the bar; its size;
+-- the running cast's cost as a faded band.
 export type ResourceSettings = {
     show: string,
     number: string,
@@ -115,6 +126,7 @@ export type ResourceSettings = {
     points: string,
     width: number,
     height: number,
+    cost: boolean,
 }
 
 export type ResourceBarOptions = { name?: string, api?: ResourceApi, width?: number, height?: number }
@@ -156,9 +168,12 @@ export class ResourceBar extends Frame
     api: ResourceApi
     opts: ResourceSettings
     bar: Well
+    -- under the fill while a cast's cost shows: what you have now, faded
+    spend: StatusBar
     fill: StatusBar
     low: StatusBar
     text: Text
+    cast: CastCost
     mana: Well
     manaFill: StatusBar
     points: Frame
@@ -187,18 +202,23 @@ export class ResourceBar extends Frame
             points = "over",
             width = opts.width or 340,
             height = opts.height or 14,
+            cost = true,
         }
+        self.cast = powerCost.castCost(self.api :: CostApi)
 
         self.bar = well(self)
-        self.fill = statusBar(self.bar, "mana", 1)
+        self.spend = statusBar(self.bar, "mana", 1)
+        inside(self.spend, self.bar)
+        self.spend:Hide()
+        self.fill = statusBar(self.bar, "mana", 2)
         inside(self.fill, self.bar)
-        self.low = statusBar(self.bar, "amber", 2)
+        self.low = statusBar(self.bar, "amber", 3)
         inside(self.low, self.bar)
         self.low:Hide()
         -- the number over the fills, space-3 from the right end
         local over = CreateFrame("Frame", nil, self.bar)
         over:SetAllPoints()
-        over:SetFrameLevel(self.bar:GetFrameLevel() + 3)
+        over:SetFrameLevel(self.bar:GetFrameLevel() + 4)
         self.text = uiText.text(over, "micro", "ink")
         self.text:SetShadowed(true)
         self.text:SetPoint("RIGHT", over, "RIGHT", -S["space-3"], 0)
@@ -226,6 +246,7 @@ export class ResourceBar extends Frame
             points?: string,
             width?: number,
             height?: number,
+            cost?: boolean,
         }
     )
         local o = self.opts
@@ -233,6 +254,9 @@ export class ResourceBar extends Frame
         o.number = opts.number or o.number
         if opts.low ~= nil then
             o.low = opts.low
+        end
+        if opts.cost ~= nil then
+            o.cost = opts.cost
         end
         if opts.druidMana ~= nil then
             o.druidMana = opts.druidMana
@@ -295,6 +319,7 @@ export class ResourceBar extends Frame
         self:SetShown(shown)
         self.text:SetShown(o.number ~= "none")
         draw.paint(self.fill, POWER_TOKEN[token] or "mana")
+        draw.paint(self.spend, POWER_TOKEN[token] or "mana", powerCost.SPEND_ALPHA)
         self:UpdatePower()
         self:UpdateMana()
         self:UpdatePoints()
@@ -309,13 +334,26 @@ export class ResourceBar extends Frame
         local pType = A.UnitPowerType("player")
         local max = amount(A.UnitPowerMax("player", pType))
         local cur = amount(A.UnitPower("player", pType))
-        self.fill:SetMinMaxValues(0, max)
+        -- a cast's cost: the fill (and the amber) show what stays, the faded
+        -- bar under them what you have now (UI/PowerCost: the engine
+        -- subtracts; no Lua arithmetic on the secret amount)
+        local cost = self.opts.cost and self.cast:Amount(pType, max) or nil
+        local lo, hi = 0, max
+        local spending = false
+        if cost and not secret.isSecret(max) then
+            spending = true
+            lo, hi = powerCost.costRange(max, cost)
+            self.spend:SetMinMaxValues(0, max)
+            self.spend:SetValue(cur)
+        end
+        self.spend:SetShown(spending)
+        self.fill:SetMinMaxValues(lo, hi)
         self.fill:SetValue(cur)
         -- amber under 25%: mana and energy only (rage starts every fight empty)
         local low = self.opts.low and (self.token == "MANA" or self.token == "ENERGY") and belowLow()
         self.low:SetShown(low and true or false)
         if low then
-            self.low:SetMinMaxValues(0, max)
+            self.low:SetMinMaxValues(lo, hi)
             self.low:SetValue(cur)
             -- (a number curve: a number)
             self.low:SetAlpha(amount(A.UnitPowerPercent("player", pType, true, low) :: number | Secret<number>))
@@ -410,6 +448,10 @@ export class ResourceBar extends Frame
         end
         events.onUnit("UNIT_POWER_FREQUENT", "player", power, self)
         events.onUnit("UNIT_POWER_UPDATE", "player", power, self)
+        -- your casts: their cost faded at the fill's end, until they end
+        self.cast:Listen(self, function()
+            self:UpdatePower()
+        end)
         events.onUnit(
             "UNIT_MAXPOWER",
             "player",
@@ -481,6 +523,11 @@ export class ResourceBar extends Frame
         end
         self.running = false
         events.offAll(self)
+        -- (a cost shown stays no longer than its events)
+        self.cast:Clear()
+        if self.spend:IsShown() then
+            self:UpdatePower()
+        end
     end
 end
 

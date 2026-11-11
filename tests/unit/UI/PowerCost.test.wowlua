@@ -1,0 +1,177 @@
+-- UI/PowerCost: your cast's cost in a power, read once when a cast or
+-- channel starts and forgotten when it ends; hidden values give nothing.
+-- The game's costs come from a stand-in (CostApi); the cast events are the
+-- emulated player's own (mock.player:castSpell) or fired.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as pc from "/UI/PowerCost"
+import type CostApi from "/UI/PowerCost"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../helpers"
+
+local MANA, RAGE = 0, 1
+local FROSTBOLT, MISSILES, DRAIN = 116, 5143, 9900002
+local owner = {}
+
+-- A stand-in for the game's costs, by spell.
+local function api(costs: { [number]: unknown }, now: number?, channelEnd: unknown?): CostApi
+    return {
+        C_Spell = {
+            GetSpellPowerCost = function(id: unknown): unknown
+                return costs[id :: number]
+            end,
+        },
+        UnitChannelInfo = function(_: string): ...unknown
+            return "Drain", "", 0, 0, channelEnd
+        end,
+        GetTime = function(): number
+            return now or 0
+        end,
+    } :: CostApi
+end
+
+local function cost(kind: unknown, amount: unknown, perSec: unknown?): { [string]: unknown }
+    return { type = kind, name = "MANA", cost = amount, minCost = amount, costPercent = 0, costPerSec = perSec or 0 }
+end
+
+@afterEach
+local function tearDown()
+    events.offAll(owner)
+    mock.advanceTime(5)
+end
+
+@test("a cast: its cost in the power asked for, until its own end")
+local function cast()
+    local c = pc.castCost(api({ [FROSTBOLT] = { cost(RAGE, 5), cost(MANA, 25) } }))
+    expect(c:Amount(MANA, 100)).toBeNil()
+    c:Begin(FROSTBOLT, "Cast-1", false)
+    expect(c:Amount(MANA, 100)).toBe(25)
+    expect(c:Amount(RAGE, 100)).toBe(5)
+    expect(c:Amount(3, 100)).toBeNil() -- energy: none
+    expect(c:Amount(MANA, 20)).toBe(20) -- never more than the bar
+    expect(c:Amount(MANA, 0)).toBeNil()
+    -- another cast's end (an instant one meanwhile) keeps it
+    expect(c:End("UNIT_SPELLCAST_SUCCEEDED", "Cast-2")).toBe(false)
+    expect(c:End("UNIT_SPELLCAST_CHANNEL_STOP", nil)).toBe(false)
+    expect(c:Amount(MANA, 100)).toBe(25)
+    expect(c:End("UNIT_SPELLCAST_SUCCEEDED", "Cast-1")).toBe(true)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    expect(c:End("UNIT_SPELLCAST_STOP", "Cast-1")).toBe(false) -- nothing left
+    -- an end without a GUID ends it
+    c:Begin(FROSTBOLT, "Cast-3", false)
+    expect(c:End("UNIT_SPELLCAST_FAILED", nil)).toBe(true)
+end
+
+@test("no cost: a spell without one, a zero cost, no spell")
+local function none()
+    local c = pc.castCost(api({ [FROSTBOLT] = { cost(MANA, 0) }, [2] = {} }))
+    c:Begin(FROSTBOLT, "Cast-1", false)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    c:Begin(2, "Cast-2", false)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    c:Begin(3, "Cast-3", false) -- (the game answers nothing)
+    expect(c.costs).toBeNil()
+    c:Begin(nil, "Cast-4", false)
+    expect(c.costs).toBeNil()
+end
+
+@test("hidden values: a secret spell, list, entry, type, cost or bar size give nothing")
+local function secrets()
+    local s = mock.secret
+    local c = pc.castCost(
+        api({
+            [1] = s({ cost(MANA, 25) }),
+            [2] = { s(cost(MANA, 25)) },
+            [3] = { cost(s(MANA), 25) },
+            [4] = { cost(MANA, s(25)) },
+            [FROSTBOLT] = { cost(MANA, 25) },
+        })
+    )
+    c:Begin(s(FROSTBOLT), "Cast-1", false)
+    expect(c.costs).toBeNil()
+    for id = 1, 4 do
+        c:Begin(id, "Cast-1", false)
+        expect(c:Amount(MANA, 100)).toBeNil()
+    end
+    c:Begin(FROSTBOLT, s("Cast-1"), false)
+    expect(c:Amount(MANA, s(100))).toBeNil()
+    expect(c:Amount(s(MANA), 100)).toBeNil()
+    -- a secret GUID can't be compared: the end ends it
+    expect(c:End("UNIT_SPELLCAST_STOP", "Cast-9")).toBe(true)
+    expectNoErrors()
+end
+
+@test("a channel: only what it still drains (its flat cost is paid as it starts)")
+local function channel()
+    local costs = { [MISSILES] = { cost(MANA, 85) }, [DRAIN] = { cost(MANA, 0, 10) } }
+    local c = pc.castCost(api(costs, 100, 103000))
+    c:Begin(MISSILES, nil, true)
+    expect(c:Amount(MANA, 1000)).toBeNil()
+    c:Begin(DRAIN, nil, true)
+    expect(c.ends).toBe(103)
+    expect(c:Amount(MANA, 1000)).toBe(30)
+    c.api = api(costs, 102.5, 103000)
+    expect(c:Amount(MANA, 1000)).toBe(5)
+    c.api = api(costs, 104, 103000)
+    expect(c:Amount(MANA, 1000)).toBeNil()
+    -- a cast's ends don't end a channel (its SUCCEEDED comes as it starts)
+    expect(c:End("UNIT_SPELLCAST_SUCCEEDED", "Cast-1")).toBe(false)
+    expect(c:End("UNIT_SPELLCAST_STOP", nil)).toBe(false)
+    expect(c:End("UNIT_SPELLCAST_CHANNEL_STOP", nil)).toBe(true)
+    c:Begin(DRAIN, nil, true)
+    expect(c:End("UNIT_SPELLCAST_INTERRUPTED", nil)).toBe(true)
+    -- a secret end time: nothing
+    c.api = api(costs, 100, mock.secret(103000))
+    c:Begin(DRAIN, nil, true)
+    expect(c:Amount(MANA, 1000)).toBeNil()
+end
+
+@test("Listen: the player's cast, channel, interrupt and instant cast")
+local function listen()
+    local c = pc.castCost(api({ [FROSTBOLT] = { cost(MANA, 25) }, [MISSILES] = { cost(MANA, 85) } }))
+    local changed = mock.spy()
+    local seen: (number | false)[] = {}
+    c:Listen(owner, function()
+        changed()
+        seen[#seen + 1] = c:Amount(MANA, 100) or false
+    end)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(c:Amount(MANA, 100)).toBe(25)
+    mock.advanceTime(2.5)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    -- START, then SUCCEEDED (ends it); STOP finds nothing left
+    expect(seen).toEqual({ 25, false })
+    -- instant: no START, nothing changes
+    mock.player:castSpell(FROSTBOLT, { castTime = 0 })
+    expect(changed).toHaveBeenCalledTimes(2)
+    -- interrupted
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(c:Amount(MANA, 100)).toBe(25)
+    mock.player:interruptCast()
+    expect(c:Amount(MANA, 100)).toBeNil()
+    mock.advanceTime(1)
+    -- failed (its own GUID)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    local guid = select(7, UnitCastingInfo("player"))
+    mock.fireUnitEvent("UNIT_SPELLCAST_FAILED", "player", guid, FROSTBOLT)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    mock.advanceTime(2.5)
+    -- a channel starts (its flat cost already paid) and stops
+    mock.player:castSpell(MISSILES, { castTime = 3, channel = true })
+    expect(c.channel).toBe(true)
+    expect(c:Amount(MANA, 100)).toBeNil()
+    mock.advanceTime(3.5)
+    expect(c.costs).toBeNil()
+    -- another unit's casts: not yours
+    local boar = mock.spawnUnit({ name = "Boar", reaction = "hostile" })
+    boar:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(c.costs).toBeNil()
+    boar:despawn()
+    expectNoErrors()
+end
+
+@test("costRange: the fill's range moved up by the cost")
+local function range()
+    expect({ pc.costRange(1000, 200) }).toEqual({ 200, 1200 })
+end

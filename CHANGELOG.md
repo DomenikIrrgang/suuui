@@ -5,9 +5,10 @@
 ### New
 
 - Player frame: a combat sign. Crossed swords just left of your frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
+- Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
 - Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
 - Professions: the Filter menu has a required level range, like the auction house's. Type a minimum, a maximum or both to see only the recipes whose item needs a level in that range; leave a box empty for no limit. Recipes that make no item (enchants) always show, and an item with no level requirement counts as level 0.
-- For plugin authors (API 0.34): the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`); `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame.
+- For plugin authors (API 0.34): the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`); `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame; the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default).
 
 ### Changed
 

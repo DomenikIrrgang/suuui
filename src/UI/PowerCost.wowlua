@@ -1,0 +1,185 @@
+-- UI/PowerCost.wowlua
+-- What your running cast will spend of a power, for the power bars (the
+-- resource bar's and the player frame's): read from the game when a cast or
+-- channel starts (C_Spell.GetSpellPowerCost), forgotten when it ends.
+--
+--   local c = castCost(api)      -- api: stand-ins for the game's functions
+--   c:Listen(owner, changed)     -- your casts' events (owner: events.offAll)
+--   c:Amount(pType, max)         -- the cost in that power, a plain number,
+--                                -- or nil (no cast, no cost, hidden values)
+--   c:Clear()
+--   costRange(max, cost)         -- the fill's min and max while it shows
+--
+-- The bar shows it as a faded band at the end of its fill: the fill shows
+-- what stays after the cast, a second bar under it, in the same colour but
+-- see-through, what you have now. Your power is secret on this client (in
+-- and out of combat), so Lua never subtracts the cost: the fill's range
+-- moves up by the cost (min = cost, max = max + cost), and the engine draws
+-- the hidden amount at (power - cost) / max of the width itself, clamped at
+-- empty. Only the cost and the maximum take part in arithmetic, and only
+-- when neither is secret; otherwise nothing shows.
+--
+-- A cast pays when it lands, so its whole cost shows until it ends. A
+-- channel pays its cost when it starts (the game takes it at once), so a
+-- channel shows only what it still drains over time: costPerSec times the
+-- seconds left (none of camelot's channels has one: Mind Flay, Arcane
+-- Missiles, Drain Life cost a flat amount).
+
+import * as secret from "wowlua:secret"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+
+-- The faded band: the power's colour at the weight of an incoming heal's
+-- segment (fel-incoming's alpha), so it reads over surface-sunk in every
+-- theme and never louder than the fill.
+export const SPEND_ALPHA = T.color["fel-incoming"][4]
+
+-- The game's functions the cost reads (tests give their own).
+export type CostApi = {
+    C_Spell?: { GetSpellPowerCost: typeof(C_Spell.GetSpellPowerCost) },
+    UnitChannelInfo?: typeof(UnitChannelInfo),
+    GetTime?: typeof(GetTime),
+}
+
+local START: EventName = "UNIT_SPELLCAST_START"
+local CHANNEL_START: EventName = "UNIT_SPELLCAST_CHANNEL_START"
+local CHANNEL_STOP = "UNIT_SPELLCAST_CHANNEL_STOP"
+local INTERRUPTED = "UNIT_SPELLCAST_INTERRUPTED"
+-- the events that may end a cast
+local ENDS: EventName[] = {
+    "UNIT_SPELLCAST_STOP",
+    "UNIT_SPELLCAST_SUCCEEDED",
+    "UNIT_SPELLCAST_FAILED",
+    "UNIT_SPELLCAST_INTERRUPTED",
+    "UNIT_SPELLCAST_CHANNEL_STOP",
+}
+
+export class CastCost
+    api: CostApi
+    -- the running cast's costs (GetSpellPowerCost's list), nil while none
+    costs: unknown[]? = nil
+    guid: unknown = nil
+    channel: boolean = false
+    -- a channel's end (GetTime's seconds)
+    ends: number? = nil
+
+    constructor(api: CostApi?)
+        self.api = api or (_G :: CostApi)
+    end
+
+    function Clear()
+        self.costs, self.guid, self.channel, self.ends = nil, nil, false, nil
+    end
+
+    -- A cast or channel of yours started: its costs, read once.
+    function Begin(spellID: unknown, guid: unknown, channel: boolean)
+        self:Clear()
+        local A = self.api
+        local spells = A.C_Spell or C_Spell
+        if not secret.isNumber(spellID) or not spells or not spells.GetSpellPowerCost then
+            return
+        end
+        local list = spells.GetSpellPowerCost(spellID)
+        if not secret.readable(list) or type(list) ~= "table" then
+            return
+        end
+        self.costs, self.guid, self.channel = list :: unknown[], guid, channel
+        if channel then
+            local info = A.UnitChannelInfo or UnitChannelInfo
+            local _, _, _, _, endMs = info("player")
+            self.ends = secret.isNumber(endMs) and endMs / 1000 or nil
+        end
+    end
+
+    -- An end event: whether it ended the cast shown. A cast ends with its
+    -- own events (its cast GUID: an instant cast's SUCCEEDED meanwhile keeps
+    -- it); a channel with CHANNEL_STOP or INTERRUPTED (its SUCCEEDED comes
+    -- as it starts).
+    function End(event: string, guid: unknown): boolean
+        if not self.costs then
+            return false
+        end
+        if self.channel then
+            if event ~= CHANNEL_STOP and event ~= INTERRUPTED then
+                return false
+            end
+        else
+            if event == CHANNEL_STOP then
+                return false
+            end
+            local mine = self.guid
+            if secret.isString(guid) and secret.isString(mine) and guid ~= mine then
+                return false
+            end
+        end
+        self:Clear()
+        return true
+    end
+
+    -- The running cast's cost in power type `pType`, out of `max`: a plain
+    -- number above 0, or nil (no cast, no cost in that power, or a value
+    -- the game hides).
+    function Amount(pType: unknown, max: unknown): number?
+        local list = self.costs
+        if not list or not secret.isNumber(pType) or not secret.isNumber(max) or max <= 0 then
+            return nil
+        end
+        for _, c in ipairs(list) do
+            if not secret.readable(c) or type(c) ~= "table" then
+                return nil
+            end
+            local info = c :: { type?: unknown, cost?: unknown, costPerSec?: unknown }
+            local kind = info.type
+            if not secret.isNumber(kind) then
+                return nil
+            end
+            if kind == pType then
+                local n: number? = nil
+                if self.channel then
+                    local perSec, ends = info.costPerSec, self.ends
+                    local now = (self.api.GetTime or GetTime)()
+                    if secret.isNumber(perSec) and ends and secret.isNumber(now) then
+                        n = perSec * math.max(ends - now, 0)
+                    end
+                else
+                    n = secret.asNumber(info.cost)
+                end
+                return n and n > 0 and math.min(n, max) or nil
+            end
+        end
+        return nil
+    end
+
+    -- Your casts' events, owned by `owner`; `changed` after each start and
+    -- each end that ended the cast shown.
+    function Listen(owner: unknown, changed: () -> ())
+        local function begin(event: string, _: unknown, guid: unknown, spellID: unknown)
+            self:Begin(spellID, guid, event == CHANNEL_START)
+            changed()
+        end
+        events.onUnit(START, "player", begin, owner)
+        events.onUnit(CHANNEL_START, "player", begin, owner)
+        for _, e in ipairs(ENDS) do
+            events.onUnit(
+                e,
+                "player",
+                function(event: string, _: unknown, guid: unknown)
+                    if self:End(event, guid) then
+                        changed()
+                    end
+                end,
+                owner
+            )
+        end
+    end
+end
+
+export function castCost(api: CostApi?): CastCost
+    return CastCost.new(api)
+end
+
+-- The fill's min and max while a cost shows: moved up by the cost, so the
+-- engine draws the (secret) power at (power - cost) / max.
+export function costRange(max: number, cost: number): (number, number)
+    return cost, max + cost
+end
