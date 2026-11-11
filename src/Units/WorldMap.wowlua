@@ -20,6 +20,9 @@
 --   Rares and treasures
 --   Skyborne   the Convergences of Elements (the convergences service),
 --              for Skyborne characters only
+--   Hidden quests  the quests to pick up this character hid (a right-click
+--              on a quest giver's pin: "Hide this quest"), ticked; unticked
+--              or Show all, their pins are back. Only while it lists any.
 -- Quests to pick up, entrances, services, rares and chests come from
 -- SuuUI's generated data (SuuUI.QuestStarts, SuuUI.MapPlaces), read
 -- through Units/WorldMap/Rows.
@@ -54,7 +57,7 @@ import type Me, Offer from "/Units/WorldMap/Quests"
 import quest, npc, entrance, instanceLevels from "/Units/WorldMap/Rows"
 import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
-import tipFor from "/Units/WorldMap/Tips"
+import tipFor, giverGroup, groupQuests from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
 import * as lazyData from "/Core/Data"
 import type QuestStarts from "/Data/QuestStarts"
@@ -140,10 +143,11 @@ local M: WorldMapModule
 local DISC = "Interface\\AddOns\\SuuUI\\Media\\Textures\\CircleFill.tga"
 
 -- What this character keeps: the flight masters it has found (by node, and
--- the continents a flight master's map has listed), and whether the game's
--- quest objectives were turned on for it once.
+-- the continents a flight master's map has listed), whether the game's
+-- quest objectives were turned on for it once, and the quests to pick up
+-- whose pins it hid (by quest ID; none: nil).
 type Taxi = { known: { [number]: boolean }, checked: { [number]: boolean } }
-type WorldMapChar = { taxi?: Taxi, questPOIOnce?: boolean }
+type WorldMapChar = { taxi?: Taxi, questPOIOnce?: boolean, hiddenQuests?: { [number]: boolean } }
 
 --------------------------------------------------------------------------------
 -- The filter menu
@@ -582,9 +586,12 @@ type ServicePin = { key: string, pin: MapPinData, kindName: string }
 -- The pins on the canvas
 --------------------------------------------------------------------------------
 
--- One of SuuUI's pins on the map: the pins merged into it.
+-- One of SuuUI's pins on the map: the pins merged into it, and whether it's
+-- a quest giver's (it keeps right-clicks for its menu; the others let them
+-- through to the map, which zooms out).
 class WorldPin extends MapPin
     group: Group? = nil
+    giver: boolean = false
 
     constructor(parent: Frame)
         super(parent)
@@ -819,6 +826,13 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     items: Item[]? = nil
     pins: WorldPin[] = {}
     free: WorldPin[] = {}
+    -- quest givers' pins, kept apart: they never let right-clicks through
+    -- (a pin's pass-through can't change in combat)
+    freeGivers: WorldPin[] = {}
+    -- the hidden quests Map filters lists (an unticked one stays until the
+    -- map opens again), and whether their names were read from the data
+    hiddenListed: number[] = {}
+    hiddenNamed: boolean = false
     -- pins made in combat, their right-click through after it
     passLater: Frame[] = {}
     hoveredPin: WorldPin? = nil
@@ -970,10 +984,35 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             end
             value[g.key] = list
         end
+        -- Hidden quests: the hidden ones ticked
+        local hidden: string[] = {}
+        for id in pairs(self:Char().hiddenQuests or {}) do
+            hidden[#hidden + 1] = tostring(id)
+        end
+        value.hidden = hidden
         return value
     end
 
     function OnFilters(value: FilterChoice)
+        -- Hidden quests: each listed one hidden while ticked (this
+        -- character's, not a filter)
+        local hidden = value.hidden
+        value.hidden = nil
+        if hidden then
+            local ticked: { [number]: boolean } = {}
+            for _, v in ipairs(hidden) do
+                local id = tonumber(v)
+                if id then
+                    ticked[id] = true
+                end
+            end
+            local data = self:Char()
+            local set = data.hiddenQuests or {}
+            for _, id in ipairs(self.hiddenListed) do
+                set[id] = ticked[id] or nil
+            end
+            data.hiddenQuests = next(set) ~= nil and set or nil
+        end
         -- (a character without the Skyborne group keeps its saved choice)
         if value.skyborne == nil then
             value.skyborne = self:Saved().skyborne
@@ -1017,6 +1056,140 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 menu:SetValue(menuValues(self:MenuValue()))
             end
         end
+    end
+
+    --------------------------------------------------------------------------------
+    -- Hidden quests: quests to pick up whose pins this character hid (a
+    -- right-click on a giver's pin), listed in Map filters to show again
+    --------------------------------------------------------------------------------
+
+    function IsQuestHidden(id: number): boolean
+        local hidden = self:Char().hiddenQuests
+        return hidden ~= nil and hidden[id] == true
+    end
+
+    -- A quest's name from the quest data (the game's, else "Quest <id>"
+    -- while it isn't built).
+    function QuestTitle(id: number): string
+        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
+        local qrow = starts.quests[id]
+        return questName(qrow and quest(qrow) or nil, id)
+    end
+
+    -- The hidden quests, by name.
+    function HiddenQuests(): number[]
+        local ids: number[] = {}
+        for id in pairs(self:Char().hiddenQuests or {}) do
+            ids[#ids + 1] = id
+        end
+        local names: { [number]: string } = {}
+        for _, id in ipairs(ids) do
+            names[id] = self:QuestTitle(id):lower()
+        end
+        table.sort(ids, function(a: number, b: number): boolean
+            local na, nb = names[a] or "", names[b] or ""
+            if na ~= nb then
+                return na < nb
+            end
+            return a < b
+        end)
+        return ids
+    end
+
+    -- Their pins away at once, on every map; Map filters lists them.
+    function HideQuests(ids: number[])
+        local data = self:Char()
+        local hidden = data.hiddenQuests or {}
+        for _, id in ipairs(ids) do
+            hidden[id] = true
+        end
+        data.hiddenQuests = next(hidden) ~= nil and hidden or nil
+        self:ListHidden(true)
+        self:Refresh()
+    end
+
+    -- Every hidden quest's pins back (Map filters' Show all); the list
+    -- stays, unticked, until the map opens again.
+    function ShowAllQuests()
+        self:Char().hiddenQuests = nil
+        local menu = self.menu
+        if menu then
+            menu:SetValue(menuValues(self:MenuValue()))
+        end
+        self:Refresh()
+    end
+
+    -- Map filters' groups: Hidden quests last, while it lists any.
+    function MenuGroups(): FilterGroup[]
+        local groups = menuGroups()
+        local listed = self.hiddenListed
+        if #listed > 0 then
+            local options: FilterOption[] = {}
+            for i, id in ipairs(listed) do
+                options[i] = { value = tostring(id), label = self:QuestTitle(id) }
+            end
+            groups[#groups + 1] = {
+                key = "hidden",
+                label = "Hidden quests",
+                kind = "toggles",
+                options = options,
+                action = {
+                    label = "Show all",
+                    onClick = function()
+                        self:ShowAllQuests()
+                    end,
+                },
+            }
+        end
+        return groups
+    end
+
+    -- Map filters lists the hidden quests again (always: `force`; else only
+    -- when they changed): the panel is built again when it next opens.
+    function ListHidden(force: boolean?)
+        local ids = self:HiddenQuests()
+        local was = self.hiddenListed
+        local same = #ids == #was
+        for i, id in ipairs(ids) do
+            if was[i] ~= id then
+                same = false
+            end
+        end
+        self.hiddenListed = ids
+        self.hiddenNamed = lazyData.questStarts:Ready()
+        local menu = self.menu
+        if menu and (force or not same) then
+            menu:SetGroups(self:MenuGroups())
+            menu:SetValue(menuValues(self:MenuValue()))
+        end
+    end
+
+    -- Right-click on a quest giver's pin: hide its quest; a pin with
+    -- several quests (a giver's, or merged) offers each of them.
+    function QuestMenu(pin: WorldPin)
+        local g = pin.group
+        if not g then
+            return
+        end
+        local ids = groupQuests(g)
+        if #ids == 0 then
+            return
+        end
+        UI.ContextMenuFrom(pin, function(_, root)
+            if #ids == 1 then
+                local id = ids[1]
+                root:CreateTitle(self:QuestTitle(id))
+                root:CreateButton("Hide this quest", function()
+                    self:HideQuests({ id })
+                end)
+            else
+                for _, id in ipairs(ids) do
+                    root:CreateButton("Hide " .. self:QuestTitle(id), function()
+                        self:HideQuests({ id })
+                    end)
+                end
+            end
+        end)
     end
 
     --------------------------------------------------------------------------------
@@ -1228,6 +1401,8 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local places = lazyData.mapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
         local muted = "|cff" .. T.color["ink-muted"].hex
         local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
+        -- the quests this character hid: none of their pins, on any map
+        local hidden = self:Char().hiddenQuests or {}
 
         -- quests to pick up: a pin per giver's place
         if on.quests.available or on.quests.repeatable then
@@ -1238,7 +1413,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 local giver = starts.givers[row[3]]
                 for i = 4, #row do
                     local id = row[i]
-                    local qrow = starts.quests[id]
+                    local qrow = not hidden[id] and starts.quests[id] or nil
                     if qrow then
                         local j = judge(qrow, id, me, done)
                         local state, difficulty, level = j.state, j.difficulty, j.level
@@ -1308,7 +1483,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 local list: Offer[], ids: number[] = {}, {}
                 for i = 5, #row do
                     local id = row[i]
-                    local qrow = starts.quests[id]
+                    local qrow = not hidden[id] and starts.quests[id] or nil
                     if qrow then
                         local j = judge(qrow, id, me, done)
                         local state, difficulty, level = j.state, j.difficulty, j.level
@@ -1694,7 +1869,8 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     -- The pins on the canvas
     --------------------------------------------------------------------------------
 
-    -- A right-click through a pin to the map (it zooms out). Refused in
+    -- A right-click through a pin to the map (it zooms out; a quest giver's
+    -- pin keeps its own, for its menu: never set on it). Refused in
     -- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
     -- a pin was made while the map opened in a fight, found in game): then
     -- after it.
@@ -1713,11 +1889,18 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
-    function Pin(layer: Frame): WorldPin
-        local pin = table.remove(self.free)
+    -- A pin from its pool (a quest giver's: `giver`).
+    function Pin(layer: Frame, giver: boolean?): WorldPin
+        local pin = table.remove(giver and self.freeGivers or self.free)
         if not pin then
             local made = WorldPin.new(layer)
-            made:RegisterForClicks("LeftButtonUp")
+            made.giver = giver == true
+            -- a giver's keeps right-clicks: its menu hides its quests
+            if giver then
+                made:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+            else
+                made:RegisterForClicks("LeftButtonUp")
+            end
             made:SetScript("OnEnter", function(p)
                 local g = p.group
                 if not g then
@@ -1737,7 +1920,13 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 self:HighlightQuests(nil)
                 self:ShowRoutes(nil)
             end)
-            made:SetScript("OnClick", function(p)
+            made:SetScript("OnClick", function(p, button)
+                if button == "RightButton" then
+                    if p.giver then
+                        self:QuestMenu(p)
+                    end
+                    return
+                end
                 local g = p.group
                 local first = g and g.items[1]
                 -- a mark: its card
@@ -1754,7 +1943,9 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 -- SuuUI's code, the map's pins were taken by it and opening
                 -- the map in combat was refused later; the tooltip lists them
             end)
-            self:PassThrough(made)
+            if not giver then
+                self:PassThrough(made)
+            end
             pin = made
         end
         pin:Show()
@@ -1878,7 +2069,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             pin:ClearAllPoints()
             pin:SetHighlight(nil)
             pin.group = nil
-            table.insert(self.free, pin)
+            table.insert(pin.giver and self.freeGivers or self.free, pin)
         end
         self.pins = {}
     end
@@ -1909,7 +2100,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local groups, grow = arrange(items, w, h, flag(f:IsAtMaxZoom()) and not flag(f:IsAtMinZoom()))
         local base = layer:GetFrameLevel()
         for _, g in ipairs(groups) do
-            local pin = self:Pin(layer)
+            local pin = self:Pin(layer, giverGroup(g))
             local data = g.items[1].pin
             if g.distinct > 1 then
                 -- a merged quest pin takes its most useful quest's colour
@@ -2332,6 +2523,15 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         if not self:DataReady() then
             self:PrepareData()
         end
+        -- Hidden quests listed before the quest data was built: their names
+        -- from it now (not under an open Map filters: it would close)
+        local menu = self.menu
+        if menu and not self.hiddenNamed and #self.hiddenListed > 0 and lazyData.questStarts:Ready() then
+            local panel = menu.panel
+            if not (panel and panel:IsShown()) then
+                self:ListHidden(true)
+            end
+        end
         local mapID = asNumber(f:GetMapID())
         readCalendar()
         self:Reveal(mapID)
@@ -2453,6 +2653,8 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 self:OnFilters(chosen(value))
             end,
         })
+        -- (the quests this character hid: their group in it)
+        self:ListHidden()
         -- every time the map opens: the game's place for its filter comes back
         self.skyborneMenu = seesConvergences()
         hookScript(f, "OnShow", function()
@@ -2466,9 +2668,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             if skyborne ~= self.skyborneMenu then
                 self.skyborneMenu = skyborne
                 if menu then
-                    menu:SetGroups(menuGroups())
+                    menu:SetGroups(self:MenuGroups())
                 end
             end
+            -- the hidden quests listed afresh: those shown again leave it
+            self:ListHidden()
             if menu then
                 menu:SetValue(menuValues(self:MenuValue()))
             end

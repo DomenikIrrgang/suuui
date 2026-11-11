@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- World map: right-click a quest giver's "!" pin and choose "Hide this quest" to hide a quest you don't want to see. All of its pins go away at once, on every map. If a pin holds several quests, you pick which one to hide. Hidden quests are saved per character and listed under Map filters › Hidden quests: untick one to see it again, or press Show all.
+- For plugin authors (API 0.33): a group in `SuuUI.UI.FilterMenu` can have an `action`, a button under its choices.
+
 ### Fixed
 
 - Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
