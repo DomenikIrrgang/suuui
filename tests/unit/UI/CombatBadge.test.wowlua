@@ -1,11 +1,12 @@
--- UI/CombatBadge: the crossed swords left of a unit frame's left edge,
--- centred on it vertically; the pop and its ring once when it comes on, a
+-- UI/CombatBadge: the crossed swords alone in gilt-text (no badge behind
+-- them) left of a unit frame's left edge, centred on it vertically; the pop and its ring once when it comes on, a
 -- fade without the pop, nothing with reduced motion; the fade when it goes.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as combat from "/UI/CombatBadge"
 import * as motion from "/Core/Motion"
+import * as draw from "/UI/Draw"
 import newParent from "../../helpers"
 
 local parent: Frame
@@ -41,11 +42,39 @@ local function build()
     expect(b.active).toBe(false)
     expect(b:GetParent()).toBe(host)
     expect(b:IsMouseEnabled()).toBe(false)
-    expect(b:GetWidth()).toBe(16)
+    expect(b:GetWidth()).toBe(18)
     expect(b.glyph:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\swords.tga")
     local layered = CreateFrame("Frame", nil, parent) :: Frame & { markerLayer: Frame }
     layered.markerLayer = CreateFrame("Frame", nil, layered)
     expect(combat.combatBadge(layered):GetParent()).toBe(layered.markerLayer)
+end
+
+@test("the swords alone in gilt-text, filling the sign: no badge behind them, a shadow of their own shape")
+local function look()
+    local b = badge()
+    local swords = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\swords.tga"
+    expect(b.glyph:GetWidth()).toBe(18)
+    expect(b.glyph:GetHeight()).toBe(18)
+    local r, g, bl, a = b.glyph:GetVertexColor()
+    local tr, tg, tb, ta = draw.rgba("gilt-text")
+    expect(r).toBeCloseTo(tr, 3)
+    expect(g).toBeCloseTo(tg, 3)
+    expect(bl).toBeCloseTo(tb, 3)
+    expect(a).toBeCloseTo(ta, 3)
+    -- every other texture is the swords' shadow: their shape, black, offset down
+    local regions = { b:GetRegions() }
+    expect(#regions).toBe(3)
+    for _, region in ipairs(regions) do
+        local tex = region :: Texture
+        expect(tex:GetTextureFilePath()).toBe(swords)
+        if tex ~= b.glyph then
+            local sr, sg, sb, sa = tex:GetVertexColor()
+            expect(sr + sg + sb).toBe(0)
+            expect(sa < 1).toBe(true)
+            local _, _, _, _, y = tex:GetPoint(1)
+            expect(y).toBe(-1)
+        end
+    end
 end
 
 @test("left of the frame's left edge, centred on it vertically")

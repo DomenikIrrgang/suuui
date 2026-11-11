@@ -1,9 +1,10 @@
 -- UI/CombatBadge.wowlua
 -- The combat sign (design "Player frame · Combat indicator", option A
--- "Badge", chosen 2026-11-11 on the left): crossed swords in a 16 px badge,
--- the info badge's colours (gilt-text fill, on-signal glyph), fully left of a
--- unit frame's left edge and centred on it vertically, on its raid marker's
--- layer.
+-- "Badge", chosen 2026-11-11 on the left): the crossed swords alone in
+-- gilt-text, 18 px, no badge behind them (asked 2026-11-12: the solid badge
+-- was distracting), over a soft shadow of their own shape so they read on any
+-- background. Fully left of a unit frame's left edge and centred on it
+-- vertically, on its raid marker's layer.
 -- It pops in once when combat starts, a single ring spreading out from it,
 -- and fades away when combat ends; it never loops. It is part of the frame:
 -- it takes the frame's alpha, moves and scales with it, and never takes the
@@ -26,11 +27,10 @@ import * as secret from "wowlua:secret"
 
 local SWORDS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\swords.tga"
 
--- the badge, its glyph, how far its centre sits left of the edge: the whole
--- badge outside the frame with a space-2 gap (asked 2026-11-11: it clipped
--- into the frame)
-export const SIZE = 16
-local GLYPH = 10
+-- the swords (the glyph fills the frame), how far their centre sits left of
+-- the edge: the whole sign outside the frame with a space-2 gap (asked
+-- 2026-11-11: it clipped into the frame)
+export const SIZE = 18
 export const OFFSET = -(SIZE / 2 + T.space["space-2"])
 local POP_FROM, RING_TO, RING_ALPHA = 1.4, 2.2, 0.9
 
@@ -39,8 +39,10 @@ local function smoothing(easing: keyof Easings): SmoothingType
 end
 
 export class CombatBadge extends Frame
-    readonly fill: Texture
     readonly glyph: Texture
+    -- the shadow: the swords' shape in black, close (0 1px) and wide (soft)
+    readonly shade: Texture
+    readonly halo: Texture
     readonly ring: Frame
     -- coming on: the pop, the ring; going off: the fade
     readonly pop: AnimationGroup
@@ -57,7 +59,8 @@ export class CombatBadge extends Frame
         self:EnableMouse(false)
         self:Hide()
 
-        -- the ring under the badge: its outline, spreading and fading
+        -- the ring under the swords, centred on them: its outline, spreading
+        -- and fading
         self.ring = CreateFrame("Frame", nil, self)
         self.ring:SetSize(SIZE, SIZE)
         self.ring:SetPoint("CENTER")
@@ -65,17 +68,23 @@ export class CombatBadge extends Frame
         draw.border(self.ring, "gilt-text")
         self.ring:SetAlpha(0)
 
-        -- shadow 0 1px 2px, black 80%
-        local shade = draw.softEdge(self)
-        shade:SetBlur(2, 0, -1)
-        shade:SetColor(0, 0, 0, 0.8)
-        self.fill = draw.fill(self, "gilt-text", "ARTWORK")
-        self.fill:SetAllPoints()
+        -- the swords alone, no badge behind them. Their shadow is their own
+        -- shape in black (a solid box behind would come back): 0 1px at 80%,
+        -- as the rested sign's moon, and 2 px wider at 35% for its softness
+        self.halo = self:CreateTexture(nil, "ARTWORK", nil, 0)
+        self.halo:SetTexture(SWORDS)
+        self.halo:SetSize(SIZE + 2, SIZE + 2)
+        self.halo:SetPoint("CENTER", 0, -1)
+        self.halo:SetVertexColor(0, 0, 0, 0.35)
+        self.shade = self:CreateTexture(nil, "ARTWORK", nil, 1)
+        self.shade:SetTexture(SWORDS)
+        self.shade:SetSize(SIZE, SIZE)
+        self.shade:SetPoint("CENTER", 0, -1)
+        self.shade:SetVertexColor(0, 0, 0, 0.8)
         self.glyph = self:CreateTexture(nil, "OVERLAY")
         self.glyph:SetTexture(SWORDS)
-        self.glyph:SetSize(GLYPH, GLYPH)
-        self.glyph:SetPoint("CENTER")
-        draw.paint(self.glyph, "on-signal")
+        self.glyph:SetAllPoints()
+        draw.paint(self.glyph, "gilt-text")
 
         -- the pop: in from 1.4 times its size
         self.pop = self:CreateAnimationGroup()

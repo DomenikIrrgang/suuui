@@ -4,7 +4,7 @@
 
 ### New
 
-- Player frame: a combat sign. Crossed swords just left of your frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
+- Player frame: a combat sign. Crossed swords on the left of your player frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
 - Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
 - World map: right-click a quest giver's "!" pin and choose "Hide this quest" to hide a quest you don't want to see. All of its pins go away at once, on every map. If a pin holds several quests, you pick which one to hide. Hidden quests are saved per character and listed under Map filters › Hidden quests: untick one to see it again, or press Show all.
 - Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
