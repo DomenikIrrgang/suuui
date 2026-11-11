@@ -50,6 +50,12 @@ local function inCombat(): boolean
     return InCombatLockdown() or secret.flag(UnitAffectingCombat("player"))
 end
 
+-- In a dungeon or a raid (the meters' "In an instance").
+local function inInstance(): boolean
+    local inside, kind = IsInInstance()
+    return secret.flag(inside) and (kind == "party" or kind == "raid")
+end
+
 --------------------------------------------------------------------------------
 -- Blizzard's meter
 --------------------------------------------------------------------------------
@@ -345,6 +351,7 @@ local SECTION: SettingsSection = {
                         { value = "always", label = "Always" },
                         { value = "group", label = "In a group" },
                         { value = "combat", label = "In combat" },
+                        { value = "instance", label = "In an instance" },
                         { value = "hidden", label = "Hidden" },
                     },
                 },
@@ -603,7 +610,9 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         end
         local shows = self:Get("shows")
         local shown = not self:Get("position").hidden and
-            (shows == "always" or (shows == "group" and secret.flag(IsInGroup())) or (shows == "combat" and inCombat()))
+            (shows == "always" or (shows == "group" and secret.flag(IsInGroup())) or
+                (shows == "combat" and inCombat()) or
+                (shows == "instance" and inInstance()))
         frame:SetShown(shown and true or false)
         -- the ticker: in combat while shown
         driver:SetShown(shown and inCombat() and true or false)
@@ -749,6 +758,12 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
             self:UpdateVisibility()
         end)
+        -- entering or leaving an instance (In an instance)
+        for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "UPDATE_INSTANCE_INFO" }) do
+            self:OnGameEvent(e, function()
+                self:UpdateVisibility()
+            end)
+        end
         self:OnGameEvent("ADDON_RESTRICTION_STATE_CHANGED", function()
             self:Soon(0.2)
         end)

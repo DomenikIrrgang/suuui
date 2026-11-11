@@ -21,6 +21,7 @@ import type Professions, CraftingData, RecipeEntry, ProfessionCard from "/UI/Pro
 import type RecipeSource from "/Data/RecipeSources"
 import * as lazyData from "/Core/Data"
 import type FilterValues from "/UI/FilterMenu"
+import type TextField from "/UI/Inputs"
 import internal M, numbers from "/Units/Professions"
 import expectNoErrors, captureConfirm from "../../helpers"
 import type Confirms from "../../helpers"
@@ -137,6 +138,168 @@ local function filtering()
     end
     search("")
     mock.advanceTime(0.2)
+end
+
+-- Products with a required level: 10, 20, 30, 50; none (a reagent); one
+-- the game hasn't loaded yet (level 25 once it has).
+local LEVEL_10, LEVEL_20, LEVEL_30, LEVEL_50, NO_LEVEL = 990331, 990332, 990333, 990334, 990335
+-- (one per test: once loaded, an item stays)
+local LOADING, LOADING_MENU = 990336, 990337
+mock.defineItem(LEVEL_10, { name = "Test Gloves", quality = 2, minLevel = 10 }, { cached = true })
+mock.defineItem(LEVEL_20, { name = "Test Boots", quality = 2, minLevel = 20 }, { cached = true })
+mock.defineItem(LEVEL_30, { name = "Test Belt", quality = 2, minLevel = 30 }, { cached = true })
+mock.defineItem(LEVEL_50, { name = "Test Plate", quality = 3, minLevel = 50 }, { cached = true })
+mock.defineItem(NO_LEVEL, { name = "Test Rod", quality = 1, minLevel = 0 }, { cached = true })
+mock.defineItem(LOADING, { name = "Test Helm", quality = 2, minLevel = 25 }, { cached = false, delay = 0.5 })
+mock.defineItem(LOADING_MENU, { name = "Test Hood", quality = 2, minLevel = 25 }, { cached = false, delay = 0.5 })
+
+-- The list's recipes (show all) making those products: the first six as
+-- LEVEL_10, LEVEL_20, LEVEL_30, NO_LEVEL, no item (an enchant), `loading`;
+-- the rest LEVEL_50. Returns the six.
+local function levelProducts(loading: number): number[]
+    assert(view().onFilters)({ show = "all" })
+    local ids: number[] = {}
+    for i = 1, 6 do
+        ids[i] = recipeAt(i).id
+    end
+    -- (0: no item)
+    local products: { [number]: number } = {
+        [ids[1]] = LEVEL_10,
+        [ids[2]] = LEVEL_20,
+        [ids[3]] = LEVEL_30,
+        [ids[4]] = NO_LEVEL,
+        [ids[5]] = 0,
+        [ids[6]] = loading,
+    }
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(id: number, _: boolean): unknown
+        local out = products[id] or LEVEL_50
+        return { outputItemID = out ~= 0 and out or nil, reagentSlotSchematics = {} }
+    end)
+    return ids
+end
+
+-- Which of the six the list shows (by their place: 1-6), and how many
+-- others (the LEVEL_50 ones).
+local function shownOf(ids: number[]): (boolean[], number)
+    local at: { [number]: number } = {}
+    for i, id in ipairs(ids) do
+        at[id] = i
+    end
+    local out: boolean[] = { false, false, false, false, false, false }
+    local others = 0
+    for _, r in ipairs(allRecipes()) do
+        local i = at[r.id]
+        if i then
+            out[i] = true
+        else
+            others = others + 1
+        end
+    end
+    return out, others
+end
+
+@test(
+    "the required level range: its product's level, open at either end, empty is no limit; no level, no item, not loaded yet"
+)
+local function levelRange()
+    openSmithing()
+    local ids = levelProducts(LOADING)
+    local filters = assert(view().onFilters)
+    local all = #allRecipes()
+    expect(all > 6).toBe(true)
+    local function range(lo: number, hi: number): (boolean[], number)
+        filters({ show = "all", level = { lo, hi } })
+        return shownOf(ids)
+    end
+    -- 10 – 20: the products of level 10 and 20; a product without a level
+    -- (level 0) out; no item, and the one not loaded yet, stay
+    local shown, others = range(10, 20)
+    expect(shown).toEqual({ true, true, false, false, true, true })
+    expect(others).toBe(0)
+    expect(M.waitingItems).toBe(true)
+    -- the item arrives: placed by its level (25) at once
+    mock.advanceTime(0.8)
+    shown, others = shownOf(ids)
+    expect(shown).toEqual({ true, true, false, false, true, false })
+    shown = range(20, 30)
+    expect(shown).toEqual({ false, true, true, false, true, true })
+    -- only a maximum: up to 20, the product without a level too
+    shown, others = range(0, 20)
+    expect(shown).toEqual({ true, true, false, true, true, false })
+    expect(others).toBe(0)
+    -- only a minimum: from 30, the level 50 ones too
+    shown, others = range(30, 0)
+    expect(shown).toEqual({ false, false, true, false, true, false })
+    expect(others).toBe(all - 6)
+    -- a minimum over the maximum: only what has no item
+    shown, others = range(30, 20)
+    expect(shown).toEqual({ false, false, false, false, true, false })
+    -- empty boxes: no limit, every recipe
+    range(0, 0)
+    expect(#allRecipes()).toBe(all)
+    filters({ show = "all", level = {} })
+    expect(#allRecipes()).toBe(all)
+    -- kept for this character with the other filters
+    range(10, 20)
+    expect(assert(M:Char().filters).level).toEqual({ 10, 20 })
+    -- sorted by level: in the range by their level, no item last
+    assert(view().onSort)("level")
+    local order: number[] = {}
+    for _, r in ipairs(allRecipes()) do
+        order[#order + 1] = r.id
+    end
+    expect(order).toEqual({ ids[1], ids[2], ids[5] })
+    assert(view().onSort)("category")
+    filters(UI.PROFESSION_FILTER_DEFAULTS)
+end
+
+@test(
+    "the level range in the Filter menu: two number boxes as the auction house's; typed, counted, Enter closes; Reset clears it"
+)
+local function levelRangeMenu()
+    openSmithing()
+    local ids = levelProducts(LOADING_MENU)
+    view():SetFilters({ show = "all" })
+    local all = #allRecipes()
+    local menu = view().filterMenu
+    mock.click(menu)
+    local panel = assert(menu.panel)
+    local fields: { TextField }? = nil
+    for _, row in ipairs(panel.rows) do
+        if row.group.key == "level" then
+            fields = row.range
+        end
+    end
+    local lo, hi = assert(fields)[1], assert(fields)[2]
+    expect(lo:IsVisible()).toBe(true)
+    expect(lo.edit:IsNumeric()).toBe(true)
+    expect(hi.edit:GetMaxLetters()).toBe(2)
+    -- typed: the list follows at once; the menu counts one filter more
+    expect(menu:Count()).toBe(1) -- (show all)
+    mock.typeText(lo.edit, "10")
+    mock.typeText(hi.edit, "20")
+    expect(menu:Count()).toBe(2)
+    expect(assert(panel.count)).toHaveText("2 filters on")
+    expect(assert(M:Char().filters).level).toEqual({ 10, 20 })
+    local shown = shownOf(ids)
+    expect(shown).toEqual({ true, true, false, false, true, true }) -- (the sixth not loaded yet)
+    -- Enter in a box closes the menu, the range kept
+    mock.script(hi.edit, "OnEnterPressed")
+    expect(panel:IsShown()).toBe(false)
+    expect(menu:GetValue().level).toEqual({ 10, 20 })
+    -- Reset: the boxes empty, no limit (and the rest back to the defaults)
+    mock.click(menu)
+    mock.click(assert(panel.reset))
+    expect(lo:GetValue()).toBe("")
+    expect(hi:GetValue()).toBe("")
+    expect(menu:Count()).toBe(0)
+    expect(assert(panel.count)).toHaveText("Defaults")
+    expect(assert(M:Char().filters).level).toEqual({ 0, 0 })
+    menu:Close()
+    assert(view().onFilters)({ show = "all" })
+    expect(#allRecipes()).toBe(all)
+    view():SetFilters(UI.PROFESSION_FILTER_DEFAULTS)
+    assert(view().onFilters)(UI.PROFESSION_FILTER_DEFAULTS)
 end
 
 @test("sorts: by category with headers; by difficulty, skill, level or name in one list")

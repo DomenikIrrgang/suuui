@@ -4,7 +4,7 @@
 -- edit mode (after a fight); the player and target size (after a fight);
 -- the options live; the out-of-combat fade; aggro on your frame in a
 -- group; combo points; pet happiness; the rested sign and its tooltip lines; the
--- settings preview and rows; stopped.
+-- combat sign; the settings preview and rows; stopped.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -41,6 +41,7 @@ local function cleanup()
     wolf:setThreat(nil, tank)
     mock.group:leave()
     mock.setResting(false)
+    settings.reset("ui", "reducedMotion")
     M:ResetAll({
         "showToT",
         "showFocus",
@@ -63,6 +64,8 @@ local function cleanup()
         "restedAnimation",
         "restedHideCombat",
         "restedHideMax",
+        "combatBadge",
+        "combatPop",
         "targetPosition",
         "totPosition",
         "focusPosition",
@@ -358,11 +361,171 @@ end
 
 @test("edit mode: the sign stands still where it could show")
 local function editMode()
+    local active = true
     mock.stub(SuuUI.EditMode, "IsActive", function(): boolean
-        return true
+        return active
     end)
     M:Emit("SUUUI_EDITMODE_CHANGED", true)
     expect(assert(M.restedSign).look).toBe("rest")
+    active = false
+    M:Emit("SUUUI_EDITMODE_CHANGED", false)
+end
+
+-- Whether two regions' rectangles overlap.
+local function overlap(a: Region, b: Region): boolean
+    return a:GetLeft() < b:GetRight() and b:GetLeft() < a:GetRight() and a:GetBottom() < b:GetTop() and
+        b:GetBottom() < a:GetTop()
+end
+
+-- Every combat sign animation done.
+local function settle()
+    mock.advanceTime(1)
+    mock.advanceFrames(40)
+end
+
+@test("the combat sign: shown in combat, gone after; the pop and its ring once as combat starts")
+local function combatSign()
+    local badge = assert(M.combatBadge)
+    settle() -- (an earlier test's fight fading out)
+    expect(badge:IsShown()).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(true)
+    expect(badge.ringPop:IsPlaying()).toBe(true)
+    settle()
+    expect(badge.pop:IsPlaying()).toBe(false)
+    expect(badge.ringPop:IsPlaying()).toBe(false)
+    expect(badge:IsShown()).toBe(true)
+    -- a change mid-fight doesn't pop it again
+    M:Set("combatPop", true)
+    M:UpdateCombatBadge()
+    expect(badge.pop:IsPlaying()).toBe(false)
+    -- out of combat: it fades, then it is gone
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(badge.out:IsPlaying()).toBe(true)
+    settle()
+    expect(badge:IsShown()).toBe(false)
+    -- the next fight pops it again
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(true)
+end
+
+@test("the combat sign without the pop: Pop when combat starts off, or Reduce motion on")
+local function combatSignStill()
+    local badge = assert(M.combatBadge)
+    M:Set("combatPop", false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(false)
+    expect(badge.ringPop:IsPlaying()).toBe(false)
+    mock.player:leaveCombat()
+    settle()
+    M:Set("combatPop", true)
+    settings.set("ui", "reducedMotion", true)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge:GetAlpha()).toBe(1)
+    expect(badge.pop:IsPlaying()).toBe(false)
+    expect(badge.ringPop:IsPlaying()).toBe(false)
+    -- and gone at once after the fight
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(false)
+    settings.reset("ui", "reducedMotion")
+end
+
+@test("the setting off: the combat sign never shows, in combat either; back on: it shows in combat again")
+local function combatSignOff()
+    local badge = assert(M.combatBadge)
+    M:Set("combatBadge", false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    settle()
+    expect(badge:IsShown()).toBe(false)
+    -- back on mid-fight: it fades in (no pop: the fight began before)
+    M:Set("combatBadge", true)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(false)
+    -- off mid-fight: gone at once
+    M:Set("combatBadge", false)
+    expect(badge:IsShown()).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    -- on again: the next fight shows and pops it
+    M:Set("combatBadge", true)
+    expect(badge:IsShown()).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(true)
+end
+
+@test("the combat sign sits left of your frame's left edge, centred on it vertically, on its marker layer")
+local function combatSignPlace()
+    local player = assert(M.frames).player
+    local badge = assert(M.combatBadge)
+    expect(badge:GetParent()).toBe(player.markerLayer)
+    expect(badge:IsMouseEnabled()).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    settle()
+    local bx, by = badge:GetCenter()
+    local _, py = player:GetCenter()
+    expect(by).toBeCloseTo(py)
+    -- fully left of the frame, its right edge space-2 clear of the left edge
+    expect(bx).toBeCloseTo(player:GetLeft() - 12)
+    expect(badge:GetRight()).toBeCloseTo(player:GetLeft() - T.space["space-2"])
+    -- not a protected frame: shown and hidden in combat freely
+    expect(badge:IsProtected()).toBe(false)
+end
+
+@test("the combat sign and the rested sign both up (Hide in combat off): apart")
+local function combatAndRested()
+    local badge = assert(M.combatBadge)
+    local sign = assert(M.restedSign)
+    M:Set("restedHideCombat", false)
+    mock.player:setStats({ restedXP = 1500, xpMax = 1000 })
+    mock.setResting(true)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    settle()
+    expect(sign.look).toBe("full")
+    expect(badge:IsShown()).toBe(true)
+    for _, l in ipairs(sign.letters) do
+        expect(overlap(badge, l.glyph)).toBe(false)
+        expect(overlap(badge, l)).toBe(false)
+    end
+    expect(overlap(badge, assert(sign.letters[1].moon))).toBe(false)
+    -- the sign right of the frame's middle, the badge left of it
+    local px = assert(M.frames).player:GetCenter()
+    expect(badge:GetRight() < px).toBe(true)
+    expect(sign:GetLeft() > px).toBe(true)
+end
+
+@test("edit mode: the combat sign shows where it sits, without the pop")
+local function combatSignEditMode()
+    local badge = assert(M.combatBadge)
+    local active = true
+    mock.stub(SuuUI.EditMode, "IsActive", function(): boolean
+        return active
+    end)
+    M:Emit("SUUUI_EDITMODE_CHANGED", true)
+    expect(badge:IsShown()).toBe(true)
+    expect(badge.pop:IsPlaying()).toBe(false)
+    active = false
+    M:Emit("SUUUI_EDITMODE_CHANGED", false)
+    expect(badge:IsShown()).toBe(false)
 end
 
 @test("the settings preview: your frame at its size, the sign, the reason while it wouldn't show")
@@ -497,6 +660,12 @@ local function rowsWait()
     M:Set("restedSign", false)
     off, why = disabled(r.restedShow)
     expect(why).toBe("The rested sign is off.")
+    -- the pop waits for the combat sign
+    expect((disabled(r.combatPop))).toBeNil()
+    M:Set("combatBadge", false)
+    off, why = disabled(r.combatPop)
+    expect(off).toBe(true)
+    expect(why).toBe("The combat sign is off.")
     M:Set("debuffBadges", "off")
 end
 
@@ -530,4 +699,5 @@ local function stopped()
     expect(assert(M.frames).player:IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("player")).toBeNil()
     expect(assert(M.frames).player.onTooltip).toBeNil()
+    expect(assert(M.combatBadge):IsShown()).toBe(false)
 end
