@@ -23,7 +23,8 @@ import * as ahead from "/Core/Ahead"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
-local CLOTH, POTION, RAG, HERB = 990021, 990022, 990023, 990024
+local CLOTH, POTION, RAG, HERB, KEY = 990021, 990022, 990023, 990024, 990025
+mock.defineItem(KEY, { name = "Test Key", quality = 1, stackCount = 1, icon = 134235, classID = 13 }, { cached = true })
 mock.defineItem(CLOTH, {
     name = "Test Cloth",
     quality = 1,
@@ -59,6 +60,7 @@ local function cleanup()
     end
     ClearCursor()
     mock.setBag(5, nil) -- (the reagent bag one test filled)
+    mock.setBag(-1, nil) -- (the keyring one test filled)
     M:SetOpen(false)
     mock.advanceTime(0.5)
     M:ResetAll({
@@ -311,29 +313,52 @@ end
 @test("the reagent bag and the keyring as sections of their own; no reagent bag says where one goes")
 local function sections()
     local laid: SlotSection[] = {}
-    mock.stub(inv(), "LayoutSlots", function(_: unknown, _: unknown, s: SlotSection[]?)
+    local slotsLaid: Button[] = {}
+    mock.stub(inv(), "LayoutSlots", function(_: unknown, list: Button[], s: SlotSection[]?)
         laid = s or {}
+        slotsLaid = list
     end)
+    -- the keyring's buttons the window lays out, by slot
+    local function keyringLaid(): number[]
+        local out: number[] = {}
+        for slot, b in pairs(M.buttons[-1] or {}) do
+            for _, x in ipairs(slotsLaid) do
+                if x == b then
+                    out[#out + 1] = slot
+                end
+            end
+        end
+        table.sort(out)
+        return out
+    end
     open()
     expect(laid[1].note).toBe("No reagent bag · the reagent slot takes one")
     mock.setBag(5, { slots = 8, items = { [1] = { id = HERB, count = 4 } } })
-    M:Set("keyring", true)
-    mock.stub(C_Container, "GetContainerNumSlots", function(bag: number): number
-        if bag == -1 then
-            return 4
-        end
-        if bag == 0 then
-            return 16
-        end
-        if bag == 5 then
-            return 8
-        end
-        return 0
-    end)
+    -- a keyring of twelve slots, two of them holding keys: only those show
+    -- (asked: not the empty ones), the section counting the keys
+    mock.setBag(-1, { slots = 12, items = { [2] = { id = KEY, count = 1 }, [5] = { id = KEY, count = 1 } } })
     M:Refresh()
     expect(laid[1].label).toBe("Reagents")
     expect(laid[1].meta).toBe("8 · 7 free")
     expect(laid[2].label).toBe("Keyring")
+    expect(laid[2].meta).toBe("2")
+    expect(keyringLaid()).toEqual({ 2, 5 })
+    -- the keyring isn't in the free count
+    expect(metaText()).toBe("14 free of 16")
+    -- a third key: shown at once (a bag update lays the window out again)
+    mock.setBag(-1, {
+        slots = 12,
+        items = { [2] = { id = KEY, count = 1 }, [5] = { id = KEY, count = 1 }, [9] = { id = KEY, count = 1 } },
+    })
+    M:Refresh()
+    expect(laid[2].meta).toBe("3")
+    expect(keyringLaid()).toEqual({ 2, 5, 9 })
+    -- no keys: no keyring section
+    mock.setBag(-1, { slots = 12 })
+    M:Refresh()
+    expect(#laid).toBe(1)
+    expect(keyringLaid()).toEqual({})
+    expect(button(-1, 2)).never.toBeShown()
 end
 
 @test("a quiver, a soul or profession bag: a section of its own after your bags, not in the free count")

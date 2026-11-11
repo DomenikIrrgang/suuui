@@ -118,6 +118,19 @@ local function freeSlots(bag: number): number?
     return asNumber((C_Container.GetContainerNumFreeSlots(bag)))
 end
 
+-- The keyring's slots that hold a key, in order: only those show (asked
+-- 2026-11-11: "only the slots that are taken, not empty ones"; the game
+-- puts a key there by itself).
+local function keySlots(n: number): number[]
+    local out: number[] = {}
+    for slot = 1, n do
+        if C_Container.GetContainerItemID(KEYRING, slot) ~= nil then
+            out[#out + 1] = slot
+        end
+    end
+    return out
+end
+
 -- A bag's family: what it takes (0: anything). The game's free count tells
 -- it; when that says 0, the bag's own item does (a profession bag sorted as
 -- an ordinary one got items the game refused: found in game).
@@ -1001,14 +1014,24 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         -- its own (design "Bags · reagent bag", direction A, chosen 2026-10-17)
         local sections: SlotSection[]? = nil
         local sizes: number[] = {}
+        -- the slots each bag shows: all of them, the keyring's filled ones
+        local shownSlots: { [number]: number[] } = {}
         local keyParts: string[] = {}
         local slotCount = 0
         for i, bag in ipairs(bags) do
-            local n = numSlots(bag)
-            sizes[i] = n
+            local size = numSlots(bag)
+            sizes[i] = size
+            local n = size
+            local keys = ""
+            if mine and bag == KEYRING then
+                local filled = keySlots(size)
+                shownSlots[i] = filled
+                n = #filled
+                keys = table.concat(filled, ",")
+            end
             slotCount = slotCount + n
             local special = mine and isSpecialBag(bag)
-            keyParts[i] = ("%d:%d:%s"):format(bag, n, special and "s" or "")
+            keyParts[i] = ("%d:%d:%s:%s"):format(bag, size, special and "s" or "", keys)
             if special and n > 0 then
                 local here = sections or {}
                 sections = here
@@ -1030,6 +1053,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                         meta = ("%d · %d free"):format(n, freeSlots(bag) or 0),
                     }
                 elseif n > 0 then
+                    -- (n: the keys, as only filled slots show)
                     here[#here + 1] = { at = slotCount - n + 1, label = "Keyring", meta = tostring(n) }
                 end
             end
@@ -1051,19 +1075,32 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         for i, bag in ipairs(bags) do
             shown[bag] = true
             local n = sizes[i]
-            for slot = 1, n do
-                list[#list + 1] = self:SlotButton(bag, slot)
-                self:UpdateSlot(bag, slot)
+            local only = shownSlots[i]
+            local on: { [number]: boolean } = {}
+            if only then
+                for _, slot in ipairs(only) do
+                    on[slot] = true
+                    list[#list + 1] = self:SlotButton(bag, slot)
+                    self:UpdateSlot(bag, slot)
+                end
+            else
+                for slot = 1, n do
+                    on[slot] = true
+                    list[#list + 1] = self:SlotButton(bag, slot)
+                    self:UpdateSlot(bag, slot)
+                end
             end
-            -- hide what the bag no longer has
-            local made = self.buttons[bag] or {}
-            for slot = n + 1, #made do
-                made[slot]:Hide()
+            -- hide what the bag no longer has (the keyring: its empty slots)
+            -- (pairs: the keyring's list has gaps where no key ever was)
+            for slot, b in pairs(self.buttons[bag] or {}) do
+                if not on[slot] then
+                    b:Hide()
+                end
             end
         end
         for bag, slots in pairs(self.buttons) do
             if not shown[bag] and self:InvFor(bag) == inv then
-                for _, b in ipairs(slots) do
+                for _, b in pairs(slots) do
                     b:Hide()
                 end
             end
@@ -1221,7 +1258,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
     function LightBag(bag: number?)
         for b2, slots in pairs(self.buttons) do
             local fade = bag ~= nil and b2 ~= bag
-            for _, b in ipairs(slots) do
+            for _, b in pairs(slots) do
                 if b:IsShown() then
                     local skin = self.skins[b]
                     local dim = skin and skin.item and skin.item.dim

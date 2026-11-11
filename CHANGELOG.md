@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Bags: the keyring now shows by default, as its own section after your bags. Settings › Bags › Keyring turns it off.
+- Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). Settings › Bags › Keyring turns it off.
 
 ## 0.6.40 (2026-11-11)
 
