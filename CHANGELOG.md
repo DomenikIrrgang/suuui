@@ -6,10 +6,35 @@
 
 - Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
 
+### Changed
+
+- Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+
+## 0.7.0 (2026-11-11)
+
+### New
+
+- Bags: currencies you mark "Show on Backpack" in the Currency tab now show at the bottom of the bags window, next to your gold. Hover one to see its tooltip, or click it to open the Currency tab.
+- For plugin authors (API 0.33): `inv:SetCurrencies(list)` shows currencies in an inventory's foot, and `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
+
+### Changed
+
+- Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). To hide it, turn off Settings › Bags › Keyring.
+- Bags: the reagent bag's free slots now show once, in its section's header, instead of also at the bottom of the window.
+
 ### Fixed
 
-- Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
-- Unit frames: setting a raid target marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+- Setting a raid marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+- Entering combat no longer stutters for a moment after your spells change (a level up, a new spell, a talent): the spellbook now redraws shortly after the change instead of at the start of your next fight.
+- Pulling a group of mobs no longer stutters as their nameplates appear: the nameplates' debuff icons are now prepared ahead, out of combat.
+- Nameplates: the borders of the health bar, the cast bar and the debuff icons no longer disappear at some camera angles. They're now one screen pixel thick at any UI scale.
+- Quest log: every quest now shows its eye, full while tracked and faint while not, so you can click it to track an untracked quest.
+- Quest tracker: the − button folds the quests away again. Before, it turned into a + but the quests stayed.
+- Macros: the icon picker now shows the icons of icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
+- Reputation and skill bars: the colour now fills the bar to both ends, with no gap at the left or right.
+- Guild window: switching tabs no longer makes the tabs flicker and jump.
+- Micro menu: opening and closing the shop no longer shows the game's own art on the game menu button.
+- Buff indicators: an indicator's Colour is now greyed out with "While missing", since it only colours the indicator while the buff is up. The Show description no longer runs into Missing colour.
 
 ## 0.6.40 (2026-11-11)
 
