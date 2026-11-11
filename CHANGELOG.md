@@ -5,6 +5,7 @@
 ### Changed
 
 - World map and collections: Questie's latest Forever data (quest givers, dungeon entrances, town services, rares, treasure chests, and where mounts, toys and appearances come from).
+- Professions, world map, flight times and collections: game data from WoW Forever 1.60.1.70888, and recipe sources from Questie's latest Forever data (more drops and containers where a recipe comes from).
 
 ## 0.6.38 (2026-11-10)
 

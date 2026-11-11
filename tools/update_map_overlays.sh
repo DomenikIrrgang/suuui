@@ -7,7 +7,7 @@
 #   sh tools/update_map_overlays.sh [<build>]
 set -e
 cd "$(dirname "$0")/.."
-BUILD=${1:-1.60.1.70862}
+BUILD=${1:-1.60.1.70888}
 CACHE=${TMPDIR:-/tmp}/suuui-wago-$BUILD
 mkdir -p "$CACHE"
 for t in WorldMapOverlay WorldMapOverlayTile; do
