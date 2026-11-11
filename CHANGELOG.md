@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### New
+
+- For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
+
+### Changed
+
+- Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). Settings › Bags › Keyring turns it off.
+- Bags: the reagent bag's free slots show once, in its section's header, no longer also at the bottom of the window.
+
 ### Fixed
 
 - Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
@@ -11,6 +20,7 @@
 - Buff indicators: an indicator's Colour is greyed out with "While missing", since it only colours the indicator while the buff is up; the Show description no longer runs into Missing colour.
 - Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
 - Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
+- Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
 
 ## 0.6.40 (2026-11-11)
 
