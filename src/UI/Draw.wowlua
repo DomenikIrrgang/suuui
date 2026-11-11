@@ -290,6 +290,8 @@ export type ColorArg = string | number[] | number
 export type BorderOptions = { width?: number, inset?: number, layer?: DrawLayer, sublevel?: number }
 
 local borders: { [Border]: boolean } = setmetatable({}, { __mode = "k" })
+-- each frame's borders (relayoutPixels walks a frame's own tree down)
+local bordersOf: { [Frame]: Border[] } = setmetatable({}, { __mode = "k" })
 
 -- Four textures `width` physical pixels thick, `inset` in from the edge.
 export class Border
@@ -315,6 +317,9 @@ export class Border
         self:SetColor(color)
         self:Layout()
         borders[self] = true
+        local list = bordersOf[frame] or {}
+        bordersOf[frame] = list
+        list[#list + 1] = self
     end
 
     function Layout()
@@ -578,27 +583,25 @@ end
 -- its lines were made otherwise: a nameplate's borders made under UIParent
 -- came out under one physical pixel on the game's plates at some UI scales,
 -- and vanished at some positions (found in game, 0.6.32).
+-- (Down from `root` through its children, never up: climbing each line's
+-- parents reached a forbidden frame of the game's, "calling 'GetParent' on
+-- bad self", found in game 2026-11-11; a forbidden frame is skipped.)
 export function relayoutPixels(root: Frame)
-    local function within(r: Region): boolean
-        local p: Region? = r
-        while p do
-            if p == root then
-                return true
-            end
-            p = p:GetParent()
+    local function visit(fr: Frame)
+        if fr:IsForbidden() then
+            return
         end
-        return false
-    end
-    for b in pairs(borders) do
-        if within(b.frame) then
+        for _, b in ipairs(bordersOf[fr] or {}) do
             b:Layout()
         end
-    end
-    for line in pairs(hairlines) do
-        if within(line) then
-            line:SetHeight(pixel.size(line))
+        if hairlines[fr] then
+            fr:SetHeight(pixel.size(fr))
+        end
+        for _, c in ipairs({ fr:GetChildren() }) do
+            visit(c)
         end
     end
+    visit(root)
 end
 
 events.on(

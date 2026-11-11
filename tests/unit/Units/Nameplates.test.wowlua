@@ -190,6 +190,46 @@ local function pixelLines()
     expect(wrong).toBe(0)
 end
 
+@test(
+    "the game's plates at another scale than the pool: the pool takes theirs once, every line one pixel; then no more work"
+)
+local function otherScale()
+    -- (found in game: the game's plates aren't at WorldFrame's scale, and the
+    -- lines' relayout climbed into a forbidden frame of the game's)
+    local real = SuuUI.Pixel.Relayout
+    local calls = 0
+    mock.stub(SuuUI.Pixel, "Relayout", function(fr: Frame)
+        calls = calls + 1
+        real(fr)
+    end)
+    local _, h = GetPhysicalScreenSize()
+    local function onePx(t: Texture): boolean
+        return math.abs(t:GetHeight() * t:GetEffectiveScale() / (768 / h) - 1) < 0.001
+    end
+    local function gameLike(scale: number): Frame
+        local p = CreateFrame("Frame", nil, WorldFrame)
+        p:SetScale(scale)
+        p:SetSize(120, 20)
+        p:SetPoint("CENTER")
+        return p
+    end
+    M:Attach("nameplate41", gameLike(0.8), false)
+    local f = assert(byUnit["nameplate41"])
+    expect(onePx(f.border.top)).toBe(true)
+    expect(onePx(f.cast.border.top)).toBe(true)
+    expect(calls).toBe(2)
+    -- the pooled plates took the scale too: the next plate needs nothing
+    M:Attach("nameplate42", gameLike(0.8), false)
+    local b = assert(byUnit["nameplate42"])
+    expect(onePx(b.border.top)).toBe(true)
+    expect(calls).toBe(2)
+    M:OnPlateRemoved("nameplate41")
+    M:OnPlateRemoved("nameplate42")
+    -- back at the usual scale (for the other tests)
+    M:Attach("nameplate41", gameLike(1), false)
+    M:OnPlateRemoved("nameplate41")
+end
+
 @test("the health text: the value, both, none")
 local function healthText()
     local f = plateOf(wolf)
