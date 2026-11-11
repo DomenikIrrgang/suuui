@@ -240,9 +240,13 @@ end
 export function presetIDs(values: Values, class: string, presets: CooldownPreset[])
     -- every name's IDs in this class's presets
     local known: { [string]: number[] } = {}
+    -- (single spells only: a shared slot's own IDs are all its members'
+    -- together, under the slot's name; taken as a spell's of that name, the
+    -- Divine Shield slot's gave Divine Protection's IDs to Divine Shield,
+    -- 0.6.38, found in game)
     local function learn(e: Entry)
         local name = e.name
-        if name and e.ids then
+        if name and e.ids and not e.members and not e.entries then
             local ids = known[name] or {}
             known[name] = ids
             for _, id in ipairs(e.ids) do
@@ -276,7 +280,7 @@ export function presetIDs(values: Values, class: string, presets: CooldownPreset
         end
         local wanted = e.name and known[e.name]
         local ids = e.ids
-        if wanted and ids then
+        if wanted and ids and not e.members and not e.entries then
             for _, id in ipairs(wanted) do
                 local has = false
                 for _, x in ipairs(ids) do
@@ -285,6 +289,88 @@ export function presetIDs(values: Values, class: string, presets: CooldownPreset
                 if not has then
                     ids[#ids + 1] = id
                 end
+            end
+        end
+        for _, m in ipairs(list(e.members)) do
+            mend(m)
+        end
+        for _, c in ipairs(list(e.entries)) do
+            mend(c)
+        end
+    end
+    eachSetup(values, function(lists: unknown, owner: string)
+        if owner ~= class then
+            return
+        end
+        local l = tableOf(lists)
+        for _, key in ipairs({ "essential", "utility", "buffs", "debuffs", "procs" }) do
+            for _, raw in ipairs(list(l and l[key])) do
+                mend(raw)
+            end
+        end
+    end)
+end
+
+-- The repair of 0.6.38's preset-IDs migration: it took a shared slot's IDs
+-- (all its members' together) for a spell of the slot's name, so the slot's
+-- member of that name got its siblings' IDs (Divine Shield got Divine
+-- Protection's, and the slot showed Divine Protection's icon: found in game,
+-- 2026-11-11). A saved single spell of a preset's name loses each ID the
+-- presets give another spell and not this one. Nothing else changes.
+export function untanglePresetIDs(values: Values, class: string, presets: CooldownPreset[])
+    -- each single spell's IDs, and every ID's spells, in this class's presets
+    local own: { [string]: { [number]: boolean } } = {}
+    local owners: { [number]: { [string]: boolean } } = {}
+    local function learn(e: Entry)
+        local name = e.name
+        if name and e.ids and not e.members and not e.entries then
+            local set = own[name] or {}
+            own[name] = set
+            for _, id in ipairs(e.ids) do
+                set[id] = true
+                local by = owners[id] or {}
+                owners[id] = by
+                by[name] = true
+            end
+        end
+        for _, m in ipairs(e.members or {}) do
+            learn(m)
+        end
+        for _, c in ipairs(e.entries or {}) do
+            learn(c)
+        end
+    end
+    for _, preset in ipairs(presets) do
+        for _, entries in pairs(preset.lists) do
+            for _, e in ipairs(entries) do
+                learn(e)
+            end
+        end
+    end
+    local function mend(raw: unknown)
+        local e = entryOf(raw)
+        if not e then
+            return
+        end
+        local name = e.name
+        local mine = name and own[name]
+        local ids = e.ids
+        if mine and ids and not e.members and not e.entries then
+            local kept: number[] = {}
+            for _, id in ipairs(ids) do
+                local by = owners[id]
+                local other = false
+                if by and not mine[id] then
+                    for n in pairs(by) do
+                        other = other or n ~= name
+                    end
+                end
+                if not other then
+                    kept[#kept + 1] = id
+                end
+            end
+            if #kept < #ids then
+                e.ids = kept
             end
         end
         for _, m in ipairs(list(e.members)) do

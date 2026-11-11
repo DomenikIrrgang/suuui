@@ -492,3 +492,81 @@ local function presetIDs()
     migrations.presetIDs(none, "DRUID", DRUID_PRESETS)
     expect(none).toEqual({})
 end
+
+local DP_IDS = { 498, 5573, 13007 }
+local DS_IDS = { 642, 659, 1020, 13874 }
+local PALADIN_PRESETS: CooldownPreset[] = {
+    {
+        id = "unspecced",
+        name = "Unspecced",
+        tree = 0,
+        lists = {
+            utility = {
+                {
+                    group = true,
+                    name = "Divine Shield",
+                    members = {
+                        { name = "Divine Protection", ids = DP_IDS },
+                        { name = "Divine Shield", ids = DS_IDS },
+                    },
+                    ids = { 498, 642, 659, 1020, 5573, 13007, 13874 },
+                },
+            },
+        },
+    },
+}
+
+-- A setup holding the Divine Shield slot (its member of the slot's name with
+-- the IDs given).
+local function shieldSetup(dsIDs: number[]): Values
+    return {
+        setups = {
+            PALADIN = {
+                ["0"] = {
+                    preset = "unspecced",
+                    lists = {
+                        utility = {
+                            {
+                                group = true,
+                                name = "Divine Shield",
+                                members = {
+                                    { name = "Divine Protection", ids = { 498, 5573, 13007 } },
+                                    { name = "Divine Shield", ids = dsIDs },
+                                },
+                                ids = { 498, 642, 659, 1020, 5573, 13007, 13874 },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+end
+
+@test("preset IDs: a shared slot's own IDs aren't a spell's of its name (Divine Shield got Divine Protection's)")
+local function presetIDsSlot()
+    local v = shieldSetup({ 642, 659, 1020, 13874 })
+    migrations.presetIDs(v, "PALADIN", PALADIN_PRESETS)
+    local slot = storedList(v, "PALADIN", "0", "utility")[1]
+    expect(assert(slot.members)[2].ids).toEqual({ 642, 659, 1020, 13874 })
+    expect(assert(slot.members)[1].ids).toEqual({ 498, 5573, 13007 })
+end
+
+@test("untangled: a saved spell loses the IDs 0.6.38 gave it of another spell; its own and the slot's stay")
+local function untangle()
+    -- as 0.6.38 left it (found in game: the slot showed Divine Protection)
+    local v = shieldSetup({ 642, 659, 1020, 13874, 498, 5573, 13007 })
+    migrations.untanglePresetIDs(v, "PALADIN", PALADIN_PRESETS)
+    local slot = storedList(v, "PALADIN", "0", "utility")[1]
+    expect(assert(slot.members)[2].ids).toEqual({ 642, 659, 1020, 13874 })
+    expect(assert(slot.members)[1].ids).toEqual({ 498, 5573, 13007 })
+    expect(slot.ids).toEqual({ 498, 642, 659, 1020, 5573, 13007, 13874 })
+    -- an ID no preset spell has stays (one you added)
+    local w = shieldSetup({ 642, 659, 1020, 13874, 99999 })
+    migrations.untanglePresetIDs(w, "PALADIN", PALADIN_PRESETS)
+    expect(assert(storedList(w, "PALADIN", "0", "utility")[1].members)[2].ids).toEqual({ 642, 659, 1020, 13874, 99999 })
+    -- nothing stored: nothing made
+    local none: Values = {}
+    migrations.untanglePresetIDs(none, "PALADIN", PALADIN_PRESETS)
+    expect(none).toEqual({})
+end
