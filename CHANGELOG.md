@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+
 ## 0.7.0 (2026-11-11)
 
 ### New

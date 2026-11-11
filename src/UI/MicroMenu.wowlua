@@ -24,6 +24,7 @@ import * as fonts from "/Core/Fonts"
 import * as draw from "/UI/Draw"
 import showTooltip, hideTooltip, TooltipLine from "/UI/Tooltip"
 import * as blizzardFrames from "/Core/Blizzard"
+import hook from "wowlua:hooks"
 
 local S = T.space
 
@@ -107,6 +108,11 @@ export class MenuButton extends Button
     active: boolean? = nil
     alertText: string? = nil
     lines: TooltipLine[]? = nil
+    -- the game's own button turned off (Legacy before it unlocks, ...): greyed
+    -- as the game's are, with the game's reason in the tooltip (asked by a
+    -- player 2026-11-11)
+    off: boolean = false
+    offReason: string? = nil
 
     constructor(menu: MicroMenu, item: MicroMenuItem)
         super(
@@ -176,8 +182,15 @@ export class MenuButton extends Button
             subtitle = key and ("Key: " .. key) or nil,
             lines = self.lines,
             maxWidth = self.lines and 320 or nil,
-            description = self.alertText,
+            description = self.off and (self.offReason or "Not available right now.") or self.alertText,
         })
+    end
+
+    -- Greyed while the game's own button is off, `reason` its tooltip's.
+    function SetOff(off: boolean, reason: string?)
+        self.off, self.offReason = off, reason
+        draw.paint(self.glyph, off and "ink-faint" or "ink")
+        self.glyph:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
     end
 
     @script("OnLeave", { hook = true })
@@ -217,6 +230,9 @@ export class MicroMenu extends Frame
         draw.shadow(self, "shadow-panel")
         self:SetSize(1, 1)
         menus[self] = true
+        self:HookScript("OnShow", function()
+            self:UpdateEnabled()
+        end)
         extend.add(extend.Kind.MicroMenu, self, { name = self.name })
     end
 
@@ -250,7 +266,28 @@ export class MicroMenu extends Frame
             x = x + px + gap
         end
         self:SetSize(math.max(1, x - gap + pad), px + pad * 2)
+        self:UpdateEnabled()
         return true
+    end
+
+    -- Each button greyed while the game's own one (the button it clicks) is
+    -- off; again when the menu shows and whenever the game updates its micro
+    -- buttons.
+    function UpdateEnabled()
+        for _, item in ipairs(self.items) do
+            local b = self.buttons[item.key]
+            local blz = item.click and blizzardFrames.frame(item.click)
+            if b then
+                local off = false
+                local reason: string? = nil
+                if blz and not blz:IsForbidden() and (blz :: { IsEnabled?: unknown }).IsEnabled then
+                    off = not (blz :: Button):IsEnabled()
+                    local why = (blz :: { disabledTooltip?: unknown }).disabledTooltip
+                    reason = type(why) == "string" and why ~= "" and why or nil
+                end
+                b:SetOff(off, reason)
+            end
+        end
     end
 
     function SetActive(key: string, active: unknown)
@@ -322,4 +359,14 @@ events.on(
 
 export function microMenu(parent: Frame, opts: { name?: string }?): MicroMenu
     return MicroMenu.new(parent, opts)
+end
+
+-- The game updates its micro buttons (which are on or off): every menu
+-- follows.
+if type(rawget(_G, "UpdateMicroButtons")) == "function" then
+    hook("UpdateMicroButtons", function()
+        for m in pairs(menus) do
+            m:UpdateEnabled()
+        end
+    end)
 end
