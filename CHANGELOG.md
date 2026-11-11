@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Cooldown Manager: shared slots such as Divine Shield (paladins) and Feral Charge (druids) show the right spell again. 0.6.38's update of your saved lists mixed the slot's spells together, so Divine Shield could show Divine Protection's icon; your lists are repaired.
+
 ## 0.6.38 (2026-11-10)
 
 ### Changed
