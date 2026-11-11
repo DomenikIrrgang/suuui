@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Entering combat no longer stutters for a moment after your spells changed (a level up, a new spell, a talent): the Spellbook page is now redrawn shortly after the change instead of in the first moment of the next fight.
+- Pulling a group of mobs no longer stutters as their nameplates appear: the nameplates' debuff icons are now prepared ahead, out of combat.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
