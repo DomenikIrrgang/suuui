@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Micro menu: opening and closing the shop no longer shows the game's own art on the game menu button.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
