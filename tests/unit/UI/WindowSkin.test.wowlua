@@ -375,16 +375,25 @@ local function coverNoDef()
     expect(showSpy).toHaveBeenCalledWith(assert(tabSkins[t1]).cover, {})
 end
 
-@test("Blizzard moving a tab: back in the row a frame later")
+@test("Blizzard moving a tab: back in the row at once, and still a frame later")
 local function tabMoved()
     local f = window(600)
     local chrome = skinWindow(f, {})
-    local t1 = tab(f, 1)
-    chrome:SetTabs({ { button = t1, label = "A" } })
+    local t1, t2 = tab(f, 1), tab(f, 2)
+    chrome:SetTabs({ { button = t1, label = "A" }, { button = t2, label = "B" } })
     t1:ClearAllPoints()
     t1:SetPoint("CENTER", UIParent, "CENTER")
+    -- (a frame later, it showed where Blizzard put it for that frame: the
+    -- guild window's tabs jumped on every switch, found in game)
+    expect(t1).toBeAnchoredTo(chrome.head, "BOTTOMLEFT", "BOTTOMLEFT")
+    -- a point added without clearing (the guild window's Info tab under
+    -- Roster): the row's only
+    t2:SetPoint("TOPLEFT", t1, "BOTTOMLEFT", 0, -20)
+    expect(t2:GetNumPoints()).toBe(1)
+    expect(t2).toBeAnchoredTo(t1, "BOTTOMLEFT", "BOTTOMRIGHT")
     mock.advanceFrames(2)
     expect(t1).toBeAnchoredTo(chrome.head, "BOTTOMLEFT", "BOTTOMLEFT")
+    expect(t2:GetNumPoints()).toBe(1)
 end
 
 @test("the selected look follows Blizzard's selected texture")
@@ -699,6 +708,45 @@ local function centering()
     skinWindow(g, {})
     centerWindow(g, true)
     expect(assert(chromeOf(g)).centered).toBeNil()
+end
+
+@test("a window in the middle keeps above your cast bar, at most up to the screen's top; centred without one")
+local function aboveCastBar()
+    -- (asked: the professions window covered the cast bar)
+    local old = anchors.get("playerCastBar")
+    rowAnchor()
+    local f, chrome = rowWindow(300)
+    f:SetHeight(500)
+    local bar = CreateFrame("Frame", nil, UIParent)
+    bar:SetSize(240, 20)
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+    anchors.publish("playerCastBar", bar)
+    f:Show()
+    centerWindow(f, true)
+    local gap = T.space["space-5"]
+    expect(assert(f:GetBottom()) >= assert(bar:GetTop()) + gap - 0.5).toBe(true)
+    -- still in the middle across
+    local _, _, _, x = f:GetPoint(1)
+    expect(x).toBeCloseTo(0)
+    -- a bar low enough: the middle, as before
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -500)
+    layout()
+    local _, _, _, _, y = f:GetPoint(1)
+    expect(y).toBeCloseTo(-chrome.rise / 2)
+    -- a window too tall to clear it: up to the screen's top, no further
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -100)
+    f:SetHeight(UIParent:GetHeight() - 120)
+    layout()
+    expect(assert(f:GetTop()) + chrome.rise <= UIParent:GetHeight() - gap + 0.5).toBe(true)
+    -- no cast bar: the middle
+    anchors.publish("playerCastBar", nil)
+    layout()
+    local _, _, _, _, yNone = f:GetPoint(1)
+    expect(yNone).toBeCloseTo(-chrome.rise / 2)
+    centerWindow(f, false)
+    f:Hide()
+    bar:Hide()
+    anchors.publish("playerCastBar", old)
 end
 
 @test("the middle holds one window: opening one there closes the other")

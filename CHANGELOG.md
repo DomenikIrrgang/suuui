@@ -4,12 +4,44 @@
 
 ### New
 
+- Player frame: a combat sign. Crossed swords just left of your frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
+- Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
 - World map: right-click a quest giver's "!" pin and choose "Hide this quest" to hide a quest you don't want to see. All of its pins go away at once, on every map. If a pin holds several quests, you pick which one to hide. Hidden quests are saved per character and listed under Map filters › Hidden quests: untick one to see it again, or press Show all.
-- For plugin authors (API 0.33): a group in `SuuUI.UI.FilterMenu` can have an `action`, a button under its choices.
+- Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
+- Professions: the Filter menu has a required level range, like the auction house's. Type a minimum, a maximum or both to see only the recipes whose item needs a level in that range; leave a box empty for no limit. Recipes that make no item (enchants) always show, and an item with no level requirement counts as level 0.
+- For plugin authors (API 0.34): the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`); `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame; the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default); a group in `SuuUI.UI.FilterMenu` can have an `action`, a button under its choices.
+
+### Changed
+
+- Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+- Windows in the middle of the screen (professions, talents, Legacy) open higher when they would cover your cast bar.
+- Resource bar: mana, rage or energy you lose now leaves a white trail, as damage does on the health bars. The bar shows your new amount at once, and the part you just lost stays white for a moment, then drains away. With Reduce motion on, the bar just drops.
+
+## 0.7.0 (2026-11-11)
+
+### New
+
+- Bags: currencies you mark "Show on Backpack" in the Currency tab now show at the bottom of the bags window, next to your gold. Hover one to see its tooltip, or click it to open the Currency tab.
+- For plugin authors (API 0.33): `inv:SetCurrencies(list)` shows currencies in an inventory's foot, and `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
+
+### Changed
+
+- Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). To hide it, turn off Settings › Bags › Keyring.
+- Bags: the reagent bag's free slots now show once, in its section's header, instead of also at the bottom of the window.
 
 ### Fixed
 
-- Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
+- Setting a raid marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+- Entering combat no longer stutters for a moment after your spells change (a level up, a new spell, a talent): the spellbook now redraws shortly after the change instead of at the start of your next fight.
+- Pulling a group of mobs no longer stutters as their nameplates appear: the nameplates' debuff icons are now prepared ahead, out of combat.
+- Nameplates: the borders of the health bar, the cast bar and the debuff icons no longer disappear at some camera angles. They're now one screen pixel thick at any UI scale.
+- Quest log: every quest now shows its eye, full while tracked and faint while not, so you can click it to track an untracked quest.
+- Quest tracker: the − button folds the quests away again. Before, it turned into a + but the quests stayed.
+- Macros: the icon picker now shows the icons of icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
+- Reputation and skill bars: the colour now fills the bar to both ends, with no gap at the left or right.
+- Guild window: switching tabs no longer makes the tabs flicker and jump.
+- Micro menu: opening and closing the shop no longer shows the game's own art on the game menu button.
+- Buff indicators: an indicator's Colour is now greyed out with "While missing", since it only colours the indicator while the buff is up. The Show description no longer runs into Missing colour.
 
 ## 0.6.40 (2026-11-11)
 

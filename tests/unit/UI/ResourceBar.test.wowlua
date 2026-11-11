@@ -13,7 +13,9 @@ import * as events from "/Core/Events"
 import tokens as T from "/Core/Tokens"
 import internal paints from "/UI/Draw"
 import internal usesPoints from "/UI/ResourceBar"
-import errorsSoFar, newParent from "../../helpers"
+import * as powerCost from "/UI/PowerCost"
+import * as settings from "/Core/Settings"
+import errorsSoFar, expectNoErrors, newParent from "../../helpers"
 
 const S = T.space
 
@@ -30,6 +32,8 @@ type World = {
     combo: number | Secret<number>,
     comboAPI: boolean,
     fighting: boolean,
+    -- C_Spell.GetSpellPowerCost's answers, by spell
+    costs: { [number]: unknown },
 }
 
 local parent: Frame
@@ -54,6 +58,7 @@ local function world(w: { [string]: unknown }?): World
         combo = 0,
         comboAPI = true,
         fighting = false,
+        costs = {},
     }
     for k, v in pairs(w or {}) do
         (d :: { [string]: unknown })[k] = v
@@ -93,6 +98,11 @@ local function api(d: World): ResourceApi
         UnitAffectingCombat = function(_)
             return d.fighting
         end,
+        C_Spell = {
+            GetSpellPowerCost = function(id)
+                return d.costs[id :: number] :: SpellPowerCostInfo[]
+            end,
+        },
     }
     if d.comboAPI then
         a.GetComboPoints = function(_, _)
@@ -121,12 +131,20 @@ local function tearDown()
     if InCombatLockdown() then
         mock.player:leaveCombat()
     end
+    -- a cast a failed test left running
+    if UnitCastingInfo("player") or UnitChannelInfo("player") then
+        mock.player:interruptCast()
+        mock.advanceTime(1)
+    end
     for _, r in ipairs(made) do
         r:Stop()
         r:Hide()
     end
     made = {}
     parent:Hide()
+    settings.reset("ui", "reducedMotion")
+    -- (a ghost's hold a test left waiting)
+    mock.advanceTime(0.2)
 end
 
 @test("a warrior: the rage bar alone, in rage's colour, faded out of combat")
@@ -358,4 +376,390 @@ local function realPlayer()
     r:SetOptions({ number = "value" })
     mock.player:leaveCombat()
     expect(#errorsSoFar()).toBe(before)
+end
+
+--------------------------------------------------------------------------------
+-- A cast's cost: the part of the fill it will spend, faded
+--------------------------------------------------------------------------------
+
+local FROSTBOLT, PUMMEL, DRAIN = 116, 6552, 9900002
+
+local function manaCost(n: unknown, kind: unknown?, perSec: unknown?): unknown
+    return { { type = kind or 0, name = "MANA", cost = n, minCost = n, costPercent = 0, costPerSec = perSec or 0 } }
+end
+
+-- A mage at 600 of 1000 mana whose Frostbolt costs 200, the bar started.
+local function mage(extra: { [string]: unknown }?): (ResourceBar, World)
+    local w: { [string]: unknown } = {
+        class = "MAGE",
+        token = "MANA",
+        pType = 0,
+        power = 600,
+        max = 1000,
+        pct = 60,
+        costs = { [FROSTBOLT] = manaCost(200), [PUMMEL] = manaCost(10, 1) },
+    }
+    for k, v in pairs(extra or {}) do
+        w[k] = v
+    end
+    local d = world(w)
+    local r = resource(d, { width = 302 })
+    r:Start()
+    return r, d
+end
+
+-- how wide a region is drawn (the fill's texture has no size of its own)
+local function span(r: Region): number
+    return (r:GetRight() or 0) - (r:GetLeft() or 0)
+end
+
+local function fillRange(b: StatusBar): number[]
+    return { b:GetMinMaxValues() }
+end
+
+@test("a cast's cost: the fill shows what stays, the faded bar under it what you have now")
+local function castCost()
+    local r = mage()
+    expect(r.spend:IsShown()).toBe(false)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(true)
+    expect(fillRange(r.fill)).toEqual({ 200, 1200 })
+    expect(r.fill:GetValue()).toBe(600)
+    expect(fillRange(r.spend)).toEqual({ 0, 1000 })
+    expect(r.spend:GetValue()).toBe(600)
+    -- in the power's colour, see-through, under the fill
+    expect(tokenOf(r.spend)).toBe("mana")
+    expect(assert(paints[r.spend]).alpha).toBe(powerCost.SPEND_ALPHA)
+    expect(r.spend:GetFrameLevel() < r.fill:GetFrameLevel()).toBe(true)
+    -- the band is cost / max of the bar (300 px inside its border)
+    local stays = span(r.fill:GetStatusBarTexture())
+    local now = span(r.spend:GetStatusBarTexture())
+    expect(stays).toBeCloseTo(300 * 400 / 1000)
+    expect(now).toBeCloseTo(300 * 600 / 1000)
+    expect(now - stays).toBeCloseTo(300 * 200 / 1000)
+    -- the number still tells what you have now
+    expect(r.text:GetText()).toBe("600")
+    -- the cast lands: gone
+    mock.advanceTime(2.5)
+    expect(r.spend:IsShown()).toBe(false)
+    expect(fillRange(r.fill)).toEqual({ 0, 1000 })
+    expectNoErrors()
+end
+
+@test("a cast's cost: gone when it's interrupted, fails or stops; an instant cast meanwhile keeps it")
+local function castCostEnds()
+    local r = mage()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    mock.player:interruptCast()
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(1)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    local guid = select(7, UnitCastingInfo("player"))
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-3-4621-0-1-9-00000000FF", 9)
+    expect(r.spend:IsShown()).toBe(true)
+    mock.fireUnitEvent("UNIT_SPELLCAST_FAILED", "player", guid, FROSTBOLT)
+    expect(r.spend:IsShown()).toBe(false)
+    expect(fillRange(r.fill)).toEqual({ 0, 1000 })
+    mock.advanceTime(2.5)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    guid = select(7, UnitCastingInfo("player"))
+    mock.fireUnitEvent("UNIT_SPELLCAST_STOP", "player", guid, FROSTBOLT)
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    expectNoErrors()
+end
+
+@test("a cast's cost: follows your power during the cast; amber shows what stays")
+local function castCostFollows()
+    local r, d = mage()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    d.power, d.pct = 150, 15
+    mock.fireUnitEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+    expect(r.fill:GetValue()).toBe(200) -- (held at its min: below what it costs)
+    expect(r.spend:GetValue()).toBe(150)
+    expect(fillRange(r.fill)).toEqual({ 200, 1200 })
+    -- the amber moves with the fill: the band stays faded mana
+    expect(r.low:IsShown()).toBe(true)
+    expect(fillRange(r.low)).toEqual({ 200, 1200 })
+    -- less than it costs: the fill is empty, all you have is the band
+    expect(span(r.fill:GetStatusBarTexture())).toBe(0)
+    expect(span(r.spend:GetStatusBarTexture())).toBeCloseTo(300 * 150 / 1000)
+    mock.advanceTime(2.5)
+    expect(fillRange(r.low)).toEqual({ 0, 1000 })
+end
+
+@test("a cast's cost: nothing for an instant cast, another power's cost, or with cost = false")
+local function castCostNone()
+    local r = mage()
+    mock.player:castSpell(FROSTBOLT, { castTime = 0 })
+    expect(r.spend:IsShown()).toBe(false)
+    -- Pummel costs rage: not the mana bar's
+    mock.player:castSpell(PUMMEL, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    -- a warrior's rage bar and a mana spell
+    local w = resource(world({ costs = { [FROSTBOLT] = manaCost(200) } }))
+    w:Start()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(w.spend:IsShown()).toBe(false)
+    expect(r.spend:IsShown()).toBe(true)
+    -- turned off: gone at once, and nothing at the next cast
+    r:SetOptions({ cost = false })
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(false)
+    expect(fillRange(r.fill)).toEqual({ 0, 1000 })
+    mock.advanceTime(2.5)
+end
+
+@test("a cast's cost: a channel shows only what it still drains")
+local function castCostChannel()
+    local r = mage({ costs = { [5143] = manaCost(85), [DRAIN] = manaCost(0, 0, 50) } })
+    -- Arcane Missiles: its 85 mana went as it started
+    mock.player:castSpell(5143, { castTime = 3, channel = true })
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(3.5)
+    -- 50 a second for 3 seconds: 150, then less as it drains
+    mock.player:castSpell(DRAIN, { castTime = 3, channel = true })
+    expect(r.spend:IsShown()).toBe(true)
+    local lo, hi = r.fill:GetMinMaxValues()
+    expect(lo).toBeCloseTo(150, 0)
+    expect(hi - lo).toBeCloseTo(1000, 2)
+    mock.advanceTime(1)
+    mock.fireUnitEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+    lo = r.fill:GetMinMaxValues()
+    expect(lo).toBeCloseTo(100, 0)
+    mock.advanceTime(2.5)
+    expect(r.spend:IsShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a cast's cost: secret power still shows it (the engine subtracts); a secret cost or maximum shows nothing")
+local function castCostSecret()
+    local before = #errorsSoFar()
+    -- your power is secret on this client, in combat or not
+    local r, d = mage({ power = mock.secret(600) })
+    mock.player:enterCombat()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(true)
+    expect(fillRange(r.fill)).toEqual({ 200, 1200 })
+    expect(span(r.fill:GetStatusBarTexture())).toBeCloseTo(300 * 400 / 1000)
+    expect(span(r.spend:GetStatusBarTexture())).toBeCloseTo(300 * 600 / 1000)
+    mock.advanceTime(2.5)
+    -- a secret maximum: the bar as it is, no band
+    d.max = mock.secret(1000)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    -- a secret cost
+    d.max = 1000
+    d.costs[FROSTBOLT] = manaCost(mock.secret(200))
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    mock.player:leaveCombat()
+    expect(#errorsSoFar()).toBe(before)
+end
+
+@test("a cast's cost: Stop forgets it")
+local function castCostStop()
+    local r = mage()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(r.spend:IsShown()).toBe(true)
+    r:Stop()
+    expect(r.spend:IsShown()).toBe(false)
+    expect(fillRange(r.fill)).toEqual({ 0, 1000 })
+    mock.advanceTime(2.5)
+end
+
+--------------------------------------------------------------------------------
+-- The ghost: what you just lost, held 150 ms, then drained (as health's)
+--------------------------------------------------------------------------------
+
+local EASE = Enum.StatusBarInterpolation.ExponentialEaseOut
+
+-- The values the ghost is given, with how the engine moves it there.
+local function ghostMoves(r: ResourceBar): unknown[][]
+    local moves: unknown[][] = {}
+    hooksecurefunc(r.ghost, "SetValue", function(_: unknown, v: unknown, how: unknown)
+        moves[#moves + 1] = { v, how or "at once" }
+    end)
+    return moves
+end
+
+local function mana(d: World, n: number | Secret<number>)
+    d.power = n
+    mock.fireUnitEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+end
+
+-- the part of the bar the ghost shows past the fill
+local function trailWidth(r: ResourceBar, over: StatusBar?): number
+    return span(r.ghost:GetStatusBarTexture()) - span((over or r.fill):GetStatusBarTexture())
+end
+
+@test("the ghost: a loss leaves the fill at once; the ghost holds 150 ms, then the engine eases it down")
+local function ghostLoss()
+    local r, d = mage()
+    expect(tokenOf(r.ghost)).toBe("ghost")
+    expect(r.ghost:GetValue()).toBe(600)
+    expect(fillRange(r.ghost)).toEqual({ 0, 1000 })
+    expect(r.ghost:GetFrameLevel() < r.spend:GetFrameLevel()).toBe(true)
+    expect(r.spend:GetFrameLevel() < r.fill:GetFrameLevel()).toBe(true)
+    local moves = ghostMoves(r)
+    mana(d, 450)
+    expect(r.fill:GetValue()).toBe(450)
+    expect(r.text:GetText()).toBe("450")
+    -- the lost 150 of 1000 shows past the fill (300 px inside the border)
+    expect(r.ghost:GetValue()).toBe(600)
+    expect(trailWidth(r)).toBeCloseTo(300 * 150 / 1000)
+    mock.advanceTime(0.1)
+    expect(moves).toEqual({})
+    mock.advanceTime(0.1)
+    expect(moves).toEqual({ { 450, EASE } })
+    mock.advanceFrames(60)
+    expect(r.ghost:GetValue()).toBeCloseTo(450)
+    expect(trailWidth(r)).toBeCloseTo(0)
+    expectNoErrors()
+end
+
+@test("the ghost: a gain shows at once, with nothing trailing it")
+local function ghostGain()
+    local r, d = mage()
+    local moves = ghostMoves(r)
+    mana(d, 800)
+    expect(r.fill:GetValue()).toBe(800)
+    -- the ghost catches up under the fill, never past it
+    expect(trailWidth(r) <= 0).toBe(true)
+    mock.advanceTime(0.2)
+    expect(moves).toEqual({ { 800, EASE } })
+    expect(r.ghost:GetValue()).toBe(800)
+end
+
+@test("the ghost: losses inside the hold move its target; a loss while it drains holds again")
+local function ghostRepeated()
+    local r, d = mage()
+    local moves = ghostMoves(r)
+    mana(d, 500)
+    local held = r.ghostTimer
+    mock.advanceTime(0.1)
+    mana(d, 400) -- the same hold, not a new one
+    expect(r.ghostTimer).toBe(held)
+    expect(trailWidth(r)).toBeCloseTo(300 * 200 / 1000)
+    mock.advanceTime(0.06)
+    expect(moves).toEqual({ { 400, EASE } })
+    -- while it drains: another loss, another hold, then down to it
+    mana(d, 300)
+    expect(r.fill:GetValue()).toBe(300)
+    expect(r.ghostTimer ~= nil).toBe(true)
+    mock.advanceTime(0.16)
+    expect(moves).toEqual({ { 400, EASE }, { 300, EASE } })
+    expect(r.ghost:GetValue()).toBe(300)
+end
+
+@test("the ghost: with reduced motion it follows the fill at once")
+local function ghostReduced()
+    settings.set("ui", "reducedMotion", true)
+    local r, d = mage()
+    local moves = ghostMoves(r)
+    mana(d, 450)
+    expect(r.fill:GetValue()).toBe(450)
+    expect(r.ghost:GetValue()).toBe(450)
+    expect(r.ghostTimer).toBeNil()
+    expect(moves).toEqual({ { 450, "at once" } })
+    -- turned off again: the trail is back
+    settings.reset("ui", "reducedMotion")
+    mana(d, 300)
+    expect(r.ghost:GetValue()).toBe(450)
+end
+
+@test("the ghost: no trail when the bar starts, after a loading screen, or when a form switches the power")
+local function ghostInstant()
+    local r, d = mage()
+    d.power = 200
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, true)
+    expect(r.ghost:GetValue()).toBe(200)
+    expect(r.ghostTimer).toBeNil()
+    -- a druid's cat form: energy instead of mana
+    local cat = world({ class = "DRUID", token = "MANA", pType = 0, power = 900, max = 1000 })
+    local b = resource(cat)
+    b:Start()
+    expect(b.ghost:GetValue()).toBe(900)
+    cat.token, cat.pType, cat.power, cat.max = "ENERGY", 3, 100, 100
+    mock.fireUnitEvent("UNIT_DISPLAYPOWER", "player")
+    expect(fillRange(b.ghost)).toEqual({ 0, 100 })
+    expect(b.ghost:GetValue()).toBe(100)
+    expect(b.ghostTimer).toBeNil()
+    -- the same power on a refresh (the options): a loss still trails
+    cat.power = 40
+    b:SetOptions({ number = "pct" })
+    expect(b.ghost:GetValue()).toBe(100)
+    expect(b.ghostTimer ~= nil).toBe(true)
+end
+
+@test("the ghost: secret power trails and drains too, in combat; the real player's as well")
+local function ghostSecret()
+    local before = #errorsSoFar()
+    local r, d = mage({ power = mock.secret(600) })
+    mock.player:enterCombat()
+    mana(d, mock.secret(450))
+    expect(span(r.fill:GetStatusBarTexture())).toBeCloseTo(300 * 450 / 1000)
+    expect(trailWidth(r)).toBeCloseTo(300 * 150 / 1000)
+    mock.advanceTime(0.2)
+    mock.advanceFrames(60)
+    expect(trailWidth(r)).toBeCloseTo(0)
+    -- the real player: the game's own secret power
+    local p = rb.resourceBar(parent, { width = 302 })
+    made[#made + 1] = p
+    p:SetPoint("CENTER")
+    mock.player:setPower(40)
+    p:Start()
+    expect(trailWidth(p)).toBeCloseTo(0)
+    mock.player:setPower(20, { frequent = true })
+    expect(trailWidth(p) > 0).toBe(true)
+    mock.advanceTime(0.2)
+    mock.advanceFrames(60)
+    expect(trailWidth(p)).toBeCloseTo(0)
+    mock.player:leaveCombat()
+    expect(#errorsSoFar()).toBe(before)
+end
+
+@test("the ghost with a cast's cost: hidden under the band; the spent mana drains when the cast lands")
+local function ghostCastCost()
+    local r, d = mage()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    -- the ghost (at what you have) lies under the band: the band's ground,
+    -- the track's colour, covers it to the band's end
+    expect(r.ghost:GetValue()).toBe(600)
+    expect(tokenOf(r.spendGround)).toBe("surface-sunk")
+    expect(r.spendGround:GetDrawLayer()).toBe("BACKGROUND")
+    expect(r.spendGround:IsVisible()).toBe(true)
+    expect(span(r.spendGround)).toBeCloseTo(300 * 600 / 1000)
+    expect(trailWidth(r, r.spend)).toBeCloseTo(0)
+    -- the cast lands, then the mana goes: the fill drops by the cost, and the
+    -- ghost drains the spent part where the band was
+    mock.advanceTime(2.5)
+    expect(r.spendGround:IsVisible()).toBe(false)
+    mana(d, 400)
+    expect(r.fill:GetValue()).toBe(400)
+    expect(trailWidth(r)).toBeCloseTo(300 * 200 / 1000)
+    mock.advanceTime(0.2)
+    expect(trailWidth(r)).toBeCloseTo(0)
+    -- the mana goes first, the cast ends after: the spent part trails past
+    -- the band's end, then past the fill's
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    mana(d, 200)
+    expect(r.spend:IsShown()).toBe(true)
+    expect(span(r.spend:GetStatusBarTexture())).toBeCloseTo(300 * 200 / 1000)
+    expect(trailWidth(r, r.spend)).toBeCloseTo(300 * 200 / 1000)
+    local guid = select(7, UnitCastingInfo("player"))
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", guid, FROSTBOLT)
+    expect(r.spend:IsShown()).toBe(false)
+    expect(r.fill:GetValue()).toBe(200)
+    expect(trailWidth(r)).toBeCloseTo(300 * 200 / 1000)
+    mock.advanceTime(0.2)
+    expect(trailWidth(r)).toBeCloseTo(0)
+    mock.player:interruptCast()
+    mock.advanceTime(1)
+    expectNoErrors()
 end

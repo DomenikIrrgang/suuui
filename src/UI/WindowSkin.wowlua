@@ -131,11 +131,16 @@ class TabSkin
             hideTooltip()
         end)
         cover:Hide()
-        -- Blizzard lays its tabs out again now and then: back in the row
+        -- Blizzard lays its tabs out again now and then: back in the row at
+        -- once (a frame later, the tab showed where Blizzard put it for that
+        -- frame: the guild window's tabs jumped on every switch, its Info tab
+        -- anchored under Roster each time; found in game 2026-11-11), and
+        -- again a frame later for points Blizzard sets after this one
         hook(b, "SetPoint", function()
             if chrome.placing then
                 return
             end
+            chrome:LayoutTabs()
             after(0, function()
                 chrome:LayoutTabs()
             end)
@@ -595,11 +600,36 @@ local function byOpening(a: WindowChrome, b: WindowChrome): boolean
     return (a.openedAt or 0) < (b.openedAt or 0)
 end
 
+-- How far (screen units) a centred window rises so its bottom keeps above
+-- your cast bar (asked 2026-11-11: the professions window covered it), at
+-- most up to the screen's top. 0 without a cast bar, or with room enough.
+local function aboveCastBar(f: Frame, cy: number, rise: number): number
+    local bar = anchors.get("playerCastBar")
+    if not bar then
+        return 0
+    end
+    local barTop = bar:GetTop()
+    if not barTop then
+        return 0
+    end
+    local es = f:GetEffectiveScale()
+    local h = f:GetHeight() * es
+    local gap = S["space-5"] * UIParent:GetEffectiveScale()
+    local bottom = cy - h / 2
+    local need = barTop * bar:GetEffectiveScale() + gap - bottom
+    if need <= 0 then
+        return 0
+    end
+    local screenTop = UIParent:GetHeight() * UIParent:GetEffectiveScale()
+    local room = screenTop - gap - (cy + h / 2 + rise * es)
+    return math.max(0, math.min(need, room))
+end
+
 -- The windows asked to sit in the middle of the screen (their headers
 -- included), out of the row; opening one there closes the other (see
--- add), so normally one: in the middle. Should two be open at once (a
--- protected one can't be closed from here), side by side, the group
--- centred. A protected one moves out of combat only.
+-- add), so normally one: in the middle, above your cast bar. Should two be
+-- open at once (a protected one can't be closed from here), side by side,
+-- the group centred. A protected one moves out of combat only.
 local function centerAll(list: WindowChrome[])
     if #list == 0 then
         return
@@ -621,7 +651,9 @@ local function centerAll(list: WindowChrome[])
             c.placeAfterCombat = true
         else
             f:ClearAllPoints()
-            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es + c.cutW / 2, -c.rise / 2)
+            local cy = UIParent:GetHeight() * us / 2 - c.rise / 2 * es
+            local up = aboveCastBar(f, cy, c.rise)
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es + c.cutW / 2, -c.rise / 2 + up / es)
         end
         x = x + w + gap
     end

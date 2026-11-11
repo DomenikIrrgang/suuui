@@ -20,6 +20,8 @@ type Person = uf.StandInPerson
 local parent: Frame
 local built: uf.UnitFrame[] = {}
 local wolf: mock.MockUnit? = nil
+-- the player made a mage (the cast's cost tests): a warrior again after
+local mage = false
 
 -- the colour token a region was painted with (UI/Draw keeps it)
 local function tokenOf(region: Region): string?
@@ -82,6 +84,15 @@ local function tearDown()
     if InCombatLockdown() then
         mock.player:leaveCombat()
     end -- secure frames hide out of combat only
+    -- a cast a failed test left running; the player as the tests expect him
+    if UnitCastingInfo("player") or UnitChannelInfo("player") then
+        mock.player:interruptCast()
+        mock.advanceTime(1)
+    end
+    if mage then
+        mock.player:update({ class = "WARRIOR" })
+        mage = false
+    end
     for _, f in ipairs(built) do
         f:Deactivate()
         f:Hide()
@@ -1522,4 +1533,83 @@ local function tappedMob()
     controlled = false
     local g = preview(priest(), nil, a)
     expect(g.tappedLook).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Your cast's cost on the player's power line
+--------------------------------------------------------------------------------
+
+local FROSTBOLT = 116 -- 25 mana (the client's answer)
+
+-- how wide a region is drawn (a fill's texture has no size of its own)
+local function span(r: Region): number
+    return (r:GetRight() or 0) - (r:GetLeft() or 0)
+end
+
+@test("the player's power line: your cast's cost faded at its end, in combat too, until the cast ends")
+local function castCost()
+    mock.player:update({ class = "MAGE" })
+    mage = true
+    mock.player:setPower(60)
+    local f = keep(uf.unitFrame(parent, "player", {}))
+    f:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, -10)
+    f:Activate()
+    expect(f.powerSpend:IsShown()).toBe(false)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(f.powerSpend:IsShown()).toBe(true)
+    expect({ f.power:GetMinMaxValues() }).toEqual({ 25, 125 })
+    expect({ f.powerSpend:GetMinMaxValues() }).toEqual({ 0, 100 })
+    expect(tokenOf(f.powerSpend)).toBe("mana")
+    expect(f.powerSpend:GetFrameLevel() < f.power:GetFrameLevel()).toBe(true)
+    -- the line shows what stays (60 - 25), the faded bar what you have (60)
+    local w = span(f.powerSpend)
+    expect(span(f.power:GetStatusBarTexture())).toBeCloseTo(w * 35 / 100)
+    expect(span(f.powerSpend:GetStatusBarTexture())).toBeCloseTo(w * 60 / 100)
+    -- in combat, your power changing meanwhile (secret: drawn by the engine)
+    mock.player:enterCombat()
+    mock.player:setPower(50)
+    expect(span(f.power:GetStatusBarTexture())).toBeCloseTo(w * 25 / 100)
+    expect(span(f.powerSpend:GetStatusBarTexture())).toBeCloseTo(w * 50 / 100)
+    mock.advanceTime(2.5)
+    expect(f.powerSpend:IsShown()).toBe(false)
+    expect({ f.power:GetMinMaxValues() }).toEqual({ 0, 100 })
+    mock.player:leaveCombat()
+    -- interrupted: gone; deactivated mid-cast: gone
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    mock.player:interruptCast()
+    expect(f.powerSpend:IsShown()).toBe(false)
+    mock.advanceTime(1)
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(f.powerSpend:IsShown()).toBe(true)
+    f:Deactivate()
+    expect(f.powerSpend:IsShown()).toBe(false)
+    expect({ f.power:GetMinMaxValues() }).toEqual({ 0, 100 })
+    mock.advanceTime(2.5)
+    expectNoErrors()
+end
+
+@test("the cast's cost: only on the player's own frame, never with powerCost = false or for rage")
+local function castCostOthers()
+    mock.player:update({ class = "MAGE" })
+    mage = true
+    mock.player:target(mock.player)
+    local target = keep(uf.unitFrame(parent, "target", {}))
+    target:Activate()
+    local off = keep(uf.unitFrame(parent, "player", { powerCost = false }))
+    off:Activate()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(target.power:IsShown()).toBe(true)
+    expect(target.powerSpend:IsShown()).toBe(false)
+    expect(off.powerSpend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    mock.player:target(nil)
+    -- a warrior's rage line and a mana spell
+    mock.player:update({ class = "WARRIOR" })
+    mage = false
+    local f = keep(uf.unitFrame(parent, "player", {}))
+    f:Activate()
+    mock.player:castSpell(FROSTBOLT, { castTime = 2 })
+    expect(f.powerSpend:IsShown()).toBe(false)
+    mock.advanceTime(2.5)
+    expectNoErrors()
 end

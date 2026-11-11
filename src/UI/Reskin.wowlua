@@ -507,13 +507,15 @@ type MenuState = {
     chevrons: Texture[],
     nChevrons: number,
     active?: boolean,
+    -- the rows restyled, and how they looked then (a choice that sets them
+    -- up again, a sort order, is restyled again)
+    rows: Frame[],
+    ticks: Texture[],
+    look: string,
 }
 
 local menus: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" })
 local rowMenu: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
--- a row: the game's OnEnter handler SuuUI's hooks sit on (the game sets a
--- reused row's scripts again, dropping them: hooked again then)
-local hooked: { [Frame]: unknown } = setmetatable({}, { __mode = "k" })
 
 -- The open root menu, if the game has one open.
 export function openRoot(): Frame?
@@ -603,6 +605,7 @@ local function menuRow(st: MenuState, row: Frame)
                     chosen = true
                 end
                 indicator = indicator or t
+                st.ticks[#st.ticks + 1] = t
                 hideRegion(st, t)
             elseif atlas:find("common%-dropdown%-tick") then
                 indicator = t
@@ -635,42 +638,13 @@ local function menuRow(st: MenuState, row: Frame)
         chev:Show()
     end
     -- SuuUI's hover and mark: on its own panel behind the rows (the game
-    -- forbids new textures on its menu rows)
+    -- forbids new textures on its menu rows). No hooks on the game's rows:
+    -- they made its menus SuuUI's, and a choice that does a protected thing
+    -- was refused ("Forbidden: GuildControlSetRank()"; in combat a raid
+    -- marker, "Forbidden: SetRaidTarget()", found in game 2026-11-11). The
+    -- panel follows the mouse and the rows' look itself (menuWatch).
     rowMenu[row] = st
-    -- (the game sets a reused row's scripts again: hooked again when its
-    -- handler is new. Not by hooking the row's SetScript: hooks on the game's
-    -- shared menu frames made its menus SuuUI's, and a choice that does a
-    -- protected thing was refused, "Forbidden: GuildControlSetRank()", found
-    -- in game)
-    local base = row:GetScript("OnEnter")
-    if hooked[row] == nil or hooked[row] ~= base then
-        hooked[row] = base or false
-        row:HookScript("OnEnter", function(self: Frame)
-            local owner = rowMenu[self]
-            if owner and owner.active then
-                owner.hover:ClearAllPoints()
-                owner.hover:SetAllPoints(self)
-                owner.hover:Show()
-            end
-        end)
-        row:HookScript("OnLeave", function(self: Frame)
-            local owner = rowMenu[self]
-            if owner then
-                owner.hover:Hide()
-            end
-        end)
-        -- a choice that sets the menu's rows up again (a sort order): marked
-        -- again a frame later
-        row:HookScript("OnClick", function(self: Frame)
-            local owner = rowMenu[self]
-            local menu = owner and owner.panel:GetParent()
-            after(0, function()
-                if owner and owner.active and menu and menu:IsShown() then
-                    reskinMenu(menu)
-                end
-            end)
-        end)
-    end
+    st.rows[#st.rows + 1] = row
     if chosen then
         st.nMarks = st.nMarks + 1
         local mark = st.marks[st.nMarks]
@@ -689,6 +663,19 @@ local function menuRow(st: MenuState, row: Frame)
         end
         mark:Show()
     end
+end
+
+-- How a restyled menu's rows look now: which are shown and which ticks are
+-- on (a choice that sets the rows up again changes it: restyled again).
+local function rowsLook(st: MenuState): string
+    local parts: string[] = {}
+    for _, row in ipairs(st.rows) do
+        parts[#parts + 1] = row:IsShown() and "1" or "0"
+    end
+    for _, t in ipairs(st.ticks) do
+        parts[#parts + 1] = t:IsShown() and "t" or "f"
+    end
+    return table.concat(parts)
 end
 
 -- Whether a row has words in it (the game ends some menus, the unit menus,
@@ -742,9 +729,41 @@ export function reskinMenu(given: unknown)
             nMarks = 0,
             chevrons = {},
             nChevrons = 0,
+            rows = {},
+            ticks = {},
+            look = "",
         }
         st = made
         menus[menu] = made
+        -- the hover band under the row the mouse is on, and the rows
+        -- restyled again when a choice set them up again: on SuuUI's own
+        -- panel, never on the game's rows (see menuRow)
+        local since = 0
+        panel:SetScript("OnUpdate", function(_: Frame, elapsed: number)
+            if not made.active then
+                return
+            end
+            local over: Frame? = nil
+            for _, row in ipairs(made.rows) do
+                if not over and row:IsVisible() and row:IsMouseOver() then
+                    over = row
+                end
+            end
+            if over then
+                made.hover:ClearAllPoints()
+                made.hover:SetAllPoints(over)
+                made.hover:Show()
+            else
+                made.hover:Hide()
+            end
+            since = since + elapsed
+            if since >= 0.1 then
+                since = 0
+                if menu:IsShown() and rowsLook(made) ~= made.look then
+                    reskinMenu(menu)
+                end
+            end
+        end)
         -- the game's look back when it closes: SuuUI's panel, its child, hides
         -- with it (no hooks on the game's shared menu frames: they made its
         -- menus SuuUI's, and a protected choice was refused)
@@ -759,6 +778,7 @@ export function reskinMenu(given: unknown)
         restoreMenu(st)
     end
     st.active = true
+    st.rows, st.ticks = {}, {}
     st.panel:Show()
     for _, t in ipairs(textures(menu)) do
         hideRegion(st, t)
@@ -782,6 +802,7 @@ export function reskinMenu(given: unknown)
     for _, row in ipairs(rows) do
         menuRow(st, row)
     end
+    st.look = rowsLook(st)
     -- the game's frame keeps room under its rows for its own drop shadow: the
     -- panel ends under the last row instead, as far below it as the first
     -- row is below the top
