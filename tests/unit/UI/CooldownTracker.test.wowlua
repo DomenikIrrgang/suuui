@@ -129,6 +129,51 @@ local function ranks()
     expect(knownRank({ ids = {} })).toBeNil()
 end
 
+-- Consecration as the client has it: Rank 1 is the highest ID (the recorded
+-- C_Spell.GetSpellSubtext answers of WoW Forever).
+local CONSECRATION = { 20116, 20922, 20923, 20924, 26573 }
+local CONSECRATION_RANKS: { [number]: string } = {
+    [26573] = "Rank 1",
+    [20116] = "Rank 2",
+    [20922] = "Rank 3",
+    [20923] = "Rank 4",
+    [20924] = "Rank 5",
+}
+local function consecration(knownUpTo: number)
+    for id, rank in pairs(CONSECRATION_RANKS) do
+        local n = assert(tonumber(rank:match("%d+")))
+        mock.defineSpell(id, { name = "Consecration", iconID = 135926, subtext = rank, known = n <= knownUpTo })
+    end
+end
+
+@test("knownRank: by rank, not by ID (Consecration's Rank 1 is its highest ID); a tie, the highest ID")
+local function ranksNotIDs()
+    consecration(5)
+    expect(knownRank({ ids = CONSECRATION })).toBe(20924)
+    consecration(3)
+    expect(knownRank({ ids = CONSECRATION })).toBe(20922)
+    consecration(1)
+    expect(knownRank({ ids = CONSECRATION })).toBe(26573)
+    -- spells without ranks: the highest known ID, as before
+    expect(knownRank({ ids = { KNOWN_LOW, KNOWN_HIGH } })).toBe(KNOWN_HIGH)
+end
+
+@test("a cell checks the mana of the highest rank you know, not of Rank 1")
+local function manaOfTopRank()
+    consecration(5)
+    local t = tracker({ essential = { { name = "Consecration", ids = CONSECRATION, unusable = "hide" } } })
+    local cell = t.built.essential[1]
+    expect(cell.spellID).toBe(20924)
+    -- Rank 1 is cheap enough, Rank 5 isn't: the cell is unusable
+    usable[26573] = { true, false }
+    usable[20924] = { false, true }
+    t:UpdateCooldowns()
+    expect(cell).never.toBeShown()
+    usable[20924] = { true, false }
+    t:UpdateCooldowns()
+    expect(cell).toBeShown()
+end
+
 @test("knowsEntry: a single entry's rank, or any group member's")
 local function knows()
     expect(knowsEntry({ ids = { KNOWN_LOW } })).toBe(true)

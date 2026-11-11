@@ -271,16 +271,43 @@ export type AuraLook = {
 -- Cooldown cells
 --------------------------------------------------------------------------------
 
--- The rank of an entry you know (highest ID first), or nil.
+-- A spell's rank number from its subtext ("Rank 5"), 0 for none; read once
+-- per spell (a secret or empty answer isn't kept).
+local rankNumbers: { [number]: number } = {}
+local function rankNumber(id: number): number
+    local cached = rankNumbers[id]
+    if cached then
+        return cached
+    end
+    local ok, sub = pcall(C_Spell.GetSpellSubtext, id)
+    if not ok or type(sub) ~= "string" or secret.isSecret(sub) then
+        return 0
+    end
+    local n = tonumber(sub:match("(%d+)")) or 0
+    if n > 0 then
+        rankNumbers[id] = n
+    end
+    return n
+end
+
+-- The rank of an entry you know, or nil: the highest rank number among the
+-- IDs you know, the highest ID on a tie (a spell without ranks). IDs don't
+-- climb with the ranks: Consecration's Rank 1 is 26573, its Ranks 2-5 are
+-- 20116-20924; the highest known ID was Rank 1, and the cell checked its mana
+-- cost and range (found in game, 2026-11-11).
 local function knownRank(entry: TrackerEntry): number?
     local ids = entry.ids or {}
+    local best: number?, bestRank = nil, -1
     for i = #ids, 1, -1 do
         local id = ids[i]
         if IsPlayerSpell and IsPlayerSpell(id) then
-            return id
+            local r = rankNumber(id)
+            if r > bestRank then
+                best, bestRank = id, r
+            end
         end
     end
-    return nil
+    return best
 end
 
 -- Whether you know an entry's spell: a rank of it, or (a group) of any of

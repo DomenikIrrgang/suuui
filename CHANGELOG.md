@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Cooldown Manager: spells whose ranks have out-of-order IDs, such as Consecration, now check the mana cost and range of the highest rank you know instead of Rank 1, and their rows show that rank.
+
 ## 0.6.39 (2026-11-11)
 
 ### New
