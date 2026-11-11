@@ -6,6 +6,7 @@
 
 - Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
 - Unit frames: setting a raid target marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+- Guild window: switching tabs no longer makes the tabs flicker and jump.
 
 ## 0.6.40 (2026-11-11)
 
