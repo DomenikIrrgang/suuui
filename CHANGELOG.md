@@ -7,6 +7,10 @@
 - Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
 - For plugin authors (API 0.34): the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default).
 
+### Changed
+
+- Resource bar: mana, rage or energy you lose now leaves a white trail, as damage does on the health bars. The bar shows your new amount at once, and the part you just lost stays white for a moment, then drains away. With Reduce motion on, the bar just drops.
+
 ## 0.7.0 (2026-11-11)
 
 ### New
