@@ -476,6 +476,8 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     -- only the ones still there, so this one stays.)
     menuHooked: boolean = false
     menuHome: Frame? = nil
+    -- while the game's button lies over SuuUI's (ReleaseMenuButton: no more)
+    menuAdopted: boolean = false
 
     function AdoptMenuButton()
         local blz = frames.asFrame(tbl.field(_G, "MainMenuMicroButton"))
@@ -490,6 +492,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         blz:SetFrameLevel(b:GetFrameLevel() + 5)
         blz:SetAlpha(0)
         blz:Show()
+        self.menuAdopted = true
         if self.menuHooked then
             return
         end
@@ -498,6 +501,25 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
             local m = self.menu
             return m and m.buttons["menu"]
         end
+        -- the game sets it again while the shop opens and closes: its alpha
+        -- (disabled 0.5, enabled 1) and its place (its micro menu laid out
+        -- again, the button at the row's end): it showed its own art over
+        -- SuuUI's bar (a player's report, 2026-11-11). Unseen and over
+        -- SuuUI's button again at once.
+        local placing = false
+        local function keep()
+            local mine = own()
+            if placing or not self.menuAdopted or not mine then
+                return
+            end
+            placing = true
+            blz:ClearAllPoints()
+            blz:SetAllPoints(mine)
+            blz:SetAlpha(0)
+            placing = false
+        end
+        hook(blz, "SetAlpha", keep)
+        hook(blz, "SetPoint", keep)
         -- (its own tooltip, the game's latency and frame rate, comes again
         -- each moment while hovered: kept away, SuuUI's shows)
         local function quiet()
@@ -534,6 +556,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         if not blz or not home then
             return
         end
+        self.menuAdopted = false
         blz:SetParent(home)
         blz:SetAlpha(1)
         errors.tryMethod(home, "Layout")
