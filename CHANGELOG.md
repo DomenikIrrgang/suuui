@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
+
 ### Fixed
 
 - Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
