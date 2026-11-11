@@ -122,6 +122,9 @@ end
 -- Backpack"): SuuUI's bags replace that backpack, so the click showed them
 -- nowhere (found in game 2026-11-11). Shown in the foot by the gold
 -- (asked); hover: the game's tooltip, a click: the Currency tab.
+-- (the game's backpack-currency setters, hooked once: see OnEnable)
+local currencyHooked = false
+
 local function backpackCurrencies(): InventoryCurrency[]
     local out: InventoryCurrency[] = {}
     local get = C_CurrencyInfo and C_CurrencyInfo.GetBackpackCurrencyInfo
@@ -3124,12 +3127,31 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("INVENTORY_SEARCH_UPDATE", function()
             self:UpdateShown()
         end)
-        -- a currency gained or spent, or one marked for the backpack
+        -- a currency gained or spent
         self:OnGameEvent("CURRENCY_DISPLAY_UPDATE", function()
             if inv:IsShown() then
                 self:Foot()
             end
         end)
+        -- one marked for the backpack or unmarked (the Currency tab's box):
+        -- no event says so, the game updates its own backpack by hand; with
+        -- the bags open it showed only once they were opened again (found in
+        -- game 2026-11-11). Hooked once; a frame later, when the game has it.
+        if not currencyHooked and C_CurrencyInfo then
+            currencyHooked = true
+            for _, name in ipairs({ "SetCurrencyBackpack", "SetCurrencyBackpackByID" }) do
+                if type(field(C_CurrencyInfo, name)) == "function" then
+                    hook(C_CurrencyInfo, name, function()
+                        after(0, function()
+                            local open = self.inv
+                            if self:IsEnabled() and open and open:IsShown() then
+                                self:Foot()
+                            end
+                        end)
+                    end)
+                end
+            end
+        end
         self:OnGameEvent("PLAYER_MONEY", function()
             self:Char().money = GetMoney()
             if inv:IsShown() then
