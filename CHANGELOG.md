@@ -9,6 +9,7 @@
 ### Changed
 
 - Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+- Windows in the middle of the screen (professions, talents, Legacy) open higher when they would cover your cast bar.
 
 ## 0.7.0 (2026-11-11)
 
