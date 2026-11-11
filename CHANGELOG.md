@@ -5,6 +5,7 @@
 ### Changed
 
 - Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). Settings › Bags › Keyring turns it off.
+- Bags: the reagent bag's free slots show once, in its section's header, no longer also at the bottom of the window.
 
 ## 0.6.40 (2026-11-11)
 
