@@ -870,8 +870,8 @@ local function newPlate(): Nameplate
 end
 
 -- What a pooled plate still lacks, made a step a frame out of combat: its
--- aura container (with your debuffs' group), then the friendly plates'
--- group. Each is a few milliseconds in game; the friendly group made when a
+-- aura container, then your debuffs' group (an enemy's); a friendly plate's
+-- group waits for its first aura. Each is a few milliseconds in game; the friendly group made when a
 -- plate first went on a friendly unit cost 7-11 ms in NAME_PLATE_UNIT_ADDED
 -- while running about (the dev profiler, 2026-11-10).
 -- (a plate without its auras first: it's what a unit would wait for)
@@ -901,6 +901,32 @@ local function unfinished(): Nameplate?
     return nil
 end
 
+-- A pooled plate whose enemy debuff group isn't in the engine yet. An
+-- enemy's plate takes its group at once (ApplyAuraCount): made then, its ten
+-- buttons were most of a pull's frames (40,000 instructions and 150 KB a
+-- plate, as it came, in combat). Made ahead instead, a plate a frame: for
+-- the plates taken first (the pool's end), and for POOL plates in all (a
+-- pull of thirty). A plate keeps its group, so more would only grow with
+-- the plates a crowd leaves in the pool, most of them friendly (the city
+-- scenario's emulated client grew by 50 MB): those wait for an enemy, as
+-- before.
+local groupsAhead = { made = 0 }
+
+local function enemyGroupMissing(): Nameplate?
+    if groupsAhead.made >= POOL or (tonumber(M:Get("auras")) or 0) <= 0 then
+        return nil
+    end
+    for i = #pool, math.max(1, #pool - POOL + 1), -1 do
+        local f = pool[i]
+        local auras = f.auras
+        local g = auras and auras.groups.mine
+        if g and not g.added then
+            return f
+        end
+    end
+    return nil
+end
+
 -- Whether a plate was made in this frame already.
 local function builtThisFrame(): boolean
     return builtAt == GetTime()
@@ -919,8 +945,10 @@ local function fill()
         if not builtThisFrame() then
             -- a plate's aura container, then plates enough;
             -- with the pool low (plates going out as fast as they come: a
-            -- crowd), a whole plate a frame, as fast as one a frame can be
+            -- crowd), a whole plate a frame, as fast as one a frame can be;
+            -- then the enemy debuff groups, then the pool topped up
             local f = unfinished()
+            local mine = not f and #pool >= POOL_LOW and enemyGroupMissing() or nil
             if f then
                 builtAt = GetTime()
                 f:BuildAuras()
@@ -928,6 +956,10 @@ local function fill()
                 local made = newPlate()
                 made:Hide()
                 pool[#pool + 1] = made
+            elseif mine then
+                builtAt = GetTime()
+                groupsAhead.made += 1
+                ;(assert(mine.auras)):SetGroupMax("mine", M:Get("auras"))
             elseif #pool < POOL then
                 -- the plate alone this frame, its auras the next
                 builtAt = GetTime()
