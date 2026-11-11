@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- World map: hovering the title (Continent › Zone) no longer causes a Lua error (Cannot anchor protected frames to regions).
+
 ## 0.6.38 (2026-11-10)
 
 ### Changed
