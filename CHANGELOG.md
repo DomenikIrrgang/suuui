@@ -5,6 +5,7 @@
 ### New
 
 - For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
+- For plugin authors (API 0.33): `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
 
 ### Changed
 
@@ -21,6 +22,7 @@
 - Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
 - Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
 - Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
+- Nameplates: the borders of the bar, the cast bar and the debuff icons no longer vanish at some camera angles; they're one screen pixel at any UI scale.
 
 ## 0.6.40 (2026-11-11)
 

@@ -844,9 +844,27 @@ local filling = false
 -- when the last plate was made (GetTime: one frame's)
 local builtAt: number? = nil
 
+-- Where plates are made and wait: a hidden frame at the scale of the game's
+-- nameplates, which hang on WorldFrame, not UIParent. A plate's pixel lines
+-- (its borders, its debuffs' edges) are made one physical pixel for the
+-- scale of where they're made: made under UIParent they came out 1.4 px on
+-- the game's plates at 1080p, and under one pixel at a larger UI scale,
+-- where they vanished at some positions (a player's report, 0.6.32: "the
+-- border disappears depending on your camera angle").
+local home: Frame? = nil
+local function poolHome(): Frame
+    local h = home
+    if not h then
+        h = CreateFrame("Frame", nil, WorldFrame)
+        h:Hide()
+        home = h
+    end
+    return h
+end
+
 local function newPlate(): Nameplate
     builtAt = GetTime()
-    local f = Nameplate.new(UIParent)
+    local f = Nameplate.new(poolHome())
     f:BuildAuras()
     return f
 end
@@ -913,7 +931,7 @@ local function fill()
             elseif #pool < POOL then
                 -- the plate alone this frame, its auras the next
                 builtAt = GetTime()
-                local made = Nameplate.new(UIParent)
+                local made = Nameplate.new(poolHome())
                 made:Hide()
                 pool[#pool + 1] = made
             else
@@ -965,7 +983,7 @@ local function release(f: Nameplate)
     f.unit, f.friendly = nil, false
     f:Hide()
     f:ClearAllPoints()
-    f:SetParent(UIParent)
+    f:SetParent(poolHome())
     pool[#pool + 1] = f
 end
 
@@ -1451,6 +1469,17 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         questCache[unit] = nil
         byUnit[unit] = f
         f:SetParent(plate)
+        -- the game's plates at another scale than the pool (found in game:
+        -- they aren't WorldFrame's): the pool takes theirs, its plates' pixel
+        -- lines laid again once, this one's too; from then on they match
+        local scale = f:GetEffectiveScale()
+        local h = poolHome()
+        if math.abs(scale - h:GetEffectiveScale()) > 0.0001 then
+            local parent = h:GetParent()
+            h:SetScale(scale / (parent and parent:GetEffectiveScale() or 1))
+            SuuUI.Pixel.Relayout(h)
+            SuuUI.Pixel.Relayout(f)
+        end
         anchor(f, plate)
         f:SetFrameLevel(plate:GetFrameLevel() + 2)
         f:SetPlateWidth(self:Get("width"))

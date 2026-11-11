@@ -149,6 +149,87 @@ local function enemy()
     expect(b.level:GetText()).toBe("12+")
 end
 
+@test("a plate's border lines are one physical pixel on the game's plate (which hangs on WorldFrame, not UIParent)")
+local function pixelLines()
+    -- (found in game, 0.6.32: made under UIParent, they came out 1.4 px at
+    -- 1080p and under one pixel at a larger UI scale, where they vanished
+    -- depending on the camera)
+    local f = plateOf(wolf)
+    local plate = gamePlate(wolf:token() :: string)
+    expect(plate:GetEffectiveScale() ~= UIParent:GetEffectiveScale()).toBe(true)
+    local _, h = GetPhysicalScreenSize()
+    local function px(r: Region, size: number): number
+        return size * r:GetEffectiveScale() / (768 / h)
+    end
+    for _, t in ipairs({ f.border.top, f.border.bottom, f.cast.border.top }) do
+        expect(math.abs(px(t, t:GetHeight()) - 1) < 0.001).toBe(true)
+    end
+    expect(math.abs(px(f.border.left, f.border.left:GetWidth()) - 1) < 0.001).toBe(true)
+    -- every line inside the plate, the debuff icons' edges among them (the
+    -- report was a debuff's): one pixel too
+    local lines, wrong = 0, 0
+    local function walk(fr: Frame)
+        for _, r in ipairs({ fr:GetRegions() }) do
+            if r:GetObjectType() == "Texture" and (r :: Texture):GetDrawLayer() == "BORDER" then
+                local t = r :: Texture
+                local thin = math.min(t:GetHeight(), t:GetWidth())
+                if thin > 0 and thin < 2 then
+                    lines = lines + 1
+                    if math.abs(px(t, thin) - 1) >= 0.001 then
+                        wrong = wrong + 1
+                    end
+                end
+            end
+        end
+        for _, c in ipairs({ fr:GetChildren() }) do
+            walk(c)
+        end
+    end
+    walk(f)
+    expect(lines > 8).toBe(true)
+    expect(wrong).toBe(0)
+end
+
+@test(
+    "the game's plates at another scale than the pool: the pool takes theirs once, every line one pixel; then no more work"
+)
+local function otherScale()
+    -- (found in game: the game's plates aren't at WorldFrame's scale, and the
+    -- lines' relayout climbed into a forbidden frame of the game's)
+    local real = SuuUI.Pixel.Relayout
+    local calls = 0
+    mock.stub(SuuUI.Pixel, "Relayout", function(fr: Frame)
+        calls = calls + 1
+        real(fr)
+    end)
+    local _, h = GetPhysicalScreenSize()
+    local function onePx(t: Texture): boolean
+        return math.abs(t:GetHeight() * t:GetEffectiveScale() / (768 / h) - 1) < 0.001
+    end
+    local function gameLike(scale: number): Frame
+        local p = CreateFrame("Frame", nil, WorldFrame)
+        p:SetScale(scale)
+        p:SetSize(120, 20)
+        p:SetPoint("CENTER")
+        return p
+    end
+    M:Attach("nameplate41", gameLike(0.8), false)
+    local f = assert(byUnit["nameplate41"])
+    expect(onePx(f.border.top)).toBe(true)
+    expect(onePx(f.cast.border.top)).toBe(true)
+    expect(calls).toBe(2)
+    -- the pooled plates took the scale too: the next plate needs nothing
+    M:Attach("nameplate42", gameLike(0.8), false)
+    local b = assert(byUnit["nameplate42"])
+    expect(onePx(b.border.top)).toBe(true)
+    expect(calls).toBe(2)
+    M:OnPlateRemoved("nameplate41")
+    M:OnPlateRemoved("nameplate42")
+    -- back at the usual scale (for the other tests)
+    M:Attach("nameplate41", gameLike(1), false)
+    M:OnPlateRemoved("nameplate41")
+end
+
 @test("the health text: the value, both, none")
 local function healthText()
     local f = plateOf(wolf)
