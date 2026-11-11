@@ -4,7 +4,7 @@
 -- game's popup hosted: its own OK answers), the others' choices from the
 -- loot lines (counts, who on hover), the timer and its urgency, several
 -- rolls in order, Pass on all and Greed on all (asked once), the results
--- (kept for the fight), folding into the tab, cancelled and timed-out rolls,
+-- (kept 10 s after the last roll, held in combat), folding into the tab, cancelled and timed-out rolls,
 -- the game saying rolls are over, the test rolls, a reload mid-roll, and no
 -- notification for a roll any more.
 -- The engine has no group loot (no START_LOOT_ROLL of its own, an empty
@@ -14,7 +14,6 @@
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
-import * as tbl from "wowlua:table"
 import SuuUI from "/Core/API"
 import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
@@ -412,7 +411,9 @@ local function onAll()
     expect(M.asking).toBe(false)
 end
 
-@test("the results: you won, someone else won (your roll), everyone passed; kept for the fight")
+@test(
+    "the results: you won, someone else won (your roll), everyone passed; kept 10 s after the last roll, longer in combat"
+)
 local function results()
     roll(7)
     roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
@@ -462,17 +463,25 @@ local function results()
     -- none open: the results stay, with a close button
     expect(tray()).toBeShown()
     expect(tray().meta:GetText()).toBe("none open")
-    -- in combat they stay; 30 s after it they go
+    -- in combat they stay; 10 s after it they go
     -- (the tray's tick runs on frames: ten a second)
     mock.player:enterCombat()
     mock.advanceFrames(400, 100)
     expect(tray()).toBeShown()
     mock.player:leaveCombat()
-    mock.advanceFrames(290, 100)
+    mock.advanceFrames(90, 100)
     expect(tray()).toBeShown()
     mock.advanceFrames(20, 100)
     expect(tray()).never.toBeShown()
     expect(#M.results).toBe(0)
+    -- out of combat: 10 s after the last roll ends
+    roll(10)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    mock.advanceFrames(90, 100)
+    expect(tray()).toBeShown()
+    expect(#M.results).toBe(1)
+    mock.advanceFrames(20, 100)
+    expect(tray()).never.toBeShown()
 end
 
 @test("closing the results; Keep the results off: none")
@@ -665,7 +674,7 @@ local function blizzardAway()
     expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
 end
 
-@test("the settings: on the Loot page; the tray in edit mode")
+@test("the settings: on the Loot page; the tray in edit mode, at first in the middle of the screen's upper third")
 local function settingsAndMover()
     local s = registry.get("lootrolls") :: registry.Section
     expect(s.merge).toBe("loot")
@@ -676,5 +685,11 @@ local function settingsAndMover()
         end
     end
     expect(found).toBe(true)
-    expect(tbl.field(M:Get("position"), "point")).toBe("BOTTOMRIGHT")
+    expect(M:Get("position")).toEqual({ point = "TOP", x = 0, y = -400 })
+    -- placed there: horizontally centred, its top in the screen's upper part
+    roll(7)
+    local t = tray()
+    local root = SuuUI.Root
+    expect(math.floor((t:GetLeft() + t:GetRight()) / 2 + 0.5)).toBe(math.floor(root:GetWidth() / 2 + 0.5))
+    expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(400)
 end

@@ -14,6 +14,8 @@ import expectNoErrors, newParent from "../../helpers"
 import internal M from "/Units/Loot"
 import type LootWindow, LootRow from "/UI/Loot"
 import * as frames from "wowlua:frames"
+import migrations as settingMigrations from "/Core/Settings"
+import type Profile from "/Core/Settings"
 
 local MONEY = (Enum.LootSlotType and Enum.LootSlotType.Money) or 2
 
@@ -221,4 +223,27 @@ local function reloaded()
     expect(win()).toBeShown()
     M:OnDisable()
     expect(win()).never.toBeShown()
+end
+
+@test("Rolls in the notification stack switched off: the Loot rolls module starts off (once)")
+local function rollsMigration()
+    local found = false
+    for _, m in ipairs(settingMigrations()) do
+        if m.namespace == "loot" and m.id == "rolls" then
+            found = true
+            local off: { [string]: unknown } = { rolls = false, atCursor = false }
+            local profile: Profile = { loot = off }
+            m.fn(off, profile)
+            expect(off.rolls).toBeNil()
+            expect(off.atCursor).toBe(false)
+            expect(profile.lootrolls).toEqual({ enabled = false })
+            -- on (the old default): the tray stays as it is
+            local on: { [string]: unknown } = { rolls = true }
+            local other: Profile = { loot = on, lootrolls = { results = false } }
+            m.fn(on, other)
+            expect(on.rolls).toBeNil()
+            expect(other.lootrolls).toEqual({ results = false })
+        end
+    end
+    expect(found).toBe(true)
 end

@@ -56,7 +56,10 @@ export type Veto = (new: unknown, old: unknown) -> (boolean?, string?)
 export type Listing = { namespace: string, keys: string[] }
 export type Exported = { name: string, data: Profile }
 -- A module's migration of its stored values (`migrations()` lists them).
-export type Migration = { namespace: string, id: string, fn: (values: Values) -> (), owner: string }
+-- 0.32: `profile` is the whole profile the values are in, by namespace (to
+-- move a setting to another module; the rest of the profile left alone).
+export type MigrationFn = (values: Values, profile: Profile?) -> ()
+export type Migration = { namespace: string, id: string, fn: MigrationFn, owner: string }
 
 -- SuuUIDB's settings part: the profiles, which one each character uses,
 -- the characters' own data, the roles' profiles and the account's values.
@@ -364,7 +367,7 @@ export class SettingsStore
         end
         local values = p[m.namespace]
         if values then
-            if not self.reporter:call(m.owner, m.fn, values) then
+            if not self.reporter:call(m.owner, m.fn, values, p) then
                 return
             end
             -- what the migration left at its default isn't stored
@@ -392,7 +395,7 @@ export class SettingsStore
         end
     end
 
-    function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?)
+    function migrate(namespace: string, id: string, fn: MigrationFn, owner: unknown?)
         local defs = self.defaults[namespace]
         if not defs then
             error(("SuuUI Settings: unknown namespace %q"):format(tostring(namespace)), 3)
@@ -909,7 +912,7 @@ end
 export function reset(namespace: string?, key: string?): boolean
     return store:reset(namespace, key)
 end
-export function migrate(namespace: string, id: string, fn: (values: Values) -> (), owner: unknown?)
+export function migrate(namespace: string, id: string, fn: MigrationFn, owner: unknown?)
     store:migrate(namespace, id, fn, owner)
 end
 export function migrations(): Migration[]
