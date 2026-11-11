@@ -11,6 +11,7 @@
 --   inv:LayoutSlots(buttons)                -- in order, row by row
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv:SetAction({ text, onClick, tooltip }) or nil: a quiet button in the foot, before the note
+--   inv:SetCurrencies({ { icon, count, tooltip, onClick } }) or nil: currencies by the money (0.33)
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --   inv.sort.tip = { title, description }: its tooltip, changed any time (0.17)
 --
@@ -315,6 +316,15 @@ export type FoundItem = {
 -- The foot's button (SetAction).
 export type InventoryAction = { text: string, onClick?: () -> (), tooltip?: tooltip.TooltipSource }
 
+-- A currency in the foot (0.33): its icon and amount left of the money, a
+-- tooltip on hover (`tooltip(owner)` shows one), a click.
+export type InventoryCurrency = {
+    icon: number | string,
+    count: number,
+    tooltip?: (owner: Frame) -> (),
+    onClick?: () -> (),
+}
+
 export class SectionHead extends Frame
     readonly rule: Texture
     readonly label: Text
@@ -527,6 +537,11 @@ export class Inventory extends Panel
     money: Money
     actionDef: InventoryAction? = nil
     action: SuuButton? = nil
+    -- the currencies by the money, and their parts (made as needed, reused)
+    currencyDefs: InventoryCurrency[] = {}
+    currencies: Button[] = {}
+    currencyIcons: Texture[] = {}
+    currencyTexts: Text[] = {}
     showResults: boolean? = nil
     heads: SectionHead[]? = nil
     -- the buttons LayoutSlots last laid out (whoever laid them out knows
@@ -695,6 +710,53 @@ export class Inventory extends Panel
         self.note:SetValue(text or "")
     end
 
+    -- Currencies left of the money, in order (the game's "Show on Backpack"
+    -- ones on your own bags), or none.
+    function SetCurrencies(list: InventoryCurrency[]?)
+        local defs = list or {}
+        self.currencyDefs = defs
+        for i, def in ipairs(defs) do
+            local b = self.currencies[i]
+            if not b then
+                local made = CreateFrame("Button", nil, self.body)
+                made:SetHeight(T.type.numeric.lineHeight)
+                local icon = made:CreateTexture(nil, "ARTWORK")
+                icon:SetSize(14, 14)
+                icon:SetPoint("LEFT")
+                icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+                local text = uiText.text(made, "numeric", "ink")
+                text:SetPoint("LEFT", icon, "RIGHT", S["space-1"], 0)
+                local index = i
+                made:SetScript("OnEnter", function(btn: Button)
+                    local d = self.currencyDefs[index]
+                    if d and d.tooltip then
+                        d.tooltip(btn)
+                    end
+                end)
+                made:SetScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
+                made:SetScript("OnClick", function()
+                    local d = self.currencyDefs[index]
+                    if d and d.onClick then
+                        d.onClick()
+                    end
+                end)
+                self.currencies[i], self.currencyIcons[i], self.currencyTexts[i] = made, icon, text
+                b = made
+            end
+            local text = self.currencyTexts[i]
+            self.currencyIcons[i]:SetTexture(def.icon)
+            text:SetText(BreakUpLargeNumbers and BreakUpLargeNumbers(def.count) or tostring(def.count))
+            b:SetWidth(14 + S["space-1"] + text:GetUnboundedStringWidth())
+            b:Show()
+        end
+        for i = #defs + 1, #self.currencies do
+            self.currencies[i]:Hide()
+        end
+        self:FitBody()
+    end
+
     -- A quiet button at the start of the foot (Sell junk), the note after it.
     function SetAction(action: InventoryAction?)
         self.actionDef = action
@@ -831,6 +893,21 @@ export class Inventory extends Panel
         else
             self.note:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-4"])
             self.money:SetPoint("TOPRIGHT", self.rule, "BOTTOMRIGHT", 0, -S["space-4"])
+        end
+        -- the currencies: right to left from the money (where it would be
+        -- when there's none), the first one leftmost
+        local beside: Region? = nil
+        for i = #self.currencyDefs, 1, -1 do
+            local b = self.currencies[i]
+            b:ClearAllPoints()
+            if beside then
+                b:SetPoint("RIGHT", beside, "LEFT", -S["space-4"], 0)
+            elseif self.money:IsShown() then
+                b:SetPoint("RIGHT", self.money, "LEFT", -S["space-4"], 0)
+            else
+                b:SetPoint("RIGHT", self.money, "RIGHT")
+            end
+            beside = b
         end
         local h = y + content:GetHeight() + S["space-4"] + 1 + S["space-4"] + foot
         self.body:SetSize(self:GridWidth(), h)
