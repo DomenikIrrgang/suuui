@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- For plugin authors (API 0.33): `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
+
+### Fixed
+
+- Nameplates: the borders of the bar, the cast bar and the debuff icons no longer vanish at some camera angles; they're one screen pixel at any UI scale.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed

@@ -149,6 +149,47 @@ local function enemy()
     expect(b.level:GetText()).toBe("12+")
 end
 
+@test("a plate's border lines are one physical pixel on the game's plate (which hangs on WorldFrame, not UIParent)")
+local function pixelLines()
+    -- (found in game, 0.6.32: made under UIParent, they came out 1.4 px at
+    -- 1080p and under one pixel at a larger UI scale, where they vanished
+    -- depending on the camera)
+    local f = plateOf(wolf)
+    local plate = gamePlate(wolf:token() :: string)
+    expect(plate:GetEffectiveScale() ~= UIParent:GetEffectiveScale()).toBe(true)
+    local _, h = GetPhysicalScreenSize()
+    local function px(r: Region, size: number): number
+        return size * r:GetEffectiveScale() / (768 / h)
+    end
+    for _, t in ipairs({ f.border.top, f.border.bottom, f.cast.border.top }) do
+        expect(math.abs(px(t, t:GetHeight()) - 1) < 0.001).toBe(true)
+    end
+    expect(math.abs(px(f.border.left, f.border.left:GetWidth()) - 1) < 0.001).toBe(true)
+    -- every line inside the plate, the debuff icons' edges among them (the
+    -- report was a debuff's): one pixel too
+    local lines, wrong = 0, 0
+    local function walk(fr: Frame)
+        for _, r in ipairs({ fr:GetRegions() }) do
+            if r:GetObjectType() == "Texture" and (r :: Texture):GetDrawLayer() == "BORDER" then
+                local t = r :: Texture
+                local thin = math.min(t:GetHeight(), t:GetWidth())
+                if thin > 0 and thin < 2 then
+                    lines = lines + 1
+                    if math.abs(px(t, thin) - 1) >= 0.001 then
+                        wrong = wrong + 1
+                    end
+                end
+            end
+        end
+        for _, c in ipairs({ fr:GetChildren() }) do
+            walk(c)
+        end
+    end
+    walk(f)
+    expect(lines > 8).toBe(true)
+    expect(wrong).toBe(0)
+end
+
 @test("the health text: the value, both, none")
 local function healthText()
     local f = plateOf(wolf)
