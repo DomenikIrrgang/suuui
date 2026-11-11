@@ -21,6 +21,7 @@
 - Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
 - Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
 - Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
+- Quest tracker: the − button folds the quests away again (it showed a + and the quests stayed).
 
 ## 0.6.40 (2026-11-11)
 
