@@ -1,21 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-11-12)
 
 ### New
 
-- Player frame: a combat sign. Crossed swords on the left of your player frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
-- Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
-- World map: right-click a quest giver's "!" pin and choose "Hide this quest" to hide a quest you don't want to see. All of its pins go away at once, on every map. If a pin holds several quests, you pick which one to hide. Hidden quests are saved per character and listed under Map filters › Hidden quests: untick one to see it again, or press Show all.
-- Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
+- **Combat sign**: crossed swords show on the left of your player frame while you're in combat. They pop in once when the fight starts and fade away when it ends. Settings › Unit frames › Combat turns the sign off, or just the pop (with Reduce motion on, it never pops).
+- **Mana cost preview**: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of your resource bar and player frame, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
+- Resource bar: mana, rage or energy you lose now leaves a white trail, as damage does on the health bars. The bar shows your new amount at once; the part you just lost stays white for a moment, then drains away. With Reduce motion on, the bar just drops.
+- **Hide quests on the map**: right-click a quest giver's "!" pin on the world map and choose "Hide this quest". All of its pins go away at once, on every map. If a pin holds several quests, you pick which one to hide. Hidden quests are saved per character and listed under Map filters › Hidden quests: untick one to see it again, or press Show all.
+- Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter. The damage meter can now also show only in an instance.
 - Professions: the Filter menu has a required level range, like the auction house's. Type a minimum, a maximum or both to see only the recipes whose item needs a level in that range; leave a box empty for no limit. Recipes that make no item (enchants) always show, and an item with no level requirement counts as level 0.
-- For plugin authors (API 0.34): the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`); `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame; the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default); a group in `SuuUI.UI.FilterMenu` can have an `action`, a button under its choices.
+- For plugin authors (API 0.34): `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame; the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default); the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`); a group in `SuuUI.UI.FilterMenu` can have an `action`, a button under its choices.
 
 ### Changed
 
 - Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
-- Windows in the middle of the screen (professions, talents, Legacy) open higher when they would cover your cast bar.
-- Resource bar: mana, rage or energy you lose now leaves a white trail, as damage does on the health bars. The bar shows your new amount at once, and the part you just lost stays white for a moment, then drains away. With Reduce motion on, the bar just drops.
+- Windows in the middle of the screen (professions, talents, Legacy) now open higher when they would cover your cast bar.
 
 ## 0.7.0 (2026-11-11)
 
