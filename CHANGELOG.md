@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
