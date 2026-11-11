@@ -360,6 +360,32 @@ local function playerMenu(owner: Frame, name: string): boolean
     return true
 end
 
+-- A link clicked in combat, as the game's SetItemRef opens it but without
+-- ShowUIPanel: that refuses addon code in combat ("Interface action failed
+-- because of an AddOn", found in game 2026-11-11), and SuuUI's lines are
+-- addon code. The link's own handlers first, then ItemRefTooltip, shown
+-- directly (it's no protected panel). False when the game lacks a piece.
+local function refInCombat(link: string, text: string, button: string, frame: Frame): boolean
+    local tip = ItemRefTooltip
+    local process = LinkUtil and LinkUtil.ProcessLink
+    if not (tip and tip.ItemRefSetHyperlink and process and LinkProcessorResponse) then
+        return false
+    end
+    local ok, response = pcall(process, link, text, { button = button, frame = frame })
+    if ok and response == LinkProcessorResponse.Handled then
+        return true
+    end
+    local wasShown = tip:IsShown()
+    if not wasShown then
+        tip:SetOwner(UIParent, "ANCHOR_PRESERVE")
+    end
+    pcall(tip.ItemRefSetHyperlink, tip, link)
+    if not wasShown and not tip:IsShown() then
+        tip:Show()
+    end
+    return true
+end
+
 local function linkClick(frame: Frame, link: unknown, text: string, button: string)
     local l = asString(link)
     if not l then
@@ -382,6 +408,9 @@ local function linkClick(frame: Frame, link: unknown, text: string, button: stri
         -- SuuUI's lines have none, so it did nothing (asked 2026-11-10).
         -- Shift-click still goes to the game (the name into chat or a box).
         chat.whisper(name, ChatFrame1)
+        return
+    end
+    if InCombatLockdown() and not IsModifiedClick() and refInCombat(l, text, button, frame) then
         return
     end
     pcall(SetItemRef, l, text, button, frame)
