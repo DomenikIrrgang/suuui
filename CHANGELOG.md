@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+
 ### Fixed
 
 - Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
