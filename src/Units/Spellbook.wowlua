@@ -59,8 +59,13 @@ import * as secret from "wowlua:secret"
 import hook, hookScript from "wowlua:hooks"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import * as ahead from "/Core/Ahead"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
+
+-- A spell change with the book closed: the page drawn this long after it
+-- (once for every change in that moment: a level up brings several)
+local STALE_DELAY = 0.5
 
 local DEFAULTS = {
     unlearned = true,
@@ -935,41 +940,50 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         })
     end
 
-    -- The list a school shows, with the switches applied.
-    function SchoolList(school: School, trainer: { [string]: TrainerSpell[] }): (BookEntry[], number)
+    -- The list a school shows, with the switches applied; how many of its
+    -- spells you could train now, and what training them costs (copper).
+    function SchoolList(school: School, trainer: { [string]: TrainerSpell[] }): (BookEntry[], number, number)
         -- the pet's: its book only (no trainer, every rank it holds)
         if school.pet then
-            return self:PetLearned(school), 0
+            return self:PetLearned(school), 0, 0
         end
+        -- (the switches read once, not per spell: a settings read for each of
+        -- a school's spells to come cost the book's render 13,000 instructions)
+        local allRanks, withUnlearned = self:Get("allRanks"), self:Get("unlearned")
         local learned = self:Learned(school)
-        local shown = self:Get("allRanks") and learned or bestRanks(learned)
+        local shown = allRanks and learned or bestRanks(learned)
         local unlearned = self:Unlearned(trainer[school.name], learned)
         local list: BookEntry[] = {}
         for _, s in ipairs(shown) do
             list[#list + 1] = s
         end
-        local toTrain, nextShown = 0, {} :: { [string]: boolean }
+        local toTrain, cost, nextShown = 0, 0, {} :: { [string]: boolean }
         for _, s in ipairs(unlearned) do
             if s.status == "trainable" then
                 toTrain = toTrain + 1
+                cost = cost + (tonumber(s.cost) or 0)
             end
-            if self:Get("unlearned") then
+            if withUnlearned then
                 -- without All ranks: only each spell's next rank to come
-                if self:Get("allRanks") or not nextShown[s.label] then
+                if allRanks or not nextShown[s.label] then
                     list[#list + 1] = s
                     nextShown[s.label] = true
                 end
             end
         end
-        return list, toTrain
+        return list, toTrain, cost
     end
 
     -- force: also while the window is closed (out of combat), so the page and
     -- its buttons are ready before a fight: the buttons can't change in one.
-    -- Drawn now while the book shows; closed, drawn when it opens or as a
-    -- fight starts (each spell or pet change drew the closed book, 7-14 ms in
-    -- game, a level up among them).
+    -- Drawn now while the book shows; closed, drawn a moment later, once for
+    -- every change in that moment, out of combat (Core/Ahead), or when it
+    -- opens or a fight starts first (each spell or pet change drew the closed
+    -- book, 7-14 ms in game, a level up among them; left to the fight's
+    -- start, the drawing was the first frame of nearly every fight: 110,000
+    -- instructions and 240 KB).
     stale: boolean = false
+    staleTimer: TimerHandle? = nil
 
     function RenderOrMark()
         local book = self.book
@@ -977,7 +991,24 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             self:Render(true)
         else
             self.stale = true
+            self:RenderAhead()
         end
+    end
+
+    function RenderAhead()
+        if self.staleTimer then
+            return
+        end
+        self.staleTimer = after(STALE_DELAY, function()
+            self.staleTimer = nil
+            ahead.schedule("spellbook: page", function(): boolean
+                -- (drawn already: opened, or a fight started)
+                if self.stale and self:IsEnabled() then
+                    self:Render(true)
+                end
+                return false
+            end)
+        end)
     end
 
     function Render(force: boolean?)
@@ -1010,8 +1041,12 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         local widest = 0
         local casts: (number | string | false)[][] = {}
         local clicks: (string | false)[][] = {}
+        -- every school's count and cost to train (CountToTrain's, from the
+        -- lists made here rather than all of them made again)
+        local count, cost = 0, 0
         for i, s in ipairs(schools) do
-            local list, n = self:SchoolList(s, trainer)
+            local list, n, c = self:SchoolList(s, trainer)
+            count, cost = count + n, cost + c
             local ids: (number | string | false)[] = {}
             local rights: (string | false)[] = {}
             for k, sp in ipairs(list) do
@@ -1044,8 +1079,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         end
         book:SetWidest(widest)
         book:SetSchools(tabs)
-        local okAll, count, cost = pcall(self.CountToTrain, self)
-        local all: BookAll? = okAll and self:Get("trainingCost") and
+        local all: BookAll? = self:Get("trainingCost") and
             { count = count, cost = cost, short = (GetMoney() or 0) < cost } or
             nil
         book:SetHead(assert(schools[chosen]).name, toTrain, all)

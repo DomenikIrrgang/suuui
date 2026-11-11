@@ -568,3 +568,35 @@ local function crosses()
     local d = draw.cross(p, 8, "ember")
     expect(tokenOf(d.strokes[1])).toBe("ember")
 end
+
+@test("relayoutPixels: a frame moved under a parent of another scale gets its lines one physical pixel again")
+local function relayout()
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetSize(40, 10)
+    local b = draw.border(f, "gilt-hairline")
+    local line = draw.hairline(f, "gilt-hairline")
+    -- one physical pixel, in screen pixels
+    local function px(r: Region, h: number): number
+        return h * r:GetEffectiveScale() / pixel.perfectScale()
+    end
+    expect(math.abs(px(b.top, b.top:GetHeight()) - 1) < 0.001).toBe(true)
+    -- under WorldFrame at half scale (the game's nameplates hang on WorldFrame)
+    local other = CreateFrame("Frame", nil, WorldFrame)
+    other:SetScale(0.5)
+    f:SetParent(other)
+    expect(math.abs(px(b.top, b.top:GetHeight()) - 1) < 0.001).toBe(false)
+    draw.relayoutPixels(f)
+    expect(math.abs(px(b.top, b.top:GetHeight()) - 1) < 0.001).toBe(true)
+    expect(math.abs(px(b.left, b.left:GetWidth()) - 1) < 0.001).toBe(true)
+    expect(math.abs(px(line, line:GetHeight()) - 1) < 0.001).toBe(true)
+    -- a frame outside it: left as it was
+    local outside = CreateFrame("Frame", nil, other)
+    local ob = draw.border(outside, "gilt-hairline")
+    outside:SetParent(UIParent)
+    local before = ob.top:GetHeight()
+    draw.relayoutPixels(f)
+    expect(ob.top:GetHeight()).toBe(before)
+    f:Hide()
+    other:Hide()
+    outside:Hide()
+end

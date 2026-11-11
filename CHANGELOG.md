@@ -5,6 +5,7 @@
 ### New
 
 - For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
+- For plugin authors (API 0.33): `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
 
 ### Changed
 
@@ -21,6 +22,9 @@
 - Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
 - Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
 - Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
+- Nameplates: the borders of the bar, the cast bar and the debuff icons no longer vanish at some camera angles; they're one screen pixel at any UI scale.
+- Entering combat no longer stutters for a moment after your spells changed (a level up, a new spell, a talent): the Spellbook page is now redrawn shortly after the change instead of in the first moment of the next fight.
+- Pulling a group of mobs no longer stutters as their nameplates appear: the nameplates' debuff icons are now prepared ahead, out of combat.
 - Quest tracker: the − button folds the quests away again (it showed a + and the quests stayed).
 
 ## 0.6.40 (2026-11-11)
