@@ -9,6 +9,7 @@
 - Guild window: switching tabs no longer makes the tabs flicker and jump.
 - Micro menu: opening and closing the shop no longer shows the game's own art on the game menu button.
 - Buff indicators: an indicator's Colour is greyed out with "While missing", since it only colours the indicator while the buff is up; the Show description no longer runs into Missing colour.
+- Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
 
 ## 0.6.40 (2026-11-11)
 
