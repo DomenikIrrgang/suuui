@@ -4,6 +4,8 @@
 
 ### New
 
+- Resource bar and player frame: while you cast a spell, the mana (or rage, or energy) it will use shows as a faded band at the end of the bar, so you see what you'll have left once the cast lands. It goes away when the cast ends, is interrupted or fails, and works in combat too. Instant spells show nothing.
+- For plugin authors (API 0.33): the resource bar's `cost` option and a unit frame's `powerCost` option show your cast's cost on their power bar (on by default).
 - For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
 - For plugin authors (API 0.33): `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
 

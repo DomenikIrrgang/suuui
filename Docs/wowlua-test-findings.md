@@ -911,6 +911,30 @@ Blizzard's trainer frame takes up a new selection in `TRAINER_DESCRIPTION_UPDATE
 
 The auction house window seemed missing from a screenshot: it is drawn, at its `motion.enter` fade's first frame (alpha about 0). Its group (0.12 s) still plays a second later: `mock.advanceTime(0.5)` leaves its progress at 0, three `mock.advanceFrames` take it to 0.42. The engine moves animations by each frame's own milliseconds only (`animations::tick` in `advance_frames`), so the time `advanceTime` passes never reaches them; in the game an animation follows the clock (a long frame jumps it ahead). Lua's `GetAlpha` says 1 all along (the animation's alpha is the renderer's). (units-trade)
 
+<a id="v44"></a>
+
+### V44. A cast never spends its power, and a test's spell has no cost
+
+*Status: open (0.13.9).*
+
+`unit:castSpell` and `player:useSpell` cast without taking the spell's cost: no `UNIT_POWER_UPDATE` / `UNIT_POWER_FREQUENT` when a cast lands or a channel starts, the power unchanged. `C_Spell.GetSpellPowerCost` answers from the client's tables or the recorded probes only (Frostbolt 116: 25 mana; Arcane Missiles 5143: 85), never from `defineSpell`'s `powerCost`, which only refuses a press without the power. When the game takes a channel's flat cost (as it starts, or tick by tick) and what `costPerSec` is (an amount or a percentage, as its documentation says) are unrecorded. The power cost prediction's tests (`UI/PowerCost`) set the power themselves and answer the costs through the bars' `api` stand-ins. (ui-units)
+
+<a id="v45"></a>
+
+### V45. A StatusBar's fill texture says it is 0 wide
+
+*Status: open (0.13.9).*
+
+`bar:GetStatusBarTexture():GetWidth()` is 0 (and `GetNumPoints()` 0) whatever the value, while `GetLeft()` and `GetRight()` give the fill's real edges (a secret value too, clamped at the range's ends). In the game the fill texture's width is the fill's. The resource bar's and unit frame's cost tests measure `GetRight() - GetLeft()`. (ui-units)
+
+<a id="v46"></a>
+
+### V46. `wowlua screenshot --frame` crops past the frame
+
+*Status: open (0.13.9).*
+
+A screenshot of the player's unit frame (`--frame`) came out about twice as wide as the frame, the area right of it the screen behind; a resource bar's was exact. The crop seems to take the frame's descendants' rects, hidden ones (the unit frame's aura and indicator containers) included. (ui-units)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:

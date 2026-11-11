@@ -23,6 +23,8 @@
 --       tapped = false,     -- 0.24: a mob tagged by someone else grey (target, ToT, focus)
 --       incoming = true,    -- incoming heals and absorbs (false: never)
 --       powerFor = nil,     -- fn(unit, api) -> bool: which units get the power line
+--       powerCost = true,   -- 0.33: the player's frame: your cast's cost faded
+--                           -- at the power line's end (UI/PowerCost)
 --       frame = nil,        -- style this button instead of making one (a group
 --                           -- header's child; the header sets its unit)
 --       reserveRight = 0,   -- px kept free at the bar's right end (inline auras)
@@ -75,6 +77,8 @@ import * as controls from "/UI/Controls"
 import * as iconModule from "/UI/Icon"
 import * as crest from "/UI/Crest"
 import * as healthFill from "/UI/HealthFill"
+import * as powerCost from "/UI/PowerCost"
+import type CastCost, CostApi from "/UI/PowerCost"
 import auraContainer, UnitAuras, AuraGroup, AuraOptions, AuraButton from "/UI/Auras"
 
 const S = T.space
@@ -185,6 +189,10 @@ export type UnitApi = {
     UnitThreatSituation?: typeof(UnitThreatSituation),
     UnitIsTapDenied?: typeof(UnitIsTapDenied),
     UnitPlayerControlled?: typeof(UnitPlayerControlled),
+    -- your cast's cost on the player's power line (UI/PowerCost)
+    C_Spell?: { GetSpellPowerCost: typeof(C_Spell.GetSpellPowerCost) },
+    UnitChannelInfo?: typeof(UnitChannelInfo),
+    GetTime?: typeof(GetTime),
 }
 
 -- Where the group is read from (the game's functions; stand-ins in tests).
@@ -1012,6 +1020,7 @@ export type UnitFrameOptions = {
     raidMarker?: boolean,
     api?: UnitApi,
     tapped?: boolean,
+    powerCost?: boolean,
 }
 
 -- A missing look shown now, and what decides it.
@@ -1046,8 +1055,12 @@ export class UnitFrame extends Button
     tint: Texture
     incoming: StatusBar
     absorb: StatusBar
+    -- under the power line while your cast's cost shows: your power now, faded
+    powerSpend: StatusBar
     power: StatusBar
     powerLow: StatusBar
+    -- your casts' costs (the player's frame, opts.powerCost)
+    cast: CastCost? = nil
     over: Frame
     border: draw.Border
     glow: draw.SoftEdge
@@ -1164,7 +1177,7 @@ export class UnitFrame extends Button
             local host = CreateFrame("Frame", nil, self)
             self.dragonHost = host
             host:SetAllPoints()
-            host:SetFrameLevel(self:GetFrameLevel() + 7)
+            host:SetFrameLevel(self:GetFrameLevel() + 8)
             local dragon = host:CreateTexture(nil, "ARTWORK")
             dragon:Hide()
             self.dragon = dragon
@@ -1202,11 +1215,15 @@ export class UnitFrame extends Button
         self.absorb:SetWidth(w - 2)
 
         -- The power line: along the bottom; inside the anchor frame on the player.
-        self.power = bar(self, 6, "mana")
-        self.powerLow = bar(self, 7, "amber")
+        -- Under it, while your cast's cost shows (the player's frame), your
+        -- power now, faded: the line itself then shows what stays.
+        self.powerSpend = bar(self, 6, "mana")
+        self.powerSpend:Hide()
+        self.power = bar(self, 7, "mana")
+        self.powerLow = bar(self, 8, "amber")
         self.powerLow:SetAlpha(0)
         local inset = opts.anchor and 3 or 0
-        for _, b in ipairs({ self.power, self.powerLow }) do
+        for _, b in ipairs({ self.powerSpend, self.power, self.powerLow }) do
             b:ClearAllPoints()
             b:SetPoint("BOTTOMLEFT", self.inner, "BOTTOMLEFT", inset, inset)
             b:SetPoint("BOTTOMRIGHT", self.inner, "BOTTOMRIGHT", -inset, inset)
@@ -1437,6 +1454,7 @@ export class UnitFrame extends Button
         if not u or self.offline or self.opts.power == false or (powerFor and not powerFor(u, A)) then
             self.power:Hide()
             self.powerLow:Hide()
+            self.powerSpend:Hide()
             return
         end
         local pType, token = A.UnitPowerType(u)
@@ -1444,15 +1462,30 @@ export class UnitFrame extends Button
         local shown = secret.isSecret(max) or (max or 0) > 0
         self.power:SetShown(shown)
         self.powerLow:SetShown(shown and token == "MANA")
+        -- your cast's cost (the player's frame): the line and its amber show
+        -- what stays, the faded bar under them your power now; the engine
+        -- subtracts (UI/PowerCost), Lua never touches the secret amount
+        local cast = self.cast
+        local cost = shown and cast and cast:Amount(pType, max) or nil
+        self.powerSpend:SetShown(cost ~= nil)
         if not shown then
             return
         end
-        draw.paint(self.power, token and POWER_TOKEN[token] or "mana")
-        self.power:SetMinMaxValues(0, amount(max))
-        self.power:SetValue(amount(A.UnitPower(u, pType)))
+        local cur = amount(A.UnitPower(u, pType))
+        local color = token and POWER_TOKEN[token] or "mana"
+        draw.paint(self.power, color)
+        local lo, hi = 0, amount(max)
+        if cost and not secret.isSecret(max) and max then
+            lo, hi = powerCost.costRange(max, cost)
+            draw.paint(self.powerSpend, color, powerCost.SPEND_ALPHA)
+            self.powerSpend:SetMinMaxValues(0, max)
+            self.powerSpend:SetValue(cur)
+        end
+        self.power:SetMinMaxValues(lo, hi)
+        self.power:SetValue(cur)
         if token == "MANA" then
-            self.powerLow:SetMinMaxValues(0, amount(max))
-            self.powerLow:SetValue(amount(A.UnitPower(u, pType)))
+            self.powerLow:SetMinMaxValues(lo, hi)
+            self.powerLow:SetValue(cur)
             self.powerLow:SetAlpha(curveAmount(A.UnitPowerPercent(u, pType, true, belowCurve(LOW_MANA))))
         end
     end
@@ -2064,6 +2097,14 @@ export class UnitFrame extends Button
                 self:UpdatePower()
             end)
         end
+        -- the player's frame: your cast's cost faded at the power line's end
+        if u == "player" and self.opts.powerCost ~= false then
+            local cast = self.cast or powerCost.castCost(self.api :: CostApi)
+            self.cast = cast
+            cast:Listen(self, function()
+                self:UpdatePower()
+            end)
+        end
         for _, e in ipairs(IDENTITY_EVENTS) do
             onUnit(self, u, e, function()
                 self:UpdateIdentity()
@@ -2191,6 +2232,14 @@ export class UnitFrame extends Button
         if ticker then
             ticker:Cancel()
             self.ticker = nil
+        end
+        -- (a cost shown stays no longer than its events)
+        local cast = self.cast
+        if cast then
+            cast:Clear()
+            if self.powerSpend:IsShown() then
+                self:UpdatePower()
+            end
         end
     end
 end
