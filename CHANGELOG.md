@@ -4,8 +4,14 @@
 
 ### New
 
+- Threat meter: show it only in a group or only in an instance (dungeon or raid), like the damage meter; the damage meter can now also show only in an instance.
 - Professions: the Filter menu has a required level range, like the auction house's. Type a minimum, a maximum or both to see only the recipes whose item needs a level in that range; leave a box empty for no limit. Recipes that make no item (enchants) always show, and an item with no level requirement counts as level 0.
 - For plugin authors (API 0.34): the Professions body's filters carry the level range as `level` (`{ min, max }`, also in `SuuUI.UI.PROFESSION_FILTER_DEFAULTS`).
+
+### Changed
+
+- Micro menu: buttons the game has turned off (such as Legacy before you unlock it) are greyed out like in the game's own menu, and their tooltip says why.
+- Windows in the middle of the screen (professions, talents, Legacy) open higher when they would cover your cast bar.
 
 ## 0.7.0 (2026-11-11)
 
