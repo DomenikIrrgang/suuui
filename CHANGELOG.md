@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
