@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Buff indicators: an indicator's Colour is greyed out with "While missing", since it only colours the indicator while the buff is up; the Show description no longer runs into Missing colour.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
