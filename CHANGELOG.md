@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Spellbook: Plate Mail no longer shows as "Train now" after you've trained it (WoW Forever lists it under Armor Proficiency).
+
 ## 0.6.38 (2026-11-10)
 
 ### Changed
