@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Loot roll tray**: group loot rolls now show in their own tray at the bottom right instead of the notifications (move it in edit mode). Each roll is a row with the item, the seconds left (amber under 10), and Need, Greed or Pass with how many chose each; hover a row to see who chose what, and a choice you can't take shows the game's reason. Bind on Pickup items ask in their row. Pass on all and Greed on all (it asks once) answer the rolls you haven't, the Results keep who won what for the fight, and the tray folds into a one-line tab. Settings › Loot › Loot rolls; /suu lootroll shows test rolls.
+- For plugin authors (API 0.32): `SuuUI.UI.LootRollTray`, the roll tray as a component.
+
 ## 0.6.38 (2026-11-10)
 
 ### Changed

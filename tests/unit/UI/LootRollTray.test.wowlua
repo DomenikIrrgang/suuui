@@ -1,0 +1,299 @@
+-- UI/LootRollTray: the roll tray as the design draws it. Rows in their
+-- states (hovered with who chose what, an unavailable choice with its
+-- reason, your choice pressed, a Bind on Pickup question, under 10 s in
+-- amber), the results, every roll answered (the rows shrink, the foot steps
+-- back), Greed on all asking in place of the foot, only results left (a
+-- close cross), folded into its tab, more rows than fit, and the callbacks.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import expectNoErrors from "../../helpers"
+import tokenOf from "./PrimitivesHelpers"
+import lootRollTray, LootRollTray, RollRowData, RollChoiceData, RollTrayData, TRAY_W, TAB_W from "/UI/LootRollTray"
+
+local made: LootRollTray[] = {}
+
+@afterEach
+local function cleanup()
+    for _, t in ipairs(made) do
+        t:Hide()
+    end
+    made = {}
+    expectNoErrors()
+end
+
+local function tray(): LootRollTray
+    local t = lootRollTray(UIParent)
+    t:SetPoint("CENTER")
+    t:Show()
+    made[#made + 1] = t
+    return t
+end
+
+local CLASS = { warrior = "|cffc79c6e", priest = "|cffffffff", mage = "|cff69ccf0", rogue = "|cfffff569" }
+
+local function choices(need: number, greed: number, pass: number, opts: { noNeed?: string }?): RollChoiceData[]
+    local o = opts or {}
+    return {
+        { key = "need", label = "Need", count = need, unavailable = o.noNeed ~= nil, reason = o.noNeed },
+        { key = "greed", label = "Greed", count = greed },
+        { key = "pass", label = "Pass", count = pass },
+    }
+end
+
+local function rolls(): RollRowData[]
+    return {
+        {
+            id = 1,
+            icon = C_Item.GetItemIconByID(5191) or 134400,
+            name = "Cruel Barb",
+            quality = "rare",
+            sub = "Binds when picked up · Sword",
+            locked = true,
+            duration = 60,
+            remaining = 52,
+            choices = choices(1, 0, 1),
+            who = "|cffa39b8bNeed|r  " ..
+                CLASS.warrior ..
+                    "Brannoc|r    |cffa39b8bPass|r  " ..
+                        CLASS.priest ..
+                            "Ysolde|r    |cffa39b8bChoosing|r  " ..
+                                CLASS.mage .. "Kaelith|r " .. CLASS.rogue .. "Morrow|r",
+        },
+        {
+            id = 2,
+            icon = C_Item.GetItemIconByID(1951) or 134400,
+            name = "Blackwater Cutlass",
+            quality = "uncommon",
+            sub = "Binds when equipped · Sword",
+            duration = 60,
+            remaining = 33,
+            choices = choices(0, 2, 0, { noNeed = "Your class can't use swords." }),
+            note = "Need: Your class can't use swords.",
+        },
+        {
+            id = 3,
+            icon = C_Item.GetItemIconByID(5193) or 134400,
+            name = "Cape of the Brotherhood",
+            quality = "rare",
+            sub = "Binds when picked up · Back",
+            locked = true,
+            duration = 60,
+            remaining = 6,
+            choices = choices(1, 1, 0),
+            choice = "need",
+            confirm = { text = "Cape of the Brotherhood binds to you when you win it.", accept = "Roll Need" },
+        },
+    }
+end
+
+local function data(): RollTrayData
+    return {
+        rolls = rolls(),
+        meta = "3 open · The Deadmines",
+        results = {
+            {
+                icon = C_Item.GetItemIconByID(5195) or 134400,
+                quality = "uncommon",
+                text = "You won |cff1eff00Gold-flecked Gloves|r",
+                right = "Greed 77",
+                won = true,
+            },
+            {
+                icon = C_Item.GetItemIconByID(5202) or 134400,
+                quality = "uncommon",
+                text = CLASS.warrior .. "Brannoc|r won |cff1eff00Corsair's Overshirt|r",
+                right = "Need 91 · you passed",
+                dim = true,
+            },
+        },
+    }
+end
+
+@test("every roll answered: the rows shrink to your choice and who's still choosing; the foot steps back")
+local function answered()
+    local t = tray()
+    local d = data()
+    for _, r in ipairs(d.rolls) do
+        r.choice = "greed"
+        r.confirm = nil
+        r.waiting = "Choosing: Morrow"
+    end
+    d.answered = true
+    d.meta = "waiting on 1 player"
+    t:SetData(d)
+    local r = assert(t:RowFor(1))
+    expect(r.compact).toBe(true)
+    expect(r.chip).toBeShown()
+    expect(r.chipLabel:GetText()).toBe("Greed")
+    expect(r.choices).never.toBeShown()
+    expect(r.time).never.toBeShown()
+    expect(r.sub:GetText()).toBe("Choosing: Morrow")
+    expect(t.cols[1]).never.toBeShown()
+    expect(t.passAll:IsEnabled()).toBe(false)
+    expect(t.greedAll:IsEnabled()).toBe(false)
+end
+
+@test("Greed on all asks once, in place of the foot; its answers")
+local function asking()
+    local t = tray()
+    local said: boolean[] = {}
+    t.onAsk = function(yes: boolean)
+        said[#said + 1] = yes
+    end
+    local d = data()
+    d.ask = {
+        text = "Greed on the 3 rolls you haven't answered?",
+        note = "Cruel Barb binds when picked up: the game still asks about it on its own row.",
+        confirm = "Greed on 3",
+    }
+    t:SetData(d)
+    expect(t.ask).toBeShown()
+    expect(t.foot).never.toBeShown()
+    expect(t.askNote).toBeShown()
+    expect(t.askYes.label:GetText()).toBe("Greed on 3")
+    mock.click(t.askNo)
+    mock.click(t.askYes)
+    expect(said).toEqual({ false, true })
+end
+
+@test("only results left: none open, a close cross")
+local function onlyResults()
+    local t = tray()
+    local closed = 0
+    t.onClose = function()
+        closed = closed + 1
+    end
+    local d = data()
+    d.rolls = {}
+    d.meta = "none open"
+    t:SetData(d)
+    expect(t.foot).never.toBeShown()
+    expect(t.resultsHead).never.toBeShown()
+    expect(assert(t.resultRows[1])).toBeShown()
+    mock.click(t.fold)
+    expect(closed).toBe(1)
+    expect(t.folded).toBe(false)
+end
+
+@test("folded into its tab: how many are open, the soonest and its seconds, amber under 10; unfolded again")
+local function folded()
+    local t = tray()
+    local folds: boolean[] = {}
+    t.onFold = function(f: boolean)
+        folds[#folds + 1] = f
+    end
+    local d = data()
+    local cape = assert(d.rolls[3])
+    cape.choice, cape.confirm = nil, nil
+    t:SetData(d)
+    mock.click(t.fold)
+    expect(t.tab).toBeShown()
+    expect(t.panel).never.toBeShown()
+    expect(t:GetWidth()).toBe(TAB_W)
+    expect(t.tabNext:GetText()).toBe("3 open · next Cape of the Brotherhood")
+    expect(t.tabTime:GetText()).toBe("6")
+    expect(tokenOf(t.tabTime)).toBe("amber")
+    expect(tokenOf(t.drain)).toBe("amber")
+    t:SetRemaining({ [3] = 40 })
+    expect(t.tabTime:GetText()).toBe("33")
+    expect(tokenOf(t.tabTime)).toBe("ink")
+    mock.click(t.tabOpen)
+    expect(t.panel).toBeShown()
+    expect(folds).toEqual({ true, false })
+end
+
+@test("more rows than fit: six show, the wheel scrolls the rest")
+local function scrolling()
+    local t = tray()
+    local list: RollRowData[] = {}
+    for i = 1, 8 do
+        list[i] = { id = i, name = "Item " .. i, duration = 60, remaining = 60 - i, choices = choices(0, 0, 0) }
+    end
+    t:SetData({ rolls = list, results = {} })
+    expect(t:RowFor(6) ~= nil).toBe(true)
+    expect(t:RowFor(7)).toBe(nil)
+    mock.wheel(t.panel, -1)
+    expect(t:RowFor(7) ~= nil).toBe(true)
+    expect(t:RowFor(1)).toBe(nil)
+    mock.wheel(t.panel, 5)
+    expect(t:RowFor(1) ~= nil).toBe(true)
+end
+
+@test("the callbacks: a choice, an unavailable one, the question, Pass on all, Greed on all, the item")
+local function callbacks()
+    local t = tray()
+    local got: string[] = {}
+    t.onChoose = function(id: number, key: string)
+        got[#got + 1] = "choose " .. id .. " " .. key
+    end
+    t.onConfirm = function(id: number, yes: boolean)
+        got[#got + 1] = "confirm " .. id .. " " .. tostring(yes)
+    end
+    t.onPassAll = function()
+        got[#got + 1] = "pass all"
+    end
+    t.onGreedAll = function()
+        got[#got + 1] = "greed all"
+    end
+    t.onItemClick = function(id: number, _: string)
+        got[#got + 1] = "item " .. id
+    end
+    t:SetData(data())
+    local barb, cutlass, cape = assert(t:RowFor(1)), assert(t:RowFor(2)), assert(t:RowFor(3))
+    mock.click(assert(barb.choices:Option("greed")))
+    mock.click(assert(cutlass.choices:Option("need"))) -- unavailable: nothing
+    mock.click(assert(cape.choices:Option("pass"))) -- another is yours: nothing
+    mock.click(cape.no)
+    mock.click(cape.yes)
+    mock.click(t.passAll)
+    mock.click(t.greedAll)
+    mock.click(barb.slot)
+    expect(got).toEqual({ "choose 1 greed", "confirm 3 false", "confirm 3 true", "pass all", "greed all", "item 1" })
+end
+
+@test(
+    "three rolls in their states: who chose what on hover, Need unavailable with its reason, Bind on Pickup asking under 10 s"
+)
+local function threeRolls()
+    -- (last, and kept shown: `wowlua screenshot --frame SuuUITestRollTray`
+    -- takes the screen as the test ends)
+    local t = lootRollTray(UIParent, { name = "SuuUITestRollTray" })
+    t:SetPoint("CENTER")
+    t:Show()
+    t:SetData(data())
+    local barb, cutlass, cape = assert(t:RowFor(1)), assert(t:RowFor(2)), assert(t:RowFor(3))
+    mock.hover(barb)
+    -- hovered: the line of who chose what, the row's fill
+    expect(barb.extra).toBeShown()
+    expect(barb.hoverBg).toBeShown()
+    expect(barb.lock).toBeShown()
+    -- unavailable: a lock in the option, its reason under the row
+    local need = assert(cutlass.choices:Option("need"))
+    expect(need.lock).toBeShown()
+    expect(tokenOf(need.label)).toBe("ink-faint")
+    expect(cutlass.extra:GetText()).toBe("Need: Your class can't use swords.")
+    expect(cutlass.extraLock).toBeShown()
+    -- your Need pressed, the question in the row, the time amber
+    expect(assert(cape.choices:Option("need")).chosen).toBe(true)
+    expect(tokenOf(assert(cape.choices:Option("need")).badge.label)).toBe("on-signal")
+    expect(cape.confirmBox).toBeShown()
+    expect(cape.yes.label:GetText()).toBe("Roll Need")
+    expect(tokenOf(cape.time)).toBe("amber")
+    expect(tokenOf(barb.time)).toBe("ink")
+    -- the columns line up: the time and the choices right-aligned across rows
+    expect(math.floor(barb.choices:GetRight() + 0.5)).toBe(math.floor(cutlass.choices:GetRight() + 0.5))
+    expect(math.floor(barb.time:GetRight() + 0.5)).toBe(math.floor(cape.time:GetRight() + 0.5))
+    -- the head, the foot, the results
+    expect(t.meta:GetText()).toBe("3 open · The Deadmines")
+    expect(t.foot).toBeShown()
+    expect(t.resultsHead).toBeShown()
+    expect(assert(t.resultRows[1]).badge).toBeShown()
+    expect(assert(t.resultRows[2]).badge).never.toBeShown()
+    expect(t:GetWidth()).toBe(TRAY_W)
+    expect(t:GetHeight()).toBe(t.panel:GetHeight())
+    -- (over the first-run welcome, which a fresh character shows)
+    t:SetFrameStrata("FULLSCREEN_DIALOG")
+    mock.advanceFrames(10, 50) -- (the Won badge fades in)
+    expect(assert(t.resultRows[1]).badge:GetAlpha()).toBe(1)
+end
