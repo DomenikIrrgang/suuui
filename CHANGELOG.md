@@ -1,22 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.6.39 (2026-11-11)
 
 ### New
 
-- **Loot roll tray**: group loot rolls now show in their own tray, high up in the middle of the screen, instead of the notifications (move it in edit mode). If you had switched off "Rolls in the notification stack", the tray starts switched off too (turn the Loot rolls module on to use it). Each roll is a row with the item, the seconds left (with a bar along the row; both amber under 10), Need, Greed or Pass with how many chose each, and under it who chose what and who is still choosing (hover the row for every name in a big raid). A choice you can't take shows the game's reason. Bind on Pickup items ask in their row. Pass on all and Greed on all (it asks once) answer the rolls you haven't, each roll's result (who won what) shows for 5 seconds once it's decided, and the tray folds into a one-line tab. Settings › Loot › Loot rolls; /suu lootroll shows test rolls.
-- For plugin authors (API 0.32): `SuuUI.UI.LootRollTray`, the roll tray as a component, and a settings migration's second argument, `profile`, to move a setting to another module.
+- **Loot roll tray**: group loot rolls now have their own tray at the top middle of the screen instead of sitting in the notifications (move it in edit mode). Each roll is a row with the item, the time left (a bar runs along the row and turns amber in the last 10 seconds) and Need, Greed and Pass with how many players chose each. Under it you see who chose what and who is still choosing; hover the row to see every name in a big raid. If you can't pick a choice, it tells you why. Bind on Pickup items ask you to confirm right in their row. Pass on all and Greed on all (it asks once) answer every roll you haven't answered yet, the winner of each roll shows for 5 seconds, and the tray folds into a one-line tab. If you had turned off "Rolls in the notification stack", the tray starts turned off too: turn on the Loot rolls module to use it. Settings › Loot › Loot rolls; `/suu lootroll` shows test rolls.
+- For plugin authors (API 0.32): `SuuUI.UI.LootRollTray`, the roll tray as a component, and a second argument for settings migrations, `profile`, to move a setting to another module.
 
 ### Changed
 
-- World map and collections: Questie's latest Forever data (quest givers, dungeon entrances, town services, rares, treasure chests, and where mounts, toys and appearances come from).
-- Professions, world map, flight times and collections: game data from WoW Forever 1.60.1.70888, and recipe sources from Questie's latest Forever data (more drops and containers where a recipe comes from).
+- World map and collections: Questie's latest Forever data for quest givers, dungeon entrances, town services, rares, treasure chests, and where mounts, toys and appearances come from.
+- Professions, world map, flight times and collections: game data from WoW Forever 1.60.1.70888, and more places recipes come from (drops and containers) from Questie's latest data.
 
 ### Fixed
 
-- Cooldown Manager: shared slots such as Divine Shield (paladins) and Feral Charge (druids) show the right spell again. 0.6.38's update of your saved lists mixed the slot's spells together, so Divine Shield could show Divine Protection's icon; your lists are repaired.
-- World map: hovering the title (Continent › Zone) no longer causes a Lua error (Cannot anchor protected frames to regions).
-- Spellbook: Plate Mail no longer shows as "Train now" after you've trained it (WoW Forever lists it under Armor Proficiency).
+- Cooldown Manager: shared slots such as Divine Shield (paladins) and Feral Charge (druids) showed the wrong spell after 0.6.38, for example Divine Protection's icon on Divine Shield. Your lists are repaired.
+- Spellbook: Plate Mail no longer says "Train now" after you've trained it.
+- World map: hovering the title (Continent › Zone) no longer causes a Lua error.
 
 ## 0.6.38 (2026-11-10)
 
