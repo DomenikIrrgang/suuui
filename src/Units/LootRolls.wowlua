@@ -1,10 +1,10 @@
 -- Units/LootRolls.wowlua
 -- Group loot rolls in the roll tray (design board "Loot roll · C · Roll
--- tray"), in the middle of the screen's upper third and moved in edit
--- mode. A row per open roll,
--- in the order the game started them: the item, the seconds left (amber
--- under 10 s), Need / Greed / Pass with how many chose each (hover the row
--- for who), your choice pressed in arcane. A choice the game won't let you
+-- tray"), high in the middle of the screen and moved in edit mode. A row
+-- per open roll, in the order the game started them: the item, the
+-- seconds left (a bar along the row, amber under 10 s), Need / Greed /
+-- Pass with how many chose each, who chose what under it (every name on
+-- hovering the row), your choice pressed in arcane. A choice the game won't let you
 -- take is dimmed with its reason. WoW Forever has no Disenchant: Need, Greed
 -- and Pass only. "Pass on all" answers every roll you haven't; "Greed on
 -- all" asks once first. Results under the rows keep who won what until
@@ -39,9 +39,10 @@ import * as item from "wowlua:item"
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
 local DEFAULTS = {
-    -- the middle of the screen, its top about a third down (a third of the
-    -- design's 1440 px is 480; 400 sits near a third on 1080p and 1440p)
-    position = { point = "TOP", x = 0, y = -400 } :: Position,
+    -- the middle of the screen, high up: its top 150 px down (a value at
+    -- its default isn't stored, so only a tray moved in edit mode keeps
+    -- its own place when this changes)
+    position = { point = "TOP", x = 0, y = -150 } :: Position,
     unfold = true, -- a new roll opens the folded tray
     results = true, -- who won what stays a moment after the last roll
 }
@@ -63,8 +64,10 @@ local RESULTS_STAY = 10
 local RESULTS_KEPT = 8
 -- s a roll stays past its time when the game hasn't said it's over
 local ROLL_GRACE = 5
--- names per choice on a row's hover line
+-- names per choice on a row's line of who chose what, at most; the
+-- characters that line has room for (caption, about 5.5 px each)
 local NAMES_SHOWN = 4
+local WHO_CHARS = 84
 local TICK = 0.1
 
 --------------------------------------------------------------------------------
@@ -354,17 +357,48 @@ local function waitingOn(roll: Roll): string[]
     return out
 end
 
--- Names in class colours, NAMES_SHOWN at most and how many more.
-local function nameList(roll: Roll, names: string[]): string
+-- Names in class colours, `most` at most (default all) and how many more.
+local function nameList(roll: Roll, names: string[], most: number?): string
+    local cap = most or #names
     local shown: string[] = {}
-    for i = 1, math.min(#names, NAMES_SHOWN) do
+    for i = 1, math.min(#names, cap) do
         shown[i] = classColored(names[i], roll.classes)
     end
-    local s = table.concat(shown, " ")
-    if #names > NAMES_SHOWN then
-        s = s .. (" +%d"):format(#names - NAMES_SHOWN)
+    local s = table.concat(shown, ", ")
+    if #names > cap then
+        s = s .. (s ~= "" and " " or "") .. ("+%d"):format(#names - cap)
     end
     return s
+end
+
+-- One group of the line: "Need Brannoc, Ysolde +3" (the label muted).
+type WhoGroup = { label: string, names: string[] }
+
+-- Plain text's length (colour codes left out).
+local function plainLength(s: string): number
+    local plain = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return #plain
+end
+
+-- The line of who chose what, in one row's width: as many names per
+-- choice as fit (NAMES_SHOWN at most), the rest counted ("+12"). A raid
+-- of 40 comes down to one name a choice, or only the counts.
+local function whoLine(roll: Roll, groups: WhoGroup[]): string?
+    if #groups == 0 then
+        return nil
+    end
+    local line = ""
+    for most = NAMES_SHOWN, 0, -1 do
+        local parts: string[] = {}
+        for i, g in ipairs(groups) do
+            parts[i] = colored("ink-muted", g.label) .. " " .. nameList(roll, g.names, most)
+        end
+        line = table.concat(parts, colored("ink-faint", "  ·  "))
+        if plainLength(line) <= WHO_CHARS then
+            return line
+        end
+    end
+    return line
 end
 
 -- "Binds when picked up · Sword": the bind, and the weapon's kind or the slot.
@@ -518,7 +552,7 @@ local SECTION: SettingsSection = {
     groups = {
         {
             title = "Loot rolls",
-            description = "Group rolls in a tray in the upper middle of the screen (move it in edit mode), in combat too: Need, Greed or Pass with how many chose each (hover a row for who), the seconds left, Pass on all and Greed on all. /suu lootroll shows test rolls.",
+            description = "Group rolls in a tray high in the middle of the screen (move it in edit mode), in combat too: Need, Greed or Pass with how many chose each (hover a row for who), the seconds left, Pass on all and Greed on all. /suu lootroll shows test rolls.",
             rows = {
                 {
                     key = "unfold",
@@ -625,17 +659,22 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
                 note = c.label .. ": " .. reason
             end
         end
-        -- on hover: who chose what, and who's still choosing
+        -- who chose what, and who's still choosing: a line always shown
+        -- (as many names as fit), every name on hovering the row
         local waiting = waitingOn(roll)
-        local parts: string[] = {}
+        local groups: WhoGroup[] = {}
         for _, c in ipairs(CHOICES) do
             local who = roll.votes[c.key]
             if #who > 0 then
-                parts[#parts + 1] = colored("ink-muted", c.label) .. "  " .. nameList(roll, who)
+                groups[#groups + 1] = { label = c.label, names = who }
             end
         end
         if #waiting > 0 then
-            parts[#parts + 1] = colored("ink-muted", "Choosing") .. "  " .. nameList(roll, waiting)
+            groups[#groups + 1] = { label = "Choosing", names = waiting }
+        end
+        local full: string[] = {}
+        for i, g in ipairs(groups) do
+            full[i] = colored("ink-muted", g.label .. " · " .. #g.names) .. "\n" .. nameList(roll, g.names)
         end
         local sub = describe(roll)
         if roll.choice and #waiting > 0 then
@@ -658,9 +697,11 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             choices = choices,
             choice = roll.choice,
             confirm = confirm,
-            who = #parts > 0 and table.concat(parts, "    ") or nil,
+            who = whoLine(roll, groups),
+            whoTip = #groups > 0 and
+                { title = "Who chose what", description = table.concat(full, "\n\n"), maxWidth = 360 } or
+                nil,
             note = note,
-            waiting = #waiting > 0 and ("Choosing: " .. nameList(roll, waiting)) or "Everyone has chosen",
         }
     end
 

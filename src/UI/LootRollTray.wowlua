@@ -2,14 +2,16 @@
 -- The loot roll tray (design board "Loot roll · C · Roll tray"): one docked
 -- glass panel for every open group roll. A row per roll: the item's slot,
 -- its name in its quality colour over the bind (a lock for Bind on Pickup),
--- the seconds left over a mini bar (amber under 10 s), and your choice as a
+-- the seconds left (and a thin bar along the row's foot, its whole width,
+-- draining from the right; amber under 10 s), and your choice as a
 -- segmented control, Need / Greed / Pass, each with how many chose it.
--- Hovering a row lists who chose what; a choice you can't take is dimmed
+-- Under it, always, who chose what ("Need Brannoc · Choosing Kaelith"; the
+-- full lists on hovering the row); a choice you can't take is dimmed
 -- with the game's reason (a lock, and its line under the row). A roll that
 -- asks for a confirmation (Bind on Pickup) asks in its row. The foot has
 -- "Pass on all" and "Greed on all" (which asks once, in place of the
--- foot); once every roll is answered the rows shrink to your choice and the
--- names still choosing. Results under the rows keep who won what. The tray
+-- foot); once every roll is answered the rows shrink to one line: your
+-- choice and who chose what. Results under the rows keep who won what. The tray
 -- folds into a one-line tab: how many are open, the soonest, its seconds.
 --
 --   local tray = lootRollTray(parent, { name })
@@ -66,9 +68,11 @@ export type RollChoiceData = {
 
 -- A roll's row. `sub` is the line under the name ("Binds when picked up ·
 -- Sword"); `locked` puts a lock before it. `choice` is your choice
--- (pressed); `confirm` asks in the row (Bind on Pickup). `who` shows on
--- hover, `note` always (an unavailable choice's reason); `waiting` is the
--- line once every roll is answered ("Choosing: Morrow").
+-- (pressed); `confirm` asks in the row (Bind on Pickup). `who` is the line
+-- of who chose what ("Need Brannoc · Pass Ysolde · Choosing Kaelith"),
+-- always shown: under the row, or in place of `sub` once every roll is
+-- answered; `whoTip` the full lists, on hovering the row. `note` an
+-- unavailable choice's reason, under the row.
 export type RollRowData = {
     id: number,
     icon?: number | string,
@@ -82,8 +86,8 @@ export type RollRowData = {
     choice?: string,
     confirm?: { text: string, accept: string },
     who?: string,
+    whoTip?: TooltipData,
     note?: string,
-    waiting?: string,
 }
 
 -- A result: the item, the line ("You won …", colour codes in it), the
@@ -332,6 +336,9 @@ export class LootRollRow extends Button
     readonly track: Texture
     readonly fill: Texture
     readonly choices: RollChoices
+    -- who chose what, always (one line; the full lists on hover)
+    readonly whoLine: Text
+    -- an unavailable choice's reason, with a lock
     readonly extra: Text
     readonly extraLock: Texture
     readonly confirmBox: Frame
@@ -346,6 +353,8 @@ export class LootRollRow extends Button
     compact: boolean = false
     -- the choices' width (the column the tray lines them up in)
     choicesW: number = 0
+    -- its width (the time bar along its foot spans it)
+    rowW: number = TRAY_W
 
     constructor(readonly tray: LootRollTray)
         super(nil, tray.panel)
@@ -391,14 +400,20 @@ export class LootRollRow extends Button
 
         self.time = text(self, "numeric", "ink")
         self.time:SetJustifyH("RIGHT")
+        -- the time left as a thin bar along the row's foot, the whole
+        -- width, draining from the right
         self.track = draw.fill(self, "track", "ARTWORK")
-        self.track:SetSize(40, 2)
+        self.track:SetHeight(2)
+        self.track:SetPoint("BOTTOMLEFT", 0, 0)
+        self.track:SetPoint("BOTTOMRIGHT", 0, 0)
         self.fill = draw.fill(self, "ink-muted", "OVERLAY")
         self.fill:SetHeight(2)
-        self.fill:SetPoint("LEFT", self.track, "LEFT", 0, 0)
+        self.fill:SetPoint("BOTTOMLEFT", 0, 0)
 
         self.choices = RollChoices.new(self, self)
 
+        self.whoLine = text(self, "caption", "ink-muted")
+        self.whoLine:SetJustifyH("LEFT")
         self.extra = text(self, "caption", "ink-muted")
         self.extra:SetJustifyH("LEFT")
         self.extraLock = glyph(self, "lock", 11, "ink-muted")
@@ -453,8 +468,15 @@ export class LootRollRow extends Button
 
         self:SetScript("OnEnter", function()
             self:Hover(true)
+            -- every name, where the line has only room for some
+            local d = self.data
+            local tip = d and d.whoTip
+            if tip then
+                showTooltip(self, tip)
+            end
         end)
         self:SetScript("OnLeave", function()
+            hideTooltip()
             self:Hover(false)
         end)
     end
@@ -475,26 +497,6 @@ export class LootRollRow extends Button
         end
         self.hovered = now
         self.hoverBg:SetShown(now)
-        local d = self.data
-        if d and d.who and not self.compact then
-            self.tray:Layout()
-        end
-    end
-
-    -- The line under the row: the reason while a choice is unavailable,
-    -- who chose what on hover.
-    function ExtraLine(): (string?, boolean)
-        local d = self.data
-        if not d or self.compact then
-            return nil, false
-        end
-        if self.hovered and d.who then
-            return d.who, false
-        end
-        if d.note then
-            return d.note, true
-        end
-        return nil, false
     end
 
     function SetData(d: RollRowData, compact: boolean)
@@ -502,7 +504,8 @@ export class LootRollRow extends Button
         self.slot.skin:SetItem({ icon = d.icon, quality = d.quality or "common" })
         self.name:SetValue(d.name)
         self.name:SetColor(qualityToken(d.quality))
-        local subText = compact and d.waiting or d.sub
+        -- answered, every roll: who chose what in place of the bind
+        local subText = compact and (d.who or d.sub) or d.sub
         self.sub:SetValue(subText or "")
         local locked = d.locked == true and not compact
         self.lock:SetShown(locked)
@@ -545,7 +548,7 @@ export class LootRollRow extends Button
         self.time:SetValue(tostring(s))
         self.time:SetColor(soon and "amber" or "ink")
         local frac = d.duration > 0 and math.max(0, math.min(1, seconds / d.duration)) or 0
-        self.fill:SetWidth(math.max(0.01, 40 * frac))
+        self.fill:SetWidth(math.max(0.01, self.rowW * frac))
         draw.paintFill(self.fill, soon and "amber" or "ink-muted")
     end
 
@@ -564,11 +567,9 @@ export class LootRollRow extends Button
             self.choices:ClearAllPoints()
             self.choices:SetPoint("TOPRIGHT", -right, top - (SLOT - 30) / 2)
             right = right + choicesW + COL_GAP
-            -- the time: the seconds over its bar, right-aligned in its column
+            -- the seconds, right-aligned in their column, on the name's line
             self.time:ClearAllPoints()
-            self.time:SetPoint("TOPRIGHT", -right, top - 1)
-            self.track:ClearAllPoints()
-            self.track:SetPoint("TOPRIGHT", -right, top - 1 - T.type.numeric.lineHeight - 3)
+            self.time:SetPoint("TOPRIGHT", -right, top - (SLOT - T.type.numeric.lineHeight) / 2)
             right = right + TIME_W + COL_GAP
         end
         local nameH = T.type.label.lineHeight
@@ -587,22 +588,32 @@ export class LootRollRow extends Button
         self.sub:SetPoint("TOPLEFT", subLeft, textTop - nameH)
         self.sub:SetPoint("TOPRIGHT", -right, textTop - nameH)
         local h = ROW_PAD + SLOT
-        local extra, locked = self:ExtraLine()
-        self.extra:SetShown(extra ~= nil)
-        self.extraLock:SetShown(extra ~= nil and locked)
-        if extra then
+        local d = self.data
+        -- who chose what (not once every roll is answered: then it's the
+        -- line under the name)
+        local who = d and not self.compact and d.who or nil
+        self.whoLine:SetShown(who ~= nil)
+        if who then
             local y = -(h + S["space-3"])
-            local x = textLeft
-            if locked then
-                self.extraLock:ClearAllPoints()
-                self.extraLock:SetPoint("TOPLEFT", x, y - 1)
-                x = x + 11 + 4
-            end
-            self.extra:SetValue(extra)
-            self.extra:ClearAllPoints()
-            self.extra:SetPoint("TOPLEFT", x, y)
-            self.extra:SetPoint("TOPRIGHT", -PAD, y)
+            self.whoLine:SetValue(who)
+            self.whoLine:ClearAllPoints()
+            self.whoLine:SetPoint("TOPLEFT", textLeft, y)
+            self.whoLine:SetPoint("TOPRIGHT", -PAD, y)
             h = h + S["space-3"] + T.type.caption.lineHeight
+        end
+        -- an unavailable choice's reason
+        local note = d and not self.compact and d.note or nil
+        self.extra:SetShown(note ~= nil)
+        self.extraLock:SetShown(note ~= nil)
+        if note then
+            local y = -(h + S["space-2"])
+            self.extraLock:ClearAllPoints()
+            self.extraLock:SetPoint("TOPLEFT", textLeft, y - 1)
+            self.extra:SetValue(note)
+            self.extra:ClearAllPoints()
+            self.extra:SetPoint("TOPLEFT", textLeft + 11 + 4, y)
+            self.extra:SetPoint("TOPRIGHT", -PAD, y)
+            h = h + S["space-2"] + T.type.caption.lineHeight
         end
         if self.confirmBox:IsShown() then
             local y = -(h + S["space-4"])
@@ -612,7 +623,11 @@ export class LootRollRow extends Button
             h = h + S["space-4"] + self.confirmBox:GetHeight()
         end
         h = h + ROW_PAD
+        self.rowW = width
         self:SetSize(width, h)
+        if d then
+            self:SetRemaining(d.remaining)
+        end
         return h
     end
 end

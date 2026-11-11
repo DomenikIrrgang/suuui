@@ -41,6 +41,15 @@ local function choices(need: number, greed: number, pass: number, opts: { noNeed
     }
 end
 
+-- A line of who chose what, as the module writes it.
+local function line(groups: string[][]): string
+    local parts: string[] = {}
+    for i, g in ipairs(groups) do
+        parts[i] = "|cffa39b8b" .. g[1] .. "|r " .. g[2]
+    end
+    return table.concat(parts, "|cff7a7264  ·  |r")
+end
+
 local function rolls(): RollRowData[]
     return {
         {
@@ -53,12 +62,12 @@ local function rolls(): RollRowData[]
             duration = 60,
             remaining = 52,
             choices = choices(1, 0, 1),
-            who = "|cffa39b8bNeed|r  " ..
-                CLASS.warrior ..
-                    "Brannoc|r    |cffa39b8bPass|r  " ..
-                        CLASS.priest ..
-                            "Ysolde|r    |cffa39b8bChoosing|r  " ..
-                                CLASS.mage .. "Kaelith|r " .. CLASS.rogue .. "Morrow|r",
+            who = line({
+                { "Need", CLASS.warrior .. "Brannoc|r" },
+                { "Pass", CLASS.priest .. "Ysolde|r" },
+                { "Choosing", CLASS.mage .. "Kaelith|r, " .. CLASS.rogue .. "Morrow|r" },
+            }),
+            whoTip = { title = "Who chose what", description = "Need · 1\nBrannoc\n\nPass · 1\nYsolde" },
         },
         {
             id = 2,
@@ -69,6 +78,10 @@ local function rolls(): RollRowData[]
             duration = 60,
             remaining = 33,
             choices = choices(0, 2, 0, { noNeed = "Your class can't use swords." }),
+            who = line({
+                { "Greed", CLASS.warrior .. "Brannoc|r, " .. CLASS.mage .. "Kaelith|r" },
+                { "Choosing", CLASS.priest .. "Ysolde|r, " .. CLASS.rogue .. "Morrow|r" },
+            }),
             note = "Need: Your class can't use swords.",
         },
         {
@@ -81,6 +94,11 @@ local function rolls(): RollRowData[]
             duration = 60,
             remaining = 6,
             choices = choices(1, 1, 0),
+            who = line({
+                { "Need", CLASS.priest .. "Ysolde|r" },
+                { "Greed", CLASS.rogue .. "Morrow|r" },
+                { "Choosing", CLASS.warrior .. "Brannoc|r, " .. CLASS.mage .. "Kaelith|r" },
+            }),
             choice = "need",
             confirm = { text = "Cape of the Brotherhood binds to you when you win it.", accept = "Roll Need" },
         },
@@ -117,7 +135,7 @@ local function answered()
     for _, r in ipairs(d.rolls) do
         r.choice = "greed"
         r.confirm = nil
-        r.waiting = "Choosing: Morrow"
+        r.who = "Choosing Morrow"
     end
     d.answered = true
     d.meta = "waiting on 1 player"
@@ -128,7 +146,11 @@ local function answered()
     expect(r.chipLabel:GetText()).toBe("Greed")
     expect(r.choices).never.toBeShown()
     expect(r.time).never.toBeShown()
-    expect(r.sub:GetText()).toBe("Choosing: Morrow")
+    -- one line a row: who chose what in place of the bind, nothing under it
+    expect(r.sub:GetText()).toBe("Choosing Morrow")
+    expect(r.whoLine).never.toBeShown()
+    expect(r.track).never.toBeShown()
+    expect(r:GetHeight()).toBe(52)
     expect(t.cols[1]).never.toBeShown()
     expect(t.passAll:IsEnabled()).toBe(false)
     expect(t.greedAll:IsEnabled()).toBe(false)
@@ -263,9 +285,22 @@ local function threeRolls()
     t:Show()
     t:SetData(data())
     local barb, cutlass, cape = assert(t:RowFor(1)), assert(t:RowFor(2)), assert(t:RowFor(3))
+    -- who chose what, on every row without hovering it
+    expect(barb.whoLine).toBeShown()
+    expect(cutlass.whoLine).toBeShown()
+    expect(cape.whoLine).toBeShown()
+    expect((barb.whoLine:GetText() :: string):find("Brannoc", 1, true) ~= nil).toBe(true)
+    expect(barb.extra).never.toBeShown()
+    -- the time: the seconds, and a bar the row's whole width along its foot,
+    -- draining from the right
+    expect(math.floor(barb.track:GetWidth() + 0.5)).toBe(TRAY_W)
+    expect(math.floor(barb.fill:GetWidth() + 0.5)).toBe(math.floor(TRAY_W * 52 / 60 + 0.5))
+    expect(math.floor(barb.fill:GetLeft() + 0.5)).toBe(math.floor(barb:GetLeft() + 0.5))
+    expect(math.floor(barb.fill:GetBottom() + 0.5)).toBe(math.floor(barb:GetBottom() + 0.5))
+    expect(tokenOf(cape.fill)).toBe("amber")
+    expect(tokenOf(barb.fill)).toBe("ink-muted")
+    -- hovered: the row's fill, every name in a tooltip
     mock.hover(barb)
-    -- hovered: the line of who chose what, the row's fill
-    expect(barb.extra).toBeShown()
     expect(barb.hoverBg).toBeShown()
     expect(barb.lock).toBeShown()
     -- unavailable: a lock in the option, its reason under the row

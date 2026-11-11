@@ -2,7 +2,7 @@
 -- with the item, the bind, the seconds, Need / Greed / Pass), choosing, an
 -- unavailable Need with its reason, Bind on Pickup asked in the row (the
 -- game's popup hosted: its own OK answers), the others' choices from the
--- loot lines (counts, who on hover), the timer and its urgency, several
+-- loot lines (counts, who always under the row), the timer and its urgency, several
 -- rolls in order, Pass on all and Greed on all (asked once), the results
 -- (kept 10 s after the last roll, held in combat), folding into the tab, cancelled and timed-out rolls,
 -- the game saying rolls are over, the test rolls, a reload mid-roll, and no
@@ -286,15 +286,16 @@ local function others()
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", ITEM_LINK)) -- changed their mind
     expect(option(7, "greed").badge.label:GetText()).toBe("0")
     expect(option(7, "pass").badge.label:GetText()).toBe("1")
-    -- hover: who chose what
+    -- who chose what: always under the row, every name on hovering it
     local r = row(7)
-    expect(r.extra).never.toBeShown()
-    mock.hover(r)
-    expect(r.extra).toBeShown()
-    local who = r.extra:GetText() :: string
+    expect(r.whoLine).toBeShown()
+    local who = r.whoLine:GetText() :: string
+    expect(who:find("Need", 1, true) ~= nil).toBe(true)
     expect(who:find("Tamsin", 1, true) ~= nil).toBe(true)
     expect(who:find("Ashford", 1, true) ~= nil).toBe(true)
-    mock.hover(nil)
+    expect(who:find("Greed", 1, true)).toBeNil() -- (nobody: no group)
+    local tip = assert(assert(tray().data.rolls[1]).whoTip)
+    expect((assert(tip.description)):find("Pass · 1|r\nAshford", 1, true) ~= nil).toBe(true)
     -- your own line presses your choice
     M:OnLootLine(line(LOOT_ROLL_GREED_SELF, 12, ITEM_LINK))
     expect(assert(M.rolls[7]).choice).toBe("greed")
@@ -318,11 +319,9 @@ local function stillChoosing()
     roll(7)
     roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
     M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
-    mock.hover(row(7))
-    local who = row(7).extra:GetText() :: string
+    local who = row(7).whoLine:GetText() :: string
     expect(who:find("Choosing", 1, true) ~= nil).toBe(true)
     expect(who:find("Ashford", 1, true) ~= nil).toBe(true)
-    mock.hover(nil)
     -- answered: the line under the name counts who's still choosing
     mock.click(option(7, "pass"))
     expect(row(7).compact).toBe(false)
@@ -334,7 +333,10 @@ local function stillChoosing()
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Tamsin", OTHER_LINK))
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", OTHER_LINK))
     expect(tray().meta:GetText()).toBe("waiting on 1 player")
-    expect((row(7).sub:GetText() :: string):find("Choosing: ", 1, true) ~= nil).toBe(true)
+    -- (one line: who chose what in place of the bind)
+    expect((row(7).sub:GetText() :: string):find("Choosing", 1, true) ~= nil).toBe(true)
+    expect((row(7).sub:GetText() :: string):find("Need", 1, true) ~= nil).toBe(true)
+    expect(row(7).whoLine).never.toBeShown()
     expect(row(7).chipLabel:GetText()).toBe("Pass")
     expect(tray().passAll:IsEnabled()).toBe(false)
 end
@@ -346,7 +348,8 @@ local function timer()
     local r = row(7)
     expect(r.time:GetText()).toBe("30")
     expect(tokenOf(r.time)).toBe("ink")
-    expect(math.floor(r.fill:GetWidth() + 0.5)).toBe(20)
+    -- (the bar: the row's whole width, half of it left)
+    expect(math.floor(r.fill:GetWidth() + 0.5)).toBe(math.floor(r:GetWidth() / 2 + 0.5))
     left[7] = 9000
     mock.advanceFrames(3, 100)
     expect(r.time:GetText()).toBe("9")
@@ -630,6 +633,24 @@ local function testRolls()
     local raid = M:Open()[1]
     mock.advanceTime(10)
     expect(#raid.votes.need + #raid.votes.greed + #raid.votes.pass > 5).toBe(true)
+    -- forty players: still one line, a name or none a choice and the rest
+    -- counted; every name in the hover's tooltip
+    mock.advanceTime(13) -- (most have chosen; the roll runs 30 s)
+    local d = assert(tray().data.rolls[1])
+    local who = assert(d.who)
+    local plain = who:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    print("raid line: " .. plain)
+    expect(#plain <= 84).toBe(true)
+    expect(plain:find("+%d+") ~= nil).toBe(true)
+    expect(row(raid.id).whoLine:GetNumLines()).toBe(1)
+    local tip = assert(assert(d.whoTip).description)
+    local named = 0
+    for _, name in ipairs(assert(raid.roster)) do
+        if tip:find(name, 1, true) then
+            named = named + 1
+        end
+    end
+    expect(named).toBe(39)
     -- ended before its votes all came: they stop
     M:EndRoll(raid.id)
     mock.advanceTime(25)
@@ -674,7 +695,7 @@ local function blizzardAway()
     expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
 end
 
-@test("the settings: on the Loot page; the tray in edit mode, at first in the middle of the screen's upper third")
+@test("the settings: on the Loot page; the tray in edit mode, at first high in the middle of the screen")
 local function settingsAndMover()
     local s = registry.get("lootrolls") :: registry.Section
     expect(s.merge).toBe("loot")
@@ -685,11 +706,11 @@ local function settingsAndMover()
         end
     end
     expect(found).toBe(true)
-    expect(M:Get("position")).toEqual({ point = "TOP", x = 0, y = -400 })
+    expect(M:Get("position")).toEqual({ point = "TOP", x = 0, y = -150 })
     -- placed there: horizontally centred, its top in the screen's upper part
     roll(7)
     local t = tray()
     local root = SuuUI.Root
     expect(math.floor((t:GetLeft() + t:GetRight()) / 2 + 0.5)).toBe(math.floor(root:GetWidth() / 2 + 0.5))
-    expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(400)
+    expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(150)
 end
