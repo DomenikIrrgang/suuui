@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- World map and collections: Questie's latest Forever data (quest givers, dungeon entrances, town services, rares, treasure chests, and where mounts, toys and appearances come from).
+
 ## 0.6.38 (2026-11-10)
 
 ### Changed
