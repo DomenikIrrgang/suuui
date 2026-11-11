@@ -11,6 +11,10 @@
 -- The ghost is a second bar behind the fill. It follows the value after a
 -- 150ms hold and drains with the engine's own interpolation, so it works on
 -- secret values too, where no Lua code may do the maths.
+--
+--   trail(host, ghost, v[, instant])   -- the same ghost for any bar: the unit
+--                                      -- frames' health and the resource bar
+--                                      -- keep theirs with it
 
 import after from "wowlua:timer"
 import * as draw from "./Draw"
@@ -28,6 +32,33 @@ export type StatusBarOptions = {
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local HOLD = 0.15
 local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
+
+-- Where a ghost bar follows to and its hold (a bar with a ghost carries both).
+export type Trail = { ghostValue: number | Secret<number>, ghostTimer: TimerHandle? }
+
+-- The ghost after its fill took `v`: it holds 150 ms (later values inside
+-- the hold move its target, never restart it), then the engine eases it to
+-- the latest value. A gain trails the same way, unseen under the fill.
+-- `instant` (a new unit or power, reduced motion) moves it at once and drops
+-- a waiting hold. Only SetValue touches `v`: it may be secret.
+export function trail(host: Trail, ghost: StatusBar, v: number | Secret<number>, instant: boolean?)
+    if instant or not INTERPOLATE then
+        local held = host.ghostTimer
+        if held then
+            held:Cancel()
+            host.ghostTimer = nil
+        end
+        ghost:SetValue(v)
+        return
+    end
+    host.ghostValue = v
+    if not host.ghostTimer then
+        host.ghostTimer = after(HOLD, function()
+            host.ghostTimer = nil
+            ghost:SetValue(host.ghostValue, INTERPOLATE)
+        end)
+    end
+end
 
 local function makeBar(parent: Frame, color: string?): StatusBar
     local b = CreateFrame("StatusBar", nil, parent)
@@ -48,7 +79,7 @@ export class Bar extends Frame
     bar: StatusBar
     ghost?: StatusBar
     -- where the ghost follows to (set before its timer starts)
-    ghostTarget: number | Secret<number> = 0
+    ghostValue: number | Secret<number> = 0
     ghostTimer?: TimerHandle
 
     constructor(parent: Frame, opts: StatusBarOptions?)
@@ -92,15 +123,8 @@ export class Bar extends Frame
     function SetValue(v: number | Secret<number>)
         self.bar:SetValue(v)
         local ghost = self.ghost
-        if not ghost then
-            return
-        end
-        self.ghostTarget = v
-        if not self.ghostTimer then
-            self.ghostTimer = after(HOLD, function()
-                self.ghostTimer = nil
-                ghost:SetValue(self.ghostTarget, INTERPOLATE)
-            end)
+        if ghost then
+            trail(self, ghost, v)
         end
     end
 
@@ -109,12 +133,7 @@ export class Bar extends Frame
         self.bar:SetValue(v)
         local ghost = self.ghost
         if ghost then
-            local timer = self.ghostTimer
-            if timer then
-                timer:Cancel()
-                self.ghostTimer = nil
-            end
-            ghost:SetValue(v)
+            trail(self, ghost, v, true)
         end
     end
 end
