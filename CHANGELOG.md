@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+### New
+
+- For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
+
 ### Changed
 
 - Bags: the keyring now shows by default, as its own section after your bags, with only the slots that hold a key (no empty ones). Settings › Bags › Keyring turns it off.
 - Bags: the reagent bag's free slots show once, in its section's header, no longer also at the bottom of the window.
+
+### Fixed
+
+- Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
 
 ## 0.6.40 (2026-11-11)
 

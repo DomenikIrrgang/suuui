@@ -361,6 +361,35 @@ local function sections()
     expect(button(-1, 2)).never.toBeShown()
 end
 
+@test("the currencies shown on the backpack: in the foot by the gold, on your own bags; updated as they change")
+local function backpackCurrencies()
+    local watched: { iconFileID: number, quantity: number }[] = {
+        { iconFileID = 463446, quantity = 12 },
+        { iconFileID = 133784, quantity = 340 },
+    }
+    mock.fake("C_CurrencyInfo.GetBackpackCurrencyInfo", function(i: number): unknown
+        return watched[i]
+    end)
+    open()
+    expect(inv().currencies[1]).toBeShown()
+    expect(inv().currencies[2]).toBeShown()
+    expect(inv().currencyTexts[2]:GetText()).toBe("340")
+    -- one unmarked (the Currency tab): gone at the next update
+    watched = { { iconFileID = 463446, quantity = 15 } }
+    mock.fireEvent("CURRENCY_DISPLAY_UPDATE")
+    expect(inv().currencies[1]).toBeShown()
+    expect(inv().currencyTexts[1]:GetText()).toBe("15")
+    expect(inv().currencies[2]).never.toBeShown()
+    -- a click opens the Currency tab (out of combat)
+    local toggled = mock.fake("ToggleCharacter", function(_: string) end)
+    mock.click(inv().currencies[1])
+    expect(toggled).toHaveBeenCalledWith("TokenFrame")
+    -- none marked: none shown
+    watched = {}
+    mock.fireEvent("CURRENCY_DISPLAY_UPDATE")
+    expect(inv().currencies[1]).never.toBeShown()
+end
+
 @test("a quiver, a soul or profession bag: a section of its own after your bags, not in the free count")
 local function specialBags()
     local laid: SlotSection[] = {}

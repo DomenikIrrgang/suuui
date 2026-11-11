@@ -40,7 +40,7 @@ import type SettingsSection from "/Core/Modules"
 import BAGS from "/Core/ServiceKeys"
 import type Position from "/EditMode/EditMode"
 import ItemSlot from "/UI/Inventory"
-import type Inventory, ItemSlotSkin, SlotSection, FoundItem, ResultRow from "/UI/Inventory"
+import type Inventory, ItemSlotSkin, SlotSection, FoundItem, ResultRow, InventoryCurrency from "/UI/Inventory"
 import type LoadingMark from "/UI/LoadingMark"
 import type Select, SelectOption from "/UI/Select"
 import type Text from "/UI/Text"
@@ -116,6 +116,45 @@ end
 
 local function freeSlots(bag: number): number?
     return asNumber((C_Container.GetContainerNumFreeSlots(bag)))
+end
+
+-- The currencies the game shows on its backpack (the Currency tab's "Show on
+-- Backpack"): SuuUI's bags replace that backpack, so the click showed them
+-- nowhere (found in game 2026-11-11). Shown in the foot by the gold
+-- (asked); hover: the game's tooltip, a click: the Currency tab.
+local function backpackCurrencies(): InventoryCurrency[]
+    local out: InventoryCurrency[] = {}
+    local get = C_CurrencyInfo and C_CurrencyInfo.GetBackpackCurrencyInfo
+    if not get then
+        return out
+    end
+    for i = 1, 10 do
+        local ok, info = pcall(get, i)
+        if not ok or not info then
+            break
+        end
+        local icon, count = asNumber(info.iconFileID), asNumber(info.quantity)
+        if icon and count then
+            local index = i
+            out[#out + 1] = {
+                icon = icon,
+                count = count,
+                tooltip = function(owner: Frame)
+                    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+                    pcall(GameTooltip.SetBackpackToken, GameTooltip, index)
+                    GameTooltip:Show()
+                end,
+                onClick = function()
+                    -- (the character window opens through the game's panels:
+                    -- refused to addon code in combat)
+                    if not InCombatLockdown() then
+                        ToggleCharacter("TokenFrame")
+                    end
+                end,
+            }
+        end
+    end
+    return out
 end
 
 -- The keyring's slots that hold a key, in order: only those show (asked
@@ -1902,6 +1941,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         local note, money = chars.foot(self:Characters(), who, GetMoney(), more)
         inv:SetNote(note)
         inv:SetMoney(money)
+        inv:SetCurrencies(self:IsLive() and backpackCurrencies() or nil)
     end
 
     --------------------------------------------------------------------------------
@@ -3083,6 +3123,12 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("INVENTORY_SEARCH_UPDATE", function()
             self:UpdateShown()
+        end)
+        -- a currency gained or spent, or one marked for the backpack
+        self:OnGameEvent("CURRENCY_DISPLAY_UPDATE", function()
+            if inv:IsShown() then
+                self:Foot()
+            end
         end)
         self:OnGameEvent("PLAYER_MONEY", function()
             self:Char().money = GetMoney()
