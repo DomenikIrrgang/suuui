@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Guild window: switching tabs no longer makes the tabs flicker and jump.
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
