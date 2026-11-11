@@ -173,6 +173,44 @@ local function talentRanks()
     expect(second[1].rank).toBe(3)
 end
 
+@test(
+    "a trained spell the book folds into another (Plate Mail in Armor Proficiency): known by its skill line or its ID"
+)
+local function foldedSpell()
+    local entries: TrainerSpell[] = { { name = "Plate Mail", level = 40, cost = 20000, icon = 1, school = "General" } }
+    -- not trained: train now
+    mock.fake("IsPlayerSpell", function(_: number): boolean
+        return false
+    end)
+    mock.fake("C_SkillInfo.GetNumSkillLines", function(): number
+        return 0
+    end)
+    local before = M:Unlearned(entries, {}, 40)
+    expect(#before).toBe(1)
+    expect(before[1].status).toBe("trainable")
+    -- trained: WoW Forever lists it under Armor Proficiency, not on its own,
+    -- and adds its skill line (found in game: it still said "Train now")
+    local lines = { { name = "Armor Proficiencies", isHeader = true }, { name = "Plate Mail", isHeader = false } }
+    mock.fake("C_SkillInfo.GetNumSkillLines", function(): number
+        return #lines
+    end)
+    mock.fake("C_SkillInfo.GetSkillLineInfo", function(i: number): unknown
+        return lines[i]
+    end)
+    expect(#M:Unlearned(entries, {}, 40)).toBe(0)
+    -- or the game knows one of its IDs
+    mock.fake("C_SkillInfo.GetNumSkillLines", function(): number
+        return 0
+    end)
+    local ids = SuuUI.TrainerSpellIDs()["Plate Mail"] or {}
+    if #ids > 0 then
+        mock.fake("IsPlayerSpell", function(id: number): boolean
+            return id == ids[1]
+        end)
+        expect(#M:Unlearned(entries, {}, 40)).toBe(0)
+    end
+end
+
 @test("a rank's tooltip line: train now and its cost, or the level it comes at")
 local function trainLine()
     expect(

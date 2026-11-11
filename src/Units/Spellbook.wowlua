@@ -782,13 +782,44 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         for _, t in ipairs(SuuUI.ClassTalents and SuuUI.ClassTalents(class :: string) or {}) do
             talents[t.name] = true
         end
+        -- A spell without ranks you have that the book doesn't list on its own:
+        -- WoW Forever folds Plate Mail into Armor Proficiency once trained (its
+        -- tooltip lists it; the book has no Plate Mail, and it showed "Train
+        -- now": found in game 2026-11-11). Yours when the game knows one of its
+        -- IDs, or your skills list has a line of its name.
+        local skills: { [string]: boolean }? = nil
+        local function ownedElsewhere(name: string): boolean
+            for _, id in ipairs(SuuUI.TrainerSpellIDs()[name] or {}) do
+                if secret.flag(IsPlayerSpell(id)) then
+                    return true
+                end
+            end
+            local lines = skills
+            if not lines then
+                local made: { [string]: boolean } = {}
+                local SI = C_SkillInfo
+                local n = SI and secret.asNumber(SI.GetNumSkillLines()) or 0
+                for i = 1, n do
+                    local info = SI.GetSkillLineInfo(i)
+                    if info and not secret.flag(info.isHeader) then
+                        local skill = secret.asString(info.name)
+                        if skill then
+                            made[skill] = true
+                        end
+                    end
+                end
+                skills = made
+                lines = made
+            end
+            return lines[name] == true
+        end
         local out: BookEntry[], level = {}, levelArg or UnitLevel("player") or 1
         for _, name in ipairs(order) do
             local list = assert(byName[name])
             table.sort(list, function(a: TrainerSpell, b: TrainerSpell): boolean
                 return a.level < b.level
             end)
-            local have = known[name] ~= nil
+            local have = known[name] ~= nil or (#list == 1 and ownedElsewhere(name))
             local talent = talents[name] == true
             if talent and not have then
                 list = {}
