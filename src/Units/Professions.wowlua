@@ -236,6 +236,18 @@ local function chosenSet(c: FilterChoice?): { [string]: boolean }
     return out
 end
 
+-- A recipe in the Filter menu's level range (0: no limit at that end), by
+-- the level its product requires (UseLevel), as the auction house's range:
+-- a product that requires none counts as level 0, so a range with a
+-- minimum leaves it out; a recipe that makes no item (an enchant) or whose
+-- item isn't loaded yet (nil) stays, and is placed once it loads.
+local function levelIn(use: number?, minLevel: number, maxLevel: number): boolean
+    if use == nil then
+        return true
+    end
+    return (minLevel == 0 or use >= minLevel) and (maxLevel == 0 or use <= maxLevel)
+end
+
 local function itemTip(owner: Frame, itemID: number?)
     if not itemID then
         return
@@ -639,8 +651,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         return need or mySkill
     end
 
-    -- The level the item a recipe makes requires; nil when it makes none or
-    -- the item isn't loaded yet (asked for, then sorted again).
+    -- The level the item a recipe makes requires (0: none); nil when it
+    -- makes none or the item isn't loaded yet (asked for, then sorted and
+    -- filtered again).
     function UseLevel(id: number): number?
         local sch = tryValue(C_TradeSkillUI.GetRecipeSchematic, id, false)
         local out = sch and sch.outputItemID
@@ -672,6 +685,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local f = self.filters
         local difficulties, qualities, other = chosenSet(f.difficulty), chosenSet(f.quality), chosenSet(f.other)
         local anyDifficulty, anyQuality = next(difficulties) == nil, next(qualities) == nil
+        -- the required level range, as the auction house's (0: no limit)
+        local minLevel, maxLevel = UI.FilterRange(f.level)
+        local ranged = minLevel > 0 or maxLevel > 0
         local learned, total = 0, 0
         for _, id in ipairs(numbers(try(C_TradeSkillUI.GetAllRecipeIDs))) do
             local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
@@ -684,9 +700,11 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 local diff = info.relativeDifficulty or 3
                 -- the product's quality is in the recipe's link ("|cnIQ3:")
                 local quality = info.hyperlink and info.hyperlink:match("IQ(%d)")
+                local use = (ranged or self.sort == "level") and self:UseLevel(id) or nil
                 local keep = (f.show ~= "learned" or info.learned) and (f.show ~= "unlearned" or not info.learned) and
                     (anyDifficulty or difficulties[DIFFICULTY_KEYS[diff] or "trivial"]) and
                     (anyQuality or (quality ~= nil and qualities[quality])) and
+                    (not ranged or levelIn(use, minLevel, maxLevel)) and
                     (not other.materials or can > 0) and
                     (not other.skillup or (info.canSkillUp ~= false and diff < 3 and info.learned)) and
                     (not search or info.name:lower():find(search, 1, true))
@@ -709,7 +727,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         need = (self.sort == "skill" or self.sort == "level") and
                             self:SkillFor(id, profession, info.name) or
                             nil,
-                        use = self.sort == "level" and self:UseLevel(id) or nil,
+                        use = use,
                     }
                 end
             end

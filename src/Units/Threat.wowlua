@@ -33,7 +33,7 @@ local UI = SuuUI.UI
 
 local DEFAULTS = {
     position = { point = "BOTTOMRIGHT", x = -292, y = 28 } :: Position,
-    shows = "always", -- "off" | "combat" | "always"
+    shows = "always", -- "off" | "combat" | "group" | "instance" | "always"
     who = "group", -- "group" | "tanks" | "self"
     marker = "role", -- "role" | "class" | "none"
     raw = true,
@@ -309,6 +309,12 @@ local function meterRows(): number
     return type(rows) == "number" and rows or 8
 end
 
+-- In a dungeon or a raid (the meters' "In an instance").
+local function inInstance(): boolean
+    local inside, kind = IsInInstance()
+    return secret.flag(inside) and (kind == "party" or kind == "raid")
+end
+
 local function meterOff(): (boolean, string)
     return M:Get("shows") == "off", "Show the threat meter first."
 end
@@ -334,11 +340,13 @@ local SECTION: SettingsSection = {
                     control = "segmented",
                     stacked = true,
                     options = {
-                        { value = "off", label = "Off" },
-                        { value = "combat", label = "In combat" },
                         { value = "always", label = "Always" },
+                        { value = "group", label = "In a group" },
+                        { value = "combat", label = "In combat" },
+                        { value = "instance", label = "In an instance" },
+                        { value = "off", label = "Hidden" },
                     },
-                    description = "In combat: while you fight a hostile target. Always: on screen all the time, empty without a hostile target.",
+                    description = "In combat: while you fight a hostile target. In a group: while you're in a party or raid. In an instance: in a dungeon or raid. It fills while you fight a hostile target and stays empty otherwise.",
                 },
                 {
                     key = "who",
@@ -503,7 +511,8 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
         local hostile = hostileTarget()
         local fighting = hostile and inCombat()
         local shows = self:Get("shows")
-        local wantMeter = not self:Get("position").hidden and (shows == "always" or (shows == "combat" and fighting))
+        local placedOff = self:Get("position").hidden
+        local wantMeter = not placedOff and (self:ShowsOutside(shows) or (shows == "combat" and fighting))
         local rows: Row[], hidden = NO_ROWS, false
         if hostile then
             rows, hidden = readRows()
@@ -528,12 +537,20 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- Whether the meter shows whatever the fight: Always, or In a group / In
+    -- an instance while you are (asked by a player 2026-11-11: solo, no
+    -- threat meter).
+    function ShowsOutside(shows: string): boolean
+        return shows == "always" or (shows == "group" and secret.flag(IsInGroup())) or
+            (shows == "instance" and inInstance())
+    end
+
     -- A driver reads the table every TICK (threat moves all the time) in combat,
-    -- and out of combat too while the meter always shows.
+    -- and out of combat too while the meter shows.
     function Refresh()
         local driver = self.driver
         if driver then
-            driver:SetShown(inCombat() or self:Get("shows") == "always")
+            driver:SetShown(inCombat() or self:ShowsOutside(self:Get("shows")))
         end
         self:Update()
     end
@@ -653,6 +670,15 @@ class ThreatModule extends Module<typeof(DEFAULTS)>
                 self:Update()
             end
         end)
+        -- joining or leaving a group, entering or leaving an instance
+        self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
+            self:Refresh()
+        end)
+        for _, e in ipairs({ "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "UPDATE_INSTANCE_INFO" }) do
+            self:OnGameEvent(e, function()
+                self:Refresh()
+            end)
+        end
         self:Refresh()
     end
 
