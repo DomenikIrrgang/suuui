@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Unit frames: setting a raid target marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+
 ## 0.6.40 (2026-11-11)
 
 ### Fixed
