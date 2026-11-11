@@ -12,12 +12,15 @@ import SuuUI from "/Core/API"
 import expectNoErrors from "../../helpers"
 import internal M from "/Units/Spellbook"
 import type BookEntry, School from "/Units/Spellbook"
-import type Spellbook from "/UI/Spellbook"
+import type Spellbook, BookAll from "/UI/Spellbook"
 import type LevelUpDef from "/UI/LevelUp"
 import type TooltipData from "/UI/Tooltip"
 import type TrainerSpell from "/Data/Trainer"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import * as ahead from "/Core/Ahead"
+
+local FRAME = 1000 / 60
 
 -- The spells window (once Blizzard's addon loaded), SuuUI's page in it.
 local function window(): Frame?
@@ -91,7 +94,21 @@ end
 -- What you know and what the trainer has
 --------------------------------------------------------------------------------
 
-@test("spells changed or a level up with the book closed: drawn when it opens, not before")
+-- The book opened and closed again: the page drawn, the window shut; what
+-- the login queued ahead (the bags' slots …) out of the way.
+local function openedAndClosed()
+    open()
+    mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
+    mock.advanceFrames(2)
+    ahead.finish()
+end
+
+-- Frames going by for `seconds`.
+local function wait(seconds: number)
+    mock.advanceFrames(math.ceil(seconds * 60), FRAME)
+end
+
+@test("spells changed or a level up with the book closed: not drawn at once; opened, drawn then")
 local function closedStale()
     open()
     mock.pressKey(GetBindingKey("TOGGLESPELLBOOK") :: string)
@@ -104,6 +121,65 @@ local function closedStale()
     open()
     expect(renders).toHaveBeenCalled()
     expect(M.stale).toBe(false)
+    expectNoErrors()
+end
+
+@test(
+    "spells changed with the book closed: drawn once a moment later, out of combat; the fight's start then draws nothing"
+)
+local function closedStaleAhead()
+    openedAndClosed()
+    local renders = mock.stub(M, "Render", M.Render)
+    -- a level up's burst: once for all of it
+    mock.fireEvent("SPELLS_CHANGED")
+    mock.fireEvent("PLAYER_LEVEL_UP", 61, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    mock.fireEvent("SPELLS_CHANGED")
+    mock.advanceFrames(2, FRAME)
+    expect(renders).toHaveBeenCalledTimes(0)
+    wait(1)
+    expect(renders).toHaveBeenCalledTimes(1)
+    expect(M.stale).toBe(false)
+    expect(M.prepared).toBe(true)
+    -- the page ready: the fight's first frame draws nothing
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(renders).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("spells changed with the book closed, a fight starting within the moment: drawn as it starts, not again after")
+local function closedStaleFight()
+    openedAndClosed()
+    local renders = mock.stub(M, "Render", M.Render)
+    mock.fireEvent("SPELLS_CHANGED")
+    -- (the window first opened in this fight needs its size and its buttons)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(renders).toHaveBeenCalledTimes(1)
+    expect(M.stale).toBe(false)
+    mock.player:leaveCombat()
+    wait(3)
+    expect(renders).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("spells changed in a fight with the book closed: drawn once it ends, not at the next fight's start")
+local function closedStaleInFight()
+    openedAndClosed()
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    local renders = mock.stub(M, "Render", M.Render)
+    mock.fireEvent("SPELLS_CHANGED")
+    wait(2)
+    expect(renders).toHaveBeenCalledTimes(0)
+    expect(M.stale).toBe(true)
+    mock.player:leaveCombat()
+    wait(3)
+    expect(renders).toHaveBeenCalledTimes(1)
+    expect(M.stale).toBe(false)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(renders).toHaveBeenCalledTimes(1)
     expectNoErrors()
 end
 
@@ -444,6 +520,35 @@ local function toTrain()
     M:Set("trainingCost", false)
     mock.advanceTime(1.1)
     expect(told[#told].cost).toBeNil()
+end
+
+@test("the page's head: every school's count and cost to train, as CountToTrain says, and this school's")
+local function headCounts()
+    mock.setPlayer({ level = 20 })
+    mock.advanceFrames(1)
+    open()
+    local heads: { n: number?, count: number?, cost: number? }[] = {}
+    local real = book().SetHead
+    mock.stub(book(), "SetHead", function(b: Spellbook, title: string?, trainable: number?, all: BookAll?)
+        heads[#heads + 1] = { n = trainable, count = all and all.count, cost = all and all.cost }
+        real(b, title, trainable, all)
+    end)
+    M:Render()
+    local count, cost = M:CountToTrain()
+    expect(count > 0).toBe(true)
+    local head = heads[#heads]
+    expect(head.count).toBe(count)
+    expect(head.cost).toBe(cost)
+    -- this school's: what its own list counts
+    local schools = M:Schools()
+    local _, n = M:SchoolList(assert(schools[assert(M.school)]), M:TrainerBySchool(schools))
+    expect(head.n).toBe(n)
+    -- without the cost setting: no all-schools line
+    M:Set("trainingCost", false)
+    M:Render()
+    expect(heads[#heads].count).toBeNil()
+    mock.setPlayer({ level = 1 })
+    expectNoErrors()
 end
 
 @test("the level-up card: the spells a level brings, its cost, gone after its time")

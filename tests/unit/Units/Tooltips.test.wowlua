@@ -14,6 +14,7 @@ import expectNoErrors from "../../helpers"
 import type Color from "/Core/Tokens"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -296,6 +297,56 @@ local function unitMenus()
     M:Set("unitMenus", false)
     openUnitMenu()
     expect(reskinned).toBe(times)
+    closeMenus()
+end
+
+-- The open menus' buttons, by their words (secret words skipped).
+local function menuButton(text: string): Button?
+    local found: Button? = nil
+    local f: Frame? = EnumerateFrames()
+    while f do
+        local cur = f :: Frame
+        if cur:IsVisible() and cur:GetObjectType() == "Button" then
+            for _, fs in ipairs(frames.fontStrings(cur)) do
+                local t = fs:GetText()
+                if t and not secret.isSecret(t) and t == text then
+                    found = cur :: Button
+                end
+            end
+        end
+        f = EnumerateFrames(cur)
+    end
+    return found
+end
+
+@test("a raid marker from the target frame's restyled menu in combat: set, nothing forbidden")
+local function markerInCombat()
+    local refused: string[] = {}
+    local watch = CreateFrame("Frame")
+    watch:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    watch:RegisterEvent("ADDON_ACTION_BLOCKED")
+    watch:SetScript("OnEvent", function(_: Frame, _: string, _: unknown, fn: unknown)
+        refused[#refused + 1] = tostring(fn)
+    end)
+    local target = assert(frames.find("SuuUITargetFrame"))
+    mock.player:target(wolf)
+    mock.advanceFrames(2)
+    -- a menu restyled out of combat first: its rows come back from the
+    -- game's pool for the next one
+    mock.click(target, "RightButton")
+    mock.advanceFrames(2)
+    closeMenus()
+    mock.advanceFrames(2)
+    mock.player:enterCombat()
+    mock.click(target, "RightButton")
+    mock.advanceFrames(2)
+    -- (found in game, 2026-11-11: Forbidden: SetRaidTarget())
+    mock.hover(assert(menuButton("Target Marker Icon"), "no marker row"))
+    mock.advanceFrames(30)
+    mock.click(assert(menuButton("Skull"), "no Skull"))
+    mock.advanceFrames(2)
+    expect(refused).toEqual({})
+    watch:UnregisterAllEvents()
     closeMenus()
 end
 
