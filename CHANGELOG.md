@@ -4,6 +4,8 @@
 
 ### New
 
+- Player frame: a combat sign. Crossed swords on the left edge of your frame while you are in combat; it pops in once when the fight starts and fades away when it ends. Settings › Unit frames › Combat turns it off, or turns off just the pop (with Reduce motion on it never pops).
+- For plugin authors (API 0.33): `SuuUI.UI.CombatBadge(unitFrame)` puts the combat sign on a unit frame.
 - For plugin authors (API 0.33): an inventory's `inv:SetCurrencies(list)` shows currencies in its foot.
 - For plugin authors (API 0.33): `SuuUI.Pixel.Relayout(frame)` lays out a frame's 1-pixel lines again after it moves under a parent of another scale.
 

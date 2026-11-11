@@ -1,0 +1,147 @@
+-- UI/CombatBadge: the crossed swords across a unit frame's left edge,
+-- centred on it vertically; the pop and its ring once when it comes on, a
+-- fade without the pop, nothing with reduced motion; the fade when it goes.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as combat from "/UI/CombatBadge"
+import * as motion from "/Core/Motion"
+import newParent from "../../helpers"
+
+local parent: Frame
+local host: Frame
+
+local function badge(): combat.CombatBadge
+    return combat.combatBadge(host)
+end
+
+-- Every animation done.
+local function settle()
+    mock.advanceTime(1)
+    mock.advanceFrames(40)
+end
+
+@beforeEach
+local function setUp()
+    parent = newParent(400, 300)
+    host = CreateFrame("Frame", nil, parent)
+    host:SetSize(300, 32)
+    host:SetPoint("CENTER")
+end
+
+@afterEach
+local function tearDown()
+    parent:Hide()
+end
+
+@test("built hidden, on the marker layer when there is one, never taking the mouse")
+local function build()
+    local b = badge()
+    expect(b:IsShown()).toBe(false)
+    expect(b.active).toBe(false)
+    expect(b:GetParent()).toBe(host)
+    expect(b:IsMouseEnabled()).toBe(false)
+    expect(b:GetWidth()).toBe(16)
+    expect(b.glyph:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\swords.tga")
+    local layered = CreateFrame("Frame", nil, parent) :: Frame & { markerLayer: Frame }
+    layered.markerLayer = CreateFrame("Frame", nil, layered)
+    expect(combat.combatBadge(layered):GetParent()).toBe(layered.markerLayer)
+end
+
+@test("across the frame's left edge, centred on it vertically")
+local function placed()
+    local b = badge()
+    b:SetActive(true)
+    local bx, by = b:GetCenter()
+    local hx, hy = host:GetCenter()
+    expect(by).toBeCloseTo(hy)
+    expect(bx).toBeCloseTo(host:GetLeft() + combat.OFFSET)
+    -- straddling: its left end outside the frame, its right end inside
+    expect(b:GetLeft() < host:GetLeft()).toBe(true)
+    expect(b:GetRight() > host:GetLeft()).toBe(true)
+    expect(hx > bx).toBe(true)
+end
+
+@test("coming on with the pop: the pop and the ring play once, never looping")
+local function pops()
+    local b = badge()
+    b:SetActive(true, { pop = true })
+    expect(b:IsShown()).toBe(true)
+    expect(b.pop:IsPlaying()).toBe(true)
+    expect(b.ringPop:IsPlaying()).toBe(true)
+    expect(b.pop:GetLooping()).toBe("NONE")
+    expect(b.ringPop:GetLooping()).toBe("NONE")
+    settle()
+    expect(b.pop:IsPlaying()).toBe(false)
+    expect(b.ringPop:IsPlaying()).toBe(false)
+    expect(b:GetAlpha()).toBe(1)
+    expect(b.ring:GetAlpha()).toBe(0)
+    -- on again: nothing replays
+    b:SetActive(true, { pop = true })
+    expect(b.pop:IsPlaying()).toBe(false)
+    expect(b.ringPop:IsPlaying()).toBe(false)
+end
+
+@test("coming on without the pop: a fade in over dur-fast, no ring")
+local function fades()
+    local fadeSpy = mock.stub(motion, "fadeIn")
+    local b = badge()
+    b:SetActive(true)
+    expect(b:IsShown()).toBe(true)
+    expect(fadeSpy).toHaveBeenCalledWith(b, 0.12)
+    expect(b.pop:IsPlaying()).toBe(false)
+    expect(b.ringPop:IsPlaying()).toBe(false)
+end
+
+@test("reduced motion: on and off at once, no pop, no ring, no fade")
+local function reduced()
+    mock.stub(motion, "reduced", function(): boolean
+        return true
+    end)
+    local fadeSpy = mock.stub(motion, "fadeIn")
+    local b = badge()
+    b:SetActive(true, { pop = true })
+    expect(b:IsShown()).toBe(true)
+    expect(b.pop:IsPlaying()).toBe(false)
+    expect(b.ringPop:IsPlaying()).toBe(false)
+    expect(fadeSpy).never.toHaveBeenCalled()
+    b:SetActive(false, { fade = true })
+    expect(b:IsShown()).toBe(false)
+    expect(b.out:IsPlaying()).toBe(false)
+end
+
+@test("going: faded out, then hidden at full alpha; at once without a fade")
+local function going()
+    local b = badge()
+    b:SetActive(false) -- off already: nothing
+    expect(b:IsShown()).toBe(false)
+    b:SetActive(true, { pop = true })
+    b:SetActive(false, { fade = true })
+    expect(b.active).toBe(false)
+    expect(b:IsShown()).toBe(true)
+    expect(b.pop:IsPlaying()).toBe(false)
+    expect(b.out:IsPlaying()).toBe(true)
+    settle()
+    expect(b:IsShown()).toBe(false)
+    expect(b:GetAlpha()).toBe(1)
+    b:SetActive(true)
+    b:SetActive(false)
+    expect(b:IsShown()).toBe(false)
+    -- back on mid-fade: shown, the fade stopped
+    b:SetActive(true)
+    b:SetActive(false, { fade = true })
+    b:SetActive(true, { pop = true })
+    expect(b.out:IsPlaying()).toBe(false)
+    expect(b:IsShown()).toBe(true)
+    expect(b:GetAlpha()).toBe(1)
+end
+
+@test("going with a fade once the alpha is secret: gone at once")
+local function goingSecret()
+    local b = badge()
+    b:SetActive(true)
+    b:SetAlpha(mock.secret(0.6))
+    b:SetActive(false, { fade = true })
+    expect(b.out:IsPlaying()).toBe(false)
+    expect(b:IsShown()).toBe(false)
+end

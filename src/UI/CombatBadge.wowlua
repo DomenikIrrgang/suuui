@@ -1,0 +1,166 @@
+-- UI/CombatBadge.wowlua
+-- The combat sign (design "Player frame · Combat indicator", option A
+-- "Badge", chosen 2026-11-11 on the left): crossed swords in a 16 px badge,
+-- the info badge's colours (gilt-text fill, on-signal glyph), across a unit
+-- frame's left edge and centred on it vertically, on its raid marker's layer.
+-- It pops in once when combat starts, a single ring spreading out from it,
+-- and fades away when combat ends; it never loops. It is part of the frame:
+-- it takes the frame's alpha, moves and scales with it, and never takes the
+-- mouse. Not a secure frame: shown, hidden and animated in combat freely.
+--
+--   local badge = combatBadge(unitFrame)
+--   badge:SetActive(on[, { pop = bool, fade = bool }])
+--     on:   shown (true) or hidden (false); the same state again does nothing,
+--           so a fight pops it once
+--     pop:  coming on: scale 1.4 -> 1 and alpha 0 -> 1 over dur-base, the ring
+--           1 -> 2.2 and 0.9 -> 0 over dur-ghost (ease-out). Without it: a fade
+--           in over dur-fast. Reduce motion: neither, at once
+--     fade: going off: alpha 1 -> 0 over dur-fast (ease-in), then hidden;
+--           without it, or with Reduce motion: at once
+
+import tokens as T, Easings from "/Core/Tokens"
+import * as motion from "/Core/Motion"
+import * as draw from "/UI/Draw"
+import * as secret from "wowlua:secret"
+
+local SWORDS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\swords.tga"
+
+-- the badge, its glyph, how far its centre sits left of the edge (so it
+-- clears the role icon or class diamond at the row's start by space-2)
+export const SIZE = 16
+local GLYPH = 10
+export const OFFSET = -T.space["space-2"]
+local POP_FROM, RING_TO, RING_ALPHA = 1.4, 2.2, 0.9
+
+local function smoothing(easing: keyof Easings): SmoothingType
+    return T.easing[easing].smoothing :: SmoothingType
+end
+
+export class CombatBadge extends Frame
+    readonly fill: Texture
+    readonly glyph: Texture
+    readonly ring: Frame
+    -- coming on: the pop, the ring; going off: the fade
+    readonly pop: AnimationGroup
+    readonly ringPop: AnimationGroup
+    readonly out: AnimationGroup
+    readonly outAlpha: Alpha
+    active: boolean = false
+
+    -- (over a unit frame's marker layer, when it has one)
+    constructor(frame: Frame)
+        super(nil, (frame :: { markerLayer?: Frame }).markerLayer or frame)
+        self:SetSize(SIZE, SIZE)
+        self:SetPoint("CENTER", frame, "LEFT", OFFSET, 0)
+        self:EnableMouse(false)
+        self:Hide()
+
+        -- the ring under the badge: its outline, spreading and fading
+        self.ring = CreateFrame("Frame", nil, self)
+        self.ring:SetSize(SIZE, SIZE)
+        self.ring:SetPoint("CENTER")
+        self.ring:SetFrameLevel(self:GetFrameLevel())
+        draw.border(self.ring, "gilt-text")
+        self.ring:SetAlpha(0)
+
+        -- shadow 0 1px 2px, black 80%
+        local shade = draw.softEdge(self)
+        shade:SetBlur(2, 0, -1)
+        shade:SetColor(0, 0, 0, 0.8)
+        self.fill = draw.fill(self, "gilt-text", "ARTWORK")
+        self.fill:SetAllPoints()
+        self.glyph = self:CreateTexture(nil, "OVERLAY")
+        self.glyph:SetTexture(SWORDS)
+        self.glyph:SetSize(GLYPH, GLYPH)
+        self.glyph:SetPoint("CENTER")
+        draw.paint(self.glyph, "on-signal")
+
+        -- the pop: in from 1.4 times its size
+        self.pop = self:CreateAnimationGroup()
+        local grow = self.pop:CreateAnimation("Scale")
+        grow:SetScaleFrom(POP_FROM, POP_FROM)
+        grow:SetScaleTo(1, 1)
+        grow:SetDuration(T.duration["dur-base"])
+        grow:SetSmoothing(smoothing("ease-out"))
+        local show = self.pop:CreateAnimation("Alpha")
+        show:SetFromAlpha(0)
+        show:SetToAlpha(1)
+        show:SetDuration(T.duration["dur-base"])
+        show:SetSmoothing(smoothing("ease-out"))
+
+        -- the ring: once, out to 2.2 times, fading away; it rests at alpha 0
+        self.ringPop = self.ring:CreateAnimationGroup()
+        local spread = self.ringPop:CreateAnimation("Scale")
+        spread:SetScaleFrom(1, 1)
+        spread:SetScaleTo(RING_TO, RING_TO)
+        spread:SetDuration(T.duration["dur-ghost"])
+        spread:SetSmoothing(smoothing("ease-out"))
+        local vanish = self.ringPop:CreateAnimation("Alpha")
+        vanish:SetFromAlpha(RING_ALPHA)
+        vanish:SetToAlpha(0)
+        vanish:SetDuration(T.duration["dur-ghost"])
+        vanish:SetSmoothing(smoothing("ease-out"))
+
+        -- going: from where it is to 0, ease-in, then hidden
+        self.out = self:CreateAnimationGroup()
+        self.outAlpha = self.out:CreateAnimation("Alpha")
+        self.outAlpha:SetToAlpha(0)
+        self.outAlpha:SetDuration(T.duration["dur-fast"])
+        self.outAlpha:SetSmoothing(smoothing("ease-in"))
+        self.out:SetScript("OnFinished", function()
+            self:Gone()
+        end)
+    end
+
+    -- Every animation stopped, the ring at rest.
+    function StopAll()
+        self.pop:Stop()
+        self.ringPop:Stop()
+        self.out:Stop()
+        motion.stop(self)
+        self.ring:SetAlpha(0)
+    end
+
+    function Gone()
+        self:StopAll()
+        self:Hide()
+        self:SetAlpha(1)
+    end
+
+    function SetActive(on: boolean, opts: { pop?: boolean, fade?: boolean }?)
+        opts = opts or {}
+        if on == self.active then
+            return
+        end
+        self.active = on
+        if on then
+            self:StopAll()
+            self:Show()
+            if motion.reduced() then
+                return
+            end
+            if opts.pop then
+                self.pop:Play()
+                self.ringPop:Play()
+            else
+                motion.fadeIn(self, T.duration["dur-fast"])
+            end
+            return
+        end
+        -- (read back secret once the frame's alpha was set from one: no fade
+        -- can start from it, as with the rested sign; gone at once then)
+        local from = secret.asNumber(self:GetAlpha())
+        if from and opts.fade and self:IsVisible() and not motion.reduced() then
+            self:StopAll()
+            self.outAlpha:SetFromAlpha(from)
+            self:SetAlpha(0) -- what's left when the fade ends
+            self.out:Play()
+        else
+            self:Gone()
+        end
+    end
+end
+
+export function combatBadge(frame: Frame): CombatBadge
+    return CombatBadge.new(frame)
+end

@@ -22,6 +22,7 @@ import type SettingsSection from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
 import type UnitFrame, UnitFrameOptions, StandInPerson from "/UI/UnitFrame"
 import type RestedSign from "/UI/RestedSign"
+import type CombatBadge from "/UI/CombatBadge"
 import type Text from "/UI/Text"
 import isSecret as isSecretValue from "wowlua:secret"
 import * as secret from "wowlua:secret"
@@ -78,6 +79,9 @@ local DEFAULTS = {
     restedAnimation = "animated", -- or "still"
     restedHideCombat = true,
     restedHideMax = true,
+    -- the combat sign across your frame's left edge while you fight
+    combatBadge = true,
+    combatPop = true,
 }
 
 local M: UnitFramesModule
@@ -494,6 +498,13 @@ local function signOff(): (boolean?, string?)
     return nil, nil
 end
 
+local function combatSignOff(): (boolean?, string?)
+    if not M:Get("combatBadge") then
+        return true, "The combat sign is off."
+    end
+    return nil, nil
+end
+
 local SECTION: SettingsSection = {
     id = "unitframes",
     label = "Unit frames",
@@ -704,6 +715,25 @@ local SECTION: SettingsSection = {
             },
         },
         {
+            title = "Combat",
+            description = "A sign on your frame while you are in combat.",
+            rows = {
+                {
+                    key = "combatBadge",
+                    label = "Show the combat sign",
+                    control = "toggle",
+                    description = "Crossed swords on your frame's left edge while you fight; gone when the fight ends.",
+                },
+                {
+                    key = "combatPop",
+                    label = "Pop when combat starts",
+                    control = "toggle",
+                    disabled = combatSignOff,
+                    description = "Once, with a ring spreading out. Off: it fades in. Never with Reduce motion on (General › Motion).",
+                },
+            },
+        },
+        {
             title = "Behaviour",
             rows = {
                 {
@@ -730,6 +760,7 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
     combo: ComboPips? = nil
     petMood: PetMood? = nil
     restedSign: RestedSign? = nil
+    combatBadge: CombatBadge? = nil
     previewView: UnitFramesPreview? = nil
     inCombat: boolean = false
     -- frames whose meta is the level (the setting turns it off)
@@ -832,6 +863,22 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             look, still = can and (self:RestedLook(true) or "rest") or nil, true
         end
         sign:SetLook(look, { still = still, fade = fade })
+    end
+
+    -- The combat sign (design "Player frame · Combat indicator", A on the
+    -- left): on while you fight; in edit mode wherever it could show, without
+    -- the pop, so you see where it sits. `entering`: combat just began, so it
+    -- pops (Pop when combat starts); false: combat just ended, so it fades.
+    function UpdateCombatBadge(entering: boolean?)
+        local badge = self.combatBadge
+        if not badge then
+            return
+        end
+        local on = self:Get("combatBadge") and (self.inCombat or SuuUI.EditMode.IsActive())
+        badge:SetActive(on and true or false, {
+            pop = entering == true and self:Get("combatPop"),
+            fade = entering == false,
+        })
     end
 
     -- Your frame's tooltip: the rested lines after the unit's, while the sign shows.
@@ -1017,6 +1064,7 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         self.combo = ComboPips.new(frames.target)
         self.petMood = PetMood.new(frames.pet)
         self.restedSign = UI.RestedSign(frames.player)
+        self.combatBadge = UI.CombatBadge(frames.player)
         return frames
     end
 
@@ -1158,10 +1206,12 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
             self.inCombat = true
             self:UpdateRested(fast)
+            self:UpdateCombatBadge(true)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self.inCombat = false
             self:UpdateRested(base)
+            self:UpdateCombatBadge(false)
         end)
         for _, e in ipairs({
             "PLAYER_UPDATE_RESTING",
@@ -1176,6 +1226,7 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         end
         self:On("SUUUI_EDITMODE_CHANGED", function()
             self:UpdateRested()
+            self:UpdateCombatBadge()
         end)
         self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
             if namespace == "ui" and key == "reducedMotion" then
@@ -1188,6 +1239,12 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             self:DrawPreview()
         end)
         self:UpdateRested()
+
+        -- the combat sign (the rested sign's events set inCombat first)
+        self:WatchAll({ "combatBadge", "combatPop" }, function()
+            self:UpdateCombatBadge()
+        end)
+        self:UpdateCombatBadge()
     end
 
     override function OnDisable()
@@ -1204,6 +1261,10 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             local sign = self.restedSign
             if sign then
                 sign:SetLook(nil)
+            end
+            local badge = self.combatBadge
+            if badge then
+                badge:SetActive(false)
             end
             frames.player.onTooltip = nil
             for _, f in pairs(self.allFrames) do
