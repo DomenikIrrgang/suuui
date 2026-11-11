@@ -388,6 +388,14 @@ An addon's `CreateListing` is blocked, and stubbing `C_LFGList.HasActiveEntryInf
 
 Code that reads the cursor over a hovered frame (`GetNormalizedCursorPosition`, the world map's coordinates) needs `mock.setCursorPosition` too; `IsMouseOver` follows the hover alone (see V13). (units-windows)
 
+<a id="r24"></a>
+
+### R24. No group loot rolls
+
+*Status: open (the roll tray, Units/LootRolls).*
+
+The engine has no group loot: nothing starts a roll (`START_LOOT_ROLL`), `GetLootRollItemInfo` answers nothing, `GetLootRollItemLink` nil and `GetLootRollTimeLeft` 0, `RollOnLoot` and `ConfirmLootRoll` do nothing, and no roll sends `CONFIRM_LOOT_ROLL`, `CANCEL_LOOT_ROLL`, `LOOT_ROLLS_COMPLETE`, the others' choices and numbers as `CHAT_MSG_LOOT` lines, the winner, or the loot history (`C_LootHistory`, `LOOT_HISTORY_UPDATE_DROP`). The tests stub the roll API (a stubbed `GetLootRollItemInfo` runs Blizzard's roll frame and its Bind on Pickup popup tainted) and fire the events and lines by hand. Wanted: a `mock` call that starts a roll for the group (the item, its time, Need/Greed allowed and why not), group members choosing and rolling (the game's lines, in its order), the winner, a roll cancelled, and the Bind on Pickup question from `RollOnLoot`.
+
 ## Compiler and checker issues
 
 <a id="k1"></a>

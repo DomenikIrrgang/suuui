@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### New
+
+- **Loot roll tray**: group loot rolls now show in their own tray, high up in the middle of the screen, instead of the notifications (move it in edit mode). If you had switched off "Rolls in the notification stack", the tray starts switched off too (turn the Loot rolls module on to use it). Each roll is a row with the item, the seconds left (with a bar along the row; both amber under 10), Need, Greed or Pass with how many chose each, and under it who chose what and who is still choosing (hover the row for every name in a big raid). A choice you can't take shows the game's reason. Bind on Pickup items ask in their row. Pass on all and Greed on all (it asks once) answer the rolls you haven't, each roll's result (who won what) shows for 5 seconds once it's decided, and the tray folds into a one-line tab. Settings › Loot › Loot rolls; /suu lootroll shows test rolls.
+- For plugin authors (API 0.32): `SuuUI.UI.LootRollTray`, the roll tray as a component, and a settings migration's second argument, `profile`, to move a setting to another module.
+
 ### Changed
 
 - World map and collections: Questie's latest Forever data (quest givers, dungeon entrances, town services, rares, treasure chests, and where mounts, toys and appearances come from).

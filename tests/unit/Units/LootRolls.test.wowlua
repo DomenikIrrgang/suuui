@@ -1,0 +1,718 @@
+-- Units/LootRolls: group loot rolls in the roll tray. A roll arriving (a row
+-- with the item, the bind, the seconds, Need / Greed / Pass), choosing, an
+-- unavailable Need with its reason, Bind on Pickup asked in the row (the
+-- game's popup hosted: its own OK answers), the others' choices from the
+-- loot lines (counts, who always under the row), the timer and its urgency, several
+-- rolls in order, Pass on all and Greed on all (asked once), the results
+-- (each kept 5 s after its roll), folding into the tab, cancelled and timed-out rolls,
+-- the game saying rolls are over, the test rolls, a reload mid-roll, and no
+-- notification for a roll any more.
+-- The engine has no group loot (no START_LOOT_ROLL of its own, an empty
+-- GetLootRollItemInfo, RollOnLoot doing nothing): the roll API is stubbed
+-- and its events fired by hand.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import * as registry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+import unregisterCommands from "/Core/Init"
+import expectNoErrors from "../../helpers"
+import tokenOf from "../UI/PrimitivesHelpers"
+
+import M from "/Units/LootRolls"
+import type LootRollTray, LootRollRow, RollOption from "/UI/LootRollTray"
+
+local ITEM_LINK = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
+local OTHER_LINK = "|cff0070dd|Hitem:5199::::::::|h[Ember Pants]|h|r"
+
+type RollOptions = {
+    name?: string,
+    link?: string,
+    quality?: number,
+    bop?: boolean,
+    need?: boolean,
+    reason?: number,
+    left?: number,
+}
+-- the rolls the game knows, by ID (default: Dusk Mantle)
+local known: { [number]: RollOptions } = {}
+local left: { [number]: number } = {}
+
+local function fakeRolls()
+    mock.stub(_G, "GetLootRollItemInfo", function(id: number): ...unknown
+        local o = known[id] or {}
+        return 135033,
+            o.name or "Dusk Mantle",
+            1,
+            o.quality or 2,
+            o.bop or false,
+            o.need ~= false,
+            true,
+            false,
+            o.reason or 0,
+            0,
+            0
+    end)
+    mock.stub(_G, "GetLootRollItemLink", function(id: number): string
+        local o = known[id]
+        return o and o.link or ITEM_LINK
+    end)
+    -- (Blizzard's own roll frame asks too, every frame: always a number)
+    mock.stub(_G, "GetLootRollTimeLeft", function(id: number): unknown
+        return left[id] or 30000
+    end)
+end
+
+local rolled: { [number]: number }[] = {}
+local notes: string[] = {}
+
+@beforeEach
+local function start()
+    known, left, rolled, notes = {}, {}, {}, {}
+    -- (the mouse away from the tray: the last test's click left it there)
+    mock.setCursorPosition(1, 1)
+    fakeRolls()
+    mock.stub(_G, "RollOnLoot", function(id: number, kind: number)
+        rolled[#rolled + 1] = { id, kind }
+    end)
+    -- (no roll notification any more: counted)
+    local notify = SuuUI.Notify
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown }): string?
+        notes[#notes + 1] = tostring(def.id)
+        return notify(def)
+    end)
+end
+
+@afterEach
+local function cleanup()
+    for id in pairs(M.rolls) do
+        M:EndRoll(id)
+    end
+    M:ClearResults()
+    M.folded = false
+    M.asking = false
+    local tray = M.tray
+    if tray then
+        tray:SetFolded(false)
+    end
+    M:Reset("unfold")
+    M:Reset("results")
+    mock.advanceTime(40)
+    expectNoErrors()
+end
+
+local function tray(): LootRollTray
+    return assert(M.tray)
+end
+
+local function row(id: number): LootRollRow
+    return (assert(tray():RowFor(id), "no row for roll " .. id))
+end
+
+local function option(id: number, key: string): RollOption
+    return (assert(row(id).choices:Option(key), "no " .. key .. " on roll " .. id))
+end
+
+local function roll(id: number, opts: RollOptions?, time: number?)
+    known[id] = opts or {}
+    mock.fireEvent("START_LOOT_ROLL", id, time or 60000, 0)
+end
+
+local function line(fmt: string, ...: string | number): string
+    return (fmt:format(...))
+end
+
+local function me(): string
+    return assert((SuuUI.FullName("player") :: string):match("^([^%-]+)"))
+end
+
+-- (first: the first loot line builds the patterns)
+@test("the formats as patterns: positional arguments, a percent sign, the history link gone")
+local function formats()
+    roll(7)
+    local real = LOOT_ROLL_PASSED_AUTO_FEMALE
+    -- a made-up format (of a line the other tests don't use), its arguments
+    -- the other way round
+    rawset(_G, "LOOT_ROLL_PASSED_AUTO_FEMALE", "|HlootHistory:%d|h[Loot]|h: %3$s (100%%) passed by %2$s")
+    M:OnLootLine("|HlootHistory:4|h[Loot]|h: " .. ITEM_LINK .. " (100%) passed by Tamsin")
+    rawset(_G, "LOOT_ROLL_PASSED_AUTO_FEMALE", real)
+    expect(assert(M.rolls[7]).votes.pass).toEqual({ "Tamsin" })
+end
+
+@test("a roll arriving: the tray opens with its row, the item, the bind, the seconds and Need, Greed, Pass")
+local function arriving()
+    expect(tray()).never.toBeShown()
+    left[7] = 45000
+    roll(7, { bop = true })
+    expect(tray()).toBeShown()
+    local r = row(7)
+    expect(r.name:GetText()).toBe("Dusk Mantle")
+    expect(tokenOf(r.name)).toBe("quality-uncommon")
+    expect((r.sub:GetText() :: string):find(ITEM_BIND_ON_PICKUP, 1, true) ~= nil).toBe(true)
+    expect(r.lock).toBeShown()
+    expect(r.time:GetText()).toBe("45")
+    local labels: string[] = {}
+    for _, o in ipairs(r.choices.options) do
+        if o:IsShown() then
+            labels[#labels + 1] = o.label:GetText() :: string
+        end
+    end
+    -- (WoW Forever has no Disenchant)
+    expect(labels).toEqual({ "Need", "Greed", "Pass" })
+    local place = M:Place()
+    expect(tray().meta:GetText()).toBe("1 open" .. (place and (" · " .. place) or ""))
+    -- a roll the client hides: nothing
+    M:StartRoll(mock.secret(9), nil)
+    expect(M.rolls[9]).toBe(nil)
+end
+
+@test("choosing rolls on it, presses the choice in arcane and dims the rest")
+local function choosing()
+    roll(7)
+    roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 }) -- (one left to answer: the rows stay whole)
+    mock.click(option(7, "greed"))
+    expect(rolled).toEqual({ { 7, LOOT_ROLL_TYPE_GREED or 2 } })
+    expect(option(7, "greed").chosen).toBe(true)
+    expect(tokenOf(option(7, "greed").label)).toBe("arcane")
+    expect(tokenOf(option(7, "need").label)).toBe("ink-faint")
+    mock.click(option(7, "need")) -- chosen already
+    expect(#rolled).toBe(1)
+end
+
+@test("an unavailable Need: a lock, dimmed, the game's reason under the row and on hover; it can't be chosen")
+local function unavailable()
+    roll(7, { need = false, reason = 1 })
+    local need = option(7, "need")
+    expect(need.lock).toBeShown()
+    expect(need.badge).never.toBeShown()
+    expect(tokenOf(need.label)).toBe("ink-faint")
+    local r = row(7)
+    expect(r.extra).toBeShown()
+    expect(r.extra:GetText()).toBe("Need: " .. LOOT_ROLL_INELIGIBLE_REASON1)
+    mock.click(need)
+    expect(#rolled).toBe(0)
+    mock.click(option(7, "greed"))
+    expect(#rolled).toBe(1)
+end
+
+@test("Bind on Pickup: asked in the roll's row, the game's popup out of sight with its OK over the row's")
+local function bindOnPickup()
+    roll(7, { bop = true })
+    -- the game asks from inside RollOnLoot
+    mock.stub(_G, "RollOnLoot", function(id: number, kind: number)
+        rolled[#rolled + 1] = { id, kind }
+        mock.fireEvent("CONFIRM_LOOT_ROLL", id, kind, "")
+    end)
+    local confirmed = mock.stub(_G, "ConfirmLootRoll", function(_: number, _: number) end)
+    mock.click(option(7, "need"))
+    mock.advanceTime(0.01)
+    local r = row(7)
+    expect(r.confirmBox).toBeShown()
+    expect(r.confirmText:GetText()).toBe("Dusk Mantle binds to you when you win it.")
+    expect(r.yes.label:GetText()).toBe("Roll Need")
+    -- the popup: see-through, off screen, its buttons over the row's
+    local h = assert(M.host, "the popup isn't hosted")
+    expect(h.dialog:GetAlpha()).toBe(0)
+    local ok = assert(h.yes)
+    expect((select(2, ok:GetPoint(1)))).toBe(r.yes)
+    -- folded: its buttons back in it (never see-through over something
+    -- else); open again: over the row again
+    mock.click(tray().fold)
+    expect(h.yes).toBe(nil)
+    expect((select(2, ok:GetPoint(1))) ~= r.yes).toBe(true)
+    mock.click(tray().tabOpen)
+    expect(h.yes).toBe(ok)
+    expect((select(2, ok:GetPoint(1)))).toBe(r.yes)
+    -- not a notification card too
+    local n = SuuUI.GetModule("notifications") :: unknown :: { hosts: { [Frame]: { which: string } } }
+    for _, host in pairs(n.hosts) do
+        expect(host.which).never.toBe("CONFIRM_LOOT_ROLL")
+    end
+    -- its own OK answers: the game confirms, the question goes, Need stays
+    mock.click(ok)
+    mock.advanceTime(0.01)
+    expect(confirmed).toHaveBeenCalledWith(7, LOOT_ROLL_TYPE_NEED or 1)
+    expect(M.host).toBe(nil)
+    expect(h.dialog).never.toBeShown()
+    expect(h.dialog:GetAlpha()).toBe(1)
+    expect(row(7).confirmBox).never.toBeShown()
+    expect(option(7, "need").chosen).toBe(true)
+    -- Cancel: the choice taken back, the roll open again
+    roll(8, { bop = true })
+    mock.click(option(8, "greed"))
+    mock.advanceTime(0.01)
+    local cancel = assert(assert(M.host).no)
+    mock.click(cancel)
+    mock.advanceTime(0.01)
+    expect(row(8).confirmBox).never.toBeShown()
+    expect(assert(M.rolls[8]).choice).toBe(nil)
+    expect(confirmed).toHaveBeenCalledTimes(1)
+end
+
+@test("Bind on Pickup on a row the popup isn't for: the row's own buttons answer")
+local function bindOnPickupElsewhere()
+    roll(7, { bop = true })
+    local confirmed = mock.stub(_G, "ConfirmLootRoll", function(_: number, _: number) end)
+    -- (the game asked; its popup isn't there: shown for another roll, or not at all)
+    M.rolls[7].choice = "need"
+    M:ConfirmAsked(7, LOOT_ROLL_TYPE_NEED or 1)
+    mock.advanceTime(0.01)
+    expect(M.host).toBe(nil)
+    mock.click(row(7).yes)
+    expect(confirmed).toHaveBeenCalledWith(7, LOOT_ROLL_TYPE_NEED or 1)
+    expect(row(7).confirmBox).never.toBeShown()
+    -- Cancel takes it back
+    roll(8, { bop = true })
+    M.rolls[8].choice = "greed"
+    M:ConfirmAsked(8, LOOT_ROLL_TYPE_GREED or 2)
+    mock.click(row(8).no)
+    expect(assert(M.rolls[8]).choice).toBe(nil)
+    expect(confirmed).toHaveBeenCalledTimes(1)
+    -- a question about a roll the tray doesn't have: nothing
+    M:ConfirmAsked(99, 1)
+end
+
+@test("the others' choices: counted from the loot lines, changed, yours; hovering a row lists who chose what")
+local function others()
+    roll(7)
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    M:OnLootLine(line(LOOT_ROLL_GREED, 12, "Ashford", ITEM_LINK))
+    expect(option(7, "need").badge.label:GetText()).toBe("1")
+    expect(option(7, "greed").badge.label:GetText()).toBe("1")
+    expect(option(7, "pass").badge.label:GetText()).toBe("0")
+    expect(tokenOf(option(7, "pass").badge.label)).toBe("ink-faint")
+    M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", ITEM_LINK)) -- changed their mind
+    expect(option(7, "greed").badge.label:GetText()).toBe("0")
+    expect(option(7, "pass").badge.label:GetText()).toBe("1")
+    -- who chose what: always under the row, every name on hovering it
+    local r = row(7)
+    expect(r.whoLine).toBeShown()
+    local who = r.whoLine:GetText() :: string
+    expect(who:find("Need", 1, true) ~= nil).toBe(true)
+    expect(who:find("Tamsin", 1, true) ~= nil).toBe(true)
+    expect(who:find("Ashford", 1, true) ~= nil).toBe(true)
+    expect(who:find("Greed", 1, true)).toBeNil() -- (nobody: no group)
+    local tip = assert(assert(tray().data.rolls[1]).whoTip)
+    expect((assert(tip.description)):find("Pass · 1|r\nAshford", 1, true) ~= nil).toBe(true)
+    -- your own line presses your choice
+    M:OnLootLine(line(LOOT_ROLL_GREED_SELF, 12, ITEM_LINK))
+    expect(assert(M.rolls[7]).choice).toBe("greed")
+    expect(row(7).chipLabel:GetText()).toBe("Greed") -- (every roll answered: the row shrinks to it)
+    expect(assert(M.rolls[7]).votes.greed[1]).toBe(me())
+    -- a line without the history link (an older client's), and lines about nothing
+    roll(8)
+    M:OnLootLine("Tamsin has selected Need for: " .. ITEM_LINK)
+    M:OnLootLine("something else entirely")
+    M:OnLootLine(mock.secret("hidden"))
+end
+
+@test("who's still choosing: your group, in class colours, on hover and once you've answered")
+local function stillChoosing()
+    for _, name in ipairs({ "Tamsin", "Ashford" }) do
+        local u = mock.spawnUnit({ name = name, player = true, class = "MAGE", level = 60, reaction = "friendly" })
+        C_PartyInfo.InviteUnit(name)
+        mock.advanceTime(1)
+        u:joinGroup()
+    end
+    roll(7)
+    roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    local who = row(7).whoLine:GetText() :: string
+    expect(who:find("Choosing", 1, true) ~= nil).toBe(true)
+    expect(who:find("Ashford", 1, true) ~= nil).toBe(true)
+    -- answered: the line under the name counts who's still choosing
+    mock.click(option(7, "pass"))
+    expect(row(7).compact).toBe(false)
+    expect((row(7).sub:GetText() :: string):find("1 choosing", 1, true) ~= nil).toBe(true)
+    -- every roll answered: the rows shrink, the head says who it waits on
+    mock.click(option(8, "pass"))
+    expect(row(7).compact).toBe(true)
+    expect(tray().meta:GetText()).toBe("waiting on 2 players")
+    M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Tamsin", OTHER_LINK))
+    M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", OTHER_LINK))
+    expect(tray().meta:GetText()).toBe("waiting on 1 player")
+    -- (one line: who chose what in place of the bind)
+    expect((row(7).sub:GetText() :: string):find("Choosing", 1, true) ~= nil).toBe(true)
+    expect((row(7).sub:GetText() :: string):find("Need", 1, true) ~= nil).toBe(true)
+    expect(row(7).whoLine).never.toBeShown()
+    expect(row(7).chipLabel:GetText()).toBe("Pass")
+    expect(tray().passAll:IsEnabled()).toBe(false)
+end
+
+@test("the timer: the seconds and a bar draining; amber under 10 s")
+local function timer()
+    left[7] = 30000
+    roll(7, nil, 60000)
+    local r = row(7)
+    expect(r.time:GetText()).toBe("30")
+    expect(tokenOf(r.time)).toBe("ink")
+    -- (the bar: the row's whole width, half of it left)
+    expect(math.floor(r.fill:GetWidth() + 0.5)).toBe(math.floor(r:GetWidth() / 2 + 0.5))
+    left[7] = 9000
+    mock.advanceFrames(3, 100)
+    expect(r.time:GetText()).toBe("9")
+    expect(tokenOf(r.time)).toBe("amber")
+    expect(tokenOf(r.fill)).toBe("amber")
+end
+
+@test("several rolls: one row each, in the order the game started them; more than six scroll")
+local function several()
+    roll(9)
+    roll(4, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    roll(7)
+    local data = tray().data.rolls
+    expect({ data[1].id, data[2].id, data[3].id }).toEqual({ 9, 4, 7 })
+    expect((tray().meta:GetText() :: string):find("^3 open") ~= nil).toBe(true)
+    -- a vote goes to the oldest open roll for that item
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    expect(#assert(M.rolls[9]).votes.need).toBe(1)
+    expect(#assert(M.rolls[7]).votes.need).toBe(0)
+    for id = 20, 24 do
+        roll(id)
+    end
+    expect(tray():RowFor(23)).toBe(nil) -- the seventh and eighth wait below
+    tray():Scroll(-2)
+    expect(tray():RowFor(24) ~= nil).toBe(true)
+    expect(tray():RowFor(9)).toBe(nil)
+end
+
+@test("Pass on all answers the rolls you haven't; Greed on all asks once, then greeds them")
+local function onAll()
+    roll(7)
+    roll(8, { need = false, reason = 1 })
+    roll(9, { bop = true })
+    mock.click(option(7, "need"))
+    mock.click(tray().passAll)
+    expect(rolled).toEqual({
+        { 7, LOOT_ROLL_TYPE_NEED or 1 },
+        { 8, LOOT_ROLL_TYPE_PASS or 0 },
+        { 9, LOOT_ROLL_TYPE_PASS or 0 },
+    })
+    -- Greed on all: asks in place of the foot, naming what binds
+    roll(10)
+    roll(11, { bop = true })
+    rolled = {}
+    mock.click(tray().greedAll)
+    expect(#rolled).toBe(0)
+    expect(tray().ask).toBeShown()
+    expect(tray().foot).never.toBeShown()
+    expect(tray().askText:GetText()).toBe("Greed on the 2 rolls you haven't answered?")
+    expect((tray().askNote:GetText() :: string):find("binds when picked up", 1, true) ~= nil).toBe(true)
+    expect(tray().askYes.label:GetText()).toBe("Greed on 2")
+    -- Cancel: nothing
+    mock.click(tray().askNo)
+    expect(tray().ask).never.toBeShown()
+    expect(#rolled).toBe(0)
+    mock.click(tray().greedAll)
+    mock.click(tray().askYes)
+    expect(rolled).toEqual({ { 10, LOOT_ROLL_TYPE_GREED or 2 }, { 11, LOOT_ROLL_TYPE_GREED or 2 } })
+    expect(tray().ask).never.toBeShown()
+    -- nothing left to answer: Greed on all doesn't ask
+    mock.click(tray().greedAll)
+    expect(M.asking).toBe(false)
+end
+
+@test("the results: you won, someone else won (your roll), everyone passed; each gone 5 s after its roll, on its own")
+local function results()
+    roll(7)
+    roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    roll(9)
+    mock.click(option(7, "greed"))
+    M:OnLootLine(line(LOOT_ROLL_ROLLED_GREED, 12, 77, ITEM_LINK, me()))
+    M:OnLootLine(line(LOOT_ROLL_YOU_WON, 12, ITEM_LINK))
+    expect(M.rolls[7]).toBe(nil)
+    local first = assert(tray().resultRows[1])
+    expect((first.label:GetText() :: string):find("^You won ") ~= nil).toBe(true)
+    expect(first.right:GetText()).toBe("Greed 77")
+    expect(first.badge).toBeShown()
+    -- someone else: their roll and yours
+    mock.click(option(8, "need"))
+    M:OnLootLine(line(LOOT_ROLL_ROLLED_NEED, 12, 91, OTHER_LINK, "Tamsin"))
+    M:OnLootLine(line(LOOT_ROLL_ROLLED_NEED, 12, 42, OTHER_LINK, me()))
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", OTHER_LINK))
+    local second = assert(tray().resultRows[2])
+    expect((second.label:GetText() :: string):find("Tamsin.* won ") ~= nil).toBe(true)
+    expect(second.right:GetText()).toBe("Need 91 · you 42")
+    expect(second.badge).never.toBeShown()
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", OTHER_LINK)) -- told once
+    expect(#M.results).toBe(2)
+    -- everyone passed (the game's chat event)
+    mock.click(option(9, "pass"))
+    mock.fireEvent("CHAT_MSG_LOOT", line(
+        LOOT_ROLL_ALL_PASSED,
+        12,
+        ITEM_LINK
+    ), "", "", "", "", "", 0, 0, "", 0, 1, "", 0, false, false, false, false, {
+        userID = 0,
+        globalName = "",
+        lastOnlineGUID = "",
+        lastOnlineName = "",
+        hasAttachment = false,
+        hasPoll = false,
+        hasEmbed = false,
+        hasSticker = false,
+        hasEmoji = false,
+        hasError = false,
+        hasForwardedMessage = false,
+        forwardedMessage = "",
+        fromDiscord = false,
+    })
+    local third = assert(tray().resultRows[3])
+    expect((third.label:GetText() :: string):find("^Everyone passed on ") ~= nil).toBe(true)
+    -- none open: the results stay, with a close button
+    expect(tray()).toBeShown()
+    expect(tray().meta:GetText()).toBe("none open")
+    -- each goes 5 s after its roll was decided, on its own: not waiting for
+    -- the others, in combat too (asked)
+    -- (the tray's tick runs on frames: ten a second)
+    mock.player:enterCombat()
+    mock.advanceFrames(45, 100)
+    expect(#M.results).toBe(3)
+    mock.advanceFrames(10, 100)
+    expect(#M.results).toBe(0)
+    expect(tray()).never.toBeShown()
+    mock.player:leaveCombat()
+    -- one decided while another is still open: it goes, the open one stays
+    roll(10)
+    roll(11, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(#M.results).toBe(1)
+    mock.advanceFrames(30, 100)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", OTHER_LINK))
+    mock.advanceFrames(25, 100)
+    expect(#M.results).toBe(1)
+    expect(assert(M.results[1]).roll.name).toBe("Ember Pants")
+    mock.advanceFrames(30, 100)
+    expect(#M.results).toBe(0)
+    expect(tray()).never.toBeShown()
+end
+
+@test("closing the results; Keep the results off: none")
+local function closeResults()
+    roll(7)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(tray()).toBeShown()
+    mock.click(tray().fold) -- (a cross while none is open)
+    expect(tray()).never.toBeShown()
+    M:Set("results", false)
+    roll(8)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(tray()).never.toBeShown()
+end
+
+@test("folding: a one-line tab with how many are open, the soonest and its seconds; a new roll opens it")
+local function folding()
+    left[7], left[8] = 40000, 30000
+    roll(7)
+    roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    mock.click(tray().fold)
+    expect(tray().panel).never.toBeShown()
+    expect(tray().tab).toBeShown()
+    expect(tray().tabNext:GetText()).toBe("2 open · next Ember Pants")
+    expect(tray().tabTime:GetText()).toBe("30")
+    expect(tokenOf(tray().tabTime)).toBe("ink")
+    left[8] = 6000
+    mock.advanceFrames(3, 100)
+    expect(tray().tabTime:GetText()).toBe("6")
+    expect(tokenOf(tray().tabTime)).toBe("amber")
+    -- answered: the tab counts what's left
+    M:Choose(assert(M.rolls[8]), "pass")
+    expect((tray().tabNext:GetText() :: string):find("^1 open · ") ~= nil).toBe(true)
+    -- a new roll opens the tray
+    roll(9)
+    expect(tray().panel).toBeShown()
+    -- (the setting off: it stays folded)
+    M:Set("unfold", false)
+    mock.click(tray().fold)
+    roll(10)
+    expect(tray().tab).toBeShown()
+    mock.click(tray().tabOpen)
+    expect(tray().panel).toBeShown()
+end
+
+@test("cancelled and timed out: an unanswered roll goes; an answered one stays until it's decided or its time is up")
+local function cancelled()
+    roll(7)
+    mock.fireEvent("CANCEL_LOOT_ROLL", 7)
+    expect(M.rolls[7]).toBe(nil)
+    expect(tray()).never.toBeShown()
+    -- answered: the game's cancel (from inside RollOnLoot) keeps it
+    mock.stub(_G, "RollOnLoot", function(id: number, _: number)
+        mock.fireEvent("CANCEL_LOOT_ROLL", id)
+    end)
+    roll(8, nil, 10000)
+    mock.click(option(8, "greed"))
+    expect(M.rolls[8] ~= nil).toBe(true)
+    expect(assert(M.rolls[8]).choice).toBe("greed")
+    -- no word at all: gone a moment after its time, not before
+    mock.advanceTime(14)
+    expect(M.rolls[8] ~= nil).toBe(true)
+    mock.advanceTime(1.5)
+    expect(M.rolls[8]).toBe(nil)
+    -- the game's time left stuck for a roll that's over: SuuUI's own clock ends it
+    left[9] = 8000
+    roll(9, nil, 10000)
+    mock.advanceTime(15.5)
+    expect(M.rolls[9]).toBe(nil)
+    -- every roll cancelled at once
+    roll(10)
+    mock.fireEvent("CANCEL_ALL_LOOT_ROLLS")
+    expect(M.rolls[10]).toBe(nil)
+end
+
+@test("the game says rolls are over: every roll of a loot done; one item's drop decided in the loot history")
+local function gameSaysOver()
+    known[21], known[22], known[23] = {}, {}, {}
+    mock.fireEvent("START_LOOT_ROLL", 21, 60000, 7)
+    mock.fireEvent("START_LOOT_ROLL", 22, 60000, 7)
+    mock.fireEvent("START_LOOT_ROLL", 23, 60000, 8)
+    mock.fireEvent("LOOT_ROLLS_COMPLETE", 7)
+    expect(M.rolls[21]).toBe(nil)
+    expect(M.rolls[22]).toBe(nil)
+    expect(M.rolls[23] ~= nil).toBe(true)
+    local drop: { [string]: unknown } = { itemHyperlink = ITEM_LINK, allPassed = false }
+    mock.fake("C_LootHistory.GetSortedInfoForDrop", function(): unknown
+        return drop
+    end)
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 1, 5)
+    expect(M.rolls[23] ~= nil).toBe(true)
+    drop.winner = { playerName = "Tamsin" }
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 1, 5)
+    expect(M.rolls[23]).toBe(nil)
+    expect((assert(tray().resultRows[1]).label:GetText() :: string):find("Tamsin.* won ") ~= nil).toBe(true)
+end
+
+@test("the item's tooltip: the game's while open, the link's after; shift-click links it")
+local function itemTips()
+    roll(7)
+    local rollTip = mock.stub(GameTooltip, "SetLootRollItem", function(_: unknown, _: number) end)
+    mock.hover(row(7).slot)
+    expect(rollTip).toHaveBeenCalledWith(GameTooltip, 7)
+    mock.hover(nil)
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    local linked = mock.stub(_G, "HandleModifiedItemClick", function(_: string): boolean
+        return true
+    end)
+    mock.click(row(7).slot)
+    expect(linked).toHaveBeenCalledWith(ITEM_LINK)
+    local link = mock.stub(GameTooltip, "SetHyperlink", function(_: unknown, _: string) end)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    mock.hover(assert(tray().resultRows[1]).slot)
+    expect(link).toHaveBeenCalledWith(GameTooltip, "item:4704::::::::")
+    mock.hover(nil)
+end
+
+@test("/suu lootroll: three test rolls that fill in and end with results; raid: forty players choosing")
+local function testRolls()
+    mock.slash("/suu lootroll")
+    local open = M:Open()
+    expect(#open).toBe(3)
+    local helm, cutlass, pants = open[1], open[2], open[3]
+    expect(helm.bop).toBe(true)
+    expect(cutlass.can.need).toBe(false)
+    expect(row(cutlass.id).extra).toBeShown()
+    -- Bind on Pickup asks in the test too, answered by the row's buttons
+    mock.click(option(helm.id, "need"))
+    expect(row(helm.id).confirmBox).toBeShown()
+    mock.click(row(helm.id).yes)
+    expect(option(helm.id, "need").badge.label:GetText()).toBe("2")
+    mock.advanceTime(8.1)
+    expect(option(helm.id, "greed").badge.label:GetText()).toBe("3")
+    -- the pants run out first: amber, then a result
+    expect(tokenOf(row(pants.id).time)).toBe("amber")
+    mock.advanceTime(6)
+    expect(M.rolls[pants.id]).toBe(nil)
+    expect(#M.results).toBe(1)
+    mock.advanceTime(30)
+    expect(#M:Open()).toBe(0)
+    expect(#M.results).toBe(3)
+    expect((assert(tray().resultRows[3]).label:GetText() :: string):find("^You won ") ~= nil).toBe(true)
+    mock.slash("/suu lootroll raid")
+    local raid = M:Open()[1]
+    mock.advanceTime(10)
+    expect(#raid.votes.need + #raid.votes.greed + #raid.votes.pass > 5).toBe(true)
+    -- forty players: still one line, a name or none a choice and the rest
+    -- counted; every name in the hover's tooltip
+    mock.advanceTime(13) -- (most have chosen; the roll runs 30 s)
+    local d = assert(tray().data.rolls[1])
+    local who = assert(d.who)
+    local plain = who:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    print("raid line: " .. plain)
+    expect(#plain <= 84).toBe(true)
+    expect(plain:find("+%d+") ~= nil).toBe(true)
+    expect(row(raid.id).whoLine:GetNumLines()).toBe(1)
+    local tip = assert(assert(d.whoTip).description)
+    local named = 0
+    for _, name in ipairs(assert(raid.roster)) do
+        if tip:find(name, 1, true) then
+            named = named + 1
+        end
+    end
+    expect(named).toBe(39)
+    -- ended before its votes all came: they stop
+    M:EndRoll(raid.id)
+    mock.advanceTime(25)
+end
+
+@test("no notification for a roll any more: not when it starts, nor its result")
+local function noNotifications()
+    roll(7)
+    mock.click(option(7, "greed"))
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(notes).toEqual({})
+end
+
+@test("set up again after a reload: the rolls still running come back")
+local function reloaded()
+    left[11], left[12] = 20000, 30000
+    known[11], known[12] = {}, {}
+    mock.stub(_G, "GetActiveLootRollIDs", function(): unknown
+        return { 11, 12 }
+    end)
+    local function again()
+        registry.unregister(M)
+        editMode.unregister(M)
+        unregisterCommands(M)
+        M:OnEnable()
+    end
+    again()
+    expect(row(11).time:GetText()).toBe("20")
+    expect(row(12) ~= nil).toBe(true)
+    M:OnDisable()
+    expect(tray()).never.toBeShown()
+    again()
+end
+
+@test("Blizzard's roll frames stay out of sight")
+local function blizzardAway()
+    local f = assert(frames.find("GroupLootContainer"))
+    expect(f:GetAlpha()).toBe(0)
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
+end
+
+@test("the settings: on the Loot page; the tray in edit mode, at first high in the middle of the screen")
+local function settingsAndMover()
+    local s = registry.get("lootrolls") :: registry.Section
+    expect(s.merge).toBe("loot")
+    local found = false
+    for _, m in ipairs(editMode.movers()) do
+        if m.label == "Loot rolls" then
+            found = true
+        end
+    end
+    expect(found).toBe(true)
+    expect(M:Get("position")).toEqual({ point = "TOP", x = 0, y = -80 })
+    -- placed there: horizontally centred, its top in the screen's upper part
+    roll(7)
+    local t = tray()
+    local root = SuuUI.Root
+    expect(math.floor((t:GetLeft() + t:GetRight()) / 2 + 0.5)).toBe(math.floor(root:GetWidth() / 2 + 0.5))
+    expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(80)
+end

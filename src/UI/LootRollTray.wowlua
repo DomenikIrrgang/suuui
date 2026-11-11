@@ -1,0 +1,1163 @@
+-- UI/LootRollTray.wowlua
+-- The loot roll tray (design board "Loot roll · C · Roll tray"): one docked
+-- glass panel for every open group roll. A row per roll: the item's slot,
+-- its name in its quality colour over the bind (a lock for Bind on Pickup),
+-- the seconds left (and a thin bar along the row's foot, its whole width,
+-- draining from the right; amber under 10 s), and your choice as a
+-- segmented control, Need / Greed / Pass, each with how many chose it.
+-- Under it, always, who chose what ("Need Brannoc · Choosing Kaelith"; the
+-- full lists on hovering the row); a choice you can't take is dimmed
+-- with the game's reason (a lock, and its line under the row). A roll that
+-- asks for a confirmation (Bind on Pickup) asks in its row. The foot has
+-- "Pass on all" and "Greed on all" (which asks once, in place of the
+-- foot); once every roll is answered the rows shrink to one line: your
+-- choice and who chose what. Results under the rows keep who won what. The tray
+-- folds into a one-line tab: how many are open, the soonest, its seconds.
+--
+--   local tray = lootRollTray(parent, { name })
+--   tray:SetData({ rolls, results, meta, answered, ask })
+--   tray:SetRemaining({ [id] = seconds })  -- the times and bars, no layout
+--   tray:SetFolded(folded)
+--   tray.onChoose(id, key), tray.onConfirm(id, yes), tray.onPassAll(),
+--   tray.onGreedAll(), tray.onAsk(yes), tray.onFold(folded), tray.onClose(),
+--   tray.onItemEnter(id, owner), tray.onItemLeave(), tray.onItemClick(id, button),
+--   tray.onResultEnter(index, owner)
+--   tray:RowFor(id)  -- a roll's row (its confirm buttons: row.yes, row.no)
+
+import tokens as T, Color from "/Core/Tokens"
+import mixins from "/Core/Init"
+import * as draw from "/UI/Draw"
+import text, Text from "/UI/Text"
+import button, stateBadge, SuuButton, StateBadge from "/UI/Controls"
+import itemSlot, ItemSlot from "/UI/Inventory"
+import Panel from "/UI/Panel"
+import showTooltip, hideTooltip, TooltipData from "/UI/Tooltip"
+
+local S = T.space
+local COLORS = T.color :: { [string]: Color }
+
+local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+
+-- The panel: its width, the side padding, the item slot, the columns' gap.
+export const TRAY_W = 560
+local PAD = S["space-5"]
+local SLOT = T.size["slot"]
+local COL_GAP = 10
+local TIME_W = 48
+local ROW_PAD = S["space-4"]
+-- rows shown before the rest scroll
+export const TRAY_ROWS = 6
+local BTN_H = 26
+local SMALL = 28
+-- the folded tab
+export const TAB_W = 400
+local TAB_H = 40
+-- seconds left under which a time turns amber
+export const SOON = 10
+
+-- One choice of a roll: its key ("need", "greed", "pass"), label, how many
+-- chose it, whether you can't (and the game's reason), who (hover).
+export type RollChoiceData = {
+    key: string,
+    label: string,
+    count?: number,
+    unavailable?: boolean,
+    reason?: string,
+    tooltip?: TooltipData,
+}
+
+-- A roll's row. `sub` is the line under the name ("Binds when picked up ·
+-- Sword"); `locked` puts a lock before it. `choice` is your choice
+-- (pressed); `confirm` asks in the row (Bind on Pickup). `who` is the line
+-- of who chose what ("Need Brannoc · Pass Ysolde · Choosing Kaelith"),
+-- always shown: under the row, or in place of `sub` once every roll is
+-- answered; `whoTip` the full lists, on hovering the row. `note` an
+-- unavailable choice's reason, under the row.
+export type RollRowData = {
+    id: number,
+    icon?: number | string,
+    name: string,
+    quality?: string,
+    sub?: string,
+    locked?: boolean,
+    duration: number,
+    remaining: number,
+    choices: RollChoiceData[],
+    choice?: string,
+    confirm?: { text: string, accept: string },
+    who?: string,
+    whoTip?: TooltipData,
+    note?: string,
+}
+
+-- A result: the item, the line ("You won …", colour codes in it), the
+-- right-hand caption ("Greed 77"), a Won badge, dimmed (not yours).
+export type RollResultData = {
+    icon?: number | string,
+    quality?: string,
+    text: string,
+    right?: string,
+    won?: boolean,
+    dim?: boolean,
+}
+
+-- What the tray shows. `answered`: every open roll has your choice (the
+-- rows shrink); `ask`: Greed on all asking, in place of the foot.
+export type RollTrayData = {
+    rolls: RollRowData[],
+    results: RollResultData[],
+    meta?: string,
+    answered?: boolean,
+    ask?: { text: string, note?: string, confirm: string },
+}
+
+local function qualityToken(q: string?): string
+    return (q and q ~= "common" and COLORS["quality-" .. q] and ("quality-" .. q)) or "ink"
+end
+
+-- A name in its quality colour, as a colour code.
+local function qualityName(name: string, q: string?): string
+    local c = COLORS[qualityToken(q)]
+    return c and ("|cff" .. c.hex .. name .. "|r") or name
+end
+
+local function glyph(parent: Frame, name: string, size: number, color: string, layer: DrawLayer?): Texture
+    local t = parent:CreateTexture(nil, layer or "OVERLAY")
+    t:SetTexture(GLYPHS .. name .. ".tga")
+    t:SetSize(size, size)
+    draw.paint(t, color)
+    return t
+end
+
+-- A 22px square button with a glyph (the fold chevron, the close cross):
+-- ink-muted, a gilt-line edge and ink on hover.
+class GlyphButton extends Button
+    readonly edge: draw.Border
+    readonly icon: Texture
+
+    constructor(parent: Frame, name: string)
+        super(nil, parent)
+        self:SetSize(22, 22)
+        self.edge = draw.border(self, "gilt-line")
+        self.edge:SetShown(false)
+        self.icon = glyph(self, name, 14, "ink-muted", "ARTWORK")
+        self.icon:SetPoint("CENTER")
+        self:SetScript("OnEnter", function()
+            self.edge:SetShown(true)
+            draw.paint(self.icon, "ink")
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetShown(false)
+            draw.paint(self.icon, "ink-muted")
+        end)
+    end
+
+    function SetGlyph(name: string)
+        self.icon:SetTexture(GLYPHS .. name .. ".tga")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The choices: a segmented control with a count badge after each label
+--------------------------------------------------------------------------------
+
+-- How many chose an option: micro on surface-sunk (ink-faint at 0), arcane
+-- with on-signal on the option that's yours.
+class CountBadge extends Frame
+    readonly bg: Texture
+    readonly label: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(14, 14)
+        self.bg = draw.fill(self, "surface-sunk", "ARTWORK")
+        self.bg:SetAllPoints()
+        self.label = text(self, "micro", "ink")
+        self.label:SetPoint("CENTER", 0, 0)
+    end
+
+    function Set(n: number, on: boolean)
+        self.label:SetValue(tostring(n))
+        self.label:SetColor(on and "on-signal" or (n > 0 and "ink" or "ink-faint"))
+        draw.paintFill(self.bg, on and "arcane" or "surface-sunk")
+        self:SetWidth(math.max(14, math.ceil(self.label:GetUnboundedStringWidth()) + 6))
+    end
+end
+
+-- One option: label (a lock before it when you can't), the count; on: an
+-- arcane-soft fill with an arcane edge, the label arcane.
+export class RollOption extends Button
+    readonly on: Texture
+    readonly edge: draw.Border
+    readonly lock: Texture
+    readonly label: Text
+    readonly badge: CountBadge
+    data: RollChoiceData? = nil
+    chosen: boolean = false
+    blocked: boolean = false
+
+    constructor(parent: Frame, row: LootRollRow)
+        super(nil, parent)
+        self:SetHeight(24)
+        self.on = draw.fill(self, "arcane-soft", "BACKGROUND")
+        self.on:SetAllPoints()
+        self.edge = draw.border(self, "arcane")
+        self.lock = glyph(self, "lock", 11, "ink-faint")
+        self.label = text(self, "label", "ink-muted")
+        self.badge = CountBadge.new(self)
+        self:SetMotionScriptsWhileDisabled(true)
+        self:SetScript("OnClick", function()
+            local d = self.data
+            if d and not self.blocked and not d.unavailable and not self.chosen then
+                row:Choose(d.key)
+            end
+        end)
+        self:SetScript("OnEnter", function()
+            row:Hover(true)
+            local d = self.data
+            if not d then
+                return
+            end
+            if not self.chosen and not self.blocked and not d.unavailable then
+                self.label:SetColor("ink")
+            end
+            if d.unavailable and d.reason then
+                showTooltip(self, { title = d.label, description = d.reason })
+            elseif d.tooltip then
+                showTooltip(self, d.tooltip)
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self:Paint()
+            hideTooltip()
+            row:Hover(false)
+        end)
+    end
+
+    function Paint()
+        local d = self.data
+        local off = self.blocked or (d ~= nil and d.unavailable == true)
+        self.label:SetColor(self.chosen and "arcane" or (off and "ink-faint" or "ink-muted"))
+        self.on:SetShown(self.chosen)
+        self.edge:SetShown(self.chosen)
+    end
+
+    -- The option's data; chosen: yours; blocked: another is yours. Returns its width.
+    function SetData(d: RollChoiceData, chosen: boolean, blocked: boolean): number
+        self.data, self.chosen, self.blocked = d, chosen, blocked
+        local x = 10
+        self.lock:ClearAllPoints()
+        local locked = d.unavailable == true and not chosen
+        self.lock:SetShown(locked)
+        if locked then
+            self.lock:SetPoint("LEFT", x, 0)
+            x = x + 11 + 5
+        end
+        self.label:SetValue(d.label)
+        self.label:ClearAllPoints()
+        self.label:SetPoint("LEFT", x, 0)
+        x = x + math.ceil(self.label:GetUnboundedStringWidth())
+        local count = d.count
+        if count and not locked then
+            self.badge:Set(count, chosen)
+            self.badge:ClearAllPoints()
+            self.badge:SetPoint("LEFT", x + 5, 0)
+            self.badge:Show()
+            x = x + 5 + self.badge:GetWidth()
+        else
+            self.badge:Hide()
+        end
+        local w = x + 10
+        self:SetWidth(w)
+        self:Paint()
+        return w
+    end
+end
+
+-- The segmented control: surface-sunk in a gilt-line edge, the options 2px
+-- apart and 2px in.
+export class RollChoices extends Frame
+    readonly options: RollOption[] = {}
+
+    constructor(parent: Frame, readonly row: LootRollRow)
+        super(nil, parent)
+        local fill = draw.fill(self, "surface-sunk", "BACKGROUND")
+        fill:SetAllPoints()
+        draw.border(self, "gilt-line")
+        self:SetHeight(30)
+    end
+
+    -- Returns its width.
+    function SetChoices(list: RollChoiceData[], choice: string?): number
+        local x = 3
+        for i, c in ipairs(list) do
+            local o = self.options[i]
+            if not o then
+                o = RollOption.new(self, self.row)
+                self.options[i] = o
+            end
+            local w = o:SetData(c, choice == c.key, choice ~= nil and choice ~= c.key)
+            o:ClearAllPoints()
+            o:SetPoint("TOPLEFT", x, -3)
+            o:Show()
+            x = x + w + 2
+        end
+        for i = #list + 1, #self.options do
+            self.options[i]:Hide()
+        end
+        local w = x + 1
+        self:SetWidth(w)
+        return w
+    end
+
+    function Option(key: string): RollOption?
+        for _, o in ipairs(self.options) do
+            local d = o.data
+            if o:IsShown() and d and d.key == key then
+                return o
+            end
+        end
+        return nil
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A roll's row
+--------------------------------------------------------------------------------
+
+export class LootRollRow extends Button
+    readonly hoverBg: Texture
+    readonly line: Texture
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly lock: Texture
+    readonly sub: Text
+    readonly time: Text
+    readonly track: Texture
+    readonly fill: Texture
+    readonly choices: RollChoices
+    -- who chose what, always (one line; the full lists on hover)
+    readonly whoLine: Text
+    -- an unavailable choice's reason, with a lock
+    readonly extra: Text
+    readonly extraLock: Texture
+    readonly confirmBox: Frame
+    readonly confirmText: Text
+    readonly yes: SuuButton
+    readonly no: SuuButton
+    readonly you: Text
+    readonly chip: Frame
+    readonly chipLabel: Text
+    data: RollRowData? = nil
+    hovered: boolean = false
+    compact: boolean = false
+    -- the choices' width (the column the tray lines them up in)
+    choicesW: number = 0
+    -- its width (the time bar along its foot spans it)
+    rowW: number = TRAY_W
+
+    constructor(readonly tray: LootRollTray)
+        super(nil, tray.panel)
+        self:SetHeight(SLOT + ROW_PAD * 2)
+        self.hoverBg = draw.fill(self, "surface-raised", "BACKGROUND")
+        draw.paintFill(self.hoverBg, "surface-raised", 0.85)
+        self.hoverBg:SetAllPoints()
+        self.hoverBg:Hide()
+        self.line = draw.fill(self, "gilt-faint", "BORDER")
+        self.line:SetPoint("TOPLEFT")
+        self.line:SetPoint("TOPRIGHT")
+        self.line:SetHeight(1)
+
+        local slot = itemSlot(self)
+        self.slot = slot
+        slot:SetPoint("TOPLEFT", PAD, -ROW_PAD)
+        slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        slot:SetScript("OnEnter", function()
+            self:Hover(true)
+            local d, enter = self.data, tray.onItemEnter
+            if d and enter then
+                enter(d.id, slot)
+            end
+        end)
+        slot:SetScript("OnLeave", function()
+            if tray.onItemLeave then
+                tray.onItemLeave()
+            end
+            self:Hover(false)
+        end)
+        slot:SetScript("OnClick", function(_, mouse: string)
+            local d, click = self.data, tray.onItemClick
+            if d and click then
+                click(d.id, mouse)
+            end
+        end)
+
+        self.name = text(self, "label", "ink")
+        self.name:SetJustifyH("LEFT")
+        self.lock = glyph(self, "lock", 11, "ink-muted")
+        self.sub = text(self, "caption", "ink-muted")
+        self.sub:SetJustifyH("LEFT")
+
+        self.time = text(self, "numeric", "ink")
+        self.time:SetJustifyH("RIGHT")
+        -- the time left as a thin bar along the row's foot, the whole
+        -- width, draining from the right
+        self.track = draw.fill(self, "track", "ARTWORK")
+        self.track:SetHeight(2)
+        self.track:SetPoint("BOTTOMLEFT", 0, 0)
+        self.track:SetPoint("BOTTOMRIGHT", 0, 0)
+        self.fill = draw.fill(self, "ink-muted", "OVERLAY")
+        self.fill:SetHeight(2)
+        self.fill:SetPoint("BOTTOMLEFT", 0, 0)
+
+        self.choices = RollChoices.new(self, self)
+
+        self.whoLine = text(self, "caption", "ink-muted")
+        self.whoLine:SetJustifyH("LEFT")
+        self.extra = text(self, "caption", "ink-muted")
+        self.extra:SetJustifyH("LEFT")
+        self.extraLock = glyph(self, "lock", 11, "ink-muted")
+
+        -- the in-row question (Bind on Pickup): sunk, a gilt-line edge
+        local box = CreateFrame("Frame", nil, self)
+        self.confirmBox = box
+        box:SetHeight(BTN_H + S["space-4"] * 2)
+        local boxFill = draw.fill(box, "surface-sunk", "BACKGROUND")
+        boxFill:SetAllPoints()
+        draw.border(box, "gilt-line")
+        self.no = button(box, {
+            text = "Cancel",
+            onClick = function()
+                local d = self.data
+                if d and tray.onConfirm then
+                    tray.onConfirm(d.id, false)
+                end
+            end,
+        })
+        self.yes = button(box, {
+            text = "Roll Need",
+            variant = "primary",
+            onClick = function()
+                local d = self.data
+                if d and tray.onConfirm then
+                    tray.onConfirm(d.id, true)
+                end
+            end,
+        })
+        self.yes:SetHeight(BTN_H)
+        self.no:SetHeight(BTN_H)
+        self.yes:SetPoint("RIGHT", -10, 0)
+        self.no:SetPoint("RIGHT", self.yes, "LEFT", -S["space-4"], 0)
+        self.confirmText = text(box, "caption", "ink")
+        self.confirmText:SetJustifyH("LEFT")
+        self.confirmText:SetPoint("LEFT", 10, 0)
+        self.confirmText:SetPoint("RIGHT", self.no, "LEFT", -S["space-4"], 0)
+        box:Hide()
+
+        -- answered (every roll): "You" and your choice, pressed
+        self.you = text(self, "caption", "ink-muted")
+        self.you:SetValue("You")
+        local chip = CreateFrame("Frame", nil, self)
+        self.chip = chip
+        chip:SetHeight(24)
+        local chipFill = draw.fill(chip, "arcane-soft", "BACKGROUND")
+        chipFill:SetAllPoints()
+        draw.border(chip, "arcane")
+        self.chipLabel = text(chip, "label", "arcane")
+        self.chipLabel:SetPoint("CENTER", 0, 0)
+
+        self:SetScript("OnEnter", function()
+            self:Hover(true)
+            -- every name, where the line has only room for some
+            local d = self.data
+            local tip = d and d.whoTip
+            if tip then
+                showTooltip(self, tip)
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            hideTooltip()
+            self:Hover(false)
+        end)
+    end
+
+    function Choose(key: string)
+        local d = self.data
+        if d and self.tray.onChoose then
+            self.tray.onChoose(d.id, key)
+        end
+    end
+
+    -- Hovered while the mouse is over the row or any part of it (a part's
+    -- leave can come while the mouse is still on the row).
+    function Hover(on: boolean)
+        local now = on or self:IsMouseOver()
+        if now == self.hovered then
+            return
+        end
+        self.hovered = now
+        self.hoverBg:SetShown(now)
+    end
+
+    function SetData(d: RollRowData, compact: boolean)
+        self.data, self.compact = d, compact
+        self.slot.skin:SetItem({ icon = d.icon, quality = d.quality or "common" })
+        self.name:SetValue(d.name)
+        self.name:SetColor(qualityToken(d.quality))
+        -- answered, every roll: who chose what in place of the bind
+        local subText = compact and (d.who or d.sub) or d.sub
+        self.sub:SetValue(subText or "")
+        local locked = d.locked == true and not compact
+        self.lock:SetShown(locked)
+        self.time:SetShown(not compact)
+        self.track:SetShown(not compact)
+        self.fill:SetShown(not compact)
+        self.choices:SetShown(not compact)
+        self.you:SetShown(compact)
+        self.chip:SetShown(compact)
+        if compact then
+            local label = ""
+            for _, c in ipairs(d.choices) do
+                if c.key == d.choice then
+                    label = c.label
+                end
+            end
+            self.chipLabel:SetValue(label)
+            self.chip:SetWidth(math.ceil(self.chipLabel:GetUnboundedStringWidth()) + S["space-5"] * 2)
+            self.choicesW = 0
+        else
+            self.choicesW = self.choices:SetChoices(d.choices, d.choice)
+        end
+        local confirm = d.confirm
+        self.confirmBox:SetShown(confirm ~= nil and not compact)
+        if confirm then
+            self.confirmText:SetValue(confirm.text)
+            self.yes:SetLabel(confirm.accept)
+        end
+        self:SetRemaining(d.remaining)
+    end
+
+    function SetRemaining(seconds: number)
+        local d = self.data
+        if not d then
+            return
+        end
+        d.remaining = seconds
+        local s = math.max(0, math.ceil(seconds))
+        local soon = seconds < SOON
+        self.time:SetValue(tostring(s))
+        self.time:SetColor(soon and "amber" or "ink")
+        local frac = d.duration > 0 and math.max(0, math.min(1, seconds / d.duration)) or 0
+        self.fill:SetWidth(math.max(0.01, self.rowW * frac))
+        draw.paintFill(self.fill, soon and "amber" or "ink-muted")
+    end
+
+    -- Places its parts for the column of choices `choicesW` wide; returns its height.
+    function Place(width: number, choicesW: number): number
+        local top = -ROW_PAD
+        local textLeft = PAD + SLOT + COL_GAP
+        local right = PAD
+        if self.compact then
+            self.chip:ClearAllPoints()
+            self.chip:SetPoint("TOPRIGHT", -right, top - (SLOT - 24) / 2)
+            self.you:ClearAllPoints()
+            self.you:SetPoint("RIGHT", self.chip, "LEFT", -S["space-3"], 0)
+            right = right + self.chip:GetWidth() + S["space-3"] + math.ceil(self.you:GetUnboundedStringWidth())
+        else
+            self.choices:ClearAllPoints()
+            self.choices:SetPoint("TOPRIGHT", -right, top - (SLOT - 30) / 2)
+            right = right + choicesW + COL_GAP
+            -- the seconds, right-aligned in their column, on the name's line
+            self.time:ClearAllPoints()
+            self.time:SetPoint("TOPRIGHT", -right, top - (SLOT - T.type.numeric.lineHeight) / 2)
+            right = right + TIME_W + COL_GAP
+        end
+        local nameH = T.type.label.lineHeight
+        local subH = T.type.caption.lineHeight
+        local textTop = top - (SLOT - nameH - subH) / 2
+        self.name:ClearAllPoints()
+        self.name:SetPoint("TOPLEFT", textLeft, textTop)
+        self.name:SetPoint("TOPRIGHT", -right, textTop)
+        local subLeft = textLeft
+        if self.lock:IsShown() then
+            self.lock:ClearAllPoints()
+            self.lock:SetPoint("TOPLEFT", textLeft, textTop - nameH - 1)
+            subLeft = textLeft + 11 + 4
+        end
+        self.sub:ClearAllPoints()
+        self.sub:SetPoint("TOPLEFT", subLeft, textTop - nameH)
+        self.sub:SetPoint("TOPRIGHT", -right, textTop - nameH)
+        local h = ROW_PAD + SLOT
+        local d = self.data
+        -- who chose what (not once every roll is answered: then it's the
+        -- line under the name)
+        local who = d and not self.compact and d.who or nil
+        self.whoLine:SetShown(who ~= nil)
+        if who then
+            local y = -(h + S["space-3"])
+            self.whoLine:SetValue(who)
+            self.whoLine:ClearAllPoints()
+            self.whoLine:SetPoint("TOPLEFT", textLeft, y)
+            self.whoLine:SetPoint("TOPRIGHT", -PAD, y)
+            h = h + S["space-3"] + T.type.caption.lineHeight
+        end
+        -- an unavailable choice's reason
+        local note = d and not self.compact and d.note or nil
+        self.extra:SetShown(note ~= nil)
+        self.extraLock:SetShown(note ~= nil)
+        if note then
+            local y = -(h + S["space-2"])
+            self.extraLock:ClearAllPoints()
+            self.extraLock:SetPoint("TOPLEFT", textLeft, y - 1)
+            self.extra:SetValue(note)
+            self.extra:ClearAllPoints()
+            self.extra:SetPoint("TOPLEFT", textLeft + 11 + 4, y)
+            self.extra:SetPoint("TOPRIGHT", -PAD, y)
+            h = h + S["space-2"] + T.type.caption.lineHeight
+        end
+        if self.confirmBox:IsShown() then
+            local y = -(h + S["space-4"])
+            self.confirmBox:ClearAllPoints()
+            self.confirmBox:SetPoint("TOPLEFT", textLeft, y)
+            self.confirmBox:SetPoint("TOPRIGHT", -PAD, y)
+            h = h + S["space-4"] + self.confirmBox:GetHeight()
+        end
+        h = h + ROW_PAD
+        self.rowW = width
+        self:SetSize(width, h)
+        if d then
+            self:SetRemaining(d.remaining)
+        end
+        return h
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A result
+--------------------------------------------------------------------------------
+
+export class RollResultRow extends Button
+    readonly slot: ItemSlot
+    readonly label: Text
+    readonly right: Text
+    readonly badge: StateBadge
+    index: number = 0
+
+    constructor(tray: LootRollTray)
+        super(nil, tray.panel)
+        self:SetHeight(SMALL + 8)
+        local slot = itemSlot(self, SMALL)
+        self.slot = slot
+        slot:SetPoint("LEFT", 0, 0)
+        slot:SetScript("OnEnter", function()
+            if tray.onResultEnter then
+                tray.onResultEnter(self.index, slot)
+            end
+        end)
+        slot:SetScript("OnLeave", function()
+            if tray.onItemLeave then
+                tray.onItemLeave()
+            end
+        end)
+        self.badge = stateBadge(self, "info", "Won")
+        self.badge:SetPoint("RIGHT", 0, 0)
+        self.right = text(self, "caption", "ink-muted")
+        self.right:SetJustifyH("RIGHT")
+        self.label = text(self, "label", "ink")
+        self.label:SetJustifyH("LEFT")
+        self.label:SetPoint("LEFT", slot, "RIGHT", COL_GAP, 0)
+        self.label:SetPoint("RIGHT", self.right, "LEFT", -S["space-4"], 0)
+    end
+
+    function SetData(r: RollResultData, index: number)
+        self.index = index
+        self.slot.skin:SetItem({ icon = r.icon, quality = r.quality or "common", dim = r.dim })
+        self.label:SetValue(r.text)
+        self.right:SetValue(r.right or "")
+        self.badge:SetShown(r.won == true)
+        self.right:ClearAllPoints()
+        if r.won then
+            self.right:SetPoint("RIGHT", self.badge, "LEFT", -S["space-4"], 0)
+        else
+            self.right:SetPoint("RIGHT", 0, 0)
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The tray
+--------------------------------------------------------------------------------
+
+export class LootRollTray extends Frame
+    readonly panel: Panel
+    readonly title: Text
+    readonly meta: Text
+    readonly fold: GlyphButton
+    readonly divider: Frame
+    readonly jewel: Texture
+    readonly cols: Text[]
+    readonly foot: Frame
+    readonly passAll: SuuButton
+    readonly greedAll: SuuButton
+    readonly footNote: Text
+    readonly ask: Frame
+    readonly askText: Text
+    readonly askNote: Text
+    readonly askNo: SuuButton
+    readonly askYes: SuuButton
+    readonly resultsHead: Frame
+    readonly resultsTitle: Text
+    readonly resultsMeta: Text
+    readonly resultsLine: Frame
+    readonly tab: Panel
+    readonly tabNext: Text
+    readonly tabTime: Text
+    readonly tabOpen: GlyphButton
+    readonly drain: Texture
+    rows: LootRollRow[] = {}
+    resultRows: RollResultRow[] = {}
+    data: RollTrayData = { rolls = {}, results = {} }
+    folded: boolean = false
+    -- the first roll shown (more than TRAY_ROWS scroll)
+    first: number = 1
+    onChoose: ((id: number, key: string) -> ())? = nil
+    onConfirm: ((id: number, yes: boolean) -> ())? = nil
+    onPassAll: (() -> ())? = nil
+    onGreedAll: (() -> ())? = nil
+    onAsk: ((yes: boolean) -> ())? = nil
+    onFold: ((folded: boolean) -> ())? = nil
+    onClose: (() -> ())? = nil
+    onItemEnter: ((id: number, owner: Frame) -> ())? = nil
+    onItemLeave: (() -> ())? = nil
+    onItemClick: ((id: number, button: string) -> ())? = nil
+    onResultEnter: ((index: number, owner: Frame) -> ())? = nil
+    -- laid out again (rows moved, scrolled, folded)
+    onLayout: (() -> ())? = nil
+
+    constructor(parent: Frame, opts: { name?: string }?)
+        super(opts and opts.name, parent)
+        self:SetSize(TRAY_W, 120)
+        local panel = Panel.new(self, { ornament = true, width = TRAY_W, height = 120 })
+        self.panel = panel
+        panel:SetPoint("BOTTOMRIGHT")
+        panel.body:Hide()
+        panel:EnableMouseWheel(true)
+        panel:SetScript("OnMouseWheel", function(_, delta: number)
+            self:Scroll(delta)
+        end)
+
+        -- the head: "Loot rolls", the meta, the fold (or close) button
+        self.title = text(panel, "header", "gilt-text")
+        self.title:SetValue("Loot rolls")
+        self.title:SetPoint("TOPLEFT", PAD, -PAD)
+        self.fold = GlyphButton.new(panel, "chevronDown")
+        self.fold:SetPoint("RIGHT", panel, "TOPRIGHT", -PAD + 4, -(PAD + T.type.header.lineHeight / 2))
+        self.fold:SetScript("OnClick", function()
+            if #self.data.rolls == 0 then
+                if self.onClose then
+                    self.onClose()
+                end
+                return
+            end
+            self:SetFolded(true)
+            if self.onFold then
+                self.onFold(true)
+            end
+        end)
+        self.meta = text(panel, "caption", "ink-muted")
+        self.meta:SetPoint("RIGHT", self.fold, "LEFT", -S["space-2"], 0)
+        local headH = PAD + T.type.header.lineHeight + S["space-4"]
+        self.divider = draw.hairline(panel, "gilt-line", "both")
+        self.divider:SetPoint("TOPLEFT", PAD, -headH)
+        self.divider:SetPoint("TOPRIGHT", -PAD, -headH)
+        self.jewel = draw.diamond(panel, 6, "gilt")
+        self.jewel:SetPoint("CENTER", self.divider, "CENTER", 0, 0)
+
+        -- the columns' captions: Item, Left, Your choice
+        self.cols = {}
+        for i, label in ipairs({ "Item", "Left", "Your choice" }) do
+            local t = text(panel, "caption", "ink-muted")
+            t:SetValue(label)
+            self.cols[i] = t
+        end
+
+        -- the foot: Pass on all, Greed on all, a note
+        local foot = CreateFrame("Frame", nil, panel)
+        self.foot = foot
+        foot:SetHeight(BTN_H + 20)
+        local footLine = draw.fill(foot, "gilt-faint", "BORDER")
+        footLine:SetPoint("TOPLEFT")
+        footLine:SetPoint("TOPRIGHT")
+        footLine:SetHeight(1)
+        self.passAll = button(foot, {
+            text = "Pass on all",
+            onClick = function()
+                if self.onPassAll then
+                    self.onPassAll()
+                end
+            end,
+        })
+        self.greedAll = button(foot, {
+            text = "Greed on all",
+            onClick = function()
+                if self.onGreedAll then
+                    self.onGreedAll()
+                end
+            end,
+        })
+        self.passAll:SetHeight(BTN_H)
+        self.greedAll:SetHeight(BTN_H)
+        self.passAll:SetPoint("LEFT", PAD, 0)
+        self.greedAll:SetPoint("LEFT", self.passAll, "RIGHT", S["space-3"], 0)
+        self.footNote = text(foot, "caption", "ink-muted")
+        self.footNote:SetValue("Only rolls you haven't answered")
+        self.footNote:SetPoint("RIGHT", -PAD, 0)
+
+        -- Greed on all, asking once (in place of the foot)
+        local ask = CreateFrame("Frame", nil, panel)
+        self.ask = ask
+        local askLine = draw.fill(ask, "gilt-faint", "BORDER")
+        askLine:SetPoint("TOPLEFT")
+        askLine:SetPoint("TOPRIGHT")
+        askLine:SetHeight(1)
+        self.askText = text(ask, "body", "ink")
+        self.askText:SetJustifyH("LEFT")
+        self.askText:SetPoint("TOPLEFT", PAD, -10)
+        self.askText:SetPoint("TOPRIGHT", -PAD, -10)
+        self.askNote = text(ask, "caption", "ink-muted")
+        self.askNote:SetJustifyH("LEFT")
+        self.askNote:SetWordWrap(true)
+        self.askYes = button(ask, {
+            text = "Greed",
+            variant = "primary",
+            onClick = function()
+                if self.onAsk then
+                    self.onAsk(true)
+                end
+            end,
+        })
+        self.askNo = button(ask, {
+            text = "Cancel",
+            onClick = function()
+                if self.onAsk then
+                    self.onAsk(false)
+                end
+            end,
+        })
+        self.askYes:SetHeight(BTN_H)
+        self.askNo:SetHeight(BTN_H)
+        self.askYes:SetPoint("BOTTOMRIGHT", -PAD, PAD)
+        self.askNo:SetPoint("RIGHT", self.askYes, "LEFT", -S["space-3"], 0)
+        ask:Hide()
+
+        -- the results: a divider, "Results · this fight", a row per roll decided
+        self.resultsLine = draw.hairline(panel, "gilt-line", "both")
+        local head = CreateFrame("Frame", nil, panel)
+        self.resultsHead = head
+        head:SetHeight(T.type.header.lineHeight)
+        self.resultsTitle = text(head, "header", "gilt-text")
+        self.resultsTitle:SetValue("Results")
+        self.resultsTitle:SetPoint("LEFT")
+        self.resultsMeta = text(head, "caption", "ink-muted")
+        self.resultsMeta:SetValue("this fight")
+        self.resultsMeta:SetPoint("RIGHT")
+
+        -- the folded tab: the icon, "Loot rolls", how many and the next, its
+        -- seconds, the open button; a drain along the foot
+        local tab = Panel.new(self, { width = TAB_W, height = TAB_H })
+        self.tab = tab
+        tab:SetPoint("BOTTOMRIGHT")
+        tab.body:Hide()
+        local tabIcon = glyph(tab, "gem", 16, "ink")
+        tabIcon:SetPoint("LEFT", PAD, 0)
+        local tabTitle = text(tab, "header", "gilt-text")
+        tabTitle:SetValue("Loot rolls")
+        tabTitle:SetPoint("LEFT", tabIcon, "RIGHT", S["space-4"], 0)
+        self.tabOpen = GlyphButton.new(tab, "chevronUp")
+        self.tabOpen:SetPoint("RIGHT", -S["space-4"], 0)
+        self.tabOpen:SetScript("OnClick", function()
+            self:SetFolded(false)
+            if self.onFold then
+                self.onFold(false)
+            end
+        end)
+        self.tabTime = text(tab, "numeric", "ink")
+        self.tabTime:SetJustifyH("RIGHT")
+        self.tabTime:SetPoint("RIGHT", self.tabOpen, "LEFT", -S["space-4"], 0)
+        self.tabNext = text(tab, "caption", "ink-muted")
+        self.tabNext:SetJustifyH("LEFT")
+        self.tabNext:SetPoint("LEFT", tabTitle, "RIGHT", S["space-4"], 0)
+        self.tabNext:SetPoint("RIGHT", self.tabTime, "LEFT", -S["space-4"], 0)
+        self.drain = draw.fill(tab, "ink-muted", "OVERLAY")
+        self.drain:SetPoint("BOTTOMLEFT", 1, 1)
+        self.drain:SetHeight(2)
+        tab:Hide()
+        -- (hidden under the mouse: no leave comes)
+        self:SetScript("OnHide", function()
+            for _, row in ipairs(self.rows) do
+                row.hovered = false
+                row.hoverBg:Hide()
+            end
+        end)
+
+        self:SetData({ rolls = {}, results = {} })
+    end
+
+    function SetData(d: RollTrayData)
+        self.data = d
+        local n = #d.rolls
+        if self.first > math.max(1, n - TRAY_ROWS + 1) then
+            self.first = math.max(1, n - TRAY_ROWS + 1)
+        end
+        for i, r in ipairs(d.rolls) do
+            local row = self.rows[i]
+            if not row then
+                row = LootRollRow.new(self)
+                self.rows[i] = row
+            end
+            row:SetData(r, d.answered == true)
+        end
+        for i = n + 1, #self.rows do
+            local row = self.rows[i]
+            row.data = nil
+            row.hovered = false
+            row.hoverBg:Hide()
+            row:Hide()
+        end
+        for i, r in ipairs(d.results) do
+            local row = self.resultRows[i]
+            if not row then
+                row = RollResultRow.new(self)
+                self.resultRows[i] = row
+            end
+            row:SetData(r, i)
+        end
+        for i = #d.results + 1, #self.resultRows do
+            self.resultRows[i]:Hide()
+        end
+        self:Layout()
+    end
+
+    -- A roll's row, while it shows.
+    function RowFor(id: number): LootRollRow?
+        for _, row in ipairs(self.rows) do
+            local d = row.data
+            if d and d.id == id and row:IsShown() then
+                return row
+            end
+        end
+        return nil
+    end
+
+    function Scroll(delta: number)
+        local n = #self.data.rolls
+        if n <= TRAY_ROWS then
+            return
+        end
+        local first = math.max(1, math.min(n - TRAY_ROWS + 1, self.first - delta))
+        if first ~= self.first then
+            self.first = first
+            self:Layout()
+        end
+    end
+
+    function Layout()
+        local d = self.panel
+        local data = self.data
+        local n = #data.rolls
+        local answered = data.answered == true
+        self.meta:SetValue(data.meta or "")
+        self.fold:SetGlyph(n == 0 and "close" or "chevronDown")
+        local y = PAD + T.type.header.lineHeight + S["space-4"] + 1
+        -- the columns (not once every roll is answered, nor without rolls)
+        local choicesW = 0
+        for _, row in ipairs(self.rows) do
+            if row.data then
+                choicesW = math.max(choicesW, row.choicesW)
+            end
+        end
+        local showCols = n > 0 and not answered
+        for _, t in ipairs(self.cols) do
+            t:SetShown(showCols)
+        end
+        if showCols then
+            local colY = -(y + 10)
+            local item, left, mine = self.cols[1], self.cols[2], self.cols[3]
+            item:ClearAllPoints()
+            item:SetPoint("TOPLEFT", PAD + SLOT + COL_GAP, colY)
+            mine:ClearAllPoints()
+            mine:SetPoint("TOPRIGHT", -PAD, colY)
+            left:ClearAllPoints()
+            left:SetPoint("TOPRIGHT", -(PAD + choicesW + COL_GAP), colY)
+            y = y + 10 + T.type.caption.lineHeight + 4
+        elseif n > 0 then
+            y = y + S["space-2"]
+        end
+        -- the rows (TRAY_ROWS at most, from `first`)
+        local last = math.min(n, self.first + TRAY_ROWS - 1)
+        for i, row in ipairs(self.rows) do
+            if row.data and i >= self.first and i <= last then
+                local h = row:Place(TRAY_W, choicesW)
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", d, "TOPLEFT", 0, -y)
+                row.line:SetShown(not (i == self.first and (answered or not showCols)))
+                row:Show()
+                y = y + h
+            else
+                row:Hide()
+            end
+        end
+        -- the foot: the two buttons (stepping back once every roll is
+        -- answered), or Greed on all asking
+        local ask = data.ask
+        self.foot:SetShown(n > 0 and ask == nil)
+        self.ask:SetShown(n > 0 and ask ~= nil)
+        if n > 0 and ask then
+            self.askText:SetValue(ask.text)
+            self.askYes:SetLabel(ask.confirm)
+            local h = 10 + T.type.body.lineHeight
+            local note = ask.note
+            self.askNote:SetShown(note ~= nil)
+            if note then
+                self.askNote:SetValue(note)
+                self.askNote:ClearAllPoints()
+                self.askNote:SetPoint("TOPLEFT", PAD, -(h + S["space-4"]))
+                self.askNote:SetWidth(TRAY_W - PAD * 2)
+                h = h + S["space-4"] + math.ceil(self.askNote:GetStringHeight())
+            end
+            h = h + S["space-4"] + BTN_H + PAD
+            self.ask:ClearAllPoints()
+            self.ask:SetPoint("TOPLEFT", d, "TOPLEFT", 0, -y)
+            self.ask:SetSize(TRAY_W, h)
+            y = y + h
+        elseif n > 0 then
+            self.passAll:SetEnabledState(not answered)
+            self.greedAll:SetEnabledState(not answered)
+            self.footNote:SetShown(not answered)
+            self.foot:ClearAllPoints()
+            self.foot:SetPoint("TOPLEFT", d, "TOPLEFT", 0, -y)
+            self.foot:SetWidth(TRAY_W)
+            y = y + self.foot:GetHeight()
+        end
+        -- the results
+        local results = data.results
+        local showResults = #results > 0
+        self.resultsLine:SetShown(showResults and n > 0)
+        self.resultsHead:SetShown(showResults and n > 0)
+        if showResults then
+            if n > 0 then
+                self.resultsLine:ClearAllPoints()
+                self.resultsLine:SetPoint("TOPLEFT", PAD, -y)
+                self.resultsLine:SetPoint("TOPRIGHT", -PAD, -y)
+                y = y + 1 + 10
+                self.resultsHead:ClearAllPoints()
+                self.resultsHead:SetPoint("TOPLEFT", PAD, -y)
+                self.resultsHead:SetPoint("TOPRIGHT", -PAD, -y)
+                y = y + T.type.header.lineHeight + S["space-3"]
+            else
+                y = y + S["space-3"]
+            end
+            for i, row in ipairs(self.resultRows) do
+                if i <= #results then
+                    row:ClearAllPoints()
+                    row:SetPoint("TOPLEFT", d, "TOPLEFT", PAD, -y)
+                    row:SetPoint("TOPRIGHT", d, "TOPRIGHT", -PAD, -y)
+                    row:Show()
+                    y = y + row:GetHeight()
+                end
+            end
+            y = y + PAD - 4
+        elseif n == 0 then
+            y = y + PAD
+        end
+        d:SetHeight(y)
+        self:Fit()
+        self:PaintTab()
+        if self.onLayout then
+            self.onLayout()
+        end
+    end
+
+    -- The frame as big as what shows (the panel or the tab), from the bottom right.
+    function Fit()
+        if self.folded then
+            self:SetSize(TAB_W, TAB_H)
+        else
+            self:SetSize(TRAY_W, self.panel:GetHeight())
+        end
+    end
+
+    function SetFolded(folded: boolean)
+        self.folded = folded
+        self.panel:SetShown(not folded)
+        self.tab:SetShown(folded)
+        hideTooltip()
+        self:Fit()
+        self:PaintTab()
+        if self.onLayout then
+            self.onLayout()
+        end
+    end
+
+    -- The rolls you haven't answered, and the soonest to end (of those, else of all).
+    function Soonest(): (number, RollRowData?)
+        local open, soonest = 0, nil :: RollRowData?
+        for _, r in ipairs(self.data.rolls) do
+            if not r.choice then
+                open = open + 1
+            end
+        end
+        for _, r in ipairs(self.data.rolls) do
+            if (open == 0 or not r.choice) and (not soonest or r.remaining < soonest.remaining) then
+                soonest = r
+            end
+        end
+        return open, soonest
+    end
+
+    -- The tab: "3 open · next Blackwater Cutlass", the seconds, the drain.
+    function PaintTab()
+        local open, soonest = self:Soonest()
+        local line: string
+        if #self.data.rolls == 0 then
+            line = "none open"
+        elseif open == 0 then
+            line = "all answered · waiting"
+        elseif open == 1 and soonest then
+            line = "1 open · " .. qualityName(soonest.name, soonest.quality)
+        else
+            line = open .. " open" .. (soonest and (" · next " .. soonest.name) or "")
+        end
+        self.tabNext:SetValue(line)
+        if soonest then
+            local soon = soonest.remaining < SOON
+            self.tabTime:SetValue(tostring(math.max(0, math.ceil(soonest.remaining))))
+            self.tabTime:SetColor(soon and "amber" or "ink")
+            local frac = soonest.duration > 0 and math.max(0, math.min(1, soonest.remaining / soonest.duration)) or 0
+            self.drain:SetWidth(math.max(0.01, (TAB_W - 2) * frac))
+            draw.paintFill(self.drain, soon and "amber" or "ink-muted")
+            self.drain:Show()
+            self.tabTime:Show()
+        else
+            self.tabTime:Hide()
+            self.drain:Hide()
+        end
+    end
+
+    -- Seconds left per roll ID: the times, the bars and the tab, no layout.
+    function SetRemaining(times: { [number]: number })
+        for _, row in ipairs(self.rows) do
+            local d = row.data
+            local t = d and times[d.id]
+            if t then
+                row:SetRemaining(t)
+            end
+        end
+        self:PaintTab()
+    end
+end
+mixins.LootRollTray = LootRollTray
+
+export function lootRollTray(parent: Frame, opts: { name?: string }?): LootRollTray
+    return LootRollTray.new(parent, opts)
+end

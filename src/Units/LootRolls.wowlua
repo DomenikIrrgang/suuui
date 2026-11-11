@@ -1,0 +1,1777 @@
+-- Units/LootRolls.wowlua
+-- Group loot rolls in the roll tray (design board "Loot roll · C · Roll
+-- tray"), high in the middle of the screen and moved in edit mode. A row
+-- per open roll, in the order the game started them: the item, the
+-- seconds left (a bar along the row, amber under 10 s), Need / Greed /
+-- Pass with how many chose each, who chose what under it (every name on
+-- hovering the row), your choice pressed in arcane. A choice the game won't let you
+-- take is dimmed with its reason. WoW Forever has no Disenchant: Need, Greed
+-- and Pass only. "Pass on all" answers every roll you haven't; "Greed on
+-- all" asks once first. Results under the rows show who won what, each
+-- for 5 s once its roll is decided (or until you close them). The tray opens
+-- by itself when a roll starts, in combat too, and folds into a one-line
+-- tab. A built-in module written against the public API only.
+--
+-- Choosing is RollOnLoot (allowed to addons, in combat too). Bind on
+-- Pickup: the game asks (CONFIRM_LOOT_ROLL) and the tray asks in the roll's
+-- row. The game's own popup goes out of sight, its OK and Cancel buttons
+-- laid see-through over the row's (only points, sizes, levels and the
+-- popup's alpha change, all put back when it closes), so the answer is the
+-- popup's own click and nothing of Blizzard's runs from SuuUI's code. A
+-- row the popup isn't for (a second Bind on Pickup roll while it asks
+-- about another) answers with ConfirmLootRoll. Votes and the results come
+-- from the game's loot lines in chat and its loot history. Blizzard's roll
+-- frames keep running off screen.
+
+import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SettingsSection from "/Core/Modules"
+import type Position from "/EditMode/EditMode"
+import type LootRollTray, RollRowData, RollChoiceData, RollResultData, RollTrayData from "/UI/LootRollTray"
+import type SuuButton from "/UI/Controls"
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as item from "wowlua:item"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+
+local DEFAULTS = {
+    -- the middle of the screen, high up: its top 80 px down (a value at
+    -- its default isn't stored, so only a tray moved in edit mode keeps
+    -- its own place when this changes)
+    position = { point = "TOP", x = 0, y = -80 } :: Position,
+    unfold = true, -- a new roll opens the folded tray
+    results = true, -- who won what, each 5 s after its roll
+}
+
+local QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
+
+-- s each result stays after its roll was decided, on its own (asked
+-- 2026-11-11: "a done roll should only stay 5 seconds after it was rolled
+-- out, then disappear and not wait for other rolls")
+local RESULTS_STAY = 5
+-- results kept (the oldest go)
+local RESULTS_KEPT = 8
+-- s a roll stays past its time when the game hasn't said it's over
+local ROLL_GRACE = 5
+-- names per choice on a row's line of who chose what, at most; the
+-- characters that line has room for (caption, about 5.5 px each)
+local NAMES_SHOWN = 4
+local WHO_CHARS = 84
+local TICK = 0.1
+
+--------------------------------------------------------------------------------
+-- Rolls
+--------------------------------------------------------------------------------
+
+export type ChoiceKey = "need" | "greed" | "pass"
+type Choice = { key: ChoiceKey, label: string, type: number }
+-- (WoW Forever has no Disenchant)
+local CHOICES: Choice[] = {
+    { key = "need", label = "Need", type = LOOT_ROLL_TYPE_NEED or 1 },
+    { key = "greed", label = "Greed", type = LOOT_ROLL_TYPE_GREED or 2 },
+    { key = "pass", label = "Pass", type = LOOT_ROLL_TYPE_PASS or 0 },
+}
+local CHOICE_BY_TYPE: { [number]: Choice } = {}
+local CHOICE_BY_KEY: { [string]: Choice } = {}
+for _, c in ipairs(CHOICES) do
+    CHOICE_BY_TYPE[c.type] = c
+    CHOICE_BY_KEY[c.key] = c
+end
+
+type Votes = { need: string[], greed: string[], pass: string[] }
+-- A number someone rolled: the choice's label and the value.
+type Rolled = { label: string, value?: number }
+-- One group roll as the tray knows it (a test roll has `test`, its own
+-- roster and classes). `confirm`: the game asks for your choice's
+-- confirmation (Bind on Pickup; its roll type).
+export type Roll = {
+    id: number,
+    seq: number,
+    test?: boolean,
+    icon?: number | string,
+    name: string,
+    quality: string,
+    link?: string,
+    duration: number,
+    bop?: boolean,
+    can: { [string]: boolean },
+    reason: { [string]: string? },
+    votes: Votes,
+    rolled: { [string]: Rolled },
+    remaining: () -> number,
+    roster?: string[],
+    classes?: { [string]: string },
+    choice?: ChoiceKey,
+    confirm?: number,
+    endedAt?: number,
+    reported?: boolean,
+    -- the loot it's from (START_LOOT_ROLL's): LOOT_ROLLS_COMPLETE ends its rolls
+    lootHandle?: number,
+}
+
+-- A decided roll: who won it (nil: everyone passed).
+export type Result = { roll: Roll, winner?: string, at: number }
+
+-- The game's loot line formats as patterns: the pattern and the order of
+-- its captures.
+type Pattern = { pattern: string, order: number[] }
+-- What a loot line says: what, who, the item, the choice, the number.
+type Captures = { [number]: string }
+type LineFn = (c: Captures) -> (string, string?, string?, ChoiceKey?, number?)
+type Line = { pattern: Pattern, fn: LineFn }
+-- "%s has selected Need for: %s" → "^(.+) has selected Need for: (.+)$".
+-- `shift`: numbered arguments (%2$s) counted from one later (the loot
+-- history link, the first, taken off).
+local function pattern(fmt: unknown, shift: number?): Pattern?
+    if type(fmt) ~= "string" then
+        return nil
+    end
+    local out: string[], order: number[], auto, i = { "^" }, {}, 0, 1
+    while i <= #fmt do
+        local c = fmt:sub(i, i)
+        if c == "%" then
+            local pos, typed = fmt:match("^%%(%d)%$([sd])", i)
+            local t: string? = typed
+            if pos then
+                order[#order + 1] = (tonumber(pos) or 0) - (shift or 0)
+                out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
+                i = i + 4
+            else
+                t = fmt:match("^%%([sd])", i)
+                if t then
+                    auto = auto + 1
+                    order[#order + 1] = auto
+                    out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
+                else
+                    out[#out + 1] = "%%" -- "%%": a percent sign
+                end
+                i = i + 2
+            end
+        else
+            out[#out + 1] = c:find("[%^%$%(%)%.%[%]%*%+%-%?]") and ("%" .. c) or c
+            i = i + 1
+        end
+    end
+    out[#out + 1] = "$"
+    return { pattern = table.concat(out), order = order }
+end
+
+local function match(pat: Pattern?, text: string): Captures?
+    if not pat then
+        return nil
+    end
+    local caps = { text:match(pat.pattern) }
+    if #caps == 0 then
+        return nil
+    end
+    local out: Captures = {}
+    for i, at in ipairs(pat.order) do
+        out[at] = caps[i]
+    end
+    return out
+end
+
+-- This client's loot lines start with a link to the loot history
+-- ("|HlootHistory:%d|h[Loot]|h: %s has selected Need for: %s"): it goes
+-- from the formats and the lines, so the captures are who, the item, the
+-- number (counted from the start, the history's number came first and no
+-- vote, number or winner was ever matched).
+local HISTORY_FORMAT = "^|HlootHistory:%%[%d%$]*d|h%[.-%]|h:%s*"
+local HISTORY_LINE = "^|HlootHistory:%d+|h%[.-%]|h:%s*"
+
+local LINES: Line[]?
+local function lines(): Line[]
+    if LINES then
+        return LINES
+    end
+    -- the whole name (Forever's characters have surnames: SuuUI.FullName)
+    local me = SuuUI.FullName("player") :: string -- yours: never secret
+    me = me:match("^([^%-]+)") or me
+    local list: Line[] = {}
+    LINES = list
+    local function add(global: string, fn: LineFn)
+        local given = tbl.field(_G, global)
+        -- (without the loot history link: HISTORY_FORMAT)
+        local fmt: unknown, shift = given, 0
+        if type(given) == "string" then
+            fmt, shift = given:gsub(HISTORY_FORMAT, "")
+        end
+        local p = pattern(fmt, shift)
+        if p then
+            list[#list + 1] = { pattern = p, fn = fn }
+        end
+    end
+    -- The specific lines before the general ones: "You passed on: X",
+    -- "Everyone passed on: X" and "You won: X" fit "%s passed on: %s" and
+    -- "%s won: %s" too, with "You" or "Everyone" as a player.
+    -- the end, yours and everyone's
+    add("LOOT_ROLL_ALL_PASSED", function(c: Captures)
+        return "allPassed", nil, c[1]
+    end)
+    add("LOOT_ROLL_YOU_WON", function(c: Captures)
+        return "won", me, c[1]
+    end)
+    -- your votes: (item)
+    add("LOOT_ROLL_NEED_SELF", function(c: Captures)
+        return "vote", me, c[1], "need"
+    end)
+    add("LOOT_ROLL_GREED_SELF", function(c: Captures)
+        return "vote", me, c[1], "greed"
+    end)
+    add("LOOT_ROLL_PASSED_SELF", function(c: Captures)
+        return "vote", me, c[1], "pass"
+    end)
+    add("LOOT_ROLL_PASSED_SELF_AUTO", function(c: Captures)
+        return "vote", me, c[1], "pass"
+    end)
+    -- others' votes: (who, item)
+    add("LOOT_ROLL_NEED", function(c: Captures)
+        return "vote", c[1], c[2], "need"
+    end)
+    add("LOOT_ROLL_GREED", function(c: Captures)
+        return "vote", c[1], c[2], "greed"
+    end)
+    add("LOOT_ROLL_PASSED", function(c: Captures)
+        return "vote", c[1], c[2], "pass"
+    end)
+    add("LOOT_ROLL_PASSED_AUTO", function(c: Captures)
+        return "vote", c[1], c[2], "pass"
+    end)
+    add("LOOT_ROLL_PASSED_AUTO_FEMALE", function(c: Captures)
+        return "vote", c[1], c[2], "pass"
+    end)
+    -- the numbers: (value, item, who)
+    add("LOOT_ROLL_ROLLED_NEED", function(c: Captures)
+        return "rolled", c[3], c[2], "need", tonumber(c[1])
+    end)
+    add("LOOT_ROLL_ROLLED_GREED", function(c: Captures)
+        return "rolled", c[3], c[2], "greed", tonumber(c[1])
+    end)
+    -- someone else won
+    add("LOOT_ROLL_WON", function(c: Captures)
+        return "won", c[1], c[2]
+    end)
+    return list
+end
+
+local function itemKey(link: string?): string?
+    return link and (link:match("item:(%d+)") or link) or nil
+end
+
+-- A name without its realm ("" for none).
+local function short(name: unknown): string
+    if type(name) ~= "string" then
+        return ""
+    end
+    return name:match("^([^%-]+)") or name
+end
+
+local function me(): string
+    return short(SuuUI.FullName("player"))
+end
+
+-- A group member's class ("MAGE"), by name.
+local function classOf(name: string): string?
+    if short(name) == me() then
+        local _, class = UnitClass("player")
+        return secret.asString(class)
+    end
+    local prefix, n = IsInRaid() and "raid" or "party", GetNumGroupMembers()
+    for i = 1, n do
+        local unit = prefix .. i
+        local un = SuuUI.FullName(unit)
+        if secret.readable(un) and short(un) == short(name) then
+            local _, class = UnitClass(unit)
+            return secret.asString(class)
+        end
+    end
+    return nil
+end
+
+local COLORS: { [string]: { hex: string } } = T.color
+local function classColored(name: string, known: { [string]: string }?): string
+    local class = (known and known[short(name)]) or classOf(name)
+    local c = class and COLORS["class-" .. class:lower()]
+    return c and ("|cff" .. c.hex .. short(name) .. "|r") or short(name)
+end
+
+local function colored(token: string, s: string): string
+    local c = COLORS[token]
+    return c and ("|cff" .. c.hex .. s .. "|r") or s
+end
+
+local function qualityName(roll: Roll): string
+    return roll.quality ~= "common" and colored("quality-" .. roll.quality, roll.name) or roll.name
+end
+
+-- Everyone in your group but you, by name (the roll's own list in a test).
+local function roster(roll: Roll): string[]
+    local given = roll.roster
+    if given then
+        return given
+    end
+    local out: string[] = {}
+    if IsInRaid() then
+        for i = 1, GetNumGroupMembers() do
+            local name = SuuUI.FullName("raid" .. i)
+            if secret.readable(name) and name and not UnitIsUnit("raid" .. i, "player") then
+                out[#out + 1] = short(name)
+            end
+        end
+    else
+        for i = 1, GetNumSubgroupMembers() do
+            local name = SuuUI.FullName("party" .. i)
+            if secret.readable(name) and name then
+                out[#out + 1] = short(name)
+            end
+        end
+    end
+    return out
+end
+
+-- Who hasn't chosen yet (you aren't listed: your own row says whether you have).
+local function waitingOn(roll: Roll): string[]
+    local chose: { [string]: boolean } = {}
+    for _, c in ipairs(CHOICES) do
+        for _, name in ipairs(roll.votes[c.key]) do
+            chose[short(name)] = true
+        end
+    end
+    local out: string[] = {}
+    for _, name in ipairs(roster(roll)) do
+        if not chose[short(name)] then
+            out[#out + 1] = name
+        end
+    end
+    return out
+end
+
+-- Names in class colours, `most` at most (default all) and how many more.
+local function nameList(roll: Roll, names: string[], most: number?): string
+    local cap = most or #names
+    local shown: string[] = {}
+    for i = 1, math.min(#names, cap) do
+        shown[i] = classColored(names[i], roll.classes)
+    end
+    local s = table.concat(shown, ", ")
+    if #names > cap then
+        s = s .. (s ~= "" and " " or "") .. ("+%d"):format(#names - cap)
+    end
+    return s
+end
+
+-- One group of the line: "Need Brannoc, Ysolde +3" (the label muted).
+type WhoGroup = { label: string, names: string[] }
+
+-- Plain text's length (colour codes left out).
+local function plainLength(s: string): number
+    local plain = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return #plain
+end
+
+-- The line of who chose what, in one row's width: as many names per
+-- choice as fit (NAMES_SHOWN at most), the rest counted ("+12"). A raid
+-- of 40 comes down to one name a choice, or only the counts.
+local function whoLine(roll: Roll, groups: WhoGroup[]): string?
+    if #groups == 0 then
+        return nil
+    end
+    local line = ""
+    for most = NAMES_SHOWN, 0, -1 do
+        local parts: string[] = {}
+        for i, g in ipairs(groups) do
+            parts[i] = colored("ink-muted", g.label) .. " " .. nameList(roll, g.names, most)
+        end
+        line = table.concat(parts, colored("ink-faint", "  ·  "))
+        if plainLength(line) <= WHO_CHARS then
+            return line
+        end
+    end
+    return line
+end
+
+-- "Binds when picked up · Sword": the bind, and the weapon's kind or the slot.
+local function describe(roll: Roll): string
+    local parts: string[] = {}
+    local data = roll.link and item.get(roll.link) or nil
+    if roll.bop then
+        parts[1] = ITEM_BIND_ON_PICKUP or "Binds when picked up"
+    elseif data and data.bindType == 2 then
+        parts[1] = ITEM_BIND_ON_EQUIP or "Binds when equipped"
+    elseif data and data.bindType == 3 then
+        parts[1] = ITEM_BIND_ON_USE or "Binds when used"
+    end
+    if data then
+        local loc = data.equipLoc
+        local slot = loc and loc ~= "" and secret.asString(tbl.field(_G, loc)) or nil
+        local kind = (data.classID == 2 and data.subType) or slot or nil
+        if kind and kind ~= "" then
+            parts[#parts + 1] = kind
+        end
+    end
+    return table.concat(parts, " · ")
+end
+
+-- A made-up 40-player raid: 39 others, votes coming in over the roll.
+local RAID_NAMES: string[] = {
+    "Ysolde",
+    "Brannoc",
+    "Morrow",
+    "Kaelith",
+    "Thessaly",
+    "Veyra",
+    "Orrin",
+    "Ashka",
+    "Doran",
+    "Elspeth",
+    "Fenwick",
+    "Garra",
+    "Hollis",
+    "Isolde",
+    "Jorund",
+    "Kestra",
+    "Lunara",
+    "Maelis",
+    "Nerith",
+    "Oskar",
+    "Perrin",
+    "Quilla",
+    "Rhosyn",
+    "Sable",
+    "Torvald",
+    "Ulla",
+    "Varek",
+    "Wren",
+    "Xandra",
+    "Yorick",
+    "Zephra",
+    "Aldric",
+    "Brisa",
+    "Corin",
+    "Delphine",
+    "Eamon",
+    "Faela",
+    "Gideon",
+    "Halvard",
+}
+local RAID_CLASSES: string[] = {
+    "WARRIOR",
+    "PALADIN",
+    "HUNTER",
+    "ROGUE",
+    "PRIEST",
+    "SHAMAN",
+    "MAGE",
+    "WARLOCK",
+    "DRUID",
+}
+-- the test rolls' group
+local TEST_CLASSES: { [string]: string } = {
+    Ysolde = "PRIEST",
+    Brannoc = "WARRIOR",
+    Morrow = "ROGUE",
+    Kaelith = "MAGE",
+}
+local TEST_ROSTER: string[] = { "Ysolde", "Brannoc", "Morrow", "Kaelith" }
+
+--------------------------------------------------------------------------------
+-- Blizzard's Bind on Pickup popup, hosted in the tray
+--------------------------------------------------------------------------------
+
+type Point = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint, x: number, y: number }
+type Saved = { points: Point[], width: number, height: number, strata: FrameStrata, level: number }
+-- The popup while the tray hosts it: the roll it asks about, its OK and
+-- Cancel, how they were.
+type Host = {
+    dialog: Frame,
+    rollID: number,
+    yes?: Button,
+    no?: Button,
+    clamped: boolean,
+    alpha: number,
+    points: Point[],
+    buttons: { [Button]: Saved },
+}
+
+local function savePoints(f: Region): Point[]
+    local pts: Point[] = {}
+    for i = 1, f:GetNumPoints() do
+        local point, rel, relPoint, x, y = f:GetPoint(i)
+        pts[i] = { point = point, rel = rel, relPoint = relPoint, x = x, y = y }
+    end
+    return pts
+end
+
+local function restorePoints(f: Region, pts: Point[])
+    f:ClearAllPoints()
+    for _, p in ipairs(pts) do
+        f:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y)
+    end
+end
+
+-- The game's popup asking about a roll, while it shows.
+local function confirmDialog(): Frame?
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() and secret.asString(tbl.field(d, "which")) == "CONFIRM_LOOT_ROLL" then
+            return d
+        end
+    end
+    return nil
+end
+
+-- A popup's button by its number (the new popups' container, or by name).
+local function popupButton(dialog: Frame, i: number): Button?
+    local name = dialog:GetName()
+    return frames.asButton(tbl.field(dialog, "ButtonContainer", "Button" .. i)) or
+        (name and frames.asButton(tbl.field(_G, name .. "Button" .. i)) or nil)
+end
+
+--------------------------------------------------------------------------------
+-- Settings
+--------------------------------------------------------------------------------
+
+local SECTION: SettingsSection = {
+    id = "lootrolls",
+    label = "Loot rolls",
+    category = "General",
+    order = 23,
+    -- on the Loot page
+    merge = "loot",
+    groups = {
+        {
+            title = "Loot rolls",
+            description = "Group rolls in a tray high in the middle of the screen (move it in edit mode), in combat too: Need, Greed or Pass with how many chose each (hover a row for who), the seconds left, Pass on all and Greed on all. /suu lootroll shows test rolls.",
+            rows = {
+                {
+                    key = "unfold",
+                    label = "Open on a new roll",
+                    control = "toggle",
+                    description = "A roll that starts while the tray is folded into its tab opens the tray again.",
+                },
+                {
+                    key = "results",
+                    label = "Keep the results",
+                    control = "toggle",
+                    description = "Who won what shows under the rolls for 5 seconds after each roll is decided (the cross closes them sooner).",
+                },
+            },
+        },
+    },
+}
+
+--------------------------------------------------------------------------------
+-- The module
+--------------------------------------------------------------------------------
+
+class LootRollsModule extends Module<typeof(DEFAULTS)>
+    tray: LootRollTray? = nil
+    driver: Frame? = nil
+    -- the open rolls by ID (a test roll's is below zero); the ones just ended
+    rolls: { [number]: Roll } = {}
+    ended: Roll[] = {}
+    results: Result[] = {}
+    seq: number = 0
+    testRolls: number = 0
+    -- Greed on all asking; the tray folded into its tab
+    asking: boolean = false
+    folded: boolean = false
+    host: Host? = nil
+    -- the popup just closed: the roll it asked about and its OK
+    lastHosted: number? = nil
+    lastYes: Button? = nil
+    hooked: { [Frame]: boolean } = {}
+    rollsHooked: boolean? = nil
+    movingRolls: boolean? = nil
+    wired: boolean? = nil
+
+    constructor()
+        super({
+            id = "lootrolls",
+            name = "Loot rolls",
+            description = "Group loot rolls in a tray: Need, Greed or Pass, who chose what, and who won.",
+            api = "0.32",
+            reloadToToggle = true,
+            defaults = DEFAULTS,
+        })
+    end
+
+    --------------------------------------------------------------------------------
+    -- What the tray shows
+    --------------------------------------------------------------------------------
+
+    -- The open rolls in the order the game started them.
+    function Open(): Roll[]
+        local list: Roll[] = {}
+        for _, roll in pairs(self.rolls) do
+            list[#list + 1] = roll
+        end
+        table.sort(list, function(a: Roll, b: Roll): boolean
+            return a.seq < b.seq
+        end)
+        return list
+    end
+
+    function Unanswered(): Roll[]
+        local out: Roll[] = {}
+        for _, roll in ipairs(self:Open()) do
+            if not roll.choice then
+                out[#out + 1] = roll
+            end
+        end
+        return out
+    end
+
+    function Row(roll: Roll): RollRowData
+        local choices: RollChoiceData[] = {}
+        local note: string? = nil
+        for _, c in ipairs(CHOICES) do
+            local who = roll.votes[c.key]
+            local can = roll.can[c.key] ~= false
+            local reason = roll.reason[c.key]
+            local names: string[] = {}
+            for _, name in ipairs(who) do
+                names[#names + 1] = classColored(name, roll.classes)
+            end
+            choices[#choices + 1] = {
+                key = c.key,
+                label = c.label,
+                count = #who,
+                unavailable = not can,
+                reason = reason,
+                tooltip = #who > 0 and { title = c.label .. " · " .. #who, description = table.concat(names, ", ") } or
+                    nil,
+            }
+            if not can and reason and not note then
+                note = c.label .. ": " .. reason
+            end
+        end
+        -- who chose what, and who's still choosing: a line always shown
+        -- (as many names as fit), every name on hovering the row
+        local waiting = waitingOn(roll)
+        local groups: WhoGroup[] = {}
+        for _, c in ipairs(CHOICES) do
+            local who = roll.votes[c.key]
+            if #who > 0 then
+                groups[#groups + 1] = { label = c.label, names = who }
+            end
+        end
+        if #waiting > 0 then
+            groups[#groups + 1] = { label = "Choosing", names = waiting }
+        end
+        local full: string[] = {}
+        for i, g in ipairs(groups) do
+            full[i] = colored("ink-muted", g.label .. " · " .. #g.names) .. "\n" .. nameList(roll, g.names)
+        end
+        local sub = describe(roll)
+        if roll.choice and #waiting > 0 then
+            sub = (sub ~= "" and (sub .. " · ") or "") .. #waiting .. " choosing"
+        end
+        local confirm: { text: string, accept: string }? = nil
+        local asked = roll.confirm and CHOICE_BY_TYPE[roll.confirm]
+        if asked then
+            confirm = { text = roll.name .. " binds to you when you win it.", accept = "Roll " .. asked.label }
+        end
+        return {
+            id = roll.id,
+            icon = roll.icon,
+            name = roll.name,
+            quality = roll.quality,
+            sub = sub,
+            locked = roll.bop == true,
+            duration = roll.duration,
+            remaining = roll.remaining(),
+            choices = choices,
+            choice = roll.choice,
+            confirm = confirm,
+            who = whoLine(roll, groups),
+            whoTip = #groups > 0 and
+                { title = "Who chose what", description = table.concat(full, "\n\n"), maxWidth = 360 } or
+                nil,
+            note = note,
+        }
+    end
+
+    function ResultRow(r: Result): RollResultData
+        local roll = r.roll
+        local name = qualityName(roll)
+        local mine = roll.rolled[me()]
+        local winner = r.winner
+        if not winner then
+            return {
+                icon = roll.icon,
+                quality = roll.quality,
+                text = "Everyone passed on " .. name,
+                right = "anyone can loot it",
+                dim = true,
+            }
+        end
+        local theirs = roll.rolled[short(winner)]
+        if short(winner) == me() then
+            return {
+                icon = roll.icon,
+                quality = roll.quality,
+                text = "You won " .. name,
+                right = mine and (mine.label .. " " .. tostring(mine.value)) or nil,
+                won = true,
+            }
+        end
+        local parts: string[] = {}
+        if theirs then
+            parts[#parts + 1] = theirs.label .. " " .. tostring(theirs.value)
+        end
+        if mine then
+            parts[#parts + 1] = "you " .. tostring(mine.value)
+        elseif roll.choice == "pass" then
+            parts[#parts + 1] = "you passed"
+        end
+        return {
+            icon = roll.icon,
+            quality = roll.quality,
+            text = classColored(winner, roll.classes) .. " won " .. name,
+            right = #parts > 0 and table.concat(parts, " · ") or nil,
+            dim = true,
+        }
+    end
+
+    -- Where the rolls are: the instance's name, else the zone's.
+    function Place(): string?
+        local inside = secret.flag(IsInInstance())
+        local name = inside and secret.asString((GetInstanceInfo())) or secret.asString(GetRealZoneText())
+        return name ~= "" and name or nil
+    end
+
+    function Data(): RollTrayData
+        local open = self:Open()
+        local rows: RollRowData[] = {}
+        local answered = #open > 0
+        local waiting: { [string]: boolean } = {}
+        local nWaiting = 0
+        for i, roll in ipairs(open) do
+            rows[i] = self:Row(roll)
+            if not roll.choice or roll.confirm then
+                answered = false
+            end
+            for _, name in ipairs(waitingOn(roll)) do
+                if not waiting[name] then
+                    waiting[name] = true
+                    nWaiting = nWaiting + 1
+                end
+            end
+        end
+        local meta: string
+        if #open == 0 then
+            meta = "none open"
+        elseif answered then
+            meta = nWaiting > 0 and (("waiting on %d player%s"):format(nWaiting, nWaiting == 1 and "" or "s")) or
+                "waiting on the rolls"
+        else
+            local place = self:Place()
+            meta = #open .. " open" .. (place and (" · " .. place) or "")
+        end
+        local results: RollResultData[] = {}
+        if self:Get("results") then
+            for i, r in ipairs(self.results) do
+                results[i] = self:ResultRow(r)
+            end
+        end
+        local d: RollTrayData = { rolls = rows, results = results, meta = meta, answered = answered }
+        if self.asking then
+            local greed = self:GreedTargets()
+            if #greed > 0 then
+                local bound: string[] = {}
+                for _, roll in ipairs(greed) do
+                    if roll.bop then
+                        bound[#bound + 1] = roll.name
+                    end
+                end
+                d.ask = {
+                    text = ("Greed on the %d roll%s you haven't answered?"):format(#greed, #greed == 1 and "" or "s"),
+                    note = #bound > 0 and
+                        (table.concat(bound, ", ") ..
+                            (#bound == 1 and " binds" or " bind") ..
+                                " when picked up: the game still asks about it on its own row.") or
+                        nil,
+                    confirm = "Greed on " .. #greed,
+                }
+            else
+                self.asking = false
+            end
+        end
+        return d
+    end
+
+    -- Whether the tray has anything to show.
+    function HasContent(): boolean
+        return next(self.rolls) ~= nil or (#self.results > 0 and self:Get("results"))
+    end
+
+    function Refresh()
+        local tray = self.tray
+        if not tray or not self:IsEnabled() then
+            return
+        end
+        if not self:HasContent() then
+            tray:Hide()
+            self.asking = false
+            if self.driver then
+                self.driver:Hide()
+            end
+            return
+        end
+        tray:SetData(self:Data())
+        if tray.folded ~= self.folded then
+            tray:SetFolded(self.folded)
+        end
+        tray:Show()
+        if self.driver then
+            self.driver:Show()
+        end
+        self:SyncHost()
+    end
+
+    -- Every tick while the tray shows: the seconds, and each result going
+    -- RESULTS_STAY s after its roll was decided (each on its own, open rolls
+    -- or not, in combat too).
+    function Tick()
+        local tray = self.tray
+        if not tray then
+            return
+        end
+        if next(self.rolls) ~= nil then
+            local times: { [number]: number } = {}
+            for id, roll in pairs(self.rolls) do
+                times[id] = roll.remaining()
+            end
+            tray:SetRemaining(times)
+        end
+        local now, kept = GetTime(), {} :: Result[]
+        for _, r in ipairs(self.results) do
+            if now - r.at < RESULTS_STAY then
+                kept[#kept + 1] = r
+            end
+        end
+        if #kept < #self.results then
+            self.results = kept
+            self:Refresh()
+        end
+    end
+
+    function ClearResults()
+        self.results = {}
+        self:Refresh()
+    end
+
+    --------------------------------------------------------------------------------
+    -- Choosing
+    --------------------------------------------------------------------------------
+
+    function Choose(roll: Roll, key: ChoiceKey)
+        if roll.choice or self.rolls[roll.id] ~= roll then
+            return
+        end
+        local choice = CHOICE_BY_KEY[key]
+        if not choice or roll.can[key] == false then
+            return
+        end
+        if roll.test then
+            roll.choice = key
+            if roll.bop and key ~= "pass" then
+                roll.confirm = choice.type
+            else
+                table.insert(roll.votes[key], me())
+            end
+            self:Refresh()
+            return
+        end
+        -- (chosen first: the game sends CANCEL_LOOT_ROLL from inside
+        -- RollOnLoot, its own roll frame done with you; and a Bind on Pickup
+        -- item asks from inside it, CONFIRM_LOOT_ROLL)
+        roll.choice = key
+        RollOnLoot(roll.id, choice.type)
+        self:Refresh()
+    end
+
+    -- The question in a roll's row answered (Bind on Pickup).
+    function Confirm(id: number, yes: boolean)
+        local roll = self.rolls[id]
+        if not roll or not roll.confirm then
+            return
+        end
+        local h = self.host
+        if h and h.rollID == id then
+            -- (the popup's own buttons lie over the row's: a click there is
+            -- the popup's; this one came from elsewhere, a test)
+            self:ReleaseButtons(h)
+        end
+        if yes and not roll.test then
+            ConfirmLootRoll(id, roll.confirm)
+        end
+        self:Answered(id, yes)
+    end
+
+    -- A roll's question answered: yes keeps your choice, no takes it back.
+    function Answered(id: number, yes: boolean)
+        local roll = self.rolls[id]
+        if not roll or not roll.confirm then
+            return
+        end
+        roll.confirm = nil
+        if yes then
+            if roll.test and roll.choice then
+                table.insert(roll.votes[roll.choice], me())
+            end
+        else
+            roll.choice = nil
+        end
+        self:Refresh()
+    end
+
+    function PassAll()
+        for _, roll in ipairs(self:Unanswered()) do
+            self:Choose(roll, "pass")
+        end
+        self.asking = false
+        self:Refresh()
+    end
+
+    -- The rolls Greed on all would answer: unanswered, Greed allowed.
+    function GreedTargets(): Roll[]
+        local out: Roll[] = {}
+        for _, roll in ipairs(self:Unanswered()) do
+            if roll.can.greed ~= false then
+                out[#out + 1] = roll
+            end
+        end
+        return out
+    end
+
+    function GreedAll()
+        if #self:GreedTargets() == 0 then
+            return
+        end
+        self.asking = true
+        self:Refresh()
+    end
+
+    function AskAnswered(yes: boolean)
+        self.asking = false
+        if yes then
+            for _, roll in ipairs(self:GreedTargets()) do
+                self:Choose(roll, "greed")
+            end
+        end
+        self:Refresh()
+    end
+
+    -- The game asks to confirm your choice (Bind on Pickup): in the roll's
+    -- row, the tray open; the popup's buttons over the row's.
+    function ConfirmAsked(rollID: unknown, rollType: unknown)
+        local id, kind = secret.asNumber(rollID), secret.asNumber(rollType)
+        local roll = id and self.rolls[id]
+        if not (id and kind and roll) then
+            return
+        end
+        local choice = CHOICE_BY_TYPE[kind]
+        roll.confirm = kind
+        roll.choice = choice and choice.key or roll.choice
+        self.folded = false
+        self:Refresh()
+        self:HostConfirm(id)
+        -- (the popup shows from the game's own handler: maybe after this one)
+        after(0, function()
+            self:HostConfirm(id)
+        end)
+    end
+
+    function HostConfirm(id: number)
+        local roll, tray = self.rolls[id], self.tray
+        if not (roll and roll.confirm and tray) then
+            return
+        end
+        local dialog = confirmDialog()
+        if not dialog or secret.asNumber(tbl.field(dialog, "data")) ~= id then
+            return
+        end
+        local row = tray:RowFor(id)
+        if not row then
+            return
+        end
+        local h = self.host
+        if h and h.dialog ~= dialog then
+            self:Release(h)
+            h = nil
+        end
+        if not h then
+            h = {
+                dialog = dialog,
+                rollID = id,
+                clamped = dialog:IsClampedToScreen() and true or false,
+                alpha = dialog:GetAlpha(),
+                points = savePoints(dialog),
+                buttons = {},
+            }
+            self.host = h
+            self:HookDialog(dialog)
+            -- out of sight, see-through (its buttons too)
+            dialog:SetClampedToScreen(false)
+            dialog:SetAlpha(0)
+            dialog:ClearAllPoints()
+            dialog:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+        else
+            self:ReleaseButtons(h)
+        end
+        h.rollID = id
+        h.yes, h.no = popupButton(dialog, 1), popupButton(dialog, 2)
+        self:Lay(h, h.yes, row.yes)
+        self:Lay(h, h.no, row.no)
+    end
+
+    -- The popup's buttons over its row only while the row shows (folded,
+    -- scrolled away or gone: back in the out-of-sight popup, never lying
+    -- see-through over another row).
+    function SyncHost()
+        local h, tray = self.host, self.tray
+        if not (h and tray) then
+            return
+        end
+        local row = tray:RowFor(h.rollID)
+        local roll = self.rolls[h.rollID]
+        if row and row:IsVisible() and roll and roll.confirm then
+            if not h.yes then
+                h.yes, h.no = popupButton(h.dialog, 1), popupButton(h.dialog, 2)
+                self:Lay(h, h.yes, row.yes)
+                self:Lay(h, h.no, row.no)
+            end
+        elseif h.yes then
+            self:ReleaseButtons(h)
+        end
+    end
+
+    -- One of the popup's buttons over one of the row's.
+    function Lay(h: Host, b: Button?, over: SuuButton)
+        if not b then
+            return
+        end
+        if not h.buttons[b] then
+            h.buttons[b] = {
+                points = savePoints(b),
+                width = b:GetWidth(),
+                height = b:GetHeight(),
+                strata = b:GetFrameStrata(),
+                level = b:GetFrameLevel(),
+            }
+        end
+        b:ClearAllPoints()
+        b:SetAllPoints(over)
+        b:SetFrameStrata(over:GetFrameStrata())
+        b:SetFrameLevel(over:GetFrameLevel() + 10)
+        self:HookButton(b)
+    end
+
+    -- The popup's buttons back in it.
+    function ReleaseButtons(h: Host)
+        for b in pairs(h.buttons) do
+            b:ClearAllPoints()
+        end
+        for b, s in pairs(h.buttons) do
+            restorePoints(b, s.points)
+            b:SetSize(s.width, s.height)
+            b:SetFrameStrata(s.strata)
+            b:SetFrameLevel(s.level)
+        end
+        h.buttons = {}
+        h.yes, h.no = nil, nil
+    end
+
+    -- The popup as it was.
+    function Release(h: Host)
+        self:ReleaseButtons(h)
+        local dialog = h.dialog
+        restorePoints(dialog, h.points)
+        dialog:SetAlpha(h.alpha)
+        dialog:SetClampedToScreen(h.clamped)
+        if self.host == h then
+            self.host = nil
+        end
+    end
+
+    function HookDialog(dialog: Frame)
+        if self.hooked[dialog] then
+            return
+        end
+        self.hooked[dialog] = true
+        hookScript(dialog, "OnHide", function()
+            local h = self.host
+            if not h or h.dialog ~= dialog then
+                return
+            end
+            local id = h.rollID
+            -- (OK's click hook runs after this hide: which roll it was for)
+            self.lastHosted, self.lastYes = id, h.yes
+            self:Release(h)
+            -- closed without OK (Cancel, Esc): the choice taken back, a
+            -- frame later (OK has answered by then)
+            after(0, function()
+                self.lastHosted, self.lastYes = nil, nil
+                self:Answered(id, false)
+            end)
+        end)
+    end
+
+    function HookButton(b: Button)
+        if self.hooked[b] then
+            return
+        end
+        self.hooked[b] = true
+        hookScript(b, "OnClick", function()
+            local h, id = self.host, self.lastHosted
+            if h and h.yes == b then
+                self:Answered(h.rollID, true)
+            elseif id and self.lastYes == b then
+                self:Answered(id, true)
+            end
+        end)
+        -- the row's button lights up under the mouse
+        hookScript(b, "OnEnter", function()
+            local over = self:Under(b)
+            local fn = over and over:GetScript("OnEnter")
+            if over and fn then
+                fn(over, false)
+            end
+        end)
+        hookScript(b, "OnLeave", function()
+            local over = self:Under(b)
+            local fn = over and over:GetScript("OnLeave")
+            if over and fn then
+                fn(over, false)
+            end
+        end)
+    end
+
+    -- The row's button a popup button lies over.
+    function Under(b: Button): SuuButton?
+        local h, tray = self.host, self.tray
+        local row = h and tray and tray:RowFor(h.rollID)
+        if not (h and row) then
+            return nil
+        end
+        if h.yes == b then
+            return row.yes
+        elseif h.no == b then
+            return row.no
+        end
+        return nil
+    end
+
+    --------------------------------------------------------------------------------
+    -- The game's flow
+    --------------------------------------------------------------------------------
+
+    function StartRoll(rollID: unknown, rollTime: unknown, lootHandle: unknown)
+        if not secret.readable(rollID) or type(rollID) ~= "number" then
+            return
+        end
+        local icon, name, _, quality, bop, canNeed, canGreed, _, reasonNeed, reasonGreed = GetLootRollItemInfo(rollID)
+        local itemName = secret.asString(name)
+        if not itemName then
+            return
+        end
+        local function reason(r: unknown): string?
+            local n = secret.asNumber(r)
+            return n and n > 0 and secret.asString(tbl.field(_G, "LOOT_ROLL_INELIGIBLE_REASON" .. n)) or nil
+        end
+        local start, duration = GetTime(), (secret.asNumber(rollTime) or 60000) / 1000
+        self.seq = self.seq + 1
+        local roll: Roll = {
+            id = rollID,
+            seq = self.seq,
+            icon = secret.readable(icon) and (secret.asNumber(icon) or secret.asString(icon)) or nil,
+            name = itemName,
+            quality = secret.readable(quality) and QUALITY[quality] or "common",
+            link = secret.asString(GetLootRollItemLink(rollID)),
+            duration = duration,
+            bop = secret.readable(bop) and bop == true,
+            can = {
+                need = secret.readable(canNeed) and canNeed or false,
+                greed = secret.readable(canGreed) and canGreed or false,
+                pass = true,
+            },
+            reason = { need = reason(reasonNeed), greed = reason(reasonGreed) },
+            votes = { need = {}, greed = {}, pass = {} },
+            rolled = {},
+            remaining = function(): number
+                local left = secret.asNumber(GetLootRollTimeLeft(rollID))
+                if left then
+                    return math.max(0, left / 1000)
+                end
+                return math.max(0, duration - (GetTime() - start))
+            end,
+        }
+        roll.lootHandle = secret.asNumber(lootHandle)
+        self:Add(roll)
+        -- (the game says it's over: LOOT_ROLLS_COMPLETE, the loot history's
+        -- drop decided, the result line; this only if none of them comes)
+        -- its time up and still open (no word from the game, no result line):
+        -- gone a moment later (found in game: the card stayed at 0). Timed on
+        -- SuuUI's own clock from the roll's start: once you've rolled the game
+        -- sends no CANCEL_LOOT_ROLL (its own roll frame hides as you choose),
+        -- and its time left can't be trusted for a roll that's over
+        local function overdue()
+            if self.rolls[rollID] ~= roll then
+                return
+            end
+            local left = duration - (GetTime() - start)
+            if left > 0 then
+                after(left + ROLL_GRACE, overdue)
+                return
+            end
+            self:EndRoll(rollID)
+        end
+        after(duration + ROLL_GRACE, overdue)
+    end
+
+    -- A roll in the tray (the folded tray opens, as the setting says).
+    function Add(roll: Roll)
+        self.rolls[roll.id] = roll
+        if self.folded and self:Get("unfold") then
+            self.folded = false
+        end
+        -- the item's kind and bind, once the game has its data
+        local link = roll.link
+        if link and not item.get(link) then
+            item.load(link, function()
+                if self.rolls[roll.id] == roll then
+                    self:Refresh()
+                end
+            end)
+        end
+        self:Refresh()
+    end
+
+    -- Every open roll of a loot that's done (LOOT_ROLLS_COMPLETE).
+    function RollsComplete(lootHandle: unknown)
+        local handle = secret.asNumber(lootHandle)
+        if not handle then
+            return
+        end
+        for id, roll in pairs(self.rolls) do
+            if roll.lootHandle == handle then
+                self:EndRoll(id)
+            end
+        end
+    end
+
+    -- One item's drop in the loot history: decided (a winner, or everyone
+    -- passed), its open roll ends, its result kept if the loot line hasn't.
+    function DropDecided(encounterID: unknown, lootListKey: unknown)
+        local enc, key = secret.asNumber(encounterID), secret.asNumber(lootListKey)
+        if not (enc and key and C_LootHistory and C_LootHistory.GetSortedInfoForDrop) then
+            return
+        end
+        local ok, info = pcall(C_LootHistory.GetSortedInfoForDrop, enc, key)
+        if not ok or type(info) ~= "table" or not secret.readable(info) then
+            return
+        end
+        local drop = info :: { itemHyperlink?: unknown, winner?: { playerName?: unknown }, allPassed?: unknown }
+        local winner = drop.winner
+        local passed = drop.allPassed == true
+        if not (winner or passed) then
+            return
+        end
+        local roll = self:RollFor(secret.asString(drop.itemHyperlink))
+        if not roll then
+            return
+        end
+        if not roll.reported then
+            roll.reported = true
+            self:Result(roll, winner and secret.asString(winner.playerName) or nil)
+        end
+        if self.rolls[roll.id] == roll then
+            self:EndRoll(roll.id)
+        end
+    end
+
+    function EndRoll(rollID: number)
+        local roll = self.rolls[rollID]
+        if not roll then
+            return
+        end
+        self.rolls[rollID] = nil
+        local h = self.host
+        if h and h.rollID == rollID then
+            -- (its popup stays out of sight until the game closes it)
+            self:ReleaseButtons(h)
+        end
+        -- kept a moment for the result line, which can come after
+        self.ended[#self.ended + 1] = roll
+        roll.endedAt = GetTime()
+        while #self.ended > 10 do
+            table.remove(self.ended, 1)
+        end
+        self:Refresh()
+    end
+
+    -- The roll a chat line is about: the oldest open one for that item (else
+    -- one just ended, for the result).
+    function RollFor(link: string?): Roll?
+        local key = itemKey(link)
+        local best: Roll? = nil
+        for _, roll in pairs(self.rolls) do
+            if itemKey(roll.link) == key then
+                if not best or roll.seq < best.seq then
+                    best = roll
+                end
+            end
+        end
+        if best then
+            return best
+        end
+        for i = #self.ended, 1, -1 do
+            local roll = self.ended[i]
+            if itemKey(roll.link) == key and GetTime() - (roll.endedAt or 0) < 30 then
+                return roll
+            end
+        end
+        return nil
+    end
+
+    -- A roll decided: under the rows, with who won.
+    function Result(roll: Roll, winner: string?)
+        for _, r in ipairs(self.results) do
+            if r.roll == roll then
+                return
+            end
+        end
+        self.results[#self.results + 1] = { roll = roll, winner = winner, at = GetTime() }
+        while #self.results > RESULTS_KEPT do
+            table.remove(self.results, 1)
+        end
+        self:Refresh()
+    end
+
+    function OnLootLine(given: unknown)
+        if not secret.readable(given) or type(given) ~= "string" then
+            return
+        end
+        local text = given:gsub(HISTORY_LINE, "")
+        for _, line in ipairs(lines()) do
+            local caps = match(line.pattern, text)
+            if caps then
+                local what, who, link, choice, value = line.fn(caps)
+                if what == "vote" and choice then
+                    local roll = self:RollFor(link)
+                    if roll then
+                        for _, c in ipairs(CHOICES) do
+                            local list = roll.votes[c.key]
+                            for i = #list, 1, -1 do
+                                if list[i] == short(who) then
+                                    table.remove(list, i)
+                                end
+                            end
+                        end
+                        table.insert(roll.votes[choice], short(who))
+                        if short(who) == me() then
+                            roll.choice = choice
+                            roll.confirm = nil
+                        end
+                        if self.rolls[roll.id] then
+                            self:Refresh()
+                        end
+                    end
+                elseif what == "rolled" then
+                    local roll = self:RollFor(link)
+                    if roll then
+                        local c = choice and CHOICE_BY_KEY[choice]
+                        roll.rolled[short(who)] = { label = c and c.label or choice or "", value = value }
+                    end
+                elseif what == "won" or what == "allPassed" then
+                    local roll = self:RollFor(link)
+                    if roll and not roll.reported then
+                        roll.reported = true
+                        self:Result(roll, what == "won" and who or nil)
+                    end
+                    -- decided: its row goes (the game doesn't always say,
+                    -- CANCEL_LOOT_ROLL missing once you've rolled: found in game)
+                    if roll and self.rolls[roll.id] == roll then
+                        self:EndRoll(roll.id)
+                    end
+                end
+                return
+            end
+        end
+    end
+
+    -- The item's tooltip: the game's for an open roll, else from its link.
+    function ItemTip(owner: Frame, roll: Roll, ended: boolean?)
+        GameTooltip:SetOwner(owner, "ANCHOR_LEFT")
+        if not ended and not roll.test and self.rolls[roll.id] and GameTooltip.SetLootRollItem then
+            GameTooltip:SetLootRollItem(roll.id)
+        else
+            local link = roll.link
+            local ref = link and (link:match("|H(item:[^|]+)|h") or link)
+            if not ref then
+                GameTooltip:Hide()
+                return
+            end
+            GameTooltip:SetHyperlink(ref)
+        end
+        GameTooltip:Show()
+    end
+
+    -- Blizzard's roll frames off screen while the tray shows the rolls.
+    function HideBlizzardRolls()
+        local f = frames.find("GroupLootContainer")
+        if not f or self.rollsHooked then
+            return
+        end
+        self.rollsHooked = true
+        local function away()
+            f:SetAlpha(0)
+            self.movingRolls = true
+            f:ClearAllPoints()
+            f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+            self.movingRolls = false
+        end
+        f:SetClampedToScreen(false)
+        hook(f, "SetPoint", function()
+            if self.movingRolls then
+                return
+            end
+            f:SetAlpha(0)
+            after(0, away)
+        end)
+        hookScript(f, "OnShow", away)
+        away()
+    end
+
+    --------------------------------------------------------------------------------
+    -- Test rolls (/suu lootroll)
+    --------------------------------------------------------------------------------
+
+    function TestRoll(
+        def: {
+            name: string,
+            item: number,
+            quality: string,
+            duration: number,
+            bop?: boolean,
+            need?: boolean,
+            votes?: { [string]: string[] },
+        }
+    ): Roll
+        self.testRolls = self.testRolls + 1
+        self.seq = self.seq + 1
+        local id = -self.testRolls
+        local start = GetTime()
+        local duration = def.duration
+        local reasonNeed = secret.asString(tbl.field(_G, "LOOT_ROLL_INELIGIBLE_REASON1")) or
+            "Your class can't use this item."
+        local votes = def.votes or {}
+        local roll: Roll = {
+            id = id,
+            seq = self.seq,
+            test = true,
+            icon = C_Item.GetItemIconByID(def.item) or 134400,
+            name = def.name,
+            quality = def.quality,
+            link = "item:" .. def.item,
+            classes = TEST_CLASSES,
+            roster = TEST_ROSTER,
+            duration = duration,
+            bop = def.bop,
+            can = { need = def.need ~= false, greed = true, pass = true },
+            reason = { need = def.need == false and reasonNeed or nil },
+            votes = { need = votes.need or {}, greed = votes.greed or {}, pass = votes.pass or {} },
+            rolled = {},
+            remaining = function(): number
+                return math.max(0, duration - (GetTime() - start))
+            end,
+        }
+        self:Add(roll)
+        after(duration, function()
+            if self.rolls[id] ~= roll then
+                return
+            end
+            -- decided: you, on Need (or Greed with no Need); else the first
+            -- who chose Need, else Greed
+            local mine = roll.choice
+            local need = #roll.votes.need > 0
+            local winner: string? = nil
+            if mine == "need" or (mine == "greed" and not need) then
+                winner = me()
+            else
+                winner = roll.votes.need[1] or roll.votes.greed[1]
+            end
+            local label = need and "Need" or "Greed"
+            if winner then
+                roll.rolled[winner] = { label = label, value = 87 }
+            end
+            if roll.choice and roll.choice ~= "pass" and winner ~= me() then
+                local c = CHOICE_BY_KEY[roll.choice]
+                roll.rolled[me()] = { label = c and c.label or "", value = 42 }
+            end
+            self:EndRoll(id)
+            self:Result(roll, winner)
+        end)
+        return roll
+    end
+
+    function TestRaidRoll()
+        local names: string[], classes: { [string]: string } = {}, {}
+        for i, name in ipairs(RAID_NAMES) do
+            names[i] = name
+            classes[name] = assert(RAID_CLASSES[(i * 7) % #RAID_CLASSES + 1])
+        end
+        local roll = self:TestRoll({
+            name = "Plans: Protector's Silvered Chain Helm",
+            item = 251382,
+            quality = "rare",
+            duration = 30,
+            bop = true,
+        })
+        roll.roster, roll.classes = names, classes
+        local id = roll.id
+        -- a shuffled order, most choose within 25 s, a few never do
+        local order: string[] = {}
+        for i, name in ipairs(RAID_NAMES) do
+            order[i] = name
+        end
+        for i = #order, 2, -1 do
+            local j = math.random(i)
+            order[i], order[j] = order[j], order[i]
+        end
+        local picks: ChoiceKey[] = { "pass", "pass", "pass", "greed", "greed", "need" }
+        for i = 1, #order - 3 do
+            after(1 + i * 0.6, function()
+                if self.rolls[id] ~= roll then
+                    return
+                end
+                table.insert(roll.votes[assert(picks[math.random(#picks)])], order[i])
+                self:Refresh()
+            end)
+        end
+        self:Refresh()
+    end
+
+    -- /suu lootroll [raid]: rolls that aren't (made-up votes; "raid": 40 players).
+    function TestRolls(arg: string?)
+        if arg == "raid" then
+            self:TestRaidRoll()
+            return
+        end
+        local helm = self:TestRoll({
+            name = "Plans: Protector's Silvered Chain Helm",
+            item = 251382,
+            quality = "rare",
+            duration = 40,
+            bop = true,
+            votes = { need = { "Ysolde" }, greed = { "Brannoc", "Morrow" } },
+        })
+        self:TestRoll({
+            name = "Blackwater Cutlass",
+            item = 1951,
+            quality = "uncommon",
+            duration = 30,
+            need = false,
+            votes = { greed = { "Brannoc", "Kaelith" } },
+        })
+        self:TestRoll({
+            name = "Smelting Pants",
+            item = 5199,
+            quality = "rare",
+            duration = 14,
+            votes = { need = { "Morrow" }, pass = { "Ysolde" } },
+        })
+        -- someone makes up their mind, to see the counts change
+        after(8, function()
+            if self.rolls[helm.id] == helm then
+                table.insert(helm.votes.greed, "Kaelith")
+                self:Refresh()
+            end
+        end)
+    end
+
+    --------------------------------------------------------------------------------
+    -- Lifecycle
+    --------------------------------------------------------------------------------
+
+    function Build(): LootRollTray
+        local known = self.tray
+        if known then
+            return known
+        end
+        local tray = UI.LootRollTray(SuuUI.Root, { name = "SuuUILootRolls" })
+        -- over open windows, in combat too
+        tray:SetFrameStrata("DIALOG")
+        tray:SetClampedToScreen(true)
+        tray:Hide()
+        local function rollOf(id: number): Roll?
+            return self.rolls[id]
+        end
+        tray.onChoose = self:Guard(function(id: number, key: string)
+            local roll, c = rollOf(id), CHOICE_BY_KEY[key]
+            if roll and c then
+                self:Choose(roll, c.key)
+            end
+        end)
+        tray.onConfirm = self:Guard(function(id: number, yes: boolean)
+            self:Confirm(id, yes)
+        end)
+        tray.onPassAll = self:Guard(function()
+            self:PassAll()
+        end)
+        tray.onGreedAll = self:Guard(function()
+            self:GreedAll()
+        end)
+        tray.onAsk = self:Guard(function(yes: boolean)
+            self:AskAnswered(yes)
+        end)
+        tray.onFold = function(folded: boolean)
+            self.folded = folded
+            self:Refresh()
+        end
+        tray.onClose = function()
+            self:ClearResults()
+        end
+        -- (scrolled: the hosted popup's buttons follow their row, or go)
+        tray.onLayout = function()
+            self:SyncHost()
+        end
+        tray.onItemEnter = function(id: number, owner: Frame)
+            local roll = rollOf(id)
+            if roll then
+                self:ItemTip(owner, roll)
+            end
+        end
+        tray.onItemLeave = function()
+            GameTooltip:Hide()
+        end
+        tray.onItemClick = function(id: number, _: string)
+            local roll = rollOf(id)
+            local link = roll and roll.link
+            if link and IsModifiedClick() then
+                HandleModifiedItemClick(link)
+            end
+        end
+        tray.onResultEnter = function(index: number, owner: Frame)
+            local r = self.results[index]
+            if r then
+                self:ItemTip(owner, r.roll, true)
+            end
+        end
+        local driver = CreateFrame("Frame")
+        driver:Hide()
+        local wait = 0
+        driver:SetScript("OnUpdate", function(_: Frame, elapsed: number)
+            wait = wait - elapsed
+            if wait > 0 then
+                return
+            end
+            wait = TICK
+            self:Tick()
+        end)
+        self.driver = driver
+        self.tray = tray
+        return tray
+    end
+
+    override function OnEnable()
+        local tray = self:Build()
+        self:RegisterMover(tray, { key = "position", label = "Loot rolls", managedShow = true })
+        self:RegisterSettings(SECTION)
+        self:Watch("results", function()
+            self:Refresh()
+        end)
+        self:RegisterCommand("lootroll", "Test loot rolls in the tray; \"/suu lootroll raid\": one in a 40-player raid.", function(
+            arg: string
+        )
+            self:TestRolls(arg ~= "" and arg or nil)
+        end)
+        -- (again on every enable: turning the module off dropped its events)
+        self.wired = nil
+        self:Wire()
+        self:Refresh()
+    end
+
+    -- The game's roll events (once a session).
+    function Wire()
+        if self.wired then
+            return
+        end
+        self.wired = true
+        self:HideBlizzardRolls()
+        self:OnGameEvent("START_LOOT_ROLL", function(_, rollID, rollTime, lootHandle)
+            self:StartRoll(rollID, rollTime, lootHandle)
+        end)
+        self:OnGameEvent("CONFIRM_LOOT_ROLL", function(_, rollID, rollType)
+            self:ConfirmAsked(rollID, rollType)
+        end)
+        -- the game says rolls are over: every roll of that loot done; one
+        -- item's drop decided in the loot history (once you've rolled no
+        -- CANCEL_LOOT_ROLL comes: found in game)
+        self:OnGameEvent("LOOT_ROLLS_COMPLETE", function(_, lootHandle)
+            self:RollsComplete(lootHandle)
+        end)
+        self:OnGameEvent("LOOT_HISTORY_UPDATE_DROP", function(_, encounterID, lootListKey)
+            self:DropDecided(encounterID, lootListKey)
+        end)
+        -- the game done with you on a roll: ended unless you rolled on it (then
+        -- it goes once it's decided: you see the others' choices till then)
+        self:OnGameEvent("CANCEL_LOOT_ROLL", function(_, rollID)
+            if not secret.readable(rollID) then
+                return
+            end
+            local roll = self.rolls[rollID]
+            if roll and roll.choice then
+                return
+            end
+            self:EndRoll(rollID)
+        end)
+        self:OnGameEvent("CANCEL_ALL_LOOT_ROLLS", function()
+            for id in pairs(self.rolls) do
+                if id > 0 then
+                    self:EndRoll(id)
+                end
+            end
+        end)
+        self:OnGameEvent("CHAT_MSG_LOOT", function(_, text)
+            self:OnLootLine(text)
+        end)
+        -- rolls already running (a /reload mid-roll)
+        if GetActiveLootRollIDs then
+            local ok: boolean, ids: unknown = pcall(GetActiveLootRollIDs)
+            if ok and type(ids) == "table" then
+                for _, id in ipairs(ids :: number[]) do
+                    local left = GetLootRollTimeLeft(id)
+                    self:StartRoll(id, secret.readable(left) and left or nil)
+                end
+            end
+        end
+    end
+
+    override function OnDisable()
+        local tray = self.tray
+        if tray then
+            tray:Hide()
+        end
+        if self.driver then
+            self.driver:Hide()
+        end
+    end
+end
+
+export local M = SuuUI.AddModule(LootRollsModule.new())

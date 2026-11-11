@@ -83,8 +83,8 @@ It is built for the realities of the modern client: values the game hides from a
 | **Minimap & micro menu** | SuuUI's own minimap and micro menu, with the Jewel. |
 | **Bags** | Bags and bank with sorting, a search across all your characters, and selling junk at a vendor. |
 | **Objective tracker** | Quests with their objectives and quest items, plus tracked profession recipes. |
-| **Notifications** | One stack for repairs, full bags, ready checks, loot rolls, requests, battlegrounds, and friends and guild members coming online. |
-| **Loot & tooltips** | The loot window and loot rolls, and the game's tooltips in SuuUI's look. |
+| **Notifications** | One stack for repairs, full bags, ready checks, requests, battlegrounds, and friends and guild members coming online. |
+| **Loot & tooltips** | The loot window, a tray for group loot rolls (who chose what, who won), and the game's tooltips in SuuUI's look. |
 | **Campsite** | Alerts for Campfire's camp benefits. |
 | **Quests** | Quests accepted and turned in for you as you talk to an NPC, except grey ones, ones with a reward to choose and, unless you allow them, dailies, shared quests and turn-ins that take gold or items. Hold Shift to do it yourself. |
 | **Settings window** | Searchable, every change live, previews at real size, plain-language descriptions. |

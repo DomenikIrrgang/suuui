@@ -1,0 +1,30 @@
+-- Saved settings from before the roll tray: tests/profiles/lootrolls-off.json
+-- has the Loot module's "Rolls in the notification stack" switched off in
+-- the character's profile ("Other" left it on). The settings migration
+-- turns the Loot rolls module off there, once; Blizzard's roll frames stay.
+
+import test, expect, config from "wowlua:test"
+import field from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as settings from "/Core/Settings"
+import * as DB from "/Core/DB"
+import SuuUI from "/Core/API"
+import errorsSoFar from "../helpers"
+
+config({ profile = "lootrolls-off" })
+
+@test("rolls switched off before the tray: the Loot rolls module starts off, Blizzard's roll frames stay")
+local function rollsOff()
+    expect(settings.get("lootrolls", "enabled")).toBe(false)
+    expect(assert(SuuUI.GetModule("lootrolls")):IsEnabled()).toBe(false)
+    local p = field(DB.db, "profiles", "Player - Realm")
+    expect(field(p, "loot", "rolls")).toBeNil()
+    expect(field(p, "loot", "atCursor")).toBe(false)
+    expect(field(p, "__migrated", "loot/rolls")).toBe(true)
+    -- (not hooked away: the game's own roll frames)
+    expect(assert(frames.find("GroupLootContainer")):GetAlpha()).toBe(1)
+    -- the other profile left it on: the tray stays on there
+    expect(field(DB.db, "profiles", "Other", "lootrolls")).toBeNil()
+    expect(field(DB.db, "profiles", "Other", "__migrated", "loot/rolls")).toBe(true)
+    expect(errorsSoFar()).toEqual({})
+end
