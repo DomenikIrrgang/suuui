@@ -13,6 +13,13 @@
 
 ### Fixed
 
+- Reputation and skill bars: the colour fills the bar to both ends, with no gap at the left and right.
+- Unit frames: setting a raid target marker from a unit's right-click menu in combat no longer fails with "Interface action failed because of an AddOn".
+- Guild window: switching tabs no longer makes the tabs flicker and jump.
+- Micro menu: opening and closing the shop no longer shows the game's own art on the game menu button.
+- Buff indicators: an indicator's Colour is greyed out with "While missing", since it only colours the indicator while the buff is up; the Show description no longer runs into Missing colour.
+- Quest log: every quest shows its eye: full while tracked, faint while not, so you can click it to track an untracked quest.
+- Macros: the icon picker draws icons from icon packs (such as Clean Icons – Mechagnome Edition) instead of empty squares.
 - Bags: currencies marked "Show on Backpack" in the Currency tab now show in the bags window's foot, by your gold; hover one for its tooltip, click it for the Currency tab.
 
 ## 0.6.40 (2026-11-11)
