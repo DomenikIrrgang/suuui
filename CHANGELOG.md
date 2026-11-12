@@ -10,7 +10,7 @@
 
 - Themes now recolour everything they should: the glows (aggro, ready buttons, alerts, warded frames and the rest) follow a theme's colours, and switching colour vision back to Normal brings the usual glows back without a /reload; the rings inside the player frame and the action bar dock, the model backgrounds in Collections, the dressing room and the NPC portrait, the red tint on items you can't use at a vendor and the dimmed screen behind the welcome now take the theme's colours too.
 
-## 0.10.0 (2026-11-12)
+## 0.10.1 (2026-11-12)
 
 ### New
 
