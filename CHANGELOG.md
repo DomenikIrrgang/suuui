@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Chat: the chat text and its tabs now use the theme's fonts (your chat font size stays as you set it). Chat colours stay the game's: set them in the game's chat settings. For theme authors (API 0.36): a theme's chat-* colours are left out, with a warning in the chat.
+
+### Fixed
+
+- Themes now recolour everything they should: the glows (aggro, ready buttons, alerts, warded frames and the rest) follow a theme's colours, and switching colour vision back to Normal brings the usual glows back without a /reload; the rings inside the player frame and the action bar dock, the model backgrounds in Collections, the dressing room and the NPC portrait, the red tint on items you can't use at a vendor and the dimmed screen behind the welcome now take the theme's colours too.
+
 ## 0.10.0 (2026-11-12)
 
 ### New

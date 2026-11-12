@@ -12,7 +12,8 @@
 --
 -- floor: the floor shadow's middle above the stage's bottom, minus 4 px
 -- (default 40); shade: the card strip's width, none without it.
--- frame.light, frame.pool (the glow) and frame.shadow are the textures.
+-- frame.base, frame.light, frame.pool (the glow) and frame.shadow are the
+-- textures.
 
 import tokens as T from "/Core/Tokens"
 import * as draw from "./Draw"
@@ -22,6 +23,7 @@ local S = T.space
 export type ModelStageOptions = { floor?: number, shade?: number }
 
 export interface ModelStage extends Frame
+    base: Texture
     light: Texture
     pool: Texture
     shadow: Texture
@@ -54,6 +56,18 @@ local function tintPool(t: Texture)
     t:SetVertexColor(r * POOL_A, g * POOL_A, b * POOL_A)
 end
 
+-- A token's colour times `k` (a shade of it), opaque.
+local function shadeOf(token: string, k: number): ColorMixin
+    local r, g, b = draw.rgba(token)
+    return CreateColor(math.min(1, r * k), math.min(1, g * k), math.min(1, b * k), 1)
+end
+
+-- The base: surface-sunk, darker at the bottom and a little lighter at the
+-- top (the design's warm browns; kept: Bind, so a theme's surfaces show).
+local function baseShade(t: Texture)
+    t:SetGradient("VERTICAL", shadeOf("surface-sunk", 0.62), shadeOf("surface-sunk", 1.1))
+end
+
 export function modelStage(frame: Frame, opts: ModelStageOptions?): ModelStage
     local stage = frame :: ModelStage
     opts = opts or {}
@@ -61,7 +75,8 @@ export function modelStage(frame: Frame, opts: ModelStageOptions?): ModelStage
     local base = stage:CreateTexture(nil, "BACKGROUND", nil, -8)
     base:SetAllPoints()
     base:SetColorTexture(1, 1, 1, 1)
-    base:SetGradient("VERTICAL", CreateColor(0.051, 0.043, 0.035, 1), CreateColor(0.09, 0.078, 0.059, 1))
+    draw.bind(base, baseShade)
+    stage.base = base
     local light = stage:CreateTexture(nil, "BACKGROUND", nil, -7)
     light:SetTexture(SOFT)
     light:SetBlendMode("ADD")

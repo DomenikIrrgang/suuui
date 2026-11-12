@@ -12,6 +12,11 @@
 --   captureConfirm()  UI.Confirm caught: its options, last one first
 --   expectPingable(f, unit)  a ping over f pings that unit, as over the
 --                     game's unit frames (PingableUnitFrameTemplate)
+--   useTheme(id)      the theme `id` applied, as when the player picks it
+--                     (nil: SuuUI's again)
+--   recordGradients(t)  each SetGradient on t from now on: its colours
+--   expectRGB(c, r, g, b[, within])  a colour's r, g, b within 1/255 (8 bits
+--                     a channel), or within `within` 255ths
 
 import expect from "wowlua:test"
 import type RowDef from "/SettingsUI/Registry"
@@ -20,6 +25,8 @@ import * as fault from "/Core/Fault"
 import SuuUI from "/Core/API"
 import type MenuDescription from "/UI/ContextMenu"
 import type ConfirmOptions from "/UI/Panel"
+import * as themes from "/Core/Themes"
+import * as settings from "/Core/Settings"
 
 export function errorsSoFar(): string[]
     local out: string[] = {}
@@ -122,4 +129,29 @@ export function expectPingable(f: Frame, unit: string)
     local info = ((f :: unknown) :: PingableType_UnitFrameMixin):GetTargetInfo() :: unknown :: { guid: unknown }
     expect(info.guid).toBe(UnitGUID(unit))
     expect(info.guid).never.toBeNil()
+end
+
+export function useTheme(id: string?)
+    settings.setAccount("theme", id)
+    themes.apply()
+end
+
+export type GradientCall = { from: number[], to: number[] }
+
+export function recordGradients(t: Texture): GradientCall[]
+    local calls: GradientCall[] = {}
+    hooksecurefunc(t, "SetGradient", function(_: Texture, _o: string, from: ColorMixin, to: ColorMixin)
+        local r1, g1, b1, a1 = from:GetRGBA()
+        local r2, g2, b2, a2 = to:GetRGBA()
+        calls[#calls + 1] = { from = { r1, g1, b1, a1 or 1 }, to = { r2, g2, b2, a2 or 1 } }
+    end)
+    return calls
+end
+
+export function expectRGB(c: number[], r: number, g: number, b: number, within: number?)
+    local d = (within or 1.01) / 255
+    if math.abs(c[1] - r) > d or math.abs(c[2] - g) > d or math.abs(c[3] - b) > d then
+        -- (fails, showing both)
+        expect({ c[1], c[2], c[3] }).toEqual({ r, g, b })
+    end
 end

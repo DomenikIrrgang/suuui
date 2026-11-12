@@ -70,8 +70,11 @@ local DEFAULTS = {
 
 local M: ChatModule
 
--- a value that's there and readable
-local BODY_FONT = "Interface\\AddOns\\SuuUI\\Media\\Fonts\\Figtree-Regular.ttf"
+-- The lines' face: the body text style's (a theme's own; the size is the
+-- player's, from the game's chat window settings).
+local function bodyFont(): string
+    return SuuUI.Fonts.File("body")
+end
 local PAD_X, PAD_TOP, PAD_BOTTOM = S["space-5"], S["space-2"], S["space-5"]
 local TABS_H, INPUT_H, GAP = 24, 30, S["space-3"]
 local TICK = 0.2
@@ -459,9 +462,10 @@ local GRIP_W = 10 -- the grip (6 px) and its gap, in edit mode
 local EDIT_PAD = 4 -- edit mode's wider padding (6 px a side, not 4)
 local PLATE_OUT = 4 -- a lifted tab's plate reaches past it on each side
 
--- a tab's name: 12 px in header's face (again when a theme changes it)
+-- a tab's name: header's face a px under its size (12 px in the design's;
+-- again when a theme changes it)
 local function tabFace(label: Text)
-    label:SetFont(SuuUI.Fonts.File("header"), 12, "")
+    label:SetFont(SuuUI.Fonts.File("header"), math.max(8, T.type.header.size - 1), "")
 end
 
 -- A dashed outline around `frame` (3 px dashes, 2 px gaps, one physical pixel
@@ -697,7 +701,7 @@ local function measureBody(text: string, size: number): number
         fs:Hide()
         bodyMeasure = fs
     end
-    fs:SetFont(BODY_FONT, size, "")
+    fs:SetFont(bodyFont(), size, "")
     fs:SetText(text)
     return fs:GetUnboundedStringWidth()
 end
@@ -1690,11 +1694,11 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     end
 
     function EditBoxFont(eb: EditBox, size: number)
-        eb:SetFont(BODY_FONT, size, "")
+        eb:SetFont(bodyFont(), size, "")
         for _, key in ipairs({ "header", "headerSuffix" }) do
             local fs = frames.asFontString(field(eb, key))
             if fs then
-                fs:SetFont(BODY_FONT, size, "")
+                fs:SetFont(bodyFont(), size, "")
             end
         end
     end
@@ -1709,7 +1713,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return false
         end
         self.fontSizes[cf] = size
-        cf:SetFont(BODY_FONT, size, "")
+        cf:SetFont(bodyFont(), size, "")
         cf:SetShadowOffset(1, -1)
         cf:SetShadowColor(0, 0, 0, 0.8)
         local eb = was ~= nil and chat.editBox(cf)
@@ -1993,7 +1997,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return
         end
         local f = m.frame
-        f:SetFont(BODY_FONT, fontSize(cf), "")
+        f:SetFont(bodyFont(), fontSize(cf), "")
         f:SetShadowOffset(1, -1)
         f:SetShadowColor(0, 0, 0, 0.8)
         -- the divider's rules are measured for the font
@@ -3130,7 +3134,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     function ShowRow(r: SearchRow, e: KeptEntry, q: string, size: number, width: number)
         local text = asString(self:Render(e.line :: Line, true)) or ""
         local cr, cg, cb = asNumber(e.r) or 1, asNumber(e.g) or 1, asNumber(e.b) or 1
-        r.text:SetFont(BODY_FONT, size, "")
+        r.text:SetFont(bodyFont(), size, "")
         r.text:SetTextColor(cr, cg, cb)
         r.ground:Hide()
         r.under:Hide()
@@ -3471,6 +3475,18 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     -- the same order. The tabs' names and the search's chips fitted to the
     -- faces.
     function ApplyTheme()
+        -- the lines' face again (the theme's body style), at each window's
+        -- own size: its lines, SuuUI's copy of them and its edit box
+        local skinned = self.fontSizes
+        self.fontSizes = {}
+        for cf in pairs(skinned) do
+            self:ApplyFont(cf)
+            self:ApplyMirrorFont(cf)
+            local eb = chat.editBox(cf)
+            if eb then
+                self:EditBoxFont(eb, fontSize(cf))
+            end
+        end
         for _, m in pairs(self.mirrors) do
             if not m.raw then
                 for _, line in ipairs(m.lines) do

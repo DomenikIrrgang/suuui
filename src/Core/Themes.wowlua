@@ -4,7 +4,9 @@
 -- General › Appearance (for every character, like colour vision), and it
 -- applies at login, just before SuuUI's modules build their frames:
 --   colors = { [token] = { r, g, b[, a] } }   a design token's colour (its
---                                             own alpha kept unless given);
+--                                             own alpha kept unless given;
+--                                             not chat-*: the game's chat
+--                                             settings colour chat lines);
 --            or function(class) → that table  (worked out at login for your
 --                                             class: "MAGE", "DRUID", …)
 --   fonts = { [style] = { file, size, lineHeight } }  a text style's face,
@@ -108,6 +110,28 @@ local list: Theme[] = {
 local byId: { [string]: Theme } = { [DEFAULT] = list[1] }
 local applied: string = DEFAULT
 
+-- The chat's line colours are the game's (decided 2026-11-12): players set
+-- them in the game's chat settings, so a theme can't change chat-*; it is
+-- told so once and the colour is left out.
+local function isChat(token: string): boolean
+    return token:find("^chat%-") ~= nil
+end
+
+local warned: { [string]: boolean } = {}
+local function warnChat(id: string, token: string)
+    local key = id .. "\0" .. token
+    if warned[key] then
+        return
+    end
+    warned[key] = true
+    print(
+        ("SuuUI.RegisterTheme: %s sets %s, which is left out: chat colours come from the game's chat settings"):format(
+            id,
+            token
+        )
+    )
+end
+
 -- (a plugin's Lua passes anything: checked here)
 export function register(value: unknown): Theme
     local def = type(value) == "table" and value :: ThemeDef or nil
@@ -117,6 +141,9 @@ export function register(value: unknown): Theme
         for token in pairs(def.colors) do
             if not colors[token] then
                 error(("SuuUI.RegisterTheme: %s has no colour token %q"):format(def.id, tostring(token)), 2)
+            end
+            if isChat(token) then
+                warnChat(def.id, token)
             end
         end
     end
@@ -211,8 +238,11 @@ export function apply()
     end
     for tokenName, c in pairs(worked) do
         local token = colors[tokenName]
-        -- (a worked-out table may name a token that isn't one: skipped)
-        if token then
+        -- (a worked-out table may name a token that isn't one: skipped; and
+        -- the chat's colours are the game's)
+        if token and isChat(tokenName) then
+            warnChat(theme.id, tokenName)
+        elseif token then
             token[1], token[2], token[3] = c[1], c[2], c[3]
             if c[4] then
                 token[4] = c[4]
