@@ -6,6 +6,11 @@
 
 - When an NPC offers you a choice of quest rewards, a gold coin now marks the one that sells for the most at a vendor, instead of the Upgrade mark.
 
+### Fixed
+
+- Nameplates: less stutter when mobs come into view, mostly when you dismount or pull a group; 0.9.0 made each plate's debuff icons as it showed.
+- Nameplates: borders on plates and their debuff icons stay a full pixel at every UI scale; 0.9.0 could draw them too thin to show.
+
 ## 0.9.0 (2026-11-12)
 
 ### New
