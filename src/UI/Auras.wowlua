@@ -331,7 +331,8 @@ local DISPEL_STYLE = Enum.CustomAuraButtonDispelTypeTextureStyle and
     Enum.CustomAuraButtonDispelTypeTextureStyle.PreserveAsset
 
 -- An engine button SuuUI styled: kept, so SetGroupSize can resize it.
-export type StyledButton = { button: AuraButton, key: string, scrim: Texture }
+-- (edges: its borders, reachable once the game has made the button forbidden)
+export type StyledButton = { button: AuraButton, key: string, scrim: Texture, edges: draw.Border[] }
 
 -- The initializer of a group's buttons. `sizes` and `buttons` are the
 -- container's (the group's size when a button is made; the buttons made).
@@ -361,7 +362,7 @@ local function makeInitializer(
         over:SetAllPoints()
         over:EnableMouse(false)
         over:SetFrameLevel(button:GetFrameLevel() + 2)
-        draw.border(over, group.border or (group.harmfulEdge and "ember" or "gilt-hairline"))
+        local borders = { draw.border(over, group.border or (group.harmfulEdge and "ember" or "gilt-hairline")) }
         if group.glow then
             draw.shadow(button, group.glow)
         end
@@ -376,6 +377,7 @@ local function makeInitializer(
             holder:EnableMouse(false)
             holder:SetFrameLevel(button:GetFrameLevel() + 3)
             local b = draw.border(holder, "ink")
+            borders[#borders + 1] = b
             for _, t in ipairs(b.parts) do
                 t:SetColorTexture(1, 1, 1, 1)
                 t:Hide()
@@ -415,7 +417,7 @@ local function makeInitializer(
         scrim:SetColorTexture(1, 1, 1, 1)
         scrim:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.8), CreateColor(0, 0, 0, 0))
         -- kept, so SetGroupSize can resize the buttons the engine already made
-        buttons[#buttons + 1] = { button = button, key = group.key, scrim = scrim }
+        buttons[#buttons + 1] = { button = button, key = group.key, scrim = scrim, edges = borders }
         local duration = text:CreateFontString(nil, "OVERLAY")
         fonts.apply(duration, size >= 30 and "numeric" or "micro")
         duration:SetShadowColor(0, 0, 0, 1)
@@ -583,10 +585,14 @@ export class UnitAuras
     preview: AuraPreview? = nil
     lineWidth: number? = nil
     flow: { anchor: FramePoint, growth: string[] }? = nil
+    -- the pixel unit lines made with it take (a nameplate's), its buttons'
+    -- too: the engine makes those later
+    pixelUnit: draw.PixelUnit? = nil
 
     constructor(container: AuraEngine, unit: string, opts: AuraOptions)
         self.container = container
         self.opts = opts
+        self.pixelUnit = draw.pixelUnit()
         -- a renderable rect from the start: the engine lays out from an OnUpdate
         container:SetSize(1, 1)
 
@@ -874,10 +880,20 @@ export class UnitAuras
             return
         end
         local group, gsize = g.group, self.sizes[key] :: number
+        local init = group.initialize or makeInitializer(group, gsize, self.sizes, self.buttons)
+        local unit = self.pixelUnit
+        if unit then
+            local build = init
+            init = function(button: AuraButton)
+                draw.withPixelUnit(unit, function()
+                    build(button)
+                end)
+            end
+        end
         local added = pcall(self.container.AddAuraGroup, self.container, key, g.filter, {
             maxFrameCount = g.max,
             candidateFilters = g.candidates,
-            initializeFrame = group.initialize or makeInitializer(group, gsize, self.sizes, self.buttons),
+            initializeFrame = init,
             layout = self:layoutOf(key, gsize),
         })
         -- one that failed is tried again with its next count

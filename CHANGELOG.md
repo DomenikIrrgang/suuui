@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The debuff icons on nameplates keep all their borders again; most of them went missing at some UI scales.
+
 ## 0.8.0 (2026-11-12)
 
 ### New

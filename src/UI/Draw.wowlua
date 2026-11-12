@@ -289,6 +289,37 @@ export type ColorArg = string | number[] | number
 
 export type BorderOptions = { width?: number, inset?: number, layer?: DrawLayer, sublevel?: number }
 
+-- One physical pixel in a line's frame units, when a line keeps one fixed
+-- size rather than its frame's scale (see withPixelUnit).
+export type PixelUnit = () -> number
+
+-- The unit lines made now take (nil: their frame's scale).
+local scoped: PixelUnit? = nil
+
+-- Every line made inside `body` (borders, hairlines) is laid with `unit` as
+-- its one pixel instead of its frame's scale at the time, and keeps it in
+-- every relayout. A nameplate's: the game draws each plate at a scale of its
+-- own and changes it as you move (0.8 farther than 10 yards, 1.2 your
+-- target, by default), and the debuff icons' lines can't be laid again
+-- once the game has made the icon forbidden; one pixel at the smallest
+-- scale keeps them on screen at every distance (a player's report, 0.8.0:
+-- "missing most borders").
+export function withPixelUnit(unit: PixelUnit?, body: () -> ())
+    local prev = scoped
+    scoped = unit
+    local ok, err = pcall(body)
+    scoped = prev
+    if not ok then
+        error(err, 0)
+    end
+end
+
+-- The unit lines made now take (to hand on to what's built later, an aura
+-- button the engine makes).
+export function pixelUnit(): PixelUnit?
+    return scoped
+end
+
 local borders: { [Border]: boolean } = setmetatable({}, { __mode = "k" })
 -- each frame's borders (relayoutPixels walks a frame's own tree down)
 local bordersOf: { [Frame]: Border[] } = setmetatable({}, { __mode = "k" })
@@ -300,6 +331,8 @@ export class Border
     readonly left: Texture
     readonly right: Texture
     readonly parts: Texture[]
+    -- its one pixel when fixed (made inside withPixelUnit)
+    unit: PixelUnit? = nil
 
     constructor(
         readonly frame: Frame,
@@ -314,6 +347,7 @@ export class Border
         self.left, self.right = crisp(frame:CreateTexture(nil, layer, nil, sub)),
             crisp(frame:CreateTexture(nil, layer, nil, sub))
         self.parts = { self.top, self.bottom, self.left, self.right }
+        self.unit = scoped
         self:SetColor(color)
         self:Layout()
         borders[self] = true
@@ -323,7 +357,8 @@ export class Border
     end
 
     function Layout()
-        local px = pixel.size(self.frame)
+        local unit = self.unit
+        local px = unit and unit() or pixel.size(self.frame)
         local w, i = px * self.width, px * self.inset
         local top, bottom, left, right = self.top, self.bottom, self.left, self.right
         top:ClearAllPoints()
@@ -377,7 +412,17 @@ end
 -- right), "both" (fading in from the left and out to the right) or nil (solid).
 --------------------------------------------------------------------------------
 
-local hairlines: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+-- each hairline, with its fixed unit (or true: its frame's scale)
+local hairlines: { [Frame]: PixelUnit | boolean } = setmetatable({}, { __mode = "k" })
+
+-- A hairline's height: one pixel.
+local function lineSize(line: Frame): number
+    local unit = hairlines[line]
+    if type(unit) == "function" then
+        return unit()
+    end
+    return pixel.size(line)
+end
 
 local function gradient(tex: Texture, color: string, fromAlpha: number, toAlpha: number)
     tex:SetColorTexture(1, 1, 1, 1)
@@ -403,8 +448,8 @@ export function hairline(parent: Frame, color: string, fade: string?): Frame
             paintFill(t, color)
         end
     end
-    line:SetHeight(pixel.size(line))
-    hairlines[line] = true
+    hairlines[line] = scoped or true
+    line:SetHeight(lineSize(line))
     return line
 end
 
@@ -595,7 +640,7 @@ export function relayoutPixels(root: Frame)
             b:Layout()
         end
         if hairlines[fr] then
-            fr:SetHeight(pixel.size(fr))
+            fr:SetHeight(lineSize(fr))
         end
         for _, c in ipairs({ fr:GetChildren() }) do
             visit(c)
@@ -607,11 +652,18 @@ end
 events.on(
     "SUUUI_ROOT_SCALED",
     function()
+        -- (a line with a unit of its own doesn't follow UIParent; one inside a
+        -- frame the game made forbidden after (an aura button) can't be
+        -- touched any more: left as it is)
         for b in pairs(borders) do
-            b:Layout()
+            if not b.unit then
+                pcall(b.Layout, b)
+            end
         end
-        for line in pairs(hairlines) do
-            line:SetHeight(pixel.size(line))
+        for line, unit in pairs(hairlines) do
+            if unit == true then
+                pcall(line.SetHeight, line, pixel.size(line))
+            end
         end
     end,
     "Draw"
