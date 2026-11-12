@@ -35,6 +35,13 @@
 --                                             (T.radius; SuuUI draws square
 --                                             corners: nothing reads them
 --                                             yet, kept for themes to come)
+--   dress = { [kind] = { header, pieces,      (0.40) art on the frames, past
+--             motes } }                       their edges where it likes:
+--                                             vines over windows, a parrot on
+--                                             the minimap, header art,
+--                                             fireflies; kinds "window",
+--                                             "minimap", "unit", "chat"
+--                                             (UI/Dress.wowlua has the shape)
 --   health = "class"                          (0.26) players' health in
 --                                             their class colour ("fill",
 --                                             the default: the unit-fill);
@@ -61,6 +68,8 @@ import * as events from "./Events"
 import * as vision from "./Vision"
 import * as fonts from "./Fonts"
 import * as draw from "/UI/Draw"
+import * as dress from "/UI/Dress"
+import type Dress, DressPiece from "/UI/Dress"
 import * as secret from "wowlua:secret"
 
 export type ThemeColors = { [string]: number[] }
@@ -82,6 +91,7 @@ export type Theme = {
     space: ThemeNumbers,
     sizes: ThemeNumbers,
     radius: ThemeRadii,
+    dress: Dress,
     health: "fill" | "class",
 }
 --- What a plugin passes SuuUI.RegisterTheme.
@@ -96,6 +106,7 @@ export type ThemeDef = {
     space?: ThemeNumbers,
     sizes?: ThemeNumbers,
     radius?: ThemeRadii,
+    dress?: Dress,
     health?: "fill" | "class",
 }
 
@@ -208,6 +219,7 @@ local list: Theme[] = {
         space = {},
         sizes = {},
         radius = {},
+        dress = {},
         health = "fill",
     },
 }
@@ -313,6 +325,104 @@ local function radiusOf(id: string, value: unknown): ThemeRadii
     return out
 end
 
+local POINTS: { [string]: boolean } = {
+    TOPLEFT = true,
+    TOP = true,
+    TOPRIGHT = true,
+    LEFT = true,
+    CENTER = true,
+    RIGHT = true,
+    BOTTOMLEFT = true,
+    BOTTOM = true,
+    BOTTOMRIGHT = true,
+}
+local SPAN_POINTS: { [string]: boolean } = { TOP = true, BOTTOM = true, LEFT = true, RIGHT = true }
+
+local function isFile(v: unknown): boolean
+    return type(v) == "string" and v ~= ""
+end
+
+-- A theme's dress (0.40), checked: the kinds, each piece's file, point and
+-- size, the motes.
+local function dressOf(id: string, given: unknown): Dress
+    if given == nil then
+        return {}
+    end
+    if type(given) ~= "table" then
+        error(("SuuUI.RegisterTheme: %s's dress is a table of frame kinds"):format(id), 3)
+    end
+    local out: Dress = {}
+    for kind, spec in pairs(given :: { [unknown]: unknown }) do
+        if type(kind) ~= "string" or not dress.KINDS[kind] then
+            error(("SuuUI.RegisterTheme: %s's dress has no frame kind %q (window, minimap, unit, chat)"):format(
+                id,
+                tostring(kind)
+            ), 3)
+        end
+        if type(spec) ~= "table" then
+            error(("SuuUI.RegisterTheme: %s's dress.%s is a table"):format(id, kind), 3)
+        end
+        local k = spec :: { header?: unknown, pieces?: unknown, motes?: unknown }
+        if k.header ~= nil and not isFile(k.header) then
+            error(("SuuUI.RegisterTheme: %s's dress.%s.header needs a file path"):format(id, kind), 3)
+        end
+        local pieces: DressPiece[] = {}
+        if k.pieces ~= nil then
+            if type(k.pieces) ~= "table" then
+                error(("SuuUI.RegisterTheme: %s's dress.%s.pieces is a list"):format(id, kind), 3)
+            end
+            for i, raw in ipairs(k.pieces :: unknown[]) do
+                local p = type(raw) == "table" and raw :: { [string]: unknown } or {}
+                local where = ("%s's dress.%s.pieces[%d]"):format(id, kind, i)
+                if not isFile(p.file) then
+                    error(("SuuUI.RegisterTheme: %s needs a file path"):format(where), 3)
+                end
+                if type(p.point) ~= "string" or not POINTS[p.point :: string] then
+                    error(("SuuUI.RegisterTheme: %s's point is a frame point (TOPLEFT, TOP, …)"):format(where), 3)
+                end
+                if p.span and not SPAN_POINTS[p.point :: string] then
+                    error(("SuuUI.RegisterTheme: %s spans an edge: TOP, BOTTOM, LEFT or RIGHT"):format(where), 3)
+                end
+                for _, key in ipairs({ "w", "h" }) do
+                    local v = p[key]
+                    if type(v) ~= "number" or v <= 0 or v > 1024 then
+                        error(("SuuUI.RegisterTheme: %s's %s is a size from 1 to 1024 px"):format(where, key), 3)
+                    end
+                end
+                for _, key in ipairs({ "x", "y", "sway" }) do
+                    local v = p[key]
+                    if v ~= nil and type(v) ~= "number" then
+                        error(("SuuUI.RegisterTheme: %s's %s is a number"):format(where, key), 3)
+                    end
+                end
+                if p.layer ~= nil and p.layer ~= "front" and p.layer ~= "back" then
+                    error(("SuuUI.RegisterTheme: %s's layer is \"front\" or \"back\""):format(where), 3)
+                end
+                if p.color ~= nil and not colors[tostring(p.color)] then
+                    error(("SuuUI.RegisterTheme: %s's color is a colour token"):format(where), 3)
+                end
+                pieces[#pieces + 1] = p :: unknown :: DressPiece
+            end
+        end
+        local motes: unknown = k.motes
+        if motes ~= nil then
+            local m = type(motes) == "table" and motes :: { [string]: unknown } or {}
+            if not isFile(m.file) or type(m.count) ~= "number" or (m.count :: number) < 1 or (m.count :: number) > 8 then
+                error(("SuuUI.RegisterTheme: %s's dress.%s.motes is { file, count (1 to 8) }"):format(id, kind), 3)
+            end
+            if m.color ~= nil and not colors[tostring(m.color)] then
+                error(("SuuUI.RegisterTheme: %s's dress.%s.motes.color is a colour token"):format(id, kind), 3)
+            end
+        end
+        out[kind] = {
+            header = k.header :: string?,
+            pieces = pieces,
+            motes = motes :: Dress[string]["motes"],
+        }
+    end
+    return out
+end
+
 -- (a plugin's Lua passes anything: checked here)
 export function register(value: unknown): Theme
     local def = type(value) == "table" and value :: ThemeDef or nil
@@ -377,6 +487,7 @@ export function register(value: unknown): Theme
     local space = numbers(def.id, "space", def.space, design.space, 0, "spacing token")
     local ownSizes = numbers(def.id, "sizes", def.sizes, design.size, 0.25, "size token")
     local radius = radiusOf(def.id, def.radius)
+    local worn = dressOf(def.id, def.dress)
     given = def.health
     if given ~= nil and given ~= "fill" and given ~= "class" then
         error(("SuuUI.RegisterTheme: %s's health is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
@@ -392,6 +503,7 @@ export function register(value: unknown): Theme
         space = space,
         sizes = ownSizes,
         radius = radius,
+        dress = worn,
         health = def.health == "class" and "class" or "fill",
     }
     list[#list + 1] = theme
@@ -519,6 +631,8 @@ export function apply()
     -- (files first: a bar's new file may take the bar's colour; repaint
     -- then sets every kept colour)
     draw.reskin()
+    -- (0.40) the dress: art on the frames, header art, motion
+    dress.apply(theme.dress)
     draw.repaint()
     -- (spacing or sizes moved: what keeps its layout is laid out again,
     -- then the modules lay out the rest on the message)
