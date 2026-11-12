@@ -248,8 +248,17 @@ local function expiringColor(seconds: number?): LuaColorCurveObject?
     return c
 end
 
+-- The timers' shade behind the digits: the shade token, fading up (one
+-- weak set and the theme handler below, not a kept paint each: the
+-- engine makes a button for every aura of every plate in a crowd).
+local scrims: { [Texture]: boolean } = setmetatable({}, { __mode = "k" })
+local function shadeScrim(t: Texture)
+    local r, g, b, a = draw.rgba("shade", 0.8)
+    t:SetGradient("VERTICAL", CreateColor(r, g, b, a), CreateColor(r, g, b, 0))
+end
+
 -- The engine keeps the curves it was given: a theme change sets their
--- colours again in place.
+-- colours again in place; the scrims too.
 events.on(
     "SUUUI_THEME_CHANGED",
     function()
@@ -257,6 +266,9 @@ events.on(
             if c then
                 pcall(expiringPoints, c, seconds)
             end
+        end
+        for t in pairs(scrims) do
+            pcall(shadeScrim, t)
         end
     end,
     "Auras"
@@ -414,7 +426,8 @@ local function makeInitializer(
         scrim:SetPoint("BOTTOMRIGHT", -1, 1)
         scrim:SetHeight(math.floor(size * 0.6))
         scrim:SetColorTexture(1, 1, 1, 1)
-        scrim:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.8), CreateColor(0, 0, 0, 0))
+        shadeScrim(scrim)
+        scrims[scrim] = true
         -- kept, so SetGroupSize can resize the buttons the engine already made
         buttons[#buttons + 1] = { button = button, key = group.key, scrim = scrim, edges = borders }
         local duration = text:CreateFontString(nil, "OVERLAY")

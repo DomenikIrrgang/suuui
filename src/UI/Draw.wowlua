@@ -39,23 +39,24 @@ export function rgba(name: string, alpha: number?): (number, number, number, num
     return c[1], c[2], c[3], c[4] * (alpha or 1)
 end
 
-local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
-
 -- The marks text shows inline, from SuuUI's own art (64 px): the fonts have
--- no ▲ ▼ ✓ ●, and the game draws a missing character as an empty box.
+-- no ▲ ▼ ✓ ●, and the game draws a missing character as an empty box. Each
+-- is a glyph's name (or, for the dot, a texture token's): a theme's own.
 export const MARKS = {
-    up = TEXTURES .. "Glyphs\\chevronUp.tga",
-    down = TEXTURES .. "Glyphs\\chevronDown.tga",
-    check = TEXTURES .. "Glyphs\\check.tga",
-    dot = TEXTURES .. "CircleFill.tga",
+    up = "chevronUp",
+    down = "chevronDown",
+    check = "check",
+    dot = "circle-fill",
 }
 
 -- A mark for a line of text (`|T…|t`) in a colour token, as tall as the line;
--- the colour is the token's when the text is made (no repaint).
+-- the colour and the file are the theme's when the text is made (no repaint).
 export function inlineMark(name: "up" | "down" | "check" | "dot", token: string): string
     local r, g, b = rgba(token)
+    local file = name == "dot" and (T.texture :: { [string]: string })[MARKS.dot] or
+        (T.glyph :: { [string]: string })[MARKS[name]]
     return ("|T%s:0:0:0:0:64:64:0:64:0:64:%d:%d:%d|t"):format(
-        MARKS[name],
+        file,
         math.floor(r * 255 + 0.5),
         math.floor(g * 255 + 0.5),
         math.floor(b * 255 + 0.5)
@@ -340,12 +341,91 @@ export function skinBar(bar: StatusBar, token: string)
     keepSkin(bar, token, false)
 end
 
+-- A texture or bar let go of its skin: something else shows there now (a
+-- class icon where a role was), which a theme change must leave alone.
+export function unskin(region: Texture | StatusBar)
+    skinToken[region], skinFile[region], skinTiled[region] = nil, nil, nil
+end
+
 -- The texture token a texture or bar was skinned with (nil: none).
 export function skinOf(region: Texture | StatusBar): string?
     return skinToken[region]
 end
 
--- Every kept skin whose token's file changed, set again (Themes.wowlua,
+--------------------------------------------------------------------------------
+-- Glyphs: SuuUI's icons by name (asked 2026-11-12: a theme replaces any of
+-- them, T.glyph). A texture given a glyph is kept, as a skin is; when a
+-- theme changes the glyph's file, reskin sets it again (keeping the
+-- texture's colour, size and tex coords). Setting the texture any other way
+-- (another file, an atlas, a colour) lets it go.
+--   glyph(texture, name)   a texture's file from a glyph's name
+--   glyphFile(name)        a glyph's file now (for |T…|t text, art paths)
+--------------------------------------------------------------------------------
+
+local glyphFiles = T.glyph :: { [string]: string }
+-- what each glyph texture shows: its glyph's name and the file set
+local glyphName: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+local glyphSet: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+local glyphWatched: { [Texture]: boolean } = setmetatable({}, { __mode = "k" })
+local glyphing = false
+
+local function letGlyphGo(tex: Texture)
+    if not glyphing then
+        glyphName[tex] = nil
+        glyphSet[tex] = nil
+    end
+end
+
+-- where a name that isn't a glyph points (Media/Textures/Glyphs/<name>.tga,
+-- as before glyphs had names: no file, so nothing shows)
+local GLYPH_DIR = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
+
+-- A glyph's file now (a name that isn't one: where it would be, as before).
+export function glyphFile(name: string): string
+    return glyphFiles[name] or (GLYPH_DIR .. tostring(name) .. ".tga")
+end
+
+-- Whether `name` is a glyph.
+export function isGlyph(name: string): boolean
+    return glyphFiles[name] ~= nil
+end
+
+-- A texture's file from a glyph's name, kept: a theme's glyph replaces it.
+-- (A name that isn't a glyph is set as before, not kept: nothing shows.)
+export function glyph(tex: Texture, name: string)
+    local file = glyphFiles[name]
+    if not file then
+        tex:SetTexture(GLYPH_DIR .. tostring(name) .. ".tga")
+        return
+    end
+    if glyphName[tex] == name and glyphSet[tex] == file then
+        return
+    end
+    glyphing = true
+    local ok: boolean, err: unknown = pcall(tex.SetTexture, tex, file)
+    glyphing = false
+    if not ok then
+        error(err, 2)
+    end
+    glyphName[tex], glyphSet[tex] = name, file
+    -- (a glyph where a skin was: the skin lets go)
+    skinToken[tex], skinFile[tex], skinTiled[tex] = nil, nil, nil
+    if not glyphWatched[tex] then
+        glyphWatched[tex] = true
+        for _, setter in ipairs({ "SetTexture", "SetAtlas", "SetColorTexture" }) do
+            if has(tex, setter) then
+                hooksecurefunc(tex, setter, letGlyphGo)
+            end
+        end
+    end
+end
+
+-- The glyph a texture shows (nil: none, or set another way since).
+export function glyphOf(tex: Texture): string?
+    return glyphName[tex]
+end
+
+-- Every kept skin and glyph whose file changed, set again (Themes.wowlua,
 -- before the colours are repainted: a bar's new file may take the bar's own
 -- colour, and repaint then sets the kept ones). A texture keeps the part of
 -- its file it showed (a raid marker's cell, a glow's slice).
@@ -391,6 +471,26 @@ export function reskin()
         end
     end
     painting = false
+    local changed: Texture[] = {}
+    for tex, name in pairs(glyphName) do
+        if glyphFiles[name] ~= glyphSet[tex] then
+            changed[#changed + 1] = tex
+        end
+    end
+    glyphing = true
+    for _, tex in ipairs(changed) do
+        local file = glyphFiles[glyphName[tex] or ""] or glyphSet[tex] or ""
+        glyphSet[tex] = file
+        local okCoords, a, b, c, d, e, f, g, h = pcall(tex.GetTexCoord, tex)
+        local ok: boolean, err: unknown = pcall(tex.SetTexture, tex, file)
+        if ok and okCoords then
+            pcall(tex.SetTexCoord, tex, a, b, c, d, e, f, g, h)
+        end
+        if not ok then
+            geterrorhandler()(err)
+        end
+    end
+    glyphing = false
 end
 
 -- A size token in px, or a number passed through.
@@ -412,6 +512,15 @@ end
 export function fill(parent: Frame, color: string, layer: DrawLayer?, sublevel: number?): Texture
     local t = parent:CreateTexture(nil, layer or "BACKGROUND", nil, sublevel)
     paintFill(t, color)
+    return t
+end
+
+-- A bar's fill drawn as a texture (sized by its owner): the texture token
+-- "bar" in a token colour, both kept (a theme's file and colour).
+export function barFill(parent: Frame, color: string, layer: DrawLayer?, sublevel: number?): Texture
+    local t = parent:CreateTexture(nil, layer or "ARTWORK", nil, sublevel)
+    skin(t, "bar")
+    paint(t, color)
     return t
 end
 

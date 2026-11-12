@@ -19,6 +19,7 @@
 import colorize from "wowlua:color"
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
+import * as fonts from "/Core/Fonts"
 import SuuUI from "/Core/API"
 import * as controls from "/UI/Controls"
 import SuuButton from "/UI/Controls"
@@ -32,7 +33,6 @@ import Text from "/UI/Text"
 
 local S = T.space
 
-local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local hex = draw.hex
 
 --------------------------------------------------------------------------------
@@ -108,7 +108,7 @@ local liveTracks: { [LegacyTrack]: boolean } = setmetatable({}, { __mode = "k" }
 local function bigNumber(parent: Frame): Text
     local fs = uiText.text(parent, "numeric", "ink")
     local spec = T.type.numeric
-    fs:SetFont(spec.file, 20, "")
+    fs:SetFont(spec.file, fonts.size("numeric", 20), "")
     return fs
 end
 
@@ -141,7 +141,7 @@ class PointsBlock extends Frame
     -- after a theme change: the caption's height and the numbers' face
     function Restyle()
         self:SetHeight(blockHeight())
-        self.big:SetFont(T.type.numeric.file, 20, "")
+        self.big:SetFont(T.type.numeric.file, fonts.size("numeric", 20), "")
     end
 end
 
@@ -199,7 +199,10 @@ end
 -- Legacy points
 --------------------------------------------------------------------------------
 
-local ROW_H = T.type.body.lineHeight + 2
+-- (from the text styles each time: a theme's line heights reach them)
+local function rowH(): number
+    return T.type.body.lineHeight + 2
+end
 
 class ChallengeRow extends Frame
     readonly check: Texture
@@ -211,10 +214,10 @@ class ChallengeRow extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self:SetHeight(ROW_H)
+        self:SetHeight(rowH())
         self:EnableMouse(true)
         self.check = self:CreateTexture(nil, "ARTWORK")
-        self.check:SetTexture(GLYPHS .. "check.tga")
+        draw.glyph(self.check, "check")
         self.check:SetSize(11, 11)
         self.check:SetPoint("LEFT", 0, 0)
         draw.paint(self.check, "ink-muted")
@@ -243,6 +246,7 @@ class ChallengeRow extends Frame
     end
 
     function Fill(item: Challenge)
+        self:SetHeight(rowH())
         self.item = item
         self.check:SetShown(item.done == true)
         self.bullet:SetShown(not item.done)
@@ -262,7 +266,7 @@ local COLS = 3
 
 local function cardHeight(): number
     return S["space-4"] * 2 + T.type.header.lineHeight + S["space-3"] + 6 + S["space-3"] +
-        CARD_ROWS * (ROW_H + S["space-2"]) +
+        CARD_ROWS * (rowH() + S["space-2"]) +
         T.type.caption.lineHeight
 end
 -- (the heights at load; a theme change updates the public copies, SuuUI.UI's)
@@ -293,7 +297,7 @@ class CategoryCard extends Button
         self.track:SetHeight(6)
         self.track:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-3"])
         self.track:SetPoint("RIGHT", self, "RIGHT", -S["space-4"], 0)
-        self.fill = draw.fill(self, "progress-fill", "ARTWORK", 1)
+        self.fill = draw.barFill(self, "progress-fill", "ARTWORK", 1)
         self.fill:SetHeight(6)
         self.fill:SetPoint("TOPLEFT", self.track, "TOPLEFT")
         self.all = uiText.text(self, "caption", "gilt-text")
@@ -319,7 +323,9 @@ end
 
 local BAR_W = 64 -- a challenge's progress bar
 local STEP_W = 168 -- a step's column
-local STEP_H = T.type.body.lineHeight
+local function stepH(): number
+    return T.type.body.lineHeight
+end
 local INDENT = 12 + S["space-3"]
 
 -- a thin bar: track and fill
@@ -333,7 +339,7 @@ class ThinBar extends Frame
         self:SetHeight(h or 3)
         self.track = draw.fill(self, "track", "ARTWORK")
         self.track:SetAllPoints()
-        self.fill = draw.fill(self, "progress-fill", "ARTWORK", 1)
+        self.fill = draw.barFill(self, "progress-fill", "ARTWORK", 1)
         self.fill:SetPoint("TOPLEFT")
         self.fill:SetPoint("BOTTOMLEFT")
         self:SetScript("OnSizeChanged", function()
@@ -364,9 +370,9 @@ class StepCell extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self:SetSize(STEP_W, STEP_H)
+        self:SetSize(STEP_W, stepH())
         self.check = self:CreateTexture(nil, "ARTWORK")
-        self.check:SetTexture(GLYPHS .. "check.tga")
+        draw.glyph(self.check, "check")
         self.check:SetSize(10, 10)
         self.check:SetPoint("LEFT", 0, 0)
         draw.paint(self.check, "ink-muted")
@@ -396,7 +402,7 @@ class DetailRow extends Button
 
     constructor(view: LegacyChallenges, parent: Frame)
         super(nil, parent)
-        self:SetHeight(ROW_H + 2)
+        self:SetHeight(rowH() + 2)
         self.hover = draw.fill(self, "gilt-faint", "BACKGROUND", 1)
         self.hover:SetAllPoints()
         self.hover:Hide()
@@ -405,7 +411,7 @@ class DetailRow extends Button
         self.chevron:SetPoint("LEFT", 0, 0)
         draw.paint(self.chevron, "gilt-text")
         self.check = self:CreateTexture(nil, "ARTWORK")
-        self.check:SetTexture(GLYPHS .. "check.tga")
+        draw.glyph(self.check, "check")
         self.check:SetSize(11, 11)
         self.check:SetPoint("LEFT", 0, 0)
         draw.paint(self.check, "ink-muted")
@@ -451,13 +457,14 @@ class DetailRow extends Button
     end
 
     function Fill(view: LegacyChallenges, item: Challenge)
+        self:SetHeight(rowH() + 2)
         self.item = item
         local stepsN = item.stepsN
         local steps = stepsN ~= nil and stepsN > 1
         local id = item.id
         local open = steps and id ~= nil and view.expanded[id] == true
         self.chevron:SetShown(steps and not item.done)
-        self.chevron:SetTexture(GLYPHS .. (open and "chevronDown" or "chevronRight") .. ".tga")
+        draw.glyph(self.chevron, (open and "chevronDown" or "chevronRight"))
         self.check:SetShown(item.done == true)
         self.bullet:SetShown(not item.done and not steps)
         self.name:SetValue(item.name or "")
@@ -486,7 +493,9 @@ class DetailRow extends Button
 end
 
 local PANEL_PAD = S["space-5"]
-local PANEL_HEAD = T.type.header.lineHeight + S["space-3"] + 3 + S["space-4"]
+local function panelHead(): number
+    return T.type.header.lineHeight + S["space-3"] + 3 + S["space-4"]
+end
 
 -- A sub-category's panel: its name, count and bar, its challenges and the
 -- open ones' steps.
@@ -519,7 +528,7 @@ class GroupPanel extends Frame
         self.name:SetValue(g.name ~= "" and g.name or category)
         self.count:SetValue(g.done .. "/" .. #g.items)
         self.bar:SetFraction(#g.items > 0 and g.done / #g.items or 0)
-        local y = PANEL_PAD + PANEL_HEAD
+        local y = PANEL_PAD + panelHead()
         local inner = width - PANEL_PAD * 2
         self.stepIndex, self.subIndex = 0, 0
         for k, item in ipairs(g.items) do
@@ -530,7 +539,7 @@ class GroupPanel extends Frame
             r:SetWidth(inner)
             r:Fill(view, item)
             r:Show()
-            y = y + ROW_H + 2 + S["space-1"]
+            y = y + rowH() + 2 + S["space-1"]
             local id, steps = item.id, item.steps
             if item.stepsN and id and view.expanded[id] and steps then
                 y = view:LayoutSteps(self, steps(), PANEL_PAD + INDENT, y, inner - INDENT)
@@ -597,7 +606,7 @@ export class LegacyChallenges extends Frame
             back.label:SetPoint("CENTER", 7, 0)
         end)
         local chevron = back:CreateTexture(nil, "OVERLAY")
-        chevron:SetTexture(GLYPHS .. "chevronLeft.tga")
+        draw.glyph(chevron, "chevronLeft")
         chevron:SetSize(10, 10)
         chevron:SetPoint("LEFT", S["space-5"], 0)
         draw.paint(chevron, "gilt-text")
@@ -658,15 +667,11 @@ export class LegacyChallenges extends Frame
                     if not r then
                         r = ChallengeRow.new(c)
                         c.rows[k] = r
-                        r:SetPoint(
-                            "TOPLEFT",
-                            c.track,
-                            "BOTTOMLEFT",
-                            0,
-                            -S["space-3"] - (k - 1) * (ROW_H + S["space-2"])
-                        )
-                        r:SetPoint("RIGHT", c, "RIGHT", -S["space-4"], 0)
                     end
+                    -- (again each time: a theme's line height moves them)
+                    r:ClearAllPoints()
+                    r:SetPoint("TOPLEFT", c.track, "BOTTOMLEFT", 0, -S["space-3"] - (k - 1) * (rowH() + S["space-2"]))
+                    r:SetPoint("RIGHT", c, "RIGHT", -S["space-4"], 0)
                     r:Fill(item)
                     r:Show()
                 elseif r then
@@ -702,7 +707,8 @@ export class LegacyChallenges extends Frame
                 p.steps[p.stepIndex] = c
                 local col, row = (n - 1) % cols, math.floor((n - 1) / cols)
                 c:ClearAllPoints()
-                c:SetPoint("TOPLEFT", p, "TOPLEFT", x + col * STEP_W, -(y + S["space-1"] + row * STEP_H))
+                c:SetHeight(stepH())
+                c:SetPoint("TOPLEFT", p, "TOPLEFT", x + col * STEP_W, -(y + S["space-1"] + row * stepH()))
                 c.check:SetShown(step.done == true)
                 c.ring:SetShown(not step.done)
                 c.hole:SetShown(not step.done)
@@ -715,7 +721,7 @@ export class LegacyChallenges extends Frame
                 c.text:SetColor(step.done and "ink-muted" or "ink")
                 c:Show()
             end
-            y = y + S["space-1"] + math.ceil(#plainSteps / cols) * STEP_H + S["space-3"]
+            y = y + S["space-1"] + math.ceil(#plainSteps / cols) * stepH() + S["space-3"]
             plainSteps = {}
         end
         for _, step in ipairs(list) do
@@ -737,7 +743,7 @@ export class LegacyChallenges extends Frame
                     steps = steps,
                 })
                 r:Show()
-                y = y + ROW_H + 2 + S["space-1"]
+                y = y + rowH() + 2 + S["space-1"]
                 local id = step.id
                 if id and self.expanded[id] and not step.done then
                     y = self:LayoutSteps(p, steps(), x + INDENT, y, width - INDENT)
@@ -874,7 +880,7 @@ class StopMark extends Frame
         self.over:SetAllPoints()
         self.over:SetFrameLevel(slot:GetFrameLevel() + 5)
         self.check = self.over:CreateTexture(nil, "OVERLAY", nil, 7)
-        self.check:SetTexture(GLYPHS .. "check.tga")
+        draw.glyph(self.check, "check")
         self.check:SetSize(10, 10)
         self.check:SetPoint("TOPRIGHT", slot, "TOPRIGHT", 3, 3)
         draw.paint(self.check, "fel")
@@ -902,7 +908,7 @@ export class LegacyTrack extends Frame
         self.points:SetWidth(LEFT_W - 8)
         self.bar = draw.fill(self, "track", "ARTWORK")
         self.bar:SetHeight(6)
-        self.fill = draw.fill(self, "progress-fill", "ARTWORK", 1)
+        self.fill = draw.barFill(self, "progress-fill", "ARTWORK", 1)
         self.fill:SetHeight(6)
         self.fill:SetPoint("TOPLEFT", self.bar, "TOPLEFT")
         self.next = uiText.text(self, "caption", "ink-muted")

@@ -166,14 +166,19 @@ SuuUI.RegisterTheme({
     id = "frost", name = "Frost", description = "Cold blues instead of gilt.",
     colors = { ["gilt-text"] = { 0.6, 0.85, 1 }, ["gilt-line"] = { 0.4, 0.65, 0.9 } },
     fonts = { header = { file = "Interface\\AddOns\\MyPlugin\\MyFont.ttf", size = 13 } },
-    textures = { ["health-bar"] = "Interface\\AddOns\\MyPlugin\\Smooth.tga" },
+    textures = { ["health-bar"] = "Interface\\AddOns\\MyPlugin\\Smooth.tga", bar = "Interface\\AddOns\\MyPlugin\\Smooth.tga" },
+    glyphs = { bag = "Interface\\AddOns\\MyPlugin\\Bag.tga", search = "Interface\\AddOns\\MyPlugin\\Search.tga" },
+    colors = { shade = { 0.05, 0.08, 0.15 } },
 })
 ```
 
 - **When to call it:** at file load, not in `OnEnable`. Themes apply at login, before SuuUI builds its frames.
 - **Choosing it:** the player picks it under Settings › General › Appearance › Theme. A change applies at once.
 - **What to change:** colour token names are the keys of `SuuUI.Tokens.color`, and text styles the keys of `SuuUI.Tokens.type`. The chat's lines use `body`'s face (at the player's chat font size), its tabs `header`'s. The chat's colours (`chat-*`) can't be themed (API 0.36): players set them in the game's chat settings, and a theme that sets one gets a warning in the chat.
-- **Textures (API 0.35):** `textures` replaces the files the unit frames and nameplates draw: the bars' fill (`health-bar`, `power-bar`, `cast-bar`, `aura-drain`), the absorb shield and the tagged mob's stripes (`absorb`, `tapped`, tiled), the glows, role icons, raid markers, the cast lock and the combat sign. The keys are `SuuUI.Tokens.texture`, and `SuuUI.Tokens.usage[key]` says how each is drawn ([API.md](API.md) lists them under "Textures that follow the theme"). Use white or light art: SuuUI colours it with the colour tokens.
+- **Textures (API 0.35):** `textures` replaces the files the unit frames and nameplates draw: the bars' fill (`health-bar`, `power-bar`, `cast-bar`, `aura-drain`), the absorb shield and the tagged mob's stripes (`absorb`, `tapped`, tiled), the glows, role icons, raid markers, the cast lock and the combat sign. The keys are `SuuUI.Tokens.texture`, and `SuuUI.Tokens.usage[key]` says how each is drawn ([API.md](API.md) lists them under "Textures that follow the theme"). Use white or light art: SuuUI colours it with the colour tokens. API 0.37 adds the rest of the UI: `bar` (every other plain bar: XP and reputation, the swing timer, the meters, the totem and weapon-enchant drains, the tooltip's health), `swing-delay`, the discs and rings (`circle-fill`, `circle-soft`, `circle-band`, `circle-edge`, `circle-dash`, `ring-arc-2` to `-4`: map pins, the minimap, the micro menu's caps), the checkbox tick (`check`) and the settings' reset and lock (`setting-reset`, `setting-lock`).
+- **Icons (API 0.37):** `glyphs` replaces SuuUI's icons by name: the window icons, buttons, bags, map pins, the micro menu, menus, professions, notifications and the rest. The names are the keys of `SuuUI.Tokens.glyph` (the file names in SuuUI's `Media/Textures/Glyphs`: `bag`, `search`, `gear`, `chevronDown`, …); give only the ones you want to change. 64 px white art works best: SuuUI colours and sizes it.
+- **Dark overlays (API 0.37):** the colour token `shade` (black) colours every dark layer: the shade behind a dialog, the vignettes, the model stage's floor, the minimap's shadow, the aura timers' shade. Each keeps its own strength.
+- **Sizes:** text SuuUI draws at a size of its own (big numbers, the NPC dialogue, titles, the minimap's N) grows and shrinks with its text style's `size`.
 - **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned; NPCs keep `unit-fill`, unless the player turns on NPC reaction colours. The player's "Health colour" setting on Class colours wins over your theme.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 

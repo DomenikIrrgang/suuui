@@ -15,6 +15,9 @@
 --                                             (the bars' fill, the absorb
 --                                             hatch, the tapped stripes, the
 --                                             glows, role icons…: T.texture)
+--   glyphs = { [name] = file }                (0.37) an icon's file, by the
+--                                             glyph's name (T.glyph: "bag",
+--                                             "search", "chevronDown"…)
 --   health = "class"                          (0.26) players' health in
 --                                             their class colour ("fill",
 --                                             the default: the unit-fill);
@@ -27,7 +30,8 @@
 -- vision go on top, every colour kept by UI.Paint is set again, and
 -- SUUUI_THEME_CHANGED tells the rest (colour codes in text, colours worked
 -- out from a token, sizes from a text style's line height). Textures set by
--- their token (UI.Skin) are set again before the colours (draw.reskin).
+-- their token (UI.Skin) or glyph (UI.Glyph) are set again before the
+-- colours (draw.reskin).
 
 import tokens as T, TextStyle, Color from "./Tokens"
 import * as settings from "./Settings"
@@ -40,6 +44,7 @@ import * as secret from "wowlua:secret"
 export type ThemeColors = { [string]: number[] }
 export type ThemeFonts = { [string]: { file?: string, size?: number, lineHeight?: number } }
 export type ThemeTextures = { [string]: string }
+export type ThemeGlyphs = { [string]: string }
 export type Theme = {
     id: string,
     name: string,
@@ -47,6 +52,7 @@ export type Theme = {
     colors: ThemeColors | ((class: string?) -> ThemeColors),
     fonts: ThemeFonts,
     textures: ThemeTextures,
+    glyphs: ThemeGlyphs,
     health: "fill" | "class",
 }
 --- What a plugin passes SuuUI.RegisterTheme.
@@ -57,12 +63,14 @@ export type ThemeDef = {
     colors?: ThemeColors | ((class: string?) -> ThemeColors),
     fonts?: ThemeFonts,
     textures?: ThemeTextures,
+    glyphs?: ThemeGlyphs,
     health?: "fill" | "class",
 }
 
 local colors: { [string]: Color } = T.color
 local styles: { [string]: TextStyle } = T.type
 local textures: { [string]: string } = T.texture
+local glyphs: { [string]: string } = T.glyph
 
 -- the design's own colours, text styles and textures, before any theme or
 -- colour vision (this file loads before the saved settings apply either)
@@ -70,7 +78,8 @@ local design: {
     color: { [string]: Color },
     type: { [string]: { file: string, size: number, lineHeight: number } },
     texture: { [string]: string },
-} = { color = {}, type = {}, texture = {} }
+    glyph: { [string]: string },
+} = { color = {}, type = {}, texture = {}, glyph = {} }
 for tokenName, c in pairs(colors) do
     design.color[tokenName] = { c[1], c[2], c[3], c[4], hex = c.hex }
 end
@@ -79,6 +88,9 @@ for styleName, s in pairs(styles) do
 end
 for tokenName, file in pairs(textures) do
     design.texture[tokenName] = file
+end
+for name, file in pairs(glyphs) do
+    design.glyph[name] = file
 end
 
 local function reset()
@@ -93,6 +105,9 @@ local function reset()
     for tokenName, file in pairs(design.texture) do
         textures[tokenName] = file
     end
+    for name, file in pairs(design.glyph) do
+        glyphs[name] = file
+    end
 end
 
 export const DEFAULT = "suuui"
@@ -104,6 +119,7 @@ local list: Theme[] = {
         colors = {},
         fonts = {},
         textures = {},
+        glyphs = {},
         health = "fill",
     },
 }
@@ -165,6 +181,19 @@ export function register(value: unknown): Theme
             error(("SuuUI.RegisterTheme: %s's texture %s needs a file path"):format(def.id, token), 2)
         end
     end
+    given = def.glyphs
+    if given ~= nil and type(given) ~= "table" then
+        error(("SuuUI.RegisterTheme: %s's glyphs are a table of glyph names"):format(def.id), 2)
+    end
+    for name, file in pairs(def.glyphs or {}) do
+        if not glyphs[name] then
+            error(("SuuUI.RegisterTheme: %s has no glyph %q"):format(def.id, tostring(name)), 2)
+        end
+        local f: unknown = file
+        if type(f) ~= "string" or f == "" then
+            error(("SuuUI.RegisterTheme: %s's glyph %s needs a file path"):format(def.id, name), 2)
+        end
+    end
     given = def.health
     if given ~= nil and given ~= "fill" and given ~= "class" then
         error(("SuuUI.RegisterTheme: %s's health is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
@@ -176,6 +205,7 @@ export function register(value: unknown): Theme
         colors = def.colors or {},
         fonts = def.fonts or {},
         textures = def.textures or {},
+        glyphs = def.glyphs or {},
         health = def.health == "class" and "class" or "fill",
     }
     list[#list + 1] = theme
@@ -268,6 +298,11 @@ export function apply()
     for token, file in pairs(theme.textures) do
         if textures[token] then
             textures[token] = file
+        end
+    end
+    for name, file in pairs(theme.glyphs) do
+        if glyphs[name] then
+            glyphs[name] = file
         end
     end
     vision.apply(settings.accountString("colorVision"))

@@ -4,7 +4,10 @@ import test, cases, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import threatMeter, ThreatMeter, ThreatEntry, ThreatMeterOptions from "/UI/ThreatMeter"
 import internal stateOf, holder, mix, STATUS_RANK from "/UI/ThreatMeter"
-import expectNoErrors, newParent from "../../helpers"
+import expectNoErrors, newParent, useTheme from "../../helpers"
+import tokens as T from "/Core/Tokens"
+import * as themes from "/Core/Themes"
+import * as draw from "/UI/Draw"
 import tokenOf, borderToken from "./HudHelpers"
 
 local parent: Frame? = nil
@@ -274,6 +277,26 @@ local function markers()
     -- a secret raw value is left out
     m:SetRows({ { name = "X", percent = 1, raw = mock.secret(100) } }, { raw = true })
     expect(m.rows[1].raw).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("role marks are the role-* texture tokens, a theme's live; a class circle shown since keeps its art")
+local function roleTokens()
+    local m = meter()
+    m:SetRows({ { name = "Tank", role = "TANK", percent = 50 } }, { marker = "role" })
+    local mark = m.rows[1].mark
+    expect(mark:GetTextureFilePath()).toBe(T.texture["role-tank"])
+    local healer = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleHealer.tga"
+    themes.register({ id = "test-threat-roles", textures = { ["role-tank"] = healer } })
+    useTheme("test-threat-roles")
+    expect(mark:GetTextureFilePath()).toBe(healer)
+    -- class circles since: the next theme change leaves them be
+    m:SetRows({ { name = "Mage", class = "MAGE", role = "TANK", percent = 50 } }, { marker = "class" })
+    expect(draw.skinOf(mark)).toBeNil()
+    useTheme(nil)
+    expect(mark:GetTextureFilePath()).never.toBe(T.texture["role-tank"])
+    m:SetRows({ { name = "Tank", role = "TANK", percent = 50 } }, { marker = "role" })
+    expect(mark:GetTextureFilePath()).toBe(T.texture["role-tank"])
     expectNoErrors()
 end
 
