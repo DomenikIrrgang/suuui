@@ -7,23 +7,31 @@
 -- look: untagged, a plate reused); or, with class colours on, a
 -- player's class colour toned as the damage meter's class bars (55% over
 -- surface-sunk, the deep end at 75% of it), so ink names stay readable. NPCs
--- keep the theme's fill. Class colours come from the "Health colour" setting
+-- keep the theme's fill, or, with "NPC reaction colours" on (asked
+-- 2026-11-12, off by default), their reaction's colour toned the same way:
+-- hostile red, neutral yellow, friendly green (reaction-*), wherever a unit
+-- isn't a player. Class colours come from the "Health colour" setting
 -- (Settings › General › Appearance) or a theme's `health = "class"`; the
--- setting wins (Themes.health). Painted through draw.bind: a theme, colour
--- vision or the setting changing repaints it.
+-- setting wins (Themes.health). Reaction colours come from their own setting
+-- next to it (Themes.reactionHealth). A tagged mob keeps its tapped look and
+-- the low-health fill still takes over below 35%. Painted through draw.bind:
+-- a theme, colour vision or either setting changing repaints it.
 --
 --   healthFill.paint(bar, look)   -- look: "tapped", a class token
 --                                 -- ("class-mage"), or nil for the fill
 --   healthFill.stripesOf(bar)     -- its tapped stripes (nil: never tapped)
 --   healthFill.classToken(class)  -- "MAGE" → "class-mage" (nil: none)
 --   healthFill.byClass()          -- class colours on?
+--   healthFill.reactionToken(r)   -- UnitReaction's 1-8 → "reaction-hostile",
+--                                 -- "-neutral", "-friendly" (nil: unknown)
+--   healthFill.byReaction()       -- NPCs' reaction colours on?
 
 import * as secret from "wowlua:secret"
 import tokens as T from "/Core/Tokens"
 import * as themes from "/Core/Themes"
 import * as draw from "./Draw"
 
--- what each health texture shows: "tapped", a class token, or false
+-- what each health texture shows: "tapped", a class or reaction token, or false
 local looks: { [Texture]: string | false } = setmetatable({}, { __mode = "k" })
 -- each health bar's tapped stripes, made the first time it is tapped
 local stripes: { [StatusBar]: Texture } = setmetatable({}, { __mode = "k" })
@@ -43,6 +51,30 @@ export function byClass(): boolean
     return themes.health() == "class"
 end
 
+-- NPCs' health in their reaction's colour on (the setting)?
+export function byReaction(): boolean
+    return themes.reactionHealth()
+end
+
+-- A unit's reaction to you (UnitReaction: 1-3 hostile, 4 neutral, 5-8
+-- friendly) as its colour token; nil for none or a secret one.
+export function reactionToken(reaction: unknown): string?
+    if secret.isSecret(reaction) or type(reaction) ~= "number" then
+        return nil
+    end
+    local r = reaction :: number
+    return r <= 3 and "reaction-hostile" or r == 4 and "reaction-neutral" or "reaction-friendly"
+end
+
+-- Whether a look is drawn in its own colour now: a class token with class
+-- colours on, a reaction token with reaction colours on.
+local function ownColor(look: string): boolean
+    if look:sub(1, 9) == "reaction-" then
+        return byReaction()
+    end
+    return byClass()
+end
+
 -- A class's colour token ("MAGE" → "class-mage"); nil for none, an unknown
 -- class or a secret one.
 export function classToken(class: unknown): string?
@@ -54,19 +86,24 @@ export function classToken(class: unknown): string?
     return colors[token] ~= nil and token or nil
 end
 
-local function drawFill(tex: Texture)
-    local look = looks[tex]
+-- What a look draws now: the deep end, then the fill.
+local function fillColors(look: string | false | nil): (number, number, number, number, number, number)
     local r1: number, g1: number, b1: number, r2: number, g2: number, b2: number
     if look == "tapped" then
         r1, g1, b1 = draw.rgba("unit-fill-tapped-deep")
         r2, g2, b2 = draw.rgba("unit-fill-tapped")
-    elseif look and byClass() then
+    elseif look and ownColor(look) then
         r2, g2, b2 = toned(look)
         r1, g1, b1 = r2 * DEEP, g2 * DEEP, b2 * DEEP
     else
         r1, g1, b1 = draw.rgba("unit-fill-deep")
         r2, g2, b2 = draw.rgba("unit-fill")
     end
+    return r1, g1, b1, r2, g2, b2
+end
+
+local function drawFill(tex: Texture)
+    local r1, g1, b1, r2, g2, b2 = fillColors(looks[tex])
     tex:SetGradient("HORIZONTAL", CreateColor(r1, g1, b1, 1), CreateColor(r2, g2, b2, 1))
 end
 
@@ -110,4 +147,10 @@ end
 export function classColors(token: string): (number, number, number, number, number, number)
     local r, g, b = toned(token)
     return r * DEEP, g * DEEP, b * DEEP, r, g, b
+end
+
+-- The colours a health bar's fill draws now (tests): the deep end, then the
+-- fill.
+export function colorsOf(bar: StatusBar): (number, number, number, number, number, number)
+    return fillColors(looks[bar:GetStatusBarTexture()])
 end

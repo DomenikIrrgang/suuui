@@ -42,6 +42,10 @@ local function cleanup()
     mock.group:leave()
     mock.setResting(false)
     settings.reset("ui", "reducedMotion")
+    if settings.accountString("npcHealthColor") then
+        settings.setAccount("npcHealthColor", nil)
+        themes.apply()
+    end
     M:ResetAll({
         "showToT",
         "showFocus",
@@ -608,6 +612,28 @@ local function inColor(fs: FontString, token: string): boolean
     return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
 end
 
+-- A health bar drawn as a look: the fill's gradient those colours?
+local function drawsAs(bar: StatusBar, r1: number, g1: number, b1: number, r2: number, g2: number, b2: number): boolean
+    local a = { healthFill.colorsOf(bar) }
+    local want = { r1, g1, b1, r2, g2, b2 }
+    for i = 1, 6 do
+        if math.abs(a[i] - want[i]) > 0.001 then
+            return false
+        end
+    end
+    return true
+end
+
+-- The theme's fill; the toned colour of a token (a class's or a reaction's).
+local function theFill(bar: StatusBar): boolean
+    local r1, g1, b1 = SuuUI.UI.RGBA("unit-fill-deep")
+    local r2, g2, b2 = SuuUI.UI.RGBA("unit-fill")
+    return drawsAs(bar, r1, g1, b1, r2, g2, b2)
+end
+local function toned(bar: StatusBar, token: string): boolean
+    return drawsAs(bar, healthFill.classColors(token))
+end
+
 @test("class-coloured health: a player's in their class colour, the name in ink; NPCs as before; the setting off")
 local function classHealth()
     local target = assert(M.frames).target
@@ -626,7 +652,7 @@ local function classHealth()
     -- an NPC: the fill, its name in its reaction colour
     mock.player:target(wolf)
     mock.advanceFrames(1)
-    expect(healthFill.lookOf(target.health)).toBe(false)
+    expect(theFill(target.health)).toBe(true)
     expect(inColor(target.name, "ink")).toBe(false)
     -- off again: the name's class colour back
     mock.player:target(tank)
@@ -641,6 +667,98 @@ local function classHealth()
     local sr = SuuUI.UI.RGBA("surface-sunk")
     expect(r2).toBeCloseTo(cr * 0.55 + sr * 0.45)
     expect(r1).toBeCloseTo(r2 * 0.75)
+end
+
+@test(
+    "NPC reaction colours: off, NPCs the fill; on, hostile red, neutral yellow, friendly green, the name in ink; a player as before"
+)
+local function reactionHealth()
+    local target = assert(M.frames).target
+    local boar = mock.spawnUnit({ name = "Old Boar", level = 8, reaction = "neutral", distance = 10 })
+    local keeper = mock.spawnUnit({ name = "Placeholder Keeper", level = 30, reaction = "friendly", distance = 10 })
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    -- off (the default): the theme's fill, the name in its reaction colour
+    expect(healthFill.byReaction()).toBe(false)
+    expect(target.fillReaction).toBe("reaction-hostile")
+    expect(theFill(target.health)).toBe(true)
+    expect(inColor(target.name, "reaction-hostile")).toBe(true)
+    -- on (live): toned red, the name in ink (on the bar)
+    settings.setAccount("npcHealthColor", "reaction")
+    themes.apply()
+    expect(healthFill.byReaction()).toBe(true)
+    expect(healthFill.lookOf(target.health)).toBe("reaction-hostile")
+    expect(toned(target.health, "reaction-hostile")).toBe(true)
+    expect(inColor(target.name, "ink")).toBe(true)
+    -- neutral: yellow; friendly: green
+    mock.player:target(boar)
+    mock.advanceFrames(1)
+    expect(toned(target.health, "reaction-neutral")).toBe(true)
+    mock.player:target(keeper)
+    mock.advanceFrames(1)
+    expect(toned(target.health, "reaction-friendly")).toBe(true)
+    -- the toned colour: 55% over surface-sunk, as class colours
+    local _, _, _, r2, g2 = healthFill.colorsOf(target.health)
+    local fr, fg = SuuUI.UI.RGBA("reaction-friendly")
+    local sr, sg = SuuUI.UI.RGBA("surface-sunk")
+    expect(r2).toBeCloseTo(fr * 0.55 + sr * 0.45)
+    expect(g2).toBeCloseTo(fg * 0.55 + sg * 0.45)
+    -- a player: exactly as before (the fill, its name in its class colour)
+    mock.player:target(tank)
+    mock.advanceFrames(1)
+    expect(target.fillReaction).toBeNil()
+    expect(healthFill.lookOf(target.health)).toBe("class-warrior")
+    expect(theFill(target.health)).toBe(true)
+    expect(inColor(target.name, "class-warrior")).toBe(true)
+    -- off again (live): the fill, the name's colour back
+    mock.player:target(wolf)
+    mock.advanceFrames(1)
+    settings.setAccount("npcHealthColor", nil)
+    themes.apply()
+    expect(theFill(target.health)).toBe(true)
+    expect(inColor(target.name, "reaction-hostile")).toBe(true)
+    boar:despawn()
+    keeper:despawn()
+end
+
+@test("NPC reaction colours follow the reaction (UNIT_FACTION); a mob tagged by someone else keeps its tagged look")
+local function reactionChanges()
+    local target = assert(M.frames).target
+    settings.setAccount("npcHealthColor", "reaction")
+    themes.apply()
+    mock.player:target(wolf)
+    mock.advanceFrames(15, 20)
+    expect(toned(target.health, "reaction-hostile")).toBe(true)
+    -- it turns friendly, then neutral, then hostile again
+    wolf:update({ reaction = "friendly" })
+    mock.advanceFrames(1)
+    expect(target.fillReaction).toBe("reaction-friendly")
+    expect(toned(target.health, "reaction-friendly")).toBe(true)
+    wolf:update({ reaction = "neutral" })
+    mock.advanceFrames(1)
+    expect(toned(target.health, "reaction-neutral")).toBe(true)
+    wolf:update({ reaction = "hostile" })
+    mock.advanceFrames(1)
+    expect(toned(target.health, "reaction-hostile")).toBe(true)
+    -- tagged: the tapped look wins
+    local denied = true
+    local a: { [string]: unknown } = setmetatable({
+        UnitIsTapDenied = function(_: string): boolean
+            return denied
+        end,
+    }, { __index = _G })
+    mock.setField(target, "api", a)
+    mock.fireUnitEvent("UNIT_FACTION", "target")
+    expect(healthFill.lookOf(target.health)).toBe("tapped")
+    local t1, t2, t3 = SuuUI.UI.RGBA("unit-fill-tapped-deep")
+    local t4, t5, t6 = SuuUI.UI.RGBA("unit-fill-tapped")
+    expect(drawsAs(target.health, t1, t2, t3, t4, t5, t6)).toBe(true)
+    -- the tag gone: its reaction's colour again
+    denied = false
+    mock.fireUnitEvent("UNIT_FACTION", "target")
+    expect(toned(target.health, "reaction-hostile")).toBe(true)
+    settings.setAccount("npcHealthColor", nil)
+    themes.apply()
 end
 
 @test("the settings rows: combo points for rogues and druids; the rested rows wait for the sign")

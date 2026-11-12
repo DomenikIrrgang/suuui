@@ -5,6 +5,7 @@
 ### New
 
 - For theme authors (API 0.35): a theme can replace the textures of the unit frames and nameplates with `textures`: the health, power and cast bar fill, the absorb shield's hatch, the tagged mob's stripes, the glows, role icons, raid markers, the cast lock and the combat sign (the names are in `SuuUI.Tokens.texture`). Picking the theme changes them at once, on every frame and nameplate. `SuuUI.UI.Skin` and `SuuUI.UI.SkinBar` make your own frames follow it too.
+- **NPC reaction colours**: a new setting under Settings › General › Appearance › Theme shows NPCs' health on the target, target of target, focus, boss and pet frames and on nameplates in their reaction's colour: hostile red, neutral yellow, friendly green. It is off by default; when on, it wins over the theme's health colour and changes along with the NPC (a mob turning hostile, a new target). Players keep the Health colour setting, and a mob tagged by someone else keeps its tagged look.
 
 ### Changed
 
