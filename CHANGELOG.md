@@ -2,10 +2,15 @@
 
 ## Unreleased
 
+### New
+
+- For theme authors (API 0.35): a theme can replace the textures of the unit frames and nameplates with `textures`: the health, power and cast bar fill, the absorb shield's hatch, the tagged mob's stripes, the glows, role icons, raid markers, the cast lock and the combat sign (the names are in `SuuUI.Tokens.texture`). Picking the theme changes them at once, on every frame and nameplate. `SuuUI.UI.Skin` and `SuuUI.UI.SkinBar` make your own frames follow it too.
+
 ### Changed
 
 - When an NPC offers you a choice of quest rewards, a gold coin now marks the one that sells for the most at a vendor, instead of the Upgrade mark.
 - Every notification has an x to close it, except the game's requests you answer on the card (invites, resurrection, summons...). Closing a reminder (gear to repair, full bags, points to spend) keeps it away until it clears and comes back.
+- Tagged mobs: a mob someone else has tagged (you get nothing from it) now shows a cool slate-blue health bar with diagonal stripes on its nameplate and on your target, target of target and focus frames, instead of plain grey. Its name and level keep their usual colours, and the stripes go as soon as the tag does.
 
 ### Fixed
 

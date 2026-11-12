@@ -20,6 +20,8 @@ record with a field per token, so a token read by name is checked):
   easing    name -> { smoothing = AnimationGroup smoothing, bezier = { x1, y1, x2, y2 } }
   shadow    name -> list of { x, y, blur, spread, inset, color = { r, g, b, a } }
   type      name -> { family, file, size, lineHeight, weight, letterSpacing (em), tabular }
+  texture   name -> a texture file (SuuUI's own, not the design system's:
+            TEXTURES below), which themes can replace
   order     family -> names in the design's order, for listings
   usage     name -> the design's usage note
 """
@@ -57,6 +59,40 @@ EXTRA_COLORS = [
     ("mark-star", "#fff27a"), ("mark-circle", "#ff8c00"), ("mark-diamond", "#e25cf5"),
     ("mark-triangle", "#2ecc71"), ("mark-moon", "#b5c9f0"), ("mark-square", "#1e5bff"),
     ("mark-cross", "#f0365a"), ("mark-skull", "#ffffff"),
+]
+
+# SuuUI's own texture tokens (asked 2026-11-12: every texture the unit frames
+# and nameplates draw comes from the theme): the files a theme can replace
+# with its own (Core/Themes.wowlua, `textures`). They aren't in the design
+# system's tokens.json, which has no textures; they follow its shadows in
+# Tokens.wowlua and take part in themes like colours. (name, file, usage)
+MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+WHITE = "Interface\\Buttons\\WHITE8X8"
+TEXTURES = [
+    ("health-bar", WHITE,
+     "Health fill of unit frames and nameplates, stretched along the bar; also the low-health fill, the damage ghost "
+     "and incoming heals. Coloured by unit-fill and the others through its vertex colour: a white or light texture."),
+    ("power-bar", WHITE,
+     "The power line on unit frames and the resource bar (its spend and low-power fills, combo points and the druid's "
+     "mana line too), stretched; coloured like health-bar."),
+    ("cast-bar", WHITE, "The fill of cast bars (unit frames' and nameplates'), stretched; coloured like health-bar."),
+    ("absorb", MEDIA + "Hatch.tga",
+     "Absorb-shield segment on the health bar: tiled (repeats at its own size), in ward-absorb."),
+    ("tapped", MEDIA + "Hatch.tga",
+     "The stripes over a tagged mob's health fill (unit frames and nameplates): tiled, in unit-fill-tapped-stripe."),
+    ("aura-drain", WHITE, "The duration bar along an aura icon's bottom edge, stretched."),
+    ("glow", MEDIA + "Soft.tga",
+     "Soft glows (the glow- shadows: aggro, warded, casts, aura highlights), cut as a 3x3 slice: the corners are "
+     "its outer quarters, the middle stretches. White, coloured by the shadow's colour."),
+    ("role-tank", MEDIA + "RoleTank.tga", "Role icon of a tank in a unit frame's name row, in ink."),
+    ("role-healer", MEDIA + "RoleHealer.tga", "Role icon of a healer in a unit frame's name row, in ink."),
+    ("role-damage", MEDIA + "RoleDamage.tga", "Role icon of a damage dealer in a unit frame's name row, in ink-muted."),
+    ("raid-markers", "Interface\\TargetingFrame\\UI-RaidTargetingIcons",
+     "Raid target markers on unit frames and nameplates: the game's sheet, eight markers in a 4x4 grid of equal cells "
+     "(star, circle, diamond, triangle on the first row; moon, square, cross, skull on the second)."),
+    ("cast-lock", "Interface\\LFGFrame\\UI-LFG-ICON-LOCK",
+     "The lock on a cast that can't be interrupted (cast bars and nameplates), desaturated, in ink."),
+    ("combat", MEDIA + "Glyphs\\swords.tga", "The combat sign on the player frame: crossed swords, in gilt-text."),
 ]
 
 # README, In-game implementation: easing -> AnimationGroup smoothing.
@@ -176,6 +212,10 @@ def main():
         for name, _ in entries:
             w("    [%s]: %s," % (lua_str(name), valuetype))
         w("}")
+        if key == "color":
+            w("-- A colour's name.")
+            w("export type ColorToken = keyof Colors")
+            w("")
         w("local %s: %s = {" % (key, typename))
         for name, value in entries:
             w("    [%s] = %s," % (lua_str(name), value))
@@ -231,6 +271,12 @@ def main():
         return "{ " + ", ".join(layers) + " }"
     simple("shadow", "shadow", "Shadows", "ShadowLayer[]", shadow)
 
+    entries = []
+    for name, file, note in TEXTURES:
+        usage.append((name, note))
+        entries.append((name, lua_str(file)))
+    record("texture", "Textures", "string", entries)
+
     # Text styles.
     entries = []
     for group in data["type"]["groups"]:
@@ -254,7 +300,8 @@ def main():
     w("local usage: { [string]: string } = {}")
     for name, note in usage:
         if note:
-            w("usage[%s] = %s" % (lua_str(name), lua_str(note)))
+            # (the fonts have no arrow: the game draws an empty box, 830e9b0e)
+            w("usage[%s] = %s" % (lua_str(name), lua_str(note.replace(" ↔ ", " and "))))
     w("")
 
     w("export type Tokens = {")
@@ -280,7 +327,8 @@ def main():
 
     with open(DST, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
-    print("wrote %s: %d colours, %d text styles" % (os.path.relpath(DST, ROOT), len(colors), len(names)))
+    print("wrote %s: %d colours, %d text styles, %d textures"
+          % (os.path.relpath(DST, ROOT), len(colors), len(names), len(TEXTURES)))
 
 
 if __name__ == "__main__":

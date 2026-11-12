@@ -851,10 +851,11 @@ local function disabled()
     expect(next(byUnit)).toBeNil()
 end
 
-@test("a mob tagged by someone else: its plate's health grey; the tag gone (UNIT_FACTION): back")
+@test("a mob tagged by someone else: its plate's health slate and striped; the tag gone (UNIT_FACTION): back")
 local function tappedPlate()
     local f = plateOf(wolf)
     expect(f.tappedLook).toBe(false)
+    expect(healthFill.stripesOf(f.health)).toBeNil()
     local denied = true
     fakeAPI(f, {
         UnitIsTapDenied = function(_: string): boolean
@@ -864,8 +865,75 @@ local function tappedPlate()
     mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
     mock.advanceFrames(1)
     expect(f.tappedLook).toBe(true)
+    expect(healthFill.lookOf(f.health)).toBe("tapped")
+    local stripes = assert(healthFill.stripesOf(f.health))
+    expect(stripes:IsVisible()).toBe(true)
+    expect(stripes:GetTextureFilePath()).toBe(UI.TextureFile("tapped"))
+    -- over the fill, as wide as it, not the whole bar
+    local fill = f.health:GetStatusBarTexture()
+    local function span(r: Region): number
+        return (r:GetRight() or 0) - (r:GetLeft() or 0)
+    end
+    expect(span(stripes)).toBeCloseTo(span(fill), 2)
+    expect(span(stripes) < span(f.health)).toBe(true)
+    expect(stripes:GetLeft() or 0).toBeCloseTo(fill:GetLeft() or 0, 2)
+    -- the name keeps its colour
+    expect(hasColor(f.name, "reaction-hostile")).toBe(true)
     denied = false
     mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
     mock.advanceFrames(1)
     expect(f.tappedLook).toBe(false)
+    expect(stripes:IsShown()).toBe(false)
+end
+
+@test("a tagged mob's plate taken for another unit: no stripes on it")
+local function tappedReused()
+    local f = plateOf(wolf)
+    -- (the tag by name: the plate's unit token goes to the next unit)
+    fakeAPI(f, {
+        UnitIsTapDenied = function(u: string): boolean
+            return secret.asString(UnitName(u)) == "Prowler"
+        end,
+    })
+    mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
+    mock.advanceFrames(1)
+    local stripes = assert(healthFill.stripesOf(f.health))
+    expect(stripes:IsShown()).toBe(true)
+    wolf:hideNameplate()
+    mock.advanceFrames(2)
+    -- the pool hands the same plate to the bear
+    local b = plateOf(bear)
+    expect(b).toBe(f)
+    expect(b.tappedLook).toBe(false)
+    expect(healthFill.lookOf(b.health)).toBe(false)
+    expect(stripes:IsShown()).toBe(false)
+end
+
+@test("a theme's textures on plates: the live ones and those in the pool, at once; SuuUI's back after")
+local function plateTextures()
+    local f = plateOf(wolf)
+    local pooled = assert(pool[#pool])
+    themes.register({
+        id = "test-plate-textures",
+        textures = {
+            ["health-bar"] = "Interface\\AddOns\\Plug\\Smooth",
+            ["cast-bar"] = "Interface\\AddOns\\Plug\\Cast",
+            glow = "Interface\\AddOns\\Plug\\Halo",
+            ["raid-markers"] = "Interface\\AddOns\\Plug\\Markers",
+        },
+    })
+    coreSettings.setAccount("theme", "test-plate-textures")
+    themes.apply()
+    for _, p in ipairs({ f, pooled }) do
+        for _, b in ipairs({ p.health, p.healthLow, p.ghost }) do
+            expect(b:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Smooth")
+        end
+        expect(p.cast.fill:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Cast")
+        expect(p.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Halo")
+        expect(p.raidMarker:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Markers")
+    end
+    coreSettings.setAccount("theme", nil)
+    themes.apply()
+    expect(f.health:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(pooled.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Soft.tga")
 end

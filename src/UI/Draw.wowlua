@@ -256,6 +256,143 @@ export function repaint()
     painting = false
 end
 
+--------------------------------------------------------------------------------
+-- Skins: textures that follow the theme (asked 2026-11-12: every texture the
+-- unit frames and nameplates draw, a theme can replace). A texture set from
+-- a texture token (T.texture: the bars' fill, the hatches, the glows…) is
+-- kept with the region, as a colour is; when a theme changes the token,
+-- reskin sets the new file on every kept one (live frames and pooled
+-- plates alike). Colours stay with paint: set a skin first, then its colour.
+--   skin(texture, token[, tile])   a texture's file; tile: repeated at its
+--                                  own size (the hatches) instead of stretched
+--   skinBar(bar, token)            a StatusBar's fill
+--------------------------------------------------------------------------------
+
+-- what each skinned region shows: its token, the file set, whether tiled
+-- (three weak maps, no table per region: every plate skins a dozen)
+local skinToken: { [Texture | StatusBar]: string } = setmetatable({}, { __mode = "k" })
+local skinFile: { [Texture | StatusBar]: string } = setmetatable({}, { __mode = "k" })
+local skinTiled: { [Texture | StatusBar]: boolean } = setmetatable({}, { __mode = "k" })
+local files = T.texture :: { [string]: string }
+-- soft edges from a texture token, by their parts (nine textures each, set
+-- together: one entry an edge, not nine skins)
+local edgeToken: { [Texture[]]: string } = setmetatable({}, { __mode = "k" })
+local edgeFile: { [Texture[]]: string } = setmetatable({}, { __mode = "k" })
+
+-- A texture token's file now (an unknown token is an error).
+export function textureFile(token: string): string
+    return files[token] or error("SuuUI: unknown texture token " .. tostring(token), 2)
+end
+
+-- Whether `name` is a texture token.
+export function isTexture(name: string): boolean
+    return files[name] ~= nil
+end
+
+local function setSkin(region: Texture | StatusBar, file: string, tile: boolean)
+    if region:GetObjectType() == "StatusBar" then
+        -- (the bar keeps its texture object: SetStatusBarTexture with a file
+        -- sets it on the texture the bar has)
+        (region :: StatusBar):SetStatusBarTexture(file)
+        return
+    end
+    local t = region :: Texture
+    if tile then
+        -- (tiles only with the texture set to repeat: without it the game
+        -- stretched the hatch's edge across the shield, seen 2026-11-08)
+        t:SetTexture(file, "REPEAT", "REPEAT")
+        t:SetHorizTile(true)
+        t:SetVertTile(true)
+    else
+        t:SetTexture(file)
+    end
+end
+
+-- (a kept colour stays while a skin is set: a skin is set before its colour)
+local function keepSkin(region: Texture | StatusBar, token: string, tile: boolean)
+    local file = files[token] or error("SuuUI: unknown texture token " .. tostring(token), 3)
+    if skinToken[region] == token and skinFile[region] == file and (skinTiled[region] == true) == tile then
+        return
+    end
+    skinToken[region], skinFile[region] = token, file
+    skinTiled[region] = tile or nil
+    -- (nothing kept on it yet, as when a frame is built: set at once)
+    if paints[region] == nil then
+        setSkin(region, file, tile)
+        return
+    end
+    local was = painting
+    painting = true
+    local ok: boolean, err: unknown = pcall(setSkin, region, file, tile)
+    painting = was
+    if not ok then
+        error(err, 3)
+    end
+end
+
+-- A texture's file from a texture token; `tile` repeats it at its own size.
+export function skin(tex: Texture, token: string, tile: boolean?)
+    keepSkin(tex, token, tile == true)
+end
+
+-- A StatusBar's fill from a texture token, stretched along the bar.
+export function skinBar(bar: StatusBar, token: string)
+    keepSkin(bar, token, false)
+end
+
+-- The texture token a texture or bar was skinned with (nil: none).
+export function skinOf(region: Texture | StatusBar): string?
+    return skinToken[region]
+end
+
+-- Every kept skin whose token's file changed, set again (Themes.wowlua,
+-- before the colours are repainted: a bar's new file may take the bar's own
+-- colour, and repaint then sets the kept ones). A texture keeps the part of
+-- its file it showed (a raid marker's cell, a glow's slice).
+export function reskin()
+    local list: (Texture | StatusBar)[] = {}
+    for region, token in pairs(skinToken) do
+        if files[token] ~= skinFile[region] then
+            list[#list + 1] = region
+        end
+    end
+    for parts, token in pairs(edgeToken) do
+        local file = files[token]
+        if file and file ~= edgeFile[parts] then
+            edgeFile[parts] = file
+            for _, t in ipairs(parts) do
+                local okCoords, a, b, c, d, e, f, g, h = pcall(t.GetTexCoord, t)
+                t:SetTexture(file)
+                if okCoords then
+                    pcall(t.SetTexCoord, t, a, b, c, d, e, f, g, h)
+                end
+            end
+        end
+    end
+    painting = true
+    for _, region in ipairs(list) do
+        local file = files[skinToken[region] or ""] or skinFile[region] or ""
+        local tile = skinTiled[region] == true
+        skinFile[region] = file
+        local ok: boolean, err: unknown
+        if region:GetObjectType() == "StatusBar" then
+            ok, err = pcall(setSkin, region, file, tile)
+        else
+            local t = region :: Texture
+            -- (a secret marker cell can't be read back: its next update sets it)
+            local okCoords, a, b, c, d, e, f, g, h = pcall(t.GetTexCoord, t)
+            ok, err = pcall(setSkin, region, file, tile)
+            if ok and okCoords then
+                pcall(t.SetTexCoord, t, a, b, c, d, e, f, g, h)
+            end
+        end
+        if not ok then
+            geterrorhandler()(err)
+        end
+    end
+    painting = false
+end
+
 -- A size token in px, or a number passed through.
 export function size(v: number | string): number
     if type(v) == "number" then
@@ -468,7 +605,8 @@ end
 
 --------------------------------------------------------------------------------
 -- Soft edges: the design's box shadows (glow-arcane, glow-ember, glow-ward,
--- shadow-panel), drawn behind `frame` from Soft.tga as a 3x3 slice.
+-- shadow-panel), drawn behind `frame` from Soft.tga as a 3x3 slice. The
+-- glows take their file from the texture token "glow" (a theme's own).
 --------------------------------------------------------------------------------
 
 -- the four corners: their point, the holder's point, the texture's u1, u2, v1, v2
@@ -485,7 +623,8 @@ export class SoftEdge
     readonly corners: Texture[] = {}
     readonly parts: Texture[] = {}
 
-    constructor(readonly frame: Frame)
+    -- token: the texture token its file comes from (nil: Soft.tga, fixed)
+    constructor(readonly frame: Frame, readonly token: string?)
         local h = CreateFrame("Frame", nil, frame)
         h:SetFrameLevel(math.max(0, frame:GetFrameLevel() - 1))
         self.holder = h
@@ -516,7 +655,14 @@ export class SoftEdge
 
     private function Part(u1: number, u2: number, v1: number, v2: number): Texture
         local t = self.holder:CreateTexture(nil, "BACKGROUND", nil, -8)
-        t:SetTexture(SOFT)
+        local token = self.token
+        if token then
+            local file = textureFile(token)
+            t:SetTexture(file)
+            edgeToken[self.parts], edgeFile[self.parts] = token, file
+        else
+            t:SetTexture(SOFT)
+        end
         t:SetTexCoord(u1, u2, v1, v2)
         self.parts[#self.parts + 1] = t
         return t
@@ -564,8 +710,12 @@ export class SoftEdge
     end
 end
 
-export function softEdge(frame: Frame): SoftEdge
-    return SoftEdge.new(frame)
+-- 0.35: `texture`, a texture token its file comes from (a theme's own)
+export function softEdge(frame: Frame, texture: string?): SoftEdge
+    if texture then
+        textureFile(texture)
+    end
+    return SoftEdge.new(frame, texture)
 end
 
 -- A soft edge from a shadow token's first outer layer, e.g. "glow-arcane".
@@ -581,7 +731,8 @@ export function shadow(frame: Frame, token: string): SoftEdge
     end
     -- (a token with inset layers only: indexing nil errors, as before)
     local layer = found :: ShadowLayer
-    local e = softEdge(frame)
+    -- (the glows from the theme's "glow"; the panels' shadow stays Soft.tga)
+    local e = softEdge(frame, token:find("^glow%-") and "glow" or nil)
     e:SetBlur(layer.blur, layer.x, -layer.y)
     e:SetColor(layer.color)
     return e

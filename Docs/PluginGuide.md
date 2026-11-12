@@ -166,12 +166,14 @@ SuuUI.RegisterTheme({
     id = "frost", name = "Frost", description = "Cold blues instead of gilt.",
     colors = { ["gilt-text"] = { 0.6, 0.85, 1 }, ["gilt-line"] = { 0.4, 0.65, 0.9 } },
     fonts = { header = { file = "Interface\\AddOns\\MyPlugin\\MyFont.ttf", size = 13 } },
+    textures = { ["health-bar"] = "Interface\\AddOns\\MyPlugin\\Smooth.tga" },
 })
 ```
 
 - **When to call it:** at file load, not in `OnEnable`. Themes apply at login, before SuuUI builds its frames.
-- **Choosing it:** the player picks it under Settings › General › Appearance › Theme. A change takes a reload.
+- **Choosing it:** the player picks it under Settings › General › Appearance › Theme. A change applies at once.
 - **What to change:** colour token names are the keys of `SuuUI.Tokens.color`, and text styles the keys of `SuuUI.Tokens.type`.
+- **Textures (API 0.35):** `textures` replaces the files the unit frames and nameplates draw: the bars' fill (`health-bar`, `power-bar`, `cast-bar`, `aura-drain`), the absorb shield and the tagged mob's stripes (`absorb`, `tapped`, tiled), the glows, role icons, raid markers, the cast lock and the combat sign. The keys are `SuuUI.Tokens.texture`, and `SuuUI.Tokens.usage[key]` says how each is drawn ([API.md](API.md) lists them under "Textures that follow the theme"). Use white or light art: SuuUI colours it with the colour tokens.
 - **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned; NPCs keep `unit-fill`. The player's "Health colour" setting on Class colours wins over your theme.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 

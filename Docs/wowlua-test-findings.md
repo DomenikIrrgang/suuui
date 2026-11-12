@@ -951,6 +951,14 @@ A secure click SuuUI's auction house left over its Buy out (shown, DIALOG strata
 
 `C_AuctionHouse.PlaceBid` is a no-op: no `AUCTION_HOUSE_PURCHASE_COMPLETED`, no auction gone, no money paid, so the game's `BUYOUT_AUCTION` popup waits with its spinner. Forever's answer to an item's buyout (its events, their order, the auction ID in `AUCTION_HOUSE_PURCHASE_COMPLETED`, the throttle) is unrecorded; the engine's commodity purchase fires it with 0. The tests stub `PlaceBid` and play the house's answer themselves. (units-trade)
 
+<a id="v49"></a>
+
+### V49. No unit is ever tagged by someone else
+
+*Status: open (0.13.9).*
+
+`UnitIsTapDenied` is a blank that always answers false, and `mock.spawnUnit` has no field for a mob another player tagged, so a real target frame or nameplate never draws the tagged look. The tests give the frame or plate its own API table with `UnitIsTapDenied` faked (`mock.setField(f, "api", …)`, by the unit's name for a plate that changes units). A `tapDenied` field on a mock unit (with `UNIT_FACTION` when it changes) would let the game's own state drive it. (tapped stripes)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:

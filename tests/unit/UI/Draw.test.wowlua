@@ -553,6 +553,106 @@ local function shadowErrors()
     end).toThrow()
 end
 
+--------------------------------------------------------------------------------
+-- Skins: textures set by their texture token follow the theme
+--------------------------------------------------------------------------------
+
+-- a texture token's file swapped for the test, as a theme does (then reskin)
+local function swapFile(token: string, file: string): () -> ()
+    local files = T.texture :: { [string]: string }
+    local was = assert(files[token])
+    files[token] = file
+    draw.reskin()
+    return function()
+        files[token] = was
+        draw.reskin()
+    end
+end
+
+@test("a skin sets a texture's or a bar's file from its token, stretched or tiled")
+local function skins()
+    local p = host()
+    local t = p:CreateTexture()
+    draw.skin(t, "role-tank")
+    expect(t:GetTextureFilePath()).toBe(T.texture["role-tank"])
+    expect(draw.skinOf(t)).toBe("role-tank")
+    local hatch = p:CreateTexture()
+    draw.skin(hatch, "absorb", true)
+    expect(hatch:GetTextureFilePath()).toBe(T.texture.absorb)
+    expect(hatch:GetHorizTile()).toBe(true)
+    expect(hatch:GetVertTile()).toBe(true)
+    local bar = CreateFrame("StatusBar", nil, p)
+    draw.skinBar(bar, "cast-bar")
+    expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["cast-bar"])
+    expect(draw.skinOf(bar)).toBe("cast-bar")
+    -- another token on the same texture: the new one is kept
+    draw.skin(t, "role-healer")
+    expect(t:GetTextureFilePath()).toBe(T.texture["role-healer"])
+    expect(draw.skinOf(t)).toBe("role-healer")
+    expect(draw.isTexture("absorb")).toBe(true)
+    expect(draw.isTexture("gilt")).toBe(false)
+    expect(function()
+        draw.skin(t, "sparkle")
+    end).toThrow("unknown texture token sparkle")
+end
+
+@test("reskin sets a changed token's new file; the texture keeps its cell and its colour")
+local function reskinKeeps()
+    local p = host()
+    local marker = p:CreateTexture()
+    draw.skin(marker, "raid-markers")
+    marker:SetTexCoord(0.25, 0.5, 0, 0.25)
+    draw.paint(marker, "ember")
+    local bar = CreateFrame("StatusBar", nil, p)
+    draw.skinBar(bar, "health-bar")
+    draw.paint(bar, "mana")
+    local tex = bar:GetStatusBarTexture()
+    local back = swapFile("raid-markers", "Interface\\AddOns\\Plug\\Markers")
+    expect(marker:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Markers")
+    local l, top, _, _, _, _, r, bottom = marker:GetTexCoord()
+    expect({ l, top, r, bottom }).toEqual({ 0.25, 0, 0.5, 0.25 })
+    -- its colour still kept: a repaint sets it
+    draw.repaint()
+    expect(tokenOf(marker)).toBe("ember")
+    -- an unchanged token: nothing set again
+    expect(tex:GetTextureFilePath()).toBe(T.texture["health-bar"])
+    back()
+    expect(marker:GetTextureFilePath()).toBe(T.texture["raid-markers"])
+    -- a bar keeps its texture object and its colour
+    local back2 = swapFile("health-bar", "Interface\\AddOns\\Plug\\Smooth")
+    expect(bar:GetStatusBarTexture()).toBe(tex)
+    expect(tex:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Smooth")
+    draw.repaint()
+    local br, bg, bb = bar:GetStatusBarColor()
+    expect(colorIs(br, bg, bb, nil, "mana")).toBe(true)
+    back2()
+    expectNoErrors()
+end
+
+@test("glows take their file from the texture token glow; the panel's shadow stays Soft.tga")
+local function glowSkin()
+    local p = host()
+    local glow = draw.shadow(p, "glow-ember")
+    local panel = draw.shadow(p, "shadow-panel")
+    expect(glow.token).toBe("glow")
+    expect(panel.token).toBeNil()
+    local back = swapFile("glow", "Interface\\AddOns\\Plug\\Halo")
+    for _, t in ipairs(glow.parts) do
+        expect(t:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Halo")
+    end
+    -- the slice kept: the top-left corner is still the file's top-left quarter
+    local l, top, _, _, _, _, r, bottom = glow.corners[1]:GetTexCoord()
+    expect({ l, top, r, bottom }).toEqual({ 0, 0, 0.25, 0.25 })
+    expect(panel.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Soft.tga")
+    back()
+    expect(glow.parts[1]:GetTextureFilePath()).toBe(T.texture.glow)
+    -- a soft edge of your own from a texture token; an unknown one is an error
+    expect(draw.softEdge(p, "glow").parts[1]:GetTextureFilePath()).toBe(T.texture.glow)
+    expect(function()
+        draw.softEdge(p, "sparkle")
+    end).toThrow("unknown texture token sparkle")
+end
+
 @test("the cross is two crossed strokes in a square, recoloured together")
 local function crosses()
     local p = host()

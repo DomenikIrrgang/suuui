@@ -239,3 +239,60 @@ local function repaint()
     themes.apply()
     expect(spy).toHaveBeenCalledTimes(1)
 end
+
+@test("a theme's textures: real texture tokens, each a file path")
+local function texturesRefused()
+    expect(function()
+        themes.register({ id = "test-tex-bad", textures = { sparkle = "Interface\\AddOns\\X\\a.tga" } })
+    end).toThrow('SuuUI.RegisterTheme: test-tex-bad has no texture token "sparkle"')
+    expect(function()
+        themes.register({ id = "test-tex-bad", textures = { absorb = "" } })
+    end).toThrow("SuuUI.RegisterTheme: test-tex-bad's texture absorb needs a file path")
+    expect(function()
+        local wrong: unknown = { absorb = 7 }
+        themes.register({ id = "test-tex-bad", textures = wrong :: { [string]: string } })
+    end).toThrow("SuuUI.RegisterTheme: test-tex-bad's texture absorb needs a file path")
+    expect(function()
+        local wrong: unknown = "Smooth.tga"
+        themes.register({ id = "test-tex-bad", textures = wrong :: { [string]: string } })
+    end).toThrow("SuuUI.RegisterTheme: test-tex-bad's textures are a table of texture tokens")
+    expect(themes.get("test-tex-bad")).toBeNil()
+end
+
+@test("applying a theme sets its texture files on what was skinned; another theme brings SuuUI's back")
+local function textures()
+    local hatch, white = T.texture.absorb, T.texture["health-bar"]
+    themes.register({
+        id = "test-textures",
+        textures = { absorb = "Interface\\AddOns\\Plug\\Dots.tga", ["health-bar"] = "Interface\\AddOns\\Plug\\Smooth" },
+    })
+    themes.register({ id = "test-textures-none", colors = { gilt = { 1, 0, 0 } } })
+    -- a texture and a bar set by their tokens, live: they follow
+    local f = CreateFrame("Frame")
+    local shield = f:CreateTexture()
+    draw.skin(shield, "absorb", true)
+    local bar = CreateFrame("StatusBar", nil, f)
+    draw.skinBar(bar, "health-bar")
+    draw.paint(bar, "ember")
+    use("test-textures")
+    expect(T.texture.absorb).toBe("Interface\\AddOns\\Plug\\Dots.tga")
+    expect(draw.textureFile("absorb")).toBe("Interface\\AddOns\\Plug\\Dots.tga")
+    expect(T.texture["cast-bar"]).toBe(white)
+    expect(shield:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Dots.tga")
+    expect(shield:GetHorizTile()).toBe(true)
+    expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Smooth")
+    -- the bar keeps its colour
+    local r, g, b = bar:GetStatusBarColor()
+    local er, eg, eb = draw.rgba("ember")
+    expect(r).toBeCloseTo(er, 2)
+    expect(g).toBeCloseTo(eg, 2)
+    expect(b).toBeCloseTo(eb, 2)
+    -- another theme without textures: SuuUI's files again
+    use("test-textures-none")
+    expect(T.texture.absorb).toBe(hatch)
+    expect(shield:GetTextureFilePath()).toBe(hatch)
+    expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(white)
+    use(nil)
+    expect(T.texture["health-bar"]).toBe(white)
+    expectNoErrors()
+end
