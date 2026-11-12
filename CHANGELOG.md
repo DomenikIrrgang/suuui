@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- When an NPC offers you a choice of quest rewards, a gold coin now marks the one that sells for the most at a vendor, instead of the Upgrade mark.
+
 ## 0.9.0 (2026-11-12)
 
 ### New
