@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Auction house: your recent searches are kept again; none showed under the search box.
+- Auction house: your recent searches are kept again (none showed under the search box), and items you Shift-click to search for are kept with them.
 
 ## 0.9.0 (2026-11-12)
 
