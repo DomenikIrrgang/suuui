@@ -19,8 +19,11 @@ local function build(styleName: string, style: TextStyle): Font
     return font
 end
 
+-- the design's sizes, before any theme (this file loads before one applies)
+local designSize: { [string]: number } = {}
 for styleName, style in pairs(T.type :: { [string]: TextStyle }) do
     objects[styleName] = build(styleName, style)
+    designSize[styleName] = style.size
 end
 
 -- The Font object for a text style, e.g. fonts.get("label").
@@ -28,8 +31,28 @@ export function get(styleName: string): Font
     return objects[styleName] or error("SuuUI: unknown text style " .. tostring(styleName), 2)
 end
 
+-- A text style's font file (its face, e.g. for a font of another size).
+export function file(styleName: string): string
+    local style = (T.type :: { [string]: TextStyle })[styleName]
+    return style and style.file or error("SuuUI: unknown text style " .. tostring(styleName), 2)
+end
+
+-- `px` on the design's own size of a text style, at the theme's size of it
+-- now: a size of its own (a 21 px title on alert's 18) that grows and
+-- shrinks with the style. The design's theme gives `px` back.
+export function size(styleName: string, px: number): number
+    local style = (T.type :: { [string]: TextStyle })[styleName] or
+        error("SuuUI: unknown text style " .. tostring(styleName), 2)
+    local d = designSize[styleName]
+    if not d or d <= 0 or d == style.size then
+        return px
+    end
+    return px * style.size / d
+end
+
 -- The styles' faces and sizes again (a theme changed them, Themes.wowlua):
--- every FontString on a style follows.
+-- every FontString on a style follows. (Text at a size of its own, from
+-- size below, is set again by its owner on SUUUI_THEME_CHANGED.)
 export function refresh()
     local styles: { [string]: TextStyle } = T.type
     for styleName, font in pairs(objects) do
@@ -41,12 +64,6 @@ export function refresh()
         font:SetSpacing(style.lineHeight - style.size)
         font:SetTextColor(unpack(T.color.ink))
     end
-end
-
--- A text style's font file (its face, e.g. for a font of another size).
-export function file(styleName: string): string
-    local style = (T.type :: { [string]: TextStyle })[styleName]
-    return style and style.file or error("SuuUI: unknown text style " .. tostring(styleName), 2)
 end
 
 -- Sets a FontString to a text style.

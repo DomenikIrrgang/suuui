@@ -10,7 +10,12 @@ import * as events from "/Core/Events"
 import * as vision from "/Core/Vision"
 import * as draw from "/UI/Draw"
 import * as fontObjects from "/Core/Fonts"
-import expectNoErrors from "../../helpers"
+import * as controls from "/UI/Controls"
+import * as barModule from "/UI/Bar"
+import * as inputs from "/UI/Inputs"
+import * as stage from "/UI/Stage"
+import * as legacy from "/UI/Legacy"
+import expectNoErrors, newParent from "../../helpers"
 
 const OWNER = "ThemesTest"
 
@@ -390,5 +395,174 @@ local function chatColors()
     )
     use("test-chat-fn")
     expect(#mock.printed()).toBe(before + 2)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- 0.37: icons by name, the rest of the UI's textures, shade, sizes
+--------------------------------------------------------------------------------
+
+-- SuuUI's own files (a file that isn't there reads back nil)
+local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+
+@test("a theme's glyphs: real glyph names, each a file path")
+local function glyphsRefused()
+    expect(function()
+        themes.register({ id = "test-glyph-bad", glyphs = { sparkle = MEDIA .. "Glyphs\\star.tga" } })
+    end).toThrow('SuuUI.RegisterTheme: test-glyph-bad has no glyph "sparkle"')
+    expect(function()
+        themes.register({ id = "test-glyph-bad", glyphs = { bag = "" } })
+    end).toThrow("SuuUI.RegisterTheme: test-glyph-bad's glyph bag needs a file path")
+    expect(function()
+        local wrong: unknown = { bag = 7 }
+        themes.register({ id = "test-glyph-bad", glyphs = wrong :: { [string]: string } })
+    end).toThrow("SuuUI.RegisterTheme: test-glyph-bad's glyph bag needs a file path")
+    expect(function()
+        local wrong: unknown = "bag.tga"
+        themes.register({ id = "test-glyph-bad", glyphs = wrong :: { [string]: string } })
+    end).toThrow("SuuUI.RegisterTheme: test-glyph-bad's glyphs are a table of glyph names")
+    expect(themes.get("test-glyph-bad")).toBeNil()
+end
+
+@test(
+    "a theme's glyph replaces the icon live, keeping its colour, size and cut; another theme brings SuuUI's back; one set otherwise since is left alone"
+)
+local function glyphs()
+    local bag, search = T.glyph.bag, T.glyph.search
+    local star, skull = MEDIA .. "Glyphs\\star.tga", MEDIA .. "Glyphs\\skull.tga"
+    themes.register({ id = "test-glyphs", glyphs = { bag = star, search = skull } })
+    themes.register({ id = "test-glyphs-none", colors = { gilt = { 1, 0, 0 } } })
+    local f = CreateFrame("Frame")
+    local icon = f:CreateTexture()
+    draw.glyph(icon, "bag")
+    draw.paint(icon, "ember")
+    icon:SetSize(14, 14)
+    icon:SetTexCoord(0.1, 0.9, 0.2, 0.8)
+    expect(icon:GetTextureFilePath()).toBe(bag)
+    expect(draw.glyphOf(icon)).toBe("bag")
+    -- a texture given a glyph, then an item's icon: let go
+    local other = f:CreateTexture()
+    draw.glyph(other, "bag")
+    other:SetTexture(MEDIA .. "Hatch.tga")
+    expect(draw.glyphOf(other)).toBeNil()
+    -- a button's icon (a component's glyph by name)
+    local b = controls.button(f, { text = "Find" })
+    b:SetIcon("search")
+    use("test-glyphs")
+    expect(T.glyph.bag).toBe(star)
+    expect(draw.glyphFile("bag")).toBe(star)
+    expect(T.glyph.close).toBe(MEDIA .. "Glyphs\\close.tga")
+    expect(icon:GetTextureFilePath()).toBe(star)
+    expect(icon:GetWidth()).toBe(14)
+    local l, t, _, _, _, _, r, bottom = icon:GetTexCoord()
+    expect(l).toBeCloseTo(0.1, 3)
+    expect(t).toBeCloseTo(0.2, 3)
+    expect(r).toBeCloseTo(0.9, 3)
+    expect(bottom).toBeCloseTo(0.8, 3)
+    local ir, ig, ib = icon:GetVertexColor()
+    local er, eg, eb = draw.rgba("ember")
+    expect(ir).toBeCloseTo(er, 2)
+    expect(ig).toBeCloseTo(eg, 2)
+    expect(ib).toBeCloseTo(eb, 2)
+    expect(other:GetTextureFilePath()).toBe(MEDIA .. "Hatch.tga")
+    expect((assert(b.icon)):GetTextureFilePath()).toBe(skull)
+    -- made while the theme is on: the theme's; inline marks too
+    local late = f:CreateTexture()
+    draw.glyph(late, "search")
+    expect(late:GetTextureFilePath()).toBe(skull)
+    themes.register({ id = "test-glyphs-check", glyphs = { check = star } })
+    use("test-glyphs-check")
+    expect(draw.inlineMark("check", "fel"):find(star, 1, true) ~= nil).toBe(true)
+    -- another theme: SuuUI's again
+    use("test-glyphs-none")
+    expect(T.glyph.bag).toBe(bag)
+    expect(icon:GetTextureFilePath()).toBe(bag)
+    expect(late:GetTextureFilePath()).toBe(search)
+    expect((assert(b.icon)):GetTextureFilePath()).toBe(search)
+    expect(draw.inlineMark("check", "fel"):find(MEDIA .. "Glyphs\\check.tga", 1, true) ~= nil).toBe(true)
+    -- a name that isn't a glyph: set as before, not kept
+    local odd = f:CreateTexture()
+    draw.glyph(odd, "compassRose")
+    expect(draw.glyphOf(odd)).toBeNil()
+    expectNoErrors()
+end
+
+local function file(t: Texture): string?
+    return t:GetTextureFilePath()
+end
+
+@test("a theme's bar, circles, swing hatch and checkbox tick reach SuuUI's bars, stage, swing timer and checkboxes live")
+local function look()
+    local white, soft, tick = T.texture.bar, T.texture["circle-soft"], T.texture.check
+    themes.register({
+        id = "test-look",
+        textures = {
+            bar = MEDIA .. "Hatch.tga",
+            ["circle-soft"] = MEDIA .. "CircleDash.tga",
+            ["swing-delay"] = MEDIA .. "Soft.tga",
+            check = MEDIA .. "Glyphs\\check.tga",
+        },
+    })
+    local parent = newParent()
+    local b = barModule.statusBar(parent, { fill = "progress-fill" })
+    local fill = draw.barFill(parent, "progress-fill")
+    local mark = inputs.check(parent, 12)
+    local st = stage.modelStage(CreateFrame("Frame", nil, parent))
+    expect(file(b.bar:GetStatusBarTexture())).toBe(white)
+    expect(draw.skinOf(mark)).toBe("check")
+    expect(file(st.light)).toBe(soft)
+    use("test-look")
+    expect(file(b.bar:GetStatusBarTexture())).toBe(MEDIA .. "Hatch.tga")
+    expect(file(fill)).toBe(MEDIA .. "Hatch.tga")
+    expect(file(mark)).toBe(MEDIA .. "Glyphs\\check.tga")
+    expect(file(st.light)).toBe(MEDIA .. "CircleDash.tga")
+    -- the fill keeps its colour
+    local r, g = fill:GetVertexColor()
+    local pr, pg = draw.rgba("progress-fill")
+    expect(r).toBeCloseTo(pr, 2)
+    expect(g).toBeCloseTo(pg, 2)
+    use(nil)
+    expect(file(b.bar:GetStatusBarTexture())).toBe(white)
+    expect(file(fill)).toBe(white)
+    expect(draw.textureFile("check")).toBe(tick)
+    expect(file(st.light)).toBe(soft)
+    expectNoErrors()
+end
+
+@test("shade: black by default; a theme's shade colours the dark overlays live, each at its own strength")
+local function shade()
+    themes.register({ id = "test-shade", colors = { shade = { 0.3, 0, 0.4 } } })
+    local st = stage.modelStage(CreateFrame("Frame", nil, newParent()))
+    local r, g, b, a = st.shadow:GetVertexColor()
+    expect({ r, g, b }).toEqual({ 0, 0, 0 })
+    expect(a).toBeCloseTo(0.4, 2)
+    use("test-shade")
+    r, g, b, a = st.shadow:GetVertexColor()
+    expect(r).toBeCloseTo(0.3, 2)
+    expect(g).toBeCloseTo(0, 2)
+    expect(b).toBeCloseTo(0.4, 2)
+    expect(a).toBeCloseTo(0.4, 2)
+    use(nil)
+    r, g, b, a = st.shadow:GetVertexColor()
+    expect({ r, g, b }).toEqual({ 0, 0, 0 })
+    expect(a).toBeCloseTo(0.4, 2)
+    expectNoErrors()
+end
+
+@test("a size of its own follows its text style: px on SuuUI's theme, scaled with a theme's size, live on what shows")
+local function sizes()
+    expect(fontObjects.size("alert", 21)).toBe(21)
+    expect(fontObjects.size("header", 9.5)).toBe(9.5)
+    themes.register({ id = "test-sizes", fonts = { numeric = { size = 18, lineHeight = 22 }, body = { lineHeight = 24 } } })
+    local points = legacy.legacyPoints(newParent())
+    local _, big = points.account.big:GetFont()
+    expect(big).toBeCloseTo(20, 1)
+    use("test-sizes")
+    expect(fontObjects.size("numeric", 20)).toBeCloseTo(30, 3)
+    _, big = points.account.big:GetFont()
+    expect(big).toBeCloseTo(30, 1)
+    use(nil)
+    _, big = points.account.big:GetFont()
+    expect(big).toBeCloseTo(20, 1)
     expectNoErrors()
 end

@@ -22,6 +22,8 @@ record with a field per token, so a token read by name is checked):
   type      name -> { family, file, size, lineHeight, weight, letterSpacing (em), tabular }
   texture   name -> a texture file (SuuUI's own, not the design system's:
             TEXTURES below), which themes can replace
+  glyph     name -> an icon's file (Media/Textures/Glyphs/<name>.tga), which
+            themes can replace
   order     family -> names in the design's order, for listings
   usage     name -> the design's usage note
 """
@@ -59,6 +61,10 @@ EXTRA_COLORS = [
     ("mark-star", "#fff27a"), ("mark-circle", "#ff8c00"), ("mark-diamond", "#e25cf5"),
     ("mark-triangle", "#2ecc71"), ("mark-moon", "#b5c9f0"), ("mark-square", "#1e5bff"),
     ("mark-cross", "#f0365a"), ("mark-skull", "#ffffff"),
+    # every dark overlay (asked 2026-11-12: the modal shade, the vignettes and
+    # floors, the minimap's shadow, the aura timers' shade…): each keeps its
+    # own alpha, the colour comes from here
+    ("shade", "#000000"),
 ]
 
 # SuuUI's own texture tokens (asked 2026-11-12: every texture the unit frames
@@ -93,7 +99,35 @@ TEXTURES = [
     ("cast-lock", "Interface\\LFGFrame\\UI-LFG-ICON-LOCK",
      "The lock on a cast that can't be interrupted (cast bars and nameplates), desaturated, in ink."),
     ("combat", MEDIA + "Glyphs\\swords.tga", "The combat sign on the player frame: crossed swords, in gilt-text."),
+    # (asked 2026-11-12: the rest of the UI's plain fills and round shapes)
+    ("bar", WHITE,
+     "Plain bar fills outside the unit frames: XP and reputation, progress and skill bars, the swing timer, class "
+     "bars and the totem drain, damage and threat meter bars, the weapon-enchant drain, the tooltip's health bar; "
+     "stretched, coloured through its vertex colour: a white or light texture."),
+    ("swing-delay", MEDIA + "Hatch.tga", "The swing timer's delay hatch over a pushed-back swing: tiled, in amber."),
+    ("circle-fill", MEDIA + "CircleFill.tga",
+     "A filled disc: map pins, the minimap's face and its N, the micro menu's pill caps, the rested sign, mark and "
+     "notification discs. White, coloured by its token."),
+    ("circle-soft", MEDIA + "CircleSoft.tga",
+     "A soft round glow: pin glows, the minimap's shadow, the NPC dialogue's and the model stage's light. White."),
+    ("circle-band", MEDIA + "CircleBand.tga", "A thick ring: the minimap's inner band, group finder and notification rims."),
+    ("circle-edge", MEDIA + "CircleEdge.tga", "A thin ring: the minimap's edge and its N's ring."),
+    ("circle-dash", MEDIA + "CircleDash.tga", "A dashed ring: waypoints and unknown flight points on the maps."),
+    ("ring-arc-2", MEDIA + "RingArc2.tga", "A half ring, turned for each part: a map pin split between two colours."),
+    ("ring-arc-3", MEDIA + "RingArc3.tga", "A third of a ring, turned for each part: a pin split between three colours."),
+    ("ring-arc-4", MEDIA + "RingArc4.tga", "A quarter ring, turned for each part: a pin split between four colours."),
+    ("check", "Interface\\Buttons\\UI-CheckBox-Check",
+     "The tick in a checkbox (the game's, desaturated), in on-signal."),
+    ("setting-reset", "Interface\\Buttons\\UI-RefreshButton",
+     "The reset arrow after a changed setting (the game's), desaturated, in ink-muted."),
+    ("setting-lock", "Interface\\LFGFrame\\UI-LFG-ICON-LOCK",
+     "The lock on a setting that can't be changed now (the game's), desaturated, in ink-muted."),
 ]
+
+# SuuUI's glyphs (asked 2026-11-12: a theme replaces any icon by its name):
+# every file in Media/Textures/Glyphs, by its name without .tga. White art,
+# coloured by a colour token where it's drawn.
+GLYPH_DIR = os.path.join(ROOT, "Media", "Textures", "Glyphs")
 
 # README, In-game implementation: easing -> AnimationGroup smoothing.
 SMOOTHING = {"ease-out": "OUT", "ease-in": "IN", "ease-in-out": "IN_OUT", "ease-linear": "NONE"}
@@ -277,6 +311,12 @@ def main():
         entries.append((name, lua_str(file)))
     record("texture", "Textures", "string", entries)
 
+    entries = []
+    glyphs = sorted(f[:-4] for f in os.listdir(GLYPH_DIR) if f.endswith(".tga"))
+    for name in glyphs:
+        entries.append((name, lua_str(MEDIA + "Glyphs\\" + name + ".tga")))
+    record("glyph", "Glyphs", "string", entries)
+
     # Text styles.
     entries = []
     for group in data["type"]["groups"]:
@@ -327,8 +367,8 @@ def main():
 
     with open(DST, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
-    print("wrote %s: %d colours, %d text styles, %d textures"
-          % (os.path.relpath(DST, ROOT), len(colors), len(names), len(TEXTURES)))
+    print("wrote %s: %d colours, %d text styles, %d textures, %d glyphs"
+          % (os.path.relpath(DST, ROOT), len(colors), len(names), len(TEXTURES), len(glyphs)))
 
 
 if __name__ == "__main__":

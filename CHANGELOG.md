@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- For theme authors (API 0.37): themes now reach much more of the UI than the unit frames. `glyphs` replaces any of SuuUI's icons by name (window icons, buttons, bags, map pins, the micro menu, menus, professions, notifications and the rest; the names are in `SuuUI.Tokens.glyph`), new texture tokens cover every other bar (XP and reputation, the swing timer, the meters, the totem and weapon-enchant drains, the tooltip's health bar), the round discs and rings of the map pins, minimap and micro menu, the checkbox tick and the settings' reset and lock icons, and the new `shade` colour tints every dark overlay. Role icons in the threat meter, raid groups, group finder and Defensives use the theme's role textures, and text drawn at its own size (big numbers, the NPC dialogue, titles, the minimap's N) follows the theme's text sizes. All of it changes at once when you pick the theme; SuuUI's own look is unchanged.
+
 ### Changed
 
 - Chat: the chat text and its tabs now use the theme's fonts (your chat font size stays as you set it). Chat colours stay the game's: set them in the game's chat settings. For theme authors (API 0.36): a theme's chat-* colours are left out, with a warning in the chat.

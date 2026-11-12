@@ -34,9 +34,8 @@ import * as tbl from "wowlua:table"
 
 local S = T.space
 
-local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
-local GLYPHS = TEX .. "Glyphs\\"
-local TANK_TEX, HEALER_TEX, DAMAGE_TEX = TEX .. "RoleTank.tga", TEX .. "RoleHealer.tga", TEX .. "RoleDamage.tga"
+-- the role icons' texture tokens (a theme's own)
+local TANK_TEX, HEALER_TEX, DAMAGE_TEX = "role-tank", "role-healer", "role-damage"
 local ROLE_TEX: { [string]: string } = { TANK = TANK_TEX, HEALER = HEALER_TEX, DAMAGER = DAMAGE_TEX }
 local ROLE_WORD: { [string]: string } = {
     TANK = TANK or "Tank",
@@ -236,9 +235,10 @@ local function asks(f: ListingFrame?, question: Selected?, id: number?): boolean
     return ok and yes == true
 end
 
-local function circle(parent: Frame, file: string, color: string, layer: DrawLayer, sub: number?): Texture
+-- (`token`: a circle texture token, the theme's)
+local function circle(parent: Frame, token: string, color: string, layer: DrawLayer, sub: number?): Texture
     local t = parent:CreateTexture(nil, layer, nil, sub)
-    t:SetTexture(TEX .. file)
+    draw.skin(t, token)
     draw.paint(t, color)
     t:SetAllPoints()
     return t
@@ -246,7 +246,7 @@ end
 
 local function glyph(parent: Frame, name: string, size: number, color: string, layer: DrawLayer?): Texture
     local t = parent:CreateTexture(nil, layer or "ARTWORK")
-    t:SetTexture(GLYPHS .. name .. ".tga")
+    draw.glyph(t, name)
     t:SetSize(size, size)
     draw.paint(t, color)
     return t
@@ -301,11 +301,16 @@ local function roundIcon(b: RoundButton, texture: string, word: string, glyphSiz
     fade(b.Background)
     fade(b.cover)
     b:SetSize(TOGGLE, TOGGLE)
-    local fill = circle(b, "CircleFill.tga", "surface-sunk", "BACKGROUND", 7)
+    local fill = circle(b, "circle-fill", "surface-sunk", "BACKGROUND", 7)
     -- the band: the thin edge texture broke into dots at 36px (found in game)
-    local edge = circle(b, "CircleBand.tga", "gilt-line", "BORDER", 7)
+    local edge = circle(b, "circle-band", "gilt-line", "BORDER", 7)
     local g = b:CreateTexture(nil, "ARTWORK", nil, 7)
-    g:SetTexture(texture)
+    -- (a glyph's name or a texture token: a theme's own)
+    if draw.isGlyph(texture) then
+        draw.glyph(g, texture)
+    else
+        draw.skin(g, texture)
+    end
     g:SetSize(glyphSize or 18, glyphSize or 18)
     g:SetPoint("CENTER")
     local w = uiText.text(b, "caption", "ink-muted")
@@ -520,7 +525,7 @@ local function skinGroupRow(row: ActivityRow?, data: GroupData?, collapsed: bool
     local all = f and asks(f, f.AreAllActivitiesForActivityGroupSelected, id)
     local some = f and asks(f, f.IsAnyActivityForActivityGroupSelected, id)
     drawBox(p, all and "all" or (some and "some") or nil)
-    p.chevron:SetTexture(GLYPHS .. (collapsed and "chevronRight" or "chevronDown") .. ".tga")
+    draw.glyph(p.chevron, (collapsed and "chevronRight" or "chevronDown"))
     local nameButton = row.NameButton
     local name = nameButton and nameButton.Name
     font(name, "header", "gilt-text")
@@ -680,7 +685,7 @@ export class ListingSkin
                 p.word:SetColor("ink")
                 local function update()
                     local role = icon.roleID
-                    p.glyph:SetTexture(role and ROLE_TEX[role] or DAMAGE_TEX)
+                    draw.skin(p.glyph, role and ROLE_TEX[role] or DAMAGE_TEX)
                     p.word:SetValue(role and ROLE_WORD[role] or "")
                     -- the game sets its own art again
                     if icon:IsObjectType("Button") then
@@ -718,7 +723,7 @@ export class ListingSkin
         local npfCheck = npf and npf.CheckButton
         if npf and npfCheck then
             local word = tbl.field(_G, "LFG_LIST_NEW_PLAYER_FRIENDLY")
-            toggle(npf, npfCheck, GLYPHS .. "leaf.tga", type(word) == "string" and word or "New player friendly", 16)
+            toggle(npf, npfCheck, "leaf", type(word) == "string" and word or "New player friendly", 16)
         end
 
         -- step 1: the hint over the cards
@@ -1009,7 +1014,7 @@ export class ListingSkin
             end
             local id = b.categoryID
             local card = id and CARDS[id]
-            p.glyph:SetTexture(GLYPHS .. (card and card.glyph or "flag") .. ".tga")
+            draw.glyph(p.glyph, (card and card.glyph or "flag"))
             p.line:SetValue(card and card.text or "")
             b:ClearAllPoints()
             b:SetSize(cw, 132)
