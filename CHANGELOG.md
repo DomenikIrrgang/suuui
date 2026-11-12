@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Vendors: items above your level (shown in red) can be bought again, as in the game's own vendor window.
+
 ## 0.8.0 (2026-11-12)
 
 ### New
