@@ -1,17 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 (2026-11-12)
 
 ### New
 
-- **Search history** in the auction house: click into the search box and your last 5 searches show under it, newest first, each with the icon of the first item it found. Click one to search it again, or the x on it to take it off the list; type to narrow the list down. Only searches that found something are kept, and each character keeps its own.
+- **Auction house search history**: click into the search box and your last 5 searches show under it, newest first, each with the icon of the first item it found. Click one to search it again, or the x on it to take it off the list; type to narrow the list down. Only searches that found something are kept, and each character keeps its own.
 
 ### Fixed
 
 - Auction house: Buy now on a stackable item (ore, herbs) sometimes did nothing after you had chosen a piece of gear and gone back before its purchase finished, or without buying it. Buy now works again.
 - Vendors: items above your level (shown in red) can be bought again, as in the game's own vendor window.
-- The debuff icons on nameplates keep all their borders again; most of them went missing at some UI scales.
-- A mob's level is grey only when it gives you no experience; mobs a few levels below you that still give experience showed grey.
+- Nameplates: debuff icons keep all their borders again; most of them went missing at some UI scales.
+- Levels show grey only when a mob gives you no experience. Mobs a few levels below you that still give experience showed grey too.
 
 ## 0.8.0 (2026-11-12)
 
