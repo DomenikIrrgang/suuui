@@ -16,7 +16,7 @@ import internal paints from "/UI/Draw"
 import * as healthFill from "/UI/HealthFill"
 import * as themes from "/Core/Themes"
 import * as settings from "/Core/Settings"
-import expectNoErrors, newParent, expectPingable from "../../helpers"
+import expectNoErrors, newParent, expectPingable, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 
 type Person = uf.StandInPerson
 
@@ -1726,5 +1726,45 @@ local function castCostOthers()
     mock.player:castSpell(FROSTBOLT, { castTime = 2 })
     expect(f.powerSpend:IsShown()).toBe(false)
     mock.advanceTime(2.5)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- A theme's spacing and sizes (0.38)
+--------------------------------------------------------------------------------
+
+type FrameLook = { w: number, h: number, pad: number, power: number, sizedW: number }
+
+@test(
+    "a theme's sizes and spacing: the frame, its padding and power line follow; in combat after the fight; SuuUI's again exactly"
+)
+local function themeLayout()
+    layoutThemes()
+    local f = preview(priest(), { size = "md" })
+    local sized = preview(priest(), { size = "lg" })
+    sized:Resize(250, 30)
+    local function look(): FrameLook
+        local _, _, _, pad = f.row:GetPoint(1)
+        return {
+            w = f:GetWidth(),
+            h = f:GetHeight(),
+            pad = pad :: number,
+            power = f.power:GetHeight(),
+            sizedW = sized:GetWidth(),
+        }
+    end
+    local design = look()
+    expect(design).toEqual({ w = 200, h = 28, pad = 8, power = 2, sizedW = 250 })
+    useTheme(COMPACT)
+    local compact = look()
+    expect(compact).toEqual({ w = 180, h = 24, pad = 5, power = 1, sizedW = 250 })
+    -- in a fight the secure frame waits; its size and padding follow at its end
+    mock.player:enterCombat()
+    useTheme(ROOMY)
+    expect(look()).toEqual(compact)
+    mock.player:leaveCombat()
+    expect(look()).toEqual({ w = 220, h = 32, pad = 12, power = 3, sizedW = 250 })
+    useTheme(nil)
+    expect(look()).toEqual(design)
     expectNoErrors()
 end

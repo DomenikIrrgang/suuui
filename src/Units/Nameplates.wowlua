@@ -104,9 +104,8 @@ local function barH(): number
 end
 -- the name row sits space-2 over the bar: the state badge (taller than the
 -- text, centred on it) keeps a hair of air above the bar's border
-local ROW_GAP = S["space-2"]
 local function plateH(): number
-    return NAME_H + ROW_GAP + barH()
+    return NAME_H + S["space-2"] + barH()
 end
 
 -- A health amount for a StatusBar: a secret one goes through untouched (a
@@ -400,7 +399,6 @@ export class Nameplate extends Frame
         -- of it: the name's capitals sit in the lower ~9px of their row, so the
         -- plate's own middle would put the marker high
         self.raidMarker = UI.RaidMarker(self, 18)
-        self.raidMarker:SetPoint("RIGHT", self, "LEFT", -S["space-2"], -math.floor((NAME_H - 9) / 2 + 0.5))
         -- a quest objective: the gilt diamond and what you have of it
         self.quest = CreateFrame("Frame", nil, self)
         self.quest:SetHeight(NAME_H)
@@ -412,7 +410,6 @@ export class Nameplate extends Frame
         self.questCount:SetPoint("LEFT", self.questMark, "RIGHT", 3, 0)
         self.quest:Hide()
         self.badge = UI.StateBadge(self, "danger", "")
-        self.badge:SetPoint("RIGHT", self.pct, "LEFT", -S["space-2"], 0)
         self.badge:Hide()
 
         -- the bar
@@ -467,7 +464,7 @@ export class Nameplate extends Frame
         self.cast:SetBarHeight(M:Get("castHeight"))
         self.cast:SetTargetShown(M:Get("castTarget"))
         self.cast:SetKickShown(M:Get("castKick"))
-        self.cast:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+        self:PlaceParts()
         SuuUI.TagInstance(self.cast, { module = M.id, role = "nameplate" })
         SuuUI.AddInstance("nameplate", self, { module = M.id, preview = api ~= nil or nil })
     end
@@ -517,6 +514,17 @@ export class Nameplate extends Frame
         if auras then
             auras.container:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, S["space-1"])
         end
+    end
+
+    -- What sits by the spacing: the raid marker left of the plate, centred on
+    -- what shows of it (the name's capitals sit in the lower ~9px of their
+    -- row, so the plate's own middle would put the marker high), and the cast
+    -- under the bar; the state badge again with the plate's width. At build,
+    -- and again when a theme changes the spacing (ApplySizes).
+    function PlaceParts()
+        self.raidMarker:SetPoint("RIGHT", self, "LEFT", -S["space-2"], -math.floor((NAME_H - 9) / 2 + 0.5))
+        self.cast:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
+        self.textMode = nil
     end
 
     function SetPlateWidth(w: number)
@@ -1738,6 +1746,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             f.cast:SetBarHeight(self:Get("castHeight"))
             f.cast:SetTargetShown(self:Get("castTarget"))
             f.cast:SetKickShown(self:Get("castKick"))
+            f:PlaceParts()
             f:SetPlateWidth(w)
         end
         each(apply)
@@ -1757,6 +1766,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 if auras then
                     auras:SetGroupSize("mine", self:Get("auraSize"))
                     auras:SetGroupSize("removable", self:Get("auraSize"))
+                    auras.container:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, S["space-1"])
                 end
             end)
         end)
@@ -2074,8 +2084,14 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 self:RelayoutPlates()
             end
         end)
-        -- the preview's target line carries a colour code
+        -- the preview's target line carries a colour code; a theme's spacing
+        -- moves the plates' parts and their height (the game's plates too)
         self:On("SUUUI_THEME_CHANGED", function()
+            self:ApplySizes()
+            self:ApplyGameSettings()
+            for _, f in pairs(byUnit) do
+                f:Refresh()
+            end
             self:DrawPreview()
         end)
         -- a unit can turn attackable (a duel): re-check its plate

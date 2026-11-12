@@ -49,8 +49,14 @@ import Select from "/UI/Select"
 
 local S = T.space
 
-local SLOT = T.size["slot"]
-local GAP = S["space-2"]
+-- an item slot's size and the gap between slots: a theme's, read when laid
+-- out
+local function slotPx(): number
+    return T.size["slot"]
+end
+local function slotGap(): number
+    return S["space-2"]
+end
 local CROP = 0.08
 local COLORS = T.color :: { [string]: Color }
 local live: { [Frame]: string } = setmetatable({}, { __mode = "k" }) -- money and inventory panels, for a theme change
@@ -223,7 +229,7 @@ export class ItemSlot extends Button
 
     constructor(parent: Frame, size: number?)
         super(nil, parent)
-        self:SetSize(size or SLOT, size or SLOT)
+        self:SetSize(size or slotPx(), size or slotPx())
         self.skin = skinItemSlot(self)
     end
 end
@@ -334,12 +340,14 @@ export class SectionHead extends Frame
         self.rule = self:CreateTexture(nil, "ARTWORK")
         draw.paintFill(self.rule, "gilt-faint")
         self.rule:SetHeight(1)
-        self.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
-        self.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
         self.label = uiText.text(self, "caption", "gilt-text")
-        self.label:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-3"])
         self.meta = uiText.text(self, "caption", "ink-muted")
-        self.meta:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+        draw.layout(self, function()
+            self.rule:SetPoint("TOPLEFT", 0, -S["space-4"])
+            self.rule:SetPoint("TOPRIGHT", 0, -S["space-4"])
+            self.label:SetPoint("TOPLEFT", self.rule, "BOTTOMLEFT", 0, -S["space-3"])
+            self.meta:SetPoint("LEFT", self.label, "RIGHT", S["space-3"], 0)
+        end)
     end
 end
 
@@ -355,7 +363,7 @@ export class ResultRow extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self:SetHeight(SLOT)
+        self:SetHeight(slotPx())
         self.slot = itemSlot(self)
         self.slot:SetPoint("LEFT")
         self.slot:EnableMouse(false)
@@ -363,13 +371,17 @@ export class ResultRow extends Frame
         self.total:SetPoint("RIGHT")
         self.total:SetJustifyH("RIGHT")
         self.label = uiText.text(self, "label", "ink")
-        self.label:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], -1)
-        self.label:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
         self.label:SetJustifyH("LEFT")
         self.label:SetWordWrap(false)
         self.places = uiText.text(self, "caption", "ink-muted")
-        self.places:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], 1)
-        self.places:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
+        draw.layout(self, function()
+            self:SetHeight(slotPx())
+            self.slot:SetSize(slotPx(), slotPx())
+            self.label:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], -1)
+            self.label:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
+            self.places:SetPoint("BOTTOMLEFT", self.slot, "BOTTOMRIGHT", S["space-4"], 1)
+            self.places:SetPoint("RIGHT", self.total, "LEFT", -S["space-4"], 0)
+        end)
         self.places:SetJustifyH("LEFT")
         self.places:SetWordWrap(false)
         self:SetScript("OnEnter", function()
@@ -434,7 +446,9 @@ export class Banner extends Frame
         self.eye:SetPoint("LEFT")
         draw.paint(self.eye, "ink-muted")
         self.text = uiText.text(self, "caption", "ink-muted")
-        self.text:SetPoint("LEFT", self.eye, "RIGHT", S["space-3"], 0)
+        draw.layout(self, function()
+            self.text:SetPoint("LEFT", self.eye, "RIGHT", S["space-3"], 0)
+        end)
     end
 end
 
@@ -489,7 +503,15 @@ local function buildCharacters(inv: Inventory, body: Frame)
         options = {},
     })
     inv.who = who
-    who:SetPoint("LEFT", inv, "TOPLEFT", S["space-5"] - S["space-2"], -(S["space-5"] + T.type.header.lineHeight / 2))
+    draw.layout(inv, function()
+        who:SetPoint(
+            "LEFT",
+            inv,
+            "TOPLEFT",
+            S["space-5"] - S["space-2"],
+            -(S["space-5"] + T.type.header.lineHeight / 2)
+        )
+    end)
     local pickRow = CreateFrame("Frame", nil, body)
     inv.pickRow = pickRow
     pickRow:SetSize(1, ROW)
@@ -505,14 +527,16 @@ local function buildCharacters(inv: Inventory, body: Frame)
     local all = inputs.toggle(body, { value = false })
     inv.all = all
     all:SetPoint("RIGHT", pickRow, "LEFT", inv:GridWidth(), 0)
-    allLabel:SetPoint("RIGHT", all, "LEFT", -S["space-4"], 0)
+    draw.layout(inv, function()
+        allLabel:SetPoint("RIGHT", all, "LEFT", -S["space-4"], 0)
+    end)
     local banner = Banner.new(body)
     inv.banner = banner
     banner:SetSize(inv:GridWidth(), T.type.caption.lineHeight)
     banner:Hide()
     local results = CreateFrame("Frame", nil, body)
     inv.results = results
-    results:SetSize(inv:GridWidth(), SLOT)
+    results:SetSize(inv:GridWidth(), slotPx())
     results:Hide()
     inv.resultRows = {}
 end
@@ -593,7 +617,7 @@ export class Inventory extends Panel
         -- the grid
         self.grid = CreateFrame("Frame", nil, body)
         self.grid:SetWidth(self:GridWidth())
-        self.grid:SetHeight(SLOT)
+        self.grid:SetHeight(slotPx())
         if o.characters then
             buildCharacters(self, body)
             -- laid out again a frame after it opens: the first time, before
@@ -621,7 +645,25 @@ export class Inventory extends Panel
     end
 
     function GridWidth(): number
-        return self.columns * SLOT + (self.columns - 1) * GAP
+        return self.columns * slotPx() + (self.columns - 1) * slotGap()
+    end
+
+    -- The body's width: the grid's, or the picker row's where that is wider
+    -- (a dense theme's grid can be narrower than Bags/Bank and the switches
+    -- beside it; they never overlap).
+    function BodyWidth(): number
+        local w = self:GridWidth()
+        local view, all, allLabel = self.view, self.all, self.allLabel
+        if view and all and allLabel then
+            local row = view:GetWidth() + S["space-6"] + allLabel:GetUnboundedStringWidth() + S["space-4"] +
+                all:GetWidth()
+            local toggle, label = self.slotsToggle, self.slotsLabel
+            if toggle and label then
+                row = row + label:GetUnboundedStringWidth() + S["space-4"] + toggle:GetWidth() + S["space-6"]
+            end
+            w = math.max(w, math.ceil(row))
+        end
+        return w
     end
 
     -- buttons laid out row by row; sections (0.17): { { at = index, label,
@@ -642,7 +684,7 @@ export class Inventory extends Panel
         for i = 1, #buttons + 1 do
             for _, sct in ipairs(starts[i] or {}) do
                 if col > 0 then
-                    y, col = y + SLOT + GAP, 0
+                    y, col = y + slotPx() + slotGap(), 0
                 end
                 used = used + 1
                 local h = sectionHead(self, used)
@@ -656,12 +698,12 @@ export class Inventory extends Panel
             local b = buttons[i]
             if b then
                 b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (SLOT + GAP), -y)
-                b:SetSize(SLOT, SLOT)
+                b:SetPoint("TOPLEFT", self.grid, "TOPLEFT", col * (slotPx() + slotGap()), -y)
+                b:SetSize(slotPx(), slotPx())
                 b:Show()
                 col = col + 1
                 if col == cols then
-                    y, col = y + SLOT + GAP, 0
+                    y, col = y + slotPx() + slotGap(), 0
                 end
             end
         end
@@ -669,8 +711,8 @@ export class Inventory extends Panel
         for i = used + 1, #heads do
             heads[i]:Hide()
         end
-        local h = col > 0 and (y + SLOT) or (y - GAP)
-        self.grid:SetHeight(math.max(SLOT, h))
+        local h = col > 0 and (y + slotPx()) or (y - slotGap())
+        self.grid:SetHeight(math.max(slotPx(), h))
         self:FitBody()
         self.laidOut = buttons :: Region[]
     end
@@ -724,7 +766,6 @@ export class Inventory extends Panel
                 icon:SetPoint("LEFT")
                 icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
                 local text = uiText.text(made, "numeric", "ink")
-                text:SetPoint("LEFT", icon, "RIGHT", S["space-1"], 0)
                 local index = i
                 made:SetScript("OnEnter", function(btn: Button)
                     local d = self.currencyDefs[index]
@@ -745,6 +786,7 @@ export class Inventory extends Panel
                 b = made
             end
             local text = self.currencyTexts[i]
+            text:SetPoint("LEFT", self.currencyIcons[i], "RIGHT", S["space-1"], 0)
             self.currencyIcons[i]:SetTexture(def.icon)
             text:SetText(BreakUpLargeNumbers and BreakUpLargeNumbers(def.count) or tostring(def.count))
             b:SetWidth(14 + S["space-1"] + text:GetUnboundedStringWidth())
@@ -824,7 +866,7 @@ export class Inventory extends Panel
             r.places:SetValue(item.places or "")
             r.total:SetValue(item.count and ("×" .. item.count) or "")
             r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", 0, -(i - 1) * (SLOT + GAP))
+            r:SetPoint("TOPLEFT", 0, -(i - 1) * (slotPx() + slotGap()))
             r:SetWidth(self:GridWidth())
             r:Show()
         end
@@ -835,7 +877,7 @@ export class Inventory extends Panel
         if not self.showResults or not self.resultsMin then
             self.resultsMin = self.grid:GetHeight()
         end
-        results:SetHeight(math.max(SLOT, self.resultsMin or 0, n * SLOT + math.max(0, n - 1) * GAP))
+        results:SetHeight(math.max(slotPx(), self.resultsMin or 0, n * slotPx() + math.max(0, n - 1) * slotGap()))
         self.showResults = list ~= nil
         self:FitBody()
         return list and (#list - n) or 0
@@ -853,7 +895,7 @@ export class Inventory extends Panel
             local all = self.all
             if all then
                 all:ClearAllPoints()
-                all:SetPoint("RIGHT", pickRow, "LEFT", self:GridWidth(), 0)
+                all:SetPoint("RIGHT", pickRow, "LEFT", self:BodyWidth(), 0)
             end
             y = y + ROW + S["space-4"]
         end
@@ -909,19 +951,19 @@ export class Inventory extends Panel
             beside = b
         end
         local h = y + content:GetHeight() + S["space-4"] + 1 + S["space-4"] + foot
-        self.body:SetSize(self:GridWidth(), h)
+        self.body:SetSize(self:BodyWidth(), h)
     end
 
     -- After `columns` changed: the widths that follow it.
     function SetColumns(columns: number)
         self.columns = columns
         local w = self:GridWidth()
-        self.search:SetWidth(w - 30 - S["space-3"])
+        self.search:SetWidth(self:BodyWidth() - 30 - S["space-3"])
         self.grid:SetWidth(w)
         local all = self.all
         if all then
             local banner = self.banner :: Banner
-            all:SetPoint("RIGHT", self.pickRow :: Frame, "LEFT", w, 0)
+            all:SetPoint("RIGHT", self.pickRow :: Frame, "LEFT", self:BodyWidth(), 0)
             banner:SetWidth(w)
         end
         self:FitBody()
@@ -944,8 +986,9 @@ events.on(
                 local m = f :: Money
                 m:SetCopper(m.copper)
             else
+                -- (the widths from the slot size and gap, then the body)
                 local inv = f :: Inventory
-                inv:FitBody()
+                inv:SetColumns(inv.columns)
             end
         end
     end,

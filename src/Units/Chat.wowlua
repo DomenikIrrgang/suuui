@@ -75,8 +75,21 @@ local M: ChatModule
 local function bodyFont(): string
     return SuuUI.Fonts.File("body")
 end
-local PAD_X, PAD_TOP, PAD_BOTTOM = S["space-5"], S["space-2"], S["space-5"]
-local TABS_H, INPUT_H, GAP = 24, 30, S["space-3"]
+-- the panel's padding and the gap between its parts: a theme's spacing,
+-- read when laid out (ChatPanel:Place, ChatModule:Layout)
+local function padX(): number
+    return S["space-5"]
+end
+local function padTop(): number
+    return S["space-2"]
+end
+local function padBottom(): number
+    return S["space-5"]
+end
+local function chatGap(): number
+    return S["space-3"]
+end
+local TABS_H, INPUT_H = 24, 30
 local TICK = 0.2
 
 -- One of Blizzard's chat windows.
@@ -250,7 +263,6 @@ class ChatPanel extends Frame
         self.deco:SetAllPoints()
         self.box = CreateFrame("Frame", nil, self.deco)
         self.box:SetPoint("TOPLEFT")
-        self.box:SetPoint("BOTTOMRIGHT", 0, INPUT_H + GAP)
         self.ground = UI.Fill(self.box, "surface-glass", "BACKGROUND")
         self.ground:SetAllPoints()
         self.border = UI.Border(self.box, "gilt-line")
@@ -263,14 +275,21 @@ class ChatPanel extends Frame
         UI.Border(self.field, "gilt-line")
         self.tabs = CreateFrame("Frame", nil, self)
         self.tabs:SetFrameStrata("MEDIUM")
-        self.tabs:SetPoint("TOPLEFT", PAD_X, -PAD_TOP)
-        self.tabs:SetPoint("TOPRIGHT", -PAD_X, -PAD_TOP)
         self.tabs:SetHeight(TABS_H)
         self.marker = UI.TabMarker(self.tabs, { y = 2 })
         self.log = CreateFrame("Frame", nil, self)
         self.log:SetFrameStrata("LOW")
-        self.log:SetPoint("TOPLEFT", PAD_X, -(PAD_TOP + TABS_H + GAP))
-        self.log:SetPoint("BOTTOMRIGHT", -PAD_X, INPUT_H + GAP + PAD_BOTTOM)
+        self:Place()
+    end
+
+    -- The box over the field, the tabs and the lines inside the padding: at
+    -- build, and again when a theme changes the spacing.
+    function Place()
+        self.box:SetPoint("BOTTOMRIGHT", 0, INPUT_H + chatGap())
+        self.tabs:SetPoint("TOPLEFT", padX(), -padTop())
+        self.tabs:SetPoint("TOPRIGHT", -padX(), -padTop())
+        self.log:SetPoint("TOPLEFT", padX(), -(padTop() + TABS_H + chatGap()))
+        self.log:SetPoint("BOTTOMRIGHT", -padX(), INPUT_H + chatGap() + padBottom())
     end
 end
 
@@ -289,7 +308,9 @@ class TextBox extends Panel
         self.field = UI.TextField(self.body, { width = 260 - S["space-5"] * 2 })
         self.field:SetPoint("TOPLEFT")
         self.hint = UI.Text(self.body, "caption", "ink-muted")
-        self.hint:SetPoint("TOPLEFT", self.field, "BOTTOMLEFT", 0, -S["space-2"])
+        SuuUI.Layout.Follow(self, function()
+            self.hint:SetPoint("TOPLEFT", self.field, "BOTTOMLEFT", 0, -S["space-2"])
+        end)
         self.field.edit:SetScript("OnEscapePressed", function()
             self:Hide()
         end)
@@ -565,7 +586,9 @@ class TabButton extends Button
         self.label:SetJustifyH("CENTER")
         self.label:SetWordWrap(false)
         self.unread = UI.Diamond(self, 4, "ink")
-        self.unread:SetPoint("LEFT", self.label, "RIGHT", S["space-2"], 1)
+        SuuUI.Layout.Follow(self, function()
+            self.unread:SetPoint("LEFT", self.label, "RIGHT", S["space-2"], 1)
+        end)
         self:SetScript("OnEnter", function()
             self.hover = true
             if not self.active then
@@ -682,7 +705,9 @@ end
 --------------------------------------------------------------------------------
 
 local FIELD_H, CHIP_H = 26, 20
-local SEARCH_HEAD_H = FIELD_H + S["space-3"] + CHIP_H + S["space-2"]
+local function searchHeadH(): number
+    return FIELD_H + S["space-3"] + CHIP_H + S["space-2"]
+end
 local GROUP_H, MORE_H, ROW_GAP = 32, 16, 2
 local CHIPS = {
     { value = "all", label = "All tabs" },
@@ -707,7 +732,7 @@ end
 
 -- the lines' width (the panel's, less its padding)
 local function logWidth(): number
-    return UI.Size("chat-w") - PAD_X * 2
+    return UI.Size("chat-w") - padX() * 2
 end
 
 -- Where to look: a chip.
@@ -761,7 +786,9 @@ class SearchHeader extends Frame
         self.jewel:SetPoint("CENTER", self, "LEFT", 3, -2)
         self.name = UI.Text(self, "unit-name", "ink")
         self.count = UI.Text(self, "caption", "ink-muted")
-        self.count:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
+        SuuUI.Layout.Follow(self, function()
+            self.count:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
+        end)
         self.whisper = UI.Button(self, {
             text = "Whisper",
             icon = "chat",
@@ -829,6 +856,7 @@ class SearchPage extends Frame
     readonly head: Frame
     -- the field: the search glyph, what's typed, how many lines match
     readonly field: TextField
+    readonly glyph: Texture
     readonly count: Text
     readonly chips: SearchChip[] = {}
     readonly scroll: ScrollArea
@@ -850,7 +878,7 @@ class SearchPage extends Frame
         self.head = CreateFrame("Frame", nil, self)
         self.head:SetPoint("TOPLEFT")
         self.head:SetPoint("TOPRIGHT")
-        self.head:SetHeight(SEARCH_HEAD_H)
+        self.head:SetHeight(searchHeadH())
         local f = UI.TextField(self.head, {
             placeholder = "A name or a word",
             onTextChanged = function()
@@ -867,15 +895,8 @@ class SearchPage extends Frame
         UI.Glyph(glyph, "search")
         glyph:SetSize(14, 14)
         UI.Paint(glyph, "ink-muted")
-        glyph:SetPoint("LEFT", S["space-4"], 0)
+        self.glyph = glyph
         self.count = UI.Text(f, "caption", "ink-muted")
-        self.count:SetPoint("RIGHT", -S["space-4"], 0)
-        local textX = S["space-4"] + 14 + S["space-4"]
-        f.edit:ClearAllPoints()
-        f.edit:SetPoint("TOPLEFT", textX, 0)
-        f.edit:SetPoint("BOTTOMRIGHT", -(S["space-4"] + 60), 0)
-        f.placeholder:ClearAllPoints()
-        f.placeholder:SetPoint("LEFT", textX, 0)
         self.field = f
         -- where to look: one chip at a time
         for _, c in ipairs(CHIPS) do
@@ -883,18 +904,29 @@ class SearchPage extends Frame
         end
         -- the matches
         self.scroll = UI.ScrollArea(self, 5)
-        self.scroll:SetPoint("TOPLEFT", 0, -SEARCH_HEAD_H)
         self.scroll:SetPoint("BOTTOMRIGHT", -8, 0)
         self.list = self.scroll.child
-        self.list:SetWidth(logWidth() - 8)
         self.note = UI.Text(self.list, "caption", "ink-muted")
-        self.note:SetPoint("TOPLEFT", 0, -S["space-2"])
         self:PlaceChips()
     end
 
-    -- The chips side by side, each as wide as its label (measured again
-    -- when a theme changes the caption).
+    -- The head (the field, its glyph and count, the chips) and the matches
+    -- under it, from the spacing: at build, and again when a theme changes
+    -- it or the caption style.
     function PlaceChips()
+        local f = self.field
+        self.head:SetHeight(searchHeadH())
+        self.glyph:SetPoint("LEFT", S["space-4"], 0)
+        self.count:SetPoint("RIGHT", -S["space-4"], 0)
+        local textX = S["space-4"] + 14 + S["space-4"]
+        f.edit:ClearAllPoints()
+        f.edit:SetPoint("TOPLEFT", textX, 0)
+        f.edit:SetPoint("BOTTOMRIGHT", -(S["space-4"] + 60), 0)
+        f.placeholder:ClearAllPoints()
+        f.placeholder:SetPoint("LEFT", textX, 0)
+        self.scroll:SetPoint("TOPLEFT", 0, -searchHeadH())
+        self.list:SetWidth(logWidth() - 8)
+        self.note:SetPoint("TOPLEFT", 0, -S["space-2"])
         local x = 0
         for _, b in ipairs(self.chips) do
             b:SetSize(math.ceil(UI.MeasureText("caption", tostring(b.label.value or ""))) + S["space-4"] * 2, CHIP_H)
@@ -962,7 +994,9 @@ class WindowRow extends Frame
                 end
             end,
         })
-        self.size:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
+        SuuUI.Layout.Follow(self, function()
+            self.size:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
+        end)
         self.config = UI.Button(self, {
             text = "Chat settings…",
             onClick = function()
@@ -976,14 +1010,18 @@ class WindowRow extends Frame
                 description = "Blizzard's settings for this window: which channels and messages it shows.",
             },
         })
-        self.config:SetPoint("LEFT", self.size, "RIGHT", S["space-4"], 0)
+        SuuUI.Layout.Follow(self, function()
+            self.config:SetPoint("LEFT", self.size, "RIGHT", S["space-4"], 0)
+        end)
         self.close = UI.CloseButton(self, function()
             local cf = self.cf
             if cf then
                 M:CloseWindow(cf)
             end
         end)
-        self.close:SetPoint("RIGHT", -S["space-2"], 0)
+        SuuUI.Layout.Follow(self, function()
+            self.close:SetPoint("RIGHT", -S["space-2"], 0)
+        end)
     end
 end
 
@@ -1555,7 +1593,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     function PanelSize(): (number, number)
         local w = UI.Size("chat-w")
         -- the panel (tabs and lines), then the input below it at the same width
-        local h = PAD_TOP + TABS_H + GAP + self:Get("logHeight") + PAD_BOTTOM + GAP + INPUT_H
+        local h = padTop() + TABS_H + chatGap() + self:Get("logHeight") + padBottom() + chatGap() + INPUT_H
         return w, h
     end
 
@@ -1567,9 +1605,9 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return nil, 0, 0, 0
         end
         local k = p:GetEffectiveScale() / UIParent:GetEffectiveScale()
-        local left = (l + PAD_X) * k
-        local right = (l + w - PAD_X) * k
-        local bottom = (b + INPUT_H + GAP + PAD_BOTTOM) * k
+        local left = (l + padX()) * k
+        local right = (l + w - padX()) * k
+        local bottom = (b + INPUT_H + chatGap() + padBottom()) * k
         local top = bottom + self:Get("logHeight") * k
         return left, bottom, right, top
     end
@@ -1679,8 +1717,8 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 eb:SetPoint("TOPLEFT", panel.field, "TOPLEFT")
                 eb:SetPoint("BOTTOMRIGHT", panel.field, "BOTTOMRIGHT")
             else
-                eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", -PAD_X, -(PAD_BOTTOM + GAP))
-                eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", PAD_X, -(PAD_BOTTOM + GAP))
+                eb:SetPoint("TOPLEFT", cf, "BOTTOMLEFT", -padX(), -(padBottom() + chatGap()))
+                eb:SetPoint("TOPRIGHT", cf, "BOTTOMRIGHT", padX(), -(padBottom() + chatGap()))
                 eb:SetHeight(INPUT_H)
             end
             eb:SetTextInsets(S["space-4"], S["space-4"], 0, 0)
@@ -3509,6 +3547,10 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             for _, b in ipairs(p.tabButtons) do
                 tabFace(b.label)
             end
+            -- a theme's spacing: the panel's padding and gaps, its size, and
+            -- Blizzard's chat in it (after combat where it is protected)
+            p:Place()
+            self:Layout()
         end
         local s = self.search
         if s then

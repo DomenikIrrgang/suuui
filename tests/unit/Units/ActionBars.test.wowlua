@@ -15,7 +15,7 @@ import type Attachable, Watched, CountKey, SizeKey, GapKey, VisKey, AttachKey, O
 import migrations as settingMigrations from "/Core/Settings"
 import internal moverList from "/EditMode/EditMode"
 import type Mover from "/EditMode/EditMode"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import * as frames from "wowlua:frames"
 
 -- One of the game's frames, by name; a line of GameTooltip.
@@ -411,5 +411,39 @@ local function upgradeRanks()
     mock.player:learn(990004)
     local _, id = GetActionInfo(1)
     expect(id).toBe(990004)
+    expectNoErrors()
+end
+
+@test("a theme's spacing: the dock's padding and gaps and the bars' default gap, after a fight; SuuUI's again exactly")
+local function themeSpacing()
+    layoutThemes()
+    mock.advanceFrames(1)
+    local d = assert(M.dock)
+    local function look(): { w: number, h: number, gap: number, bar2: number }
+        local _, _, _, x = M.bars[1].buttons[2]:GetPoint(1)
+        local _, _, _, _, y = M.bars[2].header:GetPoint(1)
+        return { w = d:GetWidth(), h = d:GetHeight(), gap = (x :: number) - 24, bar2 = y :: number }
+    end
+    local design = look()
+    expect(design.gap).toBe(2)
+    expect(design.bar2).toBe(2)
+    useTheme(COMPACT)
+    mock.advanceFrames(1)
+    local compact = look()
+    expect(compact.gap).toBe(1)
+    expect(compact.bar2).toBe(1)
+    -- 12 and 6 + 6 buttons, their gaps, space-4 between the groups, space-3 round
+    expect(compact.w).toBe(4 * 2 + (6 * 24 + 5) * 2 + 5 * 2 + (12 * 24 + 11))
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    useTheme(ROOMY)
+    mock.advanceFrames(1)
+    expect(look()).toEqual(compact)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(look().gap).toBe(3)
+    useTheme(nil)
+    mock.advanceFrames(1)
+    expect(look()).toEqual(design)
     expectNoErrors()
 end

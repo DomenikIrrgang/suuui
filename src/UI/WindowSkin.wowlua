@@ -156,6 +156,11 @@ class TabSkin
             end
         end
     end
+
+    -- the label centred in the tab's text band (from the spacing)
+    function Place()
+        self.label:SetPoint("CENTER", 0, (S["space-3"] - S["space-2"]) / 2)
+    end
 end
 
 -- the tab buttons skinned, by button
@@ -245,7 +250,7 @@ export class WindowChrome
     head: Frame
     jewel: Texture
     icon: Texture? = nil
-    titleX: number
+    titleX: number = 0
     title: Text
     close: Button? = nil
     key: KeyChip? = nil
@@ -312,7 +317,7 @@ export class WindowChrome
         end
         self.inset, self.headExtra = o.topInset or 0, o.headExtra or 0
         -- the line the second row's 22px controls sit centred on, up from the
-        -- header's bottom (in the middle of headExtra)
+        -- header's bottom (in the middle of headExtra; again in PlaceHead)
         self.rowMid = S["space-1"] + 11 + self.headExtra / 2
 
         -- the art, on the window itself (behind every pane)
@@ -336,21 +341,17 @@ export class WindowChrome
         self.head = head
         self.jewel = draw.diamond(head, 7, "gilt")
         self.jewel:SetPoint("CENTER", head, "TOPLEFT", 0, 0)
-        local x = S["space-5"]
         if o.icon then
             local icon = head:CreateTexture(nil, "ARTWORK")
             draw.glyph(icon, o.icon)
             icon:SetSize(15, 15)
             draw.paint(icon, "gilt-text")
             self.icon = icon
-            x = x + 15 + S["space-4"]
         end
-        self.titleX = x
         self.title = text(head, "header", "gilt-text")
         self.title:SetValue(o.title or "")
         -- close: Blizzard's button (its click closes the window as always), SuuUI's cross
         local close = o.close
-        local right = S["space-5"]
         if close then
             hideRegions(close)
             close:SetSize(22, 22)
@@ -369,20 +370,16 @@ export class WindowChrome
                 cross:SetColor("ink-muted")
             end)
             self.close = close
-            right = right + 22 + S["space-4"]
         end
         -- the key chip: the binding's first key
         local key = o.binding and GetBindingKey(o.binding)
         if key then
             self.key = keyChip(head, GetBindingText and GetBindingText(key, "KEY_") or key)
-            self.keyRight = right
         end
-        -- the tab row's rule
+        -- the tab row's rule (placed by PlaceHead)
         self.rule = head:CreateTexture(nil, "ARTWORK")
         draw.paintFill(self.rule, "gilt-faint")
         self.rule:SetHeight(1)
-        self.rule:SetPoint("BOTTOMLEFT", S["space-5"], 0)
-        self.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
         self:PlaceHead(true)
 
         hookScript(frame, "OnSizeChanged", function()
@@ -460,7 +457,9 @@ export class WindowChrome
         for _, def in ipairs(inRow) do
             local b = def.button
             local label = (short and def.short) or def.label
-            skinTab(self, def).label:SetValue(label)
+            local skin = skinTab(self, def)
+            skin.label:SetValue(label)
+            skin:Place()
             b:SetSize(math.ceil(measureText("header", label)), tabH())
             b:ClearAllPoints()
             if prev then
@@ -533,6 +532,13 @@ export class WindowChrome
         head:SetHeight(h)
         -- (one physical pixel at the window's scale)
         self.edge:Layout()
+        -- the title after the icon, the key chip before the close (the
+        -- spacing a theme may change)
+        self.titleX = S["space-5"] + (self.icon and 15 + S["space-4"] or 0)
+        self.keyRight = S["space-5"] + (self.close and 22 + S["space-4"] or 0)
+        self.rowMid = S["space-1"] + 11 + self.headExtra / 2
+        self.rule:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+        self.rule:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
         local lineY = -(S["space-5"] + T.type.header.lineHeight / 2)
         if self.icon then
             self.icon:SetPoint("LEFT", head, "TOPLEFT", S["space-5"], lineY)

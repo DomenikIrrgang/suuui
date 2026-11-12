@@ -18,6 +18,15 @@
 --   glyphs = { [name] = file }                (0.37) an icon's file, by the
 --                                             glyph's name (T.glyph: "bag",
 --                                             "search", "chevronDown"…)
+--   space = { [token] = px }                  (0.38) a spacing token's px
+--                                             ("space-1"…"space-7": T.space)
+--   sizes = { [token] = px }                  (0.38) a size token's px
+--                                             ("icon-md", "slot", "unit-lg"…:
+--                                             T.size)
+--   radius = { [token] = px | "N%" }          (0.38) a corner radius token
+--                                             (T.radius; SuuUI draws square
+--                                             corners: nothing reads them
+--                                             yet, kept for themes to come)
 --   health = "class"                          (0.26) players' health in
 --                                             their class colour ("fill",
 --                                             the default: the unit-fill);
@@ -31,7 +40,12 @@
 -- SUUUI_THEME_CHANGED tells the rest (colour codes in text, colours worked
 -- out from a token, sizes from a text style's line height). Textures set by
 -- their token (UI.Skin) or glyph (UI.Glyph) are set again before the
--- colours (draw.reskin).
+-- colours (draw.reskin). Spacing and sizes (asked 2026-11-12: a denser or
+-- roomier UI) are numbers from 0 (spacing) or a quarter (sizes) to four
+-- times the design's; when a change moves any, what draw.layout keeps and
+-- the stacks and grids with token gaps are laid out again (draw.relayout)
+-- before SUUUI_THEME_CHANGED tells the modules, which lay out the rest.
+-- Protected frames wait for the end of combat.
 
 import tokens as T, TextStyle, Color from "./Tokens"
 import * as settings from "./Settings"
@@ -45,6 +59,8 @@ export type ThemeColors = { [string]: number[] }
 export type ThemeFonts = { [string]: { file?: string, size?: number, lineHeight?: number } }
 export type ThemeTextures = { [string]: string }
 export type ThemeGlyphs = { [string]: string }
+export type ThemeNumbers = { [string]: number }
+export type ThemeRadii = { [string]: number | string }
 export type Theme = {
     id: string,
     name: string,
@@ -53,6 +69,9 @@ export type Theme = {
     fonts: ThemeFonts,
     textures: ThemeTextures,
     glyphs: ThemeGlyphs,
+    space: ThemeNumbers,
+    sizes: ThemeNumbers,
+    radius: ThemeRadii,
     health: "fill" | "class",
 }
 --- What a plugin passes SuuUI.RegisterTheme.
@@ -64,6 +83,9 @@ export type ThemeDef = {
     fonts?: ThemeFonts,
     textures?: ThemeTextures,
     glyphs?: ThemeGlyphs,
+    space?: ThemeNumbers,
+    sizes?: ThemeNumbers,
+    radius?: ThemeRadii,
     health?: "fill" | "class",
 }
 
@@ -71,6 +93,9 @@ local colors: { [string]: Color } = T.color
 local styles: { [string]: TextStyle } = T.type
 local textures: { [string]: string } = T.texture
 local glyphs: { [string]: string } = T.glyph
+local spaces: { [string]: number } = T.space
+local sizes: { [string]: number } = T.size
+local radii: { [string]: number | string } = T.radius
 
 -- the design's own colours, text styles and textures, before any theme or
 -- colour vision (this file loads before the saved settings apply either)
@@ -79,7 +104,10 @@ local design: {
     type: { [string]: { file: string, size: number, lineHeight: number } },
     texture: { [string]: string },
     glyph: { [string]: string },
-} = { color = {}, type = {}, texture = {}, glyph = {} }
+    space: { [string]: number },
+    size: { [string]: number },
+    radius: { [string]: number | string },
+} = { color = {}, type = {}, texture = {}, glyph = {}, space = {}, size = {}, radius = {} }
 for tokenName, c in pairs(colors) do
     design.color[tokenName] = { c[1], c[2], c[3], c[4], hex = c.hex }
 end
@@ -91,6 +119,15 @@ for tokenName, file in pairs(textures) do
 end
 for name, file in pairs(glyphs) do
     design.glyph[name] = file
+end
+for tokenName, px in pairs(spaces) do
+    design.space[tokenName] = px
+end
+for tokenName, px in pairs(sizes) do
+    design.size[tokenName] = px
+end
+for tokenName, r in pairs(radii) do
+    design.radius[tokenName] = r
 end
 
 local function reset()
@@ -108,6 +145,32 @@ local function reset()
     for name, file in pairs(design.glyph) do
         glyphs[name] = file
     end
+    for tokenName, px in pairs(design.space) do
+        spaces[tokenName] = px
+    end
+    for tokenName, px in pairs(design.size) do
+        sizes[tokenName] = px
+    end
+    for tokenName, r in pairs(design.radius) do
+        radii[tokenName] = r
+    end
+end
+
+-- The spacing, sizes and radii in effect, as text (a theme change lays the
+-- UI out again only when it moved one).
+local function geometry(): string
+    local parts: string[] = {}
+    for tokenName, px in pairs(spaces) do
+        parts[#parts + 1] = tokenName .. "=" .. tostring(px)
+    end
+    for tokenName, px in pairs(sizes) do
+        parts[#parts + 1] = tokenName .. "=" .. tostring(px)
+    end
+    for tokenName, r in pairs(radii) do
+        parts[#parts + 1] = tokenName .. "=" .. tostring(r)
+    end
+    table.sort(parts)
+    return table.concat(parts, ",")
 end
 
 export const DEFAULT = "suuui"
@@ -120,6 +183,9 @@ local list: Theme[] = {
         fonts = {},
         textures = {},
         glyphs = {},
+        space = {},
+        sizes = {},
+        radius = {},
         health = "fill",
     },
 }
@@ -146,6 +212,83 @@ local function warnChat(id: string, token: string)
             token
         )
     )
+end
+
+-- A theme's spacing or sizes: real tokens, each a number from `least` times
+-- the design's to four times it. (Level 3: the error points at the
+-- plugin's RegisterTheme call.)
+local function numbers(
+    id: string,
+    key: string,
+    value: unknown,
+    own: { [string]: number },
+    least: number,
+    what: string
+): ThemeNumbers
+    if value == nil then
+        return {}
+    end
+    if type(value) ~= "table" then
+        error(("SuuUI.RegisterTheme: %s's %s are a table of %ss"):format(id, key, what), 3)
+    end
+    local out: ThemeNumbers = {}
+    for token, px in pairs(value :: { [unknown]: unknown }) do
+        local name = tostring(token)
+        local d = type(token) == "string" and own[token] or nil
+        if d == nil then
+            error(("SuuUI.RegisterTheme: %s has no %s %q"):format(id, what, name), 3)
+        end
+        if type(px) ~= "number" or px ~= px or px < d * least or px > d * 4 then
+            error(
+                ("SuuUI.RegisterTheme: %s's %s %s is a number from %s to %s px (the design's is %s), not %s"):format(
+                    id,
+                    what,
+                    name,
+                    tostring(d * least),
+                    tostring(d * 4),
+                    tostring(d),
+                    tostring(px)
+                ),
+                3
+            )
+        end
+        out[name] = px
+    end
+    return out
+end
+
+-- A theme's corner radii: px from 0 to four times the design's; a share of
+-- the size where the design's is one ("radius-round": "50%"), from "0%" to
+-- "50%".
+local function radiusOf(id: string, value: unknown): ThemeRadii
+    if value == nil then
+        return {}
+    end
+    if type(value) ~= "table" then
+        error(("SuuUI.RegisterTheme: %s's radius is a table of radius tokens"):format(id), 3)
+    end
+    local out: ThemeRadii = {}
+    for token, r in pairs(value :: { [unknown]: unknown }) do
+        local name = tostring(token)
+        local d = type(token) == "string" and design.radius[token] or nil
+        if d == nil then
+            error(("SuuUI.RegisterTheme: %s has no radius token %q"):format(id, name), 3)
+        end
+        local ok = false
+        if type(d) == "number" then
+            ok = type(r) == "number" and r >= 0 and r <= d * 4
+        elseif type(r) == "string" then
+            local share = tonumber(r:match("^(%d+%.?%d*)%%$"))
+            ok = share ~= nil and share <= 50
+        end
+        if not ok then
+            local range = type(d) == "number" and ("a number from 0 to " .. tostring(d * 4) .. " px") or
+                "a share from \"0%\" to \"50%\""
+            error(("SuuUI.RegisterTheme: %s's radius %s is %s, not %s"):format(id, name, range, tostring(r)), 3)
+        end
+        out[name] = r :: number | string
+    end
+    return out
 end
 
 -- (a plugin's Lua passes anything: checked here)
@@ -194,6 +337,9 @@ export function register(value: unknown): Theme
             error(("SuuUI.RegisterTheme: %s's glyph %s needs a file path"):format(def.id, name), 2)
         end
     end
+    local space = numbers(def.id, "space", def.space, design.space, 0, "spacing token")
+    local ownSizes = numbers(def.id, "sizes", def.sizes, design.size, 0.25, "size token")
+    local radius = radiusOf(def.id, def.radius)
     given = def.health
     if given ~= nil and given ~= "fill" and given ~= "class" then
         error(("SuuUI.RegisterTheme: %s's health is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
@@ -206,6 +352,9 @@ export function register(value: unknown): Theme
         fonts = def.fonts or {},
         textures = def.textures or {},
         glyphs = def.glyphs or {},
+        space = space,
+        sizes = ownSizes,
+        radius = radius,
         health = def.health == "class" and "class" or "fill",
     }
     list[#list + 1] = theme
@@ -251,6 +400,7 @@ end
 -- on top: at login, before the modules start, and again whenever either
 -- setting changes.
 export function apply()
+    local before = geometry()
     reset()
     local id = settings.account("theme") or DEFAULT
     local theme = byId[id] or byId[DEFAULT] :: Theme
@@ -305,11 +455,31 @@ export function apply()
             glyphs[name] = file
         end
     end
+    for tokenName, px in pairs(theme.space) do
+        if spaces[tokenName] then
+            spaces[tokenName] = px
+        end
+    end
+    for tokenName, px in pairs(theme.sizes) do
+        if sizes[tokenName] then
+            sizes[tokenName] = px
+        end
+    end
+    for tokenName, r in pairs(theme.radius) do
+        if radii[tokenName] then
+            radii[tokenName] = r
+        end
+    end
     vision.apply(settings.accountString("colorVision"))
     fonts.refresh()
     -- (files first: a bar's new file may take the bar's colour; repaint
     -- then sets every kept colour)
     draw.reskin()
     draw.repaint()
+    -- (spacing or sizes moved: what keeps its layout is laid out again,
+    -- then the modules lay out the rest on the message)
+    if geometry() ~= before then
+        draw.relayout()
+    end
     events.emit("SUUUI_THEME_CHANGED", applied)
 end

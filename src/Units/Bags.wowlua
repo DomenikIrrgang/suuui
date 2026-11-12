@@ -258,9 +258,10 @@ end
 -- button and the game's confirmation asks (/suu probe bankslots, 2026-10-17).
 --------------------------------------------------------------------------------
 
-local RAIL_SLOT = T.size["slot"]
-local RAIL_PAD, RAIL_GAP = S["space-3"], S["space-2"]
-local RAIL_W = RAIL_SLOT + 2 * RAIL_PAD
+-- a rail's cell size, padding and gap: the theme's, read when laid out
+local function railSlot(): number
+    return T.size["slot"]
+end
 local RAIL_TOP, RAIL_OFF = 52, 6
 local TAB_BAG = asNumber(field(Enum, "BagIndex", "Characterbanktab"))
 local BACKPACK_ICON = 133633
@@ -289,7 +290,7 @@ class RailCell extends ItemSlot
     entry: RailEntry? = nil
 
     constructor(parent: Frame)
-        super(parent, RAIL_SLOT)
+        super(parent, railSlot())
         self.glyph = self:CreateTexture(nil, "OVERLAY")
         self.glyph:SetSize(16, 16)
         self.glyph:SetPoint("CENTER")
@@ -308,7 +309,7 @@ class BuyCell extends ItemSlot
     next: number? = nil
 
     constructor(rail: Frame)
-        super(rail, RAIL_SLOT)
+        super(rail, railSlot())
         self.glyph = self:CreateTexture(nil, "OVERLAY")
         self.glyph:SetSize(16, 16)
         self.glyph:SetPoint("CENTER")
@@ -341,7 +342,6 @@ class Rail extends Frame
     constructor(window: Frame)
         super(nil, window)
         self:SetPoint("TOPRIGHT", window, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
-        self:SetWidth(RAIL_W)
         UI.Fill(self, "surface", "BACKGROUND"):SetAllPoints()
         UI.Border(self, "gilt-faint")
         self:EnableMouse(true)
@@ -378,9 +378,11 @@ class SortCover extends Frame
         self.mark = UI.LoadingMark(self, { size = 60 })
         self.mark:SetPoint("CENTER", 0, 24)
         self.title = UI.Text(self, "header", "gilt-text")
-        self.title:SetPoint("TOP", self.mark, "BOTTOM", 0, -S["space-4"])
         self.caption = UI.Text(self, "caption", "ink-muted")
-        self.caption:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-2"])
+        SuuUI.Layout.Follow(self, function()
+            self.title:SetPoint("TOP", self.mark, "BOTTOM", 0, -S["space-4"])
+            self.caption:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-2"])
+        end)
         self:Hide()
     end
 end
@@ -428,8 +430,10 @@ class ForgetRow extends Frame
                 self.select:SetValue(nil)
             end,
         })
-        self.button:SetPoint("LEFT", self.select, "RIGHT", S["space-3"], 0)
-        self:SetSize(190 + S["space-3"] + self.button:GetWidth(), 30)
+        SuuUI.Layout.Follow(self, function()
+            self.button:SetPoint("LEFT", self.select, "RIGHT", S["space-3"], 0)
+            self:SetSize(190 + S["space-3"] + self.button:GetWidth(), 30)
+        end)
         self:SetScript("OnShow", function()
             self.select:SetOptions(options())
         end)
@@ -1311,6 +1315,8 @@ class BagsModule extends Module<typeof(DEFAULTS)>
 
     -- The cells top to bottom; `sepBefore` the reagent bag's hairline.
     function LayoutRail(rail: Rail, entries: RailEntry[], buy: RailBuy?)
+        local RAIL_SLOT, RAIL_PAD, RAIL_GAP = railSlot(), S["space-3"], S["space-2"]
+        rail:SetWidth(RAIL_SLOT + 2 * RAIL_PAD)
         local y = RAIL_PAD
         rail.sep:Hide()
         for i, e in ipairs(entries) do
@@ -1323,6 +1329,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
             end
             local b = self:RailCell(rail, i)
             b.entry = e
+            b:SetSize(RAIL_SLOT, RAIL_SLOT)
             b:ClearAllPoints()
             b:SetPoint("TOP", rail, "TOP", 0, -y)
             if not e.has then
@@ -1348,6 +1355,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                 rail.buy = c
             end
             y = y + S["space-2"]
+            c:SetSize(RAIL_SLOT, RAIL_SLOT)
             c:ClearAllPoints()
             c:SetPoint("TOP", rail, "TOP", 0, -y)
             c.off, c.why, c.price, c.next = buy.off == true, buy.why, buy.price, buy.next
@@ -2871,11 +2879,13 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                     end)()
                 end,
             })
-            toggle:SetPoint("RIGHT", allLabel, "LEFT", -S["space-6"], 0)
             inv.slotsToggle = toggle
             local slotsLabel = UI.Text(inv.body, "label", "ink-muted")
             slotsLabel:SetValue("Bags")
-            slotsLabel:SetPoint("RIGHT", toggle, "LEFT", -S["space-4"], 0)
+            SuuUI.Layout.Follow(toggle, function()
+                toggle:SetPoint("RIGHT", allLabel, "LEFT", -S["space-6"], 0)
+                slotsLabel:SetPoint("RIGHT", toggle, "LEFT", -S["space-4"], 0)
+            end)
             inv.slotsLabel = slotsLabel
         end
         bank:HookScript("OnHide", function()
@@ -2941,6 +2951,7 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         self:On("SUUUI_THEME_CHANGED", function()
             self:Refresh()
             self:RebuildBank()
+            self:DrawRails()
         end)
         -- Blizzard opening or closing bags, by any of its ways
         if not self.hooked then

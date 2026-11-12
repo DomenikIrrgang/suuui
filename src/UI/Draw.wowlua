@@ -6,6 +6,7 @@
 import tokens as T, Color, ShadowLayer from "/Core/Tokens"
 import * as pixel from "/Core/Pixel"
 import * as events from "/Core/Events"
+import * as combat from "/Core/Combat"
 
 local colors = T.color :: { [string]: Color }
 
@@ -500,6 +501,84 @@ export function size(v: number | string): number
     end
     return (T.size :: { [string]: number })[v] or (T.space :: { [string]: number })[v] or
         error("SuuUI: unknown size token " .. tostring(v), 2)
+end
+
+--------------------------------------------------------------------------------
+-- Layout that follows the theme (asked 2026-11-12: a theme may change the
+-- spacing and sizes, T.space and T.size, for a denser or roomier UI).
+--   layout(frame, fn)   fn(frame) now, and again whenever a theme moves the
+--                       spacing or sizes (relayout, from Themes.apply):
+--                       fn reads the tokens it lays the frame out by
+--   onLayout(frame, fn) the same, only not now (a frame its build already
+--                       laid out)
+-- A protected frame (a secure button, or one a secure frame hangs on) isn't
+-- laid out in combat: its turn waits for the end of the fight (once, with
+-- the tokens then). Frames are never collected in the game: the list is
+-- weak only for the tests' frames.
+--------------------------------------------------------------------------------
+
+local layouts: { [Frame]: ((frame: Frame) -> ())[] } = setmetatable({}, { __mode = "k" })
+
+local function layOut(frame: Frame)
+    for _, fn in ipairs(layouts[frame] or {}) do
+        local ok: boolean, err: unknown = pcall(fn, frame)
+        if not ok then
+            geterrorhandler()(err)
+        end
+    end
+end
+
+export function onLayout<F extends Frame>(frame: F, fn: (frame: F) -> ())
+    local list = layouts[frame]
+    if not list then
+        list = {}
+        layouts[frame] = list
+    end
+    list[#list + 1] = fn :: (frame: Frame) -> ()
+end
+
+export function layout<F extends Frame>(frame: F, fn: (frame: F) -> ())
+    onLayout(frame, fn)
+    fn(frame)
+end
+
+-- Whether a frame keeps a layout (tests).
+export function laysOut(frame: Frame): boolean
+    return layouts[frame] ~= nil
+end
+
+local function relayoutOne(frame: Frame)
+    if InCombatLockdown() and frame:IsProtected() then
+        combat.run("draw.layout:" .. tostring(frame), function()
+            layOut(frame)
+        end, "Draw")
+        return
+    end
+    layOut(frame)
+end
+
+-- Every kept layout again, outermost frames first (a frame's size may come
+-- from what its parent's layout set).
+export function relayout()
+    local list: { frame: Frame, depth: number }[] = {}
+    for frame in pairs(layouts) do
+        -- (a parent the game made forbidden can't be asked: as deep as reached)
+        local d = 0
+        pcall(function()
+            local p = frame:GetParent()
+            while p do
+                d += 1
+                p = p:GetParent()
+            end
+        end)
+        list[#list + 1] = { frame = frame, depth = d }
+    end
+    table.sort(list, function(a: { frame: Frame, depth: number }, b: { frame: Frame, depth: number }): boolean
+        return a.depth < b.depth
+    end)
+    for _, e in ipairs(list) do
+        relayoutOne(e.frame)
+    end
 end
 
 local function crisp(tex: Texture): Texture

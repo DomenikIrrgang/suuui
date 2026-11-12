@@ -48,14 +48,26 @@ local S = T.space
 local profiles = settings.profiles
 
 local WIDTH, HEIGHT = 1160, 740
-local NAV_W = T.size["settings-nav"]
 local PREVIEW_W = 320
-local HEAD_H = S["space-5"] + 30 + S["space-5"]
-local FOOT_H = S["space-4"] * 2 + 30
+-- The nav's width, the head's and foot's heights: a theme's size and
+-- spacing, read when laid out.
+local function navW(): number
+    return T.size["settings-nav"]
+end
+local function headH(): number
+    return S["space-5"] + 30 + S["space-5"]
+end
+local function footH(): number
+    return S["space-4"] * 2 + 30
+end
 -- The content column: narrower beside a live preview, otherwise wider, but
 -- capped so a row's label and its control stay within one glance.
-local CONTENT_W = WIDTH - NAV_W - PREVIEW_W - S["space-6"] * 2
-local WIDE_W = math.min(WIDTH - NAV_W - S["space-6"] * 2, 720)
+local function contentW(): number
+    return WIDTH - navW() - PREVIEW_W - S["space-6"] * 2
+end
+local function wideW(): number
+    return math.min(WIDTH - navW() - S["space-6"] * 2, 720)
+end
 
 local frame: SettingsWindow? = nil
 export local pages: { [string]: SettingsPage } = {} -- section id -> page
@@ -417,13 +429,13 @@ export class SettingsPage implements registry.Page
     changed: number = 0
 
     constructor(section: Section)
-        local width = section.preview and CONTENT_W or WIDE_W
+        local width = section.preview and contentW() or wideW()
         local f = CreateFrame("Frame", nil, win().content.child)
         f:SetWidth(width)
         self.section = section
         self.frame = f
         self.width = width
-        self.stack = layout.stack(f, { gap = S["space-7"], autoSize = "height" })
+        self.stack = layout.stack(f, { gap = "space-7", autoSize = "height" })
         self.title = panel.sectionHeader(f, section.label, nil, width)
         self.title:Hide()
         self.stack:Add(self.title)
@@ -536,15 +548,18 @@ class NavButton extends Button
 
     constructor(nav: Frame)
         super(nil, nav)
-        self:SetSize(NAV_W - S["space-4"] * 2, 30)
+        self:SetHeight(30)
         self.bg = draw.fill(self, "surface-raised")
         self.bg:SetAllPoints()
         self.dot = draw.diamond(self, 5, "ink")
-        self.dot:SetPoint("CENTER", self, "RIGHT", -S["space-4"] - 2.5, 0)
         self.label = text(self, "label", "ink-muted")
-        self.label:SetPoint("LEFT", S["space-5"] + 4, 0)
         self.heading = text(self, "caption", "ink-muted")
-        self.heading:SetPoint("BOTTOMLEFT", S["space-4"], S["space-2"])
+        draw.layout(self, function()
+            self:SetWidth(navW() - S["space-4"] * 2)
+            self.dot:SetPoint("CENTER", self, "RIGHT", -S["space-4"] - 2.5, 0)
+            self.label:SetPoint("LEFT", S["space-5"] + 4, 0)
+            self.heading:SetPoint("BOTTOMLEFT", S["space-4"], S["space-2"])
+        end)
         self:SetScript("OnEnter", function()
             local section = self.section
             if section and section.id ~= current then
@@ -574,10 +589,8 @@ class PreviewColumn extends Frame
     -- views whose size changes move the preview along
     readonly hooked: { [Frame]: boolean } = tbl.weakKeys()
 
-    constructor(parent: Frame, top: number, bottom: number)
+    constructor(parent: Frame)
         super(nil, parent)
-        self:SetPoint("TOPRIGHT", -1, -top)
-        self:SetPoint("BOTTOMRIGHT", -1, bottom)
         self:SetWidth(PREVIEW_W)
         draw.fill(self, "surface-sunk"):SetAllPoints()
         local rule = draw.fill(self, "gilt-faint", "ARTWORK")
@@ -585,14 +598,18 @@ class PreviewColumn extends Frame
         rule:SetPoint("BOTTOMLEFT")
         rule:SetWidth(pixel.size(parent))
         self.title = text(self, "caption", "ink-muted")
-        self.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
         self.note = text(self, "caption", "ink-muted")
-        self.note:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
         -- where a section's view sits: under the title, above the note, clipped
         self.area = CreateFrame("Frame", nil, self)
-        self.area:SetPoint("TOPLEFT", self.title, "BOTTOMLEFT", 0, -S["space-4"])
-        self.area:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -S["space-5"], S["space-5"] * 2 + 12)
         self.area:SetClipsChildren(true)
+        draw.layout(self, function()
+            self:SetPoint("TOPRIGHT", -1, -headH())
+            self:SetPoint("BOTTOMRIGHT", -1, footH())
+            self.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+            self.note:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+            self.area:SetPoint("TOPLEFT", self.title, "BOTTOMLEFT", 0, -S["space-4"])
+            self.area:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -S["space-5"], S["space-5"] * 2 + 12)
+        end)
     end
 end
 
@@ -654,7 +671,6 @@ class SettingsWindow extends Panel
 
         -- Header: the jewel and wordmark, "Settings", search, profile, close.
         local jewel = draw.diamond(self, 14, "gilt")
-        jewel:SetPoint("CENTER", self, "TOPLEFT", S["space-5"] + 10, -(S["space-5"] + 15))
         local gem = draw.diamond(self, 7, "arcane")
         gem:SetPoint("CENTER", jewel, "CENTER")
         local word = text(self, "unit-name-lg", "ink")
@@ -662,12 +678,10 @@ class SettingsWindow extends Panel
         word:SetPoint("LEFT", jewel, "CENTER", 16, 0)
         local title = text(self, "header", "ink-muted")
         title:SetValue("Settings")
-        title:SetPoint("LEFT", word, "RIGHT", S["space-5"], 0)
 
         self.close = panel.closeButton(self, function()
             self:Hide()
         end)
-        self.close:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-5"] + 4))
         self.profile = uiSelect.select(self, {
             width = 190,
             options = profileOptions(),
@@ -680,7 +694,6 @@ class SettingsWindow extends Panel
                 end
             end,
         })
-        self.profile:SetPoint("RIGHT", self.close, "LEFT", -S["space-5"], 0)
         -- through the error catcher: an error here was silent before
         self.search = inputs.textField(self, {
             width = 280,
@@ -689,31 +702,21 @@ class SettingsWindow extends Panel
                 fault.call("Settings search", search, typed)
             end,
         })
-        self.search:SetPoint("RIGHT", self.profile, "LEFT", -S["space-5"], 0)
 
         -- Body: nav | content | preview
-        local top, bottom = HEAD_H, FOOT_H
         self.nav = panel.scrollArea(self)
-        self.nav:SetPoint("TOPLEFT", 0, -top)
-        self.nav:SetPoint("BOTTOMLEFT", 0, bottom)
-        self.nav:SetWidth(NAV_W)
         -- the chosen section's jewel, gliding up and down the list (tabMarker)
         self.navMarker = tabMarker(self.nav.child, { vertical = true, side = "LEFT", x = 7 })
         local navRule = draw.fill(self, "gilt-faint", "ARTWORK")
-        navRule:SetPoint("TOPLEFT", NAV_W, -top)
-        navRule:SetPoint("BOTTOMLEFT", NAV_W, bottom)
         navRule:SetWidth(pixel.size(self))
 
-        self.preview = PreviewColumn.new(self, top, bottom)
+        self.preview = PreviewColumn.new(self)
 
         self.content = panel.scrollArea(self, S["space-3"])
-        self.content:SetPoint("TOPLEFT", NAV_W + S["space-6"], -(top + S["space-5"]))
-        self.content:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + S["space-6"]), bottom)
-        self.content.child:SetWidth(WIDE_W)
         self.pagesStack = layout.stack(self.content.child, {
-            gap = S["space-7"],
+            gap = "space-7",
             autoSize = "height",
-            padding = { 0, 0, 0, S["space-6"] },
+            padding = { 0, 0, 0, "space-6" },
         })
         self.empty = text(self.content.child, "body", "ink-muted")
         self.empty:SetValue("No setting matches that search.")
@@ -722,12 +725,7 @@ class SettingsWindow extends Panel
 
         -- Footer
         local foot = CreateFrame("Frame", nil, self)
-        foot:SetPoint("BOTTOMLEFT", S["space-5"], 0)
-        foot:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
-        foot:SetHeight(FOOT_H)
         local footRule = draw.hairline(self, "gilt-faint")
-        footRule:SetPoint("BOTTOMLEFT", 0, FOOT_H)
-        footRule:SetPoint("BOTTOMRIGHT", 0, FOOT_H)
         local importButton = controls.button(foot, {
             text = "Import",
             onClick = function()
@@ -741,14 +739,12 @@ class SettingsWindow extends Panel
                 export()
             end,
         })
-        exportButton:SetPoint("LEFT", importButton, "RIGHT", S["space-3"], 0)
         self.resetSection = controls.button(foot, {
             text = "Reset section",
             onClick = function()
                 self:ResetSection()
             end,
         })
-        self.resetSection:SetPoint("LEFT", exportButton, "RIGHT", S["space-3"], 0)
         local done = controls.button(foot, {
             text = "Done",
             variant = "primary",
@@ -759,7 +755,33 @@ class SettingsWindow extends Panel
         done:SetPoint("RIGHT")
         local note = text(foot, "caption", "ink-muted")
         note:SetValue("Changes apply as you make them.")
-        note:SetPoint("RIGHT", done, "LEFT", -S["space-5"], 0)
+
+        -- Everything placed by the size and spacing tokens: now, and again
+        -- when a theme changes them (the scroll area's bar keeps its gap)
+        draw.layout(self, function()
+            jewel:SetPoint("CENTER", self, "TOPLEFT", S["space-5"] + 10, -(S["space-5"] + 15))
+            title:SetPoint("LEFT", word, "RIGHT", S["space-5"], 0)
+            self.close:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-5"] + 4))
+            self.profile:SetPoint("RIGHT", self.close, "LEFT", -S["space-5"], 0)
+            self.search:SetPoint("RIGHT", self.profile, "LEFT", -S["space-5"], 0)
+            local top, bottom = headH(), footH()
+            self.nav:SetPoint("TOPLEFT", 0, -top)
+            self.nav:SetPoint("BOTTOMLEFT", 0, bottom)
+            self.nav:SetWidth(navW())
+            navRule:SetPoint("TOPLEFT", navW(), -top)
+            navRule:SetPoint("BOTTOMLEFT", navW(), bottom)
+            self.content:SetPoint("TOPLEFT", navW() + S["space-6"], -(top + S["space-5"]))
+            self.content:SetPoint("BOTTOMRIGHT", -((self.preview:IsShown() and PREVIEW_W or 0) + S["space-6"]), bottom)
+            self.content.child:SetWidth(wideW())
+            foot:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+            foot:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+            foot:SetHeight(footH())
+            footRule:SetPoint("BOTTOMLEFT", 0, footH())
+            footRule:SetPoint("BOTTOMRIGHT", 0, footH())
+            exportButton:SetPoint("LEFT", importButton, "RIGHT", S["space-3"], 0)
+            self.resetSection:SetPoint("LEFT", exportButton, "RIGHT", S["space-3"], 0)
+            note:SetPoint("RIGHT", done, "LEFT", -S["space-5"], 0)
+        end)
     end
 
     -- Reset section asks twice: the first click arms it for a few seconds.
@@ -857,7 +879,7 @@ local function buildNav()
         b:Show()
         y = y + 31
     end
-    f.nav.child:SetSize(NAV_W, y + S["space-5"])
+    f.nav.child:SetSize(navW(), y + S["space-5"])
     refreshNav()
 end
 
@@ -905,7 +927,7 @@ local function showPreview(section: Section?)
     local preview = section and section.preview
     local has = preview ~= nil and query == ""
     p:SetShown(has)
-    f.content:SetPoint("BOTTOMRIGHT", -((has and PREVIEW_W or 0) + S["space-6"]), FOOT_H)
+    f.content:SetPoint("BOTTOMRIGHT", -((has and PREVIEW_W or 0) + S["space-6"]), footH())
     p.title:SetValue(section and section.previewTitle or "Live preview")
     if has and preview then
         local view = preview(p.area)
@@ -1060,8 +1082,10 @@ class ProfileDialog extends Panel
         draw.fill(box, "surface-sunk"):SetAllPoints()
         draw.border(box, "gilt-line")
         local scroll = CreateFrame("ScrollFrame", nil, box, "UIPanelScrollFrameTemplate")
-        scroll:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
-        scroll:SetPoint("BOTTOMRIGHT", -26, S["space-3"])
+        draw.layout(self, function()
+            scroll:SetPoint("TOPLEFT", S["space-4"], -S["space-3"])
+            scroll:SetPoint("BOTTOMRIGHT", -26, S["space-3"])
+        end)
         local edit = CreateFrame("EditBox", nil, scroll)
         edit:SetMultiLine(true)
         edit:SetAutoFocus(false)
@@ -1074,7 +1098,9 @@ class ProfileDialog extends Panel
         self.edit = edit
 
         self.name = inputs.textField(self.body, { width = 260, placeholder = "Name for the new profile" })
-        self.name:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -S["space-4"])
+        draw.layout(self, function()
+            self.name:SetPoint("TOPLEFT", box, "BOTTOMLEFT", 0, -S["space-4"])
+        end)
         self.action = controls.button(self.body, {
             text = "Import",
             variant = "primary",
@@ -1082,9 +1108,13 @@ class ProfileDialog extends Panel
                 doImport()
             end,
         })
-        self.action:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -S["space-4"])
+        draw.layout(self, function()
+            self.action:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -S["space-4"])
+        end)
         self.status = text(self.body, "caption", "ember-text")
-        self.status:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-3"])
+        draw.layout(self, function()
+            self.status:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-3"])
+        end)
     end
 end
 
@@ -1224,6 +1254,31 @@ local function build(): SettingsWindow
         end,
         "SettingsWindow"
     )
+    -- A theme's spacing or sizes: the window's own parts follow (draw.layout
+    -- in SettingsWindow), the pages are built again with them, as when the
+    -- sections change; a frame later, as the theme is often picked on a page
+    draw.onLayout(f, function()
+        after(0, function()
+            for id, page in pairs(pages) do
+                f.pagesStack:Remove(page.frame)
+                page.frame:Hide()
+                pages[id] = nil
+            end
+            buildNav()
+            local opened = registry.get(current or "")
+            if not opened then
+                show(current)
+                return
+            end
+            getPage(opened)
+            if query ~= "" then
+                for _, section in ipairs(registry.list()) do
+                    getPage(section)
+                end
+            end
+            applyView()
+        end)
+    end)
     local moduleMessages: MessageName[] = { "SUUUI_MODULE_ENABLED", "SUUUI_MODULE_DISABLED", "SUUUI_MODULE_ERRORED" }
     for _, e in ipairs(moduleMessages) do
         events.on(

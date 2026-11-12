@@ -17,7 +17,7 @@ import * as settingsWindow from "/SettingsUI/Window"
 import internal pages, SettingsWindow, ProfileDialog, BoundRow, BoundGroup, NavButton, SettingsPage from "/SettingsUI/Window"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, COMPACT from "../../helpers"
 import printedSince, printedCount, hasLine from "./UiSettingsHelpers"
 
 local profiles = settings.profiles
@@ -895,4 +895,39 @@ local function toggling()
     settingsWindow.open("wt-alpha")
     mock.click(win().close)
     expect(win()).never.toBeShown()
+end
+
+@test(
+    "a theme's sizes and spacing: the nav, the content column and the pages built again with them; SuuUI's again exactly"
+)
+local function themeLayout()
+    layoutThemes()
+    settingsWindow.open()
+    local w = win()
+    local function look(): { nav: number, contentX: number, foot: number, navButton: number }
+        local _, _, _, contentX = w.content:GetPoint(1)
+        return {
+            nav = w.nav:GetWidth(),
+            contentX = contentX :: number,
+            foot = select(5, w.preview:GetPoint(2)) :: number,
+            navButton = w.navButtons[2]:GetWidth(),
+        }
+    end
+    local design = look()
+    expect(design.nav).toBe(200)
+    expect(design.contentX).toBe(200 + 20)
+    local before = next(pages)
+    expect(before).never.toBeNil()
+    useTheme(COMPACT)
+    mock.advanceFrames(1)
+    local compact = look()
+    expect(compact.nav).toBe(170)
+    expect(compact.contentX).toBe(170 + 14)
+    expect(compact.navButton).toBe(170 - 5 * 2)
+    expect(compact.foot).toBe(5 * 2 + 30)
+    -- the open page again, built with the theme's
+    expect(next(pages)).never.toBeNil()
+    useTheme(nil)
+    mock.advanceFrames(1)
+    expect(look()).toEqual(design)
 end

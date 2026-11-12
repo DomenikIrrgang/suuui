@@ -16,7 +16,7 @@ import internal M, byUnit, SECTION, pool, groupsAhead from "/Units/Nameplates"
 import type Nameplate from "/Units/Nameplates"
 import type UnitApi from "/UI/UnitFrame"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import * as coreSettings from "/Core/Settings"
 import * as themes from "/Core/Themes"
 import * as healthFill from "/UI/HealthFill"
@@ -1019,4 +1019,32 @@ local function plateTextures()
     themes.apply()
     expect(f.health:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
     expect(pooled.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Soft.tga")
+end
+
+@test("a theme's spacing: a plate's height, its cast, raid marker and debuffs placed again live; SuuUI's again exactly")
+local function themeSpacing()
+    layoutThemes()
+    local f = plateOf(wolf)
+    local function look(): { h: number, cast: number, marker: number }
+        local _, _, _, _, castY = f.cast:GetPoint(1)
+        local _, _, _, markerX = f.raidMarker:GetPoint(1)
+        return { h = f:GetHeight(), cast = castY :: number, marker = markerX :: number }
+    end
+    local design = look()
+    expect(design.cast).toBe(-2)
+    expect(design.marker).toBe(-4)
+    useTheme(COMPACT)
+    local compact = look()
+    expect(compact.cast).toBe(-1)
+    expect(compact.marker).toBe(-2)
+    -- (a plate's height in its own scale's units: within a hair)
+    expect(compact.h).toBeCloseTo(design.h - 2, 3)
+    useTheme(ROOMY)
+    expect(look().h).toBeCloseTo(design.h + 2, 3)
+    useTheme(nil)
+    local back = look()
+    expect(back.h).toBeCloseTo(design.h, 3)
+    expect({ back.cast, back.marker }).toEqual({ design.cast, design.marker })
+    wolf:hideNameplate()
+    expectNoErrors()
 end
