@@ -281,9 +281,24 @@ local files = T.texture :: { [string]: string }
 local edgeToken: { [Texture[]]: string } = setmetatable({}, { __mode = "k" })
 local edgeFile: { [Texture[]]: string } = setmetatable({}, { __mode = "k" })
 
--- A texture token's file now (an unknown token is an error).
+-- The texture tokens whose empty file (SuuUI's own) draws as another's: the
+-- plates' bars as the unit frames'.
+local FALLBACK: { [string]: string } = { ["plate-health-bar"] = "health-bar", ["plate-cast-bar"] = "cast-bar" }
+
+-- A token's file now, its fallback's where it is empty (nil: no such token).
+local function fileOf(token: string): string?
+    local file = files[token]
+    local other = FALLBACK[token]
+    if file == "" and other then
+        return files[other]
+    end
+    return file
+end
+
+-- A texture token's file now (an unknown token is an error). "" for a
+-- pattern or the divider in SuuUI's own look, where nothing is drawn.
 export function textureFile(token: string): string
-    return files[token] or error("SuuUI: unknown texture token " .. tostring(token), 2)
+    return fileOf(token) or error("SuuUI: unknown texture token " .. tostring(token), 2)
 end
 
 -- Whether `name` is a texture token.
@@ -312,7 +327,7 @@ end
 
 -- (a kept colour stays while a skin is set: a skin is set before its colour)
 local function keepSkin(region: Texture | StatusBar, token: string, tile: boolean)
-    local file = files[token] or error("SuuUI: unknown texture token " .. tostring(token), 3)
+    local file = fileOf(token) or error("SuuUI: unknown texture token " .. tostring(token), 3)
     if skinToken[region] == token and skinFile[region] == file and (skinTiled[region] == true) == tile then
         return
     end
@@ -426,14 +441,24 @@ export function glyphOf(tex: Texture): string?
     return glyphName[tex]
 end
 
+-- What else follows a texture token (patterns, ornaments, dividers, edges:
+-- below), each restyling what changed when reskin runs.
+local restylers: (() -> ())[] = {}
+
 -- Every kept skin and glyph whose file changed, set again (Themes.wowlua,
 -- before the colours are repainted: a bar's new file may take the bar's own
 -- colour, and repaint then sets the kept ones). A texture keeps the part of
 -- its file it showed (a raid marker's cell, a glow's slice).
 export function reskin()
+    for _, restyle in ipairs(restylers) do
+        local ok: boolean, err: unknown = pcall(restyle)
+        if not ok then
+            geterrorhandler()(err)
+        end
+    end
     local list: (Texture | StatusBar)[] = {}
     for region, token in pairs(skinToken) do
-        if files[token] ~= skinFile[region] then
+        if fileOf(token) ~= skinFile[region] then
             list[#list + 1] = region
         end
     end
@@ -452,7 +477,7 @@ export function reskin()
     end
     painting = true
     for _, region in ipairs(list) do
-        local file = files[skinToken[region] or ""] or skinFile[region] or ""
+        local file = fileOf(skinToken[region] or "") or skinFile[region] or ""
         local tile = skinTiled[region] == true
         skinFile[region] = file
         local ok: boolean, err: unknown
@@ -587,6 +612,78 @@ local function crisp(tex: Texture): Texture
     return tex
 end
 
+--------------------------------------------------------------------------------
+-- Patterns (0.39, asked 2026-11-12: a theme textures the windows, not only the
+-- bars): a theme's tiled art over a ground, from a texture token whose file
+-- is empty in SuuUI's own look ("surface-pattern" over windows and panels,
+-- "track-pattern" behind bars). Nothing is made while the file is empty; a
+-- theme with one gets a texture over each ground, at its points, shown with
+-- it, in gilt (the art's alpha says how strong), made on the change.
+--   pattern(ground, token)   the token's pattern over that texture
+--------------------------------------------------------------------------------
+
+local patternToken: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+local patternFile: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+local patternOver: { [Texture]: Texture } = setmetatable({}, { __mode = "k" })
+
+-- the pattern follows its ground in and out of sight
+local function mirror(ground: Texture)
+    local over = patternOver[ground]
+    if over then
+        over:SetShown(ground:IsShown() and (patternFile[ground] or "") ~= "")
+    end
+end
+
+local function stylePattern(ground: Texture)
+    local file = fileOf(patternToken[ground] or "") or ""
+    if patternFile[ground] == file then
+        return
+    end
+    patternFile[ground] = file
+    local over = patternOver[ground]
+    if file == "" then
+        if over then
+            over:Hide()
+        end
+        return
+    end
+    if not over then
+        local layer, sub = ground:GetDrawLayer()
+        local made = (ground:GetParent() :: Frame):CreateTexture(nil, layer, nil, math.min(7, (sub or 0) + 1))
+        made:SetAllPoints(ground)
+        patternOver[ground] = made
+        over = made
+        for _, setter in ipairs({ "Show", "Hide", "SetShown" }) do
+            hooksecurefunc(ground, setter, mirror)
+        end
+    end
+    over:SetTexture(file, "REPEAT", "REPEAT")
+    over:SetHorizTile(true)
+    over:SetVertTile(true)
+    paint(over, "gilt")
+    mirror(ground)
+end
+
+-- The token's pattern over `ground` (a texture token: "surface-pattern",
+-- "track-pattern"); nothing while its file is empty.
+export function pattern(ground: Texture, token: string)
+    textureFile(token)
+    patternToken[ground] = token
+    stylePattern(ground)
+end
+
+-- The pattern drawn over a ground (nil: none, as in SuuUI's own look).
+export function patternOf(ground: Texture): Texture?
+    local over = patternOver[ground]
+    return over and over:IsShown() and over or nil
+end
+
+restylers[#restylers + 1] = function()
+    for ground in pairs(patternToken) do
+        stylePattern(ground)
+    end
+end
+
 -- A solid texture in a token colour.
 export function fill(parent: Frame, color: string, layer: DrawLayer?, sublevel: number?): Texture
     local t = parent:CreateTexture(nil, layer or "BACKGROUND", nil, sublevel)
@@ -612,7 +709,15 @@ end
 -- { r, g, b, a }, or r, g, b, a.
 export type ColorArg = string | number[] | number
 
-export type BorderOptions = { width?: number, inset?: number, layer?: DrawLayer, sublevel?: number }
+-- texture (0.39): a texture token its lines are drawn from ("border": a
+-- theme's dotted or stitched edge), tiled; SuuUI's own is a solid line
+export type BorderOptions = {
+    width?: number,
+    inset?: number,
+    layer?: DrawLayer,
+    sublevel?: number,
+    texture?: string,
+}
 
 -- One physical pixel in a line's frame units, when a line keeps one fixed
 -- size rather than its frame's scale (see withPixelUnit).
@@ -647,6 +752,8 @@ end
 local borders: { [Border]: boolean } = setmetatable({}, { __mode = "k" })
 -- each frame's borders (relayoutPixels walks a frame's own tree down)
 local bordersOf: { [Frame]: Border[] } = setmetatable({}, { __mode = "k" })
+-- the borders drawn from a texture token (set again when its file changes)
+local textured: { [Border]: boolean } = setmetatable({}, { __mode = "k" })
 
 -- Four textures `width` physical pixels thick, `inset` in from the edge.
 export class Border
@@ -657,6 +764,10 @@ export class Border
     readonly parts: Texture[]
     -- its one pixel when fixed (made inside withPixelUnit)
     unit: PixelUnit? = nil
+    -- (a textured edge's token, the file it shows, its last colour)
+    texture?: string
+    file?: string
+    color?: { r: ColorArg, g: number?, b: number?, a: number? }
 
     constructor(
         readonly frame: Frame,
@@ -672,6 +783,13 @@ export class Border
             crisp(frame:CreateTexture(nil, layer, nil, sub))
         self.parts = { self.top, self.bottom, self.left, self.right }
         self.unit = scoped
+        local token = opts.texture
+        if token then
+            textureFile(token)
+            self.texture = token
+            self.file = fileOf(token)
+            textured[self] = true
+        end
         self:SetColor(color)
         self:Layout()
         borders[self] = true
@@ -705,6 +823,35 @@ export class Border
 
     -- A token name (plus an optional alpha multiplier), { r, g, b, a }, or r, g, b, a.
     function SetColor(r: ColorArg, g: number?, b: number?, a: number?)
+        -- (a textured edge: its lines are its file, tiled, in the colour)
+        local file = self.file
+        if file and file ~= WHITE then
+            self.color = { r = r, g = g, b = b, a = a }
+            painting = true
+            for _, t in ipairs(self.parts) do
+                t:SetTexture(file, "REPEAT", "REPEAT")
+                t:SetHorizTile(true)
+                t:SetVertTile(true)
+            end
+            painting = false
+            if type(r) == "string" then
+                for _, t in ipairs(self.parts) do
+                    paint(t, r, g)
+                end
+                return
+            end
+            local cr, cg, cb, ca = r, g, b, a
+            if type(r) == "table" then
+                cr, cg, cb, ca = r[1], r[2], r[3], r[4]
+            end
+            for _, t in ipairs(self.parts) do
+                t:SetVertexColor(cr :: number, cg :: number, cb :: number, ca)
+            end
+            return
+        end
+        if file then
+            self.color = { r = r, g = g, b = b, a = a }
+        end
         if type(r) == "string" then
             for _, t in ipairs(self.parts) do
                 paintFill(t, r, g)
@@ -720,6 +867,20 @@ export class Border
         end
     end
 
+    -- Its lines again from its texture token's file now (a theme's change).
+    function Restyle()
+        local token = self.texture
+        local file = token and fileOf(token)
+        if not file or file == self.file then
+            return
+        end
+        self.file = file
+        local c = self.color
+        if c then
+            self:SetColor(c.r, c.g, c.b, c.a)
+        end
+    end
+
     function SetShown(shown: boolean)
         for _, t in ipairs(self.parts) do
             t:SetShown(shown)
@@ -729,6 +890,12 @@ end
 
 export function border(frame: Frame, color: ColorArg, opts: BorderOptions?): Border
     return Border.new(frame, color, opts or {})
+end
+
+restylers[#restylers + 1] = function()
+    for b in pairs(textured) do
+        b:Restyle()
+    end
 end
 
 -- The anchor frame's inset-anchor (the player frame, the action bar dock,
@@ -767,8 +934,87 @@ local function gradient(tex: Texture, color: string, fromAlpha: number, toAlpha:
     paintGradient(tex, "HORIZONTAL", color, color, fromAlpha, toAlpha)
 end
 
-export function hairline(parent: Frame, color: string, fade: string?): Frame
+-- (0.39) A hairline drawn from a texture token instead ("divider"), once its
+-- file isn't empty: strips of it 8 px tall along the line, faded as the line.
+type Divider = {
+    token: string,
+    color: string,
+    fade: string?,
+    lines: Texture[],
+    strips?: Texture[],
+    file?: string,
+}
+local dividers: { [Frame]: Divider } = setmetatable({}, { __mode = "k" })
+
+-- the strip art's height (art N x 8)
+local DIVIDER_H = 8
+
+local function styleDivider(line: Frame, d: Divider)
+    local file = fileOf(d.token) or ""
+    if d.file == file then
+        return
+    end
+    d.file = file
+    if file == "" then
+        for _, t in ipairs(d.lines) do
+            t:Show()
+        end
+        for _, s in ipairs(d.strips or {}) do
+            s:Hide()
+        end
+        return
+    end
+    local strips = d.strips
+    if not strips then
+        local made: Texture[] = {}
+        for i = 1, #d.lines do
+            local s = line:CreateTexture(nil, "ARTWORK")
+            if #d.lines == 2 then
+                s:SetPoint("LEFT", line, i == 1 and "LEFT" or "CENTER")
+                s:SetPoint("RIGHT", line, i == 1 and "CENTER" or "RIGHT")
+            else
+                s:SetPoint("LEFT")
+                s:SetPoint("RIGHT")
+            end
+            s:SetHeight(DIVIDER_H)
+            made[i] = s
+        end
+        d.strips = made
+        strips = made
+    end
+    painting = true
+    for _, s in ipairs(strips) do
+        s:SetTexture(file, "REPEAT", "CLAMP")
+        s:SetHorizTile(true)
+        s:SetVertTile(false)
+    end
+    painting = false
+    if d.fade == "both" then
+        paintGradient(strips[1], "HORIZONTAL", d.color, d.color, 0, 1)
+        paintGradient(strips[2], "HORIZONTAL", d.color, d.color, 1, 0)
+    elseif d.fade == "out" then
+        paintGradient(strips[1], "HORIZONTAL", d.color, d.color, 1, 0)
+    else
+        paint(strips[1], d.color)
+    end
+    for _, t in ipairs(d.lines) do
+        t:Hide()
+    end
+    for _, s in ipairs(strips) do
+        s:Show()
+    end
+end
+
+restylers[#restylers + 1] = function()
+    for line, d in pairs(dividers) do
+        styleDivider(line, d)
+    end
+end
+
+-- divider (0.39): a texture token ("divider") a theme draws the line from
+export function hairline(parent: Frame, color: string, fade: string?, divider: string?): Frame
     local line = CreateFrame("Frame", nil, parent)
+    local first: Texture?, second: Texture? = nil, nil
     if fade == "both" then
         local left, right = crisp(line:CreateTexture(nil, "ARTWORK")), crisp(line:CreateTexture(nil, "ARTWORK"))
         left:SetPoint("TOPLEFT")
@@ -777,6 +1023,7 @@ export function hairline(parent: Frame, color: string, fade: string?): Frame
         right:SetPoint("BOTTOMRIGHT")
         gradient(left, color, 0, 1)
         gradient(right, color, 1, 0)
+        first, second = left, right
     else
         local t = crisp(line:CreateTexture(nil, "ARTWORK"))
         t:SetAllPoints()
@@ -785,10 +1032,23 @@ export function hairline(parent: Frame, color: string, fade: string?): Frame
         else
             paintFill(t, color)
         end
+        first = t
     end
     hairlines[line] = scoped or true
     line:SetHeight(lineSize(line))
+    if divider then
+        textureFile(divider)
+        local d: Divider = { token = divider, color = color, fade = fade, lines = second and { first :: Texture, second } or { first :: Texture } }
+        dividers[line] = d
+        styleDivider(line, d)
+    end
     return line
+end
+
+-- A divider's strips (nil: a plain hairline, as in SuuUI's own look).
+export function dividerStrips(line: Frame): Texture[]?
+    local d = dividers[line]
+    return d and d.file ~= "" and d.strips or nil
 end
 
 --------------------------------------------------------------------------------
@@ -802,6 +1062,64 @@ export function diamond(parent: Frame, px: number, color: string?, layer: DrawLa
     paint(t, color or "gilt")
     t:SetSize(px, px)
     t:SetRotation(math.rad(45))
+    return t
+end
+
+-- Ornaments (0.39): a diamond a theme can draw from its own file, by a
+-- texture token ("corner": the corners of panels, windows, tooltips and
+-- anchor frames; "jewel": dividers and the chosen tab). SuuUI's file is the
+-- white square, turned 45 degrees; a theme's is drawn upright, ORNAMENT
+-- times the diamond's side (its art keeps its own margin).
+export const ORNAMENT = 2
+
+local ornamentToken: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+local ornamentPx: { [Texture]: number } = setmetatable({}, { __mode = "k" })
+local ornamentFile: { [Texture]: string } = setmetatable({}, { __mode = "k" })
+
+local function styleOrnament(t: Texture)
+    local file = fileOf(ornamentToken[t] or "") or WHITE
+    local was = ornamentFile[t]
+    if was == file then
+        return
+    end
+    ornamentFile[t] = file
+    -- (made as the diamond: nothing to change)
+    if was == nil and file == WHITE then
+        return
+    end
+    local px = ornamentPx[t] or 0
+    painting = true
+    t:SetTexture(file)
+    painting = false
+    if file == WHITE then
+        t:SetSize(px, px)
+        t:SetRotation(math.rad(45))
+    else
+        t:SetSize(px * ORNAMENT, px * ORNAMENT)
+        t:SetRotation(0)
+    end
+end
+
+restylers[#restylers + 1] = function()
+    for t in pairs(ornamentToken) do
+        styleOrnament(t)
+    end
+end
+
+-- A diamond of side `px` in a colour token (gilt), drawn from the texture
+-- token's file when a theme sets one.
+export function ornament(
+    parent: Frame,
+    px: number,
+    token: string,
+    color: string?,
+    layer: DrawLayer?,
+    sublevel: number?
+): Texture
+    textureFile(token)
+    local t = diamond(parent, px, color, layer, sublevel)
+    ornamentToken[t], ornamentPx[t] = token, px
+    styleOrnament(t)
     return t
 end
 

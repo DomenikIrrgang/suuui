@@ -17,18 +17,26 @@ did. Each keeps what it stands for (a bag, a magnifier, a gear) and gains
 cat ears, a cat's face, whiskers, a slit pupil, a yarn ball or a sprig of
 catnip.
 
-PawBar.tga (256x32, white): the health and cast bars' fill, stretched along
-the bar and tinted by its colour; soft paw prints a shade darker than the
-fill (87% white), so the bar still reads as one fill.
+PawBar.tga (256x32, white): the health bars' fill, stretched along the bar
+and tinted by its colour; paw prints at 64% (BAR_SHADE), darker than the
+fill so names on it keep their contrast, still one fill. CastBar.tga
+(256x16): the cast bars' row of paws. PlateBar.tga (256x20): the
+nameplates' bars (about 140x10), simpler three-toed paws that stay paws.
+
+SurfacePattern.tga (64x64, white, alpha up to PATTERN_ALPHA): paws and
+hearts tiled over every window's ground, in gilt. TrackPattern.tga (32x32):
+a tiny paw a tile behind the bars. Stitch.tga (8x8): the panels' edge as
+stitches. CornerPaw.tga (32x32): the corners' paw print. Divider.tga
+(32x8): a tiny paw and a dot, tiled along the line under a panel's head.
 
 PawTapped.tga (32x32, white): a tagged mob's stripes as tiny paw prints,
 tiled at their own size over the fill (in unit-fill-tapped-stripe).
 
 Heart.tga (64x64, white): the checkbox's tick as a little heart (tinted
-on-signal in game).
+on-signal in game), the jewels and the small marks (toggles, sliders).
 
 BeanBar.tga (256x16, white): the thin bars (power lines, XP and the other
-plain bars, aura drains), a row of toe beans 13% darker, stretched.
+plain bars, aura drains), a row of toe beans at 70%, stretched.
 
 Hearts.tga (16x16, white): small hearts, tiled: the absorb shield and a
 swing's delay, where SuuUI draws its hatch.
@@ -264,8 +272,10 @@ CAT = {
     "book": "M4 19V7.2L4.3 2.8L7.8 6H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H4z" +
     "M20 19V7.2L19.7 2.8L16.2 6H14a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h6z",
     "tree": catnip(),
-    "trophy": poly(*corner_ears(7.5, 16.5, 5, w=3.4, h=4, drop=1.2)) + "M16.5 6.2V9.5a4.5 4.5 0 0 1-9 0V6.2" +
-    "M7.5 7.5H5a3 3 0 0 0 3 4M16.5 7.5H19a3 3 0 0 1-3 4M12 14v3.5M8 20.5h8" + dot(10.2, 8.8) + dot(13.8, 8.8),
+    # (simplified 2026-11-12: busy at 16 px) SuuUI's cup, its rim's corners
+    # rising into two small ears
+    "trophy": poly(*corner_ears(8, 16, 5, w=2.8, h=4, drop=0)) + "M16 5V9a4 4 0 0 1-8 0V5" +
+    "M8 6.5H5a3 3 0 0 0 3 4M16 6.5h3a3 3 0 0 1-3 4M12 13v4M8 20h8",
     "scroll": poly((7, 15), *corner_ears(7, 18, 6, w=3.6, h=4.2, drop=1.2), (18, 18)) +
     "M18 18a3 3 0 0 1-3 3H6a3 3 0 0 1 0-6h1M10 10.5h5M10 13.5h5",
     "people": head(8.6, 10.6, 3.6) + "M2.5 21.5c.7-3.5 3-5 6.1-5s5.4 1.5 6.1 5" +
@@ -293,7 +303,8 @@ CAT = {
     "M5.5 10.4V21h13V10.4M10 21v-5h4v5",
     # notifications, bags, everywhere
     "bell": bell(),
-    "trash": peeking(4.5, 19.5, 10.5, 12, 4) + "M6.8 10.5l1.1 11h8.2l1.1-11M12 13.5v5",
+    # (simplified 2026-11-12) SuuUI's bin, two ears on its lid for the handle
+    "trash": "M5 7h14M7 7l1 13h8l1-13" + poly((7, 7), (7.4, 2.8), (10.4, 7)) + poly((13.6, 7), (16.6, 2.8), (17, 7)),
     "eye": "M2.5 12c3-5.5 16-5.5 19 0-3 5.5-16 5.5-19 0z" + "M12 7.8c-1.7 2.4-1.7 6 0 8.4 1.7-2.4 1.7-6 0-8.4z",
     # locks, resets, roles and the rest (also the cast lock, the settings'
     # lock and reset, and the welcome's Tank)
@@ -372,22 +383,6 @@ def paw_field(width, height, paws, wrap=True):
     return supersample(width, height, inside)
 
 
-def paw_bar():
-    """256x32: a trail of paw prints walking along the bar, 87% white."""
-    paws = []
-    for i in range(8):
-        x = 16 + 32 * i
-        y = 10.5 if i % 2 == 0 else 21.5
-        paws.append((x, y, 12.5, math.radians(-14 if i % 2 == 0 else 14)))
-    cov = paw_field(256, 32, paws)
-    shade = 0.87
-
-    def pixel(x, y):
-        v = round(255 * (1 - (1 - shade) * cov[(x, y)]))
-        return (v, v, v, 255)
-    return 256, 32, pixel
-
-
 def paw_tapped():
     """32x32: four small paws, tiled over a tagged mob's fill."""
     paws = [(8, 8, 10, math.radians(-15)), (24, 24, 10, math.radians(-15)),
@@ -401,20 +396,6 @@ def heart_texture():
     pts = [(x / 24 * 64, y / 24 * 64) for x, y in heart_points(12, 12.3, 17.5)]
     cov = supersample(64, 64, lambda x, y: mt.inside_polygon(x, y, pts))
     return 64, 64, lambda x, y: (255, 255, 255, round(255 * cov[(x, y)]))
-
-
-def bean_bar():
-    """256x16: the thin bars' fill (power lines, XP, meters, drains): a row
-    of toe beans a shade darker than the fill, stretched along the bar."""
-    def inside(x, y):
-        i = int(x // 16)
-        return in_ellipse(x, y, 8 + 16 * i, 8, 3.2, 4.2)
-    cov = supersample(256, 16, inside)
-
-    def pixel(x, y):
-        v = round(255 * (1 - 0.13 * cov[(x, y)]))
-        return (v, v, v, 255)
-    return 256, 16, pixel
 
 
 def hearts():
@@ -462,9 +443,129 @@ def circle_dots():
     return 104, 104, lambda x, y: (255, 255, 255, round(255 * cov[(x, y)]))
 
 
+def shade_pixel(cov, shade):
+    """A white fill whose motif (coverage `cov`) is `shade` white."""
+    def pixel(x, y):
+        v = round(255 * (1 - (1 - shade) * cov[(x, y)]))
+        return (v, v, v, 255)
+    return pixel
+
+
+def alpha_pixel(cov, strength=1.0):
+    """White art: the motif's coverage as alpha, at most `strength`."""
+    return lambda x, y: (255, 255, 255, round(255 * strength * cov[(x, y)]))
+
+
+# How dark the bars' motifs are (asked 2026-11-12, "too faint" at 87%): the
+# paws and beans at 64% of the fill, darker than it so names on the bars
+# keep their contrast, still one fill with a pattern in it.
+BAR_SHADE = 0.64
+
+
+def paw_bar():
+    """256x32: the health bar's fill, a trail of paw prints walking along
+    it, stretched (a unit frame's bar is about 300x30)."""
+    paws = []
+    for i in range(8):
+        x = 16 + 32 * i
+        y = 11 if i % 2 == 0 else 21
+        paws.append((x, y, 15, math.radians(-16 if i % 2 == 0 else 16)))
+    return 256, 32, shade_pixel(paw_field(256, 32, paws), BAR_SHADE)
+
+
+def cast_bar():
+    """256x16: the cast bars' fill (about 300x20), a row of paws, stretched."""
+    paws = [(12.8 + 25.6 * i, 8, 11, math.radians(-12 if i % 2 == 0 else 12)) for i in range(10)]
+    return 256, 16, shade_pixel(paw_field(256, 16, paws), BAR_SHADE)
+
+
+def simple_paw(cx, cy, size):
+    """A paw for small sizes: a round pad and three toes, as ellipses."""
+    s = size / 12.0
+    return [(cx, cy + 2.4 * s, 3.6 * s, 3.0 * s), (cx - 3.6 * s, cy - 2.6 * s, 1.6 * s, 1.9 * s),
+            (cx, cy - 4.0 * s, 1.7 * s, 2.0 * s), (cx + 3.6 * s, cy - 2.6 * s, 1.6 * s, 1.9 * s)]
+
+
+def plate_bar():
+    """256x20: the nameplates' fill (about 140x10, so drawn at twice that):
+    simple three-toed paws, few and bold, that stay paws at 10 px."""
+    shapes = []
+    for i in range(6):
+        shapes += simple_paw(21.3 + 42.67 * i, 10, 15)
+
+    def inside(x, y):
+        return any(in_ellipse(x, y, cx, cy, rx, ry) for cx, cy, rx, ry in shapes)
+    return 256, 20, shade_pixel(supersample(256, 20, inside), BAR_SHADE)
+
+
+def bean_bar():
+    """256x16: the thin bars' fill (power lines, XP, meters, drains): a row
+    of toe beans, stretched along the bar."""
+    def inside(x, y):
+        i = int(x // 16)
+        return in_ellipse(x, y, 8 + 16 * i, 8, 4.2, 5.4)
+    return 256, 16, shade_pixel(supersample(256, 16, inside), BAR_SHADE + 0.06)
+
+
+# The windows' pattern at most this strong (white art in gilt over the
+# surfaces): ink-faint keeps 3:1 on its brightest pixels, ink-muted 4.5:1
+# (tests/unit/Core/ThemesBuiltin.test.wowlua, PATTERN_ALPHA).
+PATTERN_ALPHA = 0.16
+
+
+def surface_pattern():
+    """64x64, tiled over windows and panels: two paw prints and two small
+    hearts on a staggered grid, faint pink on the plum."""
+    paws = [(16, 17, 13, math.radians(-18)), (48, 49, 13, math.radians(18))]
+    hearts = [heart_points(48, 16, 9, 60), heart_points(16, 48, 9, 60)]
+    paw = paw_field(64, 64, paws)
+    heart = supersample(64, 64, lambda x, y: any(mt.inside_polygon(x, y, p) for p in hearts))
+    cov = {k: max(paw[k], heart[k]) for k in paw}
+    return 64, 64, alpha_pixel(cov, PATTERN_ALPHA)
+
+
+def track_pattern():
+    """32x32, tiled behind the bars (the missing health): one tiny paw a
+    tile, fainter than the windows'."""
+    cov = paw_field(32, 32, [(16, 16, 11, math.radians(-15))])
+    return 32, 32, alpha_pixel(cov, 0.13)
+
+
+def stitch():
+    """8x8: the panels' edge as stitches (its first row and column are what
+    a 1 px line shows): 5 px on, 3 px softly through."""
+    def pixel(x, y):
+        on = x < 5 if y == 0 else y < 5 if x == 0 else x < 5
+        return (255, 255, 255, 255 if on else 70)
+    return 8, 8, pixel
+
+
+def corner_paw():
+    """32x32: a paw print for the panels' corners."""
+    cov = paw_field(32, 32, [(16, 16.5, 27, 0)], wrap=False)
+    return 32, 32, alpha_pixel(cov)
+
+
+def divider():
+    """32x8: the divider under a panel's head, a tiny paw and a dot a tile."""
+    shapes = simple_paw(10, 4, 7.6)
+    shapes.append((26, 4.5, 1.3, 1.3))
+
+    def inside(x, y):
+        return any(in_ellipse(x, y, cx, cy, rx, ry) for cx, cy, rx, ry in shapes)
+    return 32, 8, alpha_pixel(supersample(32, 8, inside))
+
+
 TEXTURES = {
     "PawBar": paw_bar,
+    "CastBar": cast_bar,
+    "PlateBar": plate_bar,
     "BeanBar": bean_bar,
+    "SurfacePattern": surface_pattern,
+    "TrackPattern": track_pattern,
+    "Stitch": stitch,
+    "CornerPaw": corner_paw,
+    "Divider": divider,
     "PawTapped": paw_tapped,
     "Hearts": hearts,
     "Heart": heart_texture,

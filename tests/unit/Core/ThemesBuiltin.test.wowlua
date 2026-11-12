@@ -341,6 +341,35 @@ local function pinkcatFaint()
     expect(r < ratio(rgb(pinkcat("ink-muted")), rgb(pinkcat("surface")))).toBe(true)
 end
 
+-- The windows' pattern's strongest alpha (tools/pinkcat_art.py,
+-- PATTERN_ALPHA: the paws and hearts at most this, in gilt).
+const PATTERN_ALPHA = 0.16
+
+@test("Pink Cat: text stays readable over the brightest pixels of its windows' pattern")
+@cases({
+    { "ink", 7 },
+    { "gilt-text", 7 },
+    { "ink-muted", 4.5 },
+    { "ink-faint", 3 },
+})
+local function pinkcatPattern(fg: string, least: number)
+    -- the glass over the dark world, the pattern's gilt over that
+    for _, ground in ipairs({ "surface", "surface-glass" }) do
+        local g = over(pinkcat(ground), { 0, 0, 0 })
+        local gilt = pinkcat("gilt")
+        local brightest = over({ gilt[1], gilt[2], gilt[3], PATTERN_ALPHA }, g)
+        local r = ratio(rgb(pinkcat(fg)), brightest)
+        if r < least then
+            error(`{fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+        end
+    end
+end
+
+@test("Pink Cat: its glass hides what's behind it (the zone's name showed through)")
+local function pinkcatGlass()
+    expect(pinkcat("surface-glass")[4] >= 0.98).toBe(true)
+end
+
 @test("Pink Cat: the power colours stay apart (mana, rage, energy, focus)")
 local function pinkcatPower()
     local names = { "mana", "rage", "energy", "focus" }
@@ -391,9 +420,25 @@ local function pinkcatRoundTrip()
     draw.glyph(icon, "bag")
     local bar = CreateFrame("StatusBar", nil, parent)
     draw.skinBar(bar, "health-bar")
+    local plate = CreateFrame("StatusBar", nil, parent)
+    draw.skinBar(plate, "plate-health-bar")
+    -- (0.39) a window's ground, corner, jewel, mark and divider
+    local ground = draw.fill(parent, "surface-glass")
+    draw.pattern(ground, "surface-pattern")
+    local corner = draw.ornament(parent, 7, "corner")
+    local jewel = draw.ornament(parent, 6, "jewel")
+    local mark = draw.ornament(parent, 5, "mark", "ink")
+    local divider = draw.hairline(parent, "gilt-line", "both", "divider")
     settings.setAccount("theme", "pinkcat")
     themes.apply()
     expect(themes.appliedTheme()).toBe("pinkcat")
+    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(cat.textures["plate-health-bar"])
+    expect(assert(draw.patternOf(ground)):GetTextureFilePath()).toBe(cat.textures["surface-pattern"])
+    expect(corner:GetTextureFilePath()).toBe(cat.textures.corner)
+    expect(corner:GetRotation()).toBeCloseTo(0, 4)
+    expect(jewel:GetTextureFilePath()).toBe(cat.textures.jewel)
+    expect(mark:GetTextureFilePath()).toBe(cat.textures.mark)
+    expect(draw.dividerStrips(divider)).never.toBeNil()
     close(rgb(T.color.ink), { 1, 0xF4 / 255, 0xE8 / 255 }, 6)
     expect(T.glyph.bag).toBe(catBag)
     expect(T.glyph.flag).toBe(before.flag)
@@ -410,6 +455,12 @@ local function pinkcatRoundTrip()
     expect(T.glyph.bag).toBe(before.bag)
     expect(icon:GetTextureFilePath()).toBe(before.bag)
     expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
+    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
+    expect(draw.patternOf(ground)).toBeNil()
+    expect(corner:GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(corner:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(mark).toHaveSize(5, 5)
+    expect(draw.dividerStrips(divider)).toBeNil()
     expect(T.space["space-4"]).toBe(before.space)
     expect(T.size.slot).toBe(before.slot)
     expectNoErrors()
