@@ -6,7 +6,8 @@
 -- showed, remembered per item, and a cheap few; Scan all and its wait; the
 -- item tooltips' prices; Sell: your items, the item, its price filled in
 -- from the house, the deposit, why Post is off, asking before a cheap post,
--- posting; Auctions: yours (Cancel) and your bids (Bid, Buy out).
+-- posting; Auctions: yours (Cancel) and your bids (Bid, Buy out); your
+-- searches under the search box.
 --
 -- The engine's house (mock.defineAuctionHouse) answers the searches, a
 -- commodity's purchase, an item's post and the player's own auctions; bids,
@@ -19,7 +20,7 @@ import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import expectNoErrors from "../../helpers"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
-import internal M, SECTION, TableRow, AuctionTable, ResultRow, OfferRow, AuctionRow, SellRow, CatButton, BuyPage, SellPage, AuctionsPage, Category from "/Units/AuctionHouse"
+import internal M, SECTION, TableRow, AuctionTable, ResultRow, OfferRow, AuctionRow, SellRow, CatButton, BuyPage, SellPage, AuctionsPage, Category, HistoryRow from "/Units/AuctionHouse"
 import internal M as Bags from "/Units/Bags"
 import internal M as Professions from "/Units/Professions"
 import AUCTION_HOUSE from "/Core/ServiceKeys"
@@ -253,11 +254,15 @@ local function cleanup()
     if M.buy then
         M.buy.filter:SetValue(nil)
         M.buy.search:SetValue("")
+        M.buy.search.edit:ClearFocus()
         M.buy.filter:Close()
     end
+    M:CloseHistory()
+    M.historyPending = nil
     ClearCursor()
     local d = M:CharData()
     d.seen, d.posted, d.bids, d.scanAt, d.scanSeconds, d.scanCount = nil, nil, nil, nil, nil, nil
+    d.history = nil
     M:Set("cheapCheck", true)
     M:Set("tipShow", true)
     M:Set("tipMost", true)
@@ -2323,6 +2328,266 @@ local function shiftProfessions()
     mock.setModifiers({})
     C_TradeSkillUI.CloseTradeSkill()
     mock.advanceTime(0.5)
+end
+
+--------------------------------------------------------------------------------
+-- Your searches
+--------------------------------------------------------------------------------
+
+-- The texts kept, newest first.
+local function kept(): string[]
+    local out: string[] = {}
+    for i, e in ipairs(M:History()) do
+        out[i] = e.text
+    end
+    return out
+end
+
+-- The list's rows shown, top to bottom, and their texts.
+local function historyRows(): HistoryRow[]
+    local out: HistoryRow[] = {}
+    for _, r in ipairs(buy().historyRows) do
+        if r:IsVisible() then
+            out[#out + 1] = r
+        end
+    end
+    table.sort(out, function(a: HistoryRow, b: HistoryRow): boolean
+        return (a:GetTop() or 0) > (b:GetTop() or 0)
+    end)
+    return out
+end
+local function historyTexts(): string[]
+    local out: string[] = {}
+    for i, r in ipairs(historyRows()) do
+        out[i] = mock.textOf(r.label)
+    end
+    return out
+end
+
+@test("your searches: those that found something, newest first, as typed, five; the first item found and its icon")
+local function historyKept()
+    open()
+    expect(kept()).toEqual({})
+    search("blade")
+    local e = M:History()[1]
+    expect(e.text).toBe("blade")
+    expect(e.item).toBe(BLADE)
+    expect(e.icon).toBe(135274)
+    -- nothing found, or no text: not kept; spaces around it left out
+    -- (the house matches " ring" in "Test Ring")
+    search("zzz")
+    search("")
+    search(" ring")
+    expect(kept()).toEqual({ "ring", "blade" })
+    -- several found: the first as the results list them (the cheapest first)
+    search("test")
+    expect(M:History()[1].item).toBe(ORE)
+    expect(M:History()[1].icon).toBe(134400)
+    -- the same text again, in another case: moved up, as typed this time
+    search("BLADE")
+    expect(kept()).toEqual({ "BLADE", "test", "ring" })
+    -- five kept: the oldest goes
+    search("gem")
+    search("test o")
+    search("ore")
+    expect(kept()).toEqual({ "ore", "test o", "gem", "BLADE", "test" })
+    -- the Search button: kept too
+    buy().search:SetValue("ring")
+    mock.click(buy().searchButton)
+    mock.advanceTime(1)
+    expect(kept()).toEqual({ "ring", "ore", "test o", "gem", "BLADE" })
+    -- not yours: a Shift-clicked item's name, a category, favourites; a
+    -- search the house answers with its failure
+    M:SearchName("Test Gem")
+    mock.advanceTime(1)
+    buy().search:SetValue("Test Ring")
+    mock.click(assert(buy().catButtons[1]))
+    mock.advanceTime(1)
+    mock.stub(AH, "SearchForFavorites", function() end)
+    M:Favorites()
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    mock.advanceTime(1)
+    mock.stub(AH, "SendBrowseQuery", function() end)
+    search("test ring")
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_FAILURE")
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    mock.advanceTime(1)
+    expect(kept()).toEqual({ "ring", "ore", "test o", "gem", "BLADE" })
+end
+
+@test("your searches are this character's: in its own data; another's are its own")
+local function historyPerCharacter()
+    open()
+    search("blade")
+    local char = assert(M:CharKey())
+    expect(assert(M:AllCharData()[char]).history).toEqual({ { text = "blade", item = BLADE, icon = 135274 } })
+    -- another character (its own data): none yet, then its own
+    local alt: { [string]: unknown } = {}
+    local onAlt = true
+    local real = M.CharData
+    mock.stub(M, "CharData", function(_: unknown): { [string]: unknown }
+        return onAlt and alt or real(M)
+    end)
+    expect(kept()).toEqual({})
+    buy().search.edit:SetFocus()
+    expect(buy().history).never.toBeShown()
+    buy().search.edit:ClearFocus()
+    search("ring")
+    expect(kept()).toEqual({ "ring" })
+    onAlt = false
+    expect(kept()).toEqual({ "blade" })
+end
+
+@test("clicking into the search box: your searches under it with their icons; typing narrows them; none: nothing")
+local function historyShown()
+    open()
+    local edit = buy().search.edit
+    edit:SetFocus()
+    expect(buy().history).never.toBeShown()
+    edit:ClearFocus()
+    search("blade")
+    search("ring")
+    edit:SetFocus()
+    expect(buy().history).toBeShown()
+    expect(historyTexts()).toEqual({ "ring", "blade" })
+    local rows = historyRows()
+    expect(rows[1].icon.art:GetTexture()).toBe(133344)
+    expect(rows[2].icon.art:GetTexture()).toBe(135274)
+    expect(mock.textOf(buy().historyHead)).toBe("Recent searches")
+    -- under the box, as wide; the x only on hover
+    expect(buy().history:GetWidth()).toBe(buy().search:GetWidth())
+    expect(buy().history:GetLeft()).toBe(buy().search:GetLeft())
+    expect(buy().history:GetTop() < assert(buy().search:GetBottom())).toBe(true)
+    expect(rows[1].remove).never.toBeShown()
+    -- typing: those with what's typed in them (any case); none: no list;
+    -- the text gone: all again
+    typeInto(buy().search, "BLA")
+    expect(historyTexts()).toEqual({ "blade" })
+    typeInto(buy().search, "zz")
+    expect(buy().history).never.toBeShown()
+    typeInto(buy().search, "")
+    expect(historyTexts()).toEqual({ "ring", "blade" })
+    -- a kept one's icon unknown (older data): the item's own, else a question mark
+    M:Saved().history = { { text = "blade", item = BLADE }, { text = "odd" } }
+    M:DrawHistory()
+    rows = historyRows()
+    expect(rows[1].icon.art:GetTexture()).toBe(135274)
+    expect(rows[2].icon.art:GetTexture()).toBe(134400)
+end
+
+@test("one of your searches clicked: in the box and searched at once, on top; its x takes it out, nothing searched")
+local function historyPick()
+    open()
+    search("blade")
+    search("ring")
+    local sent = recordQueries()
+    local edit = buy().search.edit
+    edit:SetFocus()
+    mock.click(historyRows()[2])
+    mock.advanceTime(1)
+    expect(buy().history).never.toBeShown()
+    expect(edit:HasFocus()).toBe(false)
+    expect(edit:GetText()).toBe("blade")
+    expect(#sent).toBe(1)
+    expect(sent[1].searchString).toBe("blade")
+    expect(resultNamed("Test Blade")).toBeShown()
+    expect(kept()).toEqual({ "blade", "ring" })
+    -- the x: shown on the row's hover (and on its own), takes it out
+    edit:SetFocus()
+    local r = historyRows()[2]
+    mock.hover(r)
+    expect(r.remove).toBeShown()
+    expect(r.hover).toBeShown()
+    mock.hover(r.remove)
+    expect(r.remove).toBeShown()
+    expect(tokenOf(r.cross.strokes[1])).toBe("ink")
+    mock.click(r.remove)
+    expect(kept()).toEqual({ "blade" })
+    expect(#sent).toBe(1)
+    expect(buy().history).toBeShown()
+    expect(historyTexts()).toEqual({ "blade" })
+    -- (the click took the focus: back in the box, still open)
+    expect(edit:HasFocus()).toBe(true)
+    expect(edit:GetText()).toBe("blade")
+    -- the last one out: no list
+    local last = historyRows()[1]
+    mock.hover(last)
+    mock.click(last.remove)
+    expect(kept()).toEqual({})
+    expect(buy().history).never.toBeShown()
+    expect(#sent).toBe(1)
+    mock.hover(nil)
+    -- while Scan all runs: in the box only
+    search("ring")
+    edit:SetFocus()
+    M.scanning = { started = GetTime() }
+    mock.click(historyRows()[1])
+    expect(edit:GetText()).toBe("ring")
+    expect(#sent).toBe(2)
+    M.scanning = nil
+end
+
+@test("your searches close on Esc, a click elsewhere, Enter, the focus going, the window or tab closing")
+local function historyCloses()
+    open()
+    search("blade")
+    local edit = buy().search.edit
+    local list = buy().history
+    edit:SetFocus()
+    expect(list).toBeShown()
+    -- Esc
+    mock.script(edit, "OnEscapePressed")
+    expect(list).never.toBeShown()
+    expect(edit:HasFocus()).toBe(false)
+    -- a click on the list or the box keeps it; anywhere else closes it
+    edit:SetFocus()
+    mock.hover(list)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(list).toBeShown()
+    mock.hover(buy().search)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(list).toBeShown()
+    mock.hover(buy().scanButton)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(list).never.toBeShown()
+    -- a click on another button (the favourites, left of the box)
+    mock.stub(AH, "SearchForFavorites", function() end)
+    edit:SetFocus()
+    expect(list).toBeShown()
+    mock.click(buy().fav)
+    expect(list).never.toBeShown()
+    -- typing with the focus kept: back, narrowed
+    edit:SetFocus()
+    M:CloseHistory()
+    typeInto(buy().search, "bl")
+    expect(list).toBeShown()
+    expect(historyTexts()).toEqual({ "blade" })
+    -- the focus going: closed, unless onto the list (a click on a row takes it)
+    mock.hover(list)
+    edit:ClearFocus()
+    expect(list).toBeShown()
+    mock.hover(nil)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(list).never.toBeShown()
+    edit:SetFocus()
+    expect(list).toBeShown()
+    edit:ClearFocus()
+    expect(list).never.toBeShown()
+    -- Enter: searched, closed
+    edit:SetFocus()
+    mock.script(edit, "OnEnterPressed")
+    expect(list).never.toBeShown()
+    -- another tab, the window closing
+    edit:SetFocus()
+    expect(list).toBeShown()
+    win():SetTab("sell")
+    expect(list).never.toBeShown()
+    win():SetTab("buy")
+    edit:SetFocus()
+    expect(list).toBeShown()
+    AH.CloseAuctionHouse()
+    mock.advanceTime(1)
+    expect(list).never.toBeShown()
 end
 
 @test("turned off: the window closes, the wait's ticker stops")

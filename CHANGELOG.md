@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Search history** in the auction house: click into the search box and your last 5 searches show under it, newest first, each with the icon of the first item it found. Click one to search it again, or the x on it to take it off the list; type to narrow the list down. Only searches that found something are kept, and each character keeps its own.
+
 ## 0.8.0 (2026-11-12)
 
 ### New
