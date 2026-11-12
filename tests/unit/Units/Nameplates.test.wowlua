@@ -20,6 +20,7 @@ import expectNoErrors from "../../helpers"
 import * as coreSettings from "/Core/Settings"
 import * as themes from "/Core/Themes"
 import * as healthFill from "/UI/HealthFill"
+import * as events from "/Core/Events"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -149,36 +150,27 @@ local function enemy()
     expect(b.level:GetText()).toBe("12+")
 end
 
-@test("a plate's border lines are one physical pixel on the game's plate (which hangs on WorldFrame, not UIParent)")
-local function pixelLines()
-    -- (found in game, 0.6.32: made under UIParent, they came out 1.4 px at
-    -- 1080p and under one pixel at a larger UI scale, where they vanished
-    -- depending on the camera)
-    local f = plateOf(wolf)
-    local plate = gamePlate(wolf:token() :: string)
-    expect(plate:GetEffectiveScale() ~= UIParent:GetEffectiveScale()).toBe(true)
+-- Every pixel line on a plate (thin BORDER textures), in physical pixels at
+-- the scale it shows at now; the debuff icons' edges counted apart (reached
+-- through the container: the game makes the icons forbidden).
+local function plateLines(f: Nameplate): (number[], number)
     local _, h = GetPhysicalScreenSize()
-    local function px(r: Region, size: number): number
-        return size * r:GetEffectiveScale() / (768 / h)
+    local out: number[] = {}
+    local function add(t: Texture, thin: number)
+        if thin > 0 and thin < 3 then
+            out[#out + 1] = thin * t:GetEffectiveScale() / (768 / h)
+        end
     end
-    for _, t in ipairs({ f.border.top, f.border.bottom, f.cast.border.top }) do
-        expect(math.abs(px(t, t:GetHeight()) - 1) < 0.001).toBe(true)
+    local function measure(t: Texture)
+        add(t, math.min(t:GetHeight(), t:GetWidth()))
     end
-    expect(math.abs(px(f.border.left, f.border.left:GetWidth()) - 1) < 0.001).toBe(true)
-    -- every line inside the plate, the debuff icons' edges among them (the
-    -- report was a debuff's): one pixel too
-    local lines, wrong = 0, 0
     local function walk(fr: Frame)
+        if fr:IsForbidden() then
+            return
+        end
         for _, r in ipairs({ fr:GetRegions() }) do
             if r:GetObjectType() == "Texture" and (r :: Texture):GetDrawLayer() == "BORDER" then
-                local t = r :: Texture
-                local thin = math.min(t:GetHeight(), t:GetWidth())
-                if thin > 0 and thin < 2 then
-                    lines = lines + 1
-                    if math.abs(px(t, thin) - 1) >= 0.001 then
-                        wrong = wrong + 1
-                    end
-                end
+                measure(r :: Texture)
             end
         end
         for _, c in ipairs({ fr:GetChildren() }) do
@@ -186,26 +178,46 @@ local function pixelLines()
         end
     end
     walk(f)
-    expect(lines > 8).toBe(true)
-    expect(wrong).toBe(0)
+    local icons = 0
+    for _, b in ipairs(f.auras and f.auras.buttons or {}) do
+        -- (their thickness as set: an icon without an aura isn't laid out)
+        for _, edge in ipairs(b.edges) do
+            add(edge.top, edge.top:GetHeight())
+            add(edge.bottom, edge.bottom:GetHeight())
+            add(edge.left, edge.left:GetWidth())
+            add(edge.right, edge.right:GetWidth())
+            icons = icons + 4
+        end
+    end
+    return out, icons
 end
 
 @test(
-    "the game's plates at another scale than the pool: the pool takes theirs once, every line one pixel; then no more work"
+    "a plate's lines are one physical pixel on the game's plate (which hangs on WorldFrame, not UIParent), the debuff icons' too"
 )
-local function otherScale()
-    -- (found in game: the game's plates aren't at WorldFrame's scale, and the
-    -- lines' relayout climbed into a forbidden frame of the game's)
-    local real = SuuUI.Pixel.Relayout
-    local calls = 0
-    mock.stub(SuuUI.Pixel, "Relayout", function(fr: Frame)
-        calls = calls + 1
-        real(fr)
-    end)
-    local _, h = GetPhysicalScreenSize()
-    local function onePx(t: Texture): boolean
-        return math.abs(t:GetHeight() * t:GetEffectiveScale() / (768 / h) - 1) < 0.001
+local function pixelLines()
+    -- (found in game, 0.6.32: made under UIParent, they came out under one
+    -- pixel at a larger UI scale and vanished "depending on your camera
+    -- angle")
+    local f = plateOf(wolf)
+    local plate = gamePlate(wolf:token() :: string)
+    expect(plate:GetEffectiveScale() ~= UIParent:GetEffectiveScale()).toBe(true)
+    expect(assert(assert(f.auras).groups.mine).added).toBe(true)
+    local lines, icons = plateLines(f)
+    expect(#lines > 8).toBe(true)
+    expect(icons > 8).toBe(true)
+    for _, px in ipairs(lines) do
+        expect(math.abs(px - 1) < 0.001).toBe(true)
     end
+end
+
+@test(
+    "debuff icons made before the game shows a plate: a pixel or more on it (the game makes them forbidden, their lines can't be laid again)"
+)
+local function iconsBeforePlate()
+    -- (a player's report, 0.8.0: the debuffs' borders "missing most": the
+    -- pool made the icons at WorldFrame's scale, the game's plates are at
+    -- another, and the icons were forbidden by the time the pool took theirs)
     local function gameLike(scale: number): Frame
         local p = CreateFrame("Frame", nil, WorldFrame)
         p:SetScale(scale)
@@ -213,21 +225,52 @@ local function otherScale()
         p:SetPoint("CENTER")
         return p
     end
-    M:Attach("nameplate41", gameLike(0.8), false)
-    local f = assert(byUnit["nameplate41"])
-    expect(onePx(f.border.top)).toBe(true)
-    expect(onePx(f.cast.border.top)).toBe(true)
-    expect(calls).toBe(2)
-    -- the pooled plates took the scale too: the next plate needs nothing
-    M:Attach("nameplate42", gameLike(0.8), false)
-    local b = assert(byUnit["nameplate42"])
-    expect(onePx(b.border.top)).toBe(true)
-    expect(calls).toBe(2)
-    M:OnPlateRemoved("nameplate41")
+    -- the pool emptied, taken again (as after a reload): it fills up
+    local saved: Nameplate[] = {}
+    while #pool > 0 do
+        saved[#saved + 1] = assert(table.remove(pool))
+    end
+    groupsAhead.made = 0
+    mock.advanceFrames(1)
+    M:Attach("nameplate42", gameLike(1), false)
     M:OnPlateRemoved("nameplate42")
-    -- back at the usual scale (for the other tests)
-    M:Attach("nameplate41", gameLike(1), false)
+    -- the plates' scale unknown again (the UI scale changed)
+    events.emit("SUUUI_PIXEL_CHANGED", 1080, UIParent:GetEffectiveScale())
+    mock.advanceFrames(30)
+    expect(#pool > 4).toBe(true)
+    -- not before a plate shows: no debuff groups made ahead
+    expect(groupsAhead.made).toBe(0)
+    -- a pooled plate's debuff group made now (a plate coming in a fight)
+    -- (one without it yet, last in the pool: the next plate takes it)
+    local f: Nameplate? = nil
+    for i = #pool, 1, -1 do
+        local pf = pool[i]
+        local g = pf.aurasTried and pf.auras and pf.auras.groups.mine
+        if g and not g.added then
+            f = table.remove(pool, i)
+            break
+        end
+    end
+    table.insert(pool, assert(f))
+    local auras = assert(assert(f).auras)
+    auras:SetGroupMax("mine", 3)
+    expect(assert(auras.groups.mine).added).toBe(true)
+    -- the game's plate at UIParent's scale (not WorldFrame's)
+    local ui, world = UIParent:GetEffectiveScale(), WorldFrame:GetEffectiveScale()
+    expect(math.abs(ui - world) > 0.01).toBe(true)
+    M:Attach("nameplate41", gameLike(ui / world), false)
+    expect(byUnit["nameplate41"]).toBe(f)
+    local lines, icons = plateLines(assert(f))
+    expect(#lines > 8).toBe(true)
+    expect(icons > 8).toBe(true)
+    for _, px in ipairs(lines) do
+        expect(px > 1 - 0.001 and px < 1.5).toBe(true)
+    end
     M:OnPlateRemoved("nameplate41")
+    events.emit("SUUUI_PIXEL_CHANGED", 1080, UIParent:GetEffectiveScale())
+    for _, s in ipairs(saved) do
+        pool[#pool + 1] = s
+    end
 end
 
 @test("the health text: the value, both, none")
