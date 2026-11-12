@@ -684,6 +684,161 @@ def parrot():
     return render(64, 80, shapes)
 
 
+# --- the jungle's icons (both themes: white, tinted in game) -------------------
+#
+# Every one of SuuUI's glyphs (make_textures.GLYPHS, 24 units, stroke 1.9)
+# drawn as a vine: its lines a little thicker and gently bent (their ends
+# kept where they were, so lines still meet), a leaf or two sprouting
+# outward from the longest; a few redrawn outright (a palm for the talents'
+# tree, a woven basket for the bags).
+
+GLYPH_PX, GLYPH_BOX = 64, 24.0
+GLYPH_REDRAWN = {
+    # a palm: a leaning trunk, five fronds, two coconuts
+    "tree": "M12.6 21C13 17.6 12.6 14 11.2 10.2M11.2 10.2C9 7.8 6 7.6 3.6 9.6M11.2 10.2C10 7 7.6 5.2 4.8 5"
+            "M11.2 10.2C12.4 7.2 15 5.6 18.2 6M11.2 10.2C13.8 8.8 17 9.4 19.8 12M11.2 10.2C11.4 7.4 10.8 5 9.6 3.2"
+            "M10.2 12h.01M12.6 12.2h.01",
+    # a woven basket with its handle
+    "bag": "M5 9.5h14l-1.6 10.5H6.6L5 9.5zM8.5 9.5a3.5 3.5 0 0 1 7 0M5.8 13.2h12.4M6.3 16.6h11.4M10 9.5l.4 10.5M14 9.5l-.4 10.5",
+    # a coiled vine
+    "swirl": "M12 12.5a1.6 1.6 0 1 1 1.6-1.6 3.4 3.4 0 0 1-3.4 3.4 5 5 0 0 1-5-5 6.6 6.6 0 0 1 6.6-6.6 8 8 0 0 1 8 8",
+}
+
+
+BARE = {"chevronDown", "chevronUp", "chevronLeft", "chevronRight", "check", "dash", "minus", "sort"}
+
+
+def _length(pts):
+    return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
+
+
+def _resample(pts, step=0.45):
+    total = _length(pts)
+    if total < 1e-6:
+        return list(pts)
+    n = max(2, int(total / step))
+    out, seg, acc = [], 0, 0.0
+    starts = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        starts.append(starts[-1] + math.hypot(b[0] - a[0], b[1] - a[1]))
+    for k in range(n + 1):
+        s = total * k / n
+        while seg < len(pts) - 2 and starts[seg + 1] < s:
+            seg += 1
+        a, b = pts[seg], pts[seg + 1]
+        ll = starts[seg + 1] - starts[seg]
+        t = 0 if ll == 0 else (s - starts[seg]) / ll
+        out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def _wobble(pts, amp, seed):
+    """Each point pushed sideways by a slow wave, nothing at the ends."""
+    if len(pts) < 3 or amp <= 0:
+        return pts
+    total = _length(pts) or 1
+    out, s = [pts[0]], 0.0
+    phase = seed * 1.7
+    for i in range(1, len(pts) - 1):
+        s += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        tx, ty = pts[i + 1][0] - pts[i - 1][0], pts[i + 1][1] - pts[i - 1][1]
+        tl = math.hypot(tx, ty) or 1
+        nx, ny = -ty / tl, tx / tl
+        off = amp * math.sin(s * 0.45 + phase) * math.sin(math.pi * s / total)
+        out.append((pts[i][0] + nx * off, pts[i][1] + ny * off))
+    out.append(pts[-1])
+    return out
+
+
+def _sprout(pts, frac, size, width, centre=(12.0, 12.0)):
+    """A leaf from the line `frac` along it, outward (away from the
+    middle), leaning forward; None if it would leave the box."""
+    total = _length(pts)
+    target, s = total * frac, 0.0
+    for i in range(1, len(pts)):
+        s += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        if s >= target:
+            break
+    x, y = pts[i]
+    tx, ty = pts[min(i + 1, len(pts) - 1)][0] - pts[i - 1][0], pts[min(i + 1, len(pts) - 1)][1] - pts[i - 1][1]
+    ang_t = math.atan2(ty, tx)
+    sides = [1, -1]
+    nx, ny = -math.sin(ang_t), math.cos(ang_t)
+    if nx * (x - centre[0]) + ny * (y - centre[1]) < 0:
+        sides = [-1, 1]
+    for scale in (1.0, 0.75):
+        for side in sides:
+            a = ang_t + side * (math.pi / 2 - 0.55)
+            ln = size * scale
+            tip = (x + math.cos(a) * ln, y + math.sin(a) * ln)
+            if 0.7 <= tip[0] <= GLYPH_BOX - 0.7 and 0.7 <= tip[1] <= GLYPH_BOX - 0.7:
+                return x, y, ln, width * scale, a
+    return None
+
+
+def glyph_shapes(name, d):
+    k = GLYPH_PX / GLYPH_BOX
+    lines = mt.path_polylines(d)
+    shapes, drawn = [], []
+    for i, line in enumerate(lines):
+        total = _length(line)
+        if total < 0.05:
+            shapes.append(ellipse(line[0][0] * k, line[0][1] * k, 1.2 * k, 1.2 * k, WHITE))
+            continue
+        pts = _wobble(_resample(line), 0.3 if total > 6 else 0.0, i + len(name))
+        drawn.append(pts)
+        # (in pieces: each piece only looks at its own few segments)
+        for a in range(0, len(pts) - 1, 8):
+            chunk = pts[a:a + 9]
+            shapes.append(stroke([(x * k, y * k) for x, y in chunk], 1.9 * k, WHITE))
+    lengths = sorted(((_length(p), j) for j, p in enumerate(drawn)), reverse=True)
+    leaves = 2 if sum(n for n, _ in lengths) > 34 else 1
+    # (arrows, the tick, the dash and the raid marks keep their shape: a
+    # leaf turned a chevron into a tick)
+    if name in BARE or name.startswith("mark"):
+        leaves = 0
+    for n, (_, j) in enumerate(lengths[:leaves]):
+        got = _sprout(drawn[j], 0.55 if n == 0 else 0.3, 6.6 if n == 0 else 5.2, 2.5 if n == 0 else 2.1)
+        if got:
+            x, y, ln, wd, a = got
+            shapes += leaf(x * k, y * k, ln * k, wd * k, a, WHITE, WHITE, curl=0.04)
+    return shapes
+
+
+def jungle_glyph(name):
+    d = GLYPH_REDRAWN.get(name) or mt.GLYPHS[name]
+    return as_mask(coverage(GLYPH_PX, GLYPH_PX, glyph_shapes(name, d)))
+
+
+GLYPH_NAMES = sorted(mt.GLYPHS)
+
+
+def write_glyphs(names):
+    out = os.path.join(OUT, "Glyphs")
+    os.makedirs(out, exist_ok=True)
+    for name in names:
+        write_rgba_tga(os.path.join(out, name + ".tga"), jungle_glyph(name))
+    print("wrote", len(names), "glyphs to", os.path.relpath(out, ROOT))
+
+
+def glyph_sheet(path, names):
+    """Every glyph at 64 px, cream on the dark ground, 12 a row."""
+    per, cell = 12, 72
+    rows_n = (len(names) + per - 1) // per
+    ground = (0x16, 0x1C, 0x15)
+    canvas = [[ground + (255,)] * (per * cell) for _ in range(rows_n * cell)]
+    for idx, name in enumerate(names):
+        img = jungle_glyph(name)
+        ox, oy = (idx % per) * cell + 4, (idx // per) * cell + 4
+        for y, row in enumerate(img):
+            for x, (_, _, _, a) in enumerate(row):
+                t = a / 255
+                canvas[oy + y][ox + x] = (round(236 * t + ground[0] * (1 - t)), round(231 * t + ground[1] * (1 - t)),
+                                          round(210 * t + ground[2] * (1 - t)), 255)
+    write_png(path, canvas)
+    print("wrote", path)
+
+
 def write(name, rows):
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, name + ".tga")
@@ -750,6 +905,12 @@ def sheet(path, names):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--glyphs"]:
+        write_glyphs(args[1:] or GLYPH_NAMES)
+        return
+    if args[:1] == ["--glyph-sheet"]:
+        glyph_sheet(args[1], args[2:] or GLYPH_NAMES)
+        return
     if args[:1] == ["--sheet"]:
         sheet(args[1], args[2:] or list(ART))
         return
