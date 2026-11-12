@@ -780,19 +780,30 @@ end
 -- and vanished at some positions (found in game, 0.6.32).
 -- (Down from `root` through its children, never up: climbing each line's
 -- parents reached a forbidden frame of the game's, "calling 'GetParent' on
--- bad self", found in game 2026-11-11; a forbidden frame is skipped.)
+-- bad self", found in game 2026-11-11; a forbidden frame is skipped.
+-- The game's aura buttons refuse addon code in a fight while answering
+-- IsForbidden false (probed 2026-11-12): a frame whose children can't be
+-- read is skipped too, and a line that can't be laid stays as it is.)
+local function childrenOf(fr: Frame): Frame[]
+    return { fr:GetChildren() }
+end
+
 export function relayoutPixels(root: Frame)
     local function visit(fr: Frame)
         if fr:IsForbidden() then
             return
         end
+        local ok, kids = pcall(childrenOf, fr)
+        if not ok then
+            return
+        end
         for _, b in ipairs(bordersOf[fr] or {}) do
-            b:Layout()
+            pcall(b.Layout, b)
         end
         if hairlines[fr] then
-            fr:SetHeight(lineSize(fr))
+            pcall(fr.SetHeight, fr, lineSize(fr))
         end
-        for _, c in ipairs({ fr:GetChildren() }) do
+        for _, c in ipairs(kids) do
             visit(c)
         end
     end

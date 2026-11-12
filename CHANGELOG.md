@@ -8,7 +8,15 @@
 
 ### Changed
 
+- When an NPC offers you a choice of quest rewards, a gold coin now marks the one that sells for the most at a vendor, instead of the Upgrade mark.
+- Every notification has an x to close it, except the game's requests you answer on the card (invites, resurrection, summons...). Closing a reminder (gear to repair, full bags, points to spend) keeps it away until it clears and comes back.
 - Tagged mobs: a mob someone else has tagged (you get nothing from it) now shows a cool slate-blue health bar with diagonal stripes on its nameplate and on your target, target of target and focus frames, instead of plain grey. Its name and level keep their usual colours, and the stripes go as soon as the tag does.
+
+### Fixed
+
+- Nameplates: less stutter when mobs come into view, mostly when you dismount or pull a group; 0.9.0 made each plate's debuff icons as it showed.
+- Nameplates: borders on plates and their debuff icons stay a full pixel at every UI scale; 0.9.0 could draw them too thin to show.
+- Auction house: your recent searches are kept again (none showed under the search box), and items you Shift-click to search for are kept with them.
 
 ## 0.9.0 (2026-11-12)
 
