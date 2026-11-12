@@ -314,3 +314,81 @@ local function textures()
     expect(T.texture["health-bar"]).toBe(white)
     expectNoErrors()
 end
+
+-- a glow's colour as drawn (its first part's vertex colour)
+local function glowIs(e: draw.SoftEdge, token: string)
+    local r, g, b = e.parts[1]:GetVertexColor()
+    local c = T.color[token]
+    expect(r).toBeCloseTo(c[1], 3)
+    expect(g).toBeCloseTo(c[2], 3)
+    expect(b).toBeCloseTo(c[3], 3)
+end
+
+@test(
+    "glows follow a theme's arcane, ember and ward live; the design's come back, and colour vision back to Normal too"
+)
+local function glows()
+    themes.register({ id = "test-glows", colors = { arcane = { 1, 0, 0 }, ember = { 0, 1, 0 }, ward = { 0, 0, 1 } } })
+    local f = CreateFrame("Frame")
+    f:SetSize(20, 20)
+    local arcane, ember, ward = draw.shadow(f, "glow-arcane"), draw.shadow(f, "glow-ember"), draw.shadow(f, "glow-ward")
+    local alpha = T.shadow["glow-arcane"][1].color[4]
+    use("test-glows")
+    expect(T.color.arcane.hex).toBe("ff0000")
+    glowIs(arcane, "arcane")
+    glowIs(ember, "ember")
+    glowIs(ward, "ward")
+    -- the glow keeps its own alpha
+    expect(select(4, arcane.parts[1]:GetVertexColor())).toBeCloseTo(alpha, 3)
+    -- back to SuuUI's: the design's glows
+    use(nil)
+    expect(T.color.arcane.hex).toBe("3fd0ff")
+    glowIs(arcane, "arcane")
+    glowIs(ember, "ember")
+    -- colour vision, then Normal again: the preset's glow goes
+    use(nil, "redgreen")
+    expect(T.color.ember.hex).toBe("ec6b00")
+    glowIs(ember, "ember")
+    use(nil, "normal")
+    expect(T.color.ember.hex).toBe(design.ember.hex)
+    glowIs(ember, "ember")
+    -- a glow made while a theme is on takes it too
+    use("test-glows")
+    glowIs(draw.shadow(f, "glow-ember"), "ember")
+    expectNoErrors()
+end
+
+@test("a theme's chat colours are left out, with a warning: the game's chat settings colour chat lines")
+local function chatColors()
+    local before = #mock.printed()
+    themes.register({ id = "test-chat", colors = { ["chat-say"] = { 1, 0, 0 }, gilt = { 0, 1, 0 } } })
+    local printed = mock.printed()
+    expect(#printed).toBe(before + 1)
+    expect(printed[#printed]).toBe(
+        "SuuUI.RegisterTheme: test-chat sets chat-say, which is left out: chat colours come from the game's chat settings"
+    )
+    use("test-chat")
+    expect(themes.appliedTheme()).toBe("test-chat")
+    expect(T.color["chat-say"].hex).toBe("ffffff")
+    expect({ T.color["chat-say"][1], T.color["chat-say"][2], T.color["chat-say"][3] }).toEqual({ 1, 1, 1 })
+    -- the rest of the theme applies; the warning came once
+    expect(T.color.gilt.hex).toBe("00ff00")
+    expect(#mock.printed()).toBe(before + 1)
+    -- worked out for your class: left out when it applies
+    themes.register({
+        id = "test-chat-fn",
+        colors = function(_class: string?): themes.ThemeColors
+            return { ["chat-loot"] = { 1, 0, 0 } }
+        end,
+    })
+    use("test-chat-fn")
+    expect(T.color["chat-loot"].hex).toBe("00aa00")
+    printed = mock.printed()
+    expect(#printed).toBe(before + 2)
+    expect(printed[#printed]).toBe(
+        "SuuUI.RegisterTheme: test-chat-fn sets chat-loot, which is left out: chat colours come from the game's chat settings"
+    )
+    use("test-chat-fn")
+    expect(#mock.printed()).toBe(before + 2)
+    expectNoErrors()
+end
