@@ -75,6 +75,27 @@ local function hasColor(fs: FontString, token: string): boolean
     return hasRGB(fs, tr, tg, tb)
 end
 
+-- A health bar's fill drawn in these colours (the deep end, then the fill)?
+local function drawsAs(bar: StatusBar, want: number[]): boolean
+    local got = { healthFill.colorsOf(bar) }
+    for i = 1, 6 do
+        if math.abs(got[i] - want[i]) > 0.001 then
+            return false
+        end
+    end
+    return true
+end
+
+-- ... a gradient of two tokens; a token toned (a class's or a reaction's)
+local function fillIs(bar: StatusBar, deep: string, fill: string): boolean
+    local r1, g1, b1 = UI.RGBA(deep)
+    local r2, g2, b2 = UI.RGBA(fill)
+    return drawsAs(bar, { r1, g1, b1, r2, g2, b2 })
+end
+local function drawnToned(bar: StatusBar, token: string): boolean
+    return drawsAs(bar, { healthFill.classColors(token) })
+end
+
 -- A plate's own API table with some functions replaced: a stubbed global
 -- would run Blizzard's plates tainted too.
 local function fakeAPI(f: Nameplate, fns: { [string]: unknown })
@@ -105,6 +126,10 @@ local function cleanup()
     end
     mock.player:target(nil)
     mock.group:leave()
+    if coreSettings.accountString("npcHealthColor") then
+        coreSettings.setAccount("npcHealthColor", nil)
+        themes.apply()
+    end
     M:ResetAll({
         "width",
         "barHeight",
@@ -436,10 +461,66 @@ local function classHealth()
     local mageColor = assert(C_ClassColor.GetClassColor("MAGE"))
     expect(hasRGB(f.name, mageColor:GetRGB())).toBe(true)
     local w = plateOf(wolf)
-    expect(healthFill.lookOf(w.health)).toBe(false)
+    expect(fillIs(w.health, "unit-fill-deep", "unit-fill")).toBe(true)
     coreSettings.setAccount("healthColor", nil)
     themes.apply()
     expect(healthFill.byClass()).toBe(false)
+end
+
+@test(
+    "NPC reaction colours on plates: off, the fill; on, hostile red, neutral yellow, friendly green; a player as before; the name keeps its colour"
+)
+local function reactionHealth()
+    local boar = mock.spawnUnit({ name = "Old Boar", level = 8, reaction = "neutral", distance = 11 })
+    local w, b, g, m = plateOf(wolf), plateOf(boar), plateOf(guard), plateOf(mage)
+    -- off (the default): every NPC the theme's fill
+    expect(healthFill.byReaction()).toBe(false)
+    for _, f in ipairs({ w, b, g }) do
+        expect(fillIs(f.health, "unit-fill-deep", "unit-fill")).toBe(true)
+    end
+    expect(w.fillReaction).toBe("reaction-hostile")
+    expect(b.fillReaction).toBe("reaction-neutral")
+    expect(g.fillReaction).toBe("reaction-friendly")
+    -- on (live)
+    coreSettings.setAccount("npcHealthColor", "reaction")
+    themes.apply()
+    expect(drawnToned(w.health, "reaction-hostile")).toBe(true)
+    expect(drawnToned(b.health, "reaction-neutral")).toBe(true)
+    expect(drawnToned(g.health, "reaction-friendly")).toBe(true)
+    -- (above the bar: the name keeps its reaction colour)
+    expect(hasColor(w.name, "reaction-hostile")).toBe(true)
+    expect(hasColor(b.name, "reaction-neutral")).toBe(true)
+    -- a player: as before
+    expect(m.fillReaction).toBeNil()
+    expect(healthFill.lookOf(m.health)).toBe("class-mage")
+    expect(fillIs(m.health, "unit-fill-deep", "unit-fill")).toBe(true)
+    -- the reaction changes (UNIT_FACTION): repainted
+    boar:update({ reaction = "hostile" })
+    mock.advanceFrames(1)
+    local b2 = assert(byUnit[boar:token() :: string])
+    expect(drawnToned(b2.health, "reaction-hostile")).toBe(true)
+    expect(hasColor(b2.name, "reaction-hostile")).toBe(true)
+    -- tagged by someone else: the tapped look wins
+    local denied = true
+    fakeAPI(w, {
+        UnitIsTapDenied = function(_: string): boolean
+            return denied
+        end,
+    })
+    mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
+    mock.advanceFrames(1)
+    expect(healthFill.lookOf(w.health)).toBe("tapped")
+    expect(fillIs(w.health, "unit-fill-tapped-deep", "unit-fill-tapped")).toBe(true)
+    denied = false
+    mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
+    mock.advanceFrames(1)
+    expect(drawnToned(w.health, "reaction-hostile")).toBe(true)
+    -- off again (live): the fill
+    coreSettings.setAccount("npcHealthColor", nil)
+    themes.apply()
+    expect(fillIs(w.health, "unit-fill-deep", "unit-fill")).toBe(true)
+    boar:hideNameplate()
+    boar:despawn()
 end
 
 @test("a plate gone: back in the pool")

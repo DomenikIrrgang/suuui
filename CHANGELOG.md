@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **NPC reaction colours**: a new setting under Settings › General › Appearance › Theme shows NPCs' health on the target, target of target, focus, boss and pet frames and on nameplates in their reaction's colour: hostile red, neutral yellow, friendly green. It is off by default; when on, it wins over the theme's health colour and changes along with the NPC (a mob turning hostile, a new target). Players keep the Health colour setting, and a mob tagged by someone else keeps its tagged look.
+
 ## 0.9.0 (2026-11-12)
 
 ### New

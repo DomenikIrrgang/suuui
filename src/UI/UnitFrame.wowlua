@@ -1061,7 +1061,10 @@ export class UnitFrame extends Button
     tappedLook: boolean = false
     -- a player's class token, for class-coloured health (UI/HealthFill)
     fillClass: string? = nil
-    -- what the health fill was painted as: "tapped", a class token, or false
+    -- an NPC's reaction token, for reaction-coloured health (UI/HealthFill)
+    fillReaction: string? = nil
+    -- what the health fill was painted as: "tapped", a class or reaction
+    -- token, or false
     fillLook: string | false = false
     opts: UnitFrameOptions
     size: Size
@@ -1337,7 +1340,8 @@ export class UnitFrame extends Button
     -- The health fill: grey when tapped, a player's class colour (when class
     -- colours are on: UI/HealthFill decides at paint time), else the fill.
     function PaintHealth()
-        local look: string | false = self.tappedLook and "tapped" or self.fillClass or false
+        -- (an NPC's reaction colour when reaction colours are on, as well)
+        local look: string | false = self.tappedLook and "tapped" or self.fillClass or self.fillReaction or false
         if look ~= self.fillLook then
             self.fillLook = look
             healthFill.paint(self.health, look)
@@ -1523,8 +1527,15 @@ export class UnitFrame extends Button
                 classColor = nil
             end
         end
-        -- (the health in it too, with class colours on)
+        -- (the health in it too, with class colours on; an NPC's in its
+        -- reaction's colour, with reaction colours on: UNIT_FACTION and a new
+        -- unit come through here)
         self.fillClass = classColor
+        local reaction: string? = nil
+        if not isPlayer then
+            reaction = healthFill.reactionToken(A.UnitReaction(u, "player"))
+        end
+        self.fillReaction = reaction
         self:PaintHealth()
         self.role:Hide()
         self.classDot:Hide()
@@ -1550,6 +1561,9 @@ export class UnitFrame extends Button
         elseif classColor then
             -- (on a class-coloured bar the class name can't be read: ink)
             self.name:SetColor(healthFill.byClass() and "ink" or classColor)
+        elseif reaction and healthFill.byReaction() then
+            -- (on a reaction-coloured bar the reaction's name can't be read: ink)
+            self.name:SetColor("ink")
         else
             local r = A.UnitReaction(u, "player")
             if secret.isSecret(r) or not r then
