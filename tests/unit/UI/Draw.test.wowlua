@@ -725,3 +725,43 @@ local function relayout()
     other:Hide()
     outside:Hide()
 end
+
+@test("layout: fn now and on each relayout; onLayout only on a relayout; a failing one is reported, the rest still run")
+local function layoutKept()
+    local f = host()
+    local now, later = 0, 0
+    draw.layout(f, function()
+        now += 1
+    end)
+    draw.onLayout(f, function()
+        later += 1
+    end)
+    expect(draw.laysOut(f)).toBe(true)
+    expect(draw.laysOut(CreateFrame("Frame"))).toBe(false)
+    expect({ now, later }).toEqual({ 1, 0 })
+    draw.relayout()
+    expect({ now, later }).toEqual({ 2, 1 })
+    -- (the error handler faked, as for repaint)
+    local reported: string[] = {}
+    mock.fake("geterrorhandler", function(): (err: unknown) -> ()
+        return function(err: unknown)
+            reported[#reported + 1] = tostring(err)
+        end
+    end)
+    local fail = true
+    draw.onLayout(f, function()
+        if fail then
+            error("broken layout")
+        end
+    end)
+    local ran = false
+    draw.onLayout(f, function()
+        ran = true
+    end)
+    draw.relayout()
+    fail = false
+    expect(#reported).toBe(1)
+    expect(reported[1]).toContain("broken layout")
+    expect(ran).toBe(true)
+    expect({ now, later }).toEqual({ 3, 2 })
+end

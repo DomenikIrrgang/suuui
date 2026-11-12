@@ -169,6 +169,8 @@ SuuUI.RegisterTheme({
     textures = { ["health-bar"] = "Interface\\AddOns\\MyPlugin\\Smooth.tga", bar = "Interface\\AddOns\\MyPlugin\\Smooth.tga" },
     glyphs = { bag = "Interface\\AddOns\\MyPlugin\\Bag.tga", search = "Interface\\AddOns\\MyPlugin\\Search.tga" },
     colors = { shade = { 0.05, 0.08, 0.15 } },
+    space = { ["space-4"] = 6, ["space-5"] = 10 },
+    sizes = { ["icon-md"] = 22, slot = 32 },
 })
 ```
 
@@ -179,6 +181,7 @@ SuuUI.RegisterTheme({
 - **Icons (API 0.37):** `glyphs` replaces SuuUI's icons by name: the window icons, buttons, bags, map pins, the micro menu, menus, professions, notifications and the rest. The names are the keys of `SuuUI.Tokens.glyph` (the file names in SuuUI's `Media/Textures/Glyphs`: `bag`, `search`, `gear`, `chevronDown`, …); give only the ones you want to change. 64 px white art works best: SuuUI colours and sizes it.
 - **Dark overlays (API 0.37):** the colour token `shade` (black) colours every dark layer: the shade behind a dialog, the vignettes, the model stage's floor, the minimap's shadow, the aura timers' shade. Each keeps its own strength.
 - **Sizes:** text SuuUI draws at a size of its own (big numbers, the NPC dialogue, titles, the minimap's N) grows and shrinks with its text style's `size`.
+- **Spacing and sizes (API 0.38):** `space` changes the spacing tokens (`space-1` to `space-7`, 0 to four times the design's px) and `sizes` the size tokens (`icon-md`, `slot`, `unit-lg`, `bar-lg`, `minimap`, `notice-w`, `settings-nav`, …, a quarter to four times), for a denser or roomier UI. Picking the theme lays the windows, unit frames, nameplates, action bar dock, bags, chat, tooltips, minimap, notifications, settings, auction house, tracker and micro menu out again at once; protected frames (unit, party and raid frames, the action bars) after combat. A few parts (the meters, cast bars, aura icons, some windows' lists) take it at their next draw or after a /reload. The player's own sizes win: the player and target frames and the minimap follow your `bar-lg`, `unit-lg` and `minimap` only at their default size. `radius` is accepted too (`radius-sm`, `radius-md`, `radius-round`), but SuuUI draws square corners for now. [API.md](API.md) has the details.
 - **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned; NPCs keep `unit-fill`, unless the player turns on NPC reaction colours. The player's "Health colour" setting on Class colours wins over your theme.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 
