@@ -297,10 +297,11 @@ type Fakes = {
 -- The unit functions plates read: the game's, or a preview's stand-ins.
 local GAME = gameUnits()
 
--- The game's plates' effective scale: seen on the first one it shows (it
--- isn't WorldFrame's, found in game; distance and target don't change it,
--- SuuUI keeps the game's nameplate scales at 1); before one, the smaller of
--- UIParent's and WorldFrame's, so lines made then are a pixel or more. Lower
+-- The game's plates' effective scale: seen on the first one it shows;
+-- before one, the smaller of UIParent's and WorldFrame's, so lines made then
+-- are a pixel or more. The game's is UIParent's (measured 2026-11-12: plates
+-- at 0.64 with UIParent at 0.64, WorldFrame at 1; distance and target don't
+-- change it, SuuUI keeps the game's nameplate scales at 1). Lower
 -- when a plate turns up smaller still; guessed again when the UI scale or
 -- the screen changes.
 local seenScale: number? = nil
@@ -341,6 +342,8 @@ export class Nameplate extends Frame
     auras: UnitAuras? = nil
     -- its aura container made (or tried: a client without them)
     aurasTried: boolean = false
+    -- the plates' scale its lines were laid for (see plateScale)
+    laidScale: number = 0
     -- its debuff group waits for the unit's first such aura (ApplyAuraCount)
     auraWait: boolean = false
     -- the plate's unit while it's on one ("nameplateN"; a preview's "plateN")
@@ -895,7 +898,9 @@ local function makePlate(): Nameplate
     draw.withPixelUnit(platePixel, function()
         f = Nameplate.new(poolHome())
     end)
-    return assert(f)
+    local made = assert(f)
+    made.laidScale = plateScale()
+    return made
 end
 
 local function newPlate(): Nameplate
@@ -949,9 +954,9 @@ end
 local groupsAhead = { made = 0 }
 
 local function enemyGroupMissing(): Nameplate?
-    -- (not before the game has shown a plate: the icons' lines need its
-    -- scale, and can't be laid again after)
-    if not seenScale or groupsAhead.made >= POOL or (tonumber(M:Get("auras")) or 0) <= 0 then
+    -- (before a plate shows too: the plates' scale guessed is UIParent's,
+    -- which is the game's, measured 2026-11-12)
+    if groupsAhead.made >= POOL or (tonumber(M:Get("auras")) or 0) <= 0 then
         return nil
     end
     for i = #pool, math.max(1, #pool - POOL + 1), -1 do
@@ -1540,12 +1545,17 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         byUnit[unit] = f
         f:SetParent(plate)
         -- the first of the game's plates (or one smaller than those before):
-        -- the plates' scale is known, their lines laid for it, one pixel
+        -- the plates' scale is known. A plate laid for another one has its
+        -- lines laid again as it's taken, one pixel (one at a time: all the
+        -- pool's at once was a 30k-instruction frame); in game the guess is
+        -- the plates' scale already
         local scale = f:GetEffectiveScale()
         local known = seenScale
         if not known or scale < known - 0.0001 then
             seenScale = scale
-            self:RelayoutPlates()
+        end
+        if math.abs(f.laidScale - plateScale()) > 0.0001 then
+            f.laidScale = plateScale()
             SuuUI.Pixel.Relayout(f)
         end
         anchor(f, plate)
@@ -1679,11 +1689,12 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         auras:SetGroupMax(key, n)
     end
 
-    -- Every live and pooled plate's lines laid again (their unit changed:
+    -- Every live plate's lines laid again (their unit changed:
     -- the game's nameplate scale settings, the screen's size).
+    -- (the pooled ones as they're taken: see Attach)
     function RelayoutPlates()
-        SuuUI.Pixel.Relayout(poolHome())
         for _, f in pairs(byUnit) do
+            f.laidScale = plateScale()
             SuuUI.Pixel.Relayout(f)
         end
     end

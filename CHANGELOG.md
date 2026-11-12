@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Nameplates: less stutter when mobs come into view, mostly when you dismount or pull a group; 0.9.0 made each plate's debuff icons as it showed.
+
 ## 0.9.0 (2026-11-12)
 
 ### New
