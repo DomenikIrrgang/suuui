@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A mob's level is grey only when it gives you no experience; mobs a few levels below you that still give experience showed grey.
+
 ## 0.8.0 (2026-11-12)
 
 ### New
