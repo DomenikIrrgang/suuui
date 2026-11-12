@@ -2684,10 +2684,12 @@ local function historyKept()
     mock.click(buy().searchButton)
     mock.advanceTime(1)
     expect(kept()).toEqual({ "ring", "ore", "test o", "gem", "BLADE" })
-    -- not yours: a Shift-clicked item's name, a category, favourites; a
-    -- search the house answers with its failure
+    -- a Shift-clicked item's name: kept too (asked 2026-11-12)
     M:SearchName("Test Gem")
     mock.advanceTime(1)
+    expect(kept()).toEqual({ "Test Gem", "ring", "ore", "test o", "gem" })
+    -- not yours: a category, favourites; a search the house answers with
+    -- its failure
     buy().search:SetValue("Test Ring")
     mock.click(assert(buy().catButtons[1]))
     mock.advanceTime(1)
@@ -2700,7 +2702,47 @@ local function historyKept()
     mock.fireEvent("AUCTION_HOUSE_BROWSE_FAILURE")
     mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
     mock.advanceTime(1)
-    expect(kept()).toEqual({ "ring", "ore", "test o", "gem", "BLADE" })
+    expect(kept()).toEqual({ "Test Gem", "ring", "ore", "test o", "gem" })
+end
+
+@test(
+    "your searches: an answer in parts (an update before any result, then results added) is kept; one all there and empty isn't"
+)
+local function historyInParts()
+    -- (none were kept in game, 0.9.0: the first update had no results yet)
+    open()
+    search("blade")
+    local found = AH.GetBrowseResults()
+    M:ForgetSearch("blade")
+    expect(kept()).toEqual({})
+    local results: unknown = {}
+    local full = false
+    mock.stub(AH, "SendBrowseQuery", function() end)
+    mock.stub(AH, "GetBrowseResults", function(): unknown
+        return results
+    end)
+    mock.stub(AH, "HasFullBrowseResults", function(): boolean
+        return full
+    end)
+    search("blade")
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    expect(kept()).toEqual({})
+    expect(M.historyPending).toBe("blade")
+    results = found
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", found)
+    expect(kept()).toEqual({ "blade" })
+    expect(M:History()[1].item).toBe(BLADE)
+    -- the house's answer all there and empty: dropped
+    results = {}
+    search("zzz")
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    expect(M.historyPending).toBe("zzz")
+    full = true
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+    expect(M.historyPending).toBeNil()
+    results = found
+    mock.fireEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", found)
+    expect(kept()).toEqual({ "blade" })
 end
 
 @test("your searches are this character's: in its own data; another's are its own")
