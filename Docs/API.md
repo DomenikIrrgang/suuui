@@ -306,7 +306,7 @@ All on `SuuUI.UI`. Colours and sizes are token names (`"ink"`, `"icon-lg"`) or p
 
 | | |
 |---|---|
-| `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only |
+| `Panel(parent, { title, meta, closable, onClose, keybind, anchor, ornament, solid, shadow, plain, width, height, name })` | The one container. Put content in `panel.body`; without a fixed size the panel fits its body. `anchor` is for the player frame, minimap and dock only. `plain` leaves the theme's `surface-pattern` off its ground (SuuUI's bags and character window) |
 | `SectionHeader(parent, label, meta, width)` | A label on the world with a fading gilt rule; `:SetLabel(label, meta)` |
 | `MoneyInput(parent, { value, onChange })` (0.17) | An amount as gold, silver and copper fields with their coin letters: `:GetCopper()`, `:SetCopper(copper)`, `:Clear()`, `:SetDisabled(disabled)`; `onChange(copper)` as it's typed |
 | `LoadingMark(parent, { size, wings })` (0.17) | The SuuUI emblem for long waits: the gilt-framed diamond with its cyan gem, gilt wing lines ending in small diamonds (4 × `size` wide, 1.2 × `size` tall; `wings = false`: the mark alone, `size` square; `size` default 60). `:Start()` shows it, assembles it (0.6 s) and lights the gem's facets in turn every 1.6 s until `:Stop()` hides it. Still with `ui.reducedMotion`. Not for waits under a second |
