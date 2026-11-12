@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Auction house: your recent searches are kept again; none showed under the search box.
+
 ## 0.9.0 (2026-11-12)
 
 ### New
