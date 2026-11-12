@@ -1067,6 +1067,8 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
     durabilityState: string? = nil
     talentPointsShown: string? = nil
     legacyPointsShown: number? = nil
+    -- conditions' notes closed with their x: away while the condition holds
+    readonly closedConditions: { [string]: boolean } = {}
     -- friends coming and going, waiting to share a card, by kind and way
     presence: { [string]: Arrivals }? = nil
     presenceCount: number = 0
@@ -1115,8 +1117,12 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         elseif d.duration and remaining then
             self.endsAt[id] = GetTime() + remaining
         end
-        d.onClose = function()
+        local given = d.onClose
+        d.onClose = function(card: Notification)
             self:Dismiss(id)
+            if given then
+                given(card)
+            end
         end
         -- the same id again: replaced in place
         if not self.notes[id] then
@@ -1140,6 +1146,27 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
             end
         end
         self:Rebuild()
+    end
+
+    -- A condition's note (up while the condition holds: gear to repair, full
+    -- bags, points to spend), or nil when it no longer holds. Closed with its
+    -- x, it stays away until the condition clears (asked 2026-11-12).
+    function ShowCondition(id: string, def: NotificationData?)
+        if not def then
+            self.closedConditions[id] = nil
+            if self.notes[id] then
+                self:Dismiss(id)
+            end
+            return
+        end
+        if self.closedConditions[id] then
+            return
+        end
+        def.id = id
+        def.onClose = function()
+            self.closedConditions[id] = true
+        end
+        self:Notify(def)
     end
 
     function DismissAll()
@@ -1188,8 +1215,7 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         end
         self.durabilityState = key
         if state == "broken" then
-            self:Notify({
-                id = "suu:durability",
+            self:ShowCondition("suu:durability", {
                 kind = "until",
                 tone = "danger",
                 category = "Durability",
@@ -1200,8 +1226,7 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 actions = actions,
             })
         elseif state == "damaged" then
-            self:Notify({
-                id = "suu:durability",
+            self:ShowCondition("suu:durability", {
                 kind = "until",
                 tone = "warning",
                 category = "Durability",
@@ -1211,16 +1236,15 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 ["until"] = "Goes when you repair",
                 actions = actions,
             })
-        elseif self.notes["suu:durability"] then
-            self:Dismiss("suu:durability")
+        else
+            self:ShowCondition("suu:durability", nil)
         end
     end
 
     function CheckBags()
         if self:Get("bagsFull") and freeSlots() == 0 then
             if not self.notes["suu:bags"] then
-                self:Notify({
-                    id = "suu:bags",
+                self:ShowCondition("suu:bags", {
                     kind = "until",
                     tone = "warning",
                     category = "Bags",
@@ -1229,8 +1253,8 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                     ["until"] = "Goes when you free a slot",
                 })
             end
-        elseif self.notes["suu:bags"] then
-            self:Dismiss("suu:bags")
+        else
+            self:ShowCondition("suu:bags", nil)
         end
     end
 
@@ -1269,8 +1293,7 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                     icon = { texture = nextTalent.icon }
                 end
             end
-            self:Notify({
-                id = "suu:talents",
+            self:ShowCondition("suu:talents", {
                 kind = "until",
                 tone = "info",
                 category = "Talents",
@@ -1280,8 +1303,8 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 ["until"] = n == 1 and "Goes when you spend it" or "Goes when you spend them",
                 actions = actions,
             })
-        elseif self.notes["suu:talents"] then
-            self:Dismiss("suu:talents")
+        else
+            self:ShowCondition("suu:talents", nil)
         end
     end
 
@@ -1292,8 +1315,7 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
         end
         self.legacyPointsShown = n
         if n > 0 then
-            self:Notify({
-                id = "suu:legacy",
+            self:ShowCondition("suu:legacy", {
                 kind = "until",
                 tone = "info",
                 category = "Legacy",
@@ -1302,8 +1324,8 @@ class NotificationsModule extends Module<typeof(DEFAULTS)>
                 ["until"] = "Goes when you spend them",
                 actions = { { label = "Open Legacy", variant = "primary", onClick = openLegacy } },
             })
-        elseif self.notes["suu:legacy"] then
-            self:Dismiss("suu:legacy")
+        else
+            self:ShowCondition("suu:legacy", nil)
         end
     end
 

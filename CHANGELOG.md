@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Every notification has an x to close it, except the game's requests you answer on the card (invites, resurrection, summons...). Closing a reminder (gear to repair, full bags, points to spend) keeps it away until it clears and comes back.
+
 ## 0.9.0 (2026-11-12)
 
 ### New
