@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Auction house: Buy now on a stackable item (ore, herbs) sometimes did nothing after you had chosen a piece of gear and gone back before its purchase finished, or without buying it. Buy now works again.
 - Vendors: items above your level (shown in red) can be bought again, as in the game's own vendor window.
 
 ## 0.8.0 (2026-11-12)

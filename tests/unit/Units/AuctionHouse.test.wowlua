@@ -22,8 +22,9 @@ import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import internal M, SECTION, TableRow, AuctionTable, ResultRow, OfferRow, AuctionRow, SellRow, CatButton, BuyPage, SellPage, AuctionsPage, Category from "/Units/AuctionHouse"
 import internal M as Bags from "/Units/Bags"
 import internal M as Professions from "/Units/Professions"
+import internal M as Welcome from "/Units/Welcome"
 import AUCTION_HOUSE from "/Core/ServiceKeys"
-import type ConfirmOptions, WindowFrame from "/UI/Panel"
+import type ConfirmOptions, ConfirmDialog, WindowFrame from "/UI/Panel"
 import type SuuButton from "/UI/Controls"
 import type TextField, MoneyInput from "/UI/Inputs"
 import * as frames from "wowlua:frames"
@@ -33,6 +34,7 @@ import tryMethod from "wowlua:errors"
 
 local UI = SuuUI.UI
 local AH = C_AuctionHouse
+local realConfirm = UI.Confirm -- (stubbed in every test; the real one where a test needs its clicks)
 
 local ORE, BLADE, RING, CHARM, BAUBLE, GEM = 990201, 990202, 990203, 990204, 990205, 990206
 mock.defineItem(ORE, { name = "Test Ore", quality = 1, stackCount = 200, classID = 7, icon = 134400 })
@@ -1189,6 +1191,292 @@ local function secureBuyout()
     mock.click(buyOver.button)
     expect(StaticPopup_Visible("BUYOUT_AUCTION")).toBeTruthy()
     StaticPopup_Hide("BUYOUT_AUCTION")
+end
+
+-- Buying one after another, as in game: single auctions through the game's
+-- page and popup, commodities through SuuUI's Buy now, mixed (reported
+-- 2026-11-12: after three, the fourth's buy button did nothing).
+local HELM, BOOTS = 990210, 990211
+mock.defineItem(HELM, { name = "Test Helm", quality = 2, stackCount = 1, classID = 4, icon = 133071 })
+mock.defineItem(BOOTS, { name = "Test Boots", quality = 2, stackCount = 1, classID = 4, icon = 132539 })
+
+-- The house with more single auctions: the helm, the boots, the bauble.
+local function shop(): House
+    local h = house()
+    for _, id in ipairs({ HELM, BOOTS, BAUBLE }) do
+        h.browse[#h.browse + 1] = { itemKey = key(id), minPrice = 4000, totalQuantity = 2, containsOwnerItem = false }
+        h.items[id] = {
+            {
+                auctionID = id * 10 + 1,
+                itemKey = key(id),
+                quantity = 1,
+                buyoutAmount = 4000,
+                timeLeft = 3,
+                owners = {},
+            },
+            {
+                auctionID = id * 10 + 2,
+                itemKey = key(id),
+                quantity = 1,
+                buyoutAmount = 5000,
+                timeLeft = 3,
+                owners = {},
+            },
+        }
+    end
+    return h
+end
+
+-- The frame a click at the mouse lands on, as the client picks it: the
+-- shown, mouse-enabled frame under it in the highest strata, then level.
+local STRATA: { [string]: number } = {
+    BACKGROUND = 1,
+    LOW = 2,
+    MEDIUM = 3,
+    HIGH = 4,
+    DIALOG = 5,
+    FULLSCREEN = 6,
+    FULLSCREEN_DIALOG = 7,
+    TOOLTIP = 8,
+}
+local function underMouse(): Frame?
+    local top: Frame? = nil
+    local topRank = -1
+    for _, r in ipairs(mock.frames()) do
+        local f = frames.asFrame(r)
+        if f and f:IsVisible() and f:IsMouseEnabled() and f:IsMouseOver() and (f:GetEffectiveAlpha() or 0) > 0 then
+            local rank = (STRATA[f:GetFrameStrata()] or 0) * 100000 + f:GetFrameLevel()
+            if rank >= topRank then
+                top, topRank = f, rank
+            end
+        end
+    end
+    return top
+end
+
+local function within(f: Frame?, b: Frame): boolean
+    while f do
+        if f == b then
+            return true
+        end
+        f = f:GetParent()
+    end
+    return false
+end
+
+-- A click as it lands in game: on the frame under the mouse over `b` (a
+-- secure click laid over it, a popup, a shade), which it says: the kind of
+-- SuuUI's secure click, "self" for `b` itself, else the frame's name.
+local function press(b: Frame): string
+    mock.hover(b)
+    local top = underMouse() or b
+    mock.click(top)
+    for kind, over in pairs(M.overs) do
+        if over.button == top then
+            return kind
+        end
+    end
+    if within(top, b) then
+        return "self"
+    end
+    return tostring(tryMethod(top, "GetDebugName")) .. " (" .. top:GetFrameStrata() .. " " .. top:GetFrameLevel() .. ")"
+end
+
+-- SuuUI's secure clicks shown now, by kind.
+local function shownOvers(): string[]
+    local out: string[] = {}
+    for kind, over in pairs(M.overs) do
+        if over.button:IsShown() then
+            out[#out + 1] = kind
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- A single auction bought: its result, its auction, Buy out, the game's
+-- popup accepted, the house's answer; then Back (`early`: at once, before
+-- the house answers). What went wrong, if anything.
+local function buySingle(h: House, id: number, name: string, early: boolean?): string?
+    local landed = press(resultNamed(name))
+    if landed ~= "result" then
+        return name .. ": its result's click landed on " .. landed
+    end
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    if not M:GameOnItem() then
+        return name .. ": the game's page isn't on it"
+    end
+    local list = assert(h.items[id])
+    local auction = assert(list[1])
+    local row: OfferRow? = nil
+    for i, r in ipairs(offers()) do
+        if M.auctions[i] and M.auctions[i].auctionID == auction.auctionID then
+            row = r
+        end
+    end
+    landed = press(assert(row, "no row for the auction"))
+    if landed ~= "auction" then
+        return name .. ": its auction's click landed on " .. landed
+    end
+    landed = press(buy().itemView.buyout)
+    if landed ~= "buyout" then
+        return name .. ": Buy out landed on " .. landed .. " (note: " .. note() .. ")"
+    end
+    local dialog = frames.asFrame(StaticPopup_FindVisible("BUYOUT_AUCTION"))
+    if not dialog then
+        return name .. ": Buy out showed no popup (note: " .. note() .. ")"
+    end
+    local placed: number? = nil
+    mock.stub(AH, "PlaceBid", function(auctionID: number)
+        placed = auctionID
+    end)
+    local accept = assert(frames.asButton(tryMethod(dialog, "GetButton1")), "no Accept")
+    landed = press(accept)
+    if landed ~= "self" or placed ~= auction.auctionID then
+        return name .. ": the popup's Accept landed on " .. landed .. ", placed no bid"
+    end
+    -- (Back pressed at once, before the house answers)
+    if early then
+        press(buy().itemView.back)
+    end
+    -- the house: the auction gone, the purchase done, the money paid
+    table.remove(list, 1)
+    mock.advanceTime(0.7)
+    mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", auction.auctionID)
+    mock.player:setMoney(GetMoney() - (auction.buyoutAmount or 0))
+    mock.advanceTime(1)
+    if StaticPopup_Visible("BUYOUT_AUCTION") then
+        return name .. ": the popup stayed"
+    end
+    if not early then
+        press(buy().itemView.back)
+        mock.advanceTime(1)
+    end
+    return M.view ~= "browse" and (name .. ": Back stayed on " .. M.view) or nil
+end
+
+-- A commodity bought: its result, a quantity, Buy now, SuuUI's own
+-- question answered; then Back.
+local function buyStack(name: string, qty: number): string?
+    local landed = press(resultNamed(name))
+    if landed ~= "self" then
+        return name .. ": its result's click landed on " .. landed
+    end
+    mock.advanceTime(1)
+    if M.view ~= "commodity" then
+        return name .. ": opened as " .. M.view
+    end
+    typeInto(buy().itemView.qty, tostring(qty))
+    local dialog: ConfirmDialog? = nil
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): ConfirmDialog
+        confirmed = opts
+        local d = realConfirm(opts)
+        dialog = d
+        return d
+    end)
+    landed = press(buy().itemView.buyNow)
+    if landed ~= "self" then
+        return name .. ": Buy now landed on " .. landed
+    end
+    mock.advanceTime(1)
+    local d = dialog
+    if not d then
+        return name .. ": Buy now asked nothing (note: " .. note() .. ")"
+    end
+    mock.advanceTime(0.5)
+    landed = press(d.ok)
+    if landed ~= "self" then
+        return name .. ": the question's Buy landed on " .. landed
+    end
+    mock.advanceTime(2)
+    if note() ~= "Bought." then
+        return name .. ": " .. note()
+    end
+    press(buy().itemView.back)
+    mock.advanceTime(1)
+    return M.view ~= "browse" and (name .. ": Back stayed on " .. M.view) or nil
+end
+
+@test("five single auctions bought in a row through the game's page and popup")
+local function fiveSingles()
+    Welcome:Close() -- (first login's welcome: closed in game long ago)
+    local h = shop()
+    open(h)
+    search("test")
+    expect(buySingle(h, HELM, "Test Helm")).toBeNil()
+    expect(buySingle(h, BOOTS, "Test Boots")).toBeNil()
+    expect(buySingle(h, BAUBLE, "Test Bauble")).toBeNil()
+    expect(buySingle(h, HELM, "Test Helm")).toBeNil()
+    expect(buySingle(h, BOOTS, "Test Boots")).toBeNil()
+    expectNoErrors()
+end
+
+@test("single auctions and commodities mixed: a fourth of each still buys")
+local function mixedBuys()
+    Welcome:Close()
+    local h = shop()
+    open(h)
+    search("test")
+    expect(buySingle(h, HELM, "Test Helm")).toBeNil()
+    expect(buyStack("Test Ore", 5)).toBeNil()
+    expect(buySingle(h, BOOTS, "Test Boots")).toBeNil()
+    expect(buyStack("Test Gem", 2)).toBeNil()
+    expect(buySingle(h, BAUBLE, "Test Bauble")).toBeNil()
+    expect(buyStack("Test Ore", 5)).toBeNil()
+    expect(buySingle(h, HELM, "Test Helm")).toBeNil()
+    expect(buyStack("Test Gem", 2)).toBeNil()
+    expectNoErrors()
+end
+
+-- Reported 2026-11-12: after three purchases, the fourth's buy button did
+-- nothing. An item left with an auction chosen kept its secure click over
+-- Buy out, and a commodity's Buy now sits in the same place: its click went
+-- to the game's hidden Buyout.
+@test("left with an auction chosen (Back before the house answered, or not bought): a commodity's Buy now still asks")
+local function staleBuyout()
+    Welcome:Close()
+    local h = shop()
+    open(h)
+    search("test")
+    expect(buySingle(h, HELM, "Test Helm")).toBeNil()
+    expect(buyStack("Test Ore", 5)).toBeNil()
+    -- Back pressed while the house still works on the purchase
+    expect(buySingle(h, BOOTS, "Test Boots", true)).toBeNil()
+    expect(buyStack("Test Gem", 2)).toBeNil()
+    expect(shownOvers()).toEqual({})
+    -- an auction chosen, not bought, Back
+    press(resultNamed("Test Bauble"))
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    expect(press(offers()[1])).toBe("auction")
+    expect(assert(M.overs.buyout).button).toBeShown()
+    press(buy().itemView.back)
+    mock.advanceTime(1)
+    expect(assert(M.overs.buyout).button).never.toBeShown()
+    expect(assert(M.overs.back).button).never.toBeShown()
+    expect(buyStack("Test Ore", 5)).toBeNil()
+    -- and the item after it still through the game's page
+    expect(buySingle(h, BAUBLE, "Test Bauble")).toBeNil()
+    expectNoErrors()
+end
+
+-- Another tab: none of Buy's secure clicks over it.
+@test("Buy's secure clicks let go on another tab")
+local function oversOnOtherTab()
+    Welcome:Close()
+    local h = shop()
+    open(h)
+    search("test")
+    press(resultNamed("Test Helm"))
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    press(offers()[1])
+    expect(assert(M.overs.buyout).button).toBeShown()
+    win():SetTab("sell")
+    mock.advanceTime(0.1)
+    expect(shownOvers()).toEqual({})
+    expectNoErrors()
 end
 
 @test("the item's slot shows its tooltip: the game's item key tooltip, or the item's")
