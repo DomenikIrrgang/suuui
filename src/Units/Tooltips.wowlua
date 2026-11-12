@@ -49,6 +49,56 @@ local DEFAULTS = {
 
 local M: TooltipsModule
 
+-- The published anchors of what sits by SuuUI's tooltip place, which a
+-- tooltip opening there keeps clear of (asked 2026-11-12: under Pink Cat's
+-- roomier rows the damage meter grew over the place and the tooltip covered
+-- its header): the meters, wherever they are and however tall they are now.
+local CLEAR_OF: string[] = { "damageMeter", "threatMeter" }
+
+-- A region's left, right, bottom and top in screen pixels (nil: not laid out).
+local function screenRect(r: Frame): (number?, number?, number?, number?)
+    local l, rt, b, t = r:GetLeft(), r:GetRight(), r:GetBottom(), r:GetTop()
+    if not (l and rt and b and t) then
+        return nil
+    end
+    local s = r:GetEffectiveScale()
+    return l * s, rt * s, b * s, t * s
+end
+
+-- How far up, in screen pixels, a tooltip opening at `place`'s bottom right
+-- goes so it covers none of CLEAR_OF's shown frames (0: none in the way).
+-- It spans its place or its own size, whichever is bigger; each frame in the
+-- way lifts it to space-4 over that frame's top, and the lifted tooltip is
+-- checked again (one meter over the other).
+local function clearance(tooltip: GameTooltip, place: Frame): number
+    local _, right, bottom = screenRect(place)
+    if not (right and bottom) then
+        return 0
+    end
+    local ps, ts = place:GetEffectiveScale(), tooltip:GetEffectiveScale()
+    local w = math.max(place:GetWidth() * ps, (tooltip:GetWidth() or 0) * ts)
+    local h = math.max(place:GetHeight() * ps, (tooltip:GetHeight() or 0) * ts)
+    local gap = T.space["space-4"] * ps
+    local left, y = right - w, bottom
+    for _ = 1, #CLEAR_OF do
+        local moved = false
+        for _, anchorName in ipairs(CLEAR_OF) do
+            local f = SuuUI.GetAnchor(anchorName)
+            if f and f:IsVisible() then
+                local fl, fr, fb, ft = screenRect(f)
+                if fl and fr and fb and ft and fl < right and fr > left and fb < y + h and ft + gap > y then
+                    y = ft + gap
+                    moved = true
+                end
+            end
+        end
+        if not moved then
+            break
+        end
+    end
+    return y - bottom
+end
+
 local TOOLTIPS: string[] = {
     "GameTooltip",
     "ShoppingTooltip1",
@@ -337,7 +387,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.barSkinned = true
-        UI.SkinBar(bar, "bar")
+        -- (the game's bar: the plain fill where the theme repeats its art)
+        UI.SkinBar(bar, "bar", true)
         bar:SetHeight(4)
         local track = bar:CreateTexture(nil, "BACKGROUND")
         UI.PaintFill(track, "surface-sunk")
@@ -677,7 +728,8 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         if bags and bags:IsVisible() then
             tooltip:SetPoint("BOTTOMRIGHT", bags, "TOPRIGHT", 0, T.space["space-4"])
         else
-            tooltip:SetPoint("BOTTOMRIGHT", anchor, "BOTTOMRIGHT")
+            local lift = clearance(tooltip, anchor)
+            tooltip:SetPoint("BOTTOMRIGHT", anchor, "BOTTOMRIGHT", 0, lift / tooltip:GetEffectiveScale())
         end
     end
 

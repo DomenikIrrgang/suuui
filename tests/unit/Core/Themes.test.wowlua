@@ -16,6 +16,7 @@ import * as inputs from "/UI/Inputs"
 import * as stage from "/UI/Stage"
 import * as legacy from "/UI/Legacy"
 import * as layout from "/UI/Layout"
+import * as panel from "/UI/Panel"
 import expectNoErrors, newParent, layoutThemes, COMPACT, ROOMY from "../../helpers"
 
 const OWNER = "ThemesTest"
@@ -318,6 +319,79 @@ local function textures()
     expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(white)
     use(nil)
     expect(T.texture["health-bar"]).toBe(white)
+    expectNoErrors()
+end
+
+@test("a bar's art that repeats (0.39): { file, height } on the bar tokens only; applied live, stretched again after")
+local function repeatingBars()
+    local BEANS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Themes\\PinkCat\\BeanBar.tga"
+    expect(function()
+        themes.register({ id = "test-rep-bad", textures = { absorb = { file = BEANS, height = 16 } } })
+    end).toThrow("SuuUI.RegisterTheme: test-rep-bad's texture absorb is a file path (only a bar's fill repeats)")
+    for _, wrong in ipairs({ { file = BEANS }, { file = "", height = 16 }, { file = BEANS, height = 0 } }) do
+        expect(function()
+            local given: unknown = { bar = wrong }
+            themes.register({ id = "test-rep-bad", textures = given :: themes.ThemeTextures })
+        end).toThrow("SuuUI.RegisterTheme: test-rep-bad's texture bar is { file = path, height = px }")
+    end
+    expect(themes.get("test-rep-bad")).toBeNil()
+    themes.register({ id = "test-rep", textures = { bar = { file = BEANS, height = 16 } } })
+    local f = newParent()
+    local b = barModule.statusBar(f, { width = 300, height = 10, border = false })
+    b:SetPoint("CENTER")
+    local fill = b.bar:GetStatusBarTexture()
+    use("test-rep")
+    expect(T.texture.bar).toBe(BEANS)
+    local over = assert(draw.repeatOf(b.bar))
+    expect(over:GetTextureFilePath()).toBe(BEANS)
+    expect(over:GetScale()).toBeCloseTo(10 / 16)
+    expect(fill:GetAlpha()).toBe(0)
+    use(nil)
+    expect(draw.repeatOf(b.bar)).toBeNil()
+    expect(fill:GetAlpha()).toBe(1)
+    expect(fill:GetTextureFilePath()).toBe(T.texture.bar)
+    expectNoErrors()
+end
+
+@test("a theme's window textures (0.39): validated like the others, set live on a panel, SuuUI's look back after")
+local function windowTextures()
+    local CAT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Themes\\PinkCat\\"
+    -- an empty file is SuuUI's own: a theme can't give one
+    expect(function()
+        themes.register({ id = "test-win-bad", textures = { ["surface-pattern"] = "" } })
+    end).toThrow("SuuUI.RegisterTheme: test-win-bad's texture surface-pattern needs a file path")
+    themes.register({
+        id = "test-windows",
+        textures = {
+            ["surface-pattern"] = CAT .. "SurfacePattern.tga",
+            ["border"] = CAT .. "Stitch.tga",
+            ["corner"] = CAT .. "CornerPaw.tga",
+            ["jewel"] = CAT .. "Heart.tga",
+            ["divider"] = CAT .. "Divider.tga",
+        },
+    })
+    local p = panel.panel(UIParent, { title = "Test", ornament = true, width = 200, height = 100 })
+    -- a plain panel (the bags, the character window: asked 2026-11-12) keeps
+    -- its ground without the pattern, its other textures themed
+    local plain = panel.panel(UIParent, { title = "Plain", plain = true, width = 200, height = 100 })
+    expect(draw.patternOf(p.bg)).toBeNil()
+    expect(p.border.top:GetTextureFilePath()).toBeNil()
+    use("test-windows")
+    expect(assert(draw.patternOf(p.bg)):GetTextureFilePath()).toBe(CAT .. "SurfacePattern.tga")
+    expect(draw.patternOf(plain.bg)).toBeNil()
+    expect(plain.border.top:GetTextureFilePath()).toBe(CAT .. "Stitch.tga")
+    plain:Hide()
+    expect(p.border.top:GetTextureFilePath()).toBe(CAT .. "Stitch.tga")
+    expect(assert(p.ornTL):GetTextureFilePath()).toBe(CAT .. "CornerPaw.tga")
+    expect(assert(p.jewel):GetTextureFilePath()).toBe(CAT .. "Heart.tga")
+    expect(#assert(draw.dividerStrips(assert(p.divider)))).toBe(2)
+    use(nil)
+    expect(draw.patternOf(p.bg)).toBeNil()
+    expect(p.border.top:GetTextureFilePath()).toBeNil()
+    expect(assert(p.ornTL):GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(assert(p.ornTL):GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(draw.dividerStrips(assert(p.divider))).toBeNil()
+    p:Hide()
     expectNoErrors()
 end
 

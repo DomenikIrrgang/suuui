@@ -122,6 +122,40 @@ TEXTURES = [
      "The reset arrow after a changed setting (the game's), desaturated, in ink-muted."),
     ("setting-lock", "Interface\\LFGFrame\\UI-LFG-ICON-LOCK",
      "The lock on a setting that can't be changed now (the game's), desaturated, in ink-muted."),
+    # (asked 2026-11-12: themes texture the windows too, not only the bars.
+    # An empty file is SuuUI's own look, where nothing is drawn: no pattern,
+    # the plain hairline, the unit frames' bar file)
+    ("surface-pattern", "",
+     "A pattern over the ground of windows and panels (every panel and window, the settings window, bags, chat, "
+     "tooltips, notifications, menus, the meters): tiled at its own size over the surface fill, in gilt. White art "
+     "whose alpha says how strong it shows; text must stay readable over its brightest pixels. Empty (SuuUI's): the "
+     "plain fill, nothing drawn."),
+    ("track-pattern", "",
+     "A pattern over the sunk ground behind bars (unit frames, nameplates, cast bars, status bars' tracks): tiled at "
+     "its own size, in gilt, like surface-pattern. Empty (SuuUI's): the plain ground."),
+    ("border", WHITE,
+     "The edge line of panels, windows and tooltips (one physical pixel, in gilt-line): tiled along the line at its "
+     "own size, so a theme's art draws a dotted or stitched edge from its first row and column; white, coloured by the "
+     "edge's token. SuuUI's: a solid line."),
+    ("corner", WHITE,
+     "The ornament on the corners of panels, windows, tooltips and anchor frames, in gilt. SuuUI's: the white square "
+     "turned 45 degrees (the diamond); a theme's file is drawn upright, twice the diamond's side."),
+    ("jewel", WHITE,
+     "The jewel on dividers (a panel's head, the loot roll tray) and under the chosen tab, in gilt. SuuUI's: the "
+     "diamond; a theme's file is drawn upright, twice the diamond's side."),
+    ("mark", WHITE,
+     "Small diamond marks in their own colours: a toggle's knob, a slider's thumb (three nested), the class mark before "
+     "a unit's name, a changed setting's dot, a chosen option, the tracker's bullets. SuuUI's: the diamond; a theme's "
+     "file is drawn upright, twice the diamond's side (a mark that shows its colour well: white, filled)."),
+    ("divider", "",
+     "The divider under a panel's head and after a section header's label: tiled along the line at its own size, "
+     "8 px tall (art N x 8), in gilt-line, fading at the ends as the hairline does. Empty (SuuUI's): the 1px "
+     "hairline."),
+    ("plate-health-bar", "",
+     "The nameplates' health fill (thinner than a unit frame's: a theme's art for a thin bar), stretched, coloured "
+     "like health-bar. Empty (SuuUI's): health-bar's file."),
+    ("plate-cast-bar", "",
+     "The nameplates' cast fill, stretched, coloured like cast-bar. Empty (SuuUI's): cast-bar's file."),
 ]
 
 # SuuUI's glyphs (asked 2026-11-12: a theme replaces any icon by its name):

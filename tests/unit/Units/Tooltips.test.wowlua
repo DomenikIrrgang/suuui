@@ -270,6 +270,55 @@ local function anchor()
     expect(rel3 ~= M.anchorFrame).toBe(true)
 end
 
+-- A frame's bottom or top on the screen.
+local function screenY(f: Frame, edge: "bottom" | "top"): number
+    local y = edge == "bottom" and f:GetBottom() or f:GetTop()
+    return assert(y) * f:GetEffectiveScale()
+end
+
+@test(
+    "SuuUI's place keeps a tooltip clear of the meters, however tall they are (Pink Cat's roomier rows grew them over it)"
+)
+local function clearOfMeters()
+    local place = assert(M.anchorFrame)
+    local meter = assert(SuuUI.GetAnchor("damageMeter"))
+    expect(meter:IsVisible()).toBe(true)
+    expect(SuuUI.GetAnchor("threatMeter")).never.toBeNil()
+    -- (the mover places it by one point)
+    expect(place:GetNumPoints()).toBe(1)
+    local point, relTo, relPoint, x, y = place:GetPoint(1)
+    -- the place where the meter's header is (as when its rows grew)
+    place:ClearAllPoints()
+    place:SetPoint("BOTTOMRIGHT", meter, "TOPRIGHT", 0, -20)
+    defaultAnchor()
+    local gap = T.space["space-4"] * place:GetEffectiveScale()
+    expect(screenY(GameTooltip, "bottom")).toBeCloseTo(screenY(meter, "top") + gap, 1)
+    local _, rel = GameTooltip:GetPoint(1)
+    expect(rel).toBe(place)
+    -- the meter hidden: the place itself
+    -- the threat meter beside it is in the way of a wide tooltip too
+    local threat = assert(SuuUI.GetAnchor("threatMeter"))
+    meter:Hide()
+    if threat:IsVisible() then
+        defaultAnchor()
+        expect(screenY(GameTooltip, "bottom")).toBeCloseTo(screenY(threat, "top") + gap, 1)
+    end
+    -- both hidden: the place itself
+    local threatShown = threat:IsShown()
+    threat:Hide()
+    defaultAnchor()
+    expect(screenY(GameTooltip, "bottom")).toBeCloseTo(screenY(place, "bottom"), 1)
+    meter:Show()
+    threat:SetShown(threatShown)
+    -- a place clear of the meters (to their left): not moved
+    place:ClearAllPoints()
+    place:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMLEFT", 300, 100)
+    defaultAnchor()
+    expect(screenY(GameTooltip, "bottom")).toBeCloseTo(screenY(place, "bottom"), 1)
+    place:ClearAllPoints()
+    place:SetPoint(point, relTo, relPoint, x, y)
+end
+
 @test("an addon's own tooltip skinned the first time it shows the game's data; an embedded one keeps its host's")
 local function skinAny()
     local tip = CreateFrame("GameTooltip", "SuuUITestTooltip", UIParent, "GameTooltipTemplate")

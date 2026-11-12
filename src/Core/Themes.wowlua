@@ -14,7 +14,15 @@
 --   textures = { [token] = file }             (0.35) a texture token's file
 --                                             (the bars' fill, the absorb
 --                                             hatch, the tapped stripes, the
---                                             glows, role icons…: T.texture)
+--                                             glows, role icons…: T.texture;
+--                                             0.39: the windows' patterns,
+--                                             edges, corners, jewels, marks,
+--                                             divider and the plates' bars)
+--              or [token] = { file, height }  (0.39) a bar's art repeated along
+--                                             the bar, each copy scaled to the
+--                                             bar's height (height: the art's
+--                                             own, in px), not stretched: the
+--                                             bar tokens only (BAR_TOKENS)
 --   glyphs = { [name] = file }                (0.37) an icon's file, by the
 --                                             glyph's name (T.glyph: "bag",
 --                                             "search", "chevronDown"…)
@@ -57,7 +65,9 @@ import * as secret from "wowlua:secret"
 
 export type ThemeColors = { [string]: number[] }
 export type ThemeFonts = { [string]: { file?: string, size?: number, lineHeight?: number } }
-export type ThemeTextures = { [string]: string }
+-- a bar's art that repeats along the bar: its file and its own height in px
+export type ThemeTile = { file: string, height: number }
+export type ThemeTextures = { [string]: string | ThemeTile }
 export type ThemeGlyphs = { [string]: string }
 export type ThemeNumbers = { [string]: number }
 export type ThemeRadii = { [string]: number | string }
@@ -96,6 +106,18 @@ local glyphs: { [string]: string } = T.glyph
 local spaces: { [string]: number } = T.space
 local sizes: { [string]: number } = T.size
 local radii: { [string]: number | string } = T.radius
+
+-- The texture tokens a theme can give as repeating art ({ file, height }):
+-- the bars' fills.
+export const BAR_TOKENS: { [string]: boolean } = {
+    ["health-bar"] = true,
+    ["power-bar"] = true,
+    ["cast-bar"] = true,
+    ["aura-drain"] = true,
+    ["bar"] = true,
+    ["plate-health-bar"] = true,
+    ["plate-cast-bar"] = true,
+}
 
 -- the design's own colours, text styles and textures, before any theme or
 -- colour vision (this file loads before the saved settings apply either)
@@ -320,7 +342,22 @@ export function register(value: unknown): Theme
             error(("SuuUI.RegisterTheme: %s has no texture token %q"):format(def.id, tostring(token)), 2)
         end
         local f: unknown = file
-        if type(f) ~= "string" or f == "" then
+        if type(f) == "table" then
+            if not BAR_TOKENS[token] then
+                error(
+                    ("SuuUI.RegisterTheme: %s's texture %s is a file path (only a bar's fill repeats)"):format(
+                        def.id,
+                        token
+                    ),
+                    2
+                )
+            end
+            local t = f :: { file: unknown, height: unknown }
+            local h = t.height
+            if type(t.file) ~= "string" or t.file == "" or type(h) ~= "number" or h ~= h or h <= 0 then
+                error(("SuuUI.RegisterTheme: %s's texture %s is { file = path, height = px }"):format(def.id, token), 2)
+            end
+        elseif type(f) ~= "string" or f == "" then
             error(("SuuUI.RegisterTheme: %s's texture %s needs a file path"):format(def.id, token), 2)
         end
     end
@@ -445,11 +482,18 @@ export function apply()
             s.lineHeight = f.lineHeight
         end
     end
+    local tiles: { [string]: number } = {}
     for token, file in pairs(theme.textures) do
         if textures[token] then
-            textures[token] = file
+            if type(file) == "table" then
+                textures[token] = file.file
+                tiles[token] = file.height
+            else
+                textures[token] = file
+            end
         end
     end
+    draw.setTiles(tiles)
     for name, file in pairs(theme.glyphs) do
         if glyphs[name] then
             glyphs[name] = file

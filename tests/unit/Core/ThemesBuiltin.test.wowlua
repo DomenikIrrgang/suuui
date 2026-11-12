@@ -4,10 +4,11 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import tokens as T, Color from "/Core/Tokens"
 import * as themes from "/Core/Themes"
-import type Theme, ThemeColors from "/Core/Themes"
+import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
-import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A from "/Core/ThemesBuiltin"
-import expectNoErrors from "../../helpers"
+import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
+import * as draw from "/UI/Draw"
+import expectNoErrors, newParent from "../../helpers"
 
 const BUILT_IN: string[] = {
     "highcontrast",
@@ -21,6 +22,7 @@ const BUILT_IN: string[] = {
     "naxxramas",
     "karazhan",
     "sunwell",
+    "pinkcat",
 }
 const CLASSES: string[] = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
@@ -35,6 +37,14 @@ local function colorsOf(id: string, class: string?): ThemeColors
         return c(class)
     end
     return c
+end
+
+-- A theme texture's file (a repeating bar's too).
+local function fileOf(v: string | ThemeTile | nil): string?
+    if type(v) == "table" then
+        return v.file
+    end
+    return v
 end
 
 local function rgb(c: number[]?): number[]
@@ -224,5 +234,252 @@ local function applies()
         themes.apply()
         expect(themes.appliedTheme()).toBe(id)
     end
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Pink Cat
+--------------------------------------------------------------------------------
+
+-- A colour of Pink Cat's, or the design's where it keeps it.
+local function pinkcat(token: string): number[]
+    local own = colorsOf("pinkcat")[token]
+    if own then
+        return own
+    end
+    local c: Color = assert((T.color :: { [string]: Color })[token], token)
+    return { c[1], c[2], c[3], c[4] }
+end
+
+-- `top` over `ground` at top's own alpha.
+local function over(top: number[], ground: number[]): number[]
+    local a = top[4] or 1
+    return { top[1] * a + ground[1] * (1 - a), top[2] * a + ground[2] * (1 - a), top[3] * a + ground[3] * (1 - a) }
+end
+
+@test("Pink Cat: every glyph and texture it names is a file SuuUI ships")
+local function pinkcatFiles()
+    local t = theme("pinkcat")
+    local parent = newParent()
+    local tex = parent:CreateTexture()
+    local names: string[] = {}
+    for name, file in pairs(t.glyphs) do
+        names[#names + 1] = name
+        -- (a glyph SuuUI has, drawn from a file that exists: a missing one
+        -- reads back nil)
+        expect((T.glyph :: { [string]: string })[name]).toBeTruthy()
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    table.sort(names)
+    local want: string[] = {}
+    for _, name in ipairs(PINKCAT_GLYPHS) do
+        want[#want + 1] = name
+    end
+    table.sort(want)
+    expect(names).toEqual(want)
+    expect(#names).toBe(30)
+    local tokens: string[] = {}
+    for token, value in pairs(t.textures) do
+        tokens[#tokens + 1] = token
+        local file = assert(fileOf(value))
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    table.sort(tokens)
+    -- every texture token but geometry and the game's own signs
+    local kept: { [string]: boolean } = {}
+    for _, token in ipairs({ "glow", "raid-markers", "circle-fill", "circle-soft", "circle-band", "circle-edge",
+        "ring-arc-2", "ring-arc-3", "ring-arc-4" }) do
+        kept[token] = true
+    end
+    local all: string[] = {}
+    for token in pairs(T.texture :: { [string]: string }) do
+        if not kept[token] then
+            all[#all + 1] = token
+        end
+    end
+    table.sort(all)
+    expect(tokens).toEqual(all)
+    expectNoErrors()
+end
+
+@test("Pink Cat: text, fills and edges at the ratios the tokens' usage notes ask")
+@cases({
+    -- ink on every surface (≥14.7:1) and on the health fills (≥4.8:1)
+    { "ink", "surface", 14.7 },
+    { "ink", "surface-sunk", 14.7 },
+    { "ink", "surface-raised", 14.7 },
+    { "ink", "unit-fill", 4.8 },
+    { "ink", "unit-fill-low", 4.8 },
+    -- secondary text (6.8:1), titles (11.9:1)
+    { "ink-muted", "surface", 6.8 },
+    { "ink-muted", "surface-sunk", 6.8 },
+    { "gilt-text", "surface", 11.9 },
+    { "gilt-text", "surface-sunk", 11.9 },
+    -- the signal colours as text keep theirs on the new surfaces
+    { "arcane", "surface", 10.4 },
+    { "arcane", "surface-sunk", 10.4 },
+    { "amber", "surface", 10.4 },
+    { "ember-text", "surface", 8.5 },
+    { "ember-text", "surface-sunk", 8.5 },
+    -- fills against their ground
+    { "unit-fill", "surface-sunk", 3.05 },
+    { "fel-incoming", "surface-sunk", 3.25 }, -- (SuuUI's own: 3.29)
+    { "focus", "track", 4.2 },
+    { "progress-fill", "track", 3.9 },
+    { "mana", "track", 4.2 },
+    { "rage", "track", 3.36 },
+    { "energy", "track", 9.5 },
+    -- a panel's 1px edge keeps SuuUI's (2.18:1, 1.8:1)
+    { "gilt-line", "surface", 2.15 },
+    { "gilt-hairline", "surface", 1.78 },
+})
+local function pinkcatContrast(fg: string, bg: string, least: number)
+    local ground = pinkcat(bg)
+    local r = ratio(over(pinkcat(fg), ground), rgb(ground))
+    if r < least then
+        error(`{fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+    end
+end
+
+@test("Pink Cat: disabled text stays dimmer than secondary text, and readable")
+local function pinkcatFaint()
+    local r = ratio(rgb(pinkcat("ink-faint")), rgb(pinkcat("surface")))
+    expect(r >= 3.5 and r < 4.5).toBe(true)
+    expect(r < ratio(rgb(pinkcat("ink-muted")), rgb(pinkcat("surface")))).toBe(true)
+end
+
+-- The windows' pattern's strongest alpha (tools/pinkcat_art.py,
+-- PATTERN_ALPHA: the paws and hearts at most this, in gilt).
+const PATTERN_ALPHA = 0.16
+
+@test("Pink Cat: text stays readable over the brightest pixels of its windows' pattern")
+@cases({
+    { "ink", 7 },
+    { "gilt-text", 7 },
+    { "ink-muted", 4.5 },
+    { "ink-faint", 3 },
+})
+local function pinkcatPattern(fg: string, least: number)
+    -- the glass over the dark world, the pattern's gilt over that
+    for _, ground in ipairs({ "surface", "surface-glass" }) do
+        local g = over(pinkcat(ground), { 0, 0, 0 })
+        local gilt = pinkcat("gilt")
+        local brightest = over({ gilt[1], gilt[2], gilt[3], PATTERN_ALPHA }, g)
+        local r = ratio(rgb(pinkcat(fg)), brightest)
+        if r < least then
+            error(`{fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+        end
+    end
+end
+
+@test("Pink Cat: its glass hides what's behind it (the zone's name showed through)")
+local function pinkcatGlass()
+    expect(pinkcat("surface-glass")[4] >= 0.98).toBe(true)
+end
+
+@test("Pink Cat: the power colours stay apart (mana, rage, energy, focus)")
+local function pinkcatPower()
+    local names = { "mana", "rage", "energy", "focus" }
+    for i = 1, #names do
+        for j = i + 1, #names do
+            local a, b = pinkcat(names[i]), pinkcat(names[j])
+            local d = math.abs(hue(a[1], a[2], a[3]) - hue(b[1], b[2], b[3]))
+            -- at least 25° apart in OKLab hue
+            if math.min(d, 2 * math.pi - d) < math.rad(25) then
+                error(`{names[i]} and {names[j]} are too close`)
+            end
+        end
+    end
+    -- mana stays the blue one, rage the red one
+    local mana, rage = pinkcat("mana"), pinkcat("rage")
+    expect(mana[3] > mana[1] and mana[3] > mana[2]).toBe(true)
+    expect(rage[1] > rage[2] and rage[1] > rage[3]).toBe(true)
+end
+
+@test("Pink Cat: a little more room, within the design's ranges")
+local function pinkcatRoom()
+    local t = theme("pinkcat")
+    for token, px in pairs(t.space) do
+        local d = assert((T.space :: { [string]: number })[token])
+        expect(px >= d and px <= d * 1.2).toBe(true)
+    end
+    for token, px in pairs(t.sizes) do
+        local d = assert((T.size :: { [string]: number })[token])
+        expect(px >= d and px <= d * 1.2).toBe(true)
+    end
+end
+
+@test("Pink Cat applies, and switching back to SuuUI's restores every token and frame")
+local function pinkcatRoundTrip()
+    local before = {
+        ink = rgb(T.color.ink),
+        health = T.texture["health-bar"],
+        check = T.texture.check,
+        bag = T.glyph.bag,
+        flag = T.glyph.flag,
+        space = T.space["space-4"],
+        slot = T.size.slot,
+    }
+    local cat = theme("pinkcat")
+    local catBag, catHealth = assert(cat.glyphs.bag), assert(fileOf(cat.textures["health-bar"]))
+    local parent = newParent()
+    local icon = parent:CreateTexture()
+    draw.glyph(icon, "bag")
+    local bar = CreateFrame("StatusBar", nil, parent)
+    draw.skinBar(bar, "health-bar")
+    local plate = CreateFrame("StatusBar", nil, parent)
+    draw.skinBar(plate, "plate-health-bar")
+    -- (0.39) a window's ground, corner, jewel, mark and divider
+    local ground = draw.fill(parent, "surface-glass")
+    draw.pattern(ground, "surface-pattern")
+    local corner = draw.ornament(parent, 7, "corner")
+    local jewel = draw.ornament(parent, 6, "jewel")
+    local mark = draw.ornament(parent, 5, "mark", "ink")
+    local divider = draw.hairline(parent, "gilt-line", "both", "divider")
+    settings.setAccount("theme", "pinkcat")
+    themes.apply()
+    expect(themes.appliedTheme()).toBe("pinkcat")
+    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(fileOf(cat.textures["plate-health-bar"]))
+    expect(assert(draw.patternOf(ground)):GetTextureFilePath()).toBe(fileOf(cat.textures["surface-pattern"]))
+    expect(corner:GetTextureFilePath()).toBe(fileOf(cat.textures.corner))
+    expect(corner:GetRotation()).toBeCloseTo(0, 4)
+    expect(jewel:GetTextureFilePath()).toBe(fileOf(cat.textures.jewel))
+    expect(mark:GetTextureFilePath()).toBe(fileOf(cat.textures.mark))
+    expect(draw.dividerStrips(divider)).never.toBeNil()
+    close(rgb(T.color.ink), { 1, 0xF4 / 255, 0xE8 / 255 }, 6)
+    expect(T.glyph.bag).toBe(catBag)
+    expect(T.glyph.flag).toBe(before.flag)
+    expect(icon:GetTextureFilePath()).toBe(catBag)
+    expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(catHealth)
+    -- the bars' art repeats at their height (stretched, the beans were
+    -- long ovals: a player's report, 2026-11-12)
+    expect(assert(draw.repeatOf(bar)):GetTextureFilePath()).toBe(catHealth)
+    expect(draw.repeatOf(plate)).never.toBeNil()
+    for token in pairs(themes.BAR_TOKENS) do
+        expect(type(cat.textures[token])).toBe("table")
+    end
+    expect(T.space["space-4"]).toBe(9)
+    expect(T.size.slot).toBe(38)
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(themes.appliedTheme()).toBe(themes.DEFAULT)
+    close(rgb(T.color.ink), before.ink, 6)
+    expect(T.texture["health-bar"]).toBe(before.health)
+    expect(T.texture.check).toBe(before.check)
+    expect(T.glyph.bag).toBe(before.bag)
+    expect(icon:GetTextureFilePath()).toBe(before.bag)
+    expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
+    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
+    expect(draw.repeatOf(bar)).toBeNil()
+    expect(draw.repeatOf(plate)).toBeNil()
+    expect(draw.patternOf(ground)).toBeNil()
+    expect(corner:GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(corner:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(mark).toHaveSize(5, 5)
+    expect(draw.dividerStrips(divider)).toBeNil()
+    expect(T.space["space-4"]).toBe(before.space)
+    expect(T.size.slot).toBe(before.slot)
     expectNoErrors()
 end

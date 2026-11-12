@@ -12,6 +12,7 @@ import * as draw from "/UI/Draw"
 import * as tbl from "wowlua:table"
 import expectNoErrors, newParent from "../../helpers"
 import paintOf, tokenOf, colorIs, setToken, restoreTokens, pointOf from "./PrimitivesHelpers"
+import type KeptPaint from "./PrimitivesHelpers"
 
 local parent: Frame? = nil
 
@@ -651,6 +652,341 @@ local function glowSkin()
     expect(function()
         draw.softEdge(p, "sparkle")
     end).toThrow("unknown texture token sparkle")
+end
+
+--------------------------------------------------------------------------------
+-- Patterns, ornaments, dividers and textured edges (0.39): what a theme draws
+-- in the windows; nothing more than before in SuuUI's own look
+--------------------------------------------------------------------------------
+
+local CAT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Themes\\PinkCat\\"
+
+@test("a pattern: nothing while its token's file is empty; a theme's file tiled over the ground in gilt, shown with it")
+local function patterns()
+    local p = host()
+    local ground = draw.fill(p, "surface-sunk")
+    ground:SetAllPoints()
+    draw.pattern(ground, "track-pattern")
+    -- SuuUI's own look: no texture made
+    expect(T.texture["track-pattern"]).toBe("")
+    expect(draw.patternOf(ground)).toBeNil()
+    local before = #{ p:GetRegions() }
+    local back = swapFile("track-pattern", CAT .. "TrackPattern.tga")
+    local over = assert(draw.patternOf(ground))
+    expect(#{ p:GetRegions() }).toBe(before + 1)
+    expect(over:GetTextureFilePath()).toBe(CAT .. "TrackPattern.tga")
+    expect(over:GetHorizTile()).toBe(true)
+    expect(over:GetVertTile()).toBe(true)
+    expect(tokenOf(over)).toBe("gilt")
+    local layer, sub = over:GetDrawLayer()
+    expect(layer).toBe("BACKGROUND")
+    expect(sub).toBe(1)
+    expect((assert(pointOf(over))).relativeTo).toBe(ground)
+    -- in and out of sight with its ground
+    ground:Hide()
+    expect(over:IsShown()).toBe(false)
+    ground:SetShown(true)
+    expect(over:IsShown()).toBe(true)
+    -- back to SuuUI's: hidden, kept for the next theme (not made again)
+    back()
+    expect(draw.patternOf(ground)).toBeNil()
+    expect(over:IsShown()).toBe(false)
+    local again = swapFile("track-pattern", CAT .. "TrackPattern.tga")
+    expect(draw.patternOf(ground)).toBe(over)
+    again()
+    expect(function()
+        draw.pattern(ground, "sparkle")
+    end).toThrow("unknown texture token sparkle")
+end
+
+@test("a fill draws no pattern by itself; one given while the theme has a pattern gets it at once")
+local function surfacePatterns()
+    local p = host()
+    local glass = draw.fill(p, "surface-glass")
+    local back = swapFile("surface-pattern", CAT .. "SurfacePattern.tga")
+    expect(draw.patternOf(glass)).toBeNil()
+    local later = draw.fill(p, "surface")
+    draw.pattern(later, "surface-pattern")
+    expect(assert(draw.patternOf(later)):GetTextureFilePath()).toBe(CAT .. "SurfacePattern.tga")
+    back()
+    expect(draw.patternOf(later)).toBeNil()
+end
+
+@test("an ornament is SuuUI's diamond; a theme's file drawn upright at twice its side, and back")
+local function ornaments()
+    local p = host()
+    local corner = draw.ornament(p, 7, "corner", "gilt")
+    expect(corner:GetTextureFilePath()).toBe(T.texture.corner)
+    expect(corner).toHaveSize(7, 7)
+    expect(corner:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(tokenOf(corner)).toBe("gilt")
+    local back = swapFile("corner", CAT .. "CornerPaw.tga")
+    expect(corner:GetTextureFilePath()).toBe(CAT .. "CornerPaw.tga")
+    expect(corner).toHaveSize(7 * draw.ORNAMENT, 7 * draw.ORNAMENT)
+    expect(corner:GetRotation()).toBeCloseTo(0, 4)
+    -- its colour kept through the change
+    expect(tokenOf(corner)).toBe("gilt")
+    -- one made while the theme has its file: drawn from it at once
+    local mark = draw.ornament(p, 5, "corner", "ink")
+    expect(mark:GetTextureFilePath()).toBe(CAT .. "CornerPaw.tga")
+    expect(mark).toHaveSize(10, 10)
+    back()
+    expect(corner:GetTextureFilePath()).toBe(T.texture.corner)
+    expect(corner).toHaveSize(7, 7)
+    expect(corner:GetRotation()).toBeCloseTo(math.rad(45), 4)
+    expect(mark).toHaveSize(5, 5)
+    expect(function()
+        draw.ornament(p, 5, "sparkle")
+    end).toThrow("unknown texture token sparkle")
+end
+
+@test("a divider is the hairline until a theme sets its file: then strips 8 px tall, faded like the line")
+local function dividers()
+    local p = host()
+    local both = draw.hairline(p, "gilt-line", "both", "divider")
+    both:SetPoint("TOPLEFT")
+    both:SetPoint("TOPRIGHT")
+    local out = draw.hairline(p, "gilt-line", "out", "divider")
+    local solid = draw.hairline(p, "gilt-faint", nil, "divider")
+    local plain = draw.hairline(p, "gilt-line", "both")
+    expect(draw.dividerStrips(both)).toBeNil()
+    local regions = #{ both:GetRegions() }
+    local back = swapFile("divider", CAT .. "Divider.tga")
+    local strips = assert(draw.dividerStrips(both))
+    expect(#strips).toBe(2)
+    expect(#{ both:GetRegions() }).toBe(regions + 2)
+    expect(strips[1]:GetTextureFilePath()).toBe(CAT .. "Divider.tga")
+    expect(strips[1]:GetHeight()).toBe(8)
+    expect(strips[1]:GetHorizTile()).toBe(true)
+    expect(strips[1]:IsShown()).toBe(true)
+    -- faded at both ends, as the line is
+    local a, b = paintOf(strips[1]), paintOf(strips[2])
+    expect(a and a.kind).toBe("gradient")
+    expect({ a and a.alpha, a and a.alpha2 }).toEqual({ 0, 1 })
+    expect({ b and b.alpha, b and b.alpha2 }).toEqual({ 1, 0 })
+    -- the line's own textures hidden
+    for _, r in ipairs({ both:GetRegions() }) do
+        local t = r :: Texture
+        if t ~= strips[1] and t ~= strips[2] then
+            expect(t:IsShown()).toBe(false)
+        end
+    end
+    local o = assert(draw.dividerStrips(out))
+    expect(#o).toBe(1)
+    local op = paintOf(o[1])
+    expect({ op and op.alpha, op and op.alpha2 }).toEqual({ 1, 0 })
+    expect(tokenOf(assert(draw.dividerStrips(solid))[1])).toBe("gilt-faint")
+    -- a hairline without the token stays a hairline
+    expect(draw.dividerStrips(plain)).toBeNil()
+    back()
+    expect(draw.dividerStrips(both)).toBeNil()
+    expect(strips[1]:IsShown()).toBe(false)
+    for _, r in ipairs({ both:GetRegions() }) do
+        local t = r :: Texture
+        if t ~= strips[1] and t ~= strips[2] then
+            expect(t:IsShown()).toBe(true)
+        end
+    end
+end
+
+@test("a textured edge: solid lines in SuuUI's look; a theme's file tiled in the edge's colour; a fill again")
+local function texturedBorders()
+    local p = host()
+    p:SetSize(100, 50)
+    local b = draw.border(p, "gilt-line", { texture = "border" })
+    local plain = draw.border(p, "gilt-line")
+    expect(paintOf(b.top) and (paintOf(b.top) :: KeptPaint).kind).toBe("fill")
+    local back = swapFile("border", CAT .. "Stitch.tga")
+    for _, t in ipairs(b.parts) do
+        expect(t:GetTextureFilePath()).toBe(CAT .. "Stitch.tga")
+        expect(t:GetHorizTile()).toBe(true)
+        expect(t:GetVertTile()).toBe(true)
+        local kept = paintOf(t)
+        expect(kept and kept.kind).toBe("vertex")
+        expect(tokenOf(t)).toBe("gilt-line")
+    end
+    -- a later colour: on the file
+    b:SetColor("ember", 0.5)
+    expect(tokenOf(b.left)).toBe("ember")
+    expect(b.left:GetTextureFilePath()).toBe(CAT .. "Stitch.tga")
+    b:SetColor(1, 0, 0, 1)
+    local r, g, bl = b.left:GetVertexColor()
+    expect({ r, g, bl }).toEqual({ 1, 0, 0 })
+    b:SetColor("gilt-line")
+    -- an edge without the option keeps its solid line
+    expect(paintOf(plain.top) and (paintOf(plain.top) :: KeptPaint).kind).toBe("fill")
+    back()
+    for _, t in ipairs(b.parts) do
+        local kept = paintOf(t)
+        expect(kept and kept.kind).toBe("fill")
+        expect(tokenOf(t)).toBe("gilt-line")
+    end
+    expect(function()
+        draw.border(p, "gilt-line", { texture = "sparkle" })
+    end).toThrow("unknown texture token sparkle")
+end
+
+@test("the plates' bars draw the unit frames' files until a theme gives them their own")
+local function plateBars()
+    local p = host()
+    local health = CreateFrame("StatusBar", nil, p)
+    draw.skinBar(health, "plate-health-bar")
+    local cast = CreateFrame("StatusBar", nil, p)
+    draw.skinBar(cast, "plate-cast-bar")
+    expect(draw.textureFile("plate-health-bar")).toBe(T.texture["health-bar"])
+    expect(draw.textureFile("plate-cast-bar")).toBe(T.texture["cast-bar"])
+    -- the unit frames' file changes: the plates' too
+    local back = swapFile("health-bar", CAT .. "PawBar.tga")
+    expect(health:GetStatusBarTexture():GetTextureFilePath()).toBe(CAT .. "PawBar.tga")
+    -- their own file wins
+    local back2 = swapFile("plate-health-bar", CAT .. "PlateBar.tga")
+    expect(health:GetStatusBarTexture():GetTextureFilePath()).toBe(CAT .. "PlateBar.tga")
+    back2()
+    expect(health:GetStatusBarTexture():GetTextureFilePath()).toBe(CAT .. "PawBar.tga")
+    back()
+    expect(health:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["health-bar"])
+    expect(cast:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["cast-bar"])
+end
+
+-- A bar token's art repeated (as a theme's { file, height } does), undone by
+-- the function returned.
+local function repeatArt(token: string, file: string, height: number): () -> ()
+    local files = T.texture :: { [string]: string }
+    local was = assert(files[token])
+    files[token] = file
+    draw.setTiles({ [token] = height })
+    draw.reskin()
+    return function()
+        files[token] = was
+        draw.setTiles({})
+        draw.reskin()
+    end
+end
+
+@test(
+    "a bar's art the theme repeats: copies along the bar at its height that follow the fill and its colours; stretched again after"
+)
+local function repeatedBars()
+    local p = host()
+    local bar = CreateFrame("StatusBar", nil, p)
+    bar:SetSize(300, 8)
+    bar:SetPoint("CENTER")
+    draw.skinBar(bar, "bar")
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(40)
+    draw.paint(bar, "mana")
+    local fill = bar:GetStatusBarTexture()
+    -- SuuUI's own look: the white square stretched, nothing made
+    expect(draw.repeatOf(bar)).toBeNil()
+    local before = #{ bar:GetRegions() }
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    local over = assert(draw.repeatOf(bar))
+    expect(#{ bar:GetRegions() }).toBe(before + 1)
+    expect(over:GetTextureFilePath()).toBe(CAT .. "BeanBar.tga")
+    expect(over:GetHorizTile()).toBe(true)
+    expect(over:GetVertTile()).toBe(false)
+    -- each copy as tall as the bar: 16 px art at half its size
+    expect(over:GetScale()).toBeCloseTo(0.5)
+    -- over the fill, which shows nothing itself
+    expect(fill:GetAlpha()).toBe(0)
+    -- (where, on the screen: the copies' own units are scaled)
+    local function onScreen(r: Region, x: number): number
+        return x * r:GetEffectiveScale()
+    end
+    expect(onScreen(over, over:GetLeft())).toBeCloseTo(onScreen(fill, fill:GetLeft()))
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(fill, fill:GetRight()))
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(bar, bar:GetLeft() + 120))
+    -- the fill's colours: the bar's, a gradient, a repaint
+    draw.repaint()
+    local r, g, b = over:GetVertexColor()
+    expect(colorIs(r, g, b, nil, "mana")).toBe(true)
+    bar:SetStatusBarColor(1, 0, 0, 1)
+    r, g, b = over:GetVertexColor()
+    expect({ r, g, b }).toEqual({ 1, 0, 0 })
+    local gradients = record(over, "SetGradient")
+    draw.paintGradient(fill, "HORIZONTAL", "unit-fill-deep", "unit-fill")
+    expect(#gradients).toBe(1)
+    -- the value moves: the copies with the fill
+    bar:SetValue(90)
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(bar, bar:GetLeft() + 270))
+    -- the bar grows: the copies too
+    bar:SetHeight(24)
+    mock.advanceFrames(1)
+    expect(over:GetScale()).toBeCloseTo(1.5)
+    -- shown with the fill, its alpha theirs
+    fill:Hide()
+    expect(over:IsShown()).toBe(false)
+    fill:Show()
+    expect(over:IsShown()).toBe(true)
+    fill:SetAlpha(0.5)
+    expect(over:GetAlpha()).toBeCloseTo(0.5, 2)
+    expect(fill:GetAlpha()).toBe(0)
+    -- the theme stretches it again: the fill shows its file, the copies go
+    back()
+    expect(draw.repeatOf(bar)).toBeNil()
+    expect(over:IsShown()).toBe(false)
+    expect(fill:GetAlpha()).toBeCloseTo(0.5, 2)
+    expect(fill:GetTextureFilePath()).toBe(T.texture.bar)
+end
+
+@test(
+    "repeated art on a plain fill follows its size; the plates repeat the unit frames' art; the game's bars take the plain fill"
+)
+local function repeatedFills()
+    local p = host()
+    local t = draw.barFill(p, "progress-fill")
+    t:SetPoint("TOPLEFT")
+    local plate = CreateFrame("StatusBar", nil, p)
+    plate:SetSize(140, 10)
+    plate:SetPoint("CENTER")
+    draw.skinBar(plate, "plate-health-bar")
+    local game = CreateFrame("StatusBar", nil, p)
+    game:SetSize(200, 4)
+    game:SetPoint("BOTTOM")
+    draw.skinBar(game, "health-bar", true)
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    t:SetSize(200, 4)
+    local over = assert(draw.repeatOf(t))
+    expect(over:GetScale()).toBeCloseTo(0.25)
+    expect(t:GetAlpha()).toBe(0)
+    t:SetHeight(8)
+    expect(over:GetScale()).toBeCloseTo(0.5)
+    back()
+    expect(t:GetAlpha()).toBe(1)
+    local back2 = repeatArt("health-bar", CAT .. "PawBar.tga", 32)
+    -- (no file of their own: the plates take health-bar's art and height)
+    local plateOver = assert(draw.repeatOf(plate))
+    expect(plateOver:GetTextureFilePath()).toBe(CAT .. "PawBar.tga")
+    expect(plateOver:GetScale()).toBeCloseTo(10 / 32)
+    -- the game's own bar: no copies (no hooks on it), the plain fill
+    expect(draw.repeatOf(game)).toBeNil()
+    expect(game:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    back2()
+    expect(draw.repeatOf(plate)).toBeNil()
+    expect(game:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["health-bar"])
+end
+
+@test("repeated art on a fill whose size is secret (another unit's health): no error, the frame holding it gives the height")
+local function repeatedSecret()
+    -- (in game at login, 2026-11-12: "attempt to compare local 'a' (a
+    -- secret number value, while execution tainted by 'SuuUI')")
+    local p = host()
+    local holder = CreateFrame("Frame", nil, p)
+    holder:SetSize(200, 8)
+    holder:SetPoint("CENTER")
+    local t = draw.barFill(holder, "progress-fill")
+    t:SetPoint("TOPLEFT")
+    t:SetSize(120, 8)
+    mock.stub(t, "GetHeight", function(): number
+        return mock.secret(8) :: unknown :: number
+    end)
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    local over = assert(draw.repeatOf(t))
+    expect(over:GetScale()).toBeCloseTo(0.5)
+    t:SetSize(60, 8)
+    mock.advanceFrames(1)
+    back()
+    expectNoErrors()
 end
 
 @test("the cross is two crossed strokes in a square, recoloured together")
