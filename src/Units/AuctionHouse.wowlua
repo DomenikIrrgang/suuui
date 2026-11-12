@@ -21,13 +21,19 @@
 -- goes there, as the game does). Chat links and bag items reach the game's
 -- ChatFrameUtil.InsertLink, post-hooked; the Professions window asks the
 -- auctionhouse service.
+-- Your searches (asked 2026-11-12): clicking into the search box shows the
+-- last five you ran (Enter or Search) that found something, newest first,
+-- each with the icon of the first item it found; kept per character. A
+-- click runs one again, its x (on hover) takes it out; typing narrows the
+-- list to the ones with what you typed. Esc, a click elsewhere or picking
+-- one closes it.
 -- A built-in module written against the public API only.
 
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
 import AUCTION_HOUSE from "/Core/ServiceKeys"
 import type SettingsSection from "/Core/Modules"
-import type WindowFrame, ScrollArea from "/UI/Panel"
+import type WindowFrame, ScrollArea, Panel from "/UI/Panel"
 import type SuuButton from "/UI/Controls"
 import type Text from "/UI/Text"
 import type TextField, Segmented, MoneyInput from "/UI/Inputs"
@@ -35,7 +41,8 @@ import type ItemSlot, Money from "/UI/Inventory"
 import type FilterMenu, FilterValues, FilterChoice, FilterValue from "/UI/FilterMenu"
 import type LoadingMark from "/UI/LoadingMark"
 import type TabMarker from "/UI/TabMarker"
-import type Border from "/UI/Draw"
+import type Border, Cross from "/UI/Draw"
+import type Icon from "/UI/Icon"
 import after, every from "wowlua:timer"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
@@ -159,6 +166,29 @@ local WIDTH, HEIGHT = 840, 580
 local CAT_W = 170
 local GLYPHS = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Glyphs\\"
 local ROW_H = 32
+-- your searches: how many are kept, a row's height in their list
+local HISTORY_MAX = 5
+local HISTORY_ROW_H = 28
+
+-- One of your searches: as you typed it, the first item it found and that
+-- item's icon.
+type HistoryEntry = { text: string, item?: number, icon?: number }
+
+-- A search's text as kept: without spaces around it.
+local function trimmed(text: string): string
+    return (text:match("^%s*(.-)%s*$")) or ""
+end
+
+-- An item's icon from the client's data at hand (loaded or not); the
+-- question mark without one.
+local QUESTION_MARK = 134400
+local function itemIcon(id: number?): number
+    if not id then
+        return QUESTION_MARK
+    end
+    local _, _, _, _, icon = C_Item.GetItemInfoInstant(id)
+    return icon or QUESTION_MARK
+end
 local QUALITY: { [number]: string } = {
     [0] = "poor",
     "common",
@@ -831,11 +861,79 @@ class ItemView extends Frame
     end
 end
 
+-- One of your searches in the list under the search box: the first item's
+-- icon, the text; on hover the row lifts and its x (which takes it out of
+-- the list) shows.
+class HistoryRow extends Button
+    readonly hover: Texture
+    readonly icon: Icon
+    readonly label: Text
+    readonly remove: Button
+    readonly cross: Cross
+    entry: HistoryEntry = { text = "" }
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(HISTORY_ROW_H)
+        self.hover = UI.Fill(self, "surface-raised")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.icon = UI.Icon(self, 18)
+        self.icon:SetPoint("LEFT", S["space-4"], 0)
+        local x = CreateFrame("Button", nil, self)
+        x:SetSize(18, 18)
+        x:SetPoint("RIGHT", -S["space-3"], 0)
+        x:Hide()
+        self.remove = x
+        self.cross = UI.Cross(x, 8, "ink-muted")
+        self.cross:SetPoint("CENTER")
+        self.label = UI.Text(self, "body", "ink")
+        self.label:SetPoint("LEFT", self.icon, "RIGHT", S["space-3"], 0)
+        self.label:SetPoint("RIGHT", x, "LEFT", -S["space-2"], 0)
+        self.label:SetWordWrap(false)
+        self:SetScript("OnEnter", function()
+            self:Lit(true)
+        end)
+        -- (onto the x: still over the row)
+        self:SetScript("OnLeave", function()
+            self:Lit(self:IsMouseOver())
+        end)
+        self:SetScript("OnClick", function()
+            M:RunHistory(self.entry)
+        end)
+        x:SetScript("OnEnter", function()
+            self.cross:SetColor("ink")
+            UI.ShowTooltip(x, { title = "Remove from history" })
+        end)
+        x:SetScript("OnLeave", function()
+            self.cross:SetColor("ink-muted")
+            UI.HideTooltip()
+            self:Lit(self:IsMouseOver())
+        end)
+        x:SetScript("OnClick", function()
+            UI.HideTooltip()
+            M:ForgetSearch(self.entry.text)
+            -- (the click took the focus from the box: back to typing, as
+            -- the chat's palette does)
+            M:FocusSearch()
+        end)
+    end
+
+    function Lit(on: boolean)
+        self.hover:SetShown(on)
+        self.remove:SetShown(on)
+    end
+end
+
 -- The Buy page: the search bar, Scan all, the categories, the results or
 -- an item's view; while Scan all runs its mark over them.
 class BuyPage extends Frame
     readonly fav: FavButton
     readonly search: TextField
+    -- your searches, under the search box while it has the focus
+    readonly history: Panel
+    readonly historyHead: Text
+    readonly historyRows: HistoryRow[] = {}
     readonly filter: FilterMenu
     readonly searchButton: SuuButton
     readonly scanButton: SuuButton
@@ -862,11 +960,48 @@ class BuyPage extends Frame
         bar:SetPoint("TOPRIGHT")
         bar:SetHeight(30)
         self.fav = FavButton.new(bar)
-        self.search = UI.TextField(bar, { width = 300, placeholder = "Search" })
+        self.search = UI.TextField(bar, {
+            width = 300,
+            placeholder = "Search",
+            onTextChanged = function(text: string)
+                M:HistoryTyped(text)
+            end,
+        })
         self.search:SetPoint("LEFT", self.fav, "RIGHT", S["space-2"], 0)
         self.search.edit:HookScript("OnEnterPressed", function()
-            M:Search()
+            M:CloseHistory()
+            M:Search(nil, true)
         end)
+        -- your searches: shown with the focus; Esc closes them, as does the
+        -- focus going anywhere but onto them (a click on one takes it)
+        self.search.edit:HookScript("OnEditFocusGained", function()
+            M:OpenHistory()
+        end)
+        self.search.edit:HookScript("OnEditFocusLost", function()
+            if not (self.history:IsShown() and self.history:IsMouseOver()) then
+                M:CloseHistory()
+            end
+        end)
+        self.search.edit:HookScript("OnEscapePressed", function()
+            M:CloseHistory()
+        end)
+        self.search:HookScript("OnHide", function()
+            M:CloseHistory()
+        end)
+        -- (as a select's list: a solid panel over everything)
+        local history = UI.Panel(SuuUI.Root, { solid = true })
+        history.body:SetScript("OnSizeChanged", nil)
+        history.body:Hide()
+        history:SetFrameStrata("FULLSCREEN_DIALOG")
+        history:SetToplevel(true)
+        history:SetClampedToScreen(true)
+        history:EnableMouse(true)
+        history:SetPoint("TOPLEFT", self.search, "BOTTOMLEFT", 0, -S["space-1"])
+        history:Hide()
+        self.history = history
+        self.historyHead = UI.Text(history, "caption", "ink-muted")
+        self.historyHead:SetValue("Recent searches")
+        self.historyHead:SetPoint("TOPLEFT", S["space-2"] + S["space-4"], -(S["space-2"] + S["space-1"]))
         self.filter = UI.FilterMenu(bar, {
             groups = {
                 -- the required level range, as the game's own (in its filter
@@ -915,7 +1050,8 @@ class BuyPage extends Frame
             variant = "primary",
             icon = "search",
             onClick = function()
-                M:Search()
+                M:CloseHistory()
+                M:Search(nil, true)
             end,
         })
         self.searchButton:SetPoint("LEFT", self.filter, "RIGHT", S["space-2"], 0)
@@ -1519,6 +1655,8 @@ type CharStore = {
     scanAt?: number,
     scanSeconds?: number,
     scanCount?: number,
+    -- your searches, newest first
+    history?: HistoryEntry[],
 }
 
 -- A purchase asked of the house; a post sent; a scan running.
@@ -1614,6 +1752,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     linkLoad: LoadHandle? = nil
     linkedID: number? = nil
     linkedAt: number? = nil
+    -- your searches: the one sent, kept once the house says it found
+    -- something; their list open (with the focus), what's typed since
+    historyPending: string? = nil
+    historyOpen: boolean = false
+    historyQuery: string = ""
 
     constructor()
         super({
@@ -1656,7 +1799,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     -- A search, as the game's own: the text, the level range, the filter
     -- menu's filters and the chosen category's (its implicit filter too).
-    function Search(text: string?)
+    -- `yours`: one you ran (Enter, Search, your searches' list), kept in
+    -- them once it finds something.
+    function Search(text: string?, yours: boolean?)
         local buy = self.buy
         self.view = "browse"
         local node: Category? = self.catPath[#self.catPath]
@@ -1676,6 +1821,8 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         }
         self.query = query
         self.searched = true
+        local kept = trimmed(query.searchString)
+        self.historyPending = (yours and kept ~= "") and kept or nil
         self:SendBrowse(query)
     end
 
@@ -1735,6 +1882,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self.searched = true
         local order = self:BrowseSorts()
         self.query = { searchString = "★", sorts = order }
+        self.historyPending = nil
         self:Note("Your favourites…", nil, true)
         try(AH.SearchForFavorites, order)
         self:Refresh()
@@ -1809,6 +1957,169 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         self:Search(name)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Your searches
+    ----------------------------------------------------------------------------
+
+    function History(): HistoryEntry[]
+        return self:Saved().history or {}
+    end
+
+    -- The house's first answer to a search you ran: kept when it found
+    -- something, with the first item as the results list it.
+    function KeepSearch()
+        local text = self.historyPending
+        if not text then
+            return
+        end
+        self.historyPending = nil
+        local first = self:SortedResults(tryValue(AH.GetBrowseResults) or {})[1]
+        if not first then
+            return
+        end
+        local id = first.itemKey.itemID
+        local info = keyInfo(first.itemKey)
+        self:RememberSearch(text, id, info and info.iconFileID or itemIcon(id))
+    end
+
+    -- A search on top of yours: the same text in any case moves up, as you
+    -- typed it this time; five kept.
+    function RememberSearch(text: string, item: number?, icon: number?)
+        local d = self:Saved()
+        local key = text:lower()
+        local out: HistoryEntry[] = { { text = text, item = item, icon = icon } }
+        for _, e in ipairs(d.history or {}) do
+            if #out < HISTORY_MAX and e.text:lower() ~= key then
+                out[#out + 1] = e
+            end
+        end
+        d.history = out
+        self:DrawHistory()
+    end
+
+    -- One taken out (its x).
+    function ForgetSearch(text: string)
+        local d = self:Saved()
+        local key = text:lower()
+        d.history = tbl.filter(self:History(), function(e: HistoryEntry): boolean
+            return e.text:lower() ~= key
+        end)
+        self:DrawHistory()
+    end
+
+    -- One picked: in the search box and searched (while Scan all runs: in
+    -- the box only, for Search once it is done).
+    function RunHistory(entry: HistoryEntry)
+        local buy = self.buy
+        self:CloseHistory()
+        if not buy then
+            return
+        end
+        buy.search:SetValue(entry.text)
+        buy.search.edit:ClearFocus()
+        if self.scanning then
+            self:Refresh()
+            return
+        end
+        self:Search(entry.text, true)
+    end
+
+    -- The list under the search box (with its focus): all of them until you
+    -- type, then those with what you typed in them (kept while it stays
+    -- open: the focus back after an x).
+    function OpenHistory()
+        if not self.historyOpen then
+            self.historyOpen, self.historyQuery = true, ""
+        end
+        self:DrawHistory()
+    end
+
+    -- The keyboard back in the search box (after a click on the list).
+    function FocusSearch()
+        local buy = self.buy
+        if buy and buy.search:IsVisible() and not buy.search.edit:HasFocus() then
+            buy.search.edit:SetFocus()
+        end
+    end
+
+    function CloseHistory()
+        self.historyOpen = false
+        local buy = self.buy
+        if buy then
+            buy.history:Hide()
+        end
+    end
+
+    function HistoryTyped(text: string)
+        local buy = self.buy
+        self.historyQuery = trimmed(text)
+        if not self.historyOpen and buy and buy.search.edit:HasFocus() then
+            self.historyOpen = true
+        end
+        self:DrawHistory()
+    end
+
+    -- A click anywhere but on the list or the search box closes it.
+    function HistoryClick()
+        local buy = self.buy
+        if not (self.historyOpen and buy) then
+            return
+        end
+        local box = buy.history
+        if not ((box:IsShown() and box:IsMouseOver()) or buy.search:IsMouseOver()) then
+            self:CloseHistory()
+        end
+    end
+
+    -- Nothing to show (none kept, none with what's typed): no list.
+    function DrawHistory()
+        local buy = self.buy
+        if not buy then
+            return
+        end
+        local box = buy.history
+        if not (self.historyOpen and buy.search:IsVisible()) then
+            box:Hide()
+            return
+        end
+        local q = self.historyQuery:lower()
+        local pad = S["space-2"]
+        local y = pad + 22
+        local n = 0
+        for _, e in ipairs(self:History()) do
+            if q == "" or e.text:lower():find(q, 1, true) then
+                n = n + 1
+                local r = buy.historyRows[n]
+                if not r then
+                    r = HistoryRow.new(box)
+                    buy.historyRows[n] = r
+                end
+                r.entry = e
+                r.icon:SetArt(e.icon or itemIcon(e.item))
+                r.label:SetValue(e.text)
+                r:ClearAllPoints()
+                r:SetPoint("TOPLEFT", pad, -y)
+                r:SetPoint("RIGHT", box, "RIGHT", -pad, 0)
+                r:Show()
+                y = y + HISTORY_ROW_H
+            end
+        end
+        for i = n + 1, #buy.historyRows do
+            buy.historyRows[i]:Hide()
+        end
+        if n == 0 then
+            box:Hide()
+            return
+        end
+        box:SetSize(buy.search:GetWidth(), y + pad)
+        box:Show()
+        -- (the row under the pointer lit: another one there after an x)
+        for i = 1, n do
+            local r = buy.historyRows[i]
+            r:Lit(r:IsMouseOver())
+        end
     end
 
     -- The filter menu's choices as the game's filters.
@@ -3734,6 +4045,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:QueueRefresh()
         end
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function()
+            self:KeepSearch()
             results(true)
         end)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", function()
@@ -3761,7 +4073,12 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             results(false)
         end)
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function()
+            self.historyPending = nil
             self:Note("The search failed; try again in a moment.", "error")
+        end)
+        -- your searches' list: a click elsewhere closes it
+        self:OnGameEvent("GLOBAL_MOUSE_DOWN", function()
+            self:HistoryClick()
         end)
         self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total)
             self:OnCommodityPrice(unit, total)

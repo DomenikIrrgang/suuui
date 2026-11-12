@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- **Search history** in the auction house: click into the search box and your last 5 searches show under it, newest first, each with the icon of the first item it found. Click one to search it again, or the x on it to take it off the list; type to narrow the list down. Only searches that found something are kept, and each character keeps its own.
+
 ### Fixed
 
 - Auction house: Buy now on a stackable item (ore, herbs) sometimes did nothing after you had chosen a piece of gear and gone back before its purchase finished, or without buying it. Buy now works again.
