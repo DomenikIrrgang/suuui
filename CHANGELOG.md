@@ -7,6 +7,7 @@
 - Auction house: Buy now on a stackable item (ore, herbs) sometimes did nothing after you had chosen a piece of gear and gone back before its purchase finished, or without buying it. Buy now works again.
 - Vendors: items above your level (shown in red) can be bought again, as in the game's own vendor window.
 - The debuff icons on nameplates keep all their borders again; most of them went missing at some UI scales.
+- A mob's level is grey only when it gives you no experience; mobs a few levels below you that still give experience showed grey.
 
 ## 0.8.0 (2026-11-12)
 
