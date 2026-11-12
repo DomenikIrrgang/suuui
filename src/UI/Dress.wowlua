@@ -18,18 +18,27 @@
 --
 -- A theme's `dress` gives each kind (Themes.wowlua: SuuUI.RegisterTheme):
 --
---   header = file                         behind the header, stretched over it
+--   header = file                         behind the header, stretched to
+--                                          its height, repeated along it at
+--                                          its own width
 --   pieces = { { file, point, x, y, w, h  art at the frame's point (a
---                [, span][, layer]          FramePoint), offset by x, y (y up)
+--                [, span][, fill]           FramePoint), offset by x, y (y up)
+--                [, layer]
 --                [, color][, sway]          and w x h px; span: across the
 --                [, flip] }, … }            frame between that edge's ends
 --                                          (TOP, BOTTOM, LEFT, RIGHT), the
---                                          art repeated at its own size along
---                                          it; layer "back": behind the frame
+--                                          art repeated along it at its own
+--                                          size in px (w and h: that size);
+--                                          fill: over the whole frame,
+--                                          x and y past its sides (w, h left
+--                                          out: a ring round the minimap);
+--                                          layer "back": behind the frame
 --                                          (default: in front); color: a colour
 --                                          token tinting white art (default:
 --                                          the art's own colours); sway: degrees
---                                          it swings each way, slowly; flip:
+--                                          it swings each way, slowly (about
+--                                          its `pivot` point, default its
+--                                          point); flip:
 --                                          mirrored left to right
 --   motes = { file, count[, color]        `count` motes (fireflies) drifting
 --             [, size] }                   up over the frame and fading
@@ -46,12 +55,14 @@ export type DressPiece = {
     point: FramePoint,
     x?: number,
     y?: number,
-    w: number,
-    h: number,
+    w?: number,
+    h?: number,
     span?: boolean,
+    fill?: boolean,
     layer?: "front" | "back",
     color?: string,
     sway?: number,
+    pivot?: FramePoint,
     flip?: boolean,
 }
 export type DressMotes = { file: string, count: number, color?: string, size?: number }
@@ -132,14 +143,32 @@ local function placePiece(frame: Frame, w: Worn, p: DressPiece, i: number)
     end
     local x, y = p.x or 0, p.y or 0
     t:ClearAllPoints()
-    if p.span then
+    if p.fill then
+        t:SetPoint("TOPLEFT", w.box, "TOPLEFT", -x, y)
+        t:SetPoint("BOTTOMRIGHT", w.box, "BOTTOMRIGHT", x, -y)
+        t:SetTexture(p.file)
+        t:SetHorizTile(false)
+        t:SetVertTile(false)
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
+    elseif p.span then
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
         local point = p.point
         if point == "TOP" or point == "BOTTOM" then
             local l = (point .. "LEFT") :: FramePoint
             local r = (point .. "RIGHT") :: FramePoint
             t:SetPoint(l, w.box, l, x, y)
             t:SetPoint(r, w.box, r, -x, y)
-            t:SetHeight(p.h)
+            t:SetHeight(p.h or 0)
+            -- (repeated at its own size: one of its pixels a unit, as the
+            -- bars' repeating art, found right in game)
             t:SetTexture(p.file, "REPEAT", "CLAMP")
             t:SetHorizTile(true)
             t:SetVertTile(false)
@@ -148,22 +177,22 @@ local function placePiece(frame: Frame, w: Worn, p: DressPiece, i: number)
             local bp = ("BOTTOM" .. point) :: FramePoint
             t:SetPoint(tp, w.box, tp, x, y)
             t:SetPoint(bp, w.box, bp, x, -y)
-            t:SetWidth(p.w)
+            t:SetWidth(p.w or 0)
             t:SetTexture(p.file, "CLAMP", "REPEAT")
             t:SetHorizTile(false)
             t:SetVertTile(true)
         end
     else
         t:SetPoint(p.point, w.box, p.point, x, y)
-        t:SetSize(p.w, p.h)
+        t:SetSize(p.w or 0, p.h or 0)
         t:SetTexture(p.file)
         t:SetHorizTile(false)
         t:SetVertTile(false)
-    end
-    if p.flip then
-        t:SetTexCoord(1, 0, 0, 1)
-    else
-        t:SetTexCoord(0, 1, 0, 1)
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
     end
     if p.color then
         draw.paint(t, p.color)
@@ -172,8 +201,8 @@ local function placePiece(frame: Frame, w: Worn, p: DressPiece, i: number)
         t:SetVertexColor(1, 1, 1, 1)
     end
     t:Show()
-    if p.sway and p.sway > 0 and not p.span and not motion.reduced() then
-        sway(t, p.point, p.sway, i)
+    if p.sway and p.sway > 0 and not p.span and not p.fill and not motion.reduced() then
+        sway(t, p.pivot or p.point, p.sway, i)
     end
 end
 
@@ -257,7 +286,9 @@ local function dressOne(frame: Frame, w: Worn)
             h:SetPoint("TOPLEFT", w.box, "TOPLEFT")
             h:SetPoint("TOPRIGHT", w.box, "TOPRIGHT")
             h:SetPoint("BOTTOM", head, w.headPoint)
-            h:SetTexture(kind.header)
+            h:SetTexture(kind.header, "REPEAT", "CLAMP")
+            h:SetHorizTile(true)
+            h:SetVertTile(false)
             h:Show()
         elseif w.header then
             w.header:Hide()
@@ -294,9 +325,8 @@ export function register(frame: Frame, kind: string, head: Region?, headPoint: F
         motesUsed = 0,
     }
     worn[frame] = w
-    -- motes are scattered over the frame's size: again when it changes (on
-    -- SuuUI's own frame in front: no hook on the frame, which may be the
-    -- game's)
+    -- motes are scattered over the frame's size: again when it changes (on SuuUI's own frame in front:
+    -- no hook on the frame, which may be the game's)
     frontOf(frame, w):SetScript("OnSizeChanged", function()
         local k = current[w.kind]
         if k and k.motes then

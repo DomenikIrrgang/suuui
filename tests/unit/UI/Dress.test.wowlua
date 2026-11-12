@@ -1,0 +1,241 @@
+-- UI/Dress: a theme's art on SuuUI's frames (0.40): pieces at a point, along
+-- an edge and over the whole frame, in front and behind, header art down to
+-- the head, swaying pieces and drifting motes (still with reduced motion),
+-- off again with SuuUI's own look; RegisterTheme's checks of a dress.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as themes from "/Core/Themes"
+import * as dress from "/UI/Dress"
+import panel from "/UI/Panel"
+import expectNoErrors, newParent, useTheme from "../../helpers"
+import reduceMotion from "./PrimitivesHelpers"
+
+const ART = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Themes\\Stranglethorn\\"
+const THEME = "test-dress"
+
+local function jungle()
+    if themes.get(THEME) then
+        return
+    end
+    themes.register({
+        id = THEME,
+        dress = {
+            window = {
+                header = ART .. "RuinsHeader.tga",
+                pieces = {
+                    { file = ART .. "RuinsVineTop.tga", point = "TOP", span = true, x = 10, y = 32, w = 256, h = 48 },
+                    { file = ART .. "RuinsCorner.tga", point = "TOPLEFT", x = -22, y = 30, w = 128, h = 112, sway = 2 },
+                    { file = ART .. "RuinsRing.tga", point = "CENTER", fill = true, x = 8, y = 6, layer = "back" },
+                    { file = ART .. "RuinsCorner.tga", point = "TOPRIGHT", w = 64, h = 56, flip = true, color = "gilt" },
+                },
+                motes = { file = ART .. "Firefly.tga", count = 3, color = "amber" },
+            },
+        },
+    })
+end
+
+-- A frame of kind "window", 300x200, its head the top 30 px.
+local function window(): (Frame, Frame)
+    local f = CreateFrame("Frame", nil, newParent())
+    f:SetSize(300, 200)
+    f:SetPoint("CENTER")
+    local head = CreateFrame("Frame", nil, f)
+    head:SetPoint("TOPLEFT")
+    head:SetPoint("TOPRIGHT")
+    head:SetHeight(30)
+    dress.register(f, "window", head, "BOTTOM")
+    return f, head
+end
+
+local function playing(t: Texture): boolean
+    for _, g in ipairs({ t:GetAnimationGroups() }) do
+        if (g :: AnimationGroup):IsPlaying() then
+            return true
+        end
+    end
+    return false
+end
+
+@afterEach
+local function back()
+    reduceMotion(false)
+    useTheme(nil)
+end
+
+@test("SuuUI's own look wears nothing: no pieces, motes or header")
+local function plain()
+    local f = window()
+    local pieces, motes, header = dress.wornBy(f)
+    expect(#pieces).toBe(0)
+    expect(#motes).toBe(0)
+    expect(header).toBeNil()
+    expectNoErrors()
+end
+
+@test("a dressed theme puts its pieces on at once, and on frames made after it")
+local function puts()
+    local before = window()
+    jungle()
+    useTheme(THEME)
+    local after = window()
+    for _, f in ipairs({ before, after }) do
+        local pieces, motes, header = dress.wornBy(f)
+        expect(#pieces).toBe(4)
+        expect(#motes).toBe(3)
+        expect(header).toBeTruthy()
+        for _, t in ipairs(pieces) do
+            expect(t:IsShown()).toBe(true)
+        end
+    end
+    expectNoErrors()
+end
+
+@test("a piece sits at its point, offset, at its size; flipped and tinted as asked")
+local function placed()
+    jungle()
+    useTheme(THEME)
+    local f = window()
+    local pieces = dress.wornBy(f)
+    local corner = pieces[2]
+    expect(corner:GetWidth()).toBe(128)
+    expect(corner:GetHeight()).toBe(112)
+    expect(corner:GetLeft()).toBeCloseTo(f:GetLeft() - 22, 3)
+    expect(corner:GetTop()).toBeCloseTo(f:GetTop() + 30, 3)
+    expect(corner:GetTexture()).toBeTruthy()
+    -- in front of the frame's own regions: on a frame above it
+    expect((corner:GetParent() :: Frame):GetFrameLevel() > f:GetFrameLevel()).toBe(true)
+    local flipped = pieces[4]
+    local ulx = flipped:GetTexCoord()
+    expect(ulx).toBe(1)
+    local r, g, b = flipped:GetVertexColor()
+    expect(r == 1 and g == 1 and b == 1).toBe(false)
+    expectNoErrors()
+end
+
+@test("a span runs along its edge, between its ends, its art repeated")
+local function span()
+    jungle()
+    useTheme(THEME)
+    local f = window()
+    local vine = dress.wornBy(f)[1]
+    expect(vine:GetLeft()).toBeCloseTo(f:GetLeft() + 10, 3)
+    expect(vine:GetRight()).toBeCloseTo(f:GetRight() - 10, 3)
+    expect(vine:GetTop()).toBeCloseTo(f:GetTop() + 32, 3)
+    expect(vine:GetHeight()).toBe(48)
+    expect(vine:GetHorizTile()).toBe(true)
+    expectNoErrors()
+end
+
+@test("a fill covers the frame and x, y past its sides; back pieces sit behind it")
+local function fill()
+    jungle()
+    useTheme(THEME)
+    local f = window()
+    local ring = dress.wornBy(f)[3]
+    expect(ring:GetLeft()).toBeCloseTo(f:GetLeft() - 8, 3)
+    expect(ring:GetRight()).toBeCloseTo(f:GetRight() + 8, 3)
+    expect(ring:GetTop()).toBeCloseTo(f:GetTop() + 6, 3)
+    expect(ring:GetBottom()).toBeCloseTo(f:GetBottom() - 6, 3)
+    expect(ring:GetParent()).toBe(f)
+    expect(ring:GetDrawLayer()).toBe("BACKGROUND")
+    expectNoErrors()
+end
+
+@test("the header art fills the frame's top down to the head")
+local function header()
+    jungle()
+    useTheme(THEME)
+    local f, head = window()
+    local _, _, art = dress.wornBy(f)
+    local h = assert(art)
+    expect(h:GetTop()).toBeCloseTo(f:GetTop(), 3)
+    expect(h:GetBottom()).toBeCloseTo(head:GetBottom(), 3)
+    expect(h:GetWidth()).toBeCloseTo(300, 3)
+    expectNoErrors()
+end
+
+@test("pieces sway and motes drift; with reduced motion they keep still and no motes come")
+local function moving()
+    jungle()
+    useTheme(THEME)
+    local f = window()
+    local pieces, motes = dress.wornBy(f)
+    expect(playing(pieces[2])).toBe(true)
+    -- (a span and a fill never sway)
+    expect(playing(pieces[1])).toBe(false)
+    for _, m in ipairs(motes) do
+        expect(playing(m)).toBe(true)
+    end
+    reduceMotion(true)
+    themes.apply()
+    pieces, motes = dress.wornBy(f)
+    expect(playing(pieces[2])).toBe(false)
+    expect(#motes).toBe(0)
+    expectNoErrors()
+end
+
+@test("back to SuuUI's own look: everything off and still")
+local function off()
+    jungle()
+    useTheme(THEME)
+    local f = window()
+    local was, wasMotes, wasHeader = dress.wornBy(f)
+    useTheme(nil)
+    local pieces, motes, header = dress.wornBy(f)
+    expect(#pieces).toBe(0)
+    expect(#motes).toBe(0)
+    expect(header).toBeNil()
+    for _, t in ipairs(was) do
+        expect(t:IsShown()).toBe(false)
+        expect(playing(t)).toBe(false)
+    end
+    for _, t in ipairs(wasMotes) do
+        expect(t:IsShown()).toBe(false)
+    end
+    expect(assert(wasHeader):IsShown()).toBe(false)
+    expectNoErrors()
+end
+
+@test("a titled panel is a window: dressed down to its divider")
+local function panels()
+    jungle()
+    useTheme(THEME)
+    local p = panel(newParent(), { title = "Jungle", width = 320, height = 220 })
+    local pieces, _, art = dress.wornBy(p)
+    expect(#pieces).toBe(4)
+    expect(art).toBeTruthy()
+    expectNoErrors()
+end
+
+@test("RegisterTheme checks a dress and says what's wrong")
+@cases({
+    { { jungle = {} }, "has no frame kind \"jungle\"" },
+    { { window = 5 }, "dress.window is a table" },
+    { { window = { header = 5 } }, "dress.window.header needs a file path" },
+    { { window = { pieces = { { point = "TOP", w = 1, h = 1 } } } }, "pieces[1] needs a file path" },
+    { { window = { pieces = { { file = "x", point = "UP", w = 1, h = 1 } } } }, "point is a frame point" },
+    { { window = { pieces = { { file = "x", point = "TOPLEFT", span = true, w = 1, h = 1 } } } }, "spans an edge" },
+    { { window = { pieces = { { file = "x", point = "TOP", span = true, fill = true, w = 1, h = 1 } } } }, "not both" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 0, h = 1 } } } }, "w is a size from 1 to 1024 px" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 1 } } } }, "h is a size from 1 to 1024 px" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 1, h = 1, sway = "lots" } } } }, "sway is a number" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 1, h = 1, layer = "middle" } } } }, "layer is" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 1, h = 1, color = "puce" } } } }, "color is a colour token" },
+    { { window = { pieces = { { file = "x", point = "TOP", w = 1, h = 1, pivot = "UP" } } } }, "pivot is a frame point" },
+    { { window = { motes = { file = "x", count = 9 } } }, "motes is { file, count (1 to 8) }" },
+    { { window = { motes = { file = "x", count = 2, color = "puce" } } }, "motes.color is a colour token" },
+})
+local function checks(given: unknown, says: string)
+    local ok, err = pcall(themes.register, { id = "test-dress-bad", dress = given })
+    expect(ok).toBe(false)
+    expect(tostring(err):find(says, 1, true) ~= nil).toBe(true)
+end
+
+@test("a fill may leave its size out")
+local function fillSize()
+    local t = themes.register({
+        id = "test-dress-fill",
+        dress = { minimap = { pieces = { { file = ART .. "RuinsRing.tga", point = "CENTER", fill = true } } } },
+    })
+    expect(#(assert(t.dress.minimap).pieces or {})).toBe(1)
+end
