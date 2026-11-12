@@ -218,15 +218,20 @@ local function plateLines(f: Nameplate): (number[], number)
 end
 
 @test(
-    "a plate's lines are one physical pixel on the game's plate (which hangs on WorldFrame, not UIParent), the debuff icons' too"
+    "a plate's lines are one physical pixel on the game's plate (which hangs on WorldFrame at UIParent's scale), the debuff icons' too"
 )
 local function pixelLines()
     -- (found in game, 0.6.32: made under UIParent, they came out under one
     -- pixel at a larger UI scale and vanished "depending on your camera
     -- angle")
+    -- The game hands a plate over at a scale of 1 and gives it UIParent's a
+    -- moment later (probed 2026-11-12): 0.9.0 learned 1 from the first plate
+    -- and laid every line for it, under a pixel at UIParent's. The plate here
+    -- comes at 1 too, then takes UIParent's as the game's does.
     local f = plateOf(wolf)
     local plate = gamePlate(wolf:token() :: string)
-    expect(plate:GetEffectiveScale() ~= UIParent:GetEffectiveScale()).toBe(true)
+    local before = plate:GetScale()
+    plate:SetScale(UIParent:GetEffectiveScale() / WorldFrame:GetEffectiveScale())
     expect(assert(assert(f.auras).groups.mine).added).toBe(true)
     local lines, icons = plateLines(f)
     expect(#lines > 8).toBe(true)
@@ -234,6 +239,32 @@ local function pixelLines()
     for _, px in ipairs(lines) do
         expect(math.abs(px - 1) < 0.001).toBe(true)
     end
+    plate:SetScale(before)
+end
+
+@test(
+    "the game's nameplate scales at their defaults (far plates 0.8): every line a pixel or more on a far plate, the target's"
+)
+local function scaleSettings()
+    -- (probed 2026-11-12: at the defaults a far plate draws at UIParent's x
+    -- 0.8, your target's x 1.2; SuuUI sets them to 1, but a player may not)
+    local f = plateOf(wolf)
+    local plate = gamePlate(wolf:token() :: string)
+    local before = plate:GetScale()
+    local ui = UIParent:GetEffectiveScale() / WorldFrame:GetEffectiveScale()
+    SetCVar("nameplateMinScale", "0.8")
+    SetCVar("nameplateSelectedScale", "1.2")
+    for _, setting in ipairs({ 0.8, 1, 1.2 }) do
+        plate:SetScale(ui * setting)
+        local thin = math.huge
+        for _, px in ipairs(plateLines(f)) do
+            thin = math.min(thin, px)
+        end
+        expect(thin > 1 - 0.001).toBe(true)
+    end
+    SetCVar("nameplateMinScale", "1")
+    SetCVar("nameplateSelectedScale", "1")
+    plate:SetScale(before)
 end
 
 @test(
@@ -263,23 +294,21 @@ local function iconsBeforePlate()
     events.emit("SUUUI_PIXEL_CHANGED", 1080, UIParent:GetEffectiveScale())
     mock.advanceFrames(30)
     expect(#pool > 4).toBe(true)
-    -- not before a plate shows: no debuff groups made ahead
-    expect(groupsAhead.made).toBe(0)
-    -- a pooled plate's debuff group made now (a plate coming in a fight)
-    -- (one without it yet, last in the pool: the next plate takes it)
+    -- debuff groups made ahead before a plate shows, as before 0.9.0 (held
+    -- back till one showed, every plate made its icons as it came: pull's
+    -- first wave 2.5 times the work a frame, the dismount 36 times)
+    expect(groupsAhead.made > 0).toBe(true)
+    -- (one made ahead, last in the pool: the next plate takes it)
     local f: Nameplate? = nil
     for i = #pool, 1, -1 do
         local pf = pool[i]
         local g = pf.aurasTried and pf.auras and pf.auras.groups.mine
-        if g and not g.added then
+        if g and g.added then
             f = table.remove(pool, i)
             break
         end
     end
     table.insert(pool, assert(f))
-    local auras = assert(assert(f).auras)
-    auras:SetGroupMax("mine", 3)
-    expect(assert(auras.groups.mine).added).toBe(true)
     -- the game's plate at UIParent's scale (not WorldFrame's)
     local ui, world = UIParent:GetEffectiveScale(), WorldFrame:GetEffectiveScale()
     expect(math.abs(ui - world) > 0.01).toBe(true)
@@ -903,10 +932,11 @@ local function disabled()
     expect(next(byUnit)).toBeNil()
 end
 
-@test("a mob tagged by someone else: its plate's health grey; the tag gone (UNIT_FACTION): back")
+@test("a mob tagged by someone else: its plate's health slate and striped; the tag gone (UNIT_FACTION): back")
 local function tappedPlate()
     local f = plateOf(wolf)
     expect(f.tappedLook).toBe(false)
+    expect(healthFill.stripesOf(f.health)).toBeNil()
     local denied = true
     fakeAPI(f, {
         UnitIsTapDenied = function(_: string): boolean
@@ -916,8 +946,75 @@ local function tappedPlate()
     mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
     mock.advanceFrames(1)
     expect(f.tappedLook).toBe(true)
+    expect(healthFill.lookOf(f.health)).toBe("tapped")
+    local stripes = assert(healthFill.stripesOf(f.health))
+    expect(stripes:IsVisible()).toBe(true)
+    expect(stripes:GetTextureFilePath()).toBe(UI.TextureFile("tapped"))
+    -- over the fill, as wide as it, not the whole bar
+    local fill = f.health:GetStatusBarTexture()
+    local function span(r: Region): number
+        return (r:GetRight() or 0) - (r:GetLeft() or 0)
+    end
+    expect(span(stripes)).toBeCloseTo(span(fill), 2)
+    expect(span(stripes) < span(f.health)).toBe(true)
+    expect(stripes:GetLeft() or 0).toBeCloseTo(fill:GetLeft() or 0, 2)
+    -- the name keeps its colour
+    expect(hasColor(f.name, "reaction-hostile")).toBe(true)
     denied = false
     mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
     mock.advanceFrames(1)
     expect(f.tappedLook).toBe(false)
+    expect(stripes:IsShown()).toBe(false)
+end
+
+@test("a tagged mob's plate taken for another unit: no stripes on it")
+local function tappedReused()
+    local f = plateOf(wolf)
+    -- (the tag by name: the plate's unit token goes to the next unit)
+    fakeAPI(f, {
+        UnitIsTapDenied = function(u: string): boolean
+            return secret.asString(UnitName(u)) == "Prowler"
+        end,
+    })
+    mock.fireUnitEvent("UNIT_FACTION", wolf:token() :: string)
+    mock.advanceFrames(1)
+    local stripes = assert(healthFill.stripesOf(f.health))
+    expect(stripes:IsShown()).toBe(true)
+    wolf:hideNameplate()
+    mock.advanceFrames(2)
+    -- the pool hands the same plate to the bear
+    local b = plateOf(bear)
+    expect(b).toBe(f)
+    expect(b.tappedLook).toBe(false)
+    expect(healthFill.lookOf(b.health)).toBe(false)
+    expect(stripes:IsShown()).toBe(false)
+end
+
+@test("a theme's textures on plates: the live ones and those in the pool, at once; SuuUI's back after")
+local function plateTextures()
+    local f = plateOf(wolf)
+    local pooled = assert(pool[#pool])
+    themes.register({
+        id = "test-plate-textures",
+        textures = {
+            ["health-bar"] = "Interface\\AddOns\\Plug\\Smooth",
+            ["cast-bar"] = "Interface\\AddOns\\Plug\\Cast",
+            glow = "Interface\\AddOns\\Plug\\Halo",
+            ["raid-markers"] = "Interface\\AddOns\\Plug\\Markers",
+        },
+    })
+    coreSettings.setAccount("theme", "test-plate-textures")
+    themes.apply()
+    for _, p in ipairs({ f, pooled }) do
+        for _, b in ipairs({ p.health, p.healthLow, p.ghost }) do
+            expect(b:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Smooth")
+        end
+        expect(p.cast.fill:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Cast")
+        expect(p.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Halo")
+        expect(p.raidMarker:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Markers")
+    end
+    coreSettings.setAccount("theme", nil)
+    themes.apply()
+    expect(f.health:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(pooled.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Soft.tga")
 end

@@ -4,7 +4,20 @@
 
 ### New
 
+- For theme authors (API 0.35): a theme can replace the textures of the unit frames and nameplates with `textures`: the health, power and cast bar fill, the absorb shield's hatch, the tagged mob's stripes, the glows, role icons, raid markers, the cast lock and the combat sign (the names are in `SuuUI.Tokens.texture`). Picking the theme changes them at once, on every frame and nameplate. `SuuUI.UI.Skin` and `SuuUI.UI.SkinBar` make your own frames follow it too.
 - **NPC reaction colours**: a new setting under Settings › General › Appearance › Theme shows NPCs' health on the target, target of target, focus, boss and pet frames and on nameplates in their reaction's colour: hostile red, neutral yellow, friendly green. It is off by default; when on, it wins over the theme's health colour and changes along with the NPC (a mob turning hostile, a new target). Players keep the Health colour setting, and a mob tagged by someone else keeps its tagged look.
+
+### Changed
+
+- When an NPC offers you a choice of quest rewards, a gold coin now marks the one that sells for the most at a vendor, instead of the Upgrade mark.
+- Every notification has an x to close it, except the game's requests you answer on the card (invites, resurrection, summons...). Closing a reminder (gear to repair, full bags, points to spend) keeps it away until it clears and comes back.
+- Tagged mobs: a mob someone else has tagged (you get nothing from it) now shows a cool slate-blue health bar with diagonal stripes on its nameplate and on your target, target of target and focus frames, instead of plain grey. Its name and level keep their usual colours, and the stripes go as soon as the tag does.
+
+### Fixed
+
+- Nameplates: less stutter when mobs come into view, mostly when you dismount or pull a group; 0.9.0 made each plate's debuff icons as it showed.
+- Nameplates: borders on plates and their debuff icons stay a full pixel at every UI scale; 0.9.0 could draw them too thin to show.
+- Auction house: your recent searches are kept again (none showed under the search box), and items you Shift-click to search for are kept with them.
 
 ## 0.9.0 (2026-11-12)
 

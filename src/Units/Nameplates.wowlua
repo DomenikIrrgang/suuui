@@ -84,7 +84,6 @@ local DEFAULTS = {
 
 local M: NameplatesModule
 
-local WHITE = "Interface\\Buttons\\WHITE8X8"
 -- the damage ghost's hold before it eases down (the unit frames' own)
 local GHOST_HOLD = 0.15
 local INTERPOLATE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
@@ -297,15 +296,24 @@ type Fakes = {
 -- The unit functions plates read: the game's, or a preview's stand-ins.
 local GAME = gameUnits()
 
--- The game's plates' effective scale: seen on the first one it shows (it
--- isn't WorldFrame's, found in game; distance and target don't change it,
--- SuuUI keeps the game's nameplate scales at 1); before one, the smaller of
--- UIParent's and WorldFrame's, so lines made then are a pixel or more. Lower
--- when a plate turns up smaller still; guessed again when the UI scale or
--- the screen changes.
-local seenScale: number? = nil
+-- The smallest effective scale the game draws a plate at: UIParent's times
+-- the smallest of its nameplate scale settings (probed 2026-11-12: plates at
+-- UIParent's 0.64; at the settings' defaults a far plate at 0.64 x 0.8, your
+-- target's at 0.64 x 1.2; SuuUI sets them to 1). Worked out, not read from a
+-- plate: when the game hands a plate over (NAME_PLATE_UNIT_ADDED) it is still
+-- at a scale of 1 and takes its own a moment later (probed 2026-11-12), which
+-- laid 0.9.0's lines for 1 and so under a pixel.
+local function scaleSetting(name: string): number
+    local v = tonumber(GetCVar(name))
+    return v and v > 0 and v or 1
+end
 local function plateScale(): number
-    return seenScale or math.min(UIParent:GetEffectiveScale(), WorldFrame:GetEffectiveScale())
+    return UIParent:GetEffectiveScale() *
+        math.min(
+            scaleSetting("nameplateMinScale"),
+            scaleSetting("nameplateMaxScale"),
+            scaleSetting("nameplateSelectedScale")
+        )
 end
 
 -- One physical pixel on the plates (their lines' unit). The debuff icons'
@@ -341,13 +349,15 @@ export class Nameplate extends Frame
     auras: UnitAuras? = nil
     -- its aura container made (or tried: a client without them)
     aurasTried: boolean = false
+    -- the plates' scale its lines were laid for (see plateScale)
+    laidScale: number = 0
     -- its debuff group waits for the unit's first such aura (ApplyAuraCount)
     auraWait: boolean = false
     -- the plate's unit while it's on one ("nameplateN"; a preview's "plateN")
     unit: string? = nil
     friendly: boolean = false
     preview: boolean = false
-    -- the health drawn grey: a mob tagged by someone else
+    -- the health drawn tapped (slate, striped): a mob tagged by someone else
     tappedLook: boolean = false
     -- a player's class token, for class-coloured health (UI/HealthFill)
     fillClass: string? = nil
@@ -420,17 +430,17 @@ export class Nameplate extends Frame
         -- health after a hold and the engine eases it down (asked 2026-10-19)
         self.ghost = CreateFrame("StatusBar", nil, inner)
         self.ghost:SetAllPoints()
-        self.ghost:SetStatusBarTexture(WHITE)
+        UI.SkinBar(self.ghost, "health-bar")
         self.ghost:GetStatusBarTexture():SetSnapToPixelGrid(false)
         UI.Paint(self.ghost, "ghost")
         self.health = CreateFrame("StatusBar", nil, inner)
         self.health:SetAllPoints()
-        self.health:SetStatusBarTexture(WHITE)
+        UI.SkinBar(self.health, "health-bar")
         self.health:SetFrameLevel(self.ghost:GetFrameLevel() + 1)
         healthFill.paint(self.health, nil)
         self.healthLow = CreateFrame("StatusBar", nil, inner)
         self.healthLow:SetAllPoints()
-        self.healthLow:SetStatusBarTexture(WHITE)
+        UI.SkinBar(self.healthLow, "health-bar")
         gradient(self.healthLow, "unit-fill-low-deep", "unit-fill-low")
         self.healthLow:SetFrameLevel(self.health:GetFrameLevel() + 1)
         self.healthLow:SetAlpha(0)
@@ -627,8 +637,9 @@ export class Nameplate extends Frame
         end
         self.healthLow:SetMinMaxValues(0, amount(max, 1))
         self.healthLow:SetValue(amount(cur))
-        -- a mob tagged by someone else: grey, no low-health colour (asked
-        -- 2026-11-06; as ElvUI's oUF: not a player's or a pet's; the tag
+        -- a mob tagged by someone else: slate and striped (grey until
+        -- 2026-11-12), no low-health colour (asked 2026-11-06; as ElvUI's
+        -- oUF: not a player's or a pet's; the tag
         -- changes with UNIT_FACTION, which rechecks the plate)
         local denied, controlled = A.UnitIsTapDenied, A.UnitPlayerControlled
         local tapped = not self.preview and denied ~= nil and flag(errors.tryValue(denied, u)) == true and
@@ -681,8 +692,9 @@ export class Nameplate extends Frame
         self.pct:Show()
     end
 
-    -- The health fill: grey when tapped, a player's class colour (when class
-    -- colours are on: UI/HealthFill decides at paint time), else the fill.
+    -- The health fill: slate and striped when tapped, a player's class colour
+    -- (when class colours are on: UI/HealthFill decides at paint time), else
+    -- the fill.
     function PaintHealth()
         -- (an NPC's reaction colour when reaction colours are on, as well)
         local look: string | false = self.tappedLook and "tapped" or self.fillClass or self.fillReaction or false
@@ -903,7 +915,9 @@ local function makePlate(): Nameplate
     draw.withPixelUnit(platePixel, function()
         f = Nameplate.new(poolHome())
     end)
-    return assert(f)
+    local made = assert(f)
+    made.laidScale = plateScale()
+    return made
 end
 
 local function newPlate(): Nameplate
@@ -957,9 +971,9 @@ end
 local groupsAhead = { made = 0 }
 
 local function enemyGroupMissing(): Nameplate?
-    -- (not before the game has shown a plate: the icons' lines need its
-    -- scale, and can't be laid again after)
-    if not seenScale or groupsAhead.made >= POOL or (tonumber(M:Get("auras")) or 0) <= 0 then
+    -- (before a plate shows too: the plates' scale guessed is UIParent's,
+    -- which is the game's, measured 2026-11-12)
+    if groupsAhead.made >= POOL or (tonumber(M:Get("auras")) or 0) <= 0 then
         return nil
     end
     for i = #pool, math.max(1, #pool - POOL + 1), -1 do
@@ -1203,7 +1217,7 @@ local function addFakes(f: Nameplate, castH: number): Fakes
     local cast = CreateFrame("StatusBar", nil, f)
     cast:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -S["space-1"])
     cast:SetSize(1, castH)
-    cast:SetStatusBarTexture(WHITE)
+    UI.SkinBar(cast, "cast-bar")
     local castBorder = UI.Border(cast, "gilt-hairline")
     -- the spell's icon leading the line; the lock inside the bar's left end
     local icon = UI.Icon(f, 13)
@@ -1212,7 +1226,7 @@ local function addFakes(f: Nameplate, castH: number): Fakes
     lock:SetAllPoints()
     lock:SetFrameLevel(cast:GetFrameLevel() + 3)
     local lockArt = lock:CreateTexture(nil, "OVERLAY")
-    lockArt:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-LOCK")
+    UI.Skin(lockArt, "cast-lock")
     lockArt:SetDesaturated(true)
     UI.Paint(lockArt, "ink")
     lockArt:SetPoint("LEFT", 2, 0)
@@ -1547,13 +1561,12 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         questCache[unit] = nil
         byUnit[unit] = f
         f:SetParent(plate)
-        -- the first of the game's plates (or one smaller than those before):
-        -- the plates' scale is known, their lines laid for it, one pixel
-        local scale = f:GetEffectiveScale()
-        local known = seenScale
-        if not known or scale < known - 0.0001 then
-            seenScale = scale
-            self:RelayoutPlates()
+        -- a pooled plate laid for another scale (the UI scale or the game's
+        -- nameplate scales changed since): its lines laid again as it's
+        -- taken, one plate at a time (all the pool's at once was a
+        -- 30k-instruction frame)
+        if math.abs(f.laidScale - plateScale()) > 0.0001 then
+            f.laidScale = plateScale()
             SuuUI.Pixel.Relayout(f)
         end
         anchor(f, plate)
@@ -1687,11 +1700,12 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         auras:SetGroupMax(key, n)
     end
 
-    -- Every live and pooled plate's lines laid again (their unit changed:
+    -- Every live plate's lines laid again (their unit changed:
     -- the game's nameplate scale settings, the screen's size).
+    -- (the pooled ones as they're taken: see Attach)
     function RelayoutPlates()
-        SuuUI.Pixel.Relayout(poolHome())
         for _, f in pairs(byUnit) do
+            f.laidScale = plateScale()
             SuuUI.Pixel.Relayout(f)
         end
     end
@@ -2053,8 +2067,12 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         end)
         -- the plates' pixel: the screen's size, the game's nameplate scales
         self:On("SUUUI_PIXEL_CHANGED", function()
-            seenScale = nil
             self:RelayoutPlates()
+        end)
+        self:OnGameEvent("CVAR_UPDATE", function(_, cvar)
+            if cvar == "nameplateMinScale" or cvar == "nameplateMaxScale" or cvar == "nameplateSelectedScale" then
+                self:RelayoutPlates()
+            end
         end)
         -- the preview's target line carries a colour code
         self:On("SUUUI_THEME_CHANGED", function()

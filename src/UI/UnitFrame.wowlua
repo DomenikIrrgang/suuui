@@ -20,7 +20,7 @@
 --       lowHealth = true,   -- the low-health fill (false: never)
 --       lowTint = false,    -- the low-health tint: the empty part of the bar warms
 --                           -- to ember from 70% down to 10% (the healer layout)
---       tapped = false,     -- 0.24: a mob tagged by someone else grey (target, ToT, focus)
+--       tapped = false,     -- 0.24: a mob tagged by someone else slate and striped (target, ToT, focus)
 --       incoming = true,    -- incoming heals and absorbs (false: never)
 --       powerFor = nil,     -- fn(unit, api) -> bool: which units get the power line
 --       powerCost = true,   -- 0.34: the player's frame: your cast's cost faded
@@ -84,13 +84,8 @@ import auraContainer, UnitAuras, AuraGroup, AuraOptions, AuraButton from "/UI/Au
 
 const S = T.space
 
-local WHITE = "Interface\\Buttons\\WHITE8X8"
-local HATCH = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga"
-local ROLE_ICON: { [string]: string } = {
-    TANK = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleTank.tga",
-    HEALER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleHealer.tga",
-    DAMAGER = "Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleDamage.tga",
-}
+-- each role's icon: its texture token (a theme's own)
+local ROLE_ICON: { [string]: string } = { TANK = "role-tank", HEALER = "role-healer", DAMAGER = "role-damage" }
 
 -- marker: the raid target marker's size; rise: how far it stands over the
 -- top edge (less on sm, whose frames sit a few px apart in a raid grid)
@@ -136,9 +131,6 @@ local SIZES: { [string]: Size } = {
         rise = 4,
     },
 }
-
--- The game's raid target markers: eight 64px cells, four to a row.
-local MARKERS = "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
 
 local LOW_HEALTH = 0.35 -- the design's lowAt
 local LOW_MANA = 0.25
@@ -356,9 +348,18 @@ end
 -- Building
 --------------------------------------------------------------------------------
 
-local function bar(f: UnitFrame, level: number, color: string?): StatusBar
+-- texture: its fill's texture token ("health-bar" by default, stretched);
+-- tiled: a token whose texture repeats instead (the absorb hatch)
+local function bar(f: UnitFrame, level: number, color: string?, texture: string?, tiled: string?): StatusBar
     local b = CreateFrame("StatusBar", nil, f.inner)
-    b:SetStatusBarTexture(WHITE)
+    if tiled then
+        -- (the fill's own texture keeps the skin: the bar's would set the
+        -- file again without the repeat)
+        b:SetStatusBarTexture(draw.textureFile(tiled))
+        draw.skin(b:GetStatusBarTexture(), tiled, true)
+    else
+        draw.skinBar(b, texture or "health-bar")
+    end
     b:GetStatusBarTexture():SetSnapToPixelGrid(false)
     b:SetFrameLevel(f:GetFrameLevel() + level)
     b:SetMinMaxValues(0, 1)
@@ -468,9 +469,11 @@ end
 -- 0.9, public: raidMarker(parent, size) makes the texture (hidden), and
 -- showRaidMarker(texture, unit[, api]) shows that unit's marker on it, or
 -- hides it (no marker, no unit, or `api` without GetRaidTargetIndex).
+-- The sheet is the texture token "raid-markers" (the game's: eight 64px
+-- cells, four to a row; a theme's own in the same cells).
 export function raidMarker(parent: Frame, size: number, layer: DrawLayer?): Texture
     local t = parent:CreateTexture(nil, layer or "OVERLAY")
-    t:SetTexture(MARKERS)
+    draw.skin(t, "raid-markers")
     t:SetSize(size, size)
     t:Hide()
     return t
@@ -1226,14 +1229,8 @@ export class UnitFrame extends Button
         self.incoming:SetPoint("TOPLEFT", self.health:GetStatusBarTexture(), "TOPRIGHT")
         self.incoming:SetPoint("BOTTOMLEFT", self.health:GetStatusBarTexture(), "BOTTOMRIGHT")
         self.incoming:SetWidth(w - 2)
-        self.absorb = bar(self, 5)
-        self.absorb:SetStatusBarTexture(HATCH)
-        local hatch = self.absorb:GetStatusBarTexture()
-        -- (tiles only with the texture set to repeat: without it the game
-        -- stretched the hatch's edge across the shield, seen 2026-11-08)
-        hatch:SetTexture(HATCH, "REPEAT", "REPEAT")
-        hatch:SetHorizTile(true)
-        hatch:SetVertTile(true)
+        -- (the hatch tiled: draw.skin sets it to repeat)
+        self.absorb = bar(self, 5, nil, nil, "absorb")
         draw.paint(self.absorb, "ward-absorb")
         self.absorb:SetPoint("TOPLEFT", self.incoming:GetStatusBarTexture(), "TOPRIGHT")
         self.absorb:SetPoint("BOTTOMLEFT", self.incoming:GetStatusBarTexture(), "BOTTOMRIGHT")
@@ -1242,10 +1239,10 @@ export class UnitFrame extends Button
         -- The power line: along the bottom; inside the anchor frame on the player.
         -- Under it, while your cast's cost shows (the player's frame), your
         -- power now, faded: the line itself then shows what stays.
-        self.powerSpend = bar(self, 6, "mana")
+        self.powerSpend = bar(self, 6, "mana", "power-bar")
         self.powerSpend:Hide()
-        self.power = bar(self, 7, "mana")
-        self.powerLow = bar(self, 8, "amber")
+        self.power = bar(self, 7, "mana", "power-bar")
+        self.powerLow = bar(self, 8, "amber", "power-bar")
         self.powerLow:SetAlpha(0)
         local inset = opts.anchor and 3 or 0
         for _, b in ipairs({ self.powerSpend, self.power, self.powerLow }) do
@@ -1319,7 +1316,8 @@ export class UnitFrame extends Button
     end
 
     -- 0.24: a mob tagged by someone else (you get nothing from it, asked
-    -- 2026-11-06): its health grey, the low-health colour away (opts.tapped;
+    -- 2026-11-06): its health slate and striped (grey until 2026-11-12; name
+    -- and level keep their colours), the low-health colour away (opts.tapped;
     -- as ElvUI's oUF: not a player's or a pet's, UnitIsTapDenied; the tag
     -- changes with UNIT_FACTION, a tagger's death too). Whether it is.
     function Tapped(): boolean
@@ -1337,7 +1335,7 @@ export class UnitFrame extends Button
         return tapped
     end
 
-    -- The health fill: grey when tapped, a player's class colour (when class
+    -- The health fill: tapped, a player's class colour (when class
     -- colours are on: UI/HealthFill decides at paint time), else the fill.
     function PaintHealth()
         -- (an NPC's reaction colour when reaction colours are on, as well)
@@ -1540,9 +1538,10 @@ export class UnitFrame extends Button
         self.role:Hide()
         self.classDot:Hide()
         local marker: Texture? = nil
-        if not secret.isSecret(role) and role and ROLE_ICON[role] then
-            self.role:SetTexture(ROLE_ICON[role])
-            draw.paint(self.role, role == "DAMAGER" and "ink-muted" or "ink")
+        local roleIcon = not secret.isSecret(role) and role and ROLE_ICON[role] or nil
+        if roleIcon then
+            draw.skin(self.role, roleIcon)
+            draw.paint(self.role, roleIcon == "role-damage" and "ink-muted" or "ink")
             self.role:Show()
             marker = self.role
         elseif classColor then

@@ -232,6 +232,33 @@ local function durability()
     mock.player:setDurability(worn(), 100, 100)
 end
 
+@test("gear closed with its x: away while damaged, broken too; back once repaired and damaged again")
+local function durabilityClosed()
+    -- (asked 2026-11-12: hidden even as the gear gets worse; only a repair in
+    -- between brings it back)
+    mock.player:equip(5, { id = VEST, durability = 100, maxDurability = 100 })
+    mock.advanceFrames(2)
+    local function wear(left: number)
+        mock.player:setDurability(worn(), left, 100)
+        mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+        tick()
+    end
+    wear(15)
+    assert(note("suu:durability").onClose)(mock.partial({}))
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- worse: still away, broken too
+    wear(10)
+    expect(M.notes["suu:durability"]).toBeNil()
+    wear(0)
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- repaired, then damaged again: back
+    wear(100)
+    wear(15)
+    expect(note("suu:durability").tone).toBe("warning")
+    wear(100)
+    expect(M.notes["suu:durability"]).toBeNil()
+end
+
 -- The Durability module's reading, made up.
 local function reading(state: string, pieces: { [string]: unknown }[]): () -> DurabilityInfo?
     return function(): DurabilityInfo?
@@ -291,6 +318,29 @@ local function bags()
         return bag == 0 and 1 or 0, 0
     end)
     mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(M.notes["suu:bags"]).toBeNil()
+end
+
+@test("a condition's note closed with its x: away while it holds, back once it has cleared and comes again")
+local function conditionClosed()
+    local function full(on: boolean)
+        mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number, number)
+            return (not on and bag == 0) and 1 or 0, 0
+        end)
+        mock.fireEvent("BAG_UPDATE_DELAYED")
+    end
+    full(true)
+    local d = assert(M.notes["suu:bags"])
+    assert(d.onClose)(mock.partial({}))
+    expect(M.notes["suu:bags"]).toBeNil()
+    -- still full: stays away
+    full(true)
+    expect(M.notes["suu:bags"]).toBeNil()
+    -- a slot free, then full again: back
+    full(false)
+    full(true)
+    expect(M.notes["suu:bags"] ~= nil).toBe(true)
+    full(false)
     expect(M.notes["suu:bags"]).toBeNil()
 end
 

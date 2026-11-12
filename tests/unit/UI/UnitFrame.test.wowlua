@@ -13,6 +13,9 @@ import * as events from "/Core/Events"
 import tokens as T from "/Core/Tokens"
 import internal shortNumber, isOffline, healthPercent, metaText, belowCurve, lowTintCurve, inYourGroup, indicatorKey, pointOffset, LOW_HEALTH, difficultyColor, greyLevel, groupTierIn from "/UI/UnitFrame"
 import internal paints from "/UI/Draw"
+import * as healthFill from "/UI/HealthFill"
+import * as themes from "/Core/Themes"
+import * as settings from "/Core/Settings"
 import expectNoErrors, newParent, expectPingable from "../../helpers"
 
 type Person = uf.StandInPerson
@@ -1531,7 +1534,9 @@ local function groupScoped()
     mock.player:leaveCombat()
 end
 
-@test("a mob tagged by someone else: its health grey, no low-health colour; back when the tag goes (opts.tapped)")
+@test(
+    "a mob tagged by someone else: its health slate and striped, no low-health colour; back when the tag goes (opts.tapped)"
+)
 local function tappedMob()
     local denied, controlled = true, false
     local a = api(priest({ health = 0.2 }))
@@ -1544,18 +1549,77 @@ local function tappedMob()
     local f = preview(priest({ health = 0.2 }), { tapped = true }, a)
     expect(f.tappedLook).toBe(true)
     expect(f.healthLow:GetAlpha()).toBe(0)
+    expect(healthFill.lookOf(f.health)).toBe("tapped")
+    local stripes = assert(healthFill.stripesOf(f.health))
+    expect(stripes:IsVisible()).toBe(true)
+    expect(stripes:GetTextureFilePath()).toBe(T.texture.tapped)
+    expect(tokenOf(stripes)).toBe("unit-fill-tapped-stripe")
+    -- the name keeps its colour (as without the tag)
+    expect(tokenOf(f.name)).toBe(tokenOf(preview(priest({ health = 0.2 })).name))
     -- the tagger died: the tag goes
     denied = false
     f:UpdateHealth(true)
     expect(f.tappedLook).toBe(false)
-    -- a player's or a pet's: never grey
+    expect(stripes:IsShown()).toBe(false)
+    -- a player's or a pet's: never tapped
     denied, controlled = true, true
     f:UpdateHealth(true)
     expect(f.tappedLook).toBe(false)
-    -- without the option: never grey
+    expect(stripes:IsShown()).toBe(false)
+    -- without the option: never tapped
     controlled = false
     local g = preview(priest(), nil, a)
     expect(g.tappedLook).toBe(false)
+    expect(healthFill.stripesOf(g.health)).toBeNil()
+end
+
+@test(
+    "a theme's textures on a unit frame: bars, absorb hatch, role icon, raid marker and glow, live; SuuUI's back after"
+)
+local function frameTextures()
+    local f = preview(priest({ role = "TANK", incoming = 0.1, absorb = 0.2 }))
+    local theme = "test-frame-textures"
+    themes.register({
+        id = theme,
+        textures = {
+            ["health-bar"] = "Interface\\AddOns\\Plug\\Smooth",
+            ["power-bar"] = "Interface\\AddOns\\Plug\\Line",
+            absorb = "Interface\\AddOns\\Plug\\Dots",
+            ["role-tank"] = "Interface\\AddOns\\Plug\\Shield",
+            ["raid-markers"] = "Interface\\AddOns\\Plug\\Markers",
+            glow = "Interface\\AddOns\\Plug\\Halo",
+        },
+    })
+    local function file(b: StatusBar): string?
+        return b:GetStatusBarTexture():GetTextureFilePath()
+    end
+    settings.setAccount("theme", theme)
+    themes.apply()
+    for _, b in ipairs({ f.health, f.healthLow, f.ghost, f.incoming }) do
+        expect(file(b)).toBe("Interface\\AddOns\\Plug\\Smooth")
+    end
+    for _, b in ipairs({ f.power, f.powerSpend, f.powerLow }) do
+        expect(file(b)).toBe("Interface\\AddOns\\Plug\\Line")
+    end
+    local hatch = f.absorb:GetStatusBarTexture()
+    expect(hatch:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Dots")
+    expect(hatch:GetHorizTile()).toBe(true)
+    expect(f.role:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Shield")
+    expect(f.marker:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Markers")
+    expect(f.glow.parts[1]:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Halo")
+    -- the colours stay the tokens'
+    expect(tokenOf(f.absorb)).toBe("ward-absorb")
+    expect(tokenOf(f.power)).toBe("mana")
+    -- a frame made now takes the theme's
+    local g = preview(priest({ role = "HEALER" }))
+    expect(file(g.health)).toBe("Interface\\AddOns\\Plug\\Smooth")
+    expect(g.role:GetTextureFilePath()).toBe(T.texture["role-healer"])
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(file(f.health)).toBe("Interface\\Buttons\\WHITE8X8")
+    expect(hatch:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\Hatch.tga")
+    expect(f.role:GetTextureFilePath()).toBe("Interface\\AddOns\\SuuUI\\Media\\Textures\\RoleTank.tga")
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------
