@@ -306,11 +306,171 @@ export function isTexture(name: string): boolean
     return files[name] ~= nil
 end
 
-local function setSkin(region: Texture | StatusBar, file: string, tile: boolean)
+--------------------------------------------------------------------------------
+-- Repeating bar art (asked 2026-11-12: Pink Cat's toe beans came out as long
+-- ovals on the XP bar and the meters). A theme gives a bar token's art with
+-- its height ({ file, height }: Themes.wowlua); the fill then shows it as
+-- copies along the bar, each scaled to the bar's height, so the art keeps its
+-- shape at any length and stays put as the value changes. The copies are a
+-- texture of their own over the fill, anchored to its corners (they follow
+-- the value, a secret one too, as the tapped stripes do) and scaled so the
+-- game's tiling (copies at the art's size times the texture's scale: decision
+-- T598 in wowlua) makes each copy as tall as the bar. The fill's own drawing
+-- goes out of sight by its alpha; the copies take every colour set on it (its
+-- vertex colour, gradient, desaturation and the bar's colour), its shown state
+-- and its layer. A bar token given as a plain file is stretched, as SuuUI's own
+-- white square is: then nothing is made.
+--------------------------------------------------------------------------------
+
+-- each bar token's art height in px while the theme repeats it (Themes.apply)
+local tileHeights: { [string]: number } = {}
+
+-- The bar tokens whose art the theme repeats: token -> the art's height in px.
+export function setTiles(heights: { [string]: number })
+    tileHeights = heights
+end
+
+-- The art height a token repeats at now (its fallback's where its file is
+-- empty); nil: stretched.
+local function tileOf(token: string): number?
+    local other = FALLBACK[token]
+    if files[token] == "" and other then
+        return tileHeights[other]
+    end
+    return tileHeights[token]
+end
+
+-- per fill (a bar's texture or a plain fill texture): the copies over it, the
+-- art's height, the bar that owns it, whether the copies show, and the alpha
+-- the fill had (now the copies')
+local repeatOver: { [Texture]: Texture } = setmetatable({}, { __mode = "k" })
+local repeatArt: { [Texture]: number } = setmetatable({}, { __mode = "k" })
+local repeatBar: { [Texture]: StatusBar } = setmetatable({}, { __mode = "k" })
+local repeatOn: { [Texture]: boolean } = setmetatable({}, { __mode = "k" })
+local repeatAlpha: { [Texture]: number } = setmetatable({}, { __mode = "k" })
+local zeroing = false
+
+-- The fill's own alpha, set without its hook taking it for the copies'.
+local function fillAlpha(target: Texture, alpha: number)
+    zeroing = true
+    pcall(target.SetAlpha, target, alpha)
+    zeroing = false
+end
+
+-- Each copy as tall as the bar (the bar's height, or the plain fill's).
+local function fitRepeat(target: Texture)
+    local over, art = repeatOver[target], repeatArt[target]
+    if not (over and art and repeatOn[target]) then
+        return
+    end
+    local h = (repeatBar[target] or target):GetHeight()
+    if type(h) == "number" and h > 0 then
+        over:SetScale(h / art)
+    end
+end
+
+local function makeRepeat(target: Texture, bar: StatusBar?): Texture
+    local layer, sub = target:GetDrawLayer()
+    local over = (target:GetParent() :: Frame):CreateTexture(nil, layer, nil, math.min(7, (sub or 0) + 1))
+    over:SetPoint("TOPLEFT", target, "TOPLEFT")
+    over:SetPoint("BOTTOMRIGHT", target, "BOTTOMRIGHT")
+    over:SetSnapToPixelGrid(false)
+    over:SetTexelSnappingBias(0)
+    over:SetVertexColor(target:GetVertexColor())
+    repeatOver[target] = over
+    repeatBar[target] = bar
+    -- what is set on the fill goes to the copies
+    hooksecurefunc(target, "SetVertexColor", function(_: Texture, r: number, g: number, b: number, a: number?)
+        over:SetVertexColor(r, g, b, a)
+    end)
+    hooksecurefunc(target, "SetGradient", function(
+        _: Texture,
+        orientation: Orientation,
+        from: ColorMixin,
+        to: ColorMixin
+    )
+        over:SetGradient(orientation, from, to)
+    end)
+    hooksecurefunc(target, "SetDesaturated", function(_: Texture, on: boolean?)
+        over:SetDesaturated(on)
+    end)
+    local function sight()
+        over:SetShown(repeatOn[target] == true and target:IsShown())
+    end
+    for _, setter in ipairs({ "Show", "Hide", "SetShown" }) do
+        hooksecurefunc(target, setter, sight)
+    end
+    hooksecurefunc(target, "SetDrawLayer", function(_: Texture, l: DrawLayer, s: number?)
+        over:SetDrawLayer(l, math.min(7, (s or 0) + 1))
+    end)
+    hooksecurefunc(target, "SetAlpha", function(_: Texture, a: number)
+        if zeroing or not repeatOn[target] then
+            return
+        end
+        repeatAlpha[target] = a
+        over:SetAlpha(a)
+        fillAlpha(target, 0)
+    end)
+    local function fit()
+        fitRepeat(target)
+    end
+    if bar then
+        hooksecurefunc(bar, "SetStatusBarColor", function(_: StatusBar, r: number, g: number, b: number, a: number?)
+            over:SetVertexColor(r, g, b, a)
+        end)
+        bar:HookScript("OnSizeChanged", fit)
+    else
+        for _, setter in ipairs({ "SetHeight", "SetSize", "SetPoint", "SetAllPoints" }) do
+            hooksecurefunc(target, setter, fit)
+        end
+        ;(target:GetParent() :: Frame):HookScript("OnSizeChanged", fit)
+    end
+    return over
+end
+
+-- The fill's art repeated, `art` px tall (nil: the fill shows its file
+-- stretched again, the copies hidden).
+local function setRepeat(target: Texture, bar: StatusBar?, file: string, art: number?)
+    local over = repeatOver[target]
+    if not art then
+        if over and repeatOn[target] then
+            repeatOn[target] = nil
+            over:Hide()
+            fillAlpha(target, repeatAlpha[target] or 1)
+        end
+        return
+    end
+    over = over or makeRepeat(target, bar)
+    if not repeatOn[target] then
+        repeatOn[target] = true
+        repeatAlpha[target] = target:GetAlpha()
+    end
+    repeatArt[target] = art
+    over:SetTexture(file, "REPEAT", "REPEAT")
+    over:SetHorizTile(true)
+    over:SetVertTile(false)
+    over:SetAlpha(repeatAlpha[target] or 1)
+    fillAlpha(target, 0)
+    over:SetShown(target:IsShown())
+    fitRepeat(target)
+end
+
+-- The copies drawn over a fill (a bar, or a plain fill texture; nil: none,
+-- its art stretched as SuuUI's own).
+export function repeatOf(region: Texture | StatusBar): Texture?
+    local target = region:GetObjectType() == "StatusBar" and (region :: StatusBar):GetStatusBarTexture() or
+        region :: Texture
+    local over = repeatOver[target]
+    return over and repeatOn[target] and over or nil
+end
+
+local function setSkin(region: Texture | StatusBar, file: string, tile: boolean, art: number?)
     if region:GetObjectType() == "StatusBar" then
         -- (the bar keeps its texture object: SetStatusBarTexture with a file
         -- sets it on the texture the bar has)
-        (region :: StatusBar):SetStatusBarTexture(file)
+        local bar = region :: StatusBar
+        bar:SetStatusBarTexture(file)
+        setRepeat(bar:GetStatusBarTexture(), bar, file, art)
         return
     end
     local t = region :: Texture
@@ -322,25 +482,46 @@ local function setSkin(region: Texture | StatusBar, file: string, tile: boolean)
         t:SetVertTile(true)
     else
         t:SetTexture(file)
+        setRepeat(t, nil, file, art)
     end
+end
+
+-- the art height each skinned region repeats at (nil: stretched), and the
+-- game's bars skinned (no copies over them)
+local skinArt: { [Texture | StatusBar]: number } = setmetatable({}, { __mode = "k" })
+local skinForeign: { [Texture | StatusBar]: boolean } = setmetatable({}, { __mode = "k" })
+
+-- What a region skinned with `token` shows now: its file and the height its
+-- art repeats at. A game's bar where the theme repeats the art: the plain
+-- fill (the copies would need hooks on the game's bar).
+local function skinNow(region: Texture | StatusBar, token: string, tile: boolean): (string?, number?)
+    local file = fileOf(token)
+    local art = not tile and tileOf(token) or nil
+    if art and skinForeign[region] then
+        return WHITE, nil
+    end
+    return file, art
 end
 
 -- (a kept colour stays while a skin is set: a skin is set before its colour)
 local function keepSkin(region: Texture | StatusBar, token: string, tile: boolean)
-    local file = fileOf(token) or error("SuuUI: unknown texture token " .. tostring(token), 3)
-    if skinToken[region] == token and skinFile[region] == file and (skinTiled[region] == true) == tile then
+    local found, art = skinNow(region, token, tile)
+    local file = found or error("SuuUI: unknown texture token " .. tostring(token), 3)
+    if skinToken[region] == token and skinFile[region] == file and (skinTiled[region] == true) == tile and
+        skinArt[region] == art then
         return
     end
     skinToken[region], skinFile[region] = token, file
     skinTiled[region] = tile or nil
+    skinArt[region] = art
     -- (nothing kept on it yet, as when a frame is built: set at once)
     if paints[region] == nil then
-        setSkin(region, file, tile)
+        setSkin(region, file, tile, art)
         return
     end
     local was = painting
     painting = true
-    local ok: boolean, err: unknown = pcall(setSkin, region, file, tile)
+    local ok: boolean, err: unknown = pcall(setSkin, region, file, tile, art)
     painting = was
     if not ok then
         error(err, 3)
@@ -352,15 +533,22 @@ export function skin(tex: Texture, token: string, tile: boolean?)
     keepSkin(tex, token, tile == true)
 end
 
--- A StatusBar's fill from a texture token, stretched along the bar.
-export function skinBar(bar: StatusBar, token: string)
+-- A StatusBar's fill from a texture token, stretched along the bar (its art
+-- repeated where the theme gives its height: above). `foreign`: a bar of the
+-- game's (the tooltip's health bar), which shows the plain fill where the
+-- theme repeats the art.
+export function skinBar(bar: StatusBar, token: string, foreign: boolean?)
+    skinForeign[bar] = foreign or nil
     keepSkin(bar, token, false)
 end
 
 -- A texture or bar let go of its skin: something else shows there now (a
 -- class icon where a role was), which a theme change must leave alone.
 export function unskin(region: Texture | StatusBar)
-    skinToken[region], skinFile[region], skinTiled[region] = nil, nil, nil
+    skinToken[region], skinFile[region], skinTiled[region], skinArt[region] = nil, nil, nil, nil
+    local target = region:GetObjectType() == "StatusBar" and (region :: StatusBar):GetStatusBarTexture() or
+        region :: Texture
+    setRepeat(target, nil, "", nil)
 end
 
 -- The texture token a texture or bar was skinned with (nil: none).
@@ -458,7 +646,8 @@ export function reskin()
     end
     local list: (Texture | StatusBar)[] = {}
     for region, token in pairs(skinToken) do
-        if fileOf(token) ~= skinFile[region] then
+        local file, art = skinNow(region, token, skinTiled[region] == true)
+        if file ~= skinFile[region] or art ~= skinArt[region] then
             list[#list + 1] = region
         end
     end
@@ -477,17 +666,18 @@ export function reskin()
     end
     painting = true
     for _, region in ipairs(list) do
-        local file = fileOf(skinToken[region] or "") or skinFile[region] or ""
         local tile = skinTiled[region] == true
-        skinFile[region] = file
+        local found, art = skinNow(region, skinToken[region] or "", tile)
+        local file = found or skinFile[region] or ""
+        skinFile[region], skinArt[region] = file, art
         local ok: boolean, err: unknown
         if region:GetObjectType() == "StatusBar" then
-            ok, err = pcall(setSkin, region, file, tile)
+            ok, err = pcall(setSkin, region, file, tile, art)
         else
             local t = region :: Texture
             -- (a secret marker cell can't be read back: its next update sets it)
             local okCoords, a, b, c, d, e, f, g, h = pcall(t.GetTexCoord, t)
-            ok, err = pcall(setSkin, region, file, tile)
+            ok, err = pcall(setSkin, region, file, tile, art)
             if ok and okCoords then
                 pcall(t.SetTexCoord, t, a, b, c, d, e, f, g, h)
             end

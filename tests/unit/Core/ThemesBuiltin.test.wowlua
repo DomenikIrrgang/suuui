@@ -4,7 +4,7 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import tokens as T, Color from "/Core/Tokens"
 import * as themes from "/Core/Themes"
-import type Theme, ThemeColors from "/Core/Themes"
+import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
 import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
 import * as draw from "/UI/Draw"
@@ -37,6 +37,14 @@ local function colorsOf(id: string, class: string?): ThemeColors
         return c(class)
     end
     return c
+end
+
+-- A theme texture's file (a repeating bar's too).
+local function fileOf(v: string | ThemeTile | nil): string?
+    if type(v) == "table" then
+        return v.file
+    end
+    return v
 end
 
 local function rgb(c: number[]?): number[]
@@ -272,8 +280,9 @@ local function pinkcatFiles()
     expect(names).toEqual(want)
     expect(#names).toBe(30)
     local tokens: string[] = {}
-    for token, file in pairs(t.textures) do
+    for token, value in pairs(t.textures) do
         tokens[#tokens + 1] = token
+        local file = assert(fileOf(value))
         tex:SetTexture(file)
         expect(tex:GetTextureFilePath()).toBe(file)
     end
@@ -414,7 +423,7 @@ local function pinkcatRoundTrip()
         slot = T.size.slot,
     }
     local cat = theme("pinkcat")
-    local catBag, catHealth = assert(cat.glyphs.bag), assert(cat.textures["health-bar"])
+    local catBag, catHealth = assert(cat.glyphs.bag), assert(fileOf(cat.textures["health-bar"]))
     local parent = newParent()
     local icon = parent:CreateTexture()
     draw.glyph(icon, "bag")
@@ -432,18 +441,25 @@ local function pinkcatRoundTrip()
     settings.setAccount("theme", "pinkcat")
     themes.apply()
     expect(themes.appliedTheme()).toBe("pinkcat")
-    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(cat.textures["plate-health-bar"])
-    expect(assert(draw.patternOf(ground)):GetTextureFilePath()).toBe(cat.textures["surface-pattern"])
-    expect(corner:GetTextureFilePath()).toBe(cat.textures.corner)
+    expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(fileOf(cat.textures["plate-health-bar"]))
+    expect(assert(draw.patternOf(ground)):GetTextureFilePath()).toBe(fileOf(cat.textures["surface-pattern"]))
+    expect(corner:GetTextureFilePath()).toBe(fileOf(cat.textures.corner))
     expect(corner:GetRotation()).toBeCloseTo(0, 4)
-    expect(jewel:GetTextureFilePath()).toBe(cat.textures.jewel)
-    expect(mark:GetTextureFilePath()).toBe(cat.textures.mark)
+    expect(jewel:GetTextureFilePath()).toBe(fileOf(cat.textures.jewel))
+    expect(mark:GetTextureFilePath()).toBe(fileOf(cat.textures.mark))
     expect(draw.dividerStrips(divider)).never.toBeNil()
     close(rgb(T.color.ink), { 1, 0xF4 / 255, 0xE8 / 255 }, 6)
     expect(T.glyph.bag).toBe(catBag)
     expect(T.glyph.flag).toBe(before.flag)
     expect(icon:GetTextureFilePath()).toBe(catBag)
     expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(catHealth)
+    -- the bars' art repeats at their height (stretched, the beans were
+    -- long ovals: a player's report, 2026-11-12)
+    expect(assert(draw.repeatOf(bar)):GetTextureFilePath()).toBe(catHealth)
+    expect(draw.repeatOf(plate)).never.toBeNil()
+    for token in pairs(themes.BAR_TOKENS) do
+        expect(type(cat.textures[token])).toBe("table")
+    end
     expect(T.space["space-4"]).toBe(9)
     expect(T.size.slot).toBe(38)
     settings.setAccount("theme", nil)
@@ -456,6 +472,8 @@ local function pinkcatRoundTrip()
     expect(icon:GetTextureFilePath()).toBe(before.bag)
     expect(bar:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
     expect(plate:GetStatusBarTexture():GetTextureFilePath()).toBe(before.health)
+    expect(draw.repeatOf(bar)).toBeNil()
+    expect(draw.repeatOf(plate)).toBeNil()
     expect(draw.patternOf(ground)).toBeNil()
     expect(corner:GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
     expect(corner:GetRotation()).toBeCloseTo(math.rad(45), 4)

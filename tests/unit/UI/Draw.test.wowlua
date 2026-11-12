@@ -848,6 +848,124 @@ local function plateBars()
     expect(cast:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["cast-bar"])
 end
 
+-- A bar token's art repeated (as a theme's { file, height } does), undone by
+-- the function returned.
+local function repeatArt(token: string, file: string, height: number): () -> ()
+    local files = T.texture :: { [string]: string }
+    local was = assert(files[token])
+    files[token] = file
+    draw.setTiles({ [token] = height })
+    draw.reskin()
+    return function()
+        files[token] = was
+        draw.setTiles({})
+        draw.reskin()
+    end
+end
+
+@test(
+    "a bar's art the theme repeats: copies along the bar at its height that follow the fill and its colours; stretched again after"
+)
+local function repeatedBars()
+    local p = host()
+    local bar = CreateFrame("StatusBar", nil, p)
+    bar:SetSize(300, 8)
+    bar:SetPoint("CENTER")
+    draw.skinBar(bar, "bar")
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(40)
+    draw.paint(bar, "mana")
+    local fill = bar:GetStatusBarTexture()
+    -- SuuUI's own look: the white square stretched, nothing made
+    expect(draw.repeatOf(bar)).toBeNil()
+    local before = #{ bar:GetRegions() }
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    local over = assert(draw.repeatOf(bar))
+    expect(#{ bar:GetRegions() }).toBe(before + 1)
+    expect(over:GetTextureFilePath()).toBe(CAT .. "BeanBar.tga")
+    expect(over:GetHorizTile()).toBe(true)
+    expect(over:GetVertTile()).toBe(false)
+    -- each copy as tall as the bar: 16 px art at half its size
+    expect(over:GetScale()).toBeCloseTo(0.5)
+    -- over the fill, which shows nothing itself
+    expect(fill:GetAlpha()).toBe(0)
+    -- (where, on the screen: the copies' own units are scaled)
+    local function onScreen(r: Region, x: number): number
+        return x * r:GetEffectiveScale()
+    end
+    expect(onScreen(over, over:GetLeft())).toBeCloseTo(onScreen(fill, fill:GetLeft()))
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(fill, fill:GetRight()))
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(bar, bar:GetLeft() + 120))
+    -- the fill's colours: the bar's, a gradient, a repaint
+    draw.repaint()
+    local r, g, b = over:GetVertexColor()
+    expect(colorIs(r, g, b, nil, "mana")).toBe(true)
+    bar:SetStatusBarColor(1, 0, 0, 1)
+    r, g, b = over:GetVertexColor()
+    expect({ r, g, b }).toEqual({ 1, 0, 0 })
+    local gradients = record(over, "SetGradient")
+    draw.paintGradient(fill, "HORIZONTAL", "unit-fill-deep", "unit-fill")
+    expect(#gradients).toBe(1)
+    -- the value moves: the copies with the fill
+    bar:SetValue(90)
+    expect(onScreen(over, over:GetRight())).toBeCloseTo(onScreen(bar, bar:GetLeft() + 270))
+    -- the bar grows: the copies too
+    bar:SetHeight(24)
+    mock.advanceFrames(1)
+    expect(over:GetScale()).toBeCloseTo(1.5)
+    -- shown with the fill, its alpha theirs
+    fill:Hide()
+    expect(over:IsShown()).toBe(false)
+    fill:Show()
+    expect(over:IsShown()).toBe(true)
+    fill:SetAlpha(0.5)
+    expect(over:GetAlpha()).toBeCloseTo(0.5, 2)
+    expect(fill:GetAlpha()).toBe(0)
+    -- the theme stretches it again: the fill shows its file, the copies go
+    back()
+    expect(draw.repeatOf(bar)).toBeNil()
+    expect(over:IsShown()).toBe(false)
+    expect(fill:GetAlpha()).toBeCloseTo(0.5, 2)
+    expect(fill:GetTextureFilePath()).toBe(T.texture.bar)
+end
+
+@test(
+    "repeated art on a plain fill follows its size; the plates repeat the unit frames' art; the game's bars take the plain fill"
+)
+local function repeatedFills()
+    local p = host()
+    local t = draw.barFill(p, "progress-fill")
+    t:SetPoint("TOPLEFT")
+    local plate = CreateFrame("StatusBar", nil, p)
+    plate:SetSize(140, 10)
+    plate:SetPoint("CENTER")
+    draw.skinBar(plate, "plate-health-bar")
+    local game = CreateFrame("StatusBar", nil, p)
+    game:SetSize(200, 4)
+    game:SetPoint("BOTTOM")
+    draw.skinBar(game, "health-bar", true)
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    t:SetSize(200, 4)
+    local over = assert(draw.repeatOf(t))
+    expect(over:GetScale()).toBeCloseTo(0.25)
+    expect(t:GetAlpha()).toBe(0)
+    t:SetHeight(8)
+    expect(over:GetScale()).toBeCloseTo(0.5)
+    back()
+    expect(t:GetAlpha()).toBe(1)
+    local back2 = repeatArt("health-bar", CAT .. "PawBar.tga", 32)
+    -- (no file of their own: the plates take health-bar's art and height)
+    local plateOver = assert(draw.repeatOf(plate))
+    expect(plateOver:GetTextureFilePath()).toBe(CAT .. "PawBar.tga")
+    expect(plateOver:GetScale()).toBeCloseTo(10 / 32)
+    -- the game's own bar: no copies (no hooks on it), the plain fill
+    expect(draw.repeatOf(game)).toBeNil()
+    expect(game:GetStatusBarTexture():GetTextureFilePath()).toBe("Interface\\Buttons\\WHITE8X8")
+    back2()
+    expect(draw.repeatOf(plate)).toBeNil()
+    expect(game:GetStatusBarTexture():GetTextureFilePath()).toBe(T.texture["health-bar"])
+end
+
 @test("the cross is two crossed strokes in a square, recoloured together")
 local function crosses()
     local p = host()

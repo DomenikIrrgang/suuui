@@ -17,8 +17,8 @@ did. Each keeps what it stands for (a bag, a magnifier, a gear) and gains
 cat ears, a cat's face, whiskers, a slit pupil, a yarn ball or a sprig of
 catnip.
 
-PawBar.tga (256x32, white): the health bars' fill, stretched along the bar
-and tinted by its colour; paw prints at 64% (BAR_SHADE), darker than the
+PawBar.tga (256x32, white): the health bars' fill, repeated along the bar
+at its height (seamless left to right) and tinted by its colour; paw prints at 64% (BAR_SHADE), darker than the
 fill so names on it keep their contrast, still one fill. CastBar.tga
 (256x16): the cast bars' row of paws. PlateBar.tga (256x20): the
 nameplates' bars (about 140x10), simpler three-toed paws that stay paws.
@@ -36,7 +36,8 @@ Heart.tga (64x64, white): the checkbox's tick as a little heart (tinted
 on-signal in game), the jewels and the small marks (toggles, sliders).
 
 BeanBar.tga (256x16, white): the thin bars (power lines, XP and the other
-plain bars, aura drains), a row of toe beans at 70%, stretched.
+plain bars, aura drains), a row of toe beans at 70%, repeated along the bar
+at its height like the paw bars.
 
 Hearts.tga (16x16, white): small hearts, tiled: the absorb shield and a
 swing's delay, where SuuUI draws its hatch.
