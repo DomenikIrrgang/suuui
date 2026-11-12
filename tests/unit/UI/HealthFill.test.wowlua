@@ -1,0 +1,115 @@
+-- UI/HealthFill: a health bar's fill: the unit-fill, a class colour, or a
+-- tagged mob's slate with its stripes (made once, shown and hidden with the
+-- look, following the fill, from the theme's "tapped" texture and stripe
+-- colour).
+
+import test, expect, afterEach from "wowlua:test"
+import tokens as T from "/Core/Tokens"
+import * as healthFill from "/UI/HealthFill"
+import * as draw from "/UI/Draw"
+import * as themes from "/Core/Themes"
+import * as settings from "/Core/Settings"
+import internal paints from "/UI/Draw"
+import expectNoErrors, newParent from "../../helpers"
+
+local parent: Frame? = nil
+
+local function healthBar(): StatusBar
+    local p = newParent(200, 40)
+    parent = p
+    local b = CreateFrame("StatusBar", nil, p)
+    b:SetAllPoints()
+    draw.skinBar(b, "health-bar")
+    b:SetMinMaxValues(0, 100)
+    b:SetValue(40)
+    return b
+end
+
+-- the gradient a texture was last given, as { r1, g1, b1, r2, g2, b2 }
+local gradients: { [Texture]: number[] } = setmetatable({}, { __mode = "k" })
+local function watchGradient(t: Texture)
+    hooksecurefunc(t, "SetGradient", function(_: Texture, _: string, from: ColorMixin, to: ColorMixin)
+        local r1, g1, b1 = from:GetRGB()
+        local r2, g2, b2 = to:GetRGB()
+        gradients[t] = { r1, g1, b1, r2, g2, b2 }
+    end)
+end
+
+local function near(a: number?, b: number): boolean
+    return a ~= nil and math.abs(a - b) < 0.002
+end
+
+@afterEach
+local function cleanup()
+    settings.setAccount("theme", nil)
+    themes.apply()
+    if parent then
+        (parent :: Frame):Hide()
+    end
+    parent = nil
+end
+
+@test("tapped: the slate gradient, with the stripes over the fill in their colour")
+local function tapped()
+    local b = healthBar()
+    local fill = b:GetStatusBarTexture()
+    watchGradient(fill)
+    healthFill.paint(b, "tapped")
+    expect(healthFill.lookOf(b)).toBe("tapped")
+    local g = assert(gradients[fill])
+    -- #2b384a, deep, left; #5c738f, right
+    expect(near(g[1], 0x2b / 255) and near(g[2], 0x38 / 255) and near(g[3], 0x4a / 255)).toBe(true)
+    expect(near(g[4], 0x5c / 255) and near(g[5], 0x73 / 255) and near(g[6], 0x8f / 255)).toBe(true)
+    local s = assert(healthFill.stripesOf(b))
+    expect(s:IsShown()).toBe(true)
+    expect(s:GetTextureFilePath()).toBe(T.texture.tapped)
+    expect(s:GetHorizTile()).toBe(true)
+    expect(s:GetVertTile()).toBe(true)
+    local p = assert(paints[s])
+    expect(p.token).toBe("unit-fill-tapped-stripe")
+    local _, _, _, a = s:GetVertexColor()
+    expect(near(a, 0.22)).toBe(true)
+    -- it follows the fill: 40% of the bar
+    expect((s:GetRight() or 0) - (s:GetLeft() or 0)).toBeCloseTo(80, 1)
+    b:SetValue(10)
+    expect((s:GetRight() or 0) - (s:GetLeft() or 0)).toBeCloseTo(20, 1)
+    expectNoErrors()
+end
+
+@test("the stripes go with the look: the fill or a class colour hides them; tapped again shows the same ones")
+local function stripesFollowLook()
+    local b = healthBar()
+    healthFill.paint(b, nil)
+    expect(healthFill.stripesOf(b)).toBeNil()
+    healthFill.paint(b, "tapped")
+    local s = assert(healthFill.stripesOf(b))
+    healthFill.paint(b, false)
+    expect(s:IsShown()).toBe(false)
+    healthFill.paint(b, "tapped")
+    expect(healthFill.stripesOf(b)).toBe(s)
+    expect(s:IsShown()).toBe(true)
+    healthFill.paint(b, "class-mage")
+    expect(s:IsShown()).toBe(false)
+end
+
+@test("a theme changes the stripes' texture and colour on a striped bar at once")
+local function themed()
+    local b = healthBar()
+    healthFill.paint(b, "tapped")
+    local s = assert(healthFill.stripesOf(b))
+    themes.register({
+        id = "test-stripes",
+        colors = { ["unit-fill-tapped-stripe"] = { 1, 0, 0, 0.5 } },
+        textures = { tapped = "Interface\\AddOns\\Plug\\Stripes" },
+    })
+    settings.setAccount("theme", "test-stripes")
+    themes.apply()
+    expect(s:GetTextureFilePath()).toBe("Interface\\AddOns\\Plug\\Stripes")
+    expect(s:GetHorizTile()).toBe(true)
+    local r, g, _, a = s:GetVertexColor()
+    expect(near(r, 1) and near(g, 0) and near(a, 0.5)).toBe(true)
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(s:GetTextureFilePath()).toBe(T.texture.tapped)
+    expectNoErrors()
+end
