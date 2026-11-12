@@ -46,8 +46,17 @@ local M: MinimapModule
 local TEX = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
 local ROUND_MASK = 186178
 -- the zone lines (zone, subzone, the instance line) end this far above the
--- disc: the north marker's 8px over the ring, plus space-3
-local ZONE_GAP = 8 + S["space-3"]
+-- disc: the north marker's 8px over the ring, plus space-3 (a theme's)
+local function zoneGap(): number
+    return 8 + S["space-3"]
+end
+
+-- The map's size: the setting's, or where it is the design's own (the
+-- default) the theme's minimap size.
+local function mapSize(): number
+    local size: number = M:Get("size")
+    return size == DEFAULTS.size and UI.Size("minimap") or size
+end
 
 --------------------------------------------------------------------------------
 -- Round buttons and decorations (shared by the real map and the preview)
@@ -179,7 +188,6 @@ export class Ring
         self.zoomIn = RoundButton.new(over, 22, "plus", 12)
         self.zoomOut = RoundButton.new(over, 22, "minus", 12)
         self.zoomOut:SetPoint("BOTTOMRIGHT", over, "BOTTOMRIGHT", 6, 6)
-        self.zoomIn:SetPoint("BOTTOM", self.zoomOut, "TOP", 0, S["space-2"])
         self.zoomIn:SetScript("OnClick", function()
             handlers.zoom(1)
         end)
@@ -217,7 +225,6 @@ export class MapBlock extends Frame
         self.disc = CreateFrame("Frame", nil, self)
         self.time = UI.Text(self, "caption", "ink")
         self.time:SetShadowed(true)
-        self.time:SetPoint("TOP", self.disc, "BOTTOM", 0, -S["space-3"])
         -- the clock opens the game's clock; right click, the calendar
         self.timeButton = CreateFrame("Button", nil, self)
         self.timeButton:SetAllPoints(self.time)
@@ -236,17 +243,20 @@ export class MapBlock extends Frame
                 if below then
                     line:SetPoint("BOTTOM", below, "TOP", 0, 0)
                 else
-                    line:SetPoint("BOTTOM", self.disc, "TOP", 0, ZONE_GAP)
+                    line:SetPoint("BOTTOM", self.disc, "TOP", 0, zoneGap())
                 end
                 below = line
             else
-                line:SetPoint("BOTTOM", self.disc, "TOP", 0, ZONE_GAP)
+                line:SetPoint("BOTTOM", self.disc, "TOP", 0, zoneGap())
             end
         end
     end
 
     function Layout(size: number, zone: boolean, clock: boolean)
         self.disc:SetSize(size, size)
+        -- (by the spacing: again with each layout, a theme's)
+        self.time:SetPoint("TOP", self.disc, "BOTTOM", 0, -S["space-3"])
+        self.deco.zoomIn:SetPoint("BOTTOM", self.deco.zoomOut, "TOP", 0, S["space-2"])
         for _, line in ipairs({ self.zone, self.sub, self.instance }) do
             line:SetWidth(size + 40)
             line:SetVisible(zone)
@@ -495,7 +505,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         if not block then
             return
         end
-        local size = self:Get("size")
+        local size = mapSize()
         local disc = block.disc
         self.placing = true
         if Minimap:GetParent() ~= disc then
@@ -639,14 +649,14 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         -- (the time now, as the game's clock settings show it: 24-hour or
         -- not, local or realm time; asked in game)
         preview.time:SetValue(clockText())
-        preview:Layout(self:Get("size"), self:Get("zone"), self:Get("clock"))
+        preview:Layout(mapSize(), self:Get("zone"), self:Get("clock"))
         return preview
     end
 
     function Relayout()
         local block = self.block
         if block then
-            block:Layout(self:Get("size"), self:Get("zone"), self:Get("clock"))
+            block:Layout(mapSize(), self:Get("zone"), self:Get("clock"))
         end
         self:PlaceMinimap()
         self:UpdateZone()
@@ -676,7 +686,8 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.pendingTheme = nil
-        block:Layout(self:Get("size"), self:Get("zone"), self:Get("clock"))
+        block:Layout(mapSize(), self:Get("zone"), self:Get("clock"))
+        self:PlaceMinimap()
     end
 
     override function OnEnable()
@@ -714,7 +725,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
             }
             block = MapBlock.new(SuuUI.Root, "SuuUIMinimap", handlers)
             block:SetFrameStrata("LOW")
-            block:Layout(self:Get("size"), self:Get("zone"), self:Get("clock"))
+            block:Layout(mapSize(), self:Get("zone"), self:Get("clock"))
             self.block = block
         end
         -- the game's clock code (GameTimeFrame, the calendar) loaded

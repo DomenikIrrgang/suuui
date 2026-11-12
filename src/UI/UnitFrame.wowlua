@@ -94,6 +94,10 @@ type Size = {
     width: string,
     name: string,
     role: number,
+    -- the inner padding and the gap between the row's parts: spacing tokens,
+    -- worked out into px (pad, gap) by resolveSizes
+    padToken: string,
+    gapToken: string,
     pad: number,
     gap: number,
     marker: number,
@@ -105,8 +109,10 @@ local SIZES: { [string]: Size } = {
         width = "bar-lg",
         name = "unit-name-lg",
         role = 14,
-        pad = S["space-4"],
-        gap = S["space-3"],
+        padToken = "space-4",
+        gapToken = "space-3",
+        pad = 0,
+        gap = 0,
         marker = 18,
         rise = 8,
     },
@@ -115,8 +121,10 @@ local SIZES: { [string]: Size } = {
         width = "bar-md",
         name = "unit-name",
         role = 12,
-        pad = S["space-4"],
-        gap = S["space-3"],
+        padToken = "space-4",
+        gapToken = "space-3",
+        pad = 0,
+        gap = 0,
         marker = 16,
         rise = 7,
     },
@@ -125,12 +133,23 @@ local SIZES: { [string]: Size } = {
         width = "bar-sm",
         name = "unit-name-sm",
         role = 10,
-        pad = S["space-3"],
-        gap = S["space-2"],
+        padToken = "space-3",
+        gapToken = "space-2",
+        pad = 0,
+        gap = 0,
         marker = 14,
         rise = 4,
     },
 }
+
+-- Each size's padding and gap from the spacing now (at load, and when a
+-- theme changes it: UnitFrame:PlaceByTheme).
+local function resolveSizes()
+    for _, size in pairs(SIZES) do
+        size.pad, size.gap = S[size.padToken], S[size.gapToken]
+    end
+end
+resolveSizes()
 
 local LOW_HEALTH = 0.35 -- the design's lowAt
 local LOW_MANA = 0.25
@@ -1139,6 +1158,8 @@ export class UnitFrame extends Button
     onTooltip: ((f: UnitFrame, tooltip: GameTooltip) -> ())? = nil
     -- after each health update
     onHealth: ((f: UnitFrame) -> ())? = nil
+    -- its size comes from its tokens (a theme's sizes reach it)
+    tokenSize: boolean = false
 
     constructor(parent: Frame?, unit: string?, given: UnitFrameOptions?)
         local opts: UnitFrameOptions = given or {}
@@ -1254,6 +1275,7 @@ export class UnitFrame extends Button
             b:SetPoint("BOTTOMRIGHT", self.inner, "BOTTOMRIGHT", -inset, inset)
             b:SetHeight(S["space-1"])
         end
+        self.tokenSize = not opts.frame
 
         -- Everything drawn over the bars: border, anchor frame, text, badges.
         local o = CreateFrame("Frame", nil, self)
@@ -1309,6 +1331,11 @@ export class UnitFrame extends Button
         self.marker = raidMarker(self.markerLayer, size.marker)
         self.marker:SetPoint("TOP", self, "TOP", 0, size.rise)
         self:FitRow() -- the row ends where the health text (and reserved room) begins
+        -- a theme's spacing and sizes: laid out again (out of combat: a
+        -- secure button)
+        draw.onLayout(self, function()
+            self:PlaceByTheme()
+        end)
         extend.add(extend.Kind.UnitFrame, self, {
             unit = unit,
             name = self:GetName(),
@@ -1761,7 +1788,32 @@ export class UnitFrame extends Button
         end
     end
 
+    -- What the spacing and size tokens set, again (a theme changed them): the
+    -- size where it comes from its tokens (not a header's button, nor one
+    -- given a size by Resize), the power line, the row and its padding.
+    function PlaceByTheme()
+        resolveSizes()
+        local size, opts = self.size, self.opts
+        if self.tokenSize then
+            local w, h = draw.size(opts.width or size.width), draw.size(opts.height or size.height)
+            self:SetSize(w, h)
+            self.incoming:SetWidth(w - 2)
+            self.absorb:SetWidth(w - 2)
+        end
+        for _, b in ipairs({ self.powerSpend, self.power, self.powerLow }) do
+            b:SetHeight(S["space-1"])
+        end
+        self.row:SetPoint("TOPLEFT", size.pad, 0)
+        if opts.badgeTop then
+            for _, b in ipairs(self.edgeBadges) do
+                pcall(placeBadge, self, b)
+            end
+        end
+        self:FitRow()
+    end
+
     function Resize(w: number, h: number)
+        self.tokenSize = false
         self:SetSize(w, h)
         self.incoming:SetWidth(w - 2)
         self.absorb:SetWidth(w - 2)

@@ -11,7 +11,7 @@ import * as events from "/Core/Events"
 import skinItemSlot, itemSlot, moneyText, money, inventory, Inventory, FoundItem from "/UI/Inventory"
 import type InventoryOptions, ResultRow from "/UI/Inventory"
 import * as tooltipModule from "/UI/Tooltip"
-import expectNoErrors, newParent from "../../helpers"
+import expectNoErrors, newParent, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import tokenOf, borderToken from "./WorldHelpers"
 
 local S = T.space
@@ -508,4 +508,46 @@ local function currencies()
     expect(a).toBeAnchoredTo(inv.money, "RIGHT", "LEFT")
     inv:SetCurrencies(nil)
     expect(a).never.toBeShown()
+end
+
+@test("a theme's slot size and spacing: the grid, the search, the foot follow live; SuuUI's again exactly")
+local function themeLayout()
+    layoutThemes()
+    local inv = make({ characters = true })
+    local buttons = slots(12)
+    inv:LayoutSlots(buttons, { { at = 11, label = "Reagents" } })
+    local function look(): { grid: number, slot: number, x: number, search: number, body: number, panel: number }
+        local _, _, _, x = buttons[2]:GetPoint(1)
+        return {
+            grid = inv:GridWidth(),
+            slot = buttons[1]:GetWidth(),
+            x = x :: number,
+            search = inv.search:GetWidth(),
+            body = inv.body:GetHeight(),
+            panel = inv:GetWidth(),
+        }
+    end
+    mock.advanceFrames(1)
+    local design = look()
+    expect(design.grid).toBe(10 * 36 + 9 * 4)
+    expect(design.x).toBe(36 + 4)
+    useTheme(COMPACT)
+    -- (the owner lays its slots out again on the same message: Bags does)
+    inv:LayoutSlots(buttons, { { at = 11, label = "Reagents" } })
+    mock.advanceFrames(1)
+    local compact = look()
+    expect(compact.grid).toBe(10 * 30 + 9 * 2)
+    expect(compact.slot).toBe(30)
+    expect(compact.x).toBe(30 + 2)
+    expect(compact.search).toBe(compact.grid - 30 - 4)
+    expect(compact.panel).toBe(compact.grid + 2 * 8)
+    expect(compact.body < design.body).toBe(true)
+    useTheme(ROOMY)
+    inv:LayoutSlots(buttons, { { at = 11, label = "Reagents" } })
+    mock.advanceFrames(1)
+    expect(look().grid).toBe(10 * 42 + 9 * 6)
+    useTheme(nil)
+    inv:LayoutSlots(buttons, { { at = 11, label = "Reagents" } })
+    mock.advanceFrames(1)
+    expect(look()).toEqual(design)
 end

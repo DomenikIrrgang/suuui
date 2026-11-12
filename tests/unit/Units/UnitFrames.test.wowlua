@@ -10,7 +10,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/UnitFrames"
-import expectNoErrors, expectPingable from "../../helpers"
+import expectNoErrors, expectPingable, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import * as frames from "wowlua:frames"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
@@ -820,4 +820,49 @@ local function stopped()
     expect(SuuUI.GetAnchor("player")).toBeNil()
     expect(assert(M.frames).player.onTooltip).toBeNil()
     expect(assert(M.combatBadge):IsShown()).toBe(false)
+end
+
+@test(
+    "a theme's sizes: the player and target at the design's size follow it (after a fight), a size of your own stays; the bosses' pitch too"
+)
+local function themeSizes()
+    layoutThemes()
+    M:ResetAll({ "width", "height" })
+    local own = assert(M.frames)
+    local holder = assert(M.bossHolder)
+    local function bossGap(): number
+        local _, _, _, _, y = assert(M.bosses[2]):GetPoint(1)
+        return y :: number
+    end
+    expect(own.player:GetWidth()).toBe(300)
+    expect(own.player:GetHeight()).toBe(32)
+    local designBoss, designHolder = bossGap(), holder:GetHeight()
+    expect(designBoss).toBe(-(28 + 2 + 18 + 12))
+    useTheme(COMPACT)
+    expect(own.player:GetWidth()).toBe(260)
+    expect(own.target:GetHeight()).toBe(28)
+    expect(own.focus:GetWidth()).toBe(180)
+    expect(bossGap()).toBe(-(24 + 1 + 18 + 8))
+    -- in a fight: after it
+    mock.player:enterCombat()
+    useTheme(ROOMY)
+    expect(own.player:GetWidth()).toBe(260)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(own.player:GetWidth()).toBe(330)
+    expect(own.player:GetHeight()).toBe(38)
+    -- your own size wins over the theme's
+    M:Set("width", 280)
+    expect(own.player:GetWidth()).toBe(280)
+    useTheme(COMPACT)
+    expect(own.player:GetWidth()).toBe(280)
+    expect(own.player:GetHeight()).toBe(28)
+    M:ResetAll({ "width", "height" })
+    useTheme(nil)
+    expect(own.player:GetWidth()).toBe(300)
+    expect(own.player:GetHeight()).toBe(32)
+    expect(own.focus:GetWidth()).toBe(200)
+    expect(bossGap()).toBe(designBoss)
+    expect(holder:GetHeight()).toBe(designHolder)
+    expectNoErrors()
 end

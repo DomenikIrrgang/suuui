@@ -374,10 +374,7 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         if aura then
             -- (anchored to by the game's aura container: sized out of combat)
             self:RunOutOfCombat("auraPanel", function()
-                local size, gap = UI.Size("icon-md"), T.space["space-2"]
-                aura.panel:SetHeight(
-                    3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"]
-                )
+                self:PlaceAuraPanel(aura)
             end)
         end
     end
@@ -431,19 +428,12 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         local size = UI.Size("icon-md")
         local gap = T.space["space-2"]
         local w = PER_ROW * size + (PER_ROW - 1) * gap
-        local p = UI.Panel(SuuUI.Root, {
-            ornament = true,
-            width = w + T.space["space-4"] * 2,
-            height = 3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"],
-        })
+        local p = UI.Panel(SuuUI.Root, { ornament = true, width = 1, height = 1 })
         p:SetFrameStrata("TOOLTIP")
         p:Hide()
         local caption = UI.Text(p, "caption", "ink-muted")
-        caption:SetPoint("TOPLEFT", T.space["space-4"], -T.space["space-4"])
         caption:SetValue("Auras")
         local holder = CreateFrame("Frame", nil, p)
-        holder:SetPoint("TOPLEFT", caption, "BOTTOMLEFT", 0, -T.space["space-2"])
-        holder:SetSize(w, 3 * size + 2 * gap)
         local auras = UI.AuraContainer(holder, "none", {
             size = "icon-md",
             spacing = gap,
@@ -460,7 +450,28 @@ class TooltipsModule extends Module<typeof(DEFAULTS)>
         end
         local panel: AuraPanel = { panel = p, caption = caption, holder = holder, auras = auras }
         self.auraPanel = panel
+        self:PlaceAuraPanel(panel)
         return panel
+    end
+
+    -- The aura panel's size and parts from the icon size and spacing (the
+    -- icons' own gap is the engine's, set when made): when made, and again
+    -- out of combat when a theme changes them.
+    function PlaceAuraPanel(aura: AuraPanel)
+        local size, gap = UI.Size("icon-md"), T.space["space-2"]
+        local w = PER_ROW * size + (PER_ROW - 1) * gap
+        aura.panel:SetSize(
+            w + T.space["space-4"] * 2,
+            3 * size + 2 * gap + T.space["space-4"] * 2 + T.type.caption.lineHeight + T.space["space-2"]
+        )
+        aura.caption:SetPoint("TOPLEFT", T.space["space-4"], -T.space["space-4"])
+        aura.holder:SetPoint("TOPLEFT", aura.caption, "BOTTOMLEFT", 0, -T.space["space-2"])
+        aura.holder:SetSize(w, 3 * size + 2 * gap)
+        local auras = aura.auras
+        if auras then
+            auras:SetGroupSize("debuffs", size)
+            auras:SetGroupSize("buffs", size)
+        end
     end
 
     function ShowAuraPanel(tooltip: GameTooltip, unit: string)

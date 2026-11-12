@@ -14,7 +14,7 @@ import measureText from "/UI/Text"
 import closeButton, keyChip, panel, scrollArea, makeModal, confirm, sectionHeader, windowFrame, Panel, PanelOptions, ScrollArea, TabButton, WindowFrame, WindowOptions, ConfirmOptions, ConfirmDialog from "/UI/Panel"
 import type TabMarker from "/UI/TabMarker"
 import internal shade from "/UI/Panel"
-import expectNoErrors, newParent from "../../helpers"
+import expectNoErrors, newParent, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
 import type Point from "./PrimitivesHelpers"
 
@@ -39,6 +39,7 @@ end
 @afterEach
 local function cleanup()
     T.type.header.lineHeight = HEADER_LINE
+    useTheme(nil)
     mock.hover(nil)
     mock.player:leaveCombat()
     reduceMotion(false)
@@ -978,4 +979,86 @@ local function probeAnchoredSize()
     holder:SetWidth(150)
     mock.advanceFrames(1)
     expect(sizes).toEqual({ 100, 150 })
+end
+
+@test(
+    "a theme's spacing: a panel's padding, head and body, a key chip, a section header, a window's tabs and footer follow; SuuUI's again exactly"
+)
+local function themeSpacing()
+    layoutThemes()
+    local p = make({ title = "T", meta = "m", keybind = "B", closable = true })
+    p.body:SetSize(100, 50)
+    local plain = make()
+    plain.body:SetSize(100, 50)
+    local h = sectionHeader(host(), "Label", "meta")
+    local w = win({
+        title = "W",
+        width = 500,
+        height = 400,
+        footer = true,
+        tabs = { { key = "a", label = "A" }, { key = "b", label = "B" } },
+    })
+    mock.advanceFrames(1)
+    type Look = {
+        width: number,
+        height: number,
+        titleX: number,
+        divider: number,
+        body: number,
+        plainBody: number,
+        plainH: number,
+        keyGap: number,
+        keyW: number,
+        rule: number,
+        footer: number,
+        content: number,
+        tab2: number,
+        tabRow: number,
+    }
+    local function look(): Look
+        local key = p.key :: Frame
+        return {
+            width = p:GetWidth(),
+            height = p:GetHeight(),
+            titleX = assert(pointOf(p.title)).x,
+            divider = y(p.divider),
+            body = y(p.body),
+            plainBody = y(plain.body),
+            plainH = plain:GetHeight(),
+            keyGap = pointNamed(key, "RIGHT").x,
+            keyW = key:GetWidth(),
+            rule = pointNamed(h.rule, "LEFT").x,
+            footer = (w.footer :: Frame):GetHeight(),
+            content = pointNamed(w.body, "BOTTOMRIGHT").y,
+            tab2 = assert(pointOf(tab(w, 2))).x,
+            tabRow = y(w.tabRow),
+        }
+    end
+    local design = look()
+    expect(design.width).toBe(100 + 2 * 12)
+    expect(design.titleX).toBe(12)
+    expect(design.footer).toBe(30 + 2 * 8)
+    useTheme(COMPACT)
+    mock.advanceFrames(1)
+    local compact = look()
+    expect(compact.width).toBe(100 + 2 * 8)
+    expect(compact.titleX).toBe(8)
+    expect(compact.divider).toBe(-(8 + HEADER_LINE + 5))
+    expect(compact.body).toBe(-(8 + HEADER_LINE + 5 + 1 + 5))
+    expect(compact.plainBody).toBe(-5)
+    expect(compact.plainH).toBe(5 + 50 + 8)
+    expect(compact.keyGap).toBe(-5)
+    expect(compact.rule).toBe(5)
+    expect(compact.footer).toBe(30 + 2 * 5)
+    expect(compact.content).toBe(8 + 30 + 2 * 5 - 8 + 5)
+    expect(compact.tab2 < design.tab2).toBe(true)
+    useTheme(ROOMY)
+    mock.advanceFrames(1)
+    local roomy = look()
+    expect(roomy.width).toBe(100 + 2 * 18)
+    expect(roomy.keyW >= design.keyW).toBe(true)
+    expect(roomy.tab2 > design.tab2).toBe(true)
+    useTheme(nil)
+    mock.advanceFrames(1)
+    expect(look()).toEqual(design)
 end

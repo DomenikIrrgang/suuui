@@ -10,7 +10,7 @@ import * as draw from "/UI/Draw"
 import * as tooltip from "/UI/Tooltip"
 import microMenu, MicroMenu, MenuButton from "/UI/MicroMenu"
 import internal keyOf, Pill from "/UI/MicroMenu"
-import expectNoErrors, newParent from "../../helpers"
+import expectNoErrors, newParent, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import tokenOf, themeChanged from "./WindowsHelpers"
 
 local S = T.space
@@ -331,4 +331,32 @@ local function theme()
     b.badge:SetWidth(99)
     themeChanged()
     expect(b.badge:GetWidth()).toBe(math.max(14, math.ceil(b.count:GetStringWidth()) + 6))
+end
+
+@test(
+    "a theme's button size and spacing: the buttons laid out again (a secure one after combat); SuuUI's again exactly"
+)
+local function themeLayout()
+    layoutThemes()
+    local m = make()
+    m:SetItems({
+        { key = "char", glyph = "person", label = "Character", click = "CharacterMicroButton" },
+        { key = "bags", glyph = "bag", label = "Bags", onClick = function() end },
+    })
+    local function look(): { w: number, h: number, button: number, x: number }
+        local _, _, _, x = btn(m, "bags"):GetPoint(1)
+        return { w = m:GetWidth(), h = m:GetHeight(), button = btn(m, "bags"):GetWidth(), x = x :: number }
+    end
+    local design = look()
+    expect(design).toEqual({ w = 4 + 28 + 4 + 28 + 4, h = 28 + 8, button = 28, x = 4 + 28 + 4 })
+    useTheme(COMPACT)
+    expect(look()).toEqual({ w = 2 + 24 + 2 + 24 + 2, h = 24 + 4, button = 24, x = 2 + 24 + 2 })
+    -- in a fight the menu (secure buttons) waits for its end
+    mock.player:enterCombat()
+    useTheme(ROOMY)
+    expect(look().button).toBe(24)
+    mock.player:leaveCombat()
+    expect(look()).toEqual({ w = 6 + 32 + 6 + 32 + 6, h = 32 + 12, button = 32, x = 6 + 32 + 6 })
+    useTheme(nil)
+    expect(look()).toEqual(design)
 end

@@ -62,11 +62,19 @@ export class KeyChip extends Frame
         draw.border(self, "gilt-line")
         self.text = text(self, "micro", "ink")
         self.text:SetPoint("CENTER", 0, 0)
-        self:SetKey(key or "")
+        self.text:SetValue(key or "")
+        draw.layout(self, function()
+            self:Fit()
+        end)
     end
 
     function SetKey(k: string)
         self.text:SetValue(k)
+        self:Fit()
+    end
+
+    -- its width from the key and the spacing (again when a theme changes it)
+    function Fit()
         self:SetSize(math.max(20, self.text:GetUnboundedStringWidth() + S["space-2"] * 2), 20)
     end
 end
@@ -114,19 +122,18 @@ export type PanelOptions = {
 local function buildHead(f: Panel, opts: PanelOptions)
     local title = text(f, "header", "gilt-text")
     f.title = title
-    title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
     title:SetValue(opts.title)
 
     -- Right of the title, right to left: close, key chip, meta, all centred
-    -- on the title's line (the first placed by PlaceHead).
-    local prev: Region? = nil
-    local function chain(region: Region, gap: number?)
-        if prev then
-            region:SetPoint("RIGHT", prev, "LEFT", -(gap :: number), 0)
-        else
+    -- on the title's line (the first placed by PlaceHead, the rest each
+    -- `gap` (a spacing token) left of the one before, also by PlaceHead).
+    local chained: { region: Region, gap: string? }[] = {}
+    f.headChain = chained
+    local function chain(region: Region, gap: string?)
+        if #chained == 0 then
             f.headRight = region
         end
-        prev = region
+        chained[#chained + 1] = { region = region, gap = gap }
     end
     if opts.closable then
         local close = closeButton(f, function()
@@ -142,11 +149,11 @@ local function buildHead(f: Panel, opts: PanelOptions)
     if opts.keybind then
         local key = keyChip(f, opts.keybind)
         f.key = key
-        chain(key, S["space-4"])
+        chain(key, "space-4")
     end
     local meta = text(f, "caption", "ink-muted")
     f.meta = meta
-    chain(meta, opts.keybind and S["space-3"] or S["space-4"])
+    chain(meta, opts.keybind and "space-3" or "space-4")
     meta:SetValue(opts.meta or "")
 
     -- The divider: a gilt-line hairline fading at both ends, with its jewel.
@@ -158,9 +165,10 @@ local function buildHead(f: Panel, opts: PanelOptions)
     jewel:SetPoint("CENTER", divider, "CENTER", 0, 0)
 end
 
--- A theme can change the header style: titled panels and section headers
--- are laid out again (after combat, as a panel may hold secure frames).
-local titled: { [Panel]: boolean } = setmetatable({}, { __mode = "k" })
+-- A theme can change the header style, the spacing and sizes: panels (their
+-- head and body) and section headers are laid out again (after combat, as
+-- a panel may hold secure frames).
+local panels: { [Panel]: boolean } = setmetatable({}, { __mode = "k" })
 local headers: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 local relayoutWait = CreateFrame("Frame")
 local function relayout()
@@ -168,12 +176,13 @@ local function relayout()
         relayoutWait:RegisterEvent("PLAYER_REGEN_ENABLED")
         return
     end
-    for f in pairs(titled) do
+    for f in pairs(panels) do
         f:PlaceHead()
         f:PlaceBody()
     end
     for f in pairs(headers) do
         f:SetHeight(T.type.header.lineHeight)
+        f:PlaceRule()
     end
 end
 relayoutWait:SetScript("OnEvent", function(self)
@@ -198,12 +207,16 @@ export class Panel extends Frame
     close?: Button
     key?: KeyChip
     headRight?: Region
+    headChain?: { region: Region, gap: string? }[]
     divider?: Frame
     jewel?: Texture
     -- content goes here
     body: Frame
     fixedWidth?: number
     fixedHeight?: number
+    -- the body's size script that fits the panel to it (a panel sized by
+    -- its owner takes it away: then a relayout leaves its size alone)
+    fitter?: () -> ()
 
     constructor(parent: Frame, opts: PanelOptions?)
         super(opts and opts.name, parent)
@@ -235,25 +248,22 @@ export class Panel extends Frame
         end
 
         self.body = CreateFrame("Frame", nil, self)
-        self.body:SetPoint("TOPLEFT", S["space-5"], -self:BodyTop())
         self.body:SetSize(1, 1)
 
         self.fixedWidth, self.fixedHeight = o.width, o.height
         if o.width then
             self:SetWidth(o.width)
-            self.body:SetPoint("TOPRIGHT", -S["space-5"], -self:BodyTop())
         end
         if o.height then
             self:SetHeight(o.height)
-            self.body:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
         end
-        self.body:SetScript("OnSizeChanged", function()
+        local fitter = function()
             self:Fit()
-        end)
-        self:Fit()
-        if o.title then
-            titled[self] = true
         end
+        self.fitter = fitter
+        self.body:SetScript("OnSizeChanged", fitter)
+        Panel.PlaceBody(self)
+        panels[self] = true
     end
 
     function SetTitle(title: string?, meta: string?)
@@ -293,18 +303,30 @@ export class Panel extends Frame
             return
         end
         local headRight, divider = self.headRight :: Region, self.divider :: Frame
+        self.title:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
         headRight:SetPoint("RIGHT", self, "TOPRIGHT", -S["space-5"], -(S["space-5"] + T.type.header.lineHeight / 2))
+        local chained = self.headChain :: { region: Region, gap: string? }[]
+        for i = 2, #chained do
+            chained[i].region:SetPoint("RIGHT", chained[i - 1].region, "LEFT", -S[chained[i].gap :: string], 0)
+        end
         divider:SetPoint("TOPLEFT", S["space-5"], -(headH() + S["space-4"]))
         divider:SetPoint("TOPRIGHT", -S["space-5"], -(headH() + S["space-4"]))
     end
 
+    -- The body inside the padding (and the panel fitted to it): at build,
+    -- and again when a theme changes the spacing or the header style.
     function PlaceBody()
         local top = self:BodyTop()
         self.body:SetPoint("TOPLEFT", S["space-5"], -top)
         if self.fixedWidth then
             self.body:SetPoint("TOPRIGHT", -S["space-5"], -top)
         end
-        self:Fit()
+        if self.fixedHeight then
+            self.body:SetPoint("BOTTOMLEFT", S["space-5"], S["space-5"])
+        end
+        if self.body:GetScript("OnSizeChanged") == self.fitter then
+            self:Fit()
+        end
     end
 end
 mixins.Panel = Panel
@@ -727,6 +749,7 @@ export class SectionHeader extends Frame
     label: Text
     meta: Text
     rule: Frame
+    hasMeta: boolean = false
 
     constructor(parent: Frame, label: string?, meta: string?, width: number?)
         super(nil, parent)
@@ -745,9 +768,15 @@ export class SectionHeader extends Frame
     function SetLabel(l: string?, m: string?)
         self.label:SetValue(l or "")
         self.meta:SetValue(m or "")
+        self.hasMeta = m ~= nil and m ~= ""
+        self:PlaceRule()
+    end
+
+    -- the hairline between the label and the meta (or the end)
+    function PlaceRule()
         self.rule:ClearAllPoints()
         self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-4"], 0)
-        if m and m ~= "" then
+        if self.hasMeta then
             self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-4"], 0)
         else
             self.rule:SetPoint("RIGHT", self, "RIGHT")
@@ -869,6 +898,7 @@ export class WindowFrame extends Panel
     tabMarker?: TabMarker
     tab: string? = nil
     onTab?: (key: string) -> ()
+    footerRule?: Frame
 
     constructor(parent: Frame, opts: WindowOptions)
         super(parent, {
@@ -913,19 +943,9 @@ export class WindowFrame extends Panel
             end
         end
 
-        local bottom = 0
         if opts.footer then
-            local footH = 30 + S["space-4"] * 2
-            local footer = CreateFrame("Frame", nil, self)
-            self.footer = footer
-            footer:SetPoint("BOTTOMLEFT", S["space-5"], 0)
-            footer:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
-            footer:SetHeight(footH)
-            local rule = draw.hairline(self, "gilt-faint")
-            rule:SetPoint("BOTTOMLEFT", 0, footH)
-            rule:SetPoint("BOTTOMRIGHT", 0, footH)
-            -- the content ends space-4 above the footer's rule
-            bottom = footH - S["space-5"] + S["space-4"]
+            self.footer = CreateFrame("Frame", nil, self)
+            self.footerRule = draw.hairline(self, "gilt-faint")
         end
 
         -- The body becomes a scroll frame; content goes into window.content.
@@ -946,7 +966,6 @@ export class WindowFrame extends Panel
         end)
         self.scroll = scroll
         self.body:ClearAllPoints()
-        self.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
         self:PlaceBody()
 
         if opts.name then
@@ -1023,12 +1042,27 @@ export class WindowFrame extends Panel
     -- when a theme changes the header style (Panel:PlaceHead).
     override function PlaceBody()
         local top = self:BodyTop()
+        -- the footer row above its rule; the content ends space-4 above it
+        local bottom = 0
+        local footer, rule = self.footer, self.footerRule
+        if footer and rule then
+            local footH = 30 + S["space-4"] * 2
+            footer:SetPoint("BOTTOMLEFT", S["space-5"], 0)
+            footer:SetPoint("BOTTOMRIGHT", -S["space-5"], 0)
+            footer:SetHeight(footH)
+            rule:SetPoint("BOTTOMLEFT", 0, footH)
+            rule:SetPoint("BOTTOMRIGHT", 0, footH)
+            bottom = footH - S["space-5"] + S["space-4"]
+        end
+        self.body:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"] + bottom)
         local tabRow = self.tabRow
         if tabRow then
             tabRow:SetPoint("TOPLEFT", S["space-5"], -top)
             tabRow:SetPoint("TOPRIGHT", -S["space-5"], -top)
             local x = 0
             for _, b in ipairs(self.tabButtons :: TabButton[]) do
+                b.label:SetPoint("LEFT", S["space-4"], 2)
+                b.count:SetPoint("LEFT", b.label, "RIGHT", S["space-2"], 0)
                 local w = measureText("header", b.def.label) + 2 * S["space-4"]
                 local count = b.countText
                 if count then

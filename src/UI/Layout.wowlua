@@ -7,6 +7,9 @@
 --   local stack = layout.stack(container, {
 --       direction = "vertical",      -- or "horizontal"
 --       gap = 4, padding = 12,       -- px; padding is a number or { left, right, top, bottom }
+--                                    -- (or token names, "space-2": they
+--                                    -- follow a theme's spacing, laid out
+--                                    -- again when it changes)
 --       align = "start",             -- cross axis: start, center, end, stretch
 --       autoSize = true,             -- true, "width", "height" or false
 --   })
@@ -21,6 +24,8 @@
 import isSecret from "wowlua:secret"
 import isInstance from "wowlua:reflect"
 import * as combat from "/Core/Combat"
+import * as events from "/Core/Events"
+import tokens as T from "/Core/Tokens"
 import Text from "./Text"
 
 export type Padding = { left: number, right: number, top: number, bottom: number }
@@ -30,11 +35,16 @@ export type Align = "start" | "center" | "end" | "stretch"
 -- what the container takes its size from
 export type AutoSize = boolean | "width" | "height"
 
+-- px, or a spacing or size token's name (read when laid out)
+export type Length = number | string
+type Sides<L> = { [number]: L } | { left?: L, right?: L, top?: L, bottom?: L }
+export type PaddingSpec = Length | Sides<number> | Sides<Length>
+
 export type LayoutOptions = {
     direction?: "vertical" | "horizontal",
-    gap?: number,
+    gap?: Length,
     -- a number, { left, right, top, bottom } or { left = , right = , top = , bottom = }
-    padding?: number | { [number]: number } | { left?: number, right?: number, top?: number, bottom?: number },
+    padding?: PaddingSpec,
     align?: Align,
     autoSize?: AutoSize,
     -- grids
@@ -89,22 +99,58 @@ local function depth(frame: Region): number
     return d
 end
 
-local function padding(
-    p: number | { [number]: number } | { left?: number, right?: number, top?: number, bottom?: number } | nil
-): Padding
+-- A length in px: a token's now (spacing, then sizes), or the number.
+local function px(v: Length?): number
+    if type(v) == "string" then
+        return (T.space :: { [string]: number })[v] or (T.size :: { [string]: number })[v] or
+            error("SuuUI: unknown size token " .. v, 3)
+    end
+    return v or 0
+end
+
+local function tokenIn(p: PaddingSpec?): boolean
     if type(p) == "table" then
-        local list = p :: { [number]: number }
-        local named = p :: { left?: number, right?: number, top?: number, bottom?: number }
+        local list = p :: { [number]: Length }
+        local named = p :: { left?: Length, right?: Length, top?: Length, bottom?: Length }
+        -- (holes in it: walked by index)
+        local all: (Length?)[] = {
+            list[1],
+            list[2],
+            list[3],
+            list[4],
+            named.left,
+            named.right,
+            named.top,
+            named.bottom,
+        }
+        for i = 1, 8 do
+            if type(all[i]) == "string" then
+                return true
+            end
+        end
+        return false
+    end
+    return type(p) == "string"
+end
+
+local function padding(p: PaddingSpec?): Padding
+    if type(p) == "table" then
+        local list = p :: { [number]: Length }
+        local named = p :: { left?: Length, right?: Length, top?: Length, bottom?: Length }
         return {
-            left = list[1] or named.left or 0,
-            right = list[2] or named.right or 0,
-            top = list[3] or named.top or 0,
-            bottom = list[4] or named.bottom or 0,
+            left = px(list[1] or named.left),
+            right = px(list[2] or named.right),
+            top = px(list[3] or named.top),
+            bottom = px(list[4] or named.bottom),
         }
     end
-    local n = p or 0
+    local n = px(p)
     return { left = n, right = n, top = n, bottom = n }
 end
+
+-- the layouts with a token in their gap or padding (laid out again when a
+-- theme changes the spacing)
+local tokened: { [Layout]: boolean } = setmetatable({}, { __mode = "k" })
 
 local function number(v: uiUnit | Secret<number> | nil, fallback: number?): number
     if isSecret(v) or v == nil then
@@ -166,8 +212,10 @@ end
 -- GetLayoutSize() for a size of its own; a SuuUI text gets `layout` set.
 export abstract class Layout
     readonly children: Region[] = {}
-    readonly gap: number
-    readonly padding: Padding
+    gap: number
+    padding: Padding
+    private gapSpec?: Length
+    private paddingSpec?: PaddingSpec
     readonly autoSize: AutoSize
     readonly depth: number
     applying?: boolean
@@ -184,8 +232,12 @@ export abstract class Layout
     cellHeight?: number
 
     constructor(readonly container: Region, opts: LayoutOptions)
-        self.gap = opts.gap or 0
+        self.gapSpec, self.paddingSpec = opts.gap, opts.padding
+        self.gap = px(opts.gap)
         self.padding = padding(opts.padding)
+        if type(opts.gap) == "string" or tokenIn(opts.padding) then
+            tokened[self] = true
+        end
         local a = opts.autoSize
         if a == nil then
             a = true
@@ -195,6 +247,15 @@ export abstract class Layout
     end
 
     abstract function Arrange(): (number, number)
+
+    -- Its gap and padding read again (a theme changed the tokens they name)
+    -- and laid out on the next frame.
+    function Retoken()
+        self.gap = px(self.gapSpec)
+        self.padding = padding(self.paddingSpec)
+        self.reanchor = true
+        self:Invalidate()
+    end
 
     function Invalidate()
         pending[self] = true
@@ -480,3 +541,13 @@ end
 export function grid(container: Region, opts: LayoutOptions?): Grid
     return Grid.new(container, opts or {})
 end
+
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for l in pairs(tokened) do
+            l:Retoken()
+        end
+    end,
+    "UI.Layout"
+)

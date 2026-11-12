@@ -15,7 +15,8 @@ import * as barModule from "/UI/Bar"
 import * as inputs from "/UI/Inputs"
 import * as stage from "/UI/Stage"
 import * as legacy from "/UI/Legacy"
-import expectNoErrors, newParent from "../../helpers"
+import * as layout from "/UI/Layout"
+import expectNoErrors, newParent, layoutThemes, COMPACT, ROOMY from "../../helpers"
 
 const OWNER = "ThemesTest"
 
@@ -564,5 +565,172 @@ local function sizes()
     use(nil)
     _, big = points.account.big:GetFont()
     expect(big).toBeCloseTo(20, 1)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Spacing, sizes and radii (0.38)
+--------------------------------------------------------------------------------
+
+@test("a theme's spacing, sizes and radii: real tokens, numbers in range")
+local function geometryRefused()
+    local function refused(def: themes.ThemeDef, message: string)
+        expect(function()
+            themes.register(def)
+        end).toThrow(message)
+    end
+    refused({ id = "test-geo", space = { ["space-9"] = 4 } }, 'SuuUI.RegisterTheme: test-geo has no spacing token "space-9"')
+    refused({ id = "test-geo", sizes = { ["icon-xl"] = 40 } }, 'SuuUI.RegisterTheme: test-geo has no size token "icon-xl"')
+    refused({ id = "test-geo", radius = { ["radius-lg"] = 4 } }, 'SuuUI.RegisterTheme: test-geo has no radius token "radius-lg"')
+    -- spacing from 0 to four times the design's
+    refused(
+        { id = "test-geo", space = { ["space-2"] = 17 } },
+        "SuuUI.RegisterTheme: test-geo's spacing token space-2 is a number from 0 to 16 px (the design's is 4), not 17"
+    )
+    refused(
+        { id = "test-geo", space = { ["space-2"] = -1 } },
+        "SuuUI.RegisterTheme: test-geo's spacing token space-2 is a number from 0 to 16 px"
+    )
+    local text: unknown = "8"
+    refused(
+        { id = "test-geo", space = { ["space-4"] = text :: number } },
+        "SuuUI.RegisterTheme: test-geo's spacing token space-4 is a number from 0 to 32 px (the design's is 8), not 8"
+    )
+    -- sizes from a quarter to four times
+    refused(
+        { id = "test-geo", sizes = { ["icon-md"] = 5 } },
+        "SuuUI.RegisterTheme: test-geo's size token icon-md is a number from 6 to 96 px (the design's is 24), not 5"
+    )
+    refused(
+        { id = "test-geo", sizes = { slot = 145 } },
+        "SuuUI.RegisterTheme: test-geo's size token slot is a number from 9 to 144 px"
+    )
+    -- radii: px, or a share for radius-round
+    refused(
+        { id = "test-geo", radius = { ["radius-md"] = 13 } },
+        "SuuUI.RegisterTheme: test-geo's radius radius-md is a number from 0 to 12 px, not 13"
+    )
+    refused(
+        { id = "test-geo", radius = { ["radius-round"] = "60%" } },
+        'SuuUI.RegisterTheme: test-geo\'s radius radius-round is a share from "0%" to "50%", not 60%'
+    )
+    refused(
+        { id = "test-geo", radius = { ["radius-round"] = 8 } },
+        'SuuUI.RegisterTheme: test-geo\'s radius radius-round is a share from "0%" to "50%", not 8'
+    )
+    local wrong: unknown = 4
+    refused({ id = "test-geo", space = wrong :: { [string]: number } }, "SuuUI.RegisterTheme: test-geo's space are a table of spacing tokens")
+    refused({ id = "test-geo", sizes = wrong :: { [string]: number } }, "SuuUI.RegisterTheme: test-geo's sizes are a table of size tokens")
+    expect(themes.get("test-geo")).toBeNil()
+    -- the edges are fine
+    themes.register({
+        id = "test-geo-edges",
+        space = { ["space-1"] = 0, ["space-7"] = 112 },
+        sizes = { ["icon-sm"] = 4, minimap = 704 },
+        radius = { ["radius-sm"] = 0, ["radius-round"] = "0%" },
+    })
+    expect(themes.get("test-geo-edges")).never.toBeNil()
+end
+
+@test("applying a theme's spacing and sizes sets the tokens in place; another theme brings the design's back")
+local function geometryApplied()
+    layoutThemes()
+    local space, size, radius = T.space, T.size, T.radius
+    local before = { s2 = space["space-2"], s5 = space["space-5"], slot = size.slot, icon = size["icon-md"] }
+    expect(before).toEqual({ s2 = 4, s5 = 12, slot = 36, icon = 24 })
+    use(COMPACT)
+    expect(T.space).toBe(space)
+    expect(space["space-2"]).toBe(2)
+    expect(space["space-5"]).toBe(8)
+    expect(size.slot).toBe(30)
+    expect(size["icon-md"]).toBe(20)
+    -- what the theme leaves alone stays the design's
+    expect(size["chat-w"]).toBe(444)
+    expect(radius["radius-md"]).toBe(3)
+    use(ROOMY)
+    expect(space["space-2"]).toBe(6)
+    expect(size.slot).toBe(42)
+    -- a theme without any: every one the design's again, exactly
+    themes.register({ id = "test-geo-none", colors = { gilt = { 1, 0, 0 } } })
+    use("test-geo-none")
+    expect({ s2 = space["space-2"], s5 = space["space-5"], slot = size.slot, icon = size["icon-md"] }).toEqual(before)
+    use(COMPACT)
+    use(nil)
+    expect({ s2 = space["space-2"], s5 = space["space-5"], slot = size.slot, icon = size["icon-md"] }).toEqual(before)
+    expect(changed[#changed]).toBe("suuui")
+    themes.register({ id = "test-geo-radius", radius = { ["radius-md"] = 6, ["radius-round"] = "25%" } })
+    use("test-geo-radius")
+    expect(radius["radius-md"]).toBe(6)
+    expect(radius["radius-round"]).toBe("25%")
+    use(nil)
+    expect(radius["radius-md"]).toBe(3)
+    expect(radius["radius-round"]).toBe("50%")
+    expectNoErrors()
+end
+
+@test("what keeps its layout is laid out again when the spacing or sizes move, not for a colour")
+local function relaidOut()
+    layoutThemes()
+    local f = newParent()
+    local runs = 0
+    draw.layout(f, function(frame: Frame)
+        runs += 1
+        frame:SetSize(T.size.slot, T.space["space-4"])
+    end)
+    expect(runs).toBe(1)
+    expect({ f:GetSize() }).toEqual({ 36, 8 })
+    use(COMPACT)
+    expect(runs).toBe(2)
+    expect({ f:GetSize() }).toEqual({ 30, 5 })
+    -- a theme with the same spacing and sizes (or a colour vision change): no
+    -- layout
+    use(COMPACT, "deuteranopia")
+    expect(runs).toBe(2)
+    use(nil)
+    expect(runs).toBe(3)
+    expect({ f:GetSize() }).toEqual({ 36, 8 })
+    -- stacks and grids with token gaps and padding follow too
+    local box = newParent()
+    local s = layout.stack(box, { gap = "space-3", padding = { "space-5", 0, "space-2", 0 } })
+    local a, b = CreateFrame("Frame", nil, box), CreateFrame("Frame", nil, box)
+    a:SetSize(10, 10)
+    b:SetSize(10, 10)
+    s:Add(a)
+    s:Add(b)
+    s:ApplyNow()
+    expect(select(5, b:GetPoint())).toBe(-(4 + 10 + 6))
+    expect(select(4, b:GetPoint())).toBe(12)
+    use(ROOMY)
+    s:ApplyNow()
+    expect(select(5, b:GetPoint())).toBe(-(6 + 10 + 9))
+    expect(select(4, b:GetPoint())).toBe(18)
+    use(nil)
+    s:ApplyNow()
+    expect(select(5, b:GetPoint())).toBe(-(4 + 10 + 6))
+    expectNoErrors()
+end
+
+@test("in combat a protected frame's layout waits for the end of the fight; the rest moves at once")
+local function relayoutInCombat()
+    layoutThemes()
+    local secure = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+    local plain = newParent()
+    draw.layout(secure, function(frame: Frame)
+        frame:SetSize(T.size.slot, T.size.slot)
+    end)
+    draw.layout(plain, function(frame: Frame)
+        frame:SetSize(T.size.slot, T.size.slot)
+    end)
+    mock.player:enterCombat()
+    use(COMPACT)
+    expect(secure:GetWidth()).toBe(36)
+    expect(plain:GetWidth()).toBe(30)
+    -- (the tokens then: changed twice in the fight, laid out once at its end)
+    use(ROOMY)
+    expect(secure:GetWidth()).toBe(36)
+    mock.player:leaveCombat()
+    expect(secure:GetWidth()).toBe(42)
+    use(nil)
+    expect(secure:GetWidth()).toBe(36)
     expectNoErrors()
 end

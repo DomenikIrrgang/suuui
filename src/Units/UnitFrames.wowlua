@@ -86,6 +86,19 @@ local DEFAULTS = {
 
 local M: UnitFramesModule
 
+-- The player and target frames' size: the settings', or where they are the
+-- design's own (the default) the theme's bar-lg and unit-lg.
+local function frameSize(): (number, number)
+    local w, h = M:Get("width"), M:Get("height")
+    if w == DEFAULTS.width then
+        w = UI.Size("bar-lg")
+    end
+    if h == DEFAULTS.height then
+        h = UI.Size("unit-lg")
+    end
+    return w, h
+end
+
 -- Every frame this module draws. `show` names the setting that turns it off.
 -- the single frames: their position setting and the setting that shows them
 type FrameDef = {
@@ -248,7 +261,9 @@ export class ComboPips extends Frame
         self:SetSize(5 * 12, 12)
         -- (the first diamond's edge under the name's start; over the frame's
         -- border and crest, under the raid marker)
-        self:SetPoint("LEFT", target, "TOPLEFT", S["space-3"], -0.5)
+        SuuUI.Layout.Follow(self, function()
+            self:SetPoint("LEFT", target, "TOPLEFT", S["space-3"], -0.5)
+        end)
         self:SetFrameLevel(target:GetFrameLevel() + 10)
         for i = 1, 5 do
             local outer = UI.Diamond(self, 9, "gilt-line", "ARTWORK", 1)
@@ -318,7 +333,9 @@ export class PetMood extends Frame
         self:SetSize(3 * 12, 12)
         -- (as the combo points on the target: over the border, the first
         -- diamond's edge under the name's start)
-        self:SetPoint("LEFT", pet, "TOPLEFT", S["space-3"], -0.5)
+        SuuUI.Layout.Follow(self, function()
+            self:SetPoint("LEFT", pet, "TOPLEFT", S["space-3"], -0.5)
+        end)
         self:SetFrameLevel(pet:GetFrameLevel() + 10)
         for i = 1, 3 do
             local outer = UI.Diamond(self, 9, "gilt-line", "ARTWORK", 1)
@@ -935,7 +952,7 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             return
         end
         local f = v.frame
-        local w, h = self:Get("width"), self:Get("height")
+        local w, h = frameSize()
         f.opts.power = self:Get("showPower")
         f.opts.healthText = self:Get("healthText")
         f.opts.nameColor = self:Get("nameColor")
@@ -1014,13 +1031,26 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
     -- combo points, auras and edit-mode outlines hang off the frames and follow.
     function ApplySize()
         self:RunOutOfCombat("size", function()
-            local w, h = self:Get("width"), self:Get("height")
+            local w, h = frameSize()
             for _, key in ipairs({ "player", "target" }) do
                 self:FrameOf(key):Resize(w, h)
             end
             SuuUI.EditMode.Refresh()
             self:DrawPreview()
         end)
+    end
+
+    -- The boss stack from the tokens: each boss with room under its bar for
+    -- its cast (space-1, cast-sm). At build, and again (out of combat: secure
+    -- buttons) when a theme changes the spacing or sizes.
+    function PlaceBosses()
+        local holder = assert(self.bossHolder)
+        local w, h = UI.Size("bar-md"), UI.Size("unit-md")
+        local pitch = h + S["space-1"] + UI.Size("cast-sm") + S["space-5"]
+        holder:SetSize(w, BOSSES * pitch - S["space-5"])
+        for i, f in ipairs(self.bosses) do
+            f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * pitch)
+        end
     end
 
     function Build(): Frames
@@ -1044,10 +1074,6 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         self.frames = frames
         -- The boss stack: one holder, moved as one in edit mode.
         local holder = CreateFrame("Frame", "SuuUIBossFrames", SuuUI.Root)
-        local w, h = UI.Size("bar-md"), UI.Size("unit-md")
-        -- each boss leaves room under its bar for its cast (space-1, cast-sm)
-        local pitch = h + S["space-1"] + UI.Size("cast-sm") + S["space-5"]
-        holder:SetSize(w, BOSSES * pitch - S["space-5"])
         self.bossHolder, self.bosses = holder, {}
         for i = 1, BOSSES do
             local f = UI.UnitFrame(holder, "boss" .. i, {
@@ -1057,10 +1083,10 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             })
             self.levelMeta[f] = true
             SuuUI.TagInstance(f, { module = self.id, role = "boss" })
-            f:SetPoint("TOPRIGHT", holder, "TOPRIGHT", 0, -(i - 1) * pitch)
             self.bosses[i] = f
             self.allFrames["boss" .. i] = f
         end
+        self:PlaceBosses()
         self.combo = ComboPips.new(frames.target)
         self.petMood = PetMood.new(frames.pet)
         self.restedSign = UI.RestedSign(frames.player)
@@ -1186,6 +1212,14 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         end)
         self:WatchAll({ "width", "height" }, function()
             self:ApplySize()
+        end)
+        -- a theme's sizes and spacing (the frames' own parts follow by
+        -- themselves: UnitFrame:PlaceByTheme)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:ApplySize()
+            self:RunOutOfCombat("bosses", function()
+                self:PlaceBosses()
+            end)
         end)
         self:UpdateThreat()
         self:RunOutOfCombat("debuffBadges", function()

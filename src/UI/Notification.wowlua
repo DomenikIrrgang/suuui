@@ -66,11 +66,18 @@ import showTooltip, hideTooltip, TooltipSource from "/UI/Tooltip"
 
 local S = T.space
 
-local WIDTH = T.size["notice-w"]
-local PAD = S["space-4"]
+-- a card's width and padding, and the close button with its gap, right in
+-- the head: a theme's size and spacing, read when laid out
+local function noticeW(): number
+    return T.size["notice-w"]
+end
+local function notePad(): number
+    return S["space-4"]
+end
 local ICON = 24
--- the close button and its gap, right in the head
-local CLOSE_W = 22 + S["space-3"]
+local function closeW(): number
+    return 22 + S["space-3"]
+end
 local ACTION_H = 26
 local FIELD_H = 30
 -- a row of round role toggles: the 36px icon and its word under it
@@ -296,7 +303,7 @@ export class Notification extends Frame
     constructor(parent: Frame)
         super(nil, parent)
         notes[self] = true
-        self:SetSize(WIDTH, 80)
+        self:SetHeight(80)
         self.buttons = {}
         draw.fill(self, "surface-glass", "BACKGROUND"):SetAllPoints()
         self.border = draw.border(self, "gilt-line")
@@ -304,8 +311,6 @@ export class Notification extends Frame
         self:EnableMouse(true)
 
         self.head = CreateFrame("Frame", nil, self)
-        self.head:SetPoint("TOPLEFT", PAD, -PAD)
-        self.head:SetPoint("TOPRIGHT", -PAD, -PAD)
         self.head:SetHeight(ICON)
         self.icon = CreateFrame("Frame", nil, self.head)
         self.icon:SetSize(ICON, ICON)
@@ -359,7 +364,6 @@ export class Notification extends Frame
         self.item = iconFrame(self.itemRow, 28)
         self.item:SetPoint("LEFT")
         self.itemLabel = text(self.itemRow, "label", "ink")
-        self.itemLabel:SetPoint("LEFT", self.item, "RIGHT", S["space-4"], 0)
 
         self.confirmRow = CreateFrame("Frame", nil, self)
         self.confirmLabel = text(self.confirmRow, "caption", "ink-muted")
@@ -379,7 +383,15 @@ export class Notification extends Frame
         self.untilGlyph:SetSize(11, 11)
         self.untilGlyph:SetPoint("LEFT")
         self.untilText = text(self.untilRow, "caption", "ink-muted")
-        self.untilText:SetPoint("LEFT", self.untilGlyph, "RIGHT", S["space-2"], 0)
+        -- what sits by the width and spacing (again when a theme changes them;
+        -- the rest is laid out by SetData)
+        draw.layout(self, function()
+            self:SetWidth(noticeW())
+            self.head:SetPoint("TOPLEFT", notePad(), -notePad())
+            self.head:SetPoint("TOPRIGHT", -notePad(), -notePad())
+            self.itemLabel:SetPoint("LEFT", self.item, "RIGHT", S["space-4"], 0)
+            self.untilText:SetPoint("LEFT", self.untilGlyph, "RIGHT", S["space-2"], 0)
+        end)
 
         -- where a Group Finder note came from
         self.sourceRow = CreateFrame("Frame", nil, self)
@@ -511,7 +523,9 @@ export class Notification extends Frame
             self.head:SetHeight(lineH)
             self.status:ClearAllPoints()
             self.status:SetPoint("CENTER", self.head, "LEFT", 4, 0)
-            self.title:SetWidth(WIDTH - PAD * 2 - 14 - self.source:GetUnboundedStringWidth() - S["space-4"] - CLOSE_W)
+            self.title:SetWidth(
+                noticeW() - notePad() * 2 - 14 - self.source:GetUnboundedStringWidth() - S["space-4"] - closeW()
+            )
             self.title:ClearAllPoints()
             self.title:SetPoint("LEFT", self.head, "LEFT", 14, 0)
             -- the x on the line's middle (taller than the line)
@@ -519,8 +533,8 @@ export class Notification extends Frame
             self.close:SetPoint("RIGHT", self.head, "RIGHT")
             self.source:ClearAllPoints()
             self.source:SetPoint("RIGHT", self.close, "LEFT", -S["space-3"], 0)
-            self:SetHeight(PAD * 2 + lineH)
-            return PAD * 2 + lineH
+            self:SetHeight(notePad() * 2 + lineH)
+            return notePad() * 2 + lineH
         end
         -- online
         self.icon:Show()
@@ -543,7 +557,7 @@ export class Notification extends Frame
             self.title:SetColor("ink")
         end
         self.title:SetValue(title)
-        local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - 22 - S["space-3"]
+        local textW = noticeW() - notePad() * 2 - ICON - S["space-4"] - 22 - S["space-3"]
         self.title:SetWidth(textW)
         self.category:SetWidth(textW - 10)
         local titleH = T.type.label.lineHeight
@@ -558,17 +572,17 @@ export class Notification extends Frame
         self.category:SetPoint("TOPLEFT", x + 10, -top)
         self.title:ClearAllPoints()
         self.title:SetPoint("TOPLEFT", x, -(top + catH))
-        local y = PAD + headH
+        local y = notePad() + headH
         if single then
             local person = people[1]
             if person.detail and person.detail ~= "" then
-                self.body:SetWidth(WIDTH - PAD * 2)
+                self.body:SetWidth(noticeW() - notePad() * 2)
                 self.body:SetValue(person.detail)
                 local h = T.type.caption.lineHeight
                 y = y + S["space-3"]
                 self.bodyRow:ClearAllPoints()
-                self.bodyRow:SetPoint("TOPLEFT", PAD, -y)
-                self.bodyRow:SetPoint("TOPRIGHT", -PAD, -y)
+                self.bodyRow:SetPoint("TOPLEFT", notePad(), -y)
+                self.bodyRow:SetPoint("TOPRIGHT", -notePad(), -y)
                 self.bodyRow:SetHeight(h)
                 self.bodyRow:EnableMouse(false)
                 self.bodyRow:Show()
@@ -585,8 +599,8 @@ export class Notification extends Frame
             if #actions > 0 then
                 y = y + S["space-3"]
                 self.actionsRow:ClearAllPoints()
-                self.actionsRow:SetPoint("TOPLEFT", PAD, -y)
-                self.actionsRow:SetPoint("TOPRIGHT", -PAD, -y)
+                self.actionsRow:SetPoint("TOPLEFT", notePad(), -y)
+                self.actionsRow:SetPoint("TOPRIGHT", -notePad(), -y)
                 self.actionsRow:SetHeight(ACTION_H)
                 self.actionsRow:Show()
                 local bx = 0
@@ -616,7 +630,7 @@ export class Notification extends Frame
             -- the names, each whispering them, wrapping
             self.actionsRow:Hide()
             y = y + S["space-3"]
-            local inner, x2, rowY = WIDTH - PAD * 2, 0, 0
+            local inner, x2, rowY = noticeW() - notePad() * 2, 0, 0
             local lineH = T.type.label.lineHeight
             for i, person in ipairs(people) do
                 local b = nameButton(self, i)
@@ -637,13 +651,13 @@ export class Notification extends Frame
             end
             local h = rowY + lineH
             self.namesRow:ClearAllPoints()
-            self.namesRow:SetPoint("TOPLEFT", PAD, -y)
-            self.namesRow:SetPoint("TOPRIGHT", -PAD, -y)
+            self.namesRow:SetPoint("TOPLEFT", notePad(), -y)
+            self.namesRow:SetPoint("TOPRIGHT", -notePad(), -y)
             self.namesRow:SetHeight(h)
             self.namesRow:Show()
             y = y + h
         end
-        y = y + PAD
+        y = y + notePad()
         self:SetHeight(y)
         -- the drain of a timed note
         if d.duration and d.remaining then
@@ -687,8 +701,8 @@ export class Notification extends Frame
         local hasTime = d.duration and d.remaining
         self.time:SetShown(hasTime and kind ~= "timed" and true or false)
         -- the titles' width: what's left of the head
-        local right = (closable and CLOSE_W or 0) + ((hasTime and kind ~= "timed") and 36 or 0)
-        local textW = WIDTH - PAD * 2 - ICON - S["space-4"] - right
+        local right = (closable and closeW() or 0) + ((hasTime and kind ~= "timed") and 36 or 0)
+        local textW = noticeW() - notePad() * 2 - ICON - S["space-4"] - right
         self.title:SetWidth(textW)
         self.category:SetWidth(textW)
         local titleH = math.max(T.type.label.lineHeight, math.ceil(self.title:GetStringHeight()))
@@ -709,19 +723,19 @@ export class Notification extends Frame
         else
             self.time:SetPoint("TOPRIGHT", 0, -(headH - T.type.numeric.lineHeight) / 2)
         end
-        local y = PAD + headH
+        local y = notePad() + headH
         local function place(f: Region, h: number)
             y = y + S["space-3"]
             f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", PAD, -y)
-            f:SetPoint("TOPRIGHT", -PAD, -y)
+            f:SetPoint("TOPLEFT", notePad(), -y)
+            f:SetPoint("TOPRIGHT", -notePad(), -y)
             f:SetHeight(h)
             f:Show()
             y = y + h
         end
         -- body
         if d.body and d.body ~= "" then
-            self.body:SetWidth(WIDTH - PAD * 2)
+            self.body:SetWidth(noticeW() - notePad() * 2)
             self.body:SetValue(d.body)
             local h = math.ceil(self.body:GetStringHeight())
             self.bodyRow:SetHeight(h)
@@ -762,7 +776,7 @@ export class Notification extends Frame
             local h = n > 0 and 16 or 0
             local post = source.text
             if post and post ~= "" then
-                self.quote:SetWidth(WIDTH - PAD * 2)
+                self.quote:SetWidth(noticeW() - notePad() * 2)
                 self.quote:SetValue("“" .. post .. "”")
                 self.quote:ClearAllPoints()
                 -- the post space-3 under its badges (2px sat it on them, found in game)
@@ -797,7 +811,7 @@ export class Notification extends Frame
             place(self.rolesRow, rolesH())
         end
         if d.warning and d.warning ~= "" then
-            self.warningText:SetWidth(WIDTH - PAD * 2)
+            self.warningText:SetWidth(noticeW() - notePad() * 2)
             self.warningText:SetValue(d.warning)
             place(self.warningRow, math.ceil(self.warningText:GetStringHeight()))
         end
@@ -863,7 +877,7 @@ export class Notification extends Frame
         else
             self.actionsRow:Hide()
         end
-        y = y + PAD
+        y = y + notePad()
         self:SetHeight(y)
         -- the drain
         self.drain:SetShown(hasTime and true or false)
@@ -881,7 +895,7 @@ export class Notification extends Frame
         end
         d.remaining = remaining
         local frac = math.max(0, math.min(1, remaining / math.max(0.01, d.duration)))
-        self.drain:SetWidth(math.max(0.01, (WIDTH - 2) * frac))
+        self.drain:SetWidth(math.max(0.01, (noticeW() - 2) * frac))
         local soon = (d.kind or "timed") ~= "timed" and remaining <= (d.soonAt or 10)
         self.time:SetValue(clock(remaining))
         self.time:SetColor(soon and "amber" or "ink-muted")
@@ -982,7 +996,10 @@ export class NotificationStack extends Frame
         local opts = options or {}
         super(opts.name, parent)
         stacks[self] = true
-        self:SetSize(WIDTH, 1)
+        self:SetHeight(1)
+        draw.layout(self, function()
+            self:SetWidth(noticeW())
+        end)
         self.max = opts.max or 5
         self.foot = CreateFrame("Frame", nil, self)
         self.foot:SetHeight(T.type.caption.lineHeight)
