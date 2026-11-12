@@ -7,6 +7,7 @@ import tokens as T, Color, ShadowLayer from "/Core/Tokens"
 import * as pixel from "/Core/Pixel"
 import * as events from "/Core/Events"
 import * as combat from "/Core/Combat"
+import * as secret from "wowlua:secret"
 
 local colors = T.color :: { [string]: Color }
 
@@ -357,13 +358,24 @@ local function fillAlpha(target: Texture, alpha: number)
     zeroing = false
 end
 
--- Each copy as tall as the bar (the bar's height, or the plain fill's).
+-- Each copy as tall as the bar: the bar's height, or the frame holding the
+-- plain fill's. (Not the fill's own: sized by a secret value, another
+-- unit's health, its height is secret too and can't be compared: an error
+-- at login in game, 2026-11-12.)
 local function fitRepeat(target: Texture)
     local over, art = repeatOver[target], repeatArt[target]
     if not (over and art and repeatOn[target]) then
         return
     end
-    local h = (repeatBar[target] or target):GetHeight()
+    local bar = repeatBar[target]
+    local h = (bar or target):GetHeight()
+    if secret.isSecret(h) then
+        local parent = target:GetParent()
+        h = parent and parent:GetHeight() or 0
+        if secret.isSecret(h) then
+            return
+        end
+    end
     if type(h) == "number" and h > 0 then
         over:SetScale(h / art)
     end
