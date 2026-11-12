@@ -12,7 +12,6 @@ import internal M as AutoQuests from "/Units/AutoQuests"
 import expectNoErrors from "../../helpers"
 import type AnswerPill, Scene from "/Units/NpcDialogue"
 import * as frames from "wowlua:frames"
-import inlineMark from "/UI/Draw"
 
 local function scene(): Scene
     return M:Scene()
@@ -30,6 +29,7 @@ mock.defineItem(SWORD, {
     icon = 135274,
     equipLoc = "INVTYPE_WEAPON",
     itemLevel = 12,
+    sellPrice = 245,
 })
 mock.defineItem(SHIELD, {
     name = "Militia Buckler",
@@ -37,6 +37,7 @@ mock.defineItem(SHIELD, {
     icon = 134955,
     equipLoc = "INVTYPE_SHIELD",
     itemLevel = 12,
+    sellPrice = 1312,
 })
 mock.defineItem(CAP, { name = "Worn Cap", quality = 1, icon = 133117 })
 
@@ -56,6 +57,21 @@ mock.defineQuest(OFFERED, {
     progress = "Are the wolves gone?",
     completion = "Well done.",
     objectives = { { text = "Wolf Pelt", item = PELT, required = 2 } },
+})
+
+-- two choices that sell for the same: no coin
+local RING, AMULET = 990205, 990206
+mock.defineItem(RING, { name = "Copper Band", quality = 2, icon = 133344, sellPrice = 100 })
+mock.defineItem(AMULET, { name = "Bone Charm", quality = 2, icon = 133296, sellPrice = 100 })
+local even = mock.spawnUnit({ name = "Warden Sorrel", level = 30, reaction = "friendly", distance = 3 })
+local EVEN = 9102
+mock.defineQuest(EVEN, {
+    title = "An Even Trade",
+    text = "Either will do.",
+    objective = "Talk to me again.",
+    giver = even,
+    level = 5,
+    choices = { RING, AMULET },
 })
 
 local talker = mock.spawnUnit({ name = "Innkeeper Morwen", level = 30, reaction = "friendly", distance = 3 })
@@ -154,12 +170,16 @@ local function offered()
     expect(scene().cards.money).toBeShown()
     expect(scene().cards.xp:GetText()).toBe("450 XP")
     expect(labels()).toEqual({ "Accept", "Decline" })
-    -- a reward better than what you wear (a level 1 character has no weapon worn): an upgrade
+    -- the choice that sells for the most: a gold coin on its icon, nothing
+    -- written (it replaced the "Upgrade" mark: asked 2026-11-12)
     local cards = M:Rewards(false)
-    expect(cards[1].upgrade).toBe(true)
-    expect(cards[3].upgrade).toBeNil()
-    -- marked with SuuUI's chevron (the fonts have no ▲: an empty box in game)
-    expect(scene().cards.list[1].right:GetText()).toBe(inlineMark("up", "arcane") .. " Upgrade")
+    expect(cards[1].mostGold).toBeNil()
+    expect(cards[2].mostGold).toBe(true)
+    expect(cards[3].mostGold).toBeNil()
+    expect(scene().cards.list[2].coin).toBeShown()
+    expect(scene().cards.list[1].coin).never.toBeShown()
+    expect(scene().cards.list[3].coin).never.toBeShown()
+    expect(scene().cards.list[1].right:GetText()).toBe("")
     -- a card clicked: its link to the chat, the game's way
     local handled = mock.spy(function(_: string) end)
     mock.stub(_G, "HandleModifiedItemClick", handled)
@@ -294,6 +314,17 @@ local function handIn()
     mock.advanceFrames(3)
     expect(scene().root).never.toBeShown()
     expect(C_QuestLog.GetLogIndexForQuestID(OFFERED)).toBeNil()
+end
+
+@test("rewards that all sell for the same: no gold coin on any")
+local function evenRewards()
+    talkTo(even)
+    expect(M:View()).toBe("detail")
+    local cards = M:Rewards(false)
+    expect(cards[1].mostGold).toBeNil()
+    expect(cards[2].mostGold).toBeNil()
+    expect(scene().cards.list[1].coin).never.toBeShown()
+    expect(scene().cards.list[2].coin).never.toBeShown()
 end
 
 @test("the keys: a modifier held leaves them to the game; numbers answer; others pass")
