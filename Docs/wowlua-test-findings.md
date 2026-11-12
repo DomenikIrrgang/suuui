@@ -935,6 +935,22 @@ The auction house window seemed missing from a screenshot: it is drawn, at its `
 
 A screenshot of the player's unit frame (`--frame`) came out about twice as wide as the frame, the area right of it the screen behind; a resource bar's was exact. The crop seems to take the frame's descendants' rects, hidden ones (the unit frame's aura and indicator containers) included. (ui-units)
 
+<a id="v47"></a>
+
+### V47. `mock.click` reaches the frame it is given, whatever lies over it
+
+*Status: open (0.13.9).*
+
+A secure click SuuUI's auction house left over its Buy out (shown, DIALOG strata, over the window) took a commodity's Buy now in game (reported 2026-11-12: "the fourth item nothing happens"); `mock.click(buyNow)` ran Buy now anyway, so no test saw it. The client gives a click to the shown, mouse-enabled frame on top under the pointer. The AuctionHouse tests pick that frame themselves (`underMouse`: strata, then level, over `mock.frames()`) and click it. A `mock.click` that goes where the pointer lands (or a `mock.frameAt(x, y)`) would find such frames everywhere. Found on the way: SuuUI's first-login welcome (a full-screen DIALOG dim) is open in every test until closed. (units-trade)
+
+<a id="v48"></a>
+
+### V48. Buying out a single auction does nothing in the engine's house
+
+*Status: open (0.13.9).*
+
+`C_AuctionHouse.PlaceBid` is a no-op: no `AUCTION_HOUSE_PURCHASE_COMPLETED`, no auction gone, no money paid, so the game's `BUYOUT_AUCTION` popup waits with its spinner. Forever's answer to an item's buyout (its events, their order, the auction ID in `AUCTION_HOUSE_PURCHASE_COMPLETED`, the throttle) is unrecorded; the engine's commodity purchase fires it with 0. The tests stub `PlaceBid` and play the house's answer themselves. (units-trade)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:
