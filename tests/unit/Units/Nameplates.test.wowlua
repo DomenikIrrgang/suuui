@@ -199,9 +199,14 @@ local function pixelLines()
     -- (found in game, 0.6.32: made under UIParent, they came out under one
     -- pixel at a larger UI scale and vanished "depending on your camera
     -- angle")
+    -- The game hands a plate over at a scale of 1 and gives it UIParent's a
+    -- moment later (probed 2026-11-12): 0.9.0 learned 1 from the first plate
+    -- and laid every line for it, under a pixel at UIParent's. The plate here
+    -- comes at 1 too, then takes UIParent's as the game's does.
     local f = plateOf(wolf)
-    -- (the game's plates are at UIParent's scale, measured 2026-11-12; wowlua
-    -- 0.13.9 has them at WorldFrame's: the lines are one pixel either way)
+    local plate = gamePlate(wolf:token() :: string)
+    local before = plate:GetScale()
+    plate:SetScale(UIParent:GetEffectiveScale() / WorldFrame:GetEffectiveScale())
     expect(assert(assert(f.auras).groups.mine).added).toBe(true)
     local lines, icons = plateLines(f)
     expect(#lines > 8).toBe(true)
@@ -209,6 +214,32 @@ local function pixelLines()
     for _, px in ipairs(lines) do
         expect(math.abs(px - 1) < 0.001).toBe(true)
     end
+    plate:SetScale(before)
+end
+
+@test(
+    "the game's nameplate scales at their defaults (far plates 0.8): every line a pixel or more on a far plate, the target's"
+)
+local function scaleSettings()
+    -- (probed 2026-11-12: at the defaults a far plate draws at UIParent's x
+    -- 0.8, your target's x 1.2; SuuUI sets them to 1, but a player may not)
+    local f = plateOf(wolf)
+    local plate = gamePlate(wolf:token() :: string)
+    local before = plate:GetScale()
+    local ui = UIParent:GetEffectiveScale() / WorldFrame:GetEffectiveScale()
+    SetCVar("nameplateMinScale", "0.8")
+    SetCVar("nameplateSelectedScale", "1.2")
+    for _, setting in ipairs({ 0.8, 1, 1.2 }) do
+        plate:SetScale(ui * setting)
+        local thin = math.huge
+        for _, px in ipairs(plateLines(f)) do
+            thin = math.min(thin, px)
+        end
+        expect(thin > 1 - 0.001).toBe(true)
+    end
+    SetCVar("nameplateMinScale", "1")
+    SetCVar("nameplateSelectedScale", "1")
+    plate:SetScale(before)
 end
 
 @test(
