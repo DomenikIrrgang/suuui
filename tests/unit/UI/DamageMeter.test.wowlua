@@ -10,6 +10,7 @@ import expectNoErrors, newParent from "../../helpers"
 import tokenOf, borderToken from "./HudHelpers"
 import * as tooltip from "/UI/Tooltip"
 import * as tbl from "wowlua:table"
+import type SelectOption from "/UI/Select"
 
 -- The stand-in's data: sessions by meter type enum, sources' spells, the past fights.
 -- (unknown: the tests also give it what the game shouldn't, secrets and gaps)
@@ -546,6 +547,62 @@ local function sessionOptions()
     }, { __index = API })
     w.api = broken
     expect(#w:SessionOptions()).toBe(2)
+end
+
+@test(
+    "a fight's refreshes build the fight select only when the fights change; opening it reads the times fresh (garbage in combat)"
+)
+local function sessionsOnlyOnChange()
+    local w = meter()
+    past[1] = { sessionID = 1, name = "Fight 1", durationSeconds = 30 }
+    w:SetView("damage", "current")
+    local built = 0
+    local orig = w.SessionOptions
+    local spy = w :: { [string]: unknown }
+    spy.SessionOptions = function(self: typeof(w)): SelectOption<string | number>[]
+        built = built + 1
+        return orig(self)
+    end
+    for _ = 1, 5 do
+        w:Refresh()
+    end
+    expect(built).toBe(0)
+    expect(w.time).toHaveText("1:15")
+    -- a fight ends: the select learns it, once
+    past[2] = { sessionID = 2, name = "Fight 2", durationSeconds = 40 }
+    w:Refresh()
+    w:Refresh()
+    expect(built).toBe(1)
+    -- opening the list: the times as they are now
+    w.sessionSelect:Open()
+    expect(built).toBe(2)
+    w.sessionSelect:Close()
+    -- a past fight: its time, and the select shows it
+    w:SetView("damage", 2)
+    expect(w.time).toHaveText("0:40")
+    expect(w.sessionSelect.value).toBe(2)
+    expect(built).toBe(2)
+end
+
+@test("a row's fill is painted when it changes, not on every refresh")
+local function fillOnChange()
+    local w = meter()
+    w:BuildAhead()
+    local r = w.rows[1]
+    local tex = r.bar:GetStatusBarTexture()
+    local painted = 0
+    hooksecurefunc(tex, "SetGradient", function()
+        painted = painted + 1
+    end)
+    r:SetFill("class-warrior")
+    r:SetFill("class-warrior")
+    r:SetFill("class-warrior")
+    expect(painted).toBe(1)
+    r:SetFill(nil)
+    r:SetFill(nil)
+    expect(painted).toBe(2)
+    r:SetFill("low")
+    expect(painted).toBe(3)
 end
 
 @test("the selects change the view and tell onView")

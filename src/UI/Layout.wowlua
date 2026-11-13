@@ -159,6 +159,18 @@ local function number(v: uiUnit | Secret<number> | nil, fallback: number?): numb
     return v
 end
 
+-- Whether a container's size (`now`, as the game says it) has to become
+-- `want`. The game keeps sizes as 32-bit floats: 10.1 reads back as
+-- 10.100000381, so an exact compare saw a change on every pass and the
+-- layout anchored itself again every frame (in game: a pass in 73% of all
+-- frames). A secret size compares with the one last given (`last`).
+local function resized(now: uiUnit | Secret<number> | nil, last: number?, want: number): boolean
+    if isSecret(now) or now == nil then
+        return last == nil or math.abs(last - want) > 0.01
+    end
+    return math.abs(now - want) > 0.01
+end
+
 local function sized(child: Region): Sized?
     local fn = (child :: { [string]: unknown }).GetLayoutSize
     return type(fn) == "function" and (child :: Region & Sized) or nil
@@ -222,6 +234,10 @@ export abstract class Layout
     -- anchor every child again even if no size changed (the flusher's
     -- second pass after a container grew)
     reanchor: boolean = false
+    -- the size autoSize last gave the container (what it is when the game
+    -- won't say: a secret size)
+    private sizedW?: number
+    private sizedH?: number
     -- stacks
     direction?: "vertical" | "horizontal"
     align?: Align
@@ -330,12 +346,14 @@ export abstract class Layout
         self.applying = false
         local a = self.autoSize
         local changed = false
-        if (a == true or a == "width") and number(c:GetWidth()) ~= w then
+        if (a == true or a == "width") and resized(c:GetWidth(), self.sizedW, w) then
             c:SetWidth(w)
+            self.sizedW = w
             changed = true
         end
-        if (a == true or a == "height") and number(c:GetHeight()) ~= h then
+        if (a == true or a == "height") and resized(c:GetHeight(), self.sizedH, h) then
             c:SetHeight(h)
+            self.sizedH = h
             changed = true
         end
         -- A container that changed size tells the layout it sits in.

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Performance: smoother fights, with fewer of the short hitches that came every few seconds. The Cooldown Manager and the stance bar no longer read every cooldown again when your mana, rage or energy changes, the action bars don't read the cooldowns of hidden bars, and the damage meter no longer rebuilds its fight list every second. A pack of the same mobs reads its quest objective once instead of once for each nameplate. Together that leaves much less behind for the game to clean up in a fight.
+
+### Fixed
+
+- Some panels laid themselves out again on almost every frame for as long as they were open, costing time all the time; they now settle once.
+
 ## 0.13.0 (2026-11-13)
 
 ### New

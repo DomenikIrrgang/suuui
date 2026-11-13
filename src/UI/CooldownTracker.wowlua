@@ -526,21 +526,19 @@ export class TrackerCell extends Frame
         self:EnableMouse(false)
     end
 
-    function Update(opts: TrackerOptions)
+    -- `light`: only what is usable changed (power, the target): the cooldown
+    -- stays as last read. (Its read makes a table and a duration object, and
+    -- power changes many times a second in a fight.)
+    function Update(opts: TrackerOptions, light: boolean?)
         local id, e = self.spellID, self.entry
-        local info = C_Spell.GetSpellCooldown(id)
-        local active, gcd = cooldownFlags(info or nil)
-        if active then
-            local d = C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(id)
-            if d then
-                self.cooldown:SetCooldownFromDurationObject(d)
-            end
-            self.cooldown:SetHideCountdownNumbers(gcd)
+        local was = self.onCooldown
+        local onCooldown: boolean
+        if light and was ~= nil then
+            onCooldown = was
         else
-            self.cooldown:Clear()
+            onCooldown = self:ReadCooldown(id)
         end
-        local onCooldown = active and not gcd
-        if self.onCooldown and not onCooldown then
+        if was and not onCooldown then
             -- came ready: the pop (per entry, else the global setting) and its sound
             local pop = e.pop
             if pop == nil then
@@ -616,6 +614,23 @@ export class TrackerCell extends Frame
             alpha = T.opacity["opacity-disabled"]
         end
         self:SetAlpha(alpha)
+    end
+
+    -- The spell's cooldown onto the sweep; whether it is on cooldown (not
+    -- just the global one).
+    function ReadCooldown(id: number): boolean
+        local info = C_Spell.GetSpellCooldown(id)
+        local active, gcd = cooldownFlags(info or nil)
+        if active then
+            local d = C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(id)
+            if d then
+                self.cooldown:SetCooldownFromDurationObject(d)
+            end
+            self.cooldown:SetHideCountdownNumbers(gcd)
+        else
+            self.cooldown:Clear()
+        end
+        return active and not gcd
     end
 end
 
@@ -1474,6 +1489,8 @@ export class CooldownTracker extends Frame
     rebuild: boolean? = nil
     everBuilt: boolean? = nil
     dirty: boolean? = nil
+    -- only what is usable changed: the cells' light update
+    usableDirty: boolean? = nil
     built: TrackerBuilt = emptyBuilt()
     cells: TrackerCell[] = {}
     liveFrames: Watched[] = {}
@@ -1518,19 +1535,19 @@ export class CooldownTracker extends Frame
                 self.rebuild = false
                 self.everBuilt = true
                 fault.call("Cooldown Manager", self.Build, self)
-                self.dirty = false
+                self.dirty, self.usableDirty = false, false
                 return
             end
-            local again = self.dirty
+            local full = self.dirty == true
             for _, cell in ipairs(self.cells) do
                 if cell.dirty then
                     cell.dirty = false
-                    again = true
+                    full = true
                 end
             end
-            if again then
-                self.dirty = false
-                fault.call("Cooldown Manager", self.UpdateCooldowns, self)
+            if full or self.usableDirty then
+                self.dirty, self.usableDirty = false, false
+                fault.call("Cooldown Manager", self.UpdateCooldowns, self, nil, not full)
             end
         end)
         self:Clear()
@@ -2283,10 +2300,12 @@ export class CooldownTracker extends Frame
         end
     end
 
-    function UpdateCooldowns(noLayout: boolean?): boolean
+    -- `light`: only what is usable changed (TrackerCell:Update).
+    function UpdateCooldowns(noLayout: boolean?, light: boolean?): boolean
         local changed = false
+        local opts = self.opts or {}
         for _, cell in ipairs(self.cells) do
-            cell:Update(self.opts or {})
+            cell:Update(opts, light)
             if cell.wantShown ~= cell:IsShown() then
                 cell:SetShown(cell.wantShown == true)
                 changed = true
@@ -2445,27 +2464,33 @@ export class CooldownTracker extends Frame
         local function mark()
             t.dirty = true
         end
+        -- (power, usability, the target: the cooldowns stay as they were read)
+        local function markUsable()
+            t.usableDirty = true
+        end
         -- (events this client lacks, Forever renamed or dropped some, are
         -- never registered: wowlua:events)
         local gameEvents: EventName[] = {
             "SPELL_UPDATE_COOLDOWN",
-            "SPELL_UPDATE_USABLE",
             "SPELL_UPDATE_CHARGES",
-            "ACTIONBAR_UPDATE_USABLE",
             "UPDATE_SHAPESHIFT_FORM",
             "PLAYER_ENTERING_WORLD",
         }
         for _, e in ipairs(gameEvents) do
             events.onGame(e, mark, t)
         end
-        events.onUnit("UNIT_POWER_FREQUENT", "player", mark, t)
+        local usableEvents: EventName[] = { "SPELL_UPDATE_USABLE", "ACTIONBAR_UPDATE_USABLE" }
+        for _, e in ipairs(usableEvents) do
+            events.onGame(e, markUsable, t)
+        end
+        events.onUnit("UNIT_POWER_FREQUENT", "player", markUsable, t)
         events.onGame(
             "PLAYER_TARGET_CHANGED",
             function()
                 t:UpdateLive()
                 t:UpdateMissing()
                 t:UpdateReminders()
-                mark()
+                markUsable()
             end,
             t
         )

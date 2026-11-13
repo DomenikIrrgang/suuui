@@ -557,6 +557,39 @@ local function anchorsAgain()
     expect(a:GetNumPoints()).toBe(0)
 end
 
+-- A number as the game keeps a size: a 32-bit float (UIParent:GetWidth() is
+-- 1365.3333740234 at 1366x768, not 1365.333...).
+local function f32(v: number): number
+    if v == 0 then
+        return v
+    end
+    local m, e = math.frexp(v)
+    return math.ldexp(math.floor(m * 16777216 + 0.5) / 16777216, e)
+end
+
+@test("a container whose size the game keeps a hair off (a 32-bit float) settles: no pass every frame (found in game)")
+local function settlesOnFloats()
+    local c = host()
+    local gh = c.GetHeight
+    local shim = c :: { [string]: unknown }
+    shim.GetHeight = function(self: Frame): number
+        return f32(gh(self) :: number)
+    end
+    local s = stack(c, { autoSize = "height" })
+    s:Add(box(c, 20, 10.1))
+    mock.advanceFrames(3)
+    expect(math.abs((c:GetHeight() :: number) - 10.1) < 0.001).toBe(true)
+    local passes = 0
+    local apply = s.ApplyNow
+    local counted = s :: { [string]: unknown }
+    counted.ApplyNow = function(self: typeof(s))
+        passes = passes + 1
+        apply(self)
+    end
+    mock.advanceFrames(10)
+    expect(passes).toBe(0)
+end
+
 @test("token names for the gap and padding: read when laid out, again after a theme change")
 local function tokens()
     local c = newParent()

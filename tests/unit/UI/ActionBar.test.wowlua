@@ -503,6 +503,39 @@ local function passes()
     expectNoErrors()
 end
 
+@test("a hidden bar's cooldowns are read when it shows, not in every pass (garbage in combat)")
+local function hiddenCooldowns()
+    local b = bar()
+    mock.setAction(BASE, { type = "spell", id = 133, texture = 136243 })
+    local first = b.buttons[1]
+    local reads = 0
+    mock.fake("C_ActionBar.GetActionCooldown", function(slot: number): unknown
+        if slot == BASE then
+            reads = reads + 1
+        end
+        return nil
+    end)
+    mock.advanceFrames(1)
+    local holder = first:GetParent() :: Frame
+    holder:Hide()
+    reads = 0
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.advanceFrames(1)
+    expect(reads).toBe(0)
+    expect(first.cooldownStale).toBe(true)
+    holder:Show()
+    expect(reads).toBe(1)
+    expect(first.cooldownStale).toBeNil()
+    -- shown: read in the pass again; showing once more reads nothing new
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.advanceFrames(1)
+    expect(reads).toBe(2)
+    holder:Hide()
+    holder:Show()
+    expect(reads).toBe(2)
+    expectNoErrors()
+end
+
 @test("all three passes due in one frame: the cooldowns first, the others one a frame after")
 local function passesSpread()
     local b = bar()

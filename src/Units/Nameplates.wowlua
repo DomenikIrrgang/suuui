@@ -98,6 +98,10 @@ local hidden: { [Frame]: boolean } = tbl.weakKeys() -- Blizzard UnitFrame -> tru
 local auraHome: { [Frame]: Frame } = tbl.weakKeys() -- moved aura frame -> its parent
 local byUnit: { [string]: Nameplate } = {} -- "nameplateN" -> SuuUI plate
 local questCache: { [string]: string | false } = {} -- "nameplateN" -> false | count text ("" none)
+-- the same by kind of mob (its NPC ID): a pack's plates read one tooltip,
+-- not one each (each read is the whole tooltip as tables, ~27 KB of
+-- garbage a plate in game); cleared with questCache on quest changes
+local questByNpc: { [string]: string | false } = {}
 
 local function barH(): number
     return M:Get("barHeight")
@@ -240,6 +244,16 @@ local function questObjective(unit: string): string | false
     return false
 end
 
+-- A creature's NPC ID from its GUID ("Creature-0-…-<id>-<spawn>"); nil for
+-- players, or while the GUID is secret.
+local function npcOf(unit: string): string?
+    local guid = UnitGUID(unit)
+    if issecretvalue(guid) or guid == nil then
+        return nil
+    end
+    return guid:match("^Creature%-%d+%-%d+%-%d+%-%d+%-(%d+)")
+end
+
 local function questText(unit: string): string | false
     local cached = questCache[unit]
     if cached ~= nil then
@@ -248,9 +262,21 @@ local function questText(unit: string): string | false
     local result: string | false = false
     -- players are never quest objectives: no tooltip to read (/suu perf)
     if not flag(UnitIsPlayer(unit)) then
-        local ok, r = pcall(questObjective, unit)
-        if ok and r then
-            result = r
+        local npc = npcOf(unit)
+        local known: (string | false)? = nil
+        if npc then
+            known = questByNpc[npc]
+        end
+        if known ~= nil then
+            result = known
+        else
+            local ok, r = pcall(questObjective, unit)
+            if ok and r then
+                result = r
+            end
+            if npc then
+                questByNpc[npc] = result
+            end
         end
     end
     questCache[unit] = result
@@ -1971,11 +1997,13 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             self:ApplyFriendly()
             self:ApplyFriendlyNPCs()
             wipe(questCache)
+            wipe(questByNpc)
         end)
         -- quest progress: read every plate's objective again (once per burst)
         local questDirty = false
         local function questsChanged()
             wipe(questCache)
+            wipe(questByNpc)
             if questDirty then
                 return
             end
