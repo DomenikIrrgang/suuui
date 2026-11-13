@@ -568,6 +568,41 @@ local function questsFor()
     expect(M:QuestsFor(999)).toEqual({})
 end
 
+@test("the givers' index is made a few maps a frame once the data is there; a tooltip before it's whole makes the rest")
+local function giverIndexOverFrames()
+    local data = starts()
+    data.maps[1415] = { { 40, 70, 101, 9001, 9005 } }
+    mock.stub(SuuUI, "QuestStarts", function(): QuestStarts
+        return data
+    end)
+    local function fresh()
+        mock.setField(M, "giverIndex", nil)
+        mock.setField(M, "giverMade", nil)
+        mock.setField(M, "giverAt", nil)
+        mock.setField(M, "giverStarted", false)
+        mock.setField(M, "giverFrom", nil)
+    end
+    -- a map at a time: not whole after one
+    fresh()
+    expect(M:IndexGivers(1)).toBe(false)
+    expect(M.giverIndex).toBeNil()
+    -- a tooltip's ask makes the rest: both of Dughan's places, the same as at once
+    local list = M:QuestsFor(101)
+    expect(#list).toBe(2)
+    local whole = M:GiverPlaces(101)
+    expect(#whole).toBe(4)
+    fresh()
+    expect(M:GiverPlaces(101)).toEqual(whole)
+    -- over the frames, after the data's there
+    fresh()
+    M:IndexGiversSoon()
+    mock.advanceFrames(3)
+    expect(M.giverIndex ~= nil).toBe(true)
+    expect(M:GiverPlaces(101)).toEqual(whole)
+    expect(M:GiverPlaces(999)).toEqual({})
+    expectNoErrors()
+end
+
 @test("an NPC's tooltip: the quests it gives you now, in their difficulty's colour with their level (asked in game)")
 local function questTooltip()
     local giver = mock.spawnUnit({
