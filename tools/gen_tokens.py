@@ -65,6 +65,9 @@ EXTRA_COLORS = [
     # floors, the minimap's shadow, the aura timers' shade…): each keeps its
     # own alpha, the colour comes from here
     ("shade", "#000000"),
+    # the names on nameplates (asked 2026-11-13: white, not the reaction's
+    # red or yellow, which was hard to read; a theme may give its own)
+    ("plate-name", "#ffffff"),
 ]
 
 # SuuUI's own texture tokens (asked 2026-11-12: every texture the unit frames
