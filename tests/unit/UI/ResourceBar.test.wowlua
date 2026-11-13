@@ -408,9 +408,11 @@ local function mage(extra: { [string]: unknown }?): (ResourceBar, World)
     return r, d
 end
 
--- how wide a region is drawn (the fill's texture has no size of its own)
+-- how wide a region is drawn
 local function span(r: Region): number
-    return (r:GetRight() or 0) - (r:GetLeft() or 0)
+    -- (its width: a bar's fill has the size its value fills, secret while
+    -- the value is; the matchers look inside a secret, decision S66)
+    return r:GetWidth()
 end
 
 local function fillRange(b: StatusBar): number[]
@@ -593,9 +595,18 @@ local function mana(d: World, n: number | Secret<number>)
     mock.fireUnitEvent("UNIT_POWER_FREQUENT", "player", "MANA")
 end
 
--- the part of the bar the ghost shows past the fill
+-- the part of the bar the ghost shows past the fill (plain values: a
+-- secret one's widths are compared with the matchers instead)
 local function trailWidth(r: ResourceBar, over: StatusBar?): number
     return span(r.ghost:GetStatusBarTexture()) - span((over or r.fill):GetStatusBarTexture())
+end
+
+-- the ghost's width and the fill's, secret or not
+local function ghostSpan(r: ResourceBar): number
+    return span(r.ghost:GetStatusBarTexture())
+end
+local function fillSpan(r: ResourceBar): number
+    return span(r.fill:GetStatusBarTexture())
 end
 
 @test("the ghost: a loss leaves the fill at once; the ghost holds 150 ms, then the engine eases it down")
@@ -703,23 +714,24 @@ local function ghostSecret()
     local r, d = mage({ power = mock.secret(600) })
     mock.player:enterCombat()
     mana(d, mock.secret(450))
-    expect(span(r.fill:GetStatusBarTexture())).toBeCloseTo(300 * 450 / 1000)
-    expect(trailWidth(r)).toBeCloseTo(300 * 150 / 1000)
+    expect(fillSpan(r)).toBeCloseTo(300 * 450 / 1000)
+    -- the ghost holds at 600: 150 trails past the fill
+    expect(ghostSpan(r)).toBeCloseTo(300 * 600 / 1000)
     mock.advanceTime(0.2)
     mock.advanceFrames(60)
-    expect(trailWidth(r)).toBeCloseTo(0)
+    expect(ghostSpan(r)).toBeCloseTo(fillSpan(r))
     -- the real player: the game's own secret power
     local p = rb.resourceBar(parent, { width = 302 })
     made[#made + 1] = p
     p:SetPoint("CENTER")
     mock.player:setPower(40)
     p:Start()
-    expect(trailWidth(p)).toBeCloseTo(0)
+    expect(ghostSpan(p)).toBeCloseTo(fillSpan(p))
     mock.player:setPower(20, { frequent = true })
-    expect(trailWidth(p) > 0).toBe(true)
+    expect(ghostSpan(p)).toBeGreaterThan(fillSpan(p))
     mock.advanceTime(0.2)
     mock.advanceFrames(60)
-    expect(trailWidth(p)).toBeCloseTo(0)
+    expect(ghostSpan(p)).toBeCloseTo(fillSpan(p))
     mock.player:leaveCombat()
     expect(#errorsSoFar()).toBe(before)
 end
