@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Raid themes**: fifteen new themes in Settings › General › Appearance › Theme, three for each raid, each with its own art on the windows, the minimap, the chat and the player and target frames, its own icons, patterned bars and title font. Black Temple: **Temple** (broken draenei stone with fel in its cracks), **Chains** (iron plates and chains, fel embers) and **Runes** (fel runes glowing in black stone, fel flames). Molten Core: **Obsidian** (black rock with lava in its cracks, embers), **Basalt** (hexagonal basalt columns and molten runes) and **Flames** (flames along every window, a ring of fire round the minimap). Naxxramas: **Necropolis** (Scourge stone, iron thorns, teal-lit windows), **Bones** (ribs, bones, webs and a spider on its thread) and **Frost** (ice crystals, rime and snow). Karazhan: **Library** (bookshelves, a candle, a raven, icons drawn with a quill), **Opera** (velvet curtains, a gilded frame, comedy and tragedy masks) and **Nether** (night sky, a crescent moon, chess pieces, an astrolabe). Sunwell: **Sunburst** (sun rays and gold filigree), **Phoenix** (phoenix feathers and embers) and **Naaru** (leaded blue glass and floating crystals). The art on the player and target frames stays small, so names and bars read as before; what sways or drifts keeps still with Reduce motion on. The five colour-only raid themes (Black Temple, Molten Core, Naxxramas, Karazhan, Sunwell) are still there.
+
 ## 0.12.0 (2026-11-13)
 
 ### New
