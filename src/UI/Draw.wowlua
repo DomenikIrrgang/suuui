@@ -515,16 +515,55 @@ local function makeRepeat(target: Texture, bar: StatusBar?): Texture
     return over
 end
 
+-- A bar out of sight gets its copies when it first shows (2026-11-13: a
+-- theme with repeated art made them for every bar at once, most of them
+-- the drain bars of aura buttons the engine keeps in its pools, about
+-- 1,500 in a crowd's profile, each a texture and nine hooks): the art and
+-- file it waits with, and the bars hooked for it.
+local waitArt: { [StatusBar]: number } = setmetatable({}, { __mode = "k" })
+local waitFile: { [StatusBar]: string } = setmetatable({}, { __mode = "k" })
+local waitHooked: { [StatusBar]: boolean } = setmetatable({}, { __mode = "k" })
+
+-- Whether a bar is in sight (a secret answer counts as in sight).
+local function inSight(bar: StatusBar): boolean
+    local v = bar:IsVisible()
+    return secret.isSecret(v) or v == true
+end
+
+local setRepeat: (target: Texture, bar: StatusBar?, file: string, art: number?) -> ()
+
+local function waitForSight(bar: StatusBar, file: string, art: number)
+    waitArt[bar], waitFile[bar] = art, file
+    if waitHooked[bar] then
+        return
+    end
+    waitHooked[bar] = true
+    bar:HookScript("OnShow", function()
+        local a, f = waitArt[bar], waitFile[bar]
+        if a and f then
+            waitArt[bar], waitFile[bar] = nil, nil
+            setRepeat(bar:GetStatusBarTexture(), bar, f, a)
+        end
+    end)
+end
+
 -- The fill's art repeated, `art` px tall (nil: the fill shows its file
 -- stretched again, the copies hidden).
-local function setRepeat(target: Texture, bar: StatusBar?, file: string, art: number?)
+setRepeat = function(target: Texture, bar: StatusBar?, file: string, art: number?)
     local over = repeatOver[target]
+    if bar then
+        waitArt[bar], waitFile[bar] = nil, nil
+    end
     if not art then
         if over and repeatOn[target] then
             repeatOn[target] = nil
             over:Hide()
             fillAlpha(target, repeatAlpha[target] or 1)
         end
+        return
+    end
+    if not over and bar and not inSight(bar) then
+        waitForSight(bar, file, art)
         return
     end
     over = over or makeRepeat(target, bar)
@@ -632,8 +671,11 @@ end
 -- class icon where a role was), which a theme change must leave alone.
 export function unskin(region: Texture | StatusBar)
     skinToken[region], skinFile[region], skinTiled[region], skinArt[region] = nil, nil, nil, nil
-    local target = region:GetObjectType() == "StatusBar" and (region :: StatusBar):GetStatusBarTexture() or
-        region :: Texture
+    local isBar = region:GetObjectType() == "StatusBar"
+    if isBar then
+        waitArt[region :: StatusBar], waitFile[region :: StatusBar] = nil, nil
+    end
+    local target = isBar and (region :: StatusBar):GetStatusBarTexture() or region :: Texture
     setRepeat(target, nil, "", nil)
 end
 
