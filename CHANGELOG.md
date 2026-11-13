@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Nameplates: names are white instead of red, yellow or green, so they're easier to read; friendly players keep their class colour. For theme authors (API 0.42): the new colour token `plate-name` sets the colour of nameplate names.
+
 ## 0.13.0 (2026-11-13)
 
 ### New
