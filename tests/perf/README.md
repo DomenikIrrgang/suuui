@@ -30,6 +30,7 @@ them.
 | `guild` | A guild of two hundred whose roster keeps updating, the communities window closed, then open (the emulator's Blizzard window doesn't refresh its list as the game's does: a guard more than a measure) |
 | `bagcooldown` | Casting with the bags open: `BAG_UPDATE_COOLDOWN` four times a second, a potion's cooldown |
 | `mapglance` | Running with eight quests in the log, the world map opened every two seconds and closed half a second later |
+| `themes` | A target and the character window open; SuuUI's own look, Pink Cat, Stranglethorn Ruins and Canopy, then SuuUI's look again: each picked, then shown a moment (the dress swaying, the motes drifting), and the memory with each |
 
 ## Run
 

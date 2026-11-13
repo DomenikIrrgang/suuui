@@ -8,6 +8,7 @@ import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
 import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
 import * as draw from "/UI/Draw"
+import type DressPiece from "/UI/Dress"
 import text as uiText from "/UI/Text"
 import expectNoErrors, newParent from "../../helpers"
 
@@ -23,6 +24,27 @@ const BUILT_IN: string[] = {
     "naxxramas",
     "karazhan",
     "sunwell",
+    "blacktemple-temple",
+    "blacktemple-chains",
+    "blacktemple-runes",
+    "moltencore-obsidian",
+    "moltencore-basalt",
+    "moltencore-flames",
+    "naxxramas-necropolis",
+    "naxxramas-bones",
+    "naxxramas-frost",
+    "karazhan-library",
+    "karazhan-opera",
+    "karazhan-nether",
+    "sunwell-sunburst",
+    "sunwell-phoenix",
+    "sunwell-naaru",
+    "icecrown-saronite",
+    "icecrown-plagueworks",
+    "icecrown-crimson",
+    "ulduar-titan",
+    "ulduar-machinery",
+    "ulduar-madness",
     "pinkcat",
     "stvruins",
     "stvcanopy",
@@ -354,8 +376,11 @@ local function pinkcatFaint()
 end
 
 -- The windows' pattern's strongest alpha (tools/pinkcat_art.py,
--- PATTERN_ALPHA: the paws and hearts at most this, in gilt).
-const PATTERN_ALPHA = 0.16
+-- PATTERN_ALPHA: the paws and hearts at most this, in gilt; 0.16 until
+-- 2026-11-13, made fainter).
+const PATTERN_ALPHA = 0.10
+-- (tools/stv_art.py's: the Stranglethorn themes' stonework and leaves)
+const STV_PATTERN_ALPHA = 0.16
 
 @test("Pink Cat: text stays readable over the brightest pixels of its windows' pattern")
 @cases({
@@ -593,7 +618,7 @@ local function stvPattern(fg: string, least: number)
         for _, ground in ipairs({ "surface", "surface-glass" }) do
             local g = over(colorIn(id, ground), { 0, 0, 0 })
             local gilt = colorIn(id, "gilt")
-            local brightest = over({ gilt[1], gilt[2], gilt[3], PATTERN_ALPHA }, g)
+            local brightest = over({ gilt[1], gilt[2], gilt[3], STV_PATTERN_ALPHA }, g)
             local r = ratio(rgb(colorIn(id, fg)), brightest)
             if r < least then
                 error(`{id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
@@ -624,5 +649,210 @@ local function stvFont()
     settings.setAccount("theme", nil)
     themes.apply()
     expect(T.type.header.file).toBe(before)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The raid themes with art (ThemesRaids): three per raid
+--------------------------------------------------------------------------------
+
+-- Each raid theme: its id, its header face (and size, where Friz Quadrata
+-- is a size down so the meters' titles fit), the strongest alpha of its
+-- windows' pattern (tools/raid_art.py, PATTERN), and the dress kinds it
+-- wears (every one of them: windows, chat, the minimap, the unit frames);
+-- wraps: its corners wrap round the windows' and chat's corners (Icecrown
+-- Citadel and Ulduar).
+type Raid = { id: string, font: string, size?: number, pattern: number, wraps?: boolean }
+const MORPHEUS = "Fonts\\MORPHEUS.TTF"
+const FRIZ = "Fonts\\FRIZQT__.TTF"
+const ARIALN = "Fonts\\ARIALN.TTF"
+const SKURRI = "Fonts\\SKURRI.TTF"
+local RAIDS: Raid[] = {
+    { id = "blacktemple-temple", font = MORPHEUS, pattern = 0.13 },
+    { id = "blacktemple-chains", font = SKURRI, pattern = 0.12 },
+    { id = "blacktemple-runes", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "moltencore-obsidian", font = MORPHEUS, pattern = 0.14 },
+    { id = "moltencore-basalt", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "moltencore-flames", font = SKURRI, pattern = 0.13 },
+    { id = "naxxramas-necropolis", font = MORPHEUS, pattern = 0.13 },
+    { id = "naxxramas-bones", font = FRIZ, size = 12, pattern = 0.1 },
+    { id = "naxxramas-frost", font = ARIALN, pattern = 0.13 },
+    { id = "karazhan-library", font = MORPHEUS, pattern = 0.13 },
+    { id = "karazhan-opera", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "karazhan-nether", font = ARIALN, pattern = 0.15 },
+    { id = "sunwell-sunburst", font = FRIZ, size = 12, pattern = 0.1 },
+    { id = "sunwell-phoenix", font = MORPHEUS, pattern = 0.12 },
+    { id = "sunwell-naaru", font = ARIALN, pattern = 0.1 },
+    { id = "icecrown-saronite", font = SKURRI, pattern = 0.11, wraps = true },
+    { id = "icecrown-plagueworks", font = ARIALN, pattern = 0.11, wraps = true },
+    { id = "icecrown-crimson", font = MORPHEUS, pattern = 0.11, wraps = true },
+    { id = "ulduar-titan", font = MORPHEUS, pattern = 0.11, wraps = true },
+    { id = "ulduar-machinery", font = FRIZ, size = 12, pattern = 0.11, wraps = true },
+    { id = "ulduar-madness", font = SKURRI, pattern = 0.12, wraps = true },
+}
+
+-- How far a piece reaches past its frame's edges, outward (px): a corner
+-- piece both ways, a TOP piece up, a TOPLEFT/TOPRIGHT piece up and out.
+local function reach(p: DressPiece): number
+    local x, y = p.x or 0, p.y or 0
+    if p.point == "TOPLEFT" or p.point == "BOTTOMLEFT" then
+        x = -x
+    end
+    if p.point == "BOTTOMLEFT" or p.point == "BOTTOMRIGHT" then
+        y = -y
+    end
+    if p.point == "TOP" then
+        return y
+    end
+    return math.max(x, y)
+end
+
+@test("Raid themes: corners that wrap stay on the frame, at most 4 px past its edges, on all four corners")
+local function raidWraps()
+    local wrapped = 0
+    for _, raid in ipairs(RAIDS) do
+        if raid.wraps then
+            wrapped += 1
+            local t = theme(raid.id)
+            for _, kind in ipairs({ "window", "chat" }) do
+                local corners: { [string]: boolean } = {}
+                for _, p in ipairs(assert(t.dress[kind]).pieces or {}) do
+                    if p.span then
+                        -- (along the top, between the corners: up to 10 px over it)
+                        expect(p.point).toBe("TOP")
+                        expect(reach(p) <= 10).toBe(true)
+                        expect((p.x or 0) >= 36).toBe(true)
+                    else
+                        expect(p.w).toBe(48)
+                        expect(p.h).toBe(48)
+                        expect(reach(p)).toBe(4)
+                        expect(p.sway).toBe(nil)
+                        corners[p.point] = true
+                    end
+                end
+                for _, point in ipairs({ "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }) do
+                    expect(corners[point]).toBe(true)
+                end
+            end
+            -- the unit frames' art stays small: about 12 px over the frame at most
+            for _, p in ipairs(assert(t.dress.unit).pieces or {}) do
+                expect((p.y or 0) <= 10).toBe(true)
+                expect((p.w or 0) <= 14 and (p.h or 0) <= 12).toBe(true)
+            end
+        end
+    end
+    expect(wrapped).toBe(6)
+end
+
+@test("Raid themes: every texture, glyph and dress file they name ships, on all four kinds of frame")
+local function raidFiles()
+    local tex = newParent():CreateTexture()
+    local function ships(file: string)
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    for _, raid in ipairs(RAIDS) do
+        local t = theme(raid.id)
+        for _, value in pairs(t.textures) do
+            ships(assert(fileOf(value)))
+        end
+        for _, kind in ipairs({ "window", "chat", "minimap", "unit" }) do
+            local k = assert(t.dress[kind], `{raid.id}: {kind}`)
+            expect(#(k.pieces or {}) > 0).toBe(true)
+            if k.header then
+                ships(k.header)
+            end
+            for _, p in ipairs(k.pieces or {}) do
+                ships(p.file)
+            end
+            if k.motes then
+                ships(k.motes.file)
+            end
+        end
+        expect(assert(t.dress.window).header).toBeTruthy()
+        local icons = 0
+        for name, file in pairs(t.glyphs) do
+            icons += 1
+            expect((T.glyph :: { [string]: string })[name]).toBeTruthy()
+            ships(file)
+        end
+        expect(icons).toBe(95)
+        for token in pairs(themes.BAR_TOKENS) do
+            expect(type(t.textures[token])).toBe("table")
+        end
+    end
+end
+
+@test("Raid themes: text, fills and edges at the ratios the tokens' usage notes ask")
+@cases({
+    { "ink", "surface", 7 },
+    { "ink", "surface-raised", 7 },
+    { "ink", "unit-fill", 4.8 },
+    { "ink", "unit-fill-low", 4.8 },
+    { "ink-muted", "surface", 4.5 },
+    { "gilt-text", "surface", 7 },
+    { "unit-fill", "surface-sunk", 3.05 },
+    { "gilt-line", "surface", 2.15 },
+    { "gilt-hairline", "surface", 1.78 },
+})
+local function raidContrast(fg: string, bg: string, least: number)
+    for _, raid in ipairs(RAIDS) do
+        local ground = colorIn(raid.id, bg)
+        local r = ratio(over(colorIn(raid.id, fg), ground), rgb(ground))
+        if r < least then
+            error(`{raid.id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+        end
+    end
+end
+
+@test("Raid themes: disabled text stays dimmer than secondary text, and readable; the glass hides what's behind")
+local function raidFaint()
+    for _, raid in ipairs(RAIDS) do
+        local r = ratio(rgb(colorIn(raid.id, "ink-faint")), rgb(colorIn(raid.id, "surface")))
+        expect(r >= 3).toBe(true)
+        expect(r < ratio(rgb(colorIn(raid.id, "ink-muted")), rgb(colorIn(raid.id, "surface")))).toBe(true)
+        expect(colorIn(raid.id, "surface-glass")[4] >= 0.96).toBe(true)
+    end
+end
+
+@test("Raid themes: text stays readable over the brightest pixels of their windows' pattern")
+@cases({
+    { "ink", 7 },
+    { "gilt-text", 7 },
+    { "ink-muted", 4.5 },
+    { "ink-faint", 3 },
+})
+local function raidPattern(fg: string, least: number)
+    for _, raid in ipairs(RAIDS) do
+        for _, ground in ipairs({ "surface", "surface-glass" }) do
+            local g = over(colorIn(raid.id, ground), { 0, 0, 0 })
+            local gilt = colorIn(raid.id, "gilt")
+            local brightest = over({ gilt[1], gilt[2], gilt[3], raid.pattern }, g)
+            local r = ratio(rgb(colorIn(raid.id, fg)), brightest)
+            if r < least then
+                error(`{raid.id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+            end
+        end
+    end
+end
+
+@test("Raid themes: titles in each theme's own face, back to SuuUI's after")
+local function raidFonts()
+    local before, size = T.type.header.file, T.type.header.size
+    for _, raid in ipairs(RAIDS) do
+        settings.setAccount("theme", raid.id)
+        themes.apply()
+        expect(themes.appliedTheme()).toBe(raid.id)
+        expect(T.type.header.file).toBe(raid.font)
+        expect(T.type.header.size).toBe(raid.size or size)
+        local title = uiText(newParent(), "header", "gilt-text")
+        title:SetValue("Damage done")
+        local file = title:GetFont()
+        expect(file).toBe(raid.font)
+    end
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(T.type.header.file).toBe(before)
+    expect(T.type.header.size).toBe(size)
     expectNoErrors()
 end

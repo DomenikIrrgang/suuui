@@ -143,25 +143,34 @@ end
 -- (the kind says what the region is: paint chose it from the object type)
 local function draw(region: Paintable, p: Paint)
     local kind = p.kind
-    local token = p.token or "ink"
-    if kind == "fill" then
-        (region :: TextureBase):SetColorTexture(rgba(token, p.alpha))
-    elseif kind == "vertex" then
-        (region :: Texture):SetVertexColor(rgba(token, p.alpha))
-    elseif kind == "text" then
-        (region :: FontString | Font):SetTextColor(rgba(token, p.alpha))
-    elseif kind == "bar" then
-        (region :: StatusBar):SetStatusBarColor(rgba(token, p.alpha))
-    elseif kind == "gradient" then
-        local r1, g1, b1, a1 = rgba(token, p.alpha)
-        local r2, g2, b2, a2 = rgba(p.token2 or token, p.alpha2)
-        local texture = region :: Texture
-        texture:SetGradient(p.orientation or "HORIZONTAL", CreateColor(r1, g1, b1, a1), CreateColor(r2, g2, b2, a2))
-    else
+    if kind == "fn" or kind == nil then
         local fn = p.fn
         if fn then
             fn(region)
         end
+        return
+    end
+    local token = p.token or "ink"
+    -- (rgba's work without its call: a theme change draws tens of thousands)
+    local c = colors[token]
+    local r: number, g: number, b: number, a: number
+    if c then
+        r, g, b, a = c[1], c[2], c[3], c[4] * (p.alpha or 1)
+    else
+        r, g, b, a = rgba(token, p.alpha)
+    end
+    if kind == "fill" then
+        (region :: TextureBase):SetColorTexture(r, g, b, a)
+    elseif kind == "vertex" then
+        (region :: Texture):SetVertexColor(r, g, b, a)
+    elseif kind == "text" then
+        (region :: FontString | Font):SetTextColor(r, g, b, a)
+    elseif kind == "bar" then
+        (region :: StatusBar):SetStatusBarColor(r, g, b, a)
+    else
+        local r2, g2, b2, a2 = rgba(p.token2 or token, p.alpha2)
+        local texture = region :: Texture
+        texture:SetGradient(p.orientation or "HORIZONTAL", CreateColor(r, g, b, a), CreateColor(r2, g2, b2, a2))
     end
 end
 
@@ -246,22 +255,61 @@ export function bind<R extends Paintable>(region: R, fn: (region: R) -> ())
     watch(region, "fn")
 end
 
+-- The regions reskin set a file on while their paint stayed (a bar's new
+-- file may take the bar's own colour): the next repaint sets their colour
+-- whatever changed.
+local touched: { [Paintable]: boolean } = setmetatable({}, { __mode = "k" })
+
 -- Every kept colour again (Themes.wowlua, after the theme or colour vision
--- changed the tokens).
-export function repaint()
+-- changed the tokens). `changed`: the colour tokens whose value changed (a
+-- theme change, 2026-11-13: the rest show their colour still, so only these
+-- are set again, with the functions (they may read anything), what reskin
+-- set a file on, and every text when `texts`: the font objects were set
+-- again); nil: all.
+export function repaint(changed: { [string]: boolean }?, texts: boolean?)
     painting = true
-    -- (a hook painting another region mid-loop adds to the table: walk a copy)
-    local list: { region: Paintable, paint: Paint }[] = {}
-    for region, p in pairs(paints) do
-        list[#list + 1] = { region = region, paint = p }
+    -- (a hook painting another region mid-loop adds to the table: walk a
+    -- copy, region and paint side by side: no table per paint, a theme
+    -- change walks tens of thousands)
+    local list: unknown[] = {}
+    local n = 0
+    if not changed then
+        for region, p in pairs(paints) do
+            list[n + 1], list[n + 2] = region, p
+            n += 2
+        end
+    else
+        local allTexts = texts == true
+        for region, p in pairs(paints) do
+            local kind = p.kind
+            local token2 = p.token2
+            if kind == "fn" or changed[p.token or "ink"] or touched[region] or (allTexts and kind == "text") or
+                (token2 and changed[token2]) then
+                list[n + 1], list[n + 2] = region, p
+                n += 2
+            end
+        end
     end
-    for _, e in ipairs(list) do
-        local ok: boolean, err: unknown = pcall(draw, e.region, e.paint)
+    -- (one pcall for the walk, not one a paint: a failing paint is
+    -- reported and the walk goes on after it)
+    local i = 1
+    local function walk()
+        while i < n do
+            local region, p = list[i] :: Paintable, list[i + 1] :: Paint
+            i += 2
+            draw(region, p)
+        end
+    end
+    while i < n do
+        local ok: boolean, err: unknown = pcall(walk)
         if not ok then
             geterrorhandler()(err)
         end
     end
     painting = false
+    for region in pairs(touched) do
+        touched[region] = nil
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -467,16 +515,55 @@ local function makeRepeat(target: Texture, bar: StatusBar?): Texture
     return over
 end
 
+-- A bar out of sight gets its copies when it first shows (2026-11-13: a
+-- theme with repeated art made them for every bar at once, most of them
+-- the drain bars of aura buttons the engine keeps in its pools, about
+-- 1,500 in a crowd's profile, each a texture and nine hooks): the art and
+-- file it waits with, and the bars hooked for it.
+local waitArt: { [StatusBar]: number } = setmetatable({}, { __mode = "k" })
+local waitFile: { [StatusBar]: string } = setmetatable({}, { __mode = "k" })
+local waitHooked: { [StatusBar]: boolean } = setmetatable({}, { __mode = "k" })
+
+-- Whether a bar is in sight (a secret answer counts as in sight).
+local function inSight(bar: StatusBar): boolean
+    local v = bar:IsVisible()
+    return secret.isSecret(v) or v == true
+end
+
+local setRepeat: (target: Texture, bar: StatusBar?, file: string, art: number?) -> ()
+
+local function waitForSight(bar: StatusBar, file: string, art: number)
+    waitArt[bar], waitFile[bar] = art, file
+    if waitHooked[bar] then
+        return
+    end
+    waitHooked[bar] = true
+    bar:HookScript("OnShow", function()
+        local a, f = waitArt[bar], waitFile[bar]
+        if a and f then
+            waitArt[bar], waitFile[bar] = nil, nil
+            setRepeat(bar:GetStatusBarTexture(), bar, f, a)
+        end
+    end)
+end
+
 -- The fill's art repeated, `art` px tall (nil: the fill shows its file
 -- stretched again, the copies hidden).
-local function setRepeat(target: Texture, bar: StatusBar?, file: string, art: number?)
+setRepeat = function(target: Texture, bar: StatusBar?, file: string, art: number?)
     local over = repeatOver[target]
+    if bar then
+        waitArt[bar], waitFile[bar] = nil, nil
+    end
     if not art then
         if over and repeatOn[target] then
             repeatOn[target] = nil
             over:Hide()
             fillAlpha(target, repeatAlpha[target] or 1)
         end
+        return
+    end
+    if not over and bar and not inSight(bar) then
+        waitForSight(bar, file, art)
         return
     end
     over = over or makeRepeat(target, bar)
@@ -584,8 +671,11 @@ end
 -- class icon where a role was), which a theme change must leave alone.
 export function unskin(region: Texture | StatusBar)
     skinToken[region], skinFile[region], skinTiled[region], skinArt[region] = nil, nil, nil, nil
-    local target = region:GetObjectType() == "StatusBar" and (region :: StatusBar):GetStatusBarTexture() or
-        region :: Texture
+    local isBar = region:GetObjectType() == "StatusBar"
+    if isBar then
+        waitArt[region :: StatusBar], waitFile[region :: StatusBar] = nil, nil
+    end
+    local target = isBar and (region :: StatusBar):GetStatusBarTexture() or region :: Texture
     setRepeat(target, nil, "", nil)
 end
 
@@ -694,6 +784,7 @@ export function reskin()
         if file and file ~= edgeFile[parts] then
             edgeFile[parts] = file
             for _, t in ipairs(parts) do
+                touched[t] = true
                 local okCoords, a, b, c, d, e, f, g, h = pcall(t.GetTexCoord, t)
                 t:SetTexture(file)
                 if okCoords then
@@ -704,6 +795,7 @@ export function reskin()
     end
     painting = true
     for _, region in ipairs(list) do
+        touched[region] = true
         local tile = skinTiled[region] == true
         local found, art = skinNow(region, skinToken[region] or "", tile)
         local file = found or skinFile[region] or ""
@@ -733,6 +825,7 @@ export function reskin()
     end
     glyphing = true
     for _, tex in ipairs(changed) do
+        touched[tex] = true
         local file = glyphFiles[glyphName[tex] or ""] or glyphSet[tex] or ""
         glyphSet[tex] = file
         local okCoords, a, b, c, d, e, f, g, h = pcall(tex.GetTexCoord, tex)
@@ -889,6 +982,7 @@ local function stylePattern(ground: Texture)
     over:SetHorizTile(true)
     over:SetVertTile(true)
     paint(over, "gilt")
+    touched[over] = true
     mirror(ground)
 end
 
@@ -1107,6 +1201,9 @@ export class Border
         if c then
             self:SetColor(c.r, c.g, c.b, c.a)
         end
+        for _, t in ipairs(self.parts) do
+            touched[t] = true
+        end
     end
 
     function SetShown(shown: boolean)
@@ -1212,6 +1309,7 @@ local function styleDivider(line: Frame, d: Divider)
     end
     painting = true
     for _, s in ipairs(strips) do
+        touched[s] = true
         s:SetTexture(file, "REPEAT", "CLAMP")
         s:SetHorizTile(true)
         s:SetVertTile(false)
@@ -1316,6 +1414,7 @@ local function styleOrnament(t: Texture)
         return
     end
     local px = ornamentPx[t] or 0
+    touched[t] = true
     painting = true
     t:SetTexture(file)
     painting = false

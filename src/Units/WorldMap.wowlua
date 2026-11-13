@@ -564,8 +564,12 @@ local function routeOf(routes: { [number]: { [number]: number[][] } }, id: numbe
     return byMap and byMap[mapID] or nil
 end
 
--- A giver's place in the data: its map and the row there.
-type GiverPlace = { mapID: number, row: number[] }
+-- A giver's places in the data: each map and the row there, side by side
+-- (mapID, row, mapID, row, …: no table a place, the index is made from
+-- every quest giver's row on the first tooltip).
+type GiverPlaces = (number | number[])[]
+-- the givers' rows indexed a frame (about 5,000 instructions)
+local GIVER_ROWS = 400
 
 -- What an NPC should offer you now (QuestsFor), by the map's own checks.
 export type QuestOffer = {
@@ -1265,9 +1269,10 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         local me, done = self:Player(), completedSet()
         local out: QuestOffer[] = {}
         local seen: { [number]: boolean } = {}
-        for _, place in ipairs(self:GiverPlaces(npcID)) do
-            local row = place.row
-            me.mapID = place.mapID
+        local places = self:GiverPlaces(npcID)
+        for k = 1, #places, 2 do
+            local row = places[k + 1] :: number[]
+            me.mapID = places[k] :: number
             for i = 4, #row do
                 local id = row[i]
                 if not seen[id] then
@@ -1296,25 +1301,75 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     end
 
     -- Where each giver stands in the data, made once (QuestsFor runs for
-    -- every NPC's tooltip): its rows, each with its map.
-    giverIndex: { [number]: GiverPlace[] }? = nil
+    -- every NPC's tooltip): its rows, each with its map. Made a few maps a
+    -- frame from the frame after the quest data is there, whoever built it
+    -- (2026-11-13: made at once on the first NPC's tooltip, it was the
+    -- heaviest frame of a crowd, a city or a zone: 29,000 instructions);
+    -- whatever isn't made yet when a tooltip asks is made then.
+    giverIndex: { [number]: GiverPlaces }? = nil
+    -- (while it's made: the part so far, the last map done, whether the
+    -- frames make it, and the data it's made from)
+    giverMade: { [number]: GiverPlaces }? = nil
+    giverAt: number? = nil
+    giverStarted: boolean = false
+    giverFrom: QuestStarts? = nil
 
-    function GiverPlaces(npcID: number): GiverPlace[]
-        local index = self.giverIndex
-        if not index then
-            local made: { [number]: GiverPlace[] } = {}
-            for mapID, rows in pairs(SuuUI.QuestStarts().maps) do
-                for _, row in ipairs(rows) do
-                    local giver = row[3]
-                    local list = made[giver] or {}
-                    made[giver] = list
-                    list[#list + 1] = { mapID = mapID, row = row }
-                end
-            end
-            index = made
-            self.giverIndex = made
+    -- Up to about `rows` more rows into the index (whole maps); true once
+    -- it's whole.
+    function IndexGivers(rows: number): boolean
+        local starts = SuuUI.QuestStarts()
+        if self.giverFrom ~= starts then
+            -- (other data: made again from it)
+            self.giverFrom = starts
+            self.giverIndex, self.giverMade, self.giverAt = nil, nil, nil
         end
-        return index[npcID] or {}
+        if self.giverIndex then
+            return true
+        end
+        local maps = starts.maps
+        local made = self.giverMade or {}
+        self.giverMade = made
+        local left = rows
+        while left > 0 do
+            local mapID, list = next(maps, self.giverAt)
+            if mapID == nil then
+                self.giverIndex, self.giverMade, self.giverAt = made, nil, nil
+                return true
+            end
+            for _, row in ipairs(list) do
+                local giver = row[3]
+                local places = made[giver]
+                if not places then
+                    places = {}
+                    made[giver] = places
+                end
+                local n = #places
+                places[n + 1], places[n + 2] = mapID, row
+            end
+            left -= #list
+            self.giverAt = mapID
+        end
+        return false
+    end
+
+    -- The index made over the next frames (the quest data is there).
+    function IndexGiversSoon()
+        if self.giverStarted or self.giverIndex then
+            return
+        end
+        self.giverStarted = true
+        local function step()
+            if not self:IndexGivers(GIVER_ROWS) then
+                after(0, step)
+            end
+        end
+        -- (from the next frame: not on top of the frame that built the data)
+        after(0, step)
+    end
+
+    function GiverPlaces(npcID: number): GiverPlaces
+        self:IndexGivers(math.huge)
+        return (self.giverIndex :: { [number]: GiverPlaces })[npcID] or {}
     end
 
     -- An NPC's tooltip: the quests it gives that you can pick up now, as the
@@ -2717,6 +2772,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         self:HookQuestTips()
+        -- (the givers' index for the NPCs' tooltips, made over frames once
+        -- the quest data is there)
+        lazyData.questStarts:Then(function()
+            self:IndexGiversSoon()
+        end, "givers")
         -- the Marks filters and the marks' pins, for the marks module; the
         -- pins drawn again and a filter turned on, for the others
         self:ProvideService(WORLD_MAP, {

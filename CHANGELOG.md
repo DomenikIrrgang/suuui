@@ -2,8 +2,22 @@
 
 ## Unreleased
 
+### New
+
+- **Raid themes**: fifteen new themes in Settings › General › Appearance › Theme, three for each raid, each with its own art on the windows, the minimap, the chat and the player and target frames, its own icons, patterned bars and title font. Black Temple: **Temple** (broken draenei stone with fel in its cracks), **Chains** (iron plates and chains, fel embers) and **Runes** (fel runes glowing in black stone, fel flames). Molten Core: **Obsidian** (black rock with lava in its cracks, embers), **Basalt** (hexagonal basalt columns and molten runes) and **Flames** (flames along every window, a ring of fire round the minimap). Naxxramas: **Necropolis** (Scourge stone, iron thorns, teal-lit windows), **Bones** (ribs, bones, webs and a spider on its thread) and **Frost** (ice crystals, rime and snow). Karazhan: **Library** (bookshelves, a candle, a raven, icons drawn with a quill), **Opera** (velvet curtains, a gilded frame, comedy and tragedy masks) and **Nether** (night sky, a crescent moon, chess pieces, an astrolabe). Sunwell: **Sunburst** (sun rays and gold filigree), **Phoenix** (phoenix feathers and embers) and **Naaru** (leaded blue glass and floating crystals). The art on the player and target frames stays small, so names and bars read as before; what sways or drifts keeps still with Reduce motion on. The five colour-only raid themes (Black Temple, Molten Core, Naxxramas, Karazhan, Sunwell) are still there.
+- **Icecrown Citadel and Ulduar themes**: six more raid themes, three for each, in the same place and with the same kinds of art, icons, bars and title fonts. Their corner art wraps round the corners of the windows and the chat, along both edges, instead of sticking out. Icecrown Citadel: **Saronite** (dark frozen metal with frost runes, short spikes), **Plagueworks** (brass pipes and glass tubes of bubbling plague) and **Crimson Hall** (crimson velvet, gold filigree, blood-red gems and bats). Ulduar: **Titan** (grey-blue stone inlaid with gold, blue-white titan light), **Machinery** (riveted steel, copper cogs and warning lamps) and **Madness** (tentacles curling round the corners, watching eyes).
+
+### Changed
+
+- Performance: picking a theme is quicker (a sixth for Pink Cat, a tenth for the others) and leaves about three quarters less behind for the game to clean up, and a theme with art on the bars uses less memory. The quest, collection and recipe data the map, tooltips and windows load in the background is now spread evenly over the frames, without the spikes it had while loading. Hovering the first NPC after that data is there no longer causes a hitch, and typing a lone / in chat opens the command list more smoothly.
+- World map: about 570 more quests on the map, from Questie's latest Forever data and what players' Questie recordings show: most of Mount Hyjal's and Riverglades' quests, and more in Azshara, Shen'dralas, Mulgore and elsewhere. Quest givers stand where players meet them, and about 300 quests follow their chains (they show once the quests before them are done). More rares and mailboxes on the map too.
+- Professions and collections: about 150 more recipes and 190 more appearances show where they drop, from Questie's latest data.
+- Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.
+- Pink Cat: the paws and toe beans in the health, power, cast, nameplate, XP and meter bars, and the little paws behind the bars, are fainter.
+
 ### Fixed
 
+- Social window: opening the friends list no longer shows a "Cannot anchor to a region dependent on it" error, and its Friends, Recent allies, Requests and Raid tabs always open their own page (a tab could open another one after the window was opened again).
 - World map: the enlarged map opens in the middle of the screen again instead of at its top over the micro menu. For plugin authors (API 0.41): `SuuUI.UI.CenterWindow` takes `{ overCastBar = true }` to keep a centred window in the exact middle.
 
 ## 0.12.0 (2026-11-13)

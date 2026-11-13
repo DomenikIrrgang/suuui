@@ -53,17 +53,37 @@ end
 -- The styles' faces and sizes again (a theme changed them, Themes.wowlua):
 -- every FontString on a style follows. (Text at a size of its own, from
 -- size below, is set again by its owner on SUUUI_THEME_CHANGED.)
-export function refresh()
+-- Returns whether it set any (one that shows its style already is left
+-- alone: a theme that keeps the type and the ink changes no text).
+-- (the client gives back what it keeps: sizes as floats, 12.999999 for 13,
+-- and colours maybe in bytes: close is the same)
+local function near(x: unknown, y: number, by: number): boolean
+    return type(x) == "number" and math.abs(x - y) <= by
+end
+
+export function refresh(): boolean
     local styles: { [string]: TextStyle } = T.type
+    local ink = T.color.ink
+    local r, g, b, a = ink[1], ink[2], ink[3], ink[4]
+    local any = false
     for styleName, font in pairs(objects) do
         local style = styles[styleName]
         if not style then
             continue
         end
-        font:SetFont(style.file, style.size, "")
-        font:SetSpacing(style.lineHeight - style.size)
-        font:SetTextColor(unpack(T.color.ink))
+        local spacing = style.lineHeight - style.size
+        local face, height, flags = font:GetFont()
+        local fr, fg, fb, fa = font:GetTextColor()
+        if face ~= style.file or not near(height, style.size, 0.001) or (flags or "") ~= "" or
+            not near(font:GetSpacing(), spacing, 0.001) or not near(fr, r, 0.002) or not near(fg, g, 0.002) or
+            not near(fb, b, 0.002) or not near(fa, a, 0.002) then
+            font:SetFont(style.file, style.size, "")
+            font:SetSpacing(spacing)
+            font:SetTextColor(r, g, b, a)
+            any = true
+        end
     end
+    return any
 end
 
 -- Sets a FontString to a text style.
