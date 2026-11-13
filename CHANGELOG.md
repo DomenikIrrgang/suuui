@@ -4,6 +4,8 @@
 
 ### Changed
 
+- World map: about 570 more quests on the map, from Questie's latest Forever data and what players' Questie recordings show: most of Mount Hyjal's and Riverglades' quests, and more in Azshara, Shen'dralas, Mulgore and elsewhere. Quest givers stand where players meet them, and about 300 quests follow their chains (they show once the quests before them are done). More rares and mailboxes on the map too.
+- Professions and collections: about 150 more recipes and 190 more appearances show where they drop, from Questie's latest data.
 - Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.
 - Pink Cat: the paws and toe beans in the health, power, cast, nameplate, XP and meter bars, and the little paws behind the bars, are fainter.
 

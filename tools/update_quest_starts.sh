@@ -10,7 +10,9 @@
 set -e
 cd "$(dirname "$0")/.."
 # QuestieDB pull requests taken before they're merged (drop each once it is;
-# none now: #135, #136 and #137's fixes are in QuestieDB's main, 2026-11-08)
+# none now: #135, #136 and #137's fixes are in QuestieDB's main, 2026-11-08;
+# 2026-11-13: #72 no longer fits main, the other open ones change no Forever
+# quest data)
 PULLS=""
 CACHE=${TMPDIR:-/tmp}/suuui-questiedb-$(date +%Y%m%d%H%M%S)
 sh tools/fetch_quest_starts.sh "$CACHE" $PULLS
