@@ -1066,6 +1066,39 @@ local function repeatedSecretBars()
 end
 
 @test(
+    "a bar out of sight gets its copies when it shows, in the gradient painted on its fill while it waited"
+)
+local function repeatedLateGradient()
+    -- (found in game, 2026-11-13: Ulduar · Titan with NPC reaction colours,
+    -- the nameplates' health white; the copies made at the bar's first show
+    -- took its plain colour, not the gradient painted before)
+    local p = host()
+    local bar = CreateFrame("StatusBar", nil, p)
+    bar:SetSize(300, 8)
+    bar:SetPoint("CENTER")
+    draw.skinBar(bar, "bar")
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(40)
+    bar:Hide()
+    local back = repeatArt("bar", CAT .. "BeanBar.tga", 16)
+    -- out of sight: no copies yet
+    expect(draw.repeatOf(bar)).toBeNil()
+    local fill = bar:GetStatusBarTexture()
+    draw.paintGradient(fill, "HORIZONTAL", "unit-fill-deep", "unit-fill")
+    -- which textures get a gradient from here on (the copies are made inside)
+    local graded: { [unknown]: boolean } = {}
+    local methods = (getmetatable(fill) :: { __index: { [string]: unknown } }).__index
+    hooksecurefunc(methods, "SetGradient", function(t: unknown)
+        graded[t] = true
+    end)
+    bar:Show()
+    local over = assert(draw.repeatOf(bar))
+    expect(graded[over]).toBe(true)
+    back()
+    expectNoErrors()
+end
+
+@test(
     "repeated art on a plain fill follows its size; the plates repeat the unit frames' art; the game's bars take the plain fill"
 )
 local function repeatedFills()
