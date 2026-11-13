@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- World map: the enlarged map opens in the middle of the screen again instead of at its top over the micro menu. For plugin authors (API 0.41): `SuuUI.UI.CenterWindow` takes `{ overCastBar = true }` to keep a centred window in the exact middle.
+
 ## 0.12.0 (2026-11-13)
 
 ### New
