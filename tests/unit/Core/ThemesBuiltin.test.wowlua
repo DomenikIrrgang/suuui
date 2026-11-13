@@ -8,6 +8,7 @@ import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
 import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
 import * as draw from "/UI/Draw"
+import type DressPiece from "/UI/Dress"
 import text as uiText from "/UI/Text"
 import expectNoErrors, newParent from "../../helpers"
 
@@ -38,6 +39,12 @@ const BUILT_IN: string[] = {
     "sunwell-sunburst",
     "sunwell-phoenix",
     "sunwell-naaru",
+    "icecrown-saronite",
+    "icecrown-plagueworks",
+    "icecrown-crimson",
+    "ulduar-titan",
+    "ulduar-machinery",
+    "ulduar-madness",
     "pinkcat",
     "stvruins",
     "stvcanopy",
@@ -649,8 +656,10 @@ end
 -- Each raid theme: its id, its header face (and size, where Friz Quadrata
 -- is a size down so the meters' titles fit), the strongest alpha of its
 -- windows' pattern (tools/raid_art.py, PATTERN), and the dress kinds it
--- wears (every one of them: windows, chat, the minimap, the unit frames).
-type Raid = { id: string, font: string, size?: number, pattern: number }
+-- wears (every one of them: windows, chat, the minimap, the unit frames);
+-- wraps: its corners wrap round the windows' and chat's corners (Icecrown
+-- Citadel and Ulduar).
+type Raid = { id: string, font: string, size?: number, pattern: number, wraps?: boolean }
 const MORPHEUS = "Fonts\\MORPHEUS.TTF"
 const FRIZ = "Fonts\\FRIZQT__.TTF"
 const ARIALN = "Fonts\\ARIALN.TTF"
@@ -671,7 +680,66 @@ local RAIDS: Raid[] = {
     { id = "sunwell-sunburst", font = FRIZ, size = 12, pattern = 0.1 },
     { id = "sunwell-phoenix", font = MORPHEUS, pattern = 0.12 },
     { id = "sunwell-naaru", font = ARIALN, pattern = 0.1 },
+    { id = "icecrown-saronite", font = SKURRI, pattern = 0.11, wraps = true },
+    { id = "icecrown-plagueworks", font = ARIALN, pattern = 0.11, wraps = true },
+    { id = "icecrown-crimson", font = MORPHEUS, pattern = 0.11, wraps = true },
+    { id = "ulduar-titan", font = MORPHEUS, pattern = 0.11, wraps = true },
+    { id = "ulduar-machinery", font = FRIZ, size = 12, pattern = 0.11, wraps = true },
+    { id = "ulduar-madness", font = SKURRI, pattern = 0.12, wraps = true },
 }
+
+-- How far a piece reaches past its frame's edges, outward (px): a corner
+-- piece both ways, a TOP piece up, a TOPLEFT/TOPRIGHT piece up and out.
+local function reach(p: DressPiece): number
+    local x, y = p.x or 0, p.y or 0
+    if p.point == "TOPLEFT" or p.point == "BOTTOMLEFT" then
+        x = -x
+    end
+    if p.point == "BOTTOMLEFT" or p.point == "BOTTOMRIGHT" then
+        y = -y
+    end
+    if p.point == "TOP" then
+        return y
+    end
+    return math.max(x, y)
+end
+
+@test("Raid themes: corners that wrap stay on the frame, at most 4 px past its edges, on all four corners")
+local function raidWraps()
+    local wrapped = 0
+    for _, raid in ipairs(RAIDS) do
+        if raid.wraps then
+            wrapped += 1
+            local t = theme(raid.id)
+            for _, kind in ipairs({ "window", "chat" }) do
+                local corners: { [string]: boolean } = {}
+                for _, p in ipairs(assert(t.dress[kind]).pieces or {}) do
+                    if p.span then
+                        -- (along the top, between the corners: up to 10 px over it)
+                        expect(p.point).toBe("TOP")
+                        expect(reach(p) <= 10).toBe(true)
+                        expect((p.x or 0) >= 36).toBe(true)
+                    else
+                        expect(p.w).toBe(48)
+                        expect(p.h).toBe(48)
+                        expect(reach(p)).toBe(4)
+                        expect(p.sway).toBe(nil)
+                        corners[p.point] = true
+                    end
+                end
+                for _, point in ipairs({ "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }) do
+                    expect(corners[point]).toBe(true)
+                end
+            end
+            -- the unit frames' art stays small: about 12 px over the frame at most
+            for _, p in ipairs(assert(t.dress.unit).pieces or {}) do
+                expect((p.y or 0) <= 10).toBe(true)
+                expect((p.w or 0) <= 14 and (p.h or 0) <= 12).toBe(true)
+            end
+        end
+    end
+    expect(wrapped).toBe(6)
+end
 
 @test("Raid themes: every texture, glyph and dress file they name ships, on all four kinds of frame")
 local function raidFiles()

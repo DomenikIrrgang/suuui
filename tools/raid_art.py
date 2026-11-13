@@ -18,8 +18,14 @@ with alpha, tinted by a colour token in game.
 The unit frames' dress stays small (the user, 2026-11-13: Stranglethorn's
 vines were too big and crowded): at most about 12 px over the frame, one or
 two small motifs, nothing over the name or the bar's middle.
+
+Icecrown Citadel's and Ulduar's three each (asked the same day) wrap their
+corners round the frames' corners (Wrap, WrapLow): at most 4 px past the
+edges and about 6 in, and their corner ornaments stay within 5 px of the
+corner (the user: Naxxramas · Bones' web stuck out too far).
 """
 
+import functools
 import math
 import os
 import random
@@ -2953,6 +2959,1171 @@ def nx_ice_bar(h):
 
 
 # ======================================================================================
+# Icecrown Citadel and Ulduar (asked 2026-11-13: three themes each). Their
+# corners wrap round a frame's corner instead of sticking out (the user:
+# Naxxramas · Bones' web stuck out too far): an L along both edges, at most
+# 4 px past them and 6 inside, drawn mostly on the frame's edge.
+# ======================================================================================
+
+# A wrap is drawn for a top right corner at 2x: 96x96, drawn 48x48 at
+# TOPRIGHT (4, 4) (flipped for the left; WrapLow, upside down, for the
+# bottom). The frame's corner is at (88, 8) in the file: the art keeps to
+# the band from the file's top and right edges to 20 px in (4 px drawn past
+# the frame's edges, 6 inside). Each theme draws the top arm; the side arm
+# is its mirror across the corner's diagonal, mitred where they meet.
+WS, WT = 96, 20
+
+
+def diag(shape, s=WS):
+    """A shape mirrored across the corner's diagonal (the top arm to the side)."""
+    b = shape.bbox
+    return Shape((s - b[3], s - b[2], s - b[1], s - b[0]), lambda x, y, f=shape.fn: f(s - y, s - x))
+
+
+def wrap(arm, vertex=()):
+    """The wrap from the top arm's shapes and those on the corner itself."""
+    return render(WS, WS, list(arm) + [diag(s) for s in arm] + list(vertex))
+
+
+def low(rows):
+    """A wrap for the bottom corner: the top's upside down."""
+    return rows[::-1]
+
+
+def arm_band(tip_x, end=WS):
+    """The top arm's band: pointed at tip_x, mitred at the corner."""
+    return [(tip_x, WT / 2), (tip_x + 10, 0), (end, 0), (end - WT, WT), (tip_x + 10, WT)]
+
+
+def lit(top, bottom, y0=0.0, y1=WT):
+    """Colour by height: `top` at y0, `bottom` at y1 (light from outside)."""
+    return lambda px, py: mix(top, bottom, clamp((py - y0) / (y1 - y0)))
+
+
+def gear_pts(cx, cy, r, teeth, depth, rot=0.0):
+    """A cog's outline: `teeth` teeth `depth` deep outside radius r."""
+    pts = []
+    for k in range(teeth):
+        a = rot + k * TAU / teeth
+        step = TAU / teeth
+        for f, rr in ((0.0, r), (0.18, r + depth), (0.5, r + depth), (0.68, r)):
+            pts.append(polar(cx, cy, rr, a + f * step))
+    return pts
+
+
+def ring_band(cx, cy, r0, r1, col):
+    """A ring from radius r0 to r1, col(t) its colour from inside (0) out (1)."""
+
+    def fn(x, y):
+        d = math.hypot(x - cx, y - cy)
+        if d < r0 or d > r1:
+            return None
+        return col((d - r0) / (r1 - r0))
+    return Shape((cx - r1, cy - r1, cx + r1, cy + r1), fn)
+
+
+def ridge(hi, lo, power=1.0):
+    """A band's colour across it: `hi` along its middle, `lo` at its sides."""
+    return lambda t: mix(hi, lo, clamp(abs(t - 0.5) * 2) ** power)
+
+
+def almond(cx, cy, w, h, rot=0.0, n=12):
+    """An eye's outline: two arcs meeting at its corners."""
+    top = bez((cx - w / 2, cy), (cx - w / 4, cy - h * 0.66), (cx + w / 4, cy - h * 0.66), (cx + w / 2, cy), n)
+    bottom = bez((cx + w / 2, cy), (cx + w / 4, cy + h * 0.66), (cx - w / 4, cy + h * 0.66), (cx - w / 2, cy), n)
+    pts = top + bottom[1:-1]
+    return turn(pts, cx, cy, rot) if rot else pts
+
+
+def bat_pts(cx, cy, s):
+    """A bat, wings spread: one side's points, mirrored."""
+    half = [(0, -0.35), (0.12, -0.55), (0.18, -0.2), (0.45, -0.5), (0.8, -0.42), (1.0, -0.05), (0.82, 0.02), (0.7, 0.25),
+            (0.55, 0.08), (0.4, 0.3), (0.28, 0.1), (0.12, 0.45), (0, 0.55)]
+    right = [(cx + x * s, cy + y * s) for x, y in half]
+    left = [(cx - x * s, cy + y * s) for x, y in reversed(half[1:-1])]
+    return right + left
+
+
+def drop_pts(cx, cy, r, n=20):
+    """A drop: round below, pointed at the top (cx, cy its round middle)."""
+    pts = [(cx, cy - r * 2.1)]
+    for k in range(n + 1):
+        a = -math.pi * 0.17 + (math.pi * 1.34) * k / n
+        pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r))
+    return pts
+
+
+# --- Icecrown Citadel A: saronite and the runeblade ----------------------------------
+
+SAR_DEEP, SAR, SAR_MID, SAR_LIGHT, SAR_HI = c("#10161C"), c("#25303A"), c("#384552"), c("#62717F"), c("#A8B8C6")
+RUNE, RUNE_HI = c("#76C6FF"), c("#E0F5FF")
+
+
+def ic_saronite_header():
+    """Saronite plates behind the title, frost runes glowing faintly in them,
+    a dark rim along the foot."""
+    rng = random.Random(151)
+    shapes = []
+    for x0 in (0, 42, 86):
+        x1 = x0 + 42 if x0 < 86 else 128
+        shapes.append(polygon(rect(x0 + 0.7, 1, x1 - 0.7, 33), lit(c("#1E2731"), c("#141B22"), 1, 33)))
+        shapes.append(stroke([(x0 + 1.5, 1.8), (x1 - 1.5, 1.8)], 0.8, fade(SAR_LIGHT, 0.35)))
+    for x in (21, 64, 107):
+        y = 16 + rng.uniform(-2, 2)
+        shapes.append(glow(x, y, 12, RUNE, 0.1))
+        shapes += draw_rune(x, y, 13, rune_strokes(rng), 1.0, fade(RUNE, 0.24))
+    shapes.append(polygon(rect(-1, 34, 129, 40), c("#0B1015")))
+    for k in range(16):
+        x = k * 8 + 4
+        shapes.append(polygon([(x - 2.6, 34.5), (x, 30.5), (x + 2.6, 34.5)], c("#1A222A")))
+    return band(128, 40, shapes, c("#0D1319"))
+
+
+def ic_saronite_arm():
+    rng = random.Random(153)
+    shapes = [polygon(arm_band(8), lit(SAR_LIGHT, SAR_DEEP)),
+              stroke([(19, 1.2), (WS, 1.2)], 1.4, fade(SAR_HI, 0.8)),
+              stroke([(18, 18.6), (WS - WT + 1, 18.6)], 1.4, SAR_DEEP),
+              stroke([(20, 10), (72, 10)], 5.5, fade(c("#0A0F13"), 0.85))]
+    for x in (32, 52):
+        shapes.append(glow(x, 10, 9, RUNE, 0.5))
+        shapes += draw_rune(x, 10, 8.5, rune_strokes(rng), 1.3, RUNE_HI)
+    for x in (22, 64):
+        shapes.append(ellipse(x, 10, 1.6, 1.6, SAR_HI))
+    return shapes
+
+
+@functools.lru_cache(None)
+def ic_saronite_wrap():
+    """96x96 (drawn 48x48): a saronite blade round the corner, a frost rune
+    in a diamond boss on it."""
+    vertex = [polygon(regular(WS - 10, 10, 10.5, 4), lit(SAR_HI, SAR_MID, 0, 20)),
+              polygon(regular(WS - 10, 10, 8, 4), lit(SAR_MID, SAR_DEEP, 2, 18)),
+              glow(WS - 10, 10, 12, RUNE, 0.75),
+              polygon(regular(WS - 10, 10, 4.2, 4), RUNE_HI)]
+    return wrap(ic_saronite_arm(), vertex)
+
+
+def ic_saronite_spikes():
+    """64x12: short saronite spikes on a strip along a window's top."""
+    col = lit(SAR_HI, SAR, 1, 9)
+    shapes = [thorn(16, 9, 6, 8, 1.2, col), thorn(48, 9, 5, 5.5, -0.8, col),
+              stroke([(16.2, 7.5), (17, 3)], 0.6, fade(RUNE_HI, 0.8)), stroke([(47.8, 7.5), (47.4, 5)], 0.6, fade(RUNE_HI, 0.7)),
+              polygon(rect(-1, 8, 65, 11.5), lit(SAR_LIGHT, SAR_DEEP, 8, 11.5)),
+              stroke([(-1, 8.3), (65, 8.3)], 0.6, fade(SAR_HI, 0.7))]
+    return band(64, 12, shapes)
+
+
+def ic_saronite_ring():
+    """The minimap in a saronite ring: frost runes glowing in it, short
+    spikes out between the buttons."""
+    cx = cy = 128
+    r = rim(12)
+    rng = random.Random(155)
+    shapes = []
+    for k in range(18):
+        a = k * TAU / 18 + TAU / 36
+        if clear(math.degrees(a)):
+            continue
+        base = polar(cx, cy, r + 7, a)
+        t = thorn(base[0], base[1], 6, 7 if k % 2 else 4.5, 0, lit(SAR_HI, SAR, base[1] - 8, base[1]))
+        shapes.append(rotated(t, base[0], base[1], a + math.pi / 2))
+    shapes.append(ring_band(cx, cy, r + 0.5, r + 8.5, ridge(SAR_LIGHT, SAR_DEEP, 1.4)))
+    shapes.append(annulus(cx, cy, r + 1.4, r + 1.4, 1.1, fade(SAR_HI, 0.6)))
+    for deg in range(0, 360, 24):
+        if clear(deg) or clear(deg + 6) or clear(deg - 6):
+            continue
+        x, y = polar(cx, cy, r + 4.5, math.radians(deg))
+        shapes.append(glow(x, y, 6, RUNE, 0.55))
+        shapes += draw_rune(x, y, 5.5, rune_strokes(rng), 1.0, RUNE_HI)
+    return render(256, 256, shapes)
+
+
+def ic_saronite_unit():
+    """24x24 (drawn 12x12): a saronite diamond with a frost rune."""
+    return render(24, 24, [polygon(regular(12, 12, 11, 4), lit(SAR_HI, SAR_DEEP, 1, 23)),
+                           polygon(regular(12, 12, 8, 4), SAR_DEEP), glow(12, 12, 9, RUNE, 0.7),
+                           polygon(regular(12, 12, 4, 4), RUNE_HI)])
+
+
+def ic_rune_pattern():
+    rng = random.Random(157)
+    spots = [(20, 22), (64, 12), (106, 32), (42, 62), (88, 70), (18, 104), (62, 112), (110, 100)]
+    runes = [rune_strokes(rng) for _ in spots]
+
+    def make(dx, dy):
+        out = []
+        for (x, y), st in zip(spots, runes):
+            out += draw_rune(x + dx, y + dy, 15, st, 1.4, WHITE)
+        return out
+    return pattern(128, 128, make, PATTERN["IcecrownSaronite"])
+
+
+def ic_rune_track():
+    rng = random.Random(159)
+    st = rune_strokes(rng)
+    return pattern(32, 32, lambda dx, dy: draw_rune(16 + dx, 16 + dy, 12, st, 1.2, WHITE), 0.12)
+
+
+def ic_rune_orn():
+    """32x32 (drawn 14x14 on the corner): a small rune diamond, arms along
+    both edges, at most 5 px past them."""
+    shapes = [polygon(regular(16, 16, 7.5, 4), WHITE), polygon(regular(16, 16, 3.4, 4), CUT)]
+    for k in range(4):
+        a = k * TAU / 4
+        shapes.append(stroke([polar(16, 16, 7, a), polar(16, 16, 10.5, a)], 1.8, WHITE))
+    return mask(32, 32, shapes)
+
+
+def ic_rune_jewel():
+    rng = random.Random(161)
+    shapes = [polygon(regular(32, 32, 29, 4), WHITE), polygon(regular(32, 32, 22, 4), CUT)]
+    shapes += draw_rune(32, 32, 26, rune_strokes(rng), 4.2, WHITE)
+    return mask(64, 64, shapes)
+
+
+def ic_shard_mark():
+    return mask(64, 64, [polygon([(32, 2), (44, 32), (32, 62), (20, 32)], WHITE), stroke([(32, 14), (32, 50)], 3, CUT)])
+
+
+def ic_rune_divider():
+    def make(dx, dy):
+        out = [stroke([(dx - 2, 4), (dx + 34, 4)], 0.8, WHITE)]
+        for x in (8, 24):
+            out += [stroke([(x + dx - 1.5, 1), (x + dx + 1.5, 7)], 0.8, WHITE), stroke([(x + dx + 1.5, 1), (x + dx - 0.5, 4)], 0.8, WHITE)]
+        return out
+    return mask(32, 8, tiled(32, 8, make, ys=False))
+
+
+def ic_rune_bar(h):
+    rng = random.Random(163)
+    p = per(256, h * 1.1)
+    n = int(round(256 / p))
+    runes = [rune_strokes(rng) for _ in range(n)]
+
+    def make(dx, dy):
+        out = []
+        for k in range(-1, n + 1):
+            out += draw_rune(k * p + dx + p / 2, h / 2, h * 0.62, runes[k % n], max(0.9, h * 0.07), WHITE)
+        return out
+    return bar(h, make, 0.66)
+
+
+# --- Icecrown Citadel B: the plagueworks ----------------------------------------------------
+
+PLG, PLG_HI, PLG_DEEP = c("#8FD43C"), c("#DCFF8A"), c("#2E5A14")
+GAS, GAS_HI = c("#F0962E"), c("#FFD68C")
+PBR, PBR_HI, PBR_DARK = c("#8A6B34"), c("#E4C676"), c("#35270F")
+GLASS = c("#A8DECC")
+
+
+def tube_col(hi, mid, dark):
+    """A pipe's colour across it: lit along its middle, dark at its sides."""
+    return lambda d: mix(mix(hi, mid, clamp(d * 1.6)), dark, clamp((d - 0.55) / 0.45))
+
+
+def ic_plague_header():
+    """Putricide's laboratory behind the title: a rack of glass tubes with
+    plague in them, a brass pipe along the foot, bubbles (dim)."""
+    rng = random.Random(171)
+    shapes = []
+    for k in range(4):
+        x = k * 32 + 16
+        level = rng.uniform(14, 24)
+        shapes.append(polygon(rect(x - 3.5, 6, x + 3.5, 31), fade(GLASS, 0.04)))
+        shapes.append(polygon(rect(x - 3, level, x + 3, 30.5), fade(PLG if k % 2 else GAS, 0.13)))
+        shapes.append(stroke([(x - 3.7, 6), (x - 3.7, 31)], 0.6, fade(GLASS, 0.13)))
+        shapes.append(stroke([(x + 3.7, 6), (x + 3.7, 31)], 0.6, fade(GLASS, 0.13)))
+        shapes.append(ellipse(x + rng.uniform(-1.4, 1.4), level + 4, 0.9, 0.9, fade(PLG_HI, 0.18)))
+    shapes.append(stroke([(-2, 36), (130, 36)], 3.6, tube_col(c("#33291A"), c("#231C0E"), c("#140F08"))))
+    for x in (12, 76):
+        shapes.append(polygon(rect(x - 1.6, 33.5, x + 1.6, 38.5), c("#2A2213")))
+    return band(128, 40, shapes, c("#0E1309"))
+
+
+def ic_plague_arm():
+    col = tube_col(PBR_HI, PBR, PBR_DARK)
+    shapes = [stroke([(15, 10), (WS - WT, 10)], 15, col)]
+    for x in (38, 60):
+        shapes += [polygon(rect(x - 2.6, 0.8, x + 2.6, 19.2), lit(PBR_HI, PBR_DARK, 1, 19)),
+                   ellipse(x, 3.2, 0.9, 0.9, PBR_DARK), ellipse(x, 16.8, 0.9, 0.9, PBR_DARK)]
+    shapes += [ellipse(15, 10, 4, 8.6, lit(PBR_HI, PBR_DARK, 2, 18)), ellipse(13.5, 10, 2.4, 6.4, lit(PBR, PBR_DARK, 3, 17)),
+               stroke([(20, 6.5), (WS - WT - 2, 6.5)], 1.2, fade(c("#FFF2C4"), 0.45))]
+    return shapes
+
+
+@functools.lru_cache(None)
+def ic_plague_wrap():
+    """96x96 (drawn 48x48): a brass pipe round the corner, a glass gauge of
+    plague on its elbow."""
+    col = tube_col(PBR_HI, PBR, PBR_DARK)
+    elbow = arc_pts(WS - WT, WT, 10, -math.pi / 2, 0, 16)
+    gx, gy = polar(WS - WT, WT, 10, -math.pi / 4)
+    vertex = [stroke(elbow, 15, col),
+              ellipse(gx, gy, 7, 7, lit(PBR_HI, PBR_DARK, gy - 7, gy + 7)),
+              ellipse(gx, gy, 5.2, 5.2, lambda u, v: mix(PLG_HI, PLG_DEEP, clamp((v + 0.4) / 1.4))),
+              glow(gx, gy, 9, PLG, 0.45),
+              ellipse(gx - 1.6, gy - 1.8, 1.3, 1.0, fade(c("#FFFFFF"), 0.75))]
+    return wrap(ic_plague_arm(), vertex)
+
+
+def ic_plague_tube():
+    """64x10: a glass tube along a window's top, plague and bubbles in it."""
+    shapes = [polygon(rect(-1, 1.5, 65, 8.5), fade(GLASS, 0.16)),
+              polygon(rect(-1, 4.6, 65, 8.2), fade(PLG, 0.62)),
+              stroke([(-1, 4.6), (65, 4.6)], 0.6, fade(PLG_HI, 0.8)),
+              stroke([(-1, 1.5), (65, 1.5)], 0.9, fade(GLASS, 0.8)), stroke([(-1, 8.6), (65, 8.6)], 0.9, fade(GLASS, 0.55))]
+    for x, y, r in ((7, 6.5, 1.1), (19, 6.2, 1.5), (34, 6.7, 0.9), (47, 6.1, 1.3), (57, 6.6, 1.0)):
+        shapes.append(annulus(x, y, r, r, 0.5, fade(PLG_HI, 0.95)))
+    shapes.append(stroke([(-1, 2.6), (65, 2.6)], 0.5, fade(c("#FFFFFF"), 0.35)))
+    return band(64, 10, shapes)
+
+
+def ic_plague_ring():
+    """The minimap in a brass ring with a glass tube of plague round it,
+    flanges between the buttons and three bulbs bubbling."""
+    cx = cy = 128
+    r = rim(12)
+    shapes = [ring_band(cx, cy, r + 1.5, r + 9, lambda t: fade(GLASS, 0.18 + 0.25 * abs(t - 0.5) * 2)),
+              ring_band(cx, cy, r + 3, r + 7.5, lambda t: mix(fade(PLG_DEEP, 0.75), fade(PLG, 0.8), t)),
+              annulus(cx, cy, r + 2.6, r + 2.6, 1.6, PBR), annulus(cx, cy, r + 10, r + 10, 1.6, PBR)]
+    for deg in range(0, 360, 30):
+        if clear(deg):
+            continue
+        a = math.radians(deg)
+        p0, p1 = polar(cx, cy, r + 1, a), polar(cx, cy, r + 11.5, a)
+        shapes.append(stroke([p0, p1], 4.4, tube_col(PBR_HI, PBR, PBR_DARK)))
+    rng = random.Random(173)
+    for deg in range(4, 360, 13):
+        if clear(deg):
+            continue
+        x, y = polar(cx, cy, r + 6.5 + rng.uniform(-1, 1), math.radians(deg))
+        shapes.append(annulus(x, y, 1.1, 1.1, 0.5, fade(PLG_HI, 0.9)))
+    for deg in (205, 245, 330):
+        a = math.radians(deg)
+        nx_, ny_ = polar(cx, cy, r + 8.5, a)
+        bx, by = polar(cx, cy, r + 11.5, a)
+        shapes.append(stroke([(nx_, ny_), (bx, by)], 3.2, fade(GLASS, 0.8)))
+        shapes += [glow(bx, by, 7, PLG, 0.45), ellipse(bx, by, 3.7, 3.7, lambda u, v: mix(PLG_HI, PLG_DEEP, clamp((v + 0.6) / 1.5))),
+                   ellipse(bx - 1.1, by - 1.2, 1.0, 0.8, fade(c("#FFFFFF"), 0.8))]
+    return render(256, 256, shapes)
+
+
+def ic_plague_unit():
+    """24x24 (drawn 12x12): a small flask of plague."""
+    return render(24, 24, [glow(12, 15, 10, PLG, 0.35),
+                           polygon(rect(9.5, 2, 14.5, 10), fade(GLASS, 0.55)),
+                           ellipse(12, 15.5, 7.5, 7, fade(GLASS, 0.5)),
+                           ellipse(12, 16.5, 6.4, 5.8, lambda u, v: None if v < -0.15 else mix(PLG_HI, PLG_DEEP, clamp((v + 0.1) / 1.1))),
+                           polygon(rect(8.6, 1.2, 15.4, 3.2), PBR_HI),
+                           ellipse(9.5, 13, 1.2, 1.0, fade(c("#FFFFFF"), 0.8))])
+
+
+def mote_bubble():
+    """A bubble: a ring with a light on it."""
+    return soft(32, [annulus(16, 16, 10, 10, 2.2, WHITE), ellipse(12.5, 12, 2.6, 2, WHITE)], 0.3, 2.4)
+
+
+def ic_molecule_pattern():
+    def mol(x, y, s):
+        pts = hex_pts(x, y, s, flat=False)
+        out = [stroke(pts + [pts[0]], 1.3, WHITE)]
+        out += [ellipse(px, py, 2.3, 2.3, WHITE) for px, py in pts[::2]]
+        a = pts[1]
+        b = (a[0] + s * 0.95, a[1] + s * 0.4)
+        out += [stroke([a, b], 1.3, WHITE), ellipse(b[0], b[1], 2.8, 2.8, WHITE)]
+        return out
+
+    def make(dx, dy):
+        return mol(34 + dx, 36 + dy, 12) + mol(96 + dx, 94 + dy, 10)
+    return pattern(128, 128, make, PATTERN["IcecrownPlagueworks"])
+
+
+def ic_bubble_track():
+    def make(dx, dy):
+        return [annulus(9 + dx, 20 + dy, 3, 3, 1, WHITE), annulus(22 + dx, 10 + dy, 2, 2, 0.9, WHITE),
+                ellipse(25 + dx, 24 + dy, 1, 1, WHITE)]
+    return pattern(32, 32, make, 0.12)
+
+
+def ic_valve_orn():
+    """32x32: a valve wheel on the corner (at most 5 px past the edges)."""
+    shapes = [annulus(16, 16, 10.5, 10.5, 2.4, WHITE), ellipse(16, 16, 2.8, 2.8, WHITE)]
+    for k in range(4):
+        a = k * TAU / 4 + TAU / 8
+        shapes.append(stroke([polar(16, 16, 2, a), polar(16, 16, 9, a)], 1.6, WHITE))
+    return mask(32, 32, shapes)
+
+
+def ic_flask_jewel():
+    return mask(64, 64, [polygon(rect(26, 4, 38, 26), WHITE), ellipse(32, 40, 20, 19, WHITE),
+                         polygon(rect(22, 2, 42, 8), WHITE), ellipse(32, 41, 14, 13, CUT),
+                         ellipse(32, 46, 12.5, 7.5, WHITE)])
+
+
+def ic_drop_mark():
+    return mask(64, 64, [polygon(drop_pts(32, 40, 19), WHITE)])
+
+
+def ic_tube_divider():
+    def make(dx, dy):
+        out = [stroke([(dx - 2, 2), (dx + 34, 2)], 0.7, WHITE), stroke([(dx - 2, 6.2), (dx + 34, 6.2)], 0.7, WHITE)]
+        out += [ellipse(8 + dx, 4.1, 1.2, 1.2, WHITE), ellipse(22 + dx, 4.1, 0.9, 0.9, WHITE)]
+        return out
+    return mask(32, 8, tiled(32, 8, make, ys=False))
+
+
+def ic_bubble_bar(h):
+    rng = random.Random(177)
+    p = per(256, h * 1.2)
+    n = int(round(256 / p))
+    spots = [[(rng.uniform(0.1, 0.9), rng.uniform(0.25, 0.75), rng.uniform(0.09, 0.18)) for _ in range(3)] for _ in range(n)]
+
+    def make(dx, dy):
+        out = []
+        for k in range(-1, n + 1):
+            for fx, fy, fr in spots[k % n]:
+                rr = h * fr
+                out.append(annulus(k * p + fx * p + dx, h * fy, rr, rr, max(0.8, rr * 0.4), WHITE))
+        return out
+    return bar(h, make, 0.66)
+
+
+# --- Icecrown Citadel C: the Blood Queen's crimson hall ------------------------------------
+
+CR, CR_HI, CR_DEEP, CR_DARK = c("#C02A44"), c("#FF8C9C"), c("#5A0F1E"), c("#20070D")
+CG, CG_HI, CG_DARK = c("#B88F4C"), c("#F4D690"), c("#5A4120")
+
+
+def ic_crimson_header():
+    """The Blood Queen's hall behind the title: crimson velvet in folds,
+    gothic arches traced in dark gold (dim)."""
+    shapes = []
+    for k in range(8):
+        x = k * 16
+
+        def fold(px, py, x=x):
+            t = 0.5 + 0.5 * math.cos((px - x - 8) / 8 * math.pi)
+            return mix(c("#1C0910"), c("#2E0E18"), t * 0.8)
+        shapes.append(polygon(rect(x, 0, x + 16, 40), fold))
+    for x in (16, 48, 80, 112):
+        shapes += gothic_window(x, 39, 20, 31, 1.1, fade(CG, 0.24))
+        shapes += gothic_window(x, 39, 12, 22, 0.8, fade(CG, 0.14))
+        shapes.append(ellipse(x, 14, 1.4, 1.4, fade(CR_HI, 0.28)))
+    return band(128, 40, shapes, c("#190910"))
+
+
+def ic_crimson_arm():
+    shapes = [polygon(arm_band(8), fade(CR_DARK, 0.88)),
+              stroke([(18, 2.6), (WS - 1, 2.6)], 1.7, CG_HI),
+              stroke([(18, 17.4), (WS - WT + 1, 17.4)], 1.7, CG)]
+    wave = [(x, 10 + 4.2 * math.sin((x - 20) / 13 * math.pi)) for x in range(20, 75)]
+    shapes.append(stroke(wave, 1.3, CG))
+    for x in (26.5, 52.5):
+        shapes.append(spiral(x, 10 - 4.2 + 2.4, 2.2, 1.2, 0.9, CG_HI))
+    for x in (39.5, 65.5):
+        shapes.append(spiral(x, 10 + 4.2 - 2.4, 2.2, 1.2, 0.9, CG_HI))
+    shapes += [polygon([(5, 10), (13, 6.5), (16, 10), (13, 13.5)], lit(CG_HI, CG_DARK, 6, 14)),
+               ellipse(16.5, 5.8, 3.2, 2, CG, 0.7), ellipse(16.5, 14.2, 3.2, 2, CG, -0.7),
+               ellipse(17.5, 10, 2, 2, CR)]
+    return shapes
+
+
+@functools.lru_cache(None)
+def ic_crimson_wrap():
+    """96x96 (drawn 48x48): gold filigree round the corner on dark crimson,
+    a blood-red gem set on the corner."""
+    x, y = WS - 10, 10
+    vertex = [polygon(regular(x, y, 10.5, 4), lit(CG_HI, CG_DARK, 0, 20)),
+              polygon(regular(x, y, 7.4, 4), lit(CR_HI, CR_DEEP, 3, 17)),
+              polygon([(x, y - 7.4), (x + 3.2, y - 2), (x, y), (x - 3.2, y - 2)], fade(c("#FFD0D8"), 0.55)),
+              glow(x, y, 9, CR, 0.3)]
+    return wrap(ic_crimson_arm(), vertex)
+
+
+def ic_tracery():
+    """64x10: small gothic arches standing on a window's top."""
+    shapes = [stroke([(-1, 8.4), (65, 8.4)], 1.4, CG)]
+    for x in (8, 24, 40, 56):
+        arch = bez((x - 5, 8.4), (x - 5, 4.6), (x - 1.5, 2.6), (x, 1.3), 8) + bez((x, 1.3), (x + 1.5, 2.6), (x + 5, 4.6), (x + 5, 8.4), 8)[1:]
+        shapes += [stroke(arch, 1.0, fade(CG, 0.9)), ellipse(x, 5.6, 1.3, 1.3, CR)]
+    return band(64, 10, shapes)
+
+
+def ic_crimson_ring():
+    """The minimap in dark gold with crimson between, gems and small
+    points, two bats on it."""
+    cx = cy = 128
+    r = rim(12)
+    shapes = [annulus(cx, cy, r + 9.5, r + 9.5, 8, fade(CR_DARK, 0.85)),
+              annulus(cx, cy, r + 3.6, r + 3.6, 1.5, CG), annulus(cx, cy, r + 9.4, r + 9.4, 1.5, CG_HI)]
+    for deg in range(0, 360, 15):
+        if clear(deg):
+            continue
+        a = math.radians(deg)
+        base, tip = polar(cx, cy, r + 9, a), polar(cx, cy, r + 14, a)
+        side = 1.6
+        nx_, ny_ = -math.sin(a) * side, math.cos(a) * side
+        shapes.append(polygon([(base[0] + nx_, base[1] + ny_), tip, (base[0] - nx_, base[1] - ny_)], CG))
+    for deg in (190, 232, 312, 352, 120):
+        x, y = polar(cx, cy, r + 6.5, math.radians(deg))
+        shapes += [polygon(regular(x, y, 4.6, 4), CG_HI), polygon(regular(x, y, 3.3, 4), lit(CR_HI, CR_DEEP, y - 3, y + 3))]
+    for deg, s in ((214, 8), (330, 7)):
+        x, y = polar(cx, cy, r + 7.5, math.radians(deg))
+        shapes += [polygon(bat_pts(x, y, s), lit(CR, CR_DEEP, y - s * 0.5, y + s * 0.5)), ellipse(x - s * 0.06, y - s * 0.12, 0.7, 0.7, CG_HI),
+                   ellipse(x + s * 0.06, y - s * 0.12, 0.7, 0.7, CG_HI)]
+    return render(256, 256, shapes)
+
+
+def ic_crimson_unit():
+    """24x24 (drawn 12x12): a drop of blood under a gold cap."""
+    return render(24, 24, [glow(12, 15, 9, CR, 0.3), polygon(drop_pts(12, 15.5, 6.5), lambda px, py: mix(CR_HI, CR_DEEP, clamp((py - 4) / 18))),
+                           ellipse(10, 14.5, 1.3, 2, fade(c("#FFD0D8"), 0.7)),
+                           polygon([(7, 2), (17, 2), (15, 4.5), (9, 4.5)], CG_HI)])
+
+
+def mote_bat():
+    return soft(32, [polygon(bat_pts(16, 16, 14), WHITE)], 0.15, 2.4)
+
+
+def ic_rose_pattern():
+    def rose(x, y, s):
+        out = [annulus(x, y, s, s, 1.3, WHITE), ellipse(x, y, s * 0.14, s * 0.14, WHITE)]
+        for k in range(6):
+            px, py = polar(x, y, s * 0.52, k * TAU / 6)
+            out.append(annulus(px, py, s * 0.36, s * 0.36, 1.1, WHITE))
+        return out
+
+    def make(dx, dy):
+        return rose(32 + dx, 32 + dy, 16) + rose(96 + dx, 96 + dy, 13)
+    return pattern(128, 128, make, PATTERN["IcecrownCrimson"])
+
+
+def ic_diamond_track():
+    def make(dx, dy):
+        return [polygon(regular(8 + dx, 16 + dy, 2.6, 4), WHITE), polygon(regular(24 + dx, 16 + dy, 1.6, 4), WHITE),
+                stroke([(dx, 16 + dy), (32 + dx, 16 + dy)], 0.6, WHITE)]
+    return pattern(32, 32, make, 0.12)
+
+
+def ic_spear_orn():
+    """32x32: four small spear points round a diamond (5 px past at most)."""
+    shapes = [polygon(regular(16, 16, 4.6, 4), WHITE)]
+    for k in range(4):
+        a = k * TAU / 4
+        tip, back = polar(16, 16, 11, a), polar(16, 16, 5.6, a)
+        mid = polar(16, 16, 7.6, a)
+        nx_, ny_ = -math.sin(a) * 2.6, math.cos(a) * 2.6
+        shapes.append(polygon([back, (mid[0] + nx_, mid[1] + ny_), tip, (mid[0] - nx_, mid[1] - ny_)], WHITE))
+    return mask(32, 32, shapes)
+
+
+def ic_gem_jewel():
+    outer = regular(32, 32, 29, 8, math.pi / 8)
+    inner = regular(32, 32, 15, 8, math.pi / 8)
+    shapes = [polygon(outer, WHITE), stroke(inner + [inner[0]], 2.2, CUT)]
+    shapes += [stroke([o, i], 1.8, CUT) for o, i in zip(outer, inner)]
+    return mask(64, 64, shapes)
+
+
+def ic_blood_mark():
+    return mask(64, 64, [polygon(drop_pts(32, 40, 18), WHITE)])
+
+
+def ic_drop_divider():
+    def make(dx, dy):
+        out = [stroke([(dx - 2, 2.5), (dx + 34, 2.5)], 0.8, WHITE)]
+        out += [polygon(drop_pts(8 + dx, 5.4, 1.5, 10), WHITE), polygon(regular(24 + dx, 2.5, 1.6, 4), WHITE)]
+        return out
+    return mask(32, 8, tiled(32, 8, make, ys=False))
+
+
+def ic_arch_bar(h):
+    p = per(256, h * 1.0)
+
+    def make(dx, dy):
+        out = [stroke([(dx - 2, h * 0.84), (dx + 258, h * 0.84)], max(0.8, h * 0.05), WHITE)]
+        for k in range(-1, int(round(256 / p)) + 1):
+            x = k * p + dx + p / 2
+            pts = bez((x - p * 0.42, h * 0.84), (x - p * 0.42, h * 0.45), (x - p * 0.1, h * 0.3), (x, h * 0.14), 8) + \
+                bez((x, h * 0.14), (x + p * 0.1, h * 0.3), (x + p * 0.42, h * 0.45), (x + p * 0.42, h * 0.84), 8)[1:]
+            out.append(stroke(pts, max(0.8, h * 0.06), WHITE))
+        return out
+    return bar(h, make, 0.64)
+
+
+# --- Ulduar A: titan stonework ----------------------------------------------------------------
+
+TS, TS_DARK, TS_LIGHT, TS_HI = c("#3A4653"), c("#1C232B"), c("#5E6E7E"), c("#90A2B3")
+TG, TG_HI, TG_DARK = c("#C9A659"), c("#F4DE9C"), c("#6E5528")
+TL, TL_HI = c("#8FD3FF"), c("#EEF9FF")
+
+
+def key_line(x0, x1, y, h, s, width, col):
+    """A running key (Greek fret) between y and y + h, units s wide."""
+    out = [stroke([(x0, y + h), (x1, y + h)], width, col)]
+    x = x0
+    while x < x1 - 0.1:
+        pts = [(x + s * 0.1, y + h), (x + s * 0.1, y), (x + s * 0.85, y), (x + s * 0.85, y + h * 0.66), (x + s * 0.45, y + h * 0.66),
+               (x + s * 0.45, y + h * 0.36)]
+        out.append(stroke(pts, width, col))
+        x += s
+    return out
+
+
+def ul_titan_header():
+    """Titan stone behind the title: carved blocks, a gold line along the
+    foot, blue-white light in the joints (dim)."""
+    rng = random.Random(181)
+    shapes = []
+    for x0, x1 in ((0, 44), (44, 86), (86, 128)):
+        tone = rng.uniform(0.3, 0.6)
+        shapes.append(polygon(rect(x0 + 0.8, 1, x1 - 0.8, 29), lit(mix(c("#232B34"), c("#2B3540"), tone), c("#1A2129"), 1, 29)))
+        shapes.append(stroke([(x0 + 1.5, 1.8), (x1 - 1.5, 1.8)], 0.7, fade(TS_HI, 0.3)))
+    for x in (44, 86, 0):
+        shapes += [glow(x, 15, 7, TL, 0.3), ellipse(x, 15, 1.1, 1.1, fade(TL_HI, 0.6))]
+    shapes.append(polygon(rect(-1, 30, 129, 40), c("#161C23")))
+    shapes.append(stroke([(-1, 36.5), (129, 36.5)], 0.8, fade(TG, 0.3)))
+    return band(128, 40, shapes, c("#11171D"))
+
+
+def ul_titan_arm():
+    shapes = [polygon(arm_band(10), lit(TS_LIGHT, TS_DARK)),
+              stroke([(21, 1.1), (WS, 1.1)], 1.2, fade(TS_HI, 0.85)),
+              stroke([(20, 18.8), (WS - WT + 1, 18.8)], 1.3, c("#141A20")),
+              stroke([(25, 10), (WS - 10, 10)], 1.7, TG),
+              spiral(24, 10, 5.2, 1.4, 1.3, TG_HI)]
+    for x in (44, 62):
+        shapes.append(polygon(regular(x, 10, 3, 4), lit(TG_HI, TG_DARK, 7, 13)))
+    return shapes
+
+
+@functools.lru_cache(None)
+def ul_titan_wrap():
+    """96x96 (drawn 48x48): titan stone round the corner with a gold inlay,
+    a blue-white light in the stone on the corner."""
+    x, y = WS - 10, 10
+    vertex = [polygon(rect(x - 9.5, y - 9.5, x + 9.5, y + 9.5), lit(TS_HI, TS, 0, 20)),
+              stroke([(x - 8, y - 8), (x + 8, y - 8), (x + 8, y + 8), (x - 8, y + 8), (x - 8, y - 8)], 1.2, TG),
+              glow(x, y, 13, TL, 0.8), annulus(x, y, 5.4, 5.4, 1.1, TL_HI), ellipse(x, y, 2.8, 2.8, TL_HI)]
+    return wrap(ul_titan_arm(), vertex)
+
+
+def ul_titan_frieze():
+    """32x10: a stone frieze along a window's top, a gold key in it."""
+    shapes = [polygon(rect(-1, 1, 33, 9), lit(TS_LIGHT, TS_DARK, 1, 9)), stroke([(-1, 1.4), (33, 1.4)], 0.6, fade(TS_HI, 0.8))]
+    shapes += key_line(-16, 48, 2.6, 4.8, 16, 0.9, fade(TG, 0.85))
+    return band(32, 10, shapes)
+
+
+def ul_titan_ring():
+    """The minimap in titan stone: gold inlay lines and a gold dial, the
+    keepers' blue-white light at five points."""
+    cx = cy = 128
+    r = rim(12)
+    shapes = [ring_band(cx, cy, r + 0.8, r + 10, ridge(TS_LIGHT, TS_DARK, 1.3)),
+              annulus(cx, cy, r + 3, r + 3, 1.1, TG), annulus(cx, cy, r + 8.6, r + 8.6, 1.1, TG)]
+    for deg in range(0, 360, 6):
+        if clear(deg):
+            continue
+        a = math.radians(deg)
+        long_ = deg % 30 == 0
+        shapes.append(stroke([polar(cx, cy, r + 4.2, a), polar(cx, cy, r + (7.4 if long_ else 5.9), a)], 0.9 if not long_ else 1.3, TG))
+    for deg in (190, 232, 312, 352, 120):
+        x, y = polar(cx, cy, r + 5.8, math.radians(deg))
+        shapes += [polygon(regular(x, y, 4.2, 4), TS_HI), glow(x, y, 7, TL, 0.75), ellipse(x, y, 1.9, 1.9, TL_HI)]
+    return render(256, 256, shapes)
+
+
+def ul_titan_unit():
+    """24x24 (drawn 12x12): a titan light in a gold-rimmed stone."""
+    return render(24, 24, [polygon(regular(12, 12, 11, 4), lit(TG_HI, TG_DARK, 1, 23)),
+                           polygon(regular(12, 12, 9, 4), lit(TS_HI, TS_DARK, 3, 21)),
+                           glow(12, 12, 8, TL, 0.8), ellipse(12, 12, 2.6, 2.6, TL_HI)])
+
+
+def ul_seal_pattern():
+    def seal(x, y, s):
+        out = [annulus(x, y, s, s, 1.3, WHITE), annulus(x, y, s * 0.62, s * 0.62, 1.1, WHITE), ellipse(x, y, s * 0.12, s * 0.12, WHITE)]
+        for k in range(8):
+            a = k * TAU / 8
+            out.append(stroke([polar(x, y, s * 0.72, a), polar(x, y, s * 0.92, a)], 1.1, WHITE))
+        return out
+
+    def make(dx, dy):
+        return seal(32 + dx, 32 + dy, 18) + seal(96 + dx, 96 + dy, 14) + \
+            [polygon(regular(96 + dx, 30 + dy, 3, 4), WHITE), polygon(regular(30 + dx, 98 + dy, 3, 4), WHITE)]
+    return pattern(128, 128, make, PATTERN["UlduarTitan"])
+
+
+def ul_key_track():
+    return pattern(32, 32, lambda dx, dy: key_line(dx, dx + 32, 12 + dy, 8, 8, 1.0, WHITE), 0.11)
+
+
+def ul_knot_orn():
+    """32x32: a titan knot, square in square (5 px past at most)."""
+    shapes = [polygon(regular(16, 16, 10.5, 4), WHITE), polygon(regular(16, 16, 7.6, 4), CUT),
+              polygon(rect(12.4, 12.4, 19.6, 19.6), WHITE)]
+    return mask(32, 32, shapes)
+
+
+def ul_eye_jewel():
+    shapes = [annulus(32, 32, 28, 28, 4.5, WHITE), annulus(32, 32, 17, 17, 3.5, WHITE), ellipse(32, 32, 6.5, 6.5, WHITE)]
+    for k in range(8):
+        a = k * TAU / 8 + TAU / 16
+        shapes.append(stroke([polar(32, 32, 18.5, a), polar(32, 32, 23, a)], 2.6, WHITE))
+    return mask(64, 64, shapes)
+
+
+def ul_square_mark():
+    return mask(64, 64, [polygon(regular(32, 32, 30, 4), WHITE), polygon(regular(32, 32, 9, 4), CUT)])
+
+
+def ul_key_divider():
+    return mask(32, 8, tiled(32, 8, lambda dx, dy: key_line(dx - 8, dx + 40, 1.2, 5.4, 8, 0.8, WHITE), ys=False))
+
+
+def ul_key_bar(h):
+    s = per(256, h * 1.1)
+    return bar(h, lambda dx, dy: key_line(dx - s, dx + 256 + s, h * 0.2, h * 0.6, s, max(0.9, h * 0.07), WHITE), 0.66)
+
+
+# --- Ulduar B: Mimiron's machinery ---------------------------------------------------------------
+
+MS, MS_DARK, MS_LIGHT, MS_HI = c("#495258"), c("#1F2428"), c("#7D8890"), c("#BAC4CA")
+CU, CU_HI, CU_DARK = c("#C47336"), c("#F6B878"), c("#5A3014")
+LAMP, LAMP_HI = c("#FF4D33"), c("#FFD8C4")
+
+
+def ul_machine_header():
+    """Mimiron's steel panels behind the title: rivets, vents, a row of
+    small warning lamps (dim)."""
+    shapes = []
+    for x0, x1 in ((0, 64), (64, 128)):
+        shapes.append(polygon(rect(x0 + 0.7, 1, x1 - 0.7, 33), lit(c("#262B30"), c("#1A1E21"), 1, 33)))
+        for x, y in ((x0 + 4, 4.5), (x1 - 4, 4.5), (x0 + 4, 29.5), (x1 - 4, 29.5)):
+            shapes += [ellipse(x, y, 1.3, 1.3, c("#3A4248")), ellipse(x - 0.3, y - 0.3, 0.6, 0.6, c("#4E585F"))]
+        for k in range(4):
+            y = 10 + k * 4.5
+            shapes.append(polygon(rect(x0 + 42, y, x0 + 56, y + 2), c("#16191C")))
+    for x in (16, 80):
+        shapes += [glow(x, 17, 5, LAMP, 0.14), ellipse(x, 17, 1.3, 1.3, fade(LAMP, 0.34))]
+    shapes.append(polygon(rect(-1, 34, 129, 40), c("#121517")))
+    for k in range(8):
+        x = k * 16
+        shapes.append(polygon([(x, 40), (x + 8, 34), (x + 12, 34), (x + 4, 40)], c("#1D1A12")))
+    return band(128, 40, shapes, c("#131516"))
+
+
+def ul_machine_arm():
+    shapes = [polygon(arm_band(10), lit(MS_LIGHT, MS_DARK)),
+              stroke([(21, 1.1), (WS, 1.1)], 1.2, fade(MS_HI, 0.85)),
+              stroke([(20, 18.8), (WS - WT + 1, 18.8)], 1.3, c("#121518")),
+              stroke([(52, 2), (52, 18)], 0.9, c("#1A1E21"))]
+    for x in (34, 46, 60):
+        shapes += [ellipse(x + 0.4, 10.4, 2.2, 2.2, c("#15191C")), ellipse(x, 10, 2.1, 2.1, lit(MS_HI, MS, 8, 12))]
+    shapes += [glow(20, 10, 7, LAMP, 0.6), ellipse(20, 10, 2.4, 2.4, LAMP), ellipse(19.3, 9.2, 0.9, 0.9, LAMP_HI)]
+    return shapes
+
+
+@functools.lru_cache(None)
+def ul_machine_wrap():
+    """96x96 (drawn 48x48): a riveted steel bracket round the corner, a
+    copper cog on the corner, a red lamp at each end."""
+    gx, gy = WS - 15, 15
+    teeth = gear_pts(gx, gy, 10.5, 10, 3.2, 0.12)
+    vertex = [polygon(teeth, lambda px, py: mix(CU_HI, CU_DARK, clamp((py - gy + 12) / 26))),
+              annulus(gx, gy, 8.2, 8.2, 1.2, fade(CU_DARK, 0.8)),
+              ellipse(gx, gy, 4.2, 4.2, MS_DARK), ellipse(gx, gy, 2, 2, MS_HI)]
+    for k in range(4):
+        x, y = polar(gx, gy, 6.2, k * TAU / 4 + 0.5)
+        vertex.append(ellipse(x, y, 1.3, 1.3, CU_DARK))
+    return wrap(ul_machine_arm(), vertex)
+
+
+def ul_machine_rail():
+    """32x8: a riveted steel rail along a window's top."""
+    shapes = [polygon(rect(-1, 1, 33, 7), lit(MS_LIGHT, MS_DARK, 1, 7)), stroke([(-1, 1.4), (33, 1.4)], 0.6, fade(MS_HI, 0.8)),
+              stroke([(16, 1.5), (16, 6.5)], 0.7, c("#15191C"))]
+    for x in (8, 24):
+        shapes += [ellipse(x + 0.3, 4.3, 1.4, 1.4, c("#15191C")), ellipse(x, 4, 1.3, 1.3, MS_HI)]
+    return band(32, 8, shapes)
+
+
+def ul_machine_ring():
+    """The minimap in a copper cog, its teeth out between the buttons,
+    steel inside, two warning lamps."""
+    cx = cy = 128
+    r = rim(12)
+    shapes = []
+    for k in range(40):
+        a = k * TAU / 40
+        if clear(math.degrees(a)) or clear(math.degrees(a) + 3) or clear(math.degrees(a) - 3):
+            continue
+        p = [polar(cx, cy, r + 8.5, a - 0.04), polar(cx, cy, r + 13, a - 0.022), polar(cx, cy, r + 13, a + 0.022), polar(cx, cy, r + 8.5, a + 0.04)]
+        shapes.append(polygon(p, lambda px, py: mix(CU, CU_DARK, 0.3)))
+    shapes += [ring_band(cx, cy, r + 2.5, r + 9.5, ridge(CU_HI, CU_DARK, 1.2)), ring_band(cx, cy, r + 0.6, r + 3, ridge(MS_HI, MS_DARK))]
+    for deg in range(10, 360, 20):
+        if clear(deg):
+            continue
+        x, y = polar(cx, cy, r + 6, math.radians(deg))
+        shapes += [ellipse(x, y, 1.6, 1.6, CU_DARK), ellipse(x - 0.3, y - 0.3, 0.8, 0.8, CU_HI)]
+    for deg in (200, 340):
+        x, y = polar(cx, cy, r + 6, math.radians(deg))
+        shapes += [glow(x, y, 8, LAMP, 0.7), ellipse(x, y, 2.8, 2.8, LAMP), ellipse(x - 0.8, y - 0.9, 1, 1, LAMP_HI)]
+    return render(256, 256, shapes)
+
+
+def ul_machine_unit():
+    """24x24 (drawn 12x12): a small copper cog."""
+    return render(24, 24, [polygon(gear_pts(12, 12, 7.4, 8, 3, 0.2), lambda px, py: mix(CU_HI, CU_DARK, clamp((py - 2) / 20))),
+                           ellipse(12, 12, 3.2, 3.2, MS_DARK), ellipse(12, 12, 1.4, 1.4, MS_HI)])
+
+
+def ul_blueprint_pattern():
+    def make(dx, dy):
+        out = [stroke(gear_pts(36 + dx, 36 + dy, 15, 12, 4) + [gear_pts(36 + dx, 36 + dy, 15, 12, 4)[0]], 1.2, WHITE),
+               annulus(36 + dx, 36 + dy, 5, 5, 1.1, WHITE),
+               stroke(regular(96 + dx, 92 + dy, 9, 6) + [regular(96 + dx, 92 + dy, 9, 6)[0]], 1.2, WHITE),
+               annulus(96 + dx, 92 + dy, 4, 4, 1, WHITE)]
+        for k in range(5):
+            x = 70 + k * 6 + dx
+            out.append(stroke([(x, 30 + dy), (x + 3.5, 30 + dy)], 1, WHITE))
+        out += [stroke([(10 + dx, 100 + dy), (10 + dx, 120 + dy)], 1, WHITE), stroke([(6 + dx, 120 + dy), (30 + dx, 120 + dy)], 1, WHITE)]
+        return out
+    return pattern(128, 128, make, PATTERN["UlduarMachinery"])
+
+
+def ul_stripe_track():
+    def make(dx, dy):
+        return [polygon([(x + dx, 32 + dy), (x + 8 + dx, 32 + dy), (x + 24 + dx, dy), (x + 16 + dx, dy)], WHITE) for x in (-16, 0)]
+    return pattern(32, 32, make, 0.08)
+
+
+def ul_bolt_orn():
+    """32x32: a hex bolt head on the corner (5 px past at most)."""
+    return mask(32, 32, [polygon(hex_pts(16, 16, 10.5), WHITE), annulus(16, 16, 5.6, 5.6, 1.4, CUT), ellipse(16, 16, 2, 2, CUT)])
+
+
+def ul_cog_jewel():
+    return mask(64, 64, [polygon(gear_pts(32, 32, 22, 10, 7), WHITE), ellipse(32, 32, 10, 10, CUT), ellipse(32, 32, 5, 5, WHITE)])
+
+
+def ul_nut_mark():
+    return mask(64, 64, [polygon(hex_pts(32, 32, 30), WHITE), ellipse(32, 32, 11, 11, CUT)])
+
+
+def ul_rivet_divider():
+    def make(dx, dy):
+        return [stroke([(dx - 2, 4), (dx + 34, 4)], 0.8, WHITE), ellipse(8 + dx, 4, 1.7, 1.7, WHITE), ellipse(24 + dx, 4, 1.7, 1.7, WHITE)]
+    return mask(32, 8, tiled(32, 8, make, ys=False))
+
+
+def ul_rack_bar(h):
+    p = per(256, h * 0.6)
+
+    def make(dx, dy):
+        out = [polygon(rect(dx - 2, h * 0.62, dx + 258, h * 0.72), WHITE)]
+        for k in range(-1, int(round(256 / p)) + 1):
+            x = k * p + dx
+            out.append(polygon([(x + p * 0.1, h * 0.63), (x + p * 0.28, h * 0.3), (x + p * 0.62, h * 0.3), (x + p * 0.8, h * 0.63)], WHITE))
+        return out
+    return bar(h, make, 0.66)
+
+
+# --- Ulduar C: Yogg-Saron's madness --------------------------------------------------------------
+
+TE, TE_HI, TE_DARK = c("#7A3AA0"), c("#CE94F0"), c("#2A1038")
+SUCKER = c("#D8B4EE")
+EYE, EYE_HI, PUPIL = c("#EED553"), c("#FFF9C8"), c("#16081C")
+
+
+def flesh(d):
+    """A tentacle's colour across it: lit along its middle, dark at its rim."""
+    return mix(mix(TE_HI, TE, clamp(d * 1.25)), TE_DARK, 0.7 * clamp((d - 0.78) / 0.22))
+
+
+def eye(cx, cy, w, h, rot=0.0, glow_=0.4):
+    """A yellow eye with a slit pupil, its lids dark."""
+    out = []
+    if glow_:
+        out.append(glow(cx, cy, w * 0.75, EYE, glow_))
+    out += [polygon(almond(cx, cy, w + 1.6, h + 1.6, rot), TE_DARK),
+            polygon(almond(cx, cy, w, h, rot), lambda px, py: mix(EYE_HI, EYE, clamp(math.hypot(px - cx, py - cy) / (w * 0.5)))),
+            ellipse(cx, cy, max(0.6, w * 0.07), h * 0.42, PUPIL, rot)]
+    return out
+
+
+def ul_madness_header():
+    """The dark of Yogg-Saron's prison behind the title: whispers curling
+    in purple, a few eyes half open (dim)."""
+    rng = random.Random(191)
+    shapes = []
+    for _ in range(7):
+        x, y = rng.uniform(0, 128), rng.uniform(6, 32)
+        shapes.append(spiral(x, y, rng.uniform(4, 7), 1.3, 0.8, fade(TE_HI, 0.2)))
+    for k in range(5):
+        x = k * 25.6 + 6
+        pts = [(x + t * 14, 34 + 2.2 * math.sin(t * 6 + k)) for t in [i / 14 for i in range(15)]]
+        shapes.append(stroke(pts, 0.9, fade(TE_HI, 0.22)))
+    for x, y in ((30, 13), (94, 21)):
+        shapes += [polygon(almond(x, y, 13, 5.5), fade(TE_DARK, 0.7)), polygon(almond(x, y, 11, 4.2), fade(EYE, 0.3)),
+                   ellipse(x, y, 0.7, 1.9, fade(PUPIL, 0.85))]
+    return band(128, 40, shapes, c("#140A19"))
+
+
+def ul_madness_arm():
+    pts = [(x, 10 + 1.6 * math.sin((x - 8) / 7.5) * (1 - (x - 8) / 68)) for x in [8 + i * 2 for i in range(35)]]
+    pts += arc_pts(WS - WT, WT, 10, -math.pi / 2, -math.pi / 4, 10)[1:]
+    shapes = [stroke(pts[::-1], 1, flesh, taper=(20, 3.2))]
+    for x, r in ((30, 1.4), (43, 1.8), (56, 2.1), (68, 2.4)):
+        y = 10 + 1.6 * math.sin((x - 8) / 7.5) * (1 - (x - 8) / 68) + (3.2 + 16.8 * (x - 8) / 90) / 2 - r - 0.5
+        shapes += [ellipse(x, y, r, r * 0.8, SUCKER), ellipse(x, y, r * 0.45, r * 0.35, TE_DARK)]
+    return shapes
+
+
+@functools.lru_cache(None)
+def ul_madness_wrap():
+    """96x96 (drawn 48x48): a tentacle curling round the corner, suckers
+    along its inside, an eye opening on its bend."""
+    ex, ey = polar(WS - WT, WT, 10, -math.pi / 4)
+    return wrap(ul_madness_arm(), eye(ex, ey, 12, 6.6, math.pi / 4, 0.35))
+
+
+def ul_madness_tendril():
+    """64x8: a thin tendril wavering along a window's top, suckers on it."""
+    pts = [(x / 2 - 1, 4 + 1.6 * math.sin((x / 2 - 1) / 64 * TAU * 2)) for x in range(0, 133)]
+    shapes = [stroke(pts, 2.6, flesh)]
+    for x in (8, 24, 40, 56):
+        y = 4 + 1.6 * math.sin(x / 64 * TAU * 2)
+        shapes.append(ellipse(x, y + 0.6, 0.8, 0.6, SUCKER))
+    return band(64, 8, shapes)
+
+
+def ul_madness_ring():
+    """The minimap gripped by two tentacles, suckers inward, eyes between
+    them (gaps at the buttons)."""
+    cx = cy = 128
+    r = rim(12)
+    shapes = [annulus(cx, cy, r + 2.2, r + 2.2, 2, fade(TE_DARK, 0.9))]
+    for a0, a1 in ((168, 252), (372, 288)):
+        n = 40
+        pts = []
+        for k in range(n + 1):
+            t = k / n
+            a = math.radians(a0 + (a1 - a0) * t)
+            pts.append(polar(cx, cy, r + 6 + 1.8 * math.sin(t * 9) * (1 - t), a))
+        shapes.append(stroke(pts, 1, flesh, taper=(16, 2.4)))
+        for t in (0.15, 0.32, 0.5, 0.68):
+            a = math.radians(a0 + (a1 - a0) * t)
+            rr = 2.2 * (1 - t) + 0.8
+            x, y = polar(cx, cy, r + 6 + 1.8 * math.sin(t * 9) * (1 - t) - (14 - 12 * t) / 2 + rr + 0.6, a)
+            shapes += [ellipse(x, y, rr, rr, SUCKER), ellipse(x, y, rr * 0.45, rr * 0.45, TE_DARK)]
+    for deg, w in ((120, 13), (64, 8)):
+        a = math.radians(deg)
+        x, y = polar(cx, cy, r + 8, a)
+        shapes += eye(x, y, w, w * 0.5, a + math.pi / 2, 0.5)
+    return render(256, 256, shapes)
+
+
+def ul_madness_unit():
+    """28x16 (drawn 14x8): a small eye for the unit frames."""
+    return render(28, 16, eye(14, 8, 22, 11, 0, 0.35))
+
+
+def mote_eye():
+    shapes = [polygon(almond(16, 16, 26, 14), WHITE), ellipse(16, 16, 4.6, 4.6, CUT), ellipse(16, 16, 1.1, 3.2, WHITE)]
+    return soft(32, shapes, 0.2, 2.4)
+
+
+def ul_whisper_pattern():
+    def make(dx, dy):
+        out = [spiral(30 + dx, 30 + dy, 14, 1.6, 1.3, WHITE), spiral(98 + dx, 92 + dy, 11, 1.5, 1.2, WHITE)]
+        pts = [(64 + dx + 9 * math.sin(t / 5), 50 + t + dy) for t in range(0, 40, 2)]
+        out.append(stroke(pts, 1.2, WHITE))
+        pts = [(10 + t + dx, 100 + dy + 6 * math.sin(t / 6)) for t in range(0, 40, 2)]
+        out.append(stroke(pts, 1.2, WHITE))
+        return out
+    return pattern(128, 128, make, PATTERN["UlduarMadness"])
+
+
+def ul_dot_track():
+    def make(dx, dy):
+        return [polygon(almond(16 + dx, 16 + dy, 10, 4), WHITE), ellipse(16 + dx, 16 + dy, 0.8, 1.6, CUT)]
+    return pattern(32, 32, make, 0.1)
+
+
+def ul_eye_orn():
+    """32x32: an eye on a four-point star (5 px past the edges at most)."""
+    shapes = [polygon(star(16, 16, 11, 2.6, 4, 0), WHITE), polygon(almond(16, 16, 15, 8.5), WHITE),
+              ellipse(16, 16, 2.8, 2.8, CUT), ellipse(16, 16, 0.8, 2.2, WHITE)]
+    return mask(32, 32, shapes)
+
+
+def ul_eye_mask_jewel():
+    return mask(64, 64, [polygon(almond(32, 32, 58, 32), WHITE), ellipse(32, 32, 11, 11, CUT), ellipse(32, 32, 7.6, 7.6, WHITE),
+                         ellipse(32, 32, 1.8, 6.4, CUT)])
+
+
+def ul_slit_mark():
+    return mask(64, 64, [polygon([(32, 3), (54, 32), (32, 61), (10, 32)], WHITE), ellipse(32, 32, 3, 13, CUT)])
+
+
+def ul_wave_divider():
+    def make(dx, dy):
+        pts = [(dx + t - 2, 4 + 2.2 * math.sin((t - 2) / 32 * TAU * 2)) for t in range(0, 37)]
+        return [stroke(pts, 0.8, WHITE), ellipse(dx + 8, 6.2, 0.8, 0.8, WHITE), ellipse(dx + 24, 1.8, 0.8, 0.8, WHITE)]
+    return mask(32, 8, tiled(32, 8, make, ys=False))
+
+
+def ul_tentacle_bar(h):
+    p = per(256, h * 2.2)
+
+    def make(dx, dy):
+        pts = [(x + dx, h * 0.5 + h * 0.22 * math.sin(x / p * TAU)) for x in range(-4, 262, 2)]
+        out = [stroke(pts, max(1.0, h * 0.14), WHITE)]
+        for k in range(-1, int(round(256 / p)) + 1):
+            for f in (0.25, 0.75):
+                x = (k + f) * p + dx
+                y = h * 0.5 + h * 0.22 * math.sin((x - dx) / p * TAU)
+                side = -1 if f == 0.25 else 1
+                out.append(ellipse(x, y + side * h * 0.2, h * 0.07, h * 0.07, WHITE))
+        return out
+    return bar(h, make, 0.66)
+
+
+# --- their glyph treatments ------------------------------------------------------------
+
+def g_runed(name):
+    """The runeblade: SuuUI's line a little heavier, a small frost rune
+    struck in a free corner (each icon its own)."""
+    shapes, drawn = _plain(name, 2.05)
+    if name in BARE or name.startswith("mark"):
+        return shapes
+    spot = _corner_free(drawn, 4.2)
+    if spot:
+        x, y = spot
+        strokes = rune_strokes(random.Random(sum(ord(ch) * (k + 1) for k, ch in enumerate(name))))
+        shapes += [stroke(_scaled([(x + (px - 0.5) * 3.6, y + (py - 0.5) * 6.0) for px, py in line]), 1.05 * GK, WHITE)
+                   for line in strokes]
+    return shapes
+
+
+def g_drip(name):
+    """Plague: SuuUI's line, a drop or two hanging off its lower edges."""
+    shapes, drawn = _plain(name, 1.9)
+    if name in BARE or name.startswith("mark"):
+        return shapes
+    every = [q for line in drawn for q in line]
+    spots = []
+    for pts in drawn:
+        for i in range(1, len(pts) - 1):
+            x, y = pts[i]
+            ang = _tangent(pts, i)
+            if abs(math.sin(ang)) > 0.45 or y + 3.5 > BOX - 0.3 or not 3 <= x <= BOX - 3:
+                continue
+            # (only off the underside: nothing drawn below it)
+            if any(abs(qx - x) < 1.8 and qy > y + 0.6 for qx, qy in every):
+                continue
+            spots.append(pts[i])
+    spots.sort(key=lambda p: -p[1])
+    total = sum(sa._length(p) for p in drawn)
+    want = 2 if total > 34 else 1
+    placed = []
+    for x, y in spots:
+        if len(placed) >= want:
+            break
+        if any(abs(x - px) < 6 for px, _ in placed):
+            continue
+        placed.append((x, y))
+        shapes.append(polygon(_scaled(drop_pts(x, y + 2.35, 1.0, 12)), WHITE))
+    return shapes
+
+
+def g_finial(name):
+    """Gothic iron: every open line ends in a small spear point."""
+    shapes, drawn = _plain(name, 1.8)
+    if name in BARE or name.startswith("mark"):
+        return shapes
+    for pts in drawn:
+        if _closed(pts) or sa._length(pts) < 3:
+            continue
+        for end, nxt in ((pts[0], pts[min(4, len(pts) - 1)]), (pts[-1], pts[max(0, len(pts) - 5)])):
+            ang = math.atan2(end[1] - nxt[1], end[0] - nxt[0])
+            ux, uy = math.cos(ang), math.sin(ang)
+            nx, ny = -uy, ux
+            tip = (end[0] + ux * 1.9, end[1] + uy * 1.9)
+            if not _inside(*tip, 0.4):
+                continue
+            mid = (end[0] + ux * 0.2, end[1] + uy * 0.2)
+            shapes.append(polygon(_scaled([(end[0] - ux * 1.0, end[1] - uy * 1.0), (mid[0] + nx * 1.45, mid[1] + ny * 1.45), tip,
+                                           (mid[0] - nx * 1.45, mid[1] - ny * 1.45)]), WHITE))
+    return shapes
+
+
+def g_beveled(name):
+    """Carved in titan stone: a broad faint cut, its bright floor."""
+    shapes = []
+    for line in _lines(name):
+        if sa._length(line) < 0.05:
+            shapes += [_dot(line[0][0], line[0][1], 1.75, white(0.5)), _dot(line[0][0], line[0][1], 0.9)]
+            continue
+        pts = sa._resample(line, 0.45)
+        shapes += [stroke(_scaled(pts[a:a + 9]), 2.9 * GK, white(0.5)) for a in range(0, len(pts) - 1, 8) if len(pts[a:a + 9]) >= 2]
+    for line in _lines(name):
+        if sa._length(line) < 0.05:
+            continue
+        shapes += _strokes(sa._resample(line, 0.45), 1.25)
+    return shapes
+
+
+def g_geared(name):
+    """Mimiron's: SuuUI's line, a small cog in a free corner."""
+    shapes, drawn = _plain(name, 1.9)
+    if name not in BARE and not name.startswith("mark"):
+        spot = _corner_free(drawn, 4.4)
+        if spot:
+            x, y = spot
+            shapes += [polygon(_scaled(gear_pts(x, y, 2.1, 6, 1.0)), WHITE), _dot(x, y, 0.85, CUT)]
+    return shapes
+
+
+def g_wavering(name):
+    """Madness: every line wavers, thick and thin; an eye in a free corner."""
+    if name in BARE or name.startswith("mark"):
+        return _plain(name, 1.9)[0]
+    shapes, drawn = [], []
+    for j, line in enumerate(_lines(name)):
+        total = sa._length(line)
+        if total < 0.05:
+            shapes.append(_dot(line[0][0], line[0][1], 1.3))
+            continue
+        pts = sa._resample(line, 0.4)
+        out, s = [], 0.0
+        for i, p in enumerate(pts):
+            if i:
+                s += math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1])
+            ang = _tangent(pts, i)
+            off = 0.32 * math.sin(s * 0.85 + j) * (1 if 0 < i < len(pts) - 1 else 0)
+            out.append((clamp(p[0] - math.sin(ang) * off, 1, BOX - 1), clamp(p[1] + math.cos(ang) * off, 1, BOX - 1)))
+        drawn.append(out)
+        for a in range(0, len(out) - 1, 6):
+            chunk = out[a:a + 7]
+            if len(chunk) >= 2:
+                w = 1.85 + 0.45 * math.sin((a / len(out)) * 7 + j)
+                shapes.append(stroke(_scaled(chunk), w * GK, WHITE))
+    spot = _corner_free(drawn, 4.2)
+    if spot:
+        x, y = spot
+        shapes += [polygon(_scaled(almond(x, y, 6.2, 3.4)), WHITE), _dot(x, y, 0.95, CUT), _dot(x, y, 0.45)]
+    return shapes
+
+
+GLYPH_STYLES.update({"runed": g_runed, "drip": g_drip, "finial": g_finial, "beveled": g_beveled, "geared": g_geared,
+                     "wavering": g_wavering})
+
+
+# ======================================================================================
 # The concepts: each one's art, its glyph treatment, the alpha of its
 # windows' pattern (the contrast check reads it), and its sheet colours.
 # ======================================================================================
@@ -2961,6 +4132,8 @@ PATTERN = {
     "KarazhanLibrary": 0.13, "KarazhanOpera": 0.13, "KarazhanNether": 0.15, "SunwellSunburst": 0.1, "SunwellPhoenix": 0.12, "SunwellNaaru": 0.1,
     "BlackTempleTemple": 0.13, "BlackTempleChains": 0.12, "BlackTempleRunes": 0.13, "MoltenCoreObsidian": 0.14, "MoltenCoreBasalt": 0.13,
     "MoltenCoreFlames": 0.13, "NaxxramasNecropolis": 0.13, "NaxxramasBones": 0.1, "NaxxramasFrost": 0.13,
+    "IcecrownSaronite": 0.11, "IcecrownPlagueworks": 0.11, "IcecrownCrimson": 0.11, "UlduarTitan": 0.11, "UlduarMachinery": 0.11,
+    "UlduarMadness": 0.12,
 }
 
 CONCEPTS = {
@@ -3052,6 +4225,42 @@ CONCEPTS = {
         "Pattern": nx_snow_pattern, "Track": nx_frost_track,
         "Corner": nx_snow_orn, "Jewel": nx_hex_ice_jewel, "Mark": nx_ice_mark, "Divider": nx_frost_divider,
         "Bar": lambda: nx_ice_bar(32), "BarThin": lambda: nx_ice_bar(16)}),
+    "IcecrownSaronite": dict(glyphs="runed", ground="#0C1218", tint="#7CB8E2", art={
+        "Header": ic_saronite_header, "Wrap": ic_saronite_wrap, "WrapLow": lambda: low(ic_saronite_wrap()),
+        "Spikes": ic_saronite_spikes, "Ring": ic_saronite_ring, "Unit": ic_saronite_unit, "Mote": mote_spark,
+        "Pattern": ic_rune_pattern, "Track": ic_rune_track, "Edge": lambda: edge([255, 255, 255, 255, 255, 255, 60, 60]),
+        "Corner": ic_rune_orn, "Jewel": ic_rune_jewel, "Mark": ic_shard_mark, "Divider": ic_rune_divider,
+        "Bar": lambda: ic_rune_bar(32), "BarThin": lambda: ic_rune_bar(16)}),
+    "IcecrownPlagueworks": dict(glyphs="drip", ground="#0E1309", tint="#9CC83E", art={
+        "Header": ic_plague_header, "Wrap": ic_plague_wrap, "WrapLow": lambda: low(ic_plague_wrap()),
+        "Tube": ic_plague_tube, "Ring": ic_plague_ring, "Unit": ic_plague_unit, "Mote": mote_bubble,
+        "Pattern": ic_molecule_pattern, "Track": ic_bubble_track,
+        "Corner": ic_valve_orn, "Jewel": ic_flask_jewel, "Mark": ic_drop_mark, "Divider": ic_tube_divider,
+        "Bar": lambda: ic_bubble_bar(32), "BarThin": lambda: ic_bubble_bar(16)}),
+    "IcecrownCrimson": dict(glyphs="finial", ground="#170A0E", tint="#CF4A5E", art={
+        "Header": ic_crimson_header, "Wrap": ic_crimson_wrap, "WrapLow": lambda: low(ic_crimson_wrap()),
+        "Tracery": ic_tracery, "Ring": ic_crimson_ring, "Unit": ic_crimson_unit, "Mote": mote_bat,
+        "Pattern": ic_rose_pattern, "Track": ic_diamond_track, "Edge": lambda: edge([255, 255, 255, 255, 80, 255, 80, 80]),
+        "Corner": ic_spear_orn, "Jewel": ic_gem_jewel, "Mark": ic_blood_mark, "Divider": ic_drop_divider,
+        "Bar": lambda: ic_arch_bar(32), "BarThin": lambda: ic_arch_bar(16)}),
+    "UlduarTitan": dict(glyphs="beveled", ground="#11161C", tint="#CDAA5E", art={
+        "Header": ul_titan_header, "Wrap": ul_titan_wrap, "WrapLow": lambda: low(ul_titan_wrap()),
+        "Frieze": ul_titan_frieze, "Ring": ul_titan_ring, "Unit": ul_titan_unit, "Mote": mote_spark,
+        "Pattern": ul_seal_pattern, "Track": ul_key_track, "Edge": lambda: edge([255, 255, 255, 255, 255, 70, 255, 70]),
+        "Corner": ul_knot_orn, "Jewel": ul_eye_jewel, "Mark": ul_square_mark, "Divider": ul_key_divider,
+        "Bar": lambda: ul_key_bar(32), "BarThin": lambda: ul_key_bar(16)}),
+    "UlduarMachinery": dict(glyphs="geared", ground="#131415", tint="#D27E3A", art={
+        "Header": ul_machine_header, "Wrap": ul_machine_wrap, "WrapLow": lambda: low(ul_machine_wrap()),
+        "Rail": ul_machine_rail, "Ring": ul_machine_ring, "Unit": ul_machine_unit, "Mote": mote_glint,
+        "Pattern": ul_blueprint_pattern, "Track": ul_stripe_track, "Edge": lambda: edge([255, 255, 255, 255, 255, 255, 255, 80]),
+        "Corner": ul_bolt_orn, "Jewel": ul_cog_jewel, "Mark": ul_nut_mark, "Divider": ul_rivet_divider,
+        "Bar": lambda: ul_rack_bar(32), "BarThin": lambda: ul_rack_bar(16)}),
+    "UlduarMadness": dict(glyphs="wavering", ground="#130B18", tint="#A66AD4", art={
+        "Header": ul_madness_header, "Wrap": ul_madness_wrap, "WrapLow": lambda: low(ul_madness_wrap()),
+        "Tendril": ul_madness_tendril, "Ring": ul_madness_ring, "Unit": ul_madness_unit, "Mote": mote_eye,
+        "Pattern": ul_whisper_pattern, "Track": ul_dot_track,
+        "Corner": ul_eye_orn, "Jewel": ul_eye_mask_jewel, "Mark": ul_slit_mark, "Divider": ul_wave_divider,
+        "Bar": lambda: ul_tentacle_bar(32), "BarThin": lambda: ul_tentacle_bar(16)}),
 }
 
 # masks: white art tinted in game (shown tinted on the sheet)
