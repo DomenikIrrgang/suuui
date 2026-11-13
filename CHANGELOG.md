@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.
+
 ## 0.12.0 (2026-11-13)
 
 ### New
