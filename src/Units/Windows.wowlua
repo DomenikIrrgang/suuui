@@ -173,8 +173,17 @@ local FRIENDS_TABS = {
     { name = "FriendsFrameTab3", label = "Raid", tab = 3 },
 }
 
--- A tab's page in Forever's social window.
-type SocialPage = { label: string, short?: string, frame: Frame? }
+-- Forever's social window's tabs by the key of the page each opens (its
+-- tab data's contentFrameParentKey); another tab keeps its own name.
+const SOCIAL_PAGES: { [string]: { label: string, short?: string } } = {
+    FriendsList = { label = "Friends" },
+    RecentAlliesList = { label = "Recent allies", short = "Allies" },
+    FriendRequestsList = { label = "Requests" },
+    RaidFrame = { label = "Raid" },
+}
+-- (its RefreshTabs hooked once; its pages watched once each)
+local socialHooked = false
+local socialWatched: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
 
 --------------------------------------------------------------------------------
 -- The world map
@@ -1115,60 +1124,52 @@ class WindowsModule extends Module<typeof(DEFAULTS)>
         if not f or not chrome then
             return
         end
-        if chrome.tabs then
-            chrome:UpdateTabs()
-            return
+        if not socialHooked then
+            socialHooked = true
+            -- Blizzard takes its side buttons from a pool anew on every show,
+            -- each button maybe another tab than before (a label stayed on
+            -- its button and opened another page, found in game 2026-11-13):
+            -- the row again from its own tab data, every time
+            -- (SocialUIFrameMixin's: the declarations type the window as a Frame)
+            hook(f :: unknown, "RefreshTabs", function()
+                self:SocialTabs()
+            end)
         end
-        local allies, requests = part(f, "RecentAlliesList"), part(f, "FriendRequestsList")
-        local function friendsList(): Frame?
-            for _, c in ipairs(frames.children(f)) do
-                if field(c, "FilterBar") and c ~= allies and c ~= requests then
-                    return c
-                end
-            end
-            return nil
-        end
-        -- the side buttons: f's own unnamed buttons, about 54 square (the close
-        -- button has a name)
-        local buttons: Frame[] = {}
+        -- the side buttons: f's own buttons holding Blizzard's tab data, in
+        -- its order
+        local buttons: { button: Button, data: { [string]: unknown } }[] = {}
         for _, c in ipairs(frames.children(f)) do
-            if frames.asButton(c) and not c:GetName() then
-                local w, h = c:GetWidth(), c:GetHeight()
-                if w > 40 and w < 70 and h > 40 and h < 70 then
-                    buttons[#buttons + 1] = c
-                end
+            local b = frames.asButton(c)
+            local data = field(c, "tabData")
+            if b and type(data) == "table" and b:IsShown() then
+                buttons[#buttons + 1] = { button = b, data = data :: { [string]: unknown } }
             end
         end
-        if #buttons < 4 then
+        if #buttons == 0 then
             return
         end
-        table.sort(buttons, function(a: Frame, b: Frame): boolean
-            return (a:GetTop() or 0) > (b:GetTop() or 0)
+        table.sort(buttons, function(a, b): boolean
+            return (asNumber(a.data.tabOrder) or 0) < (asNumber(b.data.tabOrder) or 0)
         end)
-        local pages: SocialPage[] = {
-            { label = "Friends", frame = friendsList() },
-            { label = "Recent allies", short = "Allies", frame = allies },
-            { label = "Requests", frame = requests },
-            { label = "Raid", frame = part(f, "RaidFrame") },
-        }
         local tabs: SkinTab[] = {}
-        for i, b in ipairs(buttons) do
-            local page = pages[i]
-            if page then
-                local shown = page.frame
-                tabs[#tabs + 1] = {
-                    button = b,
-                    label = page.label,
-                    short = page.short or page.label,
-                    selected = function(): boolean
-                        return shown ~= nil and shown:IsShown()
-                    end,
-                }
-                if shown then
-                    hookScript(shown, "OnShow", function()
-                        chrome:UpdateTabs()
-                    end)
-                end
+        for _, entry in ipairs(buttons) do
+            local key = asString(entry.data.contentFrameParentKey) or ""
+            local page = SOCIAL_PAGES[key]
+            local name = page and page.label or asString(entry.data.tabName) or key
+            local shown = frames.asFrame(entry.data.contentFrame) or part(f, key)
+            tabs[#tabs + 1] = {
+                button = entry.button,
+                label = name,
+                short = page and page.short or name,
+                selected = function(): boolean
+                    return shown ~= nil and shown:IsShown()
+                end,
+            }
+            if shown and not socialWatched[shown] then
+                socialWatched[shown] = true
+                hookScript(shown, "OnShow", function()
+                    chrome:UpdateTabs()
+                end)
             end
         end
         chrome:SetTabs(tabs)

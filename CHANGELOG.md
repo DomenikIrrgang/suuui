@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Social window: opening the friends list no longer shows a "Cannot anchor to a region dependent on it" error, and its Friends, Recent allies, Requests and Raid tabs always open their own page (a tab could open another one after the window was opened again).
+
 ## 0.12.0 (2026-11-13)
 
 ### New
