@@ -230,6 +230,16 @@ class StanceButton extends ActionButton
         self:UpdateEmpty()
     end
 
+    -- Usable and active only; the cooldown stays as last read.
+    function UpdateState()
+        if not self.hasAction then
+            return
+        end
+        local _, active, castable = G.GetShapeshiftFormInfo(self.index)
+        self:ShowUsable(not known(castable, true))
+        self:ShowActive(uiText.flag(active))
+    end
+
     override function ShowTooltip()
         GameTooltip:SetShapeshift(self.index)
     end
@@ -245,22 +255,46 @@ export class StanceBar extends ClassBar<StanceButton>
         local function forms()
             self:UpdateForms()
         end
-        local function all()
-            self:UpdateAll()
-        end
         events.onGame("UPDATE_SHAPESHIFT_FORMS", forms, self)
         events.onGame("PLAYER_ENTERING_WORLD", forms, self)
         events.onGame("SPELLS_CHANGED", forms, self)
-        local gameEvents: EventName[] = {
+        -- One pass a frame at most: a cast fires several of these at once, and
+        -- each read every button's cooldown as a new table from the game (in
+        -- game: 58,000 updates and 19 MB of garbage in five minutes). Only
+        -- usability changing reads no cooldown.
+        local due: "all" | "states" | nil = nil
+        local flusher = CreateFrame("Frame")
+        flusher:Hide()
+        flusher:SetScript("OnUpdate", function(f: Frame)
+            f:Hide()
+            local kind = due
+            due = nil
+            if kind == "all" then
+                self:UpdateAll()
+            elseif kind == "states" then
+                self:UpdateStates()
+            end
+        end)
+        local function all()
+            due = "all"
+            flusher:Show()
+        end
+        local function states()
+            due = due or "states"
+            flusher:Show()
+        end
+        local fullEvents: EventName[] = {
             "UPDATE_SHAPESHIFT_FORM",
-            "UPDATE_SHAPESHIFT_USABLE",
             "UPDATE_SHAPESHIFT_COOLDOWN",
             "SPELL_UPDATE_COOLDOWN",
-            "SPELL_UPDATE_USABLE",
             "ACTIONBAR_UPDATE_COOLDOWN",
         }
-        for _, e in ipairs(gameEvents) do
+        for _, e in ipairs(fullEvents) do
             events.onGame(e, all, self)
+        end
+        local stateEvents: EventName[] = { "UPDATE_SHAPESHIFT_USABLE", "SPELL_UPDATE_USABLE" }
+        for _, e in ipairs(stateEvents) do
+            events.onGame(e, states, self)
         end
         events.onGame(
             "UPDATE_BINDINGS",
@@ -274,6 +308,13 @@ export class StanceBar extends ClassBar<StanceButton>
     end
 
     -- Which spell each button casts, and how many buttons: out of combat.
+    -- Each button's usable and active state, no cooldowns read.
+    function UpdateStates()
+        for _, b in ipairs(self.buttons) do
+            b:UpdateState()
+        end
+    end
+
     function UpdateForms()
         local count = G.GetNumShapeshiftForms
         local n = count and count() or 0

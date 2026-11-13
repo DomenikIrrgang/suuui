@@ -950,6 +950,60 @@ local function driver()
     expect(c.dirty).toBe(false)
 end
 
+@test("power, usability and the target change only what is usable: no cooldown is read (garbage in combat)")
+local function lightUpdates()
+    local t = tracker({ essential = { strike() } })
+    local c = t.built.essential[1]
+    local reads = 0
+    mock.fake("C_Spell.GetSpellCooldown", function(id: number): unknown
+        if id == KNOWN_HIGH then
+            reads = reads + 1
+        end
+        local cd = cooldowns[id]
+        return {
+            startTime = 0,
+            duration = 0,
+            isEnabled = true,
+            modRate = 1,
+            isActive = cd and cd.active or false,
+            isOnGCD = false,
+        }
+    end)
+    cooldowns[KNOWN_HIGH] = { active = true }
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.advanceFrames(1)
+    expect(reads).toBe(1)
+    expect(c.onCooldown).toBe(true)
+    -- out of mana while on cooldown: the cooldown stays as it was read
+    usable[KNOWN_HIGH] = { false, true }
+    mock.fireEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+    mock.advanceFrames(1)
+    mock.fireEvent("SPELL_UPDATE_USABLE")
+    mock.fireEvent("ACTIONBAR_UPDATE_USABLE")
+    mock.advanceFrames(1)
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    mock.advanceFrames(1)
+    expect(reads).toBe(1)
+    expect(c.onCooldown).toBe(true)
+    -- ready again (the sweep ends): read, and the missing mana shows
+    cooldowns[KNOWN_HIGH] = nil
+    mock.script(c.cooldown, "OnCooldownDone")
+    mock.advanceFrames(1)
+    expect(reads).toBe(2)
+    expect(c.onCooldown).toBe(false)
+    expect(c:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"])
+    -- mana back: no read either
+    usable[KNOWN_HIGH] = nil
+    mock.fireEvent("UNIT_POWER_FREQUENT", "player", "MANA")
+    mock.advanceFrames(1)
+    expect(reads).toBe(2)
+    expect(c:GetAlpha()).toBe(1)
+    -- charges come back: read
+    mock.fireEvent("SPELL_UPDATE_CHARGES")
+    mock.advanceFrames(1)
+    expect(reads).toBe(3)
+end
+
 @test("learning a rank rebuilds; the same ranks don't")
 local function learn()
     local t = tracker({ essential = { strike() } })

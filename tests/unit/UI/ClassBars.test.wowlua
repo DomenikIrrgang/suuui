@@ -269,6 +269,46 @@ local function stances()
     expect(bar.header:GetWidth()).toBe(2 * px + 1 * 2) -- space-1 apart
 end
 
+@test("a form turning unusable or active shows a frame later, no cooldown read for it")
+local function stanceStates()
+    fake.forms = {
+        { icon = 132349, active = true, castable = true, spellID = 2457 },
+        { icon = 132341, active = false, castable = true, spellID = 71 },
+    }
+    local reads = 0
+    local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStanceStates" }))
+    -- (the buttons read the game's own C_Spell, not the stand-in; the
+    -- addon's other modules read theirs on these events too)
+    mock.fake("C_Spell.GetSpellCooldown", function(id: number): unknown
+        if id == 2457 or id == 71 then
+            reads = reads + 1
+        end
+        return nil
+    end)
+    local b1, b2 = bar.buttons[1], bar.buttons[2]
+    mock.advanceFrames(1)
+    local base = reads
+    fake.forms[1].active, fake.forms[2].active, fake.forms[2].castable = false, true, false
+    mock.fireEvent("SPELL_UPDATE_USABLE")
+    mock.fireEvent("UPDATE_SHAPESHIFT_USABLE")
+    mock.advanceFrames(1)
+    expect(reads).toBe(base)
+    expect(b1.active).toBe(false)
+    expect(b2.active).toBe(true)
+    expect(b2.unusable).toBe(true)
+    -- a cooldown event reads them (the addon's own stance bar reads the
+    -- stand-in's forms too); a cast's three events in a frame, once
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.advanceFrames(1)
+    local one = reads - base
+    expect(one).toBeGreaterThan(1)
+    mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+    mock.fireEvent("ACTIONBAR_UPDATE_COOLDOWN")
+    mock.fireEvent("UPDATE_SHAPESHIFT_COOLDOWN")
+    mock.advanceFrames(1)
+    expect(reads).toBe(base + one * 2)
+end
+
 @test("no forms: the bar hides; SetEnabled hides it too")
 local function noForms()
     local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance2", label = "Stances" }))
@@ -289,12 +329,27 @@ local function stanceEvents()
     local bar = track(classBars.stanceBar(parent, { name = "SuuUITestStance3" }))
     local forms = mock.stub(bar, "UpdateForms")
     local all = mock.stub(bar, "UpdateAll")
+    local states = mock.stub(bar, "UpdateStates")
     local binds = mock.stub(bar, "UpdateBindings")
     mock.fireEvent("SPELLS_CHANGED")
     expect(forms).toHaveBeenCalledTimes(1)
+    -- a cast's events: one pass on the next frame
     mock.fireEvent("UPDATE_SHAPESHIFT_FORM")
     mock.fireEvent("SPELL_UPDATE_COOLDOWN")
-    expect(all).toHaveBeenCalledTimes(2)
+    mock.fireEvent("ACTIONBAR_UPDATE_COOLDOWN")
+    mock.fireEvent("SPELL_UPDATE_USABLE")
+    expect(all).toHaveBeenCalledTimes(0)
+    mock.advanceFrames(1)
+    expect(all).toHaveBeenCalledTimes(1)
+    expect(states).toHaveBeenCalledTimes(0)
+    -- usability alone: no cooldowns read
+    mock.fireEvent("SPELL_UPDATE_USABLE")
+    mock.fireEvent("UPDATE_SHAPESHIFT_USABLE")
+    mock.advanceFrames(1)
+    expect(all).toHaveBeenCalledTimes(1)
+    expect(states).toHaveBeenCalledTimes(1)
+    mock.advanceFrames(1)
+    expect(states).toHaveBeenCalledTimes(1)
     mock.fireEvent("UPDATE_BINDINGS")
     expect(binds).toHaveBeenCalledTimes(1)
 end

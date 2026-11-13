@@ -551,9 +551,16 @@ export class DamageRow extends Button
         self:SetFill(nil)
     end
 
+    -- (the same fill again: nothing; rows are set every refresh in a fight,
+    -- and each paint was two colours and a gradient: 3.7 MB in game. A theme
+    -- change paints again through draw.bind.)
     function SetFill(kind: string?)
         local tex = self.bar:GetStatusBarTexture()
-        fills[tex] = kind or false
+        local want = kind or false
+        if fills[tex] == want then
+            return
+        end
+        fills[tex] = want
         draw.bind(tex, drawFill)
     end
 
@@ -835,6 +842,12 @@ export class DamageMeter extends Frame
             minListWidth = 220,
             maxRows = 12,
             search = false,
+            -- the fights' times as they are now
+            onOpen = function()
+                if self.api then
+                    self:FillSessions()
+                end
+            end,
             onChange = function(v: string | number)
                 self.session = v
                 self.drill = nil
@@ -1346,32 +1359,42 @@ export class DamageMeter extends Frame
             self.what:SetValue(drill.kind == "recap" and "Death recap" or (BY_VALUE[self.type] :: MeterType).label)
             return
         end
-        -- the fight select (past fights change) and the time
-        local opts = self:SessionOptions()
-        -- only when the fights changed: this runs every second in combat, and
-        -- rebuilding an open list dropped the hover on its rows
-        local parts: string[] = {}
-        for _, o in ipairs(opts) do
-            parts[#parts + 1] = tostring(o.value) .. "=" .. tostring(o.label)
-        end
-        local sig = table.concat(parts, "|")
-        local list = self.sessionSelect.list
-        if sig ~= self.sessionSig or not (list and list:IsShown()) then
+        -- The fight select's options only when the past fights changed (or
+        -- the list opens: onOpen), the time every refresh. This runs every
+        -- second in combat: building the options each time (and the select's
+        -- list again while closed) was 16 KB of garbage a second in game;
+        -- rebuilding an open list dropped the hover on its rows.
+        local api = self.api :: MeterApi
+        local ok, list = pcall(api.GetAvailableCombatSessions)
+        local fights = ok and type(list) == "table" and list or {}
+        local newest = fights[#fights]
+        local sig = #fights ..
+            ":" ..
+                tostring(newest and newest.sessionID) ..
+                    ":" .. tostring(newest and plainString(newest.name) and newest.name)
+        if sig ~= self.sessionSig then
             self.sessionSig = sig
-            self.sessionSelect:SetOptions(opts)
+            self:FillSessions()
+        elseif self.sessionSelect.value ~= self.session then
             self.sessionSelect:SetValue(self.session)
         end
         local time = ""
         if self.session == "current" then
-            time = opts[1].note or ""
+            time = clock(api.GetSessionDurationSeconds(Enum.DamageMeterSessionType.Current))
         elseif type(self.session) == "number" then
-            for _, o in ipairs(opts) do
-                if o.value == self.session then
-                    time = o.note or ""
+            for _, s in ipairs(fights) do
+                if s.sessionID == self.session then
+                    time = clock(s.durationSeconds)
                 end
             end
         end
         self.time:SetValue(time)
+    end
+
+    -- The fight select's options, from the game now.
+    function FillSessions()
+        self.sessionSelect:SetOptions(self:SessionOptions())
+        self.sessionSelect:SetValue(self.session)
     end
 
     function Refresh()
