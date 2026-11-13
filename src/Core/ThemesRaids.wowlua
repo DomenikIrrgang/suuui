@@ -1,0 +1,866 @@
+-- Core/ThemesRaids.wowlua
+-- The raid themes (asked 2026-11-13: three for each of Black Temple, Molten
+-- Core, Naxxramas, Karazhan and Sunwell, using every capability a theme
+-- has; the user took all fifteen concepts): colours, a header font, every
+-- icon in the theme's own treatment, bar art, the windows' patterns, edges,
+-- corners, jewels, marks and dividers, and the dress on the windows, the
+-- minimap, chat and the unit frames. Each keeps its raid's colour mood
+-- (the colour-only raid themes in ThemesBuiltin stay as they are); the
+-- three of a raid are different directions. The unit frames' art stays
+-- small (at most about 12 px over the frame, one or two motifs):
+-- Stranglethorn's vines there were too big. Tall art sits on the windows'
+-- top right (their top left is often right under the micro menu). The art
+-- comes from tools/raid_art.py.
+
+import tokens as T from "./Tokens"
+import register from "./Themes"
+import type ThemeTextures from "./Themes"
+import type DressKind, DressPiece from "/UI/Dress"
+
+local ROOT = "Interface\\AddOns\\SuuUI\\Media\\Textures\\Themes\\Raids\\"
+local MORPHEUS = "Fonts\\MORPHEUS.TTF"
+local FRIZ = "Fonts\\FRIZQT__.TTF"
+local ARIALN = "Fonts\\ARIALN.TTF"
+local SKURRI = "Fonts\\SKURRI.TTF"
+
+local function byte(s: string, i: number): number
+    return (tonumber(s:sub(i, i + 1), 16) or 0) / 255
+end
+
+local function colors(list: { [string]: string }): { [string]: number[] }
+    local out: { [string]: number[] } = {}
+    for token, value in pairs(list) do
+        local c = { byte(value, 2), byte(value, 4), byte(value, 6) }
+        if #value >= 9 then
+            c[4] = byte(value, 8)
+        end
+        out[token] = c
+    end
+    return out
+end
+
+-- Every icon in the concept's own treatment (tools/raid_art.py: GLYPH_STYLES).
+local function glyphs(dir: string): { [string]: string }
+    local out: { [string]: string } = {}
+    for name in pairs(T.glyph :: { [string]: string }) do
+        out[name] = dir .. "Glyphs\\" .. name .. ".tga"
+    end
+    return out
+end
+
+-- The textures every concept sets from its own files: the bars' art
+-- repeating along them, the windows' pattern, ground behind the bars,
+-- corners, jewels, marks, divider (and its edge when it has one), the
+-- locks, reset and combat sign from its glyphs.
+local function textures(dir: string, edge: boolean): ThemeTextures
+    local bar = { file = dir .. "Bar.tga", height = 32 }
+    local thin = { file = dir .. "BarThin.tga", height = 16 }
+    local t: ThemeTextures = {
+        ["health-bar"] = bar,
+        ["cast-bar"] = thin,
+        ["power-bar"] = thin,
+        ["bar"] = thin,
+        ["aura-drain"] = thin,
+        ["plate-health-bar"] = thin,
+        ["plate-cast-bar"] = thin,
+        ["surface-pattern"] = dir .. "Pattern.tga",
+        ["track-pattern"] = dir .. "Track.tga",
+        ["corner"] = dir .. "Corner.tga",
+        ["jewel"] = dir .. "Jewel.tga",
+        ["mark"] = dir .. "Mark.tga",
+        ["divider"] = dir .. "Divider.tga",
+        ["cast-lock"] = dir .. "Glyphs\\lock.tga",
+        ["setting-lock"] = dir .. "Glyphs\\lock.tga",
+        ["setting-reset"] = dir .. "Glyphs\\reset.tga",
+        ["combat"] = dir .. "Glyphs\\swords.tga",
+    }
+    if edge then
+        t["border"] = dir .. "Edge.tga"
+    end
+    return t
+end
+
+local function piece(dir: string, file: string, point: FramePoint, x: number, y: number, w: number, h: number,
+                     more: { [string]: unknown }?): DressPiece
+    local p: { [string]: unknown } = { file = dir .. file .. ".tga", point = point, x = x, y = y, w = w, h = h }
+    for k, v in pairs(more or {}) do
+        p[k] = v
+    end
+    return p :: DressPiece
+end
+
+-- The minimap's ring, `past` px past its disc, behind the minimap's own
+-- buttons and lines (in front, it hid the zoom buttons).
+local function ring(dir: string, past: number, motes: { [string]: unknown }?, extra: DressPiece?): DressKind
+    local pieces: DressPiece[] = {
+        { file = dir .. "Ring.tga", point = "CENTER", fill = true, x = past, y = past, layer = "back" },
+    }
+    if extra then
+        pieces[2] = extra
+    end
+    local kind: { [string]: unknown } = { pieces = pieces }
+    if motes then
+        kind.motes = motes
+    end
+    return kind :: DressKind
+end
+
+--------------------------------------------------------------------------------
+-- Black Temple
+--------------------------------------------------------------------------------
+
+-- Temple: the broken temple. Draenei stone behind the titles with carved lenses,
+-- a cracked lintel along the windows' top and a broken slab on their
+-- corner, fel spores; a broken stone ring round the minimap, a small
+-- carved lens on the unit frames. Cracks in the bars, stonework in the
+-- ground; cracked icons.
+local function blacktempleTemple()
+    local dir = ROOT .. "BlackTempleTemple\\"
+    register({
+        id = "blacktemple-temple",
+        name = "Black Temple · Temple",
+        description = "The broken temple: draenei stone with carved lenses, fel glowing in its cracks, cracked icons.",
+        colors = colors({
+            ["surface"] = "#140F1B",
+            ["surface-glass"] = "#140F1BF7",
+            ["surface-sunk"] = "#131019",
+            ["surface-raised"] = "#1B1622",
+            ["track"] = "#231E29",
+            ["gilt"] = "#7DAF61",
+            ["gilt-text"] = "#B7CD9D",
+            ["gilt-line"] = "#7DAF616E",
+            ["gilt-hairline"] = "#7DAF6157",
+            ["gilt-faint"] = "#7DAF6124",
+            ["ink"] = "#E8EDE1",
+            ["ink-muted"] = "#9BA192",
+            ["ink-faint"] = "#72776A",
+            ["unit-fill"] = "#466E33",
+            ["unit-fill-deep"] = "#2D4A20",
+            ["shade"] = "#07050A",
+        }),
+        fonts = { header = { file = MORPHEUS } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Lintel", "TOP", 0, 10, 256, 16, { span = true }),
+                    piece(dir, "Slab", "TOPRIGHT", 14, 32, 88, 40, { flip = true }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 3, color = "gilt", size = 7 },
+            },
+            chat = { pieces = { piece(dir, "Slab", "TOPRIGHT", 14, 32, 88, 40, { flip = true }) } },
+            minimap = ring(dir, 10),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 8, 14, 10) } },
+        },
+    })
+end
+
+-- Chains: Illidan's chains. Riveted iron plates behind the titles, fel in their
+-- seams, a chain along the windows' top, one hanging off their corner with
+-- a shackle, fel embers; a chain round the minimap, an iron eyelet at each
+-- end of the unit frames. Chain links in the bars, rivets in the ground,
+-- square corners; riveted icons.
+local function blacktempleChains()
+    local dir = ROOT .. "BlackTempleChains\\"
+    register({
+        id = "blacktemple-chains",
+        name = "Black Temple · Chains",
+        description = "Illidan's chains: riveted iron plates, chains over the windows and fel embers, riveted icons.",
+        colors = colors({
+            ["surface"] = "#121016",
+            ["surface-glass"] = "#121016F7",
+            ["surface-sunk"] = "#0E0C11",
+            ["surface-raised"] = "#1B1820",
+            ["track"] = "#221E27",
+            ["gilt"] = "#86B86A",
+            ["gilt-text"] = "#C3DBA8",
+            ["gilt-line"] = "#8A879499",
+            ["gilt-hairline"] = "#8A87947A",
+            ["gilt-faint"] = "#8A879433",
+            ["ink"] = "#ECEDE8",
+            ["ink-muted"] = "#A2A39B",
+            ["ink-faint"] = "#75766F",
+            ["unit-fill"] = "#566945",
+            ["unit-fill-deep"] = "#39472D",
+            ["shade"] = "#050407",
+        }),
+        fonts = { header = { file = SKURRI } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        radius = { ["radius-sm"] = 0, ["radius-md"] = 0 },
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Chain", "TOP", 0, 8, 64, 16, { span = true }),
+                    piece(dir, "Hanging", "TOPRIGHT", 12, 6, 20, 100, { sway = 2, pivot = "TOP" }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 4, color = "gilt", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Hanging", "TOPRIGHT", 10, 6, 20, 100, { sway = 2, pivot = "TOP" }) } },
+            minimap = ring(dir, 10),
+            unit = {
+                pieces = {
+                    piece(dir, "Unit", "TOPLEFT", 14, 6, 10, 10),
+                    piece(dir, "Unit", "TOPRIGHT", -6, 6, 10, 10),
+                },
+            },
+        },
+    })
+end
+
+-- Runes: the Illidari's fel runes. Black stone behind the titles with fel runes
+-- glowing in it, fel flames licking off the windows' corners, fel sparks;
+-- runes round the minimap, one glowing rune on the unit frames. Tattoo
+-- swirls in the bars and the ground; runic icons.
+local function blacktempleRunes()
+    local dir = ROOT .. "BlackTempleRunes\\"
+    register({
+        id = "blacktemple-runes",
+        name = "Black Temple · Runes",
+        description = "The Illidari's mark: fel runes glowing in black stone, fel flames and tattoo swirls, runic icons.",
+        colors = colors({
+            ["surface"] = "#0F0B13",
+            ["surface-glass"] = "#0F0B13F8",
+            ["surface-sunk"] = "#0B080E",
+            ["surface-raised"] = "#18131D",
+            ["track"] = "#1E1824",
+            ["gilt"] = "#79B85A",
+            ["gilt-text"] = "#BEE3A0",
+            ["gilt-line"] = "#79B85A68",
+            ["gilt-hairline"] = "#79B85A54",
+            ["gilt-faint"] = "#79B85A24",
+            ["ink"] = "#EAF0E4",
+            ["ink-muted"] = "#9CA494",
+            ["ink-faint"] = "#707868",
+            ["unit-fill"] = "#3C6E31",
+            ["unit-fill-deep"] = "#264B1F",
+            ["shade"] = "#040306",
+        }),
+        fonts = { header = { file = FRIZ, size = 12 } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = { piece(dir, "Flame", "TOPRIGHT", 12, 36, 38, 40, { flip = true, sway = 3, pivot = "BOTTOM" }) },
+                motes = { file = dir .. "Mote.tga", count = 6, color = "gilt-text", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Flame", "TOPRIGHT", 12, 36, 38, 40, { flip = true, sway = 3, pivot = "BOTTOM" }) } },
+            minimap = ring(dir, 10, { file = dir .. "Mote.tga", count = 3, color = "gilt", size = 5 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 10, 10, 12) } },
+        },
+    })
+end
+
+--------------------------------------------------------------------------------
+-- Molten Core
+--------------------------------------------------------------------------------
+
+-- Obsidian: obsidian and lava. Obsidian behind the titles with lava in its cracks,
+-- a jagged obsidian edge along the windows' top and a boulder on their
+-- corner, embers rising; an obsidian ring round the minimap, a small shard
+-- on the unit frames. Lava cracks in the bars and the ground; jagged icons.
+local function moltencoreObsidian()
+    local dir = ROOT .. "MoltenCoreObsidian\\"
+    register({
+        id = "moltencore-obsidian",
+        name = "Molten Core · Obsidian",
+        description = "Obsidian with lava glowing in its cracks, a jagged edge on every window, embers rising, jagged icons.",
+        colors = colors({
+            ["surface"] = "#190D0A",
+            ["surface-glass"] = "#190D0AF7",
+            ["surface-sunk"] = "#160D09",
+            ["surface-raised"] = "#211510",
+            ["track"] = "#291D18",
+            ["gilt"] = "#BE5A0A",
+            ["gilt-text"] = "#FFDF53",
+            ["gilt-line"] = "#BE5A0A94",
+            ["gilt-hairline"] = "#BE5A0A75",
+            ["gilt-faint"] = "#BE5A0A36",
+            ["ink"] = "#F6E9DA",
+            ["ink-muted"] = "#AB9B8D",
+            ["ink-faint"] = "#807165",
+            ["unit-fill"] = "#8C5636",
+            ["unit-fill-deep"] = "#603922",
+            ["shade"] = "#080403",
+        }),
+        fonts = { header = { file = MORPHEUS } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Rock", "TOP", 0, 12, 256, 24, { span = true }),
+                    piece(dir, "Chunk", "TOPRIGHT", 12, 28, 64, 36, { flip = true }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 6, color = "gilt-text", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Chunk", "TOPRIGHT", 12, 28, 64, 36, { flip = true }) } },
+            minimap = ring(dir, 12, { file = dir .. "Mote.tga", count = 3, color = "gilt-text", size = 5 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 10, 14, 12) } },
+        },
+    })
+end
+
+-- Basalt: basalt and molten runes. Basalt column tops behind the titles, molten
+-- seams and a rune in them, basalt columns rising off the windows' corner,
+-- a rune tablet hanging at their side; a ring of basalt hexes round the
+-- minimap, a short column on the unit frames. Hex cells in the bars and
+-- the ground; faceted icons.
+local function moltencoreBasalt()
+    local dir = ROOT .. "MoltenCoreBasalt\\"
+    register({
+        id = "moltencore-basalt",
+        name = "Molten Core · Basalt",
+        description = "Hexagonal basalt columns with molten seams and runes, faceted icons.",
+        colors = colors({
+            ["surface"] = "#17151A",
+            ["surface-glass"] = "#17151AF7",
+            ["surface-sunk"] = "#121014",
+            ["surface-raised"] = "#201E24",
+            ["track"] = "#27242B",
+            ["gilt"] = "#C46A1A",
+            ["gilt-text"] = "#FFD772",
+            ["gilt-line"] = "#C46A1A8A",
+            ["gilt-hairline"] = "#C46A1A6E",
+            ["gilt-faint"] = "#C46A1A30",
+            ["ink"] = "#F2ECE4",
+            ["ink-muted"] = "#ACA49B",
+            ["ink-faint"] = "#7F786F",
+            ["unit-fill"] = "#6E6153",
+            ["unit-fill-deep"] = "#4A4036",
+            ["shade"] = "#060508",
+        }),
+        fonts = { header = { file = FRIZ, size = 12 } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Columns", "TOPRIGHT", 10, 32, 48, 40, { flip = true }),
+                    piece(dir, "Tablet", "TOPLEFT", -16, 4, 28, 40, { sway = 1.5, pivot = "TOP" }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 4, color = "gilt-text", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Columns", "TOPRIGHT", 10, 32, 48, 40, { flip = true }) } },
+            minimap = ring(dir, 10),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 10, 12, 12) } },
+        },
+    })
+end
+
+-- Flames: Ragnaros' flames. Flames behind the titles, small flames along the
+-- windows' top and clusters on their corners, sparks; a ring of fire round
+-- the minimap, a small flame at each end of the unit frames. Flame waves
+-- in the bars, flame outlines in the ground; icons with a flame.
+local function moltencoreFlames()
+    local dir = ROOT .. "MoltenCoreFlames\\"
+    register({
+        id = "moltencore-flames",
+        name = "Molten Core · Flames",
+        description = "Ragnaros' fire: flames along every window, a ring of fire round the minimap, sparks, flaming icons.",
+        colors = colors({
+            ["surface"] = "#1B0907",
+            ["surface-glass"] = "#1B0907F7",
+            ["surface-sunk"] = "#150605",
+            ["surface-raised"] = "#250E0A",
+            ["track"] = "#2D1410",
+            ["gilt"] = "#C8501A",
+            ["gilt-text"] = "#FFD24A",
+            ["gilt-line"] = "#C8501A94",
+            ["gilt-hairline"] = "#C8501A75",
+            ["gilt-faint"] = "#C8501A36",
+            ["ink"] = "#FBEBDD",
+            ["ink-muted"] = "#B39A8B",
+            ["ink-faint"] = "#85705F",
+            ["unit-fill"] = "#91541F",
+            ["unit-fill-deep"] = "#623812",
+            ["shade"] = "#0A0302",
+        }),
+        fonts = { header = { file = SKURRI } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "FlameTop", "TOP", 0, 14, 128, 20, { span = true }),
+                    piece(dir, "Cluster", "TOPRIGHT", 10, 28, 32, 32, { flip = true, sway = 3, pivot = "BOTTOM" }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 8, color = "gilt-text", size = 5 },
+            },
+            chat = { pieces = { piece(dir, "Cluster", "TOPRIGHT", 10, 28, 32, 32, { flip = true, sway = 3, pivot = "BOTTOM" }) } },
+            minimap = ring(dir, 16, { file = dir .. "Mote.tga", count = 4, color = "gilt-text", size = 5 }),
+            unit = {
+                pieces = {
+                    piece(dir, "Unit", "TOPLEFT", 14, 10, 8, 12),
+                    piece(dir, "Unit", "TOPRIGHT", -6, 10, 8, 12, { flip = true }),
+                },
+            },
+        },
+    })
+end
+
+--------------------------------------------------------------------------------
+-- Naxxramas
+--------------------------------------------------------------------------------
+
+-- Necropolis: the necropolis. Scourge stone behind the titles with pointed windows
+-- lit teal, iron thorns along the windows' top and claws on their corners,
+-- plague motes; a spiked iron ring round the minimap, a thorn at each end
+-- of the unit frames. Sigils in the bars and the ground; spiked icons.
+local function naxxramasNecropolis()
+    local dir = ROOT .. "NaxxramasNecropolis\\"
+    register({
+        id = "naxxramas-necropolis",
+        name = "Naxxramas · Necropolis",
+        description = "The floating necropolis: Scourge stone, iron thorns and teal-lit windows, spiked icons.",
+        colors = colors({
+            ["surface"] = "#0A141B",
+            ["surface-glass"] = "#0A141BF7",
+            ["surface-sunk"] = "#0B1318",
+            ["surface-raised"] = "#111B22",
+            ["track"] = "#192329",
+            ["gilt"] = "#52B1A9",
+            ["gilt-text"] = "#92F1F3",
+            ["gilt-line"] = "#52B1A96A",
+            ["gilt-hairline"] = "#52B1A956",
+            ["gilt-faint"] = "#52B1A924",
+            ["ink"] = "#F0EBDB",
+            ["ink-muted"] = "#95A1A4",
+            ["ink-faint"] = "#6C777A",
+            ["unit-fill"] = "#286E66",
+            ["unit-fill-deep"] = "#194A44",
+            ["shade"] = "#03080B",
+        }),
+        fonts = { header = { file = MORPHEUS } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Spikes", "TOP", 12, 10, 64, 16, { span = true }),
+                    piece(dir, "Buttress", "TOPRIGHT", 12, 30, 36, 36, { flip = true }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 4, color = "gilt", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Buttress", "TOPRIGHT", 12, 30, 36, 36, { flip = true }) } },
+            minimap = ring(dir, 14, { file = dir .. "Mote.tga", count = 2, color = "gilt", size = 6 }),
+            unit = {
+                pieces = {
+                    piece(dir, "Unit", "TOPLEFT", 14, 10, 8, 12),
+                    piece(dir, "Unit", "TOPRIGHT", -6, 10, 8, 12, { flip = true }),
+                },
+            },
+        },
+    })
+end
+
+-- Bones: bone and webs. Ribs behind the titles, a web spun off the windows'
+-- top left corner, a spider on its thread; bones round the minimap and a
+-- web in its corner, a wisp of web off the unit frames' corner. Vertebrae
+-- in the bars, faint webs in the ground; icons as bones.
+local function naxxramasBones()
+    local dir = ROOT .. "NaxxramasBones\\"
+    register({
+        id = "naxxramas-bones",
+        name = "Naxxramas · Bones",
+        description = "Ribs and bones, spider webs and a spider on its thread; bone white on slate, bone icons.",
+        colors = colors({
+            ["surface"] = "#0E1316",
+            ["surface-glass"] = "#0E1316F7",
+            ["surface-sunk"] = "#0B0F12",
+            ["surface-raised"] = "#161C20",
+            ["track"] = "#1C2226",
+            ["gilt"] = "#CFC6A6",
+            ["gilt-text"] = "#F2EBD6",
+            ["gilt-line"] = "#CFC6A661",
+            ["gilt-hairline"] = "#CFC6A64D",
+            ["gilt-faint"] = "#CFC6A624",
+            ["ink"] = "#F2EFE6",
+            ["ink-muted"] = "#A3A39C",
+            ["ink-faint"] = "#74756F",
+            ["unit-fill"] = "#486A63",
+            ["unit-fill-deep"] = "#2E4742",
+            ["shade"] = "#040607",
+        }),
+        fonts = { header = { file = FRIZ, size = 12 } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Web", "TOPRIGHT", 61, 61, 64, 64, { flip = true }),
+                    piece(dir, "Spider", "TOP", 90, 2, 13, 36, { sway = 3, pivot = "TOP" }),
+                },
+            },
+            chat = { pieces = { piece(dir, "Web", "TOPRIGHT", 61, 61, 64, 64, { flip = true }) } },
+            minimap = ring(dir, 10),
+            unit = { pieces = { piece(dir, "Unit", "TOPRIGHT", 15, 11, 16, 12) } },
+        },
+    })
+end
+
+-- Frost: the frost of Kel'Thuzad's halls. Frozen stone behind the titles with
+-- frost ferns, rime along the windows' top and ice crystals on their
+-- corner, snow; frost round the minimap, a few small crystals on the unit
+-- frames. Ice facets in the bars, snowflakes in the ground; frosted icons.
+local function naxxramasFrost()
+    local dir = ROOT .. "NaxxramasFrost\\"
+    register({
+        id = "naxxramas-frost",
+        name = "Naxxramas · Frost",
+        description = "Kel'Thuzad's frost: ice crystals, rime and frost ferns, snow drifting, frosted icons.",
+        colors = colors({
+            ["surface"] = "#0A1520",
+            ["surface-glass"] = "#0A1520F7",
+            ["surface-sunk"] = "#08111A",
+            ["surface-raised"] = "#10202C",
+            ["track"] = "#142532",
+            ["gilt"] = "#8EC9D2",
+            ["gilt-text"] = "#D6F4F8",
+            ["gilt-line"] = "#8EC9D261",
+            ["gilt-hairline"] = "#8EC9D24D",
+            ["gilt-faint"] = "#8EC9D224",
+            ["ink"] = "#F0F7FA",
+            ["ink-muted"] = "#9DB0BA",
+            ["ink-faint"] = "#6F828C",
+            ["unit-fill"] = "#2B6C74",
+            ["unit-fill-deep"] = "#1B484E",
+            ["shade"] = "#02070B",
+        }),
+        fonts = { header = { file = ARIALN } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Rime", "TOP", 0, 8, 256, 14, { span = true }),
+                    piece(dir, "Crystals", "TOPRIGHT", 10, 30, 48, 40, { flip = true }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 6, color = "gilt-text", size = 7 },
+            },
+            chat = { pieces = { piece(dir, "Crystals", "TOPRIGHT", 10, 30, 48, 40, { flip = true }) } },
+            minimap = ring(dir, 12, { file = dir .. "Mote.tga", count = 3, color = "gilt-text", size = 6 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPRIGHT", -6, 10, 14, 12) } },
+        },
+    })
+end
+
+--------------------------------------------------------------------------------
+-- Karazhan
+--------------------------------------------------------------------------------
+
+-- Library: Medivh's library. Bookshelves behind the titles, books and a candle on
+-- the windows' corner, a silk bookmark, arcane dust; a stone ring and a
+-- raven on the minimap, an inkwell on chat, one small candle on the unit
+-- frames. Script in the bars, lancet windows in the ground; the icons
+-- drawn with a broad nib.
+local function karazhanLibrary()
+    local dir = ROOT .. "KarazhanLibrary\\"
+    register({
+        id = "karazhan-library",
+        name = "Karazhan · Library",
+        description = "Medivh's library: bookshelves behind the titles, a candle and a raven, icons drawn with a broad nib.",
+        colors = colors({
+            ["surface"] = "#1A0D17",
+            ["surface-glass"] = "#1A0D17F7",
+            ["surface-sunk"] = "#180D17",
+            ["surface-raised"] = "#22141E",
+            ["track"] = "#281C27",
+            ["gilt"] = "#8C6EBD",
+            ["gilt-text"] = "#CACAEB",
+            ["gilt-line"] = "#8C6EBD8A",
+            ["gilt-hairline"] = "#8C6EBD6E",
+            ["gilt-faint"] = "#8C6EBD33",
+            ["ink"] = "#EBEAF3",
+            ["ink-muted"] = "#A09CA8",
+            ["ink-faint"] = "#77727D",
+            ["unit-fill"] = "#7F4EA1",
+            ["unit-fill-deep"] = "#57336E",
+            ["shade"] = "#0A0509",
+        }),
+        fonts = { header = { file = MORPHEUS } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = { piece(dir, "Books", "TOPRIGHT", 12, 30, 56, 38) },
+                motes = { file = dir .. "Mote.tga", count = 4, color = "gilt", size = 7 },
+            },
+            chat = { pieces = { piece(dir, "Inkwell", "TOPRIGHT", 6, 34, 40, 40) } },
+            minimap = ring(dir, 8, { file = dir .. "Mote.tga", count = 3, color = "gilt", size = 6 },
+                piece(dir, "Raven", "TOPRIGHT", -6, 8, 40, 36, { sway = 2, pivot = "BOTTOM" })),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 12, 8, 16) } },
+        },
+    })
+end
+
+-- Opera: the opera stage. A velvet valance behind the titles, curtains drawn
+-- back at the windows' sides, comedy and tragedy on chat, a gilded frame
+-- round the minimap, a small gold crest on the unit frames. Harlequin bars,
+-- damask in the ground, a rope edge; inlaid icons; a little more room.
+local function karazhanOpera()
+    local dir = ROOT .. "KarazhanOpera\\"
+    register({
+        id = "karazhan-opera",
+        name = "Karazhan · Opera",
+        description = "The opera stage: velvet curtains, a gilded frame, comedy and tragedy, harlequin bars, inlaid icons.",
+        colors = colors({
+            ["surface"] = "#1C0B19",
+            ["surface-glass"] = "#1C0B19F7",
+            ["surface-sunk"] = "#150812",
+            ["surface-raised"] = "#27121F",
+            ["track"] = "#2D1A28",
+            ["gilt"] = "#C9A45C",
+            ["gilt-text"] = "#F0DDB0",
+            ["gilt-line"] = "#C9A45C80",
+            ["gilt-hairline"] = "#C9A45C66",
+            ["gilt-faint"] = "#C9A45C2E",
+            ["ink"] = "#F5EEE6",
+            ["ink-muted"] = "#B3A4AC",
+            ["ink-faint"] = "#84757D",
+            ["unit-fill"] = "#9C4281",
+            ["unit-fill-deep"] = "#6A2B57",
+            ["shade"] = "#0B0409",
+        }),
+        fonts = { header = { file = FRIZ, size = 12 } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        space = { ["space-5"] = 14, ["space-6"] = 22 },
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Curtain", "TOPLEFT", -38, 4, 48, 150),
+                    piece(dir, "Curtain", "TOPRIGHT", 38, 4, 48, 150, { flip = true }),
+                },
+            },
+            chat = { pieces = { piece(dir, "Masks", "TOPRIGHT", 8, 30, 52, 40, { sway = 1.5 }) } },
+            minimap = ring(dir, 8),
+            unit = { pieces = { piece(dir, "Unit", "TOP", 0, 10, 24, 14) } },
+        },
+    })
+end
+
+-- Nether: the nether over the tower. Night sky behind the titles, a few stars
+-- over the windows, a crescent moon and a chess knight on their corners
+-- (the rook on chat), an astrolabe round the minimap, one star on the unit
+-- frames. Chessboard bars, constellations in the ground; icons as
+-- constellations.
+local function karazhanNether()
+    local dir = ROOT .. "KarazhanNether\\"
+    register({
+        id = "karazhan-nether",
+        name = "Karazhan · Nether",
+        description = "The nether over the tower: night sky, a crescent moon, chess pieces and an astrolabe, constellation icons.",
+        colors = colors({
+            ["surface"] = "#100E1F",
+            ["surface-glass"] = "#100E1FF7",
+            ["surface-sunk"] = "#0C0A18",
+            ["surface-raised"] = "#19162E",
+            ["track"] = "#1E1A33",
+            ["gilt"] = "#A79FE6",
+            ["gilt-text"] = "#E0DEFA",
+            ["gilt-line"] = "#A79FE680",
+            ["gilt-hairline"] = "#A79FE666",
+            ["gilt-faint"] = "#A79FE62E",
+            ["ink"] = "#EEEDF8",
+            ["ink-muted"] = "#A3A0BC",
+            ["ink-faint"] = "#75728C",
+            ["unit-fill"] = "#6553BC",
+            ["unit-fill-deep"] = "#433780",
+            ["shade"] = "#06050E",
+        }),
+        fonts = { header = { file = ARIALN } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Stars", "TOP", 10, 16, 256, 20, { span = true }),
+                    piece(dir, "Knight", "TOPRIGHT", -40, 28, 24, 32),
+                    piece(dir, "Moon", "TOPRIGHT", 22, 30, 44, 44),
+                },
+                motes = { file = dir .. "Mote.tga", count = 5, color = "gilt-text", size = 7 },
+            },
+            chat = { pieces = { piece(dir, "Rook", "TOPRIGHT", -14, 28, 24, 32) } },
+            minimap = ring(dir, 10, { file = dir .. "Mote.tga", count = 3, color = "gilt-text", size = 6 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 10, 12, 12) } },
+        },
+    })
+end
+
+--------------------------------------------------------------------------------
+-- Sunwell
+--------------------------------------------------------------------------------
+
+-- Sunburst: sunburst. Rays behind the titles, a sun on the windows' top, gold
+-- filigree on their corners, light rising; a ring of rays round the
+-- minimap, a tiny sun on the unit frames. Rays in the bars, suns in the
+-- ground, beaded edges; icons with a sparkle.
+local function sunwellSunburst()
+    local dir = ROOT .. "SunwellSunburst\\"
+    register({
+        id = "sunwell-sunburst",
+        name = "Sunwell · Sunburst",
+        description = "Sun rays behind the titles, a sunburst and gold filigree, a ring of rays round the minimap.",
+        colors = colors({
+            ["surface"] = "#272017",
+            ["surface-glass"] = "#272017F7",
+            ["surface-sunk"] = "#19130C",
+            ["surface-raised"] = "#30291F",
+            ["track"] = "#363026",
+            ["gilt"] = "#F5DC3A",
+            ["gilt-text"] = "#FFF365",
+            ["gilt-line"] = "#F5DC3A4C",
+            ["gilt-hairline"] = "#F5DC3A3B",
+            ["gilt-faint"] = "#F5DC3A1A",
+            ["ink"] = "#FAF7EA",
+            ["ink-muted"] = "#B5AD9D",
+            ["ink-faint"] = "#8B8273",
+            ["unit-fill"] = "#716421",
+            ["unit-fill-deep"] = "#4C4313",
+            ["shade"] = "#0C0904",
+        }),
+        fonts = { header = { file = FRIZ, size = 12 } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Sun", "TOP", 150, 22, 40, 40),
+                    piece(dir, "Filigree", "TOPLEFT", -6, 12, 48, 40),
+                    piece(dir, "Filigree", "TOPRIGHT", 6, 12, 48, 40, { flip = true }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 5, color = "gilt-text", size = 7 },
+            },
+            chat = { pieces = { piece(dir, "Filigree", "TOPRIGHT", 6, 12, 48, 40, { flip = true }) } },
+            minimap = ring(dir, 22, { file = dir .. "Mote.tga", count = 3, color = "gilt-text", size = 6 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPLEFT", 14, 9, 12, 12) } },
+        },
+    })
+end
+
+-- Phoenix: the phoenix. Phoenix feathers behind the titles, three tail feathers
+-- sweeping off the windows' corner, one hanging at their side, embers; a
+-- ruff of feathers round the minimap, one small feather on the unit
+-- frames. Feather barbs in the bars, plumage in the ground; feathered icons.
+local function sunwellPhoenix()
+    local dir = ROOT .. "SunwellPhoenix\\"
+    register({
+        id = "sunwell-phoenix",
+        name = "Sunwell · Phoenix",
+        description = "Phoenix feathers in gold and flame, embers rising, feathered icons.",
+        colors = colors({
+            ["surface"] = "#24130E",
+            ["surface-glass"] = "#24130EF7",
+            ["surface-sunk"] = "#180C08",
+            ["surface-raised"] = "#2E1A13",
+            ["track"] = "#34211A",
+            ["gilt"] = "#E9C24F",
+            ["gilt-text"] = "#FFE9A8",
+            ["gilt-line"] = "#E9C24F5C",
+            ["gilt-hairline"] = "#E9C24F47",
+            ["gilt-faint"] = "#E9C24F1F",
+            ["ink"] = "#FBF1E6",
+            ["ink-muted"] = "#BCA898",
+            ["ink-faint"] = "#8C7A6C",
+            ["unit-fill"] = "#8C5636",
+            ["unit-fill-deep"] = "#603922",
+            ["shade"] = "#0C0503",
+        }),
+        fonts = { header = { file = MORPHEUS } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, false),
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = {
+                    piece(dir, "Fan", "TOPRIGHT", 14, 46, 96, 56, { flip = true, sway = 1.5, pivot = "BOTTOMRIGHT" }),
+                    piece(dir, "Feather", "TOPLEFT", -18, 4, 24, 100, { sway = 2, pivot = "TOP" }),
+                },
+                motes = { file = dir .. "Mote.tga", count = 6, color = "gilt-text", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Fan", "TOPRIGHT", 14, 46, 96, 56, { flip = true }) } },
+            minimap = ring(dir, 14),
+            unit = { pieces = { piece(dir, "Unit", "TOPRIGHT", -8, 8, 28, 10) } },
+        },
+    })
+end
+
+-- Naaru: naaru light through elven glass. Leaded blue glass behind the titles,
+-- naaru crystals floating over the windows' corners, white light rising;
+-- crystals orbiting the minimap, two small ones on the unit frames.
+-- Faceted bars, a leaded lattice in the ground; crystal icons.
+local function sunwellNaaru()
+    local dir = ROOT .. "SunwellNaaru\\"
+    register({
+        id = "sunwell-naaru",
+        name = "Sunwell · Naaru",
+        description = "Naaru light through elven glass: leaded blue glass and floating crystals, gold on deep blue.",
+        colors = colors({
+            ["surface"] = "#121A24",
+            ["surface-glass"] = "#121A24F7",
+            ["surface-sunk"] = "#0D141C",
+            ["surface-raised"] = "#1A2430",
+            ["track"] = "#1E2936",
+            ["gilt"] = "#E6CB6A",
+            ["gilt-text"] = "#FFF1BE",
+            ["gilt-line"] = "#E6CB6A5C",
+            ["gilt-hairline"] = "#E6CB6A47",
+            ["gilt-faint"] = "#E6CB6A1F",
+            ["ink"] = "#F5F8FA",
+            ["ink-muted"] = "#A8B2BC",
+            ["ink-faint"] = "#7A8590",
+            ["unit-fill"] = "#726235",
+            ["unit-fill-deep"] = "#4C4122",
+            ["shade"] = "#04070B",
+        }),
+        fonts = { header = { file = ARIALN } },
+        glyphs = glyphs(dir),
+        textures = textures(dir, true),
+        radius = { ["radius-sm"] = 3, ["radius-md"] = 5 },
+        dress = {
+            window = {
+                header = dir .. "Header.tga",
+                pieces = { piece(dir, "Shards", "TOPRIGHT", 12, 44, 64, 48, { flip = true, sway = 2, pivot = "CENTER" }) },
+                motes = { file = dir .. "Mote.tga", count = 5, color = "ink", size = 6 },
+            },
+            chat = { pieces = { piece(dir, "Shards", "TOPRIGHT", 10, 34, 48, 36, { flip = true }) } },
+            minimap = ring(dir, 12, { file = dir .. "Mote.tga", count = 3, color = "ink", size = 6 }),
+            unit = { pieces = { piece(dir, "Unit", "TOPRIGHT", -8, 11, 16, 12) } },
+        },
+    })
+end
+
+-- Every raid theme, in the order the theme picker lists them (Themes
+-- Builtin calls this right after the raids' colour-only themes).
+export function registerRaids()
+    blacktempleTemple()
+    blacktempleChains()
+    blacktempleRunes()
+    moltencoreObsidian()
+    moltencoreBasalt()
+    moltencoreFlames()
+    naxxramasNecropolis()
+    naxxramasBones()
+    naxxramasFrost()
+    karazhanLibrary()
+    karazhanOpera()
+    karazhanNether()
+    sunwellSunburst()
+    sunwellPhoenix()
+    sunwellNaaru()
+end

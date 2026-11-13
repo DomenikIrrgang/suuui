@@ -23,6 +23,21 @@ const BUILT_IN: string[] = {
     "naxxramas",
     "karazhan",
     "sunwell",
+    "blacktemple-temple",
+    "blacktemple-chains",
+    "blacktemple-runes",
+    "moltencore-obsidian",
+    "moltencore-basalt",
+    "moltencore-flames",
+    "naxxramas-necropolis",
+    "naxxramas-bones",
+    "naxxramas-frost",
+    "karazhan-library",
+    "karazhan-opera",
+    "karazhan-nether",
+    "sunwell-sunburst",
+    "sunwell-phoenix",
+    "sunwell-naaru",
     "pinkcat",
     "stvruins",
     "stvcanopy",
@@ -627,5 +642,149 @@ local function stvFont()
     settings.setAccount("theme", nil)
     themes.apply()
     expect(T.type.header.file).toBe(before)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The raid themes with art (ThemesRaids): three per raid
+--------------------------------------------------------------------------------
+
+-- Each raid theme: its id, its header face (and size, where Friz Quadrata
+-- is a size down so the meters' titles fit), the strongest alpha of its
+-- windows' pattern (tools/raid_art.py, PATTERN), and the dress kinds it
+-- wears (every one of them: windows, chat, the minimap, the unit frames).
+type Raid = { id: string, font: string, size?: number, pattern: number }
+const MORPHEUS = "Fonts\\MORPHEUS.TTF"
+const FRIZ = "Fonts\\FRIZQT__.TTF"
+const ARIALN = "Fonts\\ARIALN.TTF"
+const SKURRI = "Fonts\\SKURRI.TTF"
+local RAIDS: Raid[] = {
+    { id = "blacktemple-temple", font = MORPHEUS, pattern = 0.13 },
+    { id = "blacktemple-chains", font = SKURRI, pattern = 0.12 },
+    { id = "blacktemple-runes", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "moltencore-obsidian", font = MORPHEUS, pattern = 0.14 },
+    { id = "moltencore-basalt", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "moltencore-flames", font = SKURRI, pattern = 0.13 },
+    { id = "naxxramas-necropolis", font = MORPHEUS, pattern = 0.13 },
+    { id = "naxxramas-bones", font = FRIZ, size = 12, pattern = 0.1 },
+    { id = "naxxramas-frost", font = ARIALN, pattern = 0.13 },
+    { id = "karazhan-library", font = MORPHEUS, pattern = 0.13 },
+    { id = "karazhan-opera", font = FRIZ, size = 12, pattern = 0.13 },
+    { id = "karazhan-nether", font = ARIALN, pattern = 0.15 },
+    { id = "sunwell-sunburst", font = FRIZ, size = 12, pattern = 0.1 },
+    { id = "sunwell-phoenix", font = MORPHEUS, pattern = 0.12 },
+    { id = "sunwell-naaru", font = ARIALN, pattern = 0.1 },
+}
+
+@test("Raid themes: every texture, glyph and dress file they name ships, on all four kinds of frame")
+local function raidFiles()
+    local tex = newParent():CreateTexture()
+    local function ships(file: string)
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    for _, raid in ipairs(RAIDS) do
+        local t = theme(raid.id)
+        for _, value in pairs(t.textures) do
+            ships(assert(fileOf(value)))
+        end
+        for _, kind in ipairs({ "window", "chat", "minimap", "unit" }) do
+            local k = assert(t.dress[kind], `{raid.id}: {kind}`)
+            expect(#(k.pieces or {}) > 0).toBe(true)
+            if k.header then
+                ships(k.header)
+            end
+            for _, p in ipairs(k.pieces or {}) do
+                ships(p.file)
+            end
+            if k.motes then
+                ships(k.motes.file)
+            end
+        end
+        expect(assert(t.dress.window).header).toBeTruthy()
+        local icons = 0
+        for name, file in pairs(t.glyphs) do
+            icons += 1
+            expect((T.glyph :: { [string]: string })[name]).toBeTruthy()
+            ships(file)
+        end
+        expect(icons).toBe(95)
+        for token in pairs(themes.BAR_TOKENS) do
+            expect(type(t.textures[token])).toBe("table")
+        end
+    end
+end
+
+@test("Raid themes: text, fills and edges at the ratios the tokens' usage notes ask")
+@cases({
+    { "ink", "surface", 7 },
+    { "ink", "surface-raised", 7 },
+    { "ink", "unit-fill", 4.8 },
+    { "ink", "unit-fill-low", 4.8 },
+    { "ink-muted", "surface", 4.5 },
+    { "gilt-text", "surface", 7 },
+    { "unit-fill", "surface-sunk", 3.05 },
+    { "gilt-line", "surface", 2.15 },
+    { "gilt-hairline", "surface", 1.78 },
+})
+local function raidContrast(fg: string, bg: string, least: number)
+    for _, raid in ipairs(RAIDS) do
+        local ground = colorIn(raid.id, bg)
+        local r = ratio(over(colorIn(raid.id, fg), ground), rgb(ground))
+        if r < least then
+            error(`{raid.id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+        end
+    end
+end
+
+@test("Raid themes: disabled text stays dimmer than secondary text, and readable; the glass hides what's behind")
+local function raidFaint()
+    for _, raid in ipairs(RAIDS) do
+        local r = ratio(rgb(colorIn(raid.id, "ink-faint")), rgb(colorIn(raid.id, "surface")))
+        expect(r >= 3).toBe(true)
+        expect(r < ratio(rgb(colorIn(raid.id, "ink-muted")), rgb(colorIn(raid.id, "surface")))).toBe(true)
+        expect(colorIn(raid.id, "surface-glass")[4] >= 0.96).toBe(true)
+    end
+end
+
+@test("Raid themes: text stays readable over the brightest pixels of their windows' pattern")
+@cases({
+    { "ink", 7 },
+    { "gilt-text", 7 },
+    { "ink-muted", 4.5 },
+    { "ink-faint", 3 },
+})
+local function raidPattern(fg: string, least: number)
+    for _, raid in ipairs(RAIDS) do
+        for _, ground in ipairs({ "surface", "surface-glass" }) do
+            local g = over(colorIn(raid.id, ground), { 0, 0, 0 })
+            local gilt = colorIn(raid.id, "gilt")
+            local brightest = over({ gilt[1], gilt[2], gilt[3], raid.pattern }, g)
+            local r = ratio(rgb(colorIn(raid.id, fg)), brightest)
+            if r < least then
+                error(`{raid.id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+            end
+        end
+    end
+end
+
+@test("Raid themes: titles in each theme's own face, back to SuuUI's after")
+local function raidFonts()
+    local before, size = T.type.header.file, T.type.header.size
+    for _, raid in ipairs(RAIDS) do
+        settings.setAccount("theme", raid.id)
+        themes.apply()
+        expect(themes.appliedTheme()).toBe(raid.id)
+        expect(T.type.header.file).toBe(raid.font)
+        expect(T.type.header.size).toBe(raid.size or size)
+        local title = uiText(newParent(), "header", "gilt-text")
+        title:SetValue("Damage done")
+        local file = title:GetFont()
+        expect(file).toBe(raid.font)
+    end
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(T.type.header.file).toBe(before)
+    expect(T.type.header.size).toBe(size)
     expectNoErrors()
 end
