@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Performance: picking a theme is quicker (a sixth for Pink Cat, a tenth for the others) and leaves about three quarters less behind for the game to clean up, and a theme with art on the bars uses less memory. The quest, collection and recipe data the map, tooltips and windows load in the background is now spread evenly over the frames, without the spikes it had while loading. Hovering the first NPC after that data is there no longer causes a hitch, and typing a lone / in chat opens the command list more smoothly.
+
 ## 0.12.0 (2026-11-13)
 
 ### New
