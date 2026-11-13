@@ -18,13 +18,14 @@ cat ears, a cat's face, whiskers, a slit pupil, a yarn ball or a sprig of
 catnip.
 
 PawBar.tga (256x32, white): the health bars' fill, repeated along the bar
-at its height (seamless left to right) and tinted by its colour; paw prints at 64% (BAR_SHADE), darker than the
+at its height (seamless left to right) and tinted by its colour; paw prints at 76% (BAR_SHADE), darker than the
 fill so names on it keep their contrast, still one fill. CastBar.tga
 (256x16): the cast bars' row of paws. PlateBar.tga (256x20): the
 nameplates' bars (about 140x10), simpler three-toed paws that stay paws.
 
-SurfacePattern.tga (64x64, white, alpha up to PATTERN_ALPHA): paws and
-hearts tiled over every window's ground, in gilt. TrackPattern.tga (32x32):
+SurfacePattern.tga (128x128, white, alpha up to PATTERN_ALPHA): paws and
+hearts tiled over every window's ground, in gilt, far apart (asked
+2026-11-13: fainter, repeating less often). TrackPattern.tga (32x32):
 a tiny paw a tile behind the bars. Stitch.tga (8x8): the panels' edge as
 stitches. CornerPaw.tga (32x32): the corners' paw print. Divider.tga
 (32x8): a tiny paw and a dot, tiled along the line under a panel's head.
@@ -457,10 +458,11 @@ def alpha_pixel(cov, strength=1.0):
     return lambda x, y: (255, 255, 255, round(255 * strength * cov[(x, y)]))
 
 
-# How dark the bars' motifs are (asked 2026-11-12, "too faint" at 87%): the
-# paws and beans at 64% of the fill, darker than it so names on the bars
-# keep their contrast, still one fill with a pattern in it.
-BAR_SHADE = 0.64
+# How dark the bars' motifs are: the paws and beans darker than the fill so
+# names on the bars keep their contrast, still one fill with a pattern in
+# it. 87% was "too faint" (2026-11-12), 64% then a bit strong (2026-11-13,
+# "a bit fainter"): 76%.
+BAR_SHADE = 0.76
 
 
 def paw_bar():
@@ -511,25 +513,27 @@ def bean_bar():
 # The windows' pattern at most this strong (white art in gilt over the
 # surfaces): ink-faint keeps 3:1 on its brightest pixels, ink-muted 4.5:1
 # (tests/unit/Core/ThemesBuiltin.test.wowlua, PATTERN_ALPHA).
-PATTERN_ALPHA = 0.16
+# (0.16 until 2026-11-13: the user asked for it fainter.)
+PATTERN_ALPHA = 0.10
 
 
 def surface_pattern():
-    """64x64, tiled over windows and panels: two paw prints and two small
-    hearts on a staggered grid, faint pink on the plum."""
-    paws = [(16, 17, 13, math.radians(-18)), (48, 49, 13, math.radians(18))]
-    hearts = [heart_points(48, 16, 9, 60), heart_points(16, 48, 9, 60)]
-    paw = paw_field(64, 64, paws)
-    heart = supersample(64, 64, lambda x, y: any(mt.inside_polygon(x, y, p) for p in hearts))
+    """128x128, tiled over windows and panels: two paw prints and two small
+    hearts on a wide staggered grid (each motif 64 px from the next), faint
+    pink on the plum."""
+    paws = [(30, 34, 13, math.radians(-18)), (94, 98, 13, math.radians(14))]
+    hearts = [heart_points(96, 30, 9, 60), heart_points(32, 96, 9, 60)]
+    paw = paw_field(128, 128, paws)
+    heart = supersample(128, 128, lambda x, y: any(mt.inside_polygon(x, y, p) for p in hearts))
     cov = {k: max(paw[k], heart[k]) for k in paw}
-    return 64, 64, alpha_pixel(cov, PATTERN_ALPHA)
+    return 128, 128, alpha_pixel(cov, PATTERN_ALPHA)
 
 
 def track_pattern():
     """32x32, tiled behind the bars (the missing health): one tiny paw a
     tile, fainter than the windows'."""
     cov = paw_field(32, 32, [(16, 16, 11, math.radians(-15))])
-    return 32, 32, alpha_pixel(cov, 0.13)
+    return 32, 32, alpha_pixel(cov, 0.09)
 
 
 def stitch():
