@@ -556,6 +556,12 @@ end
 -- setting changes.
 export function apply()
     local before = geometry()
+    -- each colour token's value before (only those that change are painted
+    -- again: most of a UI's kept colours stay the same between two themes)
+    local was: { [string]: number[] } = {}
+    for tokenName, c in pairs(colors) do
+        was[tokenName] = { c[1], c[2], c[3], c[4] }
+    end
     reset()
     local id = settings.account("theme") or DEFAULT
     local theme = byId[id] or byId[DEFAULT] :: Theme
@@ -633,13 +639,22 @@ export function apply()
         end
     end
     vision.apply(settings.accountString("colorVision"))
-    fonts.refresh()
+    local changed: { [string]: boolean } = {}
+    for tokenName, c in pairs(colors) do
+        local w = was[tokenName]
+        if not w or w[1] ~= c[1] or w[2] ~= c[2] or w[3] ~= c[3] or w[4] ~= c[4] then
+            changed[tokenName] = true
+        end
+    end
+    -- (a font object set again may hand its colour to its texts: then
+    -- every text's kept colour is set again)
+    local retyped = fonts.refresh()
     -- (files first: a bar's new file may take the bar's colour; repaint
     -- then sets every kept colour)
     draw.reskin()
     -- (0.40) the dress: art on the frames, header art, motion
     dress.apply(theme.dress)
-    draw.repaint()
+    draw.repaint(changed, retyped)
     -- (spacing or sizes moved: what keeps its layout is laid out again,
     -- then the modules lay out the rest on the message)
     if geometry() ~= before then

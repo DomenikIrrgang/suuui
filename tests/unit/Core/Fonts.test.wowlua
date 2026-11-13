@@ -69,6 +69,30 @@ local function refresh()
     expect(fonts.get("label"):GetSpacing()).toBeCloseTo(6, 4)
 end
 
+@test("refresh sets only the Font objects whose style or ink changed, and says whether it set any")
+local function refreshOnlyChanged()
+    expect(fonts.refresh()).toBe(false)
+    label.size, label.lineHeight = 19, 25
+    local calls = 0
+    hooksecurefunc(fonts.get("body"), "SetFont", function()
+        calls += 1
+    end)
+    expect(fonts.refresh()).toBe(true)
+    expect(calls).toBe(0)
+    local _, size = fonts.get("label"):GetFont()
+    expect(size).toBeCloseTo(19, 4)
+    expect(fonts.refresh()).toBe(false)
+    -- the ink: every object
+    local ink = T.color.ink
+    local was = ink[1]
+    ink[1] = was > 0.5 and was - 0.2 or was + 0.2
+    expect(fonts.refresh()).toBe(true)
+    expect(calls).toBe(1)
+    expect((fonts.get("body"):GetTextColor())).toBeCloseTo(ink[1], 3)
+    ink[1] = was
+    expect(fonts.refresh()).toBe(true)
+end
+
 @test("refresh skips a style the tokens no longer have")
 local function refreshMissing()
     -- (a shape the generated tokens never have: put back when the test ends)
