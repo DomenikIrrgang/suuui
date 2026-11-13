@@ -7,6 +7,10 @@
 - **Stranglethorn themes**: two new themes in Settings › General › Appearance › Theme, the jungle over your UI. **Stranglethorn Ruins** is mossy troll stone: carved stone behind every window's title, stonework with spirals and zigzags in the windows' background, carved edges and spiral corners, vines with red berries over the top of every window, the chat and the player and target frames, a ring of vines round the minimap, fireflies drifting up, and ember accents. **Stranglethorn Canopy** is deep emerald under the leaves: leaves behind the titles, faint monstera leaves in the background, vines with hibiscus and orchids, a scarlet macaw perched on the minimap, orchid jewels and teal accents. Both draw every icon as a leafy vine (the talents tree as a palm, the bags as a woven basket), put a vine or a leaf's ribs in the health, power and cast bars, and use the game's carved Morpheus font for titles. Leaves sway and fireflies drift; with Reduce motion on they keep still.
 - For theme authors (API 0.40): `dress` hangs art on the frames themselves, past their edges where it likes: pieces at a point, along an edge or over the whole frame, in front or behind, swaying gently; art behind a window's title; motes drifting up over the frame. For windows, the minimap, the player and target frames and the chat. A theme's fonts can also be the game's own (`Fonts\\MORPHEUS.TTF` and the others).
 
+### Fixed
+
+- Themes: switching to a theme with patterned bars (such as Pink Cat) while nameplates or unit frames showed another player's or a mob's health no longer floods the chat with "bad argument #1 to 'SetShown'" errors.
+
 ## 0.11.0 (2026-11-12)
 
 ### New

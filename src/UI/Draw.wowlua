@@ -367,6 +367,24 @@ end
 -- plain fill's. (Not the fill's own: sized by a secret value, another
 -- unit's health, its height is secret too and can't be compared: an error
 -- at login in game, 2026-11-12.)
+-- `region` shown while `shown` is true, a secret `shown` too: SetShown
+-- refuses a secret from addon code, and a status bar's fill answers IsShown
+-- with one while the bar's value is secret (another unit's health: found
+-- in game, 2026-11-13, picking Stranglethorn Ruins raised it on every
+-- nameplate). Then it's shown and its alpha set from the secret.
+-- (wowlua:secret's showWhen, decision S65, does the same: use it once
+-- SuuUI's pinned wowlua has it; CI pins v0.13.11.)
+local function showWhen(region: Region, shown: boolean | Secret<boolean> | nil, alpha: number?)
+    local a = alpha or 1
+    if secret.isSecret(shown) then
+        region:Show()
+        region:SetAlphaFromBoolean(shown, a, 0)
+        return
+    end
+    region:SetAlpha(a)
+    region:SetShown(shown == true)
+end
+
 local function fitRepeat(target: Texture)
     local over, art = repeatOver[target], repeatArt[target]
     if not (over and art and repeatOn[target]) then
@@ -412,7 +430,11 @@ local function makeRepeat(target: Texture, bar: StatusBar?): Texture
         over:SetDesaturated(on)
     end)
     local function sight()
-        over:SetShown(repeatOn[target] == true and target:IsShown())
+        if repeatOn[target] then
+            showWhen(over, target:IsShown(), repeatAlpha[target])
+        else
+            over:Hide()
+        end
     end
     for _, setter in ipairs({ "Show", "Hide", "SetShown" }) do
         hooksecurefunc(target, setter, sight)
@@ -466,9 +488,8 @@ local function setRepeat(target: Texture, bar: StatusBar?, file: string, art: nu
     over:SetTexture(file, "REPEAT", "REPEAT")
     over:SetHorizTile(true)
     over:SetVertTile(false)
-    over:SetAlpha(repeatAlpha[target] or 1)
     fillAlpha(target, 0)
-    over:SetShown(target:IsShown())
+    showWhen(over, target:IsShown(), repeatAlpha[target])
     fitRepeat(target)
 end
 
