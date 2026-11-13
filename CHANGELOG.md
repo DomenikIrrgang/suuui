@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Themes with patterned bars (the raid themes, Stranglethorn, Pink Cat): nameplate and other health bars that first showed after you picked the theme no longer turn white when they're coloured by reaction or class.
+
 ## 0.13.0 (2026-11-13)
 
 ### New
