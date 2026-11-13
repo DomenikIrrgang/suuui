@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.
+- Pink Cat: the paws and toe beans in the health, power, cast, nameplate, XP and meter bars, and the little paws behind the bars, are fainter.
+
 ### Fixed
 
 - Social window: opening the friends list no longer shows a "Cannot anchor to a region dependent on it" error, and its Friends, Recent allies, Requests and Raid tabs always open their own page (a tab could open another one after the window was opened again).
