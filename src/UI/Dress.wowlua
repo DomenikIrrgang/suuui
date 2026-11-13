@@ -1,0 +1,369 @@
+-- UI/Dress.wowlua
+-- A theme's dress (0.40, asked 2026-11-12 for the Stranglethorn theme): art
+-- that hangs on SuuUI's frames, past their edges where it likes (vines over a
+-- window's top, leaves round a corner, a parrot on the minimap), a header's
+-- art behind its title, and a little motion (pieces that sway, motes that
+-- drift up: fireflies). Each frame says what kind it is when it's made:
+--
+--   dress.register(frame, kind[, head]    kind: "window" (titled panels and
+--                  [, headPoint][, box])   the game's skinned windows),
+--                                          "minimap", "unit" (the unit
+--                                          frames), "chat"; head: the line
+--                                          under its header (the art fills
+--                                          the frame's top down to it); box:
+--                                          the region the art is placed on
+--                                          (default the frame: a skinned
+--                                          window's border reaches past the
+--                                          game's frame)
+--
+-- A theme's `dress` gives each kind (Themes.wowlua: SuuUI.RegisterTheme):
+--
+--   header = file                         behind the header, stretched to
+--                                          its height, repeated along it at
+--                                          its own width
+--   pieces = { { file, point, x, y, w, h  art at the frame's point (a
+--                [, span][, fill]           FramePoint), offset by x, y (y up)
+--                [, layer]
+--                [, color][, sway]          and w x h px; span: across the
+--                [, flip] }, … }            frame between that edge's ends
+--                                          (TOP, BOTTOM, LEFT, RIGHT), the
+--                                          art repeated along it at its own
+--                                          size in px (w and h: that size);
+--                                          fill: over the whole frame,
+--                                          x and y past its sides (w, h left
+--                                          out: a ring round the minimap);
+--                                          layer "back": behind the frame
+--                                          (default: in front); color: a colour
+--                                          token tinting white art (default:
+--                                          the art's own colours); sway: degrees
+--                                          it swings each way, slowly (about
+--                                          its `pivot` point, default its
+--                                          point); flip:
+--                                          mirrored left to right
+--   motes = { file, count[, color]        `count` motes (fireflies) drifting
+--             [, size] }                   up over the frame and fading
+--
+-- SuuUI's own look has no dress: nothing is made then. Motion (sway, motes)
+-- stays still with ui.reducedMotion on. A change of theme takes the old
+-- dress off and puts the new one on at once.
+
+import * as draw from "./Draw"
+import * as motion from "/Core/Motion"
+
+export type DressPiece = {
+    file: string,
+    point: FramePoint,
+    x?: number,
+    y?: number,
+    w?: number,
+    h?: number,
+    span?: boolean,
+    fill?: boolean,
+    layer?: "front" | "back",
+    color?: string,
+    sway?: number,
+    pivot?: FramePoint,
+    flip?: boolean,
+}
+export type DressMotes = { file: string, count: number, color?: string, size?: number }
+export type DressKind = { header?: string, pieces?: DressPiece[], motes?: DressMotes }
+export type Dress = { [string]: DressKind }
+
+-- The kinds a frame can be (a theme's dress names only these).
+export const KINDS: { [string]: boolean } = { window = true, minimap = true, unit = true, chat = true }
+
+-- What a dressed frame holds: its textures (kept to reuse) and the frame in
+-- front of it that carries what hangs over it.
+type Worn = {
+    kind: string,
+    box: Region,
+    head: Region?,
+    headPoint: FramePoint,
+    front?: Frame,
+    pieces: Texture[],
+    motes: Texture[],
+    header?: Texture,
+    used: number,
+    motesUsed: number,
+}
+
+local worn: { [Frame]: Worn } = setmetatable({}, { __mode = "k" })
+local current: Dress = {}
+
+local function frontOf(frame: Frame, w: Worn): Frame
+    local f = w.front
+    if not f then
+        f = CreateFrame("Frame", nil, frame)
+        f:SetAllPoints(w.box)
+        f:SetFrameLevel(frame:GetFrameLevel() + 12)
+        w.front = f
+    end
+    return f
+end
+
+local function stopMotion(t: Texture)
+    local groups = { t:GetAnimationGroups() }
+    for _, g in ipairs(groups) do
+        (g :: AnimationGroup):Stop()
+    end
+end
+
+-- A slow swing of `degrees` each way about the piece's own point.
+local function sway(t: Texture, point: FramePoint, degrees: number, seed: number)
+    local g = t:CreateAnimationGroup()
+    local r = g:CreateAnimation("Rotation") :: Rotation
+    r:SetOrigin(point, 0, 0)
+    r:SetDegrees(degrees)
+    r:SetDuration(2.6 + (seed % 5) * 0.35)
+    r:SetSmoothing("IN_OUT")
+    g:SetLooping("BOUNCE")
+    -- (a first half swing the other way, so it swings both ways)
+    t:SetRotation(math.rad(-degrees / 2))
+    g:Play()
+end
+
+local function placePiece(frame: Frame, w: Worn, p: DressPiece, i: number)
+    local back = p.layer == "back"
+    w.used += 1
+    local t = w.pieces[w.used]
+    if not t then
+        t = (back and frame or frontOf(frame, w)):CreateTexture(nil, back and "BACKGROUND" or "ARTWORK", nil, back and -8 or 2)
+        w.pieces[w.used] = t
+    else
+        -- (a texture is made on the layer it first had: a piece that moved
+        -- between front and back is made anew)
+        local wantParent: Frame = back and frame or frontOf(frame, w)
+        if t:GetParent() ~= wantParent then
+            t:Hide()
+            t = wantParent:CreateTexture(nil, back and "BACKGROUND" or "ARTWORK", nil, back and -8 or 2)
+            w.pieces[w.used] = t
+        end
+        stopMotion(t)
+        t:SetRotation(0)
+    end
+    local x, y = p.x or 0, p.y or 0
+    t:ClearAllPoints()
+    if p.fill then
+        t:SetPoint("TOPLEFT", w.box, "TOPLEFT", -x, y)
+        t:SetPoint("BOTTOMRIGHT", w.box, "BOTTOMRIGHT", x, -y)
+        t:SetTexture(p.file)
+        t:SetHorizTile(false)
+        t:SetVertTile(false)
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
+    elseif p.span then
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
+        local point = p.point
+        if point == "TOP" or point == "BOTTOM" then
+            local l = (point .. "LEFT") :: FramePoint
+            local r = (point .. "RIGHT") :: FramePoint
+            t:SetPoint(l, w.box, l, x, y)
+            t:SetPoint(r, w.box, r, -x, y)
+            t:SetHeight(p.h or 0)
+            -- (repeated at its own size: one of its pixels a unit, as the
+            -- bars' repeating art, found right in game)
+            t:SetTexture(p.file, "REPEAT", "CLAMP")
+            t:SetHorizTile(true)
+            t:SetVertTile(false)
+        else
+            local tp = ("TOP" .. point) :: FramePoint
+            local bp = ("BOTTOM" .. point) :: FramePoint
+            t:SetPoint(tp, w.box, tp, x, y)
+            t:SetPoint(bp, w.box, bp, x, -y)
+            t:SetWidth(p.w or 0)
+            t:SetTexture(p.file, "CLAMP", "REPEAT")
+            t:SetHorizTile(false)
+            t:SetVertTile(true)
+        end
+    else
+        t:SetPoint(p.point, w.box, p.point, x, y)
+        t:SetSize(p.w or 0, p.h or 0)
+        t:SetTexture(p.file)
+        t:SetHorizTile(false)
+        t:SetVertTile(false)
+        if p.flip then
+            t:SetTexCoord(1, 0, 0, 1)
+        else
+            t:SetTexCoord(0, 1, 0, 1)
+        end
+    end
+    if p.color then
+        draw.paint(t, p.color)
+    else
+        draw.unpaint(t)
+        t:SetVertexColor(1, 1, 1, 1)
+    end
+    t:Show()
+    if p.sway and p.sway > 0 and not p.span and not p.fill and not motion.reduced() then
+        sway(t, p.pivot or p.point, p.sway, i)
+    end
+end
+
+-- A mote's drift: up `rise` px with a sideways sway, fading in and out,
+-- again and again, each mote on its own beat.
+local function drift(t: Texture, seed: number)
+    local g = t:CreateAnimationGroup()
+    local up = g:CreateAnimation("Translation") :: Translation
+    up:SetOffset(((seed * 7) % 13) - 6, 18 + (seed * 5) % 22)
+    up:SetDuration(3.5 + (seed % 4) * 0.9)
+    up:SetSmoothing("IN_OUT")
+    local fadeIn = g:CreateAnimation("Alpha") :: Alpha
+    fadeIn:SetFromAlpha(0)
+    fadeIn:SetToAlpha(1)
+    fadeIn:SetDuration(1.2)
+    local fadeOut = g:CreateAnimation("Alpha") :: Alpha
+    fadeOut:SetFromAlpha(1)
+    fadeOut:SetToAlpha(0)
+    fadeOut:SetStartDelay(1.2 + (seed % 3) * 0.6)
+    fadeOut:SetDuration(1.4)
+    g:SetLooping("REPEAT")
+    g:Play()
+end
+
+-- Each mote's place, as a share of the frame's width and height (a fixed
+-- scatter: the same on every frame, no two in a row).
+local SCATTER: { number }[] = {
+    { 0.18, 0.72 }, { 0.62, 0.35 }, { 0.84, 0.8 }, { 0.36, 0.15 }, { 0.72, 0.58 }, { 0.1, 0.3 }, { 0.5, 0.88 },
+    { 0.92, 0.22 },
+}
+
+local function placeMotes(frame: Frame, w: Worn, m: DressMotes)
+    if motion.reduced() then
+        return
+    end
+    local front = frontOf(frame, w)
+    local width, height = w.box:GetSize()
+    local size = m.size or 6
+    for i = 1, math.min(m.count, #SCATTER) do
+        w.motesUsed += 1
+        local t = w.motes[w.motesUsed]
+        if not t then
+            t = front:CreateTexture(nil, "OVERLAY", nil, 6)
+            t:SetBlendMode("ADD")
+            w.motes[w.motesUsed] = t
+        else
+            stopMotion(t)
+        end
+        local s = SCATTER[i]
+        t:ClearAllPoints()
+        t:SetPoint("CENTER", w.box, "BOTTOMLEFT", s[1] * width, s[2] * height)
+        t:SetSize(size, size)
+        t:SetTexture(m.file)
+        if m.color then
+            draw.paint(t, m.color)
+        else
+            draw.unpaint(t)
+            t:SetVertexColor(1, 1, 1, 1)
+        end
+        t:SetAlpha(0)
+        t:Show()
+        drift(t, i)
+    end
+end
+
+local function dressOne(frame: Frame, w: Worn)
+    w.used, w.motesUsed = 0, 0
+    local kind = current[w.kind]
+    if kind then
+        for i, p in ipairs(kind.pieces or {}) do
+            placePiece(frame, w, p, i)
+        end
+        local head = w.head
+        if kind.header and head then
+            local h = w.header
+            if not h then
+                h = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+                w.header = h
+            end
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", w.box, "TOPLEFT")
+            h:SetPoint("TOPRIGHT", w.box, "TOPRIGHT")
+            h:SetPoint("BOTTOM", head, w.headPoint)
+            h:SetTexture(kind.header, "REPEAT", "CLAMP")
+            h:SetHorizTile(true)
+            h:SetVertTile(false)
+            h:Show()
+        elseif w.header then
+            w.header:Hide()
+        end
+        if kind.motes then
+            placeMotes(frame, w, kind.motes)
+        end
+    elseif w.header then
+        w.header:Hide()
+    end
+    for i = w.used + 1, #w.pieces do
+        stopMotion(w.pieces[i])
+        w.pieces[i]:Hide()
+    end
+    for i = w.motesUsed + 1, #w.motes do
+        stopMotion(w.motes[i])
+        w.motes[i]:Hide()
+    end
+end
+
+-- A frame of `kind` takes the theme's dress for it, now and on every change;
+-- its header art reaches down to `head`'s `headPoint` (default its centre:
+-- a divider line; "BOTTOM": a header frame), placed on `box` (default the
+-- frame).
+export function register(frame: Frame, kind: string, head: Region?, headPoint: FramePoint?, box: Region?)
+    local w: Worn = {
+        kind = kind,
+        box = box or frame,
+        head = head,
+        headPoint = headPoint or "CENTER",
+        pieces = {},
+        motes = {},
+        used = 0,
+        motesUsed = 0,
+    }
+    worn[frame] = w
+    -- motes are scattered over the frame's size: again when it changes (on SuuUI's own frame in front:
+    -- no hook on the frame, which may be the game's)
+    frontOf(frame, w):SetScript("OnSizeChanged", function()
+        local k = current[w.kind]
+        if k and k.motes then
+            dressOne(frame, w)
+        end
+    end)
+    -- (SuuUI's own look: nothing to make)
+    if next(current) ~= nil then
+        dressOne(frame, w)
+    end
+end
+
+-- The theme's dress on every registered frame (Themes.wowlua, on apply).
+export function apply(d: Dress?)
+    current = d or {}
+    for frame, w in pairs(worn) do
+        local ok: boolean, err: unknown = pcall(dressOne, frame, w)
+        if not ok then
+            geterrorhandler()(err)
+        end
+    end
+end
+
+-- What a frame wears now (tests): its shown pieces, motes and header.
+export function wornBy(frame: Frame): (Texture[], Texture[], Texture?)
+    local w = worn[frame]
+    if not w then
+        return {}, {}, nil
+    end
+    local pieces: Texture[] = {}
+    for i = 1, w.used do
+        pieces[i] = w.pieces[i]
+    end
+    local motes: Texture[] = {}
+    for i = 1, w.motesUsed do
+        motes[i] = w.motes[i]
+    end
+    local header = w.header
+    return pieces, motes, header and header:IsShown() and header or nil
+end

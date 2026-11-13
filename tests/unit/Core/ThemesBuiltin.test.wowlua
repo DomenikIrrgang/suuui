@@ -8,6 +8,7 @@ import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
 import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
 import * as draw from "/UI/Draw"
+import text as uiText from "/UI/Text"
 import expectNoErrors, newParent from "../../helpers"
 
 const BUILT_IN: string[] = {
@@ -23,6 +24,8 @@ const BUILT_IN: string[] = {
     "karazhan",
     "sunwell",
     "pinkcat",
+    "stvruins",
+    "stvcanopy",
 }
 const CLASSES: string[] = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
 
@@ -481,5 +484,145 @@ local function pinkcatRoundTrip()
     expect(draw.dividerStrips(divider)).toBeNil()
     expect(T.space["space-4"]).toBe(before.space)
     expect(T.size.slot).toBe(before.slot)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Stranglethorn (Ruins and Canopy, 0.40): the jungle's art and its contrast
+--------------------------------------------------------------------------------
+
+const STV: string[] = { "stvruins", "stvcanopy" }
+
+-- A token's colour in a theme (its own, else SuuUI's).
+local function colorIn(id: string, token: string): number[]
+    local own = colorsOf(id)[token]
+    if own then
+        return own
+    end
+    local c: Color = assert((T.color :: { [string]: Color })[token], token)
+    return { c[1], c[2], c[3], c[4] }
+end
+
+@test("Stranglethorn: every texture, header and piece it names is a file SuuUI ships")
+local function stvFiles()
+    local tex = newParent():CreateTexture()
+    local function ships(file: string)
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    for _, id in ipairs(STV) do
+        local t = theme(id)
+        for _, value in pairs(t.textures) do
+            ships(assert(fileOf(value)))
+        end
+        local kinds = 0
+        for _, kind in pairs(t.dress) do
+            kinds += 1
+            if kind.header then
+                ships(kind.header)
+            end
+            for _, p in ipairs(kind.pieces or {}) do
+                ships(p.file)
+            end
+            if kind.motes then
+                ships(kind.motes.file)
+            end
+        end
+        -- windows, the minimap, the unit frames and the chat all dressed
+        expect(kinds).toBe(4)
+        -- every one of SuuUI's icons as a vine
+        local icons = 0
+        for name, file in pairs(t.glyphs) do
+            icons += 1
+            expect((T.glyph :: { [string]: string })[name]).toBeTruthy()
+            ships(file)
+        end
+        local all = 0
+        for _ in pairs(T.glyph :: { [string]: string }) do
+            all += 1
+        end
+        expect(icons).toBe(all)
+        expect(all).toBe(95)
+        expect((t.fonts.header or {}).file).toBe("Fonts\\MORPHEUS.TTF")
+    end
+end
+
+@test("Stranglethorn: text, fills and edges at the ratios the tokens' usage notes ask")
+@cases({
+    { "stvruins", "ink", "surface", 7 },
+    { "stvruins", "ink", "surface-raised", 7 },
+    { "stvruins", "ink", "unit-fill", 4.8 },
+    { "stvruins", "ink-muted", "surface", 4.5 },
+    { "stvruins", "gilt-text", "surface", 7 },
+    { "stvruins", "unit-fill", "surface-sunk", 3.05 },
+    { "stvcanopy", "ink", "surface", 7 },
+    { "stvcanopy", "ink", "surface-raised", 7 },
+    { "stvcanopy", "ink", "unit-fill", 4.8 },
+    { "stvcanopy", "ink-muted", "surface", 4.5 },
+    { "stvcanopy", "gilt-text", "surface", 7 },
+    { "stvcanopy", "unit-fill", "surface-sunk", 3.05 },
+})
+local function stvContrast(id: string, fg: string, bg: string, least: number)
+    local ground = colorIn(id, bg)
+    local r = ratio(over(colorIn(id, fg), ground), rgb(ground))
+    if r < least then
+        error(`{id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+    end
+end
+
+@test("Stranglethorn: disabled text stays dimmer than secondary text, and readable")
+local function stvFaint()
+    for _, id in ipairs(STV) do
+        local r = ratio(rgb(colorIn(id, "ink-faint")), rgb(colorIn(id, "surface")))
+        expect(r >= 3).toBe(true)
+        expect(r < ratio(rgb(colorIn(id, "ink-muted")), rgb(colorIn(id, "surface")))).toBe(true)
+    end
+end
+
+@test("Stranglethorn: text stays readable over the brightest pixels of its windows' pattern")
+@cases({
+    { "ink", 7 },
+    { "gilt-text", 7 },
+    { "ink-muted", 4.5 },
+    { "ink-faint", 3 },
+})
+local function stvPattern(fg: string, least: number)
+    -- (tools/stv_art.py's PATTERN_ALPHA: the stonework and the leaves at
+    -- most this, in gilt)
+    for _, id in ipairs(STV) do
+        for _, ground in ipairs({ "surface", "surface-glass" }) do
+            local g = over(colorIn(id, ground), { 0, 0, 0 })
+            local gilt = colorIn(id, "gilt")
+            local brightest = over({ gilt[1], gilt[2], gilt[3], PATTERN_ALPHA }, g)
+            local r = ratio(rgb(colorIn(id, fg)), brightest)
+            if r < least then
+                error(`{id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+            end
+        end
+    end
+end
+
+@test("Stranglethorn: its glass hides what's behind it")
+local function stvGlass()
+    for _, id in ipairs(STV) do
+        expect(colorIn(id, "surface-glass")[4] >= 0.96).toBe(true)
+    end
+end
+
+@test("Stranglethorn: titles in the game's own carved font, back to SuuUI's after")
+local function stvFont()
+    local before = T.type.header.file
+    for _, id in ipairs(STV) do
+        settings.setAccount("theme", id)
+        themes.apply()
+        expect(T.type.header.file).toBe("Fonts\\MORPHEUS.TTF")
+        local title = uiText(newParent(), "header", "gilt-text")
+        title:SetValue("Character")
+        local file = title:GetFont()
+        expect(file).toBe("Fonts\\MORPHEUS.TTF")
+    end
+    settings.setAccount("theme", nil)
+    themes.apply()
+    expect(T.type.header.file).toBe(before)
     expectNoErrors()
 end
