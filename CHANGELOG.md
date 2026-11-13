@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Performance: picking a theme is quicker (a sixth for Pink Cat, a tenth for the others) and leaves about three quarters less behind for the game to clean up, and a theme with art on the bars uses less memory. The quest, collection and recipe data the map, tooltips and windows load in the background is now spread evenly over the frames, without the spikes it had while loading. Hovering the first NPC after that data is there no longer causes a hitch, and typing a lone / in chat opens the command list more smoothly.
 - World map: about 570 more quests on the map, from Questie's latest Forever data and what players' Questie recordings show: most of Mount Hyjal's and Riverglades' quests, and more in Azshara, Shen'dralas, Mulgore and elsewhere. Quest givers stand where players meet them, and about 300 quests follow their chains (they show once the quests before them are done). More rares and mailboxes on the map too.
 - Professions and collections: about 150 more recipes and 190 more appearances show where they drop, from Questie's latest data.
 - Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.

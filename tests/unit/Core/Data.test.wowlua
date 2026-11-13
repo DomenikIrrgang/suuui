@@ -90,6 +90,35 @@ local function budget()
     expectNoErrors()
 end
 
+@test("Then waits for whoever builds the table, building nothing itself; one waiter per key; ready: at once")
+local function thenWaits()
+    local log: string[] = {}
+    local d = made(log)
+    local told = mock.spy()
+    d:Then(told, "index")
+    d:Then(told, "index")
+    mock.advanceFrames(3)
+    expect(log).toEqual({})
+    expect(told).never.toHaveBeenCalled()
+    -- built by a Get: told then
+    d:Get()
+    expect(told).toHaveBeenCalledTimes(1)
+    local now = mock.spy()
+    d:Then(now)
+    expect(now).toHaveBeenCalledTimes(1)
+    -- built by a Prepare: told after its last step, with its own waiter
+    local log2: string[] = {}
+    local e = made(log2)
+    local told2, prepared = mock.spy(), mock.spy()
+    e:Then(told2, "index")
+    e:Prepare(prepared, "window")
+    mock.advanceFrames(4)
+    expect(log2).toEqual({ "a", "b", "c" })
+    expect(told2).toHaveBeenCalledTimes(1)
+    expect(prepared).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
 @test("Get while it's being prepared finishes it and tells whoever waited")
 local function getWhilePreparing()
     local log: string[] = {}

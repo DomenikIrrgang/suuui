@@ -105,6 +105,34 @@ local function matches()
     expect(assert(same.chat)[1].item.cmd).toBe("/ra")
 end
 
+@test("matches from a catalog in its order: own names in it, then aliases, as the sort gives them")
+local function matchesOrdered()
+    -- (in the catalog's own order: by rank and name in each category)
+    local ordered = {
+        item("/ask", "chat", 1, { "/zz" }),
+        item("/zb", "chat", 2),
+        item("/zc", "chat", 3, { "/zd" }),
+        item("/zeta", "game", 4),
+        item("/ab", "game", 5, { "/zx" }),
+    }
+    local byCat, total = match.matches(ordered, "/z", true)
+    expect(total).toBe(5)
+    local function names(list: match.Match[]): string[]
+        local out: string[] = {}
+        for _, m in ipairs(list) do
+            out[#out + 1] = m.item.cmd .. ":" .. m.score .. ":" .. (m.alias or "")
+        end
+        return out
+    end
+    expect(names(assert(byCat.chat))).toEqual({ "/zb:1:", "/zc:1:", "/ask:2:/zz" })
+    expect(names(assert(byCat.game))).toEqual({ "/zeta:1:", "/ab:2:/zx" })
+    -- the same out of order: sorted
+    local shuffled = { ordered[5], ordered[3], ordered[1], ordered[4], ordered[2] }
+    local again = match.matches(shuffled, "/z", true)
+    expect(names(assert(again.chat))).toEqual(names(assert(byCat.chat)))
+    expect(names(assert(again.game))).toEqual(names(assert(byCat.game)))
+end
+
 @test("narrow: the matches of a longer text from those of a text it starts with, as matches finds them")
 @cases({ { "/r", "/ra" }, { "/r", "/ro" }, { "/", "/r" }, { "/ra", "/rai" }, { "/r", "/zzz" } })
 local function narrowed(from: string, to: string)
