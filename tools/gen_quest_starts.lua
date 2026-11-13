@@ -11,7 +11,8 @@
 -- dungeon or raid.
 -- Reads QuestieDB's Forever data with its corrections applied in
 -- QuestieDB's order (inherited classic fixes, the generated Forever base,
--- the Forever fixes), from the folder tools/fetch_quest_starts.sh fills.
+-- the traces from players' recordings, the Forever fixes), from the folder
+-- tools/fetch_quest_starts.sh fills.
 -- Also writes src/Data/MapPlaces.wowlua: the town services (from NPC flags
 -- and titles), mailboxes, rares and treasure chests, for the map's pins.
 -- Every downloaded file runs in a sandbox without io, os or require.
@@ -201,19 +202,23 @@ aliases(QuestieDB.itemKeys)
 GROUPED[quests] = { [QuestieDB.questKeys.startedBy] = true, [QuestieDB.questKeys.finishedBy] = true }
 GROUPED[npcs] = { [QuestieDB.npcKeys.spawns] = true, [QuestieDB.npcKeys.waypoints] = true }
 GROUPED[objects] = { [QuestieDB.objectKeys.spawns] = true, [QuestieDB.objectKeys.waypoints] = true }
+-- (QuestieDB docs/forever.md: inherited legacy fixes, the generated
+-- delta-base, the trace layer from players' recordings, the quest relations
+-- inferred from them, then the authored Forever fixes, which win)
 local C = "src/corrections/Forever/"
-correct(quests, { C .. "legacy/classicQuestFixes.lua", C .. "generated/foreverBaseQuest.lua", C .. "foreverQuestFixes.lua" })
-correct(npcs, { C .. "legacy/classicNPCFixes.lua", C .. "generated/foreverBaseNpc.lua", C .. "foreverNPCFixes.lua" })
-correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/foreverBaseObject.lua", C .. "foreverObjectFixes.lua" })
-correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "foreverItemFixes.lua" })
+correct(quests, { C .. "legacy/classicQuestFixes.lua", C .. "generated/foreverBaseQuest.lua", C .. "traces/foreverQuestTraces.lua",
+    C .. "traces/foreverQuestRelationTraces.lua", C .. "foreverQuestFixes.lua" })
+correct(npcs, { C .. "legacy/classicNPCFixes.lua", C .. "generated/foreverBaseNpc.lua", C .. "traces/foreverNpcTraces.lua", C .. "foreverNPCFixes.lua" })
+correct(objects, { C .. "legacy/classicObjectFixes.lua", C .. "generated/foreverBaseObject.lua", C .. "traces/foreverObjectTraces.lua",
+    C .. "foreverObjectFixes.lua" })
+correct(items, { C .. "legacy/classicItemFixes.lua", C .. "generated/foreverBaseItem.lua", C .. "traces/foreverItemTraces.lua", C .. "foreverItemFixes.lua" })
 
 -- SuuUI's own corrections, found in game, where QuestieDB's data misses
 -- something (worth reporting there too): a quest offered only after
--- another (preSingle: any of them done)
-local FIXES = {
-    [97249] = { preSingle = { 97246 } }, -- Favorite Food after Meal Appeal (Borstan had nothing to give)
-    [97275] = { preSingle = { 97242 } }, -- Whuut's the Rush after Yelmak's Medley (Yelmak had nothing to give)
-}
+-- another (preSingle: any of them done). None now: Favorite Food after Meal
+-- Appeal and Whuut's the Rush after Yelmak's Medley are in QuestieDB's own
+-- fixes since 2026-11-11 (666ac82e).
+local FIXES = {} -- [questID] = { preSingle = { questID, ... } }
 for id, fix in pairs(FIXES) do
     local q = quests[id]
     if q and fix.preSingle then q[QK.preQuestSingle] = fix.preSingle end

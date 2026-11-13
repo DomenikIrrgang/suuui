@@ -1,10 +1,10 @@
 #!/bin/sh
 # tools/fetch_quest_starts.sh
 # Downloads what tools/gen_quest_starts.lua reads, into a folder outside the
-# repo: QuestieDB's Forever quests, NPCs, objects and items with their corrections,
-# the enums the corrections use, Forever's area-to-map table and dungeon
-# entrances (github.com/Questie/QuestieDB, no license stated), the Questie
-# addon's quest tag corrections (github.com/Questie/Questie, no license stated: where
+# repo: QuestieDB's Forever quests, NPCs, objects and items with their corrections
+# (the trace layer too: what players' QuestieTrace recordings show), the enums
+# the corrections use, Forever's area-to-map table and dungeon entrances
+# (github.com/Questie/QuestieDB, no license stated), the Questie addon's quest tag corrections (github.com/Questie/Questie, no license stated: where
 # the game's elite, dungeon or raid tag is wrong), and SOURCES (the
 # commits) for the data file's header. Pull requests named
 # after the folder (not merged yet) go on top as their diffs, only to the
@@ -29,6 +29,9 @@ FILES="
     src/corrections/Forever/legacy/classicObjectFixes.lua src/corrections/Forever/legacy/classicItemFixes.lua \
     src/corrections/Forever/generated/foreverBaseQuest.lua src/corrections/Forever/generated/foreverBaseNpc.lua \
     src/corrections/Forever/generated/foreverBaseObject.lua src/corrections/Forever/generated/foreverBaseItem.lua \
+    src/corrections/Forever/traces/foreverQuestTraces.lua src/corrections/Forever/traces/foreverNpcTraces.lua \
+    src/corrections/Forever/traces/foreverObjectTraces.lua src/corrections/Forever/traces/foreverItemTraces.lua \
+    src/corrections/Forever/traces/foreverQuestRelationTraces.lua \
     src/corrections/Forever/foreverQuestFixes.lua src/corrections/Forever/foreverNPCFixes.lua \
     src/corrections/Forever/foreverObjectFixes.lua src/corrections/Forever/foreverItemFixes.lua \
     support/Forever/Zones/areaIdToUiMapId.lua support/Forever/Zones/dungeons.lua"

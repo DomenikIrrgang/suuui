@@ -20,18 +20,39 @@
 #       ...
 #   }
 #
-# the same fields in the same order, cut into functions of about STEP
-# bytes of source each. Core/Data runs them on first use (all at once) or
-# one a frame (Prepare), and lets each go once it ran, so the code that
-# built the table is garbage after. A big section (a field whose value is
-# a table of keyed entries) is filled entry by entry, so it can span steps;
-# anything else is one statement. Comments after an entry stay with it.
-# A file already in this form is left as it is.
+# the same fields in the same order, cut into functions of about STEP_WORK
+# each: the values and tables a step makes, which is what building costs
+# (2026-11-13: cut by bytes of source, a step of quest objectives' text ran
+# 700 instructions and one of map pins 12,000, so four of those made one
+# frame's spike; by work, each step costs about the same). Core/Data runs
+# them on first use (all at once) or a few a frame (Prepare), and lets each
+# go once it ran, so the code that built the table is garbage after. A big
+# section (a field whose value is a table of keyed entries) is filled entry
+# by entry, so it can span steps; anything else is one statement. Comments
+# after an entry stay with it. A list's trailing nils are left out
+# ({ "a", 3, nil, nil } is { "a", 3 }: the same values, without the empty
+# slots the constructor would make).
+#
+# A file already in this form is cut again from its statements (the data
+# kept as it is), so a change here reaches the data without its source.
 import re
 import sys
 
-STEP = 48 * 1024
+# a step's work: each value (a number, a string, true, nil, a name) one, and
+# each table two more (it is made and filled)
+STEP_WORK = 5000
 SPLIT = 4 * 1024  # a section at least this big is filled entry by entry
+
+
+def work(text):
+    """What building `text` costs: its values, and two more per table."""
+    w = 0
+    for t in tokens(text, 0):
+        if t.kind in ('word', 'string'):
+            w += 1
+        elif t.kind == '{':
+            w += 2
+    return w
 
 HEAD = re.compile(r'^export local (\w+): ([^=]+?) = ', re.M)
 
@@ -165,11 +186,165 @@ def target(base, key):
     return base + '.' + key
 
 
+def trim_nils(text):
+    """`text` with the trailing `nil`s of each list left out ({ "a", 3, nil,
+    nil } is { "a", 3 }): the same values at the same places, without the
+    empty slots the constructor would make (QuestStarts' rows had 28,000).
+    A list whose last value before them is a call or `...` keeps them (it
+    would give all its values instead of one)."""
+    toks = [t for t in tokens(text, 0)]
+    cuts = []  # (start, end, replacement)
+
+    def table(i):
+        # toks[i] is '{': its fields' token ranges, then the index after '}'
+        fields_ = []
+        j = i + 1
+        start = j
+        depth = 0
+        while True:
+            k = toks[j].kind
+            if k == '{':
+                j = table(j)
+                continue
+            if k in '[(':
+                depth += 1
+            elif k in '])':
+                depth -= 1
+            elif depth == 0 and k in (',', ';', '}'):
+                if j > start:
+                    fields_.append((start, j - 1))
+                if k == '}':
+                    trim(i, j, fields_)
+                    return j + 1
+                start = j + 1
+            j += 1
+
+    def trim(open_i, close_i, fields_):
+        n = len(fields_)
+        while n > 0:
+            a, b = fields_[n - 1]
+            if a == b and toks[a].kind == 'word' and toks[a].text == 'nil':
+                n -= 1
+            else:
+                break
+        if n == len(fields_):
+            return
+        if n > 0:
+            a, b = fields_[n - 1]
+            if toks[b].kind == ')' or toks[b].text == '...':
+                return
+            if any(toks[x].kind == 'comment' for x in range(b + 1, close_i)):
+                return
+            gap = ' ' if text[toks[close_i].start - 1] in ' \t' else ''
+            cuts.append((toks[b].end, toks[close_i].start, gap))
+        else:
+            if any(toks[x].kind == 'comment' for x in range(open_i + 1, close_i)):
+                return
+            cuts.append((toks[open_i].end, toks[close_i].start, ''))
+
+    i = 0
+    while i < len(toks):
+        if toks[i].kind == '{':
+            i = table(i)
+        else:
+            i += 1
+    if not cuts:
+        return text
+    cuts.sort()
+    out = []
+    at = 0
+    for a, b, rep in cuts:
+        out.append(text[at:a])
+        out.append(rep)
+        at = b
+    out.append(text[at:])
+    return ''.join(out)
+
+
+STEPS_HEAD = re.compile(r'^export const (\w+)Steps: \(\(t: ([^)]+?)\) -> \(\)\)\[\] = ', re.M)
+
+
+def value_end(toks, i):
+    """The index after the value starting at toks[i]: a table constructor
+    (balanced) or one token."""
+    if toks[i].kind != '{':
+        return i + 1
+    depth = 0
+    while True:
+        k = toks[i].kind
+        if k == '{':
+            depth += 1
+        elif k == '}':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+
+
+def steps_stmts(src):
+    """A file in step form: its name, type, the statements its steps hold
+    (as `lazy` makes them), and where the steps' list starts and ends."""
+    m = STEPS_HEAD.search(src)
+    if not m:
+        return None
+    name, typ = m.group(1), m.group(2).strip()
+    toks = list(tokens(src, m.end()))
+    if toks[0].kind != '{':
+        raise SystemExit('lazy_data: the steps are not a list')
+    stmts = []
+    i = 1
+    current = None
+    while toks[i].kind != '}':
+        if toks[i].kind == ',':
+            i += 1
+            continue
+        if toks[i].text != 'function':
+            raise SystemExit('lazy_data: a step is not a function at %d' % toks[i].start)
+        # function(t: Type)
+        while toks[i].kind != ')':
+            i += 1
+        i += 1
+        current = None
+        while toks[i].text != 'end':
+            t = toks[i]
+            if t.kind == 'comment':
+                stmts.append((current, None, t.text))
+                i += 1
+                continue
+            if t.text == 'local':
+                # local s = <section>
+                start = toks[i + 3]
+                j = i + 4
+                while toks[j].kind in '[]' or (toks[j].kind in ('string', 'word') and toks[j - 1].kind == '['):
+                    j += 1
+                current = src[start.start:toks[j - 1].end]
+                i = j
+                continue
+            # <target> = <value>
+            start = t
+            j = i
+            while toks[j].kind != '=':
+                j += 1
+            k = value_end(toks, j + 1)
+            text = src[start.start:toks[k - 1].end]
+            comment = None
+            if toks[k].kind == 'comment' and '\n' not in src[toks[k - 1].end:toks[k].start]:
+                comment = toks[k].text
+                k += 1
+            section = current if text.startswith('s[') or text.startswith('s.') else None
+            stmts.append((section, text, comment))
+            i = k
+        i += 1
+    return name, typ, stmts, m.start(), toks[i].end
+
+
 def lazy(src):
     m = HEAD.search(src)
     if not m:
-        if re.search(r'^export const \w+Steps: ', src, re.M):
-            return src
+        found = steps_stmts(src)
+        if found:
+            name, typ, stmts, start, end = found
+            return src[:start] + steps_list(name, typ, stmts) + src[end:]
         raise SystemExit('lazy_data: no `export local name: Type = {` in the file')
     name, typ = m.group(1), m.group(2).strip()
     open_pos = m.end()
@@ -203,11 +378,25 @@ def lazy(src):
             else:
                 stmts.append((section, target('s', e.key) + ' = ' + e.value, e.comment))
     stmts = whole + stmts
+    note = (f'-- Built on first use, a step at a time (tools/lazy_data.py): each of\n'
+            f'-- `{name}Steps` fills a part of one {typ} table, in order (Core/Data).\n')
+    head = src[:m.start()]
+    tail = src[end:]
+    return f'{head}{note}{steps_list(name, typ, stmts)}{tail}'
+
+
+def steps_list(name, typ, stmts):
+    """The steps' list from the statements, cut into steps of about
+    STEP_WORK."""
     out = []
-    size = STEP
+    size = 0
     current = None
     for section, text, comment in stmts:
-        if size >= STEP:
+        if text is not None:
+            text = trim_nils(text)
+        cost = work(text) if text is not None else 0
+        # (a step full: the next statement starts another)
+        if not out or (size > 0 and size + cost > STEP_WORK):
             if out:
                 out.append('    end,')
             out.append(f'    function(t: {typ})')
@@ -220,15 +409,11 @@ def lazy(src):
         else:
             line = '        ' + text + ((' ' + comment) if comment else '')
         out.append(line)
-        size += len(line)
+        size += cost
     if out:
         out.append('    end,')
     body = '\n'.join(out)
-    note = (f'-- Built on first use, a step at a time (tools/lazy_data.py): each of\n'
-            f'-- `{name}Steps` fills a part of one {typ} table, in order (Core/Data).\n')
-    head = src[:m.start()]
-    tail = src[end:]
-    return f'{head}{note}export const {name}Steps: ((t: {typ}) -> ())[] = {{\n{body}\n}}{tail}'
+    return f'export const {name}Steps: ((t: {typ}) -> ())[] = {{\n{body}\n}}'
 
 
 def main(paths):
