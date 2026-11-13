@@ -18,6 +18,7 @@
 ### Fixed
 
 - Social window: opening the friends list no longer shows a "Cannot anchor to a region dependent on it" error, and its Friends, Recent allies, Requests and Raid tabs always open their own page (a tab could open another one after the window was opened again).
+- World map: the enlarged map opens in the middle of the screen again instead of at its top over the micro menu. For plugin authors (API 0.41): `SuuUI.UI.CenterWindow` takes `{ overCastBar = true }` to keep a centred window in the exact middle.
 
 ## 0.12.0 (2026-11-13)
 
