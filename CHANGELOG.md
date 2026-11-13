@@ -5,6 +5,7 @@
 ### Changed
 
 - Pink Cat: the paws and hearts in the background of the windows and panels (the settings and the others) are fainter and further apart, so they repeat less often.
+- Pink Cat: the paws and toe beans in the health, power, cast, nameplate, XP and meter bars, and the little paws behind the bars, are fainter.
 
 ## 0.12.0 (2026-11-13)
 
