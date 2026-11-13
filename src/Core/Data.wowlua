@@ -12,9 +12,11 @@
 --   data.collectionSources:Until(fn)  the table built only until fn(t)
 --                                  holds (the fields written whole come
 --                                  first: a small list without the rest)
---   data.questStarts:Prepare(fn)   built a step a frame (about 48 KB of
---                                  source each), then fn(); in combat too:
---                                  a step is small
+--   data.questStarts:Then(fn)      fn() once the table is whole, whoever
+--                                  builds it (nothing built for it)
+--   data.questStarts:Prepare(fn)   built a few steps a frame (each about
+--                                  the same work: tools/lazy_data.py),
+--                                  then fn(); in combat too: a step is small
 --
 -- Whoever shows the data as something opens (the world map, an NPC's
 -- tooltip) prepares it and draws what needs it once it's there, so no
@@ -112,16 +114,8 @@ export class LazyData<T> implements Stepped
             end
             return
         end
-        if done and key and self.waitingKeys[key] then
-            done = nil
-        end
         if done then
-            if key then
-                self.waitingKeys[key] = true
-            end
-            local waiting = self.waiting or {}
-            self.waiting = waiting
-            waiting[#waiting + 1] = done
+            self:Wait(done, key)
         end
         for _, d in ipairs(preparing) do
             if d == self then
@@ -130,6 +124,29 @@ export class LazyData<T> implements Stepped
         end
         preparing[#preparing + 1] = self
         driver:Show()
+    end
+
+    -- `done` once the table is whole, whoever builds it (Get, Until or
+    -- Prepare); nothing is built for it. At once when it's there already.
+    function Then(done: () -> (), key: string?)
+        if self:Ready() then
+            done()
+            return
+        end
+        self:Wait(done, key)
+    end
+
+    -- (a waiter, one per key)
+    private function Wait(done: () -> (), key: string?)
+        if key and self.waitingKeys[key] then
+            return
+        end
+        if key then
+            self.waitingKeys[key] = true
+        end
+        local waiting = self.waiting or {}
+        self.waiting = waiting
+        waiting[#waiting + 1] = done
     end
 
     -- After the last step: whoever waited.
@@ -144,8 +161,24 @@ export class LazyData<T> implements Stepped
 end
 
 -- Steps a frame for as long as this many ms (debugprofilestop), at least
--- one and at most STEPS_MAX (a step is about 48 KB of source: 0.35 ms in game).
+-- one and at most STEPS_MAX (a step was about 48 KB of source, 0.35 ms in
+-- game, and some ten times as much work as others; since 2026-11-13 steps
+-- are cut by work, each a little less than the quest rows' steps were).
 local STEP_MS, STEPS_MAX = 1.5, 4
+
+-- (one step, under fault.call: no closure or name made each frame)
+local function stepOf(d: Stepped): boolean
+    return d:Step()
+end
+local sources: { [string]: string } = {}
+local function sourceOf(d: Stepped): string
+    local s = sources[d.name]
+    if not s then
+        s = "Data: " .. d.name
+        sources[d.name] = s
+    end
+    return s
+end
 
 driver:SetScript("OnUpdate", function()
     local stop = debugprofilestop() + STEP_MS
@@ -157,9 +190,7 @@ driver:SetScript("OnUpdate", function()
             driver:Hide()
             return
         end
-        local ok, more = fault.call("Data: " .. d.name, function(): boolean
-            return d:Step()
-        end)
+        local ok, more = fault.call(sourceOf(d), stepOf, d)
         if not ok or not more then
             table.remove(preparing, 1)
             if ok then

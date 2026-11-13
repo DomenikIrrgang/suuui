@@ -102,32 +102,62 @@ end
 -- The commands that start with `typed`: by category, and in all (emotes
 -- only with `emotes`). A command whose own name fits comes before one that
 -- fits by an alias, then by rank and name.
+local function before(a: Match, b: Match): boolean
+    if a.score ~= b.score then
+        return a.score < b.score
+    end
+    if a.item.rank ~= b.item.rank then
+        return a.item.rank < b.item.rank
+    end
+    return a.item.cmd < b.item.cmd
+end
+
+-- Whether a list is in order already, each strictly before the next.
+local function ordered(list: Match[]): boolean
+    for i = 1, #list - 1 do
+        if not before(list[i], list[i + 1]) then
+            return false
+        end
+    end
+    return true
+end
+
 export function matches(catalog: Item[], typed: string, emotes: boolean): ({ [string]: Match[] }, number)
+    -- (the catalog comes in its order, by rank and name in each category,
+    -- each name its own: own-name matches, then alias matches, in that
+    -- order, are the order the sort gives. Sorting the whole list on a lone
+    -- / took 42,000 instructions; it is sorted still when it isn't in order)
     local byCat: { [string]: Match[] }, total = {}, 0
+    local byAlias: { [string]: Match[] } = {}
     for _, item in ipairs(catalog) do
         if emotes or item.cat ~= "emote" then
             local m, alias = matchOf(item, typed)
             if m then
-                local list = byCat[item.cat]
+                local into = m == 1 and byCat or byAlias
+                local list = into[item.cat]
                 if not list then
                     list = {}
-                    byCat[item.cat] = list
+                    into[item.cat] = list
                 end
                 list[#list + 1] = { item = item, score = m, alias = alias }
                 total = total + 1
             end
         end
     end
+    for cat, aliased in pairs(byAlias) do
+        local list = byCat[cat]
+        if not list then
+            byCat[cat] = aliased
+        else
+            for _, e in ipairs(aliased) do
+                list[#list + 1] = e
+            end
+        end
+    end
     for _, list in pairs(byCat) do
-        table.sort(list, function(a: Match, b: Match): boolean
-            if a.score ~= b.score then
-                return a.score < b.score
-            end
-            if a.item.rank ~= b.item.rank then
-                return a.item.rank < b.item.rank
-            end
-            return a.item.cmd < b.item.cmd
-        end)
+        if not ordered(list) then
+            table.sort(list, before)
+        end
     end
     return byCat, total
 end
