@@ -1,0 +1,169 @@
+-- Units/QuestAnnounce: finished objectives and quests ready to turn in,
+-- told in the group's chat (party, raid), marked as SuuUI's; nothing solo,
+-- nothing for a quest just taken; held while the game locks addon chat; the
+-- settings.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/QuestAnnounce"
+import internal M as AutoQuests from "/Units/AutoQuests"
+import expectNoErrors from "../../helpers"
+
+local friend = mock.spawnUnit({ name = "Brannoc", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
+
+-- A quest of this ID from a giver of its own (one with several opens a
+-- greeting instead): two pelts and a fang, items of its own (a quest of an
+-- earlier test asking for the same ones would move too).
+local function quest(id: number, title: string): (mock.MockUnit, number, number)
+    local pelt, fang = 990000 + (id - 9300) * 2, 990001 + (id - 9300) * 2
+    mock.defineItem(pelt, { name = "Test Pelt", quality = 1, icon = 134366 })
+    mock.defineItem(fang, { name = "Test Fang", quality = 1, icon = 133723 })
+    local giver = mock.spawnUnit({ name = "Ranger Tamsin", level = 30, reaction = "friendly", distance = 3 })
+    mock.defineQuest(id, {
+        title = title,
+        text = "Bring them, $N.",
+        objective = "Two pelts and a fang.",
+        giver = giver,
+        level = 5,
+        header = "Elwynn Forest",
+        progress = "Have you got them?",
+        completion = "Well done.",
+        objectives = {
+            { text = "Test Pelt", item = pelt, required = 2 },
+            { text = "Test Fang", item = fang, required = 1 },
+        },
+    })
+    return giver, pelt, fang
+end
+
+local function settle()
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+end
+
+-- The quest taken; its pelt and fang.
+local function take(id: number, title: string): (number, number)
+    local giver, pelt, fang = quest(id, title)
+    mock.player:interact(giver)
+    settle()
+    AcceptQuest()
+    settle()
+    return pelt, fang
+end
+
+-- A wolf killed and looted for these items.
+local function loot(items: { { id: number, count: number } })
+    local wolf = mock.spawnUnit({ name = "Prowler", level = 1, reaction = "hostile", distance = 3 })
+    mock.player:swing(wolf, 99999, { kill = { xp = 0, loot = items } })
+    settle()
+    mock.player:loot(wolf, { auto = true })
+    mock.advanceTime(2)
+    mock.advanceFrames(3)
+end
+
+-- What the player said in the group's chats, as the server echoes it.
+local said: string[] = {}
+local ear = CreateFrame("Frame")
+for _, e in ipairs({
+    "CHAT_MSG_PARTY",
+    "CHAT_MSG_PARTY_LEADER",
+    "CHAT_MSG_RAID",
+    "CHAT_MSG_RAID_LEADER",
+    "CHAT_MSG_INSTANCE_CHAT",
+}) do
+    ear:RegisterEvent(e)
+end
+ear:SetScript("OnEvent", function(_: Frame, event: string, text: unknown)
+    said[#said + 1] = event:gsub("^CHAT_MSG_", ""):gsub("_LEADER$", "") .. " " .. tostring(text)
+end)
+
+@beforeEach
+local function setUp()
+    AutoQuests:Set("accept", false)
+    said = {}
+end
+
+@afterEach
+local function tearDown()
+    AutoQuests:Reset("accept")
+    M:ResetAll({ "objectives", "complete" })
+    mock.setRestriction(Enum.AddOnRestrictionType.Chat, false)
+    mock.group:leave()
+    mock.advanceTime(1)
+end
+
+@test(
+    "in a party: each objective finished, then the quest ready to turn in, marked as SuuUI's; nothing when it's taken"
+)
+local function party()
+    mock.group:add(friend)
+    settle()
+    local PELT, FANG = take(9301, "Pelts and Fangs")
+    expect(said).toEqual({})
+    -- one pelt: not finished yet
+    loot({ { id = PELT, count = 1 } })
+    expect(said).toEqual({})
+    loot({ { id = PELT, count = 1 } })
+    expect(#said).toBe(1)
+    expect(said[1]:find("^PARTY SuuUI: ")).toBe(1)
+    expect(said[1]:find("Pelts and Fangs", 1, true) ~= nil).toBe(true)
+    expect(said[1]:find("2/2 Test Pelt", 1, true) ~= nil).toBe(true)
+    -- the fang: its objective, then the quest
+    loot({ { id = FANG, count = 1 } })
+    expect(#said).toBe(3)
+    expect(said[2]:find("1/1 Test Fang", 1, true) ~= nil).toBe(true)
+    expect(said[3]:find("is ready to turn in.", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+@test("solo: nothing is said")
+local function solo()
+    local PELT, FANG = take(9302, "Alone in the Woods")
+    loot({ { id = PELT, count = 2 }, { id = FANG, count = 1 } })
+    expect(said).toEqual({})
+    expectNoErrors()
+end
+
+@test("in a raid: raid chat")
+local function raid()
+    mock.group:add(friend, { raid = true })
+    settle()
+    local PELT, FANG = take(9303, "Raid Supplies")
+    loot({ { id = PELT, count = 2 } })
+    expect(#said).toBe(1)
+    expect(said[1]:find("^RAID SuuUI: ")).toBe(1)
+    expectNoErrors()
+end
+
+@test("while the game locks addon chat (a fight in a raid or instance): held, then said when it lifts")
+local function lockdown()
+    mock.group:add(friend)
+    settle()
+    local PELT, FANG = take(9304, "Held Back")
+    mock.setRestriction(Enum.AddOnRestrictionType.Chat, true)
+    loot({ { id = PELT, count = 2 } })
+    expect(said).toEqual({})
+    mock.setRestriction(Enum.AddOnRestrictionType.Chat, false)
+    settle()
+    expect(#said).toBe(1)
+    expect(said[1]:find("2/2 Test Pelt", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+@test("the settings: objectives off leaves the quest ready; both off, nothing")
+local function settingsOff()
+    mock.group:add(friend)
+    settle()
+    local PELT, FANG = take(9305, "Quiet Work")
+    M:Set("objectives", false)
+    loot({ { id = PELT, count = 2 } })
+    expect(said).toEqual({})
+    loot({ { id = FANG, count = 1 } })
+    expect(#said).toBe(1)
+    expect(said[1]:find("is ready to turn in.", 1, true) ~= nil).toBe(true)
+    M:Set("complete", false)
+    PELT, FANG = take(9306, "Quieter Work")
+    loot({ { id = PELT, count = 2 }, { id = FANG, count = 1 } })
+    expect(#said).toBe(1)
+    expectNoErrors()
+end

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Quest announcements**: in a group, SuuUI tells your party or raid when you finish a quest objective ("SuuUI: [Wolves Across the Border]: 8/8 Wolf Pelt") and when a quest is ready to turn in, as Questie does. Nothing is sent when you're solo. In raid and dungeon fights where the game holds addon chat back, the lines go out once the fight lets them. Both can be turned off in Settings › General › Quest announcements.
+
 ## 0.14.0 (2026-11-13)
 
 ### Changed
