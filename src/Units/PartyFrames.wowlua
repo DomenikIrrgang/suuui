@@ -453,6 +453,11 @@ local function build(self: PartyFramesModule): Frame
             if f.active then
                 f:Refresh()
             end
+            self:PlaceOwnerAuras(i)
+        end)
+        -- (its owner's auras back beside the owner)
+        f:HookScript("OnHide", function()
+            self:PlaceOwnerAuras(i)
         end)
         self.pets[i] = f
     end
@@ -1097,12 +1102,11 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         self:DrawPreview()
     end
 
-    -- Each pet on its owner's row: beside it in a column (past the aura row
-    -- on that side), under it in a row.
+    -- Each pet on its owner's row: right beside it in a column, under it in a
+    -- row.
     function LayoutPets()
         local w, h = self:Get("width"), self:Get("height")
         local row = self:Get("direction") == "right"
-        local besideAuras = self:Get("auraSide") == "right" and self:Get("buffIcons") + self:Get("debuffIcons") > 0
         for i, p in ipairs(self.pets) do
             local owner = self.frames[i]
             p:ClearAllPoints()
@@ -1111,12 +1115,26 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
                 p:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -S["space-1"])
             else
                 p:Resize(self:Get("petWidth"), h)
-                if besideAuras then
-                    p:SetPoint("LEFT", owner.auraClip, "RIGHT", S["space-2"], 0)
-                else
-                    p:SetPoint("LEFT", owner, "RIGHT", S["space-2"], 0)
-                end
+                p:SetPoint("LEFT", owner, "RIGHT", S["space-2"], 0)
             end
+            self:PlaceOwnerAuras(i)
+        end
+    end
+
+    -- A column with the auras on the right: the owner's auras after its pet
+    -- while the pet is out, else beside the owner (seen in game: past the
+    -- whole aura row, the pet sat far from its owner). The pet's button is
+    -- secure and stays put; the auras aren't, so they follow it in combat too.
+    function PlaceOwnerAuras(i: number)
+        local owner, p = self.frames[i], self.pets[i]
+        if not (owner and p) or self:Get("direction") == "right" or self:Get("auraSide") ~= "right" then
+            return
+        end
+        owner.auraClip:ClearAllPoints()
+        if p:IsShown() and self:Get("showPets") then
+            owner.auraClip:SetPoint("LEFT", p, "RIGHT", S["space-2"], 0)
+        else
+            owner.auraClip:SetPoint("LEFT", owner, "RIGHT", S["space-2"], 0)
         end
     end
 
