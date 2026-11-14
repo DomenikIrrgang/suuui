@@ -31,6 +31,8 @@ import forgetCompleted, completedSet from "/Units/WorldMap/Quests"
 import expectNoErrors, captureMenus, choose from "../../helpers"
 import type Checkbox from "/UI/Inputs"
 import type SuuButton from "/UI/Controls"
+import type Border from "/UI/Draw"
+import * as pixel from "/Core/Pixel"
 
 local ELWYNN = 1429
 
@@ -1257,6 +1259,38 @@ local function townPins()
     M:HideTownPins()
     expect(house:IsShown()).toBe(false)
     expect(camp:IsShown()).toBe(true)
+end
+
+-- A border's four lines, each in physical pixels.
+local function edgePixels(b: Border): number[]
+    local out: number[] = {}
+    for i, t in ipairs({ b.top, b.bottom }) do
+        out[i] = t:GetHeight() * t:GetEffectiveScale() / pixel.perfectScale()
+    end
+    for _, t in ipairs({ b.left, b.right }) do
+        out[#out + 1] = t:GetWidth() * t:GetEffectiveScale() / pixel.perfectScale()
+    end
+    return out
+end
+
+@test("Map filters in the scaled map's header: its edge one physical pixel on every side")
+local function filtersEdge()
+    -- (made under the map, at its scale; the header is at the usual one: its
+    -- right edge came out under a pixel and vanished, a player's report
+    -- 2026-11-14, any theme)
+    openMap()
+    local chrome = assert(windowSkin.chromeOf(WorldMapFrame), "no chrome")
+    local menu = assert(M.menu, "no menu")
+    expect(menu:GetParent()).toBe(chrome.head)
+    expect(WorldMapFrame:GetEffectiveScale()).never.toBeCloseTo(chrome.head:GetEffectiveScale())
+    for _, w in ipairs(edgePixels(menu.edge)) do
+        expect(w).toBeCloseTo(1)
+    end
+    -- the map at another size: the header scaled again, the edge still one pixel
+    chrome:SetBody(nil, 1)
+    for _, w in ipairs(edgePixels(menu.edge)) do
+        expect(w).toBeCloseTo(1)
+    end
 end
 
 @test("Map filters over the map's top left without SuuUI's window skin")

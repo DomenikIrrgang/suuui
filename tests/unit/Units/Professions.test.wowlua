@@ -906,3 +906,156 @@ local function otherDrags()
     M:Pickup(2656)
     expect(global).toHaveBeenCalledWith(2656)
 end
+
+--------------------------------------------------------------------------------
+-- Crafting cost and profit
+--------------------------------------------------------------------------------
+
+local ORE_BAR, FLUX, BLADE_ITEM, PART = 990341, 990342, 990343, 990344
+mock.defineItem(ORE_BAR, { name = "Test Bar", quality = 1 }, { cached = true })
+mock.defineItem(FLUX, { name = "Test Flux", quality = 1 }, { cached = true })
+mock.defineItem(BLADE_ITEM, { name = "Test Blade", quality = 2 }, { cached = true })
+mock.defineItem(PART, { name = "Test Part", quality = 1 }, { cached = true })
+
+-- The auction house's last prices (the auctionhouse service), by item.
+local function auctionPrices(prices: { [number]: number })
+    local ah = assert(services.use(AUCTION_HOUSE))
+    mock.stub(ah, "Price", function(itemID: number): { price: number, at: number }?
+        local p = prices[itemID]
+        return p and { price = p, at = time() - 60 } or nil
+    end)
+end
+
+-- A recipe of two bars and a flux making `count` of `out` (none: no item).
+local function barRecipe(out: number?, count: number?): unknown
+    return {
+        outputItemID = out,
+        quantityMin = count or 1,
+        quantityMax = count or 1,
+        reagentSlotSchematics = {
+            { required = true, quantityRequired = 2, reagents = { { itemID = ORE_BAR } } },
+            { required = true, quantityRequired = 1, reagents = { { itemID = FLUX } } },
+        },
+    }
+end
+
+@test(
+    "a recipe's cost: each reagent at the auction house's last price or a vendor's, the cheaper; sold after the 5% cut; the profit"
+)
+local function valuation()
+    openSmithing()
+    local id = recipeAt(1).id
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return barRecipe(BLADE_ITEM, 1)
+    end)
+    -- a vendor sells flux, two for 6s, and bars dearer than the house
+    mock.openMerchant({
+        name = "Smith Supplier",
+        items = { { id = FLUX, price = 600, stack = 2 }, { id = ORE_BAR, price = 5000 } },
+    })
+    mock.advanceTime(0.2)
+    expect(M:VendorPrice(FLUX)).toBe(300)
+    auctionPrices({ [ORE_BAR] = 1000, [BLADE_ITEM] = 5000 })
+    local reagents, _, sch = M:Reagents(id)
+    local v = M:Valuation(reagents, sch)
+    expect(v.cost).toBe(2 * 1000 + 300)
+    expect(v.value).toBe(4750)
+    expect(v.profit).toBe(4750 - 2300)
+    expect(#v.missing).toBe(0)
+    expect(v.at ~= nil).toBe(true)
+    -- the blade never seen on the house: no value, no profit, said
+    auctionPrices({ [ORE_BAR] = 1000 })
+    v = M:Valuation(reagents, sch)
+    expect(v.cost).toBe(2300)
+    expect(v.value).toBeNil()
+    expect(v.profit).toBeNil()
+    expect(v.missing).toEqual({ "Test Blade" })
+    -- a reagent with no price anywhere: no cost either
+    auctionPrices({ [BLADE_ITEM] = 5000 })
+    mock.stub(M, "VendorPrice", function(_: typeof(M), _: number): number?
+        return nil
+    end)
+    v = M:Valuation(reagents, sch)
+    expect(v.cost).toBeNil()
+    expect(v.profit).toBeNil()
+    expect(v.missing).toEqual({ "Test Bar", "Test Flux" })
+end
+
+@test("a vendor's limited stock isn't a price; what it sells freely is kept per unit")
+local function vendorPrices()
+    mock.openMerchant({ name = "Odd Trader", items = { { id = PART, price = 900, stack = 3, available = 2 } } })
+    mock.advanceTime(0.2)
+    expect(M:VendorPrice(PART)).toBeNil()
+    mock.openMerchant({ name = "Parts Seller", items = { { id = PART, price = 900, stack = 3 } } })
+    mock.advanceTime(0.2)
+    expect(M:VendorPrice(PART)).toBe(300)
+end
+
+@test("sorted by profit (most first) or by cost (cheapest first), a price missing last; no prices in the list itself")
+local function profitSorts()
+    openSmithing()
+    assert(view().onFilters)({ show = "all" })
+    local a, b, c = recipeAt(1).id, recipeAt(2).id, recipeAt(3).id
+    -- A: two bars and a flux for one blade; B: the same for a part; C: the
+    -- same for three blades. The rest: a reagent with no price.
+    local made: { [number]: unknown } = {
+        [a] = barRecipe(BLADE_ITEM, 1),
+        [b] = barRecipe(PART, 1),
+        [c] = barRecipe(BLADE_ITEM, 3),
+    }
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(id: number, _: boolean): unknown
+        return made[id] or
+            {
+                reagentSlotSchematics = {
+                    { required = true, quantityRequired = 1, reagents = { { itemID = 990349 } } },
+                },
+            }
+    end)
+    auctionPrices({ [ORE_BAR] = 1000, [FLUX] = 300, [BLADE_ITEM] = 5000, [PART] = 1000 })
+    M.sort = "profit"
+    M:Render()
+    local list = allRecipes()
+    expect({ list[1].id, list[2].id, list[3].id }).toEqual({ c, a, b })
+    expect(list[3].profit).toBe(950 - 2300)
+    expect(list[4].profit).toBeNil()
+    M.sort = "cost"
+    M:Render()
+    list = allRecipes()
+    expect(list[1].cost).toBe(2300)
+    expect(list[4].cost).toBeNil()
+    -- the setting off: the sorts still work
+    M:Set("craftValue", false)
+    M:Render()
+    expect(allRecipes()[1].cost).toBe(2300)
+    M:Reset("craftValue")
+    -- another sort: nothing priced (the list shows no prices, asked)
+    M.sort = "name"
+    M:Render()
+    for _, r in ipairs(allRecipes()) do
+        expect(r.cost).toBeNil()
+    end
+end
+
+@test("the chosen recipe's Market: what it costs, sells for and brings; a recipe making no item; the setting off")
+local function recipeMarket()
+    openSmithing()
+    local id = recipeAt(1).id
+    local recipe: unknown = barRecipe(BLADE_ITEM, 1)
+    mock.stub(C_TradeSkillUI, "GetRecipeSchematic", function(_: number, _: boolean): unknown
+        return recipe
+    end)
+    auctionPrices({ [ORE_BAR] = 1000, [FLUX] = 300, [BLADE_ITEM] = 5000 })
+    local m = assert(assert(M:Recipe(id)).market)
+    expect(m.cost).toBe(2300)
+    expect(m.value).toBe(4750)
+    expect(m.profit).toBe(2450)
+    expect(m.sells).toBe(true)
+    expect(assert(m.when):find("today", 1, true)).toBe(1)
+    recipe = barRecipe(nil, 1)
+    m = assert(assert(M:Recipe(id)).market)
+    expect(m.sells).toBe(false)
+    expect(m.cost).toBe(2300)
+    M:Set("craftValue", false)
+    expect(assert(M:Recipe(id)).market).toBeNil()
+    M:Reset("craftValue")
+end

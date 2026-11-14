@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate the Pink Cat theme's art into Media/Textures/Themes/PinkCat.
-Standard library only; the drawing helpers are make_textures.py's.
+Standard library only; the drawing helpers are make_textures.py's (the dress:
+tools/raid_art.py's renderer).
 
     python3 -I tools/pinkcat_art.py              every file
     python3 -I tools/pinkcat_art.py bag gear     only these
@@ -43,6 +44,21 @@ at its height like the paw bars.
 Hearts.tga (16x16, white): small hearts, tiled: the absorb shield and a
 swing's delay, where SuuUI draws its hatch.
 
+The dress (asked 2026-11-14: the corners that wrap round the frames, as
+the Icecrown Citadel and Ulduar themes' do, white and sparkles), in its own
+colours: Wrap.tga and WrapLow.tga (96x96, drawn 48x48 on a window's and
+the chat's top and bottom corners): pink satin ribbon round the corner
+with a white shine and white stitches, at most 4 px past the edges; a
+white heart edged in pink on the bottom ones. Bow.tga (64x48, drawn 16x12,
+swaying): the white bow tied over the top corners. Pearls.tga (64x10): a
+string of pearls and hearts along a window's top. Header.tga (128x40):
+plum wallpaper with faint white sparkles behind a window's title (kept
+dark: check_header). Ring.tga (256, drawn RING_PAST px past the minimap's
+disc): a ribbon of pearls with a cat's two ears. Ears.tga (56x24, drawn
+28x12): a cat's two small ears on the big unit frames. Sparkle.tga
+(32x32): the motes, a white sparkle with a little pink one, in a pink
+glow. `--dress out.png` draws them side by side.
+
 RoleTank/RoleHealer/RoleDamage.tga (32x32, white, filled): a shield with
 cat's ears, a heart, three claw marks. Claws.tga (64x64, line): the combat
 sign. CircleDots.tga (104x104): a ring of round dots where SuuUI's ring is
@@ -50,6 +66,7 @@ dashed (waypoints, unknown flight points). Glyphs/lock.tga and reset.tga
 also stand for the cast lock and the settings' lock and reset.
 """
 
+import functools
 import math
 import os
 import struct
@@ -59,6 +76,8 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import make_textures as mt  # noqa: E402
+import raid_art as ra  # noqa: E402
+from stv_art import write_rgba_tga  # noqa: E402
 
 ROOT = os.path.dirname(HERE)
 OUT = os.path.join(ROOT, "Media", "Textures", "Themes", "PinkCat")
@@ -561,6 +580,267 @@ def divider():
     return 32, 8, alpha_pixel(supersample(32, 8, inside))
 
 
+# --- the dress (asked 2026-11-14: the corners that wrap, white, sparkles) ---
+#
+# Coloured art in its own colours (RGBA, drawn with tools/raid_art.py's
+# renderer: later shapes over earlier ones). Pink satin ribbon with white
+# stitches and a white edge wraps round every corner of the windows and the
+# chat (an L along both edges, at most 4 px past them and 6 in, as the
+# Icecrown Citadel and Ulduar themes' corners); a white bow on the top
+# corners, a heart on the bottom ones; a string of pearls and hearts along a
+# window's top between them; pink-and-white sparkles drifting up. The
+# minimap in a pink ribbon with pearls and a cat's two ears, the big unit
+# frames with a cat's two small ears on their top.
+
+PINK, PINK_HI, PINK_DEEP = ra.c("#E48DBA"), ra.c("#F8BCD8"), ra.c("#B55A8A")
+RIBBON_EDGE = ra.c("#86385F")
+SNOW, SNOW_SHADE = ra.c("#FFFFFF"), ra.c("#F0CFE0")
+EAR_INNER = ra.c("#FFE4F0")
+
+
+def flip_y(shape, h):
+    """A shape upside down in a file `h` tall."""
+    b = shape.bbox
+    return ra.Shape((b[0], h - b[3], b[2], h - b[1]), lambda x, y, fn=shape.fn: fn(x, h - y))
+
+
+def sparkle_shapes(cx, cy, r, col, thin=0.2):
+    """A four-point sparkle `r` from its middle to a point (a star twinkle)."""
+    return [ra.polygon(ra.star(cx, cy, r, r * thin, 4, 0), col)]
+
+
+def heart_shapes(cx, cy, w, fill, edge=None, shine=None):
+    """A heart `w` wide: its fill, a white edge round it, a shine."""
+    out = []
+    if edge:
+        out.append(ra.polygon(heart_points(cx, cy, w + 3.2, 80), edge))
+    out.append(ra.polygon(heart_points(cx, cy, w, 80), fill))
+    if shine:
+        out.append(ra.ellipse(cx - w * 0.22, cy - w * 0.16, w * 0.12, w * 0.08, shine, -0.6))
+    return out
+
+
+def ribbon_arm():
+    """The wrap's top arm (96 x 20 of the 96x96 file, the frame's edge at
+    y 8, its corner at x 88): pink satin lit from above, a white shine along
+    its top, white stitches down its middle and one white sparkle; its end
+    cut as a ribbon's (a notch)."""
+    ws, wt = ra.WS, ra.WT
+    band = [(8, 0), (ws, 0), (ws - wt, wt), (8, wt), (14, wt / 2)]
+    shapes = [ra.polygon(band, ra.lit(PINK_HI, PINK_DEEP, 0, wt)),
+              ra.stroke([(12, 18.9), (ws - wt + 1, 18.9)], 1.6, RIBBON_EDGE),
+              ra.stroke([(11, 2.0), (ws - 2, 2.0)], 1.5, ra.fade(SNOW, 0.85))]
+    # the stitches, a gap for the sparkle (kept off the corner: the bow's)
+    for x0 in (19, 26, 44, 51, 58, 65):
+        shapes.append(ra.stroke([(x0, 10.4), (x0 + 3.6, 10.4)], 1.7, ra.fade(SNOW, 0.92)))
+    shapes.append(ra.glow(36, 10, 9, SNOW, 0.35))
+    shapes += sparkle_shapes(36, 10, 6.5, SNOW, 0.18)
+    return shapes
+
+
+@functools.lru_cache(None)
+def wrap_top():
+    """96x96 (drawn 48x48 at the top corners; flipped for the left): the
+    ribbon round the corner, mitred (the bow is its own piece, over it)."""
+    return ra.wrap(ribbon_arm())
+
+
+@functools.lru_cache(None)
+def wrap_low():
+    """96x96, the bottom corners: the ribbon upside down, a white heart
+    edged in deep pink on the corner (upright)."""
+    arm = ribbon_arm()
+    shapes = [flip_y(s, ra.WS) for s in arm + [ra.diag(s) for s in arm]]
+    shapes += heart_shapes(ra.WS - 10, ra.WS - 10, 15, ra.lit(SNOW, SNOW_SHADE, ra.WS - 18, ra.WS - 3), PINK_DEEP,
+                           ra.fade(PINK, 0.8))
+    return ra.render(ra.WS, ra.WS, shapes)
+
+
+@functools.lru_cache(None)
+def bow():
+    """64x48 (drawn 16x12 on the top corners, swaying a little): a white
+    satin bow, pink in its folds, a pink knot."""
+    k = (32, 19)
+    shapes = []
+    for side in (-1, 1):
+        def sx(x, side=side):
+            return k[0] + side * (k[0] - x)
+        # the tail, then the loop (its outline a pink line, its hollow pink)
+        tail = [(sx(30), 22), (sx(19), 44), (sx(23.5), 41), (sx(26.5), 46.5), (sx(36), 24)]
+        shapes.append(ra.polygon(tail, ra.lit(SNOW, SNOW_SHADE, 22, 46)))
+        shapes.append(ra.stroke(tail + [tail[0]], 1.4, ra.fade(PINK_DEEP, 0.75)))
+        loop = ra.bez((sx(30), 16), (sx(22), 1), (sx(6), 1), (sx(4), 13), 14) + \
+            ra.bez((sx(4), 13), (sx(2), 26), (sx(17), 29), (sx(30), 23), 14)[1:]
+        shapes.append(ra.polygon(loop, ra.lit(SNOW, SNOW_SHADE, 2, 28)))
+        shapes.append(ra.stroke(loop + [loop[0]], 1.6, ra.fade(PINK_DEEP, 0.8)))
+        shapes.append(ra.ellipse(sx(17), 15, 7.5, 3.6, ra.fade(PINK, 0.55), side * -0.25))
+    shapes.append(ra.ellipse(k[0], k[1] + 1, 5.6, 6.6, ra.lit(PINK_HI, PINK_DEEP, 13, 26)))
+    shapes.append(ra.ellipse(k[0] - 1.8, k[1] - 1.6, 1.6, 2.2, ra.fade(SNOW, 0.85)))
+    return ra.render(64, 48, shapes)
+
+
+def pearls():
+    """64x10 (drawn as it is, along a window's top between the wraps): a
+    string of white pearls swagged between two small pink hearts."""
+    shapes = []
+    for xa, xb in ((16, 48), (48, 80), (-16, 16)):
+        for k in range(1, 8):
+            x = xa + (xb - xa) * k / 8
+            y = 3.4 + 2.6 * math.sin(math.pi * k / 8)
+            shapes.append(ra.ellipse(x, y, 1.35, 1.35, ra.lit(SNOW, SNOW_SHADE, y - 1.3, y + 1.3)))
+    for x in (16, 48):
+        shapes += heart_shapes(x, 4.4, 6.2, PINK, None, ra.fade(SNOW, 0.85))
+    return ra.band(64, 10, shapes)
+
+
+def ear_outline(bl, tip, br, bulge=0.07, round_=0.2):
+    """A cat's ear's outline from one foot over its rounded tip to the
+    other: its sides bowed a little outward (points y down)."""
+    cx, cy = (bl[0] + tip[0] + br[0]) / 3, (bl[1] + tip[1] + br[1]) / 3
+
+    def lerp(p, q, t):
+        return (p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t)
+
+    def side(p, q):
+        dx, dy = q[0] - p[0], q[1] - p[1]
+        length = math.hypot(dx, dy)
+        nx, ny = -dy / length, dx / length
+        mx, my = (p[0] + q[0]) / 2, (p[1] + q[1]) / 2
+        if (mx - cx) * nx + (my - cy) * ny < 0:
+            nx, ny = -nx, -ny
+        c1, c2 = lerp(p, q, 0.33), lerp(p, q, 0.66)
+        return ra.bez(p, (c1[0] + nx * bulge * length, c1[1] + ny * bulge * length),
+                      (c2[0] + nx * bulge * length, c2[1] + ny * bulge * length), q, 12)
+    tl, tr = lerp(bl, tip, 1 - round_), lerp(br, tip, 1 - round_)
+    top = ra.bez(tl, lerp(tl, tip, 0.7), lerp(tr, tip, 0.7), tr, 8)
+    return side(bl, tl) + top[1:] + list(reversed(side(br, tr)))[1:]
+
+
+def ear_shapes(bl, tip, br, inner, lit_y):
+    """A cat's ear: pink, a white edge along its sides, its inside pale
+    (`inner`: how much of the ear it fills, from the foot's middle)."""
+    outer = ear_outline(bl, tip, br)
+    mx, my = (bl[0] + br[0]) / 2, (bl[1] + br[1]) / 2
+
+    def toward(p, t):
+        return (mx + (p[0] - mx) * t, my + (p[1] - my) * t)
+    pale = ear_outline(toward(bl, inner * 0.8), toward(tip, inner), toward(br, inner * 0.8))
+    return [ra.polygon(outer, ra.lit(PINK, PINK_DEEP, *lit_y)),
+            ra.polygon(pale, ra.lit(EAR_INNER, PINK_HI, *lit_y)),
+            ra.stroke(outer, 1.5, ra.fade(SNOW, 0.92))]
+
+
+# The minimap's ring: drawn this many px past the disc (room for the ears).
+RING_PAST = 28
+
+
+def ring():
+    """The minimap (256, drawn RING_PAST px past its disc, behind its
+    buttons) in a pink satin ribbon with a white line each side and white
+    pearls on it, and a cat's two ears on its top (clear of the N and the
+    buttons)."""
+    cx = cy = 128
+    r = ra.rim(RING_PAST)
+    k = 128 / (88 + RING_PAST)  # file px a screen px
+    shapes = []
+    # (each ear on the ring at `deg`, its tip leaning `lean` degrees up from
+    # the ring's outward line, as a cat's ears stand)
+    for deg, lean in ((230, 16), (310, -16)):
+        a = math.radians(deg)
+        spread = math.radians(10.5)
+
+        def p(rr, da, a=a):
+            return ra.polar(cx, cy, rr, a + da)
+        foot = p(r + 3, 0)
+        tip = ra.polar(foot[0], foot[1], 23 * k, a + math.radians(lean))
+        shapes += ear_shapes(p(r + 3, -spread), tip, p(r + 3, spread), 0.62, (tip[1], foot[1] + 6))
+    # (a deeper pink than the corners' ribbon: lighter, it outshone the map)
+    band = 7 * k
+    shapes.append(ra.ring_band(cx, cy, r - 0.5, r + band, ra.ridge(PINK, RIBBON_EDGE, 1.1)))
+    shapes.append(ra.annulus(cx, cy, r + 0.9, r + 0.9, 1.1, ra.fade(SNOW, 0.8)))
+    shapes.append(ra.annulus(cx, cy, r + band - 0.6, r + band - 0.6, 1.0, ra.fade(SNOW, 0.6)))
+    for deg in range(0, 360, 18):
+        if ra.clear(deg):
+            continue
+        x, y = ra.polar(cx, cy, r + band / 2, math.radians(deg))
+        shapes.append(ra.ellipse(x + 0.5, y + 0.7, 2.6, 2.6, ra.fade(RIBBON_EDGE, 0.5)))
+        shapes.append(ra.ellipse(x, y, 2.5, 2.5, ra.lit(SNOW, SNOW_SHADE, y - 2.5, y + 2.5)))
+    return ra.render(256, 256, shapes)
+
+
+def unit_ears():
+    """56x24 (drawn 28x12 on the big unit frames' top, twitching a little):
+    a cat's two ears peeking over the frame."""
+    shapes = []
+    for x0, lean in ((5, -1.4), (32, 1.4)):
+        shapes += ear_shapes((x0, 25), (x0 + 9.5 + lean, 2.6), (x0 + 19, 25), 0.6, (2, 25))
+    return ra.render(56, 24, shapes)
+
+
+def sparkle():
+    """32x32 (the motes, drawn in their own colours, added to what's under
+    them): a white sparkle with a little pink one beside it, in a soft pink
+    glow."""
+    shapes = [ra.glow(16, 16, 15.5, PINK, 0.55, power=1.8)]
+    shapes += sparkle_shapes(16, 16.5, 12.5, SNOW, 0.17)
+    shapes += [ra.polygon(ra.star(16, 16.5, 5.5, 1.3, 4, math.pi / 4), SNOW)]
+    shapes += [ra.glow(25, 7, 5, PINK_HI, 0.8)] + sparkle_shapes(25, 7, 4.6, PINK_HI, 0.25)
+    return ra.render(32, 32, shapes)
+
+
+def header():
+    """128x40, behind a window's title (stretched to its height, repeated
+    along it): plum wallpaper in soft stripes, a few faint white sparkles
+    (stretched, they stay sparkles), darker at its foot. Kept dark: the
+    titles keep their contrast over its brightest pixel (check_header)."""
+    shapes = []
+    for x in range(0, 128, 16):
+        shapes.append(ra.polygon(ra.rect(x, 0, x + 8, 40), ra.c("#25152A")))
+        shapes.append(ra.polygon(ra.rect(x + 8, 0, x + 16, 40), ra.c("#2C1830")))
+        shapes.append(ra.stroke([(x + 8, 0), (x + 8, 40)], 0.6, ra.fade(PINK, 0.12)))
+    for x, y, r in ((22, 11, 3.4), (61, 27, 2.4), (97, 14, 2.8), (118, 31, 2.0), (40, 33, 1.8)):
+        shapes += sparkle_shapes(x, y, r, ra.fade(SNOW, 0.24), 0.22)
+    for x, y in ((80, 8), (8, 26), (52, 6), (106, 24)):
+        shapes.append(ra.ellipse(x, y, 0.7, 0.7, ra.fade(PINK_HI, 0.3)))
+    shade = ra.c("#120914")
+    shapes.append(ra.polygon(ra.rect(-1, 22, 129, 40), ra.lit(ra.fade(shade, 0.02), ra.fade(shade, 0.45), 22, 40)))
+    return ra.band(128, 40, shapes)
+
+
+def lum(c3):
+    def lin(v):
+        v /= 255
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(c3[0]) + 0.7152 * lin(c3[1]) + 0.0722 * lin(c3[2])
+
+
+def check_header(rows):
+    """The titles over the header's brightest pixel: gilt-text and ink at
+    7:1, ink-muted at 4.5:1 (as over the windows' pattern)."""
+    surface = (0x19, 0x0D, 0x1B)
+    worst = 0.0
+    for row in rows:
+        for px in row:
+            t = px[3] / 255
+            worst = max(worst, lum(tuple(px[i] * t + surface[i] * (1 - t) for i in range(3))))
+    for name, text, least in (("gilt-text", (0xFB, 0xCD, 0xE3), 7), ("ink", (0xFF, 0xF4, 0xE8), 7),
+                              ("ink-muted", (0xBF, 0xA3, 0xBA), 4.5)):
+        ratio = (lum(text) + 0.05) / (worst + 0.05)
+        assert ratio >= least, "%s on the header: %.2f:1, under %s:1" % (name, ratio, least)
+
+
+DRESS = {
+    "Header": header,
+    "Wrap": wrap_top,
+    "WrapLow": wrap_low,
+    "Bow": bow,
+    "Pearls": pearls,
+    "Ring": ring,
+    "Ears": unit_ears,
+    "Sparkle": sparkle,
+}
+
+
 TEXTURES = {
     "PawBar": paw_bar,
     "CastBar": cast_bar,
@@ -670,10 +950,40 @@ def preview(path, names=None):
     print("wrote", path)
 
 
+def dress_sheet(path):
+    """The dress's art side by side on the theme's surface, at 2x (the ring
+    at 1x)."""
+    ground = (0x19, 0x0D, 0x1B)
+    items = [make() for make in DRESS.values()]
+    pad = 12
+    placed, x, height = [], pad, 0
+    for rows in items:
+        h, w = len(rows), len(rows[0])
+        zoom = 1 if w > 128 else 2
+        placed.append((x, zoom, rows))
+        x += w * zoom + pad
+        height = max(height, h * zoom)
+    width, height = x, height + 2 * pad
+    canvas = [[ground] * width for _ in range(height)]
+    for ox, zoom, rows in placed:
+        for yy, row in enumerate(rows):
+            for xx, px in enumerate(row):
+                t = px[3] / 255
+                col = tuple(round(px[i] * t + ground[i] * (1 - t)) for i in range(3))
+                for zy in range(zoom):
+                    for zx in range(zoom):
+                        canvas[pad + yy * zoom + zy][ox + xx * zoom + zx] = col
+    write_png(path, width, height, canvas)
+    print("wrote", path)
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["--preview"]:
         preview(args[1], args[2:])
+        return
+    if args[:1] == ["--dress"]:
+        dress_sheet(args[1])
         return
     only = set(args)
     os.makedirs(os.path.join(OUT, "Glyphs"), exist_ok=True)
@@ -689,6 +999,15 @@ def main():
         w, h, pixel = make()
         path = os.path.join(OUT, name + ".tga")
         mt.write_tga(path, w, h, pixel)
+        print("wrote", os.path.relpath(path, ROOT))
+    for name, make in DRESS.items():
+        if only and name not in only:
+            continue
+        rows = make()
+        if name == "Header":
+            check_header(rows)
+        path = os.path.join(OUT, name + ".tga")
+        write_rgba_tga(path, rows)
         print("wrote", os.path.relpath(path, ROOT))
 
 
