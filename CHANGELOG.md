@@ -4,6 +4,7 @@
 
 ### New
 
+- **Crafting cost and profit**: the Professions window shows what each recipe costs to make and what it brings. Every recipe in the list has its profit (losses in red), and the recipe you choose has a Market section with the reagents' cost, what the item sells for after the auction house's 5% cut, the profit, and when the prices were seen. Sort by **Profit** or **Cost to make**. Prices come from your last auction house scan and from vendors you've visited, whichever is cheaper. Turn it off with "Crafting cost and profit" in Settings › General › Professions. For plugin authors (API 0.44): the `auctionhouse` service's `Price(itemID)`.
 - **Quest announcements**: in a group, SuuUI tells your party or raid when you finish a quest objective ("SuuUI: [Wolves Across the Border]: 8/8 Wolf Pelt") and when a quest is ready to turn in, as Questie does. Nothing is sent when you're solo. In raid and dungeon fights where the game holds addon chat back, the lines go out once the fight lets them. Both can be turned off in Settings › General › Quest announcements.
 - Bags and bank: an item that starts a quest has a yellow exclamation mark in its corner, as in the game's own bags, until you take the quest. For theme authors (API 0.43): the texture token `quest-start` sets the mark.
 

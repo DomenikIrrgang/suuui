@@ -138,9 +138,25 @@ export type RecipeEntry = {
     canMake?: number,
     tracked?: boolean,
     learned?: boolean,
+    -- its reagents' cost and its profit at the auction house (copper; nil:
+    -- a price missing)
+    cost?: number,
+    profit?: number,
 }
 
 export type RecipeCategory = { name?: string, recipes?: RecipeEntry[], flat?: boolean }
+
+-- What a recipe costs to make and brings at the auction house (copper; each
+-- nil while a price is missing, `missing` naming those items), whether it
+-- makes an item to sell, when its auction prices were seen ("today 14:05").
+export type RecipeMarket = {
+    cost?: number,
+    value?: number,
+    profit?: number,
+    missing?: string[],
+    sells?: boolean,
+    when?: string,
+}
 
 export type CraftingData = {
     [string]: unknown,
@@ -151,6 +167,8 @@ export type CraftingData = {
     recipes?: { learned?: number, total?: number },
     categories?: RecipeCategory[],
     selected?: number,
+    -- the figure each recipe row shows: its profit or its cost (nil: none)
+    money?: "profit" | "cost",
 }
 
 export type RecipeReagent = {
@@ -190,6 +208,7 @@ export type RecipeDetail = {
     onReagent?: (i: number, owner: Frame) -> (),
     onProductLink?: () -> boolean,
     onReagentLink?: (i: number) -> (),
+    market?: RecipeMarket,
 }
 
 export type ProfessionsOptions = { edgeInset?: number }
@@ -517,6 +536,32 @@ end
 -- Crafting: the recipe list
 --------------------------------------------------------------------------------
 
+-- An amount of copper into a text, the units in their coin colours: a
+-- profit signed, "+" in ink and a loss "−" in ember-text; a cost plain;
+-- nothing known, an em dash.
+local function setMoney(t: Text, copper: number?, signed: boolean)
+    if not copper then
+        t:SetValue("—")
+        t:SetColor("ink-faint")
+        return
+    end
+    local loss = signed and copper < 0
+    local sign = signed and (loss and "−" or "+") or ""
+    t:SetValue(sign .. inventory.moneyText(math.abs(copper)))
+    t:SetColor(loss and "ember-text" or "ink")
+end
+
+-- A recipe row's figure: its profit or its cost; not known (a price
+-- missing) or none asked for: empty (a dash on most rows read as noise).
+local function showMoney(t: Text, kind: ("profit" | "cost")?, rec: RecipeEntry)
+    local copper = kind == "profit" and rec.profit or kind == "cost" and rec.cost or nil
+    if copper then
+        setMoney(t, copper, kind == "profit")
+    else
+        t:SetValue("")
+    end
+end
+
 export class RecipeRow extends Button
     readonly sel: Texture
     readonly selEdge: Texture
@@ -524,6 +569,8 @@ export class RecipeRow extends Button
     readonly chevron: Texture
     readonly eye: Texture
     readonly count: Text
+    -- the recipe's profit or cost (CraftingData.money)
+    readonly money: Text
     readonly label: Text
     -- a category's head, or a recipe
     category: string? = nil
@@ -556,10 +603,14 @@ export class RecipeRow extends Button
         draw.layout(self, function()
             self.count:SetPoint("RIGHT", self.eye, "LEFT", -S["space-3"], 0)
         end)
+        self.money = uiText.text(self, "caption", "ink")
+        draw.layout(self, function()
+            self.money:SetPoint("RIGHT", self.count, "LEFT", -S["space-3"], 0)
+        end)
         self.label = uiText.text(self, "label", "ink")
         draw.layout(self, function()
             self.label:SetPoint("LEFT", self, "LEFT", S["space-5"], 0)
-            self.label:SetPoint("RIGHT", self.count, "LEFT", -S["space-3"], 0)
+            self.label:SetPoint("RIGHT", self.money, "LEFT", -S["space-3"], 0)
         end)
         self.label:SetJustifyH("LEFT")
         self:SetScript("OnEnter", function()
@@ -653,6 +704,22 @@ class ToolLine extends Frame
 end
 
 -- The chosen recipe's pane: everything above the foot scrolls.
+-- A line of the Market section: what it is on the left, the amount on the right.
+class MarketLine extends Frame
+    readonly label: Text
+    readonly value: Text
+
+    constructor(parent: Frame, label: string)
+        super(nil, parent)
+        self:SetHeight(T.type.caption.lineHeight)
+        self.label = uiText.text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT")
+        self.label:SetValue(label)
+        self.value = uiText.text(self, "caption", "ink")
+        self.value:SetPoint("RIGHT")
+    end
+end
+
 class RecipePane extends Frame
     readonly none: Text
     readonly foot: Frame
@@ -670,6 +737,12 @@ class RecipePane extends Frame
     readonly source: Text
     readonly sourceHead: Text
     readonly sourceItem: ReagentRow
+    -- Market: the reagents' cost, what it sells for, the profit, a note
+    readonly marketHead: Text
+    readonly marketCost: MarketLine
+    readonly marketValue: MarketLine
+    readonly marketProfit: MarketLine
+    readonly marketNote: Text
     readonly create: SuuButton
     readonly createAll: SuuButton
     readonly qty: Stepper
@@ -758,6 +831,14 @@ class RecipePane extends Frame
             end
         end)
         sourceItem:Hide()
+        self.marketHead = uiText.text(c, "header", "gilt-text")
+        self.marketHead:SetValue("Market")
+        self.marketCost = MarketLine.new(c, "Reagents cost")
+        self.marketValue = MarketLine.new(c, "Sells for")
+        self.marketProfit = MarketLine.new(c, "Profit")
+        self.marketNote = uiText.text(c, "caption", "ink-faint")
+        self.marketNote:SetJustifyH("LEFT")
+        self.marketNote:SetWordWrap(true)
         local qty = inputs.stepper(self.foot, { min = 1, max = 1, value = 1 })
         self.qty = qty
         self.create = controls.button(self.foot, {
@@ -886,6 +967,8 @@ local SORTS: SelectOption<string>[] = {
     { value = "difficulty", label = "Difficulty", summary = "Sort: Difficulty" },
     { value = "skill", label = "Skill required", summary = "Sort: Skill" },
     { value = "level", label = "Level to use", summary = "Sort: Level" },
+    { value = "profit", label = "Profit", summary = "Sort: Profit" },
+    { value = "cost", label = "Cost to make", summary = "Sort: Cost" },
     { value = "name", label = "Name", summary = "Sort: Name" },
 }
 
@@ -1229,6 +1312,7 @@ export class Professions extends Frame
                 r.label:SetColor("gilt-text")
                 r.label:SetValue(name or "")
                 r.count:SetValue(tostring(#(cat.recipes or {})))
+                r.money:SetValue("")
             end
             if not folded then
                 for _, rec in ipairs(cat.recipes or {}) do
@@ -1242,6 +1326,7 @@ export class Professions extends Frame
                     rr.label:SetValue(rec.name or "")
                     local canMake = rec.canMake or 0
                     rr.count:SetValue(canMake > 0 and ("[" .. canMake .. "]") or "")
+                    showMoney(rr.money, d.money, rec)
                     rr.eye:SetShown(rec.tracked == true)
                     local on = rec.id == d.selected
                     rr.sel:SetShown(on)
@@ -1255,6 +1340,55 @@ export class Professions extends Frame
         end
         self.listEmpty:SetShown(n == 0)
         child:SetHeight(math.max(1, y))
+    end
+
+    -- The Market section from `y` down (none: hidden); where it ends.
+    function DrawMarket(m: RecipeMarket?, y: number): number
+        local v = self.recipe
+        local c = v.body
+        local lines = { v.marketCost, v.marketValue, v.marketProfit }
+        v.marketHead:SetShown(m ~= nil)
+        v.marketNote:SetShown(m ~= nil)
+        if not m then
+            for _, line in ipairs(lines) do
+                line:Hide()
+            end
+            return y
+        end
+        y = y + S["space-5"]
+        v.marketHead:ClearAllPoints()
+        v.marketHead:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+        y = y + T.type.header.lineHeight + S["space-3"]
+        local function line(l: MarketLine, shown: boolean, copper: number?, signed: boolean)
+            l:SetShown(shown)
+            if not shown then
+                return
+            end
+            l:ClearAllPoints()
+            l:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -y)
+            l:SetPoint("RIGHT", c, "RIGHT")
+            setMoney(l.value, copper, signed)
+            y = y + T.type.caption.lineHeight + 2
+        end
+        local sells = m.sells == true
+        line(v.marketCost, true, m.cost, false)
+        line(v.marketValue, sells, m.value, false)
+        line(v.marketProfit, sells, m.profit, true)
+        -- what the figures come from, or what they still need
+        local missing = m.missing or {}
+        local note: string
+        if #missing > 0 then
+            note = "No price yet for " .. table.concat(missing, ", ") .. ": scan the auction house or visit a vendor."
+        elseif not sells then
+            note = "Makes no item to sell: the reagents' cost only."
+        else
+            note = "Prices from " .. (m.when or "vendors") .. ". The profit counts the auction house's 5% cut."
+        end
+        v.marketNote:ClearAllPoints()
+        v.marketNote:SetPoint("TOPLEFT", v, "TOPLEFT", 0, -(y + S["space-2"]))
+        v.marketNote:SetWidth(math.max(100, c:GetWidth()))
+        v.marketNote:SetValue(note)
+        return y + S["space-2"] + v.marketNote:GetStringHeight()
     end
 
     function SetRecipe(r: RecipeDetail?)
@@ -1285,6 +1419,7 @@ export class Professions extends Frame
             v.sourceHead:Hide()
             v.sourceItem:Hide()
             v.why:Hide()
+            self:DrawMarket(nil, 0)
             return
         end
         v.product.skin:SetItem({ icon = r.icon, quality = r.qualityName })
@@ -1382,6 +1517,7 @@ export class Professions extends Frame
             v.cooldown:SetValue("Cooldown " .. cooldown)
             y = y + S["space-3"] + T.type.caption.lineHeight
         end
+        y = self:DrawMarket(r.market, y)
         -- taller than the pane: it scrolls (a long Source pushed the reagents
         -- under the foot: found in game); a new recipe starts at its top
         c:SetHeight(math.max(1, y))
