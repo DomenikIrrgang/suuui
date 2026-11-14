@@ -5,6 +5,7 @@
 import test, expect, beforeEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import RankUpgrader from "/Units/RankUpgrade"
+import type SpecRanks from "/Units/RankUpgrade"
 import expectNoErrors from "../../helpers"
 
 -- Test Bolt, ranks 1 to 4 (made up)
@@ -134,4 +135,66 @@ local function cursorBusy()
     mock.advanceTime(1.1)
     expect(slot(MAIN)).toBe(R4)
     expect(GetCursorInfo()).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Dual spec
+--------------------------------------------------------------------------------
+
+@test("a spec's slots still holding its best rank of then are stale; lower ranks it kept on purpose aren't")
+local function staleAfterSwitch()
+    local u = upgrader()
+    local specs: SpecRanks = {}
+    -- spec 2 last active knowing Rank 3 (its bars: R3 on three slots, R1 and R2 on purpose)
+    u:Remember(specs, 2)
+    expect(assert(specs["2"])["Test Bolt"]).toBe(3)
+    -- Rank 4 learned in spec 1 meanwhile
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
+    local list = u:Stale(specs, 2)
+    local slots: number[] = {}
+    for _, s in ipairs(list) do
+        slots[#slots + 1] = s.slot
+        expect(s.from).toBe(3)
+        expect(s.to).toBe(4)
+        expect(s.id).toBe(R4)
+    end
+    table.sort(slots)
+    expect(slots).toEqual({ MAIN, PAGE2, FORM })
+    -- placed: one line; the lower ranks and the other spell left
+    expect(u:Place(list)).toBe(true)
+    expect(slot(MAIN)).toBe(R4)
+    expect(slot(PAGE2)).toBe(R4)
+    expect(slot(FORM)).toBe(R4)
+    expect(slot(BAR5)).toBe(R1)
+    expect(slot(3)).toBe(R2)
+    expect(slot(2)).toBe(990100)
+    expect(#said).toBe(1)
+    expect(said[1]:find("Rank 4 replaced Rank 3 on 3 buttons.", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+@test("a spec never seen: every lower rank is offered; remembered, nothing")
+local function neverSeen()
+    local u = upgrader()
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
+    local specs: SpecRanks = {}
+    expect(#u:Stale(specs, 2)).toBe(5) -- R3 three times, R1, R2
+    u:Remember(specs, 2)
+    expect(#u:Stale(specs, 2)).toBe(0)
+end
+
+@test("placing waits out combat and a busy cursor: false, nothing changed")
+local function placeWaits()
+    local u = upgrader()
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
+    local list = u:Stale({ ["2"] = { ["Test Bolt"] = 3 } }, 2)
+    mock.player:enterCombat()
+    expect(u:Place(list)).toBe(false)
+    mock.player:leaveCombat()
+    C_Spell.PickupSpell(990100)
+    expect(u:Place(list)).toBe(false)
+    ClearCursor()
+    expect(slot(MAIN)).toBe(R3)
+    expect(u:Place(list)).toBe(true)
+    expect(slot(MAIN)).toBe(R4)
 end

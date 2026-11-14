@@ -12,6 +12,11 @@
 -- A slot is changed by picking the new rank up (C_Spell.PickupSpell) and
 -- placing it (PlaceAction), which puts the old one on the cursor, dropped
 -- after. Out of combat only, with an empty cursor: else it waits.
+--
+-- Dual spec (asked 2026-11-14): each spec has its own bars, and a rank
+-- learned in one upgrades only those. Each spec's best ranks are kept while
+-- it is active (Remember); switching to the other, its slots still holding
+-- the best rank of then (Stale) are offered in a popup (Action bars).
 
 import after from "wowlua:timer"
 
@@ -37,9 +42,18 @@ end
 -- One learned rank waiting to go onto the bars.
 type Upgrade = { name: string, from: number, to: number, id: number }
 
+-- Each spec group's best ranks as they were while it was last active (a
+-- character's saved data: "1", "2" -> spell name -> rank).
+export type SpecRanks = { [string]: { [string]: number } }
+
+-- A slot of the spec just switched to that holds an older rank.
+export type StaleSlot = { slot: number, name: string, from: number, to: number, id: number }
+
 export class RankUpgrader
     -- your best rank of each spell, by name
     best: { [string]: number } = {}
+    -- the spell ID of that best rank
+    bestID: { [string]: number } = {}
     -- learned ranks not yet on the bars (in combat, the cursor busy)
     waiting: Upgrade[] = {}
     -- tells what changed (the module's Print)
@@ -58,6 +72,7 @@ export class RankUpgrader
     -- Your best rank of each spell, from the spellbook.
     function Read()
         local best: { [string]: number } = {}
+        local ids: { [string]: number } = {}
         for i = 1, C_SpellBook.GetNumSpellBookSkillLines() do
             local line = C_SpellBook.GetSpellBookSkillLineInfo(i)
             if line then
@@ -66,11 +81,81 @@ export class RankUpgrader
                     local rank = info and info.itemType == SPELL and rankOf(info.subName)
                     if info and rank and type(info.name) == "string" and rank > (best[info.name] or 0) then
                         best[info.name] = rank
+                        if type(info.spellID) == "number" then
+                            ids[info.name] = info.spellID
+                        end
                     end
                 end
             end
         end
         self.best = best
+        self.bestID = ids
+    end
+
+    -- The ranks you know now, kept as this spec group's (while it is active:
+    -- what its bars were upgraded to).
+    function Remember(specs: SpecRanks, group: number)
+        local kept: { [string]: number } = {}
+        for name, rank in pairs(self.best) do
+            kept[name] = rank
+        end
+        specs[tostring(group)] = kept
+    end
+
+    -- After switching to `group`: its slots that hold the rank that was your
+    -- best when it was last active, of a spell you now know a higher rank
+    -- of (as learning a rank upgrades the active bars: lower ranks placed on
+    -- purpose stay). A group never seen: every lower rank (the popup asks).
+    function Stale(specs: SpecRanks, group: number): StaleSlot[]
+        local was = specs[tostring(group)]
+        local out: StaleSlot[] = {}
+        for slot = 1, SLOTS do
+            local kind, actionID = GetActionInfo(slot)
+            if kind == "spell" and type(actionID) == "number" then
+                local name, rank = spellName(actionID), spellRank(actionID)
+                local best = name and self.best[name]
+                local id = name and self.bestID[name]
+                if name and rank and best and id and rank < best and (was == nil or was[name] == rank) then
+                    out[#out + 1] = { slot = slot, name = name, from = rank, to = best, id = id }
+                end
+            end
+        end
+        return out
+    end
+
+    -- The stale slots given their new ranks (out of combat, an empty
+    -- cursor: false when that's not so, nothing changed); one chat line
+    -- per spell.
+    function Place(list: StaleSlot[]): boolean
+        if InCombatLockdown() or GetCursorInfo() ~= nil then
+            return false
+        end
+        local counts: { [string]: number } = {}
+        local order: StaleSlot[] = {}
+        for _, s in ipairs(list) do
+            C_Spell.PickupSpell(s.id)
+            PlaceAction(s.slot)
+            ClearCursor()
+            if not counts[s.name] then
+                order[#order + 1] = s
+            end
+            counts[s.name] = (counts[s.name] or 0) + 1
+        end
+        for _, s in ipairs(order) do
+            local count = counts[s.name] or 0
+            local okLink, link = pcall(C_Spell.GetSpellLink, s.id)
+            local shown = okLink and type(link) == "string" and link or s.name
+            self.say(
+                ("%s: Rank %d replaced Rank %d on %d %s."):format(
+                    shown,
+                    s.to,
+                    s.from,
+                    count,
+                    count == 1 and "button" or "buttons"
+                )
+            )
+        end
+        return true
     end
 
     -- The book changed: read it again a moment later (a learned rank's
@@ -95,6 +180,7 @@ export class RankUpgrader
         local before = self.best[name]
         if not before or before < rank then
             self.best[name] = rank
+            self.bestID[name] = id
         end
         if not before or before >= rank or not self.on() then
             return
