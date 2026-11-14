@@ -1,0 +1,234 @@
+-- Units/QuestAnnounce.wowlua
+-- Your quest progress told to your group (asked 2026-11-14, as Questie
+-- does, but as SuuUI's): an objective finished ("SuuUI: [Wolves Across the
+-- Border]: Wolf Pelt: 2/2") and a quest ready to turn in, each a line in raid,
+-- party or instance chat. Nothing solo.
+--
+-- The game tells which quest moved (QUEST_WATCH_UPDATE), then the log's new
+-- state (QUEST_LOG_UPDATE): only those quests are read again and compared
+-- with what was read before, so a quest just accepted, or done before you
+-- logged in, says nothing. Lines go out through wowlua:chat's sendToGroup,
+-- which holds them while the game locks addon chat in a fight (raids,
+-- instances) and sends them once it lifts.
+-- A built-in module written against the public API only.
+
+import SuuUI from "/Core/API"
+import Module from "/Core/Modules"
+import type SettingsSection from "/Core/Modules"
+import * as chat from "wowlua:chat"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local DEFAULTS = {
+    objectives = true, -- an objective finished
+    complete = true, -- a quest ready to turn in
+}
+
+local M: QuestAnnounceModule
+
+-- What was last read of a quest: each objective done or not, the quest
+-- complete.
+type Seen = { done: boolean[], complete: boolean }
+
+-- One objective as the log has it: its text and whether it's done.
+type Objective = { text: string, done: boolean }
+
+-- The quest's objectives (secret parts read as unknown: neither text nor done).
+local function objectivesOf(questID: number): Objective[]
+    local out: Objective[] = {}
+    local ok, list = pcall(C_QuestLog.GetQuestObjectives, questID)
+    if not ok or type(list) ~= "table" then
+        return out
+    end
+    for _, o in ipairs(list) do
+        out[#out + 1] = {
+            text = secret.readable(o.text) and type(o.text) == "string" and o.text or "",
+            done = secret.readable(o.finished) and o.finished == true,
+        }
+    end
+    return out
+end
+
+-- Whether the quest is ready to turn in.
+local function isComplete(questID: number): boolean
+    local c = errors.tryValue(C_QuestLog.IsComplete, questID)
+    if not (secret.readable(c) and c == true) then
+        c = errors.tryValue(C_QuestLog.ReadyForTurnIn, questID)
+    end
+    return secret.readable(c) and c == true
+end
+
+-- The quest's link (others can click it), else its title in brackets.
+local function questName(questID: number): string?
+    local link = errors.tryValue(GetQuestLink, questID)
+    if type(link) == "string" and secret.readable(link) and link ~= "" then
+        return link
+    end
+    local title = errors.tryValue(C_QuestLog.GetTitleForQuestID, questID)
+    if type(title) == "string" and secret.readable(title) and title ~= "" then
+        return "[" .. title .. "]"
+    end
+    return nil
+end
+
+-- Whether the quest is in your log.
+local function inLog(questID: number): boolean
+    local index = errors.tryValue(C_QuestLog.GetLogIndexForQuestID, questID)
+    return secret.readable(index) and index ~= nil
+end
+
+--------------------------------------------------------------------------------
+-- Settings
+--------------------------------------------------------------------------------
+
+local SECTION: SettingsSection = {
+    id = "questannounce",
+    label = "Quest announcements",
+    category = "General",
+    order = 24,
+    groups = {
+        {
+            title = "Tell your group",
+            description = "In a group, your quest progress goes to raid, party or instance chat, marked as SuuUI's. Solo, nothing is sent. In a fight where the game holds addon chat back, the lines go out when it ends.",
+            rows = {
+                {
+                    key = "objectives",
+                    label = "Objectives finished",
+                    control = "toggle",
+                    description = "An objective you finish, with its count: \"SuuUI: [Quest]: Wolf Pelt: 8/8\".",
+                },
+                {
+                    key = "complete",
+                    label = "Quests ready to turn in",
+                    control = "toggle",
+                    description = "A quest whose objectives are all done: \"SuuUI: [Quest] is ready to turn in.\"",
+                },
+            },
+        },
+    },
+}
+
+--------------------------------------------------------------------------------
+-- The module
+--------------------------------------------------------------------------------
+
+class QuestAnnounceModule extends Module<typeof(DEFAULTS)>
+    -- what was last read of each quest in the log
+    seen: { [number]: Seen } = {}
+    -- quests the game said moved, read at the next log update
+    moved: { [number]: boolean } = {}
+    -- quests just accepted: kept as they are at the next log update
+    fresh: { [number]: boolean } = {}
+
+    constructor()
+        super({
+            id = "questannounce",
+            name = "Quest announcements",
+            description = "Finished objectives and quests ready to turn in, told to your group.",
+            api = "0.12",
+            defaults = DEFAULTS,
+        })
+    end
+
+    -- A quest as it is now, kept; what changed to done since, told.
+    function Read(questID: number, tell: boolean)
+        if not inLog(questID) then
+            self.seen[questID] = nil
+            return
+        end
+        local objectives = objectivesOf(questID)
+        local complete = isComplete(questID)
+        local before = self.seen[questID]
+        local done: boolean[] = {}
+        for i, o in ipairs(objectives) do
+            done[i] = o.done
+        end
+        self.seen[questID] = { done = done, complete = complete }
+        if not (tell and before) then
+            return
+        end
+        local name = questName(questID)
+        if not name then
+            return
+        end
+        if self:Get("objectives") then
+            for i, o in ipairs(objectives) do
+                if o.done and not before.done[i] and o.text ~= "" then
+                    chat.sendToGroup(("SuuUI: %s: %s"):format(name, o.text))
+                end
+            end
+        end
+        if self:Get("complete") and complete and not before.complete then
+            chat.sendToGroup(("SuuUI: %s is ready to turn in."):format(name))
+        end
+    end
+
+    -- Every quest in the log, kept as it is (nothing told): at the start,
+    -- and when the world loads.
+    function ReadAll()
+        self.seen = {}
+        local n = errors.tryValue(C_QuestLog.GetNumQuestLogEntries)
+        if not (secret.readable(n) and type(n) == "number") then
+            return
+        end
+        for i = 1, n do
+            local info = errors.tryValue(C_QuestLog.GetInfo, i)
+            if type(info) == "table" and not info.isHeader and type(info.questID) == "number" then
+                self:Read(info.questID, false)
+            end
+        end
+    end
+
+    -- The log's new state: the quests that moved read again, what finished told.
+    function LogUpdated()
+        if next(self.fresh) then
+            local fresh = self.fresh
+            self.fresh = {}
+            for questID in pairs(fresh) do
+                self.moved[questID] = nil
+                self:Read(questID, false)
+            end
+        end
+        if not next(self.moved) then
+            return
+        end
+        local list = self.moved
+        self.moved = {}
+        for questID in pairs(list) do
+            self:Read(questID, true)
+        end
+    end
+
+    override function OnEnable()
+        self:RegisterSettings(SECTION)
+        self:ReadAll()
+        self:OnGameEvent("QUEST_WATCH_UPDATE", function(_, questID)
+            if type(questID) == "number" and secret.readable(questID) then
+                self.moved[questID] = true
+            end
+        end)
+        self:OnGameEvent("QUEST_LOG_UPDATE", function()
+            self:LogUpdated()
+        end)
+        -- a quest taken: kept as it starts (nothing to tell yet)
+        self:OnGameEvent("QUEST_ACCEPTED", function(_, questID)
+            if type(questID) == "number" and secret.readable(questID) then
+                self.moved[questID] = nil
+                self.fresh[questID] = true
+                self:Read(questID, false)
+            end
+        end)
+        self:OnGameEvent("QUEST_REMOVED", function(_, questID)
+            if type(questID) == "number" and secret.readable(questID) then
+                self.seen[questID] = nil
+                self.moved[questID] = nil
+                self.fresh[questID] = nil
+            end
+        end)
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            self:ReadAll()
+        end)
+    end
+end
+
+M = SuuUI.AddModule(QuestAnnounceModule.new())
