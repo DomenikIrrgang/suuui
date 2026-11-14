@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Action bars, with dual spec: after a spec switch, SuuUI looks at what is actually on that spec's bars. Every spell below your best rank is offered for an upgrade, including ranks you put there yourself, unless the bars already hold its best rank somewhere. When the same spell is there at several ranks, only the highest of them is upgraded. "Not now" isn't asked again until you learn a higher rank.
+
 ## 0.15.0 (2026-11-14)
 
 ### New

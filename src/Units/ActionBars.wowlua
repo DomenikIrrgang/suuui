@@ -49,7 +49,7 @@ import type Position from "/EditMode/EditMode"
 import type ActionBar from "/UI/ActionBar"
 import type ToggleChips from "/UI/Pickers"
 import RankUpgrader from "/Units/RankUpgrade"
-import type SpecRanks, StaleSlot from "/Units/RankUpgrade"
+import type DeclinedRanks, StaleSlot from "/Units/RankUpgrade"
 import after from "wowlua:timer"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
@@ -567,7 +567,7 @@ local SECTION: SettingsSection = {
                     key = "specSwitchRanks",
                     label = "Ask after a spec switch",
                     control = "toggle",
-                    description = "With dual spec: when you switch to your other spec, a popup lists the spell ranks you learned meanwhile that its bars don't have yet, and upgrades them if you say so. Lower ranks you placed on purpose stay.",
+                    description = "With dual spec: when you switch specs, a popup lists the spells on its bars that are below your best rank, and upgrades them if you say so. A spell already at its best rank somewhere on the bars is left alone, and with the same spell at several ranks, only the highest of them is upgraded. Not now: not asked again until you learn a higher rank.",
                 },
             },
         },
@@ -730,7 +730,6 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     -- a switch's offer not made yet: the switched-to group isn't remembered
     -- by anything else before it (a book change just before the switch
     -- remembered it as upgraded already, and nothing was asked)
-    offering: number? = nil
     placePending: StaleSlot[]? = nil
 
     constructor()
@@ -1250,24 +1249,23 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     -- Dual spec: the other spec's bars and the ranks learned meanwhile
     ----------------------------------------------------------------------------
 
-    -- Each spec group's best ranks as it last had them (this character's).
-    function RankSpecs(): SpecRanks
+    -- Each spec group's Not now answers (this character's): "1", "2" ->
+    -- spell name -> the best rank offered then.
+    function DeclinedRanks(group: number): DeclinedRanks
         local data = self:CharData()
-        local specs = data.rankSpecs
-        if type(specs) ~= "table" then
-            specs = {}
-            data.rankSpecs = specs
+        local all = data.rankDeclined
+        if type(all) ~= "table" then
+            all = {}
+            data.rankDeclined = all
         end
-        return specs :: unknown :: SpecRanks
-    end
-
-    -- The ranks you know now kept as the active spec's, unless a switch is
-    -- under way (the group the game says isn't the one these bars are yet).
-    function RememberRanks()
-        local ranks, group = self.ranks, self.specGroup
-        if ranks and group and activeSpecGroup() == group and self.offering ~= group then
-            ranks:Remember(self:RankSpecs(), group)
+        local byGroup = all :: unknown :: { [string]: DeclinedRanks }
+        local key = tostring(group)
+        local mine = byGroup[key]
+        if not mine then
+            mine = {}
+            byGroup[key] = mine
         end
+        return mine
     end
 
     -- A talent event: the spec switched when the active group changed; its
@@ -1278,33 +1276,27 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.specGroup = group
-        self.offering = group
         after(1, function()
             self:OfferRanks(group)
         end)
     end
 
-    -- The switched-to spec's slots with older ranks, in a popup: Upgrade or
-    -- not now (either way they're not asked about again). With "Ask after a
-    -- spec switch" off, nothing is asked. In combat it waits for the end of it.
+    -- The switched-to spec's bars as they are: for each spell below your
+    -- best rank (and not at it anywhere on them), the slots with its highest
+    -- rank there, in a popup: Upgrade, or Not now (not asked again until a
+    -- higher rank is learned). With "Ask after a spec switch" off, nothing
+    -- is asked. In combat it waits for the end of it.
     function OfferRanks(group: number)
         local ranks = self.ranks
-        if not ranks or self.specGroup ~= group then
-            return
-        end
-        local specs = self:RankSpecs()
-        if not self:Get("specSwitchRanks") then
-            self.offering = nil
-            ranks:Remember(specs, group)
+        if not ranks or self.specGroup ~= group or not self:Get("specSwitchRanks") then
             return
         end
         if InCombatLockdown() then
             self.offerPending = group
             return
         end
-        local list = ranks:Stale(specs, group)
-        self.offering = nil
-        ranks:Remember(specs, group)
+        local declined = self:DeclinedRanks(group)
+        local list = ranks:Stale(declined)
         if #list == 0 then
             return
         end
@@ -1330,13 +1322,19 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         end
         UI.Confirm({
             title = "Upgrade spell ranks",
-            text = "This spec's bars have older ranks of spells you learned in your other spec:\n\n" ..
+            text = "This spec's bars have older ranks of spells:\n\n" ..
                 table.concat(lines, "\n") .. "\n\nUpgrade them?",
             confirm = "Upgrade",
             cancel = "Not now",
             onConfirm = function()
                 if not ranks:Place(list) then
                     self.placePending = list
+                end
+            end,
+            -- (Not now, or closed: these ranks not offered again)
+            onCancel = function()
+                for _, sl in ipairs(list) do
+                    declined[sl.name] = sl.to
                 end
             end,
         })
@@ -1427,16 +1425,13 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         end)
         self.ranks = ranks
         self.specGroup = activeSpecGroup()
-        self:RememberRanks()
+        -- (0.15.0 kept each spec's ranks; the bars are read now)
+        self:CharData().rankSpecs = nil
         self:OnGameEvent("LEARNED_SPELL_IN_SKILL_LINE", function(_, spellID: number)
             ranks:Learned(spellID)
-            self:RememberRanks()
         end)
         self:OnGameEvent("SPELLS_CHANGED", function()
             ranks:BookChanged()
-            after(1.5, function()
-                self:RememberRanks()
-            end)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             ranks:Apply()

@@ -5,7 +5,7 @@
 import test, expect, beforeEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import RankUpgrader from "/Units/RankUpgrade"
-import type SpecRanks from "/Units/RankUpgrade"
+import type DeclinedRanks from "/Units/RankUpgrade"
 import expectNoErrors from "../../helpers"
 
 -- Test Bolt, ranks 1 to 4 (made up)
@@ -141,16 +141,12 @@ end
 -- Dual spec
 --------------------------------------------------------------------------------
 
-@test("a spec's slots still holding its best rank of then are stale; lower ranks it kept on purpose aren't")
+@test("after a switch the bars as they are: the highest rank they hold of a spell offered, lower ones beside it stay")
 local function staleAfterSwitch()
     local u = upgrader()
-    local specs: SpecRanks = {}
-    -- spec 2 last active knowing Rank 3 (its bars: R3 on three slots, R1 and R2 on purpose)
-    u:Remember(specs, 2)
-    expect(assert(specs["2"])["Test Bolt"]).toBe(3)
-    -- Rank 4 learned in spec 1 meanwhile
+    -- Rank 4 learned (in the other spec); these bars: R3 on three slots, R1 and R2
     u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
-    local list = u:Stale(specs, 2)
+    local list = u:Stale()
     local slots: number[] = {}
     for _, s in ipairs(list) do
         slots[#slots + 1] = s.slot
@@ -173,21 +169,50 @@ local function staleAfterSwitch()
     expectNoErrors()
 end
 
-@test("a spec never seen: every lower rank is offered; remembered, nothing")
-local function neverSeen()
+@test(
+    "after a switch: a rank put there by hand is offered too (nothing remembered); only the highest of a spell's ranks"
+)
+local function staleByHand()
     local u = upgrader()
     u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
-    local specs: SpecRanks = {}
-    expect(#u:Stale(specs, 2)).toBe(5) -- R3 three times, R1, R2
-    u:Remember(specs, 2)
-    expect(#u:Stale(specs, 2)).toBe(0)
+    -- (the user's case: the best rank taken off, Rank 2 and Rank 1 left)
+    for _, n in ipairs({ MAIN, PAGE2, FORM }) do
+        mock.setAction(n, nil)
+    end
+    local list = u:Stale()
+    expect(#list).toBe(1)
+    expect(list[1].slot).toBe(3)
+    expect(list[1].from).toBe(2)
+    expect(list[1].to).toBe(4)
+end
+
+@test("after a switch: a spell at your best rank somewhere on the bars, nothing of it offered")
+local function staleAtBest()
+    local u = upgrader()
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
+    mock.setAction(BAR5, { type = "spell", id = R4 })
+    expect(#u:Stale()).toBe(0)
+    -- at Rank 3, the best: none either
+    mock.setAction(BAR5, { type = "spell", id = R1 })
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 3, R3
+    expect(#u:Stale()).toBe(0)
+end
+
+@test("Not now to a rank: not offered again; a higher rank learned, offered")
+local function staleDeclined()
+    local u = upgrader()
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
+    local declined: DeclinedRanks = { ["Test Bolt"] = 4 }
+    expect(#u:Stale(declined)).toBe(0)
+    u.best["Test Bolt"], u.bestID["Test Bolt"] = 5, 990005
+    expect(#u:Stale(declined)).toBe(3)
 end
 
 @test("placing waits out combat and a busy cursor: false, nothing changed")
 local function placeWaits()
     local u = upgrader()
     u.best["Test Bolt"], u.bestID["Test Bolt"] = 4, R4
-    local list = u:Stale({ ["2"] = { ["Test Bolt"] = 3 } }, 2)
+    local list = u:Stale()
     mock.player:enterCombat()
     expect(u:Place(list)).toBe(false)
     mock.player:leaveCombat()
