@@ -53,11 +53,20 @@ local KEYS: string[][] = {
     { "raid", "position" },
     { "raid", "arrangement" },
     { "raid", "perBandLarge" },
+    { "raid", "growth" },
     { "raid", "width" },
     { "raid", "height" },
     { "raid", "heightLarge" },
     { "raid", "gap" },
     { "raid", "groupGap" },
+    -- pets (asked 2026-11-14): healers see them in party and raid, tanks in
+    -- the party, DPS not; the healer's raid pets under the groups up to 20,
+    -- above the chat from 21 (a full grid leaves no room under it)
+    { "party", "showPets" },
+    { "raid", "showPets" },
+    { "raid", "petPlace" },
+    { "raid", "petPlaceLarge" },
+    { "raid", "petPosition" },
 }
 
 -- The healer layout (boards Dungeon Healer, Raid 20 and 40 Healer): the
@@ -96,10 +105,17 @@ local HEALER: { [string]: { [string]: unknown } } = {
         heightLarge = 20,
         gap = 2,
         groupGap = 4,
+        petPlace = "below",
+        petPlaceLarge = "own",
+        petPosition = at("BOTTOMLEFT", 28, 300),
     },
 }
 
-export const LAYOUT: { [string]: { [string]: { [string]: unknown } } } = { TANK = {}, HEALER = HEALER, DAMAGER = {} }
+export const LAYOUT: { [string]: { [string]: { [string]: unknown } } } = {
+    TANK = { raid = { showPets = false } },
+    HEALER = HEALER,
+    DAMAGER = { party = { showPets = false }, raid = { showPets = false } },
+}
 
 -- The screen sizes a preset fills a layout for (SuuUI's root in its own
 -- units: 4K at the automatic scale is 2560 x 1440, at scale 1 3840 x 2160).
@@ -110,10 +126,14 @@ export const SIZES: string[] = { "1920x1080", "2560x1440", "3840x2160", "3440x14
 -- 2560 x 1440), so three.
 local NARROW: { [string]: { [string]: unknown } } = { raid = { perBandLarge = 3 } }
 
+-- From 1440p the side layout's groups grow up from the chat: a raid of 20
+-- sits on it, no band's gap above it (asked 2026-11-14).
+local TALL: { [string]: { [string]: unknown } } = { raid = { growth = "up" } }
+
 -- Per role and screen size, what differs from the role's layout.
 export const BY_SIZE: { [string]: { [string]: { [string]: { [string]: unknown } } } } = {
-    TANK = { ["1920x1080"] = NARROW },
-    DAMAGER = { ["1920x1080"] = NARROW },
+    TANK = { ["1920x1080"] = NARROW, ["2560x1440"] = TALL, ["3840x2160"] = TALL, ["3440x1440"] = TALL },
+    DAMAGER = { ["1920x1080"] = NARROW, ["2560x1440"] = TALL, ["3840x2160"] = TALL, ["3440x1440"] = TALL },
     HEALER = {},
 }
 
@@ -157,8 +177,13 @@ export function apply(role: string): (boolean, string?)
     end
     local entries: unknown[][] = {}
     for _, k in ipairs(KEYS) do
+        -- (not `values and values[key] or nil`: that drops a false)
         local values = layout[k[1]]
-        entries[#entries + 1] = { k[1], k[2], values and values[k[2]] or nil }
+        local value: unknown = nil
+        if values then
+            value = values[k[2]]
+        end
+        entries[#entries + 1] = { k[1], k[2], value }
     end
     -- 0.17: plugins' own settings per role (M:AddToRolePreset): every key a
     -- plugin set for any role, this role's value or its default

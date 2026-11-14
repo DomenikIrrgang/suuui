@@ -13,6 +13,13 @@
 -- The headers make their buttons out of combat, all forty at once (the
 -- startingIndex trick): aura containers can't be made in combat. Each button
 -- is SuuUI's unit frame; the header sets its unit, the frame follows.
+-- Pets (asked 2026-11-14): the game's pet header (SecureGroupPetHeaderTemplate:
+-- each member's pet, `raidpetN`, while it exists; made, like the groups', all
+-- forty out of combat), each a SuuUI unit frame as wide and tall as the
+-- groups' (clickable, healed by mouseover, with the buff indicators), in
+-- rows as many as the groups side by side: on top of the groups, below the
+-- last group with someone in it, or in a place of their own (edit mode's
+-- "Raid pets"), one place up to 20 players and another from 21.
 -- Inside the bar: role icon, name, the state badge at the row's end (debuff
 -- types in combat too, as on the party frames), up to three aura icons at
 -- the bar's right end (debuffs you can remove, externals, defensives, other
@@ -44,6 +51,10 @@ local DEFAULTS = {
     -- fourth column reached the player frame; the presets' 1080p layout
     -- sets 3)
     perBandLarge = 4,
+    -- columns: the groups hang from the top ("down") or sit on the bottom
+    -- edge ("up"; asked 2026-11-14: from 1440p a raid of 20 on the chat, no
+    -- gap above it)
+    growth = "down",
     width = 108,
     height = 19,
     heightLarge = 20, -- raids of 21-40
@@ -63,6 +74,14 @@ local DEFAULTS = {
     debuffKinds = "kinds",
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
+    showPets = true,
+    -- where the pets go: "top" (over the groups), "below" (under the last
+    -- group with someone in it) or "own" (petPosition)
+    petPlace = "top",
+    petPlaceLarge = "top", -- the same from 21 players
+    petPosition = { point = "BOTTOMLEFT", x = 28, y = 300 } :: Position,
+    -- in their own place: this many side by side, rows growing up
+    petsPerRow = 2,
 }
 
 local M: RaidFramesModule
@@ -407,21 +426,88 @@ class GroupHeader extends Frame
     end
 end
 
+-- The raid's pets: the game's pet header (each member's pet, `raidpetN`,
+-- listed while it exists), its buttons made and styled as the groups'.
+class PetHeader extends Frame
+    private readonly module: RaidFramesModule
+
+    constructor(m: RaidFramesModule, parent: Frame)
+        super("SuuUIRaidPets", parent, "SecureGroupPetHeaderTemplate")
+        self.module = m
+        self:SetAttribute("template", "SecureUnitButtonTemplate, PingableUnitFrameTemplate")
+        self:SetAttribute("templateType", "Button")
+        self:SetAttribute("showRaid", true)
+        self:SetAttribute("showPlayer", true)
+        self:SetAttribute("showParty", false)
+        self:SetAttribute("sortMethod", "INDEX")
+        -- rows as many as it takes (three to a row: fourteen for forty)
+        self:SetAttribute("maxColumns", 40)
+        self:SetAttribute("point", "LEFT")
+        self:SetAttribute("initialConfigFunction", INIT)
+    end
+
+    function SuuStyle(name: string)
+        local button = frames.asButton(tbl.field(_G, name))
+        if button then
+            self.module:StylePetButton(button)
+        end
+    end
+end
+
+-- The highest raid group with someone in it (1 without a raid).
+local function lastGroup(): number
+    local last = 1
+    for i = 1, (GetNumGroupMembers and GetNumGroupMembers() or 0) do
+        local _, _, subgroup = GetRaidRosterInfo(i)
+        if type(subgroup) == "number" and subgroup > last then
+            last = subgroup
+        end
+    end
+    return last
+end
+
 --------------------------------------------------------------------------------
 -- Layout and options (out of combat)
 --------------------------------------------------------------------------------
 
+-- A header's attributes changed together, laid out once at the end. The game's
+-- header only adds points to the buttons it shows (it clears the hidden
+-- ones'): a pet kept the TOP of "Below" and stretched up the screen once "Own
+-- place" gave it a BOTTOM. So: no layout while the attributes change, then the
+-- buttons' points cleared and one layout.
+local function beginHeaderLayout(header: Frame)
+    header:SetAttribute("_ignore", true)
+end
+
+local function endHeaderLayout(header: Frame, update: (self: Frame) -> ())
+    -- (its children are its buttons)
+    for _, b in ipairs({ header:GetChildren() }) do
+        b:ClearAllPoints()
+    end
+    header:SetAttribute("_ignore", nil)
+    if header:IsVisible() then
+        update(header)
+    end
+end
+
 -- The layout's numbers: frame width and height, the gap between frames and
--- between groups, groups side by side (columns), rows or columns.
-type Grid = { w: number, h: number, gap: number, groupGap: number, perBand: number, rows: boolean }
+-- between groups, groups side by side (columns), rows or columns; `shift`:
+-- every group that much lower (groups growing up: the bands in use on the
+-- holder's bottom edge).
+type Grid = { w: number, h: number, gap: number, groupGap: number, perBand: number, rows: boolean, shift: number }
+
+-- A band of five frames and the space to the next band (columns).
+local function bandStep(grid: Grid): number
+    return 5 * grid.h + 4 * grid.gap + grid.groupGap * 2
+end
 
 -- Group g's top left in the grid (x right, y down, from the top left).
 local function groupOrigin(g: number, grid: Grid): (number, number)
     if grid.rows then
-        return 0, (g - 1) * (grid.h + grid.groupGap)
+        return 0, (g - 1) * (grid.h + grid.groupGap) + grid.shift
     end
     local col, band = (g - 1) % grid.perBand, math.floor((g - 1) / grid.perBand)
-    return col * (grid.w + grid.groupGap), band * (5 * grid.h + 4 * grid.gap + grid.groupGap * 2)
+    return col * (grid.w + grid.groupGap), band * bandStep(grid) + grid.shift
 end
 
 -- A frame's top left in its group: slot 0 first (raid order or by role).
@@ -452,6 +538,7 @@ local function gridAt(h: number, large: boolean?): Grid
         groupGap = M:Get("groupGap"),
         perBand = math.max(1, large and M:Get("perBandLarge") or M:Get("perBand")),
         rows = M:Get("arrangement") == "rows",
+        shift = 0,
     }
 end
 
@@ -729,6 +816,68 @@ local SECTION: SettingsSection = {
                     description = "Your own frame while you aren't in a group: to try the frames (a debuff on you shows its badge).",
                 },
                 {
+                    key = "showPets",
+                    label = "Show pets",
+                    control = "toggle",
+                    combat = true,
+                    description = "Your raid's pets, as large as the raid frames: click one to target it; mouseover bindings heal it.",
+                },
+                {
+                    key = "petPlace",
+                    label = "Pets",
+                    control = "segmented",
+                    combat = true,
+                    options = {
+                        { value = "top", label = "On top" },
+                        { value = "below", label = "Below" },
+                        { value = "own", label = "Own place" },
+                    },
+                    description = "Up to 20 players: over the groups, under the last group, or a place of their own (move it in edit mode: Raid pets).",
+                    disabled = function(): (boolean?, string?)
+                        if not M:Get("showPets") then
+                            return true, "Turn on Show pets first."
+                        end
+                        return nil, nil
+                    end,
+                },
+                {
+                    key = "petPlaceLarge",
+                    label = "Pets from 21 players",
+                    control = "segmented",
+                    combat = true,
+                    options = {
+                        { value = "top", label = "On top" },
+                        { value = "below", label = "Below" },
+                        { value = "own", label = "Own place" },
+                    },
+                    description = "The same for a raid of 21 to 40, where a full grid may leave no room under it.",
+                    disabled = function(): (boolean?, string?)
+                        if not M:Get("showPets") then
+                            return true, "Turn on Show pets first."
+                        end
+                        return nil, nil
+                    end,
+                },
+                {
+                    key = "petsPerRow",
+                    label = "Pets per row",
+                    control = "slider",
+                    min = 1,
+                    max = 10,
+                    step = 1,
+                    combat = true,
+                    description = "In their own place: this many side by side, more rows growing up.",
+                    disabled = function(): (boolean?, string?)
+                        if not M:Get("showPets") then
+                            return true, "Turn on Show pets first."
+                        end
+                        if M:Get("petPlace") ~= "own" and M:Get("petPlaceLarge") ~= "own" then
+                            return true, "Only for pets in their own place."
+                        end
+                        return nil, nil
+                    end,
+                },
+                {
                     label = "Preview",
                     control = "segmented",
                     options = {
@@ -783,6 +932,15 @@ local SECTION: SettingsSection = {
                     step = 1,
                     combat = true,
                     description = "The same for a raid of 21 to 40: fewer keeps a full raid narrower, clear of what's beside it.",
+                    disabled = hasNoArrangement,
+                },
+                {
+                    key = "growth",
+                    label = "Groups grow",
+                    control = "segmented",
+                    combat = true,
+                    options = { { value = "down", label = "Down" }, { value = "up", label = "Up" } },
+                    description = "Down: the first band at the frames' top edge. Up: the bands sit on their bottom edge, so a smaller raid rests on what's under it (the chat) with no gap.",
                     disabled = hasNoArrangement,
                 },
                 {
@@ -989,6 +1147,14 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     tierHeight: number? = nil
     -- whether the grid was laid out for a raid past 20 players
     tierLarge: boolean? = nil
+    -- the pets: their header, its buttons, their own place, and the group
+    -- they were laid out under ("below")
+    petHeader: PetHeader? = nil
+    petButtons: UnitFrame[] = {}
+    petPlaceFrame: Frame? = nil
+    -- the last group with someone in it the layout went by (groups growing
+    -- up, pets below): another, laid out again
+    laidGroup: number? = nil
 
     constructor()
         super({
@@ -999,7 +1165,20 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             reloadToToggle = true,
             defaults = DEFAULTS,
             -- kept per screen size, with the position (Core/Settings)
-            layout = { "arrangement", "perBand", "perBandLarge", "width", "height", "heightLarge", "gap", "groupGap" },
+            layout = {
+                "arrangement",
+                "perBand",
+                "perBandLarge",
+                "growth",
+                "width",
+                "height",
+                "heightLarge",
+                "gap",
+                "groupGap",
+                "petPlace",
+                "petPlaceLarge",
+                "petsPerRow",
+            },
         })
     end
 
@@ -1075,6 +1254,106 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- A pet button the header made: a SuuUI unit frame as the groups', without
+    -- their auras; its unit from the header.
+    function StylePetButton(button: Button)
+        if self.styled[button] then
+            return
+        end
+        self.styled[button] = true
+        local f = UnitFrame.adopt(button, nil, nil, {
+            frame = button,
+            size = "sm",
+            width = self:Get("width"),
+            height = barHeight(),
+            power = false,
+            textOnSmall = true,
+            healthText = "none",
+            nameColor = self:Get("nameColor"),
+            raidMarker = self:Get("raidMarkers"),
+            lowHealth = false,
+            lowTint = self:Get("lowHealth"),
+            incoming = self:Get("incoming"),
+        })
+        SuuUI.TagInstance(f, { module = M.id, role = "raidPet" })
+        if not InCombatLockdown() then
+            f:RegisterForClicks("AnyUp")
+        end
+        f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
+        self.petButtons[#self.petButtons + 1] = f
+        f:HookScript("OnAttributeChanged", function(btn, name, value: unknown)
+            if name ~= "unit" then
+                return
+            end
+            local unit = secret.asString(value)
+            btn:SetUnit(unit, true)
+            if unit then
+                if not btn.active then
+                    btn:Activate()
+                end
+                btn:Refresh()
+            end
+        end)
+        local unit = secret.asString(f:GetAttribute("unit"))
+        if unit then
+            f:SetUnit(unit, true)
+            f:Activate()
+        end
+    end
+
+    -- The pets' header laid out for the grid: rows as many as the groups side
+    -- by side (five for groups as rows), at the place the raid's size picks.
+    function LayoutPets(w: number, h: number, grid: Grid, large: boolean)
+        local ph, holder, own = self.petHeader, assert(self.holder), self.petPlaceFrame
+        if not (ph and own) then
+            return
+        end
+        beginHeaderLayout(ph)
+        local place = large and self:Get("petPlaceLarge") or self:Get("petPlace")
+        local perRow = grid.rows and 5 or grid.perBand
+        local ownRow: number = self:Get("petsPerRow")
+        if place == "own" then
+            perRow = ownRow
+        end
+        ph:SetAttribute("unitWidth", w)
+        ph:SetAttribute("unitHeight", h)
+        ph:SetAttribute("xOffset", grid.gap)
+        ph:SetAttribute("yOffset", 0)
+        ph:SetAttribute("unitsPerColumn", perRow)
+        ph:SetAttribute("columnSpacing", grid.gap)
+        ph:ClearAllPoints()
+        own:SetSize(ownRow * w + (ownRow - 1) * grid.gap, h)
+        if place == "own" then
+            -- rows growing up from the place's bottom, away from what's under it
+            ph:SetParent(own)
+            ph:SetAttribute("columnAnchorPoint", "BOTTOM")
+            ph:SetPoint("BOTTOMLEFT", own, "BOTTOMLEFT")
+        elseif place == "below" then
+            ph:SetParent(holder)
+            ph:SetAttribute("columnAnchorPoint", "TOP")
+            local last = lastGroup()
+            self.laidGroup = last
+            local _, y = groupOrigin(last, grid)
+            local bottom = y + (grid.rows and h or (5 * h + 4 * grid.gap))
+            ph:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, -(bottom + grid.groupGap * 2))
+        else
+            ph:SetParent(holder)
+            ph:SetAttribute("columnAnchorPoint", "BOTTOM")
+            -- (over the first group, lower when they grow up)
+            ph:SetPoint("BOTTOMLEFT", holder, "TOPLEFT", 0, grid.groupGap * 2 - grid.shift)
+        end
+        for _, f in ipairs(self.petButtons) do
+            f:Resize(w, h)
+        end
+        -- the header's buttons while pets are on; their own place shows in a
+        -- raid while it is used (after the layout: hidden, the header wouldn't
+        -- let go of the pets it showed)
+        ph:SetAttribute("showRaid", self:Get("showPets"))
+        endHeaderLayout(ph, SecureGroupPetHeader_Update)
+        local used = self:Get("showPets") and (self:Get("petPlace") == "own" or self:Get("petPlaceLarge") == "own")
+        RegisterStateDriver(own, "visibility", used and "[group:raid] show; hide" or "hide")
+    end
+
     function ApplySort()
         local byRole = self:Get("sort") == "role"
         for _, hd in ipairs(self.headers) do
@@ -1094,7 +1373,18 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         local large = isLarge()
         local grid = gridAt(h, large)
         self.tierLarge = large
+        -- groups growing up: the bands in use on the holder's bottom edge (a
+        -- raid of 20 sits on what's under it, the chat, with no gap)
+        self.laidGroup = nil
+        if not grid.rows and self:Get("growth") == "up" then
+            local last = lastGroup()
+            self.laidGroup = last
+            local bands = math.ceil(GROUPS / grid.perBand)
+            local used = math.ceil(last / grid.perBand)
+            grid.shift = (bands - used) * bandStep(grid)
+        end
         for g, hd in ipairs(self.headers) do
+            beginHeaderLayout(hd)
             hd:SetAttribute("unitWidth", w)
             hd:SetAttribute("unitHeight", h)
             hd:ClearAllPoints()
@@ -1110,12 +1400,17 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             local x, y = groupOrigin(g, grid)
             hd:SetPoint("TOPLEFT", holder, "TOPLEFT", x, -y)
         end
+        -- (rows and columns anchor the buttons by LEFT or TOP)
+        for _, hd in ipairs(self.headers) do
+            endHeaderLayout(hd, SecureGroupHeader_Update)
+        end
         -- rows: as tall as eight groups of a full raid (heightLarge) whatever
         -- the raid's size: the rows hang from its top, so the top edge stays put
         -- (the healer layout sits between the player and target frames, tops
         -- level) and it ends above the dock's stance and pet bars (seen in
         -- game: sized for eight rows at the 20-player height it reached them)
         holder:SetSize(holderSize(grid, self:Get("heightLarge")))
+        self:LayoutPets(w, h, grid, large)
         local top = self:Get("arrangement") == "rows"
         for _, f in ipairs(self.buttons) do
             f.opts.reserveRight = auraReserve(h)
@@ -1132,6 +1427,15 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     end
 
     function ApplyOptions()
+        for _, f in ipairs(self.petButtons) do
+            f.opts.nameColor = self:Get("nameColor")
+            f.opts.raidMarker = self:Get("raidMarkers")
+            f.opts.lowTint = self:Get("lowHealth")
+            f.opts.incoming = self:Get("incoming")
+            if f.active then
+                f:Refresh()
+            end
+        end
         for _, f in ipairs(self.buttons) do
             f.opts.healthText = self:Get("healthText")
             f.opts.nameColor = self:Get("nameColor")
@@ -1178,6 +1482,9 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         self.indicatorTier = tier
         local list = UI.IndicatorsFor(UI.GroupIndicators(), tier)
         for _, f in ipairs(self.buttons) do
+            f:SetIndicators(list)
+        end
+        for _, f in ipairs(self.petButtons) do
             f:SetIndicators(list)
         end
     end
@@ -1259,6 +1566,17 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
 
     function UpdateRange()
         local far = self:Get("rangeAlpha")
+        for _, f in ipairs(self.petButtons) do
+            local unit = f.unit
+            if f:IsVisible() and unit then
+                local inRange = UnitInRange(unit)
+                if secret.isSecret(inRange) then
+                    f:SetAlphaFromBoolean(inRange, 1, far)
+                else
+                    f:SetAlpha(inRange == false and far or 1)
+                end
+            end
+        end
         for _, f in ipairs(self.buttons) do
             if f:IsVisible() then
                 local unit = f.unit
@@ -1500,7 +1818,16 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             for g = 1, GROUPS do
                 self.headers[g] = GroupHeader.new(self, holder, g)
             end
+            local own = CreateFrame("Frame", "SuuUIRaidPetPlace", SuuUI.Root, "SecureHandlerStateTemplate")
+            own:SetSize(1, 1)
+            self.petPlaceFrame = own
+            self.petHeader = PetHeader.new(self, holder)
         end
+        self:RegisterMover(assert(self.petPlaceFrame), {
+            key = "petPosition",
+            label = "Raid pets",
+            managedShow = true,
+        })
         -- its state driver shows it, not edit mode
         self:RegisterMover(holder, { key = "position", label = "Raid frames", managedShow = true })
         SuuUI.PublishAnchor("raid", holder)
@@ -1518,6 +1845,13 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 h:SetAttribute("startingIndex", 1)
                 h:SetAttribute("showSolo", false)
             end
+            -- the pets' forty the same way
+            local ph = assert(self.petHeader)
+            ph:SetAttribute("showSolo", true)
+            ph:SetAttribute("startingIndex", -39)
+            ph:Show()
+            ph:SetAttribute("startingIndex", 1)
+            ph:SetAttribute("showSolo", false)
             self:Layout()
             self:ApplySort()
             self:UpdateVisibility()
@@ -1525,9 +1859,14 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end)
 
         self:WatchAll({
+            "showPets",
+            "petPlace",
+            "petPlaceLarge",
+            "petsPerRow",
             "arrangement",
             "perBand",
             "perBandLarge",
+            "growth",
             "width",
             "height",
             "heightLarge",
@@ -1639,7 +1978,11 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             end
             -- crossing 20 players changes the bar height and the columns
             -- side by side (out of combat)
-            if barHeight() ~= self.tierHeight or isLarge() ~= self.tierLarge then
+            if
+                barHeight() ~= self.tierHeight
+                or isLarge() ~= self.tierLarge
+                or (self.laidGroup ~= nil and lastGroup() ~= self.laidGroup)
+            then
                 self:RunOutOfCombat("layout", function()
                     self:Layout()
                     self:ApplyOptions()
@@ -1708,6 +2051,9 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             ticker:Cancel()
         end
         for _, f in ipairs(self.buttons) do
+            f:Deactivate()
+        end
+        for _, f in ipairs(self.petButtons) do
             f:Deactivate()
         end
     end

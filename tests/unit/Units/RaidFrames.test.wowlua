@@ -13,7 +13,7 @@ import type RaidButton from "/Units/RaidFrames"
 import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
-import type Indicator from "/UI/UnitFrame"
+import type Indicator, UnitFrame from "/UI/UnitFrame"
 
 -- The raid frames' holder, a group's header (by their global names).
 local function holder(): Frame
@@ -173,6 +173,10 @@ local function layout()
     expect(onRow).toBe(myButton().row)
     M:Set("arrangement", "rows")
     expect(header(1):GetAttribute("point")).toBe("LEFT")
+    -- the shown buttons laid out anew: the header's TOP from the columns gone
+    -- (with LEFT too it stretched the first button to the header's width)
+    expect(myButton():GetNumPoints()).toBe(1)
+    expect(myButton():GetWidth()).toBe(w)
     -- rows (the healer layout): the badges on the top edge
     expect(myButton().opts.badgeTop).toBe(true)
     local _, rel, relPoint = myButton().badge:GetPoint(1)
@@ -183,6 +187,28 @@ local function layout()
     expect(box:GetWidth()).toBe(5 * w + 4 * gap)
     M:Set("width", 90)
     expect(myButton():GetWidth()).toBe(90)
+end
+
+@test("groups growing up: the bands in use on the bottom edge, a smaller raid on what's under it; the pets on top follow")
+local function growUp()
+    local function top(g: number): number
+        local _, _, _, _, y = header(g):GetPoint(1)
+        return y
+    end
+    raid(6) -- groups 1 and 2: one band of two
+    local h, gap, gg = M:Get("height"), M:Get("gap"), M:Get("groupGap")
+    local band = 5 * h + 4 * gap + gg * 2
+    expect(top(1)).toBe(0)
+    M:Set("growth", "up")
+    -- the second band empty: the first one in its place
+    expect(top(1)).toBe(-band)
+    local _, _, _, _, py = assert(frames.find("SuuUIRaidPets")):GetPoint(1)
+    expect(py).toBe(gg * 2 - band)
+    -- 24 players, groups 1 to 5: both bands in use, from the top again
+    mock.group:leave()
+    raid(24)
+    expect(top(1)).toBe(0)
+    M:Reset("growth")
 end
 
 @test("sorted by role within each group, and back to the raid's order")
@@ -485,4 +511,128 @@ local function disabled()
     raid(2)
     M:OnDisable()
     expect(myButton().active).toBeFalsy()
+end
+
+--------------------------------------------------------------------------------
+-- Pets
+--------------------------------------------------------------------------------
+
+local function petHeader(): Frame
+    return (assert(frames.find("SuuUIRaidPets")))
+end
+
+-- The shown pet button for `unit`.
+local function petButton(unit: string): UnitFrame?
+    for _, f in ipairs(M.petButtons) do
+        if f.unit == unit and f:IsShown() then
+            return f
+        end
+    end
+    return nil
+end
+
+-- A raider's pet (placeholder names).
+local function petOf(owner: mock.MockUnit, name: string): mock.MockUnit
+    local p = mock.spawnUnit({ name = name, reaction = "friendly", health = 800, healthMax = 1000, distance = 10 })
+    mock.setPet(p, { owner = owner })
+    return p
+end
+
+@test("pets: the game's pet header, its forty buttons made out of combat; a raider's pet shown as large as the raid frames")
+local function raidPets()
+    expect(#M.petButtons).toBe(40)
+    raid(6)
+    local wolf = petOf(raiders[2], "Wolf")
+    mock.advanceFrames(2)
+    local p = assert(petButton("raidpet3"), "no pet button")
+    expect(UnitName("raidpet3")).toBe("Wolf")
+    expect(p.name).toHaveText("Wolf")
+    expect(p:GetWidth()).toBe(M:Get("width"))
+    expect(p:GetHeight()).toBe(M:Get("height"))
+    expectPingable(p, "raidpet3")
+    -- on top of the groups (the default): over the holder's top, rows growing up
+    local point, rel, relPoint = petHeader():GetPoint(1)
+    expect(point).toBe("BOTTOMLEFT")
+    expect(rel).toBe(holder())
+    expect(relPoint).toBe("TOPLEFT")
+    expect(petHeader():GetAttribute("columnAnchorPoint")).toBe("BOTTOM")
+    expect(petHeader():GetAttribute("unitsPerColumn")).toBe(M:Get("perBand"))
+    -- dismissed: gone
+    mock.setPet(nil, { owner = raiders[2] })
+    mock.advanceFrames(2)
+    expect(petButton("raidpet3")).toBeNil()
+    wolf:despawn()
+end
+
+@test("pets: below the last group with someone in it, or a place of their own (edit mode's Raid pets); another from 21 players")
+local function raidPetPlaces()
+    raid(6) -- groups 1 and 2
+    petOf(raiders[2], "Wolf")
+    M:Set("petPlace", "below")
+    local h, gap, gg = M:Get("height"), M:Get("gap"), M:Get("groupGap")
+    local point, rel, relPoint, _, y = petHeader():GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(rel).toBe(holder())
+    expect(relPoint).toBe("TOPLEFT")
+    -- columns: group 2 beside group 1, so under the first band
+    expect(y).toBe(-((5 * h + 4 * gap) + gg * 2))
+    expect(petHeader():GetAttribute("columnAnchorPoint")).toBe("TOP")
+    -- their own place: shown in a raid
+    mock.advanceFrames(2)
+    local pet = assert(petButton("raidpet3"))
+    M:Set("petPlace", "own")
+    local place = assert(frames.find("SuuUIRaidPetPlace"))
+    expect(petHeader():GetParent()).toBe(place)
+    mock.advanceFrames(1)
+    expect(place).toBeShown()
+    -- the shown pet laid out anew, not stretched by the TOP "Below" gave it
+    expect(pet:GetHeight()).toBe(h)
+    expect(pet:GetNumPoints()).toBe(1)
+    -- Pets per row side by side (two by default), rows growing up from its bottom
+    local p1, prel, prelPoint = petHeader():GetPoint(1)
+    expect(p1).toBe("BOTTOMLEFT")
+    expect(prel).toBe(place)
+    expect(prelPoint).toBe("BOTTOMLEFT")
+    expect(petHeader():GetAttribute("columnAnchorPoint")).toBe("BOTTOM")
+    expect(petHeader():GetAttribute("unitsPerColumn")).toBe(2)
+    expect(place:GetWidth()).toBe(2 * M:Get("width") + M:Get("gap"))
+    M:Set("petsPerRow", 3)
+    expect(petHeader():GetAttribute("unitsPerColumn")).toBe(3)
+    M:Reset("petsPerRow")
+    -- from 21 players: its own setting
+    M:Set("petPlace", "top")
+    M:Set("petPlaceLarge", "own")
+    mock.group:leave()
+    raid(24)
+    expect(petHeader():GetParent()).toBe(place)
+    mock.setPet(nil, { owner = raiders[2] })
+    M:ResetAll({ "petPlace", "petPlaceLarge" })
+end
+
+@test("pets: Show pets off, none; clickable, healed by mouseover, with the buff indicators")
+local function raidPetUse()
+    local before = SuuUI.UI.GroupIndicators()
+    raid(6)
+    petOf(raiders[2], "Wolf")
+    mock.advanceFrames(2)
+    local p = assert(petButton("raidpet3"))
+    mock.hover(p)
+    expect(UnitName("mouseover")).toBe("Wolf")
+    mock.hover(nil)
+    mock.click(p)
+    expect(UnitName("target")).toBe("Wolf")
+    local list: Indicator[] = { { name = "Mark", kind = "icon", ids = { 1126 } } }
+    SuuUI.UI.SetGroupIndicators(list)
+    mock.advanceTime(1.1)
+    expect(#p.indicatorContainers).toBe(1)
+    SuuUI.UI.SetGroupIndicators(before)
+    mock.advanceTime(1.1)
+    M:Set("showPets", false)
+    mock.advanceFrames(2)
+    expect(petButton("raidpet3")).toBeNil()
+    M:Reset("showPets")
+    mock.advanceFrames(2)
+    expect(petButton("raidpet3") ~= nil).toBe(true)
+    mock.player:target(nil)
+    mock.setPet(nil, { owner = raiders[2] })
 end
