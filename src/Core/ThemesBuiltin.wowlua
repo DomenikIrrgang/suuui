@@ -12,7 +12,7 @@
 import tokens as T from "./Tokens"
 import register from "./Themes"
 import registerRaids from "./ThemesRaids"
-import type DressKind from "/UI/Dress"
+import type DressKind, DressPiece from "/UI/Dress"
 
 -- "#RRGGBB" or "#RRGGBBAA" → { r, g, b[, a] }
 local function byte(s: string, i: number): number
@@ -328,6 +328,14 @@ registerRaids()
 -- windows (asked 2026-11-12, "maximum cute"): paws and hearts in their
 -- ground and behind the bars, stitched edges, paw corners, hearts for the
 -- jewels and the small marks, a divider of tiny paws, a more opaque glass.
+-- Its dress (asked 2026-11-14: the corners that wrap round the frames, as
+-- the Icecrown Citadel and Ulduar themes' do, and white and sparkles): pink
+-- satin ribbon with white stitches round every corner of the windows and
+-- the chat, a white bow tied over the top ones (swaying a little), a heart
+-- on the bottom ones, a string of pearls along a window's top, plum
+-- wallpaper with faint white sparkles behind the titles, pink-and-white
+-- sparkles drifting up; the minimap in a ribbon of pearls with a cat's ears,
+-- a cat's two small ears on the player and target frames.
 -- The art comes from tools/pinkcat_art.py.
 --------------------------------------------------------------------------------
 
@@ -375,10 +383,32 @@ local function pinkcatGlyphs(): { [string]: string }
     return out
 end
 
+-- The ribbon round a frame's four corners (an L along both edges, at most
+-- 4 px past them), the bows tied over the top ones, after `more`.
+local function pinkcatCorners(more: DressPiece[]?): DressPiece[]
+    local out: DressPiece[] = {}
+    for _, p in ipairs(more or {}) do
+        out[#out + 1] = p
+    end
+    local wrap, low = PINKCAT .. "Wrap.tga", PINKCAT .. "WrapLow.tga"
+    out[#out + 1] = { file = wrap, point = "TOPLEFT", x = -4, y = 4, w = 48, h = 48, flip = true }
+    out[#out + 1] = { file = wrap, point = "TOPRIGHT", x = 4, y = 4, w = 48, h = 48 }
+    out[#out + 1] = { file = low, point = "BOTTOMLEFT", x = -4, y = -4, w = 48, h = 48, flip = true }
+    out[#out + 1] = { file = low, point = "BOTTOMRIGHT", x = 4, y = -4, w = 48, h = 48 }
+    -- (after the ribbon: in front of it; its knot on the corner)
+    local bow = PINKCAT .. "Bow.tga"
+    out[#out + 1] = { file = bow, point = "TOPLEFT", x = -7, y = 6, w = 16, h = 12, sway = 8, pivot = "CENTER" }
+    out[#out + 1] = { file = bow, point = "TOPRIGHT", x = 7, y = 6, w = 16, h = 12, sway = 8, pivot = "CENTER" }
+    return out
+end
+
+-- The sparkles (white, a little pink one beside, in their own colours).
+local PINKCAT_SPARKLE = PINKCAT .. "Sparkle.tga"
+
 register({
     id = "pinkcat",
     name = "Pink Cat",
-    description = "Pink and lilac on deep plum with cream text; cat icons, paw-print bars, a little more room.",
+    description = "Pink and lilac on deep plum with cream text; cat icons, paw-print bars, ribbons and bows round the corners, sparkles, a little more room.",
     colors = colors({
         ["surface"] = "#190D1B",
         -- (more opaque than the raids' glass: the zone's name showed through)
@@ -443,13 +473,40 @@ register({
         ["divider"] = PINKCAT .. "Divider.tga",
     },
     glyphs = pinkcatGlyphs(),
-    space = {
-        ["space-3"] = 7,
-        ["space-4"] = 9,
-        ["space-5"] = 14,
-        ["space-6"] = 23,
-        ["space-7"] = 32,
+    dress = {
+        window = {
+            header = PINKCAT .. "Header.tga",
+            pieces = pinkcatCorners({
+                { file = PINKCAT .. "Pearls.tga", point = "TOP", span = true, x = 44, y = 5, w = 64, h = 10 },
+            }),
+            motes = { file = PINKCAT_SPARKLE, count = 6, size = 10 },
+        },
+        chat = { pieces = pinkcatCorners() },
+        minimap = {
+            pieces = {
+                -- (behind the minimap's buttons, 28 px past its disc: room
+                -- for the ears)
+                { file = PINKCAT .. "Ring.tga", point = "CENTER", fill = true, x = 28, y = 28, layer = "back" },
+            },
+            motes = { file = PINKCAT_SPARKLE, count = 3, size = 9 },
+        },
+        -- (small: big art over the unit frames was too crowded)
+        unit = {
+            pieces = {
+                {
+                    file = PINKCAT .. "Ears.tga",
+                    point = "TOPLEFT",
+                    x = 12,
+                    y = 11,
+                    w = 28,
+                    h = 12,
+                    sway = 3,
+                    pivot = "BOTTOM",
+                },
+            },
+        },
     },
+    space = { ["space-3"] = 7, ["space-4"] = 9, ["space-5"] = 14, ["space-6"] = 23, ["space-7"] = 32 },
     sizes = {
         ["icon-sm"] = 18,
         ["icon-md"] = 26,
@@ -546,9 +603,7 @@ register({
             },
         },
         minimap = {
-            pieces = {
-                { file = STV .. "RuinsRing.tga", point = "CENTER", fill = true, x = 8, y = 8 },
-            },
+            pieces = { { file = STV .. "RuinsRing.tga", point = "CENTER", fill = true, x = 8, y = 8 } },
             motes = { file = STV .. "Firefly.tga", count = 3, color = "amber", size = 7 },
         },
         unit = {
@@ -614,7 +669,16 @@ register({
             pieces = {
                 { file = STV .. "CanopyRing.tga", point = "CENTER", fill = true, x = 8, y = 8 },
                 -- a scarlet macaw perched on the rim
-                { file = STV .. "Parrot.tga", point = "RIGHT", x = 24, y = 26, w = 48, h = 60, sway = 3, pivot = "BOTTOM" },
+                {
+                    file = STV .. "Parrot.tga",
+                    point = "RIGHT",
+                    x = 24,
+                    y = 26,
+                    w = 48,
+                    h = 60,
+                    sway = 3,
+                    pivot = "BOTTOM",
+                },
             },
         },
         unit = {

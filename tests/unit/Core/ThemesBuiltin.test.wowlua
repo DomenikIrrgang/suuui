@@ -8,9 +8,11 @@ import type Theme, ThemeColors, ThemeTile from "/Core/Themes"
 import * as settings from "/Core/Settings"
 import internal hex, linear, gamma, ratio, cbrt, hue, oklch, LINE_A, HAIRLINE_A, FAINT_A, PINKCAT_GLYPHS from "/Core/ThemesBuiltin"
 import * as draw from "/UI/Draw"
+import * as dress from "/UI/Dress"
 import type DressPiece from "/UI/Dress"
 import text as uiText from "/UI/Text"
 import expectNoErrors, newParent from "../../helpers"
+import reduceMotion from "../UI/PrimitivesHelpers"
 
 const BUILT_IN: string[] = {
     "highcontrast",
@@ -86,6 +88,7 @@ end
 
 @afterEach
 local function back()
+    reduceMotion(false)
     settings.setAccount("theme", nil)
     themes.apply()
 end
@@ -314,8 +317,18 @@ local function pinkcatFiles()
     table.sort(tokens)
     -- every texture token but geometry and the game's own signs
     local kept: { [string]: boolean } = {}
-    for _, token in ipairs({ "glow", "raid-markers", "circle-fill", "circle-soft", "circle-band", "circle-edge",
-        "ring-arc-2", "ring-arc-3", "ring-arc-4", "quest-start" }) do
+    for _, token in ipairs({
+        "glow",
+        "raid-markers",
+        "circle-fill",
+        "circle-soft",
+        "circle-band",
+        "circle-edge",
+        "ring-arc-2",
+        "ring-arc-3",
+        "ring-arc-4",
+        "quest-start",
+    }) do
         kept[token] = true
     end
     local all: string[] = {}
@@ -364,7 +377,9 @@ local function pinkcatContrast(fg: string, bg: string, least: number)
     local ground = pinkcat(bg)
     local r = ratio(over(pinkcat(fg), ground), rgb(ground))
     if r < least then
-        error(`{fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+        error(
+            `{fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`
+        )
     end
 end
 
@@ -383,12 +398,7 @@ const PATTERN_ALPHA = 0.10
 const STV_PATTERN_ALPHA = 0.16
 
 @test("Pink Cat: text stays readable over the brightest pixels of its windows' pattern")
-@cases({
-    { "ink", 7 },
-    { "gilt-text", 7 },
-    { "ink-muted", 4.5 },
-    { "ink-faint", 3 },
-})
+@cases({ { "ink", 7 }, { "gilt-text", 7 }, { "ink-muted", 4.5 }, { "ink-faint", 3 } })
 local function pinkcatPattern(fg: string, least: number)
     -- the glass over the dark world, the pattern's gilt over that
     for _, ground in ipairs({ "surface", "surface-glass" }) do
@@ -397,7 +407,9 @@ local function pinkcatPattern(fg: string, least: number)
         local brightest = over({ gilt[1], gilt[2], gilt[3], PATTERN_ALPHA }, g)
         local r = ratio(rgb(pinkcat(fg)), brightest)
         if r < least then
-            error(`{fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+            error(
+                `{fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`
+            )
         end
     end
 end
@@ -416,7 +428,9 @@ local function pinkcatPower()
             local d = math.abs(hue(a[1], a[2], a[3]) - hue(b[1], b[2], b[3]))
             -- at least 25° apart in OKLab hue
             if math.min(d, 2 * math.pi - d) < math.rad(25) then
-                error(`{names[i]} and {names[j]} are too close`)
+                error(
+                    `{names[i]} and {names[j]} are too close`
+                )
             end
         end
     end
@@ -591,7 +605,9 @@ local function stvContrast(id: string, fg: string, bg: string, least: number)
     local ground = colorIn(id, bg)
     local r = ratio(over(colorIn(id, fg), ground), rgb(ground))
     if r < least then
-        error(`{id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+        error(
+            `{id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`
+        )
     end
 end
 
@@ -605,12 +621,7 @@ local function stvFaint()
 end
 
 @test("Stranglethorn: text stays readable over the brightest pixels of its windows' pattern")
-@cases({
-    { "ink", 7 },
-    { "gilt-text", 7 },
-    { "ink-muted", 4.5 },
-    { "ink-faint", 3 },
-})
+@cases({ { "ink", 7 }, { "gilt-text", 7 }, { "ink-muted", 4.5 }, { "ink-faint", 3 } })
 local function stvPattern(fg: string, least: number)
     -- (tools/stv_art.py's PATTERN_ALPHA: the stonework and the leaves at
     -- most this, in gilt)
@@ -621,7 +632,9 @@ local function stvPattern(fg: string, least: number)
             local brightest = over({ gilt[1], gilt[2], gilt[3], STV_PATTERN_ALPHA }, g)
             local r = ratio(rgb(colorIn(id, fg)), brightest)
             if r < least then
-                error(`{id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+                error(
+                    `{id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`
+                )
             end
         end
     end
@@ -757,7 +770,10 @@ local function raidFiles()
             ships(assert(fileOf(value)))
         end
         for _, kind in ipairs({ "window", "chat", "minimap", "unit" }) do
-            local k = assert(t.dress[kind], `{raid.id}: {kind}`)
+            local k = assert(
+                t.dress[kind],
+                `{raid.id}: {kind}`
+            )
             expect(#(k.pieces or {}) > 0).toBe(true)
             if k.header then
                 ships(k.header)
@@ -800,7 +816,9 @@ local function raidContrast(fg: string, bg: string, least: number)
         local ground = colorIn(raid.id, bg)
         local r = ratio(over(colorIn(raid.id, fg), ground), rgb(ground))
         if r < least then
-            error(`{raid.id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`)
+            error(
+                `{raid.id}: {fg} on {bg}: {string.format("%.2f", r)}:1, under {least}:1`
+            )
         end
     end
 end
@@ -816,12 +834,7 @@ local function raidFaint()
 end
 
 @test("Raid themes: text stays readable over the brightest pixels of their windows' pattern")
-@cases({
-    { "ink", 7 },
-    { "gilt-text", 7 },
-    { "ink-muted", 4.5 },
-    { "ink-faint", 3 },
-})
+@cases({ { "ink", 7 }, { "gilt-text", 7 }, { "ink-muted", 4.5 }, { "ink-faint", 3 } })
 local function raidPattern(fg: string, least: number)
     for _, raid in ipairs(RAIDS) do
         for _, ground in ipairs({ "surface", "surface-glass" }) do
@@ -830,7 +843,9 @@ local function raidPattern(fg: string, least: number)
             local brightest = over({ gilt[1], gilt[2], gilt[3], raid.pattern }, g)
             local r = ratio(rgb(colorIn(raid.id, fg)), brightest)
             if r < least then
-                error(`{raid.id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`)
+                error(
+                    `{raid.id}: {fg} on the pattern over {ground}: {string.format("%.2f", r)}:1, under {least}:1`
+                )
             end
         end
     end
@@ -854,5 +869,151 @@ local function raidFonts()
     themes.apply()
     expect(T.type.header.file).toBe(before)
     expect(T.type.header.size).toBe(size)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Pink Cat's dress (asked 2026-11-14): ribbon round the corners, bows,
+-- pearls, sparkles; the minimap's cat ears, small ears on the unit frames
+--------------------------------------------------------------------------------
+
+local function playing(t: Texture): boolean
+    for _, g in ipairs({ t:GetAnimationGroups() }) do
+        if (g :: AnimationGroup):IsPlaying() then
+            return true
+        end
+    end
+    return false
+end
+
+@test("Pink Cat: every dress file it names ships, on all four kinds of frame")
+local function pinkcatDressFiles()
+    local t = theme("pinkcat")
+    local tex = newParent():CreateTexture()
+    local function ships(file: string)
+        tex:SetTexture(file)
+        expect(tex:GetTextureFilePath()).toBe(file)
+    end
+    for _, kind in ipairs({ "window", "chat", "minimap", "unit" }) do
+        local k = assert(t.dress[kind], kind)
+        expect(#(k.pieces or {}) > 0).toBe(true)
+        if k.header then
+            ships(k.header)
+        end
+        for _, p in ipairs(k.pieces or {}) do
+            ships(p.file)
+        end
+        if k.motes then
+            ships(k.motes.file)
+            -- (the sparkles in their own colours: white with a pink one)
+            expect(k.motes.color).toBeNil()
+        end
+    end
+    expect(assert(t.dress.window).header).toBeTruthy()
+    expect(assert(t.dress.window).motes).toBeTruthy()
+    expect(assert(t.dress.minimap).motes).toBeTruthy()
+end
+
+@test(
+    "Pink Cat: the ribbon wraps all four corners of the windows and chat, at most 4 px past the edges, a bow over each top one"
+)
+local function pinkcatCorners()
+    local t = theme("pinkcat")
+    for _, kind in ipairs({ "window", "chat" }) do
+        local corners: { [string]: boolean } = {}
+        local bows: { [string]: boolean } = {}
+        local wrapsAt: number? = nil
+        for i, p in ipairs(assert(t.dress[kind]).pieces or {}) do
+            if p.span then
+                -- (the pearls, along the top between the corners)
+                expect(p.point).toBe("TOP")
+                expect(reach(p) <= 5).toBe(true)
+                expect((p.x or 0) >= 36).toBe(true)
+            elseif p.sway then
+                -- a bow: after (in front of) the ribbon, small, its middle
+                -- within a px of a top corner, swaying a little
+                expect(i > assert(wrapsAt)).toBe(true)
+                expect(p.point == "TOPLEFT" or p.point == "TOPRIGHT").toBe(true)
+                expect(math.abs(p.x or 0) - (p.w or 0) / 2 <= 0).toBe(true)
+                expect((p.w or 0) <= 16 and (p.h or 0) <= 12).toBe(true)
+                expect(p.sway <= 8).toBe(true)
+                bows[p.point] = true
+            else
+                wrapsAt = i
+                expect(p.w).toBe(48)
+                expect(p.h).toBe(48)
+                expect(reach(p)).toBe(4)
+                corners[p.point] = true
+            end
+        end
+        for _, point in ipairs({ "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }) do
+            expect(corners[point]).toBe(true)
+        end
+        expect(bows.TOPLEFT and bows.TOPRIGHT).toBe(true)
+    end
+end
+
+@test("Pink Cat: the unit frames' art stays small: a cat's ears over the frame's top, nothing over its bar")
+local function pinkcatUnitDress()
+    local pieces = assert(theme("pinkcat").dress.unit).pieces or {}
+    expect(#pieces).toBe(1)
+    for _, p in ipairs(pieces) do
+        expect((p.w or 0) <= 28 and (p.h or 0) <= 12).toBe(true)
+        -- (its foot at most 1 px down into the frame)
+        expect((p.y or 0) - (p.h or 0) >= -1).toBe(true)
+        expect((p.y or 0) <= 12).toBe(true)
+    end
+end
+
+@test("Pink Cat: bows and ears sway and sparkles drift; with Reduce motion all of it keeps still and no sparkles come")
+local function pinkcatMotion()
+    local parent = newParent()
+    local win = CreateFrame("Frame", nil, parent)
+    win:SetSize(300, 200)
+    win:SetPoint("CENTER")
+    local head = CreateFrame("Frame", nil, win)
+    head:SetPoint("TOPLEFT")
+    head:SetPoint("TOPRIGHT")
+    head:SetHeight(30)
+    dress.register(win, "window", head, "BOTTOM")
+    local unit = CreateFrame("Frame", nil, parent)
+    unit:SetSize(300, 30)
+    unit:SetPoint("TOP")
+    dress.register(unit, "unit")
+    settings.setAccount("theme", "pinkcat")
+    themes.apply()
+    local kinds = theme("pinkcat").dress
+    local pieces, motes, header = dress.wornBy(win)
+    local want = assert(kinds.window).pieces or {}
+    expect(#pieces).toBe(#want)
+    expect(#motes).toBe(6)
+    expect(header).toBeTruthy()
+    for i, p in ipairs(want) do
+        expect(pieces[i]:IsShown()).toBe(true)
+        -- (the bows sway; the ribbon and the pearls keep still)
+        expect(playing(pieces[i])).toBe(p.sway ~= nil)
+    end
+    for _, m in ipairs(motes) do
+        expect(playing(m)).toBe(true)
+    end
+    local ears = dress.wornBy(unit)
+    expect(#ears).toBe(1)
+    expect(playing(ears[1])).toBe(true)
+    -- (the bow in front of the ribbon it's tied on)
+    local _, ribbonLevel = pieces[2]:GetDrawLayer()
+    local _, bowLevel = pieces[#pieces]:GetDrawLayer()
+    expect(bowLevel > ribbonLevel).toBe(true)
+    reduceMotion(true)
+    themes.apply()
+    pieces, motes = dress.wornBy(win)
+    expect(#pieces).toBe(#want)
+    expect(#motes).toBe(0)
+    for _, t in ipairs(pieces) do
+        expect(t:IsShown()).toBe(true)
+        expect(playing(t)).toBe(false)
+        expect(t:GetRotation()).toBeCloseTo(0, 4)
+    end
+    ears = dress.wornBy(unit)
+    expect(playing(ears[1])).toBe(false)
     expectNoErrors()
 end
