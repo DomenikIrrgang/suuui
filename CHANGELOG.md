@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- World map: the Map filters button in the map's header has its border on every side again; its right edge could go missing when the map was enlarged, in every theme.
+
 ## 0.15.0 (2026-11-14)
 
 ### New
