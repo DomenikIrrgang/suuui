@@ -167,8 +167,6 @@ export type CraftingData = {
     recipes?: { learned?: number, total?: number },
     categories?: RecipeCategory[],
     selected?: number,
-    -- the figure each recipe row shows: its profit or its cost (nil: none)
-    money?: "profit" | "cost",
 }
 
 export type RecipeReagent = {
@@ -551,17 +549,6 @@ local function setMoney(t: Text, copper: number?, signed: boolean)
     t:SetColor(loss and "ember-text" or "ink")
 end
 
--- A recipe row's figure: its profit or its cost; not known (a price
--- missing) or none asked for: empty (a dash on most rows read as noise).
-local function showMoney(t: Text, kind: ("profit" | "cost")?, rec: RecipeEntry)
-    local copper = kind == "profit" and rec.profit or kind == "cost" and rec.cost or nil
-    if copper then
-        setMoney(t, copper, kind == "profit")
-    else
-        t:SetValue("")
-    end
-end
-
 export class RecipeRow extends Button
     readonly sel: Texture
     readonly selEdge: Texture
@@ -569,8 +556,6 @@ export class RecipeRow extends Button
     readonly chevron: Texture
     readonly eye: Texture
     readonly count: Text
-    -- the recipe's profit or cost (CraftingData.money)
-    readonly money: Text
     readonly label: Text
     -- a category's head, or a recipe
     category: string? = nil
@@ -603,14 +588,10 @@ export class RecipeRow extends Button
         draw.layout(self, function()
             self.count:SetPoint("RIGHT", self.eye, "LEFT", -S["space-3"], 0)
         end)
-        self.money = uiText.text(self, "caption", "ink")
-        draw.layout(self, function()
-            self.money:SetPoint("RIGHT", self.count, "LEFT", -S["space-3"], 0)
-        end)
         self.label = uiText.text(self, "label", "ink")
         draw.layout(self, function()
             self.label:SetPoint("LEFT", self, "LEFT", S["space-5"], 0)
-            self.label:SetPoint("RIGHT", self.money, "LEFT", -S["space-3"], 0)
+            self.label:SetPoint("RIGHT", self.count, "LEFT", -S["space-3"], 0)
         end)
         self.label:SetJustifyH("LEFT")
         self:SetScript("OnEnter", function()
@@ -1312,7 +1293,6 @@ export class Professions extends Frame
                 r.label:SetColor("gilt-text")
                 r.label:SetValue(name or "")
                 r.count:SetValue(tostring(#(cat.recipes or {})))
-                r.money:SetValue("")
             end
             if not folded then
                 for _, rec in ipairs(cat.recipes or {}) do
@@ -1326,7 +1306,6 @@ export class Professions extends Frame
                     rr.label:SetValue(rec.name or "")
                     local canMake = rec.canMake or 0
                     rr.count:SetValue(canMake > 0 and ("[" .. canMake .. "]") or "")
-                    showMoney(rr.money, d.money, rec)
                     rr.eye:SetShown(rec.tracked == true)
                     local on = rec.id == d.selected
                     rr.sel:SetShown(on)

@@ -4,7 +4,7 @@
 
 ### New
 
-- **Crafting cost and profit**: the Professions window shows what each recipe costs to make and what it brings. Every recipe in the list has its profit (losses in red), and the recipe you choose has a Market section with the reagents' cost, what the item sells for after the auction house's 5% cut, the profit, and when the prices were seen. Sort by **Profit** or **Cost to make**. Prices come from your last auction house scan and from vendors you've visited, whichever is cheaper. Turn it off with "Crafting cost and profit" in Settings › General › Professions. For plugin authors (API 0.44): the `auctionhouse` service's `Price(itemID)`.
+- **Crafting cost and profit**: the Professions window shows what a recipe costs to make and what it brings. The recipe you choose has a Market section with the reagents' cost, what the item sells for after the auction house's 5% cut, the profit, and when the prices were seen. Sort by **Profit** or **Cost to make**. Prices come from your last auction house scan and from vendors you've visited, whichever is cheaper. Turn it off with "Crafting cost and profit" in Settings › General › Professions. For plugin authors (API 0.44): the `auctionhouse` service's `Price(itemID)`.
 
 ## 0.15.0 (2026-11-14)
 
