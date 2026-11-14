@@ -161,7 +161,7 @@ TEXTURES = [
      "The nameplates' cast fill, stretched, coloured like cast-bar. Empty (SuuUI's): cast-bar's file."),
     # (asked 2026-11-14: bag items that start a quest, as the game's bags mark them)
     ("quest-start", "Interface\\GossipFrame\\AvailableQuestIcon",
-     "The mark on a bag or bank slot whose item starts a quest, in its top-left corner: the game's yellow "
+     "The mark on a bag or bank slot whose item starts a quest, in its bottom-left corner: the game's yellow "
      "exclamation mark, drawn in its own colours."),
 ]
 
