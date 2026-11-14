@@ -47,6 +47,12 @@
 --                                             the default: the unit-fill);
 --                                             the "Health colour" setting
 --                                             on Class colours wins
+--   cast = "class"                            (0.46) your cast bar and swing
+--                                             timer in your class colour
+--                                             ("fill", the default: the
+--                                             cast-fill colours); the "Cast
+--                                             bar colour" setting on Class
+--                                             colours wins
 -- Plugins load after SuuUI's saved settings, so a theme can't apply where
 -- colour vision does (Settings' bind); colour vision is applied again after
 -- it, so its signal colours always win. A change applies at once (asked
@@ -93,6 +99,7 @@ export type Theme = {
     radius: ThemeRadii,
     dress: Dress,
     health: "fill" | "class",
+    cast: "fill" | "class",
 }
 --- What a plugin passes SuuUI.RegisterTheme.
 export type ThemeDef = {
@@ -108,6 +115,7 @@ export type ThemeDef = {
     radius?: ThemeRadii,
     dress?: Dress,
     health?: "fill" | "class",
+    cast?: "fill" | "class",
 }
 
 local colors: { [string]: Color } = T.color
@@ -221,6 +229,7 @@ local list: Theme[] = {
         radius = {},
         dress = {},
         health = "fill",
+        cast = "fill",
     },
 }
 local byId: { [string]: Theme } = { [DEFAULT] = list[1] }
@@ -354,10 +363,13 @@ local function dressOf(id: string, given: unknown): Dress
     local out: Dress = {}
     for kind, spec in pairs(given :: { [unknown]: unknown }) do
         if type(kind) ~= "string" or not dress.KINDS[kind] then
-            error(("SuuUI.RegisterTheme: %s's dress has no frame kind %q (window, minimap, unit, chat)"):format(
-                id,
-                tostring(kind)
-            ), 3)
+            error(
+                ("SuuUI.RegisterTheme: %s's dress has no frame kind %q (window, minimap, unit, chat)"):format(
+                    id,
+                    tostring(kind)
+                ),
+                3
+            )
         end
         if type(spec) ~= "table" then
             error(("SuuUI.RegisterTheme: %s's dress.%s is a table"):format(id, kind), 3)
@@ -413,18 +425,15 @@ local function dressOf(id: string, given: unknown): Dress
         local motes: unknown = k.motes
         if motes ~= nil then
             local m = type(motes) == "table" and motes :: { [string]: unknown } or {}
-            if not isFile(m.file) or type(m.count) ~= "number" or (m.count :: number) < 1 or (m.count :: number) > 8 then
+            if not isFile(m.file) or type(m.count) ~= "number" or (m.count :: number) < 1 or
+                (m.count :: number) > 8 then
                 error(("SuuUI.RegisterTheme: %s's dress.%s.motes is { file, count (1 to 8) }"):format(id, kind), 3)
             end
             if m.color ~= nil and not colors[tostring(m.color)] then
                 error(("SuuUI.RegisterTheme: %s's dress.%s.motes.color is a colour token"):format(id, kind), 3)
             end
         end
-        out[kind] = {
-            header = k.header :: string?,
-            pieces = pieces,
-            motes = motes :: Dress[string]["motes"],
-        }
+        out[kind] = { header = k.header :: string?, pieces = pieces, motes = motes :: Dress[string]["motes"] }
     end
     return out
 end
@@ -498,6 +507,10 @@ export function register(value: unknown): Theme
     if given ~= nil and given ~= "fill" and given ~= "class" then
         error(("SuuUI.RegisterTheme: %s's health is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
     end
+    given = def.cast
+    if given ~= nil and given ~= "fill" and given ~= "class" then
+        error(("SuuUI.RegisterTheme: %s's cast is \"fill\" or \"class\", not %q"):format(def.id, tostring(given)), 2)
+    end
     local theme: Theme = {
         id = def.id,
         name = def.name or def.id,
@@ -511,6 +524,7 @@ export function register(value: unknown): Theme
         radius = radius,
         dress = worn,
         health = def.health == "class" and "class" or "fill",
+        cast = def.cast == "class" and "class" or "fill",
     }
     list[#list + 1] = theme
     byId[def.id] = theme
@@ -542,6 +556,18 @@ export function health(): "fill" | "class"
     return theme.health
 end
 
+-- What colours your cast bar and swing timer (asked 2026-11-14): "class"
+-- (your class colour, toned as class-coloured health) by default; the "Cast
+-- bar colour" setting's "theme" gives the applied theme's choice ("fill":
+-- the cast-fill colours, a pale gradient: the look before). The setting wins.
+export function cast(): "fill" | "class"
+    if settings.accountString("castColor") ~= "theme" then
+        return "class"
+    end
+    local theme = byId[applied] or byId[DEFAULT] :: Theme
+    return theme.cast
+end
+
 -- NPCs' health in their reaction's colour (asked 2026-11-12): the "NPC
 -- reaction colours" setting, on by default since 2026-11-14 (asked; "off"
 -- turns it off); over the theme's fill.
@@ -552,6 +578,14 @@ end
 local function hex(r: number, g: number, b: number): string
     return ("%02x%02x%02x"):format(math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
+
+-- Colour tokens that take another's value unless a theme gives their own
+-- (an alpha: theirs instead of the other's).
+local FOLLOW: { token: string, from: string, alpha?: number }[] = {
+    { token = "cast-fill-deep", from = "ghost", alpha = 0 },
+    { token = "cast-fill", from = "ghost" },
+    { token = "cast-edge", from = "ink" },
+}
 
 -- The chosen theme (a missing one: SuuUI's), then the chosen colour vision
 -- on top: at login, before the modules start, and again whenever either
@@ -591,6 +625,17 @@ export function apply()
                 token[4] = c[4]
             end
             token.hex = hex(c[1], c[2], c[3])
+        end
+    end
+    -- the colours that follow another unless the theme gives them: your cast
+    -- fill the damage ghost's (its deep end clear) and its edge ink, as they
+    -- were drawn before they had their own (a theme's ghost or ink kept
+    -- reaching them)
+    for _, f in ipairs(FOLLOW) do
+        if worked[f.token] == nil then
+            local token, from = assert(colors[f.token]), assert(colors[f.from])
+            token[1], token[2], token[3], token.hex = from[1], from[2], from[3], from.hex
+            token[4] = f.alpha or from[4]
         end
     end
     for style, f in pairs(theme.fonts) do

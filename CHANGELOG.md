@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Your cast bar and swing timer are now in your class colour. To keep the pale bar from before (or your theme's colour), set "Cast bar colour" to the theme's in Settings › Appearance.
+- For theme authors (API 0.46): `cast = "class"` puts the cast bar and swing timer in the class colour for your theme, and the colour tokens `cast-fill-deep`, `cast-fill` and `cast-edge` set their colours otherwise. Without them they follow your `ghost` and `ink`, as before.
+
 ## 0.16.0 (2026-11-14)
 
 ### New
