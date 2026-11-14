@@ -5,6 +5,7 @@
 ### New
 
 - Action bars, with dual spec: when you switch to your other spec, SuuUI checks its bars for spell ranks you learned while the other spec was active and asks whether to upgrade them ("Fireball: Rank 5 to Rank 7 (2 buttons)"). As when you train, lower ranks you placed on purpose stay. Turn it off with "Ask after a spec switch" in Settings › Action bars.
+- **Quest announcements**: in a group, SuuUI tells your party or raid when you finish a quest objective ("SuuUI: [Wolves Across the Border]: 8/8 Wolf Pelt") and when a quest is ready to turn in, as Questie does. Nothing is sent when you're solo. In raid and dungeon fights where the game holds addon chat back, the lines go out once the fight lets them. Both can be turned off in Settings › General › Quest announcements.
 - Bags and bank: an item that starts a quest has a yellow exclamation mark in its corner, as in the game's own bags, until you take the quest. For theme authors (API 0.43): the texture token `quest-start` sets the mark.
 
 ### Changed
