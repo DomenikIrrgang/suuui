@@ -8,6 +8,8 @@
 -- Frames that place themselves (bars attached to the dock) move with what
 -- they're attached to and aren't checked on their own; the party and raid
 -- frames never show together, and the tooltip's place is only an anchor.
+-- Each screen size is checked with the profile's own layout for it (Core/
+-- Settings: positions are kept per screen size), or its closest one.
 -- The report goes to the chat and to SuuUIProbe.layoutCheck.
 
 import print, registerCommand from "/Core/Init"
@@ -22,7 +24,15 @@ type Screen = { name: string, w: number, h: number }
 --- What a run saves to SuuUIProbe.layoutCheck: per screen, the root's size
 --- and what is wrong on it.
 export type Report = { at: string, screens: { [string]: { root: string, issues: string[] } } }
-type Placed = { id: string, label: string, pos: settings.Values, w: number, h: number }
+type Placed = {
+    id: string,
+    label: string,
+    namespace?: string,
+    key?: string,
+    pos: settings.Values,
+    w: number,
+    h: number,
+}
 type Rect = { f: Placed, l: number, b: number, w: number, h: number }
 
 local SCREENS: Screen[] = {
@@ -94,7 +104,15 @@ local function framesOf(list: editMode.MoverInfo[]): Placed[]
             local w, h = m.frame:GetSize()
             w, h = (w or 0) * scale, (h or 0) * scale
             if w > 1 and h > 1 then
-                frames[#frames + 1] = { id = id, label = m.label, pos = pos, w = w, h = h }
+                frames[#frames + 1] = {
+                    id = id,
+                    label = m.label,
+                    namespace = m.namespace,
+                    key = m.key,
+                    pos = pos,
+                    w = w,
+                    h = h,
+                }
             end
         end
     end
@@ -105,8 +123,13 @@ end
 local function issuesOn(frames: Placed[], W: number, H: number): string[]
     local issues: string[] = {}
     local rects: Rect[] = {}
+    -- each size's own layout (Core/Settings), where the profile keeps one
+    local size = ("%dx%d"):format(W + 0.5, H + 0.5)
     for _, f in ipairs(frames) do
-        local l, b, w, h = place(f.pos, f.w, f.h, W, H)
+        local namespace, key = f.namespace, f.key
+        local at: unknown = namespace and key and settings.valueAtSize(namespace, key, size) or nil
+        local pos = type(at) == "table" and at :: settings.Values or f.pos
+        local l, b, w, h = place(pos, f.w, f.h, W, H)
         local r: Rect = { f = f, l = l, b = b, w = w, h = h }
         rects[#rects + 1] = r
         local out: string[] = {}

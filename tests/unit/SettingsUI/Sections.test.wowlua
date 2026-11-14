@@ -25,6 +25,7 @@ import _ from "/SettingsUI/Sections"
 import expectNoErrors, newParent from "../../helpers"
 import printedSince, printedCount, hasLine from "./UiSettingsHelpers"
 import type TextField from "/UI/Inputs"
+import type Text from "/UI/Text"
 import type SuuButton from "/UI/Controls"
 import type Select, SelectOption from "/UI/Select"
 
@@ -658,4 +659,41 @@ local function badModule()
     expect(hasLine(said, "left out a module without a proper id (Broken, from Plug)")).toBe(true)
     buildModules(p)
     expect(#printedSince(before)).toBe(#said)
+end
+
+@test("screen sizes: the layout in use and those kept; copy one over it, forget another")
+local function screenSizes()
+    local inUse = assert(settings.layoutSizeInUse())
+    -- (the other sizes earlier tests used: forgotten)
+    for _, size in ipairs(settings.layoutNames()) do
+        if size ~= inUse then
+            settings.forgetLayout(size)
+        end
+    end
+    local line = row("profiles", "In use").build(host()) :: Frame & { line: Text }
+    expect(line.line).toHaveText((inUse:gsub("x", " × ")))
+    -- another size kept: listed, and offered to copy and forget
+    settings.useLayout("3440x1440")
+    settings.useLayout(inUse)
+    expect(line.line).toHaveText((inUse:gsub("x", " × ")) .. " (also kept: 3440 × 1440)")
+    local copy = mock.stub(settings, "copyLayout", function(_s: string): (boolean, string?)
+        return true, nil
+    end)
+    local f = row("profiles", "Copy a layout").build(host()) :: PickAndButton
+    local sizes: string[] = {}
+    for _, o in ipairs(f.select.options) do
+        sizes[#sizes + 1] = o.value or ""
+    end
+    expect(sizes).toEqual({ "3440x1440" })
+    assert(f.select.onChange)("3440x1440")
+    mock.click(f.button)
+    mock.click(f.button)
+    expect(copy).toHaveBeenCalledWith("3440x1440")
+    local g = row("profiles", "Forget a layout").build(host()) :: PickAndButton
+    assert(g.select.onChange)("3440x1440")
+    mock.click(g.button)
+    mock.click(g.button)
+    expect(settings.layoutNames()).never.toContain("3440x1440")
+    expect(line.line).toHaveText((inUse:gsub("x", " × ")))
+    expectNoErrors()
 end

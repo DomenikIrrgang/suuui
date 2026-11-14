@@ -1326,3 +1326,187 @@ local function ownUnbound()
         store:set("bars", "scale", 2)
     end).toThrow("saved settings have not loaded yet")
 end
+
+--------------------------------------------------------------------------------
+-- Layouts: positions and group layouts per screen size, in each profile
+--------------------------------------------------------------------------------
+
+local function pos(y: number): settings.Values
+    return { point = "BOTTOM", x = 0, y = y }
+end
+
+-- The screen size a layout store reads (Root's, in SuuUI).
+type Size = { value: string }
+
+-- A store with a module's position, a named layout key and a plain setting,
+-- its size read from `size`.
+local function layoutStore(data: { [string]: unknown }, size: Size): (settings.SettingsStore, FakeNotifier)
+    local notifier = FakeNotifier.new()
+    local store = settings.SettingsStore.new(FakeReporter.new(), notifier)
+    store:register("frames", { position = pos(100), width = 200, color = "red" }, { "width" })
+    store:setSizeSource(function(): string?
+        return size.value
+    end)
+    store:bind(data, CHAR)
+    return store, notifier
+end
+
+local function layoutOf(data: { [string]: unknown }, profileName: string, size: string): unknown
+    return tbl.field(data, "profiles", profileName, "__layouts", size)
+end
+
+@test("layouts: positions and the keys a module names are layout settings; others aren't")
+local function layoutKeys()
+    local store = layoutStore({}, { value = "1920x1080" })
+    expect(store:isLayout("frames", "position")).toBe(true)
+    expect(store:isLayout("frames", "width")).toBe(true)
+    expect(store:isLayout("frames", "color")).toBe(false)
+    expect(store:layoutSizeInUse()).toBe("1920x1080")
+end
+
+@test("layouts: a profile from before them takes its own values as the layout of the size in use")
+local function layoutFromProfile()
+    local data: { [string]: unknown } = {
+        profiles = { [CHAR] = { frames = { position = pos(300), width = 150, color = "blue" } } },
+    }
+    local store = layoutStore(data, { value = "1920x1080" })
+    expect(store:get("frames", "position")).toEqual(pos(300))
+    expect(store:get("frames", "width")).toBe(150)
+    expect(tbl.field(layoutOf(data, CHAR, "1920x1080"), "frames", "width")).toBe(150)
+    -- a plain setting stays the profile's own
+    expect(tbl.field(layoutOf(data, CHAR, "1920x1080"), "frames", "color")).toBeNil()
+    expect(store:get("frames", "color")).toBe("blue")
+end
+
+@test(
+    "layouts: a layout setting written goes to the layout in use and the profile's own values; another size keeps its own"
+)
+local function layoutWrites()
+    local size: Size = { value = "1920x1080" }
+    local data: { [string]: unknown } = {}
+    local store, notifier = layoutStore(data, size)
+    store:set("frames", "width", 120)
+    store:set("frames", "color", "green")
+    expect(tbl.field(layoutOf(data, CHAR, "1920x1080"), "frames", "width")).toBe(120)
+    expect(tbl.field(data, "profiles", CHAR, "frames", "width")).toBe(120)
+    -- 1440p: a copy of the closest layout (1080p's)
+    local heard: unknown[] = {}
+    store:watch(
+        "frames",
+        "width",
+        function(v: unknown)
+            heard[#heard + 1] = v
+        end,
+        "Layout Test"
+    )
+    store:useLayout("2560x1440")
+    expect(store:layoutSizeInUse()).toBe("2560x1440")
+    expect(store:get("frames", "width")).toBe(120)
+    expect(heard).toEqual({})
+    store:set("frames", "width", 180)
+    store:set("frames", "position", pos(400))
+    expect(heard).toEqual({ 180 })
+    -- back to 1080p: its own values, the watchers told; the plain setting the same
+    store:useLayout("1920x1080")
+    expect(store:get("frames", "width")).toBe(120)
+    expect(store:get("frames", "position")).toEqual(pos(100))
+    expect(store:get("frames", "color")).toBe("green")
+    expect(heard).toEqual({ 180, 120 })
+    expect(notifier.told[#notifier.told]).toBe("SUUUI_LAYOUT_CHANGED 1920x1080")
+    expect(store:layoutNames()).toEqual({ "1920x1080", "2560x1440" })
+end
+
+@test("layouts: a new size starts from the closest layout (4K from 1440p, 1600 x 900 from 1080p)")
+local function layoutClosest()
+    local size: Size = { value = "1920x1080" }
+    local store = layoutStore({}, size)
+    store:set("frames", "width", 120)
+    store:useLayout("2560x1440")
+    store:set("frames", "width", 180)
+    store:useLayout("3840x2160")
+    expect(store:get("frames", "width")).toBe(180)
+    store:useLayout("3440x1440")
+    expect(store:get("frames", "width")).toBe(180)
+    store:useLayout("1600x900")
+    expect(store:get("frames", "width")).toBe(120)
+end
+
+@test("layouts: another profile shows its layout for the size in use; copied and forgotten layouts")
+local function layoutProfiles()
+    local data: { [string]: unknown } = {
+        profiles = {
+            [CHAR] = {},
+            Raid = {
+                __layouts = {
+                    ["1920x1080"] = { frames = { width = 90 } },
+                    ["2560x1440"] = { frames = { width = 160 } },
+                },
+            },
+        },
+    }
+    local store = layoutStore(data, { value = "2560x1440" })
+    expect(store:useProfile("Raid")).toBe(true)
+    expect(store:get("frames", "width")).toBe(160)
+    expect(store:copyLayout("1920x1080")).toBe(true)
+    expect(store:get("frames", "width")).toBe(90)
+    expect(store:forgetLayout("2560x1440")).toEqual(false)
+    expect(store:forgetLayout("1920x1080")).toBe(true)
+    expect(store:layoutNames()).toEqual({ "2560x1440" })
+    expect(store:copyLayout("1920x1080")).toBe(false)
+end
+
+@test("layouts: a profile's values set per size (role presets) go to that size's layout only")
+local function layoutPresetValues()
+    local data: { [string]: unknown } = {}
+    local store = layoutStore(data, { value = "1920x1080" })
+    local ok = store:setProfileValues("Tanks", {
+        { "frames", "width", 140, "1920x1080" },
+        { "frames", "width", 220, "2560x1440" },
+        { "frames", "color", "gold" },
+    })
+    expect(ok).toBe(true)
+    expect(tbl.field(layoutOf(data, "Tanks", "1920x1080"), "frames", "width")).toBe(140)
+    expect(tbl.field(layoutOf(data, "Tanks", "2560x1440"), "frames", "width")).toBe(220)
+    store:useProfile("Tanks")
+    expect(store:get("frames", "width")).toBe(140)
+    expect(store:get("frames", "color")).toBe("gold")
+    store:useLayout("2560x1440")
+    expect(store:get("frames", "width")).toBe(220)
+    -- in the profile in use, the size in use goes through set
+    store:setProfileValues("Tanks", { { "frames", "width", 230, "2560x1440" } })
+    expect(store:get("frames", "width")).toBe(230)
+end
+
+@test("layouts: exported and imported with the profile, wrong types dropped; migrations reach them")
+local function layoutExport()
+    local data: { [string]: unknown } = {}
+    local store = layoutStore(data, { value = "1920x1080" })
+    store:set("frames", "width", 120)
+    local exported = assert(store:exportProfile())
+    local copied = exported.data :: { [string]: unknown }
+    local sizes = copied.__layouts :: { [string]: { [string]: settings.Values } }
+    sizes["2560x1440"] = { frames = { width = "wide", position = pos(500) } }
+    expect(store:importProfile("Imported", copied)).toBe(true)
+    expect(store:get("frames", "width")).toBe(120)
+    store:useLayout("2560x1440")
+    expect(store:get("frames", "width")).toBe(200)
+    expect(store:get("frames", "position")).toEqual(pos(500))
+    -- a migration renames a key: the layouts' values too
+    store:migrate("frames", "rename", function(values: settings.Values)
+        if values.position then
+            values.position = pos(600)
+        end
+    end)
+    expect(store:get("frames", "position")).toEqual(pos(600))
+end
+
+@test("layouts: a module registered after the profiles loaded (a plugin) brings its positions into the layouts")
+local function layoutLatePlugin()
+    local data: { [string]: unknown } = { profiles = { [CHAR] = { late = { position = pos(250) } } } }
+    local store = layoutStore(data, { value = "1920x1080" })
+    store:register("late", { position = pos(10) })
+    expect(store:get("late", "position")).toEqual(pos(250))
+    store:set("late", "position", pos(260))
+    store:useLayout("2560x1440")
+    expect(store:get("late", "position")).toEqual(pos(260))
+end

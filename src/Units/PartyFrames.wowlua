@@ -13,6 +13,13 @@
 -- party1 up, so the slots never have gaps. Placement and size change only
 -- out of combat: the frames are secure buttons (click to target).
 --
+-- Pets (asked 2026-11-14): each slot's pet (`pet`, `partypet1`-4) has a
+-- frame of its own on its owner's row: in a column beside it (past its aura
+-- row when that is on the same side), in a row under it. Each is a secure
+-- unit button following its unit (RegisterUnitWatch), so it shows and hides
+-- in combat too, can be clicked and healed by mouseover, and takes the buff
+-- indicators. "Show pets" turns them off (the DPS preset does).
+--
 -- Auras are the engine's (aura containers): debuffs you can remove first
 -- (dispel-coloured edge), then defensives, then the other debuffs raid
 -- frames show; buffs come only through buff indicators. Debuff types (Magic, Curse, Poison,
@@ -59,11 +66,16 @@ local DEFAULTS = {
     auraSide = "right", -- "right", "left" or "inside" (the bar's right end; for a row)
     debuffBadges = "all", -- "all" debuff types, "removable" or "off"
     rangeAlpha = 0.25,
+    showPets = true, -- each member's pet beside (a column) or under (a row) them
+    petWidth = 120, -- a pet's frame in a column: as tall as its owner's
+    petHeight = 18, -- in a row: as wide as its owner's
 }
 
 local M: PartyFramesModule
 
 local SLOTS = { "player", "party1", "party2", "party3", "party4" }
+-- each slot's pet
+local PET_SLOTS = { "pet", "partypet1", "partypet2", "partypet3", "partypet4" }
 
 -- Healing classes, for the power line when the group gives no roles.
 local HEALER_CLASS: { [string]: boolean } = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
@@ -425,7 +437,30 @@ type PreviewSet = { view: Frame, holder: Frame, frames: PreviewPartyFrame[], scr
 local function build(self: PartyFramesModule): Frame
     local holder = CreateFrame("Frame", "SuuUIPartyFrames", SuuUI.Root, "SecureHandlerStateTemplate")
     holder:SetSize(1, 1)
-    self.holder, self.frames = holder, {}
+    self.holder, self.frames, self.pets = holder, {}, {}
+    for i, unit in ipairs(PET_SLOTS) do
+        local f = UnitFrame.new(holder, unit, {
+            size = "sm",
+            name = "SuuUIParty" .. (i == 1 and "Player" or (i - 1)) .. "PetFrame",
+            power = false,
+            textOnSmall = true,
+            healthText = "none",
+        })
+        SuuUI.TagInstance(f, { module = M.id, role = "partyPet" })
+        f:Hide()
+        -- shown as its pet comes (its unit watch): drawn for it
+        f:HookScript("OnShow", function()
+            if f.active then
+                f:Refresh()
+            end
+            self:PlaceOwnerAuras(i)
+        end)
+        -- (its owner's auras back beside the owner)
+        f:HookScript("OnHide", function()
+            self:PlaceOwnerAuras(i)
+        end)
+        self.pets[i] = f
+    end
     for i, unit in ipairs(SLOTS) do
         local f = PartyFrame.new(holder, unit, {
             size = "md",
@@ -507,6 +542,49 @@ local SECTION: SettingsSection = {
                     disabled = function(): (boolean?, string?)
                         if not M:Get("showSelf") then
                             return true, "Turn on Show yourself first."
+                        end
+                        return nil, nil
+                    end,
+                },
+                {
+                    key = "showPets",
+                    label = "Show pets",
+                    control = "toggle",
+                    combat = true,
+                    description = "Each member's pet on their row: beside them in a column, under them in a row. Click it to target it; mouseover bindings heal it.",
+                },
+                {
+                    key = "petWidth",
+                    label = "Pet width",
+                    control = "slider",
+                    min = 60,
+                    max = 200,
+                    step = 2,
+                    unit = "px",
+                    live = false,
+                    combat = true,
+                    description = "A pet's frame beside its owner (Up or Down); as tall as the owner's.",
+                    disabled = function(): (boolean?, string?)
+                        if not M:Get("showPets") then
+                            return true, "Turn on Show pets first."
+                        end
+                        return nil, nil
+                    end,
+                },
+                {
+                    key = "petHeight",
+                    label = "Pet height",
+                    control = "slider",
+                    min = 10,
+                    max = 40,
+                    step = 1,
+                    unit = "px",
+                    live = false,
+                    combat = true,
+                    description = "A pet's frame under its owner (Right); as wide as the owner's.",
+                    disabled = function(): (boolean?, string?)
+                        if not M:Get("showPets") then
+                            return true, "Turn on Show pets first."
                         end
                         return nil, nil
                     end,
@@ -708,6 +786,8 @@ end
 
 export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     frames: PartyFrame[] = {}
+    -- each slot's pet, the same order
+    pets: UnitFrame[] = {}
     holder: Frame? = nil
     indicatorTier: string? = nil
     indicatorTimer: TimerHandle? = nil
@@ -725,6 +805,8 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             api = "0.30",
             reloadToToggle = true,
             defaults = DEFAULTS,
+            -- kept per screen size, with the position (Core/Settings)
+            layout = { "direction", "width", "height", "gap", "auraSide", "petWidth", "petHeight" },
         })
     end
 
@@ -1016,10 +1098,68 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
 
     function Layout()
         self:LayoutFrames(self.frames, assert(self.holder))
+        self:LayoutPets()
         self:DrawPreview()
     end
 
+    -- Each pet on its owner's row: right beside it in a column, under it in a
+    -- row.
+    function LayoutPets()
+        local w, h = self:Get("width"), self:Get("height")
+        local row = self:Get("direction") == "right"
+        for i, p in ipairs(self.pets) do
+            local owner = self.frames[i]
+            p:ClearAllPoints()
+            if row then
+                p:Resize(w, self:Get("petHeight"))
+                p:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -S["space-1"])
+            else
+                p:Resize(self:Get("petWidth"), h)
+                p:SetPoint("LEFT", owner, "RIGHT", S["space-2"], 0)
+            end
+            self:PlaceOwnerAuras(i)
+        end
+    end
+
+    -- A column with the auras on the right: the owner's auras after its pet
+    -- while the pet is out, else beside the owner (seen in game: past the
+    -- whole aura row, the pet sat far from its owner). The pet's button is
+    -- secure and stays put; the auras aren't, so they follow it in combat too.
+    function PlaceOwnerAuras(i: number)
+        local owner, p = self.frames[i], self.pets[i]
+        if not (owner and p) or self:Get("direction") == "right" or self:Get("auraSide") ~= "right" then
+            return
+        end
+        owner.auraClip:ClearAllPoints()
+        if p:IsShown() and self:Get("showPets") then
+            owner.auraClip:SetPoint("LEFT", p, "RIGHT", S["space-2"], 0)
+        else
+            owner.auraClip:SetPoint("LEFT", owner, "RIGHT", S["space-2"], 0)
+        end
+    end
+
+    -- The frames and the pets' (the pets' in their own sizes and without text).
+    function AllFrames(): UnitFrame[]
+        local out: UnitFrame[] = {}
+        for _, f in ipairs(self.frames) do
+            out[#out + 1] = f
+        end
+        for _, p in ipairs(self.pets) do
+            out[#out + 1] = p
+        end
+        return out
+    end
+
     function ApplyOptions()
+        for _, p in ipairs(self.pets) do
+            p.opts.nameColor = self:Get("nameColor")
+            p.opts.raidMarker = self:Get("raidMarkers")
+            p.opts.lowTint = self:Get("lowHealth")
+            p.opts.incoming = self:Get("incoming")
+            if p.active then
+                p:Refresh()
+            end
+        end
         for _, f in ipairs(self.frames) do
             f.opts.healthText = self:Get("healthText")
             f.opts.nameColor = self:Get("nameColor")
@@ -1067,6 +1207,16 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
                     f:Hide()
                 end
             end
+            -- a pet while its owner's frame shows and pets are on
+            local pets = self:Get("showPets")
+            for i, p in ipairs(self.pets) do
+                if pets and i >= first then
+                    RegisterUnitWatch(p)
+                else
+                    UnregisterUnitWatch(p)
+                    p:Hide()
+                end
+            end
         end)
     end
 
@@ -1111,7 +1261,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     function ApplyIndicators()
         self.indicatorTier = UI.GroupTier()
         local list = UI.IndicatorsFor(UI.GroupIndicators(), self.indicatorTier)
-        for _, f in ipairs(self.frames) do
+        for _, f in ipairs(self:AllFrames()) do
             f:SetIndicators(list)
         end
     end
@@ -1151,7 +1301,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     -- the engine applies it as an alpha then.
     function UpdateRange()
         local far = self:Get("rangeAlpha")
-        for _, f in ipairs(self.frames) do
+        for _, f in ipairs(self:AllFrames()) do
             local unit = f.unit
             if not unit or unit == "player" or not UnitExists(unit) then
                 f:SetAlpha(1)
@@ -1171,7 +1321,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     override function OnEnable()
         standDownBlizzard()
         local holder = self.holder or build(self)
-        for _, f in ipairs(self.frames) do
+        for _, f in ipairs(self:AllFrames()) do
             f:Activate()
         end
         -- its state driver shows it, not edit mode (and each frame its unit watch)
@@ -1223,11 +1373,14 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             "debuffIcons",
             "debuffKinds",
             "auraSide",
+            "petWidth",
+            "petHeight",
+            "showPets",
         }, function(key)
             self:RunOutOfCombat("layout", function()
                 self:Layout()
             end)
-            if key == "showSelf" then
+            if key == "showSelf" or key == "showPets" then
                 self:UpdateVisibility()
             end
         end)
@@ -1243,6 +1396,15 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("UNIT_CONNECTION", function()
             self:UpdateOffline()
+        end)
+        -- a pet called, dismissed or another one: the pets' frames drawn again
+        self:OnGameEvent("UNIT_PET", function()
+            for _, p in ipairs(self.pets) do
+                if p.active and p:IsShown() then
+                    p:Refresh()
+                end
+            end
+            self:UpdateRange()
         end)
         self:WatchAll({
             "power",

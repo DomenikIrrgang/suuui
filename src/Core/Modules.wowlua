@@ -63,7 +63,7 @@ export enum ModuleState {
 
 -- The settings a module's "enabled" lives in (SuuUI's SettingsStore).
 export interface ModuleSettings
-    function register(namespace: string, defs: { [string]: unknown })
+    function register(namespace: string, defs: { [string]: unknown }, layout: string[]?)
     function get(namespace: string, key: string): unknown
     function watch(
         namespace: string,
@@ -94,6 +94,10 @@ export type ModuleDef<D> = {
     description?: string,
     api?: string,
     defaults?: D,
+    -- 0.46: the settings besides positions that belong to the screen size's
+    -- layout (sizes, how a group is laid out): kept per screen size in each
+    -- profile, as positions are
+    layout?: string[],
     enabledByDefault?: boolean,
     reloadToToggle?: boolean,
     combatSafe?: boolean,
@@ -172,6 +176,7 @@ type Own = {
     replacedBy?: string,
     -- its settings' defaults, SuuUI's "enabled" included
     defaults: Settings,
+    layout: string[]?,
 }
 local owns: { [table]: Own } = setmetatable({}, { __mode = "k" })
 
@@ -246,6 +251,7 @@ export class Module<D extends Settings> implements AnyModule
             state = ModuleState.Registered,
             replaces = def.replaces,
             defaults = defaults,
+            layout = def.layout,
         }
     end
 
@@ -782,7 +788,7 @@ export class ModuleRegistry
     function add<M extends AnyModule>(m: M): M
         local id = m.id
         assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
-        self.store:register(id, ownOf(m :: table).defaults)
+        self.store:register(id, ownOf(m :: table).defaults, ownOf(m :: table).layout)
         local api = m.api
         if api and not apiAtLeast(api) then
             ownOf(m :: table).state = ModuleState.Incompatible
