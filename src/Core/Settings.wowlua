@@ -15,6 +15,19 @@
 --   unwatch(owner)
 --   migrate(namespace, id, fn, owner)  fn(values) reshapes a profile's stored values once
 --
+-- Layouts (asked 2026-11-14: "each profile can have settings for different
+-- resolutions", "if the game resolution changes the addon loads the other
+-- settings of that profile"): where frames sit and how the group frames are
+-- laid out is kept per screen size inside each profile. The size is SuuUI's
+-- root in its own units ("1920x1080"; 4K at the automatic scale is
+-- "2560x1440"). A layout setting is every position (a default shaped
+-- { point, x, y }) and every key a module names in register's `layout`.
+-- Reading one reads the layout of the size in use; writing one writes it
+-- there, and in the profile's own values too (what an older SuuUI reads,
+-- and what a profile without layouts starts from). A size the profile has no
+-- layout for starts as a copy of its closest layout. useLayout(size)
+-- switches, and tells the watchers of every layout setting that differs.
+--
 -- A watcher may change the setting it is told about (clamping, reverting).
 -- That newer write notifies every watcher itself, and the outer notification
 -- stops, so no watcher ever hears a superseded value.
@@ -83,6 +96,68 @@ type Change = { namespace: string, key: string }
 -- setting, and it travels with the profile's data (copies, exports).
 const MIGRATED = "__migrated"
 
+-- In each profile, its layouts: screen size ("1920x1080") -> the layout's
+-- stored values, by namespace (a profile's shape). Not a namespace either.
+const LAYOUTS = "__layouts"
+-- In each layout, the namespaces its values were taken from the profile for:
+-- a plugin's settings registered after the layout was made take theirs then.
+const SEEDED = "__seeded"
+
+type Layouts = { [string]: Profile }
+
+local function layoutsOf(p: Profile?): Layouts?
+    local l: unknown = p and p[LAYOUTS]
+    if type(l) == "table" then
+        return l :: Layouts
+    end
+    return nil
+end
+
+-- "1920x1080" -> 1920, 1080
+local function sizeOf(key: string): (number?, number?)
+    local w, h = key:match("^(%d+)x(%d+)$")
+    return tonumber(w), tonumber(h)
+end
+
+-- The layout in `layouts` closest to size `key`: the nearest width and
+-- height as ratios (ties: the first name).
+local function closest(layouts: Layouts, key: string): Profile?
+    local w, h = sizeOf(key)
+    if not (w and h) then
+        return nil
+    end
+    local best: Profile? = nil
+    local bestScore, bestName = math.huge, ""
+    for name, l in pairs(layouts) do
+        local lw, lh = sizeOf(name)
+        if lw and lh and type(l) == "table" then
+            local score = math.abs(math.log(lw / w)) + math.abs(math.log(lh / h))
+            if score < bestScore - 1e-9 or (math.abs(score - bestScore) <= 1e-9 and name < bestName) then
+                best, bestScore, bestName = l, score, name
+            end
+        end
+    end
+    return best
+end
+
+-- Stores `value` in `t` (a profile or a layout): nothing when it is the
+-- default.
+local function put(t: Profile, namespace: string, key: string, value: unknown, default: unknown)
+    if equal(value, default) then
+        local values = t[namespace]
+        if values then
+            values[key] = nil
+            if next(values) == nil then
+                t[namespace] = nil
+            end
+        end
+    else
+        local values = t[namespace] or {}
+        t[namespace] = values
+        values[key] = copy(value)
+    end
+end
+
 local function stored(p: Profile?, namespace: string, key: string): unknown
     local t = p and p[namespace]
     if t then
@@ -101,6 +176,11 @@ export class SettingsStore
     private db: SavedDB? = nil
     private profile: Profile? = nil
     private charKey: string? = nil
+    -- the layout settings a module named (positions are found by their shape)
+    private layoutKeys: { [string]: { [string]: boolean } } = {}
+    -- the screen size in use ("1920x1080"), and where it comes from (Root)
+    private layoutSize: string? = nil
+    private sizeSource: (() -> string?)? = nil
 
     constructor(private reporter: fault.Reporter = fault.log, private notifier: events.Notifier = events.bus) end
 
@@ -116,13 +196,116 @@ export class SettingsStore
     -- Registry
     ----------------------------------------------------------------------------
 
-    function register(namespace: string, defs: Values)
+    -- `layout`: the keys besides positions that belong to the screen size's
+    -- layout (sizes, how a group is laid out).
+    function register(namespace: string, defs: Values, layout: string[]?)
         assert(type(namespace) == "string", "SuuUI Settings: the namespace must be a string")
         assert(not self.defaults[namespace], "SuuUI Settings: namespace " .. namespace .. " is already registered")
         for k, v in pairs(defs) do
             assert(type(k) == "string" and v ~= nil, "SuuUI Settings: defaults need string keys and non-nil values")
         end
+        if layout then
+            local keys: { [string]: boolean } = {}
+            for _, k in ipairs(layout) do
+                assert(defs[k] ~= nil, "SuuUI Settings: layout key " .. tostring(k) .. " has no default")
+                keys[k] = true
+            end
+            self.layoutKeys[namespace] = keys
+        end
         self.defaults[namespace] = copy(defs)
+        -- registered after the profiles loaded (a plugin): its values go
+        -- into the layouts made before it
+        local data = self.db
+        if data then
+            for _, other in pairs(data.profiles) do
+                if type(other) == "table" then
+                    for _, l in pairs(layoutsOf(other) or {}) do
+                        if type(l) == "table" then
+                            self:seed(other, l, namespace)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Whether a setting belongs to the screen size's layout: a position
+    -- (a default with a point) or a key its module named.
+    function isLayout(namespace: string, key: string): boolean
+        local named = self.layoutKeys[namespace]
+        if named and named[key] then
+            return true
+        end
+        local d = self.defaults[namespace]
+        local v: unknown = d and d[key]
+        return type(v) == "table" and type((v :: Values).point) == "string"
+    end
+
+    -- Copies profile `p`'s own values of `namespace`'s layout settings into
+    -- layout `l`, once.
+    private function seed(p: Profile, l: Profile, namespace: string)
+        local seeded: unknown = l[SEEDED]
+        if type(seeded) ~= "table" then
+            seeded = {}
+            l[SEEDED] = seeded :: Values
+        end
+        local done = seeded :: Values
+        if done[namespace] then
+            return
+        end
+        done[namespace] = true
+        local base = p[namespace]
+        if not base then
+            return
+        end
+        for key, v in pairs(base) do
+            if (self.defaults[namespace] :: Values)[key] ~= nil and self:isLayout(namespace, key) then
+                local values = l[namespace] or {}
+                l[namespace] = values
+                values[key] = copy(v)
+            end
+        end
+    end
+
+    -- Profile `p`'s layout for `size` (made when `create`: a copy of its
+    -- closest layout, else of its own values).
+    private function layoutAt(p: Profile, size: string?, create: boolean?): Profile?
+        if not size then
+            return nil
+        end
+        local all = layoutsOf(p)
+        local l = all and all[size]
+        if l or not create then
+            return l
+        end
+        if not all then
+            all = {}
+            p[LAYOUTS] = all :: unknown :: Values
+        end
+        local made: Profile
+        local near = closest(all, size)
+        if near then
+            made = copy(near)
+        else
+            made = {}
+            for namespace in pairs(self.defaults) do
+                self:seed(p, made, namespace)
+            end
+        end
+        all[size] = made
+        return made
+    end
+
+    -- A setting's stored value in profile `p`: a layout setting's from the
+    -- layout in use.
+    private function storedIn(p: Profile?, namespace: string, key: string): unknown
+        if p and self.layoutSize and self:isLayout(namespace, key) then
+            local l = self:layoutAt(p, self.layoutSize)
+            if l then
+                return stored(l, namespace, key)
+            end
+        end
+        return stored(p, namespace, key)
     end
 
     -- (errors blame the caller of the module's function: level 4)
@@ -142,7 +325,7 @@ export class SettingsStore
     -- hand-edited profile) is ignored, so the default applies.
     private function valueOf(namespace: string, key: string): unknown
         local d = self:default(namespace, key)
-        local v = stored(self.profile, namespace, key)
+        local v = self:storedIn(self.profile, namespace, key)
         if v == nil or type(v) ~= type(d) then
             return d
         end
@@ -166,7 +349,7 @@ export class SettingsStore
 
     function isDefault(namespace: string, key: string): boolean
         local d = self:default(namespace, key)
-        local v = stored(self.profile, namespace, key)
+        local v = self:storedIn(self.profile, namespace, key)
         return v == nil or type(v) ~= type(d)
     end
 
@@ -258,18 +441,13 @@ export class SettingsStore
 
     private function write(namespace: string, key: string, value: unknown)
         local p = self:current()
-        if equal(value, (self.defaults[namespace] :: Values)[key]) then
-            local t = p[namespace]
-            if t then
-                t[key] = nil
-                if next(t) == nil then
-                    p[namespace] = nil
-                end
+        local d = (self.defaults[namespace] :: Values)[key]
+        put(p, namespace, key, value, d)
+        if self:isLayout(namespace, key) then
+            local l = self:layoutAt(p, self.layoutSize, true)
+            if l then
+                put(l, namespace, key, value, d)
             end
-        else
-            local t = p[namespace] or {}
-            p[namespace] = t
-            t[key] = copy(value)
         end
     end
 
@@ -326,6 +504,15 @@ export class SettingsStore
     -- Drops the values in profile data `p` that a veto refuses (judged
     -- against the default), so the default applies to them.
     private function screen(p: Profile)
+        self:screenOne(p)
+        for _, l in pairs(layoutsOf(p) or {}) do
+            if type(l) == "table" then
+                self:screenOne(l)
+            end
+        end
+    end
+
+    private function screenOne(p: Profile)
         for id, hooks in pairs(self.vetoes) do
             local namespace, key = id:match("^([^%.]+)%.(.+)$")
             if not (namespace and key) then
@@ -365,20 +552,30 @@ export class SettingsStore
         if done and done[tag] then
             return
         end
-        local values = p[m.namespace]
-        if values then
-            if not self.reporter:call(m.owner, m.fn, values, p) then
-                return
+        -- the profile's own values, then each layout's (a layout is a
+        -- profile's shape: a migration moving a setting works there too)
+        local targets: Profile[] = { p }
+        for _, l in pairs(layoutsOf(p) or {}) do
+            if type(l) == "table" then
+                targets[#targets + 1] = l
             end
-            -- what the migration left at its default isn't stored
-            local defs = self.defaults[m.namespace] :: Values
-            for k, v in pairs(values) do
-                if defs[k] ~= nil and equal(v, defs[k]) then
-                    values[k] = nil
+        end
+        for _, target in ipairs(targets) do
+            local values = target[m.namespace]
+            if values then
+                if not self.reporter:call(m.owner, m.fn, values, target) then
+                    return
                 end
-            end
-            if next(values) == nil then
-                p[m.namespace] = nil
+                -- what the migration left at its default isn't stored
+                local defs = self.defaults[m.namespace] :: Values
+                for k, v in pairs(values) do
+                    if defs[k] ~= nil and equal(v, defs[k]) then
+                        values[k] = nil
+                    end
+                end
+                if next(values) == nil then
+                    target[m.namespace] = nil
+                end
             end
         end
         if type(p[MIGRATED]) ~= "table" then
@@ -495,7 +692,7 @@ export class SettingsStore
         local changed: Change[] = {}
         for namespace, defs in pairs(self.defaults) do
             for key in pairs(defs) do
-                if not equal(stored(a, namespace, key), stored(b, namespace, key)) then
+                if not equal(self:storedIn(a, namespace, key), self:storedIn(b, namespace, key)) then
                     changed[#changed + 1] = { namespace = namespace, key = key }
                 end
             end
@@ -516,6 +713,7 @@ export class SettingsStore
         local data = self:loadedDB()
         local target = assert(data.profiles[profileName])
         self:migrateAll(target)
+        self:layoutAt(target, self.layoutSize, true)
         self:screen(target)
         local changed = self:changedBetween(self:current(), target)
         data.chars[self.charKey :: string] = profileName
@@ -600,6 +798,7 @@ export class SettingsStore
         local p = self:current()
         local data: Profile = copy(assert(self:loadedDB().profiles[profileName]))
         self:migrateAll(data)
+        self:layoutAt(data, self.layoutSize, true)
         self:screen(data)
         local changed = self:changedBetween(p, data)
         wipe(p)
@@ -614,10 +813,12 @@ export class SettingsStore
     end
 
     -- Sets values in a profile (by name), creating it from the current one
-    -- when there is none: `entries` = { { namespace, key, value } }, a nil
-    -- value is the default. In the profile you use, each goes through set
-    -- (vetoes, watchers); in another, it is stored for when that profile is
-    -- used.
+    -- when there is none: `entries` = { { namespace, key, value[, size] } },
+    -- a nil value is the default. In the profile you use, each goes through
+    -- set (vetoes, watchers); in another, it is stored for when that profile
+    -- is used. A size ("1920x1080") puts a layout setting in that size's
+    -- layout (made when the profile has none), and only there unless it is
+    -- the layout in use.
     function setProfileValues(text: string?, entries: unknown[][]): (boolean, string?)
         local profileName = strtrim(text or "")
         if profileName == "" then
@@ -634,13 +835,17 @@ export class SettingsStore
         end
         local target = assert(self:loadedDB().profiles[profileName])
         for _, e in ipairs(entries) do
-            local namespace, key, value = e[1], e[2], e[3]
+            local namespace, key, value, size = e[1], e[2], e[3], e[4]
             local defs = type(namespace) == "string" and self.defaults[namespace] or nil
             if type(namespace) == "string" and type(key) == "string" and defs and defs[key] ~= nil then
                 if value == nil then
                     value = defs[key]
                 end
-                if target == self.profile then
+                if type(size) == "string" and self:isLayout(namespace, key) and
+                    not (target == self.profile and size == self.layoutSize) then
+                    local l = assert(self:layoutAt(target, size, true))
+                    put(l, namespace, key, value, defs[key])
+                elseif target == self.profile then
                     self:set(namespace, key, copy(value))
                 elseif equal(value, defs[key]) then
                     local t = target[namespace]
@@ -730,30 +935,56 @@ export class SettingsStore
         if type(data) ~= "table" then
             return out
         end
-        for namespace, values in pairs(data) do
-            if type(namespace) == "string" and type(values) == "table" then
-                for key, v in pairs(values) do
-                    if type(key) == "string" then
-                        local t = out[namespace] or {}
-                        out[namespace] = t
-                        t[key] = copy(v)
+        local function plain(from: unknown): Profile
+            local made: Profile = {}
+            if type(from) ~= "table" then
+                return made
+            end
+            for namespace, values in pairs(from :: { [unknown]: unknown }) do
+                if type(namespace) == "string" and namespace ~= LAYOUTS and type(values) == "table" then
+                    for key, v in pairs(values :: { [unknown]: unknown }) do
+                        if type(key) == "string" then
+                            local t = made[namespace] or {}
+                            made[namespace] = t
+                            t[key] = copy(v)
+                        end
+                    end
+                end
+            end
+            return made
+        end
+        out = plain(data)
+        local given: unknown = (data :: { [string]: unknown })[LAYOUTS]
+        if type(given) == "table" then
+            local layouts: Layouts = {}
+            for size, l in pairs(given :: { [unknown]: unknown }) do
+                if type(size) == "string" and sizeOf(size) and type(l) == "table" then
+                    layouts[size] = plain(l)
+                end
+            end
+            if next(layouts) ~= nil then
+                out[LAYOUTS] = layouts :: unknown :: Values
+            end
+        end
+        self:migrateAll(out)
+        local function typed(t: Profile)
+            for namespace, values in pairs(t) do
+                local defs = self.defaults[namespace]
+                if defs then
+                    for key, v in pairs(values) do
+                        if defs[key] ~= nil and type(v) ~= type(defs[key]) then
+                            values[key] = nil
+                        end
+                    end
+                    if next(values) == nil then
+                        t[namespace] = nil
                     end
                 end
             end
         end
-        self:migrateAll(out)
-        for namespace, values in pairs(out) do
-            local defs = self.defaults[namespace]
-            if defs then
-                for key, v in pairs(values) do
-                    if defs[key] ~= nil and type(v) ~= type(defs[key]) then
-                        values[key] = nil
-                    end
-                end
-                if next(values) == nil then
-                    out[namespace] = nil
-                end
-            end
+        typed(out)
+        for _, l in pairs(layoutsOf(out) or {}) do
+            typed(l)
         end
         return out
     end
@@ -838,6 +1069,141 @@ export class SettingsStore
     end
 
     ----------------------------------------------------------------------------
+    -- Layouts: the screen size in use and the profile's layouts
+    ----------------------------------------------------------------------------
+
+    -- Where the screen size comes from (Root: SuuUI's root in its own
+    -- units), read when the profiles load.
+    function setSizeSource(fn: () -> string?)
+        self.sizeSource = fn
+    end
+
+    function layoutSizeInUse(): string?
+        return self.layoutSize
+    end
+
+    -- Every layout setting's value now (to tell what a switch changes).
+    private function layoutValues(): { [string]: unknown }
+        local out: { [string]: unknown } = {}
+        for namespace, defs in pairs(self.defaults) do
+            for key in pairs(defs) do
+                if self:isLayout(namespace, key) then
+                    out[namespace .. "\0" .. key] = self:valueOf(namespace, key)
+                end
+            end
+        end
+        return out
+    end
+
+    -- Tells the watchers of every layout setting whose value differs from
+    -- `before`.
+    private function notifyLayout(before: { [string]: unknown })
+        for namespace, defs in pairs(self.defaults) do
+            for key in pairs(defs) do
+                if self:isLayout(namespace, key) then
+                    if not equal(before[namespace .. "\0" .. key], self:valueOf(namespace, key)) then
+                        self:notify(namespace, key)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Switches to the layout for screen size `size` ("1920x1080"), made
+    -- from the closest one when the profile has none, and tells the
+    -- watchers of every layout setting that differs.
+    function useLayout(size: string?)
+        if size == self.layoutSize then
+            return
+        end
+        local p = self.profile
+        if not p then
+            self.layoutSize = size
+            return
+        end
+        local before = self:layoutValues()
+        self.layoutSize = size
+        self:layoutAt(p, size, true)
+        self:notifyLayout(before)
+        self.notifier:emit("SUUUI_LAYOUT_CHANGED", size or "")
+    end
+
+    -- A setting's value in the current profile's layout for screen size
+    -- `size` (its closest layout when it has none for it): what that size
+    -- would show (/suu layoutcheck). Not a layout setting: its value now.
+    function valueAtSize(namespace: string, key: string, size: string): unknown
+        local d = self:default(namespace, key)
+        local p = self.profile
+        if not (p and self:isLayout(namespace, key)) then
+            return copy(self:valueOf(namespace, key))
+        end
+        local all = layoutsOf(p)
+        local l = all and (all[size] or closest(all, size))
+        local v = l and stored(l, namespace, key)
+        if v == nil or type(v) ~= type(d) then
+            return copy(d)
+        end
+        return copy(v)
+    end
+
+    -- The current profile's layouts, by size, sorted.
+    function layoutNames(): string[]
+        local all = layoutsOf(self.profile)
+        if not all then
+            return {}
+        end
+        local out: string[] = {}
+        for size, l in pairs(all) do
+            if type(l) == "table" and sizeOf(size) then
+                out[#out + 1] = size
+            end
+        end
+        table.sort(out, function(a: string, b: string): boolean
+            local aw, ah = sizeOf(a)
+            local bw, bh = sizeOf(b)
+            if aw ~= bw then
+                return (aw or 0) < (bw or 0)
+            end
+            return (ah or 0) < (bh or 0)
+        end)
+        return out
+    end
+
+    -- The layout in use takes a copy of another of this profile's layouts.
+    function copyLayout(from: string): (boolean, string?)
+        local p = self:current()
+        local all = layoutsOf(p)
+        local source = all and all[from]
+        if not (all and source) then
+            return false, "This profile has no layout for " .. tostring(from) .. "."
+        end
+        local size = self.layoutSize
+        if not size or from == size then
+            return true
+        end
+        local before = self:layoutValues()
+        all[size] = copy(source)
+        self:notifyLayout(before)
+        self.notifier:emit("SUUUI_LAYOUT_CHANGED", size)
+        return true
+    end
+
+    -- Forgets one of this profile's layouts (not the one in use: the next
+    -- time that size is used, it starts from its closest layout again).
+    function forgetLayout(size: string): (boolean, string?)
+        if size == self.layoutSize then
+            return false, "That layout is in use."
+        end
+        local all = layoutsOf(self:current())
+        if not (all and all[size]) then
+            return false, "This profile has no layout for " .. tostring(size) .. "."
+        end
+        all[size] = nil
+        self.notifier:emit("SUUUI_LAYOUT_CHANGED", self.layoutSize or "")
+        return true
+    end
+
+    ----------------------------------------------------------------------------
     -- Loading
     ----------------------------------------------------------------------------
 
@@ -865,6 +1231,13 @@ export class SettingsStore
                 self:migrateAll(other)
             end
         end
+        -- the screen size's layout (its source reads ui.scale: the profile
+        -- is in place)
+        local source = self.sizeSource
+        if source then
+            self.layoutSize = source()
+        end
+        self:layoutAt(p, self.layoutSize, true)
         self:screen(p)
         self.notifier:emit("SUUUI_SETTINGS_READY")
     end
@@ -873,8 +1246,34 @@ end
 -- SuuUI's settings, and its methods as the module's functions.
 export const store = SettingsStore.new()
 
-export function register(namespace: string, defs: Values)
-    store:register(namespace, defs)
+export function register(namespace: string, defs: Values, layout: string[]?)
+    store:register(namespace, defs, layout)
+end
+
+-- Layouts (see the top of this file).
+export function isLayout(namespace: string, key: string): boolean
+    return store:isLayout(namespace, key)
+end
+export function setSizeSource(fn: () -> string?)
+    store:setSizeSource(fn)
+end
+export function useLayout(size: string?)
+    store:useLayout(size)
+end
+export function layoutSizeInUse(): string?
+    return store:layoutSizeInUse()
+end
+export function valueAtSize(namespace: string, key: string, size: string): unknown
+    return store:valueAtSize(namespace, key, size)
+end
+export function layoutNames(): string[]
+    return store:layoutNames()
+end
+export function copyLayout(from: string): (boolean, string?)
+    return store:copyLayout(from)
+end
+export function forgetLayout(size: string): (boolean, string?)
+    return store:forgetLayout(size)
 end
 export function ready(): boolean
     return store:ready()

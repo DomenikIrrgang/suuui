@@ -16,6 +16,8 @@ import * as services from "/Core/Services"
 import userScale from "/Core/Root"
 import SuuUI from "/Core/API"
 import * as draw from "/UI/Draw"
+import text as textLine from "/UI/Text"
+import type Text from "/UI/Text"
 import * as inputs from "/UI/Inputs"
 import * as controls from "/UI/Controls"
 import * as uiSelect from "/UI/Select"
@@ -319,20 +321,47 @@ local function allProfiles(): Option[]
     return options
 end
 
--- A Select of other profiles and a button that acts on the chosen one. With
--- `confirm`, the first click arms the button for a few seconds.
+-- A screen size as the player reads it: "1920x1080" -> "1920 × 1080".
+local function sizeLabel(size: string): string
+    return (size:gsub("x", " × "))
+end
+
+-- This profile's layouts other than the one in use.
+local function otherLayouts(): uiSelect.SelectOption<string>[]
+    local options: uiSelect.SelectOption<string>[] = {}
+    local inUse = settings.layoutSizeInUse()
+    for _, size in ipairs(settings.layoutNames()) do
+        if size ~= inUse then
+            options[#options + 1] = { value = size, label = sizeLabel(size) }
+        end
+    end
+    return options
+end
+
+-- A Select of other profiles (or what `optionsOf` lists) and a button that
+-- acts on the chosen one. With `confirm`, the first click arms the button
+-- for a few seconds.
 class PickAndAct extends Frame
     readonly select: uiSelect.Select<string>
     readonly button: controls.SuuButton
     choice: string? = nil
     timer: TimerHandle? = nil
+    private optionsOf: () -> uiSelect.SelectOption<string>[]
 
-    constructor(parent: Frame, private label: string, act: (name: string) -> (boolean, string?), confirm: boolean?)
+    constructor(
+        parent: Frame,
+        private label: string,
+        act: (name: string) -> (boolean, string?),
+        confirm: boolean?,
+        options: (() -> uiSelect.SelectOption<string>[])?,
+        placeholder: string?
+    )
         super(nil, parent)
+        self.optionsOf = options or otherProfiles
         self.select = uiSelect.select(self, {
             width = 190,
-            placeholder = "Choose a profile",
-            options = otherProfiles(),
+            placeholder = placeholder or "Choose a profile",
+            options = self.optionsOf(),
             onChange = function(v: string?)
                 self.choice = v
             end,
@@ -382,6 +411,13 @@ class PickAndAct extends Frame
             end,
             self
         )
+        events.on(
+            "SUUUI_LAYOUT_CHANGED",
+            function()
+                self:Refresh()
+            end,
+            self
+        )
     end
 
     function Disarm()
@@ -394,7 +430,7 @@ class PickAndAct extends Frame
     end
 
     function Refresh()
-        local options = otherProfiles()
+        local options = self.optionsOf()
         self.select:SetOptions(options)
         local still = false
         for _, o in ipairs(options) do
@@ -407,6 +443,47 @@ class PickAndAct extends Frame
             self.select:SetValue(nil)
             self:Disarm()
         end
+    end
+end
+
+-- The screen size whose layout is in use, and the others this profile keeps.
+class LayoutInUse extends Frame
+    readonly line: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(380, 30)
+        self.line = textLine(self, "body", "ink")
+        self.line:SetPoint("LEFT")
+        self.line:SetWidth(380)
+        self.line:SetJustifyH("LEFT")
+        events.on(
+            "SUUUI_LAYOUT_CHANGED",
+            function()
+                self:Refresh()
+            end,
+            self
+        )
+        events.on(
+            "SUUUI_PROFILE_CHANGED",
+            function()
+                self:Refresh()
+            end,
+            self
+        )
+        self:Refresh()
+    end
+
+    function Refresh()
+        local inUse = settings.layoutSizeInUse()
+        local others: string[] = {}
+        for _, size in ipairs(settings.layoutNames()) do
+            if size ~= inUse then
+                others[#others + 1] = sizeLabel(size)
+            end
+        end
+        local now = inUse and sizeLabel(inUse) or "none"
+        self.line:SetValue(#others > 0 and ("%s (also kept: %s)"):format(now, table.concat(others, ", ")) or now)
     end
 end
 
@@ -591,6 +668,36 @@ registry.register({
                         return PickAndAct.new(p, "Delete", profiles.delete, true)
                     end,
                     description = "Characters using it go back to their own profile.",
+                },
+            },
+        },
+        {
+            title = "Screen sizes",
+            description = "Where your frames sit and how the party and raid frames are laid out is kept for each screen size in a profile. When your resolution or UI scale changes, SuuUI switches to that size's layout, after a fight; a size you haven't used yet starts as a copy of the closest one. Edit mode and these settings change the layout in use. 4K at the automatic scale counts as 2560 × 1440.",
+            rows = {
+                {
+                    label = "In use",
+                    control = "custom",
+                    build = function(p: Frame): Frame
+                        return LayoutInUse.new(p)
+                    end,
+                    description = "The screen size SuuUI lays out for: the screen's pixels over the scale.",
+                },
+                {
+                    label = "Copy a layout",
+                    control = "custom",
+                    build = function(p: Frame): Frame
+                        return PickAndAct.new(p, "Copy", settings.copyLayout, true, otherLayouts, "Choose a size")
+                    end,
+                    description = "The layout in use takes this profile's layout for another screen size.",
+                },
+                {
+                    label = "Forget a layout",
+                    control = "custom",
+                    build = function(p: Frame): Frame
+                        return PickAndAct.new(p, "Forget", settings.forgetLayout, true, otherLayouts, "Choose a size")
+                    end,
+                    description = "The next time that size is used, it starts from the closest layout again.",
                 },
             },
         },

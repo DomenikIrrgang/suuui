@@ -14,10 +14,13 @@
 --     bar and Cooldown Manager above the group; no threat meter or swing timer.
 -- A preset sets the layout only: the profile starts as a copy of the one you
 -- use, so everything else you chose comes along. Applying it again puts the
--- layout back. Positions are design pixels from the screen's bottom centre,
+-- layout back. The layout goes into the profile's layout for each screen
+-- size (Core/Settings: 1080p, 1440p, 4K at scale 1, ultrawide, and the size
+-- in use), with what differs per size (BY_SIZE: at 1080p a full raid's groups
+-- three side by side, asked 2026-11-14). Positions are design pixels from the screen's bottom centre,
 -- from the 2560 × 1440 boards; edit mode keeps their anchors on every size.
 
-import profiles from "./Settings"
+import profiles, isLayout, layoutSizeInUse from "./Settings"
 import * as extend from "./Extend"
 
 export const ROLES: string[] = { "TANK", "HEALER", "DAMAGER" }
@@ -49,6 +52,7 @@ local KEYS: string[][] = {
     { "party", "healthText" },
     { "raid", "position" },
     { "raid", "arrangement" },
+    { "raid", "perBandLarge" },
     { "raid", "width" },
     { "raid", "height" },
     { "raid", "heightLarge" },
@@ -97,6 +101,41 @@ local HEALER: { [string]: { [string]: unknown } } = {
 
 export const LAYOUT: { [string]: { [string]: { [string]: unknown } } } = { TANK = {}, HEALER = HEALER, DAMAGER = {} }
 
+-- The screen sizes a preset fills a layout for (SuuUI's root in its own
+-- units: 4K at the automatic scale is 2560 x 1440, at scale 1 3840 x 2160).
+export const SIZES: string[] = { "1920x1080", "2560x1440", "3840x2160", "3440x1440" }
+
+-- 1080p is narrower: the side layout's full raid, four groups side by side,
+-- reached the player frame (12 px, seen at 1920 x 1080; 308 px clear at
+-- 2560 x 1440), so three.
+local NARROW: { [string]: { [string]: unknown } } = { raid = { perBandLarge = 3 } }
+
+-- Per role and screen size, what differs from the role's layout.
+export const BY_SIZE: { [string]: { [string]: { [string]: { [string]: unknown } } } } = {
+    TANK = { ["1920x1080"] = NARROW },
+    DAMAGER = { ["1920x1080"] = NARROW },
+    HEALER = {},
+}
+
+local function sizeOf(size: string): (number, number)
+    local w, h = size:match("^(%d+)x(%d+)$")
+    return tonumber(w) or 1, tonumber(h) or 1
+end
+
+-- The preset size closest to `size` (the size in use when it isn't one).
+local function closestSize(size: string): string
+    local w, h = sizeOf(size)
+    local best, bestScore = SIZES[1], math.huge
+    for _, s in ipairs(SIZES) do
+        local sw, sh = sizeOf(s)
+        local score = math.abs(math.log(sw / w)) + math.abs(math.log(sh / h))
+        if score < bestScore then
+            best, bestScore = s, score
+        end
+    end
+    return best
+end
+
 export function exists(role: string): boolean
     local profileName = NAME[role]
     if not profileName then
@@ -141,6 +180,36 @@ export function apply(role: string): (boolean, string?)
                 if e[1] == a.namespace and a.values[e[2]] ~= nil then
                     e[3] = a.values[e[2]]
                 end
+            end
+        end
+    end
+    -- the layout settings once more for each screen size's layout, with
+    -- what differs there
+    local sizes: string[] = {}
+    for _, size in ipairs(SIZES) do
+        sizes[#sizes + 1] = size
+    end
+    local inUse = layoutSizeInUse()
+    local listed = false
+    for _, size in ipairs(sizes) do
+        listed = listed or size == inUse
+    end
+    if inUse and not listed then
+        sizes[#sizes + 1] = inUse
+    end
+    local base = #entries
+    for _, size in ipairs(sizes) do
+        local over = (BY_SIZE[role] or {})[closestSize(size)] or {}
+        for i = 1, base do
+            local e = entries[i]
+            local namespace, key = e[1], e[2]
+            if type(namespace) == "string" and type(key) == "string" and isLayout(namespace, key) then
+                local value = e[3]
+                local o = over[namespace]
+                if o and o[key] ~= nil then
+                    value = o[key]
+                end
+                entries[#entries + 1] = { namespace, key, value, size }
             end
         end
     end

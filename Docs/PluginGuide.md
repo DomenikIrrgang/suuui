@@ -87,6 +87,7 @@ end
 - `SuuUI.Root` is the parent for anything on the screen. One unit there is one design pixel.
 - SuuUI's components (`Panel`, `WindowFrame`, `Button`, `Icon`, `UnitFrame`, `AuraContainer`…) and the design tokens (`SuuUI.Tokens`) give a plugin SuuUI's look. See API.md › Components.
 - Settings are saved per profile. `M:Get` returns a copy of a table; `M:Peek` reads a large table without copying it.
+- Positions are saved per screen size within a profile (API 0.46): a 1080p and a 1440p setup each keep their own. Settings of yours that depend on the screen, such as a size, can join them with `layout = { "width" }` in `RegisterModule`. See API.md › Layouts per screen size.
 - `merge = "<section id>"` on the settings section adds your groups to one of SuuUI's own pages instead of a page of your own. For example, `merge = "unitframes"` (the Level badge example does this).
 
 ## 4. Adding to SuuUI's own frames

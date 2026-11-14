@@ -40,6 +40,10 @@ local DEFAULTS = {
     arrangement = "columns", -- "columns" (side layout) or "rows" (healer layout)
     sort = "group", -- within each group: "group" (raid order) or "role"
     perBand = 4, -- columns: groups side by side before the next band
+    -- the same from 21 players (asked 2026-11-14: at 1080p a full raid's
+    -- fourth column reached the player frame; the presets' 1080p layout
+    -- sets 3)
+    perBandLarge = 4,
     width = 108,
     height = 19,
     heightLarge = 20, -- raids of 21-40
@@ -82,10 +86,16 @@ export function powerFor(unit: string, A: UnitApi): boolean
     return not secret.isSecret(class) and class and HEALER_CLASS[class] == true or false
 end
 
+-- Whether the raid is past 20 players (the large raid's height and
+-- columns side by side).
+local function isLarge(): boolean
+    local n = GetNumGroupMembers and GetNumGroupMembers() or 0
+    return n > 20
+end
+
 -- The bar height for the raid's size: the shorter one from 21 players up.
 local function barHeight(): number
-    local n = GetNumGroupMembers and GetNumGroupMembers() or 0
-    return (n > 20) and M:Get("heightLarge") or M:Get("height")
+    return isLarge() and M:Get("heightLarge") or M:Get("height")
 end
 
 local function iconSize(h: number): number
@@ -433,14 +443,14 @@ local function holderSize(grid: Grid, tall: number): (number, number)
         bands * (5 * grid.h + 4 * grid.gap) + (bands - 1) * grid.groupGap * 2
 end
 
--- The settings' grid at bar height h.
-local function gridAt(h: number): Grid
+-- The settings' grid at bar height h; `large`: past 20 players.
+local function gridAt(h: number, large: boolean?): Grid
     return {
         w = M:Get("width"),
         h = h,
         gap = M:Get("gap"),
         groupGap = M:Get("groupGap"),
-        perBand = math.max(1, M:Get("perBand")),
+        perBand = math.max(1, large and M:Get("perBandLarge") or M:Get("perBand")),
         rows = M:Get("arrangement") == "rows",
     }
 end
@@ -765,6 +775,17 @@ local SECTION: SettingsSection = {
                     disabled = hasNoArrangement,
                 },
                 {
+                    key = "perBandLarge",
+                    label = "Columns side by side from 21 players",
+                    control = "stepper",
+                    min = 1,
+                    max = 8,
+                    step = 1,
+                    combat = true,
+                    description = "The same for a raid of 21 to 40: fewer keeps a full raid narrower, clear of what's beside it.",
+                    disabled = hasNoArrangement,
+                },
+                {
                     key = "width",
                     label = "Width",
                     control = "slider",
@@ -966,6 +987,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     -- edit mode's group preview
     screenSet: PreviewSet? = nil
     tierHeight: number? = nil
+    -- whether the grid was laid out for a raid past 20 players
+    tierLarge: boolean? = nil
 
     constructor()
         super({
@@ -975,6 +998,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             api = "0.30",
             reloadToToggle = true,
             defaults = DEFAULTS,
+            -- kept per screen size, with the position (Core/Settings)
+            layout = { "arrangement", "perBand", "perBandLarge", "width", "height", "heightLarge", "gap", "groupGap" },
         })
     end
 
@@ -1066,7 +1091,9 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     function Layout()
         local holder = assert(self.holder)
         local w, h, gap = self:Get("width"), barHeight(), self:Get("gap")
-        local grid = gridAt(h)
+        local large = isLarge()
+        local grid = gridAt(h, large)
+        self.tierLarge = large
         for g, hd in ipairs(self.headers) do
             hd:SetAttribute("unitWidth", w)
             hd:SetAttribute("unitHeight", h)
@@ -1333,7 +1360,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         local count = set.count or self.previewSize or 20
         local w = self:Get("width")
         local h = count > 20 and self:Get("heightLarge") or self:Get("height")
-        local grid = gridAt(h)
+        local grid = gridAt(h, count > 20)
         local groups = math.ceil(count / 5)
         local size, far = iconSize(h), self:Get("rangeAlpha")
         local badges = self:Get("debuffBadges")
@@ -1500,6 +1527,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         self:WatchAll({
             "arrangement",
             "perBand",
+            "perBandLarge",
             "width",
             "height",
             "heightLarge",
@@ -1609,8 +1637,9 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             if UI.GroupTier() ~= self.indicatorTier then
                 self:QueueIndicators()
             end
-            -- crossing 20 players changes the bar height (out of combat)
-            if barHeight() ~= self.tierHeight then
+            -- crossing 20 players changes the bar height and the columns
+            -- side by side (out of combat)
+            if barHeight() ~= self.tierHeight or isLarge() ~= self.tierLarge then
                 self:RunOutOfCombat("layout", function()
                     self:Layout()
                     self:ApplyOptions()

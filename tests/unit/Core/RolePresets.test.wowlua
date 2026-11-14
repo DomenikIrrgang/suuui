@@ -143,3 +143,29 @@ local function cannotStore()
     expect(why).toBe("A profile needs a name.")
     expect(profiles.roleProfile("DAMAGER")).toBeNil()
 end
+
+@test("a preset fills a layout for each screen size: 1080p's side layout three groups side by side from 21 players")
+local function bySize()
+    expect(rolePresets.SIZES).toEqual({ "1920x1080", "2560x1440", "3840x2160", "3440x1440" })
+    expect(rolePresets.apply("TANK")).toBe(true)
+    local data = stored("SuuTank")
+    for _, size in ipairs(rolePresets.SIZES) do
+        expect(tbl.field(data, "__layouts", size) ~= nil).toBe(true)
+    end
+    expect(tbl.field(data, "__layouts", "1920x1080", "raid", "perBandLarge")).toBe(3)
+    -- wider screens: the default (four), not stored
+    expect(tbl.field(data, "__layouts", "2560x1440", "raid", "perBandLarge")).toBeNil()
+    expect(tbl.field(data, "__layouts", "3440x1440", "raid", "perBandLarge")).toBeNil()
+    -- the healer's layout at every size
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    local healer = stored("SuuHeal")
+    for _, size in ipairs(rolePresets.SIZES) do
+        expect(tbl.field(healer, "__layouts", size, "party", "width")).toBe(120)
+        expect(tbl.field(healer, "__layouts", size, "raid", "arrangement")).toBe("rows")
+    end
+    -- a player's edit at one size, then the preset again: back
+    profiles.setValues("SuuHeal", { { "party", "width", 161, "2560x1440" } })
+    expect(tbl.field(stored("SuuHeal"), "__layouts", "2560x1440", "party", "width")).toBe(161)
+    expect(rolePresets.apply("HEALER")).toBe(true)
+    expect(tbl.field(stored("SuuHeal"), "__layouts", "2560x1440", "party", "width")).toBe(120)
+end

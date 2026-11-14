@@ -168,3 +168,40 @@ local function noReporter()
     settings.set("ui", "hideIssueReporter", false)
     expectNoErrors()
 end
+
+settings.register("roottest", { position = { point = "CENTER", x = 0, y = 0 } })
+
+@test(
+    "each screen size its layout: the root's size in its own units; another scale switches to its own positions, after a fight"
+)
+local function layoutSizes()
+    local w, h = GetPhysicalScreenSize()
+    local one = ("%dx%d"):format(w, h)
+    local two = ("%dx%d"):format(math.floor(w / 2 + 0.5), math.floor(h / 2 + 0.5))
+    expect(root.layoutSize()).toBe(one)
+    expect(settings.layoutSizeInUse()).toBe(one)
+    -- (the other sizes the tests above used: forgotten, to start from this one)
+    for _, size in ipairs(settings.layoutNames()) do
+        if size ~= one then
+            settings.forgetLayout(size)
+        end
+    end
+    settings.set("roottest", "position", { point = "CENTER", x = 10, y = 0 })
+    -- scale 2: the size of a screen half as big, a copy of the layout to start
+    settings.set("ui", "scale", 2)
+    expect(root.layoutSize()).toBe(two)
+    expect(settings.layoutSizeInUse()).toBe(two)
+    expect(settings.get("roottest", "position")).toEqual({ point = "CENTER", x = 10, y = 0 })
+    settings.set("roottest", "position", { point = "CENTER", x = 20, y = 0 })
+    -- in a fight: the scale and the layout after it
+    mock.player:enterCombat()
+    settings.set("ui", "scale", 0)
+    expect(settings.layoutSizeInUse()).toBe(two)
+    mock.player:leaveCombat()
+    expect(settings.layoutSizeInUse()).toBe(one)
+    expect(settings.get("roottest", "position")).toEqual({ point = "CENTER", x = 10, y = 0 })
+    settings.reset("roottest", "position")
+    settings.set("ui", "scale", 2)
+    settings.reset("roottest", "position")
+    expectNoErrors()
+end
