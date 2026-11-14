@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+### New
+
+- **Crafting cost and profit**: the Professions window shows what a recipe costs to make and what it brings. The recipe you choose has a Market section with the reagents' cost, what the item sells for after the auction house's 5% cut, the profit, and when the prices were seen. Sort by **Profit** or **Cost to make**. Prices come from your last auction house scan and from vendors you've visited, whichever is cheaper. Turn it off with "Crafting cost and profit" in Settings › General › Professions. For plugin authors (API 0.44): the `auctionhouse` service's `Price(itemID)`.
+
 ### Changed
 
 - **Pink Cat theme**: pink satin ribbons now wrap round the corners of the windows and the chat, with a little white bow on the top corners and a white heart on the bottom ones, a string of pearls along each window's top and soft striped wallpaper behind the titles. White and pink sparkles drift up over the windows and the minimap, the minimap wears a ribbon of pearls with cat ears, and the player and target frames have two small cat ears. The bows and ears sway gently; with Reduce motion on they keep still and no sparkles come.
-- For theme authors (API 0.44): the pieces of a theme's `dress` are drawn in their order, each in front of the ones before it.
+- For theme authors (API 0.45): the pieces of a theme's `dress` are drawn in their order, each in front of the ones before it.
 
 ## 0.15.0 (2026-11-14)
 

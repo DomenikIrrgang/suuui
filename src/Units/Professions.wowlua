@@ -16,7 +16,9 @@
 
 import SuuUI from "/Core/API"
 import Module from "/Core/Modules"
+import type SettingsSection from "/Core/Modules"
 import PROFESSIONS, AUCTION_HOUSE from "/Core/ServiceKeys"
+import type AuctionPrice from "/Core/ServiceKeys"
 import type Professions, ProfessionCard, ProfessionSpell, ProfessionTab, CraftingData, RecipeEntry, RecipeCategory, RecipeDetail, RecipeReagent, RecipeSourceItem from "/UI/Professions"
 import type FilterValues, FilterChoice from "/UI/FilterMenu"
 import type RecipeSource from "/Data/RecipeSources"
@@ -39,7 +41,30 @@ local UI, T = SuuUI.UI, SuuUI.Tokens
 local try, tryValue = errors.try, errors.tryValue
 local asString, asNumber, flag, field = secret.asString, secret.asNumber, secret.flag, tbl.field
 
-local DEFAULTS = {}
+local DEFAULTS = {
+    -- what a recipe costs to make and brings at the auction house
+    craftValue = true,
+}
+
+local SECTION: SettingsSection = {
+    id = "professions",
+    label = "Professions",
+    category = "General",
+    order = 25,
+    groups = {
+        {
+            title = "Crafting",
+            rows = {
+                {
+                    key = "craftValue",
+                    label = "Crafting cost and profit",
+                    control = "toggle",
+                    description = "The recipe you choose shows what its reagents cost, what it sells for and the profit. Prices come from your last auction house scan and from vendors you've visited; the profit counts the house's 5% cut. (Sorting by profit or cost works either way.)",
+                },
+            },
+        },
+    },
+}
 
 local M: ProfessionsModule
 
@@ -138,6 +163,9 @@ type ProfessionsChar = {
     filters?: FilterValues,
     sort?: string,
     trainers?: { [string | number]: TrainerRecord },
+    -- what vendors this character visited sell an item for, per unit (a
+    -- reagent's cost when the auction house is dearer or never had it)
+    vendor?: { [number]: number },
 }
 local function charOf(data: { [string]: unknown }): ProfessionsChar
     return data :: unknown :: ProfessionsChar
@@ -158,8 +186,20 @@ type Row = {
     tracked: boolean,
     need?: number,
     use?: number,
+    -- the reagents' cost and the profit (Valuation; nil: a price missing)
+    cost?: number,
+    profit?: number,
 }
 type Category = { name?: string, order?: number, recipes: Row[], flat?: boolean }
+
+-- What a recipe costs to make and brings at the auction house: the
+-- reagents' cost, the products' price after the house's cut, the profit
+-- (each nil while a price is missing: `missing` names those items), and
+-- when the oldest auction price used was seen.
+type Valuation = { cost?: number, value?: number, profit?: number, missing: string[], at?: number }
+
+-- The auction house keeps this much of a sale (a faction house's cut).
+const AH_CUT = 0.05
 type Crafting = {
     name?: string,
     skill?: number,
@@ -263,6 +303,25 @@ local function searchAuctions(itemID: number): boolean
     local ah = SuuUI.UseService(AUCTION_HOUSE)
     local search = ah and ah.SearchItem
     return search ~= nil and search(itemID)
+end
+
+-- When a price was seen, as the auction house window says it: "today
+-- 14:05", "yesterday", "3 days ago".
+local function ago(at: number): string
+    local d, today = date("*t", at), date("*t")
+    if d.year == today.year and d.yday == today.yday then
+        return ("today %02d:%02d"):format(d.hour, d.min)
+    end
+    local days = math.floor((time() - at) / 86400)
+    return days <= 1 and "yesterday" or (days .. " days ago")
+end
+
+-- What the auction house showed last for an item (the auctionhouse service:
+-- your last Scan all or search), or nil.
+local function auctionPrice(itemID: number): AuctionPrice?
+    local ah = SuuUI.UseService(AUCTION_HOUSE)
+    local price = ah and ah.Price
+    return price and price(itemID) or nil
 end
 
 -- Where a recipe not learned yet is learned, from SuuUI's recipe data (the
@@ -594,6 +653,100 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         return list, can, sch
     end
 
+    --------------------------------------------------------------------------------
+    -- Crafting cost and profit
+    --------------------------------------------------------------------------------
+
+    -- The cheapest a vendor any of your characters visited sells an item for,
+    -- per unit; nil when none was seen selling it.
+    function VendorPrice(itemID: number): number?
+        local best: number? = nil
+        for _, data in pairs(self:AllCharData()) do
+            local v = charOf(data).vendor
+            local p = v and v[itemID]
+            if p and (not best or p < best) then
+                best = p
+            end
+        end
+        return best
+    end
+
+    -- The vendor open now: what it sells for gold, as many as you like, kept
+    -- per unit (a limited stock or an item's other costs aren't a price).
+    function RecordVendor()
+        local saved = self:Char()
+        local vendor = saved.vendor or {}
+        saved.vendor = vendor
+        for i = 1, (asNumber(try(GetMerchantNumItems)) or 0) do
+            local info = try(C_MerchantFrame.GetItemInfo, i)
+            local price = asNumber(field(info, "price"))
+            local stack = math.max(1, asNumber(field(info, "stackCount")) or 1)
+            local stock = asNumber(field(info, "numAvailable")) or -1
+            local link = asString(try(GetMerchantItemLink, i))
+            local itemID = link and tonumber(link:match("item:(%d+)"))
+            if itemID and price and price > 0 and stock < 0 and not field(info, "hasExtendedCost") then
+                vendor[itemID] = price / stack
+            end
+        end
+    end
+
+    -- What one of an item costs you: the auction house's last price or a
+    -- vendor's, whichever is less; and when that auction price was seen
+    -- (nil for a vendor's).
+    function UnitCost(itemID: number): (number?, number?)
+        local auction, vendor = auctionPrice(itemID), self:VendorPrice(itemID)
+        if auction and (not vendor or auction.price <= vendor) then
+            return auction.price, auction.at
+        end
+        return vendor, nil
+    end
+
+    -- What a recipe costs to make and brings at the auction house (from its
+    -- reagents and schematic, as Reagents reads them).
+    function Valuation(reagents: Need[], sch: CraftingRecipeSchematic?): Valuation
+        local v: Valuation = { missing = {} }
+        local cost, oldest = 0, nil :: number?
+        local function seen(at: number?)
+            if at and (not oldest or at < oldest) then
+                oldest = at
+            end
+        end
+        local function missing(itemID: number)
+            local data = self:Item(itemID)
+            v.missing[#v.missing + 1] = data and data.name or ("item " .. itemID)
+        end
+        for _, g in ipairs(reagents) do
+            local price, at = self:UnitCost(g.itemID)
+            if price then
+                cost = cost + price * g.need
+                seen(at)
+            else
+                missing(g.itemID)
+            end
+        end
+        local complete = #v.missing == 0
+        if complete then
+            v.cost = math.floor(cost + 0.5)
+        end
+        local out = sch and sch.outputItemID
+        if sch and out then
+            local sold = auctionPrice(out)
+            if sold then
+                local low, high = sch.quantityMin or 1, sch.quantityMax or sch.quantityMin or 1
+                v.value = math.floor(sold.price * (low + high) / 2 * (1 - AH_CUT) + 0.5)
+                seen(sold.at)
+            else
+                missing(out)
+            end
+        end
+        local value, made = v.value, v.cost
+        if value and made then
+            v.profit = value - made
+        end
+        v.at = oldest
+        return v
+    end
+
     -- The header a category sits under (GetCategoryInfo's parentCategoryID up
     -- to the top).
     function RootOf(catID: number): CategoryInfo | false
@@ -689,6 +842,9 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local minLevel, maxLevel = UI.FilterRange(f.level)
         local ranged = minLevel > 0 or maxLevel > 0
         local learned, total = 0, 0
+        -- crafting cost and profit: only to sort by (the list shows no prices:
+        -- the chosen recipe's Market does, asked)
+        local priced = self.sort == "profit" or self.sort == "cost"
         for _, id in ipairs(numbers(try(C_TradeSkillUI.GetAllRecipeIDs))) do
             local info = tryValue(C_TradeSkillUI.GetRecipeInfo, id)
             if info and secret.readable(info.name) and not info.isDummyRecipe and self:InGame(info, profession) then
@@ -696,7 +852,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                 if info.learned then
                     learned = learned + 1
                 end
-                local _, can = self:Reagents(id)
+                local reagents, can, sch = self:Reagents(id)
                 local diff = info.relativeDifficulty or 3
                 -- the product's quality is in the recipe's link ("|cnIQ3:")
                 local quality = info.hyperlink and info.hyperlink:match("IQ(%d)")
@@ -717,6 +873,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                         byCat[catID] = cat
                         cats[#cats + 1] = cat
                     end
+                    local value = priced and self:Valuation(reagents, sch) or nil
                     cat.recipes[#cat.recipes + 1] = {
                         id = id,
                         name = info.name,
@@ -728,6 +885,8 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                             self:SkillFor(id, profession, info.name) or
                             nil,
                         use = use,
+                        cost = value and value.cost,
+                        profit = value and value.profit,
                     }
                 end
             end
@@ -779,6 +938,22 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
                     return x < y
                 end
                 x, y = a.need or math.huge, b.need or math.huge
+                if x ~= y then
+                    return x < y
+                end
+                return byName(a, b)
+            end,
+            -- the most profit first; a price missing goes last
+            profit = function(a: Row, b: Row): boolean
+                local x, y = a.profit or -math.huge, b.profit or -math.huge
+                if x ~= y then
+                    return x > y
+                end
+                return byName(a, b)
+            end,
+            -- the cheapest to make first; a price missing goes last
+            cost = function(a: Row, b: Row): boolean
+                local x, y = a.cost or math.huge, b.cost or math.huge
                 if x ~= y then
                     return x < y
                 end
@@ -1059,6 +1234,18 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         local parts: RecipeReagent[] = {}
         local tools: { name?: string, met?: boolean }[] = {}
         local r: RecipeDetail = { name = info.name, icon = info.icon, canMake = can, reagents = parts, tools = tools }
+        -- what it costs to make and brings at the auction house
+        if self:Get("craftValue") then
+            local v = self:Valuation(reagents, sch)
+            r.market = {
+                cost = v.cost,
+                value = v.value,
+                profit = v.profit,
+                missing = v.missing,
+                sells = sch ~= nil and sch.outputItemID ~= nil,
+                when = v.at and ago(v.at) or nil,
+            }
+        end
         local out = sch and sch.outputItemID
         if out then
             local product = self:Item(out)
@@ -1509,6 +1696,7 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         preload()
+        self:RegisterSettings(SECTION)
         self:Build()
         self:ProvideService(PROFESSIONS, {
             OpenRecipe = function(recipeID: number)
@@ -1555,6 +1743,13 @@ class ProfessionsModule extends Module<typeof(DEFAULTS)>
         }) do
             self:OnGameEvent(e, redraw)
         end
+        -- vendors: what they sell reagents for (crafting costs)
+        for _, e in ipairs({ "MERCHANT_SHOW", "MERCHANT_UPDATE" }) do
+            self:OnGameEvent(e, function()
+                self:RecordVendor()
+            end)
+        end
+        self:Watch("craftValue", redraw)
         -- profession trainers: what they teach, recorded once they've listed it
         self:OnGameEvent("TRAINER_SHOW", function()
             after(0.3, function()
