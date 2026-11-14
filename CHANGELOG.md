@@ -10,6 +10,7 @@
 
 - **Pink Cat theme**: pink satin ribbons now wrap round the corners of the windows and the chat, with a little white bow on the top corners and a white heart on the bottom ones, a string of pearls along each window's top and soft striped wallpaper behind the titles. White and pink sparkles drift up over the windows and the minimap, the minimap wears a ribbon of pearls with cat ears, and the player and target frames have two small cat ears. The bows and ears sway gently; with Reduce motion on they keep still and no sparkles come.
 - For theme authors (API 0.45): the pieces of a theme's `dress` are drawn in their order, each in front of the ones before it.
+- Unit frames and nameplates: health bars are now in class colours for players and in reaction colours (red, yellow, green) for NPCs by default. To go back to your theme's own bar colour, set "Health colour" to the theme's and turn off "NPC reaction colours" in Settings › Appearance.
 
 ## 0.15.0 (2026-11-14)
 

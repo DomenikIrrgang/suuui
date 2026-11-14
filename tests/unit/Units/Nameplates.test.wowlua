@@ -482,9 +482,12 @@ local function friendly()
     mock.leaveInstance()
 end
 
-@test("class-coloured health on plates: a player's in their class colour, an NPC's the fill; the name keeps its colour")
+@test(
+    "class-coloured health on plates: on by default, a player's in their class colour, an NPC's apart; the name keeps its colour"
+)
 local function classHealth()
-    coreSettings.setAccount("healthColor", "class")
+    -- (NPCs in the fill, to see them apart)
+    coreSettings.setAccount("npcHealthColor", "off")
     themes.apply()
     local f = plateOf(mage)
     expect(f.fillClass).toBe("class-mage")
@@ -494,18 +497,28 @@ local function classHealth()
     expect(hasRGB(f.name, mageColor:GetRGB())).toBe(true)
     local w = plateOf(wolf)
     expect(fillIs(w.health, "unit-fill-deep", "unit-fill")).toBe(true)
-    coreSettings.setAccount("healthColor", nil)
+    -- the theme's: the fill
+    coreSettings.setAccount("healthColor", "theme")
     themes.apply()
     expect(healthFill.byClass()).toBe(false)
+    expect(fillIs(f.health, "unit-fill-deep", "unit-fill")).toBe(true)
+    coreSettings.setAccount("healthColor", nil)
+    coreSettings.setAccount("npcHealthColor", nil)
+    themes.apply()
+    expect(healthFill.byClass()).toBe(true)
 end
 
 @test(
-    "NPC reaction colours on plates: off, the fill; on, hostile red, neutral yellow, friendly green; a player as before; the name keeps its colour"
+    "NPC reaction colours on plates: off, the fill; on (the default), hostile red, neutral yellow, friendly green; a player as before; the name keeps its colour"
 )
 local function reactionHealth()
+    -- players in the theme's fill, to see them unchanged below
+    coreSettings.setAccount("healthColor", "theme")
+    coreSettings.setAccount("npcHealthColor", "off")
+    themes.apply()
     local boar = mock.spawnUnit({ name = "Old Boar", level = 8, reaction = "neutral", distance = 11 })
     local w, b, g, m = plateOf(wolf), plateOf(boar), plateOf(guard), plateOf(mage)
-    -- off (the default): every NPC the theme's fill
+    -- off: every NPC the theme's fill
     expect(healthFill.byReaction()).toBe(false)
     for _, f in ipairs({ w, b, g }) do
         expect(fillIs(f.health, "unit-fill-deep", "unit-fill")).toBe(true)
@@ -513,8 +526,8 @@ local function reactionHealth()
     expect(w.fillReaction).toBe("reaction-hostile")
     expect(b.fillReaction).toBe("reaction-neutral")
     expect(g.fillReaction).toBe("reaction-friendly")
-    -- on (live)
-    coreSettings.setAccount("npcHealthColor", "reaction")
+    -- on (the default, live)
+    coreSettings.setAccount("npcHealthColor", nil)
     themes.apply()
     expect(drawnToned(w.health, "reaction-hostile")).toBe(true)
     expect(drawnToned(b.health, "reaction-neutral")).toBe(true)
@@ -548,9 +561,12 @@ local function reactionHealth()
     mock.advanceFrames(1)
     expect(drawnToned(w.health, "reaction-hostile")).toBe(true)
     -- off again (live): the fill
-    coreSettings.setAccount("npcHealthColor", nil)
+    coreSettings.setAccount("npcHealthColor", "off")
     themes.apply()
     expect(fillIs(w.health, "unit-fill-deep", "unit-fill")).toBe(true)
+    coreSettings.setAccount("npcHealthColor", nil)
+    coreSettings.setAccount("healthColor", nil)
+    themes.apply()
     boar:hideNameplate()
     boar:despawn()
 end

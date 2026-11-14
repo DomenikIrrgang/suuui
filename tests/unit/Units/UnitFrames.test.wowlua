@@ -636,33 +636,40 @@ local function toned(bar: StatusBar, token: string): boolean
     return drawsAs(bar, healthFill.classColors(token))
 end
 
-@test("class-coloured health: a player's in their class colour, the name in ink; NPCs as before; the setting off")
+@test(
+    "class-coloured health: on by default, a player's in their class colour, the name in ink; NPCs apart; the theme's fill"
+)
 local function classHealth()
     local target = assert(M.frames).target
     mock.player:target(tank)
     mock.advanceFrames(1)
-    -- off (the default): the fill, the name in its class colour
-    expect(healthFill.byClass()).toBe(false)
-    expect(target.fillClass).toBe("class-warrior")
-    expect(inColor(target.name, "class-warrior")).toBe(true)
-    -- on: the class colour drawn, the name in ink
-    settings.setAccount("healthColor", "class")
-    themes.apply()
+    -- on (the default): the class colour drawn, the name in ink
     expect(healthFill.byClass()).toBe(true)
+    expect(target.fillClass).toBe("class-warrior")
     expect(healthFill.lookOf(target.health)).toBe("class-warrior")
     expect(inColor(target.name, "ink")).toBe(true)
-    -- an NPC: the fill, its name in its reaction colour
+    -- an NPC with reaction colours off: the fill, its name in its reaction colour
+    settings.setAccount("npcHealthColor", "off")
+    themes.apply()
     mock.player:target(wolf)
     mock.advanceFrames(1)
     expect(theFill(target.health)).toBe(true)
     expect(inColor(target.name, "ink")).toBe(false)
-    -- off again: the name's class colour back
+    settings.setAccount("npcHealthColor", nil)
+    themes.apply()
+    -- the theme's: the fill, the name in its class colour
     mock.player:target(tank)
     mock.advanceFrames(1)
-    settings.setAccount("healthColor", nil)
+    settings.setAccount("healthColor", "theme")
     themes.apply()
     expect(healthFill.byClass()).toBe(false)
+    expect(theFill(target.health)).toBe(true)
     expect(inColor(target.name, "class-warrior")).toBe(true)
+    -- back to the default: class colours again
+    settings.setAccount("healthColor", nil)
+    themes.apply()
+    expect(healthFill.byClass()).toBe(true)
+    expect(inColor(target.name, "ink")).toBe(true)
     -- the toned colour: 55% over surface-sunk, the deep end at 75%
     local r1, _, _, r2 = healthFill.classColors("class-warrior")
     local cr = SuuUI.UI.RGBA("class-warrior")
@@ -672,21 +679,25 @@ local function classHealth()
 end
 
 @test(
-    "NPC reaction colours: off, NPCs the fill; on, hostile red, neutral yellow, friendly green, the name in ink; a player as before"
+    "NPC reaction colours: on by default, hostile red, neutral yellow, friendly green, the name in ink; off, NPCs the fill; a player as before"
 )
 local function reactionHealth()
     local target = assert(M.frames).target
     local boar = mock.spawnUnit({ name = "Old Boar", level = 8, reaction = "neutral", distance = 10 })
     local keeper = mock.spawnUnit({ name = "Placeholder Keeper", level = 30, reaction = "friendly", distance = 10 })
+    -- players in the theme's fill, to see them unchanged below
+    settings.setAccount("healthColor", "theme")
+    -- off: the theme's fill, the name in its reaction colour
+    settings.setAccount("npcHealthColor", "off")
+    themes.apply()
     mock.player:target(wolf)
     mock.advanceFrames(1)
-    -- off (the default): the theme's fill, the name in its reaction colour
     expect(healthFill.byReaction()).toBe(false)
     expect(target.fillReaction).toBe("reaction-hostile")
     expect(theFill(target.health)).toBe(true)
     expect(inColor(target.name, "reaction-hostile")).toBe(true)
-    -- on (live): toned red, the name in ink (on the bar)
-    settings.setAccount("npcHealthColor", "reaction")
+    -- on (the default, live): toned red, the name in ink (on the bar)
+    settings.setAccount("npcHealthColor", nil)
     themes.apply()
     expect(healthFill.byReaction()).toBe(true)
     expect(healthFill.lookOf(target.health)).toBe("reaction-hostile")
@@ -715,10 +726,13 @@ local function reactionHealth()
     -- off again (live): the fill, the name's colour back
     mock.player:target(wolf)
     mock.advanceFrames(1)
-    settings.setAccount("npcHealthColor", nil)
+    settings.setAccount("npcHealthColor", "off")
     themes.apply()
     expect(theFill(target.health)).toBe(true)
     expect(inColor(target.name, "reaction-hostile")).toBe(true)
+    settings.setAccount("npcHealthColor", nil)
+    settings.setAccount("healthColor", nil)
+    themes.apply()
     boar:despawn()
     keeper:despawn()
 end
