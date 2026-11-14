@@ -5,6 +5,7 @@
 ### New
 
 - Action bars, with dual spec: when you switch to your other spec, SuuUI checks its bars for spell ranks you learned while the other spec was active and asks whether to upgrade them ("Fireball: Rank 5 to Rank 7 (2 buttons)"). As when you train, lower ranks you placed on purpose stay. Turn it off with "Ask after a spec switch" in Settings › Action bars.
+- Bags and bank: an item that starts a quest has a yellow exclamation mark in its corner, as in the game's own bags, until you take the quest. For theme authors (API 0.43): the texture token `quest-start` sets the mark.
 
 ### Changed
 

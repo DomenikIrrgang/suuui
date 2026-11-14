@@ -80,6 +80,18 @@ local M: BagsModule
 
 local QUALITY = chars.QUALITY
 local KEYRING = -1
+
+-- Whether the item in a slot starts a quest: the game names its quest and
+-- you don't have it yet (asked 2026-11-14: marked as the game's bags do).
+local function startsQuest(bag: number, slot: number): boolean
+    local get = C_Container.GetContainerItemQuestInfo
+    local q = get and errors.tryValue(get, bag, slot)
+    if type(q) ~= "table" then
+        return false
+    end
+    local id = asNumber(q.questID)
+    return id ~= nil and id > 0 and not flag(q.isActive)
+end
 local REAGENT = 5
 local BANK_FIRST = asNumber(field(Enum, "BagIndex", "CharacterBankTab_1")) or 6
 local BANK_LAST = asNumber(field(Enum, "BagIndex", "CharacterBankTab_9")) or 14
@@ -951,12 +963,23 @@ class BagsModule extends Module<typeof(DEFAULTS)>
                     quality = QUALITY[asNumber(info.quality) or 1] or "common",
                     dim = flag(info.isFiltered),
                     locked = flag(info.isLocked),
+                    questStart = startsQuest(bag, slot),
                 })
             else
                 skin:SetItem(nil)
             end
         end
         self:SlotCooldown(b, bag, slot, info ~= nil)
+    end
+
+    -- Every slot drawn again (a quest taken or dropped: which items start
+    -- one changes).
+    function UpdateSlots()
+        for bag, list in pairs(self.buttons) do
+            for slot = 1, #list do
+                self:UpdateSlot(bag, slot)
+            end
+        end
     end
 
     -- A slot's cooldown sweep (`has`: an item there).
@@ -3134,6 +3157,16 @@ class BagsModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("BAG_UPDATE_COOLDOWN", function()
             self:UpdateCooldowns()
         end)
+        -- a quest taken or dropped: the items that start one change (shown
+        -- windows; a hidden one draws its slots as it opens)
+        for _, e in ipairs({ "QUEST_ACCEPTED", "QUEST_REMOVED" }) do
+            self:OnGameEvent(e, function()
+                local bankWindow = self.bank
+                if inv:IsShown() or (bankWindow and bankWindow:IsShown()) then
+                    self:UpdateSlots()
+                end
+            end)
+        end
         self:OnGameEvent("INVENTORY_SEARCH_UPDATE", function()
             self:UpdateShown()
         end)

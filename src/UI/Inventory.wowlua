@@ -66,7 +66,15 @@ local live: { [Frame]: string } = setmetatable({}, { __mode = "k" }) -- money an
 --------------------------------------------------------------------------------
 
 -- What a slot shows: quality "poor" … "legendary" ("common": no edge).
-export type SlotItem = { icon?: string | number, count?: number, quality?: string, dim?: boolean, locked?: boolean }
+export type SlotItem = {
+    icon?: string | number,
+    count?: number,
+    quality?: string,
+    dim?: boolean,
+    locked?: boolean,
+    -- the item starts a quest (the quest-start mark in the corner)
+    questStart?: boolean,
+}
 
 -- The template's own art, out of sight (alpha, so its code showing a part
 -- again shows nothing).
@@ -152,6 +160,8 @@ export class ItemSlotSkin
     readonly icon: Texture
     readonly border: draw.Border
     readonly count: FontString
+    -- the quest-start mark, made when a slot first needs it
+    questMark?: Texture
     hover?: boolean
     item?: SlotItem
 
@@ -200,8 +210,35 @@ export class ItemSlotSkin
         return b
     end
 
+    -- The quest-start mark: shown for an item that starts a quest, in the
+    -- bottom-left corner (the count is at the right), 60% of the slot
+    -- (asked: lower and bigger than the first 45% at the top).
+    function ShowQuestStart(on: boolean)
+        local mark = self.questMark
+        if not on then
+            if mark then
+                mark:Hide()
+            end
+            return
+        end
+        if not mark then
+            local b = self.button
+            mark = b:CreateTexture(nil, "OVERLAY", nil, 2)
+            draw.skin(mark, "quest-start")
+            local px = math.max(12, math.floor((b:GetWidth() :: number) * 0.6 + 0.5))
+            mark:SetSize(px, px)
+            -- (the game's "!" has room on its sides but reaches its art's
+            -- bottom: moved left past that room and just off the bottom edge,
+            -- placed as asked)
+            mark:SetPoint("BOTTOMLEFT", -math.floor(px * 0.15 + 0.5), math.floor(px * 0.05 + 0.5))
+            self.questMark = mark
+        end
+        mark:Show()
+    end
+
     function Draw()
         local item = self.item
+        self:ShowQuestStart(item ~= nil and item.questStart == true)
         if not item then
             draw.paintFill(self.well, "surface-sunk")
             self.border:SetColor(self.hover and "gilt" or "gilt-faint")
