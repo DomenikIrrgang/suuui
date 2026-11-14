@@ -12,6 +12,11 @@
 - For theme authors (API 0.45): the pieces of a theme's `dress` are drawn in their order, each in front of the ones before it.
 - Unit frames and nameplates: health bars are now in class colours for players and in reaction colours (red, yellow, green) for NPCs by default. To go back to your theme's own bar colour, set "Health colour" to the theme's and turn off "NPC reaction colours" in Settings › Appearance.
 
+### Fixed
+
+- World map: the Map filters button in the map's header has its border on every side again; its right edge could go missing when the map was enlarged, in every theme.
+- Themes Ulduar · Titan, Karazhan · Library and Icecrown · Plagueworks: the line along the foot of a window's header no longer runs through the world map's search box and Map filters; it sits on the header's bottom edge.
+
 ## 0.15.0 (2026-11-14)
 
 ### New
