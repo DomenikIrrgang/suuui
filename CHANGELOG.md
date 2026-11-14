@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Unit frames and nameplates: health bars are now in class colours for players and in reaction colours (red, yellow, green) for NPCs by default. To go back to your theme's own bar colour, set "Health colour" to the theme's and turn off "NPC reaction colours" in Settings › Appearance.
+
 ## 0.15.0 (2026-11-14)
 
 ### New
