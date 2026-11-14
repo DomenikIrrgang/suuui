@@ -167,6 +167,48 @@ local function bagList()
     expect(M:Bags()).toEqual({ 0, 1, 2, 3, 4 })
 end
 
+@test(
+    "an item that starts a quest has the yellow mark; one whose quest you have, and the others, don't; taken, it goes"
+)
+local function questStart()
+    local NOTE = 990031
+    mock.defineItem(NOTE, { name = "Torn Note", quality = 1, stackCount = 1, icon = 134939, classID = 12 }, {
+        cached = true,
+    })
+    local function bagWith(active: boolean)
+        mock.setBag(0, {
+            slots = 16,
+            items = {
+                [1] = { id = CLOTH, count = 3 },
+                [3] = { id = NOTE, questItem = true, questID = 9401, questActive = active },
+                [4] = { id = NOTE, questItem = true, questID = 9402, questActive = true },
+            },
+        })
+    end
+    bagWith(false)
+    open()
+    local function marked(slot: number): boolean
+        local skin = M.skins[button(0, slot)]
+        local mark = skin and skin.questMark
+        return mark ~= nil and mark:IsShown()
+    end
+    expect(shown(0, 3).questStart).toBe(true)
+    expect(marked(3)).toBe(true)
+    expect(marked(4)).toBe(false)
+    expect(marked(1)).toBe(false)
+    -- the quest taken (the note stays): no mark
+    bagWith(true)
+    mock.fireEvent("QUEST_ACCEPTED", 9401)
+    mock.advanceFrames(2)
+    expect(marked(3)).toBe(false)
+    -- dropped again: back
+    bagWith(false)
+    mock.fireEvent("QUEST_REMOVED", 9401, false)
+    mock.advanceFrames(2)
+    expect(marked(3)).toBe(true)
+    expectNoErrors()
+end
+
 @test("Blizzard's bag calls open and close the window; a toggle, the close button, Toggle")
 local function openClose()
     call("ToggleAllBags")
