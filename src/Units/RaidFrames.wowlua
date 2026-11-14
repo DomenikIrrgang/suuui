@@ -51,6 +51,10 @@ local DEFAULTS = {
     -- fourth column reached the player frame; the presets' 1080p layout
     -- sets 3)
     perBandLarge = 4,
+    -- columns: the groups hang from the top ("down") or sit on the bottom
+    -- edge ("up"; asked 2026-11-14: from 1440p a raid of 20 on the chat, no
+    -- gap above it)
+    growth = "down",
     width = 108,
     height = 19,
     heightLarge = 20, -- raids of 21-40
@@ -487,16 +491,23 @@ local function endHeaderLayout(header: Frame, update: (self: Frame) -> ())
 end
 
 -- The layout's numbers: frame width and height, the gap between frames and
--- between groups, groups side by side (columns), rows or columns.
-type Grid = { w: number, h: number, gap: number, groupGap: number, perBand: number, rows: boolean }
+-- between groups, groups side by side (columns), rows or columns; `shift`:
+-- every group that much lower (groups growing up: the bands in use on the
+-- holder's bottom edge).
+type Grid = { w: number, h: number, gap: number, groupGap: number, perBand: number, rows: boolean, shift: number }
+
+-- A band of five frames and the space to the next band (columns).
+local function bandStep(grid: Grid): number
+    return 5 * grid.h + 4 * grid.gap + grid.groupGap * 2
+end
 
 -- Group g's top left in the grid (x right, y down, from the top left).
 local function groupOrigin(g: number, grid: Grid): (number, number)
     if grid.rows then
-        return 0, (g - 1) * (grid.h + grid.groupGap)
+        return 0, (g - 1) * (grid.h + grid.groupGap) + grid.shift
     end
     local col, band = (g - 1) % grid.perBand, math.floor((g - 1) / grid.perBand)
-    return col * (grid.w + grid.groupGap), band * (5 * grid.h + 4 * grid.gap + grid.groupGap * 2)
+    return col * (grid.w + grid.groupGap), band * bandStep(grid) + grid.shift
 end
 
 -- A frame's top left in its group: slot 0 first (raid order or by role).
@@ -527,6 +538,7 @@ local function gridAt(h: number, large: boolean?): Grid
         groupGap = M:Get("groupGap"),
         perBand = math.max(1, large and M:Get("perBandLarge") or M:Get("perBand")),
         rows = M:Get("arrangement") == "rows",
+        shift = 0,
     }
 end
 
@@ -923,6 +935,15 @@ local SECTION: SettingsSection = {
                     disabled = hasNoArrangement,
                 },
                 {
+                    key = "growth",
+                    label = "Groups grow",
+                    control = "segmented",
+                    combat = true,
+                    options = { { value = "down", label = "Down" }, { value = "up", label = "Up" } },
+                    description = "Down: the first band at the frames' top edge. Up: the bands sit on their bottom edge, so a smaller raid rests on what's under it (the chat) with no gap.",
+                    disabled = hasNoArrangement,
+                },
+                {
                     key = "width",
                     label = "Width",
                     control = "slider",
@@ -1131,7 +1152,9 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     petHeader: PetHeader? = nil
     petButtons: UnitFrame[] = {}
     petPlaceFrame: Frame? = nil
-    petGroup: number? = nil
+    -- the last group with someone in it the layout went by (groups growing
+    -- up, pets below): another, laid out again
+    laidGroup: number? = nil
 
     constructor()
         super({
@@ -1146,6 +1169,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 "arrangement",
                 "perBand",
                 "perBandLarge",
+                "growth",
                 "width",
                 "height",
                 "heightLarge",
@@ -1308,14 +1332,15 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             ph:SetParent(holder)
             ph:SetAttribute("columnAnchorPoint", "TOP")
             local last = lastGroup()
-            self.petGroup = last
+            self.laidGroup = last
             local _, y = groupOrigin(last, grid)
             local bottom = y + (grid.rows and h or (5 * h + 4 * grid.gap))
             ph:SetPoint("TOPLEFT", holder, "TOPLEFT", 0, -(bottom + grid.groupGap * 2))
         else
             ph:SetParent(holder)
             ph:SetAttribute("columnAnchorPoint", "BOTTOM")
-            ph:SetPoint("BOTTOMLEFT", holder, "TOPLEFT", 0, grid.groupGap * 2)
+            -- (over the first group, lower when they grow up)
+            ph:SetPoint("BOTTOMLEFT", holder, "TOPLEFT", 0, grid.groupGap * 2 - grid.shift)
         end
         for _, f in ipairs(self.petButtons) do
             f:Resize(w, h)
@@ -1348,6 +1373,16 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         local large = isLarge()
         local grid = gridAt(h, large)
         self.tierLarge = large
+        -- groups growing up: the bands in use on the holder's bottom edge (a
+        -- raid of 20 sits on what's under it, the chat, with no gap)
+        self.laidGroup = nil
+        if not grid.rows and self:Get("growth") == "up" then
+            local last = lastGroup()
+            self.laidGroup = last
+            local bands = math.ceil(GROUPS / grid.perBand)
+            local used = math.ceil(last / grid.perBand)
+            grid.shift = (bands - used) * bandStep(grid)
+        end
         for g, hd in ipairs(self.headers) do
             beginHeaderLayout(hd)
             hd:SetAttribute("unitWidth", w)
@@ -1831,6 +1866,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             "arrangement",
             "perBand",
             "perBandLarge",
+            "growth",
             "width",
             "height",
             "heightLarge",
@@ -1945,7 +1981,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             if
                 barHeight() ~= self.tierHeight
                 or isLarge() ~= self.tierLarge
-                or (self.petGroup ~= nil and lastGroup() ~= self.petGroup)
+                or (self.laidGroup ~= nil and lastGroup() ~= self.laidGroup)
             then
                 self:RunOutOfCombat("layout", function()
                     self:Layout()
