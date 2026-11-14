@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- Action bars, with dual spec: when you switch to your other spec, SuuUI checks its bars for spell ranks you learned while the other spec was active and asks whether to upgrade them ("Fireball: Rank 5 to Rank 7 (2 buttons)"). As when you train, lower ranks you placed on purpose stay. Turn it off with "Ask after a spec switch" in Settings › Action bars.
+
 ### Changed
 
 - Performance: the threat meter does less each time it updates (five times a second in a fight, and whenever you change target): its rows are only moved when what they show changes, not every time.
