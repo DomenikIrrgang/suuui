@@ -68,6 +68,13 @@ EXTRA_COLORS = [
     # the names on nameplates (asked 2026-11-13: white, not the reaction's
     # red or yellow, which was hard to read; a theme may give its own)
     ("plate-name", "#ffffff"),
+    # your cast bar's and swing timer's fill when not in your class colour
+    # (asked 2026-11-14: class colours the default, this pale gradient the
+    # look before, a theme may give its own): the deep end, the fill, the
+    # leading edge
+    ("cast-fill-deep", "rgba(241, 234, 219, 0)"),
+    ("cast-fill", "rgba(241, 234, 219, 0.5)"),
+    ("cast-edge", "{ink}"),
 ]
 
 # SuuUI's own texture tokens (asked 2026-11-12: every texture the unit frames

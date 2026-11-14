@@ -10,6 +10,11 @@
 - Raid frames: "Groups grow" Up sits the groups on the frames' bottom edge, so a smaller raid rests on the chat with no gap above it. The tank and DPS presets use it from 1440p.
 - **Party and raid pets**: your group's pets get frames of their own. In the party, each pet sits on its owner's row: beside them in a column, under them in the healer's row. In a raid they're as large as the raid frames, on top of the groups, under the last group, or in a place of their own you move in edit mode ("Raid pets"; two side by side there by default, more rows growing up: "Pets per row"), with a separate choice for raids of 21 to 40. Click a pet to target it; your mouseover bindings heal it, and it shows your buff indicators. Turn them off with "Show pets" in the party and raid frames' settings. The role presets set them up: healers see pets in party and raid (from 21 players above the chat), tanks in the party, DPS none.
 
+### Changed
+
+- Your cast bar and swing timer are now in your class colour. To keep the pale bar from before (or your theme's colour), set "Cast bar colour" to the theme's in Settings › Appearance.
+- For theme authors (API 0.46): `cast = "class"` puts the cast bar and swing timer in the class colour for your theme, and the colour tokens `cast-fill-deep`, `cast-fill` and `cast-edge` set their colours otherwise. Without them they follow your `ghost` and `ink`, as before.
+
 ### Fixed
 
 - Raid frames: switching between rows and columns while you're in a raid, by hand or with a new screen size's layout, no longer stretches each group's first frame.

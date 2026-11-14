@@ -41,6 +41,7 @@ end
 
 @afterEach
 local function cleanup()
+    settings.setAccount("castColor", nil)
     settings.setAccount("theme", nil)
     themes.apply()
     if parent then
@@ -111,5 +112,93 @@ local function themed()
     settings.setAccount("theme", nil)
     themes.apply()
     expect(s:GetTextureFilePath()).toBe(T.texture.tapped)
+    expectNoErrors()
+end
+
+-- the gradient with its alphas: { r1, g1, b1, a1, r2, g2, b2, a2 }
+local castGradients: { [Texture]: number[] } = setmetatable({}, { __mode = "k" })
+local function watchCast(t: Texture)
+    hooksecurefunc(t, "SetGradient", function(_: Texture, _: string, from: ColorMixin, to: ColorMixin)
+        local r1, g1, b1, a1 = from:GetRGBA()
+        local r2, g2, b2, a2 = to:GetRGBA()
+        castGradients[t] = { r1, g1, b1, a1 or 1, r2, g2, b2, a2 or 1 }
+    end)
+end
+
+local function castDrawn(t: Texture, want: number[]): boolean
+    local g = castGradients[t]
+    if not g then
+        return false
+    end
+    for i = 1, 8 do
+        if not near(g[i], want[i]) then
+            return false
+        end
+    end
+    return true
+end
+
+-- the player's class colour, toned (both ends opaque)
+local function classLook(): number[]
+    local _, class = UnitClass("player")
+    local r1, g1, b1, r2, g2, b2 = healthFill.classColors(assert(healthFill.classToken(class)))
+    return { r1, g1, b1, 1, r2, g2, b2, 1 }
+end
+
+@test(
+    "your cast fill: your class colour by default; the setting's The theme's: the pale gradient from before, or the theme's cast = \"class\""
+)
+local function castFill()
+    local b = healthBar()
+    local tex = b:GetStatusBarTexture()
+    watchCast(tex)
+    healthFill.paintCast(tex)
+    expect(castDrawn(tex, classLook())).toBe(true)
+    -- The theme's: SuuUI's own is the damage ghost's colour, clear to half
+    settings.setAccount("castColor", "theme")
+    themes.apply()
+    expect(healthFill.castLook()).toBeNil()
+    local gr, gg, gb = draw.rgba("ghost")
+    expect(castDrawn(tex, { gr, gg, gb, 0, gr, gg, gb, 0.5 })).toBe(true)
+    -- a theme's cast = "class": class colours under The theme's too
+    themes.register({ id = "test-cast-class", cast = "class" })
+    settings.setAccount("theme", "test-cast-class")
+    themes.apply()
+    expect(castDrawn(tex, classLook())).toBe(true)
+    settings.setAccount("castColor", nil)
+    themes.apply()
+    expect(castDrawn(tex, classLook())).toBe(true)
+    expectNoErrors()
+end
+
+@test("your cast fill under The theme's: a theme's cast-fill colours; without them its ghost and ink still reach it")
+local function castThemed()
+    local b = healthBar()
+    local tex = b:GetStatusBarTexture()
+    watchCast(tex)
+    healthFill.paintCast(tex)
+    settings.setAccount("castColor", "theme")
+    -- its own cast colours
+    themes.register({
+        id = "test-cast-own",
+        colors = { ["cast-fill-deep"] = { 0, 0, 1, 1 }, ["cast-fill"] = { 1, 0, 0, 0.8 } },
+    })
+    settings.setAccount("theme", "test-cast-own")
+    themes.apply()
+    expect(castDrawn(tex, { 0, 0, 1, 1, 1, 0, 0, 0.8 })).toBe(true)
+    -- only ghost and ink: the cast colours follow them (as before they had their own)
+    themes.register({ id = "test-cast-ghost", colors = { ghost = { 0, 1, 0, 0.6 }, ink = { 0.2, 0.3, 0.4 } } })
+    settings.setAccount("theme", "test-cast-ghost")
+    themes.apply()
+    expect(castDrawn(tex, { 0, 1, 0, 0, 0, 1, 0, 0.6 })).toBe(true)
+    local er, eg, eb = draw.rgba("cast-edge")
+    expect(near(er, 0.2) and near(eg, 0.3) and near(eb, 0.4)).toBe(true)
+    -- SuuUI's again
+    settings.setAccount("theme", nil)
+    themes.apply()
+    local gr, gg, gb = draw.rgba("ghost")
+    expect(castDrawn(tex, { gr, gg, gb, 0, gr, gg, gb, 0.5 })).toBe(true)
+    settings.setAccount("castColor", nil)
+    themes.apply()
     expectNoErrors()
 end
