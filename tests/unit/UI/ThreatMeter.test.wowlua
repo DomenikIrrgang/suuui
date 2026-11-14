@@ -4,7 +4,7 @@ import test, cases, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import threatMeter, ThreatMeter, ThreatEntry, ThreatMeterOptions from "/UI/ThreatMeter"
 import internal stateOf, holder, mix, STATUS_RANK from "/UI/ThreatMeter"
-import expectNoErrors, newParent, useTheme from "../../helpers"
+import expectNoErrors, newParent, useTheme, layoutThemes, ROOMY from "../../helpers"
 import tokens as T from "/Core/Tokens"
 import * as themes from "/Core/Themes"
 import * as draw from "/UI/Draw"
@@ -175,6 +175,50 @@ local function byPercent()
     expect(m.rows[1].mark).toBeShown()
     expect(m.rows[5].mark).never.toBeShown()
     expect(m.note).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("rows set again in the same shape are not anchored again; a new shape is (five times a second in a fight)")
+local function anchorsOnChange()
+    local m = meter()
+    local list: ThreatEntry[] = {
+        { name = "Tank", class = "WARRIOR", role = "TANK", status = 3, percent = 100 },
+        { name = "Mage", class = "MAGE", role = "DAMAGER", status = 0, percent = 40, you = true },
+    }
+    m:SetRows(list, {})
+    local row = m.rows[2]
+    local placed = 0
+    for _, region in ipairs({ row :: Region, row.name, row.mark, row.rank, row.sub, row.badge }) do
+        hooksecurefunc(region, "SetPoint", function()
+            placed = placed + 1
+        end)
+    end
+    -- threat moves: values only
+    list[2].percent = 55
+    m:SetRows(list, {})
+    m:SetRows(list, {})
+    expect(placed).toBe(0)
+    expect(row.pct).toHaveText("55%")
+    expect(row.bar:GetValue()).toBe(55)
+    -- pulling: the badge comes, the name ends at it
+    list[2].status = 1
+    m:SetRows(list, {})
+    expect(placed).toBe(2)
+    expect(row.badge).toBeShown()
+    local _, endsAt = row.name:GetPoint(2)
+    expect(endsAt).toBe(row.badge)
+    -- class circles instead of role marks: the mark and the name move
+    placed = 0
+    m:SetRows(list, { marker = "class" })
+    expect(placed).toBe(3)
+    -- a theme's spacing: placed again at the next update
+    placed = 0
+    layoutThemes()
+    useTheme(ROOMY)
+    m:SetRows(list, { marker = "class" })
+    local placedRoomy = placed
+    useTheme(nil)
+    expect(placedRoomy > 0).toBe(true)
     expectNoErrors()
 end
 

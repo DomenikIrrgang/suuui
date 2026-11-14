@@ -6,6 +6,10 @@
 
 - Bags and bank: an item that starts a quest has a yellow exclamation mark in its corner, as in the game's own bags, until you take the quest. For theme authors (API 0.43): the texture token `quest-start` sets the mark.
 
+### Changed
+
+- Performance: the threat meter does less each time it updates (five times a second in a fight, and whenever you change target): its rows are only moved when what they show changes, not every time.
+
 ## 0.14.0 (2026-11-13)
 
 ### Changed
