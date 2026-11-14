@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Performance: the threat meter does less each time it updates (five times a second in a fight, and whenever you change target): its rows are only moved when what they show changes, not every time.
+
 ## 0.14.0 (2026-11-13)
 
 ### Changed
