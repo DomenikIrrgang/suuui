@@ -38,11 +38,7 @@ const S = T.space
 const COLORS = T.color :: { [string]: Color }
 
 -- the role icons' texture tokens (a theme's own)
-local ROLE_ICON: { [string]: string } = {
-    TANK = "role-tank",
-    HEALER = "role-healer",
-    DAMAGER = "role-damage",
-}
+local ROLE_ICON: { [string]: string } = { TANK = "role-tank", HEALER = "role-healer", DAMAGER = "role-damage" }
 const CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
 
 -- One row of the list (see the top). Name, % and raw may be secret.
@@ -120,6 +116,18 @@ export class ThreatRow extends Frame
     raw: Text
     badge: StateBadge
     sub: Text
+    -- What Set last placed and painted: anchored and painted again only when
+    -- it changes (Set runs five times a second for each row in a fight, and
+    -- on every target change). A theme's spacing: draw.layout clears it.
+    rankPlaced: boolean = false
+    slotPlaced: boolean = false
+    markKind: string? = nil
+    markWho: string? = nil
+    markX: number? = nil
+    rightOf: Text? = nil
+    nameX: number? = nil
+    nameEnd: Region? = nil
+    edgeToken: string? = nil
 
     constructor(m: ThreatMeter)
         local h = draw.size("meter-row")
@@ -160,14 +168,22 @@ export class ThreatRow extends Frame
         self.badge = stateBadge(o, "danger", "Aggro")
         self.sub = text(o, "caption", "ink")
         self.sub:SetShadowed(true)
+        self.name:SetJustifyH("LEFT")
+        -- (a theme's spacing: every part placed again at the next Set)
+        draw.layout(self, function()
+            self.rankPlaced, self.slotPlaced, self.markX = false, false, nil
+            self.rightOf, self.nameX, self.nameEnd = nil, nil, nil
+        end)
     end
 
     function Set(r: ThreatEntry, rank: number?, opts: ThreatOptions)
         local tone, word = stateOf(r)
         -- the edge: your row ink; a state's colour over it
-        self.edge:SetColor(
-            tone == "danger" and "ember" or tone == "warning" and "amber" or r.you and "ink" or "gilt-hairline"
-        )
+        local edge = tone == "danger" and "ember" or tone == "warning" and "amber" or r.you and "ink" or "gilt-hairline"
+        if edge ~= self.edgeToken then
+            self.edgeToken = edge
+            self.edge:SetColor(edge)
+        end
         self.glow:SetShown(tone == "danger")
         -- the fill: the scaled %, straight to the engine (a secret one too)
         local pct: number | Secret<number> = 0
@@ -182,33 +198,47 @@ export class ThreatRow extends Frame
         if rank then
             self.rank:SetValue(rank)
             self.rank:SetVisible(true)
-            self.rank:ClearAllPoints()
-            self.rank:SetPoint("LEFT", x, 0)
+            if not self.rankPlaced then
+                self.rankPlaced = true
+                self.rank:ClearAllPoints()
+                self.rank:SetPoint("LEFT", x, 0)
+            end
             x = x + 12 + S["space-3"]
         else
             self.rank:SetVisible(false)
         end
         -- the mark before the name
-        self.mark:Hide()
         local marker: string? = opts.marker or "role"
+        local who: string? = nil
         if marker == "role" and ROLE_ICON[r.role] then
-            draw.skin(self.mark, ROLE_ICON[r.role] :: string)
-            self.mark:SetTexCoord(0, 1, 0, 1)
-            self.mark:SetSize(11, 11)
+            who = r.role
         elseif marker == "class" and r.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[r.class] then
-            draw.unskin(self.mark)
-            self.mark:SetTexture(CLASS_ICONS)
-            local tc: number[] = CLASS_ICON_TCOORDS[r.class]
-            self.mark:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
-            self.mark:SetSize(16, 16)
+            who = r.class
         else
             marker = nil
         end
+        if marker ~= self.markKind or who ~= self.markWho then
+            self.markKind, self.markWho, self.markX = marker, who, nil
+            if marker == "role" then
+                draw.skin(self.mark, ROLE_ICON[who :: string] :: string)
+                self.mark:SetTexCoord(0, 1, 0, 1)
+                self.mark:SetSize(11, 11)
+            elseif marker == "class" then
+                draw.unskin(self.mark)
+                self.mark:SetTexture(CLASS_ICONS)
+                local tc: number[] = CLASS_ICON_TCOORDS[who :: string]
+                self.mark:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
+                self.mark:SetSize(16, 16)
+            end
+        end
+        self.mark:SetShown(marker ~= nil)
         if marker then
-            self.mark:ClearAllPoints()
-            self.mark:SetPoint("LEFT", x, 0)
-            self.mark:Show()
-            x = x + self.mark:GetWidth() + S["space-3"] - (marker == "role" and 0 or S["space-1"])
+            if self.markX ~= x then
+                self.markX = x
+                self.mark:ClearAllPoints()
+                self.mark:SetPoint("LEFT", x, 0)
+            end
+            x = x + (marker == "role" and 11 or 16) + S["space-3"] - (marker == "role" and 0 or S["space-1"])
         end
         self.name:SetValue(r.name or "")
         local class = r.class
@@ -234,19 +264,24 @@ export class ThreatRow extends Frame
         end
         local holds = isNumber(r.status) and r.status >= 2 and not word and holder(r.role)
         self.sub:SetValue(holds and (r.role == "PET" and "Pet tanking" or "Tanking") or "")
-        self.sub:ClearAllPoints()
-        self.sub:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
-        self.badge:ClearAllPoints()
-        self.badge:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+        if self.rightOf ~= right then
+            self.rightOf = right
+            self.sub:ClearAllPoints()
+            self.sub:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+            self.badge:ClearAllPoints()
+            self.badge:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+        end
         self.badge:SetShown(word ~= nil)
         if word then
             self.badge:SetState(tone, word)
         end
-        local nameEnd = word and self.badge or (holds and self.sub) or right
-        self.name:ClearAllPoints()
-        self.name:SetPoint("LEFT", x, 0)
-        self.name:SetPoint("RIGHT", nameEnd, "LEFT", -S["space-3"], 0)
-        self.name:SetJustifyH("LEFT")
+        local nameEnd: Region = word and self.badge or (holds and self.sub) or right
+        if self.nameX ~= x or self.nameEnd ~= nameEnd then
+            self.nameX, self.nameEnd = x, nameEnd
+            self.name:ClearAllPoints()
+            self.name:SetPoint("LEFT", x, 0)
+            self.name:SetPoint("RIGHT", nameEnd, "LEFT", -S["space-3"], 0)
+        end
         self:Show()
     end
 end
@@ -428,8 +463,12 @@ export class ThreatMeter extends Frame
                     row = buildRow(self)
                     self.rows[i] = row
                 end
-                row:ClearAllPoints()
-                row:SetPoint("TOPLEFT", self.body, "TOPLEFT", S["space-3"], -S["space-3"] - (i - 1) * (h + gap))
+                -- (each row has its slot: placed once, again after a theme)
+                if not row.slotPlaced then
+                    row.slotPlaced = true
+                    row:ClearAllPoints()
+                    row:SetPoint("TOPLEFT", self.body, "TOPLEFT", S["space-3"], -S["space-3"] - (i - 1) * (h + gap))
+                end
                 local rank = ranked and (pin and i == n and youAt or i) or nil
                 row:Set(x.r, rank, opts)
             elseif row then
