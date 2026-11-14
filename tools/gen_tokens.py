@@ -159,6 +159,10 @@ TEXTURES = [
      "like health-bar. Empty (SuuUI's): health-bar's file."),
     ("plate-cast-bar", "",
      "The nameplates' cast fill, stretched, coloured like cast-bar. Empty (SuuUI's): cast-bar's file."),
+    # (asked 2026-11-14: bag items that start a quest, as the game's bags mark them)
+    ("quest-start", "Interface\\GossipFrame\\AvailableQuestIcon",
+     "The mark on a bag or bank slot whose item starts a quest, in its top-left corner: the game's yellow "
+     "exclamation mark, drawn in its own colours."),
 ]
 
 # SuuUI's glyphs (asked 2026-11-12: a theme replaces any icon by its name):
