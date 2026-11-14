@@ -87,6 +87,7 @@ end
 - `SuuUI.Root` is the parent for anything on the screen. One unit there is one design pixel.
 - SuuUI's components (`Panel`, `WindowFrame`, `Button`, `Icon`, `UnitFrame`, `AuraContainer`…) and the design tokens (`SuuUI.Tokens`) give a plugin SuuUI's look. See API.md › Components.
 - Settings are saved per profile. `M:Get` returns a copy of a table; `M:Peek` reads a large table without copying it.
+- Positions are saved per screen size within a profile (API 0.46): a 1080p and a 1440p setup each keep their own. Settings of yours that depend on the screen, such as a size, can join them with `layout = { "width" }` in `RegisterModule`. See API.md › Layouts per screen size.
 - `merge = "<section id>"` on the settings section adds your groups to one of SuuUI's own pages instead of a page of your own. For example, `merge = "unitframes"` (the Level badge example does this).
 
 ## 4. Adding to SuuUI's own frames
@@ -188,6 +189,7 @@ SuuUI.RegisterTheme({
 - **Art on the frames (API 0.40):** `dress` hangs art on the frames themselves, past their edges where it likes: vines over every window (`window`), a ring of leaves and a parrot on the minimap (`minimap`), a vine on the player and target frames (`unit`), leaves at the chat's corner (`chat`). Each kind takes a `header` (art behind a window's title), `pieces` (art at a point, along an edge or over the whole frame, in front or behind, swaying if you like) and `motes` (fireflies drifting up). [API.md](API.md) has the fields under "Art on the frames"; SuuUI's Stranglethorn themes use every one (`src/Core/ThemesBuiltin.wowlua`, art from `tools/stv_art.py`).
 - **The game's fonts:** a `fonts` file can be one of the game's own, such as `Fonts\\MORPHEUS.TTF` (the carved face of quest texts), `Fonts\\FRIZQT__.TTF`, `Fonts\\ARIALN.TTF` or `Fonts\\SKURRI.TTF`, so a theme needs no font of its own for a different face.
 - **Class-coloured health (API 0.26):** `health = "class"` shows players' health on every unit frame and nameplate in their class colour, toned. It matters when the player sets "Health colour" to The theme's: class colours are the default, and win over your theme. NPCs are in their reaction colours by default; with NPC reaction colours off they keep `unit-fill`.
+- **Cast bar and swing timer (API 0.46):** `cast = "class"` draws the player's cast bar and swing timer in their class colour. Otherwise they're drawn from `cast-fill-deep` to `cast-fill`, with a `cast-edge` leading edge; leave those colours out and they follow your `ghost` (its deep end clear) and `ink`, as before. Like health, this matters when the player sets "Cast bar colour" to The theme's: class colours are the default.
 - **Colour vision** applies on top of any theme, so its signal colours always win.
 
 ## 8. Aura filter lists
