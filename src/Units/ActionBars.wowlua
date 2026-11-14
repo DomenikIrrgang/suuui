@@ -49,6 +49,8 @@ import type Position from "/EditMode/EditMode"
 import type ActionBar from "/UI/ActionBar"
 import type ToggleChips from "/UI/Pickers"
 import RankUpgrader from "/Units/RankUpgrade"
+import type SpecRanks, StaleSlot from "/Units/RankUpgrade"
+import after from "wowlua:timer"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -67,6 +69,8 @@ local DEFAULTS = {
     keyBars = { "1", "2", "3", "4", "5", "6", "7", "8", "stance", "pet" },
     -- a learned rank replaces the one before it on the bars (Units/RankUpgrade)
     upgradeRanks = true,
+    -- dual spec: after a switch, the other spec's older ranks offered in a popup
+    specSwitchRanks = true,
     showEmpty = true,
     showXP = true,
     -- the XP fill in the game's own colours (blue rested, purple not)
@@ -320,6 +324,19 @@ local TRACKING_CONTAINERS = { "MainStatusTrackingBarContainer", "SecondaryStatus
 -- The bars of clients without Edit Mode.
 local TRACKING_LEGACY = { "MainMenuExpBar", "ReputationWatchBar" }
 
+-- The active spec group (1, or 2 with dual spec in the other one); nil
+-- where the client doesn't say.
+local function activeSpecGroup(): number?
+    if not (C_SpecializationInfo and C_SpecializationInfo.GetActiveSpecGroup) then
+        return nil
+    end
+    local ok, g = pcall(C_SpecializationInfo.GetActiveSpecGroup)
+    if ok and not isSecret(g) and type(g) == "number" then
+        return g
+    end
+    return nil
+end
+
 local function suppressTracking()
     if StatusTrackingBarManager then
         for _, name in ipairs(TRACKING_CONTAINERS) do
@@ -546,6 +563,12 @@ local SECTION: SettingsSection = {
                     control = "toggle",
                     description = "When you learn a new rank, it replaces the rank you had before on every bar (forms and stances too). Lower ranks you placed on purpose stay; macros aren't changed. A chat line says what changed.",
                 },
+                {
+                    key = "specSwitchRanks",
+                    label = "Ask after a spec switch",
+                    control = "toggle",
+                    description = "With dual spec: when you switch to your other spec, a popup lists the spell ranks you learned meanwhile that its bars don't have yet, and upgrades them if you say so. Lower ranks you placed on purpose stay.",
+                },
             },
         },
     },
@@ -700,6 +723,15 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     xpFill: string? = nil
     -- learned ranks onto the bars
     ranks: RankUpgrader? = nil
+    -- the spec group whose bars these are (dual spec), as last seen
+    specGroup: number? = nil
+    -- a switch's offer waiting for the end of combat; accepted upgrades too
+    offerPending: number? = nil
+    -- a switch's offer not made yet: the switched-to group isn't remembered
+    -- by anything else before it (a book change just before the switch
+    -- remembered it as upgraded already, and nothing was asked)
+    offering: number? = nil
+    placePending: StaleSlot[]? = nil
 
     constructor()
         super({
@@ -1214,6 +1246,102 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    ----------------------------------------------------------------------------
+    -- Dual spec: the other spec's bars and the ranks learned meanwhile
+    ----------------------------------------------------------------------------
+
+    -- Each spec group's best ranks as it last had them (this character's).
+    function RankSpecs(): SpecRanks
+        local data = self:CharData()
+        local specs = data.rankSpecs
+        if type(specs) ~= "table" then
+            specs = {}
+            data.rankSpecs = specs
+        end
+        return specs :: unknown :: SpecRanks
+    end
+
+    -- The ranks you know now kept as the active spec's, unless a switch is
+    -- under way (the group the game says isn't the one these bars are yet).
+    function RememberRanks()
+        local ranks, group = self.ranks, self.specGroup
+        if ranks and group and activeSpecGroup() == group and self.offering ~= group then
+            ranks:Remember(self:RankSpecs(), group)
+        end
+    end
+
+    -- A talent event: the spec switched when the active group changed; its
+    -- bars are offered their new ranks a moment later (they load with it).
+    function SpecMaybeSwitched()
+        local group = activeSpecGroup()
+        if not group or group == self.specGroup then
+            return
+        end
+        self.specGroup = group
+        self.offering = group
+        after(1, function()
+            self:OfferRanks(group)
+        end)
+    end
+
+    -- The switched-to spec's slots with older ranks, in a popup: Upgrade or
+    -- not now (either way they're not asked about again). With "Ask after a
+    -- spec switch" off, nothing is asked. In combat it waits for the end of it.
+    function OfferRanks(group: number)
+        local ranks = self.ranks
+        if not ranks or self.specGroup ~= group then
+            return
+        end
+        local specs = self:RankSpecs()
+        if not self:Get("specSwitchRanks") then
+            self.offering = nil
+            ranks:Remember(specs, group)
+            return
+        end
+        if InCombatLockdown() then
+            self.offerPending = group
+            return
+        end
+        local list = ranks:Stale(specs, group)
+        self.offering = nil
+        ranks:Remember(specs, group)
+        if #list == 0 then
+            return
+        end
+        -- one line per spell: its ranks and how many buttons
+        local counts: { [string]: number } = {}
+        local order: StaleSlot[] = {}
+        for _, s in ipairs(list) do
+            if not counts[s.name] then
+                order[#order + 1] = s
+            end
+            counts[s.name] = (counts[s.name] or 0) + 1
+        end
+        local lines: string[] = {}
+        for _, s in ipairs(order) do
+            local count = counts[s.name] or 0
+            lines[#lines + 1] = ("%s: Rank %d to Rank %d (%d %s)"):format(
+                s.name,
+                s.from,
+                s.to,
+                count,
+                count == 1 and "button" or "buttons"
+            )
+        end
+        UI.Confirm({
+            title = "Upgrade spell ranks",
+            text = "This spec's bars have older ranks of spells you learned in your other spec:\n\n" ..
+                table.concat(lines, "\n") .. "\n\nUpgrade them?",
+            confirm = "Upgrade",
+            cancel = "Not now",
+            onConfirm = function()
+                if not ranks:Place(list) then
+                    self.placePending = list
+                end
+            end,
+        })
+    end
+
     override function OnEnable()
         local function start()
             standDownBlizzard()
@@ -1298,15 +1426,41 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
             return self:Get("upgradeRanks") == true
         end)
         self.ranks = ranks
+        self.specGroup = activeSpecGroup()
+        self:RememberRanks()
         self:OnGameEvent("LEARNED_SPELL_IN_SKILL_LINE", function(_, spellID: number)
             ranks:Learned(spellID)
+            self:RememberRanks()
         end)
         self:OnGameEvent("SPELLS_CHANGED", function()
             ranks:BookChanged()
+            after(1.5, function()
+                self:RememberRanks()
+            end)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             ranks:Apply()
+            local pending = self.placePending
+            if pending and ranks:Place(pending) then
+                self.placePending = nil
+            end
+            local group = self.offerPending
+            if group then
+                self.offerPending = nil
+                self:OfferRanks(group)
+            end
         end)
+        -- a spec switch (which of these the client tells is unprobed on
+        -- Forever: the group is compared, so any of them does)
+        for _, e in ipairs({
+            "ACTIVE_TALENT_GROUP_CHANGED",
+            "PLAYER_SPECIALIZATION_CHANGED",
+            "PLAYER_TALENT_UPDATE",
+        }) do
+            self:OnGameEvent(e, function()
+                self:SpecMaybeSwitched()
+            end)
+        end
     end
 end
 
