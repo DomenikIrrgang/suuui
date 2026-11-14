@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Unit frames: a shield bigger than the health a unit is missing now shows the part that doesn't fit, coming back in from the bar's right end as a brighter hatch with a light line where it starts. At full health with a shield of 40% of their health, the last 40% of the bar is the brighter hatch; at 80% health it's the last 20%. Before, everything past full health was cut off.
+
 ## 0.16.0 (2026-11-14)
 
 ### New

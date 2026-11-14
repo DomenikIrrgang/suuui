@@ -390,6 +390,20 @@ local function bar(f: UnitFrame, level: number, color: string?, texture: string?
     return b
 end
 
+-- An unseen bar filled from the right, only for where its fill ends (the
+-- shield past full health: anchors instead of sums on secret values).
+local function geometryBar(parent: Frame): StatusBar
+    local b = CreateFrame("StatusBar", nil, parent)
+    b:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    b:GetStatusBarTexture():SetAlpha(0)
+    b:GetStatusBarTexture():SetSnapToPixelGrid(false)
+    b:SetReverseFill(true)
+    b:SetMinMaxValues(0, 1)
+    b:SetValue(0)
+    b:EnableMouse(false)
+    return b
+end
+
 local function gradient(b: StatusBar, deep: string, fill: string)
     draw.paintGradient(b:GetStatusBarTexture(), "HORIZONTAL", deep, fill)
 end
@@ -1103,6 +1117,11 @@ export class UnitFrame extends Button
     tint: Texture
     incoming: StatusBar
     absorb: StatusBar
+    -- the shield past full health (design A2): two unseen bars for its
+    -- place, and its brighter hatch
+    absorbReach: StatusBar
+    absorbOver: StatusBar
+    overAbsorb: Texture
     -- under the power line while your cast's cost shows: your power now, faded
     powerSpend: StatusBar
     power: StatusBar
@@ -1267,6 +1286,36 @@ export class UnitFrame extends Button
         self.absorb:SetPoint("BOTTOMLEFT", self.incoming:GetStatusBarTexture(), "BOTTOMRIGHT")
         self.absorb:SetWidth(w - 2)
 
+        -- The shield past full health, back in from the bar's right end
+        -- (asked 2026-11-14, design A2): the hatch brighter, with a ward
+        -- line where it starts, over [2max - health - shield, max]. Anchors
+        -- only, the values may be secret: absorbReach, filled from the right
+        -- with the shield (unseen), puts its fill's left edge at max -
+        -- shield; absorbOver, filled from the right with the health and
+        -- laid from there, starts its fill at 2max - health - shield. The
+        -- bar clips the rest: a shield that fits leaves it past the end.
+        -- Drawn on the shield bar's own frame, over its hatch.
+        self.absorbReach = geometryBar(self.inner)
+        self.absorbReach:SetAllPoints(self.inner)
+        self.absorbOver = geometryBar(self.inner)
+        self.absorbOver:SetPoint("TOPLEFT", self.absorbReach:GetStatusBarTexture(), "TOPLEFT")
+        self.absorbOver:SetPoint("BOTTOMLEFT", self.absorbReach:GetStatusBarTexture(), "BOTTOMLEFT")
+        self.absorbOver:SetWidth(w - 2)
+        local over = self.absorbOver:GetStatusBarTexture()
+        local overTint = self.absorb:CreateTexture(nil, "OVERLAY", nil, 0)
+        overTint:SetAllPoints(over)
+        draw.paintFill(overTint, "ward", 0.18)
+        local overHatch = self.absorb:CreateTexture(nil, "OVERLAY", nil, 1)
+        overHatch:SetAllPoints(over)
+        draw.skin(overHatch, "absorb", true)
+        draw.paint(overHatch, "ward-absorb", 1.6)
+        local overEdge = self.absorb:CreateTexture(nil, "OVERLAY", nil, 2)
+        overEdge:SetPoint("TOPLEFT", over, "TOPLEFT")
+        overEdge:SetPoint("BOTTOMLEFT", over, "BOTTOMLEFT")
+        overEdge:SetWidth(2)
+        draw.paintFill(overEdge, "ward")
+        self.overAbsorb = overHatch
+
         -- The power line: along the bottom; inside the anchor frame on the player.
         -- Under it, while your cast's cost shows (the player's frame), your
         -- power now, faded: the line itself then shows what stays.
@@ -1392,7 +1441,15 @@ export class UnitFrame extends Button
         -- dead or offline: an empty bar
         local gone = dead or offline
         local max = A.UnitHealthMax(u)
-        for _, b in ipairs({ self.health, self.healthLow, self.ghost, self.incoming, self.absorb }) do
+        for _, b in ipairs({
+            self.health,
+            self.healthLow,
+            self.ghost,
+            self.incoming,
+            self.absorb,
+            self.absorbReach,
+            self.absorbOver,
+        }) do
             b:SetMinMaxValues(0, amount(max))
         end
         local cur = gone and 0 or amount(A.UnitHealth(u))
@@ -1426,6 +1483,9 @@ export class UnitFrame extends Button
         end
         self.incoming:SetValue(amount(heals))
         self.absorb:SetValue(amount(absorbs))
+        -- (the shield past full health: where it starts, from the right end)
+        self.absorbReach:SetValue(amount(absorbs))
+        self.absorbOver:SetValue(cur)
 
         if gone then
             self.right:SetStyle("caption")
@@ -1806,6 +1866,7 @@ export class UnitFrame extends Button
             self:SetSize(w, h)
             self.incoming:SetWidth(w - 2)
             self.absorb:SetWidth(w - 2)
+            self.absorbOver:SetWidth(w - 2)
         end
         for _, b in ipairs({ self.powerSpend, self.power, self.powerLow }) do
             b:SetHeight(S["space-1"])
@@ -1824,6 +1885,7 @@ export class UnitFrame extends Button
         self:SetSize(w, h)
         self.incoming:SetWidth(w - 2)
         self.absorb:SetWidth(w - 2)
+        self.absorbOver:SetWidth(w - 2)
         if self.active then
             self:Refresh()
         end
