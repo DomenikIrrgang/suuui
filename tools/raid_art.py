@@ -921,7 +921,9 @@ def kz_library_header():
             shapes.append(polygon(rect(x + 1.6, top + 8, x + w - 1.6, top + 13), mix(col, c("#A898C0"), 0.22)))
         x += w
     shapes.append(polygon(rect(-1, 36, 129, 40), c("#2A1820")))
-    shapes.append(stroke([(-1, 36.5), (129, 36.5)], 0.9, c("#4A3040")))
+    # (the plank's light line on the art's last row, as Ulduar Titan's: above
+    # the foot it crossed the world map header's controls)
+    shapes.append(stroke([(-1, 39.4), (129, 39.4)], 0.9, c("#4A3040")))
     return band(128, 40, shapes, c("#120910"))
 
 
@@ -3235,9 +3237,11 @@ def ic_plague_header():
         shapes.append(stroke([(x - 3.7, 6), (x - 3.7, 31)], 0.6, fade(GLASS, 0.13)))
         shapes.append(stroke([(x + 3.7, 6), (x + 3.7, 31)], 0.6, fade(GLASS, 0.13)))
         shapes.append(ellipse(x + rng.uniform(-1.4, 1.4), level + 4, 0.9, 0.9, fade(PLG_HI, 0.18)))
-    shapes.append(stroke([(-2, 36), (130, 36)], 3.6, tube_col(c("#33291A"), c("#231C0E"), c("#140F08"))))
+    # (on the foot itself: higher, the stretched art put it across the world
+    # map header's controls; foot_line)
+    shapes.append(stroke([(-2, 38.2), (130, 38.2)], 3.6, tube_col(c("#33291A"), c("#231C0E"), c("#140F08"))))
     for x in (12, 76):
-        shapes.append(polygon(rect(x - 1.6, 33.5, x + 1.6, 38.5), c("#2A2213")))
+        shapes.append(polygon(rect(x - 1.6, 35.7, x + 1.6, 40.5), c("#2A2213")))
     return band(128, 40, shapes, c("#0E1309"))
 
 
@@ -3583,7 +3587,10 @@ def ul_titan_header():
     for x in (44, 86, 0):
         shapes += [glow(x, 15, 7, TL, 0.3), ellipse(x, 15, 1.1, 1.1, fade(TL_HI, 0.6))]
     shapes.append(polygon(rect(-1, 30, 129, 40), c("#161C23")))
-    shapes.append(stroke([(-1, 36.5), (129, 36.5)], 0.8, fade(TG, 0.3)))
+    # (the gold line on the art's last row: the art is stretched to the
+    # header's height, and a line above the foot crossed the controls in the
+    # world map's taller header, its search box and Map filters; found in game)
+    shapes.append(stroke([(-1, 39.4), (129, 39.4)], 0.8, fade(TG, 0.3)))
     return band(128, 40, shapes, c("#11171D"))
 
 
@@ -4345,6 +4352,23 @@ def _over(fg, bg):
     return tuple(fg[i] * a + bg[i] * (1 - a) for i in range(3))
 
 
+def foot_line(make):
+    """A thin bright line across a header's lower part, above its last two
+    rows (the row, or None). The art is stretched to each header's height:
+    such a line crossed the controls in the world map's taller header (its
+    search box, Map filters; Ulduar · Titan, found in game 2026-11-14). A
+    line along the foot goes on the last rows, where the header ends."""
+    if make is None:
+        return None
+    rows = make()
+    h = len(rows)
+    lum = [sum((0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3] / 255 for p in row) / len(row) for row in rows]
+    for y in range(int(h * 0.6), h - 2):
+        if lum[y] - max(lum[y - 2], lum[y + 2]) > 12:
+            return y
+    return None
+
+
 def check():
     path = os.path.join(ROOT, "src", "Core", "ThemesRaids.wowlua")
     text = open(path, encoding="utf-8").read()
@@ -4382,6 +4406,9 @@ def check():
                     out.append(f"{fg} over the pattern on {ground} {r:.2f} < {least}")
         if col["surface-glass"][3] / 255 < 0.96:
             out.append("glass under 0.96")
+        line = foot_line(CONCEPTS[key]["art"].get("Header"))
+        if line is not None:
+            out.append(f"a line across the header at row {line}, above its foot")
         fill = _ratio(rgb("ink"), rgb("unit-fill"))
         print(f"{key:13s} ink/fill {fill:.2f}  fill/sunk {_ratio(rgb('unit-fill'), rgb('surface-sunk')):.2f}  ink/surface "
               f"{_ratio(rgb('ink'), rgb('surface')):.1f}  {'OK' if not out else '; '.join(out)}")

@@ -5,6 +5,7 @@
 ### Fixed
 
 - World map: the Map filters button in the map's header has its border on every side again; its right edge could go missing when the map was enlarged, in every theme.
+- Themes Ulduar · Titan, Karazhan · Library and Icecrown · Plagueworks: the line along the foot of a window's header no longer runs through the world map's search box and Map filters; it sits on the header's bottom edge.
 
 ## 0.15.0 (2026-11-14)
 
