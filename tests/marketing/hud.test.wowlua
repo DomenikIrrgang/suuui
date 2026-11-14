@@ -1,0 +1,173 @@
+-- Marketing scene: the HUD in a fight. Elowyn, a level 60 mage, and her
+-- party against a wolf pack in the Hinterlands: player and target frames,
+-- the party, the action bars, the Cooldown Manager, a Frostbolt on the cast
+-- bar, nameplates, the damage and threat meters filling.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as scene from "./scene"
+import * as mage from "./mage"
+
+config({ profile = "marketing-mage" })
+
+const PARTY: scene.Member[] = {
+    { name = "Thornvald", class = "WARRIOR", race = "Dwarf", role = "TANK" },
+    { name = "Liraleth", class = "PRIEST", race = "NightElf", role = "HEALER", sex = 3 },
+    { name = "Brannoc", class = "ROGUE", race = "Human", role = "DAMAGER" },
+    { name = "Kestria", class = "HUNTER", race = "NightElf", role = "DAMAGER", sex = 3 },
+}
+-- where they stand: ahead, left of Elowyn
+const PLACES = { { 15, 1.5 }, { 1, 7 }, { 19, 3 }, { 3, -8 } }
+
+type Mob = { name: string, display: number, health: number, ahead: number, left: number, elite?: boolean }
+const MOBS: Mob[] = {
+    { name = "Silvermane Alpha", display = 706, health = 0.58, ahead = 18, left = 0, elite = true },
+    { name = "Silvermane Howler", display = 903, health = 0.81, ahead = 17, left = 7 },
+    { name = "Silvermane Howler", display = 903, health = 0.34, ahead = 19, left = -7.5 },
+    { name = "Silvermane Stalker", display = 903, health = 0.92, ahead = 20, left = 15.5 },
+    { name = "Silvermane Stalker", display = 903, health = 1.0, ahead = 22, left = -16.5 },
+}
+
+local party: mock.MockUnit[] = {}
+local mobs: mock.MockUnit[] = {}
+
+@if(features.marketing)
+@test("hud combat")
+local function hudCombat()
+    scene.begin()
+    mage.dress()
+    for i, m in ipairs(PARTY) do
+        local at = PLACES[i]
+        party[i] = scene.joinGroup(m, { quiet = i < #PARTY, ahead = at[1], left = at[2] })
+    end
+    scene.seconds(1)
+    for i, m in ipairs(MOBS) do
+        local max = m.elite and 96400 or 16200
+        local u = mock.spawnUnit({
+            name = m.name,
+            displayID = m.display,
+            level = m.elite and 61 or 60,
+            reaction = "hostile",
+            classification = m.elite and "elite" or "normal",
+            creatureType = "Beast",
+            health = math.floor(max * m.health),
+            healthMax = max,
+            world = scene.spot(m.ahead, m.left),
+        })
+        u:showNameplate()
+        mobs[i] = u
+    end
+    local target = mobs[1]
+    mock.player:enterCombat()
+    for _, u in ipairs(party) do
+        u:enterCombat()
+    end
+    for _, u in ipairs(mobs) do
+        u:enterCombat()
+    end
+    mock.player:target(target)
+    -- the fight so far: everyone's damage on the pack (the meters)
+    for _ = 1, 10 do
+        mock.player:hit(mobs[2], 1, { spell = 25304, school = 16 })
+        party[1]:hit(mobs[3], 1, { spell = 11567 })
+        scene.frames(12)
+    end
+    scene.say("CHAT_MSG_GUILD", "Odrik", "raid invites for Molten Core at 8, bring fire resist")
+    scene.say("CHAT_MSG_GUILD", "Seldra", "o/ evening all")
+    scene.say("CHAT_MSG_GUILD", "Maevria", "grats on the staff Elowyn!")
+    scene.say("CHAT_MSG_WHISPER", "Odrik", "still need a mage for ZG tonight?")
+    scene.say("CHAT_MSG_PARTY_LEADER", "Thornvald", "pulling the alpha, cc the stalkers")
+    scene.say("CHAT_MSG_PARTY", "Liraleth", "mana 80%, go")
+    scene.say("CHAT_MSG_PARTY", "Brannoc", "sapped left one")
+    scene.say("CHAT_MSG_GUILD", "Odrik", "anyone up for Strat live after this?")
+    scene.say("CHAT_MSG_PARTY", "Kestria", "pet on the howler")
+    -- threat on the alpha: the tank well ahead, Elowyn second
+    target:setThreat(18400, party[1])
+    target:setThreat(12900)
+    target:setThreat(9700, party[3])
+    target:setThreat(7100, party[4])
+    target:setThreat(2300, party[2])
+    -- buffs, a debuff on the target, a hurt party
+    mock.player:applyAura({
+        spellId = 10157,
+        name = "Arcane Intellect",
+        icon = 135932,
+        duration = 1800,
+        source = "player",
+    })
+    mock.player:applyAura({ spellId = 22783, name = "Mage Armor", icon = 135991, duration = 1800, source = "player" })
+    mock.player:applyAura({ spellId = 10938, name = "Power Word: Fortitude", icon = 135987, duration = 1800 })
+    mock.player:applyAura({ spellId = 27841, name = "Divine Spirit", icon = 135898, duration = 1800 })
+    mock.player:applyAura({ spellId = 13033, name = "Ice Barrier", icon = 135988, duration = 60, source = "player" })
+    target:applyAura({
+        spellId = 25304,
+        name = "Frostbolt",
+        icon = 135846,
+        duration = 9,
+        harmful = true,
+        source = "player",
+    })
+    target:applyAura({
+        spellId = 12579,
+        name = "Winter's Chill",
+        icon = 135836,
+        duration = 15,
+        harmful = true,
+        applications = 5,
+        source = "player",
+    })
+    party[1]:damage(2300)
+    party[3]:damage(1100)
+    party[1]:setIncomingHeal(1800, party[2])
+    mock.player:damage(640)
+    mock.player:setPower(4870)
+    -- the damage meter: everyone's hits over the fight
+    for round = 1, 6 do
+        mock.player:hit(target, 2180 + round * 41, {
+            spell = 25304,
+            school = 16,
+            indicator = round % 3 == 0 and "CRITICAL" or nil,
+        })
+        party[3]:hit(target, 1460 + round * 23, { spell = 11294 })
+        party[4]:hit(target, 1210 + round * 19, { spell = 25295 })
+        party[1]:hit(target, 760 + round * 11, { spell = 11567 })
+        scene.seconds(2)
+    end
+    -- a Frostbolt half cast
+    scene.spell(25304, "Frostbolt", 135846, 2.5)
+    mock.player:castSpell(25304, { castTime = 2.5 })
+    scene.frames(66)
+    scene.tidy()
+    mock.screenshot("hud-combat")
+end
+
+@if(features.marketing)
+@test("hud quiet")
+local function hudQuiet()
+    -- the pack down, the fight over
+    scene.frames(90)
+    for _, u in ipairs(mobs) do
+        u:kill({ by = mock.player })
+    end
+    mock.player:leaveCombat()
+    for _, u in ipairs(party) do
+        u:leaveCombat()
+        u:heal(5200)
+    end
+    mock.player:heal(4180)
+    mock.player:target(nil)
+    scene.seconds(2)
+    for _, u in ipairs(mobs) do
+        u:despawn()
+    end
+    -- later, on a hill in Stranglethorn as the sun goes down
+    mock.setTimeOfDay(19, 10)
+    mock.moveTo({ mapID = 1434, zone = "Stranglethorn Vale", x = 0.30, y = 0.30, facing = 1.0 })
+    scene.say("CHAT_MSG_PARTY", "Thornvald", "gg, that alpha hit hard")
+    scene.say("CHAT_MSG_PARTY", "Liraleth", "nice frostbolts :)")
+    scene.say("CHAT_MSG_GUILD", "Odrik", "MC invites going out in 10")
+    scene.seconds(8)
+    scene.tidy()
+    mock.screenshot("hud-quiet")
+end
