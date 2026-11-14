@@ -435,3 +435,105 @@ local function disabled()
     M:OnDisable()
     expect(frame("party1")).never.toBeShown()
 end
+
+--------------------------------------------------------------------------------
+-- Pets
+--------------------------------------------------------------------------------
+
+-- A member's pet (placeholder names).
+local function petOf(owner: mock.MockUnit, name: string): mock.MockUnit
+    local p = mock.spawnUnit({ name = name, reaction = "friendly", health = 800, healthMax = 1000, distance = 10 })
+    mock.setPet(p, { owner = owner })
+    return p
+end
+
+@test("pets: a member's pet on their row, beside them in a column past their auras, under them in a row; only while there is one")
+local function pets()
+    mock.group:add(tank)
+    mock.group:add(healer)
+    local wolf = petOf(tank, "Wolf")
+    settle()
+    local owner, p = frame("party1"), M.pets[2]
+    expect(p.unit).toBe("partypet1")
+    expect(p).toBeShown()
+    -- drawn for it as it came
+    expect(p.name).toHaveText("Wolf")
+    -- the healer has none; the player's pet slot neither
+    expect(M.pets[3]).never.toBeShown()
+    expect(M.pets[1]).never.toBeShown()
+    -- a column: beside the owner, past the aura row on that side, as tall
+    local _, rel = p:GetPoint(1)
+    expect(rel).toBe(owner.auraClip)
+    expect(p:GetHeight()).toBe(M:Get("height"))
+    expect(p:GetWidth()).toBe(M:Get("petWidth"))
+    -- no auras: beside the frame itself
+    M:Set("buffIcons", 0)
+    M:Set("debuffIcons", 0)
+    _, rel = p:GetPoint(1)
+    expect(rel).toBe(owner)
+    -- a row (the healer layout): under the owner, as wide
+    M:Set("direction", "right")
+    local point, rel2, relPoint = p:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(rel2).toBe(owner)
+    expect(relPoint).toBe("BOTTOMLEFT")
+    expect(p:GetWidth()).toBe(M:Get("width"))
+    expect(p:GetHeight()).toBe(M:Get("petHeight"))
+    -- dismissed: gone (its unit watch); back: shown
+    mock.setPet(nil, { owner = tank })
+    settle()
+    expect(p).never.toBeShown()
+    mock.setPet(wolf, { owner = tank })
+    settle()
+    expect(p).toBeShown()
+    -- Show pets off: none
+    M:Set("showPets", false)
+    settle()
+    expect(p).never.toBeShown()
+    M:Set("showPets", true)
+    settle()
+    expect(p).toBeShown()
+    mock.setPet(nil, { owner = tank })
+    M:ResetAll({ "petWidth", "petHeight", "showPets" })
+end
+
+@test("pets: the player's pet beside you; clickable and healed by mouseover (the mouse over it makes it the mouseover unit)")
+local function petsClick()
+    mock.group:add(tank)
+    local imp = mock.spawnUnit({ name = "Imp", reaction = "friendly", distance = 5 })
+    mock.setPet(imp)
+    local wolf = petOf(tank, "Wolf")
+    settle()
+    local mine, theirs = M.pets[1], M.pets[2]
+    expect(mine.unit).toBe("pet")
+    expect(mine).toBeShown()
+    expectPingable(theirs, "partypet1")
+    mock.hover(theirs)
+    expect(UnitName("mouseover")).toBe("Wolf")
+    mock.hover(mine)
+    expect(UnitName("mouseover")).toBe("Imp")
+    mock.hover(nil)
+    expect(UnitExists("mouseover")).toBe(false)
+    -- a click targets it
+    mock.click(theirs)
+    expect(UnitName("target")).toBe("Wolf")
+    mock.setPet(nil)
+    mock.setPet(nil, { owner = tank })
+    wolf:despawn()
+end
+
+@test("pets take the buff indicators, as their owners do")
+local function petIndicators()
+    local before = SuuUI.UI.GroupIndicators()
+    mock.group:add(tank)
+    petOf(tank, "Wolf")
+    settle()
+    local list: Indicator[] = { { name = "Mark", kind = "icon", ids = { 1126 } } }
+    SuuUI.UI.SetGroupIndicators(list)
+    mock.advanceTime(1.1)
+    expect(#M.pets[2].indicatorContainers).toBe(1)
+    expect(#frame("party1").indicatorContainers).toBe(1)
+    SuuUI.UI.SetGroupIndicators(before)
+    mock.advanceTime(1.1)
+    mock.setPet(nil, { owner = tank })
+end
