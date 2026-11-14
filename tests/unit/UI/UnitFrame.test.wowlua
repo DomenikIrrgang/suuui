@@ -892,6 +892,51 @@ local function incoming()
     expect(g.absorb:GetValue()).toBe(0)
 end
 
+-- Where the shield past full health starts, as a share of the bar (0 its
+-- left end, 1 its right end; 1 or more: none shows).
+local function overStart(f: uf.UnitFrame): number
+    return ((f.overAbsorb:GetLeft() or 0) - (f.inner:GetLeft() or 0)) / f.inner:GetWidth()
+end
+
+@test(
+    "a shield past full health comes back in from the bar's right end, brighter (design A2); one that fits shows none"
+)
+local function overAbsorb()
+    -- full health, a 40% shield: the last 40% of the bar
+    local f = preview(priest({ health = 1, absorb = 0.4 }))
+    expect(overStart(f)).toBeCloseTo(0.6, 3)
+    -- 80%, a 40% shield: 20% fits, the other 20% from the right end
+    local g = preview(priest({ health = 0.8, absorb = 0.4 }))
+    expect(overStart(g)).toBeCloseTo(0.8, 3)
+    -- 50%, a 20% shield fits: past the end
+    local h = preview(priest({ health = 0.5, absorb = 0.2 }))
+    expect(overStart(h) >= 1).toBe(true)
+    -- no shield at full health: none
+    local k = preview(priest({ health = 1 }))
+    expect(overStart(k) >= 0.999).toBe(true)
+    -- its look: the hatch, ward-absorb stronger
+    expect(tokenOf(f.overAbsorb)).toBe("ward-absorb")
+    -- dead: none
+    local d = preview(priest({ health = 0, absorb = 0.4, dead = true }))
+    expect(overStart(d) >= 1).toBe(true)
+    expectNoErrors()
+end
+
+@test("a shield past full health with secret health and shield: drawn by the engine, nothing read")
+local function overAbsorbSecret()
+    local a = api(priest({ health = 1, absorb = 0.4 }))
+    a.UnitHealth = function(_: string): unknown
+        return mock.secret(4200)
+    end
+    a.UnitGetTotalAbsorbs = function(_: string): unknown
+        return mock.secret(1680)
+    end
+    local f = preview(priest(), nil, a)
+    expect(f.absorbOver:GetValue()).toBeSecret()
+    expect(f.absorbReach:GetValue()).toBeSecret()
+    expectNoErrors()
+end
+
 --------------------------------------------------------------------------------
 -- Power
 --------------------------------------------------------------------------------

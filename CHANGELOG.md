@@ -4,6 +4,7 @@
 
 ### New
 
+- Unit frames: a shield bigger than the health a unit is missing now shows the part that doesn't fit, coming back in from the bar's right end as a brighter hatch with a light line where it starts. At full health with a shield of 40% of their health, the last 40% of the bar is the brighter hatch; at 80% health it's the last 20%. Before, everything past full health was cut off.
 - **Layouts per screen size**: each profile now keeps where your frames sit, and how the party and raid frames are laid out, for every screen size. When you change resolution or UI scale, SuuUI switches to that size's layout (after a fight), and a size you haven't used yet starts as a copy of the closest one. Settings › General › Profiles › Screen sizes shows the layout in use and the ones kept, and lets you copy one over the one in use or forget one. `/suu layoutcheck` checks each screen size with its own layout. For plugin authors (API 0.46): a module's `layout` keys join its positions.
 - Role presets fill a layout for 1080p, 1440p, 4K at scale 1 and ultrawide. For tank and DPS at 1080p, a raid of 21–40 now shows three groups side by side instead of four, so it stays clear of your player frame.
 - Raid frames: "Columns side by side from 21 players", its own setting for a large raid.
