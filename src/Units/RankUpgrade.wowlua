@@ -14,9 +14,13 @@
 -- after. Out of combat only, with an empty cursor: else it waits.
 --
 -- Dual spec (asked 2026-11-14): each spec has its own bars, and a rank
--- learned in one upgrades only those. Each spec's best ranks are kept while
--- it is active (Remember); switching to the other, its slots still holding
--- the best rank of then (Stale) are offered in a popup (Action bars).
+-- learned in one upgrades only those. Switching to the other, what its bars
+-- hold now is read (Stale): for each spell you know a higher rank of, the
+-- slots with the highest rank the bars hold of it are offered in a popup
+-- (Action bars); lower ranks beside them stay, and a spell already at your
+-- best rank somewhere on them is left alone (the user, 2026-11-14: "it
+-- should check for the actual spells in the action bars not what it
+-- remembers", "if there is double the same spells only the higher rank").
 
 import after from "wowlua:timer"
 
@@ -42,9 +46,9 @@ end
 -- One learned rank waiting to go onto the bars.
 type Upgrade = { name: string, from: number, to: number, id: number }
 
--- Each spec group's best ranks as they were while it was last active (a
--- character's saved data: "1", "2" -> spell name -> rank).
-export type SpecRanks = { [string]: { [string]: number } }
+-- The ranks a spec's popup was answered Not now to: spell name -> the best
+-- rank offered then (asked again once a higher one is learned).
+export type DeclinedRanks = { [string]: number }
 
 -- A slot of the spec just switched to that holds an older rank.
 export type StaleSlot = { slot: number, name: string, from: number, to: number, id: number }
@@ -92,32 +96,32 @@ export class RankUpgrader
         self.bestID = ids
     end
 
-    -- The ranks you know now, kept as this spec group's (while it is active:
-    -- what its bars were upgraded to).
-    function Remember(specs: SpecRanks, group: number)
-        local kept: { [string]: number } = {}
-        for name, rank in pairs(self.best) do
-            kept[name] = rank
-        end
-        specs[tostring(group)] = kept
-    end
-
-    -- After switching to `group`: its slots that hold the rank that was your
-    -- best when it was last active, of a spell you now know a higher rank
-    -- of (as learning a rank upgrades the active bars: lower ranks placed on
-    -- purpose stay). A group never seen: every lower rank (the popup asks).
-    function Stale(specs: SpecRanks, group: number): StaleSlot[]
-        local was = specs[tostring(group)]
-        local out: StaleSlot[] = {}
+    -- What the bars hold now (after a spec switch): for each spell you know
+    -- a higher rank of, its slots with the highest rank the bars hold of it
+    -- (lower ranks beside them were placed on purpose); none when a slot
+    -- holds your best rank already, or the spec's popup was answered Not now
+    -- to that best rank (`declined`).
+    function Stale(declined: DeclinedRanks?): StaleSlot[]
+        local top: { [string]: number } = {}
+        local lower: StaleSlot[] = {}
         for slot = 1, SLOTS do
             local kind, actionID = GetActionInfo(slot)
             if kind == "spell" and type(actionID) == "number" then
                 local name, rank = spellName(actionID), spellRank(actionID)
                 local best = name and self.best[name]
                 local id = name and self.bestID[name]
-                if name and rank and best and id and rank < best and (was == nil or was[name] == rank) then
-                    out[#out + 1] = { slot = slot, name = name, from = rank, to = best, id = id }
+                if name and rank and best and id then
+                    top[name] = math.max(top[name] or 0, rank)
+                    if rank < best then
+                        lower[#lower + 1] = { slot = slot, name = name, from = rank, to = best, id = id }
+                    end
                 end
+            end
+        end
+        local out: StaleSlot[] = {}
+        for _, s in ipairs(lower) do
+            if top[s.name] == s.from and not (declined and declined[s.name] == s.to) then
+                out[#out + 1] = s
             end
         end
         return out

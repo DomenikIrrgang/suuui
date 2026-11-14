@@ -417,22 +417,17 @@ local function upgradeRanks()
     expectNoErrors()
 end
 
-@test("a spec switch: the other spec's older ranks offered in a popup; Upgrade puts the new ones on; asked once")
+@test("a spec switch: the bars' older ranks offered in a popup; Upgrade puts the new ones on; Not now: not asked again")
 local function specSwitchRanks()
     mock.defineSpell(990003, { name = "Test Bolt", subtext = "Rank 3" })
     mock.defineSpell(990004, { name = "Test Bolt", subtext = "Rank 4" })
     local ranks = assert(M.ranks)
     mock.player:setStats({ specGroups = 2, activeSpecGroup = 1 })
     mock.advanceFrames(1)
-    -- spec 2 was last active knowing Rank 3; Rank 4 learned in spec 1 since
-    local specs = M:RankSpecs()
-    ranks.best["Test Bolt"], ranks.bestID["Test Bolt"] = 3, 990003
-    ranks:Remember(specs, 2)
-    ranks.best["Test Bolt"], ranks.bestID["Test Bolt"] = 4, 990004
-    ranks:Remember(specs, 1)
     expect(M.specGroup).toBe(1)
-    -- (the switch reads the spellbook again; the emulator's book doesn't
-    -- list spells a test learns yet, so the ranks set here are kept)
+    -- Rank 4 known; (the emulator's book doesn't list spells a test learns
+    -- yet, so the ranks set here are kept)
+    ranks.best["Test Bolt"], ranks.bestID["Test Bolt"] = 4, 990004
     mock.stub(ranks, "Read", function(_: typeof(ranks)) end)
     local real = UI.Confirm
     local asked: ConfirmOptions? = nil
@@ -443,29 +438,40 @@ local function specSwitchRanks()
         dialog = d
         return d
     end)
-    -- a book change just before the switch: its remembering lands after the
-    -- switch, before the offer (it once took the offer away)
-    mock.fireEvent("SPELLS_CHANGED")
-    mock.advanceTime(0.8)
-    -- switched: spec 2's bars hold Rank 3
+    local function switch(group: number)
+        asked = nil
+        mock.player:setStats({ activeSpecGroup = group })
+        mock.advanceTime(1.1)
+        mock.advanceFrames(2)
+    end
+    -- switched: spec 2's bars hold Rank 3 (put there by hand or not)
     mock.setAction(1, { type = "spell", id = 990003 })
-    mock.player:setStats({ activeSpecGroup = 2 })
+    switch(2)
     expect(M.specGroup).toBe(2)
-    mock.advanceTime(1.1)
-    mock.advanceFrames(2)
     local o = assert(asked)
     expect(assert(o.text):find("Test Bolt: Rank 3 to Rank 4 (1 button)", 1, true) ~= nil).toBe(true)
     expect(o.confirm).toBe("Upgrade")
     assert(dialog).ok:Click()
     local _, id = GetActionInfo(1)
     expect(id).toBe(990004)
-    -- back and forth: nothing asked again
-    asked = nil
-    mock.player:setStats({ activeSpecGroup = 1 })
-    mock.advanceTime(1.1)
-    mock.player:setStats({ activeSpecGroup = 2 })
-    mock.advanceTime(1.1)
+    -- at the best rank now: nothing asked
+    switch(1)
     expect(asked).toBeNil()
+    -- Rank 3 again, Not now: not asked again in that spec
+    mock.setAction(1, { type = "spell", id = 990003 })
+    switch(2)
+    assert(asked)
+    assert(dialog).cancel:Click()
+    switch(1)
+    assert(asked)
+    assert(dialog).cancel:Click()
+    switch(2)
+    expect(asked).toBeNil()
+    switch(1)
+    expect(asked).toBeNil()
+    -- (0.15.0's remembered ranks are gone)
+    expect(M:CharData().rankSpecs).toBeNil()
+    M:CharData().rankDeclined = nil
     mock.player:setStats({ activeSpecGroup = 1, specGroups = 1 })
     mock.advanceTime(1.1)
     mock.setAction(1, nil)
@@ -481,10 +487,8 @@ local function specSwitchOff()
     local ranks = assert(M.ranks)
     mock.player:setStats({ specGroups = 2, activeSpecGroup = 1 })
     mock.advanceFrames(1)
-    local specs = M:RankSpecs()
-    ranks.best["Test Bolt"], ranks.bestID["Test Bolt"] = 3, 990003
-    ranks:Remember(specs, 2)
     ranks.best["Test Bolt"], ranks.bestID["Test Bolt"] = 4, 990004
+    mock.stub(ranks, "Read", function(_: typeof(ranks)) end)
     local asked = false
     mock.stub(UI, "Confirm", function(opts: ConfirmOptions): ConfirmDialog
         asked = true
