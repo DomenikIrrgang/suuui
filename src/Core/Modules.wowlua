@@ -434,12 +434,19 @@ export class Module<D extends Settings> implements AnyModule
     -- 0.47: timers the module owns (Core/Timers.wowlua): fn runs under the
     -- module's name in Fault; every one is cancelled when the module turns
     -- off. The handle's Cancel() stops one sooner. Every: fn(ticker) each
-    -- `seconds`, `times` times or until cancelled.
+    -- `seconds`, `times` times or until cancelled. Asked for while the
+    -- module is not enabled (from a hook or callback that outlives it, or
+    -- from OnDisable), a timer never starts: the handle is already
+    -- cancelled. A timer that must outlive the module uses wowlua:timer.
     function After(seconds: number, fn: () -> ()): TimerHandle
-        return timers.after(self, self.name, seconds, fn)
+        return timers.after(self, self.name, function(): boolean
+            return self:IsEnabled()
+        end, seconds, fn)
     end
     function Every(seconds: number, fn: (ticker: TickerHandle) -> (), times: number?): TickerHandle
-        return timers.every(self, self.name, seconds, fn, times)
+        return timers.every(self, self.name, function(): boolean
+            return self:IsEnabled()
+        end, seconds, fn, times)
     end
 
     -- 0.47: secure post-hooks the module owns (Core/Hooks.wowlua), on a
@@ -477,8 +484,12 @@ export class Module<D extends Settings> implements AnyModule
     -- (not per profile); RestoreCVar gives it back and forgets it, and so
     -- does turning the module off, for every CVar it set. In combat the
     -- write waits for its end. True when written now.
-    function SetCVar(cvarName: string, value: string | number | boolean): boolean
-        return cvars.set(self.id, cvarName, value)
+    -- `opts.seedDefault`: SuuUI's own modules that set this CVar before 0.47
+    -- without remembering the player's value; on a character that played
+    -- with SuuUI before, the game's default stands in for it once (see
+    -- Core/CVars.wowlua).
+    function SetCVar(cvarName: string, value: string | number | boolean, opts: cvars.SetOptions?): boolean
+        return cvars.set(self.id, cvarName, value, opts)
     end
     function RestoreCVar(cvarName: string): boolean
         return cvars.restore(self.id, cvarName)
@@ -675,7 +686,7 @@ export type ModuleOf<D> = {
     Every: (self: ModuleOf<D>, seconds: number, fn: (ticker: TickerHandle) -> (), times: number?) -> TickerHandle,
     SecureHook: (self: ModuleOf<D>, target: unknown, method: string | function, fn: function?, opts: hooks.HookOptions?) -> (),
     HookScript: (self: ModuleOf<D>, frame: ScriptRegion | string, script: string, fn: function) -> (),
-    SetCVar: (self: ModuleOf<D>, cvarName: string, value: string | number | boolean) -> boolean,
+    SetCVar: (self: ModuleOf<D>, cvarName: string, value: string | number | boolean, opts: cvars.SetOptions?) -> boolean,
     RestoreCVar: (self: ModuleOf<D>, cvarName: string) -> boolean,
     OnAddonMessage: (self: ModuleOf<D>, verb: string, opts: comm.VerbOptions?, fn: comm.Handler) -> (),
     SendAddonMessage: (self: ModuleOf<D>, verb: string, payload: string?, channel: string?, target: string?, opts: comm.SendOptions?) -> (boolean, string, boolean),
@@ -981,6 +992,9 @@ local function startAll()
     -- the chosen theme first: plugins' themes are registered by now, and no
     -- module has built a frame yet
     fault.call("Themes", themes.apply)
+    -- (0.47) an upgrading character or a fresh one, decided once, before any
+    -- module sets a CVar (Core/CVars.wowlua)
+    fault.call("CVars", cvars.noteCharacter)
     registry:startAll()
 end
 

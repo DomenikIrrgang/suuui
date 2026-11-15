@@ -12,6 +12,7 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as frames from "wowlua:frames"
+import * as errors from "wowlua:errors"
 import SuuUI from "/Core/API"
 import internal M, inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
 import type Bind from "/Units/MouseBindings"
@@ -336,6 +337,113 @@ local function overFrame()
     expect(ours("SHIFT-G")).toBe(false)
 end
 
+-- (CD-27) A frame that hides under the mouse: whether Forever sends OnLeave
+-- then is unprobed, so both ways. Its keys go, the world's come back, in
+-- combat too, and nothing is refused.
+local FRAME_KEY = "CLICK SuuUIMouseBindingsFrame:mb1"
+local function frameBound(): boolean
+    return GetBindingAction("SHIFT-G", true) == FRAME_KEY
+end
+
+local function overTarget(mob: mock.MockUnit): Frame
+    mock.player:target(mob)
+    mock.advanceFrames(1)
+    local tf = assert(frames.find("SuuUITargetFrame"))
+    expect(tf:IsVisible()).toBe(true)
+    mock.hover(nil)
+    mock.hover(tf)
+    mock.advanceFrames(1)
+    expect(frameBound()).toBe(true)
+    return tf
+end
+
+@test("a unit frame hidden under the mouse, with or without a leave, in or out of combat: its keys go, the world's come back")
+local function hiddenUnderMouse()
+    local name, id = known()
+    M:Add(bind("SHIFT-G", name, id), nil)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    local other = mock.spawnUnit({ name = "Gnoll", reaction = "hostile", distance = 5 })
+    -- hidden, no leave: the target cleared under the mouse
+    local tf = overTarget(mob)
+    mock.player:target(nil)
+    mock.advanceFrames(1)
+    expect(tf:IsVisible()).toBe(false)
+    expect(frameBound()).toBe(false)
+    -- the world's mouseover casting is back
+    mock.player:mouseover(other)
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-G", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb1")
+    mock.player:mouseover(nil)
+    mock.advanceFrames(15, 20)
+    expect(ours("SHIFT-G")).toBe(false)
+    -- hidden, then the leave as well: done once, the second harmless
+    tf = overTarget(mob)
+    mock.player:target(nil)
+    mock.advanceFrames(1)
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(frameBound()).toBe(false)
+    mock.player:mouseover(other)
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-G", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb1")
+    mock.player:mouseover(nil)
+    mock.advanceFrames(15, 20)
+    -- in combat: the same, by the secure paths alone
+    tf = overTarget(mob)
+    mock.player:enterCombat()
+    mock.player:target(nil)
+    mock.advanceFrames(1)
+    expect(tf:IsVisible()).toBe(false)
+    expect(frameBound()).toBe(false)
+    mock.player:mouseover(other)
+    mock.advanceFrames(15, 20)
+    expect(GetBindingAction("SHIFT-G", true)).toBe("CLICK SuuUIMouseBindingsWorld:mb1")
+    mock.player:mouseover(nil)
+    mock.advanceFrames(15, 20)
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+    -- a working enter and leave are as before
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    mock.hover(player)
+    mock.advanceFrames(1)
+    expect(frameBound()).toBe(true)
+    -- the module turned off with the mouse on the frame: nothing of it bound
+    settings.set("mousebindings", "enabled", false)
+    expect(ours("SHIFT-G")).toBe(false)
+    settings.set("mousebindings", "enabled", true)
+    mock.advanceFrames(1)
+    -- on again, still over it: its keys again; the leave takes them off
+    expect(frameBound()).toBe(true)
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(frameBound()).toBe(false)
+    expectNoErrors()
+end
+
+@test("the frame state counts only while its frame shows and its unit exists (the snippet itself)")
+local function staleFrameState()
+    local name, id = known()
+    M:Add(bind("SHIFT-G", name, id), nil)
+    local owner = assert(M.owner)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    mock.hover(player)
+    mock.advanceFrames(1)
+    expect(frameBound()).toBe(true)
+    -- the frame's unit gone while it stays (a header's button reused): the
+    -- frame button's unit no longer exists, so the next refresh binds nothing
+    -- of the frame's
+    assert(M.frameButton):SetAttribute("unit", "boss4")
+    SecureHandlerExecute(owner, [=[ self:RunAttribute("_refresh") ]=])
+    expect(frameBound()).toBe(false)
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    -- a frame state with no hovered frame (never seen entering): nothing
+    owner:SetAttribute("state-frame", "harm")
+    expect(frameBound()).toBe(false)
+    owner:SetAttribute("state-frame", "off")
+    expectNoErrors()
+end
+
 @test("a modified click on a unit frame casts on its unit; the plain click still targets")
 local function frameClick()
     local name, id = known()
@@ -484,6 +592,81 @@ local function listRows()
     expect(box.panel:IsShown()).toBe(false)
     expect(list.rows[1].line:GetText()).toBe("Targets the unit · click to change")
     parent:Hide()
+end
+
+-- (UIP-5 / SET-1's rules) The capture box keeps the key it captures and Esc,
+-- for that key only; every other key passes on, and a fight lets the
+-- keyboard go. The click box is a UI.Dismissable.
+@test("the boxes' keys: captured or Esc kept for one key, the rest pass on; a fight lets the keyboard go")
+local function boxKeys()
+    -- (the first-run welcome over everything takes Esc first)
+    SuuUI.AccountData("welcome").seen = true
+    local welcome = SuuUI.GetModule("welcome")
+    if welcome then
+        errors.tryMethod(welcome, "Close")
+    end
+    local name, id = known()
+    M:Edit({ name = name, spellID = id })
+    local box = assert(M.box)
+    local p = box.panel
+    expect(p:IsKeyboardEnabled()).toBe(true)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- waiting: the key is the input, kept for that key
+    mock.pressKey("F")
+    expect(box.input).toBe("F")
+    expect(p:GetPropagateKeyboardInput()).toBe(false)
+    mock.advanceFrames(1)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- not waiting: other keys go on to the game; Esc closes, then the
+    -- keyboard is let go
+    mock.pressKey("G")
+    expect(box.input).toBe("F")
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(p:IsShown()).toBe(false)
+    mock.advanceFrames(1)
+    expect(p:IsKeyboardEnabled()).toBe(false)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- open when a fight starts: closed, the keyboard let go before the lockdown
+    M:Edit({ name = name, spellID = id })
+    expect(p:IsKeyboardEnabled()).toBe(true)
+    mock.player:enterCombat()
+    expect(p:IsShown()).toBe(false)
+    expect(p:IsKeyboardEnabled()).toBe(false)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    mock.advanceFrames(1)
+    mock.player:leaveCombat()
+    -- the click box, as its list row opens it (the row: "the list shows
+    -- Target and Menu first")
+    M:EditClick("target")
+    local clickBox = assert(M.clickBox)
+    local cp = clickBox.panel
+    expect(cp:IsShown()).toBe(true)
+    expect(cp:IsKeyboardEnabled()).toBe(true)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("A")
+    expect(cp:IsShown()).toBe(true)
+    -- waiting with a click it had: Esc goes back to it; again: closed
+    clickBox.waiting = true
+    mock.pressKey("ESCAPE")
+    expect(cp:IsShown()).toBe(true)
+    expect(clickBox.waiting).toBe(false)
+    mock.advanceFrames(1)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(cp:IsShown()).toBe(false)
+    mock.advanceFrames(1)
+    expect(cp:IsKeyboardEnabled()).toBe(false)
+    -- open as a fight starts: the keyboard let go, the box closed
+    M:EditClick("target")
+    expect(cp:IsKeyboardEnabled()).toBe(true)
+    mock.player:enterCombat()
+    expect(cp:IsShown()).toBe(false)
+    expect(cp:IsKeyboardEnabled()).toBe(false)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.player:leaveCombat()
+    expect(#mock.refusals()).toBe(0)
+    expectNoErrors()
 end
 
 @test(

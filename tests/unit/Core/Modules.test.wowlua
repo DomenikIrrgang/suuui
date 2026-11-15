@@ -1167,6 +1167,46 @@ local function ownedTimers()
     expect(timers.count(m)).toBe(0)
 end
 
+@test("After and Every while the module is off (a hook that outlives it, OnDisable): nothing starts")
+local function timersWhileOff()
+    local ran: string[] = {}
+    local fromDisable: TimerHandle? = nil
+    local m = register({
+        id = nextId(),
+        name = "ZZ Timers Off",
+        OnDisable = function(self: Module)
+            -- OnDisable runs with the module already off
+            fromDisable = self:After(0.5, function()
+                ran[#ran + 1] = "disable"
+            end)
+        end,
+    })
+    m:Set("enabled", false)
+    expect((fromDisable :: TimerHandle):IsCancelled()).toBe(true)
+    -- a permanent hook's callback scheduling with the module off
+    local once = m:After(1, function()
+        ran[#ran + 1] = "after"
+    end)
+    local ticker = m:Every(1, function()
+        ran[#ran + 1] = "every"
+    end)
+    expect(once:IsCancelled()).toBe(true)
+    expect(ticker:IsCancelled()).toBe(true)
+    expect(timers.count(m)).toBe(0)
+    -- on again before they would have come due: still nothing from them
+    m:Set("enabled", true)
+    mock.advanceTime(2.5)
+    expect(ran).toEqual({})
+    -- on: scheduling works again
+    m:After(1, function()
+        ran[#ran + 1] = "on"
+    end)
+    mock.advanceTime(1.1)
+    expect(ran).toEqual({ "on" })
+    m:Set("enabled", false)
+    expectNoErrors()
+end
+
 type HookTarget = { Method: (self: HookTarget, n: number) -> () }
 
 @test("SecureHook and HookScript: one hook per target, re-armed on enable, silent while off")
@@ -1385,6 +1425,10 @@ local function leavesNothing()
             self:RegisterSettings({ id = "zzmcycle", build = function() end })
             self:RegisterMover(f)
             self:RegisterCommand("zzmcycle", "A test command.", function() end)
+            self:Provide("zzmCycleService", { ping = function() end })
+            self:Each("unitframe", function() end)
+            self:ExtendMenu("zzmCycleMenu", function() end)
+            self:OnAddonMessage("ZZMCYCLE", nil, function() end)
         end,
     })
     local c = cycle(id)
@@ -1405,6 +1449,9 @@ local function leavesNothing()
         sections = 1,
         movers = 1,
         commands = 1,
+        services = 1,
+        extensions = 2,
+        comm = 1,
     })
     expect(c.off).toEqual(NOTHING)
     expect(c.after).toEqual(c.before)

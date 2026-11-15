@@ -254,6 +254,8 @@ class ChatPanel extends Frame
     readonly log: Frame
     slider: Frame? = nil
     dragger: Frame? = nil
+    -- shown only while a tab is dragged: Esc puts it back (UI.Dismissable)
+    dragKeys: Frame? = nil
     editHint: EditHint? = nil
 
     constructor()
@@ -2334,9 +2336,6 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         end
         local cf = chat.asWindow(errors.try(open, name))
         self:After(0, function()
-            if not self:IsEnabled() then
-                return
-            end
             self:SkinAll()
             if cf and self.mirrors[cf] then
                 self:Select(cf)
@@ -2353,9 +2352,6 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     -- (Blizzard's starts empty), and shown.
     function OpenedWindow(cf: Window?, name: string?)
         self:After(0, function()
-            if not self:IsEnabled() then
-                return
-            end
             self:SkinAll()
             local m = cf and self.mirrors[cf]
             if not (cf and m) then
@@ -2627,14 +2623,15 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     end
 
     function StopDragger()
-        local dragger = self:Panel().dragger
+        local p = self:Panel()
+        local dragger = p.dragger
         self.press = nil
         if dragger then
             dragger:SetScript("OnUpdate", nil)
-            dragger:SetScript("OnKeyDown", nil)
-            if not InCombatLockdown() then
-                pcall(dragger.EnableKeyboard, dragger, false)
-            end
+        end
+        local keys = p.dragKeys
+        if keys then
+            keys:Hide()
         end
     end
 
@@ -2707,21 +2704,20 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         pl:SetFrameLevel(base + 1)
         pl:Show()
         b.label:SetColor(self:TabInk(b, self:Arranging()))
-        -- Esc puts it back (out of combat: taking keys is refused in it)
-        local f = p.dragger
-        if f and not InCombatLockdown() and pcall(f.EnableKeyboard, f, true) then
-            pcall(f.SetPropagateKeyboardInput, f, true)
-            f:SetScript("OnKeyDown", function(_, key: string)
-                if InCombatLockdown() then
-                    return
-                end
-                local esc = key == "ESCAPE"
-                pcall(f.SetPropagateKeyboardInput, f, not esc)
-                if esc then
+        -- Esc puts it back; every other key passes on (the helper takes the
+        -- keyboard only out of combat, and lets it go when a fight starts)
+        local keys = p.dragKeys
+        if not keys then
+            keys = CreateFrame("Frame", nil, p.tabs)
+            keys:Hide()
+            UI.Dismissable(keys, {
+                close = function()
                     self:EndDrag(false)
-                end
-            end)
+                end,
+            })
+            p.dragKeys = keys
         end
+        keys:Show()
     end
 
     -- The row for the dragged tab at `index`: the others slide to their places.

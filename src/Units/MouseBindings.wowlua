@@ -53,6 +53,7 @@ import type Icon from "/UI/Icon"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
+import after from "wowlua:timer"
 
 local UI = SuuUI.UI
 local S = SuuUI.Tokens.space
@@ -686,6 +687,15 @@ end
 -- whom: "help" (a friend), "harm" (an enemy), "other", "off". A key with
 -- only a friend's spell is taken over friends only: over an enemy it keeps
 -- its job (found in game: an action bar key did nothing there).
+--
+-- (CD-27) The frame state counts only while the frame it came from (the
+-- owner's `hovered`, set by the frames' OnEnter wrap) is still shown and
+-- its unit still exists. A frame that hid under the mouse without an
+-- OnLeave (whether Forever sends one then is unprobed), or whose unit went
+-- while it stayed, binds nothing of the frame's: the world's keys apply, as
+-- after a leave. This runs on every change of the world's mouseover state
+-- (which a frame hiding or a unit going away under the mouse moves) and of
+-- the frame state, also in combat (restricted code).
 export function refreshSnippet(frame: SnippetKey[], world: SnippetKey[]): string
     local GUARD: { [string]: string } = {
         help = 'r == "help"',
@@ -704,6 +714,12 @@ export function refreshSnippet(frame: SnippetKey[], world: SnippetKey[]): string
     return ([=[
 self:ClearBindings()
 local r = self:GetAttribute("state-frame")
+if r and r ~= "off" then
+local unit = self:GetFrameRef("frameButton"):GetAttribute("unit")
+if not (hovered and hovered:IsVisible()) or not (unit and SecureCmdOptionParse("[@" .. unit .. ",exists] 1")) then
+r = "off"
+end
+end
 if r and r ~= "off" then
 %s
 else
@@ -873,6 +889,10 @@ class CaptureBox
     rank: string = "highest"
     reach: string = "both"
     react: string = "any"
+    -- the keyboard taken (Open), its key script set (the first Open)
+    keys: boolean = false
+    scripted: boolean = false
+    settling: boolean = false
 
     constructor(private owner: MouseBindingsModule)
         local p = UI.Panel(SuuUI.Root, {
@@ -923,31 +943,14 @@ class CaptureBox
             end
         end)
         -- keys: while waiting, every key is the input (Esc cancels); else
-        -- Esc closes and the rest go on to the game
-        p:EnableKeyboard(true)
-        p:SetScript("OnKeyDown", function(frame, key)
-            if InCombatLockdown() then
-                return
-            end
-            if self.waiting then
-                frame:SetPropagateKeyboardInput(false)
-                if key == "ESCAPE" then
-                    if self.input then
-                        self.waiting = false
-                        self:Draw()
-                    else
-                        self:Close()
-                    end
-                elseif not LONE[key] then
-                    self:Got(modifiers() .. key)
-                end
-            elseif key == "ESCAPE" then
-                frame:SetPropagateKeyboardInput(false)
-                self:Close()
-            else
-                frame:SetPropagateKeyboardInput(true)
-            end
-        end)
+        -- Esc closes and the rest go on to the game. Not UI.Dismissable (a
+        -- key it captures is no dismiss), but its rules: the keyboard is
+        -- taken when the box opens (out of combat; the key script set then,
+        -- since on Forever a key script alone turns the keyboard on), at
+        -- rest every key passes on, a key it keeps is kept for that key
+        -- only (passing on again from the next frame), and the keyboard is
+        -- let go when it closes and before a fight (LetGo). Nothing here is
+        -- called in lockdown.
         -- the choices
         local function label(t: string): Text
             local l = UI.Text(body, "caption", "ink-muted")
@@ -1054,11 +1057,91 @@ class CaptureBox
         p:SetPoint("CENTER", SuuUI.Root, "CENTER", 0, 60)
         p:Show()
         p:Raise()
+        self:TakeKeys()
         self:Draw()
     end
 
     function Close()
         self.panel:Hide()
+        self:Settle()
+    end
+
+    -- The keyboard taken, keys passing on until one is kept (Open).
+    function TakeKeys()
+        local p = self.panel
+        if InCombatLockdown() then
+            return
+        end
+        pcall(p.SetPropagateKeyboardInput, p, true)
+        if not self.scripted then
+            self.scripted = true
+            p:SetScript("OnKeyDown", function(frame, key)
+                self:Key(frame, key)
+            end)
+        end
+        if pcall(p.EnableKeyboard, p, true) then
+            self.keys = true
+        end
+    end
+
+    -- Keys passing on and the keyboard let go: at once (a fight starting,
+    -- before the lockdown), and the frame after a key closed the box.
+    function LetGo()
+        if InCombatLockdown() then
+            return
+        end
+        local p = self.panel
+        pcall(p.SetPropagateKeyboardInput, p, true)
+        if self.keys or self.scripted then
+            pcall(p.EnableKeyboard, p, false)
+        end
+        self.keys = false
+    end
+
+    -- Next frame (the key being handled is done by then): shown, keys pass
+    -- on again; hidden, the keyboard is let go.
+    function Settle()
+        if self.settling then
+            return
+        end
+        self.settling = true
+        after(0, function()
+            self.settling = false
+            if InCombatLockdown() then
+                return
+            end
+            if self.panel:IsShown() then
+                local p = self.panel
+                pcall(p.SetPropagateKeyboardInput, p, true)
+            else
+                self:LetGo()
+            end
+        end)
+    end
+
+    function Key(frame: Frame, key: string)
+        if InCombatLockdown() then
+            return
+        end
+        if self.waiting then
+            pcall(frame.SetPropagateKeyboardInput, frame, false)
+            self:Settle()
+            if key == "ESCAPE" then
+                if self.input then
+                    self.waiting = false
+                    self:Draw()
+                else
+                    self:Close()
+                end
+            elseif not LONE[key] then
+                self:Got(modifiers() .. key)
+            end
+        elseif key == "ESCAPE" then
+            pcall(frame.SetPropagateKeyboardInput, frame, false)
+            self:Close()
+        else
+            pcall(frame.SetPropagateKeyboardInput, frame, true)
+        end
     end
 
     function Got(input: string)
@@ -1291,23 +1374,16 @@ class ClickBox
             end
         end)
         -- Esc: back to the click it had, or closed; keys go on to the game
-        p:EnableKeyboard(true)
-        p:SetScript("OnKeyDown", function(frame, key)
-            if InCombatLockdown() then
-                return
-            end
-            if key ~= "ESCAPE" then
-                frame:SetPropagateKeyboardInput(true)
-                return
-            end
-            frame:SetPropagateKeyboardInput(false)
-            if self.waiting and self.input then
-                self.waiting = false
-                self:Draw()
-            else
-                self:Close()
-            end
-        end)
+        UI.Dismissable(p, {
+            close = function()
+                if self.waiting and self.input then
+                    self.waiting = false
+                    self:Draw()
+                else
+                    self:Close()
+                end
+            end,
+        })
         self.lines = {}
         for i = 1, 3 do
             local l = UI.Text(body, "caption", "ink-muted")
@@ -2410,10 +2486,24 @@ export class MouseBindingsModule extends Module<{}>
                     if unit then
                         r = SecureCmdOptionParse("[@" .. unit .. ",help] help; [@" .. unit .. ",harm] harm; other") or "other"
                     end
+                    hovered = self
                     owner:SetAttribute("state-frame", r)
                 ]=])
                 SecureHandlerWrapScript(f, "OnLeave", owner, [=[
+                    if hovered == self then
+                        hovered = nil
+                    end
                     owner:SetAttribute("state-frame", "off")
+                ]=])
+                -- (CD-27) hidden under the mouse (its unit gone, the target
+                -- cleared): off as after a leave, in combat too. A leave
+                -- that also comes finds it done already (setting "off"
+                -- again binds the same)
+                SecureHandlerWrapScript(f, "OnHide", owner, [=[
+                    if hovered == self then
+                        hovered = nil
+                        owner:SetAttribute("state-frame", "off")
+                    end
                 ]=])
                 -- a Cmd click with something bound: renamed ("cmd-LeftButton"),
                 -- so the frame's attributes for it answer (the secure buttons'
@@ -2434,7 +2524,8 @@ export class MouseBindingsModule extends Module<{}>
 
     -- Apply in a moment, once for a burst of events.
     function ApplySoon()
-        if self.applySoon then
+        -- (off: its timer would not start, and the flag would stay set)
+        if self.applySoon or not self:IsEnabled() then
             return
         end
         self.applySoon = true
@@ -2484,6 +2575,8 @@ export class MouseBindingsModule extends Module<{}>
             local box = self.box
             if box then
                 box:Close()
+                -- (now: the lockdown comes after this event)
+                box:LetGo()
             end
             local clickBox = self.clickBox
             if clickBox and clickBox.panel:IsShown() then

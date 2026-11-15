@@ -1,0 +1,50 @@
+-- Units/Nameplates on a character that played with SuuUI before 0.47
+-- (tests/profiles/nameplates-upgrade.json): the saved data knows the
+-- character, nothing is remembered for its CVars, and the game's nameplate
+-- CVars already hold SuuUI's values (written then without remembering the
+-- player's). At this first login with the CVar memory the game's default
+-- stands in for the player's value: as this character's own for a
+-- per-character CVar, as the account's original for a shared one, so
+-- turning the module off gives the default back.
+
+import test, expect, config from "wowlua:test"
+import SuuUI from "/Core/API"
+import * as cvars from "/Core/CVars"
+import * as settings from "/Core/Settings"
+import expectNoErrors from "../../helpers"
+
+config({ profile = "nameplates-upgrade" })
+
+local function default(name: string): string
+    return assert(cvars.GameCVars.new():default(name))
+end
+
+@test("an upgrading character: the game's defaults remembered for the CVars SuuUI already held, and given back")
+local function seeded()
+    expect(settings.charKnownAtLoad()).toBe(true)
+    expect((assert(settings.peekCharData("core"))).cvarsSince).toBe("upgrade")
+    local M = assert(SuuUI.GetModule("nameplates"))
+    expect(M:IsEnabled()).toBe(true)
+    expect(C_CVar.GetCVar("nameplateMinAlpha")).toBe("1")
+    -- SuuUI's value was there; the default is remembered, not the "1"
+    expect(cvars.rememberedValue("nameplates", "nameplateMinAlpha")).toBe(default("nameplateMinAlpha"))
+    expect(cvars.rememberedValue("nameplates", "nameplateShowFriendlyPlayers")).toBe(default("nameplateShowFriendlyPlayers"))
+    -- given back: the defaults
+    cvars.restoreAll("nameplates")
+    expect(C_CVar.GetCVar("nameplateMinAlpha")).toBe(default("nameplateMinAlpha"))
+    expect(C_CVar.GetCVar("nameplateShowFriendlyPlayers")).toBe(default("nameplateShowFriendlyPlayers"))
+    expect(cvars.remembered("nameplates")).toBe(0)
+    -- once: set again (the module's own write), the value now there is the
+    -- player's, not seeded a second time
+    M:SetCVar("nameplateMinAlpha", "1", { seedDefault = true })
+    expect(cvars.rememberedValue("nameplates", "nameplateMinAlpha")).toBe(default("nameplateMinAlpha"))
+    C_CVar.SetCVar("nameplateMinAlpha", "1")
+    cvars.restore("nameplates", "nameplateMinAlpha")
+    C_CVar.SetCVar("nameplateMinAlpha", "1")
+    M:SetCVar("nameplateMinAlpha", "1", { seedDefault = true })
+    -- (the player's "1" for a per-character CVar, nothing for a shared one:
+    -- either way not the default again)
+    expect(cvars.rememberedValue("nameplates", "nameplateMinAlpha")).never.toBe(default("nameplateMinAlpha"))
+    cvars.restoreAll("nameplates")
+    expectNoErrors()
+end

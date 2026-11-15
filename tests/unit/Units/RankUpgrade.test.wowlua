@@ -137,6 +137,36 @@ local function cursorBusy()
     expect(GetCursorInfo()).toBeNil()
 end
 
+@test("the moment-later reads and retries go through the timer it was given (Action bars': its own)")
+local function givenLater()
+    local asked: number[] = {}
+    local pending: (() -> ())[] = {}
+    local u = RankUpgrader.new(function() end, function(): boolean
+        return true
+    end, function(sec: number, fn: () -> ())
+        asked[#asked + 1] = sec
+        pending[#pending + 1] = fn
+    end)
+    u.best["Test Bolt"] = 3
+    u:BookChanged()
+    u:BookChanged()
+    expect(asked).toEqual({ 1 })
+    C_Spell.PickupSpell(990100)
+    u:Learned(R4)
+    expect(asked).toEqual({ 1, 1 })
+    -- nothing runs by itself: a timer that never comes (the module off)
+    mock.advanceTime(3)
+    expect(slot(MAIN)).toBe(R3)
+    ClearCursor()
+    for _, fn in ipairs(pending) do
+        fn()
+    end
+    expect(slot(MAIN)).toBe(R4)
+    expect(u.rereading).toBe(false)
+    expect(u.retrying).toBe(false)
+    expectNoErrors()
+end
+
 --------------------------------------------------------------------------------
 -- Dual spec
 --------------------------------------------------------------------------------

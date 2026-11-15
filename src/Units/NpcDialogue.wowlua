@@ -32,6 +32,7 @@ import type Text from "/UI/Text"
 import type ItemSlot, Money from "/UI/Inventory"
 import type Border from "/UI/Draw"
 import hook, hookScript from "wowlua:hooks"
+import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
@@ -626,6 +627,13 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
     shown: number = 0
     speakerGUID: string? = nil
     talking: boolean? = nil
+    -- the bar's keys (ArmKeys): its key script set, the keyboard taken, a
+    -- fight on (from PLAYER_REGEN_DISABLED, before the lockdown), the flag
+    -- put back next frame
+    keyScript: boolean = false
+    keys: boolean = false
+    fighting: boolean = false
+    settling: boolean = false
     typed: number = 0
     uiAlpha: number? = nil
     uiHidden: boolean = false
@@ -716,22 +724,73 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
         self:PlaceBar()
 
         -- keys: 1-9, Space, Enter; everything else goes on to the game
-        bar:EnableKeyboard(true)
-        if not InCombatLockdown() then
-            bar:SetPropagateKeyboardInput(true)
-        end
-        bar:SetScript("OnKeyDown", function(f, key)
-            if InCombatLockdown() then
-                return
-            end
-            local handled = self:Key(key)
-            f:SetPropagateKeyboardInput(not handled)
-        end)
+        self:ArmKeys()
         -- typing the line in
         bar:SetScript("OnUpdate", function(_, elapsed)
             self:Type(elapsed)
         end)
         self:SetFaces()
+    end
+
+    -- The bar's keys, by UI.Dismissable's rules (it is no popup: it answers
+    -- 1-9, Space and Enter): the keyboard taken only out of a fight, with
+    -- every key passing on first (the key script set then: on Forever a key
+    -- script alone turns the keyboard on, so a scene built in a fight must
+    -- not set it); a key it answers kept for that key only, passing on again
+    -- from the next frame; the keyboard let go as a fight starts. Nothing is
+    -- called in lockdown, and every call is in pcall.
+    function ArmKeys()
+        local scene = self.scene
+        if not scene or self.fighting or InCombatLockdown() then
+            return
+        end
+        local bar = scene.bar
+        pcall(bar.SetPropagateKeyboardInput, bar, true)
+        if not self.keyScript then
+            self.keyScript = true
+            bar:SetScript("OnKeyDown", function(f, key)
+                if InCombatLockdown() then
+                    return
+                end
+                if self:Key(key) then
+                    pcall(f.SetPropagateKeyboardInput, f, false)
+                    self:SettleKeys()
+                else
+                    pcall(f.SetPropagateKeyboardInput, f, true)
+                end
+            end)
+        end
+        if pcall(bar.EnableKeyboard, bar, true) then
+            self.keys = true
+        end
+    end
+
+    -- A fight starting (before the lockdown): keys pass on, the keyboard let go.
+    function LetGoKeys()
+        local scene = self.scene
+        if not scene or InCombatLockdown() then
+            return
+        end
+        local bar = scene.bar
+        pcall(bar.SetPropagateKeyboardInput, bar, true)
+        if self.keys or self.keyScript then
+            pcall(bar.EnableKeyboard, bar, false)
+        end
+        self.keys = false
+    end
+
+    function SettleKeys()
+        if self.settling then
+            return
+        end
+        self.settling = true
+        after(0, function()
+            self.settling = false
+            local scene = self.scene
+            if scene and not InCombatLockdown() then
+                pcall(scene.bar.SetPropagateKeyboardInput, scene.bar, true)
+            end
+        end)
     end
 
     -- The texts set in a style's face at their own size (again after a theme
@@ -1473,14 +1532,14 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
         end
         -- in combat the keys stay the game's (a frame's key handling can't change then)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            self:Scene().bar:EnableKeyboard(false)
+            self.fighting = true
+            self:LetGoKeys()
             -- a fight: the UI back at once
             self:HideUI(false)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            local bar = self:Scene().bar
-            bar:EnableKeyboard(true)
-            bar:SetPropagateKeyboardInput(true)
+            self.fighting = false
+            self:ArmKeys()
         end)
     end
 

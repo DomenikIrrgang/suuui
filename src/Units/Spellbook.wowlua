@@ -465,6 +465,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     -- the Bindings tab shown
     bindMode: boolean = false
     catcher: Frame? = nil
+    catcherArmed: boolean = false
     hoverCell: number? = nil
     bindingsShown: boolean = false
     -- the Pet school shown (decided out of combat)
@@ -1361,8 +1362,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if on and self.bindingsShown then
             self:ShowBindings(false)
         end
-        local catcher = self.catcher or self:BuildCatcher()
-        catcher:SetShown(on and not InCombatLockdown())
+        self:ShowCatcher(on)
         if on then
             self:DrawStrip()
         else
@@ -1371,11 +1371,36 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         self:Render()
     end
 
+    -- The catcher shown (bind mode on, out of combat) or hidden. It keeps
+    -- every key by design, so it is shown only out of a fight and hidden as
+    -- one starts (PLAYER_REGEN_DISABLED, before the lockdown); its keyboard
+    -- and key script are set the first time it shows, out of combat (on
+    -- Forever a key script alone turns the keyboard on, and whether either
+    -- call is refused in lockdown is unprobed).
+    function ShowCatcher(on: boolean)
+        local c = self.catcher or self:BuildCatcher()
+        if not on or InCombatLockdown() then
+            c:Hide()
+            return
+        end
+        if not self.catcherArmed then
+            self.catcherArmed = true
+            self:ArmCatcher(c)
+        end
+        c:Show()
+    end
+
     function BuildCatcher(): Frame
         local c = CreateFrame("Frame", nil, UIParent)
         -- (under the dialogs: a question asked first takes Esc)
         c:SetFrameStrata("HIGH")
-        c:EnableKeyboard(true)
+        c:Hide()
+        self.catcher = c
+        return c
+    end
+
+    function ArmCatcher(c: Frame)
+        pcall(c.EnableKeyboard, c, true)
         c:SetScript("OnKeyDown", function(frame, key)
             if InCombatLockdown() then
                 return
@@ -1399,9 +1424,6 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end)
-        c:Hide()
-        self.catcher = c
-        return c
     end
 
     -- The strip: the spell hovered, or what to do. `combat`: a fight
@@ -2007,9 +2029,8 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         end)
         self:TakeOverClickCasting()
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            local c = self.catcher
-            if c and self.bindMode then
-                c:Show()
+            if self.catcher and self.bindMode then
+                self:ShowCatcher(true)
                 self:DrawStrip()
             end
             if self.levelTo then

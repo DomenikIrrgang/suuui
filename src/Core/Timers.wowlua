@@ -4,13 +4,28 @@
 -- of an owner's timers are cancelled when it is released (a module turned
 -- off, or failed), so none outlives it.
 --
---   after(owner, source, sec, fn)            once; the handle has Cancel()
---   every(owner, source, sec, fn, times?)    fn(ticker) every sec, `times`
---                                            times or until cancelled
+--   after(owner, source, live, sec, fn)          once; the handle has Cancel()
+--   every(owner, source, live, sec, fn, times?)  fn(ticker) every sec, `times`
+--                                                times or until cancelled
 --   cancelAll(owner) / count(owner)
 --
 -- wowlua:timer makes the timers; this keeps the handles per owner. A timer
 -- that has run its last time (or was cancelled by its owner) is dropped.
+--
+-- `live()` says whether the owner is on (a module's IsEnabled(), as with
+-- Core/Hooks). A timer asked for while it says no is never started and not
+-- kept: the handle returned is already cancelled. That is what a timer
+-- scheduled from a permanent hook, a widget's or a library's callback
+-- while the module is off gets, so the module needs no IsEnabled() guard
+-- of its own around it. One that was started while the owner was on is
+-- cancelled by the release (cancelAll), so none comes due after it; the
+-- check is made only when a timer is asked for.
+--
+-- OnDisable runs with the module already off (IsEnabled() is false there),
+-- so M:After and M:Every from OnDisable start nothing. A timer that must
+-- run after the module is off (one that finishes a fade OnDisable started)
+-- is not the module's: it uses wowlua:timer's `after` itself, and nothing
+-- cancels it.
 --
 -- The registry is a TimerOwners: what reports a callback's error comes in
 -- through its constructor, so a test builds one of its own. `timers` is
@@ -47,8 +62,13 @@ export class TimerOwners
         end
     end
 
-    function after(owner: unknown, source: string, sec: number, fn: () -> ()): TimerHandle
+    function after(owner: unknown, source: string, live: () -> boolean, sec: number, fn: () -> ()): TimerHandle
         assert(owner ~= nil, "SuuUI Timers: an owner is required")
+        if not live() then
+            local refused = timerAfter(sec, function() end)
+            refused:Cancel()
+            return refused
+        end
         local handle: TimerHandle? = nil
         local made = timerAfter(sec, function()
             if handle then
@@ -64,11 +84,17 @@ export class TimerOwners
     function every(
         owner: unknown,
         source: string,
+        live: () -> boolean,
         sec: number,
         fn: (ticker: TickerHandle) -> (),
         times: number?
     ): TickerHandle
         assert(owner ~= nil, "SuuUI Timers: an owner is required")
+        if not live() then
+            local refused = timerEvery(sec, function() end, 1)
+            refused:Cancel()
+            return refused
+        end
         local left = times
         local made = timerEvery(sec, function(ticker: TickerHandle)
             if left then
@@ -120,18 +146,19 @@ end
 -- SuuUI's, and its methods as the module's functions.
 export const timers = TimerOwners.new()
 
-export function after(owner: unknown, source: string, sec: number, fn: () -> ()): TimerHandle
-    return timers:after(owner, source, sec, fn)
+export function after(owner: unknown, source: string, live: () -> boolean, sec: number, fn: () -> ()): TimerHandle
+    return timers:after(owner, source, live, sec, fn)
 end
 
 export function every(
     owner: unknown,
     source: string,
+    live: () -> boolean,
     sec: number,
     fn: (ticker: TickerHandle) -> (),
     times: number?
 ): TickerHandle
-    return timers:every(owner, source, sec, fn, times)
+    return timers:every(owner, source, live, sec, fn, times)
 end
 
 export function cancelAll(owner: unknown)

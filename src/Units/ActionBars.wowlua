@@ -1238,29 +1238,15 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     -- game's own action buttons, each telling it its command on hover: on
     -- SuuUI's bars it bound nothing (reported by a player). While SuuUI's
     -- bars are on it opens SuuUI's keybind mode instead, and closing that
-    -- goes back to the Options, as the game's does.
-    quickHooked: boolean = false
+    -- goes back to the Options, as the game's does. (CD-31) Set up at every
+    -- enable: the listener is the module's (gone when it turns off), the
+    -- frame's hook its own (one for the session, re-armed, quiet while the
+    -- module is off), and a frame that comes later is hooked when its addon
+    -- loads.
     fromQuick: boolean = false
 
     function TakeOverQuickKeybind()
-        local quick = frames.find("QuickKeybindFrame")
-        if self.quickHooked or not quick then
-            return
-        end
-        self.quickHooked = true
-        quick:HookScript("OnShow", function()
-            if not self:IsEnabled() or InCombatLockdown() then
-                return
-            end
-            quick:Hide()
-            -- (its OnHide opens the Options again: closed for the mode)
-            if SettingsPanel and SettingsPanel:IsShown() then
-                SettingsPanel:Close(true)
-            end
-            if SuuUI.KeybindMode.Enter() then
-                self.fromQuick = true
-            end
-        end)
+        self.fromQuick = false
         self:On("SUUUI_KEYBINDMODE_CHANGED", function(_, active)
             if not active and self.fromQuick then
                 self.fromQuick = false
@@ -1269,6 +1255,33 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end)
+        local function hookQuick(): boolean
+            local quick = frames.find("QuickKeybindFrame")
+            if not quick then
+                return false
+            end
+            self:HookScript(quick, "OnShow", function()
+                if InCombatLockdown() then
+                    return
+                end
+                quick:Hide()
+                -- (its OnHide opens the Options again: closed for the mode)
+                if SettingsPanel and SettingsPanel:IsShown() then
+                    SettingsPanel:Close(true)
+                end
+                if SuuUI.KeybindMode.Enter() then
+                    self.fromQuick = true
+                end
+            end)
+            return true
+        end
+        if not hookQuick() then
+            self:OnGameEvent("ADDON_LOADED", function()
+                if hookQuick() then
+                    self:Off("ADDON_LOADED")
+                end
+            end)
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -1446,10 +1459,13 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                 suppressTracking()
             end
         end)
+        -- (its moment-later reads and retries are the module's own timers)
         local ranks = RankUpgrader.new(function(text: string)
             self:Print(text)
         end, function(): boolean
             return self:Get("upgradeRanks") == true
+        end, function(sec: number, fn: () -> ())
+            self:After(sec, fn)
         end)
         self.ranks = ranks
         self.specGroup = activeSpecGroup()

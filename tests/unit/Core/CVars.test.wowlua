@@ -40,6 +40,11 @@ class FakeCVars implements cvars.CVarAccess
     function perCharacter(_: string): boolean?
         return self.kept
     end
+
+    defaults: { [string]: string } = {}
+    function default(name: string): string?
+        return self.defaults[name]
+    end
 end
 
 -- A store of its own, with characters: `me` is the one logged in.
@@ -77,6 +82,33 @@ class FakeStore implements cvars.CVarStore
         end
         return false
     end
+
+    -- each character's "upgrade" or "fresh"; the seeds by character, and
+    -- the account's (key "account")
+    since: { [string]: string } = {}
+    seeds: { [string]: { [string]: boolean } } = {}
+
+    function upgraded(): boolean
+        return self.since[self.me] == "upgrade"
+    end
+
+    function noteCharacter(knownBefore: boolean)
+        if self.since[self.me] == nil then
+            self.since[self.me] = knownBefore and "upgrade" or "fresh"
+        end
+    end
+
+    function seeded(id: string, name: string, account: boolean): boolean
+        local set = self.seeds[account and "account" or self.me]
+        return set ~= nil and set[id .. "/" .. name] == true
+    end
+
+    function markSeeded(id: string, name: string, account: boolean)
+        local key = account and "account" or self.me
+        local set = self.seeds[key] or {}
+        self.seeds[key] = set
+        set[id .. "/" .. name] = true
+    end
 end
 
 -- A game whose CVars are per character: each character's own FakeCVars.
@@ -104,6 +136,11 @@ class PerCharacterCVars implements cvars.CVarAccess
     says: boolean? = nil
     function perCharacter(_: string): boolean?
         return self.says
+    end
+
+    defaults: { [string]: string } = {}
+    function default(name: string): string?
+        return self.defaults[name]
     end
 end
 
@@ -309,4 +346,133 @@ local function absentShapes()
     own:restore("m", "x")
     expect(game.values.x).toBe("1")
     expect(store.account).toEqual({})
+end
+
+--------------------------------------------------------------------------------
+-- Players upgrading from before 0.47: the default stands in for a value
+-- never recorded
+--------------------------------------------------------------------------------
+
+local SEED: cvars.SetOptions = { seedDefault = true }
+
+@test("upgrading characters, a per-character CVar at the module's value: each remembers the default, once")
+local function seedPerCharacter()
+    local store = FakeStore.new("Player - Realm")
+    local game = PerCharacterCVars.new(store)
+    game.says = true
+    game.defaults.zzAlpha = "0.6"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    -- both played with SuuUI before 0.47: the CVar holds SuuUI's "1"
+    game:of("Player - Realm").values.zzAlpha = "1"
+    game:of("Member1 - Realm").values.zzAlpha = "1"
+    own:noteCharacter(true)
+    own:set("zzcvar", "zzAlpha", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzAlpha")).toBe("0.6")
+    -- as this character's own value: the account keeps nothing
+    expect(store.account).toBeNil()
+    store.me = "Member1 - Realm"
+    own:noteCharacter(true)
+    own:set("zzcvar", "zzAlpha", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzAlpha")).toBe("0.6")
+    own:restore("zzcvar", "zzAlpha")
+    expect(game:of("Member1 - Realm").values.zzAlpha).toBe("0.6")
+    -- once: the player then picks SuuUI's value themselves; on again, theirs
+    game:of("Member1 - Realm").values.zzAlpha = "1"
+    own:set("zzcvar", "zzAlpha", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzAlpha")).toBe("1")
+    -- the first character's is its own
+    store.me = "Player - Realm"
+    own:restore("zzcvar", "zzAlpha")
+    expect(game:of("Player - Realm").values.zzAlpha).toBe("0.6")
+    expectNoErrors()
+end
+
+@test("upgrading characters, a shared CVar: the default is the account's original, seeded once for the account")
+local function seedShared()
+    local store = FakeStore.new("Player - Realm")
+    local game = FakeCVars.new()
+    game.kept = false
+    game.defaults.zzShared = "0"
+    game.values.zzShared = "1"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    own:noteCharacter(true)
+    own:set("zzcvar", "zzShared", "1", SEED)
+    expect(assert(store.chars["Player - Realm"]).zzcvar).toEqual({ zzShared = true })
+    expect(store.account).toEqual({ zzcvar = { zzShared = "0" } })
+    expect(own:rememberedValue("zzcvar", "zzShared")).toBe("0")
+    -- a second upgrading character: the account's original, not seeded again
+    store.me = "Member1 - Realm"
+    own:noteCharacter(true)
+    own:set("zzcvar", "zzShared", "1", SEED)
+    expect(assert(store.chars["Member1 - Realm"]).zzcvar).toEqual({ zzShared = true })
+    own:restore("zzcvar", "zzShared")
+    expect(game.values.zzShared).toBe("0")
+    -- (the first character still holds it: the original stays)
+    expect(store.account).toEqual({ zzcvar = { zzShared = "0" } })
+    store.me = "Player - Realm"
+    own:restore("zzcvar", "zzShared")
+    expect(store.account).toEqual({})
+    -- a third upgrading character later, the CVar at SuuUI's value again:
+    -- not repeated (nothing of the player's to give back)
+    game.values.zzShared = "1"
+    store.me = "Member2 - Realm"
+    own:noteCharacter(true)
+    own:set("zzcvar", "zzShared", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzShared")).toBeNil()
+    expectNoErrors()
+end
+
+@test("a fresh install, a value of the player's own, a write without the option: nothing seeded")
+local function noSeed()
+    local store = FakeStore.new("Player - Realm")
+    local game = FakeCVars.new()
+    game.kept = true
+    game.defaults.zzAlpha = "0.6"
+    game.values.zzAlpha = "1"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    -- a character new to SuuUI: its own first capture is the truth
+    own:noteCharacter(false)
+    own:set("zzcvar", "zzAlpha", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzAlpha")).toBe("1")
+    -- decided once: a later login doesn't make it an upgrade
+    own:noteCharacter(true)
+    expect(store:upgraded()).toBe(false)
+    own:restore("zzcvar", "zzAlpha")
+    -- an upgrading character whose CVar holds a value of its own
+    store.me = "Member1 - Realm"
+    own:noteCharacter(true)
+    game.values.zzAlpha = "0.8"
+    own:set("zzcvar", "zzAlpha", "1", SEED)
+    expect(own:rememberedValue("zzcvar", "zzAlpha")).toBe("0.8")
+    own:restore("zzcvar", "zzAlpha")
+    -- without the option (a CVar SuuUI always remembered)
+    game.values.zzAlpha = "1"
+    own:set("zzcvar2", "zzAlpha", "1")
+    expect(own:rememberedValue("zzcvar2", "zzAlpha")).toBe("1")
+    expect(store.seeds).toEqual({})
+    expectNoErrors()
+end
+
+@test("SuuUI's own store: this login decided as fresh (the emulator's saved data didn't know the character)")
+local function savedSince()
+    local data = assert(settings.peekCharData("core"))
+    expect(data.cvarsSince).toBe("fresh")
+    expect(settings.charKnownAtLoad()).toBe(false)
+    local saved = cvars.SavedCVars.new()
+    expect(saved:upgraded()).toBe(false)
+    saved:noteCharacter(true)
+    expect(data.cvarsSince).toBe("fresh")
+    -- the seeds' marks, per character and for the account
+    expect(saved:seeded("zzcvar", CVAR, false)).toBe(false)
+    saved:markSeeded("zzcvar", CVAR, false)
+    saved:markSeeded("zzcvar", CVAR, true)
+    expect(saved:seeded("zzcvar", CVAR, false)).toBe(true)
+    expect(saved:seeded("zzcvar", CVAR, true)).toBe(true)
+    expect((data.cvarSeeds :: { [string]: unknown }).zzcvar).toEqual({ [CVAR] = true })
+    expect((settings.account("cvarSeeds") :: { [string]: unknown }).zzcvar).toEqual({ [CVAR] = true })
+    data.cvarSeeds = nil
+    settings.setAccount("cvarSeeds", nil)
+    -- the game's defaults
+    expect(cvars.GameCVars.new():default("miniWorldMap") ~= nil).toBe(true)
+    expectNoErrors()
 end

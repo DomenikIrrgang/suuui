@@ -19,6 +19,8 @@ import expectNoErrors, layoutThemes, useTheme, holdings, COMPACT, ROOMY from "..
 import type Target, SuppressOptions from "/Core/Blizzard"
 import type ConfirmDialog, ConfirmOptions from "/UI/Panel"
 import * as frames from "wowlua:frames"
+import internal ownOf from "/Core/Modules"
+import * as settings from "/Core/Settings"
 
 local UI = SuuUI.UI
 
@@ -591,5 +593,42 @@ local function themeSpacing()
     useTheme(nil)
     mock.advanceFrames(1)
     expect(look()).toEqual(design)
+    expectNoErrors()
+end
+
+-- (last: the module off and on again; its movers come back only at a reload)
+-- (CD-31) Turned off and on again (the registry's own disable, as after a
+-- failed enable: Action bars is reloadToToggle), the take-over still goes
+-- back to the Options; its rank timers are the module's own.
+@test("off and on again: Quick Keybind still opens SuuUI's mode and goes back to the Options; the rank timers are the module's")
+local function quickKeybindAgain()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    settings.set("actionbars", "enabled", false)
+    expect(M:IsEnabled()).toBe(false)
+    local quick = assert(frames.find("QuickKeybindFrame"))
+    -- off: the game's own mode
+    quick:Show()
+    expect(quick).toBeShown()
+    expect(SuuUI.KeybindMode.IsActive()).toBe(false)
+    quick:Hide()
+    settings.set("actionbars", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M:IsEnabled()).toBe(true)
+    SettingsPanel:Open()
+    SettingsPanel:Close(true)
+    quick:Show()
+    expect(quick).never.toBeShown()
+    expect(SuuUI.KeybindMode.IsActive()).toBe(true)
+    SuuUI.KeybindMode.Exit()
+    expect(SettingsPanel).toBeShown()
+    SettingsPanel:Close(true)
+    -- the book changed: the read a moment later is one of the module's timers
+    local before = holdings(M).timers
+    mock.fireEvent("SPELLS_CHANGED")
+    expect(holdings(M).timers).toBe(before + 1)
+    mock.advanceTime(1.1)
+    expect(holdings(M).timers).toBe(before)
+    own.reloadToToggle = true
     expectNoErrors()
 end

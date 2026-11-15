@@ -1035,6 +1035,16 @@ class BuyPage extends Frame
             history:SetPoint("TOPLEFT", self.search, "BOTTOMLEFT", 0, -S["space-1"])
         end)
         history:Hide()
+        -- a click anywhere but on the list or the search box closes it (and
+        -- goes on to what it was on); Esc is the search box's own
+        UI.Dismissable(history, {
+            close = function()
+                M:CloseHistory()
+            end,
+            esc = false,
+            outside = "pass",
+            inside = { self.search },
+        })
         self.history = history
         self.historyHead = UI.Text(history, "caption", "ink-muted")
         self.historyHead:SetValue("Recent searches")
@@ -1738,6 +1748,9 @@ type CharStore = {
     scanAt?: number,
     scanSeconds?: number,
     scanCount?: number,
+    -- when the last Scan all was asked (the game's 15 minutes count from
+    -- the request, whether its list ever came or was read)
+    scanAsked?: number,
     -- your searches, newest first
     history?: HistoryEntry[],
 }
@@ -1819,6 +1832,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     scanTicker: TickerHandle? = nil
     -- the scan's reader, a slice of the list a frame (X-4.5)
     readTicker: TickerHandle? = nil
+    -- this visit's Scan all request (GetTime) until its list is read: a list
+    -- that comes after the scan's view gave up is still read (BAG-17)
+    asked: number? = nil
+    -- a scan the house's closing stopped: told on the next open
+    scanStopped: boolean = false
     waitTicker: TickerHandle? = nil
     -- the secure clicks on the game's page: over a result row, an auction
     -- row, Buy out and Back; what each does after its click
@@ -2151,18 +2169,6 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self.historyOpen = true
         end
         self:DrawHistory()
-    end
-
-    -- A click anywhere but on the list or the search box closes it.
-    function HistoryClick()
-        local buy = self.buy
-        if not (self.historyOpen and buy) then
-            return
-        end
-        local box = buy.history
-        if not ((box:IsShown() and box:IsMouseOver()) or buy.search:IsMouseOver()) then
-            self:CloseHistory()
-        end
     end
 
     -- Nothing to show (none kept, none with what's typed): no list.
@@ -2986,6 +2992,20 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         return last
     end
 
+    -- When the game allows the next Scan all: 15 minutes after the last one
+    -- asked or done (any character), nil if none is remembered.
+    function NextScanAt(): number?
+        local latest: number? = nil
+        for _, d in ipairs(self:AllSaved()) do
+            for _, at in ipairs({ d.scanAt or 0, d.scanAsked or 0 }) do
+                if at > 0 and (not latest or at > latest) then
+                    latest = at
+                end
+            end
+        end
+        return latest and (latest + SCAN_WAIT)
+    end
+
     -- How long the last scan took and how many it read (any character).
     function LastScanSize(): (number?, number?)
         local best: CharStore? = nil
@@ -3004,7 +3024,8 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         local last = self:LastScan()
-        local wait = last and (last + SCAN_WAIT - time()) or 0
+        local nextAt = self:NextScanAt()
+        local wait = nextAt and (nextAt - time()) or 0
         if self.scanning then
             buy.scanButton:SetEnabledState(false)
             buy.scanWhen:SetValue("Scanning…")
@@ -3083,24 +3104,37 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:DrawScan()
             return
         end
-        local buy = self.buy
-        if buy then
-            buy.scanMark:Start()
-        end
-        -- the progress, four times a second
-        self.scanTicker = self:Every(0.25, function()
-            if self.scanning then
-                self:DrawScan()
-            end
-        end)
-        -- no answer in a minute: the game didn't run it
-        self:After(60, function()
+        -- (BAG-17) the game's wait starts with the request: kept now, not
+        -- only when a list was read, so the button waits even after a scan
+        -- that timed out or that closing the house stopped
+        self:Saved().scanAsked = time()
+        self.asked = sc.started
+        self:ShowScan(sc)
+        -- no answer in time: the view gives up (a list that comes later
+        -- while the house is open is still read, by ReadScan). A minute, or
+        -- twice what the last scan took if that was longer.
+        local seconds = self:LastScanSize()
+        self:After(math.max(60, 2 * (seconds or 0)), function()
             if self.scanning == sc and not sc.reading then
                 self:EndScan()
                 self:Note("The scan didn't come back; try again later.", "error")
             end
         end)
-        -- the whole page: the scan takes the results' place
+    end
+
+    -- The scan's view: the mark, the progress four times a second, the whole
+    -- page (the scan takes the results' place).
+    function ShowScan(sc: Scanning)
+        self.scanning = sc
+        local buy = self.buy
+        if buy then
+            buy.scanMark:Start()
+        end
+        self.scanTicker = self:Every(0.25, function()
+            if self.scanning then
+                self:DrawScan()
+            end
+        end)
         self:Refresh()
     end
 
@@ -3124,14 +3158,38 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:QueueRefresh()
     end
 
+    -- The house closed: a scan waiting for its list or reading it ends
+    -- (X-4.5). What it read so far is dropped: the prices are kept only
+    -- when the whole list was read (ReadScan writes them in one go at the
+    -- end), so the price memory never holds a half-updated scan that looks
+    -- complete. The request still counts for the game's wait (scanAsked).
+    function StopScan()
+        self.asked = nil
+        if self.scanning then
+            self.scanStopped = true
+            self:EndScan()
+        end
+    end
+
     -- The list came: read it a slice a frame (tens of thousands of auctions),
     -- the lowest buyout per item (per unit for stacks), then keep them.
     function ReadScan()
         local sc = self.scanning
-        if not sc or sc.reading then
+        if not sc then
+            -- (BAG-17) the list of a request whose view gave up: still this
+            -- visit's scan, within the game's wait
+            local asked = self.asked
+            if not asked or not self.open or GetTime() - asked > SCAN_WAIT then
+                return
+            end
+            sc = { started = asked }
+            self:ShowScan(sc)
+        end
+        if sc.reading then
             return
         end
         sc.reading = true
+        self.asked = nil
         local n = tryValue(AH.GetNumReplicateItems) or 0
         sc.read, sc.total = 0, n
         local offers: { [number]: Offer[] } = {}
@@ -4020,7 +4078,8 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     function QueueRefresh()
-        if self.refreshPending then
+        -- (off: its timer would not start, and the flag would stay set)
+        if self.refreshPending or not self:IsEnabled() then
             return
         end
         self.refreshPending = true
@@ -4133,9 +4192,14 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             window:Show()
             window:SetTab("buy")
             self:Note("")
+            if self.scanStopped then
+                self.scanStopped = false
+                self:Note("The last scan stopped when the house closed; nothing of it was kept.")
+            end
         end)
         self:OnGameEvent("AUCTION_HOUSE_CLOSED", function()
             self.open = false
+            self:StopScan()
             window:Hide()
             for kind in pairs(self.overs) do
                 self:HideOver(kind)
@@ -4179,10 +4243,6 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("AUCTION_HOUSE_BROWSE_FAILURE", function()
             self.historyPending = nil
             self:Note("The search failed; try again in a moment.", "error")
-        end)
-        -- your searches' list: a click elsewhere closes it
-        self:OnGameEvent("GLOBAL_MOUSE_DOWN", function()
-            self:HistoryClick()
         end)
         self:OnGameEvent("COMMODITY_PRICE_UPDATED", function(_, unit, total)
             self:OnCommodityPrice(unit, total)

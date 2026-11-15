@@ -38,6 +38,8 @@ import tryMethod from "wowlua:errors"
 
 local UI = SuuUI.UI
 local AH = C_AuctionHouse
+-- the game's wait between two Scan alls
+const SCAN_MINUTES = 15
 local realConfirm = UI.Confirm -- (stubbed in every test; the real one where a test needs its clicks)
 
 local ORE, BLADE, RING, CHARM, BAUBLE, GEM = 990201, 990202, 990203, 990204, 990205, 990206
@@ -267,6 +269,8 @@ local function cleanup()
     ClearCursor()
     local d = M:CharData()
     d.seen, d.posted, d.bids, d.scanAt, d.scanSeconds, d.scanCount = nil, nil, nil, nil, nil, nil
+    d.scanAsked = nil
+    M.asked, M.scanStopped = nil, false
     d.history = nil
     M:Set("cheapCheck", true)
     M:Set("tipShow", true)
@@ -1629,8 +1633,10 @@ local function scanEndedMidRead()
     mock.advanceTime(0.1)
     expect(note():find("^Scan done") == nil).toBe(true)
     expect(d.scanCount).toBe(7)
-    -- a reader still running when its scan is gone stops itself
-    mock.click(buy().scanButton)
+    -- a reader still running when its scan is gone stops itself (asked
+    -- directly: the button waits the game's 15 minutes from the request)
+    expect(buy().scanButton:IsEnabled()).toBe(false)
+    M:Scan()
     mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
     local again = assert(M.readTicker)
     M.scanning = nil
@@ -1676,6 +1682,124 @@ local function scanWait()
     mock.advanceTime(30)
     expect(M.scanning).toBe(nil)
     expect(note()).toBe("The scan didn't come back; try again later.")
+end
+
+-- (BAG-17) The game counts its 15 minutes from the request: the wait is kept
+-- when the house is asked, the view gives up after a minute (or twice the
+-- last scan's time), and a list that comes later while the house is open
+-- is still read.
+@test("Scan all: the wait counts from the request; a list after the view gave up is still read")
+local function scanLateList()
+    mock.advanceTime(3600)
+    open()
+    local d = M:CharData()
+    local _, setGot = replicate()
+    mock.click(buy().scanButton)
+    expect(d.scanAsked).toBe(time())
+    expect(d.scanAt).toBe(nil)
+    mock.advanceTime(61)
+    expect(M.scanning).toBe(nil)
+    expect(note()).toBe("The scan didn't come back; try again later.")
+    -- no second request the game would refuse
+    expect(buy().scanButton:IsEnabled()).toBe(false)
+    expect(buy().scanWhen:GetText()).toBe("Again in 14 min")
+    -- the list after all
+    setGot(5000)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    expect(buy().scanView).toBeShown()
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+    expect(M.scanning).toBe(nil)
+    expect(note():find("^Scan done: 5,000 auctions, 2 items") ~= nil).toBe(true)
+    expect(assert(M:LowestSeen(ORE)).price).toBe(100)
+    expect(d.scanCount).toBe(5000)
+    -- told again: nothing more
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    expect(M.scanning).toBe(nil)
+    -- a slow last scan: the view waits twice as long
+    d.scanSeconds = 50
+    mock.advanceTime(SCAN_MINUTES * 60)
+    setGot(0)
+    M:Scan()
+    mock.advanceTime(90)
+    expect(M.scanning ~= nil).toBe(true)
+    mock.advanceTime(11)
+    expect(M.scanning).toBe(nil)
+end
+
+-- (X-4.5) Closing the house ends a running scan: the reader and the progress
+-- stop, what was read is dropped (nothing half kept), the request still counts
+-- for the game's wait, and the next open shows the button waiting, not
+-- scanning.
+@test("closing the house while a scan waits for its list ends it; reopened, the button waits the game's time")
+local function scanClosedWaiting()
+    mock.advanceTime(3600)
+    open()
+    local d = M:CharData()
+    local _, setGot = replicate()
+    mock.click(buy().scanButton)
+    mock.advanceTime(2)
+    local ticker = assert(M.scanTicker)
+    AH.CloseAuctionHouse()
+    mock.advanceTime(0.01)
+    expect(M.scanning).toBe(nil)
+    expect(M.scanTicker).toBe(nil)
+    expect(ticker:IsCancelled()).toBe(true)
+    expect(d.scanAsked ~= nil).toBe(true)
+    -- the list arriving after the close: not read
+    setGot(5000)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    mock.advanceTime(0.1)
+    expect(M.scanning).toBe(nil)
+    expect(M.readTicker).toBe(nil)
+    expect(M:LowestSeen(ORE)).toBe(nil)
+    -- the minute's timeout says nothing more
+    mock.advanceTime(60)
+    -- reopened: no scanning view; the button waits from the request
+    open()
+    expect(buy().scanView).never.toBeShown()
+    expect(buy().searchButton:IsEnabled()).toBe(true)
+    expect(buy().scanButton:IsEnabled()).toBe(false)
+    expect(buy().scanWhen:GetText()).toBe("Again in 14 min")
+    expect(note()).toBe("The last scan stopped when the house closed; nothing of it was kept.")
+    -- once the game's wait is over: ready again
+    mock.advanceTime(SCAN_MINUTES * 60)
+    M:DrawScan()
+    expect(buy().scanButton:IsEnabled()).toBe(true)
+    expect(buy().scanWhen:GetText()).toBe("Not scanned yet")
+end
+
+@test("closing the house while a scan reads its list stops the reader; nothing of it is kept")
+local function scanClosedReading()
+    mock.advanceTime(3600)
+    open()
+    local d = M:CharData()
+    d.scanCount, d.scanSeconds = 7, 3
+    local _, setGot = replicate()
+    mock.click(buy().scanButton)
+    setGot(5000)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    mock.advanceTime(0.01)
+    expect(buy().scanCaption:GetText()).toBe("Reading 2,500 of 5,000…")
+    local reader = assert(M.readTicker)
+    AH.CloseAuctionHouse()
+    expect(reader:IsCancelled()).toBe(true)
+    expect(M.readTicker).toBe(nil)
+    expect(M.scanning).toBe(nil)
+    mock.advanceTime(0.1)
+    -- nothing of the half read: no prices, the last complete scan's size kept
+    expect(M:LowestSeen(ORE)).toBe(nil)
+    expect(M:LowestSeen(BLADE)).toBe(nil)
+    expect(d.scanAt).toBe(nil)
+    expect(d.scanCount).toBe(7)
+    open()
+    expect(buy().scanView).never.toBeShown()
+    expect(buy().scanButton:IsEnabled()).toBe(false)
+    expect(buy().scanWhen:GetText()).toBe("Again in 15 min")
+    expect(note()).toBe("The last scan stopped when the house closed; nothing of it was kept.")
+    -- the same list told again on this visit: not read (nothing asked)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    expect(M.scanning).toBe(nil)
 end
 
 @test("Scan all that doesn't go out says so")
