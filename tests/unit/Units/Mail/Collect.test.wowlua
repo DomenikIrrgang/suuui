@@ -1,0 +1,430 @@
+-- Units/Mail/Collect: Collect all's run on the emulated mailbox, with a host
+-- of its own (the mailbox open or not, timers, the report) and the game's
+-- answers relayed to it as the Mail module relays them. What it takes next
+-- (money first, the last slot first, never COD or a game master's), room in
+-- the bags (free slots, part stacks), the run: everything taken one request
+-- at a time; a refused take skipped once and the run going on; nothing
+-- answered at all; error text only; the bags filling up; the mailbox
+-- closing; a pending command; another item's or a send's failure.
+--
+-- The emulator never refuses a take (an item with no room is taken and
+-- lost): refusals are told here as the game tells them (MAIL_FAILED with the
+-- item's ID, UI_ERROR_MESSAGE with its text), a round trip later.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import expectNoErrors from "../../../helpers"
+import * as collect from "/Units/Mail/Collect"
+import Collector from "/Units/Mail/Collect"
+import type Left from "/Units/Mail/Collect"
+import * as mails from "/Units/Mail/Inbox"
+
+local WATER, TOME, RING = 990031, 990032, 990033
+mock.defineItem(WATER, { name = "Test Water", quality = 1, stackCount = 20, icon = 134400 }, { cached = true })
+mock.defineItem(TOME, { name = "Test Tome", quality = 3, stackCount = 1, icon = 133744 }, { cached = true })
+mock.defineItem(RING, { name = "Test Ring", quality = 2, stackCount = 1, icon = 133345 }, { cached = true })
+
+local UNIQUE = "You can't carry any more of those items."
+
+type Letter = { [string]: unknown }
+local box: mock.MockUnit? = nil
+
+local function openMailbox(list: Letter[])
+    local mailbox = box or mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    box = mailbox
+    mock.defineMailbox(mailbox, { letters = list })
+    mock.player:interact(mailbox)
+    mock.advanceTime(0.5)
+end
+
+local function mixed(): Letter[]
+    return {
+        { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 10, wasRead = true },
+        { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10, wasRead = true },
+        { sender = "Tester", subject = "Pay up", cod = 20000, items = { { id = RING, count = 1 } }, daysLeft = 5 },
+        { sender = "Partyone", subject = "Water", items = { { id = WATER, count = 5 } }, daysLeft = 10, wasRead = true },
+        { sender = "Game Master", subject = "A note", money = 100, isGM = true, daysLeft = 10, wasRead = true },
+    }
+end
+
+-- the run under test, its host and what it reported
+local current: Collector? = nil
+local isOpen = true
+local report: { left: Left[], took: number }? = nil
+
+local function newRun(): Collector
+    local c = Collector.new({
+        open = function(): boolean
+            return isOpen
+        end,
+        after = function(seconds: number, fn: () -> ())
+            C_Timer.After(seconds, fn)
+        end,
+        changed = function() end,
+        done = function(left: Left[], took: number)
+            report = { left = left, took = took }
+        end,
+    })
+    current = c
+    return c
+end
+
+-- the game's answers, relayed as the Mail module relays them
+local relay = CreateFrame("Frame")
+for _, e in ipairs({ "MAIL_INBOX_UPDATE", "MAIL_SUCCESS", "MAIL_FAILED", "UI_ERROR_MESSAGE" }) do
+    relay:RegisterEvent(e)
+end
+local sending = false
+relay:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown)
+    local c = current
+    if not c then
+        return
+    end
+    if event == "MAIL_INBOX_UPDATE" then
+        c:OnInboxUpdate()
+    elseif event == "MAIL_SUCCESS" then
+        c:OnSuccess()
+    elseif event == "MAIL_FAILED" then
+        c:OnFailed(a :: number?, sending)
+    else
+        c:OnError(b :: string?)
+    end
+end)
+
+-- The game refuses `item` (the text, then MAIL_FAILED with its ID, a round
+-- trip later); everything else as the emulator answers it. Returns the
+-- TakeInboxItem spy.
+local function refusing(item: number, text: string?, failed: boolean?): (number, number) -> ()
+    local take = TakeInboxItem
+    return mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        local _, id = GetInboxItem(i, a)
+        if id == item then
+            C_Timer.After(0.4, function()
+                if text then
+                    mock.fireEvent("UI_ERROR_MESSAGE", 1, text)
+                end
+                if failed ~= false then
+                    mock.fireEvent("MAIL_FAILED", item)
+                end
+            end)
+            return
+        end
+        take(i, a)
+    end)
+end
+
+local function leftNames(): string[]
+    local out: string[] = {}
+    for _, l in ipairs(assert(report).left) do
+        out[#out + 1] = (l.money and "money" or l.name) .. " (" .. l.sender .. "): " .. l.why
+    end
+    return out
+end
+
+local function sendersLeft(): string[]
+    local out: string[] = {}
+    for i = 1, (mails.inboxCount()) do
+        local h = assert(mails.header(i))
+        if h.money > 0 or h.items > 0 then
+            out[#out + 1] = h.sender
+        end
+    end
+    return out
+end
+
+@beforeEach
+local function start()
+    mock.setBag(0, { slots = 20, items = {} })
+    for bag = 1, 4 do
+        mock.setBag(bag, nil)
+    end
+    mock.player:setMoney(1000000)
+    isOpen, report, current, sending = true, nil, nil, false
+end
+
+@afterEach
+local function cleanup()
+    local c = current
+    if c then
+        c:Stop()
+    end
+    current = nil
+    CloseMail()
+    mock.advanceTime(1)
+    mock.setBag(0, { slots = 20, items = {} })
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- What to take
+--------------------------------------------------------------------------------
+
+@test("room: a free slot, or a part stack with room for them all; none in full bags")
+local function room()
+    expect(collect.hasRoom(TOME, 1)).toBe(true)
+    local full: { [number]: number | mock.HeldItem } = {}
+    for s = 1, 4 do
+        full[s] = { id = TOME, count = 1 }
+    end
+    full[5] = { id = WATER, count = 16 }
+    mock.setBag(0, { slots = 5, items = full })
+    expect(collect.hasRoom(TOME, 1)).toBe(false)
+    expect(collect.hasRoom(WATER, 4)).toBe(true) -- onto the 16
+    expect(collect.hasRoom(WATER, 5)).toBe(false) -- 21: no
+    -- the reagent bag's free slot: crafting reagents only
+    mock.setBag(5, { slots = 2, items = {} })
+    expect(collect.roomNow().reagent).toBe(true)
+    expect(collect.hasRoom(TOME, 1)).toBe(false)
+    mock.setBag(5, nil)
+end
+
+@test("next: the money, then the last slot first; COD and a game master's never; skipped and money only")
+local function nextOne()
+    openMailbox({
+        { sender = "Tester", subject = "Pay up", cod = 20000, items = { { id = RING, count = 1 } }, daysLeft = 10 },
+        { sender = "Game Master", subject = "A note", money = 100, isGM = true, daysLeft = 10 },
+        {
+            sender = "Tamsin",
+            subject = "Bits",
+            money = 300,
+            items = { { id = TOME, count = 1 }, { id = WATER, count = 5 } },
+            daysLeft = 10,
+        },
+    })
+    local t = assert(collect.nextTake(false))
+    expect(t.index).toBe(3)
+    expect(t.slot).toBe(nil) -- the money
+    local skipped: { [string]: string } = { [collect.skipKey(t.mail, nil)] = "x" }
+    local item = assert(collect.nextTake(false, skipped))
+    expect(item.slot).toBe(2)
+    expect(item.item).toBe(WATER)
+    expect(item.name).toBe("Test Water")
+    skipped[collect.skipKey(t.mail, WATER)] = "x"
+    expect(assert(collect.nextTake(false, skipped)).item).toBe(TOME)
+    expect(collect.nextTake(true, skipped)).toBe(nil) -- money only: the money skipped
+    -- a twin is skipped alike, another item or sender is not
+    local other = mails.identify(3)
+    expect(collect.skipKey(assert(other), TOME)).toBe(collect.skipKey(t.mail, TOME))
+    expect(collect.skipKey(t.mail, TOME) ~= collect.skipKey(t.mail, WATER)).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The run
+--------------------------------------------------------------------------------
+
+@test("a run takes everything one request at a time, leaves COD and a game master's, and ends")
+local function everything()
+    openMailbox(mixed())
+    local takeItem, takeMoney = TakeInboxItem, TakeInboxMoney
+    local items = mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        takeItem(i, a)
+    end)
+    local money = mock.stub(_G, "TakeInboxMoney", function(i: number)
+        takeMoney(i)
+    end)
+    local c = newRun()
+    c:Start(false)
+    expect(c.running).toBe(true)
+    c:Start(false) -- running already: once
+    expect(c.asked).toBe(1)
+    mock.advanceTime(0.1) -- no answer yet: nothing more asked
+    expect(c.asked).toBe(1)
+    mock.advanceTime(10)
+    expect(c.running).toBe(false)
+    expect(money).toHaveBeenCalledTimes(1)
+    expect(items).toHaveBeenCalledTimes(2)
+    expect(assert(report).took).toBe(3)
+    expect(assert(report).left).toEqual({})
+    expect(C_Item.GetItemCount(TOME)).toBe(1)
+    expect(C_Item.GetItemCount(WATER)).toBe(5)
+    expect(C_Item.GetItemCount(RING)).toBe(0) -- the COD's: never taken, never paid
+    expect(sendersLeft()).toEqual({ "Tester", "Game Master" })
+    expect(GetMoney()).toBe(1000000 + 5000)
+end
+
+@test("a refused take in the middle is asked for once; the mails after it are collected; the player is told why")
+local function refusedOnce()
+    openMailbox(mixed())
+    local items = refusing(TOME, UNIQUE)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(15)
+    expect(c.running).toBe(false)
+    -- the tome once, the water after it
+    expect(items).toHaveBeenCalledTimes(2)
+    expect(C_Item.GetItemCount(WATER)).toBe(5)
+    expect(C_Item.GetItemCount(TOME)).toBe(0)
+    expect(leftNames()).toEqual({ "Test Tome (Ashford): " .. UNIQUE })
+    expect(assert(report).took).toBe(2)
+end
+
+@test("refused without a word from the game: left as refused")
+local function refusedQuietly()
+    openMailbox({ { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10 } })
+    refusing(TOME, nil)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(3)
+    expect(c.running).toBe(false)
+    expect(leftNames()).toEqual({ "Test Tome (Ashford): " .. collect.REFUSED })
+end
+
+@test("only error text, no failure: skipped a second later with the text")
+local function errorOnly()
+    openMailbox({ { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10 } })
+    local items = refusing(TOME, UNIQUE, false)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(1)
+    expect(c.running).toBe(true) -- (the text came at 0.4 s: waits till 1.4)
+    mock.advanceTime(1)
+    expect(c.running).toBe(false)
+    expect(items).toHaveBeenCalledTimes(1)
+    expect(leftNames()).toEqual({ "Test Tome (Ashford): " .. UNIQUE })
+end
+
+@test("no answer at all to any take: each thing asked for once, then the run ends")
+local function noProgress()
+    openMailbox(mixed())
+    local items = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local money = mock.stub(_G, "TakeInboxMoney", function(_: number) end)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(collect.TIMEOUT - 0.5)
+    expect(c.asked).toBe(1) -- still waiting for the first
+    mock.advanceTime(4 * collect.TIMEOUT)
+    expect(c.running).toBe(false)
+    expect(money).toHaveBeenCalledTimes(1)
+    expect(items).toHaveBeenCalledTimes(2)
+    expect(#assert(report).left).toBe(3)
+    expect(assert(report).left[1].why).toBe(collect.NO_ANSWER)
+    expect(assert(report).took).toBe(0)
+end
+
+@test("the bags fill up: what has no room is not asked for; money after it is still taken")
+local function bagsFill()
+    local items: { [number]: number | mock.HeldItem } = {}
+    for s = 1, 19 do
+        items[s] = { id = RING, count = 1 }
+    end
+    mock.setBag(0, { slots = 20, items = items })
+    openMailbox({
+        { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10 },
+        { sender = "Partyone", subject = "Water", items = { { id = WATER, count = 5 } }, daysLeft = 10 },
+        { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 10 },
+    })
+    local take = TakeInboxItem
+    local asked = mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        take(i, a)
+    end)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(10)
+    expect(c.running).toBe(false)
+    expect(asked).toHaveBeenCalledTimes(1) -- the tome, into the last slot
+    expect(C_Item.GetItemCount(TOME)).toBe(1)
+    expect(GetMoney()).toBe(1000000 + 5000)
+    expect(leftNames()).toEqual({ "Test Water (Partyone): " .. collect.NO_ROOM })
+end
+
+@test("full bags from the start: nothing asked for, the run ends at once")
+local function bagsFull()
+    local items: { [number]: number | mock.HeldItem } = {}
+    for s = 1, 20 do
+        items[s] = { id = RING, count = 1 }
+    end
+    mock.setBag(0, { slots = 20, items = items })
+    openMailbox({ { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10 } })
+    local asked = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local c = newRun()
+    c:Start(false)
+    expect(c.running).toBe(false)
+    expect(asked).toHaveBeenCalledTimes(0)
+    expect(leftNames()).toEqual({ "Test Tome (Ashford): " .. collect.NO_ROOM })
+end
+
+@test("the mailbox closing stops the run without a report; a quick reopen starts nothing")
+local function closing()
+    openMailbox(mixed())
+    local money = mock.stub(_G, "TakeInboxMoney", function(_: number) end)
+    local items = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(0.3)
+    isOpen = false
+    c:Stop()
+    expect(c.running).toBe(false)
+    isOpen = true
+    mock.advanceTime(2 * collect.TIMEOUT)
+    expect(money).toHaveBeenCalledTimes(1)
+    expect(items).toHaveBeenCalledTimes(0)
+    expect(report).toBe(nil)
+    -- closed while a take waits: the next step sees it and stops
+    local c2 = newRun()
+    c2:Start(false)
+    isOpen = false
+    mock.advanceTime(2 * collect.TIMEOUT)
+    expect(c2.running).toBe(false)
+    expect(money).toHaveBeenCalledTimes(2)
+    expect(items).toHaveBeenCalledTimes(0)
+    expect(report).toBe(nil)
+end
+
+@test("Collect money: only money; a command pending at the server waits")
+local function moneyOnly()
+    openMailbox(mixed())
+    local pending = true
+    mock.stub(C_Mail, "IsCommandPending", function(): boolean
+        return pending
+    end)
+    local items = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local c = newRun()
+    c:Start(true)
+    mock.advanceTime(1)
+    expect(c.asked).toBe(0)
+    pending = false
+    mock.advanceTime(5)
+    expect(c.running).toBe(false)
+    expect(c.asked).toBe(1)
+    expect(items).toHaveBeenCalledTimes(0)
+    expect(GetMoney()).toBe(1000000 + 5000)
+    expect(assert(report).left).toEqual({})
+end
+
+@test("a money take refused: skipped, the run goes on to the items")
+local function moneyRefused()
+    openMailbox({
+        { sender = "Tamsin", subject = "Gold", money = 5000, items = { { id = WATER, count = 5 } }, daysLeft = 10 },
+    })
+    local money = mock.stub(_G, "TakeInboxMoney", function(_: number)
+        C_Timer.After(0.4, function()
+            mock.fireEvent("UI_ERROR_MESSAGE", 1, "Too much gold.")
+            mock.fireEvent("MAIL_FAILED")
+        end)
+    end)
+    local c = newRun()
+    c:Start(false)
+    mock.advanceTime(10)
+    expect(c.running).toBe(false)
+    expect(money).toHaveBeenCalledTimes(1)
+    expect(C_Item.GetItemCount(WATER)).toBe(5)
+    expect(leftNames()).toEqual({ "money (Tamsin): Too much gold." })
+end
+
+@test("another item's failure, or one without an item while a mail is sent, is not the run's")
+local function notOurs()
+    openMailbox({ { sender = "Ashford", subject = "Tome", items = { { id = TOME, count = 1 } }, daysLeft = 10 } })
+    mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local c = newRun()
+    c:Start(false)
+    mock.fireEvent("MAIL_FAILED", WATER)
+    sending = true
+    mock.fireEvent("MAIL_FAILED")
+    mock.advanceTime(1)
+    expect(c.running).toBe(true)
+    expect(assert(c.wait).failed).toBe(false)
+    sending = false
+    mock.fireEvent("MAIL_FAILED", TOME)
+    mock.advanceTime(1)
+    expect(c.running).toBe(false)
+end

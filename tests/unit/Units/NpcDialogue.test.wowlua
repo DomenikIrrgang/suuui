@@ -3,7 +3,8 @@
 -- Decline), gossip (options, quests, Goodbye), handing a quest in (what's
 -- asked for, not done yet, the reward to choose, completing), the keys,
 -- the speaker's plate, the rest of the UI faded out and back, the game's
--- frames kept out of sight, the greeting, a theme change, stopped.
+-- frames kept out of sight, the greeting, a theme change, stopped. Steps
+-- AutoQuests answers itself: never drawn (MAP-20).
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -14,6 +15,7 @@ import type AnswerPill, Scene from "/Units/NpcDialogue"
 import Portrait from "/Units/NpcDialogue"
 import SuuUI from "/Core/API"
 import * as frames from "wowlua:frames"
+import * as settings from "/Core/Settings"
 
 local function scene(): Scene
     return M:Scene()
@@ -74,6 +76,17 @@ mock.defineQuest(EVEN, {
     giver = even,
     level = 5,
     choices = { RING, AMULET },
+})
+
+-- a quest AutoQuests accepts as its page opens
+local scout = mock.spawnUnit({ name = "Scout Alder", level = 30, reaction = "friendly", distance = 3 })
+local SCOUTED = 9103
+mock.defineQuest(SCOUTED, {
+    title = "Tracks in the Snow",
+    text = "Follow the tracks, $N.",
+    objective = "Follow the tracks.",
+    giver = scout,
+    level = 5,
 })
 
 local talker = mock.spawnUnit({ name = "Innkeeper Morwen", level = 30, reaction = "friendly", distance = 3 })
@@ -503,6 +516,313 @@ local function typedWhole()
     M:Type(0.02)
     M:Type(0.02)
     expect(mock.textOf(scene().speech.text):find("|cffff0000", 1, true) ~= nil).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- The alpha to return to (MAP-1): never read half-way through our own fade
+--------------------------------------------------------------------------------
+
+-- (a fade takes dur-base, 0.18 s; 40 frames end it, 3 frames are inside it)
+local function fadeEnds()
+    mock.advanceFrames(40)
+end
+
+-- The scene closes and the next step of the talk draws it again (as when
+-- the game closes a quest's page and the NPC's list comes back): the UI
+-- fades back, then out again.
+local function closeScene()
+    scene().root:Hide()
+end
+local function reopen()
+    M:Draw()
+end
+
+@test("closed and opened again inside the fade back: the UI ends at full alpha after the second close")
+local function reopenInFade()
+    Minimap:Show()
+    talkTo(talker)
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(0)
+    closeScene()
+    mock.advanceFrames(3)
+    -- half-way back
+    local mid = UIParent:GetAlpha()
+    expect(mid > 0 and mid < 1).toBe(true)
+    reopen()
+    expect(scene().root).toBeShown()
+    expect(M.uiAlpha).toBe(1)
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(0)
+    M:Leave()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+end
+
+@test("ten quick conversations, each inside the last one's fade: the UI back at full alpha")
+local function quickCycles()
+    Minimap:Show()
+    for i = 1, 10 do
+        M:HideUI(true)
+        mock.advanceFrames(1 + i % 4)
+        M:HideUI(false)
+        mock.advanceFrames(1 + (i * 3) % 5)
+    end
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(M.uiAlpha).toBe(1)
+    expect(Minimap).toBeShown()
+end
+
+@test("an alpha another module set before the talk is returned to exactly; read anew once the fade is over")
+local function otherAlpha()
+    UIParent:SetAlpha(0.8)
+    talkTo(talker)
+    fadeEnds()
+    closeScene()
+    mock.advanceFrames(3)
+    reopen()
+    fadeEnds()
+    M:Leave()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBeCloseTo(0.8)
+    -- the fade over, someone sets another: the next talk returns to that one
+    mock.advanceTime(1)
+    UIParent:SetAlpha(0.6)
+    talkTo(talker)
+    fadeEnds()
+    M:Leave()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBeCloseTo(0.6)
+    UIParent:SetAlpha(1)
+end
+
+@test("turned off, or a fight starting, half-way through either fade: the UI back at full alpha")
+local function offMidFade()
+    Minimap:Show()
+    -- off half-way out
+    talkTo(talker)
+    closeScene()
+    -- (frames, not advanceTime: the emulator runs no OnUpdate in that, so
+    -- the fade wouldn't move while the clock does; the game has no such gap)
+    fadeEnds()
+    mock.advanceTime(1)
+    reopen()
+    mock.advanceFrames(3)
+    M:OnDisable()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+    -- off half-way back, a talk opened meanwhile
+    talkTo(talker)
+    fadeEnds()
+    M:Leave()
+    mock.advanceFrames(3)
+    M:HideUI(true)
+    mock.advanceFrames(2)
+    M:OnDisable()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    -- a fight half-way out
+    mock.advanceTime(1)
+    talkTo(talker)
+    closeScene()
+    mock.advanceFrames(3)
+    reopen()
+    mock.advanceFrames(3)
+    mock.player:enterCombat()
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+    mock.player:leaveCombat()
+end
+
+@test("a quest accepted for you (AutoQuests) as the page opens: the UI at full alpha after")
+local function autoAccepted()
+    Minimap:Show()
+    AutoQuests:Set("accept", true)
+    mock.player:interact(scout)
+    mock.advanceTime(2)
+    mock.advanceFrames(3)
+    expect(C_QuestLog.GetLogIndexForQuestID(SCOUTED) ~= nil).toBe(true)
+    if scene().root:IsShown() then
+        M:Leave()
+    end
+    fadeEnds()
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+    C_QuestLog.SetSelectedQuest(SCOUTED)
+    C_QuestLog.SetAbandonQuest()
+    C_QuestLog.AbandonQuest()
+    settle()
+end
+
+--------------------------------------------------------------------------------
+-- Steps AutoQuests answers itself: no scene, no fade, the minimap kept (MAP-20)
+--------------------------------------------------------------------------------
+
+-- An NPC offering three quests. The emulator gives a giver one quest at a
+-- time and opens no quest from a gossip list, so the NPC's list is a
+-- gossip whose SelectAvailableQuest answers as the game does, a round trip
+-- later: the list closes and the quest's page opens (from a giver of its
+-- own beside the NPC). Each quest taken leaves the list.
+local board = mock.spawnUnit({ name = "Sergeant Brask", level = 30, reaction = "friendly", distance = 3 })
+local BOARD = { 9104, 9105, 9106 }
+local boardGivers: { [number]: mock.MockUnit } = {}
+local boardList: { [string]: unknown }[] = {}
+for i, id in ipairs(BOARD) do
+    local g = mock.spawnUnit({ name = "Sergeant Brask", level = 30, reaction = "friendly", distance = 3 })
+    boardGivers[id] = g
+    mock.defineQuest(id, {
+        title = "Patrol Duty " .. i,
+        text = "Walk the wall, $N.",
+        objective = "Walk the wall.",
+        giver = g,
+        level = 5,
+    })
+end
+mock.defineGossip(board, { text = "Plenty of work on the wall.", options = {}, availableQuests = boardList })
+
+local function boardOpen()
+    for i = #boardList, 1, -1 do
+        table.remove(boardList, i)
+    end
+    for i, id in ipairs(BOARD) do
+        boardList[i] = { questID = id, title = "Patrol Duty " .. i }
+    end
+    mock.fake("C_GossipInfo.SelectAvailableQuest", function(id: number)
+        C_Timer.After(0.3, function()
+            for i, q in ipairs(boardList) do
+                if q.questID == id then
+                    table.remove(boardList, i)
+                    break
+                end
+            end
+            C_GossipInfo.CloseGossip()
+            mock.player:interact(assert(boardGivers[id]))
+        end)
+    end)
+end
+
+local function abandon(id: number)
+    if C_QuestLog.GetLogIndexForQuestID(id) then
+        C_QuestLog.SetSelectedQuest(id)
+        C_QuestLog.SetAbandonQuest()
+        C_QuestLog.AbandonQuest()
+        settle()
+    end
+end
+
+-- What the player saw, frame by frame: the scene, the UI faded (any part
+-- of the way), the minimap hidden.
+type Seen = { scene: boolean, faded: boolean, minimap: boolean }
+local function watch(count: number, seen: Seen?): Seen
+    local s: Seen = seen or { scene = false, faded = false, minimap = false }
+    for _ = 1, count do
+        mock.advanceFrames(1)
+        s.scene = s.scene or scene().root:IsShown()
+        s.faded = s.faded or M.uiHidden or UIParent:GetAlpha() ~= 1
+        s.minimap = s.minimap or not Minimap:IsShown()
+    end
+    return s
+end
+
+@test("three quests accepted for you from one NPC: no scene, the UI never faded, the minimap never hidden")
+local function autoThree()
+    Minimap:Show()
+    AutoQuests:Set("accept", true)
+    boardOpen()
+    local seen: Seen = { scene = false, faded = false, minimap = false }
+    for _ = 1, 3 do
+        mock.player:interact(board)
+        watch(90, seen)
+    end
+    for _, id in ipairs(BOARD) do
+        expect(C_QuestLog.GetLogIndexForQuestID(id) ~= nil).toBe(true)
+    end
+    expect(seen).toEqual({ scene = false, faded = false, minimap = false })
+    -- the list again, nothing left for AutoQuests: the conversation shows
+    mock.player:interact(board)
+    watch(40)
+    expect(scene().root).toBeShown()
+    expect(M:View()).toBe("gossip")
+    M:Leave()
+    watch(40)
+    for _, id in ipairs(BOARD) do
+        abandon(id)
+    end
+end
+
+@test("AutoQuests paused with Shift, or off: the NPC's list and the quest's page show as before")
+local function autoPausedOrOff()
+    Minimap:Show()
+    AutoQuests:Set("accept", true)
+    boardOpen()
+    -- Shift held: the list shows, nothing taken
+    mock.setModifiers({ shift = true })
+    mock.player:interact(board)
+    local seen = watch(40)
+    expect(seen.scene).toBe(true)
+    expect(M:View()).toBe("gossip")
+    expect(UIParent:GetAlpha()).toBe(0)
+    expect(Minimap).never.toBeShown()
+    M:Leave()
+    watch(40)
+    mock.setModifiers({})
+    -- off: a quest offered shows its page, not accepted
+    settings.set("autoquests", "enabled", false)
+    talkTo(scout)
+    watch(40)
+    expect(M:View()).toBe("detail")
+    expect(scene().root).toBeShown()
+    expect(UIParent:GetAlpha()).toBe(0)
+    expect(C_QuestLog.GetLogIndexForQuestID(SCOUTED)).toBeNil()
+    M:Leave()
+    watch(40)
+    settings.set("autoquests", "enabled", true)
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+end
+
+@test("the game refuses the accept: the page shows once AutoQuests' second is over")
+local function autoRefused()
+    Minimap:Show()
+    AutoQuests:Set("accept", true)
+    mock.fake("AcceptQuest", function() end)
+    mock.player:interact(scout)
+    -- the round trip, then most of the second: nothing
+    local seen = watch(60)
+    expect(M:View()).toBe("detail")
+    expect(seen).toEqual({ scene = false, faded = false, minimap = false })
+    -- past it: the page, as without AutoQuests
+    watch(60)
+    expect(scene().root).toBeShown()
+    expect(scene().qhead.title:GetText()).toBe("Tracks in the Snow")
+    expect(Minimap).never.toBeShown()
+    M:Leave()
+    watch(40)
+    expect(UIParent:GetAlpha()).toBe(1)
+    expect(Minimap).toBeShown()
+end
+
+@test("AutoQuests turned off while it answers: the page shows at once")
+local function autoOffMidway()
+    Minimap:Show()
+    AutoQuests:Set("accept", true)
+    mock.fake("AcceptQuest", function() end)
+    mock.player:interact(scout)
+    local seen = watch(35)
+    expect(M:View()).toBe("detail")
+    expect(seen.scene).toBe(false)
+    settings.set("autoquests", "enabled", false)
+    -- (a look every 0.1 s: well inside AutoQuests' second)
+    watch(10)
+    expect(scene().root).toBeShown()
+    expect(scene().qhead.title:GetText()).toBe("Tracks in the Snow")
+    settings.set("autoquests", "enabled", true)
+    M:Leave()
+    watch(40)
+    expect(UIParent:GetAlpha()).toBe(1)
 end
 
 -- (last: the module off)

@@ -36,7 +36,8 @@
 -- (Units/AuctionHouse/*): Common (helpers the parts share), Tables (the
 -- table widget), Buy (search, categories, results, Shift-click), History
 -- (your searches), ItemView (an item's auctions, a commodity's offers),
--- GamePage (the secure clicks on the game's own page), Prices (the price
+-- Bidding (a bid or buyout SuuUI places: checked, and counted once the
+-- house says so), GamePage (the secure clicks on the game's own page), Prices (the price
 -- memory, a cheap few, the tooltip lines), Scan (Scan all), Sell and
 -- Auctions (their pages).
 
@@ -60,6 +61,8 @@ import type HistoryEntry from "./AuctionHouse/History"
 import * as ahGamePage from "./AuctionHouse/GamePage"
 import * as ahItemView from "./AuctionHouse/ItemView"
 import type OfferRow, Buying from "./AuctionHouse/ItemView"
+import * as ahBidding from "./AuctionHouse/Bidding"
+import type Seen, PendingBid from "./AuctionHouse/Bidding"
 import * as ahPrices from "./AuctionHouse/Prices"
 import type Offer, Market, SeenEntry, PostedEntry from "./AuctionHouse/Prices"
 import * as ahScan from "./AuctionHouse/Scan"
@@ -227,12 +230,16 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- the results' sort (a column's key, reversed): for this session
     sortKey: string = "price"
     sortReverse: boolean = false
-    -- an item's view: its key, the chosen auction, its auctions or offers
+    -- an item's view: its key, the chosen auction (its auctionID, and its
+    -- prices as the player saw them when choosing it), its auctions or offers
     itemKey: ItemKey? = nil
     chosen: number? = nil
+    chosenSeen: Seen? = nil
     offers: CommoditySearchResultInfo[] = {}
     auctions: ItemSearchResultInfo[] = {}
     buying: Buying? = nil
+    -- a bid or buyout sent, until the house answers
+    bidding: PendingBid? = nil
     posting: Posting? = nil
     sellKey: ItemKey? = nil
     scanning: Scanning? = nil
@@ -249,6 +256,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- row, Buy out and Back; what each does after its click
     overs: { [string]: Overlay } = {}
     afterClick: { [string]: () -> () } = {}
+    -- their parent: hidden in combat by the client
+    overHolder: Frame? = nil
     -- a note for what the house is asked, cleared when its results come
     waiting: boolean = false
     refreshPending: boolean = false
@@ -428,6 +437,18 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         ahGamePage.hideStaleOvers(self)
     end
 
+    function HideOvers()
+        ahGamePage.hideOvers(self)
+    end
+
+    function OversAfterCombat()
+        ahGamePage.oversAfterCombat(self)
+    end
+
+    function GameHasAuction(id: number): boolean
+        return ahGamePage.gameHasAuction(self, id)
+    end
+
     function OverResult(row: ResultRow)
         ahGamePage.overResult(self, row)
     end
@@ -460,6 +481,10 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         return ahItemView.chosenAuction(self)
     end
 
+    function ChooseAuction(id: number)
+        ahItemView.chooseAuction(self, id)
+    end
+
     function DrawItemFoot()
         ahItemView.drawItemFoot(self)
     end
@@ -486,6 +511,34 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function OnCommodityPrice(unit: unknown, totalR: unknown)
         ahItemView.onCommodityPrice(self, unit, totalR)
+    end
+
+    function DropPurchase()
+        ahItemView.dropPurchase(self)
+    end
+
+    ----------------------------------------------------------------------------
+    -- A bid or buyout SuuUI places (AuctionHouse/Bidding)
+    ----------------------------------------------------------------------------
+
+    function PlaceBid(auctionID: number, amount: number, name: string, buyout: boolean)
+        ahBidding.placeBid(self, auctionID, amount, name, buyout)
+    end
+
+    function OnBidAdded(id: unknown)
+        ahBidding.onBidAdded(self, id)
+    end
+
+    function OnPurchaseCompleted(id: unknown)
+        ahBidding.onPurchaseCompleted(self, id)
+    end
+
+    function OnHouseError(err: unknown): boolean
+        return ahBidding.onHouseError(self, err)
+    end
+
+    function DropBid()
+        ahBidding.dropBid(self)
     end
 
     ----------------------------------------------------------------------------
@@ -826,10 +879,19 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("AUCTION_HOUSE_CLOSED", function()
             self.open = false
             self:StopScan()
+            -- (no answer comes for a bid or a purchase once the house is closed)
+            self:DropBid()
+            self:DropPurchase()
             window:Hide()
-            for kind in pairs(self.overs) do
-                self:HideOver(kind)
-            end
+            self:HideOvers()
+        end)
+        -- combat: the secure clicks let go before the lockdown (BAG-33);
+        -- after it, back where their view is shown
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            self:HideOvers()
+        end)
+        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            self:OversAfterCombat()
         end)
         local function results(isResults: boolean)
             if isResults and self.waiting then
@@ -874,7 +936,7 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:OnCommodityPrice(unit, total)
         end)
         self:OnGameEvent("COMMODITY_PRICE_UNAVAILABLE", function()
-            self.buying = nil
+            self:DropPurchase()
             self:Note("That price isn't available any more: search again.", "error")
         end)
         self:OnGameEvent("COMMODITY_PURCHASE_SUCCEEDED", function()
@@ -885,11 +947,13 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("COMMODITY_PURCHASE_FAILED", function()
+            self.buying = nil
             self:Note("The purchase failed.", "error")
         end)
-        self:OnGameEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", function()
+        self:OnGameEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", function(_, id)
+            self:OnPurchaseCompleted(id)
             self:Note("Bought.", "ok")
-            self.chosen = nil
+            self.chosen, self.chosenSeen = nil, nil
             local key = self.itemKey
             if key then
                 try(AH.SendSearchQuery, key, sorts(), true)
@@ -916,7 +980,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("AUCTION_CANCELED", function(_, id)
             self:OnCancelled(id)
         end)
-        self:OnGameEvent("BID_ADDED", function()
+        self:OnGameEvent("BID_ADDED", function(_, id)
+            self:OnBidAdded(id)
             if self.tab == "auctions" then
                 try(AH.QueryBids, {}, {})
             end
@@ -986,6 +1051,9 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("AUCTION_HOUSE_SHOW_ERROR", function(_, err)
+            if self:OnHouseError(err) then
+                return
+            end
             self:Note("The auction house said no (" .. tostring(err) .. ").", "error")
         end)
     end

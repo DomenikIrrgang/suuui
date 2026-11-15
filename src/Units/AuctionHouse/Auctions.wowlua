@@ -12,6 +12,8 @@ import * as errors from "wowlua:errors"
 import keyInfo, keyTooltip, QUALITY, qualityToken, BAND, coins from "./Common"
 import TableRow, AuctionTable from "./Tables"
 import type Col, Cell from "./Tables"
+import leastBid, seenOf, recheck, recheckNote, bidProblem from "./Bidding"
+import type Seen from "./Bidding"
 import type AuctionHouseModule from "../AuctionHouse"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -151,8 +153,10 @@ export class AuctionsPage extends Frame
     readonly bid: MoneyInput
     readonly mineT: AuctionTable<AuctionRow>
     readonly bidsT: AuctionTable<AuctionRow>
-    -- the chosen one, the list shown, your bids' standing, what is cancelled
+    -- the chosen one (its auctionID, and your bid's as you saw it when
+    -- choosing it), the list shown, your bids' standing, what is cancelled
     chosen: number? = nil
+    seen: Seen? = nil
     list: Listed[] = {}
     readonly highest: { [number]: boolean } = {}
     cancelling: Listed? = nil
@@ -288,7 +292,7 @@ export function setAuctionsTab(self: AuctionHouseModule, key: string)
         return
     end
     a.sub = key
-    a.chosen = nil
+    a.chosen, a.seen = nil, nil
     for _, b in ipairs(a.tabs) do
         local on = b.key == key
         b.label:SetColor(on and "gilt-text" or "ink-muted")
@@ -426,8 +430,8 @@ export function drawAuctions(self: AuctionHouseModule)
                 if a.chosen ~= b.auctionID then
                     a.bid:Clear()
                 end
-                a.chosen = b.auctionID
-                local least = b.minBid or b.bidAmount or 0
+                a.chosen, a.seen = b.auctionID, seenOf(b)
+                local least = leastBid(b) or 0
                 if (a.bid:GetCopper() or 0) < least then
                     a.bid:SetCopper(least)
                 end
@@ -470,7 +474,7 @@ export function drawAuctions(self: AuctionHouseModule)
                 a.chosen == o.auctionID
             )
             row:SetScript("OnClick", function()
-                a.chosen = o.auctionID
+                a.chosen, a.seen = o.auctionID, nil
                 self:DrawAuctions()
             end)
         end
@@ -488,17 +492,17 @@ export function drawAuctionsFoot(self: AuctionHouseModule)
     end
     local e = a:Chosen()
     if a.sub == "bids" then
-        local least = e and (e.minBid or e.bidAmount) or 0
         local amount = a.bid:GetCopper() or 0
         local money = GetMoney() or 0
-        local why = not e and "Choose a bid." or amount < least and ("At least " .. coins(least) .. ".") or
-            amount > money and "Not enough money." or
+        local waiting = self.bidding and "Waiting for the house's answer to your last bid." or nil
+        local why = not e and "Choose a bid." or waiting or (e and bidProblem(leastBid(e), amount, money, e.buyoutAmount)) or
             nil
         a.bidButton:SetEnabledState(why == nil)
         a.bidButton.tooltip = why and { title = "Bid", description = why } or nil
         local buy = e and e.buyoutAmount
         why = not e and "Choose a bid." or not buy and "This auction has no buyout." or
             (buy and buy > money) and "Not enough money." or
+            waiting or
             nil
         a.buyout:SetEnabledState(why == nil)
         a.buyout.tooltip = why and { title = "Buy out", description = why } or nil
@@ -525,14 +529,18 @@ end
 export function cancelChosen(self: AuctionHouseModule)
     local a = self.mine
     local e = a and a:Chosen()
-    if not (a and e) then
+    -- (found by its id in the list as it is now: sold meanwhile, nothing)
+    if not (a and e) or e.status == Enum.AuctionStatus.Sold then
         return
     end
     a.cancelling = e
-    local ok, err = pcall(AH.CancelAuction, e.auctionID)
-    if not ok then
+    local id = e.auctionID
+    local ok, refused = pcall(function(): boolean
+        return (SuuUI.ExpectRefusal(AH.CancelAuction, id))
+    end)
+    if not ok or refused then
         a.cancelling = nil
-        self:Note("Couldn't cancel: " .. tostring(err), "error")
+        self:Note(refused == true and "The game refused to cancel it: nothing was cancelled." or ("Couldn't cancel: " .. tostring(refused)), "error")
     end
 end
 
@@ -557,40 +565,103 @@ export function rememberBid(self: AuctionHouseModule, auctionID: number, amount:
     bids[auctionID] = amount
 end
 
+-- The chosen bid found again by its id and checked against what you saw
+-- when choosing it (gone or changed: nothing placed, you're told and shown
+-- it as it is now); nil when it isn't fit to act on.
+local function current(self: AuctionHouseModule, seen: Seen, what: string): Listed?
+    local a = self.mine
+    if not a then
+        return nil
+    end
+    local e, why = recheck(a.list, seen)
+    if why then
+        self:Note(recheckNote(why, e, what), "error")
+        if e then
+            a.seen = seenOf(e)
+        else
+            a.chosen, a.seen = nil, nil
+            a.bid:Clear()
+        end
+        self:DrawAuctions()
+        return nil
+    end
+    return e
+end
+
+-- Bid again: checked, asked first, checked again at the answer, then
+-- placed (AuctionHouse/Bidding: counted once the house says so).
 export function bidAgain(self: AuctionHouseModule)
     local a = self.mine
-    local e = a and a:Chosen()
-    if not (a and e) then
+    local seen = a and a.seen
+    if not (a and seen and a.chosen == seen.auctionID) then
+        return
+    end
+    local e = current(self, seen, "bid")
+    if not e then
         return
     end
     local amount = a.bid:GetCopper()
-    local ok, err = pcall(AH.PlaceBid, e.auctionID, amount)
-    if not ok then
-        self:Note("Couldn't bid: " .. tostring(err), "error")
+    local why = bidProblem(leastBid(e), amount, GetMoney() or 0, e.buyoutAmount)
+    if why then
+        self:Note("No bid placed. " .. why, "error")
         return
     end
-    self:RememberBid(e.auctionID, amount)
-    self:Note("Bid " .. coins(amount) .. ".")
-end
-
-export function buyOutBid(self: AuctionHouseModule)
-    local a = self.mine
-    local e = a and a:Chosen()
-    local buyout = e and e.buyoutAmount
-    if not (e and buyout) then
-        return
-    end
-    local name = itemOf(e)
+    local name = itemOf(e) or "this"
     local id = e.auctionID
     UI.Confirm({
-        title = "Buy out " .. (name or "this") .. "?",
+        title = "Bid on " .. name .. "?",
+        text = ("Your bid: %s (least bid %s)."):format(coins(amount), coins(leastBid(e))),
+        confirm = "Bid",
+        onConfirm = function()
+            if a.chosen ~= id then
+                self:Note("You chose another bid meanwhile: no bid placed.", "error")
+                return
+            end
+            local now = current(self, seen, "bid")
+            if not now then
+                return
+            end
+            local again = bidProblem(leastBid(now), amount, GetMoney() or 0, now.buyoutAmount)
+            if again then
+                self:Note("No bid placed. " .. again, "error")
+                return
+            end
+            self:PlaceBid(id, amount, name, false)
+        end,
+    })
+end
+
+-- Buy out one of your bids: asked first; at the answer the same auction,
+-- its buyout unchanged and the money there; then sent (Forever refused a
+-- single auction's buyout from SuuUI's code before: if it does, you're told
+-- nothing was bought; bought only when the house says so).
+export function buyOutBid(self: AuctionHouseModule)
+    local a = self.mine
+    local seen = a and a.seen
+    if not (a and seen and a.chosen == seen.auctionID) then
+        return
+    end
+    local e = current(self, seen, "bought")
+    local buyout = e and e.buyoutAmount
+    if not (e and buyout and buyout > 0) then
+        return
+    end
+    local name = itemOf(e) or "this"
+    local id = e.auctionID
+    UI.Confirm({
+        title = "Buy out " .. name .. "?",
         text = ("For %s."):format(coins(buyout)),
         confirm = "Buy out",
         onConfirm = function()
-            local ok, err = pcall(AH.PlaceBid, id, buyout)
-            if not ok then
-                self:Note("Couldn't buy out: " .. tostring(err), "error")
+            local now = current(self, seen, "bought")
+            if not now then
+                return
             end
+            if buyout > (GetMoney() or 0) then
+                self:Note("Not enough money: nothing was bought.", "error")
+                return
+            end
+            self:PlaceBid(id, buyout, name, true)
         end,
     })
 end

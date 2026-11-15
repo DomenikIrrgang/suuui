@@ -735,6 +735,43 @@ local function renderListed()
     expect(listedPage().data).toBeNil()
 end
 
+@test(
+    "the ad edited on Forever (UIW-1): the 15 s refresh keeps it, after the field loses focus too; From my listing brings the written one back"
+)
+local function adEditKept()
+    listing = listingOf({ activities = { "dungeon:sfk" }, roles = { tank = true } })
+    local f = gameFrame("LFGParentFrame")
+    ShowUIPanel(f)
+    gameFrame("LFGListingFrame"):Show()
+    M:Follow()
+    local p = listedPage()
+    expect(p:IsVisible()).toBe(true)
+    local written = M:AdFromListing(listing)
+    local e = p.ad.edit
+    expect(e:GetText()).toBe(written)
+    -- typed as on Forever: the change comes with userInput false
+    mock.click(p.ad.field)
+    e:SetText("my own words")
+    mock.script(e, "OnTextChanged", false)
+    expect(M.adEdited).toBe(true)
+    -- the refresh while typing, then after Escape: the words stay
+    mock.advanceTime(15)
+    expect(e:GetText()).toBe("my own words")
+    mock.pressKey("ESCAPE")
+    expect(e:HasFocus()).toBe(false)
+    mock.advanceTime(15)
+    mock.advanceTime(15)
+    expect(ad().text).toBe("my own words")
+    expect(e:GetText()).toBe("my own words")
+    -- a refresh from code (the written text set again) is not an edit
+    mock.click(p.ad.rewrite)
+    expect(M.adEdited).toBe(false)
+    expect(e:GetText()).toBe(written)
+    mock.advanceFrames(2)
+    expect(M.adEdited).toBe(false)
+    HideUIPanel(f)
+end
+
 @test("AdFromListing: empty without a listing, else the ad for who you are now")
 local function adFromListing()
     expect(M:AdFromListing(nil)).toBe("")

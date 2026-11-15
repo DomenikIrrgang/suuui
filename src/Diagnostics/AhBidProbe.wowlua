@@ -1,0 +1,286 @@
+-- Diagnostics/AhBidProbe.wowlua
+-- "/suu probe ahbid <item name>" (at the auction house): does Forever take
+-- C_AuctionHouse.PlaceBid from SuuUI's own code (a click on SuuUI's
+-- button)? A single auction's buyout through it was refused in game
+-- ("Blocked"), which is why Buy out clicks the game's hidden page; whether a
+-- bid under the buyout is refused too was never probed (BAG-32). A refused
+-- protected call raises no Lua error, so each try records whether the game
+-- refused it during the call (ADDON_ACTION_BLOCKED or _FORBIDDEN), which
+-- events followed in the next seconds (BID_ADDED, BIDS_UPDATED,
+-- AUCTION_HOUSE_PURCHASE_COMPLETED, AUCTION_HOUSE_SHOW_ERROR, …, with their
+-- payloads: whether BID_ADDED's "bidID" is the auctionID) and whether the
+-- money changed.
+--   the item name: searched, its first result that isn't a commodity opened
+--   Bid least    its cheapest auction that takes a bid under its buyout,
+--                at its least bid (spends that much while you're the
+--                highest bidder)
+--   Bid buyout   its cheapest auction with a buyout, at the buyout (buys it)
+--   Bids tab     the first of your bids (from the house's list of them) at
+--                its least bid, under its buyout
+-- Printed and saved in SuuUIProbe.ahBid on /reload. Choose a cheap item.
+
+import isSecret from "wowlua:secret"
+import after as timerAfter from "wowlua:timer"
+import * as DB from "/Core/DB"
+import * as fault from "/Core/Fault"
+import * as tbl from "wowlua:table"
+import print from "/Core/Init"
+import panel, closeButton, Panel from "/UI/Panel"
+import text as uiText, Text from "/UI/Text"
+import button from "/UI/Controls"
+
+local AH = C_AuctionHouse
+-- how long a try's events are recorded
+local WATCH = 6
+
+type BidPanel = Panel & { closeButton?: Button }
+local probePanel: BidPanel? = nil
+local status: Text? = nil
+local listening = false
+-- the item searched, its auctions as found, the try being watched
+local itemKey: ItemKey? = nil
+local least: ItemSearchResultInfo? = nil
+local buyout: ItemSearchResultInfo? = nil
+local watching: { name: string, at: number, money: number }? = nil
+local searching = false
+
+local function show(v: unknown): string
+    if isSecret(v) then
+        return "secret"
+    end
+    if type(v) == "table" then
+        local parts: string[] = {}
+        for k, x in pairs(v :: { [unknown]: unknown }) do
+            parts[#parts + 1] = tostring(k) .. "=" .. show(x)
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return tostring(v)
+end
+
+export function out(text: string)
+    local lines = tbl.listAt(tbl.recordAt(DB.probe, "ahBid"), "lines")
+    lines[#lines + 1] = date("%H:%M:%S") .. " " .. text
+    print("AH bid probe: " .. text)
+end
+
+local function setStatus(text: string)
+    local s = status
+    if s then
+        s:SetValue(text)
+    end
+end
+
+local function sorts(): AuctionHouseSortType[]
+    return { { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false } }
+end
+
+-- The item's auctions read: the cheapest that takes a bid under its buyout
+-- (or has none), the cheapest with a buyout.
+export function readAuctions()
+    local key = itemKey
+    if not key then
+        return
+    end
+    least, buyout = nil, nil
+    for i = 1, (AH.GetNumItemSearchResults(key) or 0) do
+        local a = AH.GetItemSearchResultInfo(key, i)
+        if a and not a.containsOwnerItem then
+            local min = a.minBid or a.bidAmount
+            local bo = a.buyoutAmount
+            if min and min > 0 and (not bo or bo == 0 or min < bo) and (not least or min < (least.minBid or least.bidAmount or 0)) then
+                least = a
+            end
+            if bo and bo > 0 and (not buyout or bo < (buyout.buyoutAmount or 0)) then
+                buyout = a
+            end
+        end
+    end
+    local l, b = least, buyout
+    setStatus(
+        ("least bid: %s; buyout: %s"):format(
+            l and (("#%d at %s"):format(l.auctionID, GetMoneyString(l.minBid or l.bidAmount or 0))) or "none",
+            b and (("#%d at %s"):format(b.auctionID, GetMoneyString(b.buyoutAmount or 0))) or "none"
+        )
+    )
+    out(("auctions read: least %s, buyout %s"):format(show(l and l.auctionID), show(b and b.auctionID)))
+end
+
+-- The browse answer: the first result that isn't a commodity, its auctions asked.
+local function onBrowse()
+    if not searching then
+        return
+    end
+    searching = false
+    for _, r in ipairs(AH.GetBrowseResults() or {}) do
+        local info = AH.GetItemKeyInfo(r.itemKey)
+        if info and not info.isCommodity then
+            itemKey = r.itemKey
+            out(("item %s (%s)"):format(show(info.itemName), show(r.itemKey.itemID)))
+            local ok, err = pcall(AH.SendSearchQuery, r.itemKey, sorts(), true)
+            if not ok then
+                out("SendSearchQuery error " .. tostring(err))
+            end
+            return
+        end
+    end
+    out("no result that isn't a commodity: try another name")
+    setStatus("nothing found")
+end
+
+-- One try: PlaceBid from SuuUI's code, refused or not; then what follows.
+export function try(name: string, auctionID: number?, amount: number?)
+    if not (auctionID and amount and amount > 0) then
+        out(name .. ": no auction for it (search first; for Bids tab, bid on something first)")
+        return
+    end
+    local money = GetMoney() or 0
+    watching = { name = name, at = GetTime(), money = money }
+    local ok, refused = pcall(function(): boolean
+        return (fault.expectRefusal(AH.PlaceBid, auctionID, amount))
+    end)
+    out(
+        ("%s: PlaceBid(%d, %d): %s"):format(
+            name,
+            auctionID,
+            amount,
+            not ok and ("error " .. tostring(refused)) or (refused and "REFUSED during the call" or "not refused")
+        )
+    )
+    local w = watching
+    timerAfter(WATCH, function()
+        if watching == w and w then
+            local now = GetMoney() or 0
+            out(("%s: after %ds money %d -> %d (%+d)"):format(name, WATCH, w.money, now, now - w.money))
+            watching = nil
+        end
+    end)
+end
+
+-- The first of your bids that takes one more under its buyout.
+local function fromBids()
+    for _, b in ipairs(AH.GetBids() or {}) do
+        local min = b.minBid or b.bidAmount
+        local bo = b.buyoutAmount
+        if min and min > 0 and (not bo or bo == 0 or min < bo) then
+            try("Bids tab", b.auctionID, min)
+            return
+        end
+    end
+    try("Bids tab", nil, nil)
+end
+
+local function listen()
+    if listening then
+        return
+    end
+    listening = true
+    local f = CreateFrame("Frame")
+    for _, e in ipairs({
+        "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED",
+        "ITEM_SEARCH_RESULTS_UPDATED",
+        "BID_ADDED",
+        "BIDS_UPDATED",
+        "AUCTION_HOUSE_PURCHASE_COMPLETED",
+        "AUCTION_HOUSE_SHOW_ERROR",
+        "AUCTION_HOUSE_SHOW_NOTIFICATION",
+        "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION",
+        "AUCTION_HOUSE_NEW_BID_RECEIVED",
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+        "UI_ERROR_MESSAGE",
+        "CHAT_MSG_SYSTEM",
+        "PLAYER_MONEY",
+    }) do
+        pcall(f.RegisterEvent, f, e)
+    end
+    f:SetScript("OnEvent", function(_, event: string, a: unknown, b: unknown, c: unknown)
+        if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+            onBrowse()
+            return
+        end
+        if event == "ITEM_SEARCH_RESULTS_UPDATED" then
+            if itemKey and not watching then
+                readAuctions()
+            end
+            return
+        end
+        local w = watching
+        if not w then
+            return
+        end
+        out(("  +%.1fs %s %s %s %s"):format(GetTime() - w.at, event, show(a), show(b), show(c)))
+    end)
+end
+
+local function build(): BidPanel
+    local p = panel(UIParent, { title = "AH bid probe", width = 380, height = 150, solid = true }) :: BidPanel
+    p:SetFrameStrata("DIALOG")
+    p:SetPoint("TOP", UIParent, "TOP", 0, -120)
+    p:EnableMouse(true)
+    p:SetMovable(true)
+    p:RegisterForDrag("LeftButton")
+    p:SetScript("OnDragStart", p.StartMoving)
+    p:SetScript("OnDragStop", p.StopMovingOrSizing)
+    local s = uiText(p.body, "label", "ink")
+    s:SetPoint("TOPLEFT")
+    s:SetValue("searching…")
+    status = s
+    local bidLeast = button(p.body, {
+        text = "Bid least",
+        width = 110,
+        onClick = function()
+            local a = least
+            try("Bid least", a and a.auctionID, a and (a.minBid or a.bidAmount))
+        end,
+    })
+    bidLeast:SetPoint("BOTTOMLEFT")
+    local bidBuyout = button(p.body, {
+        text = "Bid buyout",
+        width = 110,
+        onClick = function()
+            local a = buyout
+            try("Bid buyout", a and a.auctionID, a and a.buyoutAmount)
+        end,
+    })
+    bidBuyout:SetPoint("BOTTOM")
+    local bids = button(p.body, {
+        text = "Bids tab",
+        width = 110,
+        onClick = function()
+            fromBids()
+        end,
+    })
+    bids:SetPoint("BOTTOMRIGHT")
+    local close = closeButton(p, function()
+        p:Hide()
+    end)
+    p.closeButton = close
+    if close then
+        close:SetPoint("TOPRIGHT", -8, -8)
+    end
+    return p
+end
+
+export function command(rest: string)
+    if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then
+        print("AH bid probe: open the auction house first.")
+        return
+    end
+    local name = strtrim(rest or "")
+    if name == "" then
+        print("AH bid probe: /suu probe ahbid <item name> (a cheap item that isn't a commodity)")
+        return
+    end
+    listen()
+    local p = probePanel or build()
+    probePanel = p
+    p:Show()
+    setStatus("searching…")
+    itemKey, least, buyout, searching = nil, nil, nil, true
+    local ok, err = pcall(AH.SendBrowseQuery, { searchString = name, sorts = sorts(), filters = {}, itemClassFilters = {} })
+    out(("search %q: %s"):format(name, ok and "sent" or ("error " .. tostring(err))))
+    -- (your bids, for Bids tab)
+    pcall(AH.QueryBids, {}, {})
+end

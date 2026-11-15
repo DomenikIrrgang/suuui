@@ -1,0 +1,422 @@
+-- Units/Mail/Collect.wowlua
+-- The Mail module's Collect all and Collect money (see Units/Mail.wowlua):
+-- what to take next, whether the bags have room for it, and the run that
+-- takes one thing at a time.
+--
+-- A run moves on by the game's answer, not by a clock: it asks for one
+-- thing (TakeInboxMoney or TakeInboxItem), then waits until the inbox shows
+-- it gone (MAIL_INBOX_UPDATE; the game answers MAIL_SUCCESS with it) or the
+-- game refuses it (MAIL_FAILED, with the item's ID for an item; the reason
+-- as red error text, UI_ERROR_MESSAGE, in the same moment). A refusal, or
+-- no change at all within TIMEOUT (a backstop; 1 s once error text came),
+-- skips that thing for the rest of the run, and the run goes on with the
+-- next. Only one request is ever on its way, and none while the game says a
+-- mail command is still pending (C_Mail.IsCommandPending). Mails with cash
+-- on delivery and a game master's are never taken (the game's own Open All
+-- leaves them too): a COD is paid only from the open mail, confirmed. An
+-- item the bags have no room for is not asked for. The run ends when
+-- nothing it may take is left, and then says what stayed and why; it stops
+-- without a word when the mailbox closes.
+
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as inbox from "./Inbox"
+
+type MailId = inbox.MailId
+
+local try, field = errors.try, tbl.field
+local asNumber, flag = secret.asNumber, secret.flag
+
+export const PACE = 0.15 -- s at least between takes (the game's own Open All waits as long)
+export const TIMEOUT = 5 -- s for the game's answer before a take counts as refused
+export const ERROR_WAIT = 1 -- s after the game's error text: no change by then, refused
+export const REFUSED = "the game refused it"
+export const NO_ANSWER = "no answer from the game"
+export const NO_ROOM = "no room in your bags"
+
+local REAGENT_BAG = 5
+
+--------------------------------------------------------------------------------
+-- Room in the bags
+--------------------------------------------------------------------------------
+
+-- A carried bag's family: what a special bag takes (0: anything). A bag
+-- reading 0 is asked again by its own item (as the Bags module does).
+local function familyOf(bag: number): number
+    local _, f = C_Container.GetContainerNumFreeSlots(bag)
+    local family = asNumber(f) or 0
+    if family == 0 and bag ~= 0 and bag ~= REAGENT_BAG then
+        local slot = asNumber(errors.tryValue(C_Container.ContainerIDToInventoryID, bag))
+        local id = slot and asNumber(GetInventoryItemID("player", slot))
+        if id then
+            family = asNumber((try(field(C_Item, "GetItemFamily"), id))) or 0
+        end
+    end
+    return family
+end
+
+-- The carried bags as room for more, read once for a whole inbox: the
+-- free slots' bags by family (0: anything), whether the reagent bag has a
+-- free slot, and each item's part stacks.
+export type Room = { families: number[], reagent: boolean, stacks: { [number]: number[] } }
+
+export function roomNow(): Room
+    local room: Room = { families = {}, reagent = false, stacks = {} }
+    local bags: number[] = {}
+    for bag = 0, NUM_BAG_SLOTS or 4 do
+        bags[#bags + 1] = bag
+    end
+    bags[#bags + 1] = REAGENT_BAG
+    for _, bag in ipairs(bags) do
+        local slots = asNumber(C_Container.GetContainerNumSlots(bag)) or 0
+        if slots > 0 then
+            local free = asNumber((C_Container.GetContainerNumFreeSlots(bag))) or 0
+            if free > 0 then
+                if bag == REAGENT_BAG then
+                    room.reagent = true
+                else
+                    room.families[#room.families + 1] = familyOf(bag)
+                end
+            end
+            if free < slots then
+                for s = 1, slots do
+                    local info = C_Container.GetContainerItemInfo(bag, s)
+                    local id = info and asNumber(info.itemID)
+                    if info and id then
+                        local list = room.stacks[id] or {}
+                        room.stacks[id] = list
+                        list[#list + 1] = asNumber(info.stackCount) or 1
+                    end
+                end
+            end
+        end
+    end
+    return room
+end
+
+-- Whether `count` of `item` fits: a part stack of it with room for them
+-- all, or a free slot in a bag that takes it (a special bag only its kind,
+-- the reagent bag only crafting reagents, a bag never into a special bag).
+-- The game decides in the end; this keeps Collect all from asking for what
+-- can't fit.
+export function fits(room: Room, item: number, count: number): boolean
+    local family = asNumber((try(field(C_Item, "GetItemFamily"), item))) or 0
+    local _, _, _, _, _, classID = try(field(C_Item, "GetItemInfoInstant"), item)
+    for _, bf in ipairs(room.families) do
+        if bf == 0 or (asNumber(classID) ~= 1 and bit.band(bf, family) ~= 0) then
+            return true
+        end
+    end
+    local maxStack = asNumber((try(field(C_Item, "GetItemMaxStackSizeByID"), item))) or 1
+    for _, held in ipairs(room.stacks[item] or {}) do
+        if held + count <= maxStack then
+            return true
+        end
+    end
+    return room.reagent and flag(select(17, try(field(C_Item, "GetItemInfo"), item)))
+end
+
+export function hasRoom(item: number, count: number): boolean
+    return fits(roomNow(), item, count)
+end
+
+--------------------------------------------------------------------------------
+-- What to take
+--------------------------------------------------------------------------------
+
+-- One thing Collect all takes: a mail's money (no slot) or one attachment.
+export type Take = {
+    index: number,
+    slot?: number,
+    mail: MailId,
+    item?: number,
+    count: number,
+    name: string,
+}
+
+-- What a refused take is skipped by for the rest of a run: the mail by what
+-- taking from it does not change (who from, the subject, the COD) and the
+-- thing (its money, or the item). A twin alike in these is skipped with it:
+-- what makes the game refuse (a unique item you have, no room for its kind,
+-- the gold limit) holds for the twin too.
+export function skipKey(mail: MailId, item: number?): string
+    return mail.sender .. "\031" .. mail.subject .. "\031" .. mail.cod .. "\031" .. (item and tostring(item) or "money")
+end
+
+-- Whether Collect all may take from this mail at all.
+export function collectable(mail: MailId): boolean
+    return mail.cod == 0 and not mail.gm
+end
+
+-- What Collect all takes next: the money, else an attachment (the last slot
+-- first), of the first mail it may take from, passing over what this run
+-- skipped and the items the bags have no room for.
+export function nextTake(moneyOnly: boolean, skipped: { [string]: string }?): Take?
+    local skip: { [string]: string } = skipped or {}
+    local room: Room? = nil
+    for i = 1, (inbox.inboxCount()) do
+        local mail = inbox.identify(i)
+        if mail and collectable(mail) then
+            if mail.money > 0 and not skip[skipKey(mail, nil)] then
+                return { index = i, mail = mail, count = mail.money, name = "" }
+            end
+            if not moneyOnly then
+                for k = #mail.items, 1, -1 do
+                    local it = mail.items[k]
+                    room = room or roomNow()
+                    if not skip[skipKey(mail, it.item)] and fits(room, it.item, it.count) then
+                        return { index = i, slot = it.slot, mail = mail, item = it.item, count = it.count, name = it.name }
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- How much of what `t` takes the inbox holds now, in mails like its own
+-- (the money, or the count of its item): a take made progress when this
+-- went down, wherever the mail has moved to.
+export function tally(t: Take): number
+    local n = 0
+    local m = t.mail
+    for i = 1, (inbox.inboxCount()) do
+        local h = inbox.header(i)
+        if h and h.sender == m.sender and h.subject == m.subject and h.cod == m.cod then
+            local item = t.item
+            if item then
+                if h.items > 0 then
+                    for _, it in ipairs(inbox.attachments(i)) do
+                        if it.item == item then
+                            n = n + it.count
+                        end
+                    end
+                end
+            else
+                n = n + h.money
+            end
+        end
+    end
+    return n
+end
+
+-- What a run left in the mail, and why.
+export type Left = { sender: string, name: string, count: number, money: boolean, why: string }
+
+export function leftOver(moneyOnly: boolean, skipped: { [string]: string }): Left[]
+    local out: Left[] = {}
+    local room = roomNow()
+    for i = 1, (inbox.inboxCount()) do
+        local mail = inbox.identify(i)
+        if mail and collectable(mail) then
+            if mail.money > 0 then
+                out[#out + 1] = {
+                    sender = mail.sender,
+                    name = "",
+                    count = mail.money,
+                    money = true,
+                    why = skipped[skipKey(mail, nil)] or "not taken",
+                }
+            end
+            if not moneyOnly then
+                for _, it in ipairs(mail.items) do
+                    local why = skipped[skipKey(mail, it.item)] or
+                        (not fits(room, it.item, it.count) and NO_ROOM) or
+                        "not taken"
+                    out[#out + 1] = { sender = mail.sender, name = it.name, count = it.count, money = false, why = why }
+                end
+            end
+        end
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The run
+--------------------------------------------------------------------------------
+
+-- What a run needs from the module: whether the mailbox is open, a timer
+-- (the module's), "draw again", and where the report goes.
+export type CollectHost = {
+    open: () -> boolean,
+    after: (seconds: number, fn: () -> ()) -> (),
+    changed: () -> (),
+    done: (left: Left[], took: number) -> (),
+}
+
+-- The take on its way: the inbox's tally before, until when it may take,
+-- whether the game refused it and what it said.
+export type Waiting = { take: Take, before: number, deadline: number, failed: boolean, why?: string }
+
+export class Collector
+    running: boolean = false
+    moneyOnly: boolean = false
+    -- raised by each start and stop: a timer from an earlier run does nothing
+    run: number = 0
+    took: number = 0
+    -- requests sent this run
+    asked: number = 0
+    wait: Waiting? = nil
+    skipped: { [string]: string } = {}
+
+    constructor(readonly host: CollectHost) end
+
+    function Start(moneyOnly: boolean)
+        if self.running then
+            return
+        end
+        self.running, self.moneyOnly = true, moneyOnly
+        self.took, self.asked, self.wait, self.skipped = 0, 0, nil, {}
+        self.run = self.run + 1
+        self.host.changed()
+        self:Step()
+    end
+
+    -- Stopped where it is (the mailbox closed, the player took over, the
+    -- module off): no report; an answer still on its way is not waited for.
+    function Stop()
+        if not self.running then
+            return
+        end
+        self.running, self.wait = false, nil
+        self.run = self.run + 1
+        self.host.changed()
+    end
+
+    -- `fn` in `seconds`, if this run still goes on then.
+    function Later(seconds: number, fn: () -> ())
+        local run = self.run
+        self.host.after(seconds, function()
+            if self.running and self.run == run then
+                fn()
+            end
+        end)
+    end
+
+    -- The next take, when nothing is on its way and the game is ready.
+    function Step()
+        if not self.running or self.wait then
+            return
+        end
+        if not self.host.open() then
+            self:Stop()
+            return
+        end
+        if C_Mail.IsCommandPending and flag(try(C_Mail.IsCommandPending)) then
+            self:Later(PACE, function()
+                self:Step()
+            end)
+            return
+        end
+        local t = nextTake(self.moneyOnly, self.skipped)
+        if not t then
+            self:Finish()
+            return
+        end
+        local w: Waiting = { take = t, before = tally(t), deadline = GetTime() + TIMEOUT, failed = false }
+        self.wait = w
+        self.asked = self.asked + 1
+        if t.slot then
+            try(TakeInboxItem, t.index, t.slot)
+        else
+            try(TakeInboxMoney, t.index)
+        end
+        self:Later(TIMEOUT, function()
+            if self.wait == w then
+                self:Check()
+            end
+        end)
+    end
+
+    -- Whether the take on its way is done: gone from the inbox (on to the
+    -- next), refused or out of time (skipped), or still to wait for.
+    function Check()
+        local w = self.wait
+        if not w then
+            return
+        end
+        if tally(w.take) < w.before then
+            self.wait = nil
+            self.took = self.took + 1
+            self:Later(PACE, function()
+                self:Step()
+            end)
+        elseif w.failed then
+            self:Skip(w, w.why or REFUSED)
+        elseif GetTime() >= w.deadline then
+            self:Skip(w, w.why or NO_ANSWER)
+        end
+    end
+
+    function Skip(w: Waiting, why: string)
+        self.skipped[skipKey(w.take.mail, w.take.item)] = why
+        self.wait = nil
+        self:Later(PACE, function()
+            self:Step()
+        end)
+    end
+
+    -- The game's events, from the module.
+    function OnInboxUpdate()
+        self:Check()
+    end
+
+    function OnSuccess()
+        self:Check()
+    end
+
+    -- MAIL_FAILED: with an item's ID, for that item only; without, ours
+    -- unless a mail is being sent (its failure, then).
+    function OnFailed(item: number?, sending: boolean)
+        local w = self.wait
+        if not w then
+            return
+        end
+        if item then
+            if item ~= w.take.item then
+                return
+            end
+        elseif sending then
+            return
+        end
+        w.failed = true
+        -- looked at a moment later: the error text of the same answer is in
+        -- by then (not After(0): the emulator never runs one made in a timer)
+        self:Later(0.05, function()
+            if self.wait == w then
+                self:Check()
+            end
+        end)
+    end
+
+    -- UI_ERROR_MESSAGE while a take is on its way: the reason, and no long
+    -- wait any more.
+    function OnError(message: string?)
+        local w = self.wait
+        if not w then
+            return
+        end
+        if message and message ~= "" then
+            w.why = message
+        end
+        local soon = GetTime() + ERROR_WAIT
+        if soon < w.deadline then
+            w.deadline = soon
+            self:Later(ERROR_WAIT, function()
+                if self.wait == w then
+                    self:Check()
+                end
+            end)
+        end
+    end
+
+    -- Nothing left to take: what stayed, and why, to the module.
+    function Finish()
+        self.running, self.wait = false, nil
+        self.run = self.run + 1
+        local left = leftOver(self.moneyOnly, self.skipped)
+        self.host.changed()
+        self.host.done(left, self.took)
+    end
+end

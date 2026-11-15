@@ -46,11 +46,12 @@ local function cleanup()
     expectNoErrors()
 end
 
--- The shown buttons of a card's actions row, right to left.
+-- The shown buttons of a card's actions row (pairs: a pool keeps each
+-- button at its action's position, so it can have holes).
 local function shownButtons(n: Notification): Button[]
     local out: Button[] = {}
     for _, pool in pairs(n.buttons) do
-        for _, b in ipairs(pool) do
+        for _, b in pairs(pool) do
             if b:IsShown() then
                 out[#out + 1] = b
             end
@@ -425,6 +426,136 @@ local function pressedCounts()
     expect(need.pressedBg).never.toBeShown()
     expect(tokenOf(need.border.top)).toBe("gilt-line")
     expect(greed).never.toBeShown()
+end
+
+@test(
+    "a reused card (UIP-3): [primary, quiet], then one action, then [quiet]: only the current buttons, clicks and icons"
+)
+local function reusedButtons()
+    local n = make()
+    local accept, later = mock.spy(), mock.spy()
+    n:SetData({
+        kind = "action",
+        title = "Invite",
+        actions = {
+            { label = "Accept", variant = "primary", onClick = accept, icon = "check" },
+            { label = "Later", onClick = later, icon = "hourglass" },
+        },
+    })
+    -- the quiet pool has only its second place: a hole at 1
+    local quiet = assert(n.buttons.quiet)
+    expect(quiet[1]).toBeNil()
+    local oldQuiet = assert(quiet[2])
+    local primary = assert(n.buttons.primary)[1]
+    expect(#shownButtons(n)).toBe(2)
+    -- reused for another note with one action
+    local join = mock.spy()
+    n:SetData({
+        kind = "action",
+        title = "Ready check",
+        actions = { { label = "Ready", variant = "primary", onClick = join } },
+    })
+    local shown = shownButtons(n)
+    expect(#shown).toBe(1)
+    expect(shown[1]).toBe(primary)
+    expect(primary.label).toHaveText("Ready")
+    -- its icon gone with the old note
+    expect(primary.icon).never.toBeShown()
+    expect(oldQuiet).never.toBeShown()
+    -- a hidden button has no click left: nothing of the old note can run
+    expect(oldQuiet:GetScript("OnClick")).toBeNil()
+    mock.click(primary)
+    expect(join).toHaveBeenCalledTimes(1)
+    expect(accept).never.toHaveBeenCalled()
+    expect(later).never.toHaveBeenCalled()
+    -- and then for a note with one quiet action
+    local ok = mock.spy()
+    n:SetData({ title = "Note", actions = { { label = "OK", onClick = ok, icon = "bell" } } })
+    shown = shownButtons(n)
+    expect(#shown).toBe(1)
+    local q1 = assert(assert(n.buttons.quiet)[1])
+    expect(shown[1]).toBe(q1)
+    expect(q1.label).toHaveText("OK")
+    expect(q1.icon).toBeShown()
+    expect(assert(q1.icon):GetTextureFilePath()).toBe(GLYPHS .. "bell.tga")
+    expect(primary).never.toBeShown()
+    expect(oldQuiet).never.toBeShown()
+    for _, pool in pairs(n.buttons) do
+        for _, b in pairs(pool) do
+            if not b:IsShown() then
+                expect(b:GetScript("OnClick")).toBeNil()
+                expect(b.tooltip).toBeNil()
+            end
+        end
+    end
+    mock.click(q1)
+    expect(ok).toHaveBeenCalledTimes(1)
+    expect(join).toHaveBeenCalledTimes(1)
+    expect(accept).never.toHaveBeenCalled()
+    expect(later).never.toHaveBeenCalled()
+end
+
+@test("a reused card: hosted buttons or no actions hide every button of the card's own (holes too)")
+local function reusedHosted()
+    local n = make()
+    local accept = mock.spy()
+    n:SetData({
+        title = "T",
+        actions = { { label = "Decline" }, { label = "Accept", variant = "primary", onClick = accept } },
+    })
+    local primary = assert(assert(n.buttons.primary)[2])
+    expect(assert(n.buttons.primary)[1]).toBeNil()
+    n:SetData({ title = "T", host = { buttons = 1 } })
+    expect(#shownButtons(n)).toBe(0)
+    expect(primary:GetScript("OnClick")).toBeNil()
+    n:SetData({ title = "T", actions = { { label = "Accept", variant = "primary", onClick = accept } } })
+    n:SetData({ title = "T" })
+    expect(#shownButtons(n)).toBe(0)
+    expect(n.actionsRow).never.toBeShown()
+end
+
+@test("a presence card after an action note: Whisper and Invite without the old icons, clicks or looks")
+local function presenceAfterNote()
+    local n = make()
+    local old = mock.spy()
+    n:SetData({
+        title = "T",
+        actions = {
+            { label = "Need", icon = "gem", pressed = true, onClick = old },
+            { label = "Delete", variant = "danger", onClick = old, tooltip = { title = "Gone" }, disabled = true },
+            { label = "Greed", icon = "coin", onClick = old, tooltip = { title = "Old" } },
+        },
+    })
+    local whisper, invite = mock.spy(), mock.spy()
+    n:SetData({ presence = { online = true, invite = invite, people = { { name = "Tamsin", whisper = whisper } } } })
+    local q = assert(n.buttons.quiet)
+    local shown = shownButtons(n)
+    expect(#shown).toBe(2)
+    expect(q[1].label).toHaveText("Whisper")
+    expect(q[2].label).toHaveText("Invite")
+    expect(assert(n.buttons.danger)[2]).never.toBeShown()
+    expect(q[3]).never.toBeShown()
+    for i = 1, 2 do
+        local b = q[i]
+        expect(b).toBeShown()
+        -- (Whisper's button had Need's icon; Invite's is new and has none)
+        local art = b.icon
+        expect(art == nil or not art:IsShown()).toBe(true)
+        expect(b.pressedBg).never.toBeShown()
+        expect(b.pressed).toBe(false)
+        expect(tokenOf(b.border.top)).toBe("gilt-line")
+        expect(tokenOf(b.label)).toBe("ink")
+        expect(b:IsEnabled()).toBe(true)
+        expect(b.tooltip).toBeNil()
+    end
+    mock.click(q[1])
+    mock.click(q[2])
+    expect(whisper).toHaveBeenCalledTimes(1)
+    expect(invite).toHaveBeenCalledTimes(1)
+    expect(old).never.toHaveBeenCalled()
+    -- a presence card for several: no buttons at all
+    n:SetData({ presence = { online = true, people = { { name = "A" }, { name = "B" } } } })
+    expect(#shownButtons(n)).toBe(0)
 end
 
 --------------------------------------------------------------------------------

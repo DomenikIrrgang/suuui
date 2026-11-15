@@ -147,6 +147,69 @@ local function more()
     mock.script(s.moreLink, "OnClick", "LeftButton")
 end
 
+@test("expanded (UIP-11): open until the list fits the cap again; the next burst is capped")
+local function expandedResets()
+    local s = stack(2)
+    local items: NotificationData[] = {}
+    for i = 1, 4 do
+        items[i] = { id = "n" .. i, title = "Note " .. i }
+    end
+    s:SetItems(items)
+    mock.click(s.moreLink)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(4)
+    -- still more than the cap: stays open
+    s:SetItems({ items[1], items[2], items[3] })
+    expect(s.expanded).toBe(true)
+    expect(#ids(s)).toBe(3)
+    -- down to the cap: closed again
+    s:SetItems({ items[1], items[2] })
+    expect(s.expanded).toBe(false)
+    -- a new burst: capped, "+N more" again
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+    expect(s.moreLink).toBeShown()
+    expect(s.moreLink.label).toHaveText("+2 more")
+    -- emptied: closed too
+    mock.click(s.moreLink)
+    s:SetItems(nil)
+    expect(s.expanded).toBe(false)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+end
+
+@test("a stack's reused card shows no button of the note before it")
+local function stackReuse()
+    local s = stack()
+    local accept, ok = mock.spy(), mock.spy()
+    s:SetItems({
+        {
+            id = "invite",
+            kind = "action",
+            actions = { { label = "Decline" }, { label = "Accept", variant = "primary", onClick = accept } },
+        },
+    })
+    local card = assert(s:CardFor("invite"))
+    -- the invite goes; the next note takes its card from the spares
+    s:SetItems(nil)
+    s:SetItems({ { id = "note", kind = "sticky", actions = { { label = "OK", onClick = ok } } } })
+    expect(s:CardFor("note")).toBe(card)
+    local shown: Button[] = {}
+    for _, pool in pairs(card.buttons) do
+        for _, b in pairs(pool) do
+            if b:IsShown() then
+                shown[#shown + 1] = b
+            end
+        end
+    end
+    expect(#shown).toBe(1)
+    expect(shown[1]).toBe(assert(card.buttons.quiet)[1])
+    mock.click(shown[1])
+    expect(ok).toHaveBeenCalledTimes(1)
+    expect(assert(card.buttons.primary)[2]).never.toBeShown()
+    expect(accept).never.toHaveBeenCalled()
+end
+
 @test("in combat only requests and conditions; the rest wait, said in the foot")
 local function combat()
     local s = stack()

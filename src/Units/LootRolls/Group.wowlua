@@ -1,0 +1,95 @@
+-- Units/LootRolls/Group.wowlua
+-- Your group by name for the roll tray (Units/LootRolls): who else is in
+-- it and each one's class, read in one walk over the group and kept until
+-- the group changes. A vote line looks a name up here instead of walking
+-- the group (review 2026-11-15, CHAT-3: a walk per name per row, about
+-- 15,000 name reads a vote line in a 40-player raid with five rolls open).
+-- The module marks it stale on GROUP_ROSTER_UPDATE (and a member's name
+-- arriving); several of those before the next look are one walk.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+
+-- A name without its realm ("" for none).
+export function short(name: unknown): string
+    if type(name) ~= "string" then
+        return ""
+    end
+    return name:match("^([^%-]+)") or name
+end
+
+export class GroupNames
+    -- everyone in your group but you, by name, in the group's order
+    others: string[] = {}
+    -- each member's class ("MAGE") by name, yours too
+    classes: { [string]: string } = {}
+    stale: boolean = true
+    -- your own name (it doesn't change: read once it's known)
+    mine: string? = nil
+
+    -- The group changed: read again at the next look.
+    function Invalidate()
+        self.stale = true
+    end
+
+    function Me(): string
+        local known = self.mine
+        if known then
+            return known
+        end
+        local name = short(SuuUI.FullName("player"))
+        if name ~= "" and name ~= UNKNOWNOBJECT then
+            self.mine = name
+        end
+        return name
+    end
+
+    function Fresh()
+        if self.stale then
+            self:Read()
+        end
+    end
+
+    -- One walk over the group.
+    function Read()
+        self.stale = false
+        local others: string[], classes: { [string]: string } = {}, {}
+        local me = self:Me()
+        local _, mine = UnitClass("player")
+        local myClass = secret.asString(mine)
+        if myClass then
+            classes[me] = myClass
+        end
+        local raid = secret.flag(IsInRaid())
+        local prefix = raid and "raid" or "party"
+        local n = raid and GetNumGroupMembers() or GetNumSubgroupMembers()
+        for i = 1, n do
+            local unit = prefix .. i
+            local name = SuuUI.FullName(unit)
+            if name and secret.readable(name) then
+                local s = short(name)
+                if s ~= "" and not (raid and secret.flag(UnitIsUnit(unit, "player"))) then
+                    others[#others + 1] = s
+                    local _, class = UnitClass(unit)
+                    local c = secret.asString(class)
+                    if c then
+                        classes[s] = c
+                    end
+                end
+            end
+        end
+        self.others, self.classes = others, classes
+    end
+
+    -- Everyone but you.
+    function Others(): string[]
+        self:Fresh()
+        return self.others
+    end
+
+    -- A member's class by name (nil: not in the group).
+    function ClassOf(name: string): string?
+        self:Fresh()
+        return self.classes[short(name)]
+    end
+end

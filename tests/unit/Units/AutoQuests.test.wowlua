@@ -3,10 +3,14 @@
 -- leave it to you; the NPC's list opened quest by quest (turn-ins first,
 -- grey, too low and repeatable ones left); a quest's page: shared and PvP
 -- quests left, a turn-in taking gold or items left, a reward to choose left.
+-- The step it answers told to the NPC dialogue (the autoquests service,
+-- MAP-20).
 
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M, tooLow from "/Units/AutoQuests"
+import internal M as NpcDialogue from "/Units/NpcDialogue"
+import SuuUI from "/Core/API"
 import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
 import expectNoErrors, cycle, NOTHING from "../../helpers"
@@ -20,6 +24,19 @@ mock.defineQuest(OFFERED, {
     giver = giver,
     level = 5,
     xp = 300,
+})
+
+-- a quest taken and handed in with the NPC dialogue on (once: the engine
+-- offers a quest turned in never again)
+local clerk = mock.spawnUnit({ name = "Clerk Hollis", level = 30, reaction = "friendly", distance = 3 })
+local ERRAND = 9302
+mock.defineQuest(ERRAND, {
+    title = "A Letter for the Clerk",
+    text = "Take this back to me, $N.",
+    objective = "Talk to me again.",
+    giver = clerk,
+    level = 5,
+    xp = 100,
 })
 
 -- what the module said in chat
@@ -314,6 +331,130 @@ local function acceptConfirm()
     expect(confirmed).toHaveBeenCalled()
 end
 
+--------------------------------------------------------------------------------
+-- The step it answers, told to the NPC dialogue (MAP-20)
+--------------------------------------------------------------------------------
+
+local function handling(): boolean?
+    local auto = SuuUI.UseService(SuuUI.Services.AUTO_QUESTS)
+    local fn = auto and auto.Handling
+    return fn and fn()
+end
+
+@test("Handling: from just before it answers until the conversation moves on; a second when the game never does")
+local function handlingSpan()
+    page({})
+    expect(handling()).toBe(false)
+    -- set before the game is asked (an answer the game gives at once
+    -- comes back inside the call)
+    local during: boolean? = nil
+    mock.fake("AcceptQuest", function()
+        during = handling()
+    end)
+    M:OnDetail()
+    expect(during).toBe(true)
+    expect(handling()).toBe(true)
+    -- the game's next step (here: the page closed): over
+    mock.fireEvent("QUEST_FINISHED")
+    expect(handling()).toBe(false)
+    -- refused (no event): over a second later, not before
+    M.npc = nil
+    M:OnDetail()
+    mock.advanceTime(0.9)
+    expect(handling()).toBe(true)
+    mock.advanceTime(0.2)
+    expect(handling()).toBe(false)
+    -- an earlier step's second doesn't end a later one early
+    M.npc = nil
+    M:OnDetail()
+    mock.advanceTime(0.6)
+    M:Moved()
+    M.npc = nil
+    M:OnDetail()
+    mock.advanceTime(0.6)
+    expect(handling()).toBe(true)
+    mock.advanceTime(0.5)
+    expect(handling()).toBe(false)
+end
+
+@test("Handling: each answer it gives (list, page, turn-in, reward); never for a step it leaves to you")
+local function handlingEach()
+    page({})
+    local seen: { [string]: boolean? } = {}
+    local function record(name: string): () -> ()
+        return function()
+            seen[name] = handling()
+        end
+    end
+    mock.fake("CompleteQuest", record("complete"))
+    mock.fake("GetQuestReward", record("reward"))
+    mock.fake("C_GossipInfo.GetActiveQuests", function(): unknown
+        return { { questID = 2, isComplete = true } }
+    end)
+    mock.fake("C_GossipInfo.GetAvailableQuests", function(): unknown
+        return { { questID = 12, questLevel = 30 } }
+    end)
+    mock.fake("C_GossipInfo.SelectActiveQuest", record("turn in"))
+    mock.fake("C_GossipInfo.SelectAvailableQuest", record("take"))
+    M:OnGossip()
+    M:Moved()
+    M:OnGossip()
+    M:Moved()
+    M:OnProgress()
+    M:Moved()
+    M:OnComplete()
+    M:Moved()
+    expect(seen).toEqual({ ["turn in"] = true, take = true, complete = true, reward = true })
+    -- left to you: Shift held, a PvP quest, a reward to choose
+    mock.setModifiers({ shift = true })
+    M.npc = nil
+    M:OnGossip()
+    M:OnDetail()
+    expect(handling()).toBe(false)
+    mock.setModifiers({})
+    M.npc = nil
+    page({ QuestFlagsPVP = true, choices = 3 })
+    M:OnDetail()
+    M:OnComplete()
+    expect(handling()).toBe(false)
+end
+
+-- What the player saw while `n` frames passed: the NPC dialogue's scene,
+-- or the rest of the UI faded or the minimap hidden for it.
+local function sawDialogue(n: number): boolean
+    local saw = false
+    for _ = 1, n do
+        mock.advanceFrames(1)
+        saw = saw or NpcDialogue:Scene().root:IsShown() or NpcDialogue.uiHidden or not Minimap:IsShown()
+    end
+    return saw
+end
+
+@test("with the NPC dialogue: a quest accepted, then turned in for you, is never shown; Shift held, it is")
+local function withDialogue()
+    capture()
+    Minimap:Show()
+    mock.player:interact(clerk)
+    expect(sawDialogue(90)).toBe(false)
+    expect(inLog(ERRAND)).toBe(true)
+    -- back: its page, Complete and the reward each answered for you (a
+    -- round trip each, the page open meanwhile)
+    M.npc = nil
+    mock.player:interact(clerk)
+    expect(sawDialogue(150)).toBe(false)
+    expect(inLog(ERRAND)).toBe(false)
+    expect(said).toEqual({ "Accepted: A Letter for the Clerk", "Turned in: A Letter for the Clerk" })
+    expect(UIParent:GetAlpha()).toBe(1)
+    -- Shift held: the page shows, left to you
+    M.npc = nil
+    mock.setModifiers({ shift = true })
+    talkTo(giver)
+    expect(NpcDialogue:Scene().root).toBeShown()
+    expect(NpcDialogue:View()).toBe("detail")
+    NpcDialogue:Leave()
+    mock.advanceFrames(40)
+end
+
 -- (last) The module toggles live: nothing held while off, nothing doubled
 -- on again; the conversation's end-timer goes with it.
 @test("turned off through the registry: nothing held, the conversation forgotten; on again, all back")
@@ -325,11 +466,16 @@ local function disabled()
     expect(c.stateOn).toBe(modules.ModuleState.Enabled)
     M.npc = "Creature-0-0-0-0-1-0"
     M:End()
+    M:Handle()
     settings.set("autoquests", "enabled", false)
     expect(M.npc).toBeNil()
+    -- (0.47) its service gone with it: the NPC dialogue as without it
+    expect(SuuUI.UseService(SuuUI.Services.AUTO_QUESTS)).toBeNil()
+    expect(M.handling).toBe(false)
     mock.advanceTime(1)
     settings.set("autoquests", "enabled", true)
     expect(M.npc).toBeNil()
+    expect(handling()).toBe(false)
     -- on again: a quest offered is accepted
     capture()
     talkTo(giver)

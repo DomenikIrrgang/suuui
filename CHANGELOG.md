@@ -8,6 +8,7 @@
 - For plugin authors (API 0.47): `SuuUI.UI.Dismissable(frame, { close, esc, outside, inside, shade })` gives your own popups the same Esc, click-outside and dimmed-screen handling, safe in combat.
 - For plugin authors (API 0.47): addon messages through SuuUI's own receiver (`M:OnAddonMessage`, `M:SendAddonMessage`, `SuuUI.Comm`): it checks each message from another player (the channel it came on, the sender's rank, how many a sender sends, your own coming back) and gives you readers that check a message's numbers, maps and names.
 - For plugin authors (API 0.47): `SuuUI.ExpectRefusal(fn, ...)` runs a protected call the game may refuse (one that needs a click, say) with its refusal expected: no error and no chat line, and you learn whether it was refused.
+- For plugin authors (API 0.47): the loot roll tray draws one roll's row again (`t:SetRow(row)`) or only its header line (`t:SetMeta(text)`), and the `autoquests` service (`SuuUI.Services.AUTO_QUESTS`) tells whether AutoQuests is about to answer an NPC itself (`Handling()`), so a dialogue of your own can stay out of the way. The Group Finder page's `onText` now reports your edits on Forever.
 - For plugin authors (API 0.47): `SuuUI.UI.VirtualList`, a scrolling list that makes only the rows on screen and hands them on as it scrolls (the guild roster, friends and Who lists use it).
 - For plugin authors (API 0.47): plugins can now use what SuuUI's own modules use, which all go through the public API now: the built-in services' keys (`SuuUI.Services`, for `SuuUI.UseService` and `M:ProvideService`), work built a step a frame after login (`SuuUI.BuildAhead`), the big data tables without a stutter (`SuuUI.Data.QuestStarts:Prepare(done)` and the rest), the theme's art on your own frames (`SuuUI.UI.Dress`), SuuUI's classes (`SuuUI.Classes`), helpers such as `SuuUI.UI.MoneyText`, `InlineMark`, `Hex`, `WindowChrome` and `CurveAmount`, and every type a module names, imported from `"suuui/Core/API"`. A definition table's own functions and values now stay on the module, and a field of yours that would hide one of SuuUI's module methods is an error naming it. `SuuUI.GetModule` is typed as any module now: read another module's settings with `:Setting(key)`.
 
@@ -22,9 +23,14 @@
 ### Fixed
 
 - Group Finder: opening it with its key no longer shows an error in chat. When the game refuses the search on opening, the list refreshes on your first click in the window instead (Refresh still searches at once).
+- Group Finder: your edits to the ad are kept; it is no longer written again from your listing every 15 seconds. "From my listing" still writes it again.
 - Turning Mouseover bindings off now takes your bindings off at once: keys and clicks stop casting on the unit under the mouse, a Target or Menu click you moved goes back to the game's own, an open binding box closes (it no longer holds your keys in the next fight) and its mouseover watch stops; the Mac's Cmd-click setting you turned off with "Turn it off" comes back too. Turning it on again puts them all back. A character that logs in with the module off (on another profile) gets the game's own Target and Menu clicks back.
 - Mouseover bindings: a unit frame that disappears under the mouse (the target cleared or dead, a party member leaving, a boss frame ending), also in a fight, no longer leaves its keys or the wheel casting at a unit that is gone and mouseover casting in the world switched off: the world's bindings come back at once.
 - Loot rolls still running when you log in or `/reload` show in the roll tray at once, instead of only at the next roll event (Blizzard's roll frames were already out of sight).
+- Loot rolls: with two rolls open for the same item, your choice on one no longer answers or locks the other, and one being decided no longer takes the other out of the tray.
+- Loot rolls: the tray no longer slows the game in a raid while votes come in: only the roll a vote is about is drawn again, and nothing while the tray is folded.
+- Loot rolls: another player's automatic pass is listed under their own name.
+- Loot rolls: a roll whose item the game hasn't loaded yet now shows in the tray, and gets its name once the item arrives.
 - Encounter timeline: "Hide their own display" keeps DBM's warnings hidden after a `/reload` or login.
 - Strangers can no longer start or cancel your pull countdown: SuuUI's pull message is taken only from your group's leader or an assistant (anyone in a party), never by whisper, never in a fight, and a few at most from one player.
 - Strangers can no longer fill your map marks: shared marks come only from your group, ten a minute and thirty at most from one player, their names without colour codes or icons, and never at the cost of your own marks.
@@ -40,6 +46,8 @@
 - Work a module had waiting for the end of combat no longer runs after the module was turned off, and a later request for the same work made as combat ends no longer runs before an older one.
 - Menus and the welcome panel no longer hold back your keys when a fight starts: a right-click menu, a filter menu, a dialog or the welcome open as combat begins (or opened during it) lets every key through to the game, and Esc closes it again once the fight is over. The welcome's dimmed screen no longer takes your clicks on the world in a fight. The same now holds for a chat tab being dragged, the mouseover binding boxes, the spellbook's bind mode and the gossip and quest dialogue (also one first opened in a fight).
 - A question asked over a dialog (talents, cooldown manager) no longer leaves that dialog undimmed once answered, and the dialog under the question can no longer be clicked while it is open.
+- NPC dialogue: the rest of the UI no longer stays dimmed after talking to an NPC when a conversation closed and opened again quickly, for example while quests were accepted or turned in for you.
+- NPC dialogue: quests accepted or turned in for you no longer flash the dialogue on screen, fade the rest of the UI out and back, or hide the minimap for a moment. When you hold Shift, or the game refuses the quest, the dialogue shows as before.
 - Filter menus (world map, professions, auction house) open at SuuUI's scale, the same size as their field, and follow Appearance › Scale.
 - Damage meter and Cooldown Manager: turning SuuUI's off gives Blizzard's own back also after a profile switch or a settings reset; the game's setting is now remembered per character, not in the profile (a value kept by an earlier version moves over once).
 - Alerts, damage meter, Cooldown Manager, flight map, durability and the Quests module no longer act on a delayed step after you turn them off, and a refresh still waiting (or asked for) while they were off no longer stops the next one once they are on again. The same holds for the world map, Readiness and Mouseover bindings.
@@ -54,6 +62,13 @@
 - Chat: if SuuUI's chat fails to start, its empty panel no longer stays on screen.
 - If the dressing room, loot window or loot roll modules fail to start, the game's own dressing room (with its model), loot window and roll frames are visible again instead of staying hidden off screen.
 - Auction house: Scan all's 15-minute wait now counts from the moment the scan was asked for, so after a scan that didn't come back, or that closing the house stopped, the button waits instead of asking the game again in vain; a list that comes back after the first minute (while the house is open) is still read, and a slow scan is waited for longer.
+- Auction house: Bid acts on the auction you chose, even after the list refreshed. If that auction is gone or its price changed, nothing is bid and the window shows it as it is now. A bid is asked about first, and an amount below the least bid, at or above the buyout, or above your money is refused.
+- Auction house: a bid or buyout the game refuses, or the house turns down, is no longer reported as placed; a bid counts once the house confirms it.
+- Auction house: the hidden buy buttons over the window let go when a fight starts, and when the house closes during a fight.
+- Auction house: when a commodity's price changes while you decide, the purchase asks again with the new price. It is cancelled when the price is gone, the house closes or you open another item.
+- Mail: Collect all no longer gets stuck on an item the game refuses (a unique item you already carry, no room for that kind of item). It skips it, collects the rest and tells you what was left and why. Items your bags have no room for aren't asked for, and money is still collected.
+- Mail: paying cash on delivery takes only from the mail you confirmed, at the amount shown. If the inbox changed and that mail is gone or different, nothing is taken, and the question closes with the mailbox.
+- Mail: Delete, Return, Take and clicks on the list act on the mail you see, even when the inbox has moved; if that mail changed, nothing is done.
 - Nameplates: turning the module off gives the game's nameplate settings back as you had them (after the reload): the plates' fading and scaling, "show enemy nameplates" (off if SuuUI's "Show nameplates" was off) and the friendly players' and NPCs' plates.
 - World map: turning the Windows module off gives back the game's fullscreen map if you had chosen it (after the reload).
 - If you played with an earlier SuuUI: the nameplate settings, the world map's fullscreen setting and the guild's "show offline members" that SuuUI changed then were never recorded, so turning Nameplates, Windows or Guild off gave nothing back. Now the game's default settings come back instead (your own values from before you installed SuuUI can't be known).
@@ -62,6 +77,9 @@
 - Micro menu: if it fails to start, the game's own Game Menu button shows its tooltip again.
 - Unit frames: turning the focus, pet or boss frames on no longer leaves the game's own showing beside them until the next reload.
 - Party frames: while you are in a raid (or they are hidden), the party frames and their pets no longer keep updating in the background.
+- Notifications: a card used again for a new note no longer shows a button of the note before it; clicking that could run the old note's action, such as accepting an invite that was gone.
+- Notifications: a friend's online card no longer shows an icon left over from an earlier note on its Whisper or Invite button.
+- Notifications: after "+N more" was opened, the stack is capped at five again once the notes fit.
 
 ## 0.17.0 (2026-11-14)
 

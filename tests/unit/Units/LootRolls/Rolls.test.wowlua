@@ -1,0 +1,176 @@
+-- Units/LootRolls/Rolls: which roll a line about an item is about (CHAT-23).
+-- The item's rolls (a random suffix tells them apart), your vote to the
+-- roll you answered, another's to the oldest they haven't voted on, a
+-- number rolled, a result to the roll it fits and when that's certain,
+-- every roll of the item decided. Pure: rolls made here.
+
+import test, expect from "wowlua:test"
+import expectNoErrors from "../../../helpers"
+import * as rolls from "/Units/LootRolls/Rolls"
+import type Roll from "/Units/LootRolls/Rolls"
+
+local MANTLE = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
+local OWL = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle of the Owl]|h|r"
+local BEAR = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle of the Bear]|h|r"
+local PANTS = "|cff0070dd|Hitem:5199::::::::|h[Ember Pants]|h|r"
+
+local function make(id: number, link: string?, fields: { [string]: unknown }?): Roll
+    local r: Roll = {
+        id = id,
+        seq = id,
+        name = "Dusk Mantle",
+        quality = "uncommon",
+        link = link or MANTLE,
+        duration = 60,
+        can = { need = true, greed = true, pass = true },
+        reason = {},
+        votes = { need = {}, greed = {}, pass = {} },
+        rolled = {},
+        decided = {},
+        remaining = function(): number
+            return 30
+        end,
+    }
+    local raw = r :: { [string]: unknown }
+    for k, v in pairs(fields or {}) do
+        raw[k] = v
+    end
+    return r
+end
+
+local function ids(list: Roll[]): number[]
+    local out: number[] = {}
+    for i, r in ipairs(list) do
+        out[i] = r.id
+    end
+    return out
+end
+
+@test("the item's rolls: by its ID, oldest first; a random suffix in the line's name narrows them")
+local function sameItem()
+    local list = { make(1), make(2, PANTS), make(3, OWL), make(4, BEAR) }
+    expect(ids(rolls.sameItem(list, MANTLE))).toEqual({ 1 })
+    -- (a name none of them has: all of the item)
+    local whale = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle of the Whale]|h|r"
+    expect(ids(rolls.sameItem(list, whale))).toEqual({ 1, 3, 4 })
+    expect(ids(rolls.sameItem({ make(5), make(6) }, MANTLE))).toEqual({ 5, 6 })
+    expect(ids(rolls.sameItem(list, OWL))).toEqual({ 3 })
+    expect(ids(rolls.sameItem(list, PANTS))).toEqual({ 2 })
+    expect(ids(rolls.sameItem(list, "nothing"))).toEqual({})
+    expect(rolls.itemKey(MANTLE)).toBe("4704")
+    expectNoErrors()
+end
+
+@test("your vote: the roll you answered so; else the only one without your vote; else no open roll")
+local function ownVote()
+    local a, b = make(1), make(2, nil, { choice = "pass", sent = "pass" })
+    local r, certain = rolls.ownVote({ a, b }, "pass")
+    expect(r).toBe(b)
+    expect(certain).toBe(true)
+    -- (one still asking for its Bind on Pickup confirmation: not that one)
+    local asking = make(7, nil, { choice = "need", sent = "need", confirm = 1 })
+    local confirmed = make(8, nil, { choice = "need", sent = "need" })
+    r, certain = rolls.ownVote({ asking, confirmed }, "need")
+    expect(r).toBe(confirmed)
+    expect(certain).toBe(true)
+    -- nothing answered here: two open rolls without your vote, neither
+    local c, d = make(3), make(4)
+    r, certain = rolls.ownVote({ c, d }, "greed")
+    expect(r).toBe(nil)
+    expect(certain).toBe(false)
+    -- one of them heard already: the other
+    d.heard = "need"
+    r, certain = rolls.ownVote({ c, d }, "greed")
+    expect(r).toBe(c)
+    expect(certain).toBe(true)
+    -- one just ended (its time out: the game passing for you): that one, not certain
+    local e, f = make(5, nil, { endedAt = 10 }), make(6)
+    r, certain = rolls.ownVote({ e, f }, "pass")
+    expect(r).toBe(e)
+    expect(certain).toBe(false)
+    expectNoErrors()
+end
+
+@test("another's vote: the oldest open roll they haven't voted on; one roll: changed; none left: nowhere")
+local function othersVote()
+    local a, b = make(1), make(2)
+    expect(rolls.othersVote({ a, b }, "Tamsin")).toBe(a)
+    rolls.addVote(a, "Tamsin", "need")
+    expect(rolls.othersVote({ a, b }, "Tamsin")).toBe(b)
+    rolls.addVote(b, "Tamsin", "greed")
+    expect(rolls.othersVote({ a, b }, "Tamsin")).toBe(nil)
+    -- one roll: a vote changed
+    expect(rolls.othersVote({ a }, "Tamsin")).toBe(a)
+    rolls.addVote(a, "Tamsin", "pass")
+    expect(a.votes).toEqual({ need = {}, greed = {}, pass = { "Tamsin" } })
+    expect(rolls.hasVoted(a, "Tamsin")).toBe(true)
+    expect(rolls.hasVoted(a, "Ashford")).toBe(false)
+    expectNoErrors()
+end
+
+@test("a number rolled: the roll they chose that on, without a number yet; yours only where you can have rolled")
+local function rolledOn()
+    local a, b = make(1), make(2)
+    rolls.addVote(a, "Tamsin", "greed")
+    rolls.addVote(b, "Tamsin", "need")
+    expect(rolls.rolledOn({ a, b }, "Tamsin", "need", false)).toBe(b)
+    b.rolled.Tamsin = { label = "Need", value = 3 }
+    expect(rolls.rolledOn({ a, b }, "Tamsin", "need", false)).toBe(a)
+    -- yours: a roll you never answered can't be it
+    local c, d = make(3), make(4, nil, { choice = "need", sent = "need" })
+    expect(rolls.rolledOn({ c, d }, "Me", "need", true)).toBe(d)
+    expectNoErrors()
+end
+
+@test("what your vote certainly isn't: the game's word on it, or never answered")
+local function cannotBe()
+    local never, heard, sent = make(1), make(2, nil, { heard = "pass" }), make(3, nil, { choice = "greed", sent = "greed" })
+    expect(rolls.cannotBe(never, "none")).toBe(false)
+    expect(rolls.cannotBe(never, "pass")).toBe(true)
+    expect(rolls.cannotBe(heard, "none")).toBe(true)
+    expect(rolls.cannotBe(heard, "pass")).toBe(false)
+    expect(rolls.cannotBe(heard, "rolled")).toBe(true)
+    expect(rolls.cannotBe(sent, "none")).toBe(false) -- (not confirmed by the game yet)
+    expect(rolls.cannotBe(sent, "rolled")).toBe(false)
+    expectNoErrors()
+end
+
+@test("a result: the only roll is certain; with two, the one your vote fits is; else all votes in, else the oldest, not certain")
+local function results()
+    local others = { "Tamsin", "Ashford" }
+    local only = make(1)
+    local r, certain = rolls.resultOf({ only }, "line", nil, others)
+    expect(r).toBe(only)
+    expect(certain).toBe(true)
+    -- two: the oldest, not certain
+    local a, b = make(2), make(3, nil, { heard = "pass", choice = "pass" })
+    r, certain = rolls.resultOf({ a, b }, "line", nil, others)
+    expect(r).toBe(a)
+    expect(certain).toBe(false)
+    -- the loot history says your vote was a pass: the second, certain
+    r, certain = rolls.resultOf({ a, b }, "drop", "pass", others)
+    expect(r).toBe(b)
+    expect(certain).toBe(true)
+    -- all votes in on the second: it's preferred (not certain)
+    rolls.addVote(b, "Tamsin", "need")
+    rolls.addVote(b, "Ashford", "pass")
+    r, certain = rolls.resultOf({ a, b }, "line", nil, others)
+    expect(r).toBe(b)
+    expect(certain).toBe(false)
+    expect(rolls.complete(b, others)).toBe(true)
+    expect(rolls.complete(a, others)).toBe(false)
+    -- one decided by the chat already: the other, certain now
+    a.decided.line = true
+    r, certain = rolls.resultOf({ a, b }, "line", nil, others)
+    expect(r).toBe(b)
+    expect(certain).toBe(true)
+    expect(rolls.allDecided({ a, b }, "line")).toBe(false)
+    b.decided.line = true
+    expect(rolls.allDecided({ a, b }, "line")).toBe(true)
+    expect(rolls.allDecided({ a, b }, "drop")).toBe(false)
+    -- every one decided: nothing for another result
+    r = rolls.resultOf({ a, b }, "line", nil, others)
+    expect(r).toBe(nil)
+    expect(rolls.allDecided({}, "line")).toBe(false)
+    expectNoErrors()
+end

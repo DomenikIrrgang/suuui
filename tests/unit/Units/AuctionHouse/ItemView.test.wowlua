@@ -8,12 +8,15 @@ import * as mock from "wowlua:mock"
 import expectNoErrors from "../../../helpers"
 import tokenOf from "../../SettingsUI/UiSettingsHelpers"
 import internal M from "/Units/AuctionHouse"
-import ORE, BLADE, RING, GEM, key, house, state, asked, confirm, buy, setUp, tearDown, open, note, typeInto, search, resultNamed, cell, tipText, offers from "./AuctionHouseHelpers"
+import ORE, BLADE, RING, GEM, key, house, state, asked, confirm, buy, setUp, tearDown, open, note, typeInto, search, resultNamed, cell, tipText, offers, money, plain from "./AuctionHouseHelpers"
 import ItemView from "/Units/AuctionHouse/ItemView"
 import type AuctionHouseModule from "/Units/AuctionHouse"
 import newParent from "../../../helpers"
+import SuuUI from "/Core/API"
+import type ConfirmOptions, ConfirmDialog from "/UI/Panel"
 
 local AH = C_AuctionHouse
+local realConfirm = SuuUI.UI.Confirm -- (stubbed in every test; the real one where a test needs its panel)
 
 @beforeEach
 local function start()
@@ -167,6 +170,68 @@ local function buyNow()
     expect(purchase).never.toHaveBeenCalled()
 end
 
+@test("Buy now's question: a new price for it asks again (not cancelled); the item named from the purchase; dropped when the price goes, the house closes or another item opens")
+local function buyNowRequote()
+    open()
+    search("gem")
+    mock.click(resultNamed("Test Gem"))
+    mock.advanceTime(1)
+    local v = buy().itemView
+    local cancel = mock.stub(AH, "CancelCommoditiesPurchase", function() end)
+    -- the game quotes; then quotes again (offers changed) while it's asked
+    mock.stub(AH, "StartCommoditiesPurchase", function() end)
+    typeInto(v.qty, "7")
+    mock.click(v.buyNow)
+    -- (the view's item no longer this one: the question still names the gem)
+    local viewKey = M.itemKey
+    M.itemKey = key(ORE)
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1000, 7000)
+    expect(asked().title).toBe("Buy 7 Test Gem?")
+    M.itemKey = viewKey
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1000, 7000)
+    expect((asked().text or ""):find("changed") == nil).toBe(true)
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1100, 7700)
+    expect((asked().text or ""):find("The price changed while you were deciding.", 1, true) ~= nil).toBe(true)
+    expect(plain(asked().text or ""):find("77s (11s each)", 1, true) ~= nil).toBe(true)
+    expect(M.buying ~= nil).toBe(true)
+    expect(cancel).never.toHaveBeenCalled()
+    -- the price gone: dropped, the game told
+    mock.fireEvent("COMMODITY_PRICE_UNAVAILABLE")
+    expect(M.buying).toBeNil()
+    expect(cancel).toHaveBeenCalledTimes(1)
+    -- another item opened while asked: dropped
+    mock.click(v.buyNow)
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1000, 7000)
+    M:OpenItem(key(ORE))
+    expect(M.buying).toBeNil()
+    expect(cancel).toHaveBeenCalledTimes(2)
+    -- the house closing while asked: dropped; the real question closes, not cancelled twice
+    M:OpenItem(key(GEM))
+    mock.advanceTime(1)
+    local dialog: ConfirmDialog? = nil
+    mock.stub(SuuUI.UI, "Confirm", function(opts: ConfirmOptions): ConfirmDialog
+        state.confirmed = opts
+        local d = realConfirm(opts)
+        dialog = d
+        return d
+    end)
+    typeInto(v.qty, "7")
+    mock.click(v.buyNow)
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1000, 7000)
+    local d = assert(dialog)
+    expect(d).toBeShown()
+    -- (asked again: the first question replaced without cancelling the purchase)
+    mock.fireEvent("COMMODITY_PRICE_UPDATED", 1100, 7700)
+    expect(cancel).toHaveBeenCalledTimes(2)
+    expect(d).toBeShown()
+    AH.CloseAuctionHouse()
+    mock.advanceTime(1)
+    expect(d).never.toBeShown()
+    expect(M.buying).toBeNil()
+    expect(cancel).toHaveBeenCalledTimes(3)
+    expectNoErrors()
+end
+
 --------------------------------------------------------------------------------
 -- An item's auctions
 --------------------------------------------------------------------------------
@@ -255,13 +320,49 @@ local function itemFoot()
     expect(tipText(v.buyout)).toBe("Not enough money.")
 end
 
-@test("Bid: the game's bid placed; your bid remembered; Buy out without the game's page says what to do; the game's no")
-local function itemBuy()
-    openBlade()
-    local v = buy().itemView
+-- The blade's auctions as the house lists them now (stubbed, to reorder,
+-- drop or reprice them between choosing and bidding).
+local function listed(list: ItemSearchResultInfo[])
+    mock.stub(AH, "GetNumItemSearchResults", function()
+        return #list
+    end)
+    mock.stub(AH, "GetItemSearchResultInfo", function(_: ItemKey, i: number)
+        return list[i]
+    end)
+    M:DrawItemView()
+end
+
+local function auction(id: number, least: number?, buyout: number?): ItemSearchResultInfo
+    return mock.partial({
+        auctionID = id,
+        itemKey = key(BLADE, 20),
+        quantity = 1,
+        minBid = least,
+        bidAmount = least and (least - 1000) or nil,
+        buyoutAmount = buyout,
+        timeLeft = 2,
+    })
+end
+
+-- PlaceBid recorded (the engine's does nothing: the house's answer is the test's).
+local function recordBids(): number[][]
     local placed: number[][] = {}
     mock.stub(AH, "PlaceBid", function(id: number, amount: number)
         placed[#placed + 1] = { id, amount }
+    end)
+    return placed
+end
+
+@test("Bid: asked first, then sent; your bid counted once the house takes it (BID_ADDED), once; nothing chosen, nothing")
+local function itemBid()
+    openBlade()
+    local v = buy().itemView
+    local placed = recordBids()
+    local remembered = 0
+    local remember = M.RememberBid
+    mock.stub(M, "RememberBid", function(m: AuctionHouseModule, id: number, amount: number)
+        remembered = remembered + 1
+        remember(m, id, amount)
     end)
     -- nothing chosen: nothing
     M:Bid()
@@ -269,27 +370,194 @@ local function itemBuy()
     expect(#placed).toBe(0)
     expect(state.confirmed).toBeNil()
     mock.click(offers()[1])
+    expect(M.chosen).toBe(11)
     mock.click(v.bidButton)
-    expect(placed[1]).toEqual({ 11, 21000 })
+    expect(asked().title).toBe("Bid on Test Blade?")
+    expect(plain(asked().text or "")).toBe("Your bid: 2g 10s (least bid 2g 10s).")
+    expect(#placed).toBe(0)
+    confirm(nil)
+    expect(placed).toEqual({ { 11, 21000 } })
+    -- sent, not placed yet: nothing remembered, nothing said done
+    expect(M:Saved().bids).toBeNil()
+    expect(plain(note())).toBe("Bidding 2g 10s on Test Blade…")
+    expect(v.bidButton:IsEnabled()).toBe(false)
+    expect(tipText(v.bidButton)).toBe("Waiting for the house's answer to your last bid.")
+    local again = mock.stub(AH, "SendSearchQuery", function() end)
+    mock.fireEvent("BID_ADDED", 11)
     expect(assert(M:Saved().bids)[11]).toBe(21000)
-    expect(note():find("^Bid 2") ~= nil).toBe(true)
-    -- Buy out: Forever takes it only from the game's own page (the secure
-    -- click over the button when it has the auction): SuuUI's own never
-    mock.click(v.buyout)
-    expect(note()).toBe("Go back and open the item again to buy it out.")
-    expect(#placed).toBe(1)
-    -- the game's no
+    expect(plain(note())).toBe("Bid 2g 10s on Test Blade.")
+    expect(again).toHaveBeenCalled()
+    expect(M.chosen).toBeNil()
+    mock.fireEvent("BID_ADDED", 11)
+    expect(remembered).toBe(1)
+    -- bought (through the game's page): the auctions asked again, none chosen
+    mock.click(offers()[2])
+    mock.resetSpies()
+    mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", 12)
+    expect(note()).toBe("Bought.")
+    expect(M.chosen).toBe(nil)
+    expect(again).toHaveBeenCalled()
+    expectNoErrors()
+end
+
+@test("Bid: the list read again between choosing and bidding never bids on another auction (reordered, gone, changed)")
+local function bidReread()
+    openBlade()
+    local v = buy().itemView
+    local placed = recordBids()
+    local list: ItemSearchResultInfo[] = { auction(11, 21000, 50000), auction(12, nil, 60000), auction(13, 5000, nil) }
+    listed(list)
+    mock.click(offers()[1])
+    -- reordered (someone bid, the house sorts by price): the choice follows 11
+    list[1], list[3] = list[3], list[1]
+    M:DrawItemView()
+    expect(offers()[3].sel:IsShown()).toBe(true)
+    expect(offers()[1].sel:IsShown()).toBe(false)
+    expect(v.bid:GetCopper()).toBe(21000)
+    mock.click(v.bidButton)
+    confirm(nil)
+    expect(placed).toEqual({ { 11, 21000 } })
+    M.bidding = nil
+    -- reordered while asked: still 11
+    mock.click(v.bidButton)
+    list[1], list[3] = list[3], list[1]
+    M:DrawItemView()
+    confirm(nil)
+    expect(placed[2]).toEqual({ 11, 21000 })
+    M.bidding = nil
+    -- changed since chosen: nothing asked or placed; told what it is now
+    list[1] = auction(11, 23000, 50000)
+    M:DrawItemView()
+    state.confirmed = nil
+    M:Bid()
+    expect(state.confirmed).toBeNil()
+    expect(#placed).toBe(2)
+    expect(plain(note())).toBe("That auction changed since you chose it: nothing was bid. Now least bid 2g 30s, buyout 5g.")
+    -- (shown as it is now: the typed bid is under its least bid, Bid says so)
+    expect(plain(assert(tipText(v.bidButton)))).toBe("At least 2g 30s.")
+    money(v.bid, 23000)
+    mock.click(v.bidButton)
+    confirm(nil)
+    expect(placed[3]).toEqual({ 11, 23000 })
+    M.bidding = nil
+    -- changed while asked: nothing placed
+    mock.click(v.bidButton)
+    list[1] = auction(11, 24000, 50000)
+    M:DrawItemView()
+    confirm(nil)
+    expect(#placed).toBe(3)
+    expect(note():find("^That auction changed since you chose it") ~= nil).toBe(true)
+    -- gone while asked: nothing placed, nothing chosen, the bid cleared
+    mock.click(v.bidButton)
+    table.remove(list, 1)
+    M:DrawItemView()
+    expect(tipText(v.buyout)).toBe("The auction you chose isn't listed any more.")
+    confirm(nil)
+    expect(#placed).toBe(3)
+    expect(note()).toBe("That auction isn't listed any more (sold, bought out or ended): nothing was bid.")
+    expect(M.chosen).toBeNil()
+    -- another auction chosen while asked: nothing placed
+    mock.click(offers()[2]) -- 13
+    mock.click(v.bidButton)
+    list[#list + 1] = auction(14, 7000, nil)
+    M:DrawItemView()
+    mock.click(offers()[3])
+    confirm(nil)
+    expect(#placed).toBe(3)
+    expect(note()).toBe("You chose another auction meanwhile: no bid placed.")
+    expectNoErrors()
+end
+
+@test("Bid: under the least bid, at or above the buyout, more than your money: off, saying why; never sent")
+local function bidAmounts()
+    openBlade()
+    local v = buy().itemView
+    local placed = recordBids()
+    mock.click(offers()[1])
+    money(v.bid, 20000)
+    expect(v.bidButton:IsEnabled()).toBe(false)
+    expect(plain(assert(tipText(v.bidButton)))).toBe("At least 2g 10s.")
+    M:Bid()
+    expect(state.confirmed).toBeNil()
+    expect(plain(note())).toBe("No bid placed. At least 2g 10s.")
+    money(v.bid, 50000)
+    expect(tipText(v.bidButton)).toBe("That's the buyout or more: use Buy out.")
+    money(v.bid, 70000)
+    M:Bid()
+    expect(note()).toBe("No bid placed. That's the buyout or more: use Buy out.")
+    mock.player:setMoney(30000)
+    money(v.bid, 40000)
+    expect(tipText(v.bidButton)).toBe("Not enough money.")
+    M:Bid()
+    expect(note()).toBe("No bid placed. Not enough money.")
+    -- enough when asked, spent before the answer: not sent
+    money(v.bid, 25000)
+    expect(v.bidButton:IsEnabled()).toBe(true)
+    mock.click(v.bidButton)
+    mock.player:setMoney(20000)
+    confirm(nil)
+    expect(note()).toBe("No bid placed. Not enough money.")
+    expect(#placed).toBe(0)
+    expectNoErrors()
+end
+
+@test("Bid: a refused PlaceBid places and records nothing and says so; an error; the house's no; no answer; the house closing")
+local function bidRefused()
+    openBlade()
+    local v = buy().itemView
+    mock.click(offers()[1])
+    -- refused (the game fires the blocked action during the call): quiet, said
+    mock.stub(AH, "PlaceBid", function()
+        mock.fireEvent("ADDON_ACTION_FORBIDDEN", "SuuUI", "PlaceBid()")
+    end)
+    mock.click(v.bidButton)
+    confirm(nil)
+    expect(note()).toBe("The game refused the bid from SuuUI: no bid was placed.")
+    expect(M.bidding).toBeNil()
+    expect(M:Saved().bids).toBeNil()
+    expect(v.bidButton:IsEnabled()).toBe(true)
+    -- an error
     mock.stub(AH, "PlaceBid", function()
         error("too low")
     end)
     mock.click(v.bidButton)
+    confirm(nil)
     expect(note():find("^Couldn't bid: ") ~= nil).toBe(true)
-    -- bought: the auctions asked again, none chosen
-    local again = mock.stub(AH, "SendSearchQuery", function() end)
-    mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", 11)
-    expect(note()).toBe("Bought.")
-    expect(M.chosen).toBe(nil)
-    expect(again).toHaveBeenCalled()
+    expect(M.bidding).toBeNil()
+    -- sent, the house says no
+    mock.stub(AH, "PlaceBid", function() end)
+    mock.click(v.bidButton)
+    confirm(nil)
+    mock.fireEvent("AUCTION_HOUSE_SHOW_ERROR", 3)
+    expect(note()).toBe("No bid was placed: the auction house said no (3).")
+    expect(M:Saved().bids).toBeNil()
+    -- sent, no answer: said, and a late BID_ADDED counts nothing
+    mock.click(v.bidButton)
+    confirm(nil)
+    mock.advanceTime(11)
+    expect(note()).toBe("No answer from the house about Test Blade: look at your bids before trying again.")
+    expect(M.bidding).toBeNil()
+    mock.fireEvent("BID_ADDED", 11)
+    expect(M:Saved().bids).toBeNil()
+    -- sent, the house closes: nothing waits
+    mock.click(v.bidButton)
+    confirm(nil)
+    expect(M.bidding ~= nil).toBe(true)
+    AH.CloseAuctionHouse()
+    mock.advanceTime(1)
+    expect(M.bidding).toBeNil()
+    expectNoErrors()
+end
+
+@test("Buy out without the game's page on the item says what to do")
+local function buyOutAdvice()
+    openBlade()
+    local v = buy().itemView
+    local placed = recordBids()
+    mock.click(offers()[1])
+    mock.click(v.buyout)
+    expect(note():find("^Buy out goes through the game's own page") ~= nil).toBe(true)
+    expect(#placed).toBe(0)
 end
 
 @test("the item's slot shows its tooltip: the game's item key tooltip, or the item's")

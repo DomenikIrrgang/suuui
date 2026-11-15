@@ -91,3 +91,66 @@ first. Each names what to do and what to see.
     `SuuUI_LevelBadge`).
 23. A plugin that sets a field named like a module method (for example
     `M.Get = …`) gets an error that names the field.
+
+## Bug fixes of 2026-11-15
+
+The `high-bugs` branch (auction house bids, Collect all, loot rolls,
+notification cards, the group finder ad, the NPC dialogue with AutoQuests)
+was checked with `wowlua check` and the tests of the files it changed; the
+emulator can't answer for the game in several places
+(`Docs/wowlua-test-findings.md`, V50 to V56).
+
+24. **The bid probe** (a dev build: `wowlua dev` or `wowlua install`;
+    probes are left out of release builds). At the auction house:
+    `/suu probe ahbid <cheap item>` (one that isn't a commodity). It
+    places a **real** bid and a **real** buyout. Then `/reload` and read
+    `SuuUIProbe.ahBid`: whether `PlaceBid` from SuuUI's button was refused
+    (BAG-32), and which events and payloads followed (is `BID_ADDED`'s ID
+    the auction's?).
+25. **The bid flow.** Search an item with several auctions that take
+    bids. Select one, let the list refresh (search again), press Bid: a
+    question asks first, and the bid lands on the auction you chose. Type an
+    amount below the least bid, one at or above the buyout, and one above
+    your money: each is refused with its reason. Have someone outbid or
+    buy the auction while the question is open: confirming bids nothing and
+    the row shows it as it is now. A bid the house turns down is not
+    reported as placed. Start a fight with the house open, and close the
+    house in a fight: Buy out and Bid work again after it (no hidden button
+    left over the window). A commodity whose price changes while its
+    question is open asks again with the new price.
+26. **Collect all with a refused item.** Three mails: money, a unique item
+    you already carry, and a stack of something else, the unique one in the
+    middle. Collect all: it skips the unique item, takes the rest and says
+    what was left and why. With full bags: items aren't asked for, money is
+    still taken.
+27. **COD after the inbox changed.** Open a COD mail, press its item, and
+    before confirming, have a new mail arrive or delete another one; then
+    confirm: the money paid is the amount shown, and only that mail's item
+    arrives. Delete or return the COD mail from another window meanwhile:
+    confirming takes nothing. Close the mailbox with the question open: it
+    closes too.
+28. **Two rolls of the same item** (a dungeon boss dropping two of one
+    item, or two greens of the same name): Need on one, Greed on the other;
+    each answer reaches its own roll, one being decided leaves the other in
+    the tray.
+29. **The raid's frame rate while votes come in.** A 25- or 40-player raid
+    with several rolls open: the frame rate holds while the votes arrive,
+    with the tray open and folded.
+30. **A notification card used again.** Get a note with two buttons (a
+    group invite: Accept and Decline), let it go, then get a one-button
+    note (a friend coming online): no button of the invite is left on it,
+    and its Whisper or Invite has the right icon or none.
+31. **The group finder ad.** Edit the ad under My listing, then leave it
+    for 15 seconds or more (listed): your text stays. "From my listing"
+    writes it again from the listing.
+32. **Three quests accepted for you from one NPC** with AutoQuests on and
+    NPC dialogue's "hide the rest of the UI" on: no flash of the dialogue,
+    the rest of the UI doesn't fade out and back, the minimap doesn't
+    blink. Then the same NPC with Shift held: the dialogue shows as before.
+    With a full quest log (the game refuses the accept), if the game leaves
+    the quest's page open: it shows about a second later.
+33. **The group finder probe.** `/suu probe lfg opens`, then open the Group
+    Finder a few times (its key, the micro menu, out of and in a fight),
+    `/suu probe lfg opens off`, `/reload`: `SuuUIProbe.lfg.opens` says, per
+    opening, how it was opened and whether the search on opening was
+    refused.

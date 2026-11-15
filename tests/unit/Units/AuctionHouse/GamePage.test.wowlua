@@ -53,7 +53,7 @@ local function secureBuyout()
     mock.hover(offers()[2])
     local pick = assert(M.overs.auction, "no secure click over the auction")
     mock.click(pick.button)
-    expect(M.chosen).toBe(2)
+    expect(M.chosen).toBe(12)
     expect(field(gameFrame(), "ItemBuyFrame", "auctionID")).toBe(12)
     -- Buy out: the game's own Buyout, its popup asks
     local buyOver = assert(M.overs.buyout, "no secure click over Buy out")
@@ -346,5 +346,104 @@ local function oversOnOtherTab()
     win():SetTab("sell")
     mock.advanceTime(0.1)
     expect(shownOvers()).toEqual({})
+    expectNoErrors()
+end
+
+-- The game's page on the blade, through the secure click on its result.
+local function bladeOnGamePage()
+    open()
+    search("blade")
+    mock.hover(resultNamed("Test Blade"))
+    mock.click(assert(M.overs.result).button)
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+end
+
+@test("an auction's secure click follows the auction its row shows when the list is read again under the mouse; it chooses that one by its id")
+local function overAuctionById()
+    bladeOnGamePage()
+    mock.hover(offers()[2]) -- 12
+    local pick = assert(M.overs.auction)
+    -- read again before the click: another auction on that row now
+    local list: ItemSearchResultInfo[] = {}
+    for i = 1, AH.GetNumItemSearchResults(key(BLADE, 20)) do
+        list[i] = assert(AH.GetItemSearchResultInfo(key(BLADE, 20), i))
+    end
+    list[1], list[2] = list[2], list[1]
+    mock.stub(AH, "GetItemSearchResultInfo", function(_: ItemKey, i: number)
+        return list[i]
+    end)
+    M:DrawItemView()
+    -- (the row now shows 11: the click goes to the game's row for 11)
+    local target = frames.asFrame(pick.button:GetAttribute("clickbutton1"))
+    expect(field(target, "rowData", "auctionID")).toBe(11)
+    mock.click(pick.button)
+    expect(M.chosen).toBe(11)
+    expect(field(gameFrame(), "ItemBuyFrame", "auctionID")).toBe(11)
+    expect(assert(M.overs.buyout).button).toBeShown()
+    expectNoErrors()
+end
+
+@test("Buy out's advice: the auction's row again when the game lists it; said plainly when the game doesn't")
+local function buyOutAdvice()
+    bladeOnGamePage()
+    -- chosen in SuuUI only (not through the game's row): its row again
+    mock.click(offers()[1])
+    expect(M:GameHasAuction(11)).toBe(true)
+    M:BuyOut()
+    expect(note()).toBe("Click the auction's row again, then Buy out.")
+    -- one the game's page has no row for
+    local list: ItemSearchResultInfo[] = {}
+    for i = 1, AH.GetNumItemSearchResults(key(BLADE, 20)) do
+        list[i] = assert(AH.GetItemSearchResultInfo(key(BLADE, 20), i))
+    end
+    list[#list + 1] = mock.partial({ auctionID = 19, itemKey = key(BLADE, 20), quantity = 1, buyoutAmount = 70000, timeLeft = 3 })
+    mock.stub(AH, "GetNumItemSearchResults", function()
+        return #list
+    end)
+    mock.stub(AH, "GetItemSearchResultInfo", function(_: ItemKey, i: number)
+        return list[i]
+    end)
+    M:DrawItemView()
+    M:ChooseAuction(19)
+    expect(M:GameHasAuction(19)).toBe(false)
+    M:BuyOut()
+    expect(note()).toBe("The game lists only the first auctions of an item, and this one isn't among them: it can't be bought out here yet.")
+    expectNoErrors()
+end
+
+@test("combat: the secure clicks let go when it starts (hidden, unanchored; the client hides them too) and come back after; the house closed in combat, none")
+local function oversInCombat()
+    bladeOnGamePage()
+    mock.hover(offers()[2])
+    mock.click(assert(M.overs.auction).button)
+    local buyOver = assert(M.overs.buyout).button
+    local back = assert(M.overs.back).button
+    expect(buyOver).toBeShown()
+    expect(back).toBeShown()
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(buyOver).never.toBeShown()
+    expect(back).never.toBeShown()
+    expect(buyOver:GetNumPoints()).toBe(0)
+    expect(back:GetNumPoints()).toBe(0)
+    expect(buyOver:GetParent()).toBe(M.overHolder)
+    expect(assert(M.overHolder)).never.toBeVisible()
+    -- (a refresh in combat shows none)
+    M:Refresh()
+    expect(buyOver).never.toBeShown()
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(buyOver).toBeShown()
+    expect(back).toBeShown()
+    expect(assert(M.overHolder)).toBeVisible()
+    -- closed in combat: none after it
+    mock.player:enterCombat()
+    AH.CloseAuctionHouse()
+    mock.advanceTime(1)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(buyOver).never.toBeShown()
+    expect(back).never.toBeShown()
     expectNoErrors()
 end

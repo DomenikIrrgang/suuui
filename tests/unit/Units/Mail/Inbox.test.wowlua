@@ -1,0 +1,123 @@
+-- Units/Mail/Inbox: the inbox as the Mail module reads it, on the emulated
+-- mailbox: a mail's header and attachments, what a mail is (MailId), the
+-- very mail again or the same with less in it, and finding it after the
+-- inbox moved (a twin by its expiry; none when it is gone or changed).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import expectNoErrors from "../../../helpers"
+import * as mails from "/Units/Mail/Inbox"
+
+local WATER, TOME = 990041, 990042
+mock.defineItem(WATER, { name = "Test Water", quality = 1, stackCount = 20, icon = 134400 }, { cached = true })
+mock.defineItem(TOME, { name = "Test Tome", quality = 3, stackCount = 1, icon = 133744 }, { cached = true })
+
+type Letter = { [string]: unknown }
+local box: mock.MockUnit? = nil
+
+local function mailbox(list: Letter[])
+    local unit = box or mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    if not box then
+        box = unit
+        mock.defineMailbox(unit, { letters = list })
+        mock.player:interact(unit)
+        mock.advanceTime(0.5)
+    else
+        -- the inbox as the server has it now (the mailbox stays open)
+        mock.defineMailbox(unit, { letters = list })
+    end
+end
+
+local function bits(days: number?, items: { { [string]: unknown } }?): Letter
+    return {
+        sender = "Ashford",
+        subject = "Bits",
+        money = 300,
+        items = items or { { id = WATER, count = 5 }, { id = TOME, count = 1 } },
+        daysLeft = days or 10,
+    }
+end
+local function hello(): Letter
+    return { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 9 }
+end
+
+@beforeEach
+local function start()
+    mailbox({ hello(), bits() })
+end
+
+@afterEach
+local function cleanup()
+    expectNoErrors()
+end
+
+@test("a header: who from, the subject, money, COD, the items' count and icon; nothing past the inbox")
+local function headers()
+    expect(mails.inboxCount()).toBe(2)
+    local h = assert(mails.header(2))
+    expect(h.sender).toBe("Ashford")
+    expect(h.money).toBe(300)
+    expect(h.cod).toBe(0)
+    expect(h.items).toBe(2)
+    expect(h.icon).toBe(134400)
+    expect(assert(mails.header(1)).icon).toBe(mails.ENVELOPE)
+    expect(mails.header(3)).toBe(nil)
+end
+
+@test("attachments: slot, item, count and name; a MailId holds them with the money and COD")
+local function identity()
+    expect(mails.attachments(2)).toEqual({
+        { slot = 1, item = WATER, count = 5, name = "Test Water" },
+        { slot = 2, item = TOME, count = 1, name = "Test Tome" },
+    })
+    local id = assert(mails.identify(2))
+    expect(id.sender).toBe("Ashford")
+    expect(id.money).toBe(300)
+    expect(#id.items).toBe(2)
+    expect(assert(mails.attachmentAt(id, 2)).item).toBe(TOME)
+    expect(mails.attachmentAt(id, 3)).toBe(nil)
+    expect(#assert(mails.identify(1)).items).toBe(0)
+    expect(mails.identify(3)).toBe(nil)
+end
+
+@test("the same mail, or the same with less in it; never with more, another slot or another COD")
+local function sameAndFollows()
+    local before = assert(mails.identify(2))
+    expect(mails.sameMail(before, assert(mails.identify(2)))).toBe(true)
+    mailbox({ hello(), bits(10, { { id = WATER, count = 5, taken = true }, { id = TOME, count = 1 } }) })
+    local now = assert(mails.identify(2))
+    expect(mails.sameMail(before, now)).toBe(false)
+    expect(mails.follows(before, now)).toBe(true)
+    expect(mails.follows(now, before)).toBe(false) -- more in it
+    -- the tome in another slot, more money, a COD: another mail
+    mailbox({ hello(), bits(10, { { id = TOME, count = 1 } }) })
+    expect(mails.follows(before, assert(mails.identify(2)))).toBe(false)
+    local richer = bits()
+    richer.money = 400
+    mailbox({ hello(), richer })
+    expect(mails.follows(before, assert(mails.identify(2)))).toBe(false)
+    local cod = bits()
+    cod.cod = 100
+    mailbox({ hello(), cod })
+    expect(mails.follows(before, assert(mails.identify(2)))).toBe(false)
+end
+
+@test("find: where the mail is now; the preferred index first; a twin by its expiry; none when gone")
+local function finding()
+    local id = assert(mails.identify(2))
+    expect(mails.find(id, 2)).toBe(2)
+    -- moved down by new mail
+    mailbox({ hello(), hello(), bits() })
+    expect(mails.find(id)).toBe(3)
+    expect(mails.find(id, 1)).toBe(3)
+    -- twins: the one expiring nearest to it, unless the preferred one matches
+    mailbox({ bits(25), bits(10), bits(2) })
+    expect(mails.find(id)).toBe(2)
+    expect(mails.find(id, 3)).toBe(3)
+    -- gone, or changed
+    mailbox({ hello() })
+    expect(mails.find(id)).toBe(nil)
+    mailbox({ bits(10, { { id = WATER, count = 5, taken = true }, { id = TOME, count = 1 } }) })
+    expect(mails.find(id)).toBe(nil)
+    expect(mails.find(id, nil, mails.follows)).toBe(1)
+end

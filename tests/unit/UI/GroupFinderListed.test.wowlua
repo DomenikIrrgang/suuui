@@ -177,6 +177,57 @@ local function typing()
     expectNoErrors()
 end
 
+@test("an edit on Forever (UIW-1): reported without the user-input flag; a text set from code is not")
+local function editWithoutUserInput()
+    local p = page()
+    local onText = mock.spy(function(_t: string) end)
+    p.onText = onText
+    local e = p.ad.edit
+    p:SetData({ ad = { text = "LFM SFK", channel = "General", channels = CHANNELS } })
+    -- the code's own SetText: its OnTextChanged comes a frame later, with
+    -- the field focused meanwhile: still not an edit
+    mock.click(p.ad.field)
+    expect(e:HasFocus()).toBe(true)
+    mock.advanceFrames(1)
+    expect(onText).never.toHaveBeenCalled()
+    -- typing as on Forever: the change arrives with userInput false
+    e:SetText("LFM SFK, need a healer")
+    mock.script(e, "OnTextChanged", false)
+    expect(onText).toHaveBeenCalledWith("LFM SFK, need a healer")
+    expect(onText).toHaveBeenCalledTimes(1)
+    -- the same text again (the deferred event of the same change): once only
+    mock.advanceFrames(1)
+    mock.script(e, "OnTextChanged", false)
+    expect(onText).toHaveBeenCalledTimes(1)
+    -- out of the field, new data from code: set, not reported
+    mock.pressKey("ESCAPE")
+    p:SetData({ ad = { text = "from the listing", channel = "General" } })
+    mock.advanceFrames(1)
+    mock.script(e, "OnTextChanged", false)
+    expect(e:GetText()).toBe("from the listing")
+    expect(onText).toHaveBeenCalledTimes(1)
+    -- a change without focus is never an edit
+    e:SetText("something else")
+    mock.script(e, "OnTextChanged", false)
+    expect(onText).toHaveBeenCalledTimes(1)
+    expectNoErrors()
+end
+
+@test("From my listing takes the focus off the field first, so the written ad can show")
+local function rewriteClearsFocus()
+    local p = page()
+    p:SetData({ ad = { text = "mine", channel = "General", channels = CHANNELS } })
+    p.onRewrite = function()
+        p:SetData({ ad = { text = "from the listing", channel = "General", channels = CHANNELS } })
+    end
+    mock.click(p.ad.field)
+    expect(p.ad.edit:HasFocus()).toBe(true)
+    mock.click(p.ad.rewrite)
+    expect(p.ad.edit:HasFocus()).toBe(false)
+    expect(p.ad.edit:GetText()).toBe("from the listing")
+    expectNoErrors()
+end
+
 @test("the buttons report: Update, Delist, From my listing, Post, the channel")
 local function buttons()
     local p = page()
