@@ -16,8 +16,14 @@
 --       OnInitialize = function(self) end,  -- once, before the first enable
 --       OnEnable = function(self) end,
 --       OnDisable = function(self) end,
+--       Refresh = function(self) end,  -- any other field stays on the module
+--                                      -- (0.47), unless it takes a name of
+--                                      -- SuuUI's (a method, `id`…): an error
 --   })
 --   M:Migrate("renameFoo", function(values) ... end) -- once per profile, at file load
+--
+-- SuuUI's own modules are classes extending Module (a module file extends
+-- /Core/API's, which adds nothing), added with SuuUI.AddModule(X.new()).
 --
 -- A module that is off is never initialised: no frames, no events. Its
 -- "enabled" setting lives in its own namespace, so it is saved per profile.
@@ -62,13 +68,12 @@ import * as hooks from "./Hooks"
 import * as cvars from "./CVars"
 import * as anchors from "./Anchors"
 import * as comm from "./Comm"
-import * as visibility from "/UI/Visibility"
-import * as settingsRegistry from "/SettingsUI/Registry"
-import * as editMode from "/EditMode/EditMode"
+import type SectionDef, Section from "/SettingsUI/Registry"
+import type Mover, MoverOptions from "/EditMode/EditMode"
 import * as tbl from "wowlua:table"
 
 -- A settings section as a module registers it (SettingsUI/Registry).
-export type SettingsSection = settingsRegistry.SectionDef
+export type SettingsSection = SectionDef
 
 export const API_VERSION = "0.47.0"
 
@@ -231,6 +236,29 @@ export interface AnyModule
     -- one of its settings, from another module: what it is is that
     -- module's business (it may be replaced, or off), so the reader checks
     function Setting(key: string): unknown
+end
+
+-- (SET-7) The layers above the core: the settings window and edit mode take
+-- a module's sections and movers, and they (and UI/Visibility) let go of
+-- what a module gave them when it turns off. Each hands its part over as
+-- it loads (SettingsUI/Registry, EditMode/EditMode, UI/Visibility): the
+-- core imports none of them.
+export type SectionHost = (def: SettingsSection, owner: AnyModule) -> Section
+export type MoverHost = (frame: Region, opts: MoverOptions, owner: AnyModule) -> Mover
+local hosts: { sections: SectionHost?, movers: MoverHost? } = {}
+local releasers: ((m: AnyModule) -> ())[] = {}
+
+-- Where M:RegisterSettings and M:RegisterMover go.
+export function hostSections(fn: SectionHost)
+    hosts.sections = fn
+end
+export function hostMovers(fn: MoverHost)
+    hosts.movers = fn
+end
+-- fn(module) when a module is released (turned off, failed, or off at
+-- login), with the core's own releases.
+export function onRelease(fn: (m: AnyModule) -> ())
+    releasers[#releasers + 1] = fn
 end
 
 -- What a module may add to a role's preset, and a notification kind.
@@ -521,18 +549,18 @@ export class Module<D extends Settings> implements AnyModule
     -- A settings section for this module: its rows read and write the
     -- module's own namespace, and the section goes away when the module
     -- turns off.
-    function RegisterSettings(def: SettingsSection): settingsRegistry.Section
+    function RegisterSettings(def: SettingsSection): Section
         def.namespace = def.namespace or self.id
-        return settingsRegistry.register(def, self)
+        return assert(hosts.sections, "SuuUI: no settings window")(def, self)
     end
 
     -- An edit-mode handle for one of the module's frames. opts.key names a
     -- position setting in the module's defaults (default "position").
-    function RegisterMover(frame: Region, opts: editMode.MoverOptions?): editMode.Mover
-        local o: editMode.MoverOptions = opts or {}
+    function RegisterMover(frame: Region, opts: MoverOptions?): Mover
+        local o: MoverOptions = opts or {}
         o.namespace = self.id
         o.label = o.label or self.name
-        return editMode.register(frame, o, self)
+        return assert(hosts.movers, "SuuUI: no edit mode")(frame, o, self)
     end
 
     -- 0.17: SuuUI's own UI (Core/Extend.wowlua). fn(object, info) for every
@@ -613,115 +641,114 @@ export class Module<D extends Settings> implements AnyModule
 end
 
 -- What a plugin's module is made from: a module's definition and its
--- callbacks (see the top of this file).
-export type PluginDef = ModuleDef<Settings>
-    & {
-        OnInitialize?: (self: PluginModule) -> (),
-        OnEnable?: (self: PluginModule) -> (),
-        OnDisable?: (self: PluginModule) -> (),
-    }
-
--- A plugin's module (SuuUI.RegisterModule): its callbacks come with its
--- definition, and it keeps what it likes on itself.
-export class PluginModule extends Module<Settings>
-    constructor(def: PluginDef)
-        super(def)
-        -- the instance's own, in front of the class's empty ones
-        if def.OnInitialize then
-            rawset(self, "OnInitialize", def.OnInitialize)
-        end
-        if def.OnEnable then
-            rawset(self, "OnEnable", def.OnEnable)
-        end
-        if def.OnDisable then
-            rawset(self, "OnDisable", def.OnDisable)
-        end
-    end
-end
-
--- A module not converted to a class yet (TRANSITION: built-in modules move
--- to classes extending Module one by one; this goes when the last one has):
--- a PluginModule seen with its settings typed and whatever it keeps on
--- itself loose.
-export type ModuleOf<D> = {
-    id: string,
-    name: string,
-    description: string?,
-    api: string?,
-    source: string,
-    builtIn: boolean,
-    state: ModuleState,
-    error: string?,
-    pendingReload: boolean?,
-    enabledAtLoad: boolean?,
-    initialized: boolean?,
-    reloadToToggle: boolean,
-    combatSafe: boolean,
-    replaces: string?,
-    replacedBy: string?,
-    Get: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
-    Peek: <K extends keyof D>(self: ModuleOf<D>, key: K) -> D[K],
-    Set: <K extends keyof D>(self: ModuleOf<D>, key: K, value: D[K]) -> (boolean, string?),
-    Reset: <K extends keyof D>(self: ModuleOf<D>, key: K?) -> boolean,
-    Watch: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (value: D[K], namespace: string, key: string) -> ()) -> (),
-    Veto: <K extends keyof D>(self: ModuleOf<D>, key: K, fn: (new: D[K], old: D[K]) -> (boolean?, string?)) -> (),
-    WatchAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[], fn: (key: K) -> ()) -> (),
-    ResetAll: <K extends keyof D>(self: ModuleOf<D>, keys: K[]) -> (),
-    IsEnabled: (self: ModuleOf<D>) -> boolean,
-    On: <M extends string>(self: ModuleOf<D>, message: M, fn: (name: M, EventArgs<M>...) -> ()) -> (),
-    Off: (self: ModuleOf<D>, message: string) -> (),
-    Emit: <M extends string>(self: ModuleOf<D>, message: M, EventArgs<M>...) -> (),
-    OnGameEvent: <E extends EventName>(self: ModuleOf<D>, event: E, fn: (name: E, EventArgs<E>...) -> ()) -> (),
-    OnUnitEvent: <E extends EventName>(self: ModuleOf<D>, event: E, units: UnitToken
-        | UnitToken[], fn: (name: E, EventArgs<E>...) -> ()) -> (),
-    Setting: (self: ModuleOf<D>, key: string) -> unknown,
-    Migrate: (self: ModuleOf<D>, id: string, fn: settings.MigrationFn) -> (),
-    CharData: (self: ModuleOf<D>) -> { [string]: unknown },
-    AllCharData: (self: ModuleOf<D>) -> { [string]: { [string]: unknown } },
-    CharKey: (self: ModuleOf<D>) -> string?,
-    ForgetCharData: (self: ModuleOf<D>, key: string) -> boolean,
-    Guard: <A..., R...>(self: ModuleOf<D>, fn: (A...) -> R...) -> (A...) -> (boolean, R...),
-    RunOutOfCombat: (self: ModuleOf<D>, key: string | number, fn: () -> ()) -> (),
-    After: (self: ModuleOf<D>, seconds: number, fn: () -> ()) -> TimerHandle,
-    Every: (self: ModuleOf<D>, seconds: number, fn: (ticker: TickerHandle) -> (), times: number?) -> TickerHandle,
-    SecureHook: (self: ModuleOf<D>, target: unknown, method: string | function, fn: function?, opts: hooks.HookOptions?) -> (),
-    HookScript: (self: ModuleOf<D>, frame: ScriptRegion | string, script: string, fn: function) -> (),
-    SetCVar: (self: ModuleOf<D>, cvarName: string, value: string | number | boolean, opts: cvars.SetOptions?) -> boolean,
-    RestoreCVar: (self: ModuleOf<D>, cvarName: string) -> boolean,
-    OnAddonMessage: (self: ModuleOf<D>, verb: string, opts: comm.VerbOptions?, fn: comm.Handler) -> (),
-    SendAddonMessage: (self: ModuleOf<D>, verb: string, payload: string?, channel: string?, target: string?, opts: comm.SendOptions?) -> (boolean, string, boolean),
-    RegisterCommand: (self: ModuleOf<D>, cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?) -> (),
-    RegisterSettings: (self: ModuleOf<D>, def: SettingsSection) -> settingsRegistry.Section,
-    RegisterMover: (self: ModuleOf<D>, frame: Region, opts: editMode.MoverOptions?) -> editMode.Mover,
-    Each: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, fn: (obj: extend.KindInstances[K], info: extend.Info) -> (), undo: ((obj: extend.KindInstances[K], info: extend.Info) -> ())?) -> (),
-    Hook: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string, fn: (this: extend.KindInstances[K], ...unknown) -> ()) -> (),
-    Override: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string, fn: (this: extend.KindInstances[K], original: extend.Method, ...unknown) -> ...unknown) -> (),
-    Provide: (self: ModuleOf<D>, serviceName: string, impl: { [string]: unknown }) -> (),
-    ProvideService: <T>(self: ModuleOf<D>, key: services.ServiceKey<T>, impl: T) -> (),
-    ExtendMenu: (self: ModuleOf<D>, id: string, fn: extend.MenuExtension) -> (),
-    AddMicroItem: (self: ModuleOf<D>, item: unknown) -> (),
-    AddGameMenuItem: (self: ModuleOf<D>, item: unknown) -> (),
-    AddNotificationKind: (self: ModuleOf<D>, which: string, def: NotificationKind?) -> (),
-    AddToRolePreset: (self: ModuleOf<D>, role: string, values: { [string]: unknown }) -> (),
-    Print: (self: ModuleOf<D>, ...unknown) -> (),
-    [string]: unknown,
-}
--- (TRANSITION) what such a module is made from: its callbacks see it so.
-export type LooseDef<D> = {
+-- callbacks (see the top of this file). Any other field it has is kept on
+-- the module (a function the plugin calls as a method, a value of its own),
+-- as long as it doesn't take one of SuuUI's names (API-5, below).
+-- (ModuleDef's fields written out: the checker reads `D` from `defaults` in
+-- one table type, not through an intersection)
+export type PluginDef<D extends Settings> = {
     id: string,
     name?: string,
     description?: string,
     api?: string,
     defaults?: D,
+    layout?: string[],
     enabledByDefault?: boolean,
     reloadToToggle?: boolean,
     combatSafe?: boolean,
     replaces?: string,
     addon?: string,
-    OnInitialize?: (self: ModuleOf<WithEnabled<D>>) -> (),
-    OnEnable?: (self: ModuleOf<WithEnabled<D>>) -> (),
-    OnDisable?: (self: ModuleOf<WithEnabled<D>>) -> (),
+    OnInitialize?: (self: RegisteredModule<D>) -> (),
+    OnEnable?: (self: RegisteredModule<D>) -> (),
+    OnDisable?: (self: RegisteredModule<D>) -> (),
 }
+
+-- What SuuUI.RegisterModule returns: the plugin's module, its settings typed
+-- by its defaults, and whatever the plugin keeps on it (loose: its own).
+export type RegisteredModule<D extends Settings> = PluginModule<D> & { [string]: unknown }
+
+-- The keys of a module's definition that are SuuUI's (the rest of a
+-- plugin's definition is kept on its module).
+local DEF_KEYS: { [string]: boolean } = {
+    id = true,
+    name = true,
+    description = true,
+    api = true,
+    defaults = true,
+    layout = true,
+    enabledByDefault = true,
+    reloadToToggle = true,
+    combatSafe = true,
+    replaces = true,
+    addon = true,
+}
+local CALLBACKS: { [string]: boolean } = { OnInitialize = true, OnEnable = true, OnDisable = true }
+
+-- (API-5) Why a module may not hold `key` as a field of its own, or nil: a
+-- method of every module (Get, Hook, IsEnabled…) or one of SuuUI's own fields
+-- (id, state…) would be hidden from the core and the other modules, which
+-- call and read them on it. The three callbacks are the module's to set.
+local function takenName(key: unknown, value: unknown): string?
+    if type(key) ~= "string" then
+        return nil
+    end
+    if CALLBACKS[key] then
+        return type(value) ~= "function" and "a callback (a function)" or nil
+    end
+    local class = Module :: unknown :: { [string]: unknown }
+    local getters = rawget(class, "__getters") :: { [string]: unknown }?
+    if getters and getters[key] then
+        return "one of SuuUI's own fields of a module"
+    end
+    if class[key] ~= nil then
+        return "a method every module has"
+    end
+    return nil
+end
+
+local function refuse(id: string, key: string, why: string, level: number)
+    error(
+        ("SuuUI: the module %s can't have a field %q: it is %s (use another name)"):format(id, key, why),
+        level
+    )
+end
+
+-- A plugin's module (SuuUI.RegisterModule): its callbacks and the rest of
+-- its definition come with the definition, and it keeps what it likes on
+-- itself, except SuuUI's names.
+export class PluginModule<D extends Settings> extends Module<D>
+    constructor(def: PluginDef<D>)
+        super(def)
+        local id = def.id
+        for key, value in pairs(def :: unknown :: { [string]: unknown }) do
+            if not DEF_KEYS[key] then
+                local why = takenName(key, value)
+                if why then
+                    refuse(id, key, why, 4)
+                end
+                -- the instance's own, in front of the class's (the callbacks:
+                -- in front of the class's empty ones)
+                rawset(self, key, value)
+            end
+        end
+    end
+end
+
+-- A plugin's module's fields set after RegisterModule (`function M:OnEnable()`,
+-- `M.frame = …`) are checked the same way as it sets each new one (API-5).
+-- The class's own __newindex (its read-only properties) still runs after.
+do
+    local class = PluginModule :: unknown :: { __newindex: (t: table, k: unknown, v: unknown) -> () }
+    local base = class.__newindex
+    rawset(class :: unknown :: table, "__newindex", function(t: table, k: unknown, v: unknown)
+        local why = takenName(k, v)
+        if why then
+            local own = owns[t]
+            refuse(own and own.id or "?", tostring(k), why, 3)
+        end
+        base(t, k, v)
+    end)
+end
 
 --------------------------------------------------------------------------------
 -- Lifecycle
@@ -732,14 +759,16 @@ local function releaseAll(m: AnyModule)
     events.offAll(m)
     settings.unwatch(m)
     unregisterCommands(m)
-    settingsRegistry.unregister(m)
-    editMode.unregister(m)
+    -- the settings window's sections, edit mode's movers, the visibility
+    -- modes (SET-7: what the layers above handed over)
+    for _, release in ipairs(releasers) do
+        release(m)
+    end
     extend.unregister(m)
     services.unregister(m)
     timers.cancelAll(m)
     hooks.release(m)
     combat.cancel("m:" .. m.id .. ":")
-    visibility.release(m)
     anchors.release(m)
     cvars.restoreAll(m.id)
     comm.release(m)
@@ -923,6 +952,14 @@ export class ModuleRegistry
     function add<M extends AnyModule>(m: M): M
         local id = m.id
         assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
+        -- (API-5) what it set on itself so far (a class's field initializers,
+        -- a plugin's definition) takes none of SuuUI's names
+        for key, value in pairs(m :: unknown :: { [string]: unknown }) do
+            local why = takenName(key, value)
+            if why then
+                refuse(id, key, why, 3)
+            end
+        end
         self.store:register(id, ownOf(m :: table).defaults, ownOf(m :: table).layout)
         local api = m.api
         if api and not apiAtLeast(api) then
@@ -941,11 +978,10 @@ export class ModuleRegistry
         return m
     end
 
-    -- A plugin's module (SuuUI.RegisterModule), and (TRANSITION) a
-    -- built-in one not converted to a class yet.
-    function register<D extends Settings>(def: LooseDef<D>): ModuleOf<WithEnabled<D>>
-        local m = self:add(PluginModule.new((def :: unknown) :: PluginDef))
-        return (m :: unknown) :: ModuleOf<WithEnabled<D>>
+    -- A plugin's module (SuuUI.RegisterModule).
+    function register<D extends Settings>(def: PluginDef<D>): RegisteredModule<D>
+        local m = self:add(PluginModule.new(def))
+        return (m :: unknown) :: RegisteredModule<D>
     end
 
     function get(id: string): AnyModule?
@@ -974,7 +1010,7 @@ export const registry = ModuleRegistry.new()
 export function add<M extends AnyModule>(m: M): M
     return registry:add(m)
 end
-export function register<D extends Settings>(def: LooseDef<D>): ModuleOf<WithEnabled<D>>
+export function register<D extends Settings>(def: PluginDef<D>): RegisteredModule<D>
     return registry:register(def)
 end
 export function get(id: string): AnyModule?

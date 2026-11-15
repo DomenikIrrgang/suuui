@@ -17,7 +17,6 @@ import * as services from "/Core/Services"
 import * as events from "/Core/Events"
 import * as modules from "/Core/Modules"
 import userScale from "/Core/Root"
-import SuuUI from "/Core/API"
 import * as editMode from "/EditMode/EditMode"
 import * as registry from "/SettingsUI/Registry"
 import * as settingsWindow from "/SettingsUI/Window"
@@ -267,20 +266,24 @@ end
 local function welcome()
     local r = row("appearance", "First steps")
     local close = mock.stub(settingsWindow, "close", function() end)
-    local show = mock.stub(SuuUI, "ShowWelcome", function() end)
-    mock.stub(services, "get", function(_n: string): { [string]: unknown }?
+    local shown = 0
+    local welcomeService = { Show = function() shown += 1 end }
+    -- (the welcome service by its key, as SuuUI.ShowWelcome asks it: the
+    -- settings window is below the public API)
+    mock.stub(services, "use", function(key: { name: string }): unknown
+        expect(key.name).toBe("welcome")
         return nil
     end)
     local off, why = r.disabled()
     expect(off).toBe(true)
     expect(why).toBe("The Welcome module is off (Settings › Modules).")
-    mock.stub(services, "get", function(_n: string): { [string]: unknown }?
-        return {}
+    mock.stub(services, "use", function(_key: unknown): unknown
+        return welcomeService
     end)
     expect((r.disabled())).toBe(false)
     r.onClick()
     expect(close).toHaveBeenCalledTimes(1)
-    expect(show).toHaveBeenCalledTimes(1)
+    expect(shown).toBe(1)
 end
 
 --------------------------------------------------------------------------------

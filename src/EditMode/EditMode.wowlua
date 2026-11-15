@@ -28,6 +28,8 @@ import tokens as T from "/Core/Tokens"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as combat from "/Core/Combat"
+import * as modules from "/Core/Modules"
+import * as modes from "/Core/Modes"
 import * as pixel from "/Core/Pixel"
 import root from "/Core/Root"
 import * as draw from "/UI/Draw"
@@ -73,6 +75,12 @@ export type MoverOptions = {
     dragFrame?: () -> Region,
     -- its module shows and hides the frame (it reads position.hidden itself)
     managedShow?: boolean,
+    -- (0.47, for the layout check) another mover ("namespace.key") that
+    -- never shows at the same time as this one (party and raid frames)
+    apartFrom?: string,
+    -- (0.47, for the layout check) only an anchor or a window that opens
+    -- over the rest by design (the tooltip's place, the bags): not checked
+    anchorOnly?: boolean,
 }
 
 --- A registered mover (what register returns).
@@ -90,6 +98,8 @@ export type Mover = {
     dragFrame?: () -> Region,
     overlay?: MoverOverlay,
     managedShow: boolean,
+    apartFrom?: string,
+    anchorOnly: boolean,
 }
 
 --- What movers() lists for the layout check.
@@ -101,6 +111,8 @@ export type MoverInfo = {
     enabled: boolean,
     custom: boolean,
     managedShow: boolean,
+    apartFrom?: string,
+    anchorOnly: boolean,
 }
 
 settings.register("layout", {
@@ -1149,6 +1161,9 @@ export function exit()
     end
 end
 
+-- Keybind mode, entering, closes edit mode (Core/Modes).
+modes.onClose("editmode", exit)
+
 -- A frame's settings (its right-click): edit mode closes and the Settings
 -- window opens at its module's section.
 export function openSettings(m: Mover?)
@@ -1304,6 +1319,8 @@ export function register(frame: Region, opts: MoverOptions, owner: unknown?): Mo
         onReset = opts.reset,
         dragFrame = opts.dragFrame,
         managedShow = opts.managedShow == true,
+        apartFrom = opts.apartFrom,
+        anchorOnly = opts.anchorOnly == true,
     }
     assert(
         type(settings.get(m.namespace, m.key)) == "table",
@@ -1351,6 +1368,8 @@ export function movers(): MoverInfo[]
             enabled = enabled(m),
             custom = m.customPlace ~= nil,
             managedShow = m.managedShow,
+            apartFrom = m.apartFrom,
+            anchorOnly = m.anchorOnly,
         }
     end
     return out
@@ -1377,5 +1396,10 @@ export function unregister(owner: unknown)
         end
     end
 end
+
+-- A module's movers come here (M:RegisterMover), and go when it turns off
+-- (Core/Modules: the core doesn't import edit mode).
+modules.hostMovers(register)
+modules.onRelease(unregister)
 
 registerCommand("edit", "Move SuuUI's frames: edit mode with a snap grid.", toggle)

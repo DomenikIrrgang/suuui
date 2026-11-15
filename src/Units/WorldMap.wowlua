@@ -35,17 +35,8 @@
 -- (The game's map canvas declares its methods' results `any`: each is read
 -- through wowlua:secret and wowlua:frames where it's used.)
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import MARKS, WORLD_MAP, CONVERGENCES, CAMPFIRES, FLIGHT_MAP from "/Core/ServiceKeys"
-
-import type MarkFilters from "/Core/ServiceKeys"
-import chromeOf from "/UI/WindowSkin"
-import MapPin from "/UI/MapPin"
-import type MapPinData from "/UI/MapPin"
-import type FilterMenu, FilterValue, FilterValues, FilterGroup, FilterOption from "/UI/FilterMenu"
-import type TooltipData from "/UI/Tooltip"
+import SuuUI, Module, MapPinClass from "/Core/API"
+import type SettingsSection, MarkFilters, MapPinData, FilterMenu, FilterValue, FilterValues, FilterGroup, FilterOption, TooltipData, MapPin from "/Core/API"
 import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
@@ -59,9 +50,14 @@ import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import tipFor, giverGroup, groupQuests from "/Units/WorldMap/Tips"
 import unexploredTiles from "/Units/WorldMap/Overlays"
-import * as lazyData from "/Core/Data"
 import type QuestStarts from "/Data/QuestStarts"
 import type MapPlaces from "/Data/MapPlaces"
+
+local MARKS = SuuUI.Services.MARKS
+local WORLD_MAP = SuuUI.Services.WORLD_MAP
+local CONVERGENCES = SuuUI.Services.CONVERGENCES
+local CAMPFIRES = SuuUI.Services.CAMPFIRES
+local FLIGHT_MAP = SuuUI.Services.FLIGHT_MAP
 
 -- A campfire's time left: m:ss, or out.
 export function fireLeft(s: number): string
@@ -503,7 +499,7 @@ end
 
 local function isGroupQuest(id: number): boolean
     -- (the data not built yet: no group bar until it is)
-    if not lazyData.questStarts:Ready() then
+    if not SuuUI.Data.QuestStarts:Ready() then
         return false
     end
     local starts = SuuUI.QuestStarts()
@@ -592,7 +588,7 @@ type ServicePin = { key: string, pin: MapPinData, kindName: string }
 -- One of SuuUI's pins on the map: the pins merged into it, and whether it's
 -- a quest giver's (it keeps right-clicks for its menu; the others let them
 -- through to the map, which zooms out).
-class WorldPin extends MapPin
+class WorldPin extends MapPinClass
     group: Group? = nil
     giver: boolean = false
 
@@ -1073,7 +1069,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     -- A quest's name from the quest data (the game's, else "Quest <id>"
     -- while it isn't built).
     function QuestTitle(id: number): string
-        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
+        local starts = SuuUI.Data.QuestStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
         local qrow = starts.quests[id]
         return questName(qrow and quest(qrow) or nil, id)
     end
@@ -1158,7 +1154,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             end
         end
         self.hiddenListed = ids
-        self.hiddenNamed = lazyData.questStarts:Ready()
+        self.hiddenNamed = SuuUI.Data.QuestStarts:Ready()
         local menu = self.menu
         if menu and (force or not same) then
             menu:SetGroups(self:MenuGroups())
@@ -1414,8 +1410,8 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end
         -- (the quest data built a step a frame the first time: its lines from
         -- the next hover on)
-        if not lazyData.questStarts:Ready() then
-            lazyData.questStarts:Prepare()
+        if not SuuUI.Data.QuestStarts:Ready() then
+            SuuUI.Data.QuestStarts:Prepare()
             return
         end
         local on = self:Layers().quests
@@ -1448,10 +1444,10 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         me.mapID = mapID
         -- (the quest and place data not built yet: the other pins now,
         -- these once it's there; Refresh)
-        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
+        local starts = SuuUI.Data.QuestStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
         local info = errors.tryValue(C_Map.GetMapInfo, mapID)
         local mapName = info and info.name
-        local places = lazyData.mapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
+        local places = SuuUI.Data.MapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
         local muted = "|cff" .. T.color["ink-muted"].hex
         local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
         -- the quests this character hid: none of their pins, on any map
@@ -2509,7 +2505,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end
         -- (the overlays' data built a step a frame the first time: Refresh
         -- reveals again once it's there)
-        if not lazyData.mapOverlays:Ready() then
+        if not SuuUI.Data.MapOverlays:Ready() then
             return
         end
         local art = errors.tryValue(C_Map.GetMapArtID, mapID)
@@ -2535,7 +2531,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
 
     -- Whether the map's data is built (Core/Data).
     function DataReady(): boolean
-        return lazyData.questStarts:Ready() and lazyData.mapPlaces:Ready() and lazyData.mapOverlays:Ready()
+        return SuuUI.Data.QuestStarts:Ready() and SuuUI.Data.MapPlaces:Ready() and SuuUI.Data.MapOverlays:Ready()
     end
 
     -- The map's data built a step a frame, then the map drawn again.
@@ -2546,9 +2542,9 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 self:Refresh()
             end
         end
-        lazyData.mapOverlays:Prepare(done, "worldmap")
-        lazyData.mapPlaces:Prepare(done, "worldmap")
-        lazyData.questStarts:Prepare(done, "worldmap")
+        SuuUI.Data.MapOverlays:Prepare(done, "worldmap")
+        SuuUI.Data.MapPlaces:Prepare(done, "worldmap")
+        SuuUI.Data.QuestStarts:Prepare(done, "worldmap")
     end
 
     function Refresh()
@@ -2580,7 +2576,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- Hidden quests listed before the quest data was built: their names
         -- from it now (not under an open Map filters: it would close)
         local menu = self.menu
-        if menu and not self.hiddenNamed and #self.hiddenListed > 0 and lazyData.questStarts:Ready() then
+        if menu and not self.hiddenNamed and #self.hiddenListed > 0 and SuuUI.Data.QuestStarts:Ready() then
             local panel = menu.panel
             if not (panel and panel:IsShown()) then
                 self:ListHidden(true)
@@ -2609,7 +2605,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         menu:ClearAllPoints()
-        local chrome = chromeOf(f)
+        local chrome = SuuUI.UI.WindowChrome(f)
         local head = chrome and chrome.head
         if chrome and head then
             menu:SetParent(head)
@@ -2778,7 +2774,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         self:HookQuestTips()
         -- (the givers' index for the NPCs' tooltips, made over frames once
         -- the quest data is there)
-        lazyData.questStarts:Then(function()
+        SuuUI.Data.QuestStarts:Then(function()
             self:IndexGiversSoon()
         end, "givers")
         -- the Marks filters and the marks' pins, for the marks module; the

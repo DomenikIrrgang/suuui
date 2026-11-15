@@ -34,10 +34,10 @@ config({ lifecycle = "manual" })
 const P = "|cff9fd3c7SuuUI|r "
 const LISTENER = { name = "Modules Test Listener" }
 
--- (the loose view of a module made from a definition)
-type Module = modules.ModuleOf<modules.WithEnabled<modules.Settings>>
+-- a module made from a definition (what SuuUI.RegisterModule returns)
+type Module = modules.RegisteredModule<modules.Settings>
 type Calls = { init: number, enable: number, disable: number }
-type Def = modules.LooseDef<modules.Settings>
+type Def = modules.PluginDef<modules.Settings>
 -- a table the test hands over as it is
 type Opts = { [string]: unknown }
 -- messages a module of this file sends (as a plugin's own would be)
@@ -344,13 +344,64 @@ local function ownFields()
     for _, key in ipairs({ "id", "name", "state", "error", "replacedBy", "builtIn" }) do
         expect(function()
             (m :: Opts)[key] = "x"
-        end).toThrow(("property '%s' of PluginModule is read-only"):format(key))
+        end).toThrow(("the module %s can't have a field \"%s\": it is one of SuuUI's own fields of a module"):format(m.id, key))
     end
     m.counter = 5
     expect(rawget(m, "counter")).toBe(5)
     expect(m.counter).toBe(5)
-    -- a module's own field can shadow a method name for itself only
     expect(type(m.Get)).toBe("function")
+end
+
+@test("API-5: a plugin's field may not hide a module method, at registration or after")
+local function shadowing()
+    local id = nextId()
+    expect(function()
+        register(({ id = id, Hook = {} } :: unknown) :: Def)
+    end).toThrow(("the module %s can't have a field \"Hook\": it is a method every module has"):format(id))
+    expect(modules.get(id)).toBeNil()
+    local m = register({ id = nextId() })
+    expect(function()
+        (m :: Opts).IsEnabled = true
+    end).toThrow(("the module %s can't have a field \"IsEnabled\": it is a method every module has"):format(m.id))
+    expect(function()
+        (m :: Opts).OnEnable = "soon"
+    end).toThrow(("the module %s can't have a field \"OnEnable\": it is a callback (a function)"):format(m.id))
+    -- differing by case is a name of its own; a callback assigned after is fine
+    m.hook = 1
+    m.isEnabled = 2
+    function m:OnEnable() end
+    expect(m.hook).toBe(1)
+    expect(m.isEnabled).toBe(2)
+    expect(type(m.IsEnabled)).toBe("function")
+    expect(type(rawget(m, "OnEnable"))).toBe("function")
+end
+
+@test("API-5: a definition's own fields are kept on the module (its methods too)")
+local function definitionFields()
+    local m = register(({
+        id = nextId(),
+        defaults = { size = 3 },
+        limit = 7,
+        Double = function(self: Module): number
+            return (self:Get("size") :: number) * 2
+        end,
+    } :: unknown) :: Def)
+    expect(m.limit).toBe(7)
+    expect((m.Double :: (Module) -> number)(m)).toBe(6)
+    -- SuuUI's keys of the definition are not copied onto it
+    expect(rawget(m, "defaults")).toBeNil()
+    expect(rawget(m, "id")).toBeNil()
+end
+
+@test("API-5: a built-in module's own fields are checked as it is added")
+local function builtInShadowing()
+    local id = nextId()
+    local m = modules.Module.new({ id = id })
+    rawset(m, "Print", {})
+    expect(function()
+        modules.add(m)
+    end).toThrow(("the module %s can't have a field \"Print\": it is a method every module has"):format(id))
+    expect(modules.get(id)).toBeNil()
 end
 
 @test("the source addon comes from the call stack: the first other addon, else SuuUI, else ?")
@@ -540,19 +591,17 @@ end
 @test("RegisterMover: edit mode gets the module's namespace and name")
 local function registerMover()
     local m = register({ id = nextId(), name = "ZZ Mover" })
-    local original = editMode.register
     local defs: Opts[] = {}
     local MOVER: editMode.Mover = mock.partial({})
-    mock.module(editMode, {
-        register = function(frame: Region, opts: editMode.MoverOptions, owner: unknown): editMode.Mover
-            defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
-            return MOVER
-        end,
-    })
+    -- (edit mode hands the registry its register as it loads: SET-7)
+    modules.hostMovers(function(frame: Region, opts: editMode.MoverOptions, owner: unknown): editMode.Mover
+        defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
+        return MOVER
+    end)
     local frame = CreateFrame("Frame")
     local r1 = m:RegisterMover(frame)
     local r2 = m:RegisterMover(frame, { key = "pos2", label = "Own label" })
-    mock.module(editMode, { register = original })
+    modules.hostMovers(editMode.register)
     expect(r1).toBe(MOVER)
     expect(r2).toBe(MOVER)
     expect(defs[1].opts).toEqual({ namespace = m.id, label = "ZZ Mover" })

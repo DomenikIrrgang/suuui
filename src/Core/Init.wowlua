@@ -8,7 +8,6 @@
 import addon, build from "wowlua:meta"
 import slash from "wowlua:slash"
 import * as fault from "./Fault"
-import * as settingsWindow from "/SettingsUI/Window"
 import API_VERSION from "./Modules"
 
 export const name: string = addon.name
@@ -26,7 +25,8 @@ end
 -- Slash commands
 --
 -- Core files and modules add subcommands with registerCommand. "/suu" alone
--- opens the settings window; "/suu help" lists the commands in registration
+-- does what the settings window gives it (onBareCommand: it opens or closes
+-- the window); "/suu help" lists the commands in registration
 -- order. A command registered with an owner (a module) is removed again with
 -- unregisterCommands(owner). `args`, optional: the words that can follow it
 -- (a list, or a function returning one), for the chat's command palette.
@@ -94,6 +94,16 @@ export function unregisterCommands(owner: unknown)
     end
 end
 
+-- What "/suu" alone does: the settings window hands it over as it loads
+-- (the window is above the core, which doesn't import it). Returns the one
+-- it replaces.
+local bare: (() -> ())? = nil
+export function onBareCommand(fn: (() -> ())?): (() -> ())?
+    local was = bare
+    bare = fn
+    return was
+end
+
 local function showHelp()
     print("version " .. version)
     for _, key in ipairs(order) do
@@ -124,12 +134,12 @@ local function onSlash(msg: string)
     local word, rest = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
     local key = (word or ""):lower()
     local cmd = commands[key]
-    if key == "" then
-        settingsWindow.toggle()
+    if key == "" and bare then
+        bare()
     elseif cmd then
         fault.call("/suu " .. key, cmd.fn, rest or "")
     else
-        if key ~= "help" then
+        if key ~= "help" and key ~= "" then
             print(("Unknown command \"%s\"."):format(key))
         end
         showHelp()
