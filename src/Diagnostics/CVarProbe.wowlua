@@ -1,0 +1,100 @@
+-- Diagnostics/CVarProbe.wowlua
+-- "/suu probe cvars": where the game keeps the CVars SuuUI's modules write
+-- (and a few controls): per character, per account, or for the whole
+-- machine. A module that changes a CVar remembers the player's own value to
+-- give it back when it turns off (Core/CVars); what "the player's own"
+-- means depends on this. C_CVar.GetCVarInfo answers per CVar: its value,
+-- its default, and whether it is stored for the account or the character
+-- (neither: Config.wtf, one value for every character). Saved in
+-- SuuUIProbe.cvars; a line per CVar is printed too.
+--
+--   /suu probe cvars              the list below
+--   /suu probe cvars name name    these CVars instead
+
+import print from "/Core/Init"
+import * as DB from "/Core/DB"
+import isSecret from "wowlua:secret"
+
+-- What the modules write or read (DamageMeter, CooldownManager, Guild,
+-- Windows, Marks, Nameplates, ActionBars, ObjectiveTracker, Minimap,
+-- MouseBindings), then three controls: by the config files
+-- nameplateShowEnemies and showTargetOfTarget are kept per account and
+-- nameplateMaxDistance per character.
+local NAMES: string[] = {
+    "damageMeterEnabled",
+    "cooldownViewerEnabled",
+    "communitiesShowOffline",
+    "miniWorldMap",
+    "showInGameNavigation",
+    "nameplateShowEnemies",
+    "nameplateShowFriendlyNPCs",
+    "nameplateShowFriendlyPlayers",
+    "nameplateShowFriends",
+    "nameplateMinAlpha",
+    "nameplateMaxAlpha",
+    "nameplateSelectedAlpha",
+    "nameplateNotSelectedAlpha",
+    "nameplateMinScale",
+    "nameplateMaxScale",
+    "nameplateSelectedScale",
+    "lockActionBars",
+    "showQuestObjectivesInLog",
+    "timeMgrUseLocalTime",
+    "timeMgrUseMilitaryTime",
+    "MacUseCommandLeftClickAsRightClick",
+    "nameplateMaxDistance",
+    "showTargetOfTarget",
+    "uiScale",
+}
+
+local function text(v: unknown): string
+    if isSecret(v) then
+        return "secret"
+    end
+    return tostring(v)
+end
+
+export function command(rest: string?)
+    local names: string[] = {}
+    for name in (rest or ""):gmatch("%S+") do
+        names[#names + 1] = name
+    end
+    if #names == 0 then
+        names = NAMES
+    end
+    local rows: { [string]: unknown } = {}
+    local info = C_CVar and C_CVar.GetCVarInfo
+    for _, name in ipairs(names) do
+        local row: { [string]: unknown } = {}
+        if info then
+            -- value, default, account, character, locked, secure, read only
+            local ok, value, default, account, character, locked, secure, readOnly = pcall(info, name)
+            row.ok = ok
+            if ok then
+                row.value, row.default = text(value), text(default)
+                row.account, row.character = text(account), text(character)
+                row.locked, row.secure, row.readOnly = text(locked), text(secure), text(readOnly)
+            else
+                row.error = text(value)
+            end
+        end
+        local okGet, got = pcall(GetCVar, name)
+        row.getCVar = okGet and text(got) or ("error: " .. text(got))
+        rows[name] = row
+        local where = "unknown"
+        if row.ok then
+            where = (row.character == "true" and "character")
+                or (row.account == "true" and "account")
+                or (row.value == "nil" and "no such CVar")
+                or "machine"
+        end
+        print(("CVar %s: %s (value %s, default %s)"):format(name, where, text(row.value), text(row.default)))
+    end
+    DB.probe.cvars = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        hasInfo = info ~= nil,
+        character = UnitName("player") and "Player" or "?",
+        rows = rows,
+    }
+    print(("CVar probe: %d read. /reload to save."):format(#names))
+end
