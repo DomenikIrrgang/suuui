@@ -1174,8 +1174,9 @@ export class UnitFrame extends Button
     edgeBadges: Frame[] = {}
     active: boolean? = nil
     ticker: TickerHandle? = nil
-    -- asks the reaction again while the client doesn't know it yet
-    reactionTicker: TickerHandle? = nil
+    -- the client didn't know the unit's reaction yet: asked again on its
+    -- next UNIT_FLAGS
+    reactionUnknown: boolean = false
     -- 0.17: adds lines to the frame's tooltip after the unit's
     onTooltip: ((f: UnitFrame, tooltip: GameTooltip) -> ())? = nil
     -- after each health update
@@ -1635,7 +1636,7 @@ export class UnitFrame extends Button
             unknown = r == nil
         end
         self.fillReaction = reaction
-        self:WaitForReaction(unknown)
+        self.reactionUnknown = unknown
         self:PaintHealth()
         self.role:Hide()
         self.classDot:Hide()
@@ -2263,6 +2264,15 @@ export class UnitFrame extends Button
                 end
             end)
         end
+        -- a reaction the client didn't know yet (seen in game: a party pet's
+        -- frame kept the theme's bar until a /reload, no UNIT_FACTION telling
+        -- when it was known): asked again on the unit's UNIT_FLAGS, which
+        -- comes often (probed on a party member), only while unknown
+        onUnit(self, u, "UNIT_FLAGS", function()
+            if self.reactionUnknown then
+                self:UpdateIdentity()
+            end
+        end)
         -- going offline or coming back: the bar, the text, the name and the power line
         onUnit(self, u, "UNIT_CONNECTION", function()
             self:Refresh()
@@ -2371,32 +2381,6 @@ export class UnitFrame extends Button
         self:Refresh()
     end
 
-    -- A unit the client doesn't know the reaction of yet (seen in game: a
-    -- group member's pet that came while out of sight kept the theme's bar
-    -- until a /reload, no event telling when it was known): asked again each
-    -- second until it's known, the unit is gone or the frame stops.
-    function WaitForReaction(wait: boolean)
-        local ticker = self.reactionTicker
-        if not (wait and self.active) then
-            if ticker then
-                ticker:Cancel()
-                self.reactionTicker = nil
-            end
-            return
-        end
-        if ticker then
-            return
-        end
-        self.reactionTicker = timer.every(1, function()
-            local now = self.unit
-            if now and self.api.UnitExists(now) then
-                self:UpdateIdentity()
-            else
-                self:WaitForReaction(false)
-            end
-        end)
-    end
-
     function Deactivate()
         if not self.active then
             return
@@ -2408,7 +2392,6 @@ export class UnitFrame extends Button
             ticker:Cancel()
             self.ticker = nil
         end
-        self:WaitForReaction(false)
         -- (a cost shown stays no longer than its events)
         local cast = self.cast
         if cast then

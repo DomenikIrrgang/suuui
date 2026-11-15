@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Party and raid pets: a pet could show your theme's bar colour instead of green until a /reload, when the game didn't yet know how it stands to you as it came; its frame now asks again and turns green as soon as the game knows. The same goes for any NPC frame.
+- Party and raid pets: a pet could show your theme's bar colour instead of green until a /reload, when the game didn't yet know how it stands to you as it came; its frame now turns green with the next update the game sends about that pet. The same goes for any NPC frame.
 
 ## 0.17.0 (2026-11-14)
 
