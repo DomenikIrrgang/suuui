@@ -104,6 +104,30 @@ does; the Group Finder's tests use that for the refused case.
 it (the panel manager's secure attribute handler, the key's down or up, a
 client change) is not known yet.
 
+<a id="v3"></a>
+
+### V3. A frame without a size: a rect and OnSizeChanged in the VM, neither in the game
+
+A frame with one anchor point and no size (0 x 0) has a rect in the VM
+(`GetLeft()` is a number) and its children's `OnSizeChanged` fires when
+their size is set. In the game the same frame reads `left = nil`, and a child
+under it gets no `OnSizeChanged` (`/suu probe bagopen`, dev build, 2026-11-15:
+the bags' window shown, 0 x 0, one anchor, its body sized and never
+reported). So a panel that waits for its body's `OnSizeChanged` to get its
+first size is sized in the VM and never in the game.
+
+That is how a dev build opened the bags with no size: a dev build's monitor
+sets every script through a wrapper (`__wl.mon.setScript`), so
+`body:GetScript("OnSizeChanged")` is the wrapper, never the function that
+was set; `Panel:PlaceBody` compared it with `fitter` and so never fitted the
+panel at build. Never compare a `GetScript` result with a function of ours
+(compare it with `nil`, or keep a flag). The tests run without the monitor:
+with `"monitor": true` in the `test` profile they ran the wrapper, and Panel's
+tests failed on it (0 x 0) before the fix.
+
+Repro: a frame with `SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -28, 28)`
+and no size: `GetLeft()` is a number in the VM, nil in the game.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not

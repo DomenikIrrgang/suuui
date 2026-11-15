@@ -5,6 +5,23 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import errorsSoFar from "../helpers"
 
+-- the windows the toggles below open, by their global names
+local WINDOWS: string[] = { "SuuUIBags", "SuuUITalents", "SuuUICollectionsWindow", "SuuUISettings" }
+
+-- The windows shown without a size ("name w x h"): a window shown but
+-- 0 x 0 draws nothing (the bags in a dev build on the real client, every
+-- flag reading open).
+local function sizeless(): string[]
+    local out: string[] = {}
+    for _, name in ipairs(WINDOWS) do
+        local f = _G[name] :: Frame?
+        if f and f:IsShown() and not (f:GetWidth() > 0 and f:GetHeight() > 0) then
+            out[#out + 1] = ("%s %s x %s"):format(name, tostring(f:GetWidth()), tostring(f:GetHeight()))
+        end
+    end
+    return out
+end
+
 @test("the windows open and close")
 local function windows()
     for _ = 1, 2 do
@@ -13,7 +30,32 @@ local function windows()
         SuuUI.ToggleCollections()
         SuuUI.ToggleSettings()
         mock.advanceFrames(2)
+        expect(sizeless()).toEqual({})
     end
+    expect(errorsSoFar()).toEqual({})
+end
+
+@test("opened, every window has a size")
+local function sized()
+    SuuUI.ToggleBags()
+    SuuUI.ToggleTalents()
+    SuuUI.ToggleCollections()
+    SuuUI.ToggleSettings()
+    mock.advanceFrames(2)
+    local shown: string[] = {}
+    for _, name in ipairs(WINDOWS) do
+        local f = _G[name] :: Frame?
+        if f and f:IsShown() then
+            shown[#shown + 1] = name
+        end
+    end
+    expect(shown).toEqual(WINDOWS)
+    expect(sizeless()).toEqual({})
+    SuuUI.ToggleBags()
+    SuuUI.ToggleTalents()
+    SuuUI.ToggleCollections()
+    SuuUI.ToggleSettings()
+    mock.advanceFrames(2)
     expect(errorsSoFar()).toEqual({})
 end
 
