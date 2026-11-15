@@ -1,0 +1,233 @@
+-- Units/Collections/Gifts: a wrapped mount, toy or pet (the gift in the
+-- strip, the present on the stage or the card, unwrapped the game's way);
+-- a gift arriving (told, counted); the present placed in any scene.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import internal M from "/Units/Collections"
+import type Entry from "/Units/Collections/Catalog"
+import start, cleanup, open, ui, cells, toyData, giftTexture, wrappedRam, fakePresent, petJournal from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- Gifts: what the game wraps
+--------------------------------------------------------------------------------
+
+@test("a wrapped mount: the gift in the strip, the present on the stage; Unwrap opens it and the mount shows")
+local function giftMount()
+    local cleared = wrappedRam()
+    local present = fakePresent()
+    open()
+    local e = assert(M.chosen)
+    expect(e.name).toBe("Swift Ram")
+    expect(cells()[1].icon:GetTexture()).toBe(giftTexture())
+    expect(cells()[1].fresh).toBeShown()
+    expect(ui().gift).toBeShown()
+    -- the present's model from Forever's files (its display isn't there),
+    -- stood on the floor shadow (72 px over the stage's bottom) as a mount
+    expect(present.file).toBe(1401005)
+    -- smaller, raised in its scene (its base off the scene's bottom edge)
+    expect(present.scale).toBe(0.6)
+    expect(present.z).toBeCloseTo(1 / 0.6)
+    local gift, stage = ui().gift, ui().stage
+    expect(assert(gift:GetBottom()) + 100).toBeCloseTo(assert(stage:GetBottom()) + 72)
+    expect(assert(gift:GetLeft()) + 360).toBeCloseTo((assert(stage:GetLeft()) + assert(stage:GetRight())) / 2)
+    expect(ui().model).never.toBeShown()
+    expect(ui().stage.hint:GetText()).toBe("Click the gift to unwrap it")
+    -- Unwrap: the secure button's action left out, the click opens it
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Unwrap")
+    expect(act:GetAttribute("type")).toBeNil()
+    expect(assert(ui().window.tabButtons)[1].countText).toBe("1")
+    -- (the mount shown after it opens, counted)
+    local shows = 0
+    local show = M.ShowMount
+    mock.stub(M, "ShowMount", function(me: typeof(M), shown: Entry)
+        shows += 1
+        show(me, shown)
+    end)
+    mock.click(act)
+    -- (the present unwraps first)
+    mock.advanceTime(1)
+    expect(cleared).toEqual({})
+    expect(ui().gift).toBeShown()
+    mock.advanceTime(2.1)
+    expect(cleared).toEqual({ 102 })
+    -- shown, then once more a frame later (its camera read once laid out)
+    expect(shows).toBe(1)
+    mock.advanceFrames(1)
+    expect(shows).toBe(2)
+    expect(ui().gift).never.toBeShown()
+    expect(ui().model).toBeShown()
+    expect(act.look.label:GetText()).toBe("Summon")
+    expect(act:GetAttribute("type")).toBe("spell")
+    expect(assert(ui().window.tabButtons)[1].countText).toBeNil()
+end
+
+@test(
+    "a wrapped toy: its card shows the gift (Forever has no present for toys) and Unwrap; a click opens it, Use after"
+)
+local function giftToy()
+    toyData()
+    mock.setToys({
+        [201] = { fanfare = true },
+        [202] = { favorite = true, usable = false },
+        [203] = { collected = false },
+    })
+    open("toys")
+    local c = ui().shelf.cards[1]
+    expect(c.name:GetText()).toBe("Toy Drum")
+    expect(c.icon:GetTexture()).toBe(giftTexture())
+    expect(c.icon).toBeShown()
+    expect(c.gift).never.toBeShown()
+    expect(c.act.look.label:GetText()).toBe("Unwrap")
+    expect(c.use:GetText()).toBe("A gift: click to unwrap it")
+    expect(c.act:GetAttribute("type")).toBeNil()
+    mock.click(c)
+    mock.advanceTime(3.1)
+    expect(C_ToyBoxInfo.NeedsFanfare(201)).toBe(false)
+    -- (opened, it sorts with the others again)
+    local drum = ui().shelf.cards[2]
+    expect(drum.name:GetText()).toBe("Toy Drum")
+    expect(drum.gift).never.toBeShown()
+    expect(drum.act.look.label:GetText()).toBe("Use")
+    expect(drum.act:GetAttribute("type")).toBe("toy")
+end
+
+@test("a gift arriving: told, Open shows it chosen; the counts on the tabs and for the micro menu")
+local function giftArrives()
+    wrappedRam()
+    toyData()
+    local said: { [string]: unknown }[] = {}
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown })
+        said[#said + 1] = def
+    end)
+    local counts: number[] = {}
+    local owner = {}
+    events.on(
+        "SUUUI_GIFTS_CHANGED",
+        function(_, n: number)
+            counts[#counts + 1] = n
+        end,
+        owner
+    )
+    mock.fireEvent("NEW_MOUNT_ADDED", 102)
+    expect(#said).toBe(1)
+    expect(said[1].title).toBe("A gift arrived")
+    expect(said[1].body).toBe("Swift Ram waits wrapped in your collections.")
+    expect(counts[#counts]).toBe(1)
+    expect(M:GiftCount()).toBe(1)
+    -- Open: the window (through its secure toggle), the gift chosen
+    local action = (said[1].actions :: { { onClick: () -> (), click: () -> Frame? } })[1]
+    expect(action.click()).toBe(M.toggleButton)
+    open()
+    action.onClick()
+    expect(assert(M.chosen).id).toBe(102)
+    -- not wrapped: noted, not told
+    mock.fireEvent("NEW_MOUNT_ADDED", 101)
+    expect(#said).toBe(1)
+    -- a toy arriving wrapped
+    toyData()
+    mock.fireEvent("TOYS_UPDATED", 201, true, true)
+    expect(#said).toBe(2)
+    expect(said[2].body).toBe("Toy Drum waits wrapped in your collections.")
+    events.offAll(owner)
+end
+
+@test("a wrapped pet: the gift in the strip, the present on the stage, the tab's count; Unwrap opens it by its GUID")
+local function giftPet()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    local present = fakePresent()
+    -- (a pet's gift in a mount's scene: the pet's own showed it empty)
+    mock.stub(M, "MountScene", function(): number?
+        return 42
+    end)
+    local scenes: number[] = {}
+    mock.stub(ui().gift, "TransitionToModelSceneID", function(_: unknown, id: number)
+        scenes[#scenes + 1] = id
+    end)
+    open("pets")
+    expect(scenes[1]).toBe(42)
+    local e = assert(M.chosen)
+    expect(e.name).toBe("Black Tabby Cat")
+    expect(e.wrapped).toBe(true)
+    expect(cells()[1].icon:GetTexture()).toBe(giftTexture())
+    expect(ui().gift).toBeShown()
+    expect(present.file).toBe(1401005)
+    expect(assert(ui().window.tabButtons)[2].countText).toBe("1")
+    expect(M:GiftCount()).toBe(1)
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Unwrap")
+    mock.click(act)
+    mock.advanceTime(3.1)
+    expect(calls.cleared).toEqual({ "Pet-C" })
+    mock.advanceFrames(1)
+    expect(ui().gift).never.toBeShown()
+    expect(assert(ui().window.tabButtons)[2].countText).toBeNil()
+end
+
+@test("a wrapped pet whose own scene shows no present: in a mount's scene; an empty model (0) given the present")
+local function giftPetScene()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    -- the pet's scene: none (as Forever may give)
+    mock.fake("C_PetJournal.GetPetModelSceneInfoBySpeciesID", function(_: number): number?
+        return nil
+    end)
+    mock.stub(M, "MountScene", function(): number?
+        return 42
+    end)
+    local present = fakePresent() :: { file?: number, GetModelFileID: () -> number? }
+    present.GetModelFileID = function(): number?
+        return 0
+    end
+    open("pets")
+    expect(assert(M.chosen).wrapped).toBe(true)
+    expect(ui().gift).toBeShown()
+    expect(present.file).toBe(1401005)
+end
+
+@test("the present in any scene: 150 px tall, its base on the floor shadow, the frame kept over the stage")
+local function presentPlaced()
+    local calls = petJournal()
+    calls.wrapped = "Pet-C"
+    local present = fakePresent() :: { scale?: number, z?: number }
+    -- a scene showing the box high and large: 40 px a world unit upward,
+    -- the scene's origin 300 px over the frame's bottom (found in game: cut off)
+    local gift = ui().gift :: {}
+    mock.stub(gift, "Transform3DPointTo2D", function(_: unknown, _x: number, _y: number, z: number): (number, number)
+        local s = ui().gift:GetEffectiveScale()
+        return 380 * s, (300 + 40 * z) * s
+    end)
+    open("pets")
+    expect(ui().gift).toBeShown()
+    local k = assert(present.scale)
+    expect(k).toBeCloseTo(150 / (40 * 2.3))
+    -- its base (the actor's place times its scale) projects 72 px up
+    expect(300 + 40 * assert(present.z) * k).toBeCloseTo(72)
+    expect(assert(ui().gift:GetBottom())).toBeCloseTo(assert(ui().stage:GetBottom()))
+    -- unseen until it stands still (a frame or two), then shown, its fit kept
+    -- for the scene (another pet's gift shows at once, no flash: found in game)
+    mock.advanceFrames(3)
+    expect(ui().gift:GetAlpha()).toBe(1)
+    expect(next(M.presentFits) ~= nil).toBe(true)
+    -- the scene, loaded late, resets the box to its own size (found in game:
+    -- huge on first opening): hidden, placed again, shown
+    local fitted = assert(present.scale)
+    present.scale = 1
+    mock.advanceFrames(5)
+    expect(assert(present.scale)).toBeCloseTo(fitted)
+    expect(ui().gift:GetAlpha()).toBe(1)
+end

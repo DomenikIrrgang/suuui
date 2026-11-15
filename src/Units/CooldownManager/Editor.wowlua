@@ -1,0 +1,641 @@
+-- Units/CooldownManager/Editor.wowlua
+-- The Cooldown Manager's settings editor, the two custom rows of its
+-- settings section (Units/CooldownManager.wowlua): the setup and preset bar
+-- (which spec's setup you edit, your class's presets, Load, Reset) and the
+-- list editor (the Cooldowns or Auras tab, each list's head, its rows, its
+-- "+ Add"; rows drag to reorder, onto each other to share a slot; the
+-- Behaviour panel per entry). Both edit the module through the EditorHost
+-- they are given.
+
+import SuuUI from "/Core/API"
+import type SelectOption, Select, SuuButton, Text, Segmented from "/Core/API"
+import * as Lists from "./Lists"
+import * as data from "./EditorData"
+import EntryRow, ListHead, AddRow, AddToRow, DragGhost, RailedFrame, ROW_H, GAP, WIDTH, INDENT from "./Rows"
+import type Rail, RowContext from "./Rows"
+import BehaviourPanel from "./Behaviour"
+
+local UI = SuuUI.UI
+
+type Entry = Lists.Entry
+type ListSet = Lists.ListSet
+type Path = Lists.Path
+type GroupOffer = data.GroupOffer
+type EditorHost = data.EditorHost
+
+local presets, findPreset, specName = data.presets, data.findPreset, data.specName
+local infoOf, kindOf, tabLists, mutate, newUid = data.infoOf, data.kindOf, data.tabLists, data.mutate, data.newUid
+local candidates, addOptions = data.candidates, data.addOptions
+local locate, entryAt, walk = Lists.locate, Lists.entryAt, Lists.walk
+local combine, accepts = Lists.combine, Lists.accepts
+
+--------------------------------------------------------------------------------
+-- The setup and preset bar: which spec's setup you edit (the active one by
+-- default), your class's presets, Load, and what the lists are based on.
+--------------------------------------------------------------------------------
+
+export class PresetBar extends Frame
+    -- the module whose setups it shows and loads
+    readonly host: EditorHost
+    readonly setup: Select<number>
+    readonly active: Text
+    readonly select: Select<string>
+    readonly status: Text
+    readonly load: SuuButton
+    readonly reset: SuuButton
+    choice: string? = nil
+
+    -- (@unchecked: exported, its first closure got the constructor's
+    -- runtime checks in dev and test builds (wowlua 0.13.15), which the
+    -- class had none of while it was local: a cleared choice raised there)
+    @unchecked
+    constructor(parent: Frame, host: EditorHost)
+        super(nil, parent)
+        self.host = host
+        self:SetSize(520, 112)
+        self.setup = UI.Select(self, {
+            width = 200,
+            onChange = function(v: number)
+                self.host.editSpec = v
+                self.host:Emit("SUUUI_COOLDOWNS_SETUP")
+            end,
+        })
+        self.setup:SetPoint("TOPLEFT")
+        self.active = UI.Text(self, "caption", "ink-muted")
+        self.active:SetPoint("LEFT", self.setup, "RIGHT", 10, 0)
+        local options: SelectOption<string>[] = {}
+        for _, p in ipairs(presets()) do
+            options[#options + 1] = { value = p.id, label = p.name }
+        end
+        self.select = UI.Select(self, {
+            width = 200,
+            options = options,
+            onChange = function(v: string)
+                self.choice = v
+            end,
+        })
+        self.select:SetPoint("TOPLEFT", self.setup, "BOTTOMLEFT", 0, -10)
+        self.status = UI.Text(self, "caption", "ink-muted")
+        self.status:SetPoint("TOPLEFT", self.select, "BOTTOMLEFT", 0, -6)
+        self.load = UI.Button(self, {
+            text = "Load",
+            variant = "primary",
+            onClick = function()
+                local choice = self.choice
+                if not choice then
+                    return
+                end
+                local spec = self.host:EditSpec()
+                local p = findPreset(choice)
+                local function load()
+                    self.host:LoadPreset(choice, spec)
+                    self:Refresh()
+                end
+                -- loading over lists you've changed (or another preset's) asks first
+                local changes = self.host:Changes()
+                if choice ~= self.host:PresetId(spec) or changes > 0 then
+                    UI.Confirm({
+                        title = "Load " .. (p and p.name or "preset") .. "?",
+                        text = ("Your %s lists are replaced with %s's.%s"):format(
+                            specName(spec),
+                            p and p.name or "the preset",
+                            changes > 0 and
+                                (" Your %d %s are lost."):format(changes, changes == 1 and "change" or "changes") or
+                                ""
+                        ),
+                        confirm = "Replace",
+                        onConfirm = load,
+                    })
+                else
+                    load()
+                end
+            end,
+        })
+        self.load:SetPoint("LEFT", self.select, "RIGHT", 8, 0)
+        self.reset = UI.Button(self, {
+            text = "Reset to preset",
+            onClick = function()
+                local spec = self.host:EditSpec()
+                local id = self.host:PresetId(spec)
+                local n = self.host:Changes()
+                if id == "" or n == 0 then
+                    return
+                end
+                UI.Confirm({
+                    title = "Reset to preset?",
+                    text = ("Your %d %s to the %s lists are undone."):format(
+                        n,
+                        n == 1 and "change" or "changes",
+                        specName(spec)
+                    ),
+                    confirm = "Reset",
+                    onConfirm = function()
+                        self.host:LoadPreset(id, spec)
+                        self:Refresh()
+                    end,
+                })
+            end,
+        })
+        self.reset:SetPoint("LEFT", self.load, "RIGHT", 8, 0)
+        self:Refresh()
+        self.host:Watch("setups", function()
+            self:Refresh()
+        end)
+        self.host:On("SUUUI_COOLDOWNS_SETUP", function()
+            self.choice = nil
+            self:Refresh()
+        end)
+    end
+
+    function Refresh()
+        local spec = self.host:EditSpec()
+        -- the setups: Unspecced and the class's trees, the active one marked
+        local specs: SelectOption<number>[] = {}
+        local seen: { [number]: boolean } = {}
+        for _, p in ipairs(presets()) do
+            local t = p.tree or 0
+            if not seen[t] then
+                seen[t] = true
+                specs[#specs + 1] = { value = t, label = specName(t) .. (t == self.host.spec and " (active)" or "") }
+            end
+        end
+        table.sort(specs, function(a: SelectOption<number>, b: SelectOption<number>): boolean
+            return (a.value or 0) < (b.value or 0)
+        end)
+        self.setup:SetOptions(specs)
+        self.setup:SetValue(spec)
+        local pts = self.host.points
+        self.active:SetValue(
+            ("This character: %s · talents %d / %d / %d"):format(specName(self.host.spec), pts[1], pts[2], pts[3])
+        )
+        local p = findPreset(self.host:PresetId(spec))
+        self.choice = self.choice or (p and p.id)
+        self.select:SetValue(self.choice)
+        local n = p and self.host:Changes() or 0
+        self.status:SetValue(
+            p and ("Based on " .. p.name .. (n > 0 and (" · " .. n .. (n == 1 and " change" or " changes")) or "")) or
+                "No preset loaded"
+        )
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The list editor: the Cooldowns or Auras tab, each list's head, its rows,
+-- its "+ Add"; rows drag to reorder, onto each other to share a slot.
+--------------------------------------------------------------------------------
+
+-- What a row being dragged is, and what it may land on.
+type Drag = Lists.DragFrom
+
+-- What a drop at the cursor may land on, row by row: the frame, the
+-- position before it, what may land on it (onto a row).
+type LayoutItem = { frame: Frame, before: Path, onto?: string, path?: Path, row?: EntryRow }
+-- A list as laid out: its items, its head, its foot, the position after it.
+type ListLayout = { items: LayoutItem[], head: ListHead, add?: AddRow, endPath?: Path }
+-- Where a drop lands: at a position (the line over `frame`), or onto a row.
+type DropTarget = { path: Path, frame: Frame, onto?: string, row?: EntryRow }
+
+export class ListEditor extends Frame
+    -- the module whose lists it edits
+    readonly host: EditorHost
+    readonly tabs: Segmented<string>
+    readonly rows: EntryRow[] = {}
+    readonly heads: ListHead[] = {}
+    readonly adds: AddRow[] = {}
+    readonly addTos: AddToRow[] = {}
+    -- folded or open, per collection and shared slot (by uid), this session:
+    -- collections start open, shared slots folded
+    readonly fold: { [string]: boolean } = {}
+    -- Dragging: a ghost follows the cursor; an arcane line marks where the
+    -- row lands, an arcane edge the row it joins.
+    readonly ghost: DragGhost
+    readonly line: Texture
+    tab: string = "cooldowns"
+    layout: { [string]: ListLayout } = {}
+    drag: Drag? = nil
+    target: DropTarget? = nil
+    dragRow: EntryRow? = nil
+    lit: EntryRow? = nil
+    behaviour: BehaviourPanel? = nil
+
+    -- (@unchecked: exported, its first closure got the constructor's
+    -- runtime checks in dev and test builds (wowlua 0.13.15), which the
+    -- class had none of while it was local: a cleared choice raised there)
+    @unchecked
+    constructor(parent: Frame, host: EditorHost)
+        super(nil, parent)
+        self.host = host
+        self:SetSize(WIDTH, 100)
+        self.tabs = UI.Segmented(self, {
+            options = { { value = "cooldowns", label = "Cooldowns" }, { value = "auras", label = "Auras" } },
+            onChange = function(v: string)
+                self.tab = v
+                self:Refresh()
+            end,
+        })
+        self.tabs:SetPoint("TOPLEFT")
+        self.tabs:SetValue("cooldowns")
+        self.ghost = DragGhost.new()
+        self.line = self:CreateTexture(nil, "OVERLAY")
+        UI.PaintFill(self.line, "arcane")
+        self.line:SetHeight(2)
+        self.line:Hide()
+
+        -- the panel closes with the page (and the settings window)
+        self:HookScript("OnHide", function()
+            local b = self.behaviour
+            if b then
+                b:Hide()
+            end
+        end)
+        -- "Seen recently" changes while the settings are closed
+        self:HookScript("OnShow", function()
+            self:Refresh()
+        end)
+
+        self:Refresh()
+        self.host:Watch("setups", function()
+            self:Refresh()
+        end)
+        self.host:On("SUUUI_COOLDOWNS_SETUP", function()
+            -- another spec's lists: the Behaviour panel's entry isn't there
+            local b = self.behaviour
+            if b then
+                b:Hide()
+            end
+            self:Refresh()
+        end)
+    end
+
+    -- Where a drop at the cursor lands, in the visible tab: at a position
+    -- (the line goes over `frame`), or onto a row: a single entry (a new
+    -- shared slot), a shared slot (joins it) or a collection (goes last in
+    -- it). Rows that can take one are split in four: the top quarter is
+    -- before, the middle onto, the bottom after.
+    function DropTarget(): DropTarget?
+        local _, cy = GetCursorPosition()
+        cy = cy / self:GetEffectiveScale()
+        for _, key in ipairs(tabLists(self.tab)) do
+            local L = self.layout[key]
+            local add, endPath = L and L.add, L and L.endPath
+            local top, bottom = L and L.head:GetTop(), add and add:GetBottom()
+            if L and add and endPath and top and bottom and cy <= top and cy >= bottom then
+                local items, foot, tail = L.items, add, endPath
+                local function at(n: number): DropTarget
+                    local it = items[n]
+                    if it then
+                        return { path = it.before, frame = it.frame }
+                    end
+                    return { path = tail, frame = foot }
+                end
+                for n, it in ipairs(items) do
+                    local t, b = it.frame:GetTop(), it.frame:GetBottom()
+                    if t and b then
+                        b = b - GAP
+                        if cy <= t and cy > b then
+                            local h = t - b
+                            local row = it.row
+                            if it.onto and row then
+                                if cy > t - h / 4 then
+                                    return at(n)
+                                end
+                                if cy > b + h / 4 then
+                                    return { onto = it.onto, path = it.path or it.before, frame = row, row = row }
+                                end
+                                return at(n + 1)
+                            end
+                            return cy > t - h / 2 and at(n) or at(n + 1)
+                        end
+                    end
+                end
+                local first = items[1]
+                local firstTop = first and first.frame:GetTop()
+                if firstTop and cy > firstTop then
+                    return at(1)
+                end
+                return at(#items + 1)
+            end
+        end
+        return nil
+    end
+
+    function ShowDrop(t: DropTarget?)
+        local lit = self.lit
+        if lit then
+            lit.dropFill:Hide()
+            lit.dropEdge:SetShown(false)
+            self.lit = nil
+        end
+        self.line:Hide()
+        if not t then
+            return
+        end
+        local row = t.row
+        if t.onto and row then
+            row.dropFill:Show()
+            row.dropEdge:SetShown(true)
+            self.lit = row
+        else
+            self.line:ClearAllPoints()
+            self.line:SetPoint("BOTTOMLEFT", t.frame, "TOPLEFT", 0, 1)
+            self.line:SetPoint("BOTTOMRIGHT", t.frame, "TOPRIGHT", 0, 1)
+            self.line:Show()
+        end
+    end
+
+    function StartDrag(row: EntryRow)
+        local drag: Drag = { path = row.path, kind = row.kind, enchant = row.entry.enchant }
+        self.drag = drag
+        row:SetAlpha(0.4)
+        self.dragRow = row
+        self.ghost.icon:SetArt(row.icon:IsShown() and row.icon.art:GetTexture() or nil)
+        self.ghost.name:SetValue(row.name:GetText() or "")
+        self.ghost:Show()
+        self:SetScript("OnUpdate", function()
+            local x, y = GetCursorPosition()
+            local s = UIParent:GetEffectiveScale()
+            self.ghost:ClearAllPoints()
+            self.ghost:SetPoint("LEFT", UIParent, "BOTTOMLEFT", x / s + 12, y / s)
+            local t = self:DropTarget()
+            -- a drop that isn't allowed doesn't light up
+            if t and not accepts(drag, t) then
+                t = nil
+            end
+            self.target = t
+            self:ShowDrop(t)
+        end)
+    end
+
+    function StopDrag()
+        self:SetScript("OnUpdate", nil)
+        self.ghost:Hide()
+        self:ShowDrop(nil)
+        local dragRow = self.dragRow
+        if dragRow then
+            dragRow:SetAlpha(1)
+        end
+        local from, to = self.drag, self.target
+        self.drag, self.target, self.dragRow = nil, nil, nil
+        if not (from and to) then
+            return
+        end
+        if to.onto == "entry" then
+            -- onto a single entry: offer a shared slot of the two
+            local lists = self.host:Lists(self.host:EditSpec())
+            local a, b = entryAt(lists, to.path), entryAt(lists, from.path)
+            if not (a and b) then
+                return
+            end
+            local names = { a.name, b.name }
+            local cooldown = kindOf(to.path.key) == "cooldown"
+            UI.Confirm({
+                title = "Make a shared slot?",
+                text = ("Make \"%s + %s\" a shared slot? %s"):format(
+                    a.name or "?",
+                    b.name or "?",
+                    cooldown and "One icon: the last of them you know shows there." or
+                        "One icon: whichever is up shows there."
+                ),
+                confirm = "Make shared slot",
+                onConfirm = function()
+                    local uid = newUid()
+                    self.fold[uid] = true
+                    mutate(self.host, function(l: ListSet)
+                        combine(l, to.path, from.path, uid, names)
+                    end)
+                end,
+            })
+            return
+        end
+        local dest = Lists.dropPath(to)
+        mutate(self.host, function(l: ListSet)
+            Lists.moveEntry(l, from.path, dest)
+        end)
+    end
+
+    function RemoveAt(path: Path)
+        mutate(self.host, function(l: ListSet)
+            Lists.removeAt(l, path)
+        end)
+    end
+
+    function IsOpen(e: Entry, p: Path): boolean
+        local v = self.fold[Lists.foldKey(e, p)]
+        if v == nil then
+            return e.collection and true or false
+        end
+        return v
+    end
+
+    function ToggleFold(r: EntryRow)
+        self.fold[Lists.foldKey(r.entry, r.path)] = not self:IsOpen(r.entry, r.path)
+        self:Refresh()
+    end
+
+    function Refresh()
+        self.layout = {}
+        for _, r in ipairs(self.rows) do
+            r:Hide()
+        end
+        for _, h in ipairs(self.heads) do
+            h:Hide()
+        end
+        for _, a in ipairs(self.adds) do
+            a:Hide()
+        end
+        for _, a in ipairs(self.addTos) do
+            a:Hide()
+        end
+        -- the Cooldowns/Auras switch anchored anew each time, as the rows are:
+        -- in the game a frame laid out while a size script resizes what its
+        -- anchor hangs on (this editor's height resizes its settings row) is
+        -- never placed until anchored again (wowlua PROBES "Found with SuuUI"
+        -- item 1). Anchored once, in the constructor, it was missing in game:
+        -- an empty gap under "Lists" (seen 2026-11-10)
+        self.tabs:ClearAllPoints()
+        self.tabs:SetPoint("TOPLEFT")
+        local lists = self.host:Lists(self.host:EditSpec())
+        local y = -(30 + 12)
+        local rowN, addN = 0, 0
+        local found: { [string]: { byName: { [string]: number[] }, groups: { [string]: GroupOffer } } } = {}
+        for i, key in ipairs(tabLists(self.tab)) do
+            local info = infoOf(key)
+            local cooldown = info.kind == "cooldown"
+            local list = lists[key] or {}
+            local known = found[info.kind]
+            if not known then
+                local byName, groups = candidates(info.kind)
+                known = { byName = byName, groups = groups }
+                found[info.kind] = known
+            end
+            local byName, groups = known.byName, known.groups
+            local present: { [string]: boolean } = {}
+            local spells, nested = 0, false
+            walk(list, key, function(e: Entry)
+                if e.name then
+                    present[e.name] = true
+                end
+                if e.group or e.collection then
+                    nested = true
+                else
+                    spells = spells + 1
+                end
+            end)
+            local h = self.heads[i] or ListHead.new(self)
+            self.heads[i] = h
+            h.title:SetValue(info.label)
+            h.note:SetValue(info.note)
+            local noun = cooldown and "spell" or "aura"
+            if nested then
+                h.count:SetValue(
+                    ("%d %s · %d %s"):format(
+                        #list,
+                        #list == 1 and "entry" or "entries",
+                        spells,
+                        spells == 1 and noun or (noun .. "s")
+                    )
+                )
+            else
+                h.count:SetValue(#list == 1 and "1 spell" or (#list .. " spells"))
+            end
+            h:ClearAllPoints()
+            h:SetPoint("TOPLEFT", 0, y)
+            h:Show()
+            local L: ListLayout = { items = {}, head = h }
+            self.layout[key] = L
+            y = y - 38
+
+            local function place(fr: RailedFrame, level: number, rails: Rail[])
+                fr:ClearAllPoints()
+                fr:SetPoint("TOPLEFT", level * INDENT, y)
+                fr:SetWidth(WIDTH - level * INDENT)
+                fr:SetRails(rails, level)
+                fr:Show()
+                y = y - (ROW_H + GAP)
+            end
+            -- c: what the row shows, plus its rails, and what may land on it;
+            -- a drop over its top lands at its position
+            local function row(c: RowContext)
+                rowN = rowN + 1
+                local r = self.rows[rowN] or EntryRow.new(self)
+                self.rows[rowN] = r
+                r:Fill(c)
+                place(r, c.level, c.rails)
+                L.items[#L.items + 1] = { frame = r, before = c.path, onto = c.onto, path = c.path, row = r }
+            end
+            local function addTo(box: Entry, path: Path, level: number, rails: Rail[], endPath: Path)
+                addN = addN + 1
+                local a = self.addTos[addN] or AddToRow.new(self)
+                self.addTos[addN] = a
+                a.path, a.byName, a.groups = path, byName, groups
+                a.select.placeholder = "+ Add to " .. (box.name or "it") .. "…"
+                a.select:SetOptions(addOptions(self.host, info.kind, key, byName, groups, present, box.collection))
+                a.select:SetValue(nil)
+                place(a, level, rails)
+                L.items[#L.items + 1] = { frame = a, before = endPath }
+            end
+            -- a single entry, or a shared slot and (open) its members
+            local function entryRows(e: Entry, p: Path, level: number, rails: Rail[])
+                if not e.group then
+                    -- (nothing joins a weapon enchant in a shared slot)
+                    row({
+                        key = key,
+                        path = p,
+                        entry = e,
+                        kind = "entry",
+                        level = level,
+                        rails = rails,
+                        onto = not e.enchant and "entry" or nil,
+                    })
+                    return
+                end
+                local open = self:IsOpen(e, p)
+                row({
+                    key = key,
+                    path = p,
+                    entry = e,
+                    kind = "slot",
+                    level = level,
+                    rails = rails,
+                    open = open,
+                    onto = "slot",
+                })
+                if not open then
+                    return
+                end
+                local inner: Rail[] = { unpack(rails) }
+                inner[#inner + 1] = { level = level, faint = true }
+                local members = e.members or {}
+                for m, x in ipairs(members) do
+                    row({
+                        key = key,
+                        path = { key = key, i = p.i, j = p.j, m = m },
+                        entry = x,
+                        kind = "member",
+                        slot = e,
+                        level = level + 1,
+                        rails = inner,
+                    })
+                end
+                addTo(e, p, level + 1, inner, { key = key, i = p.i, j = p.j, m = #members + 1 })
+            end
+
+            for index, e in ipairs(list) do
+                local p: Path = { key = key, i = index }
+                if e.collection then
+                    local open = self:IsOpen(e, p)
+                    row({
+                        key = key,
+                        path = p,
+                        entry = e,
+                        kind = "collection",
+                        level = 0,
+                        rails = {},
+                        open = open,
+                        onto = "collection",
+                    })
+                    if open then
+                        local rails: Rail[] = { { level = 0 } }
+                        local entries = e.entries or {}
+                        for j, x in ipairs(entries) do
+                            entryRows(x, { key = key, i = index, j = j }, 1, rails)
+                        end
+                        addTo(e, p, 1, rails, { key = key, i = index, j = #entries + 1 })
+                    end
+                else
+                    entryRows(e, p, 0, {})
+                end
+            end
+
+            local a = self.adds[i] or AddRow.new(self)
+            self.adds[i] = a
+            a.key = key
+            a.byName, a.groups = byName, groups
+            a.select:SetOptions(addOptions(self.host, info.kind, key, byName, groups, present, true))
+            a.select:SetValue(nil)
+            a:ClearAllPoints()
+            a:SetPoint("TOPLEFT", 0, y)
+            a:Show()
+            L.add = a
+            L.endPath = { key = key, i = #list + 1 }
+            y = y - 46
+        end
+        self:SetHeight(-y)
+        local b = self.behaviour
+        if b and b:IsShown() then
+            b:Refresh()
+        end
+    end
+
+    -- The Behaviour panel, on the entry at `path`.
+    function OpenBehaviour(path: Path)
+        local t, i, slot = locate(self.host:Lists(self.host:EditSpec()), path)
+        local e = t and i and t[i]
+        if not e then
+            return
+        end
+        local b = self.behaviour or BehaviourPanel.new(self.host)
+        self.behaviour = b
+        b:Open(path, e, slot)
+    end
+end

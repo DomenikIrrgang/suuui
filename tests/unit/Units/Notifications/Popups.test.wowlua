@@ -1,0 +1,234 @@
+-- Units/Notifications/Popups: what SuuUI knows of Blizzard's request
+-- windows (a bank tab's price in coins, the ready check's and the
+-- battleground's time), on their cards.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
+import SuuUI from "/Core/API"
+import * as popups from "/Units/Notifications/Popups"
+import internal M from "/Units/Notifications"
+import type Host from "/Units/Notifications"
+import expectNoErrors from "../../../helpers"
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+-- One of the game's frames by name.
+local function frame(name: string): Frame
+    local f = frames.find(name)
+    assert(f, "no " .. name)
+    return f
+end
+
+local function hideAll()
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() then
+            d:Hide()
+        end
+    end
+end
+
+-- The hosted popup's card (the only one, or by its category).
+local function hosted(category: string?): Host?
+    for _, h in pairs(M.hosts) do
+        if not category or h.kind.category == category then
+            return h
+        end
+    end
+    return nil
+end
+
+local function host(category: string?): Host
+    local h = hosted(category)
+    assert(h, "nothing hosted")
+    return h
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
+    hideAll()
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+@test("a bank tab's price on its card, in coins")
+local function bankTab()
+    local d = frames.asFrame(
+        StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") })
+    )
+    mock.advanceFrames(2)
+    local h = hosted("Bank")
+    if h then
+        local body = h.data.body
+        if body then
+            expect(body:sub(1, 6)).toBe("Costs ")
+        end
+        M:Emit("SUUUI_THEME_CHANGED", "suuui")
+    end
+    if d then
+        d:Hide()
+    end
+end
+
+@test("the ready check: Blizzard's window on a card with its time")
+local function readyCheck()
+    local friend = mock.spawnUnit({
+        name = "Brannoc Ironhand",
+        player = true,
+        class = "WARRIOR",
+        reaction = "friendly",
+    })
+    mock.group:add(friend)
+    mock.advanceFrames(2)
+    mock.fireEvent("READY_CHECK", "Brannoc Ironhand", 30)
+    mock.advanceFrames(3)
+    expect(M.readyEndsAt ~= nil).toBe(true)
+    local h = hosted("Ready check")
+    if h then
+        local duration, left = h.time()
+        expect(duration).toBe(30)
+        expect((left or 99) <= 30).toBe(true)
+    end
+    mock.fireEvent("READY_CHECK_FINISHED", false)
+    expect(M.readyEndsAt).toBeNil()
+    local ready = frames.find("ReadyCheckFrame")
+    if ready and ready:IsShown() then
+        ready:Hide()
+    end
+end
+
+@test("the battleground ready to enter: its window on a card, its time counting down")
+local function battleground()
+    mock.stub(_G, "GetMaxBattlefieldID", function(): number
+        return 2
+    end)
+    mock.stub(_G, "GetBattlefieldStatus", function(i: number): string
+        return i == 2 and "confirm" or "none"
+    end)
+    local left = 80000
+    mock.stub(_G, "GetBattlefieldPortExpiration", function(_: number): number
+        return left
+    end)
+    local dialog = frame("PVPReadyDialog")
+    dialog:Show()
+    mock.advanceFrames(2)
+    local h = host("Battleground")
+    -- milliseconds on this client: 80 s, and the first reading is the whole time
+    local total, remaining = h.time()
+    expect(total).toBe(80)
+    expect(remaining).toBe(80)
+    left = 50000
+    local total2, remaining2 = h.time()
+    expect(total2).toBe(80)
+    expect(remaining2).toBe(50)
+    -- in seconds on others
+    left = 30
+    local _, r3 = h.time()
+    expect(r3).toBe(30)
+    -- none waiting: no time
+    mock.stub(_G, "GetBattlefieldStatus", function(_: number): string
+        return "none"
+    end)
+    expect((h.time())).toBeNil()
+    dialog:Hide()
+    mock.advanceFrames(2)
+    expect(hosted("Battleground")).toBeNil()
+end
+
+@test("a bank tab's price from the next tab's data when the popup shows none")
+local function bankTabPrice()
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: number): PurchasableBankTabData?
+        return mock.partial({ tabCost = 1234567 })
+    end)
+    local d = frames.asFrame(
+        StaticPopup_Show("CONFIRM_BUY_BANK_TAB", nil, nil, { bankType = tbl.field(Enum, "BankType", "Character") })
+    )
+    mock.advanceFrames(2)
+    local h = host("Bank")
+    local shown = secret.asNumber(tbl.field(d, "MoneyFrame", "staticMoney"))
+    if shown then
+        -- (the popup's own money frame wins when it shows one)
+        expect(h.cost).toBe(shown)
+    else
+        expect(h.cost).toBe(1234567)
+        expect((h.data.body or ""):find("123", 1, true) ~= nil).toBe(true)
+    end
+    if d then
+        d:Hide()
+    end
+end
+
+@test("a cost in coins, each in its coin's colour; a plugin's kind read field by field; SuuUI's own first")
+local function kinds()
+    local C = SuuUI.Tokens.color
+    expect(popups.coinString(12345)).toBe(
+        ("|cff%s1g|r |cff%s23s|r |cff%s45c|r"):format(C["coin-gold"].hex, C["coin-silver"].hex, C["coin-copper"].hex)
+    )
+    expect(popups.coinString(0)).toBe(("|cff%s0c|r"):format(C["coin-copper"].hex))
+    local k = popups.kindFrom({
+        which = "TEST_POPUP",
+        category = "Test",
+        glyph = "door",
+        primary = 2,
+        item = true,
+        cost = function(_: Frame): number
+            return 500
+        end,
+    })
+    expect(k.category).toBe("Test")
+    expect(k.glyph).toBe("door")
+    expect(k.primary).toBe(2)
+    expect(k.item).toBe(true)
+    expect(k.confirm).toBe(false)
+    expect(assert(k.cost)(UIParent)).toBe(500)
+    expect(popups.kindFrom({ category = 7 }).category).toBeNil()
+    expect((assert(popups.kindOf("PARTY_INVITE"))).category).toBe("Party invite")
+    expect(popups.kindOf("TEST_NOT_A_POPUP")).toBeNil()
+    expect((popups.noTime())).toBeNil()
+end
+
+@test("the ready check's window reads its time from the clock it is given")
+local function readyClock()
+    local window: popups.Window? = nil
+    for _, w in ipairs(popups.WINDOWS) do
+        if w.name == "ReadyCheckFrame" then
+            window = w
+        end
+    end
+    local w = assert(window, "no ready check window")
+    local parts = w.parts(frame("ReadyCheckFrame"), { readyDuration = 30, readyEndsAt = GetTime() + 10 })
+    local total, left = assert(parts.time)()
+    expect(total).toBe(30)
+    expect((left or 0) > 9 and (left or 0) <= 10).toBe(true)
+    local none = w.parts(frame("ReadyCheckFrame"), {})
+    expect((assert(none.time)())).toBeNil()
+end

@@ -1,0 +1,386 @@
+-- UI/CooldownTracker/Conditions: the conditions ("Show only when"): each
+-- type's test, all and any, the static state a build sees, chains, and a
+-- group without the members that can't show.
+
+import test, expect, beforeAll, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as roles from "/Core/Roles"
+import cooldownConditionMet, conditionMet, staticState, chain, stateOf, allMet, withMetMembers from "/UI/CooldownTracker/Conditions"
+import internal currentStance, targetKind, instanceKind, rosterClasses, hasRank, readTalents, lookUp, listHas, counts, formByName, TEST from "/UI/CooldownTracker/Conditions"
+import type TrackerEntry, TrackerCondition, TrackerWhen from "/UI/CooldownTracker/Entries"
+import expectNoErrors from "../../../helpers"
+
+-- Test spells: known ones and an unknown one.
+const KNOWN_LOW = 900001
+const KNOWN_HIGH = 900002
+const UNKNOWN = 900003
+const OTHER = 900004
+
+local role = "DAMAGER"
+
+@beforeAll
+local function world()
+    mock.defineSpell(KNOWN_LOW, { name = "Test Strike", iconID = 1001, known = true })
+    mock.defineSpell(KNOWN_HIGH, { name = "Test Strike", iconID = 1002, known = true })
+    mock.defineSpell(UNKNOWN, { name = "Test Unknown", iconID = 1003, known = false })
+    mock.defineSpell(OTHER, { name = "Overpower", iconID = 1004, known = true })
+    mock.setPlayer({ class = "MAGE" })
+    mock.module(roles, {
+        current = function(): (roles.Role, roles.RoleSource)
+            return role :: roles.Role, roles.RoleSource.Chosen
+        end,
+    })
+end
+
+local function cond(c: TrackerCondition, match: string?): TrackerWhen
+    return { match = match, conditions = { c } }
+end
+
+@afterEach
+local function reset()
+    role = "DAMAGER"
+end
+
+--------------------------------------------------------------------------------
+-- Conditions
+--------------------------------------------------------------------------------
+
+@test("no conditions, or nothing chosen: always met")
+local function always()
+    expect(cooldownConditionMet(nil)).toBe(true)
+    expect(cooldownConditionMet({})).toBe(true)
+    expect(cooldownConditionMet({ conditions = {} })).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "classes", classes = {} }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "nonsense" }))).toBe(true)
+    expect(cooldownConditionMet({ match = "any", conditions = { { type = "role", roles = {} } } })).toBe(true)
+    expect(counts("x")).toBe(false)
+    expect(counts({ type = "combat" })).toBe(true)
+    expect(counts({ type = "role", roles = "TANK" })).toBe(false)
+    expectNoErrors()
+end
+
+@test("group: solo, group, raid; the classes in it")
+local function groupCond()
+    -- (faked: the mock can't leave a group again, and the other tests are solo)
+    local inGroup, inRaid = false, false
+    mock.fake("IsInGroup", function(): boolean
+        return inGroup
+    end)
+    mock.fake("IsInRaid", function(): boolean
+        return inRaid
+    end)
+    mock.fake("UnitIsUnit", function(a: string, b: string): unknown
+        return a == "party2" and b == "player"
+    end)
+    mock.fake("UnitClass", function(unit: string): (unknown, unknown)
+        if unit == "player" then
+            return "Mage", "MAGE"
+        end
+        if unit == "party1" or unit == "raid3" then
+            return "Druid", "DRUID"
+        end
+        if unit == "party3" then
+            return "x", mock.secret("PRIEST")
+        end
+        return nil, nil
+    end)
+    expect(cooldownConditionMet(cond({ type = "group", value = "solo" }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "group", value = "group" }))).toBe(false)
+    expect(cooldownConditionMet(cond({ type = "group", value = "raid" }))).toBe(false)
+    inGroup = true
+    expect(cooldownConditionMet(cond({ type = "group", value = "group" }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "group", value = "solo" }))).toBe(false)
+    expect(cooldownConditionMet(cond({ type = "classes", classes = { "DRUID" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "classes", classes = { "MAGE" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "classes", classes = { "MAGE" }, others = true }))).toBe(false)
+    expect(cooldownConditionMet(cond({ type = "classes", classes = { "PRIEST" } }))).toBe(false)
+    expect(rosterClasses(false)).toEqual({ MAGE = true, DRUID = true })
+    expect(rosterClasses(true)).toEqual({ DRUID = true })
+    inRaid = true
+    expect(cooldownConditionMet(cond({ type = "group", value = "raid" }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "group", value = "group" }))).toBe(true)
+    expect(rosterClasses(true)).toEqual({ DRUID = true })
+    expectNoErrors()
+end
+
+@test("role, with not")
+local function roleCond()
+    role = "TANK"
+    expect(cooldownConditionMet(cond({ type = "role", roles = { "TANK", "HEALER" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "role", roles = { "TANK" }, ["not"] = true }))).toBe(false)
+    role = "DAMAGER"
+    expect(cooldownConditionMet(cond({ type = "role", roles = { "TANK" } }))).toBe(false)
+    expectNoErrors()
+end
+
+@test("instance kinds and their aliases")
+local function instanceCond()
+    expect(instanceKind()).toBe("none")
+    expect(cooldownConditionMet(cond({ type = "instance", kinds = { "world" } }))).toBe(true)
+    mock.enterInstance("party")
+    expect(instanceKind()).toBe("party")
+    expect(cooldownConditionMet(cond({ type = "instance", kinds = { "dungeon" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "instance", kinds = { "raid" } }))).toBe(false)
+    mock.leaveInstance()
+    mock.fake("IsInInstance", function(): (boolean, string)
+        return true, "arena"
+    end)
+    expect(instanceKind()).toBe("pvp")
+    mock.fake("IsInInstance", function(): (boolean, string)
+        return true, "weird"
+    end)
+    expect(instanceKind()).toBe("none")
+    expectNoErrors()
+end
+
+@test("combat: the tracker's own idea first")
+local function combatCond()
+    local c = cond({ type = "combat" })
+    expect(conditionMet(c, { combat = true })).toBe(true)
+    expect(conditionMet(c, { combat = false })).toBe(false)
+    expect(conditionMet(c, nil)).toBe(false)
+    mock.player:enterCombat()
+    expect(cooldownConditionMet(c)).toBe(true)
+    mock.player:leaveCombat()
+    expectNoErrors()
+end
+
+@test("target kinds: player, boss, elite, normal, none")
+local function targetCond()
+    expect(targetKind()).toBeNil()
+    local mob = mock.spawnUnit({ name = "Mob", reaction = "hostile", level = 10 })
+    mock.player:target(mob)
+    expect(targetKind()).toBe("normal")
+    mock.fake("UnitClassification", function(_: string): string
+        return "rareelite"
+    end)
+    expect(targetKind()).toBe("elite")
+    mock.fake("UnitClassification", function(_: string): string
+        return "worldboss"
+    end)
+    expect(targetKind()).toBe("boss")
+    expect(cooldownConditionMet(cond({ type = "target", kinds = { "boss" } }))).toBe(true)
+    mock.fake("UnitClassification", function(_: string): string
+        return "normal"
+    end)
+    mock.fake("UnitLevel", function(_: string): number
+        return -1
+    end)
+    expect(targetKind()).toBe("boss")
+    mock.fake("UnitLevel", function(_: string): number
+        return 10
+    end)
+    mock.fake("UnitIsBossMob", function(_: string): unknown
+        return true
+    end)
+    expect(targetKind()).toBe("boss")
+    mock.fake("UnitIsPlayer", function(_: string): unknown
+        return true
+    end)
+    expect(targetKind()).toBe("player")
+    mock.player:target(nil)
+    mob:despawn()
+    expectNoErrors()
+end
+
+@test("stance: caster, forms by spell, by name, a rogue's stealth")
+local function stanceCond()
+    local index: unknown = 0
+    local spell: unknown = 768
+    mock.fake("GetShapeshiftForm", function(): unknown
+        return index
+    end)
+    mock.fake("GetShapeshiftFormInfo", function(_: number): (unknown, unknown, unknown, unknown)
+        return 1, true, true, spell
+    end)
+    expect(currentStance()).toBe("caster")
+    index = 1
+    expect(currentStance()).toBe("cat")
+    expect(cooldownConditionMet(cond({ type = "stance", stances = { "cat", "bear" } }))).toBe(true)
+    -- Travel Form counts as caster form (asked): caster's spells show in it
+    spell = 783
+    expect(currentStance()).toBe("travel")
+    expect(cooldownConditionMet(cond({ type = "stance", stances = { "caster", "moonkin" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "stance", stances = { "travel" } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "stance", stances = { "cat", "bear" } }))).toBe(false)
+    spell = 768
+    expect(cooldownConditionMet(cond({ type = "stance", stances = { "caster", "moonkin" } }))).toBe(false)
+    spell = nil
+    expect(currentStance()).toBeNil()
+    spell = mock.secret(768)
+    expect(currentStance()).toBeNil()
+    -- another rank of a form: by its name
+    mock.defineSpell(2458, { name = "Berserker Stance" })
+    mock.defineSpell(900010, { name = "Berserker Stance" })
+    spell = 900010
+    expect(currentStance()).toBe("berserker")
+    expect(formByName("Nothing")).toBeNil()
+    spell = OTHER
+    expect(currentStance()).toBeNil()
+    spell = 999999 -- no name at all
+    expect(currentStance()).toBeNil()
+    index = mock.secret(1)
+    expect(currentStance()).toBeNil()
+    mock.fake("UnitClass", function(_: string): (string, string)
+        return "Rogue", "ROGUE"
+    end)
+    index = 1
+    expect(currentStance()).toBe("stealth")
+    expectNoErrors()
+end
+
+@test("talent: learned in the active config, or a spell you know")
+local function talentCond()
+    -- a known spell counts
+    expect(cooldownConditionMet(cond({ type = "talent", talents = { KNOWN_LOW } }))).toBe(true)
+    expect(cooldownConditionMet(cond({ type = "talent", talents = { UNKNOWN, "x" } }))).toBe(false)
+    -- from the talent config
+    expect(assert(TEST.talent)({ talents = { 4242 } }, { talents = { [4242] = true } })).toBe(true)
+    expectNoErrors()
+end
+
+@test("readTalents: ranked nodes' chosen entry, else every entry")
+local function talents()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown
+        return 7
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): unknown
+        return { treeIDs = { 1 } }
+    end)
+    mock.fake("C_Traits.GetTreeNodes", function(_: number): unknown
+        return { 10, 11, 12, 13 }
+    end)
+    mock.fake("C_Traits.GetNodeInfo", function(_: number, node: number): unknown
+        if node == 10 then
+            return { ranksPurchased = 1, activeEntry = { entryID = 100 }, entryIDs = { 100 } }
+        end
+        if node == 11 then
+            return { activeRank = 2, entryIDs = { 110, 111, mock.secret(1) } }
+        end
+        if node == 12 then
+            return { currentRank = 0, entryIDs = { 120 } }
+        end
+        return { ranksPurchased = mock.secret(1), entryIDs = { 130 } }
+    end)
+    mock.fake("C_Traits.GetEntryInfo", function(_: number, entry: number): unknown
+        if entry == 111 then
+            return { definitionID = mock.secret(5) }
+        end
+        return { definitionID = entry * 10 }
+    end)
+    mock.fake("C_Traits.GetDefinitionInfo", function(def: number): unknown
+        if def == 1000 then
+            return { spellID = 5000, overriddenSpellID = 5001 }
+        end
+        if def == 1100 then
+            return { spellID = mock.secret(1) }
+        end
+        return nil
+    end)
+    local set = readTalents() :: { [number]: boolean }
+    expect(set[5000]).toBe(true)
+    expect(set[5001]).toBe(true)
+    expect(set[1200]).toBeNil()
+    expect(hasRank({ ranksPurchased = 0, activeRank = 0 })).toBe(false)
+    expect(hasRank({ currentRank = 3 })).toBe(true)
+    -- no config, a secret one, no tree list
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown
+        return nil
+    end)
+    expect(readTalents()).toBeNil()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown
+        return mock.secret(7)
+    end)
+    expect(readTalents()).toBeNil()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function(): unknown
+        return 7
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number): unknown
+        return {}
+    end)
+    expect(readTalents()).toBeNil()
+    expectNoErrors()
+end
+
+@test("lookUp keeps what it read, false for nothing")
+local function lookups()
+    local ctx: { [string]: unknown } = {}
+    local n = 0
+    local function read(): unknown
+        n = n + 1
+        return nil
+    end
+    expect(lookUp(ctx, "k", read)).toBe(false)
+    expect(lookUp(ctx, "k", read)).toBe(false)
+    expect(n).toBe(1)
+    expect(listHas({ "a" }, "b", { a = "b" })).toBe(true)
+    expect(listHas({ "a" }, "b", nil)).toBe(false)
+    expectNoErrors()
+end
+
+@test("all and any")
+local function matching()
+    local yes = { type = "combat" }
+    local no = { type = "combat", ["not"] = true }
+    local ctx = { combat = true }
+    expect(conditionMet({ conditions = { yes, no } }, ctx)).toBe(false)
+    expect(conditionMet({ match = "any", conditions = { no, yes } }, ctx)).toBe(true)
+    expect(conditionMet({ match = "any", conditions = { no } }, ctx)).toBe(false)
+    expect(conditionMet({ conditions = { yes } }, ctx)).toBe(true)
+    expectNoErrors()
+end
+
+@test("staticState: met, unmet, live")
+local function static()
+    local solo = { type = "group", value = "solo" }
+    local inGroup = { type = "group", value = "group" }
+    local live = { type = "combat" }
+    expect(staticState(nil, {})).toBe("met")
+    expect(staticState({ conditions = { solo } }, {})).toBe("met")
+    expect(staticState({ conditions = { inGroup } }, {})).toBe("unmet")
+    expect(staticState({ conditions = { solo, live } }, {})).toBe("live")
+    expect(staticState({ conditions = { inGroup, live } }, {})).toBe("unmet")
+    expect(staticState({ match = "any", conditions = { inGroup, solo } }, {})).toBe("met")
+    expect(staticState({ match = "any", conditions = { inGroup } }, {})).toBe("unmet")
+    expect(staticState({ match = "any", conditions = { inGroup, live } }, {})).toBe("live")
+    expect(staticState({ conditions = { { type = "role", roles = {} } } }, {})).toBe("met")
+    expectNoErrors()
+end
+
+@test("chain, stateOf, allMet")
+local function chains()
+    local a, b = cond({ type = "combat" }), cond({ type = "group", value = "group" })
+    expect(chain(nil, a)).toEqual({ a })
+    expect(chain({ a }, nil)).toEqual({ a })
+    expect(#chain({ a }, b)).toBe(2)
+    expect(stateOf({}, {})).toBe("met")
+    expect(stateOf({ a }, {})).toBe("live")
+    expect(stateOf({ a, b }, {})).toBe("unmet")
+    expect(allMet({ a }, { combat = true })).toBe(true)
+    expect(allMet({ a }, { combat = false })).toBe(false)
+    expectNoErrors()
+end
+
+@test("withMetMembers: a group without the members that can't show")
+local function metMembers()
+    local single: TrackerEntry = { ids = { 1 } }
+    expect(withMetMembers(single, {})).toBe(single)
+    local plain: TrackerEntry = { group = true, members = { { ids = { 1 } } } }
+    expect(withMetMembers(plain, {})).toBe(plain)
+    local g: TrackerEntry = {
+        group = true,
+        name = "G",
+        members = {
+            { ids = { 3, 1 } },
+            { ids = { 2 }, when = cond({ type = "group", value = "raid" }) },
+            { ids = { 1, 4 }, when = cond({ type = "combat" }) },
+            { when = cond({ type = "combat" }) },
+        },
+    }
+    local e = withMetMembers(g, {})
+    expect(e).never.toBe(g)
+    expect(#assert(e.members)).toBe(3)
+    expect(e.ids).toEqual({ 1, 3, 4 })
+    expect(e.name).toBe("G")
+    expectNoErrors()
+end

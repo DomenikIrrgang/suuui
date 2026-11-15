@@ -1,0 +1,176 @@
+-- UI/Panel/ScrollArea.wowlua
+-- A scrolling area for panels and windows (UI/Panel.wowlua): the mouse wheel,
+-- an optional thin scrollbar that takes the mouse, and the scroll pulled back
+-- when the content gets shorter.
+--
+--   scrollArea(parent[, bar]) -> ScrollArea (content in area.child)
+
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as draw from "/UI/Draw"
+
+--------------------------------------------------------------------------------
+-- scrollArea(parent[, bar]): a scrolling area, mouse wheel only, content in
+-- area.child (size it to its content). With `bar`, a
+-- thin scrollbar (Select's: a gilt-faint track, an ink-muted thumb for the
+-- visible part) sits `bar` px right of the area, only while the content
+-- overflows.
+--------------------------------------------------------------------------------
+
+export class ScrollArea extends ScrollFrame
+    readonly child: Frame
+    -- with a bar
+    track?: Texture
+    thumb?: Texture
+    grip?: Button
+    grab?: number
+    dragging?: boolean
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.child = CreateFrame("Frame", nil, self)
+    end
+end
+
+local function updateBar(scroll: ScrollArea)
+    local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local on = max >= 1 and viewH > 0
+    track:SetShown(on)
+    thumb:SetShown(on)
+    if scroll.grip then
+        scroll.grip:SetShown(on)
+    end
+    if not on then
+        return
+    end
+    local thumbH = math.max(24, viewH * viewH / (viewH + max))
+    thumb:SetHeight(thumbH)
+    thumb:ClearAllPoints()
+    thumb:SetPoint("TOP", track, "TOP", 0, -(viewH - thumbH) * math.min(1, scroll:GetVerticalScroll() / max))
+end
+
+-- The bar takes the mouse: drag the thumb, or press the track and the thumb
+-- jumps there and follows (only the wheel scrolled: found in game).
+local function followCursor(scroll: ScrollArea)
+    local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+    local viewH = scroll:GetHeight()
+    local max = math.max(0, scroll.child:GetHeight() - viewH)
+    local range = viewH - thumb:GetHeight()
+    local top = track:GetTop()
+    if max <= 0 or range <= 0 or not top then
+        return
+    end
+    local _, y = GetCursorPosition()
+    y = y / track:GetEffectiveScale()
+    local pos = (top - y) - (scroll.grab or 0)
+    scroll:SetVerticalScroll(max * math.min(1, math.max(0, pos / range)))
+end
+
+local function makeGrip(scroll: ScrollArea, parent: Frame): Button
+    local grip = CreateFrame("Button", nil, parent)
+    grip:SetPoint("TOP", scroll.track :: Texture, "TOP")
+    grip:SetPoint("BOTTOM", scroll.track :: Texture, "BOTTOM")
+    grip:SetWidth(12)
+    grip:SetFrameLevel(scroll:GetFrameLevel() + 5)
+    grip:RegisterForClicks("AnyUp")
+    grip:SetScript("OnMouseDown", function()
+        local track, thumb = scroll.track :: Texture, scroll.thumb :: Texture
+        local thumbTop = thumb:GetTop()
+        if not thumbTop then
+            return
+        end
+        local _, y = GetCursorPosition()
+        y = y / track:GetEffectiveScale()
+        local at = thumbTop - y
+        -- on the thumb: keep the spot grabbed; on the track: its middle
+        scroll.grab = (at >= 0 and at <= thumb:GetHeight()) and at or thumb:GetHeight() / 2
+        scroll.dragging = true
+        followCursor(scroll)
+    end)
+    grip:SetScript("OnMouseUp", function()
+        scroll.dragging = false
+    end)
+    grip:SetScript("OnUpdate", function()
+        if scroll.dragging then
+            if not IsMouseButtonDown("LeftButton") then
+                scroll.dragging = false
+                return
+            end
+            followCursor(scroll)
+        end
+    end)
+    grip:SetScript("OnEnter", function()
+        draw.paintFill(scroll.thumb :: Texture, "ink")
+    end)
+    grip:SetScript("OnLeave", function()
+        draw.paintFill(scroll.thumb :: Texture, "ink-muted")
+    end)
+    return grip
+end
+
+export function scrollArea(parent: Frame, bar: number?): ScrollArea
+    local scroll = ScrollArea.new(parent)
+    local child = scroll.child
+    child:SetSize(1, 1)
+    scroll:SetScrollChild(child)
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local max = math.max(0, child:GetHeight() - self:GetHeight())
+        self:SetVerticalScroll(math.min(max, math.max(0, self:GetVerticalScroll() - delta * 48)))
+    end)
+    if bar then
+        -- on the parent: the scroll frame clips what it holds
+        local track = draw.fill(parent, "gilt-faint", "ARTWORK")
+        scroll.track = track
+        track:SetPoint("TOPLEFT", scroll, "TOPRIGHT", bar, 0)
+        track:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", bar, 0)
+        track:SetWidth(3)
+        local thumb = draw.fill(parent, "ink-muted", "OVERLAY")
+        scroll.thumb = thumb
+        thumb:SetWidth(3)
+        scroll.grip = makeGrip(scroll, parent)
+        local function update()
+            updateBar(scroll)
+        end
+        scroll:SetScript("OnScrollRangeChanged", update)
+        scroll:SetScript("OnVerticalScroll", update)
+        scroll:SetScript("OnSizeChanged", update)
+        child:SetScript("OnSizeChanged", update)
+        update()
+    end
+    -- content that got shorter (or a taller area) pulls the scroll back, so
+    -- no empty space stays at the bottom. A frame later: the sizes settle
+    -- only after the change (a panel that shrinks with its content), and the
+    -- game's own range is then the truth. In combat the game can give the
+    -- range as a secret (the character window's stats, found in game
+    -- 2026-11-09; their heights stayed plain): then the heights tell it.
+    local pending = false
+    local function settle()
+        pending = false
+        local range = scroll:GetVerticalScrollRange()
+        local max = math.max(
+            0,
+            secret.readable(range) and range or
+                (secret.asNumber(child:GetHeight()) or 0) - (secret.asNumber(scroll:GetHeight()) or 0)
+        )
+        if scroll:GetVerticalScroll() > max then
+            scroll:SetVerticalScroll(max)
+        end
+        if scroll.track then
+            updateBar(scroll)
+        end
+    end
+    local function clamp()
+        if pending then
+            return
+        end
+        pending = true
+        after(0, settle)
+    end
+    scroll:HookScript("OnScrollRangeChanged", clamp)
+    scroll:HookScript("OnSizeChanged", clamp)
+    child:HookScript("OnSizeChanged", clamp)
+    return scroll
+end

@@ -1,0 +1,340 @@
+-- Units/Collections/Actions.wowlua
+-- What the collections window's buttons do (Units/Collections): Summon or
+-- Dismiss on SuuUI's own secure button (SecureAction; each toy card's Use
+-- is one too), a pet summoned, dismissed or linked in chat, a random
+-- favourite, the favourite star, an entry of yours picked up for an action
+-- bar; and why each is off (actionLabel, petActionLabel, toyWhy, a toy's
+-- cooldown, the favourites the game refuses). The module's LinkPet,
+-- PetAction, RandomPet, ToggleFavourite, MountIndex, Pickup and DrawAction
+-- as functions taking the module (its methods call them).
+
+import SuuUI from "/Core/API"
+import type SuuButton from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry from "./Catalog"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local UI = SuuUI.UI
+local try, field = errors.try, tbl.field
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+-- A toy's cooldown: when it started and how long (0 when ready).
+export function toyCooldown(itemID: number): (number, number)
+    local startR, durationR = try(field(C_Container, "GetItemCooldown"), itemID)
+    local start, duration = asNumber(startR), asNumber(durationR)
+    if not (start and duration) then
+        return 0, 0
+    end
+    if duration > 1.5 and start > 0 then
+        return start, duration
+    end
+    return 0, 0
+end
+
+-- "Ready in 41 min", "Ready in 1 h 5 min", "Ready in 30 s"
+export function readyIn(start: number, duration: number, now: number?): string
+    local left = math.max(0, start + duration - (now or GetTime()))
+    if left >= 3600 then
+        return ("Ready in %d h %d min"):format(math.floor(left / 3600), math.floor(left % 3600 / 60))
+    end
+    if left >= 60 then
+        return ("Ready in %d min"):format(math.ceil(left / 60))
+    end
+    return ("Ready in %d s"):format(math.ceil(left))
+end
+
+-- Why a toy's Use is off (nil: on).
+export function toyWhy(e: Entry, start: number, duration: number): string?
+    if not e.collected then
+        return "You don't have this toy yet."
+    end
+    if duration > 0 then
+        return readyIn(start, duration) .. "."
+    end
+    if e.usable == false then
+        return "You can't use this toy here."
+    end
+    return nil
+end
+
+-- Whether the game takes changes to your pets now: it can keep the journal
+-- locked, while the account is logged in more than once (found in game on
+-- Forever: favourites taken without an error and dropped; the game's own
+-- journal greys its Favourite out then).
+export function petJournalUnlocked(): boolean
+    local unlocked = try(field(C_PetJournal, "IsJournalUnlocked"))
+    return unlocked == nil or flag(unlocked)
+end
+
+-- Whether the game lets this mount (by its place in the game's list) be
+-- made a favourite or not: the game's own Mounts tab greys its Favourite out
+-- otherwise.
+export function mountCanFavourite(i: number): boolean
+    local _, can = try(field(C_MountJournal, "GetIsFavorite"), i)
+    return can == nil or flag(can)
+end
+
+export local MOUNT_NO_FAVOURITE = "The game takes no favourite for this mount right now."
+
+export local PET_JOURNAL_LOCKED = "Your pet journal is locked because this account is logged in more than once: no favourites until it is logged in only here."
+
+-- A secure action button (Summon, a toy's Use): the look a SuuUI button
+-- under it, its tooltip why it's off.
+export class SecureAction extends Button
+    readonly look: SuuButton
+    why: string? = nil
+
+    constructor(name: string, parent: Frame, text: string, width: number, variant: string?)
+        super(name, parent, "SecureActionButtonTemplate")
+        self:RegisterForClicks("AnyUp", "AnyDown")
+        self.look = UI.Button(self, { text = text, variant = variant, width = width })
+        self.look:SetAllPoints()
+        self.look:EnableMouse(false)
+        self:HookScript("OnEnter", function()
+            local why = self.why
+            if why then
+                UI.ShowTooltip(self, { title = self.look.label:GetText() or "", description = why })
+            end
+        end)
+        self:HookScript("OnLeave", function()
+            UI.HideTooltip()
+        end)
+    end
+end
+
+-- A pet's action: its label and why it's off (nil: on).
+export function petActionLabel(e: Entry?): (string, string?)
+    if not e then
+        return "Summon", "Choose a pet."
+    end
+    if not e.collected or not (e.guids and e.guids[1]) then
+        return "Summon", "You don't have this pet yet."
+    end
+    if e.wrapped then
+        return UNWRAP or "Unwrap", nil
+    end
+    if e.summoned then
+        return "Dismiss", nil
+    end
+    local guid = e.guids[1]
+    local ok, _, errText = try(field(C_PetJournal, "GetPetSummonInfo"), guid)
+    if ok ~= nil and not flag(ok) then
+        return "Summon", asString(errText) or "You can't summon this pet now."
+    end
+    return "Summon", nil
+end
+
+-- The stage's action: its label and why it's off (nil: on).
+export function actionLabel(mounted: boolean, e: Entry?): (string, string?)
+    if mounted then
+        return "Dismiss", nil
+    end
+    if not e then
+        return "Summon", "Choose a mount."
+    end
+    if not e.collected then
+        return "Summon", "You don't have this mount yet."
+    end
+    if e.wrapped then
+        return UNWRAP or "Unwrap", nil
+    end
+    if not e.usable then
+        return "Summon", "You can't ride this mount here."
+    end
+    return "Summon", nil
+end
+
+-- A pet's link in chat (Forever's are the companion links, by its row).
+export function linkPet(e: Entry)
+    local index = e.linkIndex
+    local link = index and asString(try(field(C_PetJournal, "GetNonBattlePetLinkByIndex"), index))
+    if not link then
+        return
+    end
+    local insert = field(_G, "ChatFrameUtil", "InsertLink") or field(_G, "ChatEdit_InsertLink")
+    try(insert, link)
+end
+
+-- Summon or dismiss the chosen pet (or open it, a gift).
+export function petAction(self: CollectionsModule)
+    local e = self.chosen
+    if not (e and e.kind == "pet") then
+        return
+    end
+    local _, why = petActionLabel(e)
+    if why then
+        return
+    end
+    if e.wrapped then
+        self:Unwrap()
+    elseif e.summoned then
+        try(field(C_PetJournal, "DismissSummonedPet"), e.summoned)
+    elseif e.guids and e.guids[1] then
+        try(field(C_PetJournal, "SummonPetByGUID"), e.guids[1])
+    end
+end
+
+-- A random favourite summoned (the game's own pick).
+export function randomPet()
+    if flag(try(field(C_PetJournal, "HasFavoritePets"))) then
+        try(field(C_PetJournal, "SummonRandomPet"), true)
+    end
+end
+
+-- A mount's favourite: the game keeps it by the mount's place in its own
+-- list, so the place is looked up first.
+export function toggleFavourite(self: CollectionsModule)
+    local e = self.chosen
+    if e and e.kind == "appearance" then
+        try(field(C_TransmogCollection, "SetIsAppearanceFavorite"), e.visualID, not e.favourite)
+        self:After(0.1, function()
+            self:Refresh()
+        end)
+        return
+    end
+    if e and e.kind == "toy" then
+        try(field(C_ToyBox, "SetIsFavorite"), e.itemID, not e.favourite)
+        self:After(0.1, function()
+            self:Refresh()
+        end)
+        return
+    end
+    if e and e.kind == "pet" then
+        local guid = e.guids and e.guids[1]
+        if guid and petJournalUnlocked() then
+            -- (1 or 0, as the game's own journal: Forever refuses true
+            -- with "Usage: SetFavorite(petID, bool)", found in game)
+            try(field(C_PetJournal, "SetFavorite"), guid, e.favourite and 0 or 1)
+            self:After(0.1, function()
+                self:Refresh()
+            end)
+        end
+        return
+    end
+    if not (e and e.kind == "mount") then
+        return
+    end
+    local i = self:MountIndex(e.id)
+    if i and mountCanFavourite(i) then
+        try(field(C_MountJournal, "SetIsFavorite"), i, not e.favourite)
+        self:After(0.1, function()
+            self:Refresh()
+        end)
+    end
+end
+
+-- A mount's place in the game's list (the favourite is set by it).
+export function mountIndex(id: number): number?
+    local MJ = C_MountJournal
+    for i = 1, asNumber(try(field(MJ, "GetNumDisplayedMounts"))) or 0 do
+        if asNumber(try(field(MJ, "GetDisplayedMountID"), i)) == id then
+            return i
+        end
+    end
+    return nil
+end
+
+-- An entry of yours on the cursor, for an action bar, as the game's own
+-- journals pick it up: a mount by its place in the game's list (that
+-- list's search and filters cleared when they hide it: SuuUI's window
+-- has no use for them, as with the pets'), a pet by its GUID, a toy by
+-- its item. Not one you haven't got, nor a gift still wrapped.
+export function pickup(self: CollectionsModule, e: Entry?)
+    if not e or not e.collected or e.wrapped then
+        return
+    end
+    if e.kind == "mount" then
+        local MJ = C_MountJournal
+        local i = self:MountIndex(e.id)
+        if not i then
+            try(field(MJ, "SetSearch"), "")
+            try(field(MJ, "SetDefaultFilters"))
+            i = self:MountIndex(e.id)
+        end
+        if i then
+            try(field(MJ, "Pickup"), i)
+        end
+    elseif e.kind == "pet" then
+        local guid = e.summoned or (e.guids or {})[1]
+        if guid then
+            try(field(C_PetJournal, "PickupPet"), guid)
+        end
+    elseif e.kind == "toy" and e.itemID then
+        try(field(C_ToyBox, "PickupToyBoxItem"), e.itemID)
+    end
+end
+
+-- Summon or Dismiss: the secure button's job, set out of combat (in one it
+-- waits; its look says why).
+export function drawAction(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local act, e = ui.act, self.chosen
+    if self.tab == "wardrobe" then
+        ui.random:Hide()
+        if not InCombatLockdown() then
+            act:Hide()
+        end
+        return
+    end
+    -- Pets: not protected, the click's PostClick does it (no secure action)
+    local pets = self.tab == "pets"
+    ui.random:SetShown(pets)
+    if pets then
+        local hasFav = flag(try(field(C_PetJournal, "HasFavoritePets")))
+        ui.random:SetEnabledState(hasFav)
+        ui.random.tooltip = {
+            title = "Random favourite",
+            description = hasFav and "Summon one of your favourite pets at random." or
+                "Mark pets as favourites (the star) to summon one at random.",
+        }
+        local label, why = petActionLabel(e)
+        act.look.label:SetValue(label)
+        act.look:SetEnabledState(why == nil)
+        act.why = why
+        if InCombatLockdown() then
+            self.actionAfterCombat = true
+            return
+        end
+        act:SetShown(e ~= nil)
+        act:SetAttribute("type", nil)
+        return
+    end
+    local mountedNow = flag(try(field(_G, "IsMounted")))
+    if e and e.wrapped and not mountedNow then
+        local label = actionLabel(false, e)
+        act.look.label:SetValue(label)
+        act.look:SetEnabledState(true)
+        act.why = nil
+        if InCombatLockdown() then
+            self.actionAfterCombat = true
+            return
+        end
+        act:Show()
+        act:SetAttribute("type", nil)
+        return
+    end
+    local mounted = flag(try(field(_G, "IsMounted")))
+    local label, why = actionLabel(mounted, e)
+    act.look.label:SetValue(label)
+    act.look:SetEnabledState(why == nil)
+    act.why = why
+    if InCombatLockdown() then
+        self.actionAfterCombat = true
+        return
+    end
+    act:SetShown(e ~= nil or mounted)
+    if mounted then
+        act:SetAttribute("type", "macro")
+        act:SetAttribute("macrotext", "/dismount")
+    elseif why or not e then
+        act:SetAttribute("type", nil)
+    else
+        act:SetAttribute("type", "spell")
+        act:SetAttribute("spell", e.spellID)
+    end
+end

@@ -1,0 +1,118 @@
+-- Units/RaidPlanner/Fill: the engine's raid read and filling the slots
+-- (pinned, exact before provisional, two fit one slot, review mode).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Fill"
+import type Member from "/Units/RaidPlanner/Fill"
+import cleanup, warrior, priest, mage, mage2, shaman, raid, setup, slotIn, filled, placed, member from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("the raid read: you and the others, their groups, roles, the leader")
+local function roster()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 2 } })
+    local r = M:ReadRoster()
+    expect(M.inRaid).toBe(true)
+    expect(#r).toBe(3)
+    expect(M.me ~= nil).toBe(true)
+    expect(assert(M.me).lead).toBe(true)
+    local w = member("Raider Warrior")
+    expect(w.class).toBe("WARRIOR")
+    expect(w.role).toBe("TANK")
+    expect(member("Raider Priest").group).toBe(2)
+    mock.group:leave()
+    M:ReadRoster()
+    expect(M.inRaid).toBe(false)
+    expect(#M.roster).toBe(0)
+    -- a party isn't a raid
+    mock.group:add(warrior)
+    mock.advanceTime(0.6)
+    M:ReadRoster()
+    expect(M.inRaid).toBe(false)
+end
+
+@test("filling: the pickiest slot first, exact over provisional, the spec unknown provisional, two fit one slot")
+local function filling()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 1 }, { unit = mage, g = 2 }, { unit = mage2, g = 2 } })
+    local tank = slotIn(1, "WARRIOR", 3, "TANK")
+    local healer = slotIn(1, nil, nil, "HEALER")
+    local caster = slotIn(2, "MAGE")
+    local open = slotIn(3, "DRUID")
+    M:Refill()
+    expect(placed(tank).m.name).toBe("Raider Warrior")
+    expect(placed(tank).how).toBe("provisional")
+    expect(placed(healer).m.name).toBe("Raider Priest")
+    expect(filled().slot[caster.id] ~= nil).toBe(true)
+    expect(filled().slot[open.id]).toBeNil()
+    -- the other mage fits the mage slot as well: two fit one
+    expect(filled().conflict[caster.id] ~= nil).toBe(true)
+    -- you, without a slot
+    expect(#filled().unplaced).toBe(2)
+    -- review mode: who is placed stays until Fill slots
+    M:Set("fill", "review")
+    local extra = slotIn(3, "MAGE")
+    M:Refill()
+    expect(filled().slot[extra.id]).toBeNil()
+    M:Refill(true)
+    expect(filled().slot[extra.id] ~= nil).toBe(true)
+end
+
+@test("filling by role: a known tree's role, a class that can't take it, the spec unknown")
+local function fillingByRole()
+    setup()
+    raid({ { unit = shaman, g = 1 }, { unit = mage, g = 1 } })
+    local healer = slotIn(1, nil, nil, "HEALER")
+    M:Refill()
+    -- the shaman may heal (not known yet); the mage can't
+    expect(placed(healer).m.name).toBe("Raider Shaman")
+    expect(placed(healer).how).toBe("provisional")
+    M:NoteSpec("Raider Shaman", 3, "message")
+    M:Refill()
+    expect(placed(healer).how).toBe("exact")
+    M:NoteSpec("Raider Shaman", 2, "message")
+    M:Refill()
+    expect(filled().slot[healer.id]).toBeNil()
+end
+
+-- A player as the roster read them.
+local function someone(class: string, tree: number?, role: string?): Member
+    return {
+        index = 1,
+        unit = "raid1",
+        name = "Player",
+        key = "Player",
+        class = class,
+        group = 1,
+        online = true,
+        you = false,
+        role = role,
+        lead = false,
+        assist = false,
+        tree = tree,
+    }
+end
+
+@test("a fit: the class, the spec, the role (set, from the tree, or the class's maybe); the pickiest slot; a role and how it's known")
+local function fits()
+    expect(part.fit({ id = 1, g = 1, class = "MAGE" }, someone("MAGE"))).toBe("exact")
+    expect(part.fit({ id = 1, g = 1, class = "PRIEST" }, someone("MAGE"))).toBeNil()
+    expect(part.fit({ id = 1, g = 1, class = "SHAMAN", spec = 3 }, someone("SHAMAN"))).toBe("provisional")
+    expect(part.fit({ id = 1, g = 1, class = "SHAMAN", spec = 3 }, someone("SHAMAN", 2))).toBeNil()
+    expect(part.fit({ id = 1, g = 1, role = "HEALER" }, someone("SHAMAN"))).toBe("provisional")
+    expect(part.fit({ id = 1, g = 1, role = "HEALER" }, someone("SHAMAN", 3))).toBe("exact")
+    expect(part.fit({ id = 1, g = 1, role = "HEALER" }, someone("MAGE"))).toBeNil()
+    expect(part.fit({ id = 1, g = 1, role = "TANK" }, someone("DRUID", nil, "DAMAGER"))).toBeNil()
+    expect(part.strictness({ id = 1, g = 1, class = "MAGE", spec = 1, role = "DAMAGER" })).toBe(7)
+    expect(part.strictness({ id = 1, g = 1 })).toBe(0)
+    expect(select(2, part.roleOf({ class = "WARRIOR", role = "TANK" }))).toBe("set")
+    expect(part.roleOf({ class = "WARRIOR", tree = 3 })).toBe("TANK")
+    expect(select(2, part.roleOf({ class = "PRIEST" }))).toBe("likely")
+    expect(part.inRaidNow()).toBe(false)
+end

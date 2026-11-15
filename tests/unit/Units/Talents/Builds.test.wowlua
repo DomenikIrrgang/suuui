@@ -1,0 +1,184 @@
+-- Units/Talents/Builds: builds as data (the store's helpers, steps,
+-- levels, drafts, the order lines, what fits), through the module and on
+-- their own.
+
+import internal M from "/Units/Talents"
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import talentedPoints, stepLevel, splitOf, nextStep, plural, copySteps, charKey from "/Units/Talents/Builds"
+import * as talentBuilds from "/Units/Talents/Builds"
+import * as secret from "wowlua:secret"
+import type SavedBuild from "/Units/Talents/Builds"
+import CONFIG, wt, steps, build, setup, teardown from "./TalentsHelpers"
+import type Step from "./TalentsHelpers"
+import expectNoErrors from "../../../helpers"
+
+@beforeEach
+local function before()
+    setup()
+end
+
+@afterEach
+local function after()
+    teardown()
+end
+
+--------------------------------------------------------------------------------
+-- Pure pieces
+--------------------------------------------------------------------------------
+
+@test("talentedPoints: the currency over one a level from 10, 0 to 5")
+@cases({ { 5, 1, 5 }, { 5, 9, 5 }, { 6, 10, 5 }, { 3, 12, 0 }, { 8, 8, 5 }, { 7, 11, 5 }, { 2, 10, 1 } })
+local function talented(max: number, level: number, want: number)
+    expect(talentedPoints(max, level)).toBe(want)
+end
+
+@test("stepLevel: Talented's points from level 5, then one a level from 10")
+@cases({ { 1, 5, 5 }, { 5, 5, 9 }, { 6, 5, 10 }, { 1, 0, 10 }, { 3, 2, 10 }, { 51, 5, 55 } })
+local function levels(i: number, t: number, want: number)
+    expect(stepLevel(i, t)).toBe(want)
+end
+
+@test("plural, copySteps and charKey")
+local function small()
+    expect(plural(1, "point", "points")).toBe("point")
+    expect(plural(0, "point", "points")).toBe("points")
+    local s: Step[] = { { node = 1, entry = 5 }, { node = 2 } }
+    local c = copySteps(s)
+    expect(c).toEqual({ { node = 1, entry = 5 }, { node = 2 } })
+    expect(c[1] == s[1]).toBe(false)
+    expect(copySteps(nil)).toEqual({})
+    expect(charKey()).toBe(assert(secret.asString(UnitGUID("player")))) -- (the player's own: never secret)
+    mock.fake("UnitGUID", function()
+        return mock.secret("Player-1")
+    end)
+    expect(charKey()).toBe(assert(secret.asString(UnitName("player"))) .. "-" .. GetRealmName())
+end
+
+@test("nextStep: the first step past the ranks you have")
+local function next1()
+    local s = steps(11, 13, 13, 21)
+    local i, r = nextStep(s, {})
+    expect(i).toBe(1)
+    expect(r).toBe(1)
+    i, r = nextStep(s, { [11] = 1, [13] = 1 })
+    expect(i).toBe(3)
+    expect(r).toBe(2)
+    i = nextStep(s, { [11] = 1, [13] = 2, [21] = 1 })
+    expect(i).toBeNil()
+end
+
+@test("splitOf: a build's points per tree")
+local function split()
+    local tree = M:BuildTree("WARRIOR")
+    expect(splitOf(tree, steps(11, 13, 13, 21))).toBe("3 / 1 / 0")
+    expect(splitOf(tree, steps(999))).toBe("0 / 0 / 0")
+    expect(splitOf(nil, steps(11))).toBe("")
+end
+
+--------------------------------------------------------------------------------
+-- Drafts, order lines, what fits
+--------------------------------------------------------------------------------
+
+@test("Draft: a tree that changed keeps the steps that still fit")
+local function draftTrim()
+    local id = assert(M:AddBuild("Old", "WARRIOR", {}))
+    build(id).steps = steps(11, 13, 999, 21)
+    M.buildView = id
+    local d = assert(M:Draft())
+    expect(d.steps).toEqual(steps(11, 13))
+    expect(d.dirty).toBe(true)
+    expect(d.problem).toBe("Step 3 isn't a talent of this tree any more.")
+end
+
+@test("OrderLines: runs of a talent's ranks with their levels and states")
+local function orderLines()
+    local tree = M:BuildTree("WARRIOR")
+    local s = steps(11, 13, 13, 21, 13)
+    local lines = M:OrderLines(s, tree)
+    expect(#lines).toBe(4)
+    expect(lines[1]).toEqual({
+        node = 11,
+        from = 1,
+        to = 1,
+        count = 1,
+        state = nil,
+        levels = "5",
+        name = "Arms One",
+        icon = 1011,
+        ranks = "",
+    })
+    expect(lines[2].levels).toBe("6–7")
+    expect(lines[2].ranks).toBe("1–2")
+    expect(lines[2].count).toBe(2)
+    expect(lines[4].ranks).toBe("3")
+    -- learned and next
+    lines = M:OrderLines(s, tree, { [11] = 1, [13] = 1 }, 3)
+    expect(lines[1].state).toBe("learned")
+    expect(lines[2].state).toBe("next")
+    expect(lines[3].state).toBeNil()
+    -- an unknown talent
+    lines = M:OrderLines(steps(999), nil)
+    expect(lines[1].name).toBe("?")
+    expect(lines[1].ranks).toBe("")
+end
+
+@test("Fit: the steps that fit your points, the talents in the way")
+local function fit()
+    local nodes = wt().nodes
+    nodes[1].rank = 1
+    nodes[4].rank = 1 -- 21: not in the build
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 23, 12, 13)))
+    local data = assert(M:Collect())
+    local fits, conflicts, learned = M:Fit(build(id), data)
+    -- 11 learned; 13 and 23 fit; 12 needs 5 spent in the whole tree (4
+    -- then: 11, 21, 13, 23): stops, the rest after it too
+    expect(fits).toEqual(steps(13, 23))
+    expect(conflicts).toEqual({ { node = 21, name = "Fury One", treeName = "Fury", ranks = 1 } })
+    expect(learned[11]).toBe(1)
+    -- out of points
+    data.available = 1
+    fits = M:Fit(build(id), data)
+    expect(fits).toEqual(steps(13))
+end
+
+--------------------------------------------------------------------------------
+-- On their own
+--------------------------------------------------------------------------------
+
+@test("orderLines, fit, nextTalentOf and draftOf with what the module hands in")
+local function onTheirOwn()
+    local tree = assert(M:BuildTree("WARRIOR"))
+    local s = steps(11, 13, 13, 21)
+    -- the levels from the function given
+    local lines = talentBuilds.orderLines(s, tree, nil, nil, function(i: number): number
+        return 10 * i
+    end)
+    expect(#lines).toBe(3)
+    expect(lines[1].levels).toBe("10")
+    expect(lines[2].levels).toBe("20–30")
+    expect(lines[3].levels).toBe("40")
+    -- what fits: nothing without the tree
+    local b: SavedBuild = { id = "bx", class = "WARRIOR", steps = s }
+    local data = assert(M:Collect())
+    local fits, conflicts = talentBuilds.fit(b, data, nil)
+    expect(fits).toEqual({})
+    expect(conflicts).toEqual({})
+    fits = talentBuilds.fit(b, data, tree)
+    expect(fits).toEqual(s)
+    -- the next talent on a config's talents
+    wt().nodes[1].rank = 1
+    local n = assert(talentBuilds.nextTalentOf(b, tree, CONFIG))
+    expect(n.node).toBe(13)
+    expect(n.rank).toBe(1)
+    expect(n.index).toBe(2)
+    expect(n.build).toBe("")
+    -- a draft without its tree: the steps as saved, nothing to look at
+    local d = talentBuilds.draftOf({ id = "by", name = "Old", class = "WARRIOR", steps = steps(11, 999) }, nil)
+    expect(d.id).toBe("by")
+    expect(d.name).toBe("Old")
+    expect(d.steps).toEqual(steps(11, 999))
+    expect(d.dirty).toBe(false)
+    expect(d.problem).toBeNil()
+    expectNoErrors()
+end

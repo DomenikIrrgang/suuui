@@ -1,0 +1,268 @@
+-- tests/unit/Units/WorldMap/WorldMapHelpers.wowlua
+-- The world map tests' world (Units/WorldMap and its parts): SuuUI's quest
+-- and place data, small stand-ins so each kind of pin is known exactly
+-- (the real data kept for the one test that reads it), Map filters with
+-- every filter on, each test's start and end, and the pins a map would
+-- show or shows, by name.
+--
+--   @beforeEach local function data() world.setup() end
+--   @afterEach local function cleanup() world.cleanup() end
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type QuestStarts from "/Data/QuestStarts"
+import type MapPlaces from "/Data/MapPlaces"
+import internal M from "/Units/WorldMap"
+import forgetQuests from "/Units/WorldMap/Collect"
+import * as lazyData from "/Core/Data"
+import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
+import expectNoErrors from "../../../helpers"
+
+export const ELWYNN = 1429
+
+-- SuuUI's quest data, small: a giver with two quests (one a group's), a
+-- repeatable one, one far above you; a quest from an item two mobs drop;
+-- three entrances (one the Horde's); a walking giver.
+-- (`flags.patrol`: a giver whose quest's group tag the game tells late;
+-- `flags.crowd`: a second giver beside the first)
+export const flags = { patrol = false, crowd = false }
+local function giverRows(): number[][]
+    local rows: number[][] = { { 50, 50, 101, 9001, 9005 }, { 51.5, 50, 102, 9002 }, { 80, 80, 103, 9004 } }
+    if flags.patrol then
+        rows[#rows + 1] = { 20, 80, 105, 9007 }
+    end
+    if flags.crowd then
+        rows[#rows + 1] = { 50.3, 50.2, 106, 9008 }
+    end
+    return rows
+end
+export function starts(): QuestStarts
+    return {
+        quests = {
+            [9001] = { "Wolves Across the Border", 1, 2 },
+            [9002] = { "Boar Hides", 1, 1, nil, nil, nil, nil, nil, nil, 1 },
+            [9003] = { "A Torn Scroll", 1, 1 },
+            [9004] = { "The Fallen Hero", 1, 30 },
+            [9005] = { "The Kobold Lord", 1, 2 },
+            [9007] = { "Elite Patrol", 1, 2 },
+            [9008] = { "The Lost Necklace", 1, 1 },
+        },
+        objectives = { [9001] = "Kill 8 wolves for $N." },
+        tags = { [9005] = 81 },
+        group = { [9005] = "dungeon", [9007] = "elite" },
+        maps = { [ELWYNN] = giverRows() },
+        drops = { [ELWYNN] = { { 30, 30, 104, 7001, 9003 }, { 35, 30, -5, 7001, 9003 } } },
+        items = { [7001] = "A Torn Scroll" },
+        givers = {
+            [101] = "Marshal Dughan",
+            [102] = "Farmer Saldean",
+            [103] = "A Guard",
+            [104] = "Kobold Worker",
+            [105] = "Sergeant Willem",
+            [106] = "Farmer Furlbrow",
+            [-5] = "Old Crate",
+        },
+        entrances = {
+            [ELWYNN] = {
+                { 40, 40, "The Deadmines", "dungeon" },
+                { 41, 40, "Ragefire Chasm", "dungeon", "H" },
+                { 60, 62, "Warsong Gulch", "battleground", nil, true },
+            },
+        },
+        routes = { [101] = { [ELWYNN] = { { 50, 50, 55, 55, 60, 50 } } } },
+    }
+end
+
+-- SuuUI's place data, small: an innkeeper who repairs, a smith, your class
+-- trainer and another class's, a weapon master, an herbalist, the Horde's
+-- innkeeper, a Winter Veil vendor, a walking vendor, a banker, mailboxes,
+-- a rare elite at two spots, a walking rare, a chest.
+export function places(): MapPlaces
+    return {
+        npcs = {
+            [201] = { "Innkeeper Farley", "Innkeeper", "A", "inn,repair" },
+            [202] = { "Smith Argus", "Weaponsmith", "A", "repair,vendor" },
+            [203] = { "Lyria Du Lac", "Warrior Trainer", "A", "class:WARRIOR" },
+            [204] = { "Khelden Bremen", "Mage Trainer", "A", "class:MAGE,inn" },
+            [11867] = { "Woo Ping", "Weapon Master", "A", "trainer:weapon" },
+            [206] = { "Herbalist Pomeroy", "Herbalism Trainer", "A", "trainer:herbalism" },
+            [207] = { "Innkeeper Grosk", "Innkeeper", "H", "inn" },
+            [208] = { "Winter Vendor", "Holiday Goods", "A", "vendor", nil, nil, nil, "winterVeil" },
+            [209] = { "Hogger", nil, nil, nil, "rareElite", 11, 11 },
+            [210] = { "Mother Fang", nil, nil, nil, "rare", 10, 12 },
+            [211] = { "Wandering Peddler", "General Goods", "A", "goods" },
+            [212] = { "Banker Marion", "Banker", "A", "bank" },
+        },
+        services = {
+            [ELWYNN] = {
+                42,
+                65,
+                201,
+                43,
+                65,
+                202,
+                44,
+                65,
+                203,
+                45,
+                65,
+                204,
+                20,
+                20,
+                11867,
+                21,
+                21,
+                206,
+                46,
+                65,
+                207,
+                47,
+                65,
+                208,
+                60,
+                20,
+                211,
+                48,
+                65,
+                212,
+            },
+        },
+        mailboxes = { [ELWYNN] = { 42, 66, 42.5, 66.2 } },
+        rares = { [ELWYNN] = { 70, 70, 209, 71, 71, 209, 75, 20, 210 } },
+        treasures = { [ELWYNN] = { 65, 35, "Mossy Chest" } },
+        routes = { [211] = { [ELWYNN] = { { 60, 20, 62, 22 } } }, [210] = { [ELWYNN] = { { 75, 20, 76, 21 } } } },
+    }
+end
+
+-- Map filters' choice: each group's values on.
+export type Choice = { [string]: string[] }
+
+-- Every filter on.
+export function all(): Choice
+    return {
+        quests = { "objectives", "levels", "colours", "available", "repeatable", "items", "trivial" },
+        places = { "unexplored", "dungeons", "battlegrounds", "flight", "campfires" },
+        services = {
+            "inn",
+            "repair",
+            "goods",
+            "food",
+            "vendor",
+            "stable",
+            "battlemaster",
+            "guild",
+            "tabard",
+            "spirit",
+        },
+        trading = { "auction", "mail", "bank" },
+        trainers = { "class", "professions", "weapon", "riding" },
+        rares = { "rares", "treasures" },
+        marks = { "yours", "shared" },
+    }
+end
+
+export function copy(c: Choice): Choice
+    local out: Choice = {}
+    for k, list in pairs(c) do
+        local l: string[] = {}
+        for i, v in ipairs(list) do
+            l[i] = v
+        end
+        out[k] = l
+    end
+    return out
+end
+
+-- (the real data, for the one test that reads it)
+export const realStarts = SuuUI.QuestStarts
+export const realPlaces = SuuUI.MapPlaces
+
+-- Each test's start (its @beforeEach).
+export function setup()
+    -- (the real data built, as the map has it after its first open; the
+    -- stand-ins in its place)
+    lazyData.questStarts:Get()
+    lazyData.mapPlaces:Get()
+    lazyData.mapOverlays:Get()
+    mock.stub(SuuUI, "QuestStarts", starts)
+    mock.stub(SuuUI, "MapPlaces", places)
+    -- (the stand-ins and fakes change between tests without quest events)
+    forgetQuests()
+end
+
+-- Each test's end (its @afterEach).
+export function cleanup()
+    mock.hover(nil)
+    if WorldMapFrame:IsShown() then
+        WorldMapFrame:Hide()
+    end
+    M:Reset("filters")
+    M:Reset("pinAlpha")
+    M:Char().taxi = nil
+    M:Char().hiddenQuests = nil
+    M:ListHidden()
+    SuuUI.UI.CloseContextMenu()
+    mock.advanceTime(7)
+    expectNoErrors()
+end
+
+-- The pins a map would show, by name.
+export function collect(mapID: number?): { [string]: Item }
+    local out: { [string]: Item } = {}
+    for _, it in ipairs(M:Collect(mapID or ELWYNN)) do
+        out[it.name] = it
+    end
+    return out
+end
+
+-- A pin's line under its card.
+export function line(it: Item?, i: number): TipLine
+    assert(it, "no pin")
+    local more = it.more
+    assert(more, "no lines")
+    local l = more[i]
+    assert(l, "no line " .. i)
+    return l
+end
+
+-- The text of a pin's line.
+export function text(it: Item?, i: number): string
+    return line(it, i)[1] or ""
+end
+
+export function pin(it: Item?): Item
+    assert(it, "no pin")
+    return it
+end
+
+export function openMap(mapID: number?)
+    WorldMapFrame:Show()
+    WorldMapFrame:SetMapID(mapID or ELWYNN)
+    mock.advanceFrames(3)
+end
+
+-- The pin showing a pin of this name.
+export function pinOf(name: string)
+    for _, p in ipairs(M.pins) do
+        local g = p.group
+        for _, it in ipairs(g and g.items or {}) do
+            if it.name == name then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+export function shownPin(name: string)
+    local p = pinOf(name)
+    assert(p, "no pin shows " .. name)
+    return p
+end
+
+-- The pins merged into the one showing this name.
+export function groupOf(name: string): Group
+    local g = shownPin(name).group
+    assert(g, "no group")
+    return g
+end

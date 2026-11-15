@@ -1,0 +1,401 @@
+-- Units/Talents/Window.wowlua
+-- Where Units/Talents shows its page: SuuUI's own Talents window (its size,
+-- the key that toggles it, an inspected player's talents in it) and the
+-- page over Blizzard's Talents tab of the spells window (the tab kept out
+-- of sight, the window at the tab's size and back), and the page's
+-- callbacks into the module. Functions of Units/Talents' module (its
+-- BuildWindow, Toggle, Build, Wire … call them with itself).
+
+import SuuUI from "/Core/API"
+import type TalentTree, TalentNode as PageTalent, OrderLineData from "/Core/API"
+import type TalentsModule from "/Units/Talents"
+import type Collected from "/Units/Talents/Trees"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+
+local try, field = errors.try, tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- the spells window's height on this tab: the header's 44 and the foot's
+-- 16 around the page (summary, trees, foot: 426), and the specs' row with
+-- two talent groups
+local PAGE_H = 426
+local SPECS_H = 42
+
+-- SuuUI's own Talents window (asked for in game: open beside the Spellbook,
+-- which Blizzard's spells window can't: one tab at a time). N and the micro
+-- menu's Talents button open it; in the middle of the screen.
+local HEAD_RISE = 40 -- the header above the window's top (SkinWindow, topInset 20)
+
+--------------------------------------------------------------------------------
+-- SuuUI's own Talents window
+--------------------------------------------------------------------------------
+
+export function windowHeight(m: TalentsModule): number
+    local groups = m:SpecGroups()
+    return 44 + PAGE_H + 16 + ((groups > 1 and not m.inspectUnit) and SPECS_H or 0)
+end
+
+-- Sized before the page fills (its trees measure the room they get): the
+-- build picker (your own talents) is taller than the summary line it
+-- replaces, and a build shown adds its order panel.
+export function fitWindow(m: TalentsModule)
+    local w = m.window
+    if not w then
+        return
+    end
+    local builds = not m.inspectUnit
+    local order = builds and m:Viewed() ~= nil
+    local extra = builds and math.max(0, 30 - T.type.label.lineHeight) or 0
+    w:SetSize(UI.TALENT_TREE_W + 40 + (order and UI.TALENT_ORDER_W or 0), m:WindowHeight() + extra)
+end
+
+export function buildWindow(m: TalentsModule)
+    if m.window then
+        return
+    end
+    local f = CreateFrame("Frame", "SuuUITalents", UIParent)
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    f:SetClampedToScreen(true)
+    f:Hide()
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, -HEAD_RISE / 2)
+    local close = CreateFrame("Button", nil, f)
+    close:SetScript("OnClick", function()
+        f:Hide()
+    end)
+    -- in the window row's middle group: beside the Legacy window when both
+    -- are open (asked for in game)
+    m.chrome = UI.SkinWindow(f, {
+        title = "Talents",
+        icon = "tree",
+        binding = "TOGGLETALENTS",
+        close = close,
+        topInset = 20,
+        under = "microMenu",
+    })
+    UI.CenterWindow(f, true)
+    local page = UI.TalentTree(f)
+    page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    m:Wire(page)
+    m.windowPage = page
+    m.window = f
+    m:FitWindow()
+    -- added beside the window row's own (SetScript replaced them: opening
+    -- Talents didn't close Legacy, found in game)
+    f:HookScript("OnShow", function()
+        PlaySound(asNumber(field(_G, "SOUNDKIT", "IG_CHARACTER_INFO_OPEN")) or 839)
+        -- your active build, unless a plan with changes is still open
+        local draft = m.draft
+        if not (draft and draft.dirty) then
+            m.draft, m.planning = nil, false
+            m.buildView = m:ActiveID()
+        end
+        m:Render()
+        m:Emit("SUUUI_TALENTS_SHOWN", true)
+    end)
+    f:HookScript("OnHide", function()
+        PlaySound(asNumber(field(_G, "SOUNDKIT", "IG_CHARACTER_INFO_CLOSE")) or 840)
+        m:SetInspect(nil)
+        GameTooltip:Hide()
+        m:Emit("SUUUI_TALENTS_SHOWN", false)
+    end)
+    -- Esc closes it
+    tinsert(UISpecialFrames, "SuuUITalents")
+    -- the key: N (whatever opens Blizzard's talents) opens this one instead
+    local toggle = CreateFrame("Button", "SuuUITalentsToggle", UIParent)
+    toggle:SetScript("OnClick", function()
+        m:Toggle()
+    end)
+    m.bindOwner = CreateFrame("Frame")
+    m:BindKeys()
+end
+
+export function toggleWindow(m: TalentsModule)
+    local window = m.window
+    if not window then
+        return
+    end
+    -- showing someone else's: the key goes back to yours
+    if m.inspectUnit and window:IsShown() then
+        m:SetInspect(nil)
+        m:Render()
+        return
+    end
+    window:SetShown(not window:IsShown())
+end
+
+-- Whose talents the window shows: an inspected player's (read only), or
+-- nil for yours.
+export function setInspect(m: TalentsModule, unit: string?)
+    if unit == nil and m.inspectUnit == nil then
+        return
+    end
+    m.inspectUnit, m.inspectData = unit, nil
+    local who = unit and asString(UnitName(unit))
+    local chrome = m.chrome
+    if chrome then
+        chrome:SetTitle(who and ("Talents · " .. who) or "Talents")
+    end
+end
+
+-- View Talents on inspect: the window with their talents.
+export function showInspect(m: TalentsModule, unit: string?)
+    local window = m.window
+    if not (window and unit) then
+        return
+    end
+    m:SetInspect(unit)
+    if window:IsShown() then
+        m:Render()
+    else
+        window:Show()
+    end
+end
+
+-- The talents key as an override binding onto SuuUI's button (out of combat:
+-- bindings can't change in one).
+export function bindKeys(m: TalentsModule)
+    local owner = m.bindOwner
+    if not owner then
+        return
+    end
+    if InCombatLockdown() then
+        m.bindAfterCombat = true
+        return
+    end
+    ClearOverrideBindings(owner)
+    for _, key in ipairs({ GetBindingKey("TOGGLETALENTS") }) do
+        local name = asString(key)
+        if name then
+            SetOverrideBindingClick(owner, false, name, "SuuUITalentsToggle")
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Into the spells window
+--------------------------------------------------------------------------------
+
+-- The window at this tab's size (out of combat: it is protected); Blizzard's
+-- size back when another tab shows.
+export function size(m: TalentsModule)
+    local f = frames.find("PlayerSpellsFrame")
+    if not f or InCombatLockdown() then
+        return
+    end
+    local width = UI.TALENT_TREE_W + 40
+    local groups = m:SpecGroups()
+    local tall = 44 + PAGE_H + 16 + (groups > 1 and SPECS_H or 0)
+    -- opened in combat too at this size, in the middle (the window's
+    -- secure placer: SuuUI can't size or move it in a fight)
+    local placer = UI.SecurePlacement(f)
+    local tab = frames.asFrame(field(f, "TalentsFrame"))
+    if placer and tab then
+        placer:Track("talents", tab, { centered = true })
+        placer:SetTabSize("talents", width, tall)
+    end
+    local h, w = f:GetHeight(), f:GetWidth()
+    if math.abs(h - tall) < 1 and math.abs(w - width) < 1 then
+        return
+    end
+    if math.abs(h - tall) >= 1 then
+        m.blizzHeight = h
+    end
+    if math.abs(w - width) >= 1 then
+        m.blizzWidth = w
+    end
+    m.sizing = true
+    f:SetHeight(tall)
+    f:SetWidth(width)
+    m.sizing = false
+end
+
+export function restore(m: TalentsModule)
+    local f = frames.find("PlayerSpellsFrame")
+    local height, width = m.blizzHeight, m.blizzWidth
+    if not f or InCombatLockdown() or not (height or width) then
+        return
+    end
+    m.sizing = true
+    if height then
+        f:SetHeight(height)
+    end
+    if width then
+        f:SetWidth(width)
+    end
+    m.sizing = false
+    m.blizzHeight, m.blizzWidth = nil, nil
+end
+
+export function wire(m: TalentsModule, page: TalentTree)
+    -- a build's talents (planning) or yours
+    page.onClick = function(n: PageTalent)
+        local plan = m.planNodes[n]
+        if plan then
+            m:PlanAdd(plan)
+            return
+        end
+        local node = m.pageNodes[n]
+        if node then
+            m:Purchase(node)
+        end
+    end
+    page.onRemove = function(n: PageTalent)
+        local plan = m.planNodes[n]
+        if plan then
+            m:PlanRemove(plan)
+            return
+        end
+        local node = m.pageNodes[n]
+        if node then
+            m:Refund(node)
+        end
+    end
+    page.onEnter = function(b: Button, n: PageTalent)
+        local plan = m.planNodes[n]
+        if plan then
+            m:ShowPlanTip(b, plan)
+            return
+        end
+        local node = m.pageNodes[n]
+        if node then
+            m:ShowTip(b, node, m:PageData(page))
+        end
+    end
+    page.onLeave = function()
+        GameTooltip:Hide()
+    end
+    page.onApply = function()
+        m:Apply()
+    end
+    page.onUndo = function()
+        m:Undo()
+    end
+    page.onOrderEnter = function(line: OrderLineData)
+        page:MarkNode(line.node)
+    end
+    page.onOrderLeave = function()
+        page:MarkNode(nil)
+    end
+    page.onOrderMove = function(from: number, before: number)
+        m:MoveLine(page, from, before)
+    end
+    -- the other talent group: its own active build
+    page.onSpec = function(i: number)
+        m:Leave(function()
+            m.viewing, m.planning = i, false
+            m.buildView = m:ActiveID(i)
+            m:Render()
+        end)
+    end
+    page.onBack = function()
+        local window = m.window
+        if window then
+            window:Hide()
+        end
+    end
+    page.onActivate = function()
+        local viewing = m.viewing
+        if InCombatLockdown() or not viewing then
+            return
+        end
+        try(field(C_SpecializationInfo, "SetActiveSpecGroup"), viewing)
+    end
+end
+
+-- The data a page shows (an inspected player's on the window while
+-- inspecting).
+export function pageData(m: TalentsModule, page: TalentTree): Collected?
+    if page == m.windowPage and m.inspectUnit then
+        return m.inspectData
+    end
+    return m.data
+end
+
+export function build(m: TalentsModule)
+    local f = frames.find("PlayerSpellsFrame")
+    local tab = f and frames.asFrame(field(f, "TalentsFrame"))
+    if not (f and tab) or m.page or InCombatLockdown() then
+        return
+    end
+    -- Blizzard's tab out of sight: see-through and off screen, still shown
+    -- (its OnShow and OnHide drive this page). Only see-through, its 1212 ×
+    -- 681 stuck out of the smaller window, and its talent buttons took the
+    -- mouse there (tooltips, no camera: found in game). Back off screen
+    -- whenever Blizzard places it again (out of combat: the window is
+    -- protected).
+    tab:SetAlpha(0)
+    local function away()
+        if InCombatLockdown() then
+            m.awayAfterCombat = true
+            return
+        end
+        m.placingTab = true
+        tab:ClearAllPoints()
+        tab:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+        m.placingTab = false
+    end
+    m.away = away
+    away()
+    hook(tab, "SetPoint", function()
+        if not m.placingTab then
+            m:After(0, away)
+        end
+    end)
+    local page = UI.TalentTree(f)
+    page:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -44)
+    page:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 16)
+    page:SetFrameLevel(tab:GetFrameLevel() + 50)
+    page:EnableMouse(true) -- Blizzard's buttons underneath get no clicks
+    page:SetShown(tab:IsShown())
+    m.page = page
+    m:Wire(page)
+    -- shown with Blizzard's tab
+    -- in the middle of the screen while this tab shows (asked for in game);
+    -- the other tabs stay in the row under the micro menu
+    hookScript(tab, "OnShow", function()
+        page:Show()
+        m:Size()
+        UI.CenterWindow(f, true)
+        m:Render()
+    end)
+    hookScript(tab, "OnHide", function()
+        page:Hide()
+        GameTooltip:Hide()
+        m:Restore()
+        UI.CenterWindow(f, false)
+    end)
+    -- Blizzard sets the window's size again right after it shows
+    local function again()
+        if not m.sizing and tab:IsShown() then
+            m:Size()
+        end
+    end
+    -- into and out of another player's talents
+    local spells: unknown = f
+    if type(field(spells, "SetInspecting")) == "function" then
+        hook(spells, "SetInspecting", function()
+            m:QueueRender()
+        end)
+    end
+    hook(f, "SetHeight", again)
+    hook(f, "SetWidth", again)
+    hook(f, "SetSize", again)
+    page:HookScript("OnSizeChanged", function()
+        if page:IsVisible() then
+            m:QueueRender()
+        end
+    end)
+    if tab:IsShown() then
+        m:Size()
+        UI.CenterWindow(f, true)
+    end
+    m:Render()
+end

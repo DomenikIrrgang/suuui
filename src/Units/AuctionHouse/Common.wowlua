@@ -1,0 +1,92 @@
+-- Units/AuctionHouse/Common.wowlua
+-- What the auction house's parts share (Units/AuctionHouse): a search's
+-- text as kept, the quality names and their colour tokens, the game's
+-- time-left bands, money as text, the house's default order, an item key's
+-- info and tooltip, and "today hh:mm / n days ago".
+
+import SuuUI from "/Core/API"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local T = SuuUI.Tokens
+local try, tryValue, field = errors.try, errors.tryValue, tbl.field
+
+local AH = C_AuctionHouse
+
+-- A search's text as kept: without spaces around it.
+export function trimmed(text: string): string
+    return (text:match("^%s*(.-)%s*$")) or ""
+end
+
+export const QUALITY = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+} :: { [number]: string }
+export const BAND = { [0] = "Short", "Medium", "Long", "Very long" } :: { [number]: string }
+
+export function coins(copper: number?): string
+    local c0 = math.max(0, math.floor(copper or 0))
+    local g, s, c = math.floor(c0 / 10000), math.floor(c0 / 100) % 100, c0 % 100
+    local parts: string[] = {}
+    local function part(v: number, unit: string, token: keyof typeof(T.color))
+        parts[#parts + 1] = v .. "|cff" .. T.color[token].hex .. unit .. "|r"
+    end
+    if g > 0 then
+        part(g, "g", "coin-gold")
+    end
+    if s > 0 or (g > 0 and c > 0) then
+        part(s, "s", "coin-silver")
+    end
+    if c > 0 or #parts == 0 then
+        part(c, "c", "coin-copper")
+    end
+    return table.concat(parts, " ")
+end
+
+export function sorts(): AuctionHouseSortType[]
+    return {
+        { sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+        { sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+    }
+end
+
+-- An item key's name, icon, quality and kind (nil until the game has it:
+-- ITEM_KEY_ITEM_INFO_RECEIVED).
+export function keyInfo(key: ItemKey?): ItemKeyInfo?
+    return key and tryValue(AH.GetItemKeyInfo, key) or nil
+end
+
+export function qualityToken(quality: number?): string
+    return (quality and quality ~= 1) and ("quality-" .. (QUALITY[quality] or "common")) or "ink"
+end
+
+-- An item key's tooltip: the game's own item key tooltip, else the item's.
+export function keyTooltip(owner: Frame, key: ItemKey)
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    local byKey = field(GameTooltip, "SetItemKey")
+    if byKey then
+        try(byKey, GameTooltip, key.itemID, key.itemLevel, key.itemSuffix)
+    else
+        GameTooltip:SetItemByID(key.itemID)
+    end
+    GameTooltip:Show()
+end
+
+export function when(at: number?): string
+    if not at then
+        return ""
+    end
+    local d = date("*t", at)
+    local today = date("*t")
+    if d.year == today.year and d.yday == today.yday then
+        return ("today %02d:%02d"):format(d.hour, d.min)
+    end
+    local days = math.floor((time() - at) / 86400)
+    return days <= 1 and "yesterday" or (days .. " days ago")
+end

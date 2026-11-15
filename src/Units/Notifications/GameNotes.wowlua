@@ -1,0 +1,304 @@
+-- Units/Notifications/GameNotes.wowlua
+-- SuuUI's own notes about the game, on the Notifications module's cards
+-- (Units/Notifications.wowlua): damaged or broken gear (with the Durability
+-- module's names and Show repairers), full bags, talent points and Legacy
+-- points to spend; each a condition that stays while it holds. The
+-- module's methods (CheckDurability, CheckBags, CheckTalents, CheckLegacy)
+-- call these with the module.
+
+import SuuUI from "/Core/API"
+import type DurabilityInfo, NotificationAction, NotificationIcon from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import type NotificationsModule from "/Units/Notifications"
+
+local WORLD_MAP = SuuUI.Services.WORLD_MAP
+
+-- The game's values, read without trusting their types.
+local try, field = errors.try, tbl.field
+local asNumber = secret.asNumber
+
+-- Your gear: the worst piece's durability (0 broken, nil nothing to wear out).
+local function worstDurability(): number?
+    local worst: number? = nil
+    for slot = 1, 19 do
+        local c, m = GetInventoryItemDurability(slot)
+        local cur, max = asNumber(c), asNumber(m)
+        if cur and max and max > 0 then
+            local r = cur / max
+            if not worst or r < worst then
+                worst = r
+            end
+        end
+    end
+    return worst
+end
+
+-- The world map, for its Repair pins (the World map pins module's filter:
+-- Map filters › Services › Repair). The map opens through a secure click
+-- on the minimap's zone button (its click is ToggleWorldMap, as the M key):
+-- opened from SuuUI's code, the map's pins were taken by it and the map
+-- opened in combat was refused later (found in game).
+local function showRepairers()
+    local map = SuuUI.UseService(WORLD_MAP)
+    local openWith = map and map.OpenWith
+    if openWith then
+        openWith("services", "repair")
+    end
+end
+
+local function zoneButton(): Frame?
+    return frames.asFrame(tbl.field(_G, "MinimapCluster", "ZoneTextButton"))
+end
+
+local function mapShown(): boolean
+    local shown = frames.find("WorldMapFrame")
+    return shown ~= nil and shown:IsShown()
+end
+
+-- "Legs 15% · Chest 18%": the worn pieces that aren't broken, lowest first.
+local function wornList(d: DurabilityInfo): string
+    local out: string[] = {}
+    for _, p in ipairs(d.pieces) do
+        if p.state == "damaged" then
+            out[#out + 1] = p.label .. " " .. p.percent .. "%"
+        end
+    end
+    return table.concat(out, " · ")
+end
+
+-- With the Durability module's "Name the pieces in the note" (design board
+-- "Durability" D): which pieces, and Show repairers. Its line too.
+local function namedNote(d: DurabilityInfo): (string, string)
+    local worn = wornList(d)
+    if d.state == "broken" then
+        local broken: string[], names: string[] = {}, {}
+        for _, p in ipairs(d.pieces) do
+            if p.state == "broken" then
+                broken[#broken + 1] = p.label
+                names[#names + 1] = p.name
+            end
+        end
+        local title, gives
+        if #broken == 1 then
+            title = "Your " .. broken[1] .. " is broken"
+            gives = names[1] .. " gives no stats until repaired"
+        else
+            title = #broken .. " pieces are broken"
+            gives = table.concat(broken, ", ") .. " give no stats until repaired"
+        end
+        return title, worn ~= "" and (gives .. " · " .. worn) or gives
+    end
+    return "Your gear is badly damaged", worn
+end
+
+-- Free slots in your general bags (backpack and bags 1-4; special bags
+-- hold only their own kind).
+local function freeSlots(): number
+    local free = 0
+    for bag = 0, (NUM_BAG_SLOTS or 4) do
+        local n, family = C_Container.GetContainerNumFreeSlots(bag)
+        local slots, kind = asNumber(n), asNumber(family)
+        if slots and (kind == nil or kind == 0) then
+            free = free + slots
+        end
+    end
+    return free
+end
+
+-- Talent points not spent yet (the active talent config's points to spend).
+local function unspentTalents(): number
+    if not (C_ClassTalents and C_Traits) then
+        return 0
+    end
+    local configID = asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
+    if not configID then
+        return 0
+    end
+    local info = errors.tryValue(C_Traits.GetConfigInfo, configID)
+    local treeID = info and info.treeIDs and info.treeIDs[1]
+    if not treeID then
+        return 0
+    end
+    local currency = errors.tryValue(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    return asNumber(currency and currency[1] and currency[1].quantity) or 0
+end
+
+-- Legacy points this character can still spend (the Legacy trees' currency;
+-- one config for all three trees: 1187 is Professions).
+local LEGACY_TREE = 1187
+local function unspentLegacy(): number
+    if not C_Traits then
+        return 0
+    end
+    local configID = asNumber(errors.tryValue(C_Traits.GetConfigIDByTreeID, LEGACY_TREE))
+    if not configID then
+        return 0
+    end
+    local currency = errors.tryValue(C_Traits.GetTreeCurrencyInfo, configID, LEGACY_TREE, false)
+    return asNumber(currency and currency[1] and currency[1].quantity) or 0
+end
+
+-- Open Legacy: Blizzard's own key (ToggleLegacySystemUI) only shows the
+-- window, which isn't one of the panels Blizzard's window manager places,
+-- so showing it from here taints nothing Esc relies on (checked in
+-- Blizzard's code, 2026-10-14).
+local function openLegacy()
+    if not frames.find("LegacySystemFrame") then
+        try(field(C_AddOns, "LoadAddOn"), "Blizzard_LegacySystem")
+    end
+    local f = frames.find("LegacySystemFrame")
+    if f and not f:IsShown() then
+        f:Show()
+    end
+end
+
+export function checkDurability(m: NotificationsModule)
+    local d = SuuUI.Durability()
+    local state: string
+    local title: string?, body: string? = nil, nil
+    local actions: NotificationAction[]? = nil
+    if not m:Get("durability") then
+        state = "fine"
+    elseif d then
+        -- the Durability module's line and reading
+        state = d.state
+        if state ~= "fine" and d.parts.note then
+            title, body = namedNote(d)
+            actions = {
+                {
+                    label = "Show repairers",
+                    variant = "primary",
+                    icon = "map",
+                    click = zoneButton,
+                    skipClick = mapShown,
+                    onClick = showRepairers,
+                },
+            }
+        end
+    else
+        local worst = worstDurability()
+        state = (worst and worst <= 0 and "broken") or (worst and worst <= 0.2 and "damaged") or "fine"
+    end
+    -- only when it changes (durability moves with every hit in combat)
+    local key = state .. "|" .. (title or "") .. "|" .. (body or "")
+    if key == m.durabilityState then
+        return
+    end
+    m.durabilityState = key
+    if state == "broken" then
+        m:ShowCondition("suu:durability", {
+            kind = "until",
+            tone = "danger",
+            category = "Durability",
+            title = title or "Some of your gear is broken",
+            body = body,
+            icon = { glyph = "anvil" },
+            ["until"] = "Goes when you repair",
+            actions = actions,
+        })
+    elseif state == "damaged" then
+        m:ShowCondition("suu:durability", {
+            kind = "until",
+            tone = "warning",
+            category = "Durability",
+            title = title or "Your gear is badly damaged",
+            body = body,
+            icon = { glyph = "anvil" },
+            ["until"] = "Goes when you repair",
+            actions = actions,
+        })
+    else
+        m:ShowCondition("suu:durability", nil)
+    end
+end
+
+export function checkBags(m: NotificationsModule)
+    if m:Get("bagsFull") and freeSlots() == 0 then
+        if not m.notes["suu:bags"] then
+            m:ShowCondition("suu:bags", {
+                kind = "until",
+                tone = "warning",
+                category = "Bags",
+                title = "Your bags are full",
+                icon = { glyph = "bag" },
+                ["until"] = "Goes when you free a slot",
+            })
+        end
+    else
+        m:ShowCondition("suu:bags", nil)
+    end
+end
+
+export function checkTalents(m: NotificationsModule)
+    local n = m:Get("talentPoints") and unspentTalents() or 0
+    -- with a talent build followed, the note names its next talent (design I)
+    local nextTalent = n > 0 and SuuUI.TalentBuildNext() or nil
+    local key = n .. (nextTalent and (":" .. nextTalent.node .. ":" .. nextTalent.rank) or "")
+    if key == m.talentPointsShown then
+        return
+    end
+    m.talentPointsShown = key
+    if n > 0 then
+        local talents = SuuUI.GetModule("talents")
+        local actions: NotificationAction[]? = nil
+        if talents and talents:IsEnabled() then
+            actions = {
+                {
+                    label = "Open talents",
+                    variant = "primary",
+                    onClick = function()
+                        if not SuuUI.TalentsShown() then
+                            SuuUI.ToggleTalents()
+                        end
+                    end,
+                },
+            }
+        end
+        local title = n == 1 and "1 talent point to spend" or (n .. " talent points to spend")
+        local body: string? = nil
+        local icon: NotificationIcon = { glyph = "tree" }
+        if nextTalent then
+            title = ("%d talent %s · next: %s"):format(n, n == 1 and "point" or "points", nextTalent.name)
+            body = ("Rank %d of %d · %s"):format(nextTalent.rank, nextTalent.max, nextTalent.build)
+            if nextTalent.icon then
+                icon = { texture = nextTalent.icon }
+            end
+        end
+        m:ShowCondition("suu:talents", {
+            kind = "until",
+            tone = "info",
+            category = "Talents",
+            title = title,
+            body = body,
+            icon = icon,
+            ["until"] = n == 1 and "Goes when you spend it" or "Goes when you spend them",
+            actions = actions,
+        })
+    else
+        m:ShowCondition("suu:talents", nil)
+    end
+end
+
+export function checkLegacy(m: NotificationsModule)
+    local n = m:Get("legacyPoints") and unspentLegacy() or 0
+    if n == m.legacyPointsShown then
+        return
+    end
+    m.legacyPointsShown = n
+    if n > 0 then
+        m:ShowCondition("suu:legacy", {
+            kind = "until",
+            tone = "info",
+            category = "Legacy",
+            title = n == 1 and "1 Legacy point to spend" or (n .. " Legacy points to spend"),
+            icon = { glyph = "trophy" },
+            ["until"] = "Goes when you spend them",
+            actions = { { label = "Open Legacy", variant = "primary", onClick = openLegacy } },
+        })
+    else
+        m:ShowCondition("suu:legacy", nil)
+    end
+end

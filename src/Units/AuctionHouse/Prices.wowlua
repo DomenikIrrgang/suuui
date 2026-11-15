@@ -1,0 +1,186 @@
+-- Units/AuctionHouse/Prices.wowlua
+-- The auction house's price memory (Units/AuctionHouse): what the house
+-- showed last per item and what you last posted at, kept per character and
+-- read across all of them; what a list of offers says (the lowest price,
+-- and the one past a cheap few); the item tooltips' block of it. The
+-- module's methods for it (Seen, LowestSeen, LastPosted, Market,
+-- AddTooltipPrices, HookTooltips) call the functions here.
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import coins, when from "./Common"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local T = SuuUI.Tokens
+local try, tryValue, tryMethod, field, list = errors.try, errors.tryValue, errors.tryMethod, tbl.field, tbl.list
+local asNumber = secret.asNumber
+
+-- An offer: its price per unit, how many, whether it's yours; and what
+-- Market() makes of a list of them.
+export type Offer = { price: number, qty: number, mine?: boolean }
+export type Market = { low: number, ref: Offer, cheap: number, total: number, n: number }
+
+--------------------------------------------------------------------------------
+-- What SuuUI remembers per item (by item ID), kept per character and read
+-- across all of them: what the house showed last (each search; Scan all
+-- fills it too) and the price you last posted at. A seen entry: price (the
+-- lowest buyout per unit), at, and what is known of: most (what most sell
+-- it for, when a cheap few sell under them), qty (units offered), n
+-- (auctions). The newest look wins.
+--------------------------------------------------------------------------------
+
+export type SeenEntry = { price: number, at: number, qty?: number, n?: number, most?: number }
+export type PostedEntry = { price: number, at: number }
+
+-- `m`: a price, or a Market() result (with qty and n when known).
+export function recordSeen(self: AuctionHouseModule, itemID: number?, m: Market | number | nil, qty: number?)
+    local low: number?, total: number?, n: number?, most: number? = nil, qty, nil, nil
+    if type(m) == "number" then
+        low = m
+    elseif m then
+        low, total, n = m.low, m.total, m.n
+        most = m.cheap > 0 and m.ref.price or nil
+    end
+    if not (itemID and low and low > 0) then
+        return
+    end
+    local d = self:Saved()
+    local seen = d.seen or {}
+    d.seen = seen
+    seen[itemID] = { price = low, at = time(), qty = total, n = n, most = most }
+end
+
+export function lowestSeen(self: AuctionHouseModule, itemID: number?): SeenEntry?
+    local best: SeenEntry? = nil
+    if not itemID then
+        return nil
+    end
+    for _, d in ipairs(self:AllSaved()) do
+        local e = d.seen and d.seen[itemID]
+        if e and (not best or (e.at or 0) > (best.at or 0)) then
+            best = e
+        end
+    end
+    return best
+end
+
+export function lastPosted(self: AuctionHouseModule, itemID: number?): PostedEntry?
+    local best: PostedEntry? = nil
+    if not itemID then
+        return nil
+    end
+    for _, d in ipairs(self:AllSaved()) do
+        local e = d.posted and d.posted[itemID]
+        if e and (not best or (e.at or 0) > (best.at or 0)) then
+            best = e
+        end
+    end
+    return best
+end
+
+-- What the offers say (nil: none): the lowest price, and the offer the
+-- price goes under (ref): the cheapest, or with the cheap-few check on, the
+-- first after a cheap few: the most offers from the cheapest up that
+-- together are at most cheapShare % of all offered and at least
+-- cheapPercent % under the next price.
+export function market(self: AuctionHouseModule, offers: Offer[]): Market?
+    if #offers == 0 then
+        return nil
+    end
+    table.sort(offers, function(a: Offer, b: Offer): boolean
+        return a.price < b.price
+    end)
+    local total = 0
+    for _, o in ipairs(offers) do
+        total = total + o.qty
+    end
+    local m: Market = { low = offers[1].price, ref = offers[1], cheap = 0, total = total, n = #offers }
+    if not self:Get("cheapCheck") then
+        return m
+    end
+    local under = 1 - self:Get("cheapPercent") / 100
+    local most = total * self:Get("cheapShare") / 100
+    local count = 0
+    for k = 1, #offers - 1 do
+        count = count + offers[k].qty
+        if count > most then
+            break
+        end
+        if offers[k].price <= offers[k + 1].price * under then
+            m.ref, m.cheap = offers[k + 1], count
+        end
+    end
+    return m
+end
+
+-- Item tooltips anywhere: the stack under the tooltip (a bag item's).
+local function stackCount(tooltip: GameTooltip): number?
+    local info = tryMethod(tooltip, "GetProcessingTooltipInfo") or tryMethod(tooltip, "GetPrimaryTooltipInfo")
+    if field(info, "getterName") ~= "GetBagItem" then
+        return nil
+    end
+    local args = list(field(info, "getterArgs"))
+    local bag, slot = asNumber(args[1]), asNumber(args[2])
+    if not (bag and slot) then
+        return nil
+    end
+    local item = tryValue(C_Container.GetContainerItemInfo, bag, slot)
+    return item and asNumber(item.stackCount) or nil
+end
+
+-- Item tooltips anywhere: a small block of what the house showed last
+-- (Settings › Auction house › Item tooltips): the lowest buyout, what most
+-- sell it for, how many are offered, and on a stack in your bags its price.
+export function addTooltipPrices(self: AuctionHouseModule, tooltip: GameTooltip, data: unknown)
+    if not self:Get("tipShow") then
+        return
+    end
+    local itemID = asNumber(field(data, "id"))
+    if not itemID then
+        return
+    end
+    local e = self:LowestSeen(itemID)
+    if not e then
+        return
+    end
+    local stack = asNumber((select(8, C_Item.GetItemInfo(itemID))))
+    local each = (stack and stack > 1) and " each" or ""
+    local head, label, value = T.color["gilt-text"], T.color["ink-muted"], T.color["ink"]
+    local function row(l: string, v: string)
+        tooltip:AddDoubleLine(l, v, label[1], label[2], label[3], value[1], value[2], value[3])
+    end
+    tooltip:AddLine(" ")
+    tooltip:AddLine("Auction house · " .. when(e.at), head[1], head[2], head[3])
+    row("Lowest buyout", coins(e.price) .. each)
+    local most, qty, n = e.most, e.qty, e.n
+    if self:Get("tipMost") and most then
+        row("Most sell it for", coins(most) .. each)
+    end
+    if self:Get("tipOffered") and qty then
+        row("Offered", n and n ~= qty and ("%d in %d auctions"):format(qty, n) or tostring(qty))
+    end
+    if self:Get("tipStack") then
+        local count = stackCount(tooltip)
+        if count and count > 1 then
+            row(("This stack (%d)"):format(count), coins(e.price * count))
+        end
+    end
+end
+
+export function hookTooltips(self: AuctionHouseModule)
+    local add = field(_G, "TooltipDataProcessor", "AddTooltipPostCall")
+    local itemType = field(Enum, "TooltipDataType", "Item")
+    if self.tooltipHooked or not (add and itemType) then
+        return
+    end
+    self.tooltipHooked = true
+    try(add, itemType, function(tooltip: GameTooltip, data: unknown)
+        if self:IsEnabled() then
+            self:Guard(function()
+                self:AddTooltipPrices(tooltip, data)
+            end)()
+        end
+    end)
+end

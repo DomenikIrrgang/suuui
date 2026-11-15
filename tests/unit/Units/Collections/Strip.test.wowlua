@@ -1,0 +1,82 @@
+-- Units/Collections/Strip: a cell's tooltip and look; paging the strip,
+-- the search and the filters (the tools), nothing left.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import start, cleanup, open, ui, cells, captureTooltips, mount, mountData from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+@test("a cell's tooltip: the name, collected, its source; hovered and new ones look so")
+local function cellTips()
+    local shown = captureTooltips()
+    open()
+    local b = cells()[2]
+    mock.hover(b)
+    expect(shown().title).toBe("Brown Horse")
+    expect(shown().description).toBe("Vendor · Vendor Brom, Elwynn Forest +1")
+    mock.hover(nil)
+    -- a new one (this week): its diamond
+    assert(b.entry).learned = time() - 60
+    M:DrawCell(b)
+    expect(b.fresh).toBeShown()
+    -- an empty cell
+    b.entry = nil
+    mock.hover(b)
+    mock.hover(nil)
+end
+
+@test("paging: 36 a page, the arrows, the wheel; the search and the filters; nothing left: the stage says so")
+local function paging()
+    for i = 1, 40 do
+        mount(1000 + i, ("Test Mount %02d"):format(i))
+    end
+    mock.setMounts(mountData())
+    open()
+    expect(M.pages).toBe(2)
+    expect(ui().strip.next).toBeShown()
+    expect(ui().strip.pageText:GetText()).toBe("1 / 2")
+    mock.click(ui().strip.next)
+    expect(M.page).toBe(2)
+    expect(#cells()).toBe(44 - 36)
+    mock.click(ui().strip.prev)
+    expect(M.page).toBe(1)
+    mock.script(ui().strip, "OnMouseWheel", -1)
+    expect(M.page).toBe(2)
+    mock.script(cells()[1], "OnMouseWheel", 1)
+    expect(M.page).toBe(1)
+    M:Page(-5)
+    expect(M.page).toBe(1)
+    -- the search
+    ui().tools.search:SetValue("ram")
+    assert(ui().tools.search.onTextChanged)("ram")
+    expect(#cells()).toBe(1)
+    -- not collected only
+    ui().tools.search:SetValue("")
+    assert(ui().tools.search.onTextChanged)("")
+    ui().tools.have:SetValue("missing")
+    assert(ui().tools.have.onChange)("missing")
+    expect(#cells()).toBe(1)
+    expect(assert(cells()[1].entry).name).toBe("Zebra")
+    -- favourites, then nothing
+    ui().tools.have:SetValue("all")
+    ui().tools.list:SetValue("fav")
+    assert(ui().tools.list.onChange)("fav")
+    expect(#cells()).toBe(1)
+    ui().tools.search:SetValue("zzz")
+    assert(ui().tools.search.onTextChanged)("zzz")
+    expect(#cells()).toBe(0)
+    expect(ui().strip.empty:GetText()).toBe("No mounts match.")
+    expect(ui().stage.empty).toBeShown()
+    expect(ui().stage.empty.title:GetText()).toBe("No mounts match")
+    expect(ui().card).never.toBeShown()
+end

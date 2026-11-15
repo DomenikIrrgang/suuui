@@ -1,0 +1,121 @@
+-- Units/Chat/Kept: kept chat (saved at logout, loaded, restored dimmed
+-- above the divider, a whisper window's earlier whispers, cleared).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as chat from "wowlua:chat"
+import internal M from "/Units/Chat"
+import type Kept from "/Units/Chat/Kept"
+import type Mirror from "/Units/Chat/Mirrors"
+import expectNoErrors, captureConfirm from "../../../helpers"
+import ready, mirror, windowOf, chatEvent, rowOf, whisper, resetChat from "./ChatHelpers"
+
+local CF1, CF2 = ChatFrame1, ChatFrame2
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Kept chat
+--------------------------------------------------------------------------------
+
+@test("at logout each tab's last lines, the whispers and their names' classes are saved; nothing with keeping off")
+local function saving()
+    mock.spawnUnit({ name = "Otherplayer", class = "WARRIOR", player = true, guid = "Player-0000-00000000" })
+    chatEvent("CHAT_MSG_SAY", "hey", "Otherplayer", "Player-0000-00000000", 9)
+    whisper("|Hplayer:Otherplayer|h[Otherplayer]|h whispers: and me")
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: keep me", 1, 1, 0)
+    mock.fireEvent("PLAYER_LOGOUT")
+    local kept = M:CharData().kept :: unknown :: Kept
+    local general = assert(kept.windows[1])
+    expect(general.name).toBe("General")
+    expect(general.lines[#general.lines].text).toBe("|Hplayer:Otherplayer|h[Otherplayer]|h says: keep me")
+    expect(general.lines[#general.lines].rgb).toBe("ffff00")
+    expect(kept.whispers[#kept.whispers].who).toBe("otherplayer")
+    expect(kept.classes.otherplayer).toBe("WARRIOR")
+    M:Set("keepHistory", false)
+    expect(M:CharData().kept).toBe(nil)
+    M:SaveHistory()
+    expect(M:CharData().kept).toBe(nil)
+end
+
+local HOUR = 3600
+
+@test("kept chat comes back dimmed above an 'Earlier' divider, in the window it came from")
+local function restoring()
+    M:CharData().kept = {
+        at = time() - 2 * HOUR,
+        windows = {
+            [1] = {
+                name = "General",
+                lines = {
+                    { text = "|Hplayer:Tamsin|h[Tamsin]|h says: old news", at = time() - 3 * HOUR, rgb = "ff8000" },
+                    "junk",
+                },
+            },
+            [7] = { name = "Renamed since", lines = { { text = "gone", at = 1 } } },
+        },
+        whispers = {
+            {
+                who = "tamsin",
+                text = "|Hplayer:Tamsin|h[Tamsin]|h whispers: earlier",
+                at = time() - 3 * HOUR,
+                rgb = "ff80ff",
+            },
+            5,
+        },
+        classes = { tamsin = "MAGE", [3] = "x" },
+    }
+    M.historyLoaded, M.whispers = nil, {}
+    M:LoadHistory()
+    M:LoadHistory() -- once
+    expect(#M.whispers).toBe(1)
+    expect(M.whispers[1].old).toBe(true)
+    local m: Mirror = { frame = M:MirrorFrame(), lines = {}, raw = false }
+    M:RestoreKept(CF1, m)
+    expect(#m.lines).toBe(2)
+    expect(m.lines[1].old).toBe(true)
+    expect(assert(m.lines[1].classes)[1]).toBe("MAGE")
+    expect(m.lines[2].divider).toBe(true)
+    expect(M:DividerText(m, m.lines[2].at):find("Earlier · logged out 2 h ago", 1, true) ~= nil).toBe(true)
+    -- with room, the gilt rules either side
+    m.frame:ClearAllPoints()
+    m.frame:SetSize(3000, 100)
+    expect(M:DividerText(m, m.lines[2].at):find("WHITE8X8", 1, true) ~= nil).toBe(true)
+    M:RestoreKept(CF1, m) -- used up
+    expect(#m.lines).toBe(2)
+    M:RestoreKept(assert(chat.window("ChatFrame7")), m) -- another name now
+    expect(#m.lines).toBe(2)
+    -- a whisper window with them: the earlier whispers, then the divider
+    whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: now")
+    M:OpenWhisperWindow("Tamsin")
+    mock.advanceTime(0.01)
+    local w = mirror(windowOf("Tamsin"))
+    expect(w.lines[1].old).toBe(true)
+    expect(w.lines[2].divider).toBe(true)
+    M:CloseWindow(windowOf("Tamsin"))
+    -- keeping off: nothing loaded
+    M:Set("keepHistory", false)
+    M.historyLoaded = nil
+    M:LoadHistory()
+end
+
+@test("Clear kept chat forgets the kept lines and whispers and empties the tabs (not the combat log)")
+local function clearing()
+    local asked = captureConfirm().last
+    CF1:AddMessage("to forget")
+    CF2:AddMessage("combat stays")
+    rowOf("Kept chat").onClick()
+    assert(asked().onConfirm)()
+    expect(#mirror(CF1).lines).toBe(0)
+    expect(#mirror(CF2).lines > 0).toBe(true)
+    expect(M.whispers).toEqual({})
+end

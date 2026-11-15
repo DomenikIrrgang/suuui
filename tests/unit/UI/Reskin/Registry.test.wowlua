@@ -1,0 +1,121 @@
+-- UI/Reskin/Registry: what the parts of Reskin share: SuuUI's own frames
+-- and art, what a module has the passes leave alone, what a pass did to a
+-- part, and the changes to the game's shared frames with their undo.
+
+import test, expect, afterEach from "wowlua:test"
+import * as draw from "/UI/Draw"
+import markOwn, isOwn, markArt, isArt, leave, flagged, skinOf, skipped, fade, atlasOf, askString, hideRegion, menuText from "/UI/Reskin/Registry"
+import type Undo from "/UI/Reskin/Registry"
+import internal skins from "/UI/Reskin/Registry"
+import expectNoErrors from "../../../helpers"
+import host, resetHost from "./ReskinHelpers"
+
+@afterEach
+local function cleanup()
+    resetHost()
+    expectNoErrors()
+end
+
+@test("SuuUI's own frames and textures: marked, or a plugin's suuOwn")
+local function marks()
+    local f = CreateFrame("Frame", nil, host())
+    local t = f:CreateTexture()
+    expect(isOwn(nil)).toBe(false)
+    expect(isOwn(f)).toBe(false)
+    markOwn(f)
+    expect(isOwn(f)).toBe(true)
+    expect(isOwn({ suuOwn = true })).toBe(true)
+    expect(isArt(nil)).toBe(false)
+    expect(isArt(t)).toBe(false)
+    markArt(t)
+    expect(isArt(t)).toBe(true)
+end
+
+@test("leave: a part a module keeps as it is, or a plugin's flag on the frame")
+local function leaving()
+    local p = host()
+    local b = CreateFrame("Button", nil, p)
+    local c = CreateFrame("CheckButton", nil, p)
+    local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    expect(flagged(b, "button")).toBe(false)
+    expect(flagged(nil, "button")).toBe(false)
+    leave(b, "button")
+    expect(flagged(b, "button")).toBe(true)
+    expect(flagged(b, "check")).toBe(false)
+    leave(c, "check")
+    expect(flagged(c, "check")).toBe(true)
+    expect(flagged({ suuNoButton = true }, "button")).toBe(true)
+    expect(flagged({ suuNoCheck = true }, "check")).toBe(true)
+    expect(flagged({ suuSkip = true }, "text")).toBe(true)
+    -- a text: left alone by a module, or marked by a pass
+    expect(skipped(fs)).toBe(false)
+    leave(fs, "text")
+    expect(skipped(fs)).toBe(true)
+    local other = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    skinOf(other).skip = true
+    expect(skipped(other)).toBe(true)
+end
+
+@test("skinOf: one record per part, kept off the part")
+local function records()
+    local f = CreateFrame("Frame", nil, host())
+    expect(skins[f]).toBeNil()
+    local s = skinOf(f)
+    expect(skinOf(f)).toBe(s)
+    expect(skins[f]).toBe(s)
+    expect(rawget(f :: {}, "skin")).toBeNil()
+end
+
+@test("reading the game's parts: an atlas in lower case, a string answer, a fade")
+local function reading()
+    local f = CreateFrame("Frame", nil, host())
+    local t = f:CreateTexture()
+    expect(atlasOf(t)).toBe("")
+    t:SetAtlas("Common-Stat-Bar-Green")
+    expect(atlasOf(t)).toBe("common-stat-bar-green")
+    expect(atlasOf(nil)).toBe("")
+    expect(askString(f, "GetObjectType")).toBe("Frame")
+    expect(askString(f, "NoSuchMethod")).toBeNil()
+    fade(t)
+    expect(t:GetAlpha()).toBe(0)
+    fade(nil)
+    fade({})
+end
+
+@test("hideRegion and menuText: each change undone by its undo list, SuuUI's art left alone")
+local function undoing()
+    local p = host()
+    local t = p:CreateTexture()
+    t:SetAlpha(0.5)
+    local gone = p:CreateTexture()
+    gone:SetAlpha(0)
+    local art = p:CreateTexture()
+    markArt(art)
+    local fs = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fs:SetTextColor(1, 0.82, 0)
+    fs:SetShadowOffset(1, -1)
+    local r0, g0, b0 = fs:GetTextColor()
+    local st: Undo = { undo = {} }
+    hideRegion(st, t)
+    hideRegion(st, gone)
+    hideRegion(st, art)
+    menuText(st, fs, "ink")
+    expect(t:GetAlpha()).toBe(0)
+    expect(art:GetAlpha()).toBe(1)
+    -- one undo for the shown texture and one for the text
+    expect(#st.undo).toBe(2)
+    local r, g, b = fs:GetTextColor()
+    local ir, ig, ib = draw.rgba("ink")
+    expect(r).toBeCloseTo(ir, 2)
+    expect(g).toBeCloseTo(ig, 2)
+    expect(b).toBeCloseTo(ib, 2)
+    expect({ fs:GetShadowOffset() }).toEqual({ 0, 0 })
+    for i = #st.undo, 1, -1 do
+        st.undo[i]()
+    end
+    -- (the client keeps an alpha in 8 bits: 0.5 reads back as 128/255)
+    expect(t:GetAlpha()).toBeCloseTo(0.5, 2)
+    expect(gone:GetAlpha()).toBe(0)
+    expect({ fs:GetTextColor() }).toEqual({ r0, g0, b0, 1 })
+    expect({ fs:GetShadowOffset() }).toEqual({ 1, -1 })
+end

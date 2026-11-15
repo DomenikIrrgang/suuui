@@ -1,0 +1,75 @@
+-- Units/FlightMap/Timer: the flight bar's frame, how far along a flight is
+-- by the time flown, what the bar shows for a flight not timed yet, and
+-- edit mode's sample. The functions take the module (Units/FlightMap's,
+-- whose bar is built once the world map is attached).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/FlightMap"
+import * as flightTimer from "/Units/FlightMap/Timer"
+import expectNoErrors from "../../../helpers"
+
+@afterEach
+local function cleanup()
+    M:ForgetTimes()
+    M.flight = nil
+    M:UpdateTimer()
+    expectNoErrors()
+end
+
+@test("the flight bar made once; a stop's diamond made once")
+local function madeOnce()
+    local bar = flightTimer.buildTimer(M)
+    expect(flightTimer.buildTimer(M)).toBe(bar)
+    expect(M.timer).toBe(bar)
+    local d = bar:Stop(1)
+    expect(bar:Stop(1)).toBe(d)
+end
+
+@test("how far along: by the time flown of the time expected; nil with neither")
+local function byTimeFlown()
+    local v: flightTimer.TimerView = flightTimer.timerView(M, {
+        path = { 23, 99999 },
+        started = GetTime() - 10,
+        names = {},
+    })
+    expect(v.left).toBe("Not timed yet · timing this flight")
+    expect(flightTimer.flownShare(M, { path = { 23, 25 }, started = GetTime() - 10, expected = 100, names = {} }, false))
+        .toBeCloseTo(0.1, 3)
+    expect(flightTimer.flownShare(M, { path = { 23, 25 }, started = GetTime(), names = {} }, false)).toBeNil()
+end
+
+@test("a flight not timed yet: its time estimated (~), the fill hatched, about when it lands")
+local function estimated()
+    local v = flightTimer.timerView(M, {
+        path = { 23, 25 },
+        started = GetTime(),
+        expected = 110,
+        measured = false,
+        names = { [25] = "Crossroads" },
+    })
+    expect(v.name).toBe("Crossroads")
+    expect(v.time:sub(1, 1)).toBe("~")
+    expect(v.fill).toBe("hatch")
+    expect(v.right:find("^about ") ~= nil).toBe(true)
+    -- on the ground: no Land at
+    expect(v.land).toBeNil()
+end
+
+@test("a stop's name: kept, else ?")
+local function names()
+    local fl = { path = { 23, 25 }, started = GetTime(), names = { [25] = "Crossroads" }, namesRead = true }
+    expect(flightTimer.stopName(M, fl, 25)).toBe("Crossroads")
+    expect(flightTimer.stopName(M, fl, 99999)).toBe("?")
+end
+
+@test("edit mode's sample: a timed flight with a stop, Land at")
+local function sample()
+    local bar = flightTimer.buildTimer(M)
+    flightTimer.sampleTimer(M)
+    expect(bar.name).toHaveText("Crossroads")
+    expect(bar.land.label).toHaveText("Land at Camp Taurajo")
+    expect(bar.landAt).toBe("Camp Taurajo")
+    expect(bar.sweep).never.toBeShown()
+    mock.advanceFrames(1)
+end

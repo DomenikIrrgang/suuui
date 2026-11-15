@@ -1,0 +1,243 @@
+-- UI/Notification/Stack.wowlua
+-- The notification stack (design board "Notification stack"; how it orders
+-- and holds cards: UI/Notification): the cards of a list, requests first,
+-- at most `max` of them, the foot with "+N more", what waits for the end
+-- of combat and "Dismiss all"; and the theme change that lays out cards and
+-- stacks again. Offers `notificationStack(parent, opts)` and the
+-- `NotificationStack` class.
+
+import hook from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as draw from "/UI/Draw"
+import text, Text from "/UI/Text"
+import notification, noticeW, notes from "/UI/Notification/Card"
+import type Notification, NotificationData from "/UI/Notification/Card"
+
+local S = T.space
+
+local ORDER: { [string]: number } = { action = 0, roll = 0, ["until"] = 1, sticky = 2, timed = 3 }
+
+type Entry = { d: NotificationData, i: number }
+
+-- A link in the stack's foot: gilt words, ink on hover.
+class StackLink extends Button
+    readonly label: Text
+
+    constructor(parent: Frame, label: string, onClick: () -> ())
+        super(nil, parent)
+        self.label = text(self, "caption", "gilt-text")
+        self.label:SetPoint("LEFT")
+        self.label:SetValue(label)
+        self:SetSize(80, T.type.caption.lineHeight)
+        self:SetScript("OnClick", onClick)
+        self:SetScript("OnEnter", function()
+            self.label:SetColor("ink")
+        end)
+        self:SetScript("OnLeave", function()
+            self.label:SetColor("gilt-text")
+        end)
+        -- as wide as its words (the first text too: it was 80 wide, its words at
+        -- the left, so a right-aligned link stood in from the edge)
+        local function fit()
+            self:SetWidth(math.ceil(self.label:GetUnboundedStringWidth()))
+        end
+        hook(self.label, "SetValue", fit)
+        self:HookScript("OnShow", fit) -- the font may not measure before it's shown
+        fit()
+    end
+end
+
+local function link(parent: Frame, label: string, onClick: () -> ()): StackLink
+    return StackLink.new(parent, label, onClick)
+end
+
+local stacks: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+
+-- A theme change: the cards laid out again (colour codes in the titles and
+-- counts, the text styles' line heights), a stack's with its items.
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for f in pairs(stacks) do
+            local s = f :: NotificationStack
+            s.foot:SetHeight(T.type.caption.lineHeight)
+            s.moreLink:SetHeight(T.type.caption.lineHeight)
+            s.clearLink:SetHeight(T.type.caption.lineHeight)
+            if s.items then
+                s:SetItems(s.items, s.inCombat)
+            end
+        end
+        for n in pairs(notes) do
+            local data, parent = n.data, n:GetParent()
+            if data and not (parent and stacks[parent]) then
+                n:SetData(data)
+            end
+        end
+    end,
+    "UI.Notification"
+)
+
+export class NotificationStack extends Frame
+    max: number
+    foot: Frame
+    moreLink: StackLink
+    expanded: boolean = false
+    heldText: Text
+    clearLink: StackLink
+    notesHidden: boolean? = nil
+    -- the cards by their item's id, and the cards put by
+    cards: { [string | number]: Notification } = {}
+    spare: Notification[] = {}
+    items: NotificationData[]? = nil
+    inCombat: boolean? = nil
+    onExpand: (() -> ())? = nil
+    onClearAll: (() -> ())? = nil
+
+    constructor(parent: Frame, options: { name?: string, max?: number }?)
+        local opts = options or {}
+        super(opts.name, parent)
+        stacks[self] = true
+        self:SetHeight(1)
+        draw.layout(self, function()
+            self:SetWidth(noticeW())
+        end)
+        self.max = opts.max or 5
+        self.foot = CreateFrame("Frame", nil, self)
+        self.foot:SetHeight(T.type.caption.lineHeight)
+        self.moreLink = link(self.foot, "+1 more", function()
+            self.expanded = true
+            if self.onExpand then
+                self.onExpand()
+            end
+        end)
+        self.heldText = text(self.foot, "caption", "ink-muted")
+        self.clearLink = link(self.foot, "Dismiss all", function()
+            if self.onClearAll then
+                self.onClearAll()
+            end
+        end)
+        self.clearLink:SetPoint("RIGHT")
+        self.foot:Hide()
+    end
+
+    -- Notes out of sight (a window covers them), requests kept.
+    function SetNotesHidden(hidden: unknown)
+        local on = hidden ~= nil and hidden ~= false
+        if self.notesHidden == on then
+            return
+        end
+        self.notesHidden = on
+        for _, card in pairs(self.cards) do
+            if card.data then
+                card:SetShown(card.request or not on)
+            end
+        end
+        self.foot:SetAlpha(on and 0 or 1)
+    end
+
+    function CardFor(id: string | number): Notification?
+        return self.cards[id]
+    end
+
+    -- A card made ahead into the spares (Core/Ahead: out of combat), so the
+    -- next card (a wipe's Release Spirit, over the notes already showing) is
+    -- only filled in; false: nothing more to make.
+    function BuildAhead(): boolean
+        if #self.spare == 0 then
+            local card = notification(self)
+            card:Hide()
+            self.spare[#self.spare + 1] = card
+        end
+        return false
+    end
+
+    function SetItems(items: NotificationData[]?, inCombat: boolean?)
+        self.items, self.inCombat = items, inCombat
+        local list: Entry[], held = {}, 0
+        for i, d in ipairs(items or {}) do
+            local kind = d.kind or "timed"
+            if inCombat and (kind == "sticky" or kind == "timed") then
+                held = held + 1
+            else
+                list[#list + 1] = { d = d, i = i }
+            end
+        end
+        table.sort(list, function(a: Entry, b: Entry): boolean
+            local oa, ob = ORDER[a.d.kind or "timed"] or 3, ORDER[b.d.kind or "timed"] or 3
+            if oa ~= ob then
+                return oa < ob
+            end
+            return a.i < b.i
+        end)
+        local max = self.expanded and #list or math.min(#list, self.max)
+        local used: { [string | number]: boolean } = {}
+        local y = 0
+        for k = 1, max do
+            local d = list[k].d
+            local id = d.id or k
+            local card = self.cards[id]
+            if not card then
+                card = table.remove(self.spare) or notification(self)
+                self.cards[id] = card
+            end
+            used[id] = true
+            -- requests (popups to answer, loot rolls) above open windows; notes
+            -- at the stack's own layer, under them (asked for in game)
+            local request = d.kind == "action" or d.kind == "roll"
+            card.request = request
+            card:SetFrameStrata(request and "DIALOG" or self:GetFrameStrata())
+            card:SetData(d)
+            card:ClearAllPoints()
+            card:SetPoint("TOPLEFT", 0, -y)
+            card:SetShown(request or not self.notesHidden)
+            y = y + card:GetHeight() + S["space-3"]
+        end
+        for id, card in pairs(self.cards) do
+            if not used[id] then
+                card:Hide()
+                card.data = nil
+                self.cards[id] = nil
+                self.spare[#self.spare + 1] = card
+            end
+        end
+        -- the foot: more, held in combat, dismiss all
+        local more = #list - max
+        local sticky = 0
+        for _, x in ipairs(list) do
+            if (x.d.kind or "timed") == "sticky" then
+                sticky = sticky + 1
+            end
+        end
+        self.moreLink:SetShown(more > 0)
+        self.moreLink.label:SetValue("+" .. more .. " more")
+        self.heldText:SetShown(held > 0)
+        self.heldText:SetValue(held .. " waiting for the end of combat")
+        self.clearLink:SetShown(sticky > 1 and not inCombat)
+        local footShown = more > 0 or held > 0 or (sticky > 1 and not inCombat)
+        self.foot:SetShown(footShown)
+        if footShown then
+            self.foot:ClearAllPoints()
+            -- flush with the cards' edges: Dismiss all ends at their right edge
+            self.foot:SetPoint("TOPLEFT", 0, -y)
+            self.foot:SetPoint("TOPRIGHT", 0, -y)
+            local x = 0
+            if self.moreLink:IsShown() then
+                self.moreLink:ClearAllPoints()
+                self.moreLink:SetPoint("LEFT", x, 0)
+                x = x + self.moreLink:GetWidth() + S["space-4"]
+            end
+            if self.heldText:IsShown() then
+                self.heldText:ClearAllPoints()
+                self.heldText:SetPoint("LEFT", x, 0)
+                x = x + self.heldText:GetUnboundedStringWidth() + S["space-4"]
+            end
+            y = y + T.type.caption.lineHeight
+        end
+        self:SetHeight(math.max(1, y))
+    end
+end
+
+export function notificationStack(parent: Frame, opts: { name?: string, max?: number }?): NotificationStack
+    return NotificationStack.new(parent, opts)
+end

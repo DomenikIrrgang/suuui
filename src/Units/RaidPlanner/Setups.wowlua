@@ -1,0 +1,482 @@
+-- Units/RaidPlanner/Setups.wowlua
+-- The raid planner's setups and their saved data (Units/RaidPlanner): the
+-- account's store (SuuUI.AccountData), the loaded setup being worked on and
+-- the saved ones (load, save, save as new, duplicate, rename, delete, a new
+-- one empty or from the raid), and the setup's slots (added, changed,
+-- removed, pinned, a spec or a player dropped). The module's methods of the
+-- same names call these with the module.
+
+import SuuUI from "/Core/API"
+import type PlannerId, PlannerSpec, PlannerArt, DragWhat, DropWhere, SlotChanges from "/Core/API"
+import * as tbl from "wowlua:table"
+import CLASS, MAX_GROUP, key, treeRole from "/Units/RaidPlanner/Catalog"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local UI = SuuUI.UI
+
+--------------------------------------------------------------------------------
+-- Setups (account-wide): data.setups[id], and the loaded one being worked on
+-- (data.work, a copy: Save writes it back)
+--------------------------------------------------------------------------------
+
+-- A slot: its group, what it asks for (a class, maybe a spec and a role),
+-- its own label, the player placed in it by hand.
+export type Slot = { id: number, g: number, class?: string, spec?: number, role?: string, label?: string, pin?: string }
+-- A setup: its slots; `id` the saved one's (the loaded copy's), when saved.
+export type Setup = { id?: number, name: string, size: number, slots: Slot[], nextSlot?: number, saved?: number }
+-- A spec heard or inspected, and when.
+export type SpecNote = { tree: number, at: number, from?: string }
+-- What a slot asks for (the palette's spec, a player's).
+export type Requirement = { class?: string, spec?: number, role?: string }
+
+-- The account's data: the setups, the specs known, the trees' icons seen,
+-- the raid size shown, the loaded setup.
+export type Store = {
+    setups: { [number]: Setup },
+    nextId: number,
+    specs: { [string]: SpecNote },
+    treeIcons: { [string]: { [number]: PlannerArt } },
+    size: number,
+    work?: Setup,
+}
+export type RawStore = {
+    setups?: { [number]: Setup },
+    nextId?: number,
+    specs?: { [string]: SpecNote },
+    treeIcons?: { [string]: { [number]: PlannerArt } },
+    size?: number,
+    work?: Setup,
+}
+
+export function newSetup(name: string, size: number?): Setup
+    return { name = name, size = size or 40, slots = {}, nextSlot = 1 }
+end
+
+-- The next slot ID of a setup.
+export function takeSlotId(w: Setup): number
+    local id = w.nextSlot or (#w.slots + 1)
+    w.nextSlot = id + 1
+    return id
+end
+
+-- A saved setup by its ID ("work", the loaded unsaved one, is none).
+export function setupIn(d: Store, id: PlannerId?): Setup?
+    if type(id) == "number" then
+        return d.setups[id]
+    end
+    return nil
+end
+
+-- The layout of a setup, for comparing the loaded one with its saved self.
+export function sameLayout(a: Setup?, b: Setup?): boolean
+    if not (a and b) or a.name ~= b.name or a.size ~= b.size or #a.slots ~= #b.slots then
+        return false
+    end
+    for i, s in ipairs(a.slots) do
+        local o = b.slots[i]
+        if s.g ~= o.g or s.class ~= o.class or s.spec ~= o.spec or s.role ~= o.role or s.label ~= o.label or
+            s.pin ~= o.pin then
+            return false
+        end
+    end
+    return true
+end
+
+-- A copy as saved (no ids of the work's own).
+export function saved(setup: Setup): Setup
+    local s = tbl.copy(setup)
+    s.id = nil
+    return s
+end
+
+-- A spec as the module keeps it: the tree's number (1-3).
+export function specNumber(v: PlannerSpec | false | nil): number?
+    if type(v) == "number" then
+        return v
+    end
+    return nil
+end
+
+export function data(): Store
+    local d = SuuUI.AccountData("raidplanner") :: unknown :: RawStore
+    d.setups = d.setups or {}
+    d.nextId = d.nextId or 1
+    d.specs = d.specs or {}
+    d.treeIcons = d.treeIcons or {}
+    d.size = d.size or 40
+    return d :: unknown :: Store
+end
+
+export function currentWork(self: RaidPlannerModule): Setup
+    local d = self:Data()
+    local w = d.work
+    if not w then
+        w = newSetup(self:UniqueName("New setup"), d.size)
+        d.work = w
+    end
+    return w
+end
+
+export function uniqueName(self: RaidPlannerModule, base: string): string
+    local taken: { [string]: boolean } = {}
+    for _, s in pairs(self:Data().setups) do
+        taken[s.name] = true
+    end
+    local w = self:Data().work
+    if w then
+        taken[w.name] = true
+    end
+    if not taken[base] then
+        return base
+    end
+    for n = 2, 99 do
+        local name = ("%s %d"):format(base, n)
+        if not taken[name] then
+            return name
+        end
+    end
+    return base
+end
+
+export function changed(self: RaidPlannerModule): boolean
+    local w = self:Work()
+    return not (w.id and sameLayout(w, self:Data().setups[w.id]))
+end
+
+export function slotById(self: RaidPlannerModule, id: PlannerId?): Slot?
+    for _, s in ipairs(self:Work().slots) do
+        if s.id == id then
+            return s
+        end
+    end
+    return nil
+end
+
+export function slotsIn(self: RaidPlannerModule, g: number): Slot[]
+    return self:SlotsInOf(self:Work(), g)
+end
+
+export function slotsInOf(w: Setup, g: number): Slot[]
+    local out: Slot[] = {}
+    for _, s in ipairs(w.slots) do
+        if s.g == g then
+            out[#out + 1] = s
+        end
+    end
+    return out
+end
+
+export function loadSetup(self: RaidPlannerModule, id: PlannerId)
+    local d = self:Data()
+    local s = setupIn(d, id)
+    if not s then
+        return
+    end
+    local saveId = type(id) == "number" and id or nil
+    local function load()
+        local work = tbl.copy(s)
+        work.id = saveId
+        d.work = work
+        d.size = s.size
+        self:Refill(true)
+    end
+    if self:Changed() and #self:Work().slots > 0 and self:Work().id ~= id then
+        UI.Confirm({
+            title = "Load " .. s.name .. "?",
+            text = ("The changes to %s aren't saved."):format(self:Work().name),
+            confirm = "Load",
+            onConfirm = load,
+        })
+    else
+        load()
+    end
+end
+
+export function save(self: RaidPlannerModule)
+    local d = self:Data()
+    local w = self:Work()
+    local id = w.id
+    if not id or not d.setups[id] then
+        id = d.nextId
+        d.nextId = d.nextId + 1
+    end
+    w.id = id
+    local s = saved(w)
+    s.saved = time()
+    d.setups[id] = s
+    w.saved = s.saved
+    self:Render()
+end
+
+export function saveAsNew(self: RaidPlannerModule)
+    local w = self:Work()
+    UI.Confirm({
+        title = "Save as new",
+        text = "A new setup from this one, under its own name.",
+        confirm = "Save",
+        input = { label = "Name", value = self:UniqueName(w.name) },
+        onConfirm = function(name: string?)
+            if not name then
+                return
+            end
+            w.name = name
+            w.id = nil
+            self:Save()
+        end,
+    })
+end
+
+-- Keeps a setup under a new ID.
+export function addSetup(self: RaidPlannerModule, s: Setup)
+    local d = self:Data()
+    d.setups[d.nextId] = s
+    d.nextId = d.nextId + 1
+end
+
+export function duplicate(self: RaidPlannerModule, id: PlannerId?)
+    local src = setupIn(self:Data(), id) or self:Work()
+    local s = saved(src)
+    s.name = self:UniqueName(src.name .. " (copy)")
+    s.saved = time()
+    self:AddSetup(s)
+    self:Print(("%s saved as %s."):format(src.name, s.name))
+    self:Render()
+end
+
+export function delete(self: RaidPlannerModule, id: PlannerId?)
+    local d = self:Data()
+    local w = self:Work()
+    local which = id or w.id
+    local num = type(which) == "number" and which or nil
+    local s = num and d.setups[num]
+    if not (num and s) then
+        -- the unsaved one: start again
+        if #w.slots == 0 then
+            return
+        end
+        UI.Confirm({
+            title = "Discard " .. w.name .. "?",
+            text = "It was never saved.",
+            confirm = "Discard",
+            onConfirm = function()
+                d.work = nil
+                self:Refill(true)
+            end,
+        })
+        return
+    end
+    UI.Confirm({
+        title = "Delete " .. s.name .. "?",
+        text = "The setup is gone for every character.",
+        confirm = "Delete",
+        onConfirm = function()
+            d.setups[num] = nil
+            -- the loaded one stays open, unsaved
+            if w.id == num then
+                w.id = nil
+            end
+            self:Render()
+        end,
+    })
+end
+
+export function rename(self: RaidPlannerModule, id: PlannerId, name: string?)
+    if not name or name == "" then
+        self:Render()
+        return
+    end
+    local w = self:Work()
+    if id == "work" or w.id == id then
+        w.name = name
+    end
+    -- a saved setup takes its new name at once (not a change to save)
+    local s = setupIn(self:Data(), id)
+    if s then
+        s.name = name
+    end
+    self:Render()
+end
+
+-- A new setup: empty, or the raid as it is (each player a slot in their
+-- group, asking for their class and spec; nobody pinned).
+export function create(self: RaidPlannerModule, fromRaid: boolean)
+    local d = self:Data()
+    local function make()
+        local w = newSetup(self:UniqueName("New setup"), d.size)
+        if fromRaid then
+            -- big enough for everyone and for the highest group in use
+            local need = #self.roster
+            for _, m in ipairs(self.roster) do
+                need = math.max(need, m.group * 5)
+            end
+            w.size = need > 20 and 40 or need > 10 and 20 or 10
+            d.size = w.size
+            for _, m in ipairs(self.roster) do
+                if #self:SlotsInOf(w, m.group) < MAX_GROUP and m.group <= w.size / 5 then
+                    w.slots[#w.slots + 1] = {
+                        id = takeSlotId(w),
+                        g = m.group,
+                        class = m.class,
+                        spec = m.tree,
+                        role = m.role or (m.tree and treeRole(m.class, m.tree)) or nil,
+                    }
+                end
+            end
+        end
+        d.work = w
+        self:Refill(true)
+    end
+    if self:Changed() and #self:Work().slots > 0 then
+        UI.Confirm({
+            title = "A new setup?",
+            text = ("The changes to %s aren't saved."):format(self:Work().name),
+            confirm = "New setup",
+            onConfirm = make,
+        })
+    else
+        make()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Slots
+--------------------------------------------------------------------------------
+
+export function addSlot(self: RaidPlannerModule, g: number, req: Requirement?, pin: string?): Slot?
+    local w = self:Work()
+    if g > w.size / 5 or #self:SlotsIn(g) >= MAX_GROUP then
+        return nil
+    end
+    local s: Slot = { id = takeSlotId(w), g = g }
+    if req then
+        s.class, s.spec, s.role = req.class, req.spec, req.role
+    end
+    if pin then
+        self:Unpin(pin)
+        s.pin = pin
+    end
+    w.slots[#w.slots + 1] = s
+    return s
+end
+
+export function removeSlot(self: RaidPlannerModule, id: PlannerId)
+    local w = self:Work()
+    for i, s in ipairs(w.slots) do
+        if s.id == id then
+            table.remove(w.slots, i)
+            break
+        end
+    end
+end
+
+-- Nobody else keeps `name` pinned.
+export function unpin(self: RaidPlannerModule, name: string)
+    local k = key(name)
+    for _, s in ipairs(self:Work().slots) do
+        if s.pin and key(s.pin) == k then
+            s.pin = nil
+        end
+    end
+end
+
+-- The slot asks for a spec from the palette (or any of a class, or a role).
+export function setRequirement(self: RaidPlannerModule, s: Slot, req: Requirement)
+    s.class, s.spec, s.role = req.class, req.spec, req.role
+    if s.spec and not s.role then
+        s.role = treeRole(s.class, s.spec)
+    end
+    local m = s.pin and self.byKey[key(s.pin)]
+    if m and s.class and m.class ~= s.class then
+        s.pin = nil
+    end
+end
+
+export function changeSlot(self: RaidPlannerModule, id: PlannerId, changes: SlotChanges)
+    local s = self:SlotById(id)
+    if not s then
+        return
+    end
+    if changes.class ~= nil then
+        local v = changes.class or nil
+        if v ~= s.class then
+            s.spec = nil
+        end
+        s.class = v
+    end
+    if changes.spec ~= nil then
+        local v = specNumber(changes.spec)
+        s.spec = v
+        -- a spec brings its role (the healer of a Restoration shaman)
+        if v and s.class and CLASS[s.class] then
+            s.role = treeRole(s.class, v)
+        end
+    end
+    if changes.role ~= nil then
+        s.role = changes.role or nil
+    end
+    if changes.label ~= nil then
+        s.label = changes.label
+    end
+    if changes.pin ~= nil then
+        local v = changes.pin or nil
+        if v then
+            self:Unpin(v)
+        end
+        s.pin = v
+    end
+    if s.label == "" then
+        s.label = nil
+    end
+    self:Refill()
+end
+
+-- What was dragged where (UI.RaidPlanner's onDrop).
+export function drop(self: RaidPlannerModule, what: DragWhat, where: DropWhere)
+    local spec, name = what.spec, what.player
+    if spec then
+        local req: Requirement = { class = spec.class, spec = specNumber(spec.spec), role = spec.role }
+        if where.slot then
+            local s = self:SlotById(where.slot)
+            if s then
+                self:SetRequirement(s, req)
+            end
+        elseif where.group then
+            local s = self:AddSlot(where.group)
+            if s then
+                self:SetRequirement(s, req)
+            end
+        end
+    elseif name then
+        local m = self.byKey[key(name)]
+        if where.unplaced then
+            self:Unpin(name)
+            self.letGo[key(name)] = true
+        elseif where.slot then
+            local target = self:SlotById(where.slot)
+            if not target then
+                return
+            end
+            local from = what.from and self:SlotById(what.from)
+            local there = self.fill and self.fill.slot[target.id]
+            local displaced = (there and there.m.name) or target.pin
+            self:Unpin(name)
+            target.pin = name
+            -- onto another player: the two swap
+            if from and from ~= target and displaced and key(displaced) ~= key(name) then
+                self:Unpin(displaced)
+                from.pin = displaced
+            end
+        elseif where.group and m then
+            local tree = m.tree
+            self:AddSlot(
+                where.group,
+                { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil },
+                name
+            )
+        end
+        if not where.unplaced then
+            self.letGo[key(name)] = nil
+        end
+    end
+    self:Refill()
+end

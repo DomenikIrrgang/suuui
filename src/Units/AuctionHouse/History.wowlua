@@ -1,0 +1,266 @@
+-- Units/AuctionHouse/History.wowlua
+-- Your searches (Units/AuctionHouse; asked 2026-11-12): the ones you ran
+-- that found something, kept per character, newest first, five; their
+-- list under the search box while it has the focus (a row: the first
+-- item's icon, the text, an x on hover), narrowed by what you type. The
+-- module's methods for them (History, KeepSearch, RememberSearch, …) call
+-- the functions here.
+
+import SuuUI from "/Core/API"
+import type Icon, Text, Cross from "/Core/API"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import keyInfo, trimmed from "./Common"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local tryValue = errors.tryValue
+
+local AH = C_AuctionHouse
+
+-- your searches: how many are kept, a row's height in their list
+local HISTORY_MAX = 5
+local HISTORY_ROW_H = 28
+
+-- One of your searches: as you typed it, the first item it found and that
+-- item's icon.
+export type HistoryEntry = { text: string, item?: number, icon?: number }
+
+-- An item's icon from the client's data at hand (loaded or not); the
+-- question mark without one.
+local QUESTION_MARK = 134400
+local function itemIcon(id: number?): number
+    if not id then
+        return QUESTION_MARK
+    end
+    local _, _, _, _, icon = C_Item.GetItemInfoInstant(id)
+    return icon or QUESTION_MARK
+end
+
+-- One of your searches in the list under the search box: the first item's
+-- icon, the text; on hover the row lifts and its x (which takes it out of
+-- the list) shows.
+export class HistoryRow extends Button
+    readonly hover: Texture
+    readonly icon: Icon
+    readonly label: Text
+    readonly remove: Button
+    readonly cross: Cross
+    entry: HistoryEntry = { text = "" }
+
+    constructor(parent: Frame, m: AuctionHouseModule)
+        super(nil, parent)
+        self:SetHeight(HISTORY_ROW_H)
+        self.hover = UI.Fill(self, "surface-raised")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.icon = UI.Icon(self, 18)
+        SuuUI.Layout.Follow(self, function()
+            self.icon:SetPoint("LEFT", S["space-4"], 0)
+        end)
+        local x = CreateFrame("Button", nil, self)
+        x:SetSize(18, 18)
+        SuuUI.Layout.Follow(self, function()
+            x:SetPoint("RIGHT", -S["space-3"], 0)
+        end)
+        x:Hide()
+        self.remove = x
+        self.cross = UI.Cross(x, 8, "ink-muted")
+        self.cross:SetPoint("CENTER")
+        self.label = UI.Text(self, "body", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.label:SetPoint("LEFT", self.icon, "RIGHT", S["space-3"], 0)
+            self.label:SetPoint("RIGHT", x, "LEFT", -S["space-2"], 0)
+        end)
+        self.label:SetWordWrap(false)
+        self:SetScript("OnEnter", function()
+            self:Lit(true)
+        end)
+        -- (onto the x: still over the row)
+        self:SetScript("OnLeave", function()
+            self:Lit(self:IsMouseOver())
+        end)
+        self:SetScript("OnClick", function()
+            m:RunHistory(self.entry)
+        end)
+        x:SetScript("OnEnter", function()
+            self.cross:SetColor("ink")
+            UI.ShowTooltip(x, { title = "Remove from history" })
+        end)
+        x:SetScript("OnLeave", function()
+            self.cross:SetColor("ink-muted")
+            UI.HideTooltip()
+            self:Lit(self:IsMouseOver())
+        end)
+        x:SetScript("OnClick", function()
+            UI.HideTooltip()
+            m:ForgetSearch(self.entry.text)
+            -- (the click took the focus from the box: back to typing, as
+            -- the chat's palette does)
+            m:FocusSearch()
+        end)
+    end
+
+    function Lit(on: boolean)
+        self.hover:SetShown(on)
+        self.remove:SetShown(on)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Your searches
+--------------------------------------------------------------------------------
+
+export function history(self: AuctionHouseModule): HistoryEntry[]
+    return self:Saved().history or {}
+end
+
+-- A search you ran, kept once the house's answer holds an item, with the
+-- first item as the results list it. The answer can come in parts (an
+-- update before any result, then results added): the search waits for
+-- one, and is dropped only when the house says it's all there and empty
+-- (none kept in game, 0.9.0: the first update had no results yet).
+export function keepSearch(self: AuctionHouseModule)
+    local text = self.historyPending
+    if not text then
+        return
+    end
+    local first = self:SortedResults(tryValue(AH.GetBrowseResults) or {})[1]
+    if not first then
+        if tryValue(AH.HasFullBrowseResults) then
+            self.historyPending = nil
+        end
+        return
+    end
+    self.historyPending = nil
+    local id = first.itemKey.itemID
+    local info = keyInfo(first.itemKey)
+    self:RememberSearch(text, id, info and info.iconFileID or itemIcon(id))
+end
+
+-- A search on top of yours: the same text in any case moves up, as you
+-- typed it this time; five kept.
+export function rememberSearch(self: AuctionHouseModule, text: string, item: number?, icon: number?)
+    local d = self:Saved()
+    local key = text:lower()
+    local out: HistoryEntry[] = { { text = text, item = item, icon = icon } }
+    for _, e in ipairs(d.history or {}) do
+        if #out < HISTORY_MAX and e.text:lower() ~= key then
+            out[#out + 1] = e
+        end
+    end
+    d.history = out
+    self:DrawHistory()
+end
+
+-- One taken out (its x).
+export function forgetSearch(self: AuctionHouseModule, text: string)
+    local d = self:Saved()
+    local key = text:lower()
+    d.history = tbl.filter(self:History(), function(e: HistoryEntry): boolean
+        return e.text:lower() ~= key
+    end)
+    self:DrawHistory()
+end
+
+-- One picked: in the search box and searched (while Scan all runs: in
+-- the box only, for Search once it is done).
+export function runHistory(self: AuctionHouseModule, entry: HistoryEntry)
+    local buy = self.buy
+    self:CloseHistory()
+    if not buy then
+        return
+    end
+    buy.search:SetValue(entry.text)
+    buy.search.edit:ClearFocus()
+    if self.scanning then
+        self:Refresh()
+        return
+    end
+    self:Search(entry.text, true)
+end
+
+-- The list under the search box (with its focus): all of them until you
+-- type, then those with what you typed in them (kept while it stays
+-- open: the focus back after an x).
+export function openHistory(self: AuctionHouseModule)
+    if not self.historyOpen then
+        self.historyOpen, self.historyQuery = true, ""
+    end
+    self:DrawHistory()
+end
+
+-- The keyboard back in the search box (after a click on the list).
+export function focusSearch(self: AuctionHouseModule)
+    local buy = self.buy
+    if buy and buy.search:IsVisible() and not buy.search.edit:HasFocus() then
+        buy.search.edit:SetFocus()
+    end
+end
+
+export function closeHistory(self: AuctionHouseModule)
+    self.historyOpen = false
+    local buy = self.buy
+    if buy then
+        buy.history:Hide()
+    end
+end
+
+export function historyTyped(self: AuctionHouseModule, text: string)
+    local buy = self.buy
+    self.historyQuery = trimmed(text)
+    if not self.historyOpen and buy and buy.search.edit:HasFocus() then
+        self.historyOpen = true
+    end
+    self:DrawHistory()
+end
+
+-- Nothing to show (none kept, none with what's typed): no list.
+export function drawHistory(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local box = buy.history
+    if not (self.historyOpen and buy.search:IsVisible()) then
+        box:Hide()
+        return
+    end
+    local q = self.historyQuery:lower()
+    local pad = S["space-2"]
+    local y = pad + 22
+    local n = 0
+    for _, e in ipairs(self:History()) do
+        if q == "" or e.text:lower():find(q, 1, true) then
+            n = n + 1
+            local r = buy.historyRows[n]
+            if not r then
+                r = HistoryRow.new(box, self)
+                buy.historyRows[n] = r
+            end
+            r.entry = e
+            r.icon:SetArt(e.icon or itemIcon(e.item))
+            r.label:SetValue(e.text)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", pad, -y)
+            r:SetPoint("RIGHT", box, "RIGHT", -pad, 0)
+            r:Show()
+            y = y + HISTORY_ROW_H
+        end
+    end
+    for i = n + 1, #buy.historyRows do
+        buy.historyRows[i]:Hide()
+    end
+    if n == 0 then
+        box:Hide()
+        return
+    end
+    box:SetSize(buy.search:GetWidth(), y + pad)
+    box:Show()
+    -- (the row under the pointer lit: another one there after an x)
+    for i = 1, n do
+        local r = buy.historyRows[i]
+        r:Lit(r:IsMouseOver())
+    end
+end

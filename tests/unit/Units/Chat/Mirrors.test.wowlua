@@ -1,0 +1,141 @@
+-- Units/Chat/Mirrors: SuuUI's copy of each Blizzard window (lines copied,
+-- formatted, timed, raw, secret, trimmed, redrawn), the mouse wheel,
+-- names' classes, the whispers kept by player.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Chat"
+import expectNoErrors from "../../../helpers"
+import ready, mirror, frameOf, lastLine, textOf, rendered, chatEvent, whisper, resetChat from "./ChatHelpers"
+
+local T = SuuUI.Tokens
+local CF1, CF2 = ChatFrame1, ChatFrame2
+
+local LINE = "|Hplayer:Tamsin:12|h[Tamsin]|h says: hello there"
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Mirrors and lines
+--------------------------------------------------------------------------------
+
+@test("a line Blizzard adds is copied in the design's form: no brackets, the verb gone, the time while awake")
+local function copied()
+    CF1:AddMessage(LINE, 1, 1, 1)
+    local line = lastLine(CF1)
+    expect(line.src).toBe(LINE)
+    expect(textOf(line):find("[Tamsin]", 1, true)).toBe(nil)
+    expect(textOf(line):find("|h: hello there", 1, true) ~= nil).toBe(true)
+    M.awake = true
+    expect(rendered(line, M:ShowTimes()):find(date("%H:%M", line.at), 1, true) ~= nil).toBe(true)
+    M:Set("timestamps", false)
+    expect(M:Render(line, M:ShowTimes())).toBe(line.text)
+end
+
+@test("the combat log's lines and secret ones go in as they are")
+local function raw()
+    local log = mirror(CF2)
+    expect(log.raw).toBe(true)
+    CF2:AddMessage("|Hplayer:Tamsin|h[Tamsin]|h hits", 1, 1, 1)
+    expect(log.lines[#log.lines].text).toBe("|Hplayer:Tamsin|h[Tamsin]|h hits")
+    local hidden = mock.secret("hidden words")
+    CF1:AddMessage(hidden, 1, 1, 1)
+    expect(lastLine(CF1).raw).toBe(true)
+    -- nothing to copy
+    local add = CF1.AddMessage :: unknown :: (self: Frame, text: unknown) -> ()
+    add(CF1, nil)
+end
+
+@test("a mirror keeps 500 lines")
+local function trimmed()
+    local m = mirror(CF1)
+    for i = 1, 510 do
+        CF1:AddMessage("line " .. i)
+    end
+    expect(#m.lines).toBe(500)
+    expect(m.lines[500].src).toBe("line 510")
+end
+
+@test("the time coming and going redraws the lines where they were scrolled")
+local function redraw()
+    local m = mirror(CF1)
+    for i = 1, 60 do
+        CF1:AddMessage("scroll " .. i)
+    end
+    M.awake = true
+    m.drawnWithTime = nil
+    M:Redraw(m)
+    m.frame:ScrollUp()
+    M:Set("timestamps", false)
+    expect(m.drawnWithTime).toBe(false)
+    M:Redraw(m) -- the same: nothing
+    expect(m.drawnWithTime).toBe(false)
+    M:Redraw(mirror(CF2)) -- the combat log: never
+end
+
+@test("the mouse wheel scrolls; with Shift to the top and the bottom")
+local function wheel()
+    local m = frameOf(CF1)
+    for i = 1, 60 do
+        CF1:AddMessage("wheel " .. i)
+    end
+    mock.wheel(m, 1)
+    expect(m:GetScrollOffset() > 0).toBe(true)
+    mock.wheel(m, -1)
+    mock.setModifiers({ shift = true })
+    mock.wheel(m, 1)
+    expect(m:GetScrollOffset() > 0).toBe(true)
+    mock.wheel(m, -1)
+    expect(m:GetScrollOffset()).toBe(0)
+end
+
+@test("names: the class from the line's sender, from chat events, or none")
+local function classes()
+    mock.spawnUnit({ name = "Otherplayer", class = "WARRIOR", player = true, guid = "Player-0000-00000000" })
+    mock.stub(C_ChatInfo, "GetChatLineSenderGUID", function(_: number): string
+        return "Player-0000-00000000"
+    end)
+    CF1:AddMessage("|Hplayer:Otherplayer:7|h[Otherplayer]|h says: hi")
+    expect(textOf(lastLine(CF1)):find(T.color["class-warrior"].hex, 1, true) ~= nil).toBe(true)
+    expect(assert(lastLine(CF1).classes)[1]).toBe("WARRIOR")
+    mock.stub(C_ChatInfo, "GetChatLineSenderGUID", function(_: number): string
+        return ""
+    end)
+    -- a chat event tells the sender's class, kept by name
+    chatEvent("CHAT_MSG_SAY", "hey", "Otherplayer-Ashford", "Player-0000-00000000", 9)
+    CF1:AddMessage("|Hplayer:Otherplayer-Ashford|h[Otherplayer-Ashford]|h says: again")
+    expect(assert(lastLine(CF1).classes)[1]).toBe("WARRIOR")
+    CF1:AddMessage("|Hplayer:Tester|h[Tester]|h says: who")
+    expect(assert(lastLine(CF1).classes)[1]).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- Whispers
+--------------------------------------------------------------------------------
+
+@test("whispers are kept by player (once, 300 at most); a name finds its realm's lines too")
+local function whispers()
+    M.whispers = {}
+    whisper("|Hplayer:Tamsin-Ashford|h[Tamsin-Ashford]|h whispers: one")
+    whisper("|Hplayer:Tamsin-Ashford|h[Tamsin-Ashford]|h whispers: one") -- the same line twice
+    whisper("no player in it")
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: not a whisper", 1, 1, 1, nil, nil, nil, "CHAT_MSG_SAY")
+    expect(#M.whispers).toBe(1)
+    expect(#M:WhispersWith("Tamsin")).toBe(1)
+    expect(#M:WhispersWith("tamsin-ashford")).toBe(1)
+    expect(#M:WhispersWith("Otherplayer")).toBe(0)
+    for i = 1, 305 do
+        whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: n" .. i)
+    end
+    expect(#M.whispers).toBe(300)
+end

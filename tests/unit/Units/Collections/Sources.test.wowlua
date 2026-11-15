@@ -1,0 +1,128 @@
+-- Units/Collections/Sources: where something comes from, as one line and
+-- as a card (SuuUI's generated sources or the game's source kind); the
+-- sources built on first use, the window drawn again then.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import data from "/Units/Collections/Sources"
+import * as lazyData from "/Core/Data"
+import start, cleanup from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- Where it comes from
+--------------------------------------------------------------------------------
+
+@test(
+    "a source as one line: vendor, quest, world drop, drop, object, container, crafted, the game's text, the item; else the kind"
+)
+local function sourceLines()
+    expect(M:SourceLine({ v = { 1, 2 } }, "mount", 1)).toBe("Vendor · Vendor Brom, Elwynn Forest +1")
+    expect(M:SourceLine({ v = { 99 }, q = { 10, 11 } }, "mount", 1)).toBe("Quest · The Ram Trial +1")
+    expect(M:SourceLine({ q = { 12 } }, "mount", 1)).toBe("Quest")
+    expect(M:SourceLine({ dn = 40 }, "mount", 1)).toBe("World drop")
+    expect(M:SourceLine({ d = { 2 }, dn = 3 }, "mount", 1)).toBe("Drop · Kobold Miner, Elwynn Forest · 5 +2")
+    expect(M:SourceLine({ d = { 3, 2 } }, "mount", 1)).toBe("Drop · Boar +1")
+    expect(M:SourceLine({ o = { 1 } }, "mount", 1)).toBe("Found in · Old Chest, Westfall")
+    expect(M:SourceLine({ o = { 2, 1 } }, "mount", 1)).toBe("Found in · Crate +1")
+    mock.stub(C_Item, "GetItemNameByID", function(id: number): string?
+        return id == 501 and "Locked Box" or nil
+    end)
+    expect(M:SourceLine({ c = { 501 } }, "mount", 1)).toBe("Inside · Locked Box")
+    expect(M:SourceLine({ c = { 502 } }, "mount", 1)).toBe("Inside · a container")
+    expect(M:SourceLine({ p = "Engineering" }, "mount", 1)).toBe("Crafted · Engineering")
+    expect(M:SourceLine({ x = "A gift from the event" }, "mount", 1)).toBe("A gift from the event")
+    expect(M:SourceLine({ i = 501 }, "mount", 1)).toBe("Taught by · Locked Box")
+    expect(M:SourceLine({ i = 502 }, "mount", 1)).toBe("Taught by · an item")
+    -- unknown creatures and objects: on to the next
+    expect(M:SourceLine({ v = { 99 }, d = { 99 }, o = { 99 } }, "mount", -1)).toBe("Source unknown")
+    -- the game's kinds: a mount's by the pet journal's words, an appearance's by the transmog ones
+    expect(M:SourceLine(nil, "mount", 0)).toBe(BATTLE_PET_SOURCE_1)
+    expect(M:SourceLine(nil, "appearance", 1)).toBe(TRANSMOG_SOURCE_1)
+    expect(M:SourceLine(nil, "mount", nil)).toBe("Source unknown")
+    expect(M:SourceLine(nil, "mount", 999)).toBe("Source unknown")
+end
+
+@test("the sources not built yet: none for now, built a step a frame, the window drawn again then")
+local function sourcesLater()
+    mock.stub(lazyData.collectionSources, "Ready", function(): boolean
+        return false
+    end)
+    local waiting: (() -> ())? = nil
+    local keys: unknown[] = {}
+    mock.stub(lazyData.collectionSources, "Prepare", function(_: unknown, done: (() -> ())?, key: unknown)
+        waiting = done
+        keys[#keys + 1] = key
+    end)
+    local d = data()
+    expect(next(d.mount)).toBeNil()
+    expect(#d.toys).toBe(0)
+    -- (asked under one key: the window, however often it asks, is told once;
+    -- 374 redraws in one frame froze the game for 2.8 s)
+    data()
+    expect(keys).toEqual({ "collections", "collections" })
+    local refresh = mock.spy()
+    mock.stub(M, "Refresh", refresh)
+    assert(waiting, "nothing waits for the sources")()
+    expect(refresh).toHaveBeenCalledTimes(1)
+end
+
+@test("a source as a card: every kind with its places, a world drop, more dropping it, the item, the game's kind")
+local function sourceCards()
+    mock.stub(C_Item, "GetItemNameByID", function(id: number): string?
+        return id == 501 and "Locked Box" or nil
+    end)
+    local card = M:SourceCard(
+        {
+            v = { 1, 2, 99 },
+            q = { 10, 12 },
+            d = { 2, 3 },
+            dn = 5,
+            o = { 1, 99 },
+            c = { 501, 502 },
+            p = "Engineering",
+            x = "Event",
+        },
+        "mount",
+        1
+    )
+    local function lines(title: string): string[]?
+        for _, s in ipairs(card) do
+            if s.title == title then
+                return s.lines
+            end
+        end
+        return nil
+    end
+    expect(lines("Sold by")).toEqual({ "Vendor Brom, Elwynn Forest (Alliance)", "Kobold Miner, Elwynn Forest" })
+    expect(lines("Quest")).toEqual({ "The Ram Trial", "Quest 12" })
+    expect(lines("Dropped by")).toEqual({ "Kobold Miner, Elwynn Forest · level 5", "Boar", "and 3 more" })
+    expect(lines("Found in")).toEqual({ "Old Chest, Westfall" })
+    expect(lines("Inside")).toEqual({ "Locked Box", "Item 502" })
+    expect(lines("Crafted by")).toEqual({ "Engineering" })
+    expect(lines("In the game")).toEqual({ "Event" })
+    expect(lines("Taught by")).toBe(nil)
+    -- a world drop; the teaching item alone
+    expect(M:SourceCard({ dn = 50 }, "mount", 1)[1]).toEqual({
+        title = "World drop",
+        lines = { "Dropped by 50 creatures across the world" },
+    })
+    expect(M:SourceCard({ i = 502 }, "mount", 1)[1]).toEqual({ title = "Taught by", lines = { "Item 502" } })
+    expect(M:SourceCard({ i = 501 }, "mount", 1)[1].lines).toEqual({ "Locked Box" })
+    -- nothing known: the game's kind, else nothing
+    expect(M:SourceCard(nil, "appearance", 1)[1]).toEqual({
+        title = TRANSMOG_SOURCE_1,
+        lines = { "Nothing more is known." },
+    })
+    expect(#M:SourceCard({ v = { 99 } }, "mount", -1)).toBe(0)
+end

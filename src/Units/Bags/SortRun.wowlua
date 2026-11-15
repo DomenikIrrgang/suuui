@@ -1,0 +1,450 @@
+-- Units/Bags/SortRun.wowlua
+-- The Bags module's sort as it runs (see Units/Bags.wowlua): SortRun reads
+-- the slots a sort covers, sends each wave of moves and waits for it to
+-- land (the module's sort driver ticks it), covers the window with the
+-- loading mark meanwhile, stops on what the game refuses (and leaves a bag
+-- out that refused a sorted item), and runs the game's own sort when asked.
+-- The plans are Bags/Sort's; SortRun works on the module it is made with
+-- (its windows, sorting state, covers and driver).
+
+import SuuUI from "/Core/API"
+import type Inventory, LoadingMark, Text from "/Core/API"
+import type BagsModule from "../Bags"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as sort from "./Sort"
+import * as containers from "./Containers"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local try, field = errors.try, tbl.field
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+local REAGENT, BANK_TYPE = containers.REAGENT, containers.BANK_TYPE
+local numSlots, familyOf = containers.numSlots, containers.familyOf
+local bagItem, plainBag = containers.bagItem, containers.plainBag
+
+local function sortBank()
+    local sortFn = field(C_Container, "SortBank")
+    if type(sortFn) ~= "function" then
+        return
+    end
+    local run = sortFn :: (...unknown) -> ()
+    -- (without an argument as before: 0.9.1 declares SortBank's bankType as required)
+    if not (BANK_TYPE and pcall(run, BANK_TYPE)) then
+        pcall(run)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Sorting (asked 2026-10-19): SuuUI sorts your bags and bank itself, in the
+-- order Settings › Bags › Sort picks (by type, quality, item level or name),
+-- the items gathered at the start or the end of the bags; or the game's own
+-- sort. What the client allows (/suu probe bagsort, 2026-10-19): picking an
+-- item up and putting it on another slot (C_Container.PickupContainerItem
+-- twice) works for addon code out of combat, nothing blocked; each move
+-- lands in about 0.35 s (ITEM_LOCK_CHANGED, then BAG_UPDATE and
+-- BAG_UPDATE_DELAYED), and moves on separate slots sent in one frame land
+-- together. An item put on a part stack of its own kind stacks onto it. The
+-- reagent bag takes only crafting reagents (its family reads 0; the game
+-- refuses anything else with an error).
+-- A sort runs in waves: the bags read as they are, where everything should
+-- be worked out again, up to WAVE moves on separate slots sent, then a wait
+-- for their locks to clear. Part stacks are put together first. Meanwhile
+-- the window waits under the loading mark; combat, an item you pick up, the
+-- window closing or the game refusing a move stops it where it is.
+--------------------------------------------------------------------------------
+
+local MAX_WAVES, STACK_ROUNDS = sort.MAX_WAVES, sort.STACK_ROUNDS
+type SortSlot = sort.SortSlot
+type Move = sort.Move
+type Family = sort.Family
+local itemOf = sort.itemOf
+
+-- A sort under way: its window and order, where it stands, the wave on its
+-- way, what PlanStacks remembers.
+export type SortState = {
+    bank: boolean,
+    inv: Inventory,
+    order: string,
+    toEnd: boolean,
+    phase: string,
+    rounds: number,
+    waves: number,
+    idle: number,
+    started: number,
+    partials: { [number | string]: number },
+    noStack: { [number | string]: boolean },
+    game?: boolean,
+    wait?: sort.Wave,
+    total?: number,
+    lastWrong?: number,
+    lastUpdate?: number,
+    -- the game's refusal while a wave was on its way (looked at once it lands)
+    refused?: string,
+}
+
+local function locked(s: SortSlot): boolean
+    local info = C_Container.GetContainerItemInfo(s.bag, s.slot)
+    return info ~= nil and flag(info.isLocked)
+end
+
+-- The window a sort covers: the loading mark over its slots.
+export class SortCover extends Frame
+    readonly fill: Texture
+    readonly mark: LoadingMark
+    readonly title: Text
+    readonly caption: Text
+
+    constructor(inv: Inventory)
+        super(nil, inv.body)
+        self:SetAllPoints(inv.body)
+        self:SetFrameLevel(inv.body:GetFrameLevel() + 100)
+        self:EnableMouse(true)
+        self.fill = UI.Fill(self, "surface")
+        self.fill:SetAllPoints()
+        self.fill:SetAlpha(0.85)
+        self.mark = UI.LoadingMark(self, { size = 60 })
+        self.mark:SetPoint("CENTER", 0, 24)
+        self.title = UI.Text(self, "header", "gilt-text")
+        self.caption = UI.Text(self, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.title:SetPoint("TOP", self.mark, "BOTTOM", 0, -S["space-4"])
+            self.caption:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-2"])
+        end)
+        self:Hide()
+    end
+end
+
+-- The sort of the Bags module `m`: its sorting state, covers and driver.
+export class SortRun
+    readonly m: BagsModule
+
+    constructor(m: BagsModule)
+        self.m = m
+    end
+
+    -- The slots a sort covers, in the window's order, as they are now.
+    function SortSlots(bank: boolean): SortSlot[]
+        local m = self.m
+        local bags = bank and m:BankBags() or { 0, 1, 2, 3, 4 }
+        if not bank and m:Get("reagentBag") then
+            bags[#bags + 1] = REAGENT
+        end
+        local slots: SortSlot[] = {}
+        for _, bag in ipairs(bags) do
+            local family: Family = 0
+            if bag == REAGENT then
+                -- a profession bag in the reagent slot (a leatherworking or
+                -- skinning bag, found in game): only its own kind; a reagent
+                -- bag tells family 0 (probed in game), any crafting reagent
+                local f = familyOf(bag)
+                family = f ~= 0 and f or "reagent"
+            else
+                family = familyOf(bag)
+            end
+            local own = bagItem(bag)
+            -- (a bag the game refused a sorted item for: left as it is)
+            local n = (own and m.refusingBags[own]) and 0 or numSlots(bag)
+            for slot = 1, n do
+                local s: SortSlot = { bag = bag, slot = slot, family = family }
+                local info = C_Container.GetContainerItemInfo(bag, slot)
+                if info and asNumber(info.itemID) then
+                    s.item = itemOf(info)
+                    s.locked = flag(info.isLocked)
+                end
+                slots[#slots + 1] = s
+            end
+        end
+        return slots
+    end
+
+    -- After a refused wave, the moves that didn't land: the bag at either end
+    -- that isn't a plain bag refused it. False: none to blame.
+    function Refused(moves: Move[]): boolean
+        local found = false
+        for _, m in ipairs(moves) do
+            local moved = m.from.item
+            local now = C_Container.GetContainerItemInfo(m.to.bag, m.to.slot)
+            local id = now and asNumber(now.itemID)
+            if moved and id ~= moved.id then
+                for _, bag in ipairs({ m.to.bag, m.from.bag }) do
+                    local own = bagItem(bag)
+                    if own and not plainBag(own) and not self.m.refusingBags[own] then
+                        self.m.refusingBags[own] = true
+                        found = true
+                        local name = asString((try(field(C_Item, "GetItemInfo"), own))) or "a bag"
+                        self.m:Print(
+                            ("Sorting leaves your %s as it is: the game takes only some items in it."):format(name)
+                        )
+                    end
+                end
+            end
+        end
+        return found
+    end
+
+    -- Part stacks of one item put together (Bags/Sort's planStacks).
+    function PlanStacks(slots: SortSlot[], st: sort.StackState): Move[]
+        return sort.planStacks(slots, st)
+    end
+
+    -- Where each item belongs (Bags/Sort's sortTarget).
+    function SortTarget(slots: SortSlot[], order: string, toEnd: boolean): sort.Target?
+        return sort.sortTarget(slots, order, toEnd)
+    end
+
+    -- One wave of moves on separate slots (Bags/Sort's planWave).
+    function PlanWave(slots: SortSlot[], target: sort.Target): (Move[], number)
+        return sort.planWave(slots, target)
+    end
+
+    -- The window a sort covers, and the loading mark over its slots.
+    function SortCover(inv: Inventory, on: boolean, title: string?)
+        local m = self.m
+        local c = m.covers[inv]
+        if not c then
+            c = SortCover.new(inv)
+            m.covers[inv] = c
+        end
+        if on then
+            c.title:SetValue(title or "Sorting")
+            c.caption:SetValue("")
+            c:Show()
+            c.mark:Start()
+        else
+            c.mark:Stop()
+            c:Hide()
+        end
+        inv.sort:SetEnabled(not on and (inv ~= m.inv or m:IsLive()))
+    end
+
+    function SortCaption(text: string?)
+        local m = self.m
+        local st = m.sorting
+        local cover = st and m.covers[st.inv]
+        if cover then
+            cover.caption:SetValue(text or "")
+        end
+    end
+
+    -- The Sort button: SuuUI's order, or the game's sort.
+    function Sort(bank: boolean)
+        local m = self.m
+        if m.sorting then
+            return
+        end
+        local inv = bank and m.bank or m.inv
+        if not inv then
+            return
+        end
+        if InCombatLockdown() then
+            m:Print("Your bags can't be sorted in combat.")
+            return
+        end
+        if CursorHasItem() then
+            m:Print("Put down the item you're holding first, then press Sort.")
+            return
+        end
+        local order, toEnd = m:Get("sortOrder"), m:Get("sortDirection") ~= "start"
+        local st: SortState = {
+            bank = bank,
+            inv = inv,
+            order = order,
+            toEnd = toEnd,
+            phase = "stack",
+            rounds = 0,
+            waves = 0,
+            idle = 0,
+            started = GetTime(),
+            partials = {},
+            noStack = {},
+        }
+        m.sorting = st
+        self:SortCover(inv, true, bank and "Sorting the bank" or "Sorting bags")
+        if order == "game" then
+            st.game = true
+            -- right to left off: the game fills the last bags and leaves the gaps
+            -- in the first (seen in the probe)
+            try(field(C_Container, "SetSortBagsRightToLeft"), not toEnd)
+            if bank then
+                sortBank()
+            else
+                try(field(C_Container, "SortBags"))
+            end
+            self:SortCaption("The game is sorting…")
+            st.wait = { at = GetTime(), moves = {} }
+            local driver = m.sortDriver
+            if driver then
+                driver:Show()
+            end
+            return
+        end
+        self:SortStep()
+    end
+
+    -- One wave: read, plan, send.
+    function SortStep()
+        local st = self.m.sorting
+        if not st then
+            return
+        end
+        if CursorHasItem() then
+            return self:StopSort("you picked up an item")
+        end
+        local slots = self:SortSlots(st.bank)
+        local moves: Move[]? = nil
+        if st.phase == "stack" then
+            st.rounds = st.rounds + 1
+            local stacks = self:PlanStacks(slots, st)
+            if #stacks == 0 or st.rounds > STACK_ROUNDS then
+                st.phase = "place"
+            else
+                moves = stacks
+                self:SortCaption("Stacking…")
+            end
+        end
+        if not moves then
+            local target = self:SortTarget(slots, st.order, st.toEnd)
+            if not target then
+                return self:StopSort("there isn't room to put everything in order")
+            end
+            local wave, wrong = self:PlanWave(slots, target)
+            moves = wave
+            if wrong == 0 then
+                return self:FinishSort()
+            end
+            st.total = math.max(st.total or 0, wrong)
+            self:SortCaption(("%d item%s to move"):format(wrong, wrong == 1 and "" or "s"))
+            -- every move puts one slot right: no fewer wrong for a while means stuck
+            local last = st.lastWrong
+            if last and wrong >= last then
+                st.idle = st.idle + 1
+            else
+                st.idle = 0
+            end
+            st.lastWrong = wrong
+            if st.idle > 6 then
+                return self:StopSort("some items wouldn't go where the order puts them")
+            end
+        end
+        st.waves = st.waves + 1
+        if st.waves > MAX_WAVES then
+            return self:StopSort("it took too long")
+        end
+        for _, m in ipairs(moves) do
+            pcall(C_Container.PickupContainerItem, m.from.bag, m.from.slot)
+            if CursorHasItem() then
+                pcall(C_Container.PickupContainerItem, m.to.bag, m.to.slot)
+                if CursorHasItem() then
+                    ClearCursor()
+                    return self:StopSort("the game didn't take a move")
+                end
+            end
+        end
+        st.wait = { at = GetTime(), moves = moves }
+        local driver = self.m.sortDriver
+        if driver then
+            driver:Show()
+        end
+    end
+
+    -- Each frame while a wave is on its way: on when its slots are free again
+    -- and the bags have updated (the game's sort: once the bags are quiet).
+    function SortTick()
+        local m = self.m
+        local st, driver = m.sorting, m.sortDriver
+        local w = st and st.wait
+        if not (st and w) then
+            if driver then
+                driver:Hide()
+            end
+            return
+        end
+        local state = sort.waveState(w, GetTime(), st.game == true, st.lastUpdate, locked)
+        if state == "finish" then
+            return self:FinishSort()
+        end
+        if state == "timeout" then
+            return self:StopSort("the game didn't answer")
+        end
+        if state == "wait" then
+            return
+        end
+        st.wait = nil
+        if driver then
+            driver:Hide()
+        end
+        local refused = st.refused
+        if refused then
+            st.refused = nil
+            if not self:Refused(w.moves) then
+                return self:StopSort("the game refused a move" .. (refused ~= "" and (" (" .. refused .. ")") or ""))
+            end
+        end
+        self:SortStep()
+    end
+
+    function EndSort()
+        local m = self.m
+        local st = m.sorting
+        if not st then
+            return
+        end
+        m.sorting = nil
+        local driver = m.sortDriver
+        if driver then
+            driver:Hide()
+        end
+        self:SortCover(st.inv, false)
+        if st.inv == m.inv then
+            m:Rebuild()
+        else
+            m:RebuildBank()
+        end
+    end
+
+    function FinishSort()
+        self:EndSort()
+    end
+
+    -- Stopped where it is; Sort again finishes it. The bank's first wave refused:
+    -- the game's bank sort instead.
+    function StopSort(why: string)
+        local m = self.m
+        local st = m.sorting
+        if not st then
+            return
+        end
+        self:EndSort()
+        if st.bank and not st.game and st.waves <= 1 and why:find("^the game") then
+            sortBank()
+            m:Print("The game didn't let SuuUI move bank items; your bank got the game's own sort instead.")
+            return
+        end
+        m:Print(("Sorting stopped: %s. Press Sort to finish."):format(why))
+    end
+
+    -- The Sort button's tooltip, after the order and direction.
+    function SortTip()
+        local m = self.m
+        local orderLabel = sort.sortLabel(m:Get("sortOrder"))
+        local where = m:Get("sortDirection") == "start" and "the start" or "the end"
+        local tip = {
+            title = "Sort",
+            description = ("%s, gathered at %s of your bags. Settings › Bags › Sort changes it."):format(
+                orderLabel,
+                where
+            ),
+        }
+        local inv, bank = m.inv, m.bank
+        if inv then
+            inv.sort.tip = tip
+        end
+        if bank then
+            bank.sort.tip = tip
+        end
+    end
+end

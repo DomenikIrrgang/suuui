@@ -1,0 +1,397 @@
+-- Units/Bags/Saved.wowlua
+-- The Bags module's every character's bags and bank (see Units/Bags.wowlua):
+-- SavedBags saves this character's entry as it changes, fills the picker,
+-- shows another character's bags or bank read only (SuuUI's own saved
+-- slots), lists the "All characters" search, writes the foot (everyone's
+-- gold, the backpack's currencies), adds the item counts to tooltips and
+-- builds the Forget row of the settings. The data work is Bags/Characters';
+-- SavedBags works on the module it is made with (its window, picker state,
+-- saved slots and characters' data).
+
+import SuuUI, ItemSlotClass from "/Core/API"
+import type FoundItem, ResultRow, Select, SelectOption, SuuButton from "/Core/API"
+import type BagsModule from "../Bags"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as chars from "./Characters"
+import * as containers from "./Containers"
+
+local T = SuuUI.Tokens
+local UI = SuuUI.UI
+local S = T.space
+
+local try, field = errors.try, tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+local QUALITY = chars.QUALITY
+
+-- A saved slot (another character's bags, or yours as last seen): SuuUI's
+-- own, read only; its item's link.
+export class SavedSlot extends ItemSlotClass
+    link: string? = nil
+
+    constructor(parent: Frame)
+        super(parent)
+    end
+end
+
+-- A saved character to forget, and the button (click it twice).
+export class ForgetRow extends Frame
+    readonly select: Select<string>
+    readonly button: SuuButton
+
+    constructor(parent: Frame, options: () -> SelectOption<string>[], forget: (key: string) -> ())
+        super(nil, parent)
+        local choice: string? = nil
+        local timer: TimerHandle? = nil
+        self.select = UI.Select(self, {
+            width = 190,
+            placeholder = "Choose a character",
+            options = options(),
+            onChange = function(v: string)
+                choice = v
+            end,
+        })
+        self.select:SetPoint("LEFT")
+        self.button = UI.Button(self, {
+            text = "Forget",
+            onClick = function(b)
+                local key = choice
+                if not key then
+                    return
+                end
+                local pending = timer
+                if not pending then
+                    b:SetLabel("Click again")
+                    timer = after(3, function()
+                        timer = nil
+                        b:SetLabel("Forget")
+                    end)
+                    return
+                end
+                pending:Cancel()
+                timer = nil
+                b:SetLabel("Forget")
+                forget(key)
+                choice = nil
+                self.select:SetOptions(options())
+                self.select:SetValue(nil)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.button:SetPoint("LEFT", self.select, "RIGHT", S["space-3"], 0)
+            self:SetSize(190 + S["space-3"] + self.button:GetWidth(), 30)
+        end)
+        self:SetScript("OnShow", function()
+            self.select:SetOptions(options())
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Every character's bags and bank
+--------------------------------------------------------------------------------
+
+local ago, nameOf, classDiamond = chars.ago, chars.nameOf, chars.classDiamond
+
+local function itemTip(owner: Frame, link: unknown, extra: string[]?)
+    local text = asString(link)
+    local ref = text and (text:match("|H(item:[^|]+)|h") or (text:match("^item:") and text))
+    if not ref then
+        return
+    end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:SetHyperlink(ref)
+    if extra then
+        GameTooltip:AddLine(" ")
+        for _, line in ipairs(extra) do
+            GameTooltip:AddLine(line, 0.85, 0.82, 0.76)
+        end
+    end
+    GameTooltip:Show()
+end
+
+type Snapshot = chars.Snapshot
+
+local label = chars.charLabel
+
+--------------------------------------------------------------------------------
+-- Item counts in tooltips
+--------------------------------------------------------------------------------
+
+local WHERE: { key: "bags" | "bank" | "equipped", label: string }[] = {
+    { key = "bags", label = "Bags" },
+    { key = "bank", label = "Bank" },
+    { key = "equipped", label = "Equipped" },
+}
+
+-- How many of item `id` each saved character has: { { c, total, bags, bank, equipped } } in picker order.
+type Counts = chars.Counts
+
+-- Every character's bags and bank for the Bags module `m`.
+export class SavedBags
+    readonly m: BagsModule
+
+    constructor(m: BagsModule)
+        self.m = m
+    end
+
+    -- This character's entry: who, money, bags (and the bank while at a banker).
+    -- An empty read (bags not in yet at login) never replaces a saved one.
+    function SaveMe()
+        local m = self.m
+        local d = m:Char()
+        local _, class = UnitClass("player")
+        d.name, d.realm = asString(UnitName("player")), GetRealmName()
+        d.class, d.level = asString(class), asNumber(UnitLevel("player"))
+        d.money, d.seen = GetMoney(), time()
+        local bags = containers.snapshot(m:Bags())
+        if bags.size > 0 then
+            d.bags = bags
+        end
+        if m.atBank then
+            local bank = containers.snapshot(m:BankBags())
+            if bank.size > 0 then
+                d.bank = bank
+            end
+        end
+        -- what you wear: item links by slot (head 1 … tabard 19)
+        local worn: string[] = {}
+        for slot = 1, 19 do
+            local link = asString(GetInventoryItemLink("player", slot))
+            if link then
+                worn[#worn + 1] = link
+            end
+        end
+        d.equipped = worn
+    end
+
+    function QueueSave()
+        local m = self.m
+        if m.saveTimer then
+            return
+        end
+        m.saveTimer = m:After(1, function()
+            m.saveTimer = nil
+            self:SaveMe()
+        end)
+    end
+
+    -- Saved characters, you first, then by name: { key, d, me }.
+    function Characters(): chars.Character[]
+        return chars.sortCharacters(self.m:AllCharData(), self.m:CharKey())
+    end
+
+    function UpdatePicker()
+        local m = self.m
+        local inv = m.inv
+        local who, view = inv and inv.who, inv and inv.view
+        if not (inv and who) then
+            return
+        end
+        local opts: SelectOption<string>[] = {}
+        local myRealm = GetRealmName()
+        for _, c in ipairs(self:Characters()) do
+            opts[#opts + 1] = { value = c.key, label = label(c, myRealm), note = c.me and "you" or ago(c.d.seen) }
+        end
+        who:SetOptions(opts)
+        who:SetValue(m.who or m:CharKey())
+        if view then
+            view:SetValue(m.view or "bags")
+        end
+    end
+
+    -- A saved slot: SuuUI's own, read only; its tooltip from the item's link,
+    -- shift-click links it.
+    function SavedSlot(i: number): SavedSlot
+        local m = self.m
+        local known = m.savedSlots[i]
+        if known then
+            return known
+        end
+        local inv = m.inv
+        assert(inv, "no bags window")
+        local b = SavedSlot.new(inv.grid)
+        b:SetScript("OnEnter", function(slot)
+            itemTip(slot, slot.link)
+        end)
+        b:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+        b:SetScript("OnClick", function(slot)
+            local link = slot.link
+            if link and IsModifiedClick() then
+                try(field(_G, "HandleModifiedItemClick"), link)
+            end
+        end)
+        m.savedSlots[i] = b
+        return b
+    end
+
+    function HideSaved()
+        for _, b in ipairs(self.m.savedSlots) do
+            b:Hide()
+        end
+    end
+
+    function ShowSaved()
+        local m = self.m
+        local inv = m.inv
+        if not inv then
+            return
+        end
+        local me = m:CharKey()
+        local who, view = m.who or me or "", m.view or "bags"
+        local d = m:EntryOf(who)
+        local box: Snapshot? = nil
+        if d then
+            box = view == "bank" and d.bank or (view ~= "bank" and d.bags or nil)
+        end
+        local q = (m.query or ""):lower()
+        local list: SavedSlot[] = {}
+        for i, e in ipairs(box and box.slots or {}) do
+            local b = self:SavedSlot(i)
+            b.link = e and e.l or nil
+            if e then
+                local name = nameOf(e.l)
+                b.skin:SetItem({
+                    icon = e.t,
+                    count = e.c,
+                    quality = QUALITY[e.q] or "common",
+                    dim = q ~= "" and not (name and name:lower():find(q, 1, true)),
+                })
+            else
+                b.skin:SetItem(nil)
+            end
+            list[i] = b
+        end
+        for i = #list + 1, #m.savedSlots do
+            m.savedSlots[i]:Hide()
+        end
+        inv:LayoutSlots(list)
+        inv:SetMeta(box and ("%d free of %d"):format(box.free or 0, box.size or 0) or "")
+        inv:SetBanner(chars.savedBanner(who, me, view, d, box))
+    end
+
+    -- "All characters": every item whose name holds the search, on every
+    -- character's bags and bank, most first.
+    function ShowResults()
+        local m = self.m
+        local inv = m.inv
+        if not inv then
+            return
+        end
+        self:SaveMe()
+        local found: FoundItem[] = {}
+        for i, r in ipairs(chars.searchResults(self:Characters(), (m.query or ""):lower())) do
+            found[i] = {
+                icon = r.icon,
+                quality = r.quality,
+                label = r.label,
+                count = r.count,
+                places = r.places,
+                link = r.link,
+                lines = r.lines,
+            }
+        end
+        m.more = inv:SetResults(found)
+        for _, row in ipairs(inv.resultRows or {}) do
+            row:EnableMouse(true)
+            row.onEnter = function(rowFrame: ResultRow)
+                local it = rowFrame.item
+                if it.link then
+                    itemTip(rowFrame, it.link, it.lines)
+                end
+            end
+            row.onLeave = function()
+                GameTooltip:Hide()
+            end
+        end
+        inv:SetMeta(#found == 1 and "1 item" or ("%d items"):format(#found))
+        inv:SetBanner(nil)
+    end
+
+    -- The foot: every character's gold (the reagent bag's free slots are its
+    -- section's); the money of whoever is shown.
+    function Foot()
+        local m = self.m
+        local inv = m.inv
+        if not inv then
+            return
+        end
+        local who = m.who or m:CharKey()
+        local more = m:ShowingResults() and (m.more or 0) or 0
+        local note, money = chars.foot(self:Characters(), who, GetMoney(), more)
+        inv:SetNote(note)
+        inv:SetMoney(money)
+        inv:SetCurrencies(m:IsLive() and containers.backpackCurrencies() or nil)
+    end
+
+    --------------------------------------------------------------------------------
+    -- Item counts in tooltips
+    --------------------------------------------------------------------------------
+
+    function CountsFor(id: number): Counts[]
+        return chars.countsFor(self:Characters(), id)
+    end
+
+    function AddCounts(tooltip: GameTooltip, data: unknown)
+        if not self.m:Get("itemCounts") then
+            return
+        end
+        local id = asNumber(field(data, "id"))
+        if not id then
+            return
+        end
+        local counts = self:CountsFor(id)
+        if #counts == 0 then
+            return
+        end
+        local muted, gilt = T.color["ink-muted"], T.color["gilt-text"]
+        tooltip:AddLine(" ")
+        local all = 0
+        for _, n in ipairs(counts) do
+            local parts: string[] = {}
+            for _, w in ipairs(WHERE) do
+                local count = w.key == "bags" and n.bags or w.key == "bank" and n.bank or n.equipped
+                if count > 0 then
+                    parts[#parts + 1] = w.label .. " " .. count
+                end
+            end
+            local d = n.c.d
+            local classFile = d.class
+            local class = classFile and asString(field(T.color, "class-" .. classFile:lower(), "hex"))
+            local name = d.name or n.c.key
+            local realm = d.realm
+            if realm and realm ~= GetRealmName() then
+                name = name .. "-" .. realm
+            end
+            local left = classDiamond(classFile) .. (class and ("|cff" .. class .. name .. "|r") or name)
+            tooltip:AddDoubleLine(left, table.concat(parts, " · "), 1, 1, 1, muted[1], muted[2], muted[3])
+            all = all + n.total
+        end
+        if #counts > 1 then
+            tooltip:AddDoubleLine("Total", tostring(all), gilt[1], gilt[2], gilt[3], gilt[1], gilt[2], gilt[3])
+        end
+        tooltip:Show() -- fit the new lines
+    end
+
+    -- A saved character to forget (Settings › Bags › Characters).
+    function ForgetRow(parent: Frame): ForgetRow
+        local function options(): SelectOption<string>[]
+            local out: SelectOption<string>[] = {}
+            local myRealm = GetRealmName()
+            for _, c in ipairs(self:Characters()) do
+                if not c.me then
+                    out[#out + 1] = { value = c.key, label = label(c, myRealm), note = ago(c.d.seen) }
+                end
+            end
+            return out
+        end
+        return ForgetRow.new(parent, options, function(key: string)
+            self.m:ForgetCharData(key)
+        end)
+    end
+end

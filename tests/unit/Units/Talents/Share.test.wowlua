@@ -1,0 +1,326 @@
+-- Units/Talents/Share: the dialogs (Use build's question, New build) and
+-- sharing builds (SuuUI's text, the game's string), through the module's
+-- methods.
+
+import internal M from "/Units/Talents"
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as talentShare from "/Units/Talents/Share"
+import NewBuildDialog as NewBuild, ShareDialog as Share from "/Units/Talents/Share"
+import charKey from "/Units/Talents/Builds"
+import SuuUI from "/Core/API"
+import * as world from "../TraitWorld"
+import WARRIOR_TREE, store, wt, steps, build, share, mismatch, newBuild, captureNotes, setup, teardown from "./TalentsHelpers"
+import expectNoErrors from "../../../helpers"
+
+local w: world.World
+
+@beforeEach
+local function before()
+    w = setup()
+end
+
+@afterEach
+local function after()
+    teardown()
+end
+
+--------------------------------------------------------------------------------
+-- Use build: what's in the way
+--------------------------------------------------------------------------------
+
+@test("UseBuild with talents in the way: asked first, then a reset waits")
+local function useBuildMismatch()
+    wt().nodes[4].rank = 1
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    local notes = captureNotes()
+    M:UseBuild(id)
+    local p = mismatch()
+    expect(p).toBeShown()
+    expect(M:ActiveID()).toBeNil()
+    expect(p.use.label).toHaveText("Use, plan the 3 that fit")
+    local texts: string[] = {}
+    for _, l in ipairs(p.lines) do
+        if l:IsShown() then
+            texts[#texts + 1] = mock.textOf(l)
+        end
+    end
+    expect(texts).toEqual({
+        "Fits now",
+        "Arms One, rank 1 · Arms",
+        "Arms Three, ranks 1–2 · Arms",
+        "Not in this build",
+        "Fury One, 1 rank · Fury",
+        "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply.",
+    })
+    mock.click(p.use)
+    expect(p).never.toBeShown()
+    expect(M:ActiveID()).toBe(id)
+    expect(assert(store().reset[charKey()])[1]).toBe(id)
+    expect(assert(notes[1]).id).toBe("suu:talentbuild:reset")
+    expect(assert(notes[1]).title).toBe("Reset at a trainer to use Arms")
+    expect(assert(notes[1]).body).toBe("1 talent aren't in it. Any warrior trainer can reset them.")
+    -- again, nothing fits: Cancel
+    wt().available = 0
+    w.staged = {}
+    M:UseBuild(id)
+    expect(p.use.label).toHaveText("Use it")
+    texts = {}
+    for _, l in ipairs(p.lines) do
+        if l:IsShown() then
+            texts[#texts + 1] = mock.textOf(l)
+        end
+    end
+    expect(texts[2]).toBe("Nothing yet: the talents in the way come first.")
+    mock.click(p.cancel)
+    expect(p).never.toBeShown()
+end
+
+--------------------------------------------------------------------------------
+-- New build and sharing
+--------------------------------------------------------------------------------
+
+@test("AskNewBuild: a name and a class make a build to plan")
+local function askNewBuild()
+    M:AskNewBuild()
+    local p = newBuild()
+    expect(p).toBeShown()
+    -- no name: nothing
+    mock.click(p.create)
+    expect(p).toBeShown()
+    mock.typeText(p.name.edit, "Levelling")
+    mock.click(p.create)
+    expect(p).never.toBeShown()
+    local made = build(assert(M.buildView))
+    expect(made.name).toBe("Levelling")
+    expect(made.class).toBe("WARRIOR")
+    expect(M.planning).toBe(true)
+    expect(M.window).toBeShown()
+    M:AskNewBuild()
+    expect(p.name.edit:GetText()).toBe("")
+    mock.click(p.cancel)
+    expect(p).never.toBeShown()
+end
+
+@test("ShareText and GameString write a build out")
+local function shareTexts()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local b = build(id)
+    local text = assert(M:ShareText(b))
+    expect(text:sub(1, 6)).toBe("SuuUI:")
+    local back = assert(SuuUI.UI.DecodeTalentBuild(text))
+    expect(back.name).toBe("Arms")
+    expect(#back.steps).toBe(2)
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number
+        return 2
+    end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do
+            h[i] = i
+        end
+        return h
+    end)
+    local game = M:GameString(b)
+    expect(type(game)).toBe("string")
+    mock.fake("C_Traits.GetTreeHash", function()
+        return nil
+    end)
+    expect(M:GameString(b)).toBeNil()
+    expect(M:GameString({ id = "bx", class = "DRUID", steps = {} })).toBeNil()
+end
+
+@test("ReadPasted: SuuUI's text, the game's string, or why not")
+local function readPasted()
+    expect(M:ReadPasted(nil)).toBeNil()
+    expect(M:ReadPasted("   ")).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local text = assert(M:ShareText(build(id)))
+    local found = assert(M:ReadPasted(text))
+    expect(found.name).toBe("Arms")
+    expect(found.class).toBe("WARRIOR")
+    expect(found.steps).toEqual({ { node = 11 }, { node = 13 } })
+    expect(found.note).toBeNil()
+    -- a bad order: a note
+    local bad = assert(SuuUI.UI.EncodeTalentBuild({ name = "", classID = 1, treeID = WARRIOR_TREE, steps = steps(12) }))
+    found = assert(M:ReadPasted(bad))
+    expect(found.name).toBe("Shared build")
+    expect(found.note).toContain("Needs a look: ")
+    -- another tree version
+    local other = assert(SuuUI.UI.EncodeTalentBuild({ name = "x", classID = 1, treeID = 9, steps = steps(11) }))
+    expect(assert(M:ReadPasted(other)).note).toBe("Made for another version of the talents.")
+    -- a class without talents here
+    local druid = assert(SuuUI.UI.EncodeTalentBuild({ name = "x", classID = 11, treeID = 9, steps = {} }))
+    expect({ M:ReadPasted(druid) }).toEqual({ nil, "That class has no talents here." })
+    local _, why = M:ReadPasted("SuuUI:garbage")
+    expect(type(why)).toBe("string")
+    expect({ M:ReadPasted("hello") }).toEqual({ nil, "This isn't SuuUI's text or the game's talent string." })
+end
+
+@test("ReadPasted: the game's own talent string")
+local function readPastedGame()
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number
+        return 2
+    end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do
+            h[i] = 0
+        end
+        return h
+    end)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    local game = assert(M:GameString(build(id)))
+    local found = assert(M:ReadPasted(game))
+    expect(found.name).toBe("Imported build")
+    expect(found.fromGame).toBe(true)
+    expect(found.class).toBe("WARRIOR")
+    expect(#found.steps).toBe(3)
+    expect(found.note).toBeNil()
+end
+
+@test("BuildSummary: points, per tree, levels")
+local function buildSummary()
+    expect(M:BuildSummary("WARRIOR", steps(11, 13, 21))).toBe(
+        "3 points · Arms 2, Fury 1, Protection 0 · levels 5–7, in order"
+    )
+    expect(M:BuildSummary("WARRIOR", {})).toBe("0 points · Arms 0, Fury 0, Protection 0")
+    expect(M:BuildSummary("DRUID", steps(1))).toBe("1 point · levels 5–5, in order")
+end
+
+@test("ShowShare: Copy shows the texts; Import previews and saves")
+local function showShare()
+    -- nothing shown: Import
+    M:ShowShare("copy")
+    local p = share()
+    expect(p).toBeShown()
+    expect(p.mode).toBe("import")
+    expect(p.ok:IsEnabled()).toBe(false)
+    expect(p.previewLine).toHaveText("What you paste shows here before it's saved.")
+    -- a pasted text
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    local text = assert(M:ShareText(build(id)))
+    M:PreviewPaste(text)
+    expect(p.ok:IsEnabled()).toBe(true)
+    expect(p.previewName).toHaveText("Arms")
+    expect(p.previewClass).toHaveText("Warrior")
+    expect(p.previewLine).toHaveText("2 points · Arms 2, Fury 0, Protection 0 · levels 5–6, in order")
+    M:PreviewPaste("nonsense")
+    expect(p.previewLine).toHaveText("This isn't SuuUI's text or the game's talent string.")
+    expect(p.ok:IsEnabled()).toBe(false)
+    mock.click(p.ok)
+    expect(p).toBeShown()
+    M:PreviewPaste(text)
+    mock.click(p.ok)
+    expect(p).never.toBeShown()
+    expect(build(assert(M.buildView)).name).toBe("Arms")
+    expect(M.buildView).never.toBe(id)
+    expect(M.planning).toBe(true)
+    -- Copy: the build shown
+    M:ShowShare("copy")
+    expect(p.mode).toBe("copy")
+    expect(p.text.edit:GetText()).toBe(text)
+    -- (the game's own string too: the engine answers its version and the tree's hash)
+    expect(p.game).toBeShown()
+    expect(p.gameShared ~= "").toBe(true)
+    mock.advanceTime(0.05)
+    -- the copy fields stay as written
+    p.text.edit:SetText("changed")
+    p:Reselect()
+    expect(p.text.edit:GetText()).toBe(text)
+    mock.click(p.ok)
+    expect(p).never.toBeShown()
+    -- the switch
+    M:ShowShare("import")
+    expect(p.mode).toBe("import")
+    mock.click(p.cancel)
+end
+
+@test("PreviewPaste: the game's string notes what can't come along")
+local function previewGame()
+    mock.fake("C_Traits.GetLoadoutSerializationVersion", function(): number
+        return 2
+    end)
+    mock.fake("C_Traits.GetTreeHash", function(): number[]
+        local h: number[] = {}
+        for i = 1, 16 do
+            h[i] = 0
+        end
+        return h
+    end)
+    M:PreviewPaste("x")
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    M.buildView = id
+    M:ShowShare("copy")
+    local p = share()
+    expect(p.game).toBeShown()
+    local game = p.game.edit:GetText()
+    M:ShowShare("import")
+    M:PreviewPaste(game)
+    expect(p.previewNote:GetText()).toContain("From the game's string the order can't come along")
+    mock.click(p.cancel)
+end
+
+@test("a choice talent's entry: in SuuUI's text and the game's string, and read back")
+local function choices()
+    wt().nodes[3].choice = true
+    wipe(M.buildTrees)
+    local id = assert(M:AddBuild("Choice", "WARRIOR", { { node = 11 }, { node = 13, entry = 131 } }))
+    local b = build(id)
+    local shared = assert(M:ShareText(b))
+    local game = assert(M:GameString(b))
+    local fromShare = assert(M:ReadPasted(shared))
+    expect(fromShare.steps[2].entry).toBe(131)
+    local fromGame = assert(M:ReadPasted(game))
+    local entry: number? = nil
+    for _, s in ipairs(fromGame.steps) do
+        if s.node == 13 then
+            entry = s.entry
+        end
+    end
+    expect(entry).toBe(131)
+end
+
+--------------------------------------------------------------------------------
+-- The dialogs and functions on their own
+--------------------------------------------------------------------------------
+
+@test("New build's dialog hands its name and class to whoever made it")
+local function newBuildDialog()
+    local made: string[] = {}
+    local p = NewBuild.new(M:Classes(), function(name: string, file: string)
+        made = { name, file }
+    end)
+    p:Show()
+    expect(p.class.value).toBe("WARRIOR")
+    mock.typeText(p.name.edit, "  Levelling ")
+    mock.click(p.create)
+    expect(made).toEqual({ "Levelling", "WARRIOR" })
+    expect(p).never.toBeShown()
+end
+
+@test("the share dialog's callbacks, and the sharing functions take the module")
+local function shareDialog()
+    local modes: string[] = {}
+    local pasted: string[] = {}
+    local done = 0
+    local p = Share.new(function(mode: string)
+        modes[#modes + 1] = mode
+    end, function(text: string)
+        pasted[#pasted + 1] = text
+    end, function()
+        done = done + 1
+    end)
+    p:Show()
+    mock.typeText(p.paste.edit, "x")
+    expect(pasted[#pasted]).toBe("x")
+    mock.click(p.ok)
+    expect(done).toBe(1)
+    p:Hide()
+    -- the functions behind the module's methods
+    expect(talentShare.buildSummary(M, "WARRIOR", {})).toBe("0 points · Arms 0, Fury 0, Protection 0")
+    expect({ talentShare.readPasted(M, "hello") }).toEqual({ nil, "This isn't SuuUI's text or the game's talent string." })
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    expect(talentShare.shareText(M, build(id))).toBe(M:ShareText(build(id)))
+    expectNoErrors()
+end

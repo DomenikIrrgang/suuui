@@ -1,0 +1,152 @@
+-- Units/WorldMap/QuestLook: the game's quest pins and the quest log's
+-- markers in SuuUI's look, each of their styles, and the cities' little
+-- houses hidden.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
+import internal M from "/Units/WorldMap"
+import * as world from "./WorldMapHelpers"
+import openMap from "./WorldMapHelpers"
+
+@beforeEach
+local function data()
+    world.setup()
+end
+
+@afterEach
+local function cleanup()
+    world.cleanup()
+end
+
+@test("the game's quest pins and the quest log's markers in SuuUI's look; the game's again when off")
+local function questPins()
+    local giver = mock.spawnUnit({ name = "Kargal Battlescar", level = 30, reaction = "friendly" })
+    mock.defineQuest(959, { title = "Trouble at the Docks", giver = giver })
+    giver:setDistance(3)
+    mock.player:interact(giver)
+    mock.advanceTime(1)
+    AcceptQuest()
+    mock.advanceTime(1)
+    openMap(1412)
+    local styled = 0
+    for _, p in ipairs(frames.mapPins(WorldMapFrame, "QuestPinTemplate")) do
+        if M.looks[p] then
+            styled = styled + 1
+        end
+    end
+    expect(styled > 0).toBe(true)
+    M:Set("enabled", false)
+    for _, p in ipairs(frames.mapPins(WorldMapFrame, "QuestPinTemplate")) do
+        local look = M.looks[p]
+        if look then
+            expect(look).never.toBeShown()
+        end
+    end
+    M:Reset("enabled")
+end
+
+-- A quest pin as the game's quest data provider makes one: its style, its
+-- quest, tracked or not, its highlight.
+class GamePin extends Button
+    questID: number
+    readonly HighlightTexture: Texture
+    readonly NormalTexture: Texture
+    shownStyle: number
+    tracked: boolean
+
+    constructor(parent: Frame, style: number, opts: { questID?: number, lit?: boolean, tracked?: boolean }?)
+        super(nil, parent)
+        local o = opts or {}
+        self:SetSize(20, 20)
+        self.shownStyle = style
+        self.tracked = o.tracked == true
+        self.questID = o.questID or 9005
+        self.HighlightTexture = self:CreateTexture()
+        self.HighlightTexture:SetShown(o.lit == true)
+        self.NormalTexture = self:CreateTexture()
+    end
+
+    function GetStyle(): number
+        return self.shownStyle
+    end
+    function IsSelected(): boolean
+        return self.tracked
+    end
+    function SetStyle(s: number)
+        self.shownStyle = s
+    end
+end
+
+-- One of the game's quest pin styles.
+local function style(name: string): number
+    return secret.asNumber(tbl.field(_G, "POIButtonUtil", "Style", name)) or -1
+end
+
+local function gamePin(name: string, opts: { questID?: number, lit?: boolean, tracked?: boolean }?): GamePin
+    local layer = M.layer
+    assert(layer, "no layer")
+    return GamePin.new(layer, style(name), opts)
+end
+
+-- SuuUI's look in a game pin.
+local function lookOf(p: Frame)
+    local look = M.looks[p]
+    assert(look, "not styled")
+    return look
+end
+
+@test("the game's quest pins' looks: in progress, to turn in (a group's with its bar), a waypoint, disabled, tracked")
+local function questLooks()
+    openMap()
+    local progress = gamePin("QuestInProgress")
+    M:StyleQuestPin(progress)
+    expect(lookOf(progress)).toBeShown()
+    expect(progress.NormalTexture:GetAlpha()).toBe(0)
+    expect(lookOf(progress).glow).never.toBeShown()
+    -- the same look again (the game restyles often): nothing drawn again
+    local data = mock.stub(lookOf(progress).pin, "SetData")
+    M:StyleQuestPin(progress)
+    expect(data).toHaveBeenCalledTimes(0)
+    local turnIn = gamePin("QuestComplete")
+    M:StyleQuestPin(turnIn)
+    expect(lookOf(turnIn).glow).toBeShown()
+    local waypoint = gamePin("Waypoint", { lit = true })
+    M:StyleQuestPin(waypoint)
+    expect(lookOf(waypoint).pin.hl).toBeShown()
+    local tracked = gamePin("QuestInProgress", { tracked = true })
+    M:StyleQuestPin(tracked)
+    expect(lookOf(tracked).glow).toBeShown()
+    -- the game's own style changes: ours follows
+    tracked:SetStyle(style("QuestDisabled"))
+    expect(lookOf(tracked)).never.toBeShown()
+    tracked:SetStyle(99)
+    expect(lookOf(tracked)).never.toBeShown()
+    -- hovered: a tenth larger
+    mock.hover(progress)
+    expect(lookOf(progress).hovered).toBe(true)
+    mock.hover(nil)
+    expect(lookOf(progress).hovered).toBe(false)
+end
+
+@test("the cities' little houses hidden on the map")
+local function townPins()
+    openMap()
+    local house = CreateFrame("Frame", nil, UIParent)
+    local camp = CreateFrame("Frame", nil, UIParent)
+    mock.setField(house, "poiInfo", { name = "Stormwind" })
+    mock.setField(camp, "poiInfo", { atlasName = "poi-town" })
+    mock.stub(WorldMapFrame, "EnumeratePinsByTemplate", function(_: unknown, template: string): () -> Frame?
+        local list: Frame[] = template == "AreaPOIPinTemplate" and { house, camp } or {}
+        local i = 0
+        return function(): Frame?
+            i = i + 1
+            return list[i]
+        end
+    end)
+    M:HideTownPins()
+    expect(house:IsShown()).toBe(false)
+    expect(camp:IsShown()).toBe(true)
+end

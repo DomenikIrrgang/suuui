@@ -1,0 +1,109 @@
+-- Units/MouseBindings/List: the Bindings tab's list, the unit frames'
+-- Target and Menu first, then each group of bindings under its head.
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import M, ranksOf from "/Units/MouseBindings"
+import BindingsList from "/Units/MouseBindings/List"
+import type Bind from "/Units/MouseBindings/Inputs"
+import expectNoErrors from "../../../helpers"
+
+-- A spell the character knows: its name and highest rank's ID.
+local function known(): (string, number)
+    for _, name in ipairs({ "Heroic Strike", "Battle Shout", "Attack" }) do
+        local ranks = ranksOf(name)
+        local top = ranks[#ranks]
+        if top then
+            return name, top.id
+        end
+    end
+    error("no known spell")
+end
+
+local function bind(input: string, spell: string, id: number, more: { reach?: string, react?: string }?): Bind
+    local o = more or {}
+    return {
+        input = input,
+        spell = spell,
+        rank = "highest",
+        spellID = id,
+        reach = (o.reach or "both") :: "both",
+        react = (o.react or "any") :: "any",
+    }
+end
+
+@afterEach
+local function cleanup()
+    mock.setModifiers({})
+    mock.player:mouseover(nil)
+    mock.hover(nil)
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:Store().specs = {}
+    M:Store().clicks = {}
+    M:Store().clickSynced = nil
+    local box = M.box
+    if box then
+        box:Close()
+    end
+    local clickBox = M.clickBox
+    if clickBox and clickBox.panel:IsShown() then
+        clickBox.cancelled, clickBox.after = nil, nil
+        clickBox:Close()
+    end
+    M:Apply()
+    expectNoErrors()
+end
+
+@test("the list shows Target and Menu first; a click on one opens its click box")
+local function listRows()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(600, 400)
+    parent:SetPoint("CENTER")
+    M:List(parent, function() end)
+    local list = assert(M.list)
+    local target, menu = list.rows[1], list.rows[2]
+    expect(target.name:GetText()).toBe("Target")
+    expect(target.line:GetText()).toBe("Targets the unit · the game's own click")
+    expect(menu.name:GetText()).toBe("Menu")
+    expect(menu.line:GetText()).toBe("Opens the unit's menu · the game's own click")
+    mock.click(target.frame)
+    local box = assert(M.clickBox)
+    expect(box.panel:IsShown()).toBe(true)
+    expect(box.kind).toBe("target")
+    -- a click picked in the box, saved: the row says so
+    box:Got("CTRL-BUTTON1")
+    box:Confirm()
+    expect(box.panel:IsShown()).toBe(false)
+    expect(list.rows[1].line:GetText()).toBe("Targets the unit · click to change")
+    parent:Hide()
+end
+
+@test("the list on its own: Target and Menu, then unit frame clicks, keys and the wheel, each under its head, by input")
+local function groups()
+    local name, id = known()
+    M:Add(bind("SHIFT-F", name, id), nil)
+    M:Add(bind("MOUSEWHEELUP", name, id), nil)
+    M:Add(bind("ALT-F", name, id), nil)
+    M:Add(bind("SHIFT-BUTTON1", name, id), nil)
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(600, 400)
+    parent:SetPoint("CENTER")
+    local list = BindingsList.new(M, parent, function() end)
+    list:Draw()
+    expect(list.heads[1]:GetText()).toBe("Target and menu on unit frames")
+    expect(list.heads[2]:GetText()).toBe("Unit frame clicks")
+    expect(list.heads[3]:GetText()).toBe("Keys")
+    expect(list.heads[4]:GetText()).toBe("Mouse wheel")
+    local inputs: string[] = {}
+    for i = 3, 6 do
+        local b = list.rows[i].bind
+        inputs[#inputs + 1] = b and b.input or ""
+    end
+    expect(inputs).toEqual({ "SHIFT-BUTTON1", "ALT-F", "SHIFT-F", "MOUSEWHEELUP" })
+    parent:Hide()
+end

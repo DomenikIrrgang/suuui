@@ -1,0 +1,166 @@
+-- Units/Chat/Panel: the links in SuuUI's lines (copy a line from its
+-- diamond, a player's menu, a left click whispering, an item clicked in
+-- combat, the tooltips), through the live chat's windows.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Chat"
+import links from "/Units/Chat/Panel"
+import expectNoErrors, captureMenus, choose from "../../../helpers"
+import printedSince, printedCount, hasLine from "../../SettingsUI/UiSettingsHelpers"
+import ready, frameOf, lastLine, focused, resetChat from "./ChatHelpers"
+
+local CF1 = ChatFrame1
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Links
+--------------------------------------------------------------------------------
+
+@test("the class diamond copies the line: a box with it as plain text; Enter or Esc closes")
+local function copyLine()
+    mock.spawnUnit({ name = "Otherplayer", class = "WARRIOR", player = true })
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: copy me")
+    local line = lastLine(CF1)
+    mock.script(frameOf(CF1), "OnHyperlinkClick", "addon:suuui:copy:" .. tostring(line.id), "", "LeftButton")
+    expect(focused():GetText()).toBe(date("%H:%M", line.at) .. "  Otherplayer: copy me")
+    mock.advanceTime(0.01)
+    local box = focused()
+    mock.pressKey("ESCAPE")
+    expect(box:IsVisible()).toBe(false)
+    box:ClearFocus() -- (the engine keeps a hidden box's focus)
+    M:CopyLine(999999) -- gone: nothing
+    M:CopyLine(line.id)
+    mock.pressKey("ENTER")
+    expect(box:IsVisible()).toBe(false)
+    box:ClearFocus()
+end
+
+@test("a right-click on a name: SuuUI's menu (whisper, window, invite, copy, friend, ignore)")
+local function playerMenu()
+    local menu = captureMenus()
+    local m = frameOf(CF1)
+    local function click(link: unknown, text: string, button: string)
+        mock.script(m, "OnHyperlinkClick", link, text, button)
+    end
+    click("player:Tamsin:5", "[Tamsin]", "RightButton")
+    for _, label in ipairs({ "Whisper", "Whisper window", "Invite", "Copy name", "Add friend", "Ignore" }) do
+        expect(menu[label] ~= nil).toBe(true)
+    end
+    local tell = mock.stub(ChatFrameUtil, "SendTell", function(_: string, _: unknown) end)
+    choose(menu, "Whisper")
+    expect(tell).toHaveBeenCalledTimes(1)
+    local invite = mock.stub(C_PartyInfo, "InviteUnit", function(_: string) end)
+    choose(menu, "Invite")
+    expect(invite).toHaveBeenCalledWith("Tamsin")
+    choose(menu, "Copy name")
+    expect(focused():GetText()).toBe("Tamsin")
+    focused():ClearFocus()
+    local friend = mock.stub(SuuUI, "AddFriend", function(_: string): boolean
+        return true
+    end)
+    local n = printedCount()
+    choose(menu, "Add friend")
+    expect(friend).toHaveBeenCalledWith("Tamsin")
+    expect(hasLine(printedSince(n), "Friend request sent to Tamsin.")).toBe(true)
+    local ignore = mock.stub(C_FriendList, "AddIgnore", function(_: string) end)
+    choose(menu, "Ignore")
+    expect(ignore).toHaveBeenCalledWith("Tamsin")
+    local open = mock.stub(M, "OpenWhisperWindow", function(_: unknown, _: string) end)
+    choose(menu, "Whisper window")
+    expect(open).toHaveBeenCalledTimes(1)
+    -- a left click on a name whispers them (the game's handler whispered
+    -- through the clicked frame's edit box: SuuUI's lines have none)
+    local ref = mock.fake("SetItemRef", function(...: unknown) end)
+    click("player:Tamsin:7", "[Tamsin]", "LeftButton")
+    expect(tell).toHaveBeenCalledTimes(2)
+    expect(tell).toHaveBeenCalledWith("Tamsin", ChatFrame1)
+    expect(ref).never.toHaveBeenCalled()
+    -- shift-click still goes to the game (the name into chat or a dialog)
+    mock.fake("IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    click("player:Tamsin", "[Tamsin]", "LeftButton")
+    expect(tell).toHaveBeenCalledTimes(2)
+    expect(ref).toHaveBeenCalledTimes(1)
+    mock.fake("IsModifiedClick", function(_: string?): boolean
+        return false
+    end)
+    -- other links open as the game's do; a secret one does nothing
+    click("item:6948", "[Hearthstone]", "LeftButton")
+    expect(ref).toHaveBeenCalledTimes(2)
+    click(mock.secret("item:1"), "", "LeftButton")
+    expect(ref).toHaveBeenCalledTimes(2)
+end
+
+@test("an item link clicked in combat: its tooltip, and no \"Interface action failed\"")
+local function itemInCombat()
+    -- (the game's SetItemRef shows the tooltip with ShowUIPanel, which
+    -- refuses addon code in combat with that message: found in game,
+    -- 2026-11-11)
+    local blocked = mock.stub(_G, "DisplayInterfaceActionBlockedMessage", function() end)
+    ItemRefTooltip:Hide()
+    mock.player:enterCombat()
+    mock.script(frameOf(CF1), "OnHyperlinkClick", "item:6948", "[Hearthstone]", "LeftButton")
+    expect(blocked).never.toHaveBeenCalled()
+    expect(ItemRefTooltip).toBeShown()
+    -- another link, the tooltip already open: still no message
+    mock.script(frameOf(CF1), "OnHyperlinkClick", "item:2589", "[Linen Cloth]", "LeftButton")
+    expect(blocked).never.toHaveBeenCalled()
+    expect(ItemRefTooltip).toBeShown()
+    mock.player:leaveCombat()
+    -- out of combat the game's SetItemRef opens it, as before
+    local ref = mock.fake("SetItemRef", function(...: unknown) end)
+    mock.script(frameOf(CF1), "OnHyperlinkClick", "item:6948", "[Hearthstone]", "LeftButton")
+    expect(ref).toHaveBeenCalledTimes(1)
+    ItemRefTooltip:Hide()
+end
+
+@test("hovering a link: the copy hint, an item's tooltip, nothing for others")
+local function linkTips()
+    local m = frameOf(CF1)
+    local function enter(link: unknown)
+        mock.script(m, "OnHyperlinkEnter", link, "")
+    end
+    local function leave()
+        mock.script(m, "OnHyperlinkLeave", "", "")
+    end
+    enter("addon:suuui:copy:1")
+    expect(GameTooltip).toBeShown()
+    leave()
+    expect(GameTooltip).never.toBeShown()
+    local set = mock.stub(GameTooltip, "SetHyperlink", function(...: unknown) end)
+    enter("item:6948")
+    expect(set).toHaveBeenCalledTimes(1)
+    leave()
+    enter("player:Tamsin")
+    enter(mock.secret("item:1"))
+    expect(set).toHaveBeenCalledTimes(1)
+end
+
+@test("links on a frame of its own: they act on the module given (a copy link opens its line)")
+local function linksOfItsOwn()
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: from elsewhere")
+    local line = lastLine(CF1)
+    local f = CreateFrame("Frame", nil, UIParent)
+    links(M, f)
+    local copy = mock.stub(M, "CopyLine", function(_: unknown, _: number?) end)
+    mock.script(f, "OnHyperlinkClick", "addon:suuui:copy:" .. tostring(line.id), "", "LeftButton")
+    expect(copy).toHaveBeenCalledWith(M, line.id)
+    mock.script(f, "OnHyperlinkEnter", "addon:suuui:copy:1", "")
+    expect(GameTooltip).toBeShown()
+    mock.script(f, "OnHyperlinkLeave", "", "")
+    expect(GameTooltip).never.toBeShown()
+    f:Hide()
+end

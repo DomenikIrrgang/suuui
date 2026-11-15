@@ -1,0 +1,283 @@
+-- Units/Notifications/Presence: friends and guild members coming online
+-- and going offline (one card for a burst, held in combat, a Battle.net
+-- friend's, one still loading in, the chat lines hidden).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
+import SuuUI from "/Core/API"
+import * as presenceNotes from "/Units/Notifications/Presence"
+import type NotificationData, NotificationPresence, NotificationPerson from "/UI/Notification"
+import internal M from "/Units/Notifications"
+import expectNoErrors from "../../../helpers"
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+-- A note, there.
+local function note(id: string): NotificationData
+    local n = M.notes[id]
+    assert(n, "no note " .. id)
+    return n
+end
+
+local function run(fn: (() -> ())?)
+    assert(fn, "nothing to run")
+    fn()
+end
+
+local function hideAll()
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() then
+            d:Hide()
+        end
+    end
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
+    hideAll()
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+-- A friend on the friends list, by name.
+local function friendList(friends: { [string]: { [string]: unknown } })
+    mock.stub(C_FriendList, "GetFriendInfo", function(name: string): FriendInfo?
+        local f = friends[name]
+        if not f then
+            return nil
+        end
+        return mock.partial(f)
+    end)
+end
+
+local function presenceCards(): NotificationData[]
+    local out: NotificationData[] = {}
+    for _, id in ipairs(M.noteOrder) do
+        local n = note(id)
+        if n.presence then
+            out[#out + 1] = n
+        end
+    end
+    return out
+end
+
+-- A presence card's presence and people.
+local function presence(n: NotificationData?): (NotificationPresence, NotificationPerson[])
+    local p = n and n.presence
+    assert(p, "not a presence card")
+    local people = p.people
+    assert(people, "no people")
+    return p, people
+end
+
+@test("friends coming online: one card for a burst, Whisper and Invite; going offline; your own line ignored")
+local function friendsOnline()
+    friendList({
+        ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60, area = "Ironforge", className = "Warrior" },
+        ["Tamsin Ashford"] = { name = "Tamsin Ashford", level = 42, className = "Priest" },
+    })
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    -- the same one again: once
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    local p, people = presence(cards[1])
+    expect(p.online).toBe(true)
+    expect(p.source).toBe("Friend")
+    expect(#people).toBe(2)
+    expect(people[1].detail).toBe("Level 60 · Ironforge")
+    expect(p.invite).toBeNil()
+    local told = mock.spy(function(_: string) end)
+    mock.stub(ChatFrameUtil, "SendTell", told)
+    run(people[1].whisper)
+    expect(told).toHaveBeenCalledWith("Brannoc Ironhand")
+    -- going offline, alone: Invite only for those online
+    mock.systemMessage(ERR_FRIEND_OFFLINE_S:format("Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    expect(presence(cards[#cards]).online).toBe(false)
+    -- one alone online: Invite
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    local invited = mock.spy(function(_: string) end)
+    mock.stub(C_PartyInfo, "InviteUnit", invited)
+    run(presence(cards[#cards]).invite)
+    expect(invited).toHaveBeenCalledWith("Brannoc Ironhand")
+    -- your own name, someone unknown, nonsense: nothing
+    local before = #presenceCards()
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Kaelith Dawnmere", "Kaelith Dawnmere"))
+    M:SystemLine(tostring(SuuUI.FullName("player")) .. " has gone offline.")
+    M:SystemLine(42)
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(before)
+    -- off by the setting
+    M:Set("presenceFriendOnline", false)
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(before)
+end
+
+@test("guild members: their rank, level and zone; in combat the card waits for the fight's end")
+local function guildOnline()
+    mock.joinGuild({ name = "Wardens of Dawn", ranks = { { name = "Guild Master" }, { name = "Officer" } } })
+    mock.defineGuildMember({
+        name = "Tamsin Ashford",
+        rank = 1,
+        level = 42,
+        class = "PRIEST",
+        zone = "Stormwind City",
+        online = true,
+    })
+    mock.advanceTime(1)
+    friendList({})
+    mock.player:enterCombat()
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Tamsin Ashford", "Tamsin Ashford"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(0)
+    mock.player:leaveCombat()
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    local p, people = presence(cards[1])
+    expect(p.source).toBe("Wardens of Dawn")
+    expect((people[1].detail or ""):find("Officer", 1, true)).toBe(1)
+    mock.leaveGuild()
+end
+
+-- A Battle.net friend's account, playing `game`.
+local function bnetAccount(tag: string, game: { [string]: unknown })
+    mock.stub(C_BattleNet, "GetAccountInfoByID", function(_: number): BNetAccountInfo?
+        return mock.partial({ accountName = "|Kq1|k", battleTag = tag, gameAccountInfo = game })
+    end)
+end
+
+@test("a Battle.net friend: their game and character, Invite on your side; the card for them only once")
+local function bnet()
+    local game: { [string]: unknown } = {
+        clientProgram = BNET_CLIENT_WOW or "WoW",
+        characterName = "Brannoc Ironhand",
+        className = "Warrior",
+        areaName = "Ironforge",
+        wowProjectID = tbl.field(_G, "WOW_PROJECT_ID"),
+        gameAccountID = 77,
+        factionName = UnitFactionGroup("player"),
+    }
+    bnetAccount("Brannoc#1137", game)
+    mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", 5, false)
+    mock.advanceTime(2.6)
+    local cards = presenceCards()
+    expect(#cards).toBe(1)
+    local p, people = presence(cards[1])
+    expect(p.source).toBe("Battle.net")
+    expect(people[1].tag).toBe("#1137")
+    expect(people[1].detail).toBe("Brannoc Ironhand · Ironforge")
+    local invited = mock.spy(function(_: number) end)
+    mock.stub(C_BattleNet, "InviteFriend", invited)
+    run(p.invite)
+    expect(invited).toHaveBeenCalledWith(77)
+    run(people[1].whisper)
+    -- the same character as a friend too: no second card
+    friendList({ ["Brannoc Ironhand"] = { name = "Brannoc Ironhand", level = 60 } })
+    mock.systemMessage(ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand"))
+    mock.advanceTime(2.6)
+    expect(#presenceCards()).toBe(1)
+    -- in another game: its name; offline
+    game.clientProgram = "WTCG"
+    mock.fireEvent("BN_FRIEND_ACCOUNT_OFFLINE", 5, false)
+    mock.advanceTime(2.6)
+    cards = presenceCards()
+    local _, gone = presence(cards[#cards])
+    expect(gone[1].detail).toBe("Hearthstone")
+end
+
+@test("a Battle.net friend still loading in: Invite added when their character arrives")
+local function bnetLoading()
+    local game: { [string]: unknown } = { clientProgram = "App" }
+    bnetAccount("Tamsin#2041", game)
+    mock.fireEvent("BN_FRIEND_ACCOUNT_ONLINE", 6, false)
+    mock.advanceTime(2.6)
+    expect(presence(presenceCards()[1]).invite).toBeNil()
+    expect(M.awaitInvite ~= nil).toBe(true)
+    -- still not playing: waits
+    mock.fireEvent("BN_FRIEND_INFO_CHANGED", 1)
+    expect(M.awaitInvite ~= nil).toBe(true)
+    game.clientProgram = BNET_CLIENT_WOW or "WoW"
+    game.characterName = "Tamsin Ashford"
+    game.wowProjectID = tbl.field(_G, "WOW_PROJECT_ID")
+    game.gameAccountID = 78
+    game.factionName = UnitFactionGroup("player")
+    mock.fireEvent("BN_FRIEND_INFO_CHANGED", 1)
+    expect(M.awaitInvite).toBeNil()
+    local cards = presenceCards()
+    expect(presence(cards[#cards]).invite ~= nil).toBe(true)
+    M:BnetInfoChanged()
+end
+
+-- The lines in the main chat frame.
+local function chatLines(): number
+    return secret.asNumber((errors.tryMethod(frames.find("ChatFrame1"), "GetNumMessages"))) or -1
+end
+
+@test("the game's online lines hidden in chat (and Battle.net's toast); shown with the setting off")
+local function hiddenLines()
+    local line = ERR_FRIEND_ONLINE_SS:format("Brannoc Ironhand", "Brannoc Ironhand")
+    local before = chatLines()
+    mock.systemMessage(line)
+    expect(chatLines()).toBe(before)
+    -- another system line: shown
+    mock.systemMessage("You feel rested.")
+    expect(chatLines()).toBe(before + 1)
+    M:Set("presenceHideChat", false)
+    mock.systemMessage(line)
+    expect(chatLines()).toBe(before + 2)
+    M:Set("presenceHideChat", true)
+    M.presence = nil
+    local toast = frames.find("BNToastFrame")
+    if toast then
+        mock.setField(toast, "toastType", tbl.field(_G, "BN_TOAST_TYPE_ONLINE") or 1)
+        toast:Show()
+        expect(toast:IsShown()).toBe(false)
+    end
+end
+
+@test("a class's icon: the class sheet and its coordinates; none for no class or one the game doesn't know")
+local function classIcons()
+    local icon = assert(presenceNotes.classIcon("PRIEST"))
+    expect(icon.texture).toBe("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+    expect(#(icon.coords or {})).toBe(4)
+    expect(presenceNotes.classIcon(nil)).toBeNil()
+    expect(presenceNotes.classIcon("TEST_NO_CLASS")).toBeNil()
+end

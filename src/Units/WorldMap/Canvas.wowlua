@@ -1,0 +1,438 @@
+-- Units/WorldMap/Canvas.wowlua
+-- What the world map module (Units/WorldMap) draws on the map's canvas:
+-- its pins (from their pools, laid out by Units/WorldMap/Arrange, their
+-- tiers, hover, clicks and right-clicks through), a walking giver's route
+-- while his pin is hovered, and the unexplored areas. Offers WorldPin and
+-- RouteLayer, and the module's PassThrough, Pin, HighlightQuests,
+-- ShowRoutes, ClearPins, Layout, PinForMark, QueueLayout and Reveal as
+-- functions taking the module.
+
+import SuuUI, MapPinClass from "/Core/API"
+import type TooltipData from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as frames from "wowlua:frames"
+import arrange from "/Units/WorldMap/Arrange"
+import type Group from "/Units/WorldMap/Arrange"
+import tipFor, giverGroup from "/Units/WorldMap/Tips"
+import unexploredTiles from "/Units/WorldMap/Overlays"
+import type WorldMapModule from "/Units/WorldMap"
+
+local MARKS = SuuUI.Services.MARKS
+
+local UI = SuuUI.UI
+
+local asNumber, flag = secret.asNumber, secret.flag
+
+--------------------------------------------------------------------------------
+-- The pins on the canvas
+--------------------------------------------------------------------------------
+
+-- One of SuuUI's pins on the map: the pins merged into it, and whether it's
+-- a quest giver's (it keeps right-clicks for its menu; the others let them
+-- through to the map, which zooms out).
+export class WorldPin extends MapPinClass
+    group: Group? = nil
+    giver: boolean = false
+
+    constructor(parent: Frame)
+        super(parent)
+    end
+end
+
+-- Hovering a quest's pin rings every pin of the same quest (its giver, all
+-- the places its item drops), a rare's every spot it spawns at, and fades
+-- the rest, so they show at a glance.
+type Related = { quests: { [number]: boolean }, rares: { [number]: boolean } }
+local function relatedOf(g: Group): Related?
+    local quests: { [number]: boolean }, rares: { [number]: boolean } = {}, {}
+    local found = false
+    for _, it in ipairs(g.items) do
+        for _, id in ipairs(it.quests or {}) do
+            quests[id] = true
+            found = true
+        end
+        local rare = it.rare
+        if rare then
+            rares[rare] = true
+            found = true
+        end
+    end
+    return found and { quests = quests, rares = rares } or nil
+end
+
+-- A walking giver's route while you hover his pin: a dotted line in his
+-- pin's colour, a dot every 9 px on a surface rim, under the pins.
+local ROUTE_STEP, ROUTE_DOT = 9, 4
+type Dot = { rim: Texture, fill: Texture }
+export class RouteLayer extends Frame
+    readonly dots: Dot[] = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The module's (WorldMapModule:PassThrough, Pin, HighlightQuests,
+-- ShowRoutes, ClearPins, Layout, PinForMark, QueueLayout)
+--------------------------------------------------------------------------------
+
+-- A right-click through a pin to the map (it zooms out; a quest giver's
+-- pin keeps its own, for its menu: never set on it). Refused in
+-- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
+-- a pin was made while the map opened in a fight, found in game): then
+-- after it.
+export function passThrough(self: WorldMapModule, pin: Frame)
+    if not InCombatLockdown() then
+        errors.tryMethod(pin, "SetPassThroughButtons", "RightButton")
+        return
+    end
+    self.passLater[#self.passLater + 1] = pin
+    self:RunOutOfCombat("passThrough", function()
+        local list = self.passLater
+        self.passLater = {}
+        for _, p in ipairs(list) do
+            errors.tryMethod(p, "SetPassThroughButtons", "RightButton")
+        end
+    end)
+end
+
+-- A pin from its pool (a quest giver's: `giver`).
+export function poolPin(self: WorldMapModule, layer: Frame, giver: boolean?): WorldPin
+    local pin = table.remove(giver and self.freeGivers or self.free)
+    if not pin then
+        local made = WorldPin.new(layer)
+        made.giver = giver == true
+        -- a giver's keeps right-clicks: its menu hides its quests
+        if giver then
+            made:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        else
+            made:RegisterForClicks("LeftButtonUp")
+        end
+        made:SetScript("OnEnter", function(p)
+            local g = p.group
+            if not g then
+                return
+            end
+            self.hoveredPin = p
+            UI.ShowTooltip(p, function(): TooltipData
+                local now = p.group
+                return now and tipFor(now) or {}
+            end)
+            self:HighlightQuests(g)
+            self:ShowRoutes(g)
+        end)
+        made:SetScript("OnLeave", function()
+            self.hoveredPin = nil
+            UI.HideTooltip()
+            self:HighlightQuests(nil)
+            self:ShowRoutes(nil)
+        end)
+        made:SetScript("OnClick", function(p, button)
+            if button == "RightButton" then
+                if p.giver then
+                    self:QuestMenu(p)
+                end
+                return
+            end
+            local g = p.group
+            local first = g and g.items[1]
+            -- a mark: its card
+            local mark = g and g.distinct == 1 and first and first.mark or nil
+            if mark then
+                local marks = SuuUI.UseService(MARKS)
+                local open = marks and marks.OpenCard
+                if open then
+                    open(mark, p)
+                end
+                return
+            end
+            -- several of a kind: no zoom (asked 2026-11-05): zoomed from
+            -- SuuUI's code, the map's pins were taken by it and opening
+            -- the map in combat was refused later; the tooltip lists them
+        end)
+        if not giver then
+            self:PassThrough(made)
+        end
+        pin = made
+    end
+    pin:Show()
+    return pin
+end
+
+export function highlightQuests(self: WorldMapModule, group: Group?)
+    local set = group and relatedOf(group)
+    for _, pin in ipairs(self.pins) do
+        if not set then
+            pin:SetHighlight(nil)
+        else
+            local related = false
+            local g = pin.group
+            for _, it in ipairs(g and g.items or {}) do
+                local rare = it.rare
+                if rare and set.rares[rare] then
+                    related = true
+                    break
+                end
+                for _, id in ipairs(it.quests or {}) do
+                    if set.quests[id] then
+                        related = true
+                        break
+                    end
+                end
+                if related then
+                    break
+                end
+            end
+            pin:SetHighlight(related and true or "dim")
+        end
+    end
+end
+
+export function showRoutes(self: WorldMapModule, group: Group?)
+    local layer = self.layer
+    if not layer then
+        return
+    end
+    local r = self.routes
+    if not r then
+        r = RouteLayer.new(layer)
+        r:SetFrameLevel(layer:GetFrameLevel())
+        self.routes = r
+    end
+    for _, d in ipairs(r.dots) do
+        d.rim:Hide()
+        d.fill:Hide()
+    end
+    r:Hide()
+    local w, h, cs = self.lw, self.lh, self.lcs
+    if not (group and w and h and cs) then
+        return
+    end
+    local n = 0
+    local routes = r
+    local function dot(x: number, y: number, color: string)
+        n = n + 1
+        local d = routes.dots[n]
+        if not d then
+            local made: Dot = {
+                rim = routes:CreateTexture(nil, "ARTWORK", nil, 1),
+                fill = routes:CreateTexture(nil, "ARTWORK", nil, 2),
+            }
+            UI.Skin(made.rim, "circle-fill")
+            made.rim:SetSize(ROUTE_DOT + 2, ROUTE_DOT + 2)
+            UI.Paint(made.rim, "surface")
+            UI.Skin(made.fill, "circle-fill")
+            made.fill:SetSize(ROUTE_DOT, ROUTE_DOT)
+            routes.dots[n] = made
+            d = made
+        end
+        UI.Paint(d.fill, color)
+        for _, t in ipairs({ d.rim, d.fill }) do
+            t:ClearAllPoints()
+            t:SetPoint("CENTER", routes, "TOPLEFT", x, -y)
+            t:Show()
+        end
+    end
+    local drawn: { [number[][]]: boolean } = {}
+    for _, it in ipairs(group.items) do
+        local color = it.pin.color or "ink"
+        local route = it.route
+        if route and not drawn[route] then
+            for _, path in ipairs(route) do
+                -- walk the path, a dot each ROUTE_STEP px of it
+                local left = 0
+                for i = 1, #path - 3, 2 do
+                    local ax, ay = path[i] / 100 * w, path[i + 1] / 100 * h
+                    local bx, by = path[i + 2] / 100 * w, path[i + 3] / 100 * h
+                    local len = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+                    local t = left
+                    while t <= len do
+                        local k = len > 0 and t / len or 0
+                        dot(ax + (bx - ax) * k, ay + (by - ay) * k, color)
+                        t = t + ROUTE_STEP
+                    end
+                    left = t - len
+                end
+            end
+        end
+        if route then
+            drawn[route] = true
+        end
+    end
+    if n == 0 then
+        return
+    end
+    r:SetScale(1 / cs)
+    r:ClearAllPoints()
+    r:SetPoint("TOPLEFT", layer, "TOPLEFT")
+    r:SetSize(w, h)
+    r:Show()
+end
+
+export function clearPins(self: WorldMapModule)
+    self:ShowRoutes(nil)
+    for _, pin in ipairs(self.pins) do
+        pin:Hide()
+        pin:ClearAllPoints()
+        pin:SetHighlight(nil)
+        pin.group = nil
+        table.insert(pin.giver and self.freeGivers or self.free, pin)
+    end
+    self.pins = {}
+end
+
+export function layout(self: WorldMapModule)
+    self.layoutQueued = false
+    local f, layer, items = self.map, self.layer, self.items
+    if not (f and layer and items and f:IsShown()) then
+        return
+    end
+    self:ClearPins()
+    local canvas = frames.asFrame(f:GetCanvas())
+    -- (times the window's scale: the enlarged map is the window scaled,
+    -- its pins at their usual size, as far apart as on screen)
+    local cs = asNumber(f:GetCanvasScale())
+    cs = cs and cs * f:GetScale()
+    if not (canvas and cs and cs > 0) then
+        return
+    end
+    local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
+    if w <= 0 or h <= 0 then
+        return
+    end
+    self.lw, self.lh, self.lcs = w, h, cs
+    -- zoomed all the way in (on a map that zooms), every pin stays on its
+    -- exact spot, so you find it there: none move, and only those on one
+    -- spot merge (they'd hide each other)
+    local groups, grow = arrange(items, w, h, flag(f:IsAtMaxZoom()) and not flag(f:IsAtMinZoom()))
+    local base = layer:GetFrameLevel()
+    for _, g in ipairs(groups) do
+        local pin = self:Pin(layer, giverGroup(g))
+        local data = g.items[1].pin
+        if g.distinct > 1 then
+            -- a merged quest pin takes its most useful quest's colour
+            if g.key == "available" or g.key == "itemQuest" or g.key == "repeatable" then
+                local best = g.items[1]
+                for _, it in ipairs(g.items) do
+                    if (it.rank or 9) < (best.rank or 9) then
+                        best = it
+                    end
+                end
+                data = best.pin
+            end
+            data = {
+                glyph = data.glyph,
+                char = data.char,
+                color = data.color,
+                edge = data.edge,
+                small = data.small,
+                ring = data.ring,
+                spin = data.spin,
+                edgeWidth = data.edgeWidth,
+                glow = data.glow,
+                count = g.distinct,
+            }
+        end
+        pin:SetData(data)
+        pin:SetBaseAlpha(self:Get("pinAlpha") / 100)
+        pin.group = g
+        pin:SetScale(grow / cs)
+        -- (three tiers in a few levels, under the game's own pins: small ones,
+        -- then the rest, then places and marks; a count tab just above its pin)
+        local tier = g.small and 1 or (g.fixed and 5 or 3)
+        pin:SetFrameLevel(base + tier)
+        pin.countTab:SetFrameLevel(base + tier + 1)
+        pin:ClearAllPoints()
+        pin:SetPoint("CENTER", layer, "TOPLEFT", g.x / grow, -g.y / grow)
+        self.pins[#self.pins + 1] = pin
+    end
+    -- a mark's open card follows its pin
+    local marks = SuuUI.UseService(MARKS)
+    local cardOf, anchor = marks and marks.CardMark, marks and marks.AnchorCard
+    local cardMark = cardOf and cardOf()
+    if cardMark and anchor then
+        anchor(self:PinForMark(cardMark))
+    end
+    -- the game's quest markers sized again for the zoom (it scales its own)
+    for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
+        if self.looks[pin] then
+            self:FitQuestPin(pin)
+        end
+    end
+end
+
+-- The pin showing a mark (the marks module's card sits under it).
+export function pinForMark(self: WorldMapModule, id: number): WorldPin?
+    for _, pin in ipairs(self.pins) do
+        local g = pin.group
+        if g and g.distinct == 1 and g.items[1].mark == id then
+            return pin
+        end
+    end
+    return nil
+end
+
+export function queueLayout(self: WorldMapModule)
+    -- (off: its timer would not start, and the flag would stay set)
+    if self.layoutQueued or not self:IsEnabled() then
+        return
+    end
+    self.layoutQueued = true
+    self:After(0, function()
+        self:Layout()
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- Unexplored areas: the map's overlays you haven't explored, drawn as the
+-- game draws the explored ones (Blizzard_SharedMapDataProviders, read
+-- 2026-10-15), tinted a little darker and bluer so the map still says where
+-- you haven't been. From SuuUI.MapOverlays (Forever's client tables).
+--------------------------------------------------------------------------------
+
+local TINT = { 0.62, 0.7, 0.92 }
+
+-- (WorldMapModule:Reveal)
+export function revealUnexplored(self: WorldMapModule, mapID: number?)
+    for _, t in ipairs(self.revealUsed) do
+        t:Hide()
+        table.insert(self.revealFree, t)
+    end
+    self.revealUsed = {}
+    local f, reveal = self.map, self.reveal
+    if not (mapID and f and reveal and self:Layers().places.unexplored) then
+        return
+    end
+    -- the overlays are the base layer's: drawn only on it
+    local layerIndex = asNumber(errors.tryMethod(f:GetCanvasContainer(), "GetCurrentLayerIndex")) or 1
+    self.revealLayer = layerIndex
+    if layerIndex ~= 1 then
+        return
+    end
+    -- (the overlays' data built a step a frame the first time: Refresh
+    -- reveals again once it's there)
+    if not SuuUI.Data.MapOverlays:Ready() then
+        return
+    end
+    local art = errors.tryValue(C_Map.GetMapArtID, mapID)
+    local overlays = art and SuuUI.MapOverlays()[art]
+    local layers = errors.tryValue(C_Map.GetMapArtLayers, mapID)
+    local layer = layers and layers[1]
+    if not (overlays and layer) then
+        return
+    end
+    local explored = errors.tryValue(C_MapExplorationInfo.GetExploredMapTextures, mapID) or {}
+    for _, tile in ipairs(unexploredTiles(overlays, explored, layer.tileWidth, layer.tileHeight)) do
+        local t = table.remove(self.revealFree) or reveal:CreateTexture(nil, "ARTWORK")
+        t:SetTexture(tile.file, nil, nil, "TRILINEAR")
+        t:SetSize(tile.w, tile.h)
+        t:SetTexCoord(0, tile.u, 0, tile.v)
+        t:ClearAllPoints()
+        t:SetPoint("TOPLEFT", reveal, "TOPLEFT", tile.x, -tile.y)
+        t:SetVertexColor(TINT[1], TINT[2], TINT[3])
+        t:Show()
+        self.revealUsed[#self.revealUsed + 1] = t
+    end
+end

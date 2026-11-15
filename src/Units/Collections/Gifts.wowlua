@@ -1,0 +1,370 @@
+-- Units/Collections/Gifts.wowlua
+-- Gifts in the collections window (Units/Collections): a mount, toy or pet
+-- bought or given comes wrapped (the game's fanfare; what is wrapped and
+-- how many: Collections/Catalog). The game's wrapped present in a model
+-- scene (presentIn: on the stage, over a toy card's icon), stood on the
+-- floor shadow the same size in any scene; opened the game's way; the
+-- counts on the tabs and the micro menu; a notification when one arrives.
+-- The module's ShowGift, WatchPresent, SettlePresent, PlacePresent,
+-- Unwrap, UnwrapToy, GiftCount, UpdateGifts, GiftArrived and ShowGiftIn as
+-- functions taking the module (its methods call them).
+
+import SuuUI from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry from "./Catalog"
+import GIFT_ICON, clearWrapped, giftCounts from "./Catalog"
+import toyList from "./Sources"
+import MODEL_W, FEET_Y from "./Stage"
+import COLS, ROWS from "./Strip"
+import type ToyCard from "./Shelf"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local tryMethod = errors.tryMethod
+local asNumber, flag = secret.asNumber, secret.flag
+
+--------------------------------------------------------------------------------
+-- Gifts: what the game wraps (its fanfare), its own functions
+--------------------------------------------------------------------------------
+
+-- the toy box's wrapped present (its model scene; Forever has none: probed
+-- 2026-11-05, the game's own toy box shows nothing there either)
+export local GIFT_SCENE = 253
+-- the present's model: the game sets it by a creature display (71933) Forever
+-- doesn't have (its actor stays empty: found in game); the model itself is
+-- there (shop_giftbox01.m2, read from Forever's files 2026-11-05)
+local PRESENT_FILE = 1401005
+-- on the stage: smaller than the mount's scene shows it, and raised in it
+-- (world units: the box is about 2.3 high) so its base isn't at the scene's
+-- bottom edge, where the box was cut off (found in game)
+local PRESENT_SCALE, PRESENT_LIFT = 0.6, 1.0
+-- the box's height in world units at scale 1, and the height it gets on the
+-- stage in any scene (a pet's gift in a mount's scene showed it huge, its
+-- top cut off: found in game)
+local PRESENT_H, PRESENT_PX = 2.3, 150
+
+-- A model scene showing the game's wrapped present: `scene` (a mount's own:
+-- it holds the "wrapped" actor, as the game's mount journal uses it).
+-- Whether the present is there to show.
+export function presentIn(gift: ModelScene, scene: number?): boolean
+    if not scene then
+        return false
+    end
+    tryMethod(
+        gift,
+        "TransitionToModelSceneID",
+        scene,
+        CAMERA_TRANSITION_TYPE_IMMEDIATE,
+        CAMERA_MODIFICATION_TYPE_MAINTAIN,
+        true
+    )
+    tryMethod(gift, "PrepareForFanfare", true)
+    local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+    if actor == nil then
+        return false
+    end
+    -- (always the present's model: the scene's own, where there is one,
+    -- isn't in Forever's files; a pet's scene showed an empty one)
+    tryMethod(actor, "SetModelByFileID", PRESENT_FILE)
+    return true
+end
+
+-- A wrapped mount: the game's present on the stage (in the mount's own
+-- model scene, as the game's journal: the toy box's scene isn't in
+-- Forever, found in game), the mount hidden until it is opened.
+export function showGift(self: CollectionsModule, e: Entry)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    ui.model:Hide()
+    ui.stage.loading:Hide()
+    self.showing, self.waiting = nil, nil
+    local gift = ui.gift
+    if self.unwrapping then
+        return
+    end
+    -- (a pet's own scene may have no present: a mount's then, whose does;
+    -- found in game, the pet's gift didn't show)
+    -- (a pet's gift in a mount's scene: the present showed empty in the
+    -- pet's own, found in game; the mount's, with SuuUI's model, works)
+    local scene = e.kind == "mount" and e.scene or self:MountScene() or e.scene
+    local shown = presentIn(gift, scene)
+    if not shown and scene ~= e.scene then
+        shown = presentIn(gift, e.scene)
+    end
+    gift:SetShown(shown)
+    local actor = gift:IsShown() and tryMethod(gift, "GetActorByTag", "wrapped")
+    if not actor then
+        return
+    end
+    -- unseen until it stands right: the scene, set anew, shows the box at
+    -- its own size for a moment, and its camera reads wrong until laid out
+    -- (found in game: huge on opening the tab, a flash on changing pets)
+    gift:SetAlpha(0)
+    local fit = scene and self.presentFits[scene]
+    if fit then
+        -- (this scene's fit known: at once)
+        tryMethod(actor, "SetScale", fit[1])
+        tryMethod(actor, "SetPosition", fit[2], fit[3], fit[4])
+    else
+        -- (the scene's place for it: smaller, raised)
+        local x, y, z = tryMethod(actor, "GetPosition")
+        tryMethod(actor, "SetScale", PRESENT_SCALE)
+        tryMethod(
+            actor,
+            "SetPosition",
+            asNumber(x) or 0,
+            asNumber(y) or 0,
+            (asNumber(z) or 0) + PRESENT_LIFT / PRESENT_SCALE
+        )
+    end
+    self.presentToken = self.presentToken + 1
+    self.presentSettling = true
+    self:SettlePresent(self.presentToken, scene, 0)
+end
+
+-- While the present shows: a scene that finished loading late resets the
+-- box to its own size (found in game: huge on first opening the tab,
+-- right once chosen again): hidden and placed again.
+export function watchPresent(self: CollectionsModule)
+    local ui = self.ui
+    local k = self.presentK
+    if not ui or not k or self.presentSettling or self.unwrapping then
+        return
+    end
+    local actor = tryMethod(ui.gift, "GetActorByTag", "wrapped")
+    local now = actor ~= nil and asNumber(tryMethod(actor, "GetScale"))
+    if not now or math.abs(now - k) <= 0.01 * math.max(k, 0.01) then
+        return
+    end
+    ui.gift:SetAlpha(0)
+    self.presentToken = self.presentToken + 1
+    self.presentSettling = true
+    self:SettlePresent(self.presentToken, self.presentScene, 0)
+end
+
+-- The present placed again each frame until it stops changing (the
+-- scene's camera laid out), then shown and its fit kept for the scene.
+export function settlePresent(self: CollectionsModule, token: number, scene: number?, tries: number)
+    local ui = self.ui
+    if not ui or token ~= self.presentToken then
+        return
+    end
+    local gift = ui.gift
+    local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+    if actor == nil then
+        gift:SetAlpha(1)
+        self.presentSettling = false
+        return
+    end
+    local k0 = asNumber(tryMethod(actor, "GetScale")) or 1
+    local _, _, z0 = tryMethod(actor, "GetPosition")
+    self:PlacePresent()
+    local k1 = asNumber(tryMethod(actor, "GetScale")) or 1
+    local x1, y1, z1 = tryMethod(actor, "GetPosition")
+    local still = math.abs(k1 - k0) <= 0.01 * math.max(k0, 0.01) and
+        math.abs((asNumber(z1) or 0) - (asNumber(z0) or 0)) <= 0.01
+    if (still and tries >= 1) or tries >= 15 then
+        gift:SetAlpha(1)
+        self.presentSettling = false
+        self.presentK, self.presentScene = k1, scene
+        if scene and still then
+            self.presentFits[scene] = { k1, asNumber(x1) or 0, asNumber(y1) or 0, asNumber(z1) or 0 }
+        end
+        return
+    end
+    self:After(0, function()
+        self:SettlePresent(token, scene, tries + 1)
+    end)
+end
+
+-- The present stood on the floor shadow's middle, as a mount, the same
+-- size in any scene: the scene's own measure read from two points it
+-- projects (pixels per world unit, upward), the box scaled to
+-- PRESENT_PX tall and moved in the scene until its base projects FEET_Y
+-- above the stage's bottom; the scene's frame stays over the stage.
+-- (Moving the frame instead cut the box off at its top in a scene that
+-- showed it high: found in game with a pet's gift.) A scene that can't
+-- project: the frame moved, as before.
+export function placePresent(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local gift = ui.gift
+    local actor = tryMethod(gift, "GetActorByTag", "wrapped")
+    if actor == nil then
+        return
+    end
+    local s = gift:GetEffectiveScale()
+    if not (s and s > 0) then
+        return
+    end
+    -- a world point on the frame (pixels from its bottom left)
+    local function at(x: number, y: number, z: number): (number?, number?)
+        local px, py = tryMethod(gift, "Transform3DPointTo2D", x, y, z)
+        local a, b = asNumber(px), asNumber(py)
+        if not (a and b) then
+            return nil, nil
+        end
+        return a / s, b / s
+    end
+    local ax, ay, az = tryMethod(actor, "GetPosition")
+    local k = asNumber(tryMethod(actor, "GetScale")) or 1
+    local wx, wy, wz = (asNumber(ax) or 0) * k, (asNumber(ay) or 0) * k, (asNumber(az) or 0) * k
+    local bx, by = at(wx, wy, wz)
+    local _, uy = at(wx, wy, wz + 1)
+    if not (bx and by) then
+        return
+    end
+    local slope = uy and (uy - by) or 0
+    if slope < 0.5 then
+        -- (no measure: the frame moved so the base is on the floor)
+        gift:ClearAllPoints()
+        gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", MODEL_W / 2 - bx, FEET_Y - by)
+        return
+    end
+    gift:ClearAllPoints()
+    gift:SetPoint("BOTTOM", ui.stage, "BOTTOM", 0, 0)
+    -- the size, then the base on the floor (a few steps: the camera's
+    -- perspective bends the measure)
+    local k2 = math.max(0.05, math.min(5, PRESENT_PX / (slope * PRESENT_H)))
+    local z = wz
+    for _ = 1, 4 do
+        local _, y = at(wx, wy, z)
+        local _, y1 = at(wx, wy, z + 1)
+        if not (y and y1) or y1 - y < 0.01 then
+            break
+        end
+        z = z + (FEET_Y - y) / (y1 - y)
+    end
+    tryMethod(actor, "SetScale", k2)
+    tryMethod(actor, "SetPosition", wx / k2, wy / k2, z / k2)
+end
+
+-- The chosen gift opened the game's way: the present unwraps, then the
+-- game is told and the mount shows. (No present to play: opened at once.)
+export function unwrap(self: CollectionsModule, given: Entry?)
+    local ui = self.ui
+    local e = given or self.chosen
+    if not (ui and e and e.wrapped) or self.unwrapping then
+        return
+    end
+    self.unwrapping = e
+    local function opened()
+        self.unwrapping = nil
+        clearWrapped(e.kind, e.giftGuid or e.id)
+        e.wrapped = nil
+        ui.gift:Hide()
+        self.showing = nil
+        self:Refresh()
+        self:UpdateGifts()
+        -- the model was hidden under the present: its camera reads wrong
+        -- the frame it shows again (found in game: placed right only
+        -- after choosing another and back), so shown once more a frame
+        -- later, as on opening the window
+        self:After(0, function()
+            self.showing = nil
+            self:Refresh()
+        end)
+    end
+    local gift = ui.gift
+    if gift:IsShown() then
+        tryMethod(gift, "StartUnwrapAnimation", opened)
+    end
+    if not flag(tryMethod(gift, "IsUnwrapAnimating")) then
+        opened()
+    end
+end
+
+-- A wrapped toy opened from its card: its present unwraps there.
+export function unwrapToy(self: CollectionsModule, c: ToyCard)
+    local e = c.entry
+    if not (e and e.wrapped) or c.unwrapping then
+        return
+    end
+    c.unwrapping = true
+    local function opened()
+        c.unwrapping = false
+        clearWrapped("toy", e.id)
+        e.wrapped = nil
+        c.gift:Hide()
+        self:Refresh()
+        self:UpdateGifts()
+    end
+    if c.gift:IsShown() then
+        tryMethod(c.gift, "StartUnwrapAnimation", opened)
+    end
+    if not flag(tryMethod(c.gift, "IsUnwrapAnimating")) then
+        opened()
+    end
+end
+
+-- How many gifts wait (mounts, pets and toys: what this window opens).
+export function giftCount(): number
+    local n = giftCounts(toyList())
+    return n.mounts + n.toys + n.pets
+end
+
+-- The counts on the tabs and the micro menu's (SUUUI_GIFTS_CHANGED).
+export function updateGifts(self: CollectionsModule)
+    local n = giftCounts(toyList())
+    local ui = self.ui
+    if ui then
+        ui.window:SetTabCount("mounts", n.mounts > 0 and tostring(n.mounts) or nil)
+        ui.window:SetTabCount("toys", n.toys > 0 and tostring(n.toys) or nil)
+        ui.window:SetTabCount("pets", n.pets > 0 and tostring(n.pets) or nil)
+    end
+    self:Emit("SUUUI_GIFTS_CHANGED", n.mounts + n.toys + n.pets)
+end
+
+-- A gift arrived: told, Open shows it (the window through its secure
+-- toggle: it is protected in a fight).
+export function giftArrived(self: CollectionsModule, kind: string, id: number, name: string?)
+    local tab = kind == "toy" and "toys" or kind == "pet" and "pets" or "mounts"
+    SuuUI.Notify({
+        id = "suu:gift:" .. kind .. ":" .. id,
+        kind = "timed",
+        category = "Collections",
+        icon = { texture = GIFT_ICON },
+        title = "A gift arrived",
+        body = (name or (kind == "toy" and "A toy" or kind == "pet" and "A pet" or "A mount")) ..
+            " waits wrapped in your collections.",
+        actions = {
+            {
+                label = "Open",
+                variant = "primary",
+                click = function(): Frame?
+                    return self.toggleButton
+                end,
+                skipClick = function(): boolean
+                    return self:Shown()
+                end,
+                onClick = function()
+                    self:ShowGiftIn(tab, id)
+                end,
+            },
+        },
+    })
+    self:UpdateGifts()
+end
+
+-- The window on a gift's tab, the gift chosen (mounts: on its page).
+export function showGiftIn(self: CollectionsModule, tab: string, id: number)
+    local w = self:Window()
+    if not (w and w:IsShown()) then
+        return
+    end
+    w:SetTab(tab)
+    if tab ~= "mounts" and tab ~= "pets" then
+        return
+    end
+    for i, e in ipairs(self.entries) do
+        if e.id == id then
+            self.page = math.floor((i - 1) / (COLS * ROWS)) + 1
+            self:Choose(e)
+            return
+        end
+    end
+end

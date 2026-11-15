@@ -1,0 +1,236 @@
+-- tests/unit/Units/Chat/ChatHelpers.wowlua
+-- Shared by the chat's tests (Units/Chat and its parts), which drive the
+-- live module over the emulated client's chat frames.
+--
+--   ready()                     the module's windows ready (their mirrors made)
+--   mirror(cf), frameOf(cf), lastLine(cf)   a window's mirror, its message
+--                               frame, its newest line
+--   textOf(line), rendered(line, withTime?) a line's text, readable
+--   window(name), windowOf(name)            a window by its name (or its
+--                               whisper's player)
+--   findTab(name), tab(name)    the shown tab button with that name
+--   leftOf(f)                   a frame's left edge in UIParent units
+--   chatEvent(event, text, sender, guid, lineID)  a chat event as the
+--                               client sends it
+--   whisper(text)               a whisper line into General
+--   rowOf(label)                a row of the chat's settings
+--   focused()                   the edit box with the keyboard focus
+--   held, press(b, dx)          a press on a tab moved along the row
+--   openSearch()                the Search tab, looking through every tab
+--   resetChat()                 what a test changed, undone
+--
+--   @beforeEach local function start() ready() end
+--   @afterEach local function cleanup() resetChat() expectNoErrors() end
+
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as secret from "wowlua:secret"
+import * as chat from "wowlua:chat"
+import * as registry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
+import internal M from "/Units/Chat"
+import type TabButton from "/Units/Chat/TabBar"
+import type SearchPage from "/Units/Chat/SearchPage"
+import type Mirror, Line from "/Units/Chat/Mirrors"
+import testRow, TestRow from "../../../helpers"
+
+local CF1 = ChatFrame1
+
+-- The module's windows ready (their mirrors are made a frame after login).
+export function ready()
+    if not M.mirrors[CF1] then
+        mock.advanceFrames(2)
+    end
+end
+
+export function mirror(cf: chat.Window): Mirror
+    ready()
+    return (assert(M.mirrors[cf], "no mirror"))
+end
+
+-- A window's message frame in SuuUI's panel.
+export function frameOf(cf: chat.Window): ScrollingMessageFrameMixin & Frame
+    return mirror(cf).frame
+end
+
+export function lastLine(cf: chat.Window): Line
+    local m = mirror(cf)
+    return m.lines[#m.lines]
+end
+
+-- A line's text, readable.
+export function textOf(line: Line): string
+    return secret.asString(line.text) or ""
+end
+export function rendered(line: Line, withTime: boolean?): string
+    return secret.asString(M:Render(line, withTime)) or ""
+end
+
+-- The window named `name` (Blizzard's settings for it, or a whisper's player).
+export function window(name: string): chat.Window?
+    for _, cf in ipairs(M:Windows()) do
+        local _, target = chat.conversation(cf)
+        if GetChatWindowInfo(cf:GetID()) == name or target == name then
+            return cf
+        end
+    end
+    return nil
+end
+
+export function windowOf(name: string): chat.Window
+    return (assert(window(name), "no window " .. name))
+end
+
+-- The shown tab button with this name.
+export function findTab(name: string): TabButton?
+    for _, b in ipairs(M:Panel().tabButtons) do
+        if b:IsShown() and b.label:GetText() == name then
+            return b
+        end
+    end
+    return nil
+end
+
+export function tab(name: string): TabButton
+    return (assert(findTab(name), "no tab " .. name))
+end
+
+-- A frame's left edge in UIParent units.
+export function leftOf(f: Region): number
+    return assert(f:GetLeft()) * f:GetEffectiveScale() / UIParent:GetEffectiveScale()
+end
+
+-- A message that isn't from Discord.
+local NO_DISCORD = {
+    userID = 0,
+    globalName = "",
+    lastOnlineGUID = "",
+    lastOnlineName = "",
+    hasAttachment = false,
+    hasPoll = false,
+    hasEmbed = false,
+    hasSticker = false,
+    hasEmoji = false,
+    hasError = false,
+    hasForwardedMessage = false,
+    forwardedMessage = "",
+    fromDiscord = false,
+}
+
+-- A chat event with every argument the client sends (lineID, the sender's GUID).
+export function chatEvent(event: string, text: string, sender: string, guid: string, lineID: number)
+    mock.fireEvent(
+        event,
+        text,
+        sender,
+        "",
+        "",
+        "",
+        "",
+        0,
+        0,
+        "",
+        0,
+        lineID,
+        guid,
+        0,
+        false,
+        false,
+        false,
+        false,
+        NO_DISCORD
+    )
+end
+
+-- A row of the chat's settings: what the tests use of it.
+export function rowOf(label: string): TestRow
+    local s = registry.get("chat") :: registry.Section
+    for _, g in ipairs(s.groups or {}) do
+        for _, r in ipairs(g.rows) do
+            if r.label == label then
+                return testRow(r)
+            end
+        end
+    end
+    error("no row " .. label)
+end
+
+-- The edit box with the keyboard focus, which must be there.
+export function focused(): EditBox
+    return (assert(frames.asEditBox(GetCurrentKeyBoardFocus()), "nothing has the keyboard focus"))
+end
+
+export function whisper(text: string)
+    CF1:AddMessage(text, 1, 0.5, 1, nil, nil, nil, "CHAT_MSG_WHISPER")
+end
+
+-- A press on a tab and the pointer moved `dx` along the row, the left
+-- button held (the engine holds none: faked).
+export const held = { left = false, right = false }
+export function press(b: TabButton, dx: number)
+    mock.fake("IsMouseButtonDown", function(button: string?): boolean
+        if button == "RightButton" then
+            return held.right
+        end
+        return held.left
+    end)
+    held.left, held.right = true, false
+    local s = b:GetEffectiveScale()
+    local x, y = b:GetCenter()
+    x, y = assert(x), assert(y)
+    mock.setCursorPosition(x * s, y * s)
+    mock.script(b, "OnMouseDown", "LeftButton")
+    mock.advanceFrames(1)
+    mock.setCursorPosition((x + dx) * s, y * s)
+    mock.advanceFrames(1)
+end
+
+export function openSearch(): SearchPage
+    mock.click(tab("Search"))
+    local s = assert(M.search)
+    for _, b in ipairs(s.chips) do
+        if b.value == "all" then
+            mock.click(b)
+        end
+    end
+    return s
+end
+
+-- What a test changed, undone (each test file's @afterEach, before its
+-- expectNoErrors()).
+export function resetChat()
+    if editMode.isActive() then
+        editMode.exit()
+    end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    mock.setModifiers({ shift = false })
+    if M.drag or M.press then
+        M:EndDrag(false)
+    end
+    M:ResetAll({
+        "logHeight",
+        "fadeIdle",
+        "idleDelay",
+        "globalTab",
+        "timestamps",
+        "classDiamonds",
+        "classNames",
+        "shortChannels",
+        "recall",
+        "keepHistory",
+        "tabReorder",
+        "position",
+    })
+    M:CharData().tabOrder = nil
+    M:CharData().history = nil
+    M:CharData().kept = nil
+    M.keyCapture, M.recall = nil, nil
+    local focus: EditBox? = GetCurrentKeyBoardFocus()
+    if focus then
+        focus:ClearFocus()
+    end
+    M:Select(CF1)
+    mock.advanceTime(1)
+end

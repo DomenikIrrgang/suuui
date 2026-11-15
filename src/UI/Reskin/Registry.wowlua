@@ -1,0 +1,208 @@
+-- UI/Reskin/Registry.wowlua
+-- What every part of Reskin (UI/Reskin.wowlua) shares: how the game's frames
+-- are read, which frames and textures are SuuUI's own, what a module has the
+-- passes leave alone, what a pass did to each of the game's parts (kept off
+-- the game's frames), and the undo list the shared frames (menus, popups)
+-- are restyled with.
+--
+--   markOwn(f), isOwn(f)          -- SuuUI's own frames: a pass leaves them be
+--   markArt(t), isArt(t)          -- SuuUI's own textures on the game's parts
+--   leave(f, what), flagged(f, what) -- "button", "check", "text" left alone
+--   skinOf(r), skins, skipped(fs) -- what a pass did to a part
+--   askString, atlasOf, fade, textures, fontStrings -- reading the game's parts
+--   hideRegion(st, r), menuText(st, fs, color) -- changes with their undo
+
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+
+--------------------------------------------------------------------------------
+-- Reading the game's frames: what is there is checked as it's read
+--------------------------------------------------------------------------------
+
+-- (the game's frames are read with wowlua:frames, wowlua:table's field and
+-- wowlua:errors' tryMethod: what is there is checked as it's read)
+
+-- A method's answer when it is a (readable) string.
+export function askString(r: unknown, method: string): string?
+    return secret.asString(errors.tryMethod(r, method))
+end
+
+-- A texture's atlas, lower case ("" without one).
+export function atlasOf(t: unknown): string
+    return (askString(t, "GetAtlas") or ""):lower()
+end
+
+-- SuuUI's own frames inside the game's windows, and its own textures on the
+-- game's parts: a pass leaves them be (`f.suuOwn = true`, the plugins' way,
+-- counts too).
+local ownFrames: { [Region]: true } = tbl.weakKeys()
+local ownArt: { [Region]: true } = tbl.weakKeys()
+
+export function markOwn(f: Region)
+    ownFrames[f] = true
+end
+
+export function isOwn(f: unknown): boolean
+    if type(f) ~= "table" then
+        return false
+    end
+    return ownFrames[f :: Region] == true or (f :: { [string]: unknown }).suuOwn == true
+end
+
+export function markArt(t: Region)
+    ownArt[t] = true
+end
+
+export function isArt(t: unknown): boolean
+    return type(t) == "table" and ownArt[t :: Region] == true
+end
+
+-- What a module has the passes leave alone on one of the game's parts:
+-- "button" (no button look), "check" (no check box look), "text" (its font
+-- and colour). Kept here, never on the game's frames; a plugin's flags on
+-- the frame (suuNoButton, suuNoCheck, suuSkip) count too.
+export type Leave = "button" | "check" | "text"
+local leftButtons: { [Region]: true } = tbl.weakKeys()
+local leftChecks: { [Region]: true } = tbl.weakKeys()
+local leftTexts: { [Region]: true } = tbl.weakKeys()
+
+-- What's left alone, and the plugins' flag for it.
+local function leftOf(what: Leave): ({ [Region]: true }, string)
+    if what == "button" then
+        return leftButtons, "suuNoButton"
+    end
+    if what == "check" then
+        return leftChecks, "suuNoCheck"
+    end
+    return leftTexts, "suuSkip"
+end
+
+export function leave(f: Region, what: Leave)
+    local set = leftOf(what)
+    set[f] = true
+end
+
+export function flagged(f: unknown, what: Leave): boolean
+    local set, key = leftOf(what)
+    return (type(f) == "table" and set[f :: Region] == true) or tbl.field(f, key) == true
+end
+
+-- A part of `f` that can be faded (anything with SetAlpha).
+export function fade(v: unknown)
+    local r = frames.asRegion(v)
+    if r then
+        r:SetAlpha(0)
+    end
+end
+
+-- The textures and font strings among a frame's regions.
+export const textures = frames.textures
+export const fontStrings = frames.fontStrings
+
+--------------------------------------------------------------------------------
+-- What a pass did to each of the game's parts (kept off the game's frames)
+--------------------------------------------------------------------------------
+
+export type Redraw = { draw: () -> () }
+export type IconSkin = { edge: draw.Border, hover: boolean, draw: () -> () }
+export type CheckSkin = { box: Frame, draw: () -> () }
+
+export type Skin = {
+    -- a scrollbar, status bar, dropdown, edit box, scroll box, dialog or a
+    -- dialog's box: done
+    scrollBar?: boolean,
+    statusBar?: boolean,
+    dropdown?: boolean,
+    edit?: boolean,
+    scrollBox?: boolean,
+    dialog?: boolean,
+    box?: boolean,
+    scrollingFont?: boolean,
+    -- a status bar's: its fill's atlas, its track, whether its fill is hooked
+    atlas?: string,
+    track?: Frame,
+    flattening?: boolean,
+    fillHooked?: boolean,
+    -- a fill bar's: its atlas's colour word, its share, how it's drawn again
+    fillBar?: boolean,
+    atlasWord?: string,
+    percent?: number,
+    flat?: () -> (),
+    tint?: () -> (),
+    sizeFill?: () -> (),
+    -- buttons
+    icon?: IconSkin,
+    check?: CheckSkin,
+    button?: Redraw,
+    collapse?: Redraw,
+    -- a list row's check moved to its corner; a category row's rule
+    moved?: boolean,
+    headRule?: Texture,
+    -- a text's colour token; a text left as it is
+    token?: string,
+    skip?: boolean,
+}
+
+local skins: { [Region]: Skin } = setmetatable({}, { __mode = "k" })
+
+export function skinOf(r: Region): Skin
+    local s = skins[r]
+    if not s then
+        s = {}
+        skins[r] = s
+    end
+    return s
+end
+
+-- Whether a text is left as it is: marked by a pass, or by a module (suuSkip).
+export function skipped(fs: FontString): boolean
+    local s = skins[fs]
+    return (s ~= nil and s.skip == true) or flagged(fs, "text")
+end
+
+--------------------------------------------------------------------------------
+-- Changes to the game's shared frames, with their undo (menus, popups)
+--------------------------------------------------------------------------------
+
+-- What undoing a change needs: a list of functions.
+export type Undo = { undo: (() -> ())[] }
+
+export function hideRegion(st: Undo, r: Region)
+    if isArt(r) then
+        return
+    end
+    local a = r:GetAlpha()
+    -- (an alpha once set from a secret reads back secret: left as it is)
+    if issecretvalue(a) or a == 0 then
+        return
+    end
+    r:SetAlpha(0)
+    st.undo[#st.undo + 1] = function()
+        r:SetAlpha(a)
+    end
+end
+
+export function menuText(st: Undo, fs: FontString, color: string)
+    local fo = fs:GetFontObject()
+    local file, size, flags = fs:GetFont()
+    local r, g, b, a = fs:GetTextColor()
+    local sx, sy = fs:GetShadowOffset()
+    st.undo[#st.undo + 1] = function()
+        if fo then
+            fs:SetFontObject(fo)
+        elseif file then
+            fs:SetFont(file, size, flags)
+        end
+        fs:SetTextColor(r, g, b, a)
+        fs:SetShadowOffset(sx, sy)
+    end
+    fonts.apply(fs, "body")
+    -- (set raw: again on every open, and the game's shared menu rows get
+    -- no hooks of SuuUI's)
+    fs:SetTextColor(draw.rgba(color))
+    fs:SetShadowOffset(0, 0)
+end

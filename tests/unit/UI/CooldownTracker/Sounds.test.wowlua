@@ -1,0 +1,58 @@
+-- UI/CooldownTracker/Sounds: the tracker's sounds, and the aura sounds it
+-- registers with the engine.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import trackerSound, trackerSoundFiles, trackerAuraSounds, addAuraSounds, clearAuraSounds from "/UI/CooldownTracker/Sounds"
+import expectNoErrors from "../../../helpers"
+
+--------------------------------------------------------------------------------
+-- Sounds
+--------------------------------------------------------------------------------
+
+@test("trackerSound: the file, else the sound kit; unknown plays nothing")
+local function sounds()
+    local played: { unknown } = {}
+    mock.fake("PlaySoundFile", function(file: unknown, _: string): unknown
+        played[#played + 1] = file
+        return true
+    end)
+    mock.fake("PlaySound", function(kit: unknown, _: string): unknown
+        played[#played + 1] = "kit" .. kit
+        return true
+    end)
+    trackerSound("chime")
+    expect(played).toEqual({ 567409 })
+    mock.fake("PlaySoundFile", function(_: unknown, _: string): unknown
+        return false
+    end)
+    trackerSound("ping")
+    expect(played[2]).toBe("kit" .. SOUNDKIT.MAP_PING)
+    trackerSound("nope")
+    expect(#played).toBe(2)
+    expect(assert(trackerSoundFiles().warning).file).toBe(567397)
+    expectNoErrors()
+end
+
+@test("aura sounds: one per spell and trigger with a sound, cleared all at once")
+local function auraSounds()
+    local added: { unknown } = {}
+    local removed: { unknown } = {}
+    mock.fake("C_UnitAuras.AddAuraSound", function(_: unknown, data: unknown): unknown
+        added[#added + 1] = data.spellID
+        return #added
+    end)
+    mock.fake("C_UnitAuras.RemoveAuraSound", function(id: unknown)
+        removed[#removed + 1] = id
+    end)
+    addAuraSounds({ name = "Test", ids = { 1, 2 }, soundAppear = "chime", soundStack = "nope" }, "target")
+    local ids, what = trackerAuraSounds()
+    expect(added).toEqual({ 1, 2 })
+    expect(#ids).toBe(2)
+    expect(what[2]).toBe("Test soundAppear 2 (target)")
+    clearAuraSounds()
+    expect(removed).toEqual({ 1, 2 })
+    local after, _ = trackerAuraSounds()
+    expect(#after).toBe(0)
+    expectNoErrors()
+end

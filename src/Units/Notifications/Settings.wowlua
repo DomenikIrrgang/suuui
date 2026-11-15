@@ -1,0 +1,183 @@
+-- Units/Notifications/Settings.wowlua
+-- The Notifications module's settings (Units/Notifications.wowlua): their
+-- defaults, the section in the settings window and its preview (made-up
+-- cards of each kind).
+
+import SuuUI from "/Core/API"
+import type SettingsSection, Position, NotificationData, NotificationStack from "/Core/API"
+import classIcon from "./Presence"
+import type NotificationsModule from "/Units/Notifications"
+
+local UI = SuuUI.UI
+
+export const DEFAULTS = {
+    -- under the micro menu (28px down, 36px tall), space-5 clear
+    position = { point = "TOPLEFT", x = 28, y = -76 } :: Position,
+    max = 5,
+    requests = true, -- Blizzard's popups as cards
+    durability = true, -- a note while your gear is badly damaged or broken
+    bagsFull = true, -- a note while your bags are full
+    talentPoints = true, -- a note while you have talent points to spend
+    legacyPoints = true, -- a note while you have Legacy points to spend
+    -- friends and guild members coming online / going offline
+    presenceBnetOnline = true,
+    presenceBnetOffline = true,
+    presenceFriendOnline = true,
+    presenceFriendOffline = true,
+    presenceGuildOnline = true,
+    presenceGuildOffline = false,
+    presenceHideChat = true, -- the game's own lines in chat hidden
+}
+
+local PREVIEW: NotificationData[] = {
+    {
+        id = "p1",
+        kind = "action",
+        category = "Party invite",
+        title = "Ysolde invites you to a group.",
+        icon = { glyph = "people" },
+        duration = 60,
+        remaining = 42,
+        actions = { { label = "Accept", variant = "primary" }, { label = "Decline" } },
+    },
+    {
+        id = "p2",
+        kind = "action",
+        tone = "danger",
+        category = "Delete item",
+        title = "Do you want to destroy Ember Pelt?",
+        icon = { glyph = "trash" },
+        item = { icon = 134075, label = "Ember Pelt", quality = "uncommon" },
+        confirmText = "DELETE",
+        actions = { { label = "Yes", variant = "danger" }, { label = "No" } },
+    },
+    {
+        id = "p3",
+        kind = "until",
+        category = "Durability",
+        title = "Your gear is badly damaged",
+        icon = { glyph = "anvil" },
+        tone = "warning",
+        ["until"] = "Goes when you repair",
+    },
+    {
+        id = "p4",
+        kind = "timed",
+        presence = {
+            online = true,
+            source = "Battle.net",
+            people = {
+                {
+                    name = "Kaelith",
+                    tag = "#1137",
+                    color = "class-priest",
+                    detail = "Kaelith · Eastern Plaguelands",
+                    icon = classIcon("PRIEST"),
+                },
+            },
+            invite = function() end,
+        },
+        duration = 6,
+        remaining = 4,
+    },
+    {
+        id = "p5",
+        kind = "timed",
+        presence = { online = false, source = "Guild", people = { { name = "Ysolde" } } },
+        duration = 4,
+        remaining = 3,
+    },
+}
+
+-- The section in the settings window; `preview` builds its preview (the
+-- module's PreviewView).
+export function section(preview: (parent: Frame) -> Frame): SettingsSection
+    return {
+        id = "notifications",
+        label = "Notifications",
+        category = "General",
+        order = 30,
+        preview = preview,
+        groups = {
+            {
+                title = "Notifications",
+                description = "Requests and notes at the top left, under the micro menu: requests first, then what waits on something, then notes. In combat only requests and conditions show. Move them in edit mode.",
+                rows = {
+                    {
+                        key = "requests",
+                        label = "Blizzard's popups as cards",
+                        control = "toggle",
+                        description = "Invites, resurrection, summons, duels, trades, release spirit, deleting items, logging out, battleground entry: Blizzard's own buttons on SuuUI's cards, so every answer is still Blizzard's. Off: Blizzard's popups as they are.",
+                    },
+                    {
+                        key = "max",
+                        label = "Shown at once",
+                        control = "slider",
+                        min = 3,
+                        max = 8,
+                        step = 1,
+                        description = "The rest wait behind \"+N more\".",
+                    },
+                },
+            },
+            {
+                title = "Notes",
+                rows = {
+                    {
+                        key = "durability",
+                        label = "Damaged gear",
+                        control = "toggle",
+                        description = "Amber while a piece is at 20% or less (the Durability module's line while it's on, and the pieces by name), ember once one breaks; goes when you repair.",
+                    },
+                    {
+                        key = "bagsFull",
+                        label = "Full bags",
+                        control = "toggle",
+                        description = "While your bags have no free slot; goes when one frees up.",
+                    },
+                    {
+                        key = "talentPoints",
+                        label = "Talent points to spend",
+                        control = "toggle",
+                        description = "While you have talent points left, with a button that opens your talents; goes when you spend them.",
+                    },
+                    {
+                        key = "legacyPoints",
+                        label = "Legacy points to spend",
+                        control = "toggle",
+                        description = "While this character has Legacy points left, with a button that opens the Legacy window; goes when you spend them.",
+                    },
+                },
+            },
+            {
+                title = "Friends and guild",
+                description = "A card when someone comes online or goes offline: who, what they're playing or where they are; click it to whisper them. Several at once share one card; in combat they wait. /suu presence shows one of each.",
+                rows = {
+                    { key = "presenceBnetOnline", label = "Battle.net friends online", control = "toggle" },
+                    { key = "presenceBnetOffline", label = "Battle.net friends offline", control = "toggle" },
+                    { key = "presenceFriendOnline", label = "Friends online", control = "toggle" },
+                    { key = "presenceFriendOffline", label = "Friends offline", control = "toggle" },
+                    { key = "presenceGuildOnline", label = "Guild members online", control = "toggle" },
+                    { key = "presenceGuildOffline", label = "Guild members offline", control = "toggle" },
+                    {
+                        key = "presenceHideChat",
+                        label = "Hide the game's online and offline lines in chat",
+                        control = "toggle",
+                        description = "The \"has come online\" and \"has gone offline\" lines, and Battle.net's own popup for them while SuuUI shows Battle.net friends.",
+                    },
+                },
+            },
+        },
+    }
+end
+
+export function previewView(m: NotificationsModule, parent: Frame): NotificationStack
+    local view = m.preview
+    if not view then
+        view = UI.NotificationStack(parent, { max = 5 })
+        view:SetItems(PREVIEW, false)
+        m.preview = view
+    end
+    view:SetParent(parent)
+    return view
+end

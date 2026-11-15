@@ -1,0 +1,56 @@
+-- UI/CooldownTracker/Pool: a container's key, and the pool that keeps
+-- what builds made.
+
+import test, expect from "wowlua:test"
+import containerKey, Pool from "/UI/CooldownTracker/Pool"
+import expectNoErrors from "../../../helpers"
+
+@test("containerKey: everything fixed at creation")
+local function keys()
+    local k = containerKey("player", {
+        size = 30,
+        anchor = "TOPLEFT",
+        growth = { "RIGHT", "DOWN" },
+        groups = { { key = "e", filter = { "HELPFUL", "PLAYER" }, max = 1, include = { 1, 2 } } },
+    })
+    expect(k).toBe("player;30;TOPLEFT;RIGHT,DOWN;e/HELPFUL,PLAYER/1/1,2//nil/nil/nil/nil/nil/nil/nil")
+    local k2 = containerKey("target", { groups = {} })
+    expect(k2).toBe("target;nil;nil;")
+    expectNoErrors()
+end
+
+@test("Pool: a spare under the same key, else a new one; Clear hands back")
+local function pool()
+    local p: Pool<{ n: number }> = Pool.new()
+    local made = 0
+    local function make(): { n: number }
+        made = made + 1
+        return { n = made }
+    end
+    local a, freshA = p:Take("k", make)
+    local b, freshB = p:Take("k", make)
+    expect(freshA).toBe(true)
+    expect(freshB).toBe(true)
+    expect(made).toBe(2)
+    -- nothing made: nil, and nothing taken
+    local none, freshNone = p:Take("x", function(): { n: number }?
+        return nil
+    end)
+    expect(none).toBeNil()
+    expect(freshNone).toBe(false)
+    expect(#p.taken).toBe(2)
+    local back: { string } = {}
+    p:Clear(function(_: { n: number }, key: string)
+        back[#back + 1] = key
+    end)
+    expect(back).toEqual({ "k", "k" })
+    expect(#p.taken).toBe(0)
+    -- the spares come back under their key, not under another
+    local again, freshAgain = p:Take("k", make)
+    expect(freshAgain).toBe(false)
+    expect(again == a or again == b).toBe(true)
+    local other, freshOther = p:Take("other", make)
+    expect(freshOther).toBe(true)
+    expect(assert(other).n).toBe(3)
+    expectNoErrors()
+end

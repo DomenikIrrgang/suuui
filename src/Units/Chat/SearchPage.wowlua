@@ -1,0 +1,513 @@
+-- Units/Chat/SearchPage.wowlua
+-- The chat's Search tab as a page (Units/Chat): the field and the chips
+-- for where to look, then the kept lines that match grouped by player (the
+-- name in its class colour, how many, a Whisper button, "N more"), the
+-- match marked; and the search run over every tab and the kept whispers.
+-- The page takes the module it searches; Units/Chat/Search does the text.
+
+import SuuUI from "/Core/API"
+import type Text, Border, TextField, ScrollArea, SuuButton from "/Core/API"
+import type ChatModule from "../Chat"
+import links, logWidth, measureBody, bodyFont from "./Panel"
+import fontSize, windowName from "./Windows"
+import classOf from "./Mirrors"
+import type Line, Classes from "./Mirrors"
+import * as chatSearch from "./Search"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as chat from "wowlua:chat"
+
+local isColor = SuuUI.UI.IsColor
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local field, asString, asNumber = tbl.field, secret.asString, secret.asNumber
+
+-- A kept line for the search: Blizzard's text, the line as shown, where from.
+export type KeptEntry = chatSearch.KeptEntry
+export type Found = chatSearch.Found
+
+--------------------------------------------------------------------------------
+-- The Search tab (option B): the last tab. A field and chips for where to
+-- look, then the kept lines that match (every tab and the whispers), grouped
+-- by player, newest first: the name in its class colour, how many lines, and
+-- a Whisper button that opens the conversation in its whisper window. The
+-- match on a faint ink ground, underlined. In the lines' area: the panel
+-- keeps its size (the raid frames sit right above it).
+--------------------------------------------------------------------------------
+
+local FIELD_H, CHIP_H = 26, 20
+local function searchHeadH(): number
+    return FIELD_H + S["space-3"] + CHIP_H + S["space-2"]
+end
+local GROUP_H, MORE_H, ROW_GAP = 32, 16, 2
+local CHIPS = {
+    { value = "all", label = "All tabs" },
+    { value = "whisper", label = "Whispers" },
+    { value = "party", label = "Party" },
+    { value = "guild", label = "Guild" },
+    { value = "trade", label = "Trade" },
+}
+
+-- Where to look: a chip.
+export class SearchChip extends Button
+    readonly bg: Texture
+    readonly edge: Border
+    readonly label: Text
+
+    constructor(s: SearchPage, readonly value: string, label: string)
+        super(nil, s.head)
+        self.bg = UI.Fill(self, "surface-raised")
+        self.bg:SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("CENTER")
+        self.label:SetValue(label)
+        self:SetScript("OnEnter", function()
+            if s.scope ~= value then
+                self.label:SetColor("ink")
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            if s.scope ~= value then
+                self.label:SetColor("ink-muted")
+            end
+        end)
+        self:SetScript("OnClick", function()
+            s.scope = value
+            s.m:RunSearch()
+        end)
+    end
+end
+
+-- A player's group: a rule, their class jewel, name, how many lines, Whisper.
+export class SearchHeader extends Frame
+    readonly rule: Frame
+    readonly jewel: Texture
+    readonly name: Text
+    readonly count: Text
+    readonly whisper: SuuButton
+    who: string? = nil
+
+    constructor(s: SearchPage)
+        super(nil, s.list)
+        self:SetHeight(GROUP_H)
+        self.rule = UI.Hairline(self, "gilt-faint")
+        self.rule:SetPoint("TOPLEFT")
+        self.rule:SetPoint("TOPRIGHT")
+        -- 6 above, 2 below the row's content (its middle 2 below the frame's)
+        self.jewel = UI.Diamond(self, 5, "ink-muted")
+        self.jewel:SetPoint("CENTER", self, "LEFT", 3, -2)
+        self.name = UI.Text(self, "unit-name", "ink")
+        self.count = UI.Text(self, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.count:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
+        end)
+        self.whisper = UI.Button(self, {
+            text = "Whisper",
+            icon = "chat",
+            onClick = function()
+                local who = self.who
+                if who then
+                    s.m:OpenWhisperWindow(who)
+                end
+            end,
+        })
+        self.whisper:SetHeight(24)
+        self.whisper:SetPoint("RIGHT", 0, -2)
+    end
+end
+
+-- A matching line: its text, the match on a faint ink ground, underlined.
+export class SearchRow extends Frame
+    readonly ground: Texture
+    readonly under: Texture
+    readonly text: FontString
+
+    constructor(s: SearchPage)
+        super(nil, s.list)
+        self.ground = UI.Fill(self, "ink", "BACKGROUND")
+        self.ground:SetAlpha(0.16)
+        self.under = self:CreateTexture(nil, "ARTWORK")
+        self.under:SetColorTexture(1, 1, 1, 1)
+        self.text = self:CreateFontString(nil, "OVERLAY")
+        self.text:SetPoint("LEFT")
+        self.text:SetPoint("RIGHT")
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(false)
+        self.text:SetShadowOffset(1, -1)
+        self.text:SetShadowColor(0, 0, 0, 0.8)
+        -- links in it work as in the chat
+        self:EnableMouse(true)
+        links(s.m, self)
+    end
+end
+
+-- "N more" under a group: opens it.
+class SearchMore extends Button
+    readonly label: Text
+    key: string = ""
+
+    constructor(s: SearchPage)
+        super(nil, s.list)
+        self:SetHeight(MORE_H)
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT")
+        self:SetScript("OnEnter", function()
+            self.label:SetColor("ink")
+        end)
+        self:SetScript("OnLeave", function()
+            self.label:SetColor("ink-muted")
+        end)
+        self:SetScript("OnClick", function()
+            s.open[self.key] = true
+            s.m:RunSearch()
+        end)
+    end
+end
+
+export class SearchPage extends Frame
+    readonly head: Frame
+    -- the field: the search glyph, what's typed, how many lines match
+    readonly field: TextField
+    readonly glyph: Texture
+    readonly count: Text
+    readonly chips: SearchChip[] = {}
+    readonly scroll: ScrollArea
+    readonly list: Frame
+    readonly note: Text
+    readonly headers: SearchHeader[] = {}
+    readonly rows: SearchRow[] = {}
+    readonly mores: SearchMore[] = {}
+    -- where to look, the groups opened, the last search
+    scope: string = "all"
+    open: { [string]: boolean } = {}
+    lastQuery: string? = nil
+    lastScope: string? = nil
+
+    constructor(readonly m: ChatModule, parent: Frame)
+        super(nil, parent)
+        self:SetAllPoints()
+        self:Hide()
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT")
+        self.head:SetPoint("TOPRIGHT")
+        self.head:SetHeight(searchHeadH())
+        local f = UI.TextField(self.head, {
+            placeholder = "A name or a word",
+            onTextChanged = function()
+                m:RunSearch()
+            end,
+            onChange = function()
+                m:RunSearch()
+            end,
+        })
+        f:SetPoint("TOPLEFT")
+        f:SetPoint("TOPRIGHT")
+        f:SetHeight(FIELD_H)
+        local glyph = f:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(glyph, "search")
+        glyph:SetSize(14, 14)
+        UI.Paint(glyph, "ink-muted")
+        self.glyph = glyph
+        self.count = UI.Text(f, "caption", "ink-muted")
+        self.field = f
+        -- where to look: one chip at a time
+        for _, c in ipairs(CHIPS) do
+            self.chips[#self.chips + 1] = SearchChip.new(self, c.value, c.label)
+        end
+        -- the matches
+        self.scroll = UI.ScrollArea(self, 5)
+        self.scroll:SetPoint("BOTTOMRIGHT", -8, 0)
+        self.list = self.scroll.child
+        self.note = UI.Text(self.list, "caption", "ink-muted")
+        self:PlaceChips()
+    end
+
+    -- The head (the field, its glyph and count, the chips) and the matches
+    -- under it, from the spacing: at build, and again when a theme changes
+    -- it or the caption style.
+    function PlaceChips()
+        local f = self.field
+        self.head:SetHeight(searchHeadH())
+        self.glyph:SetPoint("LEFT", S["space-4"], 0)
+        self.count:SetPoint("RIGHT", -S["space-4"], 0)
+        local textX = S["space-4"] + 14 + S["space-4"]
+        f.edit:ClearAllPoints()
+        f.edit:SetPoint("TOPLEFT", textX, 0)
+        f.edit:SetPoint("BOTTOMRIGHT", -(S["space-4"] + 60), 0)
+        f.placeholder:ClearAllPoints()
+        f.placeholder:SetPoint("LEFT", textX, 0)
+        self.scroll:SetPoint("TOPLEFT", 0, -searchHeadH())
+        self.list:SetWidth(logWidth() - 8)
+        self.note:SetPoint("TOPLEFT", 0, -S["space-2"])
+        local x = 0
+        for _, b in ipairs(self.chips) do
+            b:SetSize(math.ceil(UI.MeasureText("caption", tostring(b.label.value or ""))) + S["space-4"] * 2, CHIP_H)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", self.head, "TOPLEFT", x, -(FIELD_H + S["space-3"]))
+            x = x + b:GetWidth() + S["space-2"]
+        end
+    end
+
+    function Header(i: number): SearchHeader
+        local h = self.headers[i] or SearchHeader.new(self)
+        self.headers[i] = h
+        return h
+    end
+
+    function Row(i: number): SearchRow
+        local r = self.rows[i] or SearchRow.new(self)
+        self.rows[i] = r
+        return r
+    end
+
+    function More(i: number): SearchMore
+        local b = self.mores[i] or SearchMore.new(self)
+        self.mores[i] = b
+        return b
+    end
+end
+
+-- The search's limits.
+local GROUP_SHOWN = 2 -- a player's lines shown before "N more"
+local MAX_ROWS = 200
+local KIND_LABEL = chatSearch.KIND_LABEL
+local snippet = chatSearch.snippet
+-- Where the match sits in a line (Units/Chat/Search), measured in the
+-- lines' font at `size`.
+local function matchSpan(
+    text: string,
+    q: string,
+    size: number
+): (number?, number?, string?, number[]?, (number?)[]?, number?)
+    return chatSearch.matchSpan(text, q, function(part: string): number
+        return measureBody(part, size)
+    end)
+end
+
+local function isMe(key: string): boolean
+    local me = asString(SuuUI.FullName("player"))
+    local name = asString(UnitName("player"))
+    return (me ~= nil and me:lower() == key) or (name ~= nil and name:lower() == key)
+end
+
+--------------------------------------------------------------------------------
+-- The Search tab
+--------------------------------------------------------------------------------
+
+export function showSearch(self: ChatModule, show: boolean)
+    if show and not self.search then
+        self.search = SearchPage.new(self, self:Panel().log)
+    end
+    local s = self.search
+    if not s then
+        return
+    end
+    s:SetShown(show)
+    local edit = s.field.edit
+    if show then
+        s.head:SetAlpha(1)
+        self:RunSearch()
+        edit:SetFocus()
+    elseif edit:HasFocus() then
+        edit:ClearFocus()
+    end
+end
+
+-- Every kept line once (a whisper in General and in its window is one),
+-- newest first.
+export function keptLines(self: ChatModule): KeptEntry[]
+    local out: KeptEntry[] = {}
+    local seen: { [string]: boolean } = {}
+    local function add(
+        src: string,
+        line: Line,
+        r: unknown,
+        g: unknown,
+        b: unknown,
+        where: string,
+        whisper: boolean?
+    )
+        if seen[src] then
+            return
+        end
+        seen[src] = true
+        out[#out + 1] = {
+            src = src,
+            line = line,
+            r = r,
+            g = g,
+            b = b,
+            where = where,
+            whisper = whisper,
+            n = #out + 1,
+        }
+    end
+    for _, w in ipairs(self.whispers) do
+        local shown = w.shown
+        if not shown then
+            local classes: Classes = {}
+            shown = { text = self:FormatLine(w.text, nil, w.old, classes), at = w.at, classes = classes }
+            w.shown = shown
+        end
+        add(w.text, shown, w.r, w.g, w.b, KIND_LABEL.whisper or "Whispers", true)
+    end
+    for _, cf in ipairs(self:Windows()) do
+        local m = self.mirrors[cf]
+        if m and not m.raw and not chat.isTemporary(cf) then
+            local where = windowName(cf) or "Chat"
+            for _, line in ipairs(m.lines) do
+                local src = line.src
+                if src then
+                    add(src, line, line.r, line.g, line.b, where)
+                end
+            end
+        end
+    end
+    table.sort(out, function(a: KeptEntry, b: KeptEntry): boolean
+        if a.line.at ~= b.line.at then
+            return a.line.at > b.line.at
+        end
+        return a.n > b.n
+    end)
+    return out
+end
+
+-- The lines with `q` (lower case) in them, in `scope`, by player, the
+-- newest player first; and how many lines.
+export function findLines(self: ChatModule, q: string, scope: string): (Found[], number)
+    return chatSearch.findLines(self:KeptLines(), q, scope)
+end
+
+-- One matching line: its text (cut to show the match if it's long), the
+-- match on a faint ink ground, underlined in the line's colour.
+export function showRow(self: ChatModule, r: SearchRow, e: KeptEntry, q: string, size: number, width: number)
+    local text = asString(self:Render(e.line :: Line, true)) or ""
+    local cr, cg, cb = asNumber(e.r) or 1, asNumber(e.g) or 1, asNumber(e.b) or 1
+    r.text:SetFont(bodyFont(), size, "")
+    r.text:SetTextColor(cr, cg, cb)
+    r.ground:Hide()
+    r.under:Hide()
+    local x1, x2, shown, at, linkStarts, s = matchSpan(text, q, size)
+    if x2 and x2 > width - 2 and shown and at and linkStarts and s then
+        local cut = snippet(text, shown, at, linkStarts, s)
+        if cut then
+            text = cut
+            x1, x2 = matchSpan(text, q, size)
+        end
+    end
+    r.text:SetText(text)
+    if x1 and x2 and x2 <= width then
+        r.ground:ClearAllPoints()
+        r.ground:SetPoint("TOPLEFT", r, "TOPLEFT", x1 - 1, 0)
+        r.ground:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2 + 1, 0)
+        r.ground:Show()
+        r.under:ClearAllPoints()
+        r.under:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", x1, 2)
+        r.under:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2, 2)
+        r.under:SetHeight(1)
+        r.under:SetVertexColor(cr, cg, cb)
+        r.under:Show()
+    end
+end
+
+-- The search again: on typing, a chip, the tab chosen, a group opened.
+export function runSearch(self: ChatModule)
+    local s = self.search
+    if not (s and s:IsShown()) then
+        return
+    end
+    for _, b in ipairs(s.chips) do
+        local on = b.value == s.scope
+        UI.PaintFill(b.bg, on and "arcane-soft" or "surface-raised")
+        b.edge:SetColor(on and "arcane" or "gilt-line")
+        b.label:SetColor(on and "ink" or "ink-muted")
+    end
+    local query = strtrim(s.field.edit:GetText() or "")
+    local q = query:lower()
+    -- a new search starts at the top, its groups closed
+    if q ~= s.lastQuery or s.scope ~= s.lastScope then
+        s.lastQuery, s.lastScope = q, s.scope
+        wipe(s.open)
+        s.scroll:SetVerticalScroll(0)
+    end
+    for _, h in ipairs(s.headers) do
+        h:Hide()
+    end
+    for _, r in ipairs(s.rows) do
+        r:Hide()
+    end
+    for _, b in ipairs(s.mores) do
+        b:Hide()
+    end
+    local groups: Found[], total = {}, 0
+    if #q >= 2 then
+        groups, total = self:FindLines(q, s.scope)
+    end
+    s.count:SetValue(chatSearch.countText(q, total))
+    s.note:SetValue(chatSearch.noteText(q, total))
+    local width = logWidth() - 8
+    local size = fontSize(ChatFrame1)
+    local rowH = math.ceil(size) + 5
+    local y = 0
+    local nh, nr, nm = 0, 0, 0
+    for gi, group in ipairs(groups) do
+        if nr >= MAX_ROWS then
+            break
+        end
+        if gi > 1 then
+            y = y + S["space-2"]
+        end
+        nh = nh + 1
+        local h = s:Header(nh)
+        h.rule:SetShown(gi > 1)
+        local who = group.who
+        local name = who and who:match("^([^%-]+)")
+        local class = who and classOf(who)
+        local classToken = class and "class-" .. class:lower()
+        local token = classToken and isColor(classToken) and classToken or nil
+        UI.Paint(h.jewel, token or "ink-muted")
+        h.jewel:SetShown(name ~= nil)
+        h.name:ClearAllPoints()
+        h.name:SetPoint("LEFT", h, "LEFT", name and (6 + S["space-3"]) or 0, -2)
+        h.name:SetValue(name or "Other lines")
+        h.name:SetColor(token or (name and "ink" or "gilt-text"))
+        local n = #group.lines
+        h.count:SetValue(chatSearch.groupCount(group))
+        h.who = who
+        h.whisper:SetShown(who ~= nil and not isMe(group.key) and field(_G, "FCF_OpenTemporaryWindow") ~= nil)
+        h:ClearAllPoints()
+        h:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+        h:SetWidth(width)
+        h:Show()
+        y = y + GROUP_H
+        local shownLines = s.open[group.key] and n or math.min(GROUP_SHOWN, n)
+        for li = 1, shownLines do
+            if nr >= MAX_ROWS then
+                break
+            end
+            nr = nr + 1
+            local r = s:Row(nr)
+            r:SetSize(width, rowH)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+            self:ShowRow(r, group.lines[li], q, size, width)
+            r:Show()
+            y = y + rowH + ROW_GAP
+        end
+        if n > shownLines then
+            nm = nm + 1
+            local b = s:More(nm)
+            b.key = group.key
+            b.label:SetValue((n - shownLines) .. " more")
+            b:SetWidth(math.ceil(UI.MeasureText("caption", tostring(b.label.value or ""))) + 4)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
+            b:Show()
+            y = y + MORE_H
+        end
+    end
+    s.note:SetShown(nh == 0)
+    s.list:SetHeight(math.max(1, y))
+end

@@ -1,0 +1,309 @@
+-- Units/Talents/Builds.wowlua
+-- Talent builds as data, for Units/Talents (no frames): the account's store
+-- of builds (store, charKey), a build's steps and points per tree, the
+-- level that brings each step (Legacy's Talented points), a build's next
+-- talent on your talents, a draft of a saved build, the order panel's
+-- lines, and what of a build fits your learned ranks now (fit). The module
+-- keeps the state (the draft, the build shown) and hands in the trees.
+
+import SuuUI from "/Core/API"
+import type TalentStep, TalentNext, OrderLineData from "/Core/API"
+import type BuildTree, Collected from "/Units/Talents/Trees"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local UI = SuuUI.UI
+
+local asNumber, asString = secret.asNumber, secret.asString
+
+--------------------------------------------------------------------------------
+-- Talent builds (step 3.2e, design board "Talent builds": B, F, I, J, M).
+-- Forever has no loadouts of its own (/suu probe talentbuilds), so SuuUI
+-- keeps builds: every class's, for the whole account, each an order of
+-- points (a step is one rank). The picker in the window's head shows one;
+-- your active build (per character and talent group) shows on your talents
+-- with its next talent ringed, any other is planned on its class's trees
+-- (read live, the view loadout for another class) and its order listed
+-- right of them, where lines drag to a new place. Nothing is learned
+-- without Apply.
+--------------------------------------------------------------------------------
+
+local TALENTED_MAX = 5 -- Legacy's Talented: a point a level from 5 to 9
+
+export function plural(n: number, one: string, many: string): string
+    return n == 1 and one or many
+end
+
+-- A saved build: its name, class, tree, steps (one a rank), its points per
+-- tree as text, when it changed.
+export type SavedBuild = {
+    id: string,
+    name?: string,
+    class: string,
+    classID?: number,
+    treeID?: number,
+    steps: TalentStep[],
+    split?: string,
+    updated?: number,
+}
+-- A build being planned (a copy until Save build).
+export type Draft = {
+    id: string,
+    name?: string,
+    class: string,
+    classID?: number,
+    treeID?: number,
+    steps: TalentStep[],
+    dirty: boolean,
+    problem?: string,
+}
+-- The builds of the account: by id; each character's active one and the
+-- one waiting for a trainer's reset, by talent group.
+export type BuildStore = {
+    builds: { [string]: SavedBuild },
+    active: { [string]: { [number]: string } },
+    reset: { [string]: { [number]: string } },
+    nextID: number,
+}
+type RawStore = {
+    builds?: { [string]: SavedBuild },
+    active?: { [string]: { [number]: string } },
+    reset?: { [string]: { [number]: string } },
+    nextID?: number,
+}
+
+export function store(): BuildStore
+    local d = SuuUI.AccountData("talentbuilds") :: unknown :: RawStore
+    local builds, active, reset = d.builds or {}, d.active or {}, d.reset or {}
+    d.builds, d.active, d.reset = builds, active, reset
+    local nextID = d.nextID or 1
+    d.nextID = nextID
+    return d :: unknown :: BuildStore
+end
+
+export function charKey(): string
+    local guid = asString(UnitGUID("player"))
+    return guid or ((asString(UnitName("player")) or "?") .. "-" .. (GetRealmName() or "?"))
+end
+
+export function copySteps(steps: TalentStep[]?): TalentStep[]
+    local out: TalentStep[] = {}
+    for i, s in ipairs(steps or {}) do
+        out[i] = { node = s.node, entry = s.entry }
+    end
+    return out
+end
+
+-- "0 / 29 / 2": a build's points per tree.
+export function splitOf(tree: BuildTree?, steps: TalentStep[]): string
+    local per: number[] = {}
+    for i = 1, #(tree and tree.trees or {}) do
+        per[i] = 0
+    end
+    for _, s in ipairs(steps) do
+        local n = tree and tree.byID[s.node]
+        local index = n and n.treeIndex
+        if index then
+            per[index] = (per[index] or 0) + 1
+        end
+    end
+    local parts: string[] = {}
+    for i = 1, #per do
+        parts[i] = tostring(per[i])
+    end
+    return table.concat(parts, " / ")
+end
+
+-- Legacy's Talented gives points before level 10: what the currency holds
+-- (`max`) over one a level from 10, at `level` (0 to 5).
+export function talentedPoints(max: number, level: number): number
+    return math.max(0, math.min(TALENTED_MAX, max - math.max(0, level - 9)))
+end
+
+-- The level that brings step i, with `talented` points from Talented (one
+-- a level from 5, then one a level from 10).
+export function stepLevel(i: number, talented: number): number
+    if i <= talented then
+        return 4 + i
+    end
+    return 9 + i - talented
+end
+
+-- The first step not learned yet (each step is that talent's next rank),
+-- with the ranks you have: its index, else nil.
+export function nextStep(steps: TalentStep[], have: { [number]: number }): (number?, number?)
+    local count: { [number]: number } = {}
+    for i, s in ipairs(steps) do
+        local n = (count[s.node] or 0) + 1
+        count[s.node] = n
+        if n > (have[s.node] or 0) then
+            return i, n
+        end
+    end
+    return nil, nil
+end
+
+-- A talent in the way of a build (a rank the build doesn't have).
+export type Conflict = { node: number, name: string, treeName: string, ranks: number }
+
+-- A draft of a saved build (Talents' Draft: a copy until Save build), on
+-- its class's tree (`tree`; nil: unread).
+export function draftOf(b: SavedBuild, tree: BuildTree?): Draft
+    local made: Draft = {
+        id = b.id,
+        name = b.name,
+        class = b.class,
+        classID = b.classID,
+        treeID = b.treeID,
+        steps = copySteps(b.steps),
+        dirty = false,
+    }
+    -- a tree that changed in a patch: the steps that still fit stay
+    if tree then
+        local ok, at, why = UI.TalentOrderCheck(made.steps, tree)
+        if not ok and at then
+            for i = #made.steps, at, -1 do
+                table.remove(made.steps, i)
+            end
+            made.dirty, made.problem = true, why
+        end
+    end
+    return made
+end
+
+-- Runs of a talent's ranks one after another: the order panel's lines.
+-- (`level`: the level that brings step i, Talents' StepLevel.)
+export function orderLines(
+    steps: TalentStep[],
+    tree: BuildTree?,
+    learned: { [number]: number }?,
+    nextIndex: number?,
+    level: (i: number) -> number
+): OrderLineData[]
+    local lines: OrderLineData[] = {}
+    local seen: { [number]: number } = {}
+    local i = 1
+    while i <= #steps do
+        local id = steps[i].node
+        local j = i
+        while steps[j + 1] and steps[j + 1].node == id do
+            j = j + 1
+        end
+        local n = tree and tree.byID[id]
+        local first = (seen[id] or 0) + 1
+        local upTo = (seen[id] or 0) + (j - i + 1)
+        seen[id] = upTo
+        local a, b = level(i), level(j)
+        local state: string? = nil
+        if learned then
+            if upTo <= (learned[id] or 0) then
+                state = "learned"
+            end
+            if nextIndex and nextIndex >= i and nextIndex <= j then
+                state = "next"
+            end
+        end
+        local max = n and n.max or 1
+        lines[#lines + 1] = {
+            node = id,
+            from = i,
+            to = j,
+            count = j - i + 1,
+            state = state,
+            levels = a == b and tostring(a) or (a .. "–" .. b),
+            name = n and n.name or "?",
+            icon = n and n.icon,
+            ranks = max > 1 and (first == upTo and tostring(first) or (first .. "–" .. upTo)) or "",
+        }
+        i = j + 1
+    end
+    return lines
+end
+
+-- A build's next talent on a config's talents (its class's tree): what
+-- Talents' NextTalent answers for your active build, or nil.
+export function nextTalentOf(b: SavedBuild, tree: BuildTree, configID: number): TalentNext?
+    local have: { [number]: number } = {}
+    for _, s in ipairs(b.steps) do
+        if have[s.node] == nil then
+            local ni = errors.tryValue(C_Traits.GetNodeInfo, configID, s.node)
+            have[s.node] = ni and asNumber(ni.currentRank) or 0
+        end
+    end
+    local i, rank = nextStep(b.steps, have)
+    local n = i and tree.byID[b.steps[i].node]
+    if not (i and rank and n) then
+        return nil
+    end
+    return {
+        node = n.id,
+        name = n.name or "?",
+        icon = n.icon or 0,
+        rank = rank,
+        max = n.max or 1,
+        treeName = n.treeName or "",
+        build = b.name or "",
+        index = i,
+    }
+end
+
+-- Against your learned ranks: the steps that fit now (in order, up to your
+-- points), and the talents in the way (ranks the build doesn't have).
+-- (`tree`: your class's, Talents' BuildTree.)
+export function fit(
+    b: SavedBuild,
+    data: Collected,
+    tree: BuildTree?
+): (TalentStep[], Conflict[], { [number]: number })
+    local learned: { [number]: number } = {}
+    local spent = 0
+    for _, t in ipairs(data.trees) do
+        for _, n in ipairs(t.nodes) do
+            learned[n.id] = n.rank
+            spent = spent + n.rank
+        end
+    end
+    local want: { [number]: number } = {}
+    for _, s in ipairs(b.steps) do
+        want[s.node] = (want[s.node] or 0) + 1
+    end
+    local conflicts: Conflict[] = {}
+    for id, r in pairs(learned) do
+        if r > (want[id] or 0) then
+            local n = tree and tree.byID[id]
+            conflicts[#conflicts + 1] = {
+                node = id,
+                name = n and n.name or "?",
+                treeName = n and n.treeName or "",
+                ranks = r - (want[id] or 0),
+            }
+        end
+    end
+    table.sort(conflicts, function(x: Conflict, y: Conflict): boolean
+        return x.name < y.name
+    end)
+    local fits: TalentStep[] = {}
+    local count: { [number]: number } = {}
+    local seen: { [number]: number } = {}
+    local points = data.available
+    for id, r in pairs(learned) do
+        count[id] = r
+    end
+    for _, s in ipairs(b.steps) do
+        local had = (seen[s.node] or 0) + 1
+        seen[s.node] = had
+        if had > (learned[s.node] or 0) then
+            if points <= 0 then
+                break
+            end
+            local n = tree and tree.byID[s.node]
+            if not (tree and n) or UI.TalentStepProblem(tree, n, count, spent) then
+                break
+            end
+            fits[#fits + 1] = s
+            count[s.node] = (count[s.node] or 0) + 1
+            spent, points = spent + 1, points - 1
+        end
+    end
+    return fits, conflicts, learned
+end

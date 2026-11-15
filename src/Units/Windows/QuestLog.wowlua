@@ -1,0 +1,540 @@
+-- Units/Windows/QuestLog.wowlua
+-- The world map's quest log in SuuUI's look (Units/Windows), restyled in
+-- place (its clicks stay the game's): the whole log walked once, then only
+-- the rows the game made since, at most once a frame; its search box in
+-- the header's second row, the zone headers in label ink, a tracked
+-- quest's eye, the rows measured again for SuuUI's fonts, the list centred
+-- in its panel, and the quest details (their buttons and rewards centred
+-- between the map and the window's edge, the money reward as SuuUI's
+-- money). Each a function taking the module where it needs it; the
+-- module's methods (RestyleQuestLog, StyleDetails, StyleRewardMoney,
+-- PlaceQuestList, PlaceQuestDetails) call them. inkFont: the headers'
+-- font in ink again (a theme change).
+
+import SuuUI from "/Core/API"
+import hook, hookScript from "wowlua:hooks"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import type WindowsModule from "/Units/Windows"
+import part, shows from "/Units/Windows/Shared"
+import ROW_MID, SEARCH_H from "/Units/Windows/WorldMap"
+
+local chromeOf = SuuUI.UI.WindowChrome
+local leave = SuuUI.UI.ReskinLeave
+local reskinPart = SuuUI.UI.ReskinPart
+local moneyText = SuuUI.UI.MoneyText
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, tryMethod = errors.try, errors.tryMethod
+local asString, asNumber, field = secret.asString, secret.asNumber, tbl.field
+local find = frames.find
+
+-- The tracked quests' eyes, by their check box.
+local trackEyes: { [Frame]: Texture } = tbl.weakKeys()
+
+-- What SuuUI did once to the game's quest log parts (kept here, never on them).
+local styledSearch: { [Frame]: boolean } = tbl.weakKeys()
+local styledDetails: { [Frame]: boolean } = tbl.weakKeys()
+local placedList: { [Frame]: boolean } = tbl.weakKeys()
+local hookedHeaders: { [Frame]: boolean } = tbl.weakKeys()
+
+-- A zone header in SuuUI's label font and ink.
+local function inkHeader(row: Frame, label: Font)
+    local b = frames.asButton(row)
+    if b then
+        b:SetNormalFontObject(label)
+        b:SetHighlightFontObject(label)
+        b:SetDisabledFontObject(label)
+    end
+    for _, fs in ipairs(frames.fontStrings(row)) do
+        fs:SetFontObject(label)
+        UI.Paint(fs, "ink")
+    end
+    local text = frames.asFontString(field(row, "ButtonText") or (b and b:GetFontString()))
+    if text then
+        text:SetFontObject(label)
+        UI.Paint(text, "ink")
+    end
+    -- the game colours a header's title on hover and back to its grey when
+    -- the mouse leaves (ListHeaderMixin:CheckHighlightTitle): in ink again
+    -- after it (a header hovered once stayed grey: found in game)
+    if not hookedHeaders[row] then
+        hookedHeaders[row] = true
+        local function again()
+            inkHeader(row, label)
+        end
+        row:HookScript("OnEnter", again)
+        row:HookScript("OnLeave", again)
+    end
+end
+-- The quest log's restyle (the performance work of 2026-11-09): the whole
+-- window walked once (reskinned), then only the list's rows the game made
+-- since (its pools'); a walk of the whole window took 333k instructions,
+-- and the game lays the list out several times when it opens.
+local reskinnedLog: { [Frame]: boolean } = tbl.weakKeys()
+local reskinnedRows: { [Frame]: boolean } = tbl.weakKeys()
+local QUEST_POOLS = {
+    "titleFramePool",
+    "objectiveFramePool",
+    "headerFramePool",
+    "campaignHeaderFramePool",
+    "campaignHeaderMinimalFramePool",
+    "covenantCallingsHeaderFramePool",
+}
+
+-- How many parents a frame has up to `top` (nil: `top` isn't one of them).
+local function depthBelow(f: Frame, top: Frame): number?
+    local n = 0
+    local p: Frame? = f
+    while p and p ~= top do
+        n = n + 1
+        p = frames.asFrame(p:GetParent())
+    end
+    return p == top and n or nil
+end
+
+-- The quest log's search box in the header's second row: as tall as the
+-- row's controls allow, SuuUI's search glyph in front (the reskin hid the
+-- game's), its × a glyph (the reskin had made it a button: a bare square).
+local function styleQuestSearch(sb: Frame)
+    styledSearch[sb] = true
+    sb:SetHeight(SEARCH_H)
+    -- (Forever sets it to 200 x 20 on every count update; its width is
+    -- SuuUI's anchors')
+    if field(_G, "QuestLogQuests_ShowQuestCount") then
+        hook("QuestLogQuests_ShowQuestCount", function()
+            sb:SetHeight(SEARCH_H)
+        end)
+    end
+    local icon = frames.asTexture(field(sb, "searchIcon") or field(sb, "SearchIcon"))
+    if icon then
+        UI.Glyph(icon, "search")
+        icon:SetTexCoord(0, 1, 0, 1)
+        icon:SetSize(12, 12)
+        icon:ClearAllPoints()
+        icon:SetPoint("LEFT", sb, "LEFT", S["space-1"], 0)
+        icon:SetAlpha(1)
+        UI.Paint(icon, "ink-muted")
+        -- (the game tints it on focus)
+        hookScript(sb, "OnEditFocusGained", function()
+            UI.Paint(icon, "ink")
+        end)
+        hookScript(sb, "OnEditFocusLost", function()
+            UI.Paint(icon, "ink-muted")
+        end)
+    end
+    -- the text and the placeholder start after the magnifier (the search
+    -- boxes' restyle put them where it is: they ran into each other, found in
+    -- game)
+    local textX = icon and (S["space-2"] + 12 + S["space-2"]) or S["space-3"]
+    if icon then
+        icon:ClearAllPoints()
+        icon:SetPoint("LEFT", sb, "LEFT", S["space-2"], 0)
+    end
+    local edit = frames.asEditBox(sb)
+    if edit then
+        edit:SetTextInsets(textX, S["space-5"], 0, 0)
+    end
+    local instructions = frames.asFontString(field(sb, "Instructions"))
+    if instructions then
+        instructions:SetFontObject(SuuUI.Fonts.Get("body"))
+        UI.Paint(instructions, "ink-muted")
+        instructions:ClearAllPoints()
+        instructions:SetPoint("LEFT", sb, "LEFT", textX, 0)
+        instructions:SetPoint("RIGHT", sb, "RIGHT", -S["space-3"], 0)
+        instructions:SetJustifyH("LEFT")
+    end
+    local x = part(sb, "clearButton")
+    if x then
+        for _, r in ipairs(frames.textures(x)) do
+            r:SetAlpha(0)
+        end
+        local glyph = x:CreateTexture(nil, "OVERLAY", nil, 7)
+        UI.Glyph(glyph, "close")
+        glyph:SetSize(10, 10)
+        glyph:SetPoint("CENTER")
+        UI.Paint(glyph, "ink-muted")
+        hookScript(x, "OnEnter", function()
+            UI.Paint(glyph, "ink")
+        end)
+        hookScript(x, "OnLeave", function()
+            UI.Paint(glyph, "ink-muted")
+        end)
+    end
+end
+
+-- The quest list's rows measured again: the game sizes each quest's row
+-- for the fonts it had, the reskin gives SuuUI's after, and long
+-- objectives wrapped onto more lines than their row had (into the next
+-- quest; found in game). The game's sums (QuestLogQuests_AddQuestButton):
+-- 8 + the title, each objective 3 (the first) or 2 under the one before,
+-- 4 without objectives, 6 for the marker; then the list stacked again.
+local function fitQuestRows(list: Frame)
+    local titles = field(list, "titleFramePool")
+    local contents = field(list, "Contents")
+    if not (titles and field(contents, "Layout")) then
+        return
+    end
+    local below: { [number]: number } = {}
+    for _, line in ipairs(frames.rows(field(list, "objectiveFramePool"))) do
+        local id = asNumber(field(line, "questID"))
+        local text = frames.asFontString(field(line, "Text"))
+        if id and text then
+            local h = text:GetStringHeight()
+            line:SetHeight(h)
+            local before = below[id]
+            below[id] = (before or 0) + h + (before and 2 or 3)
+        end
+    end
+    local objectives = GetCVarBool("showQuestObjectivesInLog")
+    local changed = false
+    for _, row in ipairs(frames.rows(titles)) do
+        local id = asNumber(field(row, "questID"))
+        local text = frames.asFontString(field(row, "Text"))
+        if id and text then
+            local h = 8 + text:GetStringHeight() + (objectives and (below[id] or 0) or 4) + 6
+            if math.abs(row:GetHeight() - h) > 0.5 then
+                row:SetHeight(h)
+                changed = true
+            end
+        end
+    end
+    if changed then
+        tryMethod(contents, "Layout")
+    end
+end
+
+-- a font object's colour in ink (UI.Paint colours regions, not fonts)
+export function inkFont(font: Font)
+    font:SetTextColor(UI.RGBA("ink"))
+end
+
+-- The quest list centred in the panel beside the map: the game keeps 22px
+-- right of it for its scroll bar, which left its headers 12px from the
+-- map and 35px from the window's edge (measured in game: /suu probe map
+-- log). The list moves right by half the difference, the scroll bar into
+-- the margin it leaves; the search box (fixed at 200px from the quest
+-- count leftwards, it ran 10px over the map) starts where the headers do.
+local LIST_SHIFT = 11
+local HEADER_X = 9 -- the game's zone headers, from the list's left
+
+-- At most once a frame: called again in the same frame (the game lays
+-- the list out several times as it opens), once more on the next.
+export function restyleQuestLog(self: WindowsModule)
+    local now = GetTime()
+    if self.questRestyledAt == now then
+        if not self.questRestylePending then
+            self.questRestylePending = true
+            after(0, function()
+                self.questRestylePending = nil
+                if self:IsEnabled() then
+                    self:RestyleQuestLog()
+                end
+            end)
+        end
+        return
+    end
+    self.questRestyledAt = now
+    local q = find("QuestMapFrame")
+    if not q then
+        return
+    end
+    local list = frames.asScrollFrame(field(_G, "QuestScrollFrame"))
+    local sb = part(list, "SearchBox")
+    -- (its × not made a button by the reskin)
+    local clear = part(sb, "clearButton")
+    if clear then
+        leave(clear, "button")
+    end
+    if not reskinnedLog[q] then
+        reskinnedLog[q] = true
+        UI.Reskin(q)
+        -- (every row there now had its pass with the window's)
+        for _, poolKey in ipairs(QUEST_POOLS) do
+            for _, row in ipairs(frames.rows(field(list, poolKey))) do
+                reskinnedRows[row] = true
+            end
+        end
+    else
+        -- the rows the game made since: as the window's pass would
+        for _, poolKey in ipairs(QUEST_POOLS) do
+            for _, row in ipairs(frames.rows(field(list, poolKey))) do
+                if not reskinnedRows[row] then
+                    reskinnedRows[row] = true
+                    local depth = depthBelow(row, q)
+                    if depth then
+                        reskinPart(row, depth)
+                    end
+                end
+            end
+        end
+    end
+    if sb and not styledSearch[sb] then
+        styleQuestSearch(sb)
+    end
+    local d = part(q, "DetailsFrame")
+    if d then
+        for _, key in ipairs({ "Bg", "SealMaterialBG", "BorderFrame" }) do
+            local r = frames.asRegion(field(d, key))
+            if r then
+                r:SetAlpha(0)
+            end
+        end
+        if not styledDetails[d] then
+            styledDetails[d] = true
+            self:StyleDetails(d)
+        end
+        -- the details' texts again each time a quest shows: the game sets
+        -- their dark parchment colours (and fonts) on every display, and
+        -- the window's pass now runs once (0.6.30: dark text on SuuUI's
+        -- surface, found in game). Only the details' content, a few dozen
+        -- regions, not the whole log.
+        local content = frames.asFrame(errors.tryMethod(part(d, "ScrollFrame"), "GetScrollChild"))
+        if content and d:IsShown() then
+            local depth = depthBelow(content, q)
+            if depth then
+                reskinPart(content, depth)
+            end
+        end
+    end
+    -- the list's ornate frame and parchment away
+    if not list then
+        return
+    end
+    for _, key in ipairs({ "BorderFrame", "Background" }) do
+        local r = frames.asRegion(field(list, key))
+        if r then
+            r:SetAlpha(0)
+        end
+    end
+    if not placedList[list] then
+        placedList[list] = true
+        self:PlaceQuestList(q, list)
+    end
+    -- the zone headers in label ink, hovered or not (the game switches a
+    -- header's font on hover, so a header first seen hovered read as a
+    -- title; found in game)
+    -- (their own font in ink: the button takes its font's colour on hover)
+    local label = self.questFont
+    if not label then
+        local made = CreateFont("SuuUIQuestHeaderFont")
+        made:CopyFontObject(SuuUI.Fonts.Get("label"))
+        UI.Bind(made, inkFont)
+        self.questFont = made
+        label = made
+    end
+    for _, poolKey in ipairs({ "headerFramePool", "campaignHeaderMinimalFramePool" }) do
+        for _, row in ipairs(frames.rows(field(list, poolKey))) do
+            inkHeader(row, label)
+        end
+    end
+    -- the track box as the drawing's eye, not the game's yellow tick: in
+    -- ink-muted while tracked, faint while not (it was hidden then, and
+    -- an untracked quest had nothing to click to track it: found in game
+    -- 2026-11-11)
+    for _, row in ipairs(frames.rows(field(list, "titleFramePool"))) do
+        local cb = part(row, "Checkbox")
+        if cb then
+            local eye = trackEyes[cb]
+            if not eye then
+                for _, r in ipairs(frames.textures(cb)) do
+                    r:SetAlpha(0)
+                end
+                local made = cb:CreateTexture(nil, "OVERLAY", nil, 7)
+                UI.Glyph(made, "eye")
+                made:SetSize(14, 14)
+                made:SetPoint("CENTER")
+                UI.Paint(made, "ink-muted")
+                trackEyes[cb] = made
+                eye = made
+            end
+            local tracked = shows(field(cb, "CheckMark"))
+            UI.Paint(eye, tracked and "ink-muted" or "ink-faint")
+            eye:SetAlpha(tracked and 1 or T.opacity["opacity-disabled"])
+            eye:Show()
+        end
+    end
+    fitQuestRows(list)
+end
+
+-- The quest details, once: sized for SuuUI's window, the buttons and
+-- rewards centred in their column, the game's art away.
+export function styleDetails(self: WindowsModule, d: Frame)
+    -- the game sizes the details for its own window (502 px, its
+    -- text 430, from the log's top 1 px down): to the log's bottom
+    -- instead, 3 px above it as the game's, so they fit the small
+    -- window and run all the way down the enlarged one (fixed, they
+    -- stopped two thirds down it, found in game); the text to the
+    -- game's 29 px above the details' bottom
+    d:SetPoint("BOTTOMRIGHT", 0, 3)
+    local scroll = part(d, "ScrollFrame")
+    if scroll then
+        scroll:SetPoint("BOTTOMLEFT", d, "BOTTOMLEFT", 5, 29)
+    end
+    -- Abandon / Share / Track and the rewards centred in the column
+    -- the details sit in, between the map and the window's edge,
+    -- measured as they show (lined up with the details alone they
+    -- sat left: the column runs on past them over the text's scroll
+    -- bar; found in game). The game's dividers between them away.
+    for _, key in ipairs({ "AbandonButton", "ShareButton", "TrackButton" }) do
+        for _, r in ipairs(frames.textures(part(d, key) or d)) do
+            local atlas = part(d, key) and asString(r:GetAtlas())
+            if atlas and atlas:find("BtnDiv") then
+                r:SetAlpha(0)
+            end
+        end
+    end
+    -- (a frame after showing, when the positions are there; again when
+    -- the window changes size: fullscreen)
+    local function place()
+        self:After(0, function()
+            self:PlaceQuestDetails()
+        end)
+    end
+    hookScript(d, "OnShow", place)
+    local map = find("WorldMapFrame")
+    if map then
+        hookScript(map, "OnSizeChanged", place)
+    end
+    -- the strip with Back: its art away, a hairline under it
+    local back = part(d, "BackFrame")
+    if back then
+        for _, r in ipairs(frames.textures(back)) do
+            r:SetAlpha(0)
+        end
+        local line = UI.Hairline(back, "gilt-line")
+        line:SetPoint("BOTTOMLEFT", 6, 8)
+        line:SetPoint("BOTTOMRIGHT", -6, 8)
+    end
+    -- the rewards: surface instead of the brown art (still opaque:
+    -- the text scrolls under it), a hairline on top, the label in ink
+    local rewards = part(d, "RewardsFrameContainer", "RewardsFrame")
+    if rewards then
+        for _, key in ipairs({ "Top", "Bottom", "Background" }) do
+            local r = frames.asRegion(field(rewards, key))
+            if r then
+                r:SetAlpha(0)
+            end
+        end
+        local fill = UI.Fill(rewards, "surface", "BACKGROUND")
+        fill:SetAllPoints()
+        local line = UI.Hairline(rewards, "gilt-line")
+        line:SetPoint("TOPLEFT", 6, 0)
+        line:SetPoint("TOPRIGHT", -6, 0)
+        local label = frames.asFontString(field(rewards, "Label"))
+        if label then
+            label:SetFontObject(SuuUI.Fonts.Get("label"))
+            UI.Paint(label, "ink")
+        end
+    end
+    local money = frames.asFontString(field(find("MapQuestInfoRewardsFrame"), "MoneyFrame", "Name"))
+    if money then
+        self:StyleRewardMoney(money)
+    end
+end
+
+-- The details' money reward as SuuUI's money ("25s", the unit in its
+-- coin's colour), in numeric as the XP beside it. The game's text has its
+-- coin inline (GetMoneyString: "25|T…SilverIcon:0:0:2:0|t", the coin as
+-- tall as the font), placed for the game's font: in SuuUI's (the pass's
+-- body style, the markup counted as a long text) the coin stood above
+-- the digits' middle (found in game).
+export function styleRewardMoney(fs: FontString)
+    leave(fs, "text")
+    SuuUI.Fonts.Apply(fs, "numeric")
+    UI.Paint(fs, "ink")
+    fs:SetShadowOffset(0, 0)
+    local setting = false
+    local function restyle()
+        local copper = asNumber(try(GetQuestLogRewardMoney))
+        if setting or not copper or copper <= 0 then
+            return
+        end
+        setting = true
+        fs:SetText(moneyText(copper))
+        setting = false
+    end
+    -- (the game sets it each time it shows a quest's rewards)
+    hook(fs, "SetText", restyle)
+    if fs:IsVisible() then
+        restyle()
+    end
+end
+
+export function placeQuestList(q: Frame, list: Frame)
+    local quests = part(q, "QuestsFrame")
+    if quests then
+        list:ClearAllPoints()
+        list:SetPoint("TOPLEFT", quests, "TOPLEFT", LIST_SHIFT, 0)
+        list:SetPoint("BOTTOMRIGHT", quests, "BOTTOMRIGHT", LIST_SHIFT, 0)
+    end
+    -- (its 8px in the middle of the 24px between the headers and the edge)
+    local bar = part(list, "ScrollBar")
+    if bar then
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", list, "TOPRIGHT", -2, 2)
+        bar:SetPoint("BOTTOMLEFT", list, "BOTTOMRIGHT", -2, -4)
+    end
+    -- the search box: its left (SuuUI's edge 4px outside it) under the
+    -- headers' left (the log is questLogWidth wide at the window's right),
+    -- its right by the count, its middle on the row's
+    local sb, count, map = part(list, "SearchBox"), find("QuestLogCount"), find("WorldMapFrame")
+    local mapChrome = map and chromeOf(map)
+    if not (sb and count and map and mapChrome) then
+        return
+    end
+    local fromRight = (asNumber(field(map, "questLogWidth")) or 333) - LIST_SHIFT - HEADER_X - 4
+    sb:ClearAllPoints()
+    sb:SetPoint("LEFT", mapChrome.head, "BOTTOMRIGHT", -fromRight, ROW_MID)
+    sb:SetPoint("RIGHT", count, "LEFT", -S["space-3"], 0)
+end
+
+-- The quest details' buttons and rewards, centred between the map and the
+-- window's edge with the same margin either side. (Measured in the
+-- details' units: the map is scaled with the enlarged window, the log
+-- kept at its usual size; the window's edge is the log's, 3 px outside
+-- it, as the scaled window runs on unseen past it: found in game.)
+export function placeQuestDetails()
+    local q = find("QuestMapFrame")
+    local d = part(q, "DetailsFrame")
+    local container = part(find("WorldMapFrame"), "ScrollContainer")
+    if not (q and d and d:IsVisible() and container) then
+        return
+    end
+    local ds = d:GetEffectiveScale()
+    local mapRight, logRight, left = container:GetRight(), q:GetRight(), d:GetLeft()
+    if not (mapRight and logRight and left) then
+        return
+    end
+    mapRight = mapRight * container:GetEffectiveScale() / ds
+    local edge = logRight * q:GetEffectiveScale() / ds + 3
+    local MARGIN, GAP = 11, 4
+    local x0, x1 = mapRight + MARGIN - left, edge - MARGIN - left
+    local ab, sh, tr = part(d, "AbandonButton"), part(d, "ShareButton"), part(d, "TrackButton")
+    if ab and sh and tr then
+        local w = math.floor((x1 - x0 - 2 * GAP) / 3)
+        ab:ClearAllPoints()
+        ab:SetPoint("BOTTOMLEFT", x0, 0)
+        sh:ClearAllPoints()
+        sh:SetPoint("LEFT", ab, "RIGHT", GAP, 0)
+        tr:ClearAllPoints()
+        tr:SetPoint("LEFT", sh, "RIGHT", GAP, 0)
+        for _, btn in ipairs({ ab, sh, tr }) do
+            btn:SetWidth(w)
+        end
+    end
+    -- (the rewards start at the details' left: as wide as puts their middle
+    -- in the column's)
+    local box = part(d, "RewardsFrameContainer")
+    if box then
+        box:SetWidth(x0 + x1)
+        local rewards = part(box, "RewardsFrame")
+        if rewards then
+            rewards:SetWidth(x0 + x1)
+        end
+    end
+end

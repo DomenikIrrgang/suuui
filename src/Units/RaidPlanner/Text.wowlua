@@ -1,0 +1,124 @@
+-- Units/RaidPlanner/Text.wowlua
+-- A raid planner setup shared as text (Units/RaidPlanner): the setup written
+-- as "SuuRaid1;name;size;g,class,spec,role,label,pin;…" and read back (what
+-- it can't read left out), and the Export and Import dialogs. The module's
+-- ExportText, ImportText, Export and Import call these.
+
+import SuuUI from "/Core/API"
+import type PlannerId, ConfirmDialog from "/Core/API"
+import CLASS, MAX_GROUP, ROLE_WORD from "/Units/RaidPlanner/Catalog"
+import newSetup, takeSlotId, setupIn, saved from "/Units/RaidPlanner/Setups"
+import type Slot, Setup from "/Units/RaidPlanner/Setups"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local UI = SuuUI.UI
+
+--------------------------------------------------------------------------------
+-- Sharing a setup as text: "SuuRaid1;name;size;g,class,spec,role,label,pin;…"
+--------------------------------------------------------------------------------
+
+export function esc(text: string?): string
+    return (tostring(text or ""):gsub("[%%;,|]", function(ch: string): string
+        return ("%%%02X"):format(ch:byte())
+    end))
+end
+export function unesc(text: string): string
+    return (text:gsub("%%(%x%x)", function(h: string): string
+        return string.char(tonumber(h, 16) or 0)
+    end))
+end
+
+export function exportText(setup: Setup): string
+    local parts: string[] = { "SuuRaid1", esc(setup.name), tostring(setup.size) }
+    for _, s in ipairs(setup.slots) do
+        parts[#parts + 1] = table.concat(
+            {
+                tostring(s.g),
+                s.class or "",
+                s.spec and tostring(s.spec) or "",
+                s.role or "",
+                esc(s.label),
+                esc(s.pin),
+            },
+            ","
+        )
+    end
+    return table.concat(parts, ";")
+end
+
+export function importText(self: RaidPlannerModule, text: string?): (Setup?, string?)
+    local fields: string[] = {}
+    for f in (strtrim(text or "") .. ";"):gmatch("([^;]*);") do
+        fields[#fields + 1] = f
+    end
+    if fields[1] ~= "SuuRaid1" then
+        return nil, "That isn't a raid planner setup."
+    end
+    local size = tonumber(fields[3])
+    if size ~= 40 and size ~= 20 and size ~= 10 then
+        return nil, "The setup's raid size is wrong."
+    end
+    local w = newSetup(unesc(fields[2] or ""), size)
+    if w.name == "" then
+        w.name = "Imported setup"
+    end
+    local per: { [number]: number } = {}
+    for i = 4, #fields do
+        local gText, class, specText, role, label, pin = strsplit(",", fields[i])
+        local g, spec = tonumber(gText), tonumber(specText)
+        if g and g >= 1 and g <= size / 5 and (per[g] or 0) < MAX_GROUP then
+            per[g] = (per[g] or 0) + 1
+            local s: Slot = { id = takeSlotId(w), g = g }
+            s.class = CLASS[class or ""] and class or nil
+            s.spec = (s.class and spec and spec >= 1 and spec <= 3) and spec or nil
+            s.role = ROLE_WORD[role or ""] and role or nil
+            s.label = label and unesc(label) or nil
+            if s.label == "" then
+                s.label = nil
+            end
+            s.pin = pin and pin ~= "" and unesc(pin) or nil
+            w.slots[#w.slots + 1] = s
+        end
+    end
+    w.name = self:UniqueName(w.name)
+    return w, nil
+end
+
+export function exportDialog(self: RaidPlannerModule, id: PlannerId?)
+    local s = setupIn(self:Data(), id) or self:Work()
+    local p: ConfirmDialog? = UI.Confirm({
+        title = "Export " .. s.name,
+        text = "Copy the text (Ctrl+C) and share it; Import from text makes the same setup.",
+        confirm = "Done",
+        input = { label = "Setup as text", value = self:ExportText(s) },
+    })
+    if p then
+        p.field.edit:HighlightText()
+    end
+end
+
+export function importDialog(self: RaidPlannerModule)
+    UI.Confirm({
+        title = "Import a setup",
+        text = "Paste a setup's text (from Export as text).",
+        confirm = "Import",
+        input = { label = "Setup as text", placeholder = "SuuRaid1;…" },
+        onConfirm = function(text: string?)
+            if not text then
+                return
+            end
+            local w, why = self:ImportText(text)
+            if not w then
+                self:Print(why)
+                return
+            end
+            local s = saved(w)
+            s.saved = time()
+            local d = self:Data()
+            local id = d.nextId
+            self:AddSetup(s)
+            self:Print(("Imported %s."):format(s.name))
+            self:Load(id)
+        end,
+    })
+end

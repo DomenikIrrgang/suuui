@@ -1,0 +1,600 @@
+-- UI/Reskin/Pieces.wowlua
+-- One-off pieces of Blizzard's windows in SuuUI's look (UI/Reskin.wowlua):
+-- each restyles one kind of part, once (its hooks keep it so), and a pass
+-- (Reskin/Pass) picks the piece by what it finds.
+--
+--   reskinScrollBar(bar)          -- no track art, a 2px gilt-line thumb
+--   reskinStatusBar(bar)          -- a flat bar on a track, standing colours kept
+--   reskinFillBar(bar)            -- Blizzard's coloured progress bar, flat
+--   reskinIconButton(button)      -- a well in a gilt-hairline edge
+--   reskinCheckButton(button)     -- a 16px box, arcane check
+--   reskinButton(button)          -- SuuUI's quiet button
+--   reskinEditBox(box)            -- a sunk field, arcane while typing
+--   reskinCollapseButton(button)  -- SuuUI's minus or plus
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import * as pixel from "/Core/Pixel"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import askString, atlasOf, fade, textures, fontStrings, skinOf, markArt, isArt from "./Registry"
+import type IconSkin from "./Registry"
+
+local S = T.space
+
+local WHITE = "Interface\\Buttons\\WHITE8X8"
+
+local BAR_COLORS: { [string]: string } = {
+    red = "rep-hostile",
+    orange = "rep-unfriendly",
+    yellow = "rep-neutral",
+    green = "rep-friendly",
+    blue = "progress-fill",
+    purple = "arcane",
+    gold = "gilt-text",
+}
+
+--------------------------------------------------------------------------------
+-- Pieces
+--------------------------------------------------------------------------------
+
+export function reskinScrollBar(given: unknown)
+    local bar = frames.asFrame(given)
+    if not bar then
+        return
+    end
+    local s = skinOf(bar)
+    if s.scrollBar then
+        return
+    end
+    s.scrollBar = true
+    local track = frames.asFrame(tbl.field(bar, "Track"))
+    if track then
+        for _, r in ipairs({ track:GetRegions() }) do
+            r:SetAlpha(0)
+        end
+        local thumb = frames.asFrame(tbl.field(track, "Thumb"))
+        if thumb then
+            for _, r in ipairs({ thumb:GetRegions() }) do
+                r:SetAlpha(0)
+            end
+            local t = thumb:CreateTexture(nil, "OVERLAY")
+            draw.paintFill(t, "gilt-line")
+            t:SetPoint("TOP")
+            t:SetPoint("BOTTOM")
+            t:SetWidth(2)
+            -- under the mouse: gilt and a little wider, so it reads as
+            -- something to grab (it showed no hover, found in game)
+            hookScript(thumb, "OnEnter", function()
+                draw.paintFill(t, "gilt")
+                t:SetWidth(4)
+            end)
+            hookScript(thumb, "OnLeave", function()
+                draw.paintFill(t, "gilt-line")
+                t:SetWidth(2)
+            end)
+        end
+    end
+    for _, key in ipairs({ "Back", "Forward" }) do
+        fade(tbl.field(bar, key))
+    end
+end
+
+-- A flat fill on a track inside a gilt-hairline edge, as tall as Blizzard's
+-- fill; the colour from the fill's atlas (standing colours kept).
+export function reskinStatusBar(given: unknown)
+    local bar = frames.asStatusBar(given)
+    if not bar then
+        return
+    end
+    local s = skinOf(bar)
+    local fill = frames.asTexture(errors.tryMethod(bar, "GetStatusBarTexture"))
+    local atlas = fill and askString(fill, "GetAtlas")
+    if atlas and atlas ~= "" then
+        s.atlas = atlas
+    end
+    if not s.statusBar then
+        s.statusBar = true
+        for _, r in ipairs({ bar:GetRegions() }) do
+            local t = r:GetObjectType()
+            if t == "Texture" and r ~= fill then
+                r:SetAlpha(0)
+            end
+            if t == "MaskTexture" and fill then
+                pcall(fill.RemoveMaskTexture, fill, r :: MaskTexture)
+            end
+        end
+        -- the track as tall as the fill, whatever the fill's height comes to
+        -- be (a bar skinned while hidden reported none and got a guess)
+        local track = CreateFrame("Frame", nil, bar)
+        track:SetPoint("LEFT")
+        track:SetPoint("RIGHT")
+        if fill then
+            track:SetPoint("TOP", fill, "TOP")
+            track:SetPoint("BOTTOM", fill, "BOTTOM")
+        else
+            track:SetHeight(math.min(14, bar:GetHeight()))
+        end
+        track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
+        draw.fill(track, "track"):SetAllPoints()
+        draw.border(track, "gilt-hairline")
+        s.track = track
+    end
+    local function flatten()
+        local f = frames.asTexture(errors.tryMethod(bar, "GetStatusBarTexture"))
+        if not f then
+            return
+        end
+        local a = askString(f, "GetAtlas")
+        if a and a ~= "" then
+            s.atlas = a
+        end
+        s.flattening = true
+        f:SetTexture(WHITE)
+        local word = s.atlas and s.atlas:lower():match("stat%-bar%-(%a+)")
+        draw.paint(f, BAR_COLORS[word or ""] or "progress-fill")
+        s.flattening = false
+    end
+    if fill and not s.fillHooked then
+        s.fillHooked = true
+        -- Blizzard sets the fill again (its standing's atlas): flat again
+        local function again()
+            if not s.flattening then
+                flatten()
+            end
+        end
+        hook(fill, "SetAtlas", again)
+        hook(bar, "SetStatusBarTexture", again)
+    end
+    flatten()
+    for _, r in ipairs(fontStrings(bar)) do
+        fonts.apply(r, "numeric")
+        r:SetJustifyH("CENTER")
+        -- on the track's middle, a pixel up (the figures sit low otherwise)
+        local track = s.track
+        if track then
+            r:ClearAllPoints()
+            r:SetPoint("LEFT", track, "LEFT", 0, 1)
+            r:SetPoint("RIGHT", track, "RIGHT", 0, 1)
+        end
+        draw.paint(r, "ink")
+        r:SetShadowColor(0, 0, 0, 1)
+        r:SetShadowOffset(0, -1)
+    end
+end
+
+local fillBars: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for bar in pairs(fillBars) do
+            local tint = skinOf(bar).tint
+            if tint then
+                tint()
+            end
+        end
+    end,
+    "UI.ReskinFillBar"
+)
+
+-- A bar Blizzard draws itself (a frame with a Fill texture it sizes and
+-- tints: the reputation's standing bars, the skills' bars): the fill flat in
+-- Blizzard's tint (the standing's colour) or its atlas's colour (the skills'
+-- blue), a track in a gilt-hairline edge, the text centred.
+export function reskinFillBar(given: unknown)
+    local bar = frames.asFrame(given)
+    local fill = frames.asTexture(tbl.field(bar, "Fill"))
+    if not (bar and fill) then
+        return
+    end
+    local s = skinOf(bar)
+    if not s.fillBar then
+        s.fillBar = true
+        for _, r in ipairs({ bar:GetRegions() }) do
+            local t = r:GetObjectType()
+            if t == "Texture" and r ~= fill then
+                r:SetAlpha(0)
+            end
+            if t == "MaskTexture" then
+                pcall(fill.RemoveMaskTexture, fill, r :: MaskTexture)
+            end
+        end
+        local h = math.max(6, math.min(14, fill:GetHeight() or 12))
+        local track = CreateFrame("Frame", nil, bar)
+        -- round the area the fill grows in, its edge a pixel outside it: the
+        -- game insets that area 6 px from the bar's ends (its old end caps),
+        -- so a track over the whole bar left a gap at both ends (found in
+        -- game, the reputation bars, 2026-11-11)
+        local area = frames.asFrame(tbl.field(bar, "FillArea"))
+        if area then
+            local px = pixel.size(bar)
+            track:SetPoint("LEFT", area, "LEFT", -px, 0)
+            track:SetPoint("RIGHT", area, "RIGHT", px, 0)
+        else
+            track:SetPoint("LEFT")
+            track:SetPoint("RIGHT")
+        end
+        track:SetHeight(h)
+        track:SetFrameLevel(math.max(0, bar:GetFrameLevel() - 1))
+        draw.fill(track, "track"):SetAllPoints()
+        draw.border(track, "gilt-hairline")
+        s.track = track
+        fill:SetHeight(h - 2)
+        -- the colour: Blizzard's tint on a white atlas (the reputation's
+        -- standings); a coloured atlas (the skills' blue, tinted white on
+        -- top) keeps its colour as a token
+        -- (set raw, not painted: the SetVertexColor hook below would tint
+        -- again inside a repaint; fillBars tints again on a theme change)
+        local flattening = false
+        local function tint()
+            local token = BAR_COLORS[s.atlasWord or ""]
+            if not token then
+                return
+            end
+            flattening = true
+            fill:SetVertexColor(draw.rgba(token))
+            flattening = false
+        end
+        local function flat()
+            if flattening then
+                return
+            end
+            local a = atlasOf(fill)
+            if a ~= "" then
+                s.atlasWord = a:match("stat%-bar%-(%a+)")
+            end
+            flattening = true
+            fill:SetTexture(WHITE)
+            -- (the game's SetAtlas sizes the fill to its art again, 15 px:
+            -- over the track's gilt edge; back inside it)
+            fill:SetHeight(h - 2)
+            flattening = false
+            tint()
+        end
+        hook(fill, "SetAtlas", flat)
+        hook(fill, "SetVertexColor", function()
+            if not flattening then
+                tint()
+            end
+        end)
+        s.flat = flat
+        s.tint = tint
+        fillBars[bar] = true
+        -- Blizzard sizes the fill as a share of its FillArea's width once
+        -- (SetFillPercent); a row filled in before it had a width got 0,
+        -- which a texture draws at its own size (8 px of white: seen
+        -- 2026-10-18, 3,210 / 6,000 as a sliver). Keep the share and size the
+        -- fill again whenever the width changes; none: no fill.
+        local area = frames.asFrame(tbl.field(bar, "FillArea"))
+        if tbl.field(bar, "SetFillPercent") and area then
+            -- the share Blizzard set before this: the right edge of its
+            -- texture coordinates (SetTexCoord(0, p, 1, 0)), read before
+            -- the flat texture goes on
+            local _, _, _, _, right = fill:GetTexCoord()
+            s.percent = tonumber(right) and math.min(1, math.max(0, right)) or nil
+            local function size()
+                local w = (s.percent or 0) * (area:GetWidth() or 0)
+                fill:SetAlpha(w >= 0.5 and 1 or 0)
+                if w >= 0.5 then
+                    fill:SetWidth(w)
+                end
+            end
+            hook(bar :: unknown, "SetFillPercent", function(_: unknown, percent: unknown)
+                s.percent = math.min(1, math.max(0, tonumber(percent) or 0))
+                size()
+            end)
+            hookScript(area, "OnSizeChanged", size)
+            s.sizeFill = size
+        end
+    end
+    local flat, sizeFill, track = s.flat, s.sizeFill, s.track
+    if flat then
+        flat()
+    end
+    if sizeFill then
+        sizeFill()
+    end
+    for _, r in ipairs(fontStrings(bar)) do
+        fonts.apply(r, "numeric")
+        r:SetJustifyH("CENTER")
+        -- on the track's middle (the reputation's figures sit right there;
+        -- a pixel up was too high, found in game)
+        r:ClearAllPoints()
+        if track then
+            r:SetPoint("LEFT", track, "LEFT", 0, 0)
+            r:SetPoint("RIGHT", track, "RIGHT", 0, 0)
+        end
+        draw.paint(r, "ink")
+        r:SetShadowColor(0, 0, 0, 1)
+        r:SetShadowOffset(0, -1)
+    end
+end
+
+-- An icon button (the set popup's grid and its chosen icon): every bit of
+-- Blizzard's frame art away, the icon cropped on a surface-sunk well in a
+-- gilt-hairline edge, gilt on hover, arcane while selected (Blizzard's own
+-- SelectedTexture says when).
+export function reskinIconButton(given: unknown)
+    local b = frames.asButton(given)
+    if not b then
+        return
+    end
+    local s = skinOf(b)
+    local icon = frames.asTexture(tbl.field(b, "Icon")) or frames.asTexture(tbl.field(b, "icon"))
+    local st = s.icon
+    if not st then
+        local well = b:CreateTexture(nil, "BACKGROUND", nil, -8)
+        draw.paintFill(well, "surface-sunk")
+        well:SetAllPoints()
+        markArt(well)
+        local edgeHolder = CreateFrame("Frame", nil, b)
+        edgeHolder:SetAllPoints()
+        edgeHolder:EnableMouse(false)
+        edgeHolder:SetFrameLevel(b:GetFrameLevel() + 2)
+        local edge = draw.border(edgeHolder, "gilt-hairline")
+        local sel = frames.asRegion(tbl.field(b, "SelectedTexture")) or frames.asRegion(tbl.field(b, "selectedTexture"))
+        local made: IconSkin = { edge = edge, hover = false, draw = function() end }
+        made.draw = function()
+            local on = sel ~= nil and sel:IsShown()
+            edge:SetColor(on and "arcane" or (made.hover and "gilt" or "gilt-hairline"))
+        end
+        st = made
+        s.icon = made
+        hookScript(b, "OnEnter", function()
+            made.hover = true
+            made.draw()
+        end)
+        hookScript(b, "OnLeave", function()
+            made.hover = false
+            made.draw()
+        end)
+        if sel then
+            for _, m in ipairs({ "Show", "Hide", "SetShown" }) do
+                hook(sel, m, function()
+                    made.draw()
+                end)
+            end
+        end
+    end
+    for _, get in ipairs({
+        "GetNormalTexture",
+        "GetPushedTexture",
+        "GetHighlightTexture",
+        "GetDisabledTexture",
+        "GetCheckedTexture",
+    }) do
+        local t = frames.asRegion(errors.tryMethod(b, get))
+        if t and t ~= icon then
+            t:SetAlpha(0)
+        end
+    end
+    for _, t in ipairs(textures(b)) do
+        if t ~= icon and not isArt(t) then
+            t:SetAlpha(0)
+        end
+    end
+    if icon then
+        icon:SetAlpha(1)
+        icon:ClearAllPoints()
+        icon:SetPoint("TOPLEFT", 1, -1)
+        icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
+    st.draw()
+end
+
+export function reskinCheckButton(given: unknown)
+    local b = frames.asCheckButton(given)
+    if not b then
+        return
+    end
+    local s = skinOf(b)
+    if s.check then
+        return
+    end
+    for _, get in ipairs({
+        "GetNormalTexture",
+        "GetPushedTexture",
+        "GetHighlightTexture",
+        "GetCheckedTexture",
+        "GetDisabledCheckedTexture",
+    }) do
+        fade(errors.tryMethod(b, get))
+    end
+    local box = CreateFrame("Frame", nil, b)
+    box:SetSize(16, 16)
+    box:SetPoint("CENTER")
+    box:EnableMouse(false)
+    draw.fill(box, "surface-sunk"):SetAllPoints()
+    local edge = draw.border(box, "gilt-line")
+    local check = box:CreateTexture(nil, "OVERLAY")
+    draw.glyph(check, "check")
+    check:SetSize(14, 14)
+    check:SetPoint("CENTER")
+    draw.paint(check, "arcane")
+    local function redraw()
+        local checked = errors.tryMethod(b, "GetChecked")
+        local on = checked ~= nil and checked ~= false
+        check:SetShown(on)
+        edge:SetColor(on and "arcane" or "gilt-line")
+    end
+    hook(b, "SetChecked", redraw)
+    hookScript(b, "OnClick", redraw)
+    hookScript(b, "OnShow", redraw)
+    s.check = { box = box, draw = redraw }
+    redraw()
+end
+
+-- Blizzard's panel button (Left/Middle/Right art, or a red button atlas) as
+-- SuuUI's quiet button: surface-raised, gilt-line edge (gilt on hover), its
+-- label in `label` ink; dimmed while disabled.
+export function reskinButton(given: unknown)
+    local b = frames.asButton(given)
+    if not b then
+        return
+    end
+    local s = skinOf(b)
+    if s.button then
+        return
+    end
+    for _, key in ipairs({ "Left", "Middle", "Center", "Right", "LeftSeparator", "RightSeparator" }) do
+        fade(tbl.field(b, key))
+    end
+    -- any other button art (an atlas with "button" in it)
+    for _, t in ipairs(textures(b)) do
+        if atlasOf(t):find("button") then
+            t:SetAlpha(0)
+        end
+    end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        fade(errors.tryMethod(b, get))
+    end
+    local bg = b:CreateTexture(nil, "BACKGROUND", nil, -7)
+    draw.paintFill(bg, "surface-raised")
+    bg:SetAllPoints()
+    local edge = draw.border(b, "gilt-line")
+    hookScript(b, "OnEnter", function()
+        edge:SetColor("gilt")
+    end)
+    hookScript(b, "OnLeave", function()
+        edge:SetColor("gilt-line")
+    end)
+    local function redraw()
+        b:SetAlpha(errors.tryMethod(b, "IsEnabled") == false and T.opacity["opacity-disabled"] or 1)
+        local fs = frames.asFontString(errors.tryMethod(b, "GetFontString"))
+        if fs then
+            fonts.apply(fs, "label")
+            draw.paint(fs, "ink")
+            fs:SetShadowOffset(0, 0)
+        end
+    end
+    hook(b, "SetEnabled", redraw)
+    if tbl.field(b, "Enable") then
+        hook(b, "Enable", redraw)
+    end
+    if tbl.field(b, "Disable") then
+        hook(b, "Disable", redraw)
+    end
+    s.button = { draw = redraw }
+    redraw()
+end
+
+-- An input box: Blizzard's Left/Middle/Right art away, surface-sunk inside a
+-- gilt-line edge (arcane while typing), body ink.
+export function reskinEditBox(given: unknown)
+    local e = frames.asEditBox(given)
+    if not e then
+        return
+    end
+    local s = skinOf(e)
+    if s.edit then
+        return
+    end
+    for _, key in ipairs({ "Left", "Middle", "Right", "Mid" }) do
+        fade(tbl.field(e, key))
+    end
+    local name = e:GetName()
+    if name then
+        for _, suffix in ipairs({ "Left", "Middle", "Right", "Mid" }) do
+            fade(tbl.field(_G, name .. suffix))
+        end
+    end
+    -- whatever else Blizzard drew it with (its own art, a backdrop frame)
+    for _, t in ipairs(textures(e)) do
+        t:SetAlpha(0)
+    end
+    for _, c in ipairs(frames.children(e)) do
+        fade(tbl.field(c, "NineSlice"))
+        for _, t in ipairs(textures(c)) do
+            t:SetAlpha(0)
+        end
+    end
+    fade(tbl.field(e, "NineSlice"))
+    -- a search box (its magnifier and "Search" placeholder): the field is the
+    -- box itself, the text and placeholder space-3 in from its left
+    local search = tbl.field(e, "searchIcon") or tbl.field(e, "Instructions")
+    local bg = e:CreateTexture(nil, "BACKGROUND", nil, -7)
+    draw.paintFill(bg, "surface-sunk")
+    if search then
+        bg:SetAllPoints()
+        e:SetTextInsets(S["space-3"], S["space-5"], 0, 0)
+        local hint = frames.asFontString(tbl.field(e, "Instructions"))
+        if hint then
+            hint:ClearAllPoints()
+            hint:SetPoint("LEFT", S["space-3"], 0)
+            hint:SetPoint("RIGHT", -S["space-3"], 0)
+            hint:SetJustifyH("LEFT")
+            fonts.apply(hint, "body")
+            draw.paint(hint, "ink-muted")
+            skinOf(hint).skip = true
+        end
+    else
+        bg:SetPoint("TOPLEFT", -4, -1)
+        bg:SetPoint("BOTTOMRIGHT", 0, 1)
+    end
+    local holder = CreateFrame("Frame", nil, e)
+    holder:SetPoint("TOPLEFT", bg)
+    holder:SetPoint("BOTTOMRIGHT", bg)
+    holder:EnableMouse(false)
+    local edge = draw.border(holder, "gilt-line")
+    hookScript(e, "OnEditFocusGained", function()
+        edge:SetColor("arcane")
+    end)
+    hookScript(e, "OnEditFocusLost", function()
+        edge:SetColor("gilt-line")
+    end)
+    e:SetFontObject(fonts.get("body"))
+    draw.paint(e, "ink")
+    s.edit = true
+end
+
+-- A small collapse/expand button (Statistics' sub-categories): SuuUI's
+-- minus or plus in gilt-text, following the state Blizzard sets.
+export function reskinCollapseButton(given: unknown)
+    local b = frames.asButton(given)
+    if not b then
+        return
+    end
+    local s = skinOf(b)
+    if s.collapse then
+        return
+    end
+    local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    glyph:SetSize(12, 12)
+    glyph:SetPoint("CENTER")
+    draw.paint(glyph, "gilt-text")
+    local function redraw()
+        local t = frames.asTexture(errors.tryMethod(b, "GetNormalTexture"))
+        local name = ""
+        if t then
+            name = (askString(t, "GetAtlas") or askString(t, "GetTextureFilePath") or
+                tostring(errors.tryMethod(t, "GetTexture") or "")):lower()
+            t:SetAlpha(0)
+        end
+        for _, get in ipairs({ "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+            fade(errors.tryMethod(b, get))
+        end
+        for _, r in ipairs(textures(b)) do
+            if r ~= glyph then
+                r:SetAlpha(0)
+            end
+        end
+        local plus = name:find("plus") or name:find("expand") and not name:find("expanded")
+        draw.glyph(glyph, (plus and "plus" or "minus"))
+    end
+    if tbl.field(b, "SetNormalTexture") then
+        hook(b, "SetNormalTexture", redraw)
+    end
+    if tbl.field(b, "SetNormalAtlas") then
+        hook(b, "SetNormalAtlas", redraw)
+    end
+    hookScript(b, "OnClick", function()
+        after(0, redraw)
+    end)
+    s.collapse = { draw = redraw }
+    redraw()
+end

@@ -1,0 +1,149 @@
+-- UI/CooldownTracker/Slots: an aura entry's size, looks, art, filters and
+-- engine groups. (The slots, reminders and enchants on screen are driven
+-- through the tracker: UI/CooldownTracker's tests.)
+
+import test, cases, expect, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import auraSize, auraLook, slotArt, sourceFilter, auraParts from "/UI/CooldownTracker/Slots"
+import type TrackerEntry, TrackerCondition, TrackerWhen from "/UI/CooldownTracker/Entries"
+import expectNoErrors from "../../../helpers"
+
+-- Test spells: known ones and an unknown one.
+const KNOWN_LOW = 900001
+const KNOWN_HIGH = 900002
+const UNKNOWN = 900003
+const OTHER = 900004
+
+@beforeAll
+local function world()
+    mock.defineSpell(KNOWN_LOW, { name = "Test Strike", iconID = 1001, known = true })
+    mock.defineSpell(KNOWN_HIGH, { name = "Test Strike", iconID = 1002, known = true })
+    mock.defineSpell(UNKNOWN, { name = "Test Unknown", iconID = 1003, known = false })
+    mock.defineSpell(OTHER, { name = "Overpower", iconID = 1004, known = true })
+end
+
+local function cond(c: TrackerCondition, match: string?): TrackerWhen
+    return { match = match, conditions = { c } }
+end
+
+--------------------------------------------------------------------------------
+-- Aura looks, parts and filters
+--------------------------------------------------------------------------------
+
+@test("auraSize and auraLook")
+local function looks()
+    expect(auraSize({})).toBe(T.size["icon-lg"])
+    expect(auraSize({ size = "small" })).toBe(T.size["icon-md"])
+    expect(auraSize({ size = "large" })).toBe(T.size["cdm-essential"])
+    expect(auraSize({ size = "huge" })).toBe(T.size["icon-lg"])
+    local look = auraLook({ border = "gilt", glow = true, digits = false, stacks = true, expiring = 5 }, {
+        border = "arcane",
+        drain = "drain-arcane",
+    })
+    expect(look.border).toBe("gilt")
+    expect(look.glow).toBe("glow-arcane")
+    expect(look.drain).toBe("drain-arcane")
+    expect(look.digits).toBe(false)
+    expect(look.expiring).toBe(5)
+    expect(auraLook({ border = "nope" }, nil).border).toBeNil()
+    expectNoErrors()
+end
+
+@test("slotArt: a single aura's art; a group's fixed icon, known member, met member")
+local function art()
+    expect(slotArt({ ids = { KNOWN_LOW } }, {})).toBe(1001)
+    expect(slotArt({ group = true, fixedIcon = true, icon = OTHER, ids = { KNOWN_LOW } }, {})).toBe(1004)
+    local g: TrackerEntry = {
+        group = true,
+        icon = OTHER,
+        ids = { UNKNOWN },
+        members = {
+            { ids = { UNKNOWN }, icon = KNOWN_HIGH, when = cond({ type = "combat" }) },
+            { ids = { UNKNOWN } },
+            { ids = { KNOWN_LOW } },
+        },
+    }
+    expect(slotArt(g, {})).toBe(1001) -- the member you know
+    table.remove(assert(g.members), 3)
+    expect(slotArt(g, { combat = true })).toBe(1002) -- the first met: its own icon
+    expect(slotArt(g, { combat = false })).toBe(1003) -- the second: its first ID
+    expect(slotArt({ group = true, icon = OTHER, ids = { UNKNOWN }, members = { { ids = {} } } }, {})).toBe(1004)
+    expectNoErrors()
+end
+
+@test("sourceFilter: the entry's, a group's mine, the list's default")
+@cases({
+    { "mine", "nil", "any", "HELPFUL|PLAYER" },
+    { "others", "nil", "any", "HELPFUL|!PLAYER" },
+    { "any", "nil", "mine", "HELPFUL" },
+    { "nil", "group", "any", "HELPFUL|PLAYER" },
+    { "nil", "mine", "any", "HELPFUL|PLAYER" },
+    { "nil", "nil", "others", "HELPFUL|!PLAYER" },
+})
+local function filters(source: string, flag: string, default: string, out: string)
+    local e: TrackerEntry = {}
+    if source ~= "nil" then
+        e.source = source
+    end
+    if flag == "group" then
+        e.group = true
+    elseif flag == "mine" then
+        e.mine = true
+    end
+    expect(table.concat(sourceFilter("HELPFUL", e, default), "|")).toBe(out)
+    expectNoErrors()
+end
+
+@test("auraParts: one part, or one per source, a live member apart")
+local function parts()
+    local single = auraParts("HARMFUL", { ids = { 1 } }, "mine", {})
+    expect(#single).toBe(1)
+    expect(single[1].filter).toEqual({ "HARMFUL", "PLAYER" })
+    -- a group whose members share a source: one part with the group's IDs
+    local same = auraParts("HELPFUL", {
+        group = true,
+        ids = { 9 },
+        members = { { ids = { 1 } }, { ids = { 2 } } },
+    }, "any", {})
+    expect(#same).toBe(1)
+    expect(same[1].ids).toEqual({ 9 })
+    -- different sources
+    local mixed = auraParts(
+        "HELPFUL",
+        {
+            group = true,
+            ids = { 1, 2, 3 },
+            source = "others",
+            members = {
+                { ids = { 1, 1 } },
+                { ids = { 2 }, source = "mine" },
+                { ids = { 3 } },
+                { ids = {}, source = "any" },
+            },
+        },
+        "any",
+        nil
+    )
+    expect(#mixed).toBe(2)
+    expect(mixed[1].ids).toEqual({ 1, 3 })
+    expect(mixed[1].filter).toEqual({ "HELPFUL", "!PLAYER" })
+    expect(mixed[2].filter).toEqual({ "HELPFUL", "PLAYER" })
+    -- a live member: its own part with its when
+    local live = cond({ type = "combat" })
+    local lp = auraParts("HELPFUL", {
+        group = true,
+        ids = { 1, 2 },
+        members = { { ids = { 1 }, when = live }, { ids = { 2 } } },
+    }, "any", {})
+    expect(#lp).toBe(2)
+    expect(lp[1].when).toBe(live)
+    local only = auraParts("HELPFUL", {
+        group = true,
+        ids = { 1 },
+        members = { { ids = { 1 }, when = live } },
+    }, "any", {})
+    expect(#only).toBe(1)
+    expect(only[1].when).toBe(live)
+    expectNoErrors()
+end

@@ -1,0 +1,664 @@
+-- Units/Collections/Stage.wowlua
+-- The collections window's stage (Units/Collections): the mount or pet in a
+-- model frame the game fits it into (MountModel), stood on the floor
+-- shadow, turned and zoomed; its card with the full source (StageCard);
+-- the icon while it loads, the empty stage, the star and the turn and zoom
+-- buttons (RoundButton: the wardrobe's and the toy cards' star too); the
+-- stage's geometry. The module's DrawStage, ShowMount, PlaceModel,
+-- ModelLoaded, Turn and Zoom as functions taking the module (its methods
+-- call them).
+
+import SuuUI from "/Core/API"
+import type Text, ModelStage from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry from "./Catalog"
+import status, petSourceLines from "./Catalog"
+import sourceCard from "./Sources"
+import petJournalUnlocked, mountCanFavourite, MOUNT_NO_FAVOURITE, PET_JOURNAL_LOCKED from "./Actions"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try = errors.try
+local asNumber = secret.asNumber
+
+export local DOLL_L, DOLL_R = 320, 210 -- Appearances: the slot columns' insets
+local CARD_W, SHADE_W = 270, 340
+
+-- The mount: a model frame the game fits each model into, whatever its
+-- size (seen in game: the mount scene's camera, tuned by hand, fit some
+-- mounts and left others too big, too low or cut off; the first probe's
+-- PlayerModel framed them whole). It sizes the model by its frame's width
+-- and centres it in the frame, and cuts it at the frame's edges (seen in
+-- game: 560 wide drew the mount about 300 high, a 300-high frame cut it).
+-- So MODEL_W sets the size (a mount about 0.53 of it high), and the frame,
+-- from the stage's top, is MODEL_H high so the middle of a mount that high
+-- sits half its height above the floor glow: its feet stand there. Centred
+-- on the stage, the card over its left.
+-- The game centres each mount by its whole size, so where the feet show
+-- differs per mount (seen in game: some stood on the floor shadow, some
+-- floated). The frame's camera says where it stands and aims relative to
+-- the model, whose origin is the ground under it: how far below the
+-- frame's middle that shows follows from it, times FEET_K * the frame's
+-- width (calibrated with /suu probe mountframe in a 440 by 470 frame: a
+-- Swift Stormsaber's 165px). Each mount is lifted by the frame's own
+-- SetPosition until it shows FEET_BELOW under the middle (the camera and
+-- the model's size untouched: tested with /suu probe mountframe place, the
+-- feet of every mount within about 20px), and the frame sits so that point
+-- is FEET_Y above the stage's bottom, the floor shadow's middle.
+-- FEET_DROP: the feet a mount shows stand above the ground under its body
+-- (seen in game: a raptor's 60px, a kodo's 30px above the shadow's
+-- middle), so every mount goes down by about that much.
+-- The frame is wide so long mounts turned side on fit (seen in game: 440
+-- wide cut them); the game sizes the model by the frame's larger side, so
+-- the camera moves back by that side over the calibrated 470 (tested with
+-- the placement probe: a kodo the same size in 760 wide, its feet the same
+-- 40px above the ground point; scaling the model instead misplaced it).
+-- The projection follows the larger side too.
+export local FLOOR, MODEL_W, MODEL_H, SIZE_REF = 40, 760, 470, 470
+export local FEET_K, FEET_Y, FEET_BELOW = 2.739 * 440 / SIZE_REF, 72, 165
+-- How far each mount model's feet show above the ground under its body, by
+-- model file (stood on the floor by hand with /suu probe mountfeet,
+-- 2026-10-17, at the stage's facing); a model not here: FEET_DROP.
+local FEET_DROP = 64
+local FEET_DROPS: { [number]: number } = {
+    [123410] = 56, -- Black War Wolf
+    [123418] = 56, -- Brown Wolf
+    [124038] = 94, -- Black War Tiger
+    [124052] = 90, -- Golden Sabercat
+    [124696] = 46, -- Black War Kodo
+    [124711] = 46, -- Brown Kodo
+    [124872] = 74, -- Blue Mechanostrider
+    [124880] = 72, -- Black Battlestrider
+    [125009] = 64, -- Green Skeletal Warhorse
+    [125223] = 70, -- Summon Dreadsteed
+    [125227] = 70, -- Summon Felsteed
+    [125522] = 70, -- Black War Ram
+    [125546] = 54, -- White Ram
+    [125614] = 74, -- Black Stallion
+    [125620] = 56, -- Black War Steed
+    [125649] = 76, -- Black War Raptor
+    [125680] = 76, -- Emerald Raptor
+    [125687] = 80, -- Summon Blue Qiraji Battle Tank
+    [126304] = 66, -- Black Skeletal Horse
+    [126306] = 62, -- Dark Skeletal Horse
+    [126403] = 62, -- Summon Charger
+    [126407] = 66, -- Summon Warhorse
+    [7704354] = 64, -- Empyrean Galestrider
+    [7704356] = 64, -- Swift Empyrean Galestrider
+    [7704362] = 52, -- Spectral Bear
+    [7780798] = 94, -- Summon Forsaken Charger
+    [7935081] = 48, -- Pack Kodo
+    [7958137] = 94, -- Summon Warhorse
+}
+local FACING = 0.6
+export local CAM_SCALE = math.max(MODEL_W, MODEL_H) / SIZE_REF
+local ZOOM_MIN, ZOOM_MAX = 0.6, 2.5
+
+-- A small round button (the stage's star, turn and zoom): a disc, a glyph.
+export class RoundButton extends Button
+    readonly disc: Texture
+    readonly glyph: Texture
+    on: boolean = false
+    -- why it does nothing now (faint, its tooltip says why); nil: it works
+    why: string? = nil
+
+    constructor(
+        parent: Frame,
+        glyph: string,
+        tip: string | ((b: RoundButton) -> string),
+        onClick: (b: RoundButton) -> ()
+    )
+        super(nil, parent)
+        self:SetSize(26, 26)
+        self.disc = self:CreateTexture(nil, "BACKGROUND")
+        UI.Skin(self.disc, "circle-fill")
+        self.disc:SetAllPoints()
+        UI.Paint(self.disc, "surface-raised")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(self.glyph, glyph)
+        self.glyph:SetSize(12, 12)
+        self.glyph:SetPoint("CENTER")
+        UI.Paint(self.glyph, "ink-muted")
+        self:SetScript("OnEnter", function()
+            self:Draw(true)
+            local title: string
+            if type(tip) == "function" then
+                title = tip(self)
+            else
+                title = tip
+            end
+            UI.ShowTooltip(self, { title = title, description = self.why })
+        end)
+        self:SetScript("OnLeave", function()
+            self:Draw(false)
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", function()
+            if not self.why then
+                onClick(self)
+            end
+        end)
+    end
+
+    function Draw(hover: boolean)
+        local tone = self.on and "gilt" or hover and "ink" or "ink-muted"
+        UI.Paint(self.glyph, self.why and "ink-faint" or tone)
+    end
+end
+
+export function favouriteTip(b: RoundButton): string
+    return b.on and "Remove from favourites" or "Add to favourites"
+end
+
+--------------------------------------------------------------------------------
+-- The card on the stage: name, status, a rule, the full source card
+--------------------------------------------------------------------------------
+
+export class StageCard extends Frame
+    readonly name: Text
+    readonly status: Text
+    readonly extra: Text
+    readonly rule: Frame
+    readonly texts: Text[] = {}
+
+    constructor(stage: Frame)
+        super(nil, stage)
+        self:SetPoint("TOPLEFT", S["space-6"], -S["space-6"])
+        self:SetPoint("BOTTOMLEFT", S["space-6"], 52)
+        self:SetWidth(CARD_W)
+        self:SetFrameLevel(stage:GetFrameLevel() + 10)
+        self.name = UI.Text(self, "alert", "ink")
+        self.name:SetPoint("TOPLEFT")
+        self.name:SetWidth(CARD_W)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(true)
+        self.status = UI.Text(self, "caption", "gilt-text")
+        SuuUI.Layout.Follow(self, function()
+            self.status:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-3"])
+        end)
+        self.extra = UI.Text(self, "caption", "arcane")
+        SuuUI.Layout.Follow(self, function()
+            self.extra:SetPoint("LEFT", self.status, "RIGHT", S["space-4"], 0)
+        end)
+        self.rule = UI.Hairline(self, "gilt-line", "out")
+        SuuUI.Layout.Follow(self, function()
+            self.rule:SetPoint("TOPLEFT", self.status, "BOTTOMLEFT", 0, -S["space-4"])
+        end)
+        self.rule:SetWidth(CARD_W)
+    end
+
+    function Draw(e: Entry, extra: string?)
+        self.name:SetValue(e.name)
+        local text, color = status(e)
+        self.status:SetValue(text)
+        self.status:SetColor(color)
+        self.extra:SetValue(extra or "")
+        for _, t in ipairs(self.texts) do
+            t:Hide()
+        end
+        local card = sourceCard(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType)
+        if e.kind == "pet" then
+            card = {}
+            local lines = petSourceLines(e.sourceText)
+            if lines[1] then
+                card[#card + 1] = { title = "Where it comes from", lines = lines }
+            end
+            local about = e.description
+            if about and about ~= "" then
+                card[#card + 1] = { title = "About", lines = { about } }
+            end
+        end
+        if not card[1] then
+            card = { { title = "Source unknown", lines = {} } }
+        end
+        local n = 0
+        local prev: Region = self.rule
+        local prevIndent = 0
+        local function addText(style: string, tone: string, indent: number, gap: number): Text
+            n = n + 1
+            local t = self.texts[n]
+            if not t then
+                t = UI.Text(self, style, tone)
+                t:SetJustifyH("LEFT")
+                t:SetWordWrap(true)
+                self.texts[n] = t
+            end
+            t:SetStyle(style)
+            t:SetColor(tone)
+            t:ClearAllPoints()
+            t:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", indent - prevIndent, -gap)
+            t:SetWidth(CARD_W - indent)
+            t:Show()
+            prev, prevIndent = t, indent
+            return t
+        end
+        for i, section in ipairs(card) do
+            addText("micro", "gilt-text", 0, i == 1 and S["space-4"] or S["space-5"]):SetValue(section.title)
+            for _, line in ipairs(section.lines) do
+                addText("body", "ink", 15, S["space-2"]):SetValue(line)
+            end
+        end
+    end
+end
+
+-- The mount: fitted by the game, turned by drag, zoomed by the wheel.
+export class MountModel extends PlayerModel
+    dragX: number? = nil
+
+    constructor(stage: Frame, m: CollectionsModule)
+        super(nil, stage)
+        self:SetSize(MODEL_W, MODEL_H)
+        self:SetPoint("BOTTOM", stage, "BOTTOM", 0, FEET_Y - FEET_DROP + FEET_BELOW - MODEL_H / 2)
+        self:SetFrameLevel(stage:GetFrameLevel() + 2)
+        self:EnableMouse(true)
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseDown", function(_: Frame, button: string)
+            if button == "LeftButton" then
+                self.dragX = (GetCursorPosition())
+            end
+        end)
+        self:SetScript("OnMouseUp", function()
+            self.dragX = nil
+        end)
+        self:SetScript("OnUpdate", function()
+            local from = self.dragX
+            if not from then
+                return
+            end
+            local x = GetCursorPosition()
+            local delta = (x - from) / (self:GetEffectiveScale() * 100)
+            self.dragX = x
+            if delta ~= 0 then
+                try(self.SetFacing, self, (asNumber(try(self.GetFacing, self)) or 0) + delta)
+            end
+        end)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            m:Zoom(-delta)
+        end)
+        self:SetScript("OnModelLoaded", function()
+            m:ModelLoaded()
+        end)
+    end
+end
+
+-- The stage's icon while a model loads.
+class Loading extends Frame
+    readonly icon: Texture
+    readonly text: Text
+
+    constructor(stage: Frame)
+        super(nil, stage)
+        self:SetSize(200, 120)
+        self:SetPoint("CENTER", stage, "CENTER", 0, FLOOR / 2)
+        self:SetFrameLevel(stage:GetFrameLevel() + 3)
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetSize(80, 80)
+        self.icon:SetPoint("TOP")
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.text = UI.Text(self, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.text:SetPoint("TOP", self.icon, "BOTTOM", 0, -S["space-4"])
+        end)
+        self.text:SetValue("Loading the model…")
+        self:Hide()
+    end
+end
+
+-- The empty stage: what the search left.
+class EmptyStage extends Frame
+    readonly title: Text
+    readonly text: Text
+
+    constructor(stage: Frame)
+        super(nil, stage)
+        self:SetAllPoints()
+        self:SetFrameLevel(stage:GetFrameLevel() + 4)
+        self.title = UI.Text(self, "alert", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.title:SetPoint("TOP", 0, -S["space-7"])
+        end)
+        self.text = UI.Text(self, "body", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.text:SetPoint("TOP", self.title, "BOTTOM", 0, -S["space-3"])
+        end)
+        self.text:SetWidth(420)
+        self.text:SetWordWrap(true)
+        self.text:SetJustifyH("CENTER")
+        self:Hide()
+    end
+end
+
+-- The stage: the model's art, what loads, the empty stage, the star, the
+-- turn and zoom buttons, the hint.
+export class Stage extends Frame
+    readonly art: ModelStage
+    readonly loading: Loading
+    readonly empty: EmptyStage
+    readonly star: RoundButton
+    readonly ctl: Frame
+    readonly buttons: RoundButton[] = {}
+    readonly hint: Text
+
+    constructor(body: Frame, tools: Frame, m: CollectionsModule)
+        super(nil, body)
+        self:SetPoint("TOPLEFT")
+        self:SetPoint("TOPRIGHT")
+        self:SetPoint("BOTTOM", tools, "TOP", 0, S["space-5"])
+        self:SetClipsChildren(true)
+        self.art = UI.ModelStage(self, { floor = FLOOR, shade = SHADE_W })
+        self.loading = Loading.new(self)
+        self.empty = EmptyStage.new(self)
+        self.star = RoundButton.new(self, "star", favouriteTip, function()
+            m:ToggleFavourite()
+        end)
+        self.star:SetFrameLevel(self:GetFrameLevel() + 12)
+        -- bottom centre of the model's area: turn left, zoom out, zoom in, turn right
+        local ctl = CreateFrame("Frame", nil, self)
+        SuuUI.Layout.Follow(self, function()
+            ctl:SetSize(4 * 26 + 3 * S["space-3"], 26)
+            ctl:SetPoint("BOTTOM", self, "BOTTOM", 0, S["space-4"])
+        end)
+        ctl:SetFrameLevel(self:GetFrameLevel() + 12)
+        local x = 0
+        local buttons: { glyph: string, tip: string, click: () -> () }[] = {
+            {
+                glyph = "turnLeft",
+                tip = "Turn left",
+                click = function()
+                    m:Turn(-1)
+                end,
+            },
+            {
+                glyph = "minus",
+                tip = "Zoom out",
+                click = function()
+                    m:Zoom(1)
+                end,
+            },
+            {
+                glyph = "plus",
+                tip = "Zoom in",
+                click = function()
+                    m:Zoom(-1)
+                end,
+            },
+            {
+                glyph = "turnRight",
+                tip = "Turn right",
+                click = function()
+                    m:Turn(1)
+                end,
+            },
+        }
+        for _, def in ipairs(buttons) do
+            local b = RoundButton.new(ctl, def.glyph, def.tip, function()
+                def.click()
+            end)
+            if not (def.glyph == "minus" or def.glyph == "plus") then
+                -- turn arrows: the reset glyph, mirrored for the right
+                UI.Glyph(b.glyph, "reset")
+                if def.glyph == "turnRight" then
+                    b.glyph:SetTexCoord(1, 0, 0, 1)
+                end
+            end
+            b:SetPoint("LEFT", x, 0)
+            self.buttons[#self.buttons + 1] = b
+            x = x + 26 + S["space-3"]
+        end
+        self.ctl = ctl
+        self.art.ctl = ctl
+        self.hint = UI.Text(self, "caption", "ink-faint")
+        SuuUI.Layout.Follow(self, function()
+            self.hint:SetPoint("BOTTOMRIGHT", -S["space-5"], S["space-5"])
+        end)
+        self.hint:SetValue("Drag to turn · Wheel to zoom")
+    end
+
+    function CentreOn(x: number)
+        self.art:CentreOn(x)
+    end
+    function Tint(token: string)
+        self.art:Tint(token)
+    end
+end
+
+-- how far below the frame's middle the ground under the model shows, with
+-- the camera at P aiming at T and the model lifted by `lift`
+local function dot(a: number[], b: number[]): number
+    return a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+end
+local function norm(x: number, y: number, z: number): number[]?
+    local l = math.sqrt(x * x + y * y + z * z)
+    if l == 0 then
+        return nil
+    end
+    return { x / l, y / l, z / l }
+end
+local function groundBelow(P: number[], aim: number[], lift: number): number?
+    local f = norm(aim[1] - P[1], aim[2] - P[2], aim[3] - P[3])
+    if not f then
+        return nil
+    end
+    local right = norm(f[2], -f[1], 0)
+    if not right then
+        return nil
+    end
+    local u = {
+        right[2] * f[3] - right[3] * f[2],
+        right[3] * f[1] - right[1] * f[3],
+        right[1] * f[2] - right[2] * f[1],
+    }
+    if u[3] < 0 then
+        u = { -u[1], -u[2], -u[3] }
+    end
+    local r = { -P[1], -P[2], lift - P[3] }
+    local depth = dot(r, f)
+    if depth <= 0 then
+        return nil
+    end
+    return -FEET_K * math.max(MODEL_W, MODEL_H) * dot(r, u) / depth
+end
+
+----------------------------------------------------------------------------
+-- The stage
+----------------------------------------------------------------------------
+
+export function drawStage(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local stage, e = ui.stage, self.chosen
+    local wardrobe = self.tab == "wardrobe"
+    ui.wardrobe:SetShown(wardrobe)
+    if wardrobe then
+        ui.model:Hide()
+        self.showing, self.waiting = nil, nil
+        stage.loading:Hide()
+        stage.star:Hide()
+        stage.empty:Hide()
+        stage.ctl:Show()
+        -- no hint here (the design: it would run under Undress)
+        stage.hint:Hide()
+        -- the doll stands between the columns, off the stage's middle
+        stage:CentreOn((DOLL_L - DOLL_R) / 2)
+        if not InCombatLockdown() then
+            ui.act:Hide()
+        end
+        stage:Tint("gilt")
+        self:DrawWardrobe()
+        return
+    end
+    stage:CentreOn(0)
+    local none = e == nil
+    stage.empty:SetShown(none)
+    ui.card:SetShown(not none)
+    stage.star:SetShown(not none)
+    stage.ctl:SetShown(not none)
+    stage.hint:SetShown(not none)
+    stage:Tint("gilt")
+    if not e then
+        -- only when a search or filter leaves nothing (the first entry is
+        -- chosen otherwise, also with none of your own)
+        stage.empty.title:SetValue(self.tab == "pets" and "No pets match" or "No mounts match")
+        stage.empty.text:SetValue("Clear the search or show All.")
+        ui.model:Hide()
+        self.showing, self.waiting = nil, nil
+        stage.loading:Hide()
+        self:DrawAction()
+        return
+    end
+    stage.star.on = e.favourite and true or false
+    stage.star.why = e.kind == "pet" and e.collected and not petJournalUnlocked() and PET_JOURNAL_LOCKED or nil
+    if e.kind == "mount" and e.collected then
+        local i = self:MountIndex(e.id)
+        if i and not mountCanFavourite(i) then
+            stage.star.why = MOUNT_NO_FAVOURITE
+        end
+    end
+    stage.star:Draw(false)
+    if e.wrapped then
+        self:ShowGift(e)
+    else
+        if not self.unwrapping then
+            ui.gift:Hide()
+        end
+        self:ShowMount(e)
+    end
+    stage.hint:SetValue(e.wrapped and "Click the gift to unwrap it" or "Drag to turn · Wheel to zoom")
+    ui.card:Draw(e)
+    self:DrawAction()
+end
+
+-- The mount fitted to the stage; its icon until the model has loaded, then
+-- the model fades in. The same mount again is left as it is (seen in game:
+-- shown twice on opening, the second load sent no signal and the icon
+-- stayed).
+export function showMount(self: CollectionsModule, e: Entry)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local model, stage = ui.model, ui.stage
+    if self.showing == e.id and model:IsShown() then
+        return
+    end
+    self.showing, self.waiting = e.id, e.id
+    model:SetAlpha(0)
+    model:Show()
+    stage.loading.icon:SetTexture(e.icon)
+    stage.loading:Show()
+    try(model.ClearModel, model)
+    try(model.SetDisplayInfo, model, e.display or 0)
+    self.camScale = CAM_SCALE
+    try(model.SetCamDistanceScale, model, self.camScale)
+    try(model.SetPosition, model, 0, 0, 0)
+    try(model.SetFacing, model, FACING)
+    -- no answer from the game in two seconds: shown anyway
+    local id = e.id
+    self:After(2, function()
+        if self.waiting == id then
+            self:ModelLoaded()
+        end
+    end)
+end
+
+-- The mount lifted so the ground under it shows FEET_BELOW under the
+-- frame's middle (on the floor shadow). Nothing when the camera can't be read.
+export function placeModel(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local m = ui.model
+    local pxR, pyR, pzR = try(m.GetCameraPosition, m)
+    local txR, tyR, tzR = try(m.GetCameraTarget, m)
+    local px, py, pz, tx, ty, tz = asNumber(pxR),
+        asNumber(pyR),
+        asNumber(pzR),
+        asNumber(txR),
+        asNumber(tyR),
+        asNumber(tzR)
+    if not (px and py and pz and tx and ty and tz) then
+        return
+    end
+    local P, aim = { px, py, pz }, { tx, ty, tz }
+    if not groundBelow(P, aim, 0) then
+        return
+    end
+    local lo, hi = -3, 3
+    for _ = 1, 40 do
+        local mid = (lo + hi) / 2
+        local b = groundBelow(P, aim, mid)
+        if not b then
+            return
+        end
+        if b > FEET_BELOW then
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+    try(m.SetPosition, m, 0, 0, (lo + hi) / 2)
+    -- down by this model's own gap between its feet and the ground point
+    local file = asNumber(try(m.GetModelFileID, m))
+    local drop = (file and FEET_DROPS[file]) or FEET_DROP
+    m:ClearAllPoints()
+    m:SetPoint("BOTTOM", ui.stage, "BOTTOM", 0, FEET_Y - drop + FEET_BELOW - MODEL_H / 2)
+end
+
+-- Loaded: the camera back (CAM_SCALE), then placed on the floor once the
+-- camera has moved (read a moment later), then shown.
+export function modelLoaded(self: CollectionsModule)
+    local ui = self.ui
+    local id = self.waiting
+    if not (ui and id) then
+        return
+    end
+    local model = ui.model
+    self.waiting = nil
+    try(model.SetCamDistanceScale, model, self.camScale)
+    self:After(0.1, function()
+        if self.showing ~= id then
+            return
+        end
+        self:PlaceModel()
+        ui.stage.loading:Hide()
+        model:SetAlpha(1)
+        SuuUI.Motion.FadeIn(model, T.duration["dur-base"])
+    end)
+end
+
+export function turn(self: CollectionsModule, dir: number)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local m: PlayerModel = self.tab == "wardrobe" and ui.wardrobe.doll or ui.model
+    try(m.SetFacing, m, (asNumber(try(m.GetFacing, m)) or 0) + dir * 0.35)
+end
+
+export function zoom(self: CollectionsModule, dir: number)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    if self.tab == "wardrobe" then
+        local d = ui.wardrobe.doll
+        self.dollScale = math.max(0.6, math.min(2.5, self.dollScale * (dir > 0 and 1.12 or 0.89)))
+        try(d.SetCamDistanceScale, d, self.dollScale)
+        return
+    end
+    local m = ui.model
+    self.camScale = math.max(
+        ZOOM_MIN * CAM_SCALE,
+        math.min(ZOOM_MAX * CAM_SCALE, self.camScale * (dir > 0 and 1.12 or 0.89))
+    )
+    try(m.SetCamDistanceScale, m, self.camScale)
+    -- on the floor again at the new distance
+    self:After(0.05, function()
+        self:PlaceModel()
+    end)
+end

@@ -1,0 +1,1204 @@
+-- Units/CooldownManager/Behaviour.wowlua
+-- The Cooldown Manager's Behaviour panel (Units/CooldownManager/Editor opens
+-- it from a row): per entry, a modal with the sections that apply to it
+-- (a cooldown's, an aura's, a shared slot's, a member's, a collection's, a
+-- weapon enchant's) and on every one of them its conditions, a row per
+-- condition. It edits the module's lists through the EditorHost it is
+-- given.
+
+import SuuUI, PanelClass from "/Core/API"
+import type SelectOption, Select, ScrollArea, SuuButton, Text, Icon, Border, Toggle, Segmented, SegmentedOption, Stepper, TextField, ToggleChips from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as Lists from "./Lists"
+import * as Conditions from "./Conditions"
+import * as data from "./EditorData"
+import RemoveButton from "./Rows"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local asNumber = secret.asNumber
+
+type Entry = Lists.Entry
+type ListSet = Lists.ListSet
+type Path = Lists.Path
+type Condition = Conditions.Condition
+type EditedWhen = Conditions.EditedWhen
+type Choice = Conditions.Choice
+type EditorHost = data.EditorHost
+
+local CLASS = data.CLASS
+local infoOf, kindOf, mutate = data.infoOf, data.kindOf, data.mutate
+local newCondition, conditionSentence, choiceOptions, conditionTypes =
+    data.newCondition, data.conditionSentence, data.choiceOptions, data.conditionTypes
+local classTalents, candidates, spellLookup = data.classTalents, data.candidates, data.spellLookup
+local copy, regroup = Lists.copy, Lists.regroup
+local ENCHANT_NAME, LIST_SOURCE, entrySource = Lists.ENCHANT_NAME, Lists.LIST_SOURCE, Lists.entrySource
+
+local CLASSES, ROLES, STANCES, INSTANCES, TARGETS = Conditions.CLASSES,
+    Conditions.ROLES,
+    Conditions.STANCES,
+    Conditions.INSTANCES,
+    Conditions.TARGETS
+local talentName = Conditions.talentName
+
+-- While an aura isn't up, each entry's own choice (there's no list-wide
+-- one): buffs grey and debuffs "with a target" unless set.
+local MISSING: SegmentedOption<string>[] = {
+    { value = "hide", label = "Hide" },
+    { value = "grey", label = "Grey" },
+    { value = "warn", label = "Warn" },
+    { value = "remind", label = "Remind" },
+}
+local MISSING_DEBUFF: SegmentedOption<string>[] = {
+    { value = "hide", label = "Hide" },
+    { value = "grey", label = "Grey" },
+    { value = "target", label = "With a target" },
+    { value = "warn", label = "Warn" },
+    { value = "remind", label = "Remind" },
+}
+local MISSING_DEFAULT = Lists.MISSING_DEFAULT
+
+--------------------------------------------------------------------------------
+-- The Behaviour panel: per entry, a modal sized to what applies.
+--   cooldown: when ready, pop, sound, on cooldown, show, when unusable,
+--     edge, effect; a cooldown shared slot adds its name and shown
+--   single aura: whose, when missing, edge, size, glow, timer, stacks,
+--     amber, sounds
+--   shared slot (auras): name, how many at once, icon, then as a single aura
+--   a shared slot's member: whose only (how it looks is the slot's)
+--   collection: name
+-- and on every one of them, Conditions.
+--------------------------------------------------------------------------------
+
+local BP_W = 520
+local CW = BP_W - 40 -- the body's width
+local EDGES: SegmentedOption<string>[] = {
+    { value = "default", label = "By state" },
+    { value = "ink", label = "Ink" },
+    { value = "gilt", label = "Gilt" },
+    { value = "muted", label = "Muted" },
+}
+local SOUND_OPTIONS: SelectOption<string>[] = {
+    { value = "none", label = "None" },
+    { value = "chime", label = "Ready chime" },
+    { value = "ping", label = "Soft ping" },
+    { value = "proc", label = "Proc" },
+    { value = "warning", label = "Warning" },
+}
+local WHOSE: SegmentedOption<string>[] = {
+    { value = "mine", label = "Only yours" },
+    { value = "others", label = "Only others'" },
+    { value = "any", label = "Anyone's" },
+}
+
+-- A segmented choice of words.
+local function segmented(
+    parent: Frame,
+    options: SegmentedOption<string>[],
+    onChange: (v: string) -> ()
+): Segmented<string>
+    return UI.Segmented(parent, { options = options, onChange = onChange })
+end
+
+-- A section of the panel: the panel stacks those that apply.
+class Section extends Frame
+    height: number = 0
+    y: number = 0
+
+    constructor(inner: Frame, sections: Section[])
+        super(nil, inner)
+        self:SetWidth(CW)
+        sections[#sections + 1] = self
+    end
+
+    -- A label over a control, stacked down the section; the height so far.
+    function Add(label: string?, control: Region, h: number?): number
+        if label then
+            local t = UI.Text(self, "caption", "ink-muted")
+            t:SetPoint("TOPLEFT", 0, -self.y)
+            t:SetValue(label)
+            self.y = self.y + 18
+        end
+        control:SetPoint("TOPLEFT", 0, -self.y)
+        self.y = self.y + (h or 30) + 12
+        self.height = self.y
+        return self.y
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Conditions: "Conditions" and All of these | Any of these, a row per
+-- condition (Not, its type, its control under them, ✕), "+ Add
+-- condition", then the sentence. Its height follows its rows.
+--------------------------------------------------------------------------------
+
+local COND_X = 56 -- a condition's control, under its type
+
+-- A chosen talent in a talent condition: icon, name, ✕.
+class TalentRow extends Frame
+    readonly icon: Icon
+    readonly name: Text
+    readonly remove: RemoveButton
+    id: number = 0
+
+    constructor(r: ConditionRow)
+        super(nil, r)
+        self:SetSize(300, 24)
+        self.icon = UI.Icon(self, 20)
+        self.icon:SetPoint("LEFT")
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.icon, "RIGHT", 8, 0)
+        self.name:SetFixedWidth(240)
+        self.remove = RemoveButton.new(self, function()
+            r.panel:SetCondition(r.index, function(c: Condition)
+                Conditions.removeTalent(c, self.id)
+            end)
+        end)
+        self.remove:SetPoint("RIGHT")
+    end
+end
+
+class ConditionRow extends Frame
+    readonly panel: BehaviourPanel
+    readonly notButton: Button
+    readonly notEdge: Border
+    readonly notText: Text
+    readonly type: Select<string>
+    readonly remove: RemoveButton
+    readonly group: Segmented<string>
+    readonly classesA: ToggleChips
+    readonly classesB: ToggleChips
+    readonly classesOthers: Segmented<string>
+    readonly roles: ToggleChips
+    readonly stances: ToggleChips?
+    readonly instance: ToggleChips
+    readonly target: ToggleChips
+    readonly plain: Text
+    readonly talentRows: TalentRow[] = {}
+    readonly talentClassSelect: Select<string>
+    readonly addTalent: Select<string>
+    readonly controls: Region[]
+    talentClass: string = CLASS
+    index: number = 0
+    cond: Condition? = nil
+    height: number = 0
+
+    constructor(host: Frame, panel: BehaviourPanel)
+        super(nil, host)
+        self.panel = panel
+        self:SetWidth(CW)
+        UI.Fill(self, "surface-sunk"):SetAllPoints()
+        UI.Border(self, "gilt-faint")
+        -- Not turns the condition around (ember while on)
+        self.notButton = CreateFrame("Button", nil, self)
+        self.notButton:SetSize(40, 30)
+        self.notButton:SetPoint("TOPLEFT", 8, -8)
+        self.notEdge = UI.Border(self.notButton, "gilt-line")
+        self.notText = UI.Text(self.notButton, "label", "ink-faint")
+        self.notText:SetPoint("CENTER")
+        self.notText:SetValue("Not")
+        self.notButton:SetScript("OnClick", function()
+            panel:SetCondition(self.index, function(c: Condition)
+                c["not"] = (not c["not"]) or nil
+            end)
+        end)
+        self.type = UI.Select(self, {
+            width = 196,
+            onChange = function(v: string?)
+                if not v then
+                    return
+                end
+                panel:MutateWhen(function(w: EditedWhen)
+                    Conditions.changeType(w, self.index, v, CLASS)
+                end)
+            end,
+        })
+        self.type:SetPoint("LEFT", self.notButton, "RIGHT", 8, 0)
+        self.remove = RemoveButton.new(self, function()
+            panel:MutateWhen(function(w: EditedWhen)
+                table.remove(w.conditions, self.index)
+            end)
+        end)
+        self.remove:SetPoint("TOPRIGHT", -8, -12)
+
+        -- the type's controls, one set showing
+        local top = -(8 + 30 + 6)
+        local function chips(options: Choice[], set: (c: Condition, values: string[]) -> ()): ToggleChips
+            local c = UI.ToggleChips(self, {
+                options = options,
+                onChange = function(values: string[])
+                    panel:SetCondition(self.index, function(cond: Condition)
+                        set(cond, values)
+                    end)
+                end,
+            })
+            c:SetPoint("TOPLEFT", COND_X, top)
+            return c
+        end
+        self.group = segmented(self, {
+            { value = "solo", label = "Solo" },
+            { value = "group", label = "Group" },
+            { value = "raid", label = "Raid" },
+        }, function(v: string)
+            panel:SetCondition(self.index, function(c: Condition)
+                c.value = v
+            end)
+        end)
+        self.group:SetPoint("TOPLEFT", COND_X, top)
+        -- classes in two rows of chips, one list
+        local function classes()
+            local all = self.classesA:GetValue()
+            for _, v in ipairs(self.classesB:GetValue()) do
+                all[#all + 1] = v
+            end
+            panel:SetCondition(self.index, function(c: Condition)
+                c.classes = all
+            end)
+        end
+        self.classesA = UI.ToggleChips(self, { options = { unpack(CLASSES, 1, 5) }, onChange = classes })
+        self.classesA:SetPoint("TOPLEFT", COND_X, top)
+        self.classesB = UI.ToggleChips(self, { options = { unpack(CLASSES, 6, 9) }, onChange = classes })
+        self.classesB:SetPoint("TOPLEFT", COND_X, top - 32)
+        -- you counted or not
+        self.classesOthers = segmented(self, {
+            { value = "me", label = "Counting you" },
+            { value = "others", label = "Others only" },
+        }, function(v: string)
+            panel:SetCondition(self.index, function(c: Condition)
+                c.others = (v == "others") or nil
+            end)
+        end)
+        self.classesOthers:SetPoint("TOPLEFT", COND_X, top - 64)
+        self.roles = chips(ROLES, function(c: Condition, v: string[])
+            c.roles = v
+        end)
+        local stances = STANCES[CLASS]
+        self.stances = stances and
+            chips(stances, function(c: Condition, v: string[])
+                c.stances = v
+            end) or
+            nil
+        self.instance = chips(INSTANCES, function(c: Condition, v: string[])
+            c.kinds = v
+        end)
+        self.target = chips(TARGETS, function(c: Condition, v: string[])
+            c.kinds = v
+        end)
+        self.plain = UI.Text(self, "caption", "ink-faint")
+        self.plain:SetPoint("TOPLEFT", COND_X, top - 6)
+        -- talents: the chosen ones (icon, name, ✕), then a class (any: a
+        -- profile may serve another character) and "+ Add talent…" of its
+        -- talents (a typed number finds any spell by its ID)
+        self.talentClassSelect = UI.Select(self, {
+            width = 160,
+            options = choiceOptions(CLASSES),
+            value = CLASS,
+            onChange = function(v: string?)
+                if not v then
+                    return
+                end
+                self.talentClass = v
+                self:TalentOptions()
+            end,
+        })
+        self.addTalent = UI.Select(self, {
+            width = 300,
+            placeholder = "+ Add talent…",
+            lookup = spellLookup,
+            onChange = function(v: string?)
+                local id = v and (tonumber(v) or tonumber(v:match("^id:(%d+)$")))
+                if not id then
+                    return
+                end
+                panel:SetCondition(self.index, function(c: Condition)
+                    Conditions.addTalent(c, id)
+                end)
+            end,
+        })
+        local controls: Region[] = {
+            self.group,
+            self.classesA,
+            self.classesB,
+            self.classesOthers,
+            self.roles,
+            self.instance,
+            self.target,
+            self.plain,
+            self.talentClassSelect,
+            self.addTalent,
+        }
+        if self.stances then
+            controls[#controls + 1] = self.stances
+        end
+        self.controls = controls
+    end
+
+    -- The chosen class's talents, without those already chosen: by tree,
+    -- left to right, each under its spec's name (Data/Talents; else the
+    -- tree's number), then by name.
+    function TalentOptions()
+        local cond = self.cond
+        local options = Conditions.talentOptions(classTalents(self.talentClass), cond and cond.talents)
+        local byId: SelectOption<string>[] = {}
+        for _, o in ipairs(options) do
+            byId[#byId + 1] = {
+                value = o.value and tostring(o.value),
+                label = o.label,
+                icon = o.icon,
+                heading = o.heading,
+            }
+        end
+        self.addTalent:SetOptions(byId)
+        self.addTalent:SetValue(nil)
+    end
+
+    function Fill(c: Condition)
+        self.notEdge:SetColor(c["not"] and "ember" or "gilt-line")
+        self.notText:SetColor(c["not"] and "ember-text" or "ink-faint")
+        self.type:SetOptions(conditionTypes(c.type))
+        self.type:SetValue(c.type)
+        self.cond = c
+        for _, ctl in ipairs(self.controls) do
+            ctl:Hide()
+        end
+        for _, t in ipairs(self.talentRows) do
+            t:Hide()
+        end
+        local h = 26
+        local stances = self.stances
+        if c.type == "group" then
+            self.group:SetValue(c.value or "group")
+            self.group:Show()
+            h = 30
+        elseif c.type == "classes" then
+            self.classesA:SetValue(c.classes)
+            self.classesB:SetValue(c.classes)
+            self.classesOthers:SetValue(c.others and "others" or "me")
+            self.classesA:Show()
+            self.classesB:Show()
+            self.classesOthers:Show()
+            h = 64 + 30
+        elseif c.type == "role" then
+            self.roles:SetValue(c.roles)
+            self.roles:Show()
+        elseif c.type == "stance" and stances then
+            stances:SetValue(c.stances)
+            stances:Show()
+        elseif c.type == "instance" then
+            self.instance:SetValue(c.kinds)
+            self.instance:Show()
+        elseif c.type == "target" then
+            self.target:SetValue(c.kinds)
+            self.target:Show()
+        elseif c.type == "talent" then
+            local y = 8 + 30 + 6
+            local n = 0
+            for _, talent in ipairs(c.talents or {}) do
+                local id = asNumber(talent)
+                if id then
+                    n = n + 1
+                    local t = self.talentRows[n] or TalentRow.new(self)
+                    self.talentRows[n] = t
+                    t.id = id
+                    t.icon:SetArt(C_Spell.GetSpellTexture(id))
+                    t.name:SetValue(talentName(id))
+                    t:ClearAllPoints()
+                    t:SetPoint("TOPLEFT", COND_X, -y)
+                    t:Show()
+                    y = y + 28
+                end
+            end
+            self.talentClassSelect:ClearAllPoints()
+            self.talentClassSelect:SetPoint("TOPLEFT", COND_X, -y)
+            self.talentClassSelect:SetValue(self.talentClass)
+            self.talentClassSelect:Show()
+            self.addTalent:ClearAllPoints()
+            self.addTalent:SetPoint("TOPLEFT", COND_X, -(y + 36))
+            self:TalentOptions()
+            self.addTalent:Show()
+            h = y + 36 + 30 - (8 + 30 + 6)
+        else
+            self.plain:SetValue(
+                c.type == "combat" and "No options: while you're in combat." or "Your class has no stances or forms."
+            )
+            self.plain:Show()
+            h = 20
+        end
+        self.height = 8 + 30 + 6 + h + 8
+        self:SetHeight(self.height)
+    end
+end
+
+-- The conditions' section: a row per condition.
+class ConditionsSection extends Section
+    readonly rows: ConditionRow[] = {}
+end
+
+-- An aura's three sounds: the field of each, and its label.
+type SoundField = { get: (e: Entry) -> string?, set: (e: Entry, v: string?) -> (), label: string }
+local SOUND_FIELDS: SoundField[] = {
+    {
+        get = function(e: Entry): string?
+            return e.soundAppear
+        end,
+        set = function(e: Entry, v: string?)
+            e.soundAppear = v
+        end,
+        label = "Sound when it appears",
+    },
+    {
+        get = function(e: Entry): string?
+            return e.soundStack
+        end,
+        set = function(e: Entry, v: string?)
+            e.soundStack = v
+        end,
+        label = "when it stacks up",
+    },
+    {
+        get = function(e: Entry): string?
+            return e.soundDrop
+        end,
+        set = function(e: Entry, v: string?)
+            e.soundDrop = v
+        end,
+        label = "when it drops",
+    },
+}
+
+-- A switch with its label, in a row of switches.
+local function switch(row: Frame, x: number, label: string, onChange: (v: boolean) -> ()): Toggle
+    local t = UI.Toggle(row, { onChange = onChange })
+    t:SetPoint("LEFT", x, 0)
+    local l = UI.Text(row, "label", "ink")
+    l:SetPoint("LEFT", t, "RIGHT", 8, 0)
+    l:SetValue(label)
+    return t
+end
+
+export class BehaviourPanel extends PanelClass
+    -- the module whose lists it edits
+    readonly host: EditorHost
+    readonly sections: Section[] = {}
+    readonly scroll: ScrollArea
+    readonly inner: Frame
+    -- a note on top
+    readonly note: Section
+    readonly noteText: Text
+    -- name, beside how many show at once or shown
+    readonly naming: Section
+    readonly name: TextField
+    readonly sideLabel: Text
+    readonly max: Stepper
+    readonly slotShown: Toggle
+    -- an aura slot's icon
+    readonly iconSection: Section
+    readonly icon: Select<string | number>
+    -- a member's whose
+    readonly memberSection: Section
+    readonly memberSource: Segmented<string>
+    -- cooldowns
+    readonly cd: Section
+    readonly ready: Segmented<string>
+    readonly pop: Segmented<string>
+    readonly sound: Select<string>
+    readonly onCooldown: Segmented<string>
+    readonly show: Segmented<string>
+    readonly unusable: Segmented<string>
+    readonly cdEdge: Segmented<string>
+    readonly effect: Segmented<string>
+    readonly effectAura: Select<string>
+    -- auras
+    readonly au: Section
+    readonly source: Segmented<string>
+    readonly missing: Segmented<string>
+    readonly missingDebuff: Segmented<string>
+    readonly auEdge: Segmented<string>
+    readonly size: Segmented<string>
+    readonly glow: Toggle
+    readonly digits: Toggle
+    readonly stacks: Toggle
+    readonly expiring: Stepper
+    readonly soundAppear: Select<string>
+    readonly soundStack: Select<string>
+    readonly soundDrop: Select<string>
+    readonly soundNote: Text
+    -- a weapon enchant
+    readonly weaponSection: Section
+    readonly weapon: Segmented<string>
+    readonly weaponMissing: Segmented<string>
+    readonly warnOoc: Toggle
+    -- conditions
+    readonly cond: ConditionsSection
+    readonly match: Segmented<string>
+    readonly addCondition: SuuButton
+    readonly condSentence: Text
+    readonly condNote: Text
+    readonly reset: SuuButton
+    readonly done: SuuButton
+    -- the entry it's open on (name is the panel's Name field: the entry's
+    -- name goes in entryName)
+    key: string = ""
+    path: Path = { key = "", i = 0 }
+    uid: (string | number)? = nil
+    entryName: string? = nil
+    slotUid: (string | number)? = nil
+    ctx: string = "single"
+    auraByName: { [string]: number[] } = {}
+
+    constructor(host: EditorHost)
+        super(SuuUI.Root, { title = "Behaviour", width = BP_W, height = 600, solid = true })
+        self.host = host
+        UI.MakeModal(self)
+        -- everything scrolls once the panel would outgrow the screen (many
+        -- conditions): the panel stops at most of the screen's height
+        self.scroll = UI.ScrollArea(self.body, 6)
+        self.scroll:SetAllPoints(self.body)
+        self.inner = self.scroll.child
+        self.inner:SetWidth(CW)
+        local function section(): Section
+            return Section.new(self.inner, self.sections)
+        end
+
+        -- a note on top: a member's slot, a cooldown slot's order
+        -- (the box itself, then space-5 before the next section)
+        self.note = section()
+        self.note.height = 34 + T.space["space-5"]
+        local box = CreateFrame("Frame", nil, self.note)
+        box:SetPoint("TOPLEFT")
+        box:SetPoint("TOPRIGHT")
+        box:SetHeight(34)
+        UI.Fill(box, "surface-sunk"):SetAllPoints()
+        UI.Border(box, "gilt-faint")
+        self.noteText = UI.Text(box, "caption", "ink-muted")
+        self.noteText:SetPoint("LEFT", 8, 0)
+        self.noteText:SetFixedWidth(CW - 16)
+        self.noteText:SetJustifyH("LEFT")
+
+        -- a shared slot's or collection's name, beside how many show at
+        -- once (aura slots) or shown (cooldown slots)
+        local nm = section()
+        nm.height = 18 + 30 + 12
+        local nameLabel = UI.Text(nm, "caption", "ink-muted")
+        nameLabel:SetPoint("TOPLEFT")
+        nameLabel:SetValue("Name")
+        self.name = UI.TextField(nm, {
+            width = 240,
+            onChange = function(text: string?)
+                if text and text ~= "" then
+                    self:MutateEntry(function(e: Entry)
+                        e.name = text
+                    end)
+                end
+            end,
+        })
+        self.name:SetPoint("TOPLEFT", 0, -18)
+        self.sideLabel = UI.Text(nm, "caption", "ink-muted")
+        self.sideLabel:SetPoint("TOPLEFT", 256, 0)
+        self.max = UI.Stepper(nm, {
+            min = 1,
+            max = 4,
+            step = 1,
+            onChange = function(v: number)
+                self:MutateEntry(function(e: Entry)
+                    e.max = v
+                end)
+            end,
+        })
+        self.max:SetPoint("TOPLEFT", 256, -18)
+        self.slotShown = UI.Toggle(nm, {
+            onChange = function(v: boolean)
+                self:MutateEntry(function(e: Entry)
+                    e.hidden = (not v) or nil
+                end)
+            end,
+        })
+        self.slotShown:SetPoint("TOPLEFT", 256, -24)
+        self.naming = nm
+
+        -- an aura slot's icon while none of its auras is up. Automatic: what
+        -- can show (the first member you know, else the icon); a member:
+        -- always that one's
+        local ic = section()
+        self.icon = UI.Select(ic, {
+            width = 240,
+            placeholder = "First spell",
+            onChange = function(v: (string | number)?)
+                if v == "auto" then
+                    self:MutateEntry(function(e: Entry)
+                        e.fixedIcon = nil
+                    end)
+                elseif type(v) == "number" then
+                    self:MutateEntry(function(e: Entry)
+                        e.icon, e.fixedIcon = v, true
+                    end)
+                end
+            end,
+        })
+        ic:Add("Icon when none is up", self.icon)
+        self.iconSection = ic
+
+        -- a member's whose (unless set, the slot's)
+        local ms = section()
+        self.memberSource = segmented(ms, WHOSE, function(v: string)
+            self:MutateEntry(function(e: Entry, slot: Entry?)
+                e.source = (not slot or v ~= entrySource(slot, self.key)) and v or nil
+            end)
+        end)
+        ms:Add("Whose", self.memberSource)
+        self.memberSection = ms
+
+        -- cooldowns
+        local cd = section()
+        self.ready = segmented(cd, {
+            { value = "normal", label = "Normal" },
+            { value = "glow", label = "Glow" },
+            { value = "pulse", label = "Pulse" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.ready = v ~= "normal" and v or nil
+            end)
+        end)
+        cd:Add("When ready", self.ready)
+        self.pop = segmented(cd, {
+            { value = "default", label = "Like Display" },
+            { value = "on", label = "On" },
+            { value = "off", label = "Off" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                if v == "default" then
+                    e.pop = nil
+                else
+                    e.pop = (v == "on")
+                end
+            end)
+        end)
+        cd:Add("Pop when it comes ready", self.pop)
+        self.sound = UI.Select(cd, {
+            width = 220,
+            options = SOUND_OPTIONS,
+            onChange = function(v: string)
+                self:MutateEntry(function(e: Entry)
+                    e.sound = v ~= "none" and v or nil
+                end)
+                if v ~= "none" then
+                    UI.TrackerSound(v)
+                end
+            end,
+        })
+        cd:Add("Sound when ready", self.sound)
+        self.onCooldown = segmented(cd, {
+            { value = "grey", label = "Grey" },
+            { value = "dim", label = "Dim" },
+            { value = "hide", label = "Hide" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.onCooldown = v ~= "grey" and v or nil
+            end)
+        end)
+        cd:Add("On cooldown", self.onCooldown)
+        self.show = segmented(cd, {
+            { value = "always", label = "Always" },
+            { value = "ready", label = "Only when ready" },
+            { value = "cooldown", label = "Only on cooldown" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.show = v ~= "always" and v or nil
+            end)
+        end)
+        cd:Add("Show", self.show)
+        self.unusable = segmented(cd, {
+            { value = "dim", label = "Dim" },
+            { value = "hide", label = "Hide" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.unusable = v ~= "dim" and v or nil
+            end)
+        end)
+        cd:Add("When unusable (not enough rage, wrong form)", self.unusable)
+        self.cdEdge = segmented(cd, EDGES, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.border = v ~= "default" and v or nil
+            end)
+        end)
+        cd:Add("Edge when ready", self.cdEdge)
+        -- "Effect running": while the spell's buff (or your debuff on the
+        -- target) is up, its aura covers the icon with its own time
+        self.effect = segmented(cd, {
+            { value = "off", label = "Off" },
+            { value = "you", label = "Buff on you" },
+            { value = "target", label = "Debuff on target" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.effect = v ~= "off" and v or nil
+            end)
+            self.effectAura:SetDisabled(v == "off")
+        end)
+        cd:Add("While its effect runs, show it over the icon", self.effect)
+        self.effectAura = UI.Select(cd, {
+            width = 300,
+            lookup = spellLookup,
+            onChange = function(v: string?)
+                if v == nil or v == "current" then
+                    return
+                end
+                self:MutateEntry(function(e: Entry)
+                    local id = tonumber(v:match("^id:(%d+)$"))
+                    local ids = self.auraByName[v]
+                    if v == "self" then
+                        e.effectIDs, e.effectName = nil, nil
+                    elseif id then
+                        e.effectIDs, e.effectName = { id }, ("%s · ID %d"):format(C_Spell.GetSpellName(id) or "?", id)
+                    elseif ids then
+                        e.effectIDs, e.effectName = copy(ids), v
+                    end
+                end)
+            end,
+        })
+        cd:Add("Effect (name or spell ID)", self.effectAura)
+        self.cd = cd
+
+        -- auras
+        local au = section()
+        -- whose aura counts (a shared slot's own setting; its members may differ)
+        self.source = segmented(au, WHOSE, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.mine = nil
+                e.source = v ~= LIST_SOURCE[self.key] and v or nil
+                if e.group then
+                    e.source = v
+                end
+            end)
+        end)
+        au:Add("Whose", self.source)
+        -- (unset = the list's default: grey for buffs, with a target for debuffs)
+        local function setMissing(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.missing = v ~= MISSING_DEFAULT[self.key] and v or nil
+            end)
+        end
+        self.missing = segmented(au, MISSING, setMissing)
+        au:Add("When missing", self.missing)
+        self.missingDebuff = segmented(au, MISSING_DEBUFF, setMissing)
+        self.missingDebuff:SetPoint(self.missing:GetPoint())
+        self.auEdge = segmented(au, EDGES, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.border = v ~= "default" and v or nil
+            end)
+        end)
+        au:Add("Edge", self.auEdge)
+        self.size = segmented(au, {
+            { value = "small", label = "Small" },
+            { value = "normal", label = "Normal" },
+            { value = "large", label = "Large" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.size = v ~= "normal" and v or nil
+            end)
+        end)
+        au:Add("Size", self.size)
+        -- three switches in one row
+        local row = CreateFrame("Frame", nil, au)
+        row:SetSize(CW, 30)
+        self.glow = switch(row, 0, "Glow", function(v: boolean)
+            self:MutateEntry(function(e: Entry)
+                e.glow = v or nil
+            end)
+        end)
+        self.digits = switch(row, 120, "Timer", function(v: boolean)
+            self:MutateEntry(function(e: Entry)
+                if v then
+                    e.digits = nil
+                else
+                    e.digits = false
+                end
+            end)
+        end)
+        self.stacks = switch(row, 240, "Stacks", function(v: boolean)
+            self:MutateEntry(function(e: Entry)
+                if v then
+                    e.stacks = nil
+                else
+                    e.stacks = false
+                end
+            end)
+        end)
+        au:Add(nil, row)
+        -- the amber threshold on one line, its label before it
+        local amber = CreateFrame("Frame", nil, au)
+        amber:SetSize(CW, 30)
+        local amberLabel = UI.Text(amber, "caption", "ink-muted")
+        amberLabel:SetPoint("LEFT")
+        amberLabel:SetValue("Timer turns amber in the last")
+        self.expiring = UI.Stepper(amber, {
+            min = 1,
+            max = 10,
+            step = 1,
+            unit = "s",
+            onChange = function(v: number)
+                self:MutateEntry(function(e: Entry)
+                    e.expiring = v ~= 3 and v or nil
+                end)
+            end,
+        })
+        self.expiring:SetPoint("LEFT", amberLabel, "RIGHT", 12, 0)
+        au:Add(nil, amber)
+        -- sounds, three across: the engine plays them (registered on every
+        -- tracker build)
+        local sounds = CreateFrame("Frame", nil, au)
+        sounds:SetSize(CW, 48)
+        local selects: Select<string>[] = {}
+        for n, s in ipairs(SOUND_FIELDS) do
+            local t = UI.Text(sounds, "caption", "ink-muted")
+            t:SetPoint("TOPLEFT", (n - 1) * 150, 0)
+            t:SetValue(s.label)
+            local sel = UI.Select(sounds, {
+                width = 140,
+                options = SOUND_OPTIONS,
+                onChange = function(v: string)
+                    self:MutateEntry(function(e: Entry)
+                        s.set(e, v ~= "none" and v or nil)
+                    end)
+                    if v ~= "none" then
+                        UI.TrackerSound(v)
+                    end
+                end,
+            })
+            sel:SetPoint("TOPLEFT", (n - 1) * 150, -18)
+            selects[n] = sel
+        end
+        self.soundAppear, self.soundStack, self.soundDrop = selects[1], selects[2], selects[3]
+        local h = au:Add(nil, sounds, 48)
+        self.soundNote = UI.Text(au, "caption", "ink-muted")
+        self.soundNote:SetWordWrap(true)
+        self.soundNote:SetJustifyH("LEFT")
+        self.soundNote:SetFixedWidth(CW)
+        self.soundNote:SetPoint("TOPLEFT", 0, -(h - 6))
+        self.soundNote:SetValue("The game plays these itself, in combat too, for this aura from anyone.")
+        au.height = h + 22
+        self.au = au
+
+        -- a weapon enchant: which weapon, while it has nothing on it (warn:
+        -- the ember edge pulses), and whether the warning waits for the end
+        -- of a fight
+        local we = section()
+        self.weapon = segmented(we, {
+            { value = "main", label = "Main hand" },
+            { value = "off", label = "Off hand" },
+            { value = "ranged", label = "Ranged" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.enchant, e.name = v, ENCHANT_NAME[v]
+            end)
+        end)
+        we:Add("Weapon", self.weapon)
+        self.weaponMissing = segmented(we, {
+            { value = "hide", label = "Hide" },
+            { value = "grey", label = "Grey" },
+            { value = "warn", label = "Warn" },
+        }, function(v: string)
+            self:MutateEntry(function(e: Entry)
+                e.missing = v ~= "warn" and v or nil
+            end)
+            self.warnOoc:SetDisabled(v ~= "warn")
+        end)
+        we:Add("When missing (Warn: the ember edge pulses)", self.weaponMissing)
+        self.warnOoc = UI.Toggle(we, {
+            onChange = function(v: boolean)
+                self:MutateEntry(function(e: Entry)
+                    e.warnCombat = (not v) or nil
+                end)
+            end,
+        })
+        we:Add("Warn only out of combat", self.warnOoc)
+        self.weaponSection = we
+
+        -- conditions
+        local cs = ConditionsSection.new(self.inner, self.sections)
+        local rule = UI.Hairline(cs, "gilt-faint")
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        local title = UI.Text(cs, "label", "gilt-text")
+        title:SetPoint("TOPLEFT", 0, -18)
+        title:SetValue("Conditions")
+        self.match = segmented(cs, {
+            { value = "all", label = "All of these" },
+            { value = "any", label = "Any of these" },
+        }, function(v: string)
+            self:MutateWhen(function(w: EditedWhen)
+                w.match = v
+            end)
+        end)
+        self.match:SetPoint("TOPRIGHT", 0, -12)
+        self.addCondition = UI.Button(cs, {
+            text = "+ Add condition",
+            onClick = function()
+                -- the first type not used yet
+                self:MutateWhen(function(w: EditedWhen)
+                    table.insert(w.conditions, newCondition(Conditions.firstUnusedType(w.conditions, CLASS)))
+                end)
+            end,
+        })
+        self.condSentence = UI.Text(cs, "body", "ink")
+        self.condSentence:SetWordWrap(true)
+        self.condSentence:SetJustifyH("LEFT")
+        self.condSentence:SetFixedWidth(CW)
+        self.condNote = UI.Text(cs, "caption", "ink-muted")
+        self.cond = cs
+
+        self.reset = UI.Button(self.inner, {
+            text = "Reset",
+            width = 90,
+            onClick = function()
+                local ctx = self.ctx
+                self:MutateEntry(function(e: Entry)
+                    Lists.resetBehaviour(e, ctx)
+                end)
+            end,
+        })
+        self.done = UI.Button(self.inner, {
+            text = "Done",
+            variant = "primary",
+            width = 90,
+            onClick = function()
+                self:Hide()
+            end,
+        })
+    end
+
+    -- The panel's entry in the lists, and the shared slot it's a member of:
+    -- by uid (shared slots and collections have one; a member goes by its
+    -- slot's), else at its path while that is still the same spell; nil
+    -- once it's gone.
+    function Find(l: ListSet): (Entry?, Entry?)
+        return Lists.findEntry(l, {
+            key = self.key,
+            path = self.path,
+            uid = self.uid,
+            slotUid = self.slotUid,
+            entryName = self.entryName,
+        })
+    end
+
+    function MutateEntry(fn: (e: Entry, slot: Entry?) -> ())
+        mutate(self.host, function(l: ListSet)
+            local e, slot = self:Find(l)
+            if e then
+                fn(e, slot)
+                if slot then
+                    regroup(slot)
+                end
+            end
+        end)
+    end
+
+    -- Changes the entry's conditions; with none left it has no `when`.
+    function MutateWhen(fn: (w: EditedWhen) -> ())
+        self:MutateEntry(function(e: Entry)
+            Conditions.editWhen(e, fn)
+        end)
+    end
+
+    function SetCondition(i: number, fn: (c: Condition, w: EditedWhen) -> ())
+        self:MutateWhen(function(w: EditedWhen)
+            local c = w.conditions[i]
+            if c then
+                fn(c, w)
+            end
+        end)
+    end
+
+    -- subject: the entry's name in the sentence (nil: "Shows …");
+    -- note: under it ("Applies to everything inside.")
+    function FillConditions(e: Entry, subject: string?, note: string?)
+        local cs = self.cond
+        local when = e.when
+        local conds = when and when.conditions or {}
+        self.match:SetValue(when and when.match or "all")
+        local y = 12 + 30 + 10
+        for _, r in ipairs(cs.rows) do
+            r:Hide()
+        end
+        for i, c in ipairs(conds) do
+            local r = cs.rows[i] or ConditionRow.new(cs, self)
+            cs.rows[i] = r
+            r.index = i
+            r:Fill(c)
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:Show()
+            y = y + r.height + 6
+        end
+        self.addCondition:ClearAllPoints()
+        self.addCondition:SetPoint("TOPLEFT", 0, -y)
+        y = y + 30 + 10
+        self.condSentence:SetValue(conditionSentence(subject, when))
+        self.condSentence:ClearAllPoints()
+        self.condSentence:SetPoint("TOPLEFT", 0, -y)
+        y = y + math.max(16, self.condSentence:GetStringHeight()) + 6
+        self.condNote:SetShown(note ~= nil)
+        if note then
+            self.condNote:SetValue(note)
+            self.condNote:ClearAllPoints()
+            self.condNote:SetPoint("TOPLEFT", 0, -y)
+            y = y + 16 + 4
+        end
+        cs.height = y + 8
+    end
+
+    -- Opens on the entry at `path`.
+    function Open(path: Path, e: Entry, slot: Entry?)
+        self.key, self.path, self.uid, self.entryName, self.slotUid = path.key, path, e.uid, e.name, slot and slot.uid
+        self.scroll:SetVerticalScroll(0)
+        self:Refresh()
+        self:Show()
+    end
+
+    function Refresh()
+        local e, slot = self:Find(self.host:Lists(self.host:EditSpec()))
+        if not e then
+            self:Hide()
+            return
+        end
+        local cooldown = kindOf(self.key) == "cooldown"
+        local ctx = (e.collection and "collection") or (e.group and "slot") or (slot and "member") or "single"
+        self.ctx = ctx
+        local shown: Section[]
+        local meta: string
+        if ctx == "collection" then
+            local n = #(e.entries or {})
+            shown, meta = { self.naming, self.cond }, ("Collection · %d %s"):format(n, n == 1 and "entry" or "entries")
+        elseif ctx == "member" then
+            local slotName = slot and slot.name
+            shown, meta = { self.note, self.memberSection, self.cond }, "In " .. (slotName or "a shared slot")
+            self.noteText:SetValue("One slot: how it looks follows " .. (slotName or "the shared slot") .. ".")
+        elseif ctx == "slot" then
+            local n = #(e.members or {})
+            if cooldown then
+                shown = { self.note, self.naming, self.cd, self.cond }
+                self.noteText:SetValue("Shows the last spell in the list you know: put upgrades last.")
+                meta = ("Shared slot · %d %s"):format(n, n == 1 and "spell" or "spells")
+            else
+                shown = { self.naming, self.iconSection, self.au, self.cond }
+                meta = ("Shared slot · %d %s"):format(n, n == 1 and "aura" or "auras")
+            end
+        elseif e.enchant then
+            shown, meta = { self.weaponSection, self.cond },
+                self.path.j and "Weapon enchant · in a collection" or "Weapon enchant"
+        else
+            shown = { cooldown and self.cd or self.au, self.cond }
+            meta = cooldown and ("Cooldown · " .. infoOf(self.key).label) or
+                (self.path.j and "Single aura · in a collection" or "Single aura")
+        end
+        self:SetTitle(e.name or "Behaviour", meta)
+
+        if ctx == "slot" or ctx == "collection" then
+            self.name:SetValue(e.name or "")
+            self.sideLabel:SetShown(ctx == "slot")
+            self.sideLabel:SetValue(cooldown and "Shown" or "How many show at once")
+            self.max:SetShown(ctx == "slot" and not cooldown)
+            self.max:SetValue(e.max or 1)
+            self.slotShown:SetShown(ctx == "slot" and cooldown)
+            self.slotShown:SetValue(not e.hidden)
+        end
+        if ctx == "slot" and not cooldown then
+            local iconOptions: SelectOption<string | number>[] = {
+                { value = "auto", label = "Automatic (what can show)" },
+            }
+            for _, m in ipairs(e.members or {}) do
+                local art = m.icon or (m.ids and m.ids[1])
+                if art then
+                    iconOptions[#iconOptions + 1] = { value = art, label = m.name, icon = C_Spell.GetSpellTexture(art) }
+                end
+            end
+            self.icon:SetOptions(iconOptions)
+            self.icon:SetValue(e.fixedIcon and e.icon or "auto")
+        end
+        if ctx == "member" and slot then
+            self.memberSource:SetValue(e.source or entrySource(slot, self.key))
+        end
+        if cooldown and ctx ~= "member" then
+            self.ready:SetValue(e.ready or "normal")
+            self.pop:SetValue(e.pop == nil and "default" or (e.pop and "on" or "off"))
+            self.sound:SetValue(e.sound or "none")
+            self.onCooldown:SetValue(e.onCooldown or "grey")
+            self.show:SetValue(e.show or "always")
+            self.unusable:SetValue(e.unusable or "dim")
+            self.cdEdge:SetValue(e.border or "default")
+            self.effect:SetValue(e.effect or "off")
+            -- the effect: the spell itself, or any aura the presets know
+            self.auraByName = (candidates("aura"))
+            local options: SelectOption<string>[] = {
+                { value = "self", label = "The spell itself (" .. (e.name or "?") .. ")" },
+            }
+            local names: string[] = {}
+            for name in pairs(self.auraByName) do
+                names[#names + 1] = name
+            end
+            table.sort(names)
+            for _, name in ipairs(names) do
+                options[#options + 1] = { value = name, label = name }
+            end
+            local current = "self"
+            local effectName = e.effectName
+            if effectName then
+                current = self.auraByName[effectName] and effectName or "current"
+                if current == "current" then
+                    table.insert(options, 2, { value = "current", label = effectName })
+                end
+            end
+            self.effectAura:SetOptions(options)
+            self.effectAura:SetValue(current)
+            self.effectAura:SetDisabled(not e.effect)
+        elseif e.enchant then
+            self.weapon:SetValue(e.enchant)
+            self.weaponMissing:SetValue(e.missing or "warn")
+            self.warnOoc:SetValue(not e.warnCombat)
+            self.warnOoc:SetDisabled((e.missing or "warn") ~= "warn")
+        elseif ctx == "single" or ctx == "slot" then
+            self.source:SetValue(entrySource(e, self.key))
+            local debuff = self.key == "debuffs"
+            self.missing:SetShown(not debuff)
+            self.missingDebuff:SetShown(debuff)
+            local missing = debuff and self.missingDebuff or self.missing
+            missing:SetValue(e.missing or MISSING_DEFAULT[self.key])
+            missing:SetAlpha(self.key == "procs" and T.opacity["opacity-disabled"] or 1)
+            self.auEdge:SetValue(e.border or "default")
+            self.size:SetValue(e.size or "normal")
+            self.glow:SetValue(e.glow and true or false)
+            self.digits:SetValue(e.digits ~= false)
+            self.stacks:SetValue(e.stacks ~= false)
+            self.expiring:SetValue(e.expiring or 3)
+            self.soundAppear:SetValue(e.soundAppear or "none")
+            self.soundStack:SetValue(e.soundStack or "none")
+            self.soundDrop:SetValue(e.soundDrop or "none")
+        end
+
+        -- conditions: on every entry (a cooldown slot's members have no panel)
+        self:FillConditions(
+            e,
+            ctx ~= "collection" and e.name or nil,
+            ctx == "collection" and "Applies to everything inside." or nil
+        )
+
+        -- the sections that apply, stacked; Reset and Done under them
+        for _, s in ipairs(self.sections) do
+            s:Hide()
+        end
+        local h = 0
+        for _, s in ipairs(shown) do
+            s:ClearAllPoints()
+            s:SetPoint("TOPLEFT", self.inner, "TOPLEFT", 0, -h)
+            s:SetHeight(s.height)
+            s:Show()
+            h = h + s.height
+        end
+        h = h + 10
+        self.reset:ClearAllPoints()
+        self.reset:SetPoint("TOPLEFT", self.inner, "TOPLEFT", 0, -h)
+        self.done:ClearAllPoints()
+        self.done:SetPoint("TOPRIGHT", self.inner, "TOPLEFT", CW, -h)
+        local content = h + 30
+        self.inner:SetHeight(content)
+        self:SetHeight(math.min(self:BodyTop() + content + 20, math.floor(SuuUI.Root:GetHeight() * 0.85)))
+    end
+end

@@ -1,0 +1,67 @@
+-- Units/FlightMap/Flights: a flight kept over a reload, its time (measured
+-- or estimated from its length at the character's speed) and what a
+-- landing teaches. The functions take the module (Units/FlightMap's);
+-- Orgrimmar to the Crossroads is 3335 yards in the route data.
+
+import test, expect, afterEach from "wowlua:test"
+import SuuUI from "/Core/API"
+import internal M from "/Units/FlightMap"
+import * as flights from "/Units/FlightMap/Flights"
+import type RouteRecord from "/Units/FlightMap/Route"
+import expectNoErrors from "../../../helpers"
+
+local function routes(): { [string]: RouteRecord }
+    local data = SuuUI.AccountData("flightmap") :: unknown :: flights.FlightAccount
+    local list = data.routes or {}
+    data.routes = list
+    return list
+end
+
+@afterEach
+local function cleanup()
+    M:ForgetTimes()
+    M.flight, M.pending = nil, nil
+    M:Char().flight = nil
+    expectNoErrors()
+end
+
+@test("a kept flight too old, or on the ground: dropped")
+local function staleFlight()
+    M:Char().flight = { path = { 23, 25 }, wall = time() - 60 }
+    M:ResumeFlight()
+    expect(M.flight).toBeNil()
+    expect(M:Char().flight).toBeNil()
+    M:Char().flight = { path = { 23, 25 } }
+    M:ResumeFlight()
+    expect(M.flight).toBeNil()
+end
+
+@test("a flight's time: none without a route; estimated from its length at the speed; flown before, measured")
+local function flightTimes()
+    expect({ flights.flightTimeOf(M, nil) }).toEqual({})
+    expect(flights.speedOf(M)).toBe(30.3)
+    local t, measured = flights.flightTimeOf(M, { 23, 25 })
+    expect(t).toBeCloseTo(3335 / 30.3, 1)
+    expect(measured).toBe(false)
+    routes()["23>25"] = { t = 100, n = 1, v = 30.3 }
+    local again, timed = flights.flightTimeOf(M, { 23, 25 })
+    expect(again).toBe(100)
+    expect(timed).toBe(true)
+end
+
+@test("a landing: far off its estimate, too short or begun before a reload teaches nothing; else the route's time and the speed")
+local function learning()
+    flights.learn(M, { path = { 23, 25 }, expected = 100 }, 150)
+    flights.learn(M, { path = { 23, 25 }, expected = 100, reloaded = true }, 100)
+    flights.learn(M, { path = { 23, 25 } }, 3)
+    expect(routes()["23>25"]).toBeNil()
+    expect(M:Char().flights).toBeNil()
+    flights.learn(M, { path = { 23, 25 }, expected = 110 }, 110)
+    local r = routes()["23>25"]
+    assert(r, "no route kept")
+    expect(r.n).toBe(1)
+    expect(r.t).toBe(110)
+    expect(M:Char().flights).toBe(1)
+    expect(flights.speedOf(M)).toBeCloseTo(30.3 + 0.25 * (3335 / 110 - 30.3), 3)
+    expect(r.v).toBe(flights.speedOf(M))
+end

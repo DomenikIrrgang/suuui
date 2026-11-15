@@ -1,0 +1,99 @@
+-- Units/Collections/Shelf: the Toys shelf: a card each with what it does,
+-- where it comes from, Use on SuuUI's secure button; a toy's cooldown, its
+-- star; in combat the secure part waits.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import tokenOf from "../../SettingsUI/UiSettingsHelpers"
+import start, cleanup, open, ui, captureTooltips, toyData from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- The Toys tab
+--------------------------------------------------------------------------------
+
+@test("Toys: a card each with what it does, where it comes from, Use on SuuUI's secure button; yours first")
+local function toysTab()
+    toyData()
+    open("toys")
+    expect(ui().shelf).toBeShown()
+    expect(ui().stage).never.toBeShown()
+    local cards = ui().shelf.cards
+    expect(cards[1].name:GetText()).toBe("Bubble Wand")
+    expect(cards[2].name:GetText()).toBe("Toy Drum")
+    expect(cards[2].use:GetText()).toBe("Plays a drum.")
+    expect(cards[2].src:GetText()).toBe("From a holiday")
+    -- what it does stays above its source and Use (two lines ran into them
+    -- in game)
+    local card = cards[2]
+    expect((card.use:GetBottom() or 0) >= (card.act:GetTop() or 0)).toBe(true)
+    expect((card.use:GetBottom() or 0) >= (card.src:GetTop() or 0)).toBe(true)
+    expect(cards[2].check).toBeShown()
+    expect(cards[2].act:GetAttribute("type")).toBe("toy")
+    expect(cards[2].act:GetAttribute("toy")).toBe(201)
+    -- not usable here; not yours
+    expect(cards[1].act.why).toBe("You can't use this toy here.")
+    expect(cards[3].act.why).toBe("You don't have this toy yet.")
+    expect(cards[3].act:GetAttribute("type")).toBe(nil)
+    expect(tokenOf(cards[3].name)).toBe("ink-muted")
+    -- the first filter's label follows the tab
+    expect(ui().tools.list.buttons[1].label:GetText()).toBe("Toys")
+    -- a card's tooltip: all of its source
+    local shown = captureTooltips()
+    mock.hover(cards[2])
+    expect(shown().title).toBe("Toy Drum")
+    expect(shown().description).toBe("Plays a drum.")
+    expect(assert(shown().lines)[1][1]).toBe("In the game")
+    mock.hover(nil)
+    mock.hover(cards[3])
+    expect(assert(shown().lines)[1][1]).toBe("Source unknown")
+    mock.hover(nil)
+    -- Use's tooltip says why
+    mock.hover(cards[3].act)
+    expect(shown().description).toBe("You don't have this toy yet.")
+    mock.hover(nil)
+    -- nothing matches
+    ui().tools.search:SetValue("zzz")
+    assert(ui().tools.search.onTextChanged)("zzz")
+    expect(ui().shelf.empty).toBeShown()
+end
+
+@test(
+    "a toy on cooldown: when it's ready, again each second and when the game says; its star; in combat the buttons wait"
+)
+local function toyCooldowns()
+    toyData()
+    open("toys")
+    local drum = ui().shelf.cards[2]
+    mock.setItemCooldown(201, 600)
+    expect(drum.src:GetText()).toBe("Ready in 10 min")
+    mock.advanceTime(1.1)
+    expect(drum.src:GetText()).toBe("Ready in 10 min")
+    expect(tokenOf(drum.src)).toBe("arcane")
+    expect(drum.act.why).toBe("Ready in 10 min.")
+    mock.setItemCooldown(201, 0)
+    expect(drum.src:GetText()).toBe("From a holiday")
+    -- the star: yours only
+    mock.click(drum.star)
+    expect(C_ToyBox.GetIsFavorite(201)).toBe(true)
+    mock.click(ui().shelf.cards[3].star)
+    expect(C_ToyBox.GetIsFavorite(203)).toBe(false)
+    mock.advanceTime(0.2)
+    -- in combat: drawn, the secure part after
+    mock.player:enterCombat()
+    M:Refresh()
+    expect(M.shelfAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceTime(0.1)
+    expect(M.shelfAfterCombat).toBe(false)
+end

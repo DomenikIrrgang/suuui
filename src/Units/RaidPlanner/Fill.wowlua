@@ -1,0 +1,296 @@
+-- Units/RaidPlanner/Fill.wowlua
+-- The raid read and filled into the slots (Units/RaidPlanner): whether
+-- you're in a raid, the roster (out of combat), how a player fits a slot and
+-- what their role is, and the fill itself (the pinned first, then the
+-- pickiest slots), run again as the raid changes. The module's ReadRoster,
+-- RunFill, Refill and RefillSoon call these.
+
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import after from "wowlua:timer"
+import CLASS, key, canPlay from "/Units/RaidPlanner/Catalog"
+import type Slot from "/Units/RaidPlanner/Setups"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local try = errors.try
+local asNumber, asString = secret.asNumber, secret.asString
+
+--------------------------------------------------------------------------------
+-- The raid
+--------------------------------------------------------------------------------
+
+-- A player in the raid as the roster read them.
+export type Member = {
+    index: number,
+    unit: string,
+    name: string,
+    key: string,
+    class: string,
+    group: number,
+    online: boolean,
+    you: boolean,
+    role?: string,
+    lead: boolean,
+    assist: boolean,
+    tree?: number,
+}
+-- Who fills a slot, and how ("pinned", "exact", "provisional").
+export type Placed = { m: Member, how: string }
+-- The slots filled: by slot, who is where, two who fit one slot, who has none.
+export type Filled = {
+    slot: { [number]: Placed },
+    placed: { [string]: number },
+    conflict: { [number]: Member },
+    unplaced: Member[],
+}
+
+-- Whether you're in a raid now: IsInRaid, else (should it read false or
+-- secret while you are in one) your own index in the raid.
+export function inRaidNow(): boolean
+    if secret.flag(IsInRaid()) then
+        return true
+    end
+    local n = asNumber(try(GetNumGroupMembers))
+    if not (n and n > 0) then
+        return false
+    end
+    local index = try(UnitInRaid, "player")
+    return secret.readable(index)
+end
+
+-- What someone's role is, and how it's known: as set, from their spec, or
+-- the class's likely one.
+export function roleOf(m: { class: string, tree?: number, role?: string }): (string?, string)
+    if m.role then
+        return m.role, "set"
+    end
+    local c = CLASS[m.class]
+    if m.tree and c then
+        return c.roles[m.tree], "spec"
+    end
+    return c and c.likely or nil, "likely"
+end
+
+-- How a player fits a slot: "exact", "provisional" (their spec or role isn't
+-- known yet, so it may not be them), or nil.
+export function fit(s: Slot, m: Member): string?
+    if s.class and s.class ~= m.class then
+        return nil
+    end
+    local sure = true
+    if s.spec then
+        if m.tree then
+            if m.tree ~= s.spec then
+                return nil
+            end
+        else
+            sure = false
+        end
+    end
+    local role = s.role
+    if role then
+        if m.role then
+            if m.role ~= role then
+                return nil
+            end
+        elseif m.tree then
+            if not canPlay(m.class, m.tree, role) then
+                return nil
+            end
+        else
+            if not canPlay(m.class, nil, role) then
+                return nil
+            end
+            sure = false
+        end
+    end
+    return sure and "exact" or "provisional"
+end
+
+-- How picky a slot is: the pickiest fill first.
+export function strictness(s: Slot): number
+    return (s.class and 4 or 0) + (s.spec and 2 or 0) + (s.role and 1 or 0)
+end
+
+-- Decides once whether you're in a raid (self.inRaid): the roster, the
+-- view, Arrange groups, inspecting and sharing all go by it until the next
+-- read, so they can't disagree. The roster itself out of combat only
+-- (its values may be secret in combat).
+export function readRoster(self: RaidPlannerModule): Member[]
+    local out: Member[] = {}
+    local byKey: { [string]: Member } = {}
+    self.inRaid = inRaidNow()
+    if not self.inRaid then
+        self.roster, self.byKey, self.me = out, byKey, nil
+        return out
+    end
+    if InCombatLockdown() then
+        return self.roster
+    end
+    local me: Member? = nil
+    for i = 1, asNumber(try(GetNumGroupMembers)) or 0 do
+        local nameR, rankR, groupR, _, _, fileR, _, online, _, _, _, combatRole = try(GetRaidRosterInfo, i)
+        local name, file, group, rank = asString(nameR), asString(fileR), asNumber(groupR), asNumber(rankR)
+        if name and file and group then
+            local unit = "raid" .. i
+            local role = asString(combatRole)
+            if role == "NONE" or role == "" then
+                role = nil
+            end
+            if not role then
+                local r = asString(try(UnitGroupRolesAssigned, unit))
+                role = r ~= "NONE" and r or nil
+            end
+            local you = secret.flag(UnitIsUnit(unit, "player"))
+            local m: Member = {
+                index = i,
+                unit = unit,
+                name = name,
+                key = key(name),
+                class = file,
+                group = group,
+                online = secret.flag(online),
+                you = you,
+                role = role,
+                lead = rank == 2,
+                assist = rank == 1,
+            }
+            m.tree = self:KnownTree(name, you)
+            out[#out + 1] = m
+            byKey[m.key] = m
+            if you then
+                me = m
+            end
+        end
+    end
+    self.roster, self.byKey, self.me = out, byKey, me
+    return out
+end
+
+-- Fills the slots from the raid: the pinned first, then the pickiest slots
+-- with whoever fits best (sure over provisional, the class's likely role,
+-- already in that slot or group, fitting the fewest other slots). With
+-- `keepOnly` (review mode until Fill slots), only who was placed stays.
+export function runFill(self: RaidPlannerModule, keepOnly: boolean)
+    local w = self:Work()
+    local roster = self.roster
+    local prev: { [string]: number } = self.fill and self.fill.placed or {}
+    local fill: Filled = { slot = {}, placed = {}, conflict = {}, unplaced = {} }
+    local used: { [string]: boolean } = {}
+    -- pinned players in the raid take their slots
+    for _, s in ipairs(w.slots) do
+        local m = s.pin and self.byKey[key(s.pin)]
+        if m and not used[m.key] then
+            used[m.key] = true
+            fill.slot[s.id] = { m = m, how = "pinned" }
+            fill.placed[m.key] = s.id
+        end
+    end
+    -- how many slots each player fits
+    local options: { [string]: number } = {}
+    for _, m in ipairs(roster) do
+        local n = 0
+        for _, s in ipairs(w.slots) do
+            if not s.pin and fit(s, m) then
+                n = n + 1
+            end
+        end
+        options[m.key] = n
+    end
+    local order: { s: Slot, i: number }[] = {}
+    for i, s in ipairs(w.slots) do
+        if not s.pin then
+            order[#order + 1] = { s = s, i = i }
+        end
+    end
+    table.sort(order, function(a: { s: Slot, i: number }, b: { s: Slot, i: number }): boolean
+        local x, y = strictness(a.s), strictness(b.s)
+        if x ~= y then
+            return x > y
+        end
+        return a.i < b.i
+    end)
+    local letGo = self.letGo
+    for _, o in ipairs(order) do
+        local s = o.s
+        local best: Member? = nil
+        local bestScore: number? = nil
+        local bestHow = ""
+        for _, m in ipairs(roster) do
+            local how = not used[m.key] and not letGo[m.key] and fit(s, m) or nil
+            if how and keepOnly and prev[m.key] ~= s.id then
+                how = nil
+            end
+            if how then
+                local score = (how == "exact" and 100 or 0) - (options[m.key] or 0)
+                if prev[m.key] == s.id then
+                    score = score + 20
+                end
+                if m.group == s.g then
+                    score = score + 4
+                end
+                local c = CLASS[m.class]
+                if s.role and not m.role and not m.tree and c and c.likely == s.role then
+                    score = score + 10
+                end
+                if not bestScore or score > bestScore then
+                    best, bestScore, bestHow = m, score, how
+                end
+            end
+        end
+        if best then
+            used[best.key] = true
+            fill.slot[s.id] = { m = best, how = bestHow }
+            fill.placed[best.key] = s.id
+        end
+    end
+    for _, m in ipairs(roster) do
+        if not used[m.key] then
+            fill.unplaced[#fill.unplaced + 1] = m
+        end
+    end
+    -- two fit one slot: someone left over fits a slot as well as its player
+    for _, s in ipairs(w.slots) do
+        local f = fill.slot[s.id]
+        if f and f.how ~= "pinned" then
+            for _, m in ipairs(fill.unplaced) do
+                local how = not letGo[m.key] and fit(s, m)
+                if how and (how == "exact" or f.how == "provisional") then
+                    fill.conflict[s.id] = m
+                    break
+                end
+            end
+        end
+    end
+    self.fill = fill
+end
+
+-- Fills again (out of combat) and draws. `force`: review mode's Fill slots.
+export function refill(self: RaidPlannerModule, force: boolean?)
+    if InCombatLockdown() then
+        self:RunOutOfCombat("fill", function()
+            self:Refill(force)
+        end)
+        self:Render()
+        return
+    end
+    self:NoteOwnTreeIcons()
+    self:ReadRoster()
+    local review = self:Get("fill") == "review"
+    self:RunFill(review and not force and self.fill ~= nil)
+    self:Render()
+end
+
+-- The roster changes in bursts: one fill once it settles.
+export function refillSoon(self: RaidPlannerModule)
+    if self.refillQueued then
+        return
+    end
+    self.refillQueued = true
+    after(0.5, function()
+        self.refillQueued = false
+        if self:IsEnabled() then
+            self:Refill()
+        end
+    end)
+end

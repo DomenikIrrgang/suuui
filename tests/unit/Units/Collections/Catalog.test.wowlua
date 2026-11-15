@@ -1,0 +1,177 @@
+-- Units/Collections/Catalog: what the window lists: the mounts, toys, pets
+-- and appearances, yours first, with their sources; the slots' counts and
+-- the weapon kinds; the search and the filters; what the game says is
+-- wrapped, counted.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import filterEntries, wrapped, giftCounts, status, petSourceLines from "/Units/Collections/Catalog"
+import type Entry from "/Units/Collections/Catalog"
+import actionLabel, petActionLabel from "/Units/Collections/Actions"
+import start, cleanup, entry, SOURCES, CHEST_ALL, MAIN_ALL, wardrobeData, toyData, wrappedRam, petJournal from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- What there is
+--------------------------------------------------------------------------------
+
+@test("the mounts: yours first, favourites first among them, then by name; hidden ones left out; their sources")
+local function mounts()
+    local list = M:Mounts()
+    local names: string[] = {}
+    for _, e in ipairs(list) do
+        names[#names + 1] = e.name
+    end
+    expect(names).toEqual({ "Swift Ram", "Brown Horse", "Night Saber", "Zebra" })
+    expect(list[2].source).toBe(SOURCES.mount[101])
+    expect(list[1].display).toBe(9102)
+    expect(list[4].learned).toBe(nil)
+end
+
+@test("the toys: every toy of Forever, yours first, favourites, by name; names the game hasn't sent yet")
+local function toys()
+    -- the third's item not loaded yet: no name, the question mark
+    mock.defineItem(201, { name = "Toy Drum", icon = 134001 })
+    mock.defineItem(202, { name = "Bubble Wand", icon = 134002 })
+    mock.setToys({ [201] = { favorite = true }, [202] = { usable = false }, [203] = { collected = false } })
+    M.namesPending = false
+    local list = M:Toys()
+    local names: string[] = {}
+    for _, e in ipairs(list) do
+        names[#names + 1] = e.name
+    end
+    expect(names).toEqual({ "Toy Drum", "Bubble Wand", "Toy 203" })
+    expect(list[1].source).toBe(SOURCES.toy[201])
+    expect(list[1].icon).toBe(134001)
+    expect(list[2].usable).toBe(false)
+    expect(list[3].collected).toBe(false)
+    expect(list[3].icon).toBe(134400)
+    expect(M.namesPending).toBe(true)
+end
+
+@test("the weapon kinds a hand can use; each slot's yours of all; a slot without a kind for this class says why")
+local function slotCounts()
+    wardrobeData()
+    local main = M:WeaponKinds("main")
+    expect(#main).toBe(3)
+    expect(main[1]).toEqual({ category = 14, name = "One-Handed Swords" })
+    expect(#M:WeaponKinds("off")).toBe(2)
+    expect(#M:WeaponKinds("ranged")).toBe(0)
+    local counts = M:SlotCounts("Warriors")
+    expect(assert(counts.CHESTSLOT)).toEqual({ have = 2, all = CHEST_ALL })
+    expect(assert(counts.MAINHANDSLOT)).toEqual({ have = 1, all = MAIN_ALL })
+    expect(assert(counts.RANGEDSLOT).reason).toBe("No ranged weapons for Warriors")
+    expect(assert(M:SlotCounts(nil).RANGEDSLOT).reason).toBe("No ranged weapons for this class")
+end
+
+@test("a slot's appearances: what you wear first, then yours, each with its first collected source; names to come")
+local function appearances()
+    wardrobeData()
+    M.namesPending = false
+    local list = M:Appearances(4, "CHESTSLOT")
+    expect(#list).toBe(CHEST_ALL)
+    local ids: number[] = {}
+    for i = 1, 4 do
+        ids[i] = list[i].visualID or 0
+    end
+    expect(ids).toEqual({ 63240, 63239, 63305, 63242 })
+    expect(list[1].worn).toBe(true)
+    expect(list[1].name).toBe("Worn Tunic")
+    expect(list[2].source).toBe(SOURCES.item[56])
+    expect(list[2].camera).toBe(545)
+    expect(list[3].sourceID).toBe(316091)
+    expect(list[3].favourite).toBe(true)
+    -- an item the client hasn't loaded yet: its name to come
+    expect(list[4].name).toBe("…")
+    expect(M.namesPending).toBe(true)
+    -- nothing worn in the slot
+    mock.player:equip(5, nil)
+    expect(M:Worn("CHESTSLOT")).toBe(nil)
+    expect(M:Appearances(4, nil)[1].visualID).toBe(63239)
+end
+
+@test("the search and the filters: yours, missing, favourites, recent (newest first, from before SuuUI last)")
+local function filters()
+    local all: Entry[] = {
+        entry({ name = "Alpha", collected = true, favourite = true, learned = 0 }),
+        entry({ name = "Beta", collected = false }),
+        entry({ name = "Gamma", collected = true, learned = 200 }),
+        entry({ name = "Delta", collected = true, learned = 100 }),
+        entry({ name = "Epsilon", collected = true, learned = 0 }),
+    }
+    local function names(list: Entry[]): string[]
+        local out: string[] = {}
+        for _, e in ipairs(list) do
+            out[#out + 1] = e.name
+        end
+        return out
+    end
+    expect(names(filterEntries(all, "a", "all", "all"))).toEqual({ "Alpha", "Beta", "Gamma", "Delta" })
+    expect(names(filterEntries(all, "", "have", "all"))).toEqual({ "Alpha", "Gamma", "Delta", "Epsilon" })
+    expect(names(filterEntries(all, "", "missing", "all"))).toEqual({ "Beta" })
+    expect(names(filterEntries(all, "", "all", "fav"))).toEqual({ "Alpha" })
+    expect(names(filterEntries(all, "", "all", "recent"))).toEqual({ "Gamma", "Delta", "Alpha", "Epsilon" })
+end
+
+@test("gifts: wrapped mounts, toys and pets as the game says; counted")
+local function giftsRead()
+    wrappedRam()
+    toyData()
+    mock.setToys({ [201] = { fanfare = true }, [202] = {}, [203] = { collected = false } })
+    mock.fake("C_PetJournal.PetNeedsFanfare", function(guid: string): boolean
+        return guid == "BattlePet-0-1"
+    end)
+    mock.fake("C_PetJournal.GetNumPetsNeedingFanfare", function(): number
+        return 1
+    end)
+    expect(wrapped("mount", 102)).toBe(true)
+    expect(wrapped("mount", 101)).toBe(false)
+    expect(wrapped("toy", 201)).toBe(true)
+    expect(wrapped("pet", "BattlePet-0-1")).toBe(true)
+    expect(wrapped("appearance", 1)).toBe(false)
+    expect(giftCounts({ 201, 202, 203 })).toEqual({ mounts = 1, toys = 1, pets = 1 })
+    -- yours first, the gifts first among them
+    local list = M:Mounts()
+    expect(list[1].name).toBe("Swift Ram")
+    expect(list[1].wrapped).toBe(true)
+    expect(list[2].wrapped).toBeNil()
+    expect(M:Toys()[1].wrapped).toBe(true)
+    expect((status(list[1]))).toBe("A gift · unwrap it")
+    expect((actionLabel(false, list[1]))).toBe("Unwrap")
+end
+
+@test("pets: every kind once, yours first (favourites first), how many; the game journal's search and filters opened")
+local function petsRead()
+    local calls = petJournal()
+    local list = M:Pets()
+    local names: string[] = {}
+    for i, e in ipairs(list) do
+        names[i] = e.name
+    end
+    expect(names).toEqual({ "Mechanical Squirrel", "Black Tabby Cat", "Prairie Dog" })
+    local squirrel = list[1]
+    expect(squirrel.guids).toEqual({ "Pet-A", "Pet-B" })
+    expect(squirrel.favourite).toBe(true)
+    expect(squirrel.display).toBe(7001)
+    expect(squirrel.scene).toBe(99)
+    expect((status(squirrel)):find("^Collected ×2") ~= nil).toBe(true)
+    expect(list[3].collected).toBe(false)
+    expect(petSourceLines(list[3].sourceText)).toEqual({ "Vendor: Nat Pagle", "Zone: Dustwallow Marsh" })
+    -- a row without its source and description (found in game): the species'
+    expect(petSourceLines(list[2].sourceText)).toEqual({ "Drop: A stray" })
+    expect(list[2].description).toBe("A cat.")
+    expect(calls.searchCleared).toBe(true)
+    expect(#calls.filters).toBe(2)
+    -- not yours: why its Summon is off
+    expect(select(2, petActionLabel(list[3]))).toBe("You don't have this pet yet.")
+end

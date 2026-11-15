@@ -1,0 +1,164 @@
+-- UI/Reskin/Popup.wowlua
+-- The game's shared StaticPopups in SuuUI's look while they show one dialog
+-- (UI/Reskin.wowlua), undone when they hide.
+--
+--   reskinPopup(dialog)           -- a solid surface, the edit box sunk, Accept arcane
+--   PopupSkin                     -- a surface and edge over a part of the popup
+import hookScript from "wowlua:hooks"
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import textures, hideRegion, menuText from "./Registry"
+
+-- One of the game's shared popups (StaticPopup1-4: the guild note popup)
+-- in SuuUI's look while it shows that dialog: solid surface inside a gilt-line edge
+-- with the corner diamond, its text in body ink, the edit box as a sunk
+-- field, Accept as the primary (arcane) button, the others quiet. The game
+-- reuses these frames for every popup, so it's all undone when it hides.
+-- SuuUI's art lives on its own child frames (shown only while it's ours).
+
+-- A surface and edge on a frame of its own over a part of the popup.
+export class PopupSkin extends Frame
+    readonly fill: Texture
+    readonly edge: draw.Border
+
+    constructor(parent: Frame, fill: string, edge: string, level: number?)
+        super(nil, parent)
+        self:SetAllPoints()
+        self:SetFrameLevel(level or parent:GetFrameLevel())
+        self:EnableMouse(false)
+        self.fill = draw.fill(self, fill)
+        self.fill:SetAllPoints()
+        self.edge = draw.border(self, edge)
+        self:Hide()
+    end
+end
+
+type PopupState = { undo: (() -> ())[], skins: { [Frame]: PopupSkin }, active?: boolean }
+
+local popups: { [Frame]: PopupState } = setmetatable({}, { __mode = "k" })
+
+local function restorePopup(st: PopupState)
+    for i = #st.undo, 1, -1 do
+        pcall(st.undo[i])
+    end
+    st.undo = {}
+    for _, f in pairs(st.skins) do
+        f:Hide()
+    end
+    st.active = false
+end
+
+local function popupButton(st: PopupState, given: unknown, primary: boolean)
+    local b = frames.asButton(given)
+    if not (b and b:IsShown()) then
+        return
+    end
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+        local t = frames.asRegion(errors.tryMethod(b, get))
+        if t then
+            hideRegion(st, t)
+        end
+    end
+    for _, t in ipairs(textures(b)) do
+        hideRegion(st, t)
+    end
+    local skin = st.skins[b]
+    if not skin then
+        local made = PopupSkin.new(b, primary and "arcane" or "surface-raised", primary and "arcane" or "gilt-line")
+        skin = made
+        st.skins[b] = made
+        hookScript(b, "OnEnter", function()
+            if st.active and not primary then
+                made.edge:SetColor("gilt")
+            end
+        end)
+        hookScript(b, "OnLeave", function()
+            if st.active and not primary then
+                made.edge:SetColor("gilt-line")
+            end
+        end)
+    end
+    skin.edge:SetColor(primary and "arcane" or "gilt-line")
+    skin:Show()
+    local fs = frames.asFontString(errors.tryMethod(b, "GetFontString"))
+    if fs then
+        menuText(st, fs, primary and "on-signal" or "ink")
+        fonts.apply(fs, "label")
+    end
+end
+
+export function reskinPopup(given: unknown)
+    local dialog = frames.asFrame(given)
+    if not dialog or errors.tryMethod(dialog, "IsForbidden") then
+        return
+    end
+    local st = popups[dialog]
+    if not st then
+        -- solid: it opens over windows, whose text showed through the glass
+        local panel = PopupSkin.new(dialog, "surface", "gilt-line")
+        draw.shadow(panel, "shadow-panel")
+        draw.ornament(panel, 7, "corner", "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        local made: PopupState = { undo = {}, skins = { [dialog] = panel } }
+        st = made
+        popups[dialog] = made
+        -- the game's look back when it closes: SuuUI's panel, its child, hides
+        -- with it (no hooks on the game's shared popup frames: hooks on its
+        -- shared frames made its code SuuUI's, and a protected choice was
+        -- refused, found in game)
+        panel:SetScript("OnHide", function()
+            if made.active and not dialog:IsShown() then
+                restorePopup(made)
+            end
+        end)
+    end
+    if st.active then
+        restorePopup(st)
+    end
+    st.active = true
+    local own = st.skins[dialog]
+    if own then
+        own:Show()
+    end
+    -- the game's frame art
+    for _, key in ipairs({ "Border", "NineSlice", "BG", "Bg" }) do
+        local art = frames.asRegion(tbl.field(dialog, key))
+        if art then
+            hideRegion(st, art)
+        end
+    end
+    for _, t in ipairs(textures(dialog)) do
+        hideRegion(st, t)
+    end
+    local text = frames.asFontString(tbl.field(dialog, "Text"))
+    if text then
+        menuText(st, text, "ink")
+    end
+    -- the edit box: a sunk field
+    local edit = frames.asEditBox(tbl.field(dialog, "EditBox"))
+    if edit and edit:IsShown() then
+        local nine = frames.asRegion(tbl.field(edit, "NineSlice"))
+        if nine then
+            hideRegion(st, nine)
+        end
+        for _, t in ipairs(textures(edit)) do
+            hideRegion(st, t)
+        end
+        local skin = st.skins[edit]
+        if not skin then
+            skin = PopupSkin.new(edit, "surface-sunk", "gilt-line")
+            skin:ClearAllPoints()
+            skin:SetPoint("TOPLEFT", -4, 2)
+            skin:SetPoint("BOTTOMRIGHT", 4, -2)
+            st.skins[edit] = skin
+        end
+        skin:Show()
+    end
+    local container = tbl.field(dialog, "ButtonContainer")
+    for i = 1, 4 do
+        local b = tbl.field(container, "Button" .. i) or tbl.field(dialog, "button" .. i)
+        popupButton(st, b, i == 1)
+    end
+end

@@ -1,0 +1,204 @@
+-- Units/WorldMap/GiverTips.wowlua
+-- The quest givers of the world map's data (Units/WorldMap): where each
+-- giver stands (an index made a few maps a frame once the quest data is
+-- there), what an NPC should offer you now by the map's own checks (for
+-- /suu probe givers), and those quests on an NPC's tooltip. Offers the
+-- module's QuestsFor, IndexGivers, IndexGiversSoon, GiverPlaces,
+-- HookQuestTips and QuestTip as functions taking the module.
+
+import SuuUI from "/Core/API"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import completedSet, onQuest from "/Units/WorldMap/Quests"
+import judge from "/Units/WorldMap/Collect"
+import type WorldMapModule from "/Units/WorldMap"
+
+local UI = SuuUI.UI
+
+-- A giver's places in the data: each map and the row there, side by side
+-- (mapID, row, mapID, row, …: no table a place, the index is made from
+-- every quest giver's row on the first tooltip).
+export type GiverPlaces = (number | number[])[]
+-- the givers' rows indexed a frame (about 5,000 instructions)
+local GIVER_ROWS = 400
+
+-- What an NPC should offer you now (QuestsFor), by the map's own checks.
+export type QuestOffer = {
+    id: number,
+    name?: string,
+    state?: string,
+    difficulty?: string,
+    level?: number,
+    onQuest: boolean,
+    done: boolean,
+}
+
+--------------------------------------------------------------------------------
+-- The module's (WorldMapModule:QuestsFor, IndexGivers, IndexGiversSoon,
+-- GiverPlaces, HookQuestTips, QuestTip)
+--------------------------------------------------------------------------------
+
+-- What an NPC should offer you now (for /suu probe givers, which
+-- compares it with what the NPC does offer): every quest the data has
+-- it giving, with the state the map would show it in (nil: the map
+-- wouldn't), whether you're on it or have done it.
+export function questsFor(self: WorldMapModule, npcID: number): (QuestOffer[], { [number]: boolean })
+    local starts = SuuUI.QuestStarts()
+    local me, done = self:Player(), completedSet()
+    local out: QuestOffer[] = {}
+    local seen: { [number]: boolean } = {}
+    local places = self:GiverPlaces(npcID)
+    for k = 1, #places, 2 do
+        local row = places[k + 1] :: number[]
+        me.mapID = places[k] :: number
+        for i = 4, #row do
+            local id = row[i]
+            if not seen[id] then
+                seen[id] = true
+                local qrow = starts.quests[id]
+                local j = qrow and judge(qrow, id, me, done)
+                local state: string? = nil
+                local difficulty: string? = nil
+                local level: number? = nil
+                if j then
+                    state, difficulty, level = j.state, j.difficulty, j.level
+                end
+                out[#out + 1] = {
+                    id = id,
+                    name = j and j.name or nil,
+                    state = state,
+                    difficulty = difficulty,
+                    level = level,
+                    onQuest = onQuest(id),
+                    done = done[id] or false,
+                }
+            end
+        end
+    end
+    return out, done
+end
+
+-- Up to about `rows` more rows into the index (whole maps); true once
+-- it's whole.
+export function indexGivers(self: WorldMapModule, rows: number): boolean
+    local starts = SuuUI.QuestStarts()
+    if self.giverFrom ~= starts then
+        -- (other data: made again from it)
+        self.giverFrom = starts
+        self.giverIndex, self.giverMade, self.giverAt = nil, nil, nil
+    end
+    if self.giverIndex then
+        return true
+    end
+    local maps = starts.maps
+    local made = self.giverMade or {}
+    self.giverMade = made
+    local left = rows
+    while left > 0 do
+        local mapID, list = next(maps, self.giverAt)
+        if mapID == nil then
+            self.giverIndex, self.giverMade, self.giverAt = made, nil, nil
+            return true
+        end
+        for _, row in ipairs(list) do
+            local giver = row[3]
+            local places = made[giver]
+            if not places then
+                places = {}
+                made[giver] = places
+            end
+            local n = #places
+            places[n + 1], places[n + 2] = mapID, row
+        end
+        left -= #list
+        self.giverAt = mapID
+    end
+    return false
+end
+
+-- The index made over the next frames (the quest data is there).
+export function indexGiversSoon(self: WorldMapModule)
+    if self.giverStarted or self.giverIndex then
+        return
+    end
+    self.giverStarted = true
+    local function step()
+        if not self:IndexGivers(GIVER_ROWS) then
+            after(0, step)
+        end
+    end
+    -- (from the next frame: not on top of the frame that built the data)
+    after(0, step)
+end
+
+export function giverPlaces(self: WorldMapModule, npcID: number): GiverPlaces
+    self:IndexGivers(math.huge)
+    return (self.giverIndex :: { [number]: GiverPlaces })[npcID] or {}
+end
+
+-- An NPC's tooltip: the quests it gives that you can pick up now, as the
+-- map's quest pins would show them (asked 2026-11-07), in their
+-- difficulty's colour with their level.
+export function hookQuestTips(self: WorldMapModule)
+    local add = tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
+    local kind = tbl.field(tbl.field(Enum, "TooltipDataType"), "Unit")
+    if self.questTipsHooked or type(add) ~= "function" or kind == nil then
+        return
+    end
+    self.questTipsHooked = true
+    ;(add :: (unknown, (GameTooltip, unknown) -> ()) -> ())(kind, function(tooltip: GameTooltip, _: unknown)
+        if tooltip == GameTooltip then
+            self:QuestTip(tooltip)
+        end
+    end)
+end
+
+export function questTip(self: WorldMapModule, tooltip: GameTooltip)
+    if not self:IsEnabled() then
+        return
+    end
+    local ok: boolean, _: unknown, unit: unknown = pcall(tooltip.GetUnit, tooltip)
+    if not ok or not secret.readable(unit) or type(unit) ~= "string" then
+        return
+    end
+    local isPlayer = UnitIsPlayer(unit)
+    if not secret.readable(isPlayer) or isPlayer then
+        return
+    end
+    local guid = UnitGUID(unit)
+    if not secret.readable(guid) or type(guid) ~= "string" then
+        return
+    end
+    local kind, _, _, _, _, npcID = strsplit("-", guid)
+    local id = (kind == "Creature") and tonumber(npcID) or nil
+    if not id then
+        return
+    end
+    -- (the quest data built a step a frame the first time: its lines from
+    -- the next hover on)
+    if not SuuUI.Data.QuestStarts:Ready() then
+        SuuUI.Data.QuestStarts:Prepare()
+        return
+    end
+    local on = self:Layers().quests
+    local shown: QuestOffer[] = {}
+    for _, o in ipairs((self:QuestsFor(id))) do
+        local state, difficulty = o.state, o.difficulty
+        if state and difficulty and on[state] and (difficulty ~= "trivial" or on.trivial) then
+            shown[#shown + 1] = o
+        end
+    end
+    if #shown == 0 then
+        return
+    end
+    local r, g, b = UI.RGBA("gilt-text")
+    tooltip:AddLine(" ")
+    tooltip:AddLine("Quests", r, g, b)
+    for _, o in ipairs(shown) do
+        local level = o.level
+        local qr, qg, qb = UI.RGBA("quest-" .. (o.difficulty or "standard"))
+        tooltip:AddLine((o.name or ("Quest " .. o.id)) .. (level and (" (" .. level .. ")") or ""), qr, qg, qb)
+    end
+    tooltip:Show()
+end

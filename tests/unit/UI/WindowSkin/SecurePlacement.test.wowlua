@@ -1,0 +1,107 @@
+-- UI/WindowSkin/SecurePlacement: a skinned window's secure placer (one per
+-- window, made out of combat), what it hands its secure handler (the row's
+-- place under the anchor, the middle, each tab's size and whether it
+-- centres) and updatePlacers.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as anchors from "/Core/Anchors"
+import skinWindow from "/UI/WindowSkin/Chrome"
+import securePlacement, updatePlacers from "/UI/WindowSkin/SecurePlacement"
+import expectNoErrors from "../../../helpers"
+import window, tab, closeWindows from "./WindowSkinHelpers"
+
+local S = T.space
+
+@afterEach
+local function cleanup()
+    closeWindows()
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+-- An anchor for the row, published as "testPlacer".
+local function placerAnchor(): Frame
+    local a = CreateFrame("Frame", nil, UIParent)
+    a:SetSize(200, 30)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 50, -20)
+    anchors.publish("testPlacer", a)
+    return a
+end
+
+@test("securePlacement: none for a window not skinned; one placer per window, made out of combat")
+local function onePerWindow()
+    expect(securePlacement(nil)).toBeNil()
+    local f = window()
+    expect(securePlacement(f)).toBeNil()
+    local chrome = skinWindow(f, {})
+    local p = assert(securePlacement(f))
+    expect(chrome.placer).toBe(p)
+    expect(p.chrome).toBe(chrome)
+    expect(p:GetParent()).toBe(f)
+    expect(securePlacement(f)).toBe(p)
+    -- in combat: the one made stays, none is made
+    local g = window()
+    skinWindow(g, {})
+    mock.player:enterCombat()
+    expect(securePlacement(f)).toBe(p)
+    expect(securePlacement(g)).toBeNil()
+    mock.player:leaveCombat()
+end
+
+@test("Place: the row's place under the anchor and the middle, out of combat")
+local function places()
+    local a = placerAnchor()
+    local f = window()
+    local chrome = skinWindow(f, { under = "testPlacer" })
+    local p = assert(securePlacement(f))
+    local es, as = f:GetEffectiveScale(), a:GetEffectiveScale()
+    expect(p:GetAttribute("rowX")).toBeCloseTo(assert(a:GetLeft()) * as / es)
+    expect(p:GetAttribute("rowY")).toBeCloseTo(
+        (assert(a:GetBottom()) * as - S["space-5"] * as) / es - chrome.rise
+    )
+    expect(p:GetAttribute("centerY")).toBe(-chrome.rise / 2)
+    -- the anchor moves: updatePlacers hands the new place on
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 90, -20)
+    updatePlacers()
+    expect(p:GetAttribute("rowX")).toBeCloseTo(assert(a:GetLeft()) * as / es)
+    -- a fight starting: placed again (the moment before the lockdown)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 130, -20)
+    mock.player:enterCombat()
+    expect(p:GetAttribute("rowX")).toBeCloseTo(assert(a:GetLeft()) * as / es)
+    -- in combat nothing changes
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 170, -20)
+    p:Place()
+    expect(p:GetAttribute("rowX")).never.toBeCloseTo(assert(a:GetLeft()) * as / es)
+    mock.player:leaveCombat()
+    a:Hide()
+end
+
+@test("Track and SetTabSize: each tab once, its size and whether it centres; out of combat")
+local function tracks()
+    local f = window()
+    skinWindow(f, {})
+    local p = assert(securePlacement(f))
+    local t1, t2 = tab(f, 1), tab(f, 2)
+    p:Track("one", t1)
+    p:Track("two", t2, { centered = true })
+    p:Track("one", t1)
+    expect(p:GetAttribute("count")).toBe(2)
+    expect(p.keys).toEqual({ one = 1, two = 2 })
+    expect(p:GetAttribute("centered1")).toBeNil()
+    expect(p:GetAttribute("centered2")).toBe(true)
+    p:SetTabSize("two", 640, 480)
+    expect(p:GetAttribute("w2")).toBe(640)
+    expect(p:GetAttribute("h2")).toBe(480)
+    -- an unknown key: nothing
+    p:SetTabSize("three", 1, 1)
+    expect(p:GetAttribute("w3")).toBeNil()
+    -- in combat: neither
+    mock.player:enterCombat()
+    p:Track("three", t2)
+    p:SetTabSize("one", 300, 200)
+    mock.player:leaveCombat()
+    expect(p:GetAttribute("count")).toBe(2)
+    expect(p:GetAttribute("w1")).toBeNil()
+end

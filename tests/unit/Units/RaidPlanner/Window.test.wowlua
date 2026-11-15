@@ -1,0 +1,158 @@
+-- Units/RaidPlanner/Window: the window, its callbacks, the menus.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/RaidPlanner"
+import type Slot from "/Units/RaidPlanner/Setups"
+import cleanup, priest, mage, raid, printed, asked, menu, enabled, choose, setup, slot, slotIn, window from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("the menus: a slot's, a setup's, a new setup's, a player's")
+local function menus()
+    setup()
+    raid({ { unit = mage, g = 1 }, { unit = priest, g = 2 } })
+    M:Toggle()
+    local s = slotIn(1, "MAGE")
+    M:Refill()
+    local whispered: string? = nil
+    mock.fake("ChatFrameUtil.SendTell", function(name: string)
+        whispered = name
+    end)
+    M:SlotMenu(s.id, window())
+    choose("Whisper")
+    expect(whispered).toBe("Raider Mage")
+    choose("Pin Raider Mage")
+    expect(s.pin).toBe("Raider Mage")
+    M:SlotMenu(s.id, window())
+    choose("Unpin")
+    expect(s.pin).toBeNil()
+    -- pinned and away: invite, whisper, unpin
+    s.pin = "Raider Somebody"
+    M:Refill()
+    local invited: string? = nil
+    mock.fake("C_PartyInfo.InviteUnit", function(name: string)
+        invited = name
+    end)
+    M:SlotMenu(s.id, window())
+    choose("Invite Raider Somebody")
+    expect(invited).toBe("Raider Somebody")
+    choose("Whisper")
+    expect(whispered).toBe("Raider Somebody")
+    choose("Unpin")
+    M:SlotMenu(s.id, window())
+    choose("Clear (any player)")
+    expect(s.class).toBeNil()
+    choose("Edit slot")
+    M:SlotMenu(s.id, window())
+    choose("Remove slot")
+    expect(M:SlotById(s.id)).toBeNil()
+    M:SlotMenu(999, window())
+    -- a setup's
+    slot(1, "PRIEST")
+    M:Save()
+    M:Duplicate(1)
+    M:SetupMenu(2, window())
+    choose("Load")
+    expect(M:Work().id).toBe(2)
+    M:SetupMenu(2, window())
+    choose("Save")
+    choose("Rename")
+    choose("Duplicate")
+    expect(M:Data().setups[3] ~= nil).toBe(true)
+    choose("Export as text")
+    expect(asked().title).toBe("Export New setup (copy)")
+    choose("Delete…")
+    expect(asked().title).toBe("Delete New setup (copy)?")
+    M:SetupMenu(1, window())
+    choose("Save as new…")
+    M:SetupMenu("work", window())
+    choose("Discard…")
+    M:SetupMenu(99, window())
+    -- a new setup's
+    M:NewMenu(window())
+    expect(enabled["From the raid as it is"]).toBe(true)
+    choose("Import from text…")
+    expect(asked().title).toBe("Import a setup")
+    choose("Empty (40 players)")
+    choose("From the raid as it is")
+    -- a player's: a slot for them in their group
+    M:PersonMenu("Raider Priest", window())
+    choose("Whisper")
+    expect(whispered).toBe("Raider Priest")
+    choose("Add a slot for them")
+    local mine: Slot? = nil
+    for _, x in ipairs(M:Work().slots) do
+        if x.pin == "Raider Priest" then
+            mine = x
+        end
+    end
+    expect(assert(mine).class).toBe("PRIEST")
+end
+
+@test("a player's slot goes to the first group with room when theirs is full")
+local function personFullGroup()
+    setup()
+    raid({ { unit = priest, g = 1 } })
+    M:Toggle()
+    for _ = 1, 5 do
+        slot(1)
+    end
+    M:PersonMenu("Raider Priest", window())
+    choose("Add a slot for them")
+    expect(M:SlotsIn(2)[1].pin).toBe("Raider Priest")
+    for g = 2, 8 do
+        while #M:SlotsIn(g) < 5 do
+            slot(g)
+        end
+    end
+    M:PersonMenu("Raider Priest", window())
+    choose("Add a slot for them")
+    expect(printed[#printed]).toBe("Every group has five slots.")
+end
+
+@test("the window: opened by /suu raid and the module's service, drawn, its callbacks")
+local function windowCallbacks()
+    setup()
+    mock.slash("/suu raid")
+    expect(window():IsShown()).toBe(true)
+    mock.slash("/suu raid")
+    expect(window():IsShown()).toBe(false)
+    local w = window()
+    w:Show()
+    assert(w.onSize)(10)
+    expect(M:Data().size).toBe(10)
+    assert(w.onAdd)(1, w)
+    expect(#M:SlotsIn(1)).toBe(1)
+    local id = M:SlotsIn(1)[1].id
+    assert(w.onSlotChange)(id, { class = "MAGE" })
+    expect(M:SlotsIn(1)[1].class).toBe("MAGE")
+    assert(w.onSlot)(id, w, "LeftButton")
+    assert(w.onSlot)(id, w, "RightButton")
+    expect(menu["Edit slot"] ~= nil).toBe(true)
+    assert(w.onSave)()
+    assert(w.onSetup)("work")
+    local saveId = assert(M:Work().id)
+    assert(w.onSetup)(saveId)
+    assert(w.onSetupMenu)(saveId, w)
+    assert(w.onNew)(w)
+    assert(w.onRename)(saveId, "Renamed")
+    expect(M:Work().name).toBe("Renamed")
+    assert(w.onDuplicate)()
+    assert(w.onSetup)(2)
+    expect(M:Work().id).toBe(2)
+    assert(w.onSaveAsNew)()
+    assert(w.onDelete)()
+    assert(w.onDrop)({ spec = { class = "PRIEST", spec = 1 } }, { group = 2 })
+    assert(w.onPerson)("Raider Priest", w, "RightButton")
+    assert(w.onPerson)("Raider Priest", w, "LeftButton")
+    assert(w.onSlotRemove)(id)
+    assert(w.onInspect)()
+    assert(w.onArrange)()
+    assert(w.onFill)()
+    w:Hide()
+    M:Render()
+end

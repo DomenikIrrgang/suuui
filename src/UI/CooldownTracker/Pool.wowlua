@@ -1,0 +1,81 @@
+-- UI/CooldownTracker/Pool.wowlua
+-- What the tracker's builds take and hand back: Pool (things of one kind,
+-- kept by the key of everything fixed when they were made), containerKey
+-- (that key for an engine aura container) and resetMax (a spare
+-- container's groups back at their own max).
+
+import type AuraOptions, AuraGroup, UnitAuras from "/UI/Auras"
+
+-- Rebuilds reuse what earlier builds made: an engine aura container can
+-- never be freed, and cells and slots would pile up too. Each is kept under a
+-- key of everything fixed when it was made (for a container: its unit, size,
+-- flow and every group setting); a build takes a spare with the same key, or
+-- makes one. Clear hands everything back (containers released: no unit,
+-- hidden, deaf).
+
+-- Everything about a container that is fixed at creation, as one string.
+export function containerKey(unit: string, opts: AuraOptions): string
+    local parts: string[] = { unit, tostring(opts.size), tostring(opts.anchor), table.concat(opts.growth or {}, ",") }
+    for _, g in ipairs(opts.groups) do
+        parts[#parts + 1] = table.concat(
+            {
+                g.key,
+                table.concat(g.filter, ","),
+                tostring(g.max),
+                table.concat(g.include or {}, ","),
+                table.concat(g.dispelTypes or {}, ","),
+                tostring(g.border),
+                tostring(g.glow),
+                tostring(g.drain),
+                tostring(g.digits),
+                tostring(g.stacks),
+                tostring(g.expiring),
+                tostring(g.size),
+            },
+            "/"
+        )
+    end
+    return table.concat(parts, ";")
+end
+
+-- A spare container's groups back at their own max (a live condition may
+-- have set one to 0).
+export function resetMax(ac: UnitAuras, groups: AuraGroup[])
+    for _, g in ipairs(groups) do
+        ac:SetGroupMax(g.key, g.max or 16)
+    end
+end
+
+-- Things of one kind a build takes and Clear hands back, by the key of
+-- everything fixed when they were made.
+export class Pool<X>
+    readonly spare: { [string]: X[] } = {}
+    taken: { key: string, thing: X }[] = {}
+
+    -- A spare made under `key`, else a new one from make() (nil if it makes
+    -- none); the second value is true for a new one.
+    function Take(key: string, make: () -> X?): (X?, boolean)
+        local spare = self.spare[key]
+        local thing = spare and table.remove(spare)
+        local fresh = thing == nil
+        if not thing then
+            thing = make()
+        end
+        if not thing then
+            return nil, false
+        end
+        self.taken[#self.taken + 1] = { key = key, thing = thing }
+        return thing, fresh
+    end
+
+    -- Everything taken back (`back` readies each: hidden, released).
+    function Clear(back: (thing: X, key: string) -> ())
+        for _, t in ipairs(self.taken) do
+            back(t.thing, t.key)
+            local spares = self.spare[t.key] or {}
+            self.spare[t.key] = spares
+            table.insert(spares, t.thing)
+        end
+        self.taken = {}
+    end
+end

@@ -1,0 +1,187 @@
+-- Units/MouseBindings/Inputs: the inputs as a person reads them, a click's
+-- attributes on unit frames, where an input works; what a binding comes to
+-- (movement keys refused, another spell's input and the frames' Target's and
+-- Menu's clicks offered to move) and what a click for Target or Menu does.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, specName, CLICK_KINDS, BUTTON_NAMES from "/Units/MouseBindings/Inputs"
+import type Bind from "/Units/MouseBindings/Inputs"
+import expectNoErrors from "../../../helpers"
+
+local function bind(input: string, spell: string, id: number, more: { reach?: string, react?: string }?): Bind
+    local o = more or {}
+    return {
+        input = input,
+        spell = spell,
+        rank = "highest",
+        spellID = id,
+        reach = (o.reach or "both") :: "both",
+        react = (o.react or "any") :: "any",
+    }
+end
+
+@afterEach
+local function noErrors()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Inputs
+--------------------------------------------------------------------------------
+
+@test("an input as a person reads it, and as a chip")
+@cases({
+    { "SHIFT-F", "Shift-F", "Shift-F" },
+    { "ALT-CTRL-BUTTON1", "Alt-Ctrl-Left click", "Alt-Ctrl-Left" },
+    { "BUTTON2", "Right click", "Right" },
+    { "SHIFT-MOUSEWHEELUP", "Shift-Wheel up", "Shift-Wheel up" },
+    { "META-Q", "Cmd-Q", "Cmd-Q" },
+    { "BUTTON4", "Button 4", "Button 4" },
+})
+local function inputs(input: string, text: string, chip: string)
+    expect(inputText(input)).toBe(text)
+    expect(chipText(bind(input, "Heroic Strike", 1))).toBe(chip)
+end
+
+@test("a click's attributes on unit frames: Alt, Ctrl, Shift in the secure buttons' order; Cmd a renamed button")
+local function prefixes()
+    expect(clickPrefix("ALT-SHIFT-BUTTON1")).toBe("alt-shift-")
+    expect(clickPrefix("CTRL-BUTTON2")).toBe("ctrl-")
+    expect(clickPrefix("BUTTON1")).toBe("")
+    expect(clickSuffix("SHIFT-BUTTON3")).toBe("3")
+    -- Cmd: not a prefix the secure buttons know; the frame's wrap renames it
+    expect(clickPrefix("META-SHIFT-BUTTON1")).toBe("shift-")
+    expect(clickSuffix("META-SHIFT-BUTTON1")).toBe("-cmd-LeftButton")
+    expect(clickSuffix("META-BUTTON2")).toBe("-cmd-RightButton")
+    expect(cmdMark("ALT-META-BUTTON4")).toBe("suuui-cmd-alt-Button4")
+    expect(cmdMark("SHIFT-BUTTON1")).toBe(nil)
+    expect(isPlainClick("BUTTON1")).toBe(true)
+    expect(isPlainClick("SHIFT-BUTTON1")).toBe(false)
+    expect(isPlainClick("BUTTON3")).toBe(false)
+end
+
+@test("where an input works: plain Left and Right on frames only; a Cmd click anywhere")
+@cases({
+    { "SHIFT-F", "both", "both" },
+    { "BUTTON1", "both", "frames" },
+    { "BUTTON1", "world", nil },
+    { "META-BUTTON1", "both", "both" },
+    { "META-BUTTON1", "frames", "frames" },
+    { "SHIFT-BUTTON1", "world", "world" },
+    { "MOUSEWHEELUP", "frames", "frames" },
+})
+local function reaches(input: string, wanted: string, out: string?)
+    expect(reachFor(input, wanted :: "both") :: string?).toBe(out)
+end
+
+--------------------------------------------------------------------------------
+-- What a binding comes to
+--------------------------------------------------------------------------------
+
+@test("a movement key is refused")
+local function movement()
+    SetBinding("SHIFT-W", "MOVEFORWARD")
+    local v = judge({}, bind("SHIFT-W", "Heroic Strike", 1), nil)
+    expect(v.refuse).toBe("Shift-W is Move Forward")
+    expect(v.refuseDetail).toBe("It can't cast on mouseover. Pick another key.")
+    SetBinding("SHIFT-W")
+end
+
+@test("another spell's input is asked first, and replaced; the same spell's is not asked")
+local function takenFirst()
+    local old = bind("SHIFT-F", "Battle Shout", 2)
+    local v = judge({ old }, bind("SHIFT-F", "Heroic Strike", 1), nil)
+    expect(v.ask and v.ask.title).toBe("Shift-F already casts Battle Shout")
+    expect(v.ask and v.ask.confirm).toBe("Replace")
+    expect(#v.takes).toBe(1)
+    -- friends and enemies apart: no overlap, nothing taken
+    local friendly = bind("SHIFT-F", "Battle Shout", 2, { react = "help" })
+    local w = judge({ friendly }, bind("SHIFT-F", "Heroic Strike", 1, { react = "harm" }), nil)
+    expect(w.ask).toBe(nil)
+    expect(#w.takes).toBe(0)
+    -- the same spell again
+    local same = judge({ bind("SHIFT-F", "Heroic Strike", 1) }, bind("SHIFT-F", "Heroic Strike", 1), nil)
+    expect(same.ask).toBe(nil)
+end
+
+@test("Target's and Menu's clicks offer to move them first; a click they've left is free; plain clicks on frames only")
+local function plainClicks()
+    local v = judge({}, bind("BUTTON1", "Heroic Strike", 1), nil)
+    expect(v.reach).toBe("frames")
+    expect(v.ask and v.ask.title).toBe("Left click targets on unit frames")
+    expect(v.ask and v.ask.text).toBe("Move Target to another click? Then Left click casts Heroic Strike there.")
+    expect(v.ask and v.ask.confirm).toBe("Move Target…")
+    expect(v.ask and v.ask.move).toBe("target")
+    expect(v.info[1]).toBe("Left click works on unit frames only.")
+    local r = judge({}, bind("BUTTON2", "Heroic Strike", 1, { reach = "world" }), nil)
+    expect(r.refuse).toBe("Right click can't work there")
+    -- Target moved to Shift-Left: Left is free, Shift-Left offered to move
+    local moved = { target = "SHIFT-BUTTON1", menu = "BUTTON2" }
+    local free = judge({}, bind("BUTTON1", "Heroic Strike", 1), nil, moved)
+    expect(free.ask).toBe(nil)
+    local shift = judge({}, bind("SHIFT-BUTTON1", "Heroic Strike", 1), nil, moved)
+    expect(shift.ask and shift.ask.move).toBe("target")
+    -- in the world only: the frames' click isn't in its way
+    local world = judge({}, bind("SHIFT-BUTTON1", "Heroic Strike", 1, { reach = "world" }), nil, moved)
+    expect(world.ask).toBe(nil)
+    local menu = judge({}, bind("BUTTON2", "Heroic Strike", 1), nil, moved)
+    expect(menu.ask and menu.ask.title).toBe("Right click opens the unit's menu on unit frames")
+    expect(menu.ask and menu.ask.move).toBe("menu")
+end
+
+@test(
+    "a click for Target or Menu: a mouse button with Shift, Ctrl, Alt or Cmd; the other's click swapped; a spell's taken"
+)
+local function clickVerdicts()
+    local clicks = { target = "BUTTON1", menu = "BUTTON2" }
+    local key = judgeClick({}, clicks, "target", "SHIFT-F")
+    expect(key.refuse).toBe("Shift-F isn't a mouse click")
+    expect(key.refuseDetail).toBe("Target takes a mouse button, with Shift, Ctrl, Alt or Cmd.")
+    expect(judgeClick({}, clicks, "target", "MOUSEWHEELUP").refuse).toBe("Wheel up isn't a mouse click")
+    local cmd = judgeClick({}, clicks, "menu", "META-BUTTON2")
+    expect(cmd.refuse).toBe(nil)
+    -- the other's click: swapped
+    local swap = judgeClick({}, clicks, "target", "BUTTON2")
+    expect(swap.swap).toBe(true)
+    expect(swap.ask and swap.ask.title).toBe("Right click opens the unit's menu on unit frames")
+    expect(swap.ask and swap.ask.text).toBe("Swap them? Menu moves to Left click.")
+    -- a spell's: taken, kept in the world where it can be
+    local both = bind("SHIFT-BUTTON1", "Battle Shout", 2)
+    local taken = judgeClick({ both }, clicks, "target", "SHIFT-BUTTON1")
+    expect(taken.ask and taken.ask.title).toBe("Shift-Left click casts Battle Shout on unit frames")
+    expect(taken.ask and taken.ask.text).toBe("Target takes it; Battle Shout keeps working in the world.")
+    expect(taken.takes).toEqual({ both })
+    expect(taken.info).toEqual({ "Left click on unit frames does nothing until you bind a spell to it." })
+    local framesOnly = bind("BUTTON3", "Battle Shout", 2, { reach = "frames" })
+    local gone = judgeClick({ framesOnly }, clicks, "menu", "BUTTON3")
+    expect(gone.ask and gone.ask.text).toBe("Menu takes it; Battle Shout's binding goes.")
+    -- a world-only spell on that click: nothing taken
+    local world = judgeClick(
+        { bind("CTRL-BUTTON1", "Battle Shout", 2, { reach = "world" }) },
+        clicks,
+        "target",
+        "CTRL-BUTTON1"
+    )
+    expect(world.ask).toBe(nil)
+    expect(#world.takes).toBe(0)
+end
+
+@test("a key with a job keeps it away from units, and says so")
+local function keepsJob()
+    SetBinding("SHIFT-E", "ACTIONBUTTON3")
+    local v = judge({}, bind("SHIFT-E", "Heroic Strike", 1), nil)
+    expect(v.info[#v.info]).toBe(
+        "Away from units Shift-E stays " .. (_G.BINDING_NAME_ACTIONBUTTON3 or "ACTIONBUTTON3") .. "."
+    )
+    SetBinding("SHIFT-E")
+end
+
+@test("a spec's name: none yet, or a tree the class lacks; Target and Menu in order; the secure buttons' names")
+local function names()
+    expect(specName("0")).toBe("No talents yet")
+    expect(specName("9")).toBe("Tree 9")
+    expect(CLICK_KINDS).toEqual({ "target", "menu" })
+    expect(BUTTON_NAMES[1]).toBe("LeftButton")
+    expect(BUTTON_NAMES[3]).toBe("MiddleButton")
+    expect(BUTTON_NAMES[5]).toBe("Button5")
+end

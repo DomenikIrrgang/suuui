@@ -1,0 +1,842 @@
+-- Units/WorldMap/Collect.wowlua
+-- What's on a world map (Units/WorldMap): every pin the map would show
+-- before merging (quests to pick up and from items, entrances, flight
+-- masters, campfires, services and trainers, mailboxes, rares, treasures,
+-- marks, convergences), each quest judged once until something it depends
+-- on changes, its group tag (the game's, told late), and the flight masters
+-- this character has found. Offers the module's Player, RecordTaxiNodes and
+-- Collect as functions taking the module, and what the other parts share:
+-- isGroupQuest, judge, forgetQuests, NO_STARTS.
+
+import SuuUI from "/Core/API"
+import type MapPinData, TooltipData from "/Core/API"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import QUEST_RANK, questPin, raceBit, completedSet, eventOn, questName, questState from "/Units/WorldMap/Quests"
+import type Me, Offer from "/Units/WorldMap/Quests"
+import quest, npc, entrance, instanceLevels from "/Units/WorldMap/Rows"
+import type Item, TipLine from "/Units/WorldMap/Arrange"
+import type QuestStarts from "/Data/QuestStarts"
+import type MapPlaces from "/Data/MapPlaces"
+import type WorldMapModule from "/Units/WorldMap"
+
+local MARKS = SuuUI.Services.MARKS
+local CONVERGENCES = SuuUI.Services.CONVERGENCES
+local CAMPFIRES = SuuUI.Services.CAMPFIRES
+
+local T = SuuUI.Tokens
+
+local asNumber, asString, field = secret.asNumber, secret.asString, tbl.field
+
+-- A campfire's time left: m:ss, or out.
+export function fireLeft(s: number): string
+    if s <= 0 then
+        return "going out"
+    end
+    s = math.floor(s)
+    return ("%d:%02d"):format(s / 60, s % 60)
+end
+
+--------------------------------------------------------------------------------
+-- What's on a map
+--------------------------------------------------------------------------------
+
+-- service key → filter, glyph, glyph colour
+local SERVICE: { [string]: { filter: string, glyph: string, color?: string } } = {
+    spirit = { filter = "spirit", glyph = "spirit", color = "arcane" },
+    inn = { filter = "inn", glyph = "inn" },
+    bank = { filter = "bank", glyph = "bank" },
+    auction = { filter = "auction", glyph = "gavel" },
+    battlemaster = { filter = "battlemaster", glyph = "flag" },
+    guild = { filter = "guild", glyph = "scroll" },
+    tabard = { filter = "tabard", glyph = "tabard" },
+    stable = { filter = "stable", glyph = "paw" },
+    repair = { filter = "repair", glyph = "anvil" },
+    food = { filter = "food", glyph = "mug" },
+    goods = { filter = "goods", glyph = "bag" },
+    vendor = { filter = "vendor", glyph = "coin" },
+}
+-- What each weapon master teaches (asked 2026-10-18), from cMaNGOS's
+-- Classic world database (github.com/cmangos/classic-db ec4f596, GPL-3.0:
+-- their trainer lists); Classic's lists, Forever's own not recorded yet.
+local WEAPON_MASTERS: { [number]: string } = {
+    [2704] = "Bows, One-Handed Axes, Staves, Thrown, Two-Handed Axes", -- Hanashi, Orgrimmar
+    [11865] = "Fist Weapons, Guns, One-Handed Axes, One-Handed Maces, Two-Handed Axes, Two-Handed Maces", -- Buliwyf Stonehand, Ironforge
+    [11866] = "Bows, Daggers, Fist Weapons, Staves, Thrown", -- Ilyenia Moonfire, Darnassus
+    [11867] = "Crossbows, Daggers, One-Handed Swords, Polearms, Staves, Two-Handed Swords", -- Woo Ping, Stormwind
+    [11868] = "Bows, Daggers, Fist Weapons, One-Handed Axes, Thrown, Two-Handed Axes", -- Sayoc, Orgrimmar
+    [11869] = "Guns, One-Handed Maces, Staves, Two-Handed Maces", -- Ansekhwa, Thunder Bluff
+    [11870] = "Crossbows, Daggers, One-Handed Swords, Polearms, Two-Handed Swords", -- Archibald, Undercity
+    [13084] = "Crossbows, Daggers, Thrown", -- Bixi Wobblebonk, Ironforge
+}
+
+local SERVICE_NAMES: { [string]: string } = {
+    spirit = "Spirit healer",
+    inn = "Innkeeper",
+    bank = "Banker",
+    auction = "Auctioneer",
+    battlemaster = "Battlemaster",
+    guild = "Guild master",
+    tabard = "Tabard designer",
+    stable = "Stable master",
+    repair = "Repair",
+    food = "Food and drink",
+    goods = "General goods",
+    vendor = "Vendor",
+    mail = "Mailbox",
+    classTrainer = "Class trainer",
+    trainer = "Trainer",
+}
+-- (drawn after the game's own profession icons, which players know)
+local PROFESSION_GLYPH: { [string]: string } = {
+    alchemy = "profAlchemy",
+    blacksmithing = "profBlacksmithing",
+    enchanting = "profEnchanting",
+    engineering = "gear",
+    herbalism = "profHerbalism",
+    leatherworking = "profLeatherworking",
+    mining = "profMining",
+    skinning = "hide",
+    tailoring = "profTailoring",
+    cooking = "profCooking",
+    firstAid = "profFirstAid",
+    fishing = "profFishing",
+    weapon = "sword",
+    riding = "book",
+    pet = "book",
+    other = "book",
+}
+local PROFESSION_NAMES: { [string]: string } = {
+    alchemy = "Alchemy trainer",
+    blacksmithing = "Blacksmithing trainer",
+    enchanting = "Enchanting trainer",
+    engineering = "Engineering trainer",
+    herbalism = "Herbalism trainer",
+    leatherworking = "Leatherworking trainer",
+    mining = "Mining trainer",
+    skinning = "Skinning trainer",
+    tailoring = "Tailoring trainer",
+    cooking = "Cooking trainer",
+    firstAid = "First aid trainer",
+    fishing = "Fishing trainer",
+    weapon = "Weapon master",
+    riding = "Riding instructor",
+    pet = "Pet trainer",
+    other = "Trainer",
+}
+-- Whether a quest needs a group, as Questie decides it: its corrections
+-- where the game's tag is wrong (SuuUI's data), else the game's tag. The
+-- game knows a quest it hasn't loaded only a moment after it's first asked
+-- (probe questgroup: nil at first, the tag 2 to 6 s later): until it has
+-- told, SuuUI's own guess (Classic's elite, dungeon and raid quests, and
+-- those set in one), and the map is drawn again once the answers are in.
+local GROUP_TAGS: { [number]: boolean } = { [1] = true, [62] = true, [81] = true } -- elite, raid, dungeon
+local told: { [number]: number | false } = {}
+local waiting: { [number]: number }? = nil
+local guessed: { [number]: boolean } = {}
+
+local function askTag(id: number): number?
+    local t = errors.tryValue(C_QuestLog.GetQuestTagInfo, id)
+    return t and asNumber(t.tagID) or nil
+end
+
+local function groupTag(tag: number?): boolean
+    return tag ~= nil and GROUP_TAGS[tag] == true
+end
+
+-- the quests asked and not told yet (when each was first asked): again
+-- after 2 s, and after 6 s (no tag 5 s after the first ask is the game's
+-- answer; a quest asked later waits for the next round); the map again
+-- when one turned out otherwise than guessed
+local askAgain: (self: WorldMapModule, final: boolean) -> ()
+local function startRound(self: WorldMapModule)
+    after(2, function()
+        askAgain(self, false)
+    end)
+    after(6, function()
+        askAgain(self, true)
+    end)
+end
+askAgain = function(self: WorldMapModule, final: boolean)
+    local w = waiting
+    if not w then
+        return
+    end
+    local changed, now = false, GetTime()
+    for id, since in pairs(w) do
+        local tag = askTag(id)
+        if tag or (final and now - since >= 5) then
+            told[id] = tag or false
+            w[id] = nil
+            if groupTag(tag) ~= (guessed[id] or false) then
+                changed = true
+            end
+        end
+    end
+    if final then
+        if next(w) then
+            startRound(self)
+        else
+            waiting = nil
+        end
+    end
+    local map = self.map
+    if changed and map and map:IsShown() then
+        self:Refresh()
+    end
+end
+
+-- What each quest is for you (questState, and its name), kept until
+-- something it depends on changes: a quest turned in, accepted or
+-- abandoned, your level, skills or reputation (forgetQuests). The map read
+-- every quest on it again at each refresh: 320k instructions and 357 KB, three
+-- times as it opened. An event's quest is judged each time (the holidays and
+-- the map it's on decide).
+export type Judged = { state?: string, difficulty?: string, level?: number, name: string }
+local judged: { [number]: Judged } = {}
+
+export function judge(qrow: unknown[], id: number, me: Me, done: { [number]: boolean }): Judged
+    local known = judged[id]
+    if known then
+        return known
+    end
+    local q = quest(qrow)
+    local state, difficulty, level = questState(q, id, me, done)
+    local j: Judged = { state = state, difficulty = difficulty, level = level, name = questName(q, id) }
+    if not q.event then
+        judged[id] = j
+    end
+    return j
+end
+
+-- No quests and no places: the map's pins while the data is being built.
+export const NO_STARTS = {
+    quests = {},
+    objectives = {},
+    tags = {},
+    group = {},
+    maps = {},
+    drops = {},
+    items = {},
+    givers = {},
+    entrances = {},
+    routes = {},
+} :: QuestStarts
+const NO_PLACES: MapPlaces = { npcs = {}, services = {}, rares = {}, mailboxes = {}, treasures = {}, routes = {} }
+
+-- (the turned-in quests stay: only a turn-in adds one, QUEST_TURNED_IN)
+export function forgetQuests()
+    judged = {}
+end
+
+export function isGroupQuest(self: WorldMapModule, id: number): boolean
+    -- (the data not built yet: no group bar until it is)
+    if not SuuUI.Data.QuestStarts:Ready() then
+        return false
+    end
+    local starts = SuuUI.QuestStarts()
+    local fixed = starts.tags[id]
+    if fixed then
+        return groupTag(fixed)
+    end
+    if told[id] == nil then
+        local tag = askTag(id)
+        if tag then
+            told[id] = tag
+        elseif not (waiting and waiting[id]) then
+            local w = waiting
+            if not w then
+                w = {}
+                waiting = w
+                startRound(self)
+            end
+            w[id] = GetTime()
+            errors.try(field(C_QuestLog, "RequestLoadQuestByID"), id)
+        end
+    end
+    local known = told[id]
+    if known ~= nil then
+        return known ~= false and groupTag(known)
+    end
+    local guess = starts.group[id] ~= nil
+    guessed[id] = guess
+    return guess
+end
+
+-- The continent a map lies on (itself for a continent), or nil (the world).
+local function continentOf(mapID: number?): number?
+    local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID) or nil
+    local continent = asNumber(field(Enum, "UIMapType", "Continent")) or 2
+    local guard = 0
+    while info and guard < 8 do
+        if info.mapType == continent then
+            return info.mapID
+        end
+        local parent = info.parentMapID
+        info = parent and parent > 0 and errors.tryValue(C_Map.GetMapInfo, parent) or nil
+        guard = guard + 1
+    end
+    return nil
+end
+
+-- Taxi nodes the client still lists that no one flies to (an old copy of
+-- Powderfuse Port, transports, quest flights)
+local function junkTaxiNode(name: unknown): boolean
+    local s = asString(name)
+    return not s or s:find("^zzOLD") ~= nil or s:find("^Transport,") ~= nil or s:find("^Quest Path") ~= nil
+end
+
+-- A walker's route on a map, from the data's routes by NPC.
+local function routeOf(routes: { [number]: { [number]: number[][] } }, id: number, mapID: number): number[][]?
+    local byMap = routes[id]
+    return byMap and byMap[mapID] or nil
+end
+
+-- A service NPC's pin before its place: its key, look and kind.
+type ServicePin = { key: string, pin: MapPinData, kindName: string }
+
+--------------------------------------------------------------------------------
+-- The module's (WorldMapModule:Player, RecordTaxiNodes, Collect)
+--------------------------------------------------------------------------------
+
+-- who you are, for what you can pick up and who serves you
+export function player(self: WorldMapModule): Me
+    local _, _, race = UnitRace("player")
+    local _, class, classID = UnitClass("player")
+    local raceID, classNumber = asNumber(race), asNumber(classID)
+    local faction = asString(UnitFactionGroup("player"))
+    return {
+        level = asNumber(UnitLevel("player")) or 1,
+        raceBit = raceID and raceBit(raceID) or 0,
+        classBit = classNumber and 2 ^ (classNumber - 1) or 0,
+        class = asString(class),
+        faction = faction == "Horde" and "H" or faction == "Alliance" and "A" or nil,
+    }
+end
+
+-- The flight masters this character has found, saved whenever a flight
+-- master's map opens: the game marks none undiscovered away from one on
+-- Forever (isUndiscovered is always false; probed 2026-10-19), but there it
+-- lists each node of the continent with its state (0 where you are, 1 one
+-- you can fly to, 2 not found). A continent no flight master's map has
+-- opened on yet is "not checked".
+export function recordTaxiNodes(self: WorldMapModule)
+    if not C_TaxiMap then
+        return
+    end
+    local zone = errors.tryValue(C_Map.GetBestMapForUnit, "player")
+    local data = self:Char()
+    local taxi = data.taxi or { known = {}, checked = {} }
+    local function record(m: number): boolean
+        local seen = false
+        for _, n in ipairs(errors.tryValue(C_TaxiMap.GetAllTaxiNodes, m) or {}) do
+            local id, state = asNumber(n.nodeID), asNumber(n.state)
+            if id and (state == 0 or state == 1) and not junkTaxiNode(n.name) then
+                taxi.known[id] = true
+                seen = true
+            end
+        end
+        return seen
+    end
+    -- where you are, its continent, the flight map's (each while the one before is known)
+    local continent = continentOf(zone)
+    local taxiMap = asNumber((errors.try(field(_G, "GetTaxiMapID"))))
+    local seen = zone ~= nil and record(zone)
+    if not seen and zone and continent then
+        seen = record(continent)
+    end
+    if not seen and zone and continent and taxiMap then
+        seen = record(taxiMap)
+    end
+    if not seen then
+        return
+    end
+    if continent then
+        taxi.checked[continent] = true
+    end
+    data.taxi = taxi
+    local map = self.map
+    if map and map:IsShown() then
+        self:Refresh()
+    end
+end
+
+-- every pin the map would show, before merging (Item)
+export function collect(self: WorldMapModule, mapID: number): Item[]
+    local items: Item[] = {}
+    local on = self:Layers()
+    local me = self:Player()
+    me.mapID = mapID
+    -- (the quest and place data not built yet: the other pins now,
+    -- these once it's there; Refresh)
+    local starts = SuuUI.Data.QuestStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
+    local info = errors.tryValue(C_Map.GetMapInfo, mapID)
+    local mapName = info and info.name
+    local places = SuuUI.Data.MapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
+    local muted = "|cff" .. T.color["ink-muted"].hex
+    local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
+    -- the quests this character hid: none of their pins, on any map
+    local hidden = self:Char().hiddenQuests or {}
+
+    -- quests to pick up: a pin per giver's place
+    if on.quests.available or on.quests.repeatable then
+        local done = completedSet()
+        for _, row in ipairs(starts.maps[mapID] or {}) do
+            local best: { rank: number, difficulty: string, state: string }? = nil
+            local list: Offer[], ids: number[] = {}, {}
+            local giver = starts.givers[row[3]]
+            for i = 4, #row do
+                local id = row[i]
+                local qrow = not hidden[id] and starts.quests[id] or nil
+                if qrow then
+                    local j = judge(qrow, id, me, done)
+                    local state, difficulty, level = j.state, j.difficulty, j.level
+                    if state and difficulty and level and on.quests[state] and
+                        (difficulty ~= "trivial" or on.quests.trivial) then
+                        list[#list + 1] = {
+                            name = j.name,
+                            level = level,
+                            difficulty = difficulty,
+                            state = state,
+                            group = isGroupQuest(self, id),
+                        }
+                        ids[#ids + 1] = id
+                        local rank = QUEST_RANK[difficulty] or 9
+                        if not best or rank < best.rank then
+                            best = { rank = rank, difficulty = difficulty, state = state }
+                        end
+                    end
+                end
+            end
+            if best then
+                local repeatable = best.state == "repeatable"
+                local lines: TipLine[] = {}
+                for i, o in ipairs(list) do
+                    if i > 1 then
+                        lines[#lines + 1] = {
+                            o.name .. "  " .. muted .. "Level " .. o.level .. "|r",
+                            quest = ids[i],
+                        }
+                    end
+                end
+                -- who gives it, after its level ("Level 15 · Gorrik")
+                local from = giver and (" · " .. giver) or ""
+                -- one who walks: his route, drawn while you hover the pin
+                local route = routeOf(starts.routes, row[3], mapID)
+                if route then
+                    table.insert(lines, 1, { walks })
+                end
+                local look: MapPinData = repeatable and { char = "!", color = "mana", edge = "mana" } or
+                    questPin(list, best)
+                items[#items + 1] = {
+                    x = row[1] / 100,
+                    y = row[2] / 100,
+                    key = repeatable and "repeatable" or "available",
+                    rank = best.rank,
+                    pin = look,
+                    name = list[1].name,
+                    detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
+                    more = lines,
+                    difficulty = best.difficulty,
+                    repeatable = repeatable,
+                    uid = "g" .. row[3],
+                    quests = ids,
+                    route = route,
+                }
+            end
+        end
+    end
+
+    -- quests started by an item: where the mobs that drop it live
+    if on.quests.items then
+        local done = completedSet()
+        for _, row in ipairs(starts.drops[mapID] or {}) do
+            local source = starts.givers[row[3]] or "?"
+            local itemName = starts.items[row[4]] or "an item"
+            local best: { rank: number, difficulty: string }? = nil
+            local list: Offer[], ids: number[] = {}, {}
+            for i = 5, #row do
+                local id = row[i]
+                local qrow = not hidden[id] and starts.quests[id] or nil
+                if qrow then
+                    local j = judge(qrow, id, me, done)
+                    local state, difficulty, level = j.state, j.difficulty, j.level
+                    if state and difficulty and level and (difficulty ~= "trivial" or on.quests.trivial) then
+                        list[#list + 1] = {
+                            name = j.name,
+                            level = level,
+                            difficulty = difficulty,
+                            group = isGroupQuest(self, id),
+                        }
+                        ids[#ids + 1] = id
+                        local rank = QUEST_RANK[difficulty] or 9
+                        if not best or rank < best.rank then
+                            best = { rank = rank, difficulty = difficulty }
+                        end
+                    end
+                end
+            end
+            if best then
+                local lines: TipLine[] = {
+                    { "Starts from " .. itemName },
+                    { muted .. (row[3] < 0 and "Found in " or "Dropped by ") .. source .. "|r" },
+                }
+                for i = 2, #list do
+                    lines[#lines + 1] = {
+                        list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r",
+                        quest = ids[i],
+                    }
+                end
+                items[#items + 1] = {
+                    x = row[1] / 100,
+                    y = row[2] / 100,
+                    key = "itemQuest",
+                    rank = best.rank,
+                    pin = questPin(list, best),
+                    name = list[1].name,
+                    detail = "Level " .. list[1].level,
+                    listDetail = "Level " .. list[1].level .. " · " .. itemName .. " · " .. source,
+                    more = lines,
+                    difficulty = best.difficulty,
+                    uid = "d" .. row[3] .. ":" .. row[4],
+                    kindName = "Quests from items",
+                    quests = ids,
+                }
+            end
+        end
+    end
+
+    -- entrances, with their recommended levels (the group finder's) and
+    -- the wings' own; one whose door isn't known yet is in its area's middle
+    local levels = SuuUI.InstanceLevels()
+    local function range(lo: number, hi: number): string
+        return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi)
+    end
+    for _, raw in ipairs(starts.entrances[mapID] or {}) do
+        local e = entrance(raw)
+        local kind = e.kind
+        local show = (kind == "battleground" and on.places.battlegrounds) or
+            (kind ~= "battleground" and on.places.dungeons)
+        if show and (not e.faction or e.faction == me.faction) then
+            local detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon"
+            local ofKind = levels[kind]
+            local lvRow = ofKind and ofKind[e.name]
+            local lines: TipLine[] = {}
+            if lvRow then
+                local lv = instanceLevels(lvRow)
+                detail = detail .. " · " .. range(lv.min, lv.max)
+                for _, wing in ipairs(lv.wings) do
+                    lines[#lines + 1] = { wing.name .. "  " .. muted .. range(wing.min, wing.max) .. "|r" }
+                end
+            end
+            if e.approx then
+                lines[#lines + 1] = { muted .. "Approximate: its door isn't known yet|r" }
+            end
+            -- entrances on one spot merge (Blackrock Mountain's four stacked,
+            -- only the top one's card to read); one place's doors count once
+            local look: MapPinData = kind == "battleground" and { glyph = "swords" } or
+                { glyph = "swirl", spin = true, ring = kind == "raid" and "gilt" or nil }
+            items[#items + 1] = {
+                x = e.x / 100,
+                y = e.y / 100,
+                fixed = true,
+                uid = "e" .. e.name,
+                key = kind == "battleground" and "battleground" or "entrance",
+                kindName = kind == "battleground" and "Battlegrounds" or "Entrances",
+                pin = look,
+                name = e.name,
+                detail = detail,
+                more = #lines > 0 and lines or nil,
+            }
+        end
+    end
+
+    -- flight masters: the game's taxi nodes for this map (yours and
+    -- neutral), found or not by this character's own record (the game's
+    -- isUndiscovered is always false on Forever; see RecordTaxiNodes)
+    if on.places.flight and C_TaxiMap then
+        local nodes = errors.tryValue(C_TaxiMap.GetTaxiNodesForMap, mapID)
+        local mine = me.faction == "H" and 1 or me.faction == "A" and 2 or -1
+        local taxi = self:Char().taxi
+        local continent = continentOf(mapID)
+        local checked = taxi ~= nil and
+            ((continent ~= nil and taxi.checked[continent] == true) or
+                (continent == nil and next(taxi.checked) ~= nil))
+        for _, n in ipairs(nodes or {}) do
+            local gx, gy = errors.tryMethod(n.position, "GetXY")
+            local x, y = asNumber(gx), asNumber(gy)
+            local side = asNumber(n.faction)
+            if x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (side == 0 or side == mine) and
+                not junkTaxiNode(n.name) then
+                local id = asNumber(n.nodeID)
+                local known = taxi ~= nil and id ~= nil and taxi.known[id] == true
+                items[#items + 1] = {
+                    x = x,
+                    y = y,
+                    fixed = true,
+                    pin = { glyph = "wing", color = known and "gilt-text" or "ink-muted" },
+                    name = asString(n.name) or "?",
+                    detail = known and "Flight master" or checked and "Flight master · not found yet" or
+                        "Flight master · not checked yet",
+                    more = not (known or checked) and
+                        {
+                            {
+                                muted ..
+                                    "Open any flight master's map on this continent: SuuUI notes which ones this character has found|r",
+                            },
+                        } or
+                        nil,
+                }
+            end
+        end
+    end
+
+    -- campfires you found (the campsite module's memory)
+    if on.places.campfires then
+        local camp = SuuUI.UseService(CAMPFIRES)
+        local fires = camp and camp.Fires
+        for _, f in ipairs(fires and fires() or {}) do
+            if f.map == mapID then
+                local detail = f.by and ("Found by " .. f.by) or "One you found"
+                local out = f.out
+                items[#items + 1] = {
+                    x = f.x,
+                    y = f.y,
+                    key = "campfire",
+                    fixed = true,
+                    pin = { glyph = "campfire", color = "ember-text" },
+                    name = "Campfire",
+                    detail = detail,
+                    -- how long it burns, read as you hover (asked 2026-11-05)
+                    tip = out and
+                        function(): TooltipData
+                            return {
+                                title = "Campfire",
+                                subtitle = detail,
+                                lines = { { "Goes out in", fireLeft(out - time()) } },
+                            }
+                        end or
+                        nil,
+                }
+            end
+        end
+    end
+
+    -- services: one pin per NPC, the first of its services whose filter is on
+    local npcs = places.npcs
+    local svc = places.services[mapID] or {}
+    for i = 1, #svc, 3 do
+        local id = svc[i + 2]
+        local row = npcs[id]
+        local n = row and npc(row)
+        local services, friendly, faction = n and n.services, n and n.friendly, me.faction
+        -- (a holiday's NPC only while it's on)
+        local event = n and n.event
+        if n and services and friendly and faction and friendly:find(faction, 1, true) and
+            (not event or eventOn(event, mapID)) then
+            for kind in services:gmatch("[^,]+") do
+                local found: ServicePin? = nil
+                local never = false
+                local class = kind:match("^class:(.+)$")
+                local prof = kind:match("^trainer:(.+)$")
+                if class then
+                    if class == me.class and on.trainers.class then
+                        local token = "class-" .. class:lower()
+                        found = {
+                            key = "classTrainer",
+                            pin = { glyph = "book", color = token, edge = token, small = true },
+                            kindName = SERVICE_NAMES.classTrainer or "Class trainer",
+                        }
+                    elseif class ~= me.class then
+                        never = true -- another class's trainer: never
+                    end
+                elseif prof then
+                    local layer = (prof == "weapon" and "weapon") or
+                        ((prof == "riding" or prof == "pet") and "riding") or
+                        "professions"
+                    if on.trainers[layer] then
+                        found = {
+                            key = "trainer:" .. prof,
+                            pin = { glyph = PROFESSION_GLYPH[prof] or "book", small = true },
+                            kindName = PROFESSION_NAMES[prof] or "Trainer",
+                        }
+                    end
+                else
+                    local s = SERVICE[kind]
+                    local group = (kind == "bank" or kind == "auction") and on.trading or on.services
+                    if s and group[s.filter] then
+                        found = {
+                            key = kind,
+                            pin = { glyph = s.glyph, color = s.color, small = true },
+                            kindName = SERVICE_NAMES[kind] or kind,
+                        }
+                    end
+                end
+                if never then
+                    break
+                end
+                if found then
+                    local it: Item = {
+                        x = svc[i] / 100,
+                        y = svc[i + 1] / 100,
+                        small = true,
+                        uid = "n" .. id,
+                        key = found.key,
+                        pin = found.pin,
+                        kindName = found.kindName,
+                        name = n.name,
+                        detail = n.title,
+                    }
+                    -- one who walks his round (Zixil, Kira Songshine): his
+                    -- route while you hover, like a walking rare's
+                    local route = routeOf(places.routes, id, mapID)
+                    if route then
+                        it.route = route
+                        it.more = { { walks } }
+                    end
+                    -- a weapon master: the weapons he teaches
+                    local teaches = WEAPON_MASTERS[id]
+                    if prof == "weapon" and teaches then
+                        it.teaches = teaches
+                        local more = it.more or {}
+                        table.insert(more, 1, { "Teaches " .. teaches })
+                        it.more = more
+                    end
+                    items[#items + 1] = it
+                    break
+                end
+            end
+        end
+    end
+    if on.trading.mail then
+        local mail = places.mailboxes[mapID] or {}
+        for i = 1, #mail, 2 do
+            items[#items + 1] = {
+                x = mail[i] / 100,
+                y = mail[i + 1] / 100,
+                key = "mail",
+                small = true,
+                pin = { glyph = "mail", small = true },
+                name = "Mailbox",
+                kindName = "Mailbox",
+            }
+        end
+    end
+
+    -- rares and treasures
+    if on.rares.rares then
+        local rares = places.rares[mapID] or {}
+        -- how many spots each spawns at here (hovering one rings them all)
+        local spots: { [number]: number } = {}
+        for i = 3, #rares, 3 do
+            spots[rares[i]] = (spots[rares[i]] or 0) + 1
+        end
+        for i = 1, #rares, 3 do
+            local id = rares[i + 2]
+            local row = npcs[id]
+            local n = row and npc(row)
+            local event = n and n.event
+            if n and (not event or eventOn(event, mapID)) then
+                local elite = n.rank == "rareElite"
+                local lo, hi = n.minLevel, n.maxLevel
+                local level = lo and (hi and hi ~= lo and (lo .. "-" .. hi) or tostring(lo)) or nil
+                local route = routeOf(places.routes, id, mapID)
+                local lines: TipLine[] = {}
+                local count = spots[id] or 1
+                if count > 1 then
+                    lines[#lines + 1] = { muted .. "Spawns at one of " .. count .. " spots, ringed on the map|r" }
+                end
+                if route then
+                    lines[#lines + 1] = { walks }
+                end
+                local look: MapPinData = elite and
+                    { glyph = "skull", color = "gilt-text", edge = "gilt", ring = "gilt" } or
+                    { glyph = "skull", color = "ink", edge = "coin-silver" }
+                items[#items + 1] = {
+                    x = rares[i] / 100,
+                    y = rares[i + 1] / 100,
+                    key = elite and "rareElite" or "rare",
+                    pin = look,
+                    name = n.name,
+                    detail = (elite and "Rare elite" or "Rare") .. (level and (" · level " .. level) or ""),
+                    kindName = elite and "Rare elite" or "Rare",
+                    uid = "n" .. id,
+                    rare = id,
+                    route = route,
+                    more = #lines > 0 and lines or nil,
+                }
+            end
+        end
+    end
+    if on.rares.treasures then
+        local chests = places.treasures[mapID] or {}
+        for i = 1, #chests, 3 do
+            local x, y = asNumber(chests[i]), asNumber(chests[i + 1])
+            if x and y then
+                items[#items + 1] = {
+                    x = x / 100,
+                    y = y / 100,
+                    key = "treasure",
+                    pin = { glyph = "chest", color = "coin-gold" },
+                    name = asString(chests[i + 2]) or "Treasure",
+                    detail = "Treasure (when it's there)",
+                    kindName = "Treasure chest",
+                }
+            end
+        end
+    end
+    -- your marks and shared ones (the marks module's), on their map and the
+    -- maps above it; they keep their spot, and a click opens their card
+    local marks = SuuUI.UseService(MARKS)
+    local list, placeOn, mapNameOf, pinLook = marks and marks.Marks,
+        marks and marks.PlaceOn,
+        marks and marks.MapName,
+        marks and marks.PinLook
+    if list and placeOn and mapNameOf and pinLook and (on.marks.yours or on.marks.shared) then
+        for _, mark in ipairs(list()) do
+            local from = mark.from
+            if (from and on.marks.shared) or (not from and on.marks.yours) then
+                local x, y = placeOn(mark, mapID)
+                if x and y then
+                    local where = ("%s %.1f, %.1f"):format(mapNameOf(mark.map) or "", mark.x * 100, mark.y * 100)
+                    items[#items + 1] = {
+                        x = x,
+                        y = y,
+                        fixed = true,
+                        uid = "m" .. mark.id,
+                        mark = mark.id,
+                        pin = pinLook(mark),
+                        name = mark.name ~= "" and mark.name or "Mark",
+                        detail = where,
+                        kindName = "Marks",
+                        more = from and { { muted .. "Shared by " .. from .. "|r" } } or nil,
+                    }
+                end
+            end
+        end
+    end
+    -- the Convergences of Elements (a Skyborne's): glowing while you lack
+    -- the blessing; their tooltip read when shown (the blessing's time left)
+    local conv = on.skyborne.convergences and SuuUI.UseService(CONVERGENCES) or nil
+    local shown, onMap, lookOf = conv and conv.Shown, conv and conv.OnMap, conv and conv.PinLook
+    if shown and onMap and lookOf and shown() then
+        local look = lookOf()
+        for i, c in ipairs(onMap(mapID)) do
+            items[#items + 1] = {
+                x = c.x,
+                y = c.y,
+                fixed = true,
+                key = "convergence",
+                uid = "c" .. i,
+                pin = look,
+                name = "Convergence of Elements",
+                kindName = "Convergences of Elements",
+                detail = c.where,
+                tip = c.tip,
+            }
+        end
+    end
+    return items
+end

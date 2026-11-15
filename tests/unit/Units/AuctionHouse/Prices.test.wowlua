@@ -1,0 +1,126 @@
+-- Units/AuctionHouse/Prices: the item tooltips' prices (what the house
+-- showed last, what most sell it for, how many are offered, your stack's
+-- price); the price memory and a cheap few called directly.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/AuctionHouse"
+import ORE, BLADE, setUp, tearDown, plain from "./AuctionHouseHelpers"
+import * as ahPrices from "/Units/AuctionHouse/Prices"
+
+@beforeEach
+local function start()
+    setUp()
+end
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- Item tooltips
+--------------------------------------------------------------------------------
+
+local function tipLines(): string[]
+    local out: string[] = {}
+    local rights = mock.tooltipLines(GameTooltip, true)
+    for i, left in ipairs(mock.tooltipLines(GameTooltip)) do
+        local right = rights[i]
+        out[i] = left .. ((right and right ~= "") and (" = " .. right) or "")
+    end
+    return out
+end
+
+local function hasLine(lines: string[], pattern: string): boolean
+    for _, l in ipairs(lines) do
+        if l:find(pattern) then
+            return true
+        end
+    end
+    return false
+end
+
+local function oreTooltip(): string[]
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetBagItem(0, 1)
+    local lines = {}
+    for i, l in ipairs(tipLines()) do
+        lines[i] = plain(l)
+    end
+    GameTooltip:Hide()
+    return lines
+end
+
+@test("an item's tooltip: what the house showed last, what most sell it for, how many are offered, your stack's price")
+local function tooltips()
+    -- nothing seen: nothing
+    expect(hasLine(oreTooltip(), "^Auction house")).toBe(false)
+    M:Seen(ORE, M:Market({ { price = 100, qty = 10 }, { price = 150, qty = 200 }, { price = 160, qty = 90 } }))
+    local lines = oreTooltip()
+    expect(hasLine(lines, "^Auction house · today %d%d:%d%d$")).toBe(true)
+    expect(hasLine(lines, "^Lowest buyout = 1s each$")).toBe(true)
+    expect(hasLine(lines, "^Most sell it for = 1s 50c each$")).toBe(true)
+    expect(hasLine(lines, "^Offered = 300 in 3 auctions$")).toBe(true)
+    expect(hasLine(lines, "^This stack %(20%) = 20s$")).toBe(true)
+    -- each setting off
+    M:Set("tipMost", false)
+    M:Set("tipOffered", false)
+    M:Set("tipStack", false)
+    lines = oreTooltip()
+    expect(hasLine(lines, "^Most sell")).toBe(false)
+    expect(hasLine(lines, "^Offered")).toBe(false)
+    expect(hasLine(lines, "^This stack")).toBe(false)
+    M:Set("tipShow", false)
+    expect(hasLine(oreTooltip(), "^Auction house")).toBe(false)
+    M:Set("tipShow", true)
+    M:Set("tipOffered", true)
+    -- one per auction, a single item: no "each", no "in n auctions"
+    M:Seen(BLADE, 50000, 2)
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    GameTooltip:SetItemByID(BLADE)
+    lines = {}
+    for i, l in ipairs(tipLines()) do
+        lines[i] = plain(l)
+    end
+    GameTooltip:Hide()
+    expect(hasLine(lines, "^Lowest buyout = 5g$")).toBe(true)
+    expect(hasLine(lines, "^Offered = 2$")).toBe(true)
+    -- not an item ID, or the module off: nothing
+    local tip: GameTooltip = mock.partial({ AddLine = mock.spy(), AddDoubleLine = mock.spy() })
+    M:AddTooltipPrices(tip, { id = "x" })
+    M:AddTooltipPrices(tip, nil)
+    expect(tip.AddLine).never.toHaveBeenCalled()
+    mock.stub(M, "IsEnabled", function()
+        return false
+    end)
+    expect(hasLine(oreTooltip(), "^Auction house")).toBe(false)
+    -- hooked once
+    M:HookTooltips()
+end
+
+@test("the price memory called directly: a price seen, the newest look read back; what a list of offers says, past a cheap few")
+local function memory()
+    ahPrices.recordSeen(M, ORE, 120, 40)
+    local e = assert(ahPrices.lowestSeen(M, ORE))
+    expect(e.price).toBe(120)
+    expect(e.qty).toBe(40)
+    expect(ahPrices.lowestSeen(M, nil)).toBeNil()
+    expect(ahPrices.lastPosted(M, ORE)).toBeNil()
+    -- 10 at 1s under 200 at 1s 50c: a cheap few (25 % under, at most 10 % of all)
+    local m = assert(ahPrices.market(M, { { price = 150, qty = 200 }, { price = 100, qty = 10 } }))
+    expect(m.low).toBe(100)
+    expect(m.ref.price).toBe(150)
+    expect(m.cheap).toBe(10)
+    expect(m.total).toBe(210)
+    expect(m.n).toBe(2)
+    expect(ahPrices.market(M, {})).toBeNil()
+    -- kept as a market: what most sell it for too
+    ahPrices.recordSeen(M, ORE, m)
+    expect(assert(ahPrices.lowestSeen(M, ORE)).most).toBe(150)
+    -- the check off: the cheapest sets the price
+    M:Set("cheapCheck", false)
+    local cheapest = assert(ahPrices.market(M, { { price = 150, qty = 200 }, { price = 100, qty = 10 } }))
+    expect(cheapest.ref.price).toBe(100)
+    expect(cheapest.cheap).toBe(0)
+end

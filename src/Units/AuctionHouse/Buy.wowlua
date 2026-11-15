@@ -1,0 +1,819 @@
+-- Units/AuctionHouse/Buy.wowlua
+-- The Buy page of the auction house (Units/AuctionHouse): the search bar
+-- (favourites, the search and your searches under it, Filter, Search, Scan
+-- all), the game's categories down the left, the results (sorted by the
+-- house or here), and a Shift-clicked item searched. The module's methods
+-- for them (Search, SortBy, DrawCategories, DrawResults, SearchItem, …)
+-- call the functions here; an item's view is AuctionHouse/ItemView.
+
+import SuuUI from "/Core/API"
+import type ScrollArea, Panel, SuuButton, Text, TextField, ItemSlot, Money, FilterMenu, FilterValues, FilterChoice, FilterValue, LoadingMark, Border from "/Core/API"
+import hook from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as itemData from "wowlua:item"
+import trimmed, keyInfo, qualityToken, keyTooltip, QUALITY, sorts from "./Common"
+import TableRow, AuctionTable from "./Tables"
+import ItemView from "./ItemView"
+import type HistoryRow from "./History"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, tryValue, field, list = errors.try, errors.tryValue, tbl.field, tbl.list
+local asString = secret.asString
+
+local AH = C_AuctionHouse
+
+--------------------------------------------------------------------------------
+-- Buy: the search bar, the categories, the results
+--------------------------------------------------------------------------------
+
+local CAT_W = 170
+
+-- The results' columns the house sorts itself (Enum.AuctionHouseSortOrder).
+-- Its Level order goes with the game's required level column on Forever,
+-- not the item level: item level and Available are sorted here.
+local SERVER_SORT: { [string]: AuctionHouseSortOrder } = {
+    name = Enum.AuctionHouseSortOrder.Name,
+    price = Enum.AuctionHouseSortOrder.Price,
+}
+-- A result sorted here: its value, its place in the house's order.
+type SortEntry = { r: BrowseResultInfo, v: number, i: number }
+
+-- One of the game's categories (AuctionCategories, from its auction house UI:
+-- Blizzard_AuctionHouseUI's Camelot/Blizzard_AuctionData.lua builds the tree;
+-- read here, never written). Up to three levels deep: Armor, Plate, Head.
+export type Category = {
+    name?: string,
+    filters?: AuctionHouseItemClassFilter[],
+    implicitFilter?: AuctionHouseFilter,
+    subCategories?: Category[],
+    flags?: { WOW_TOKEN_FLAG?: boolean },
+}
+
+-- The game's category tree, WoW Token left out (its auctions are unavailable
+-- on Forever).
+local function categories(): Category[]
+    local out: Category[] = {}
+    local all = list(rawget(_G, "AuctionCategories")) :: unknown :: Category[]
+    for _, c in ipairs(all) do
+        local flags = c.flags
+        if not (flags and flags.WOW_TOKEN_FLAG) then
+            out[#out + 1] = c
+        end
+    end
+    return out
+end
+
+-- A filter group's values (a list, or one).
+local function choices(c: FilterChoice?): FilterValue[]
+    if type(c) == "table" then
+        return c
+    end
+    return {}
+end
+
+-- A category's button: its name, the chosen fill, the hover; a chevron when
+-- it has subcategories (right: closed, down: open).
+export class CatButton extends Button
+    readonly sel: Texture
+    readonly hover: Texture
+    readonly text: Text
+    readonly chevron: Texture
+    depth: number = 0
+    chosen: boolean = false
+    -- on the way to the chosen one (its subcategories shown)
+    opened: boolean = false
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(24)
+        self.sel = UI.Fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        -- hover: the row lifts (as the trainer's rows), a subcategory's
+        -- text also goes from muted to ink
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:SetAlpha(0.6)
+        self.hover:Hide()
+        self.chevron = self:CreateTexture(nil, "ARTWORK")
+        self.chevron:SetSize(10, 10)
+        SuuUI.Layout.Follow(self, function()
+            self.chevron:SetPoint("RIGHT", -S["space-2"], 0)
+        end)
+        UI.Paint(self.chevron, "ink-muted")
+        self.chevron:Hide()
+        self.text = UI.Text(self, "body", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.text:SetPoint("LEFT", S["space-3"], 0)
+            self.text:SetPoint("RIGHT", self.chevron, "LEFT", -S["space-1"], 0)
+        end)
+        self.text:SetWordWrap(false)
+        self:SetScript("OnEnter", function()
+            if self.chosen then
+                return
+            end
+            self.hover:Show()
+            self.text:SetColor("ink")
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            if not self.chosen then
+                self.text:SetColor(self:Ink())
+            end
+        end)
+    end
+
+    -- The text's colour when not chosen: a subcategory's muted, unless open.
+    function Ink(): string
+        return (self.depth > 0 and not self.opened) and "ink-muted" or "ink"
+    end
+end
+
+-- The favourites button: a star.
+export class FavButton extends Button
+    readonly edge: Border
+    readonly glyph: Texture
+
+    constructor(parent: Frame, m: AuctionHouseModule)
+        super(nil, parent)
+        self:SetSize(30, 30)
+        self:SetPoint("LEFT")
+        UI.Fill(self, "surface-sunk"):SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(self.glyph, "star")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("CENTER")
+        UI.Paint(self.glyph, "gilt")
+        self:SetScript("OnClick", function()
+            m:Favorites()
+        end)
+        self:SetScript("OnEnter", function()
+            self.edge:SetColor("gilt")
+            UI.ShowTooltip(self, { title = "Favourites", description = "The items you marked as favourites." })
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetColor("gilt-line")
+            UI.HideTooltip()
+        end)
+    end
+end
+
+-- A result: the item (slot, name, Yours), item level, how many, the lowest price.
+export class ResultRow extends TableRow
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly mine: Text
+    readonly ilvl: Text
+    readonly qty: Text
+    readonly price: Money
+    key: ItemKey? = nil
+
+    constructor(parent: Frame)
+        super(parent)
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetWordWrap(false)
+        self.mine = UI.Text(self, "micro", "arcane")
+        self.ilvl = UI.Text(self, "numeric", "ink-muted")
+        self.ilvl:SetJustifyH("RIGHT")
+        self.qty = UI.Text(self, "numeric", "ink")
+        self.qty:SetJustifyH("RIGHT")
+        self.price = UI.Money(self)
+    end
+end
+
+-- The Buy page: the search bar, Scan all, the categories, the results or
+-- an item's view; while Scan all runs its mark over them.
+export class BuyPage extends Frame
+    readonly fav: FavButton
+    readonly search: TextField
+    -- your searches, under the search box while it has the focus
+    readonly history: Panel
+    readonly historyHead: Text
+    readonly historyRows: HistoryRow[] = {}
+    readonly filter: FilterMenu
+    readonly searchButton: SuuButton
+    readonly scanButton: SuuButton
+    readonly scanWhen: Text
+    readonly catList: ScrollArea
+    readonly catButtons: CatButton[] = {}
+    readonly main: Frame
+    readonly results: AuctionTable<ResultRow>
+    readonly empty: Text
+    readonly more: SuuButton
+    readonly itemView: ItemView
+    readonly scanView: Frame
+    readonly scanMark: LoadingMark
+    readonly scanCaption: Text
+    readonly catBlock: Frame
+
+    constructor(body: Frame, m: AuctionHouseModule)
+        super(nil, body)
+        self:SetAllPoints()
+        self:Hide()
+        -- the search bar: favourites, the search, Filter, Search
+        local bar = CreateFrame("Frame", nil, self)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(30)
+        self.fav = FavButton.new(bar, m)
+        self.search = UI.TextField(bar, {
+            width = 300,
+            placeholder = "Search",
+            onTextChanged = function(text: string)
+                m:HistoryTyped(text)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.search:SetPoint("LEFT", self.fav, "RIGHT", S["space-2"], 0)
+        end)
+        self.search.edit:HookScript("OnEnterPressed", function()
+            m:CloseHistory()
+            m:Search(nil, true)
+        end)
+        -- your searches: shown with the focus; Esc closes them, as does the
+        -- focus going anywhere but onto them (a click on one takes it)
+        self.search.edit:HookScript("OnEditFocusGained", function()
+            m:OpenHistory()
+        end)
+        self.search.edit:HookScript("OnEditFocusLost", function()
+            if not (self.history:IsShown() and self.history:IsMouseOver()) then
+                m:CloseHistory()
+            end
+        end)
+        self.search.edit:HookScript("OnEscapePressed", function()
+            m:CloseHistory()
+        end)
+        self.search:HookScript("OnHide", function()
+            m:CloseHistory()
+        end)
+        -- (as a select's list: a solid panel over everything)
+        local history = UI.Panel(SuuUI.Root, { solid = true })
+        history.body:SetScript("OnSizeChanged", nil)
+        history.body:Hide()
+        history:SetFrameStrata("FULLSCREEN_DIALOG")
+        history:SetToplevel(true)
+        history:SetClampedToScreen(true)
+        history:EnableMouse(true)
+        SuuUI.Layout.Follow(self, function()
+            history:SetPoint("TOPLEFT", self.search, "BOTTOMLEFT", 0, -S["space-1"])
+        end)
+        history:Hide()
+        -- a click anywhere but on the list or the search box closes it (and
+        -- goes on to what it was on); Esc is the search box's own
+        UI.Dismissable(history, {
+            close = function()
+                m:CloseHistory()
+            end,
+            esc = false,
+            outside = "pass",
+            inside = { self.search },
+        })
+        self.history = history
+        self.historyHead = UI.Text(history, "caption", "ink-muted")
+        self.historyHead:SetValue("Recent searches")
+        SuuUI.Layout.Follow(self, function()
+            self.historyHead:SetPoint("TOPLEFT", S["space-2"] + S["space-4"], -(S["space-2"] + S["space-1"]))
+        end)
+        self.filter = UI.FilterMenu(bar, {
+            groups = {
+                -- the required level range, as the game's own (in its filter
+                -- menu too): numbers only, two digits; empty is no limit
+                {
+                    key = "level",
+                    label = "Required level",
+                    kind = "range",
+                    placeholders = { "Min", "Max" },
+                    digits = 2,
+                },
+                {
+                    key = "only",
+                    label = "Show",
+                    kind = "toggles",
+                    options = { { value = "usable", label = "Usable only" } },
+                },
+                {
+                    key = "rarity",
+                    label = "Rarity",
+                    kind = "many",
+                    options = {
+                        { value = "poor", label = "Poor", color = "quality-poor" },
+                        { value = "common", label = "Common", color = "quality-common" },
+                        { value = "uncommon", label = "Uncommon", color = "quality-uncommon" },
+                        { value = "rare", label = "Rare", color = "quality-rare" },
+                        { value = "epic", label = "Epic", color = "quality-epic" },
+                    },
+                },
+            },
+            defaults = { level = {}, only = {}, rarity = {} },
+            placeholder = "Filter",
+            width = 110,
+            onChange = function(v: FilterValues)
+                m.filterValue = v
+            end,
+            -- Enter in a level box searches, as in the search box
+            onSubmit = function()
+                self.filter:Close()
+                m:Search()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.filter:SetPoint("LEFT", self.search, "RIGHT", S["space-2"], 0)
+        end)
+        self.searchButton = UI.Button(bar, {
+            text = "Search",
+            variant = "primary",
+            icon = "search",
+            onClick = function()
+                m:CloseHistory()
+                m:Search(nil, true)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.searchButton:SetPoint("LEFT", self.filter, "RIGHT", S["space-2"], 0)
+        end)
+        -- Scan all: after a thin divider, the button and when it last ran
+        local div = UI.Fill(bar, "gilt-faint", "ARTWORK")
+        div:SetSize(1, 22)
+        SuuUI.Layout.Follow(self, function()
+            div:SetPoint("LEFT", self.searchButton, "RIGHT", S["space-4"], 0)
+        end)
+        self.scanButton = UI.Button(bar, {
+            text = "Scan all",
+            icon = "sort",
+            onClick = function()
+                m:Scan()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.scanButton:SetPoint("LEFT", div, "RIGHT", S["space-4"], 0)
+        end)
+        self.scanWhen = UI.Text(bar, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.scanWhen:SetPoint("LEFT", self.scanButton, "RIGHT", S["space-3"], 0)
+        end)
+        -- the categories down the left
+        local cats = UI.ScrollArea(self, S["space-2"])
+        SuuUI.Layout.Follow(self, function()
+            cats:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
+        end)
+        cats:SetPoint("BOTTOMLEFT")
+        cats:SetWidth(CAT_W)
+        cats.child:SetWidth(CAT_W)
+        self.catList = cats
+        -- the main column: results, an item's auctions or a commodity's offers
+        local main = CreateFrame("Frame", nil, self)
+        SuuUI.Layout.Follow(self, function()
+            main:SetPoint("TOPLEFT", CAT_W + S["space-3"] + S["space-5"], -(30 + S["space-4"]))
+        end)
+        main:SetPoint("BOTTOMRIGHT")
+        self.main = main
+        self.results = AuctionTable.new(main, {
+            { label = "Name", sort = "name" },
+            { label = "Item level", w = 70, right = true, sort = "ilvl" },
+            { label = "Available", w = 70, right = true, sort = "qty" },
+            { label = "Lowest price", w = 120, right = true, sort = "price" },
+        }, function(p: Frame): ResultRow
+            return ResultRow.new(p)
+        end)
+        self.results:SetAllPoints()
+        self.results.onSort = function(key: string)
+            m:SortBy(key)
+        end
+        self.empty = UI.Text(main, "body", "ink-muted")
+        self.empty:SetPoint("TOP", 0, -60)
+        self.more = UI.Button(main, {
+            text = "More results",
+            onClick = function()
+                try(AH.RequestMoreBrowseResults)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.more:SetPoint("BOTTOM", 0, S["space-2"])
+        end)
+        self.more:Hide()
+        self.itemView = ItemView.new(main, m)
+        -- while Scan all runs: the mark, "Scanning auctions", the progress
+        local sv = CreateFrame("Frame", nil, main)
+        sv:SetAllPoints()
+        sv:SetFrameLevel(main:GetFrameLevel() + 20)
+        sv:EnableMouse(true)
+        sv:Hide()
+        self.scanView = sv
+        self.scanMark = UI.LoadingMark(sv, { size = 60 })
+        self.scanMark:SetPoint("CENTER", 0, 40)
+        local title = UI.Text(sv, "header", "gilt-text")
+        title:SetValue("Scanning auctions")
+        SuuUI.Layout.Follow(self, function()
+            title:SetPoint("TOP", self.scanMark, "BOTTOM", 0, -S["space-4"])
+        end)
+        self.scanCaption = UI.Text(sv, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.scanCaption:SetPoint("TOP", title, "BOTTOM", 0, -S["space-2"])
+        end)
+        -- the categories wait too: dimmed, and a cover that says why
+        local block = CreateFrame("Frame", nil, self)
+        block:SetAllPoints(cats)
+        block:SetFrameLevel(cats:GetFrameLevel() + 20)
+        block:EnableMouse(true)
+        block:SetScript("OnEnter", function()
+            UI.ShowTooltip(block, { title = "Categories", description = "Scanning: back when the scan is done." })
+        end)
+        block:SetScript("OnLeave", function()
+            UI.HideTooltip()
+        end)
+        block:Hide()
+        self.catBlock = block
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Buy
+--------------------------------------------------------------------------------
+
+-- A search, as the game's own: the text, the level range, the filter
+-- menu's filters and the chosen category's (its implicit filter too).
+-- `yours`: one you ran (Enter, Search, your searches' list), kept in
+-- them once it finds something.
+export function search(self: AuctionHouseModule, text: string?, yours: boolean?)
+    local buy = self.buy
+    self.view = "browse"
+    local node: Category? = self.catPath[#self.catPath]
+    local filters = self:QueryFilters()
+    local implicit = node and node.implicitFilter
+    if implicit then
+        filters[#filters + 1] = implicit
+    end
+    local minLevel, maxLevel = self:LevelRange()
+    local query: AuctionHouseBrowseQuery = {
+        searchString = text or (buy and buy.search.edit:GetText()) or "",
+        minLevel = minLevel,
+        maxLevel = maxLevel,
+        sorts = self:BrowseSorts(),
+        filters = filters,
+        itemClassFilters = node and node.filters or {},
+    }
+    self.query = query
+    self.searched = true
+    local kept = trimmed(query.searchString)
+    self.historyPending = (yours and kept ~= "") and kept or nil
+    self:SendBrowse(query)
+end
+
+export function sendBrowse(self: AuctionHouseModule, query: AuctionHouseBrowseQuery)
+    self:Note("Searching…", nil, true)
+    local ok, err = pcall(AH.SendBrowseQuery, query)
+    if not ok then
+        self:Note("The search didn't go out: " .. tostring(err), "error")
+    end
+    self:Refresh()
+end
+
+-- The Filter menu's level range: the required levels searched (0: no
+-- limit, as the game's own range sends).
+export function levelRange(self: AuctionHouseModule): (number, number)
+    return UI.FilterRange((self.filterValue or {}).level)
+end
+
+-- The house's order for the results: the chosen column's, then price or
+-- name; item level and Available have none (sorted here, DrawResults).
+export function browseSorts(self: AuctionHouseModule): AuctionHouseSortType[]
+    local first = SERVER_SORT[self.sortKey]
+    if not first then
+        return sorts()
+    end
+    local O = Enum.AuctionHouseSortOrder
+    return {
+        { sortOrder = first, reverseSort = self.sortReverse },
+        { sortOrder = first == O.Price and O.Name or O.Price, reverseSort = false },
+    }
+end
+
+-- A column's header clicked: the results sorted by it, again reversed.
+-- The house's own orders send the search again; the others sort what
+-- it gave.
+export function sortBy(self: AuctionHouseModule, key: string)
+    if self.sortKey == key then
+        self.sortReverse = not self.sortReverse
+    else
+        self.sortKey, self.sortReverse = key, false
+    end
+    local query = self.query
+    if SERVER_SORT[key] and query and self.searched and not self.scanning then
+        if query.searchString == "★" then
+            self:Favorites()
+            return
+        end
+        query.sorts = self:BrowseSorts()
+        self:SendBrowse(query)
+        return
+    end
+    self:Refresh()
+end
+
+export function favorites(self: AuctionHouseModule)
+    self.view = "browse"
+    self.searched = true
+    local order = self:BrowseSorts()
+    self.query = { searchString = "★", sorts = order }
+    self.historyPending = nil
+    self:Note("Your favourites…", nil, true)
+    try(AH.SearchForFavorites, order)
+    self:Refresh()
+end
+
+-- Another edit box being typed in: the chat line open, or the keyboard
+-- on one outside this window (where a Shift-click's link goes).
+export function typingElsewhere(self: AuctionHouseModule): boolean
+    local active = field(_G, "ChatFrameUtil", "GetActiveWindow") or field(_G, "ChatEdit_GetActiveWindow")
+    if active and try(active) then
+        return true
+    end
+    local focus: Region? = GetCurrentKeyBoardFocus()
+    local window = self.window
+    while focus do
+        if focus == window then
+            return false
+        end
+        focus = focus:GetParent()
+    end
+    return GetCurrentKeyBoardFocus() ~= nil
+end
+
+-- A Shift-clicked item (its ID or link): its name searched on Buy while
+-- the window is open and nothing else is being typed in; whether it is.
+-- Not loaded yet, the search comes once the client has the item.
+export function searchItem(self: AuctionHouseModule, item: number | string): boolean
+    local window = self.window
+    if not (self:IsEnabled() and self.open and window and window:IsShown()) or self:TypingElsewhere() then
+        return false
+    end
+    local id = type(item) == "number" and item or tonumber((tostring(item):match("item:(%d+)")))
+    if not id then
+        return false
+    end
+    local now = GetTime()
+    if id == self.linkedID and now == self.linkedAt then
+        return true
+    end
+    self.linkedID, self.linkedAt = id, now
+    local pending = self.linkLoad
+    if pending then
+        pending:cancel()
+    end
+    self.linkLoad = nil
+    local handle = itemData.load(id, function(data: itemData.ItemData?)
+        self.linkLoad = nil
+        if data and self.open and window:IsShown() then
+            self:SearchName(data.name)
+        end
+    end)
+    if not handle:isDone() then
+        self.linkLoad = handle
+    end
+    return true
+end
+
+-- A name searched on Buy, in all categories (while Scan all runs: put in
+-- the search box, for Search once it is done).
+export function searchName(self: AuctionHouseModule, name: string)
+    local window, buy = self.window, self.buy
+    if not (window and buy) then
+        return
+    end
+    if self.tab ~= "buy" then
+        window:SetTab("buy")
+    end
+    buy.search:SetValue(name)
+    self.catPath = {}
+    if self.scanning then
+        self:Refresh()
+        return
+    end
+    -- kept in your searches too (asked 2026-11-12)
+    self:Search(name, true)
+end
+
+-- The filter menu's choices as the game's filters.
+export function queryFilters(self: AuctionHouseModule): AuctionHouseFilter[]
+    local F = Enum.AuctionHouseFilter
+    local v = self.filterValue or {}
+    local out: AuctionHouseFilter[] = {}
+    for _, t in ipairs(choices(v.only)) do
+        if t == "usable" then
+            out[#out + 1] = F.UsableOnly
+        end
+    end
+    local rarity: { [string]: AuctionHouseFilter } = {
+        poor = F.PoorQuality,
+        common = F.CommonQuality,
+        uncommon = F.UncommonQuality,
+        rare = F.RareQuality,
+        epic = F.EpicQuality,
+    }
+    for _, q in ipairs(choices(v.rarity)) do
+        local f = type(q) == "string" and rarity[q] or nil
+        if f then
+            out[#out + 1] = f
+        end
+    end
+    return out
+end
+
+-- A category clicked, as in the game's own list: one on the chosen path
+-- (the chosen one or one above it) closes, back to the one above it;
+-- any other is chosen, under the ones above it. Then the search, with
+-- the chosen one's filters (none chosen: all categories).
+export function chooseCategory(self: AuctionHouseModule, node: Category, depth: number)
+    local path: Category[] = {}
+    for i = 1, depth do
+        path[i] = self.catPath[i]
+    end
+    if self.catPath[depth + 1] ~= node then
+        path[depth + 1] = node
+    end
+    self.catPath = path
+    self:Search()
+end
+
+-- The category tree, as the game's list: the top categories; under the
+-- chosen one (or one on the way to it) its subcategories, a level
+-- further in (Armor, Plate, Head). The chosen one is marked.
+export function drawCategories(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local c = buy.catList.child
+    local path = self.catPath
+    local y, n = 0, 0
+    local function draw(nodes: Category[], depth: number)
+        for _, node in ipairs(nodes) do
+            local opened = path[depth + 1] == node
+            local chosen = opened and #path == depth + 1
+            local kids = node.subCategories
+            n = n + 1
+            local b = buy.catButtons[n]
+            if not b then
+                b = CatButton.new(c)
+                buy.catButtons[n] = b
+            end
+            b.depth, b.chosen, b.opened = depth, chosen, opened
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", depth * S["space-4"], -y)
+            b:SetPoint("RIGHT", c, "RIGHT")
+            b.text:SetStyle(depth > 0 and "caption" or "body")
+            b.text:SetValue(node.name or "?")
+            b.text:SetColor(chosen and "arcane" or b:Ink())
+            b.sel:SetShown(chosen)
+            b.hover:SetShown(not chosen and b:IsMouseOver() and b:IsVisible())
+            b.chevron:SetShown(kids ~= nil and #kids > 0)
+            UI.Glyph(b.chevron, (opened and "chevronDown" or "chevronRight"))
+            b:SetScript("OnClick", function()
+                self:ChooseCategory(node, depth)
+            end)
+            b:Show()
+            y = y + 24
+            if opened and kids then
+                draw(kids, depth + 1)
+            end
+        end
+    end
+    draw(categories(), 0)
+    for i = n + 1, #buy.catButtons do
+        buy.catButtons[i]:Hide()
+    end
+    c:SetHeight(math.max(1, y))
+end
+
+-- The results in the chosen order: the house's own for name and price
+-- (as it gave them); by item level (gear's, the rest as none) or by how
+-- many are offered here, the house's order kept among equals.
+export function sortedResults(self: AuctionHouseModule, results: BrowseResultInfo[]): BrowseResultInfo[]
+    local key = self.sortKey
+    if SERVER_SORT[key] then
+        return results
+    end
+    local entries: SortEntry[] = {}
+    for i, r in ipairs(results) do
+        local v = 0
+        if key == "ilvl" then
+            local info = keyInfo(r.itemKey)
+            v = info and info.isEquipment and r.itemKey.itemLevel or 0
+        else
+            v = r.totalQuantity or 0
+        end
+        entries[i] = { r = r, v = v, i = i }
+    end
+    local reverse = self.sortReverse
+    table.sort(entries, function(a: SortEntry, b: SortEntry): boolean
+        if a.v ~= b.v then
+            if reverse then
+                return a.v > b.v
+            end
+            return a.v < b.v
+        end
+        return a.i < b.i
+    end)
+    local out: BrowseResultInfo[] = {}
+    for i, e in ipairs(entries) do
+        out[i] = e.r
+    end
+    return out
+end
+
+export function drawResults(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local t = buy.results
+    t:ShowSort(self.sortKey, self.sortReverse)
+    local results = self:SortedResults(tryValue(AH.GetBrowseResults) or {})
+    local n = 0
+    for i, r in ipairs(results) do
+        n = i
+        local row = t:Line(i)
+        local info = keyInfo(r.itemKey)
+        local quality = info and info.quality
+        row.slot.skin:SetItem({ icon = info and info.iconFileID, quality = QUALITY[quality or 1] or "common" })
+        row.name:SetValue(info and info.itemName or "…")
+        row.name:SetColor(qualityToken(quality))
+        row.mine:SetValue(r.containsOwnerItem and "Yours" or "")
+        local level = r.itemKey.itemLevel
+        row.ilvl:SetValue(info and info.isEquipment and level and tostring(level) or "")
+        row.qty:SetValue(tostring(r.totalQuantity or ""))
+        row.price:SetCopper(r.minPrice or 0)
+        self:Seen(r.itemKey.itemID, r.minPrice, r.totalQuantity)
+        -- the name cell: the slot, the name, Yours
+        local places = t:Places(t.list:GetWidth())
+        row.slot:ClearAllPoints()
+        row.slot:SetPoint("LEFT", places[1].x, 0)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
+        row.name:SetWidth(math.max(20, places[1].w - 24 - S["space-3"] - (r.containsOwnerItem and 40 or 0)))
+        row.mine:ClearAllPoints()
+        row.mine:SetPoint("LEFT", row.name, "RIGHT", S["space-2"], 0)
+        t:PlaceCells(row, { false, row.ilvl, row.qty, row.price })
+        row.key = r.itemKey
+        row.onEnter = function()
+            local key = row.key
+            if key then
+                keyTooltip(row, key)
+            end
+            self:OverResult(row)
+        end
+        row:SetScript("OnClick", function()
+            self:OpenItem(row.key)
+        end)
+        row:Show()
+    end
+    t:Fit(n)
+    local full = tryValue(AH.HasFullBrowseResults)
+    buy.more:SetShown(n > 0 and full == false)
+    buy.empty:SetShown(n == 0)
+    if n == 0 then
+        local query = self.query
+        local q = query and query.searchString or ""
+        -- (the favourites' query is "★", which the fonts can't draw)
+        buy.empty:SetValue(
+            self.searched and
+                (q == "★" and "No favourites yet." or q ~= "" and ("Nothing for “" .. q .. "”.") or
+                    "Nothing here.") or
+                "Search, or choose a category."
+        )
+    end
+end
+
+-- A Shift-click's item link (a chat link's, a bag item's: the game's
+-- HandleModifiedItemClick) as the game's InsertLink gets it, after the
+-- game put it where it goes: searched while the window is open. A
+-- post-hook (the bag slots' clicks are the game's own, kept untainted);
+-- the older name too where it is another function (a call goes through
+-- one of the two).
+export function hookLinks(self: AuctionHouseModule)
+    if self.linkHooked then
+        return
+    end
+    self.linkHooked = true
+    local function linked(text: unknown)
+        local link = asString(text)
+        if link and link:find("|Hitem:") then
+            self:SearchItem(link)
+        end
+    end
+    local util = field(_G, "ChatFrameUtil")
+    local insert = field(util, "InsertLink")
+    if type(insert) == "function" then
+        hook(util, "InsertLink", linked)
+    end
+    local old = field(_G, "ChatEdit_InsertLink")
+    if type(old) == "function" then
+        hook("ChatEdit_InsertLink", linked)
+    end
+end

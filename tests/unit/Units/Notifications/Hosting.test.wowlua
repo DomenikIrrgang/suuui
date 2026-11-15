@@ -1,0 +1,334 @@
+-- Units/Notifications/Hosting: Blizzard's popups hosted on cards from the
+-- engine (dying, deleting an item, logging out, a party invite, a plugin's
+-- kind, an invite that asks for your role; released when they close).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import type Notification from "/UI/Notification"
+import internal M from "/Units/Notifications"
+import type Host from "/Units/Notifications"
+import * as hosting from "/Units/Notifications/Hosting"
+import * as popups from "/Units/Notifications/Popups"
+import expectNoErrors from "../../../helpers"
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+local function hideAll()
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() then
+            d:Hide()
+        end
+    end
+end
+
+-- The hosted popup's card (the only one, or by its category).
+local function hosted(category: string?): Host?
+    for _, h in pairs(M.hosts) do
+        if not category or h.kind.category == category then
+            return h
+        end
+    end
+    return nil
+end
+
+local function host(category: string?): Host
+    local h = hosted(category)
+    assert(h, "nothing hosted")
+    return h
+end
+
+local function hostCard(h: Host): Notification
+    local c = h.card
+    assert(c, "not on a card")
+    return c
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
+    hideAll()
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+@test("dying: Blizzard's popup as a card, its own button on it; released when it closes")
+local function death()
+    mock.player:die()
+    mock.advanceFrames(3)
+    local h = host("You died")
+    local list = h.buttons()
+    local b = list[#list].button
+    local _, rel = b:GetPoint(1)
+    expect(rel).toBe(hostCard(h).actionsRow)
+    -- the popup itself off screen
+    local point = h.dialog:GetPoint(1)
+    expect(point).toBe("BOTTOMRIGHT")
+    -- moved by Blizzard: put back, its buttons on the card again
+    h.dialog:ClearAllPoints()
+    h.dialog:SetPoint("CENTER")
+    b:ClearAllPoints()
+    b:SetPoint("CENTER")
+    tick()
+    expect((h.dialog:GetPoint(1))).toBe("BOTTOMRIGHT")
+    local _, rel2 = b:GetPoint(1)
+    expect(rel2).toBe(hostCard(h).actionsRow)
+    -- the button's look follows the mouse
+    mock.hover(b)
+    mock.hover(nil)
+    -- Blizzard sizes it again: kept
+    b:SetWidth(120)
+    expect(b:GetWidth() ~= 120).toBe(true)
+    h.dialog:Hide()
+    mock.advanceFrames(2)
+    expect(hosted("You died")).toBeNil()
+    -- a priest offers to bring you back: its card
+    local healer = mock.spawnUnit({
+        name = "Tamsin Ashford",
+        player = true,
+        class = "PRIEST",
+        reaction = "friendly",
+        distance = 5,
+    })
+    healer:resurrect(mock.player)
+    mock.advanceFrames(3)
+    host("Resurrection").buttons()[1].button:Click()
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    expect(hosted("Resurrection")).toBeNil()
+end
+
+@test("deleting an item: its card names it; Blizzard's popups as they are with the setting off")
+local function deleting()
+    local ITEM = 990301
+    mock.defineItem(ITEM, { name = "Ember Pelt", quality = 1, icon = 134366 })
+    mock.setBag(0, { slots = 16, items = { [1] = ITEM } })
+    C_Container.PickupContainerItem(0, 1)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    local h = host("Delete item")
+    local it = h.data.item
+    expect(it and it.label).toBe("Ember Pelt")
+    -- Blizzard's "No"
+    for _, x in ipairs(h.buttons()) do
+        if x.index == 2 then
+            x.button:Click()
+        end
+    end
+    mock.advanceFrames(2)
+    expect(hosted("Delete item")).toBeNil()
+    ClearCursor()
+    -- off: Blizzard's own
+    M:Set("requests", false)
+    C_Container.PickupContainerItem(0, 1)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    expect(hosted("Delete item")).toBeNil()
+    ClearCursor()
+    hideAll()
+end
+
+@test("a good item: type DELETE on the card")
+local function deletingGood()
+    local ITEM = 990302
+    mock.defineItem(ITEM, { name = "Shining Blade", quality = 4, icon = 135274 })
+    mock.setBag(0, { slots = 16, items = { [2] = ITEM } })
+    C_Container.PickupContainerItem(0, 2)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    local h = host()
+    if h.kind.confirm then
+        expect(h.data.confirmText).toBe(DELETE_ITEM_CONFIRM_STRING or "DELETE")
+    end
+    ClearCursor()
+    h.dialog:Hide()
+end
+
+@test(
+    "logging out: the countdown on its card; a party invite; a popup a plugin added; one SuuUI doesn't know stays Blizzard's"
+)
+local function camping()
+    mock.slash("/camp")
+    mock.advanceFrames(3)
+    local h = host("Logging out")
+    tick(1.2)
+    expect(h.card ~= nil).toBe(true)
+    h.dialog:Hide()
+    mock.advanceFrames(2)
+    -- a party invite (shown as the game shows it)
+    StaticPopup_Show("PARTY_INVITE", "Brannoc Ironhand")
+    mock.advanceFrames(2)
+    local invite = host("Party invite")
+    -- a second popup under it: back on screen
+    local other = frames.asFrame(StaticPopup_Show("CONFIRM_RESET_INSTANCES"))
+    if other then
+        other:ClearAllPoints()
+        other:SetPoint("TOP", invite.dialog, "BOTTOM")
+        tick()
+        local _, rel = other:GetPoint(1)
+        expect(rel).toBe(UIParent)
+        other:Hide()
+    end
+    invite.dialog:Hide()
+    -- a plugin's kind
+    M:AddNotificationKind("CONFIRM_RESET_INSTANCES", { category = "Reset", glyph = "door" })
+    local d = frames.asFrame(StaticPopup_Show("CONFIRM_RESET_INSTANCES"))
+    mock.advanceFrames(2)
+    expect(hosted("Reset") ~= nil).toBe(true)
+    if d then
+        d:Hide()
+    end
+end
+
+@test("an invite that asks for your role: Blizzard's role buttons on the card as SuuUI's toggles, its queue warning")
+local function roleInvite()
+    -- (the game's own event: with a role allowed, Blizzard shows its role popup.
+    -- WoW Forever 1.60.1.70888 added isCrossShard after isXRealm, 9 values;
+    -- a client before it, 8: wowlua checks them against its own description
+    -- of the event, and runs the client's Blizzard code. wowlua 0.13.9 with
+    -- an installed 70888 client fits neither: this test needs a wowlua that
+    -- knows 70888 (T627) there)
+    local ok = pcall(
+        mock.fireEvent,
+        "PARTY_INVITE_REQUEST",
+        "Brannoc Ironhand",
+        true,
+        true,
+        false,
+        true,
+        false,
+        false,
+        "Player-0000-00000000",
+        false
+    )
+    if not ok then
+        mock.fireEvent(
+            "PARTY_INVITE_REQUEST",
+            "Brannoc Ironhand",
+            true,
+            true,
+            false,
+            true,
+            false,
+            "Player-0000-00000000",
+            false
+        )
+    end
+    mock.advanceFrames(3)
+    local h = host("Party invite")
+    expect(h.which).toBe("LFGInvitePopup")
+    local rolesOf = h.roles
+    assert(rolesOf, "no roles")
+    local roles = rolesOf()
+    expect(#roles > 0).toBe(true)
+    -- each role button over the card's role row, drawn by SuuUI
+    local b = roles[1]
+    local art = M.roleArts[b]
+    assert(art, "no toggle")
+    expect(art:IsShown()).toBe(true)
+    local _, rel = b:GetPoint(1)
+    expect(rel).toBe(hostCard(h).rolesRow)
+    -- the game's checkbox drives the toggle; hover brightens it
+    local check = frames.asCheckButton(tbl.field(b, "checkButton"))
+    if check then
+        check:SetChecked(true)
+        expect(art.tick:IsShown()).toBe(true)
+        check:SetChecked(false)
+        expect(art.tick:IsShown()).toBe(false)
+    end
+    mock.hover(b)
+    expect(art.hover).toBe(true)
+    mock.hover(nil)
+    expect(art.hover).toBe(false)
+    -- a role the game disables: dimmed
+    b:Disable()
+    expect(art:GetAlpha() < 1).toBe(true)
+    b:Enable()
+    -- the queue warning, when the game shows it
+    local warning = frames.asFontString(tbl.field(_G, "LFGInvitePopup", "QueueWarningText"))
+    local warningOf = h.warning
+    if warning and warningOf then
+        warning:SetText("You will be removed from the queue.")
+        warning:Show()
+        expect(warningOf()).toBe("You will be removed from the queue.")
+    end
+    -- Decline: the popup goes, its card with it
+    local decline = frames.asButton(tbl.field(_G, "LFGInvitePopupDeclineButton"))
+    assert(decline, "no Decline")
+    decline:Click()
+    mock.advanceFrames(2)
+    expect(hosted("Party invite")).toBeNil()
+end
+
+@test("what SuuUI changes on a part, remembered once and put back: points, size, layer, alphas")
+local function rememberUndo()
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetSize(40, 20)
+    f:SetPoint("CENTER", UIParent, "CENTER", 5, 6)
+    f:SetFrameStrata("LOW")
+    local t = f:CreateTexture()
+    t:SetAlpha(0.5)
+    local h: Host = {
+        dialog = f,
+        order = 0,
+        which = "TEST_POPUP",
+        kind = {},
+        id = "popup:test",
+        buttons = function(): popups.Shown[]
+            return {}
+        end,
+        text = function(): string?
+            return nil
+        end,
+        time = popups.noTime,
+        data = {},
+    }
+    local s = hosting.remember(M, h, f)
+    expect(hosting.remember(M, h, f)).toBe(s)
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT")
+    f:SetSize(10, 10)
+    f:SetFrameStrata("DIALOG")
+    t:SetAlpha(0)
+    hosting.undo(M, h)
+    expect(h.saved).toBeNil()
+    local point, rel, _, x, y = f:GetPoint(1)
+    expect(point).toBe("CENTER")
+    expect(rel).toBe(UIParent)
+    expect(x).toBe(5)
+    expect(y).toBe(6)
+    expect(f:GetWidth()).toBe(40)
+    expect(f:GetFrameStrata()).toBe("LOW")
+    -- (the client keeps an alpha in 8 bits)
+    expect(t:GetAlpha()).toBeCloseTo(0.5, 2)
+    -- nothing remembered: nothing to put back
+    hosting.undo(M, h)
+    f:Hide()
+end

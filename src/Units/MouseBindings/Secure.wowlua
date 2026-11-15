@@ -1,0 +1,116 @@
+-- Units/MouseBindings/Secure.wowlua
+-- The secure part's attributes and snippets as data (Units/MouseBindings):
+-- an input's virtual button, the attributes a binding's spells need on a
+-- secure button or a unit frame's click, over whom a key casts, the
+-- restricted snippet that sets the bindings for where the mouse is, and the
+-- mouseover state's condition. The module's Apply sets them.
+
+--------------------------------------------------------------------------------
+-- The secure part's attributes and snippets
+--------------------------------------------------------------------------------
+
+-- The virtual button of the n-th input ("mb3"); its friendly and hostile
+-- branches ("mb3h", "mb3x").
+export function vbutton(n: number): string
+    return "mb" .. n
+end
+
+-- The attributes input n's spells need on a button whose clicks come with
+-- `prefix` and `suffix` ("*" and "-mb3" for a binding's virtual button,
+-- "shift-" and "1" for a unit frame's click): { name, value } pairs. `any`,
+-- `help`, `harm` the spell IDs to cast on anyone, friends, enemies.
+export function castAttributes(prefix: string, suffix: string, n: number, any: number?, help: number?, harm: number?): {
+    string | number,
+}[]
+    local out: { string | number }[] = {}
+    if any then
+        out[#out + 1] = { prefix .. "type" .. suffix, "spell" }
+        out[#out + 1] = { prefix .. "spell" .. suffix, any }
+    else
+        -- a friend's or an enemy's spell only: the click's own type no action
+        -- (ATTRIBUTE_NOOP), not the frame's wildcard target. The game's unit
+        -- button reads the click's type before it splits friends from foes,
+        -- and a target or menu with no click binding of the game's for the
+        -- click stops it there: Ctrl-Left with a friend's spell did nothing
+        -- (found in game, 2026-11-10; SecureUnitButton_OnClick).
+        out[#out + 1] = { prefix .. "type" .. suffix, "" }
+    end
+    if help then
+        out[#out + 1] = { prefix .. "helpbutton" .. suffix, vbutton(n) .. "h" }
+        out[#out + 1] = { "*type-" .. vbutton(n) .. "h", "spell" }
+        out[#out + 1] = { "*spell-" .. vbutton(n) .. "h", help }
+    end
+    if harm then
+        out[#out + 1] = { prefix .. "harmbutton" .. suffix, vbutton(n) .. "x" }
+        out[#out + 1] = { "*type-" .. vbutton(n) .. "x", "spell" }
+        out[#out + 1] = { "*spell-" .. vbutton(n) .. "x", harm }
+    end
+    return out
+end
+
+-- A key the secure part binds: the input, its virtual button, and over whom
+-- ("any"; "help", "harm": only a friend's or only an enemy's spell; "both").
+export type SnippetKey = { input: string, button: string, when: string }
+
+-- Over whom a key's spells cast: anyone, friends, enemies, or both apart.
+export function whenOf(any: boolean, help: boolean, harm: boolean): string
+    if any then
+        return "any"
+    elseif help and harm then
+        return "both"
+    end
+    return help and "help" or "harm"
+end
+
+-- The restricted snippet that sets the bindings for where the mouse is: over
+-- a SuuUI unit frame (`frame` keys, its button) or a unit in the world
+-- (`world` keys, the mouseover button); none otherwise. The states say
+-- whom: "help" (a friend), "harm" (an enemy), "other", "off". A key with
+-- only a friend's spell is taken over friends only: over an enemy it keeps
+-- its job (found in game: an action bar key did nothing there).
+--
+-- (CD-27) The frame state counts only while the frame it came from (the
+-- owner's `hovered`, set by the frames' OnEnter wrap) is still shown and
+-- its unit still exists. A frame that hid under the mouse without an
+-- OnLeave (whether Forever sends one then is unprobed), or whose unit went
+-- while it stayed, binds nothing of the frame's: the world's keys apply, as
+-- after a leave. This runs on every change of the world's mouseover state
+-- (which a frame hiding or a unit going away under the mouse moves) and of
+-- the frame state, also in combat (restricted code).
+export function refreshSnippet(frame: SnippetKey[], world: SnippetKey[]): string
+    local GUARD: { [string]: string } = {
+        help = 'r == "help"',
+        harm = 'r == "harm"',
+        both = '(r == "help" or r == "harm")',
+    }
+    local function lines(list: SnippetKey[], ref: string): string
+        local out: string[] = {}
+        for _, k in ipairs(list) do
+            local line = ("self:SetBindingClick(true, %q, self:GetFrameRef(%q), %q)"):format(k.input, ref, k.button)
+            local guard = GUARD[k.when]
+            out[#out + 1] = guard and ("if " .. guard .. " then " .. line .. " end") or line
+        end
+        return table.concat(out, "\n")
+    end
+    return ([=[
+self:ClearBindings()
+local r = self:GetAttribute("state-frame")
+if r and r ~= "off" then
+local unit = self:GetFrameRef("frameButton"):GetAttribute("unit")
+if not (hovered and hovered:IsVisible()) or not (unit and SecureCmdOptionParse("[@" .. unit .. ",exists] 1")) then
+r = "off"
+end
+end
+if r and r ~= "off" then
+%s
+else
+r = self:GetAttribute("state-mo")
+if r and r ~= "off" then
+%s
+end
+end
+]=]):format(lines(frame, "frameButton"), lines(world, "worldButton"))
+end
+
+-- Whom a unit is to you, in restricted code: "help", "harm" or "other".
+export const MOUSEOVER_STATE = "[@mouseover,help] help; [@mouseover,harm] harm; [@mouseover,exists] other; off"

@@ -1,0 +1,338 @@
+-- Units/RaidPlanner/Window.wowlua
+-- The raid planner's window (Units/RaidPlanner): built (UI.RaidPlanner) with
+-- its callbacks, toggled, the slot editor and the menus of a slot, a setup,
+-- a new setup and a player. The module's methods of the same names call
+-- these.
+
+import SuuUI from "/Core/API"
+import type RaidPlanner as PlannerWindow, PlannerId, PlannerSpec, DragWhat, DropWhere, SlotChanges, SelectOption, SegmentedOption from "/Core/API"
+import * as chat from "wowlua:chat"
+import invite as groupInvite from "wowlua:unit"
+import CLASSES, CLASS, MAX_GROUP, key, treeRole from "/Units/RaidPlanner/Catalog"
+import setupIn from "/Units/RaidPlanner/Setups"
+import type Member from "/Units/RaidPlanner/Fill"
+import reqText from "/Units/RaidPlanner/View"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local UI = SuuUI.UI
+
+local whisper = chat.whisper
+
+--------------------------------------------------------------------------------
+-- The slot editor and the menus
+--------------------------------------------------------------------------------
+
+export function openEditor(self: RaidPlannerModule, id: PlannerId, card: Frame?)
+    local s = self:SlotById(id)
+    local window = self.window
+    if not (s and window) then
+        return
+    end
+    local classes: SelectOption<string>[] = { { value = "any", label = "Any class" } }
+    for _, c in ipairs(CLASSES) do
+        classes[#classes + 1] = { value = c.file, label = c.name }
+    end
+    local specs: SegmentedOption<PlannerSpec>[] = { { value = "any", label = "Any" } }
+    local c = s.class and CLASS[s.class]
+    if c then
+        for t = 1, 3 do
+            specs[#specs + 1] = { value = t, label = c.short[t] }
+        end
+    end
+    local who: SelectOption<string>[] = { { value = "any", label = "Anyone who fits" } }
+    local listed: { [string]: boolean } = {}
+    local people: Member[] = {}
+    for _, m in ipairs(self.roster) do
+        if not s.class or m.class == s.class then
+            people[#people + 1] = m
+        end
+    end
+    if #people > 0 then
+        who[#who + 1] = {
+            heading = c and ("Pin a %s in the raid"):format(c.name:lower()) or "Pin a player in the raid",
+        }
+        for _, m in ipairs(people) do
+            who[#who + 1] = { value = m.name, label = m.name }
+            listed[m.key] = true
+        end
+    end
+    if s.pin and not listed[key(s.pin)] then
+        who[#who + 1] = { value = s.pin, label = s.pin .. " (not in the raid)" }
+    end
+    local slots = self:SlotsIn(s.g)
+    local pos = 1
+    for i, x in ipairs(slots) do
+        if x == s then
+            pos = i
+        end
+    end
+    window:EditSlot(
+        {
+            id = id,
+            title = "Slot · group " .. s.g,
+            meta = ("%d of %d"):format(pos, #slots),
+            class = s.class,
+            spec = s.spec,
+            role = s.role,
+            label = s.label,
+            who = s.pin,
+            classes = classes,
+            specs = specs,
+            whoOptions = who,
+        },
+        card
+    )
+end
+
+export function slotMenu(self: RaidPlannerModule, id: PlannerId, owner: Frame)
+    local s = self:SlotById(id)
+    if not s then
+        return
+    end
+    local f = self.fill and self.fill.slot[s.id]
+    local name = (f and f.m.name) or s.pin
+    UI.ContextMenuFrom(owner, function(_, root)
+        root:CreateTitle(name or reqText(s))
+        root:CreateButton("Edit slot", function()
+            self:OpenEditor(id, owner)
+        end)
+        local pin = s.pin
+        if f then
+            local m = f.m
+            root:CreateButton("Whisper", function()
+                whisper(m.name)
+            end)
+            if f.how == "pinned" then
+                root:CreateButton("Unpin", function()
+                    s.pin = nil
+                    self:Refill()
+                end)
+            else
+                root:CreateButton("Pin " .. m.name, function()
+                    self:Unpin(m.name)
+                    s.pin = m.name
+                    self:Refill()
+                end)
+            end
+        elseif pin then
+            root:CreateButton("Invite " .. pin, function()
+                groupInvite(pin)
+            end)
+            root:CreateButton("Whisper", function()
+                whisper(pin)
+            end)
+            root:CreateButton("Unpin", function()
+                s.pin = nil
+                self:Refill()
+            end)
+        end
+        root:CreateDivider()
+        root:CreateButton("Clear (any player)", function()
+            s.class, s.spec, s.role, s.label, s.pin = nil, nil, nil, nil, nil
+            self:Refill()
+        end)
+        root:CreateButton("Remove slot", function()
+            self:RemoveSlot(id)
+            self:Refill()
+        end)
+    end, "raidPlannerSlot", { slot = id, player = name })
+end
+
+export function setupMenu(self: RaidPlannerModule, id: PlannerId, owner: Frame)
+    local w = self:Work()
+    local s = id == "work" and w or setupIn(self:Data(), id)
+    if not s then
+        return
+    end
+    local loaded = id == "work" or w.id == id
+    local saveId = id ~= "work" and id or nil
+    UI.ContextMenuFrom(owner, function(_, root)
+        root:CreateTitle(s.name)
+        if not loaded then
+            root:CreateButton("Load", function()
+                self:Load(id)
+            end)
+        end
+        if loaded then
+            root:CreateButton("Save", function()
+                self:Save()
+            end)
+        end
+        root:CreateButton("Save as new…", function()
+            if not loaded then
+                self:Load(id)
+            end
+            self:SaveAsNew()
+        end)
+        root:CreateDivider()
+        root:CreateButton("Rename", function()
+            if self.window then
+                self.window:Rename(id)
+            end
+        end)
+        if saveId then
+            root:CreateButton("Duplicate", function()
+                self:Duplicate(saveId)
+            end)
+        end
+        root:CreateButton("Export as text", function()
+            self:Export(saveId)
+        end)
+        root:CreateDivider()
+        root:CreateButton(saveId and "Delete…" or "Discard…", function()
+            self:Delete(saveId)
+        end)
+    end, "raidPlannerSetup", { setup = id })
+end
+
+export function newMenu(self: RaidPlannerModule, owner: Frame)
+    UI.ContextMenuFrom(
+        owner,
+        function(_, root)
+            root:CreateTitle("New setup")
+            root:CreateButton(("Empty (%d players)"):format(self:Data().size), function()
+                self:New(false)
+            end)
+            root:CreateButton("From the raid as it is", function()
+                self:New(true)
+            end):SetEnabled(#self.roster > 0)
+            root:CreateDivider()
+            root:CreateButton("Import from text…", function()
+                self:Import()
+            end)
+        end,
+        "raidPlannerNew"
+    )
+end
+
+export function personMenu(self: RaidPlannerModule, name: string, owner: Frame)
+    local m = self.byKey[key(name)]
+    UI.ContextMenuFrom(owner, function(_, root)
+        root:CreateTitle(name)
+        root:CreateButton("Whisper", function()
+            whisper(name)
+        end)
+        if m then
+            root:CreateButton("Add a slot for them", function()
+                local w = self:Work()
+                -- their own group if it has room, else the first that has
+                local g = (m.group <= w.size / 5 and #self:SlotsIn(m.group) < MAX_GROUP) and m.group or nil
+                for x = 1, w.size / 5 do
+                    if not g and #self:SlotsIn(x) < MAX_GROUP then
+                        g = x
+                    end
+                end
+                if not g then
+                    self:Print("Every group has five slots.")
+                    return
+                end
+                local tree = m.tree
+                self:AddSlot(
+                    g,
+                    { class = m.class, spec = tree, role = tree and treeRole(m.class, tree) or nil },
+                    m.name
+                )
+                self.letGo[m.key] = nil
+                self:Refill()
+            end)
+        end
+    end, "raidPlannerPlayer", { player = name })
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+export function build(self: RaidPlannerModule): PlannerWindow
+    local w = UI.RaidPlanner(SuuUI.Root)
+    self.window = w
+    w.onSize = function(size: number)
+        self:Data().size = size
+        self:Render()
+    end
+    -- the loaded one's row does nothing (a load would drop its changes)
+    w.onSetup = function(id: PlannerId)
+        if id ~= "work" and id ~= self:Work().id then
+            self:Load(id)
+        end
+    end
+    w.onSetupMenu = function(id: PlannerId, owner: Frame)
+        self:SetupMenu(id, owner)
+    end
+    w.onNew = function(owner: Frame)
+        self:NewMenu(owner)
+    end
+    w.onRename = function(id: PlannerId, text: string)
+        self:Rename(id, text)
+    end
+    w.onSave = function()
+        self:Save()
+    end
+    w.onSaveAsNew = function()
+        self:SaveAsNew()
+    end
+    w.onDuplicate = function()
+        self:Duplicate(self:Work().id)
+    end
+    w.onDelete = function()
+        self:Delete(nil)
+    end
+    w.onSlot = function(id: PlannerId, owner: Frame, button: string)
+        if button == "RightButton" then
+            self:SlotMenu(id, owner)
+        else
+            self:OpenEditor(id, owner)
+        end
+    end
+    w.onAdd = function(g: number)
+        local s = self:AddSlot(g)
+        if s then
+            self:Refill()
+            self:OpenEditor(s.id, w:CardFor(s.id))
+        end
+    end
+    w.onDrop = function(what: DragWhat, where: DropWhere)
+        self:Drop(what, where)
+    end
+    w.onPerson = function(name: string, owner: Frame, button: string)
+        if button == "RightButton" then
+            self:PersonMenu(name, owner)
+        end
+    end
+    w.onSlotChange = function(id: PlannerId, changes: SlotChanges)
+        self:ChangeSlot(id, changes)
+    end
+    w.onSlotRemove = function(id: PlannerId)
+        self:RemoveSlot(id)
+        self:Refill()
+    end
+    w.onInspect = function()
+        self.inspectRound = true
+        self:InspectNext()
+        self:Render()
+    end
+    w.onArrange = function()
+        self:Arrange()
+    end
+    w.onFill = function()
+        self:Refill(true)
+    end
+    w:HookScript("OnShow", function()
+        if not self:IsEnabled() then
+            return
+        end
+        self:Refill()
+        self:AskSpecs()
+        self:InspectNext()
+    end)
+    return w
+end
+
+export function toggle(self: RaidPlannerModule)
+    local w = self.window or self:Build()
+    if w:IsShown() then
+        w:Hide()
+    else
+        w:Show()
+    end
+end

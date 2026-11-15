@@ -1,0 +1,193 @@
+-- Units/WorldMap/Canvas: the pins on the map's canvas: merged where they
+-- crowd, in tiers, hovered, clicked, right-clicked through to the map,
+-- made in combat, sized for the window's scale; the unexplored areas.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/WorldMap"
+import internal M as marks from "/Units/Marks"
+import internal M as flightMap from "/Units/FlightMap"
+import captureMenus from "../../../helpers"
+import * as world from "./WorldMapHelpers"
+import ELWYNN, flags, all, copy, openMap, pinOf, shownPin, groupOf from "./WorldMapHelpers"
+
+@beforeEach
+local function data()
+    world.setup()
+end
+
+@afterEach
+local function cleanup()
+    world.cleanup()
+end
+
+@test("the map open: pins merged where they crowd, in tiers, at the setting's opacity")
+local function drawn()
+    openMap()
+    M:OnFilters(all())
+    mock.advanceFrames(2)
+    expect(#M.pins > 10).toBe(true)
+    local mail = shownPin("Mailbox")
+    expect(groupOf("Mailbox").distinct).toBe(2)
+    expect(mail.countTab).toBeShown()
+    local layer = M.layer
+    assert(layer, "no layer")
+    local base = layer:GetFrameLevel()
+    expect(mail:GetFrameLevel()).toBe(base + 1)
+    expect(shownPin("Wolves Across the Border"):GetFrameLevel()).toBe(base + 3)
+    expect(shownPin("The Deadmines"):GetFrameLevel()).toBe(base + 5)
+    M:Set("pinAlpha", 50)
+    expect(shownPin("The Deadmines"):GetAlpha()).toBeCloseTo(0.5)
+end
+
+@test("a quest's pin hovered: its tooltip, every pin of its quests ringed, the rest faded, the giver's walk")
+local function hovered()
+    openMap()
+    local giver = shownPin("Wolves Across the Border")
+    mock.hover(giver)
+    expect(M.hoveredPin).toBe(giver)
+    expect(giver.hl).toBeShown()
+    expect(shownPin("Innkeeper Farley"):GetAlpha()).toBeCloseTo(0.3)
+    expect(M.routes).toBeShown()
+    -- Shift: its objectives (the tooltip asked again)
+    local refreshed = mock.spy(function(_: Region) end)
+    mock.stub(SuuUI.UI, "RefreshTooltip", refreshed)
+    mock.setModifiers({ shift = true })
+    expect(refreshed).toHaveBeenCalledTimes(1)
+    mock.setModifiers({})
+    mock.hover(nil)
+    expect(M.hoveredPin).toBeNil()
+    expect(M.routes).never.toBeShown()
+    expect(giver.hl).never.toBeShown()
+end
+
+@test("the map window scaled (the enlarged map): SuuUI's pins at their usual size on screen")
+local function pinsScaled()
+    openMap()
+    local before = shownPin("Innkeeper Farley")
+    local size = before:GetWidth() * before:GetEffectiveScale()
+    local was = WorldMapFrame:GetScale()
+    WorldMapFrame:SetScale(was * 1.5)
+    M:Layout()
+    local after = shownPin("Innkeeper Farley")
+    expect(after:GetWidth() * after:GetEffectiveScale()).toBeCloseTo(size)
+    WorldMapFrame:SetScale(was)
+    M:Layout()
+end
+
+@test("a rare's pin hovered: its every spot ringed")
+local function rareHovered()
+    openMap()
+    M:OnFilters(all())
+    mock.advanceFrames(2)
+    local fang = shownPin("Mother Fang")
+    mock.hover(fang)
+    expect(fang.hl).toBeShown()
+    expect(M.routes).toBeShown()
+end
+
+@test("a click on a mark opens its card; on a merged pin or another nothing (no zoom from SuuUI's code)")
+local function clicks()
+    openMap()
+    local zoomed = mock.spy(function(_: unknown, _: number, _: number) end)
+    mock.stub(WorldMapFrame, "PanAndZoomTo", zoomed)
+    mock.click(shownPin("Mailbox"))
+    mock.click(shownPin("Innkeeper Farley"))
+    expect(zoomed).never.toHaveBeenCalled()
+    local mark = marks:Add(ELWYNN, 0.9, 0.9, { name = "Ore" })
+    mock.advanceFrames(2)
+    local opened = mock.spy(function(_: unknown, _: number, _: Region?) end)
+    mock.stub(marks, "OpenCard", opened)
+    mock.click(shownPin("Ore"))
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(M:PinForMark(mark.id)).toBe(pinOf("Ore"))
+    marks:Remove(mark.id)
+end
+
+@test("the unexplored areas drawn by the filter; none with it off")
+local function unexplored()
+    openMap()
+    local shown = #M.revealUsed
+    M:Reveal(ELWYNN)
+    expect(#M.revealUsed).toBe(shown)
+    local v = copy(M:MenuValue())
+    v.places = {}
+    M:OnFilters(v)
+    expect(#M.revealUsed).toBe(0)
+end
+
+@test("two givers on one spot: one pin, its best quest's look")
+local function crowded()
+    flags.crowd = true
+    openMap()
+    expect(groupOf("Wolves Across the Border").distinct).toBe(2)
+    expect(shownPin("Wolves Across the Border").countTab).toBeShown()
+    flags.crowd = false
+end
+
+@test("right-click elsewhere: through to the map, which zooms out; only quest givers' pins keep it")
+local function rightClickElsewhere()
+    openMap()
+    M:OnFilters(all())
+    mock.advanceFrames(2)
+    local menu = captureMenus()
+    local inn = shownPin("Innkeeper Farley")
+    expect(inn.giver).toBe(false)
+    expect(inn:ShouldButtonPassThrough("RightButton")).toBe(true)
+    expect(shownPin("The Deadmines"):ShouldButtonPassThrough("RightButton")).toBe(true)
+    expect(shownPin("A Torn Scroll"):ShouldButtonPassThrough("RightButton")).toBe(true)
+    expect(shownPin("Boar Hides"):ShouldButtonPassThrough("RightButton")).toBe(false)
+    expect(shownPin("Wolves Across the Border"):ShouldButtonPassThrough("RightButton")).toBe(false)
+    -- (a right-click that reaches a pin of another kind: no menu)
+    mock.click(inn, "RightButton")
+    expect(next(menu)).toBeNil()
+    -- the map's own right-click: up to the continent
+    mock.click(WorldMapFrame.ScrollContainer, "RightButton")
+    expect(WorldMapFrame:GetMapID()).toBe(1415)
+end
+
+@test("a quest giver's pin made in combat: nothing to set after it")
+local function giverPinInCombat()
+    local layer = assert(M.layer)
+    local spare = M.freeGivers
+    M.freeGivers = {}
+    mock.player:enterCombat()
+    local made = M:Pin(layer, true)
+    expect(#M.passLater).toBe(0)
+    mock.player:leaveCombat()
+    made:Hide()
+    M.freeGivers = spare
+    table.insert(M.freeGivers, made)
+end
+
+@test("a pin made in combat lets right-clicks through to the map after it (refused in combat)")
+local function pinInCombat()
+    local layer = assert(M.layer)
+    -- (a pin made fresh: none to reuse)
+    local spare = M.free
+    M.free = {}
+    mock.player:enterCombat()
+    local made = M:Pin(layer)
+    expect(#M.passLater).toBe(1)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(#M.passLater).toBe(0)
+    made:Hide()
+    M.free = spare
+    table.insert(M.free, made)
+    -- the flight map's pins the same
+    local fl = assert(flightMap.layer)
+    local fspare = flightMap.free
+    flightMap.free = {}
+    mock.player:enterCombat()
+    local fpin = flightMap:Pin(fl)
+    expect(#flightMap.passLater).toBe(1)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(#flightMap.passLater).toBe(0)
+    fpin:Hide()
+    flightMap.pins = {}
+    flightMap.free = fspare
+    table.insert(flightMap.free, fpin)
+end

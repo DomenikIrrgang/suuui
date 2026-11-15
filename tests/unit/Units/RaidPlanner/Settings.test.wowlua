@@ -1,0 +1,74 @@
+-- Units/RaidPlanner/Settings: the settings and what's tracked.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Settings"
+import type FamilyChecks from "/Units/RaidPlanner"
+import cleanup, setup, window from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("settings: the presets, a box changed makes it Custom, a family's reset; what's tracked counts")
+local function settings()
+    setup()
+    local section = M:Section()
+    expect(section.id).toBe("raidplanner")
+    local track = assert(section.groups)[1].rows[2]
+    local trackDefault, setTrack, resetTrack = assert(track.isDefault), assert(track.set), assert(track.reset)
+    expect(trackDefault()).toBe(true)
+    local essentials = M:TrackedCount()
+    setTrack("all")
+    expect(M:TrackedCount() > essentials).toBe(true)
+    -- a box off and on again: back to Everything
+    M:SetTracked("tremor", false)
+    expect(M:Get("preset")).toBe("custom")
+    M:SetTracked("tremor", true)
+    expect(M:Get("preset")).toBe("all")
+    setTrack("custom")
+    expect(M:Get("preset")).toBe("custom")
+    resetTrack()
+    expect(M:Get("preset")).toBe("essentials")
+    -- one box: Custom; both ways back to the preset
+    M:SetTracked("tremor", true)
+    expect(M:Get("preset")).toBe("custom")
+    expect(M:IsTracked("tremor")).toBe(true)
+    M:SetTracked("tremor", false)
+    expect(M:Get("preset")).toBe("essentials")
+    -- a family's row: its checkboxes, counts, default and reset
+    local fam = assert(section.groups)[2]
+    local familyRow = fam.rows[1]
+    local isDefault, reset = assert(familyRow.isDefault), assert(familyRow.reset)
+    local parent = CreateFrame("Frame", nil, UIParent)
+    parent:SetSize(500, 400)
+    local boxes = assert(familyRow.build)(parent, function() end, familyRow) :: FamilyChecks
+    boxes:SetValue(assert(familyRow.get)() :: unknown :: { [string]: boolean })
+    boxes:SetDisabled()
+    local describe = familyRow.description
+    expect(type(describe) == "function" and describe():find("tracked", 1, true) ~= nil).toBe(true)
+    expect(isDefault()).toBe(true)
+    boxes.boxes[1]:SetValue(true)
+    M:SetTracked(boxes.items[1].key, not M:IsTracked(boxes.items[1].key))
+    expect(isDefault()).toBe(false)
+    reset()
+    expect(isDefault()).toBe(true)
+    -- a box's tooltip: the spell's
+    mock.hover(boxes.boxes[1])
+    mock.hover(nil)
+    -- the button opens the planner
+    assert(assert(section.groups)[1].rows[1].onClick)()
+    expect(window():IsShown()).toBe(true)
+end
+
+@test("the presets as sets: the essentials within everything; two sets the same")
+local function presets()
+    local essentials, all = part.presetSet("essentials"), part.presetSet("all")
+    expect(essentials.fortitude).toBe(true)
+    expect(all.tremor).toBe(true)
+    expect(part.sameSet(essentials, part.presetSet("essentials"))).toBe(true)
+    expect(part.sameSet(essentials, all)).toBe(false)
+    expect(part.sameSet({}, {})).toBe(true)
+end

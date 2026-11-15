@@ -1,0 +1,278 @@
+-- Units/Bags/SortRun: a sort as it runs (the plans are Bags/Sort's): the
+-- slots and their bags' families, a bag the game refused an item for, SuuUI's
+-- waves under the loading mark, the game's sort, what stops a sort, the
+-- bank's sort and its fallback to the game's.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as secret from "wowlua:secret"
+import internal M from "/Units/Bags"
+import type SortSlot from "/Units/Bags/Sort"
+import * as sort from "/Units/Bags/Sort"
+import expectNoErrors from "../../../helpers"
+import printedSince, printedCount, hasLine from "../../SettingsUI/UiSettingsHelpers"
+import start as startBags, cleanup as cleanupBags, CLOTH, POTION, HERB, inv, open, atBank, stacksOf, cover from "./BagsHelpers"
+
+@beforeEach
+local function start()
+    startBags()
+end
+
+@afterEach
+local function cleanup()
+    cleanupBags()
+end
+
+@test(
+    "a sort's bags by what they take: a profession bag in the reagent slot only its kind; a bag the game counts as any, by its own item"
+)
+local function sortFamilies()
+    local LEATHER, HERBS = 8, 32
+    mock.setBag(1, { slots = 4 })
+    mock.setBag(5, { slots = 4 })
+    local free: { [number]: number } = { [5] = LEATHER }
+    mock.fake("C_Container.GetContainerNumFreeSlots", function(bag: number): (number, number)
+        return 4, free[bag] or 0
+    end)
+    -- bag 1's item: a herb bag (the game's count says 0)
+    mock.fake("GetInventoryItemID", function(_: string, slot: number): number?
+        return slot == C_Container.ContainerIDToInventoryID(1) and 990090 or nil
+    end)
+    mock.fake("C_Item.GetItemFamily", function(id: unknown): number
+        return id == 990090 and HERBS or 0
+    end)
+    local function familyAt(bag: number): sort.Family?
+        for _, s in ipairs(M:SortSlots(false)) do
+            if s.bag == bag then
+                return s.family
+            end
+        end
+        return nil
+    end
+    expect(familyAt(5)).toBe(LEATHER)
+    expect(familyAt(1)).toBe(HERBS)
+    expect(familyAt(0)).toBe(0)
+    -- a family SuuUI has no name for (a skinning bag, reported by a
+    -- player): still only its own kind
+    free[5] = 0x200000
+    expect(familyAt(5)).toBe(0x200000)
+    -- a reagent bag (no family of its own, probed in game): any crafting reagent
+    free[5] = nil
+    expect(familyAt(5)).toBe("reagent")
+    mock.setBag(1, nil)
+    mock.setBag(5, nil)
+end
+
+@test(
+    "a move the game refused: the bag at its end that isn't a plain one is left out of sorts from then on, said once (reported by a player)"
+)
+local function refusedBag()
+    local SKIN = 990096
+    mock.setBag(1, { slots = 4 })
+    mock.fake("GetInventoryItemID", function(_: string, slot: number): number?
+        return slot == C_Container.ContainerIDToInventoryID(1) and SKIN or nil
+    end)
+    local real = C_Item.GetItemInfoInstant
+    mock.fake("C_Item.GetItemInfoInstant", function(id: number): ...unknown
+        if id == SKIN then
+            -- a container, not a plain bag (a profession bag)
+            return SKIN, "Container", "Leatherworking Bag", "INVTYPE_BAG", 133640, 1, 7
+        end
+        return real(id)
+    end)
+    local before = #mock.printed()
+    -- the backpack's cloth sent to bag 1; it didn't land there
+    local from: SortSlot = { bag = 0, slot = 1, family = 0, item = { id = CLOTH, count = 3 } :: sort.SortItem }
+    local to: SortSlot = { bag = 1, slot = 2, family = 0 }
+    expect(M:Refused({ { from = from, to = to } })).toBe(true)
+    expect(M.refusingBags[SKIN]).toBe(true)
+    expect(hasLine(printedSince(before), "leaves your")).toBe(true)
+    for _, s in ipairs(M:SortSlots(false)) do
+        expect(s.bag).never.toBe(1)
+    end
+    -- the same again: nothing more to blame, nothing said
+    before = #mock.printed()
+    expect(M:Refused({ { from = from, to = to } })).toBe(false)
+    expect(#printedSince(before)).toBe(0)
+    -- only plain bags at both ends: nobody to blame (the sort stops as before)
+    M.refusingBags = {}
+    mock.fake("C_Item.GetItemInfoInstant", function(id: number): ...unknown
+        if id == SKIN then
+            return SKIN, "Container", "Bag", "INVTYPE_BAG", 133640, 1, 0
+        end
+        return real(id)
+    end)
+    expect(M:Refused({ { from = from, to = to } })).toBe(false)
+    mock.setBag(1, nil)
+end
+
+--------------------------------------------------------------------------------
+-- Sorting
+--------------------------------------------------------------------------------
+
+@test("Sort: part stacks put together, SuuUI's order in waves under the loading mark, the items moved, the window back")
+local function sorting()
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [5] = { id = CLOTH, count = 3 },
+            [9] = { id = POTION, count = 2 },
+            [12] = { id = HERB, count = 4 },
+            [14] = { id = CLOTH, count = 5 },
+        },
+    })
+    open()
+    mock.click(inv().sort)
+    expect(M.sorting ~= nil).toBe(true)
+    expect(cover(inv())).toBeShown()
+    M:Sort(false) -- sorting already: once
+    for _ = 1, 40 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then
+            break
+        end
+    end
+    expect(M.sorting).toBe(nil)
+    expect(cover(inv())).never.toBeShown()
+    expect(stacksOf(0, CLOTH):match("^%d+×8$") ~= nil).toBe(true)
+end
+
+@test("the game's sort when asked; what stops a sort: combat, an item in hand, the window closing")
+local function sortStops()
+    M:Set("sortOrder", "game")
+    open()
+    local sorted = mock.stub(C_Container, "SortBags", function() end)
+    M:Sort(false)
+    expect(sorted).toHaveBeenCalledTimes(1)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    for _ = 1, 30 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then
+            break
+        end
+    end
+    expect(M.sorting).toBe(nil)
+    M:Reset("sortOrder")
+    local n = printedCount()
+    mock.player:enterCombat()
+    M:Sort(false)
+    expect(hasLine(printedSince(n), "can't be sorted in combat")).toBe(true)
+    mock.player:leaveCombat()
+    mock.stub(_G, "CursorHasItem", function(): boolean
+        return true
+    end)
+    M:Sort(false)
+    expect(hasLine(printedSince(n), "Put down the item")).toBe(true)
+    mock.stub(_G, "CursorHasItem", function(): boolean
+        return false
+    end)
+    mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 } } })
+    M:Sort(false)
+    M:SetOpen(false)
+    expect(M.sorting).toBe(nil)
+    expect(hasLine(printedSince(n), "Sorting stopped: the bags closed")).toBe(true)
+    open()
+    M:Sort(false)
+    mock.player:enterCombat()
+    expect(hasLine(printedSince(n), "combat started")).toBe(true)
+    mock.player:leaveCombat()
+    open()
+    M:Sort(false)
+    mock.fireEvent("UI_ERROR_MESSAGE", 1, "Can't do that")
+    mock.advanceFrames(2, 100)
+end
+
+@test("the bank sorts the same way, part stacks put together; refused at once, the game's bank sort instead")
+local function bankSort()
+    atBank({
+        tabs = {
+            {
+                name = "Tab 1",
+                slots = 28,
+                items = { [3] = { id = CLOTH, count = 7 }, [9] = { id = CLOTH, count = 3 } },
+            },
+        },
+    })
+    local tab = secret.asNumber(tbl.field(Enum, "BagIndex", "CharacterBankTab_1")) or 6
+    M.sorting = nil
+    M:Sort(true)
+    for _ = 1, 40 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then
+            break
+        end
+    end
+    expect(M.sorting).toBe(nil)
+    expect(stacksOf(tab, CLOTH):match("^%d+×10$") ~= nil).toBe(true)
+    -- the game refusing the first wave: its own bank sort
+    atBank({
+        tabs = {
+            {
+                name = "Tab 1",
+                slots = 28,
+                items = { [3] = { id = CLOTH, count = 7 }, [9] = { id = CLOTH, count = 3 } },
+            },
+        },
+    })
+    local n = printedCount()
+    local game = mock.stub(C_Container, "SortBank", function(...: unknown) end)
+    M:Sort(true)
+    mock.fireEvent("UI_ERROR_MESSAGE", 1, "Can't do that")
+    expect(game).toHaveBeenCalledTimes(1)
+    expect(hasLine(printedSince(n), "the game's own sort instead")).toBe(true)
+    mock.fireEvent("BANKFRAME_CLOSED")
+end
+
+@test("the old regression: each special bag keeps its own slots in a sort's plan")
+local function twoSpecialBags()
+    local HERBS, SHARDS = 32, 4
+    local slotsList: SortSlot[] = {
+        { bag = 0, slot = 1, family = 0, item = { id = "cloth", count = 1, classID = 7 } },
+        { bag = 0, slot = 2, family = 0 },
+        { bag = 2, slot = 1, family = HERBS, item = { id = "shard", count = 1, classID = 7, family = SHARDS } },
+        { bag = 1, slot = 1, family = SHARDS, item = { id = "herb", count = 1, classID = 7, family = HERBS } },
+    }
+    local target = M:SortTarget(slotsList, "type", false)
+    assert(target, "no plan")
+    local function idAt(i: number): unknown
+        local it = target[i]
+        return it and it.id
+    end
+    expect(idAt(3)).toBe("herb")
+    expect(idAt(4)).toBe("shard")
+    expect(idAt(1)).toBe("cloth")
+end
+
+@test("an item picked up mid-sort stops it")
+local function pickedMidSort()
+    mock.setBag(0, { slots = 16, items = { [5] = { id = CLOTH, count = 3 }, [9] = { id = POTION, count = 2 } } })
+    open()
+    local n = printedCount()
+    M:Sort(false)
+    mock.stub(_G, "CursorHasItem", function(): boolean
+        return true
+    end)
+    for _ = 1, 20 do
+        mock.advanceFrames(1, 100)
+        if not M.sorting then
+            break
+        end
+    end
+    expect(hasLine(printedSince(n), "you picked up an item")).toBe(true)
+end
+
+@test("SortRun: made with the module; the loading mark over a window, its caption, gone again")
+local function made()
+    expect(M.sortRun.m).toBe(M)
+    open()
+    M.sortRun:SortCover(inv(), true, "Sorting bags")
+    local c = assert(cover(inv()))
+    expect(c).toBeShown()
+    expect(c.title:GetText()).toBe("Sorting bags")
+    expect(inv().sort:IsEnabled()).toBe(false)
+    M.sortRun:SortCover(inv(), false)
+    expect(c).never.toBeShown()
+    expect(inv().sort:IsEnabled()).toBe(true)
+    expectNoErrors()
+end

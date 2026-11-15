@@ -1,0 +1,227 @@
+-- Units/Collections/Sources.wowlua
+-- Where something in the collections window (Units/Collections) comes
+-- from: SuuUI's generated sources (Data/CollectionSources, built on first
+-- use), read into one line (sourceLine) or a card of sections
+-- (sourceCard), the game's source kind where the data knows nothing;
+-- Forever's toy list (toyList), an item's name. onSourcesReady: what runs
+-- once the sources are built (the module draws its window again).
+
+import SuuUI from "/Core/API"
+import type CollectionSource, CollectionSources from "/Data/CollectionSources"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local try, field = errors.try, tbl.field
+local asString = secret.asString
+
+--------------------------------------------------------------------------------
+-- Where something comes from: the best source as one line, all of it as a
+-- card (design: vendor, quest, world drop, drop, object, container,
+-- crafted, the game's own text, the item that teaches it; then the game's
+-- source kind, then "Source unknown")
+--------------------------------------------------------------------------------
+
+local WORLD = 12
+
+-- A source card's section.
+export type CardSection = { title: string, lines: string[] }
+
+-- What runs once the sources are there (Units/Collections: the window
+-- drawn again).
+local ready: () -> () = function() end
+export function onSourcesReady(fn: () -> ())
+    ready = fn
+end
+
+-- The sources (Data/CollectionSources, 2 MB): built on first use, a step
+-- a frame (Core/Data), the window drawn again once they're there; until
+-- then no sources (the lists without the things you lack).
+const NO_SOURCES: CollectionSources = { npc = {}, obj = {}, mount = {}, toy = {}, toys = {}, item = {} }
+
+export function data(): CollectionSources
+    local sources = SuuUI.Data.CollectionSources
+    if sources:Ready() then
+        return SuuUI.CollectionSources()
+    end
+    sources:Prepare(
+        function()
+            ready()
+        end,
+        "collections"
+    )
+    return NO_SOURCES
+end
+
+-- Forever's toys (the gifts' count at login and on the micro menu): only
+-- the data's first step, not its 2 MB of sources (Core/Data).
+export function toyList(): number[]
+    local t = SuuUI.Data.CollectionSources:Until(function(c: CollectionSources): boolean
+        return c.toys ~= nil
+    end)
+    return t.toys or {}
+end
+
+-- "Name|Zone|Level|Faction" -> name, zone, level, faction
+local function npc(id: number): (string?, string?, string?, string?)
+    local s = data().npc[id]
+    if not s then
+        return nil
+    end
+    local name, zone, level, faction = s:match("^(.-)|(.-)|(.-)|(.*)$")
+    return name, zone ~= "" and zone or nil, level ~= "" and level or nil, faction ~= "" and faction or nil
+end
+local function object(id: number): (string?, string?)
+    local s = data().obj[id]
+    if not s then
+        return nil
+    end
+    local name, zone = s:match("^(.-)|(.*)$")
+    return name, zone ~= "" and zone or nil
+end
+export function itemName(id: number?): string?
+    return asString(try(field(C_Item, "GetItemNameByID"), id))
+end
+local function questTitle(id: number): string?
+    local t = asString(try(field(C_QuestLog, "GetTitleForQuestID"), id))
+    return t ~= "" and t or nil
+end
+
+local function place(name: string, zone: string?): string
+    return zone and (name .. ", " .. zone) or name
+end
+local function more(ids: number[]): string
+    return (#ids > 1) and (" +" .. (#ids - 1)) or ""
+end
+
+-- The game's own word for a source kind (its numbers: mounts use the pet
+-- journal's, appearances the transmog ones).
+local function kindName(kind: string, number: number?): string?
+    if not number or number < 0 then
+        return nil
+    end
+    local g = asString(
+        field(_G, kind == "appearance" and ("TRANSMOG_SOURCE_" .. number) or ("BATTLE_PET_SOURCE_" .. (number + 1)))
+    )
+    return g ~= "" and g or nil
+end
+
+-- src: a CollectionSources entry (or nil); kind/number: the game's source
+-- kind as the fallback. -> "Vendor · Name, Zone +1" or nil
+export function sourceLine(src: CollectionSource?, kind: string, number: number?): string
+    if src then
+        local v, q, d, o, c = src.v, src.q, src.d, src.o, src.c
+        if v and v[1] then
+            local name, zone = npc(v[1])
+            if name then
+                return "Vendor · " .. place(name, zone) .. more(v)
+            end
+        end
+        if q and q[1] then
+            local title = questTitle(q[1])
+            return "Quest" .. (title and (" · " .. title) or "") .. more(q)
+        end
+        local dn = src.dn or 0
+        if dn > WORLD then
+            return "World drop"
+        end
+        if d and d[1] then
+            local name, zone, level = npc(d[1])
+            if name then
+                local extra = dn > 1 and (" +" .. (dn - 1)) or more(d)
+                return "Drop · " .. place(name, zone) .. (level and (" · " .. level) or "") .. extra
+            end
+        end
+        if o and o[1] then
+            local name, zone = object(o[1])
+            if name then
+                return "Found in · " .. place(name, zone) .. more(o)
+            end
+        end
+        if c and c[1] then
+            return "Inside · " .. (itemName(c[1]) or "a container")
+        end
+        if src.p then
+            return "Crafted · " .. src.p
+        end
+        if src.x then
+            return src.x
+        end
+        if src.i then
+            return "Taught by · " .. (itemName(src.i) or "an item")
+        end
+    end
+    return kindName(kind, number) or "Source unknown"
+end
+
+-- The full card: { { title, lines = { … } }, … } (empty: nothing known).
+export function sourceCard(src: CollectionSource?, kind: string, number: number?): CardSection[]
+    local card: CardSection[] = {}
+    local function section(title: string, lines: string[])
+        if lines[1] then
+            card[#card + 1] = { title = title, lines = lines }
+        end
+    end
+    if src then
+        local lines: string[] = {}
+        for _, id in ipairs(src.v or {}) do
+            local name, zone, _, faction = npc(id)
+            if name then
+                lines[#lines + 1] = place(name, zone) .. (faction and (" (" .. faction .. ")") or "")
+            end
+        end
+        section("Sold by", lines)
+        lines = {}
+        for _, id in ipairs(src.q or {}) do
+            lines[#lines + 1] = questTitle(id) or ("Quest " .. id)
+        end
+        section("Quest", lines)
+        lines = {}
+        local dn = src.dn or 0
+        if dn > WORLD then
+            section("World drop", { ("Dropped by %d creatures across the world"):format(dn) })
+        else
+            local d = src.d or {}
+            for _, id in ipairs(d) do
+                local name, zone, level = npc(id)
+                if name then
+                    lines[#lines + 1] = place(name, zone) .. (level and (" · level " .. level) or "")
+                end
+            end
+            if dn > #d then
+                lines[#lines + 1] = ("and %d more"):format(dn - #d)
+            end
+            section("Dropped by", lines)
+        end
+        lines = {}
+        for _, id in ipairs(src.o or {}) do
+            local name, zone = object(id)
+            if name then
+                lines[#lines + 1] = place(name, zone)
+            end
+        end
+        section("Found in", lines)
+        lines = {}
+        for _, id in ipairs(src.c or {}) do
+            lines[#lines + 1] = itemName(id) or ("Item " .. id)
+        end
+        section("Inside", lines)
+        if src.p then
+            section("Crafted by", { src.p })
+        end
+        if src.x then
+            section("In the game", { src.x })
+        end
+        local taught = src.i
+        if taught and not card[1] then
+            section("Taught by", { itemName(taught) or ("Item " .. taught) })
+        end
+    end
+    if not card[1] then
+        local word = kindName(kind, number)
+        if word then
+            card[1] = { title = word, lines = { "Nothing more is known." } }
+        end
+    end
+    return card
+end

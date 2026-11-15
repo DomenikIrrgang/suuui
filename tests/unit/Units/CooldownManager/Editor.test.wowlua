@@ -1,0 +1,245 @@
+-- Units/CooldownManager/Editor: the Cooldown Manager's settings editor, as
+-- the settings window builds it from the module's section. The preset bar
+-- (the setup picker, Load and Reset with their questions), the list
+-- editor's Cooldowns/Auras switch, dragging and dropping rows, the Behaviour
+-- panel closing with the editor; the editor given a host of its own. The
+-- character is an Unspecced warrior.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as events from "/Core/Events"
+import type Entry from "/Units/CooldownManager/Lists"
+import internal M from "/Units/CooldownManager"
+import PresetBar, ListEditor from "/Units/CooldownManager/Editor"
+import setUp, tearDown, asked, confirm, askedText, lastAsked, forgetAsked, presetBar, editor, contains, row, hasRow, names, click, auras, listOf, lastOf, membersOf, inside, behaviour, options, replaced, pick, addToNamed, slotOf, cursorOn, drag, StandInHost from "./EditorHelpers"
+import expectNoErrors, newParent from "../../../helpers"
+
+@beforeEach
+local function begin()
+    setUp()
+end
+
+@afterEach
+local function finish()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- The preset bar
+--------------------------------------------------------------------------------
+
+@test("the preset bar: which spec's setup, this character's spec and talents, what the lists are based on")
+local function bar()
+    local f = presetBar()
+    expect(options(f.setup)).toEqual({ "0", "1", "2", "3" })
+    expect(f.setup.options[1].label).toBe("Unspecced (active)")
+    expect(f.active:GetText()).toBe("This character: Unspecced · talents 0 / 0 / 0")
+    expect(f.status:GetText()).toBe("Based on Unspecced")
+    pick(f.setup, 1)
+    expect(M:EditSpec()).toBe(1)
+    expect(f.status:GetText()).toBe("Based on Arms")
+end
+
+@test("Load: the same preset unchanged loads at once; another, or over changes, asks first")
+local function loading()
+    local f = presetBar()
+    mock.click(f.load)
+    expect(lastAsked()).toBe(nil)
+    pick(f.select, "arms")
+    mock.click(f.load)
+    expect(asked().title).toBe("Load Arms?")
+    expect(asked().text).toBe("Your Unspecced lists are replaced with Arms's.")
+    confirm()
+    expect(M:PresetId(0)).toBe("arms")
+    -- one change: counted, and named in the question
+    local l = M:Lists(0)
+    M:SetLists(replaced(l, "essential", { assert(l.essential)[2] }), 0)
+    expect(M:Changes() > 0).toBe(true)
+    expect(contains(f.status, "Based on Arms · ")).toBe(true)
+    forgetAsked()
+    mock.click(f.load)
+    expect(askedText():find("are lost.", 1, true) ~= nil).toBe(true)
+end
+
+@test("Reset to preset undoes the changes, after asking; with none, nothing; no preset: none loaded")
+local function resetting()
+    local f = presetBar()
+    mock.click(f.reset)
+    expect(lastAsked()).toBe(nil)
+    M:SetLists(replaced(M:Lists(0), "essential", {}), 0)
+    mock.click(f.reset)
+    expect(asked().title).toBe("Reset to preset?")
+    confirm()
+    expect(M:Changes()).toBe(0)
+    M:SaveSetup(0, { preset = "", lists = {} })
+    events.emit("SUUUI_COOLDOWNS_SETUP")
+    expect(f.status:GetText()).toBe("No preset loaded")
+    mock.click(f.load) -- nothing chosen
+    mock.click(f.reset)
+    expect(M:Changes()).toBe(0)
+end
+
+--------------------------------------------------------------------------------
+-- The list editor: the Cooldowns/Auras switch
+--------------------------------------------------------------------------------
+
+@test("the Cooldowns/Auras switch: at the top of the lists, anchored anew on every refresh; it switches the lists")
+local function listSwitch()
+    local f = editor()
+    local tabs = f.tabs
+    expect(tabs).toBeShown()
+    expect(#tabs.buttons).toBe(2)
+    expect(tabs.value).toBe("cooldowns")
+    expect(math.abs((tabs:GetTop() or 0) - (f:GetTop() or 1)) < 0.01).toBe(true)
+    -- the heads start under it
+    expect((f.heads[1]:GetTop() or 0) <= (tabs:GetBottom() or 0)).toBe(true)
+    -- the game leaves a frame unplaced when what it hangs on resizes while
+    -- it's laid out (in the settings window: this editor's row); a refresh
+    -- anchors it again (it was anchored once and missing in game)
+    tabs:ClearAllPoints()
+    f:Refresh()
+    expect(tabs:GetNumPoints()).toBe(1)
+    local point, relativeTo = tabs:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(relativeTo).toBe(f)
+    expect(tabs:GetLeft()).never.toBeNil()
+    -- it switches between the spell lists and the aura lists
+    auras(f)
+    expect(f.tab).toBe("auras")
+    expect(f.heads[1].title:GetText()).toBe("Buffs on you")
+    expect(hasRow(f, "Overpower")).toBe(false)
+    click(tabs, "cooldowns")
+    expect(f.heads[1].title:GetText()).toBe("Essential")
+    expect(hasRow(f, "Overpower")).toBe(true)
+    expect(tabs:GetNumPoints()).toBe(1)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Dragging and dropping
+--------------------------------------------------------------------------------
+
+@test("a row dropped before or after another moves there; the line marks where")
+local function dropMove()
+    local f = editor()
+    local first = assert(listOf("essential")[1].name)
+    local exec = row(f, "Execute")
+    mock.script(exec, "OnDragStart")
+    expect(f.ghost).toBeShown()
+    cursorOn(row(f, first), "before")
+    mock.advanceFrames(1)
+    expect(f.line).toBeShown()
+    mock.script(exec, "OnDragStop")
+    expect(listOf("essential")[1].name).toBe("Execute")
+    expect(f.ghost).never.toBeShown()
+    -- onto Utility's foot: the end of that list
+    drag(row(f, "Execute"), f.adds[2], "before")
+    expect(lastOf("utility").name).toBe("Execute")
+    -- let go nowhere: nothing
+    mock.script(row(f, "Execute"), "OnDragStart")
+    mock.setCursorPosition(1, 1)
+    mock.advanceFrames(1)
+    mock.script(row(f, "Execute"), "OnDragStop")
+    expect(lastOf("utility").name).toBe("Execute")
+end
+
+@test("onto a single spell: asks to make a shared slot of the two")
+local function dropOntoEntry()
+    local f = editor()
+    drag(row(f, "Execute"), row(f, "Thunder Clap"), "onto")
+    expect(asked().title).toBe("Make a shared slot?")
+    expect(askedText():find("Thunder Clap + Execute", 1, true) ~= nil).toBe(true)
+    confirm()
+    local slot = assert(slotOf("essential"))
+    expect(slot.name).toBe("Thunder Clap + Execute")
+    expect(names(slot.members)).toEqual({ "Thunder Clap", "Execute" })
+end
+
+@test("onto a shared slot it joins it; onto a collection it goes last in it; a member dragged out is single again")
+local function dropOntoBoxes()
+    local f = editor()
+    auras(f)
+    mock.click(row(f, "Armor Reduction").fold)
+    drag(row(f, "Rend"), row(f, "Armor Reduction"), "onto")
+    local function coll(): Entry
+        for _, e in ipairs(listOf("debuffs")) do
+            if e.collection then
+                return e
+            end
+        end
+        error("no collection")
+    end
+    expect(names(inside(coll())[1].members)).toEqual({ "Sunder Armor", "Expose Armor", "Rend" })
+    drag(row(f, "Hamstring"), row(f, "Physical Debuffs"), "onto")
+    local entries = inside(coll())
+    expect(entries[#entries].name).toBe("Hamstring")
+    drag(row(f, "Sunder Armor"), row(f, "Stuns"), "after")
+    local last = lastOf("debuffs")
+    expect(last.name).toBe("Sunder Armor")
+    expect(last.group).toBe(nil)
+    -- onto an open slot's "+ Add to" row: last in the slot
+    mock.click(row(f, "Stuns").fold)
+    drag(row(f, "Hamstring"), addToNamed(f, "+ Add to Stuns…"), "before")
+    local debuffs = listOf("debuffs")
+    local members = membersOf(debuffs[#debuffs - 1])
+    expect(members[#members].name).toBe("Hamstring")
+    -- a collection can't go into a collection: nothing lights
+    mock.script(row(f, "Physical Debuffs"), "OnDragStart")
+    cursorOn(row(f, "Physical Debuffs"), "onto")
+    mock.advanceFrames(1)
+    expect(f.target).toBe(nil)
+    mock.script(row(f, "Physical Debuffs"), "OnDragStop")
+end
+
+--------------------------------------------------------------------------------
+-- The Behaviour panel, opened and closed by the editor
+--------------------------------------------------------------------------------
+
+@test("the panel closes with the page, with another spec's lists, and when its entry is gone")
+local function panelCloses()
+    local f = editor()
+    local b = behaviour(f, "Execute")
+    f:Hide()
+    expect(b).never.toBeShown()
+    f:Show()
+    b = behaviour(f, "Execute")
+    events.emit("SUUUI_COOLDOWNS_SETUP")
+    expect(b).never.toBeShown()
+    b = behaviour(f, "Execute")
+    mock.click(row(f, "Execute").remove)
+    expect(b).never.toBeShown()
+    f:OpenBehaviour({ key = "essential", i = 99 }) -- not there: nothing
+end
+
+--------------------------------------------------------------------------------
+-- A host of its own
+--------------------------------------------------------------------------------
+
+@test("the list editor and the preset bar edit the host they are given, not the module")
+local function ownHost()
+    local host = StandInHost.new()
+    host.saved[0] = { essential = { { name = "Spell One", ids = { 133 } } } }
+    local before = M:Lists(M:EditSpec())
+    local parent = newParent(700, 900)
+    local f = ListEditor.new(parent, host)
+    f:SetPoint("TOPLEFT", parent, "TOPLEFT")
+    expect(row(f, "Spell One")).toBeShown()
+    expect(f.heads[1].count:GetText()).toBe("1 spell")
+    -- shown off: the host's lists change, and the editor follows them
+    mock.click(row(f, "Spell One").shown)
+    expect(assert(assert(host.saved[0]).essential)[1].hidden).toBe(true)
+    expect(row(f, "Spell One").shown.value).toBe(false)
+    expect(M:Lists(M:EditSpec())).toBe(before)
+    local bar = PresetBar.new(parent, host)
+    expect(bar.active:GetText()).toBe("This character: Unspecced · talents 0 / 0 / 0")
+    expect(bar.status:GetText()).toBe("No preset loaded")
+    -- another spec's setup: the host is told, both follow
+    pick(bar.setup, 1)
+    expect(host.editSpec).toBe(1)
+    expect(host.emitted).toBe(1)
+    expect(M:EditSpec()).toBe(0)
+    expect(hasRow(f, "Spell One")).toBe(false)
+    f:Hide()
+    bar:Hide()
+    expectNoErrors()
+end

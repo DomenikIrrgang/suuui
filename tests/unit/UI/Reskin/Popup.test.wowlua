@@ -1,0 +1,56 @@
+-- UI/Reskin/Popup: the game's shared StaticPopup in SuuUI's look while it
+-- shows a dialog, undone when it hides.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import reskinPopup from "/UI/Reskin/Popup"
+import internal sameColor from "/UI/Reskin/Pass"
+import expectNoErrors from "../../../helpers"
+import resetHost, PopupParts from "./ReskinHelpers"
+
+@afterEach
+local function cleanup()
+    resetHost()
+    expectNoErrors()
+end
+
+local POPUP = "SUUUI_TEST_POPUP"
+
+@test("reskinPopup: the shared popup in SuuUI's look while it shows; undone after")
+local function popup()
+    local accepted = mock.spy()
+    StaticPopupDialogs[POPUP] = {
+        text = "Set the note for %s",
+        button1 = ACCEPT,
+        button2 = CANCEL,
+        hasEditBox = true,
+        OnAccept = function()
+            accepted()
+        end,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+    }
+    local shown = StaticPopup_Show(POPUP, "Tamsin Ashford") :: PopupParts?
+    expect(shown).never.toBeNil()
+    local dialog = assert(shown)
+    local text = dialog.Text
+    local r0, g0, b0 = text:GetTextColor()
+    reskinPopup(dialog)
+    expect(sameColor("ink", text:GetTextColor())).toBe(true)
+    reskinPopup(dialog) -- again while shown: from the game's look
+    expect(sameColor("ink", text:GetTextColor())).toBe(true)
+    local container = dialog.ButtonContainer
+    local accept = (container and container.Button1) or dialog.button1
+    expect(sameColor("on-signal", accept:GetFontString():GetTextColor())).toBe(true)
+    local cancel = (container and container.Button2) or dialog.button2
+    mock.hover(cancel)
+    mock.hover(nil)
+    mock.click(accept)
+    expect(accepted).toHaveBeenCalledTimes(1)
+    expect(dialog).never.toBeShown()
+    -- hidden: the game's look again
+    local r, g, b = text:GetTextColor()
+    expect({ r, g, b }).toEqual({ r0, g0, b0 })
+    reskinPopup(nil)
+end

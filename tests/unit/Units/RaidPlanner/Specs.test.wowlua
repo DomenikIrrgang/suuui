@@ -1,0 +1,231 @@
+-- Units/RaidPlanner/Specs: specs from an inspect and from raid members'
+-- SuuUI (heard, asked for, shared, guarded), the trees' icons.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Specs"
+import expectNoErrors from "../../../helpers"
+import cleanup, warrior, priest, mage, raid, planner, setup, slot, slotIn, placed, window from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("specs from raid members' SuuUI: a member's spec heard, asked for, yours shared when asked")
+local function specMessages()
+    setup()
+    raid({ { unit = warrior, g = 1 } })
+    local tank = slotIn(1, "WARRIOR", 3, "TANK")
+    M:Refill()
+    expect(placed(tank).how).toBe("provisional")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t3", "RAID", "Raider Warrior")
+    mock.advanceTime(0.6)
+    expect(placed(tank).how).toBe("exact")
+    expect(M:KnownTree("Raider Warrior", false)).toBe(3)
+    -- nonsense and other addons' messages: nothing
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t7", "RAID", "Raider Priest")
+    mock.receiveAddonMessage("Other", "RPSPEC\t1", "RAID", "Raider Priest")
+    mock.advanceTime(0.6)
+    expect(M:KnownTree("Raider Priest", false)).toBeNil()
+    -- asked by another: yours a moment later
+    mock.stub(SuuUI, "Spec", function()
+        return 1
+    end)
+    local before = #planner()
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Warrior")
+    mock.advanceTime(2.1)
+    local sent = planner()
+    expect(#sent).toBe(before + 1)
+    expect(sent[#sent]).toBe("RPSPEC\t1")
+    -- not shared when off
+    M:Set("shareSpec", false)
+    M:ShareSpec()
+    expect(#planner()).toBe(before + 1)
+    -- asking: when a spec is unknown, at most twice a minute
+    raid({ { unit = priest, g = 1 } })
+    M:Refill()
+    M:AskSpecs()
+    M:AskSpecs()
+    sent = planner()
+    expect(sent[#sent]).toBe("RPSPECQ")
+    expect(#sent).toBe(before + 2)
+    -- in combat: nothing sent
+    mock.player:enterCombat()
+    M:Send("RPSPECQ")
+    expect(#planner()).toBe(before + 2)
+end
+
+@test("specs from strangers and other channels: a whisper or party message is ignored; questions answered once in 30 s")
+local function specMessagesGuarded()
+    setup()
+    raid({ { unit = mage, g = 1 } })
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "WHISPER", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "PARTY", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "GUILD", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t02x", "RAID", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t0", "RAID", "Raider Mage")
+    mock.advanceTime(0.6)
+    expect(M:KnownTree("Raider Mage", false)).toBeNil()
+    -- the exact text an older SuuUI sends, on the raid's channel
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "RAID", "Raider Mage")
+    expect(M:KnownTree("Raider Mage", false)).toBe(2)
+    -- a question by whisper: no answer; many from the raid: one in 30 s
+    mock.stub(SuuUI, "Spec", function()
+        return 1
+    end)
+    mock.advanceTime(31)
+    local before = #planner()
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "WHISPER", "Stranger")
+    mock.advanceTime(2.1)
+    expect(#planner()).toBe(before)
+    for _ = 1, 10 do
+        mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Mage")
+        mock.advanceTime(2.1)
+    end
+    expect(#planner()).toBe(before + 1)
+    mock.advanceTime(10)
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Mage")
+    mock.advanceTime(2.1)
+    expect(#planner()).toBe(before + 2)
+    -- a flood of specs from one member: five in ten seconds
+    local noted = mock.spy(M.NoteSpec)
+    mock.stub(M, "NoteSpec", noted)
+    for _ = 1, 30 do
+        mock.receiveAddonMessage("SuuUI", "RPSPEC\t3", "RAID", "Raider Mage")
+    end
+    expect(noted).toHaveBeenCalledTimes(5)
+    expectNoErrors()
+end
+
+@test("a spec from another realm's player is theirs: a raid member of the same name keeps their own")
+local function specOtherRealm()
+    setup()
+    M:NoteSpec("Raider Hunter", 1, "message")
+    M:NoteSpec("Raider Hunter-Elsewhere", 3, "message")
+    expect(assert(M:Data().specs["Raider Hunter"]).tree).toBe(1)
+    expect(assert(M:Data().specs["Raider Hunter-Elsewhere"]).tree).toBe(3)
+    expect(M:KnownTree("Raider Hunter", false)).toBe(1)
+    expect(M:KnownTree("Raider Hunter-Elsewhere", false)).toBe(3)
+    -- only the other realm's known: not taken for the one of yours
+    M:Data().specs["Raider Hunter"] = nil
+    expect(M:KnownTree("Raider Hunter", false)).toBeNil()
+    -- your own realm's suffix: the bare name
+    local _, realm = UnitFullName("player")
+    M:NoteSpec("Raider Bowman-" .. tostring(realm), 2, "message")
+    expect(M:KnownTree("Raider Bowman", false)).toBe(2)
+end
+
+@test("inspecting: one player at a time while the planner is open, the spec from the talents' points")
+local function inspecting()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 1 } })
+    warrior:setInspect({ spec = 1491 })
+    -- (the engine keeps no inspected talent groups: the points as the client gives them)
+    mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
+        return {
+            { groupID = 11, displayName = "Arms", icon = 132355 },
+            { groupID = 12, displayName = "Fury", icon = 132347 },
+            { groupID = 13, displayName = "Protection", icon = 134952 },
+        }
+    end)
+    mock.fake("C_Traits.GetGroupCurrencyInfo", function(_: number, _ids: number[])
+        return {
+            { traitNodeGroupID = 11, currencyInfos = { { spent = 5 } } },
+            { traitNodeGroupID = 13, currencyInfos = { { spent = 31 } } },
+        }
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number)
+        return { treeIDs = { 1117 } }
+    end)
+    slot(1, "WARRIOR", 3, "TANK")
+    M:Toggle()
+    expect(window():IsShown()).toBe(true)
+    -- the warrior inspected; the priest can't be (no inspect data): tried later
+    expect(M.inspecting ~= nil).toBe(true)
+    expect(assert(M.inspecting).m.name).toBe("Raider Warrior")
+    mock.advanceTime(1)
+    expect(M.inspecting).toBeNil()
+    expect(M:KnownTree("Raider Warrior", false)).toBe(3)
+    expect(assert(M:Data().treeIcons.WARRIOR)[3]).toBe(134952)
+    expect(M:TreeIcon("WARRIOR", 3)).toBe(134952)
+    expect(M:TreeIcon("PRIEST", 1) ~= nil).toBe(true)
+    expect(M:TreeIcon(nil, 1)).toBeNil()
+    mock.advanceTime(1)
+    expect(placed(M:SlotsIn(1)[1]).how).toBe("exact")
+    -- the priest's turn comes again in a while; on click only: not by itself
+    expect(M:SpecQueue()[1]).toBeNil()
+    mock.advanceTime(31)
+    -- someone joins while the planner is open: asked and inspected a second later
+    local askedSpecs = mock.spy(function(_: unknown) end)
+    mock.stub(M, "AskSpecs", askedSpecs)
+    mock.group:add(mage, { raid = true, subgroup = 2 })
+    mock.advanceTime(1.1)
+    expect(askedSpecs).toHaveBeenCalled()
+    M:Set("inspect", "click")
+    M.inspectFailed = {}
+    M:InspectNext()
+    expect(M.inspecting).toBeNil()
+end
+
+@test("an inspect that never answers is given up; one answering without a tree fails")
+local function inspectFails()
+    setup()
+    raid({ { unit = warrior, g = 1 } })
+    warrior:setInspect({ spec = 1491 })
+    M:Refill()
+    M.inspectRound = true
+    mock.fake("NotifyInspect", function(_: string) end)
+    M:InspectNext()
+    expect(M.inspecting ~= nil).toBe(true)
+    mock.advanceTime(5.1)
+    expect(M.inspecting).toBeNil()
+    expect(M.inspectFailed["Raider Warrior"] ~= nil).toBe(true)
+    -- the answer to another inspect: not ours
+    M:OnInspectReady("Player-0000-00000000")
+    -- answered, no tree to read: failed
+    M.inspectFailed = {}
+    M.inspectRound = true
+    M:InspectNext()
+    M:OnInspectReady(assert(M.inspecting).guid)
+    expect(M:KnownTree("Raider Warrior", false)).toBeNil()
+    expect(M.inspectFailed["Raider Warrior"] ~= nil).toBe(true)
+end
+
+@test("your own talent groups' icons noted once there")
+local function ownIcons()
+    setup()
+    M.ownIconsRead = false
+    mock.fake("C_ClassTalents.GetActiveConfigID", function()
+        return 7143862
+    end)
+    mock.fake("C_Traits.GetConfigInfo", function(_: number)
+        return { treeIDs = { 1117 } }
+    end)
+    mock.fake("C_Traits.GetGroupDisplayInfoByTreeID", function(_: number)
+        return {
+            { groupID = 11, displayName = "Arms", icon = 132355 },
+            { groupID = 12, displayName = "Fury", icon = 134400 },
+            { groupID = 13, displayName = "Nobody's", icon = 1 },
+        }
+    end)
+    M:NoteOwnTreeIcons()
+    expect(M.ownIconsRead).toBe(true)
+    expect(assert(M:Data().treeIcons.WARRIOR)[1]).toBe(132355)
+    -- the question mark isn't an icon
+    expect(assert(M:Data().treeIcons.WARRIOR)[2]).toBeNil()
+    M:NoteTreeIcons("NOBODY", {})
+    M:NoteTreeIcons("WARRIOR", 5)
+end
+
+@test("a tree by its name: the class's spec, part of it, or none")
+local function byName()
+    expect(part.treeByName("WARRIOR", "Protection")).toBe(3)
+    expect(part.treeByName("WARRIOR", "fury")).toBe(2)
+    expect(part.treeByName("WARRIOR", "Warrior Protection")).toBe(3)
+    expect(part.treeByName("WARRIOR", nil)).toBeNil()
+    expect(part.treeByName("NOBODY", "Arms")).toBeNil()
+    expect(part.SPEC_FRESH).toBe(86400)
+end

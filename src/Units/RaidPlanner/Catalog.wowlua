@@ -1,0 +1,88 @@
+-- Units/RaidPlanner/Catalog.wowlua
+-- The raid planner's catalog (Units/RaidPlanner): the classes, the items it
+-- can track and their families, read once from SuuUI.RaidCatalog()
+-- (Data/RaidPlanner.lua), and what follows from them: a tree's role, the
+-- trees that can take a role, a class's plural, a list joined with "and".
+-- Also the group size, the roles' words and a name as a key. Every part of
+-- the planner reads these.
+
+import SuuUI from "/Core/API"
+import type RaidClass, RaidFamily, RaidItem from "/Data/RaidPlanner"
+
+export const MAX_GROUP = 5
+export const ROLE_WORD = { TANK = "tank", HEALER = "healer", DAMAGER = "damage" } :: { [string]: string }
+export const ROLE_NAME = { TANK = "Tank", HEALER = "Healer", DAMAGER = "Damage" } :: { [string]: string }
+
+-- A name as a key: the realm only for another realm's players.
+export function key(name: string): string
+    return Ambiguate(name, "none")
+end
+
+--------------------------------------------------------------------------------
+-- The catalog
+--------------------------------------------------------------------------------
+
+export const CLASSES = {} :: RaidClass[]
+export const CLASS = {} :: { [string]: RaidClass }
+export const ITEMS = {} :: RaidItem[]
+export const ITEM = {} :: { [string]: RaidItem }
+export const FAMILIES = {} :: RaidFamily[]
+
+export function loadCatalog()
+    if #ITEMS > 0 then
+        return
+    end
+    local cat = SuuUI.RaidCatalog()
+    for _, c in ipairs(cat.classes) do
+        CLASSES[#CLASSES + 1] = c
+        CLASS[c.file] = c
+    end
+    for _, f in ipairs(cat.families) do
+        FAMILIES[#FAMILIES + 1] = f
+    end
+    for _, it in ipairs(cat.items) do
+        ITEMS[#ITEMS + 1] = it
+        ITEM[it.key] = it
+    end
+end
+
+export function familyOf(famKey: string): RaidFamily?
+    for _, f in ipairs(FAMILIES) do
+        if f.key == famKey then
+            return f
+        end
+    end
+    return nil
+end
+
+-- A class's role for a tree (the catalog's).
+export function treeRole(class: string?, tree: number?): string?
+    local c = class and CLASS[class]
+    return c and tree and c.roles[tree] or nil
+end
+
+-- A class's trees that can take a role (Feral tanks too).
+export function canPlay(class: string, tree: number?, role: string): boolean
+    local c = CLASS[class]
+    if not c then
+        return false
+    end
+    for t = 1, 3 do
+        if (not tree or t == tree) and (c.roles[t] == role or (role == "TANK" and class == "DRUID" and t == 2)) then
+            return true
+        end
+    end
+    return false
+end
+
+export function plural(class: string): string
+    local c = CLASS[class]
+    return c and (c.name:lower() .. "s") or "?"
+end
+
+export function joinAnd(parts: string[], word: string?): string
+    if #parts <= 1 then
+        return parts[1] or ""
+    end
+    return table.concat(parts, ", ", 1, #parts - 1) .. " " .. (word or "and") .. " " .. parts[#parts]
+end

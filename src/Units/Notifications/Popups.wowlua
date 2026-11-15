@@ -1,0 +1,332 @@
+-- Units/Notifications/Popups.wowlua
+-- What the Notifications module (Units/Notifications.wowlua) knows of
+-- Blizzard's request windows, as data: the popups it shows as cards (their
+-- kinds, SuuUI's own and the ones plugins add), a cost in coins, where a
+-- popup's or window's parts are (buttons, text, time left), and the request
+-- windows that aren't popups (the group finder's invite, the battleground's
+-- "enter", the ready check). Units/Notifications/Hosting.wowlua puts them on
+-- the cards.
+
+import SuuUI from "/Core/API"
+import type NotificationKind, ColorToken from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+
+local T = SuuUI.Tokens
+
+-- The game's values, read without trusting their types.
+local try, field = errors.try, tbl.field
+local asString, asNumber = secret.asString, secret.asNumber
+
+-- A popup SuuUI shows as a card: caption, glyph, tone, a title when the
+-- popup's text can't be read, which button is the main answer (primary) or
+-- the dangerous one, whether it's about the item on the cursor, whether you
+-- type DELETE, what it costs.
+export type Kind = {
+    category?: string,
+    glyph?: string,
+    tone?: string,
+    title?: string,
+    primary?: number,
+    danger?: number,
+    item?: boolean,
+    confirm?: boolean,
+    cost?: (dialog: Frame) -> number?,
+}
+
+-- The popups SuuUI shows as cards: caption, glyph, tone, which button is the
+-- main answer (primary) or the dangerous one, the item it's about.
+local KINDS: { [string]: Kind } = {
+    PARTY_INVITE = { category = "Party invite", glyph = "people", primary = 1 },
+    GROUP_INVITE_CONFIRMATION = { category = "Group invite", glyph = "people", primary = 1 },
+    RESURRECT = { category = "Resurrection", glyph = "plus", primary = 1 },
+    RESURRECT_NO_SICKNESS = { category = "Resurrection", glyph = "plus", primary = 1 },
+    RESURRECT_NO_TIMER = { category = "Resurrection", glyph = "plus", primary = 1 },
+    CONFIRM_SUMMON = { category = "Summon", glyph = "map", primary = 1 },
+    CONFIRM_SUMMON_SCENARIO = { category = "Summon", glyph = "map", primary = 1 },
+    CONFIRM_SUMMON_STARTING_AREA = { category = "Summon", glyph = "map", primary = 1 },
+    DUEL_REQUESTED = { category = "Duel", glyph = "sword", primary = 1 },
+    DUEL_OUTOFBOUNDS = { category = "Duel", glyph = "sword", tone = "warning" },
+    TRADE = { category = "Trade", glyph = "coin", primary = 1 },
+    DEATH = { category = "You died", glyph = "skull", tone = "warning", primary = 1 },
+    RECOVER_CORPSE = { category = "Your corpse", glyph = "skull", primary = 1 },
+    RECOVER_CORPSE_INSTANCE = { category = "Your corpse", glyph = "skull" },
+    AREA_SPIRIT_HEAL = { category = "Spirit healer", glyph = "skull", primary = 1 },
+    XP_LOSS = { category = "Spirit healer", glyph = "skull", tone = "warning" },
+    DELETE_ITEM = { category = "Delete item", glyph = "trash", tone = "danger", danger = 1, item = true },
+    DELETE_GOOD_ITEM = {
+        category = "Delete item",
+        glyph = "trash",
+        tone = "danger",
+        danger = 1,
+        item = true,
+        confirm = true,
+    },
+    DELETE_QUEST_ITEM = { category = "Delete quest item", glyph = "trash", tone = "danger", danger = 1, item = true },
+    DELETE_GOOD_QUEST_ITEM = {
+        category = "Delete quest item",
+        glyph = "trash",
+        tone = "danger",
+        danger = 1,
+        item = true,
+        confirm = true,
+    },
+    CAMP = { category = "Logging out", glyph = "door" },
+    QUIT = { category = "Quitting", glyph = "door", danger = 1 },
+    CONFIRM_BATTLEFIELD_ENTRY = { category = "Battleground", glyph = "flag", primary = 1 },
+    BFMGR_INVITED_TO_ENTER = { category = "Battleground", glyph = "flag", primary = 1 },
+    INSTANCE_LOCK = { category = "Instance lock", glyph = "hourglass", tone = "warning", primary = 1 },
+    INSTANCE_BOOT = { category = "Leaving the instance", glyph = "door", tone = "danger" },
+    LOOT_BIND = { category = "Binds when picked up", glyph = "gem", primary = 1 },
+    EQUIP_BIND = { category = "Binds when equipped", glyph = "gem", primary = 1 },
+    USE_BIND = { category = "Binds when used", glyph = "gem", primary = 1 },
+    CONFIRM_LOOT_ROLL = { category = "Loot roll", glyph = "gem", primary = 1 },
+    ABANDON_QUEST = { category = "Abandon quest", glyph = "scroll", tone = "danger", danger = 1 },
+    QUEST_ACCEPT = { category = "Quest", glyph = "scroll", primary = 1 },
+    CONFIRM_TALENT_WIPE = { category = "Talents", glyph = "tree", tone = "warning" },
+    -- items the game wanted to give you (the authenticator's bag bonus) that
+    -- didn't fit (seen at a first login, 2026-10-18)
+    CLIENT_INVENTORY_FULL_OVERFLOW = { category = "Inventory full", glyph = "bag", tone = "warning", primary = 1 },
+    -- the bags' buy cell (a secure click on the game's purchase button):
+    -- the game's own question, its cost on the card
+    CONFIRM_BUY_BANK_TAB = {
+        category = "Bank",
+        glyph = "bank",
+        primary = 1,
+        cost = function(dialog: Frame): number?
+            -- what the popup's own money frame shows, else the next tab's price
+            local shown = asNumber(field(dialog, "MoneyFrame", "staticMoney"))
+            if shown and shown > 0 then
+                return shown
+            end
+            local bankType = asNumber(field(dialog, "data", "bankType")) or
+                asNumber(field(Enum, "BankType", "Character"))
+            local nextTab = bankType and errors.tryValue(C_Bank and C_Bank.FetchNextPurchasableBankTabData, bankType)
+            return nextTab and asNumber(nextTab.tabCost) or nil
+        end,
+    },
+}
+
+-- "1g 20s 5c", each in its coin's colour (zero coins left out).
+export function coinString(copper: number): string
+    local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
+    local out: string[] = {}
+    local function add(n: number, suffix: string, token: ColorToken)
+        out[#out + 1] = ("|cff%s%d%s|r"):format(T.color[token].hex, n, suffix)
+    end
+    if g > 0 then
+        add(g, "g", "coin-gold")
+    end
+    if s > 0 then
+        add(s, "s", "coin-silver")
+    end
+    if c > 0 or #out == 0 then
+        add(c, "c", "coin-copper")
+    end
+    return table.concat(out, " ")
+end
+
+-- A button a hosted window shows, and its place among the window's buttons
+-- (which one is primary or dangerous).
+export type Shown = { button: Button, index: number }
+
+-- Where a Blizzard request window's parts are: its buttons (in order), text,
+-- time (duration, remaining), edit box, role buttons and queue warning.
+export type Parts = {
+    buttons: () -> Shown[],
+    text: () -> string?,
+    time?: () -> (number?, number?),
+    editBox?: EditBox,
+    roles?: () -> Button[],
+    warning?: () -> string?,
+}
+
+export function noTime(): (number?, number?)
+    return nil, nil
+end
+
+-- A font string's text, when it is one and readable.
+export function textOf(v: unknown): string?
+    local fs = frames.asFontString(v)
+    return fs and asString(fs:GetText()) or nil
+end
+
+export function buttonsOf(dialog: Frame): Shown[]
+    local out: Shown[] = {}
+    local name = dialog:GetName()
+    for i = 1, 4 do
+        local b = frames.asButton(field(dialog, "ButtonContainer", "Button" .. i)) or
+            (name and frames.asButton(field(_G, name .. "Button" .. i)) or nil)
+        if b and b:IsShown() then
+            out[#out + 1] = { button = b, index = i }
+        end
+    end
+    return out
+end
+
+-- A popup's kind: SuuUI's own, else one a plugin added (0.17,
+-- M:AddNotificationKind(which, def), def as above), read field by field.
+export function kindFrom(def: NotificationKind): Kind
+    local cost = def.cost
+    return {
+        category = asString(def.category),
+        glyph = asString(def.glyph),
+        tone = asString(def.tone),
+        title = asString(def.title),
+        primary = asNumber(def.primary),
+        danger = asNumber(def.danger),
+        item = secret.flag(def.item),
+        confirm = secret.flag(def.confirm),
+        cost = type(cost) == "function" and
+            function(dialog: Frame): number?
+                return asNumber((try(cost, dialog)))
+            end or
+            nil,
+    }
+end
+
+export function kindOf(which: string): Kind?
+    local own = KINDS[which]
+    if own then
+        return own
+    end
+    for _, added in ipairs(SuuUI.Additions("notificationkinds")) do
+        -- M:AddNotificationKind's table, with `which` set
+        local def = added :: NotificationKind
+        if def.which == which then
+            return kindFrom(def)
+        end
+    end
+    return nil
+end
+
+-- Blizzard's request windows that aren't popups: the battleground's "enter"
+-- (its answer is forbidden to addons: hosted like the popups) and the ready
+-- check (hosted the same way, so it sits with the rest).
+local function shownButtons(...: unknown): Shown[]
+    local out: Shown[] = {}
+    for i = 1, select("#", ...) do
+        local b = frames.asButton((select(i, ...)))
+        if b and b:IsShown() then
+            out[#out + 1] = { button = b, index = i }
+        end
+    end
+    return out
+end
+
+-- The battleground waiting for you to enter.
+local function battlefieldReady(): number?
+    for i = 1, asNumber((try(field(_G, "GetMaxBattlefieldID")))) or 0 do
+        if asString((try(field(_G, "GetBattlefieldStatus"), i))) == "confirm" then
+            return i
+        end
+    end
+    return nil
+end
+
+-- Where the ready check's time is kept (the module: READY_CHECK sets it).
+export interface ReadyClock
+    readyDuration: number?
+    readyEndsAt: number?
+end
+
+-- A request window SuuUI hosts: its global name, its kind, its parts (the
+-- ready check's time read from `clock`).
+export type Window = { name: string, kind: Kind, parts: (f: Frame, clock: ReadyClock) -> Parts }
+
+export const WINDOWS: Window[] = {
+    -- a group invite that asks for your role (the group finder's; not a
+    -- shared popup): its role buttons come onto the card too
+    {
+        name = "LFGInvitePopup",
+        kind = { category = "Party invite", glyph = "people", primary = 1 },
+        parts = function(f: Frame): Parts
+            return {
+                buttons = function(): Shown[]
+                    return shownButtons(
+                        field(_G, "LFGInvitePopupAcceptButton"),
+                        field(_G, "LFGInvitePopupDeclineButton")
+                    )
+                end,
+                text = function(): string?
+                    return textOf(field(_G, "LFGInvitePopupText"))
+                end,
+                time = function(): (number?, number?)
+                    local total, left = asNumber(field(_G, "StaticPopupTimeoutSec")), asNumber(field(f, "timeOut"))
+                    if total and left and total > 0 then
+                        return total, math.max(0, left)
+                    end
+                    return nil, nil
+                end,
+                roles = function(): Button[]
+                    local out: Button[] = {}
+                    for _, b in ipairs(tbl.list(field(f, "RoleButtons"))) do
+                        local button = frames.asButton(b)
+                        if button then
+                            out[#out + 1] = button
+                        end
+                    end
+                    return out
+                end,
+                warning = function(): string?
+                    local w = frames.asFontString(field(f, "QueueWarningText"))
+                    if w and w:IsShown() then
+                        return asString(w:GetText())
+                    end
+                    return nil
+                end,
+            }
+        end,
+    },
+    {
+        name = "PVPReadyDialog",
+        kind = { category = "Battleground", glyph = "flag", primary = 1, title = "Your battleground is ready" },
+        parts = function(f: Frame): Parts
+            local total: number? = nil -- the first reading: the whole time to enter
+            return {
+                buttons = function(): Shown[]
+                    return shownButtons(field(f, "enterButton"), field(f, "leaveButton"))
+                end,
+                text = function(): string?
+                    return textOf(field(f, "label"))
+                end,
+                time = function(): (number?, number?)
+                    local i = battlefieldReady()
+                    local t = i and asNumber((try(field(_G, "GetBattlefieldPortExpiration"), i)))
+                    if t and t > 0 then
+                        -- seconds on some clients, milliseconds on others
+                        local left = t > 1000 and t / 1000 or t
+                        local whole = total or left
+                        total = whole
+                        return whole, left
+                    end
+                    return nil, nil
+                end,
+            }
+        end,
+    },
+    {
+        name = "ReadyCheckFrame",
+        kind = { category = "Ready check", glyph = "flag", primary = 1, title = "Are you ready?" },
+        parts = function(f: Frame, clock: ReadyClock): Parts
+            local l = frames.find("ReadyCheckListenerFrame") or f
+            return {
+                buttons = function(): Shown[]
+                    return shownButtons(field(l, "YesButton"), field(l, "NoButton"))
+                end,
+                text = function(): string?
+                    return textOf(field(l, "Text"))
+                end,
+                time = function(): (number?, number?)
+                    local ends = clock.readyEndsAt
+                    if ends then
+                        return clock.readyDuration, math.max(0, ends - GetTime())
+                    end
+                    return nil, nil
+                end,
+            }
+        end,
+    },
+}

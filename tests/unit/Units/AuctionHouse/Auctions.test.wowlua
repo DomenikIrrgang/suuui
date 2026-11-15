@@ -1,0 +1,322 @@
+-- Units/AuctionHouse/Auctions: the Auctions page: yours (Cancel) and your
+-- bids (Bid, Buy out). The engine's house has no bids: stubbed in the
+-- tests that need them.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokenOf from "../../SettingsUI/UiSettingsHelpers"
+import internal M from "/Units/AuctionHouse"
+import type AuctionTable from "/Units/AuctionHouse/Tables"
+import type AuctionRow from "/Units/AuctionHouse/Auctions"
+import * as secret from "wowlua:secret"
+import ORE, BLADE, RING, BAUBLE, GEM, key, asked, confirm, auctions, setUp, tearDown, open, win, note, money, shown, tipText, plain, at from "./AuctionHouseHelpers"
+import AuctionsPage from "/Units/AuctionHouse/Auctions"
+import type AuctionHouseModule from "/Units/AuctionHouse"
+import newParent from "../../../helpers"
+
+local AH = C_AuctionHouse
+
+@beforeEach
+local function start()
+    setUp()
+end
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- Auctions: yours and your bids
+--------------------------------------------------------------------------------
+
+local function auctionRows(t: AuctionTable<AuctionRow>): AuctionRow[]
+    return shown(t)
+end
+
+local function openAuctions()
+    open()
+    win():SetTab("auctions")
+    mock.advanceTime(1)
+end
+
+-- the blade posted at 4g 70s (the engine's own post), the house asked again
+local function postBlade()
+    AH.PostItem(at(2), 2, 1, nil, 47000)
+    mock.advanceTime(3) -- (asked while the house answers, the engine tells nothing: recorded)
+    AH.QueryOwnedAuctions({})
+    mock.advanceTime(1)
+end
+
+@test("your auctions: the item, time left, bid and buyout; choose one to cancel it; the deposit's note; none")
+local function ownedAuctions()
+    openAuctions()
+    local a = auctions()
+    expect(a.mineT).toBeShown()
+    expect(a.bidsT).never.toBeShown()
+    expect(a.mineT.empty:GetText()).toBe("You have no auctions.")
+    expect(a.mineT.empty).toBeShown()
+    expect(a.cancel:IsEnabled()).toBe(false)
+    expect(tipText(a.cancel)).toBe("Choose one of your auctions.")
+    postBlade()
+    local rows = auctionRows(a.mineT)
+    expect(#rows).toBe(1)
+    local r = rows[1]
+    expect(r.second.copper).toBe(47000)
+    expect(r.name:GetText()).toBe("Test Blade")
+    expect(tokenOf(r.name)).toBe("quality-rare")
+    expect(mock.textOf(r.time):find("^%d+ h$") ~= nil).toBe(true)
+    expect(r.firstText:GetText()).toBe("no bids")
+    expect(r.tag:GetText()).toBe("")
+    -- its tooltip: the item's link
+    local link = mock.stub(GameTooltip, "SetHyperlink", function() end)
+    mock.hover(r)
+    expect(link).toHaveBeenCalled()
+    mock.hover(nil)
+    -- chosen: Cancel, and what it costs
+    mock.click(r)
+    expect(r.sel:IsShown()).toBe(true)
+    expect(a.cancel:IsEnabled()).toBe(true)
+    expect(a.cancelNote:GetText()).toBe("The deposit isn't returned when you cancel.")
+    mock.stub(AH, "GetCancelCost", function()
+        return 500
+    end)
+    M:DrawAuctionsFoot()
+    expect(plain(a.cancelNote:GetText() or "")).toBe(
+        "The deposit isn't returned when you cancel. Cancelling this one costs 5s."
+    )
+    mock.click(a.cancel)
+    mock.advanceTime(1)
+    expect(note()).toBe("Cancelled: Test Blade ×1. The deposit isn't returned.")
+    mock.advanceTime(1)
+    expect(#auctionRows(a.mineT)).toBe(0)
+    expect(a.chosen).toBe(nil)
+end
+
+@test("your auctions: sold, minutes left, a bid on it, the house not letting you cancel; the game's no")
+local function ownedStates()
+    openAuctions()
+    local a = auctions()
+    local S, Band = Enum.AuctionStatus, Enum.AuctionHouseTimeLeftBand
+    local owned: OwnedAuctionInfo[] = {
+        { auctionID = 41, itemKey = key(RING), status = S.Sold, quantity = 1, buyoutAmount = 3000 },
+        {
+            auctionID = 42,
+            itemKey = key(ORE),
+            status = S.Active,
+            quantity = 20,
+            timeLeftSeconds = 600,
+            bidAmount = 2000,
+            buyoutAmount = 4000,
+        },
+        {
+            auctionID = 43,
+            itemKey = key(GEM),
+            status = S.Active,
+            quantity = 1,
+            timeLeftSeconds = 5,
+            timeLeft = Band.Short,
+        },
+        { auctionID = 44, itemKey = key(BAUBLE), status = S.Active, quantity = 1, timeLeft = Band.Medium },
+    }
+    mock.stub(AH, "GetNumOwnedAuctions", function()
+        return #owned
+    end)
+    mock.stub(AH, "GetOwnedAuctionInfo", function(i: number)
+        return owned[i]
+    end)
+    M:DrawAuctions()
+    local rows = auctionRows(a.mineT)
+    expect(#rows).toBe(4)
+    expect(rows[1].tag:GetText()).toBe("Sold")
+    expect(rows[1].time:GetText()).toBe("")
+    expect(rows[1].firstText:GetText()).toBe("")
+    expect(rows[2].time:GetText()).toBe("10 min")
+    expect(rows[2].first.copper).toBe(2000)
+    expect(rows[3].time:GetText()).toBe("1 min")
+    expect(rows[3].secondText:GetText()).toBe("")
+    expect(rows[4].time:GetText()).toBe("Medium")
+    -- sold: nothing to cancel
+    mock.click(rows[1])
+    expect(a.cancel:IsEnabled()).toBe(false)
+    expect(tipText(a.cancel)).toBe("It has sold.")
+    -- the house says no
+    mock.stub(AH, "CanCancelAuction", function()
+        return false
+    end)
+    mock.click(rows[2])
+    expect(tipText(a.cancel)).toBe("The house doesn't allow cancelling this one.")
+    mock.stub(AH, "CanCancelAuction", function()
+        return true
+    end)
+    M:DrawAuctionsFoot()
+    mock.stub(AH, "CancelAuction", function()
+        error("busy")
+    end)
+    mock.click(a.cancel)
+    expect(note():find("^Couldn't cancel: ") ~= nil).toBe(true)
+    expect(a.cancelling).toBe(nil)
+    -- another auction cancelled (one of the house's): no note, asked again
+    local queriedOwned = mock.stub(AH, "QueryOwnedAuctions", function() end)
+    M:Note("")
+    mock.fireEvent("AUCTION_CANCELED", 99)
+    expect(note()).toBe("")
+    expect(queriedOwned).toHaveBeenCalled()
+    -- expired: asked again
+    mock.resetSpies()
+    mock.fireEvent("AUCTION_HOUSE_AUCTIONS_EXPIRED", 42)
+    expect(queriedOwned).toHaveBeenCalled()
+    -- nothing chosen: no cancel
+    a.chosen = nil
+    M:CancelChosen()
+    -- an item key's tooltip (no link)
+    local had: unknown = rawget(GameTooltip, "SetItemKey")
+    local byKey: number? = nil
+    rawset(GameTooltip, "SetItemKey", function(_: unknown, id: number)
+        byKey = id
+    end)
+    mock.hover(rows[2])
+    expect(byKey).toBe(ORE)
+    mock.hover(nil)
+    rawset(GameTooltip, "SetItemKey", nil)
+    local byID = mock.stub(GameTooltip, "SetItemByID", function() end)
+    mock.hover(rows[2])
+    expect(byID).toHaveBeenCalledWith(GameTooltip, ORE)
+    mock.hover(nil)
+    rawset(GameTooltip, "SetItemKey", had)
+end
+
+@test("your bids: highest or outbid (said once), your own bid shown; choose one to bid again or buy out; why not")
+local function bids()
+    openAuctions()
+    local a = auctions()
+    local me = secret.asString(UnitGUID("player"))
+    local Band = Enum.AuctionHouseTimeLeftBand
+    local placedBids: BidInfo[] = {
+        {
+            auctionID = 31,
+            itemKey = key(BLADE, 20),
+            bidAmount = 20000,
+            minBid = 21000,
+            buyoutAmount = 50000,
+            bidder = me,
+            timeLeft = Band.Long,
+        },
+        { auctionID = 32, itemKey = key(RING), bidAmount = 1000, minBid = 1100, timeLeft = Band.VeryLong },
+    }
+    mock.stub(AH, "GetBids", function()
+        return placedBids
+    end)
+    local queried = mock.stub(AH, "QueryBids", function() end)
+    -- the tabs' hover
+    local tab = a.tabs[2]
+    mock.hover(tab)
+    expect(tokenOf(tab.label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(tab.label)).toBe("ink-muted")
+    mock.click(tab)
+    expect(queried).toHaveBeenCalled()
+    expect(a.bidsT).toBeShown()
+    expect(a.mineT).never.toBeShown()
+    expect(tokenOf(tab.label)).toBe("gilt-text")
+    mock.hover(tab)
+    expect(tokenOf(tab.label)).toBe("gilt-text")
+    mock.hover(nil)
+    local rows = auctionRows(a.bidsT)
+    expect(#rows).toBe(2)
+    expect(rows[1].tag:GetText()).toBe("Highest bid")
+    expect(rows[1].first.copper).toBe(20000)
+    expect(rows[1].time:GetText()).toBe("Long")
+    expect(rows[2].secondText:GetText()).toBe("none")
+    -- nothing chosen
+    expect(tipText(a.bidButton)).toBe("Choose a bid.")
+    expect(tipText(a.buyout)).toBe("Choose a bid.")
+    -- chosen: its least bid
+    mock.click(rows[1])
+    expect(a.bid:GetCopper()).toBe(21000)
+    expect(a.bidButton:IsEnabled()).toBe(true)
+    expect(a.buyout:IsEnabled()).toBe(true)
+    money(a.bid, 20500)
+    expect(plain(assert(tipText(a.bidButton)))).toBe("At least 2g 10s.")
+    money(a.bid, 2000000)
+    expect(tipText(a.bidButton)).toBe("Not enough money.")
+    -- bid again: placed, remembered, shown in the list
+    money(a.bid, 25000)
+    local placed: number[][] = {}
+    mock.stub(AH, "PlaceBid", function(id: number, amount: number)
+        placed[#placed + 1] = { id, amount }
+    end)
+    mock.click(a.bidButton)
+    expect(placed[1]).toEqual({ 31, 25000 })
+    expect(plain(note())).toBe("Bid 2g 50s.")
+    M:DrawAuctions()
+    expect(auctionRows(a.bidsT)[1].first.copper).toBe(25000)
+    -- buy out: asked first
+    mock.click(a.buyout)
+    expect(asked().title).toBe("Buy out Test Blade?")
+    confirm(nil)
+    expect(placed[2]).toEqual({ 31, 50000 })
+    -- the ring: no buyout; the other's least bid, not the one typed
+    mock.click(auctionRows(a.bidsT)[2])
+    expect(a.bid:GetCopper()).toBe(1100)
+    expect(tipText(a.buyout)).toBe("This auction has no buyout.")
+    mock.click(auctionRows(a.bidsT)[1])
+    mock.player:setMoney(30000)
+    M:DrawAuctionsFoot()
+    expect(tipText(a.buyout)).toBe("Not enough money.")
+    -- the game's no
+    mock.stub(AH, "PlaceBid", function()
+        error("too low")
+    end)
+    mock.click(a.bidButton)
+    expect(note():find("^Couldn't bid: ") ~= nil).toBe(true)
+    confirm(nil)
+    expect(note():find("^Couldn't buy out: ") ~= nil).toBe(true)
+    -- outbid: said once
+    M:Note("")
+    placedBids[1].bidder = "Otherplayer"
+    M:DrawAuctions()
+    expect(note()).toBe("You've been outbid on Test Blade.")
+    expect(auctionRows(a.bidsT)[1].tag:GetText()).toBe("Outbid")
+    expect(tokenOf(auctionRows(a.bidsT)[1].tag)).toBe("ember-text")
+    M:Note("")
+    M:DrawAuctions()
+    expect(note()).toBe("")
+    -- a bid added: asked again; the list told: drawn
+    mock.resetSpies()
+    mock.fireEvent("BID_ADDED", 31)
+    expect(queried).toHaveBeenCalled()
+    mock.fireEvent("BIDS_UPDATED")
+    mock.advanceTime(0.1)
+    -- over: your bid forgotten, none chosen nothing to do
+    placedBids = {}
+    M:DrawAuctions()
+    expect(assert(M:Saved().bids)[31]).toBe(nil)
+    expect(a.bidsT.empty:GetText()).toBe("You have no bids.")
+    M:BidAgain()
+    M:BuyOutBid()
+    -- not on the Auctions tab: the house's news ignored
+    win():SetTab("buy")
+    mock.resetSpies()
+    mock.fireEvent("BID_ADDED", 31)
+    mock.fireEvent("AUCTION_HOUSE_AUCTIONS_EXPIRED", 42)
+    mock.fireEvent("OWNED_AUCTIONS_UPDATED")
+    expect(queried).never.toHaveBeenCalled()
+    -- no Auctions page: nothing drawn
+    local mine = auctions()
+    M.mine = nil
+    M:DrawAuctions()
+    M.mine = mine
+end
+
+@test("the Auctions page acts on the module it is given: a sub-tab chosen")
+local function givenModule()
+    local tab = mock.spy()
+    local fake: AuctionHouseModule = mock.partial({ SetAuctionsTab = tab })
+    local parent = newParent()
+    local page = AuctionsPage.new(parent, fake)
+    page:Show()
+    mock.click(page.tabs[2])
+    expect(tab).toHaveBeenCalledWith(fake, "bids")
+    parent:Hide()
+end

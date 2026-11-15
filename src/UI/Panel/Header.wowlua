@@ -1,0 +1,137 @@
+-- UI/Panel/Header.wowlua
+-- The pieces of SuuUI's headers (UI/Panel.wowlua): the close button and key
+-- chip at the right of a panel's or window's head, and the SectionHeader, a
+-- label floating on the world. Sizes and colours follow the design system's
+-- Panel and SectionHeader specs.
+--
+--   closeButton(parent[, onClick])        -- a 22px square close button
+--   keyChip(parent[, key])                -- the kbd chip
+--   sectionHeader(parent[, label, meta, width])
+--   relayoutHeaders()                     -- the section headers laid out
+--                                         -- again (Panel's theme relayout)
+
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import text, Text from "/UI/Text"
+
+local S = T.space
+
+--------------------------------------------------------------------------------
+-- Close button and key chip
+--------------------------------------------------------------------------------
+
+-- A 22px square close button: ink-muted cross, a gilt-line border on hover.
+export function closeButton(parent: Frame, onClick: ((b: Button) -> ())?): Button
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(22, 22)
+    local border = draw.border(b, "gilt-line")
+    border:SetShown(false)
+    local cross = draw.cross(b, 10, "ink-muted")
+    cross:SetPoint("CENTER")
+    b:SetScript("OnEnter", function()
+        border:SetShown(true)
+        cross:SetColor("ink")
+    end)
+    b:SetScript("OnLeave", function()
+        border:SetShown(false)
+        cross:SetColor("ink-muted")
+    end)
+    b:SetScript("OnClick", function()
+        if onClick then
+            onClick(b)
+        end
+    end)
+    return b
+end
+
+-- The kbd chip: a key in micro on surface-raised, at least 20px square.
+export class KeyChip extends Frame
+    text: Text
+
+    constructor(parent: Frame, key: string?)
+        super(nil, parent)
+        draw.fill(self, "surface-raised"):SetAllPoints()
+        draw.border(self, "gilt-line")
+        self.text = text(self, "micro", "ink")
+        self.text:SetPoint("CENTER", 0, 0)
+        self.text:SetValue(key or "")
+        draw.layout(self, function()
+            self:Fit()
+        end)
+    end
+
+    function SetKey(k: string)
+        self.text:SetValue(k)
+        self:Fit()
+    end
+
+    -- its width from the key and the spacing (again when a theme changes it)
+    function Fit()
+        self:SetSize(math.max(20, self.text:GetUnboundedStringWidth() + S["space-2"] * 2), 20)
+    end
+end
+
+export function keyChip(parent: Frame, key: string?): KeyChip
+    return KeyChip.new(parent, key)
+end
+
+--------------------------------------------------------------------------------
+-- SectionHeader: a label floating on the world, a gilt hairline fading out,
+-- and an optional meta caption. Give it a width.
+--------------------------------------------------------------------------------
+
+-- Every section header, for Panel's relayout when a theme changes the
+-- header style (UI/Panel.wowlua, with the panels).
+local headers: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+
+export class SectionHeader extends Frame
+    label: Text
+    meta: Text
+    rule: Frame
+    hasMeta: boolean = false
+
+    constructor(parent: Frame, label: string?, meta: string?, width: number?)
+        super(nil, parent)
+        self:SetSize(width or 380, T.type.header.lineHeight)
+        headers[self] = true
+        self.label = text(self, "header", "gilt-text")
+        self.label:SetShadowed(true)
+        self.label:SetPoint("LEFT")
+        self.meta = text(self, "caption", "ink-muted")
+        self.meta:SetShadowed(true)
+        self.meta:SetPoint("RIGHT")
+        self.rule = draw.hairline(self, "gilt-line", "out", "divider")
+        self:SetLabel(label, meta)
+    end
+
+    function SetLabel(l: string?, m: string?)
+        self.label:SetValue(l or "")
+        self.meta:SetValue(m or "")
+        self.hasMeta = m ~= nil and m ~= ""
+        self:PlaceRule()
+    end
+
+    -- the hairline between the label and the meta (or the end)
+    function PlaceRule()
+        self.rule:ClearAllPoints()
+        self.rule:SetPoint("LEFT", self.label, "RIGHT", S["space-4"], 0)
+        if self.hasMeta then
+            self.rule:SetPoint("RIGHT", self.meta, "LEFT", -S["space-4"], 0)
+        else
+            self.rule:SetPoint("RIGHT", self, "RIGHT")
+        end
+    end
+end
+
+export function sectionHeader(parent: Frame, label: string?, meta: string?, width: number?): SectionHeader
+    return SectionHeader.new(parent, label, meta, width)
+end
+
+-- The section headers from the header style's line height (Panel's relayout,
+-- after the panels).
+export function relayoutHeaders()
+    for f in pairs(headers) do
+        f:SetHeight(T.type.header.lineHeight)
+        f:PlaceRule()
+    end
+end

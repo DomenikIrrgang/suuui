@@ -1,0 +1,306 @@
+-- Units/FlightMap/Taxi.wowlua
+-- What the game gives the flight map (Units/FlightMap), read apart from its
+-- frames: a map's continent, the map you're on, every flight master's place
+-- on a map, a hop's length and a flight's (SuuUI.FlightRoutes), a hop's way
+-- on a map (SuuUI.FlightPaths, kept per map), the world's yards at a map's
+-- place and yours on a map; the flight master's map as the game gives it
+-- (readSession) and your quests' next steps counted by master (questSteps).
+-- (The game's map canvas and taxi functions declare their results `any`:
+-- each is read through wowlua:secret where it's used.)
+
+import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import junk, fitWay, nearestMaster from "/Units/FlightMap/Route"
+import type TaxiNode from "/Units/FlightMap/Route"
+import * as maths from "/Units/FlightMap/Route"
+
+local try, field = errors.try, tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- A flight master on the flight master's map (M:ReadSession).
+export type Session = { nodes: TaxiNode[], byID: { [number]: TaxiNode }, current?: TaxiNode }
+
+--------------------------------------------------------------------------------
+-- What the game gives
+--------------------------------------------------------------------------------
+
+export function continentOf(mapID: number?): number?
+    local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID) or nil
+    local continent = asNumber(field(Enum, "UIMapType", "Continent")) or 2
+    local guard = 0
+    while info and guard < 8 do
+        if info.mapType == continent then
+            return info.mapID
+        end
+        local parent = info.parentMapID
+        info = parent and parent > 0 and errors.tryValue(C_Map.GetMapInfo, parent) or nil
+        guard = guard + 1
+    end
+    return nil
+end
+
+export function bestMap(): number?
+    return errors.tryValue(C_Map.GetBestMapForUnit, "player")
+end
+
+-- A position's x, y as the game gives it (a Vector2D), read.
+local function xyOf(pos: unknown): (number?, number?)
+    local x, y = errors.tryMethod(pos, "GetXY")
+    return asNumber(x), asNumber(y)
+end
+
+-- Every flight master's place on a map, by nodeID (anywhere, a flight
+-- master or not; a zone's map gives its continent's too, outside 0-1).
+export function positions(mapID: number?): { [number]: number[] }
+    local out: { [number]: number[] } = {}
+    if not mapID then
+        return out
+    end
+    for _, n in ipairs(errors.tryValue(C_TaxiMap.GetTaxiNodesForMap, mapID) or {}) do
+        local x, y = xyOf(n.position)
+        local id = asNumber(n.nodeID)
+        if id and x and y then
+            out[id] = { x, y }
+        end
+    end
+    return out
+end
+
+export function hopYards(a: number, b: number): number?
+    return maths.hopYards(SuuUI.FlightRoutes(), a, b)
+end
+
+-- A flight's length: its hops added up; nil when one isn't known.
+export function pathYards(path: number[]): number?
+    return maths.pathYards(SuuUI.FlightRoutes(), path)
+end
+
+-- A hop's way on a map: its waypoints (SuuUI.FlightPaths(); the reverse
+-- hop's backwards when only that one is there) as the map's positions, kept
+-- per map; false when there's none, or when the map puts its ends away from
+-- the two masters (pa, pb: their places on it), then it's drawn straight.
+local ways: { [number]: { [string]: number[][] | false } } = {}
+
+export function hopWay(mapID: number, a: number, b: number, pa: number[], pb: number[]): number[][] | false
+    local mine = ways[mapID] or {}
+    ways[mapID] = mine
+    local key = a .. ">" .. b
+    local cached = mine[key]
+    if cached ~= nil then
+        return cached
+    end
+    local got: number[][] | false = false
+    local paths = SuuUI.FlightPaths()
+    local fromA, fromB = paths[a], paths[b]
+    local data, back = fromA and fromA[b], false
+    if not data then
+        data, back = fromB and fromB[a], true
+    end
+    if data and C_Map.GetMapPosFromWorldPos and CreateVector2D then
+        local points: number[][] = {}
+        local whole = true
+        for i = 2, #data - 1, 2 do
+            -- (the world's x, y as the client tables give them: x north, y west)
+            local onMap, pos = try(C_Map.GetMapPosFromWorldPos, data[1], CreateVector2D(data[i], data[i + 1]), mapID)
+            local x, y = nil, nil
+            if asNumber(onMap) == mapID then
+                x, y = xyOf(pos)
+            end
+            if x == nil or y == nil then
+                whole = false
+                break
+            end
+            points[#points + 1] = { x, y }
+        end
+        -- each end near its master: within a quarter of the hop
+        if whole then
+            got = fitWay(points, back, pa, pb)
+        end
+    end
+    mine[key] = got
+    return got
+end
+
+-- The world's yards at a map's place, nil when the game doesn't say.
+export function worldXY(mapID: number, x: number, y: number): (number?, number?)
+    local _, pos = try(C_Map.GetWorldPosFromMapPos, mapID, CreateVector2D(x, y))
+    return xyOf(pos)
+end
+
+-- Your place on a map (0-1), nil while the game doesn't give it.
+export function myPlace(mapID: number?): (number?, number?)
+    if not mapID then
+        return nil, nil
+    end
+    local x, y = xyOf((try(C_Map.GetPlayerMapPosition, mapID, "player")))
+    if x and y and (x > 0 or y > 0) then
+        return x, y
+    end
+    return nil, nil
+end
+
+-- One of the game's taxi functions by name, called quietly; its first value.
+local function taxi(name: string, ...: unknown): unknown
+    return (try(field(_G, name), ...))
+end
+
+-- Your quests' next steps (asked 2026-10-19): where the game's quest pins
+-- put each quest in your log, its objectives' area or, done, where it's
+-- turned in; each counted for the flight master nearest to it, within
+-- NEAR yards. { [nodeID] = { questID, ... } } for the session's masters.
+local NEAR = 800
+
+export function inside(p: number[]): boolean
+    return p[1] >= -0.01 and p[1] <= 1.01 and p[2] >= -0.01 and p[2] <= 1.01
+end
+
+--------------------------------------------------------------------------------
+-- The flight master's map, and your quests' steps by master
+--------------------------------------------------------------------------------
+
+-- The flight master's map as the game gives it: { nodes (by slot), byID,
+-- current } with each node { slot, id, name, kind ("CURRENT", "REACHABLE",
+-- "DISTANT"), cost, path (the nodeIDs a flight there passes, from here) };
+-- nil while there's none.
+export function readSession(): Session?
+    local n = asNumber(taxi("NumTaxiNodes"))
+    if not (n and n > 0) then
+        return nil
+    end
+    -- nodeIDs by slot (C_TaxiMap's nodes carry both), by name to be sure
+    local ids: { [number]: number }, byName: { [string]: number } = {}, {}
+    local function read(m: number): boolean
+        for _, node in ipairs(errors.tryValue(C_TaxiMap.GetAllTaxiNodes, m) or {}) do
+            local id, slot, name = asNumber(node.nodeID), asNumber(node.slotIndex), asString(node.name)
+            if id and slot then
+                ids[slot] = ids[slot] or id
+            end
+            if id and name then
+                byName[name] = byName[name] or id
+            end
+        end
+        return next(ids) ~= nil
+    end
+    -- where you are, its continent, the flight map's (each while the one before is known)
+    local zone = bestMap()
+    local continent = continentOf(zone)
+    local taxiMap = asNumber(taxi("GetTaxiMapID"))
+    local found = zone ~= nil and read(zone)
+    if not found and zone and continent then
+        found = read(continent)
+    end
+    if not found and zone and continent and taxiMap then
+        read(taxiMap)
+    end
+    local s: Session = { nodes = {}, byID = {} }
+    for slot = 1, n do
+        local name, kind = asString(taxi("TaxiNodeName", slot)), asString(taxi("TaxiNodeGetType", slot))
+        local id = ids[slot] or (name and byName[name])
+        if name and kind and kind ~= "NONE" and not junk(name) and id then
+            local node: TaxiNode = {
+                slot = slot,
+                id = id,
+                name = name,
+                kind = kind,
+                cost = asNumber(taxi("TaxiNodeCost", slot)) or 0,
+            }
+            s.nodes[#s.nodes + 1] = node
+            s.byID[id] = node
+            if kind == "CURRENT" then
+                s.current = node
+            end
+        end
+    end
+    -- each destination's hops, slot to slot, as nodeIDs
+    local slotID: { [number]: number } = {}
+    for _, node in ipairs(s.nodes) do
+        slotID[node.slot] = node.id
+    end
+    local current = s.current
+    for _, node in ipairs(s.nodes) do
+        if node.kind == "REACHABLE" then
+            local hops = asNumber(taxi("GetNumRoutes", node.slot))
+            if hops and hops > 0 then
+                local firstSlot = asNumber(taxi("TaxiGetNodeSlot", node.slot, 1, true))
+                local first = firstSlot and slotID[firstSlot]
+                local path: number[] = {}
+                if first then
+                    path[1] = first
+                end
+                local whole = first ~= nil
+                for r = 1, hops do
+                    local hopSlot = asNumber(taxi("TaxiGetNodeSlot", node.slot, r, false))
+                    local id = hopSlot and slotID[hopSlot]
+                    if not id then
+                        whole = false
+                        break
+                    end
+                    path[r + 1] = id
+                end
+                if whole then
+                    node.path = path
+                end
+            end
+            -- (a route the game can't trace: straight there)
+            if not node.path and current then
+                node.path = { current.id, node.id }
+            end
+        end
+    end
+    if not current then
+        return nil
+    end
+    return s
+end
+
+export function questSteps(s: Session?): { [number]: number[] }
+    local out: { [number]: number[] } = {}
+    local continent = continentOf(bestMap())
+    if not (s and continent and C_Map.GetWorldPosFromMapPos and CreateVector2D) then
+        return out
+    end
+    -- the masters you can fly to, and the one you're at, in yards
+    local at = positions(continent)
+    local masters: { node: TaxiNode, x: number, y: number }[] = {}
+    for _, n in ipairs(s.nodes) do
+        local p = at[n.id]
+        local x, y = nil, nil
+        if p then
+            x, y = worldXY(continent, p[1], p[2])
+        end
+        if x and y and n.kind ~= "DISTANT" then
+            masters[#masters + 1] = { node = n, x = x, y = y }
+        end
+    end
+    -- each quest once: on its zone's map, else the continent's
+    local maps: number[] = { continent }
+    local zone = asNumber(field(Enum, "UIMapType", "Zone"))
+    for _, c in ipairs(errors.tryValue(C_Map.GetMapChildrenInfo, continent, nil, true) or {}) do
+        if c.mapType == zone then
+            table.insert(maps, 1, c.mapID)
+        end
+    end
+    local seen: { [number]: boolean } = {}
+    for _, map in ipairs(maps) do
+        for _, q in ipairs(errors.tryValue(C_QuestLog.GetQuestsOnMap, map) or {}) do
+            local id, qx, qy = asNumber(q.questID), asNumber(q.x), asNumber(q.y)
+            if id and qx and qy and not seen[id] then
+                seen[id] = true
+                local x, y = worldXY(map, qx, qy)
+                local best: TaxiNode? = nil
+                if x and y then
+                    best = nearestMaster(masters, x, y, NEAR)
+                end
+                -- (nearest the master you're at: not a reason to fly)
+                if best and best.kind == "REACHABLE" then
+                    local steps = out[best.id] or {}
+                    out[best.id] = steps
+                    table.insert(steps, id)
+                end
+            end
+        end
+    end
+    return out
+end

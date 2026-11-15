@@ -1,0 +1,50 @@
+-- Units/Windows/Collections: the collections window in SuuUI's look: five
+-- text tabs (an empty collection greyed), left alone in a fight, the
+-- appearances' Items and Sets as text tabs.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import internal M from "/Units/Windows"
+import internal paneTabs from "/Units/Windows/Collections"
+import loadWindows, closeWindows, win, tab, lit, labels from "./WindowsHelpers"
+
+local field = tbl.field
+
+loadWindows()
+
+@afterEach
+local function cleanup()
+    closeWindows()
+end
+
+@test("the collections: five text tabs; one the game hides, or with nothing in it, greyed")
+local function collections()
+    local f = win("CollectionsJournal")
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    local ch = assert(M.collections)
+    expect(labels(ch)).toBe("Mounts, Pets, Toys, Heirlooms, Appearances")
+    expect(assert(tab(ch, "Heirlooms").disabled)()).toBe(true)
+    for _, def in ipairs(ch.tabs or {}) do
+        local off = def.disabled
+        if not (off and off()) and def.button:IsVisible() then
+            mock.click(def.button)
+            mock.advanceFrames(3)
+            expect(lit(ch)).toBe(def.label)
+        end
+    end
+    -- in a fight: left for after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:SetCollectionTabs()
+    mock.player:leaveCombat()
+    -- the appearances: Items and Sets as text tabs
+    local items = frames.asFrame(field(_G, "WardrobeCollectionFrame", "ItemsTab"))
+    if items then
+        expect(paneTabs[items] ~= nil).toBe(true)
+        mock.hover(items)
+        mock.hover(nil)
+    end
+end

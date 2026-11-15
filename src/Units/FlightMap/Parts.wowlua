@@ -1,0 +1,183 @@
+-- Units/FlightMap/Parts.wowlua
+-- The flight map's widgets (Units/FlightMap): a tag on glass beside a pin
+-- or a destination, a flight master's pin, the drawing on the canvas (its
+-- pooled lines and stops' dots), a destination's row and the side panel
+-- that lists them, and the bar at the map's bottom with Fly. Frames only:
+-- the module fills and places them.
+
+import SuuUI, PanelClass, MapPinClass from "/Core/API"
+import type ScrollArea, SectionHeader, Border, Text, SuuButton, Money from "/Core/API"
+import type TaxiNode from "/Units/FlightMap/Route"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+export const ROW_H = 36
+
+--------------------------------------------------------------------------------
+-- The parts
+--------------------------------------------------------------------------------
+
+-- A tag beside a pin or a destination: its text on glass.
+export class Tag extends Frame
+    readonly text: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        UI.Fill(self, "surface-glass"):SetAllPoints()
+        UI.Border(self, "gilt-hairline")
+        self.text = UI.Text(self, "micro", "ink")
+        self.text:SetPoint("CENTER", 0, 0)
+    end
+end
+
+export function setTag(tag: Tag, text: string, color: string)
+    tag.text:SetValue(text)
+    tag.text:SetColor(color)
+    tag:SetSize(math.ceil(tag.text:GetUnboundedStringWidth()) + 10, T.type.micro.lineHeight + 2)
+    tag:Show()
+end
+
+-- A flight master's pin: the time (or "You are here") right of it.
+export class FlightPin extends MapPinClass
+    readonly tag: Tag
+    node: TaxiNode? = nil
+
+    constructor(parent: Frame)
+        super(parent)
+        self.tag = Tag.new(self)
+        self.tag:SetPoint("LEFT", self, "RIGHT", 3, 0)
+    end
+end
+
+-- The lines of one draw layer, pooled (n in use).
+export type LinePool = { n: number, [number]: Line }
+-- A stop on a route in flight: a small gilt disc on a surface rim.
+export type Dot = { rim: Texture, fill: Texture }
+
+-- The drawing on the map's canvas: lines (the dark underlay under the
+-- gilt), stops' dots, the time left in flight by the destination.
+export class Ink extends Frame
+    readonly pools: { BORDER: LinePool, ARTWORK: LinePool } = { BORDER = { n = 0 }, ARTWORK = { n = 0 } }
+    readonly dots: Dot[] = {}
+    dotN: number = 0
+    readonly left: Tag
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.left = Tag.new(self)
+        self.left:SetFrameLevel(self:GetFrameLevel() + 8)
+        self.left:Hide()
+    end
+end
+
+-- A destination's row in the side panel.
+export class DestRow extends Button
+    readonly fill: Texture
+    readonly edge: Border
+    readonly glyph: Texture
+    readonly time: Text
+    readonly name: Text
+    readonly stops: Text
+    hover: boolean = false
+    node: TaxiNode? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.fill = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.fill:SetAllPoints()
+        self.fill:Hide()
+        self.edge = UI.Border(self, "gilt-line")
+        self.edge:SetShown(false)
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(self.glyph, "wing")
+        self.glyph:SetSize(14, 14)
+        SuuUI.Layout.Follow(self, function()
+            self.glyph:SetPoint("LEFT", S["space-4"], 0)
+        end)
+        UI.Paint(self.glyph, "gilt-text")
+        self.time = UI.Text(self, "numeric", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.time:SetPoint("RIGHT", -S["space-4"], 0)
+        end)
+        -- the name over the row's middle, its stops under it; the time's
+        -- room kept on the right
+        local x = S["space-4"] + 14 + S["space-4"]
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("BOTTOMLEFT", self, "LEFT", x, 0)
+        self.name:SetPoint("BOTTOMRIGHT", self, "RIGHT", -64, 0)
+        self.name:SetJustifyH("LEFT")
+        self.stops = UI.Text(self, "caption", "ink-muted")
+        self.stops:SetPoint("TOPLEFT", self, "LEFT", x, 0)
+    end
+end
+
+-- The side panel: the destinations.
+export class Side extends Frame
+    readonly edge: Border
+    readonly head: SectionHeader
+    readonly scroll: ScrollArea
+    readonly rows: DestRow[] = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:EnableMouse(true)
+        self:Hide()
+        UI.Fill(self, "surface", "BACKGROUND"):SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.head = UI.SectionHeader(self, "Destinations", "")
+        SuuUI.Layout.Follow(self, function()
+            self.head:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
+            self.head:SetPoint("TOPRIGHT", -S["space-5"], -S["space-5"])
+        end)
+        self.scroll = UI.ScrollArea(self, 2)
+        SuuUI.Layout.Follow(self, function()
+            self.scroll:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -S["space-4"])
+            self.scroll:SetPoint("BOTTOMRIGHT", -S["space-5"] - S["space-3"], S["space-5"])
+        end)
+    end
+end
+
+-- The bar at the map's bottom: the chosen destination and Fly.
+export class FlyBar extends PanelClass
+    readonly glyph: Texture
+    readonly name: Text
+    readonly via: Text
+    readonly rule: Texture
+    readonly money: Money
+    readonly clock: Texture
+    readonly time: Text
+    readonly fly: SuuButton
+
+    constructor(parent: Frame, onFly: () -> ())
+        super(parent, { ornament = true })
+        -- (over the map's pins, the game's and SuuUI's, as the status line)
+        self:SetFrameLevel(4000)
+        self.body:SetFrameLevel(4001)
+        self:EnableMouse(true)
+        self:Hide()
+        local body = self.body
+        self.glyph = body:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(self.glyph, "wing")
+        self.glyph:SetSize(15, 15)
+        UI.Paint(self.glyph, "gilt-text")
+        self.name = UI.Text(body, "unit-name", "ink")
+        self.via = UI.Text(body, "caption", "ink-muted")
+        self.rule = UI.Fill(body, "gilt-faint", "ARTWORK")
+        self.rule:SetWidth(1)
+        self.money = UI.Money(body)
+        self.clock = body:CreateTexture(nil, "ARTWORK")
+        UI.Glyph(self.clock, "hourglass")
+        self.clock:SetSize(11, 11)
+        UI.Paint(self.clock, "ink-faint")
+        self.time = UI.Text(body, "numeric", "ink-muted")
+        self.fly = UI.Button(body, {
+            text = "Fly",
+            variant = "primary",
+            icon = "wing",
+            onClick = onFly,
+            tooltip = { title = "Fly", description = "Take this flight (the cost is paid at once)." },
+        })
+    end
+end

@@ -1,0 +1,112 @@
+-- Units/Chat/Recall: the input's history (Enter, your own lines coming
+-- back, Up and Down, combat, lockdown, recall off, the command palette).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Chat"
+import expectNoErrors from "../../../helpers"
+import ready, chatEvent, resetChat from "./ChatHelpers"
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The input's history
+--------------------------------------------------------------------------------
+
+local function input(): EditBox
+    local box = CreateFrame("EditBox", nil, UIParent)
+    box:SetSize(200, 20)
+    box:SetPoint("CENTER")
+    box:SetAutoFocus(false)
+    M:HistoryFor(box)
+    M:HistoryFor(box) -- once
+    return box
+end
+
+@test("Enter keeps what was sent, as the command that sends it again")
+local function enterKeeps()
+    local box = input()
+    box:SetAttribute("chatType", "PARTY")
+    box:SetText("on my way")
+    mock.script(box, "OnKeyDown", "ENTER")
+    box:SetText("/dance")
+    mock.script(box, "OnKeyDown", "NUMPADENTER")
+    mock.script(box, "OnKeyDown", "NUMPADENTER") -- the same again: once
+    box:SetText("")
+    mock.script(box, "OnKeyDown", "ENTER")
+    mock.script(box, "OnKeyDown", "A")
+    expect(M:History()).toEqual({ "/p on my way", "/dance" })
+end
+
+@test("your own lines come back as chat events and fill in, until Enter reaches SuuUI")
+local function sentLines()
+    local me = UnitGUID("player") :: string
+    chatEvent("CHAT_MSG_SAY", "hello all", "Player", me, 3)
+    chatEvent("CHAT_MSG_WHISPER_INFORM", "see you", "Tamsin", "", 4)
+    chatEvent("CHAT_MSG_SAY", "not mine", "Otherplayer", "", 5)
+    expect(M:History()).toEqual({ "/s hello all", "/w Tamsin see you" })
+    M.keyCapture = true
+    chatEvent("CHAT_MSG_SAY", "after enter", "Player", me, 6)
+    expect(#M:History()).toBe(2)
+end
+
+@test(
+    "Up and Down recall; in combat past protected commands; nothing in a lockdown, with recall off, or the palette open"
+)
+local function recall()
+    local box = input()
+    M:CharData().history = { "/s one", "/cast Fireball", "/s two" }
+    box:SetFocus()
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("/s two")
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("/cast Fireball")
+    mock.script(box, "OnArrowPressed", "DOWN")
+    mock.script(box, "OnArrowPressed", "DOWN")
+    expect(box:GetText()).toBe("")
+    mock.script(box, "OnArrowPressed", "DOWN") -- past the end: nowhere
+    expect(box:GetText()).toBe("")
+    mock.script(box, "OnArrowPressed", "LEFT")
+    -- a new start once the text isn't the recalled line
+    box:SetText("typed")
+    mock.player:enterCombat()
+    mock.script(box, "OnArrowPressed", "UP")
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("/s one")
+    mock.player:leaveCombat()
+    box:SetText("x")
+    mock.stub(C_ChatInfo, "InChatMessagingLockdown", function(): boolean
+        return true
+    end)
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("x")
+    mock.stub(C_ChatInfo, "InChatMessagingLockdown", function(): boolean
+        return false
+    end)
+    local palette = assert(SuuUI.GetModule("chatcommands"))
+    mock.stub(palette, "TakesArrows", function(_: unknown, _: unknown): boolean
+        return true
+    end)
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("x")
+    mock.stub(palette, "TakesArrows", function(_: unknown, _: unknown): boolean
+        return false
+    end)
+    M:Set("recall", false)
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("x")
+    M:Set("recall", true)
+    M:CharData().history = {}
+    mock.script(box, "OnArrowPressed", "UP")
+    expect(box:GetText()).toBe("x")
+end

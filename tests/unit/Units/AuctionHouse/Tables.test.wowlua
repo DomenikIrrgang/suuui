@@ -1,0 +1,84 @@
+-- Units/AuctionHouse/Tables: the auction house's table on its own: its
+-- captions, the columns' places, a sortable header's click and arrow, the
+-- rows made as they are needed, placed at their lines and hidden past the
+-- ones shown.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors, newParent from "../../../helpers"
+import TableRow, AuctionTable, ROW_H from "/Units/AuctionHouse/Tables"
+import type Col from "/Units/AuctionHouse/Tables"
+
+local S = SuuUI.Tokens.space
+
+local COLS: Col[] = {
+    { label = "Name", sort = "name" },
+    { label = "Available", w = 70, right = true },
+    { label = "Lowest price", w = 120, right = true, sort = "price" },
+}
+
+local function make(): AuctionTable<TableRow>
+    local t = AuctionTable.new(newParent(600, 300), COLS, function(p: Frame): TableRow
+        return TableRow.new(p)
+    end)
+    t:SetAllPoints()
+    return t
+end
+
+@test("the captions; each column's place: the fixed ones as wide as set, the rest for the one without")
+local function places()
+    local t = make()
+    expect(t.headCells[1]).toHaveText("Name")
+    expect(t.headCells[3]).toHaveText("Lowest price")
+    local p = t:Places(500)
+    expect(p[1].x).toBe(S["space-3"])
+    local fixed = 70 + 120 + 3 * S["space-4"]
+    expect(p[1].w).toBe(math.max(40, 500 - fixed - S["space-3"] * 2))
+    expect(p[2].x).toBe(p[1].x + p[1].w + S["space-4"])
+    expect(p[2].w).toBe(70)
+    expect(p[3].w).toBe(120)
+    assert(t:GetParent()):Hide()
+    expectNoErrors()
+end
+
+@test("a sortable header's click asks for its key; the sorted one lit with its arrow; none without a key")
+local function sorting()
+    local t = make()
+    local asked: string[] = {}
+    t.onSort = function(key: string)
+        asked[#asked + 1] = key
+    end
+    expect(t.headButtons[1]).toBeShown()
+    expect(t.headButtons[2]).toBeNil()
+    mock.click(assert(t.headButtons[3]))
+    expect(asked).toEqual({ "price" })
+    t:ShowSort("price", true)
+    expect(t.arrow).toBeShown()
+    expect(t.sortKey).toBe("price")
+    expect(t.sortReverse).toBe(true)
+    t:ShowSort(nil, false)
+    expect(t.arrow).never.toBeShown()
+    assert(t:GetParent()):Hide()
+    expectNoErrors()
+end
+
+@test("rows made on first use, placed at their lines; those past the ones shown hidden, the list as tall")
+local function rows()
+    local t = make()
+    local a, b = t:Line(1), t:Line(2)
+    expect(t:Row(1)).toBe(a)
+    expect(#t.rows).toBe(2)
+    a:Show()
+    b:Show()
+    local _, _, _, _, y = b:GetPoint(1)
+    expect(y).toBe(-ROW_H)
+    t:Fit(1)
+    expect(a:IsShown()).toBe(true)
+    expect(b:IsShown()).toBe(false)
+    expect(t.list.child:GetHeight()).toBe(ROW_H)
+    t:Fit(0)
+    expect(t.list.child:GetHeight()).toBe(1)
+    assert(t:GetParent()):Hide()
+    expectNoErrors()
+end

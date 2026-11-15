@@ -1,0 +1,135 @@
+-- Units/Chat/GlobalTab.wowlua
+-- The Global tab (Units/Chat): the numbered channels moved out of General
+-- into a window of their own (a "Guild" tab renamed, else a new one),
+-- through Blizzard's own chat settings for the windows. The function takes
+-- the module.
+
+import SuuUI from "/Core/API"
+import type ChatModule from "../Chat"
+import idOf from "./Windows"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import * as chat from "wowlua:chat"
+
+local field, asString, asNumber = tbl.field, secret.asString, secret.asNumber
+
+-- One of Blizzard's chat windows.
+type Window = chat.Window
+
+-- Global channels in their own tab (Blizzard's own chat settings, as its
+-- tab menu sets them): General keeps everything but the numbered channels;
+-- a "Global" tab (a "Guild" tab renamed, else a new one) shows only those.
+-- Channels joined later move there too. Out of combat only.
+
+-- The channels a window is set to show (joined or not: GetChatWindowChannels
+-- lists name, id pairs).
+local function windowChannels(id: number): string[]
+    local out: string[] = {}
+    local list = { GetChatWindowChannels(id) }
+    for i = 1, #list, 2 do
+        local name = asString(list[i])
+        if name then
+            out[#out + 1] = name
+        end
+    end
+    return out
+end
+
+-- the numbered channels you're in, by name
+local function joinedChannels(): string[]
+    local out: string[] = {}
+    local list = { GetChannelList() }
+    for i = 1, #list, 3 do
+        local name = asString(list[i + 1])
+        if name then
+            out[#out + 1] = name
+        end
+    end
+    return out
+end
+
+-- the window with one of these names (any case), or nil
+local function windowNamed(...: string): Window?
+    local wanted: { [string]: boolean } = {}
+    for _, n in ipairs({ ... }) do
+        wanted[n:lower()] = true
+    end
+    for i = 1, asNumber(field(_G, "NUM_CHAT_WINDOWS")) or 10 do
+        local name = asString((GetChatWindowInfo(i)))
+        if name and wanted[name:lower()] then
+            return chat.window("ChatFrame" .. i)
+        end
+    end
+    return nil
+end
+
+-- A channel call on a window (AddChannel, RemoveChannel …), quietly.
+local function channelCall(cf: Window, method: string, ...: unknown)
+    errors.tryMethod(cf, method, ...)
+end
+
+--------------------------------------------------------------------------------
+-- The Global tab
+--------------------------------------------------------------------------------
+
+-- Channels live on the windows on this client: frame:AddChannel(name),
+-- frame:RemoveChannel(name), frame:RemoveAllMessageGroups() (/suu probe chat).
+export function applyGlobalTab(self: ChatModule)
+    if not self:Get("globalTab") or InCombatLockdown() then
+        return
+    end
+    local general = ChatFrame1
+    if not (field(general, "AddChannel") and field(general, "RemoveChannel")) then
+        if not self.warnedGlobal then
+            self.warnedGlobal = true
+            self:Print(
+                "This client's chat windows have no AddChannel/RemoveChannel: the Global tab can't be set up."
+            )
+        end
+        return
+    end
+    local global = windowNamed("Global")
+    if not global then
+        -- a "Guild" tab becomes Global (its guild messages go back to General), else a new tab
+        local guild = windowNamed("Guild")
+        local rename, open = field(_G, "FCF_SetWindowName"), field(_G, "FCF_OpenNewWindow")
+        if guild and rename then
+            errors.try(rename, guild, "Global")
+            channelCall(guild, "RemoveAllMessageGroups")
+            global = guild
+        elseif open then
+            global = chat.asWindow(errors.try(open, "Global")) or windowNamed("Global")
+            if global then
+                channelCall(global, "RemoveAllMessageGroups")
+            end
+        end
+    end
+    if not global then
+        return
+    end
+    -- (its place among the tabs is the player's: dragging it, as with any
+    -- tab; moving the dock from addon code upsets whisper windows, and the
+    -- game docks by its own order on load)
+    -- everything General was set to show, and every channel you're in
+    local channels: string[] = {}
+    local seen: { [string]: boolean } = {}
+    for _, list in ipairs({ windowChannels(idOf(general)), joinedChannels() }) do
+        for _, name in ipairs(list) do
+            if not seen[name] then
+                seen[name] = true
+                channels[#channels + 1] = name
+            end
+        end
+    end
+    for _, name in ipairs(channels) do
+        -- channels the group finder reads but keeps out of chat
+        -- (LookingForGroup): on no window
+        if SuuUI.LFG.IsHiddenChannel(name) then
+            channelCall(global, "RemoveChannel", name)
+        else
+            channelCall(global, "AddChannel", name)
+        end
+        channelCall(general, "RemoveChannel", name)
+    end
+end

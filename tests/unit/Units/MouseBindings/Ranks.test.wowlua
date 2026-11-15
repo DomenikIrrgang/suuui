@@ -1,0 +1,63 @@
+-- Units/MouseBindings/Ranks: the spellbook's ranks by name, read once until
+-- the book changes, and a binding's line under its spell.
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import ranksOf, bindLine from "/Units/MouseBindings/Ranks"
+import type Bind from "/Units/MouseBindings/Inputs"
+import expectNoErrors from "../../../helpers"
+
+-- A spell the character knows: its name and highest rank's ID.
+local function known(): (string, number)
+    for _, name in ipairs({ "Heroic Strike", "Battle Shout", "Attack" }) do
+        local ranks = ranksOf(name)
+        local top = ranks[#ranks]
+        if top then
+            return name, top.id
+        end
+    end
+    error("no known spell")
+end
+
+local function bind(input: string, spell: string, id: number, more: { reach?: string, react?: string }?): Bind
+    local o = more or {}
+    return {
+        input = input,
+        spell = spell,
+        rank = "highest",
+        spellID = id,
+        reach = (o.reach or "both") :: "both",
+        react = (o.react or "any") :: "any",
+    }
+end
+
+@afterEach
+local function noErrors()
+    expectNoErrors()
+end
+
+@test("the book's ranks read once until the book changes; each answer the caller's own")
+local function ranksOnce()
+    mock.fireEvent("SPELLS_CHANGED")
+    local reads = mock.stub(C_SpellBook, "GetNumSpellBookSkillLines", C_SpellBook.GetNumSpellBookSkillLines)
+    local name = known()
+    local a = ranksOf(name)
+    local b = ranksOf(name)
+    expect(reads).toHaveBeenCalledTimes(1)
+    expect(a).toEqual(b)
+    expect(a ~= b).toBe(true)
+    expect(#ranksOf("No Such Spell")).toBe(0)
+    mock.fireEvent("SPELLS_CHANGED")
+    ranksOf(name)
+    expect(reads).toHaveBeenCalledTimes(2)
+end
+
+@test("a binding's line: its rank, where and on whom")
+local function lines()
+    local name, id = known()
+    local b = bind("SHIFT-F", name, id, { reach = "frames", react = "harm" })
+    expect(bindLine(b):find("unit frames only · enemies", 1, true) ~= nil).toBe(true)
+end

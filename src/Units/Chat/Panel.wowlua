@@ -1,0 +1,329 @@
+-- Units/Chat/Panel.wowlua
+-- SuuUI's own chat frame (Units/Chat): the panel's geometry (its padding
+-- and gaps from the theme's spacing, the tabs' and the input's heights,
+-- the lines' face and width), the panel itself (the mover: the glass box,
+-- the input's field, the tab bar, the lines' area) and edit mode's hint
+-- over it; the small box with one line of text (copy a name or a line,
+-- name a window); and the links in SuuUI's lines (a player's menu, a link
+-- clicked in combat, the copy hint), which take the module they act on.
+
+import SuuUI, PanelClass from "/Core/API"
+import type Text, Border, TabMarker, TextField from "/Core/API"
+import type ChatModule from "../Chat"
+import type TabButton, TabOf from "./TabBar"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import after from "wowlua:timer"
+import * as chat from "wowlua:chat"
+import invite as groupInvite from "wowlua:unit"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local field, asString = tbl.field, secret.asString
+
+-- The lines' face: the body text style's (a theme's own; the size is the
+-- player's, from the game's chat window settings).
+export function bodyFont(): string
+    return SuuUI.Fonts.File("body")
+end
+-- the panel's padding and the gap between its parts: a theme's spacing,
+-- read when laid out (ChatPanel:Place, ChatModule:Layout)
+export function padX(): number
+    return S["space-5"]
+end
+export function padTop(): number
+    return S["space-2"]
+end
+export function padBottom(): number
+    return S["space-5"]
+end
+export function chatGap(): number
+    return S["space-3"]
+end
+export const TABS_H = 24
+export const INPUT_H = 30
+
+-- Widths in the lines' font (texture codes and all).
+local bodyMeasure: FontString? = nil
+export function measureBody(text: string, size: number): number
+    local fs = bodyMeasure or UIParent:CreateFontString(nil, "OVERLAY")
+    if not bodyMeasure then
+        fs:Hide()
+        bodyMeasure = fs
+    end
+    fs:SetFont(bodyFont(), size, "")
+    fs:SetText(text)
+    return fs:GetUnboundedStringWidth()
+end
+
+-- the lines' width (the panel's, less its padding)
+export function logWidth(): number
+    return UI.Size("chat-w") - padX() * 2
+end
+
+--------------------------------------------------------------------------------
+-- The panel (SuuUI's own frame, the mover)
+--------------------------------------------------------------------------------
+
+-- Edit mode's hint over the lines.
+export class EditHint extends Frame
+    readonly text: Text
+
+    constructor(p: ChatPanel)
+        super(nil, p)
+        self:SetFrameStrata("FULLSCREEN_DIALOG")
+        self:SetPoint("TOPLEFT", p.log, "TOPLEFT", 0, 0)
+        self.text = UI.Text(self, "caption", "ink-faint")
+        self.text:SetShadowed(true)
+        self.text:SetPoint("TOPLEFT")
+        self.text:SetValue("Edit mode · drag a tab by its grip or name")
+        self:SetSize(
+            math.ceil(UI.MeasureText("caption", tostring(self.text.value or ""))) + 2,
+            T.type.caption.lineHeight or 16
+        )
+    end
+end
+
+export class ChatPanel extends Frame
+    readonly deco: Frame
+    -- the panel: glass ground and gilt-line edge around the tabs and lines
+    readonly box: Frame
+    readonly ground: Texture
+    readonly border: Border
+    -- the input field below the panel, as wide
+    readonly field: Frame
+    -- the tab bar: SuuUI's own tab buttons, above Blizzard's (invisible) dock
+    readonly tabs: Frame
+    readonly tabButtons: TabButton[] = {}
+    readonly tabFor: { [TabOf]: TabButton } = {}
+    -- the chosen tab's underline and jewel, gliding (UI.TabMarker)
+    readonly marker: TabMarker
+    -- the lines' area: SuuUI's message frames, one per Blizzard window
+    readonly log: Frame
+    slider: Frame? = nil
+    dragger: Frame? = nil
+    -- shown only while a tab is dragged: Esc puts it back (UI.Dismissable)
+    dragKeys: Frame? = nil
+    editHint: EditHint? = nil
+
+    constructor()
+        super("SuuUIChat", SuuUI.Root)
+        self:SetFrameStrata("BACKGROUND")
+        self:EnableMouse(false)
+        self.deco = CreateFrame("Frame", nil, self)
+        self.deco:SetAllPoints()
+        self.box = CreateFrame("Frame", nil, self.deco)
+        self.box:SetPoint("TOPLEFT")
+        self.ground = UI.Fill(self.box, "surface-glass", "BACKGROUND")
+        self.ground:SetAllPoints()
+        UI.Pattern(self.ground, "surface-pattern")
+        self.border = UI.Border(self.box, "gilt-line", { texture = "border" })
+        -- a theme's dress for the chat (0.40): a vine at its corner
+        SuuUI.UI.Dress(self.box, "chat")
+        -- surface-sunk, a gilt-line edge (Blizzard's edit box sits on it)
+        self.field = CreateFrame("Frame", nil, self.deco)
+        self.field:SetPoint("BOTTOMLEFT")
+        self.field:SetPoint("BOTTOMRIGHT")
+        self.field:SetHeight(INPUT_H)
+        UI.Fill(self.field, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        UI.Border(self.field, "gilt-line")
+        self.tabs = CreateFrame("Frame", nil, self)
+        self.tabs:SetFrameStrata("MEDIUM")
+        self.tabs:SetHeight(TABS_H)
+        self.marker = UI.TabMarker(self.tabs, { y = 2 })
+        self.log = CreateFrame("Frame", nil, self)
+        self.log:SetFrameStrata("LOW")
+        self:Place()
+    end
+
+    -- The box over the field, the tabs and the lines inside the padding: at
+    -- build, and again when a theme changes the spacing.
+    function Place()
+        self.box:SetPoint("BOTTOMRIGHT", 0, INPUT_H + chatGap())
+        self.tabs:SetPoint("TOPLEFT", padX(), -padTop())
+        self.tabs:SetPoint("TOPRIGHT", -padX(), -padTop())
+        self.log:SetPoint("TOPLEFT", padX(), -(padTop() + TABS_H + chatGap()))
+        self.log:SetPoint("BOTTOMRIGHT", -padX(), INPUT_H + chatGap() + padBottom())
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A small box with one line of text (copy a name, name a window): Enter
+-- gives the text to `onAccept` (if any) and closes, Esc closes.
+--------------------------------------------------------------------------------
+
+class TextBox extends PanelClass
+    readonly field: TextField
+    readonly hint: Text
+    onAccept: ((text: string) -> ())? = nil
+
+    constructor(title: string)
+        super(SuuUI.Root, { title = title, width = 260, solid = true })
+        self.field = UI.TextField(self.body, { width = 260 - S["space-5"] * 2 })
+        self.field:SetPoint("TOPLEFT")
+        self.hint = UI.Text(self.body, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.hint:SetPoint("TOPLEFT", self.field, "BOTTOMLEFT", 0, -S["space-2"])
+        end)
+        self.field.edit:SetScript("OnEscapePressed", function()
+            self:Hide()
+        end)
+        self.field.edit:SetScript("OnEnterPressed", function(edit: EditBox)
+            local accept = self.onAccept
+            self:Hide()
+            if accept then
+                accept(strtrim(edit:GetText() or ""))
+            end
+        end)
+        UI.MakeModal(self)
+    end
+end
+
+local textBox: TextBox? = nil
+export function askText(title: string, text: string?, hint: string, onAccept: ((text: string) -> ())?)
+    local box = textBox or TextBox.new(title)
+    textBox = box
+    box:SetTitle(title)
+    -- (the hint's line height read now: a theme can change it)
+    box.body:SetHeight(box.field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
+    box.hint:SetValue(hint)
+    box.onAccept = onAccept
+    box:Show()
+    local edit = box.field.edit
+    edit:SetText(text or "")
+    edit:SetFocus()
+    -- a frame later, once the box has its width: from the start, all selected
+    -- (set before that, the text scrolls out of view to the left)
+    after(0, function()
+        edit:SetCursorPosition(0)
+        edit:HighlightText()
+    end)
+end
+
+local function copyName(name: string)
+    askText("Copy name", name, "Ctrl+C to copy · Esc closes")
+end
+
+-- Right click on a player's name: SuuUI's own menu (Blizzard's, opened from
+-- an addon, runs tainted: copying a name is blocked then). Nothing in it
+-- needs a protected action.
+local function playerMenu(m: ChatModule, owner: Frame, name: string): boolean
+    -- in the tooltip's look (asked for in game)
+    UI.ContextMenuFrom(owner, function(_, root)
+        root:CreateTitle(name)
+        root:CreateButton("Whisper", function()
+            chat.whisper(name, ChatFrame1)
+        end)
+        if field(_G, "FCF_OpenTemporaryWindow") then
+            root:CreateButton("Whisper window", function()
+                m:OpenWhisperWindow(name)
+            end)
+        end
+        root:CreateButton("Invite", function()
+            groupInvite(name)
+        end)
+        root:CreateButton("Copy name", function()
+            copyName(name)
+        end)
+        root:CreateButton("Add friend", function()
+            -- a friend request (Forever's classic friends list is off)
+            if SuuUI.AddFriend(name) then
+                m:Print("Friend request sent to " .. name .. ".")
+            end
+        end)
+        root:CreateButton("Ignore", function()
+            errors.try(field(C_FriendList, "AddIgnore"), name)
+        end)
+    end, "chatPlayer", { name = name })
+    return true
+end
+
+-- A link clicked in combat, as the game's SetItemRef opens it but without
+-- ShowUIPanel: that refuses addon code in combat ("Interface action failed
+-- because of an AddOn", found in game 2026-11-11), and SuuUI's lines are
+-- addon code. The link's own handlers first, then ItemRefTooltip, shown
+-- directly (it's no protected panel). False when the game lacks a piece.
+local function refInCombat(link: string, text: string, button: string, frame: Frame): boolean
+    local tip = ItemRefTooltip
+    local process = LinkUtil and LinkUtil.ProcessLink
+    if not (tip and tip.ItemRefSetHyperlink and process and LinkProcessorResponse) then
+        return false
+    end
+    local ok, response = pcall(process, link, text, { button = button, frame = frame })
+    if ok and response == LinkProcessorResponse.Handled then
+        return true
+    end
+    local wasShown = tip:IsShown()
+    if not wasShown then
+        tip:SetOwner(UIParent, "ANCHOR_PRESERVE")
+    end
+    pcall(tip.ItemRefSetHyperlink, tip, link)
+    if not wasShown and not tip:IsShown() then
+        tip:Show()
+    end
+    return true
+end
+
+local function linkClick(m: ChatModule, frame: Frame, link: unknown, text: string, button: string)
+    local l = asString(link)
+    if not l then
+        return
+    end
+    -- a line's class diamond: the whole line to copy
+    local copyID = l:match("^addon:suuui:copy:(%d+)$")
+    if copyID then
+        m:CopyLine(tonumber(copyID))
+        return
+    end
+    local name = l:match("^player:([^:]+)")
+    if button == "RightButton" then
+        if name and name ~= "" and playerMenu(m, frame, name) then
+            return
+        end
+    elseif name and name ~= "" and not IsModifiedClick("CHATLINK") then
+        -- a left click on a name whispers them, as the game's chat does: the
+        -- game's handler whispers through the clicked frame's edit box, and
+        -- SuuUI's lines have none, so it did nothing (asked 2026-11-10).
+        -- Shift-click still goes to the game (the name into chat or a box).
+        chat.whisper(name, ChatFrame1)
+        return
+    end
+    if InCombatLockdown() and not IsModifiedClick() and refInCombat(l, text, button, frame) then
+        return
+    end
+    pcall(SetItemRef, l, text, button, frame)
+end
+
+local function linkEnter(frame: Frame, link: unknown)
+    local l = asString(link)
+    if not l then
+        return
+    end
+    if l:find("^addon:suuui:copy:") then
+        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
+        GameTooltip:SetText("Click to copy this line")
+        GameTooltip:Show()
+        return
+    end
+    local kind = l:match("^(%a+):")
+    if kind == "item" or kind == "spell" or kind == "achievement" or kind == "quest" or kind == "currency" then
+        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
+        pcall(GameTooltip.SetHyperlink, GameTooltip, l)
+        GameTooltip:Show()
+    end
+end
+
+-- The links of a frame's lines: they work as in the chat.
+export function links(m: ChatModule, f: Frame)
+    f:SetHyperlinksEnabled(true)
+    f:SetScript("OnHyperlinkClick", function(_, link: string, text: string, button: string)
+        linkClick(m, f, link, text, button)
+    end)
+    f:SetScript("OnHyperlinkEnter", function(_, link: string)
+        linkEnter(f, link)
+    end)
+    f:SetScript("OnHyperlinkLeave", function()
+        GameTooltip:Hide()
+    end)
+end

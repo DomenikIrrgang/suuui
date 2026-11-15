@@ -1,0 +1,406 @@
+-- tests/unit/Units/AuctionHouse/AuctionHouseHelpers.wowlua
+-- Shared by the auction house's tests (Units/AuctionHouse and its parts):
+-- the test items, the engine's house (mock.defineAuctionHouse) with its
+-- offers and auctions, the auctioneer, what a test's question stubs saw,
+-- setUp/tearDown for each test, opening the house, the window's pages, and
+-- the small steps the tests take (a search, typing, a money field, the rows
+-- shown, a cell, a tooltip's text, the browse queries sent, Scan all's
+-- list, an item location in the backpack).
+--
+-- The engine's house answers the searches, a commodity's purchase, an
+-- item's post and the player's own auctions; bids, Scan all, favourites and
+-- a commodity's post it doesn't have: stubbed in the tests that need them.
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../../helpers"
+import internal M from "/Units/AuctionHouse"
+import type TableRow, AuctionTable from "/Units/AuctionHouse/Tables"
+import type BuyPage, ResultRow from "/Units/AuctionHouse/Buy"
+import type OfferRow from "/Units/AuctionHouse/ItemView"
+import type SellPage from "/Units/AuctionHouse/Sell"
+import type AuctionsPage from "/Units/AuctionHouse/Auctions"
+import type ConfirmOptions, WindowFrame from "/UI/Panel"
+import type SuuButton from "/UI/Controls"
+import type TextField, MoneyInput from "/UI/Inputs"
+import * as frames from "wowlua:frames"
+import * as secret from "wowlua:secret"
+import field from "wowlua:table"
+
+local UI = SuuUI.UI
+local AH = C_AuctionHouse
+
+export const ORE = 990201
+export const BLADE = 990202
+export const RING = 990203
+export const CHARM = 990204
+export const BAUBLE = 990205
+export const GEM = 990206
+mock.defineItem(ORE, { name = "Test Ore", quality = 1, stackCount = 200, classID = 7, icon = 134400 })
+mock.defineItem(BLADE, {
+    name = "Test Blade",
+    quality = 3,
+    stackCount = 1,
+    classID = 2,
+    equipLoc = "INVTYPE_WEAPON",
+    itemLevel = 20,
+    icon = 135274,
+})
+mock.defineItem(RING, { name = "Test Ring", quality = 2, stackCount = 1, classID = 15, icon = 133344 })
+mock.defineItem(CHARM, { name = "Bound Charm", quality = 1, stackCount = 1, classID = 15, icon = 133345 })
+mock.defineItem(BAUBLE, { name = "Test Bauble", quality = 0, stackCount = 1, classID = 4, icon = 133346 })
+mock.defineItem(GEM, { name = "Test Gem", quality = 1, stackCount = 20, classID = 3, icon = 134071 })
+
+export function key(id: number, level: number?): ItemKey
+    return { itemID = id, itemLevel = level or 0, itemSuffix = 0, battlePetSpeciesID = 0 }
+end
+
+-- What the engine's house holds (mock.defineAuctionHouse).
+export type HouseOffer = {
+    auctionID: number,
+    quantity: number,
+    unitPrice: number,
+    timeLeftSeconds: number,
+    totalNumberOfOwners: number,
+    owners: string[],
+    numOwnerItems: number,
+    containsOwnerItem: boolean,
+    containsAccountItem: boolean,
+}
+export type HouseAuction = {
+    auctionID: number,
+    itemKey: ItemKey,
+    quantity: number,
+    bidAmount?: number,
+    minBid?: number,
+    buyoutAmount?: number,
+    timeLeft?: number,
+    owners?: string[],
+}
+export type House = {
+    browse: BrowseResultInfo[],
+    commodities: { [number]: HouseOffer[] },
+    items: { [number]: HouseAuction[] },
+    deposit: number,
+    nextAuctionID: number,
+}
+
+-- Ore: 10 at 1s, 200 at 1s 50c (three sellers), 90 of yours at 1s 60c: the
+-- first 10 a cheap few (under 25 % below the next, at most 10 % of all).
+-- The gem: 5 at 10s, 10 at 12s (what a purchase of 7 is told costs at the
+-- cheapest, 70s, is not what the offers add up to, 74s). The blade: one with a bid and a
+-- buyout, one with a buyout only, two with a starting bid and no buyout.
+-- The ring: one, no time left told.
+export function house(): House
+    return {
+        browse = {
+            { itemKey = key(ORE), minPrice = 100, totalQuantity = 300, containsOwnerItem = true },
+            { itemKey = key(BLADE, 20), minPrice = 50000, totalQuantity = 2, containsOwnerItem = false },
+            { itemKey = key(RING), minPrice = 3000, totalQuantity = 1, containsOwnerItem = false },
+            { itemKey = key(GEM), minPrice = 1000, totalQuantity = 15, containsOwnerItem = false },
+        },
+        commodities = {
+            [ORE] = {
+                {
+                    auctionID = 1,
+                    quantity = 10,
+                    unitPrice = 100,
+                    timeLeftSeconds = 3600,
+                    totalNumberOfOwners = 1,
+                    owners = { "Tamsin" },
+                    numOwnerItems = 0,
+                    containsOwnerItem = false,
+                    containsAccountItem = false,
+                },
+                {
+                    auctionID = 2,
+                    quantity = 200,
+                    unitPrice = 150,
+                    timeLeftSeconds = 3600,
+                    totalNumberOfOwners = 3,
+                    owners = { "Ashford" },
+                    numOwnerItems = 0,
+                    containsOwnerItem = false,
+                    containsAccountItem = false,
+                },
+                {
+                    auctionID = 3,
+                    quantity = 90,
+                    unitPrice = 160,
+                    timeLeftSeconds = 3600,
+                    totalNumberOfOwners = 1,
+                    owners = { "Player" },
+                    numOwnerItems = 90,
+                    containsOwnerItem = true,
+                    containsAccountItem = true,
+                },
+            },
+            [GEM] = {
+                {
+                    auctionID = 4,
+                    quantity = 5,
+                    unitPrice = 1000,
+                    timeLeftSeconds = 3600,
+                    totalNumberOfOwners = 1,
+                    owners = { "Ashford" },
+                    numOwnerItems = 0,
+                    containsOwnerItem = false,
+                    containsAccountItem = false,
+                },
+                {
+                    auctionID = 5,
+                    quantity = 10,
+                    unitPrice = 1200,
+                    timeLeftSeconds = 3600,
+                    totalNumberOfOwners = 1,
+                    owners = { "Tamsin" },
+                    numOwnerItems = 0,
+                    containsOwnerItem = false,
+                    containsAccountItem = false,
+                },
+            },
+        },
+        items = {
+            [BLADE] = {
+                {
+                    auctionID = 11,
+                    itemKey = key(BLADE, 20),
+                    quantity = 1,
+                    bidAmount = 20000,
+                    minBid = 21000,
+                    buyoutAmount = 50000,
+                    timeLeft = 2,
+                    owners = {},
+                },
+                -- (the game's own page reads who owns each: real auctions say)
+                {
+                    auctionID = 12,
+                    itemKey = key(BLADE, 20),
+                    quantity = 1,
+                    buyoutAmount = 60000,
+                    timeLeft = 3,
+                    owners = {},
+                },
+                { auctionID = 13, itemKey = key(BLADE, 20), quantity = 2, minBid = 5000, timeLeft = 0, owners = {} },
+            },
+            [RING] = { { auctionID = 21, itemKey = key(RING), quantity = 1, buyoutAmount = 3000 } },
+        },
+        deposit = 100,
+        nextAuctionID = 500,
+    }
+end
+
+-- What the tests share across files: the question asked last (UI.Confirm,
+-- stubbed in every test), the game's categories while a test has its own.
+export type State = { confirmed: ConfirmOptions?, realCats: unknown }
+export const state = { confirmed = nil, realCats = nil } :: State
+
+local auctioneer = mock.spawnUnit({ name = "Auctioneer", reaction = "neutral" })
+auctioneer:setDistance(3)
+
+export function asked(): ConfirmOptions
+    return (assert(state.confirmed, "nothing asked"))
+end
+export function confirm(text: string?)
+    assert(asked().onConfirm)(text)
+end
+
+-- The window's pages.
+export function buy(): BuyPage
+    return assert(M.buy)
+end
+export function sellPage(): SellPage
+    return assert(M.sell)
+end
+export function auctions(): AuctionsPage
+    return assert(M.mine)
+end
+
+-- Before each test (its @beforeEach).
+export function setUp()
+    state.confirmed = nil
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil
+        state.confirmed = opts
+        return nil
+    end)
+    mock.player:setMoney(1000000) -- 100g
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = ORE, count = 20 },
+            [2] = { id = BLADE },
+            [3] = { id = RING },
+            [4] = { id = CHARM, bound = true },
+        },
+    })
+end
+
+-- After each test (its @afterEach).
+export function tearDown()
+    if M.open then
+        AH.CloseAuctionHouse()
+    end
+    if state.realCats then
+        rawset(_G, "AuctionCategories", state.realCats)
+        state.realCats = nil
+    end
+    mock.advanceTime(1)
+    if M.scanning then
+        M:EndScan()
+    end
+    if M.sell then
+        M.sell.asking, M.sell.resend = nil, false
+    end
+    M.posting, M.buying = nil, nil
+    M.filterValue = nil
+    M.sortKey, M.sortReverse = "price", false
+    if M.buy then
+        M.buy.filter:SetValue(nil)
+        M.buy.search:SetValue("")
+        M.buy.search.edit:ClearFocus()
+        M.buy.filter:Close()
+    end
+    M:CloseHistory()
+    M.historyPending = nil
+    ClearCursor()
+    local d = M:CharData()
+    d.seen, d.posted, d.bids, d.scanAt, d.scanSeconds, d.scanCount = nil, nil, nil, nil, nil, nil
+    d.scanAsked = nil
+    M.asked, M.scanStopped = nil, false
+    d.history = nil
+    M:Set("cheapCheck", true)
+    M:Set("tipShow", true)
+    M:Set("tipMost", true)
+    M:Set("tipOffered", true)
+    M:Set("tipStack", true)
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+export function open(data: House?)
+    mock.defineAuctionHouse(auctioneer, data or house())
+    mock.player:interact(auctioneer)
+    mock.advanceTime(1)
+    mock.advanceTime(0.01) -- (the house opens within the second: its next-frame call runs at the next advance)
+end
+
+export function win(): WindowFrame
+    return assert(M.window)
+end
+-- The game's own auction house frame (kept open, out of sight).
+export function gameFrame(): Frame
+    return assert(frames.find("AuctionHouseFrame"))
+end
+export function note(): string
+    return assert(M.note):GetText() or ""
+end
+
+-- what a text field gets when someone types it
+export function typeInto(f: TextField, text: string)
+    f:SetValue(text)
+    assert(f.onTextChanged)(text)
+end
+
+export function money(input: MoneyInput, copper: number)
+    input:SetCopper(copper)
+    local copperField = input.fields[3]
+    assert(copperField.onTextChanged)(copperField.edit:GetText() or "")
+end
+
+export function search(text: string)
+    buy().search:SetValue(text)
+    mock.script(buy().search.edit, "OnEnterPressed")
+    mock.advanceTime(1)
+end
+
+export function shown<R extends TableRow>(t: AuctionTable<R>): R[]
+    local out: R[] = {}
+    for _, r in ipairs(t.rows) do
+        if r:IsShown() then
+            out[#out + 1] = r
+        end
+    end
+    return out
+end
+
+export function resultNamed(name: string): ResultRow
+    for _, r in ipairs(shown(buy().results)) do
+        if r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no result " .. name)
+end
+
+-- a row's cell k as text (a word, or a Money's copper)
+export function cell(r: OfferRow, k: number): number | string | nil
+    local m, t = r.money[k], r.texts[k]
+    if m and m:IsShown() then
+        return m.copper
+    end
+    return t and t:GetText()
+end
+
+export function tipText(b: SuuButton): string?
+    return secret.asString(field(b.tooltip, "description"))
+end
+
+-- SendBrowseQuery recorded (and passed on to the engine's house).
+export function recordQueries(): AuctionHouseBrowseQuery[]
+    local sent: AuctionHouseBrowseQuery[] = {}
+    local send = AH.SendBrowseQuery
+    mock.stub(AH, "SendBrowseQuery", function(q: AuctionHouseBrowseQuery)
+        sent[#sent + 1] = q
+        send(q)
+    end)
+    return sent
+end
+
+export function offers(): OfferRow[]
+    return shown(buy().itemView.table)
+end
+
+-- The house's every auction (the engine has no Scan all), as many as set: the
+-- first ten 20 ore at 20s, the rest one blade each at 4g, every fifth
+-- without a buyout.
+export function replicate(): ((...unknown) -> ...unknown, (number) -> ())
+    local scan = mock.stub(AH, "ReplicateItems", function() end)
+    local got = 0
+    mock.stub(AH, "GetNumReplicateItems", function()
+        return got
+    end)
+    mock.stub(AH, "GetReplicateItemInfo", function(k: number): ...unknown
+        if k < 10 then
+            return nil, nil, 20, nil, nil, nil, nil, nil, nil, 2000, nil, nil, nil, nil, nil, nil, ORE
+        end
+        return nil,
+            nil,
+            1,
+            nil,
+            nil,
+            nil,
+            nil,
+            nil,
+            nil,
+            (k % 5 == 0) and 0 or 40000,
+            nil,
+            nil,
+            nil,
+            nil,
+            nil,
+            nil,
+            BLADE
+    end)
+    return scan,
+        function(v: number)
+            got = v
+        end
+end
+
+export function plain(s: string): string
+    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+export function at(slot: number): ItemLocation
+    return ItemLocation:CreateFromBagAndSlot(0, slot)
+end

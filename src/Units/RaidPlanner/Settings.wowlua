@@ -1,0 +1,300 @@
+-- Units/RaidPlanner/Settings.wowlua
+-- Settings › Raid planner (Units/RaidPlanner): what's tracked (per profile:
+-- a preset, or Custom), a family's items as checkboxes (FamilyChecks), and
+-- the section with its groups. The module's TrackedSet, IsTracked,
+-- SetTrackedSet, SetTracked, TrackedCount, FamilyCounts, FamilyIsDefault,
+-- ResetFamily and Section call these.
+
+import SuuUI from "/Core/API"
+import type SettingsSection, SettingsGroupDef, Checkbox from "/Core/API"
+import type RaidItem from "/Data/RaidPlanner"
+import ITEMS, ITEM, FAMILIES from "/Units/RaidPlanner/Catalog"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local UI = SuuUI.UI
+
+--------------------------------------------------------------------------------
+-- What's tracked (per profile)
+--------------------------------------------------------------------------------
+
+export function presetSet(preset: string): { [string]: boolean }
+    local out: { [string]: boolean } = {}
+    for _, it in ipairs(ITEMS) do
+        if preset == "all" or it.essential then
+            out[it.key] = true
+        end
+    end
+    return out
+end
+
+export function sameSet(a: { [string]: boolean }, b: { [string]: boolean }): boolean
+    for k in pairs(a) do
+        if not b[k] then
+            return false
+        end
+    end
+    for k in pairs(b) do
+        if not a[k] then
+            return false
+        end
+    end
+    return true
+end
+
+export function trackedSet(self: RaidPlannerModule): { [string]: boolean }
+    local preset = self:Get("preset")
+    if preset == "custom" then
+        local out: { [string]: boolean } = {}
+        for k, on in pairs(self:Get("tracked")) do
+            if on and ITEM[k] then
+                out[k] = true
+            end
+        end
+        return out
+    end
+    return presetSet(preset == "all" and "all" or "essentials")
+end
+
+-- While the window is drawn, the set is read once (trackCache).
+export function isTracked(self: RaidPlannerModule, itemKey: string): boolean
+    local set = self.trackCache or self:TrackedSet()
+    return set[itemKey] == true
+end
+
+-- Writes a set: back to a preset when it is one, Custom otherwise.
+export function setTrackedSet(self: RaidPlannerModule, set: { [string]: boolean })
+    if sameSet(set, presetSet("essentials")) then
+        self:Set("tracked", {})
+        self:Set("preset", "essentials")
+    elseif sameSet(set, presetSet("all")) then
+        self:Set("tracked", {})
+        self:Set("preset", "all")
+    else
+        self:Set("tracked", set)
+        self:Set("preset", "custom")
+    end
+end
+
+export function setTracked(self: RaidPlannerModule, itemKey: string, on: boolean)
+    local set = self:TrackedSet()
+    set[itemKey] = on and true or nil
+    self:SetTrackedSet(set)
+end
+
+export function trackedCount(self: RaidPlannerModule): number
+    local n = 0
+    for _ in pairs(self:TrackedSet()) do
+        n = n + 1
+    end
+    return n
+end
+
+--------------------------------------------------------------------------------
+-- Settings › Raid planner
+--------------------------------------------------------------------------------
+
+-- A family's items as checkboxes, two columns, each with its small print.
+export class FamilyChecks extends Frame
+    readonly boxes: Checkbox[] = {}
+    readonly items: RaidItem[] = {}
+
+    constructor(parent: Frame, family: string, onChange: (itemKey: string, on: boolean) -> ())
+        super(nil, parent)
+        local width = math.max(400, parent:GetWidth())
+        local colW = math.floor(width / 2)
+        local row = 0
+        for _, item in ipairs(ITEMS) do
+            if item.family == family then
+                local i = #self.boxes
+                local b = UI.Checkbox(self, {
+                    label = item.label,
+                    onChange = function(on: boolean)
+                        onChange(item.key, on)
+                    end,
+                })
+                b:SetPoint("TOPLEFT", (i % 2) * colW, -(math.floor(i / 2) * 26))
+                local note = item.note
+                local label = b.label
+                if note and label then
+                    local small = UI.Text(b, "caption", "ink-muted")
+                    small:SetPoint("LEFT", label, "RIGHT", 6, 0)
+                    small:SetValue(note)
+                    b:SetWidth(b:GetWidth() + 6 + UI.MeasureText("caption", note))
+                end
+                -- the spell's own tooltip: what it is
+                b:HookScript("OnEnter", function()
+                    UI.SpellTooltip(b, item.spell, item.detail)
+                end)
+                b:HookScript("OnLeave", function()
+                    GameTooltip:Hide()
+                end)
+                self.boxes[#self.boxes + 1] = b
+                self.items[#self.items + 1] = item
+                row = math.floor(i / 2) + 1
+            end
+        end
+        self:SetSize(width, row * 26)
+    end
+
+    function SetValue(set: { [string]: boolean }?)
+        for i, b in ipairs(self.boxes) do
+            b:SetValue(set and set[self.items[i].key])
+        end
+    end
+
+    function SetDisabled() end
+end
+
+-- The section's groups (Settings › Raid planner).
+export type SettingsGroup = SettingsGroupDef
+
+local ESSENTIALS_TEXT = "The essentials: Fortitude, Mark, Intellect, Blessings, Battle Shout, Windfury, Mana Tide, Trueshot Aura, Sunder, the warlock curses, Faerie Fire, decursing and magic dispels, Rebirth, Soulstone, Innervate. Changing a box below makes it Custom."
+
+export function familyCounts(self: RaidPlannerModule, family: string): (number, number)
+    local on, all = 0, 0
+    local set = self:TrackedSet()
+    for _, item in ipairs(ITEMS) do
+        if item.family == family then
+            all = all + 1
+            if set[item.key] then
+                on = on + 1
+            end
+        end
+    end
+    return on, all
+end
+
+export function familyIsDefault(self: RaidPlannerModule, family: string): boolean
+    local set, essential = self:TrackedSet(), presetSet("essentials")
+    for _, item in ipairs(ITEMS) do
+        if item.family == family and (set[item.key] or false) ~= (essential[item.key] or false) then
+            return false
+        end
+    end
+    return true
+end
+
+export function resetFamily(self: RaidPlannerModule, family: string)
+    local set, essential = self:TrackedSet(), presetSet("essentials")
+    for _, item in ipairs(ITEMS) do
+        if item.family == family then
+            set[item.key] = essential[item.key]
+        end
+    end
+    self:SetTrackedSet(set)
+end
+
+export function section(self: RaidPlannerModule): SettingsSection
+    local groups: SettingsGroup[] = {
+        {
+            title = "Raid planner",
+            description = "Plan raids as setups of slots; the raid fills them. Open it from Social › Raid › Plan or /suu raid. Only what's tracked below shows in coverage and counts.",
+            rows = {
+                {
+                    label = "Open the planner",
+                    control = "button",
+                    text = "Raid planner",
+                    description = "Setups are saved for the account; what's tracked follows this profile.",
+                    onClick = function()
+                        SuuUI.ToggleSettings()
+                        self:Toggle()
+                    end,
+                },
+                {
+                    label = "Track",
+                    control = "segmented",
+                    stacked = true,
+                    description = ESSENTIALS_TEXT,
+                    options = {
+                        { value = "all", label = "Everything" },
+                        { value = "essentials", label = "The essentials" },
+                        { value = "custom", label = "Custom" },
+                    },
+                    get = function(): unknown
+                        return self:Get("preset")
+                    end,
+                    set = function(v: unknown): (boolean, string?)
+                        if v == "custom" or type(v) ~= "string" then
+                            self:Set("tracked", self:TrackedSet())
+                            return self:Set("preset", "custom")
+                        end
+                        self:Set("tracked", {})
+                        return self:Set("preset", v)
+                    end,
+                    isDefault = function(): boolean
+                        return self:Get("preset") == "essentials"
+                    end,
+                    reset = function()
+                        self:Reset("tracked")
+                        self:Reset("preset")
+                    end,
+                },
+                {
+                    key = "fill",
+                    label = "Auto-fill",
+                    control = "segmented",
+                    options = {
+                        { value = "instant", label = "As the raid changes" },
+                        { value = "review", label = "After review" },
+                    },
+                    description = "As the raid changes: slots fill at once, out of combat; players you placed by hand stay. After review: who is placed stays, newcomers wait for Fill slots.",
+                },
+                {
+                    key = "inspect",
+                    label = "Inspect missing specs",
+                    control = "segmented",
+                    options = {
+                        { value = "auto", label = "Automatically" },
+                        { value = "click", label = "On click" },
+                    },
+                    description = "Automatically: while the planner is open, one player at a time, out of combat, slowly so the game allows it. On click: only from the planner's Inspect button.",
+                },
+                {
+                    key = "flagDoubled",
+                    label = "Flag doubled party-wide buffs",
+                    control = "toggle",
+                    description = "Two Trueshot Auras or two Blood Pacts in one group: one is wasted.",
+                },
+                {
+                    key = "shareSpec",
+                    label = "Share my spec",
+                    control = "toggle",
+                    description = "Tell raid members who use SuuUI your spec, out of combat, so their planner needn't inspect you.",
+                },
+            },
+        },
+    }
+    for _, fam in ipairs(FAMILIES) do
+        local famKey = fam.key
+        groups[#groups + 1] = {
+            title = fam.title,
+            description = fam.description,
+            rows = {
+                {
+                    label = "Tracked",
+                    control = "custom",
+                    stacked = true,
+                    build = function(parent: Frame): FamilyChecks
+                        return FamilyChecks.new(parent, famKey, function(itemKey: string, on: boolean)
+                            self:SetTracked(itemKey, on)
+                        end)
+                    end,
+                    description = function(): string
+                        local on, all = self:FamilyCounts(famKey)
+                        return ("%d of %d tracked."):format(on, all)
+                    end,
+                    get = function(): unknown
+                        return self:TrackedSet()
+                    end,
+                    isDefault = function(): boolean
+                        return self:FamilyIsDefault(famKey)
+                    end,
+                    reset = function()
+                        self:ResetFamily(famKey)
+                    end,
+                },
+            },
+        }
+    end
+    return { id = "raidplanner", label = "Raid planner", category = "Insights", order = 45, groups = groups }
+end

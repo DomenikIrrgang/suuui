@@ -1,0 +1,117 @@
+-- Units/Bags/Containers: the game's bags as the Bags module reads them: which
+-- bag is which, a bag's slots and free count, its family and the special
+-- bags' kinds, the keyring's filled slots, a quest starter, a saved copy, a
+-- grey item the vendor buys, the backpack's currencies.
+
+import test, expect, cases, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as containers from "/Units/Bags/Containers"
+import familyName from "/Units/Bags/Containers"
+import expectNoErrors from "../../../helpers"
+import start as startBags, cleanup as cleanupBags, CLOTH, RAG, KEY from "./BagsHelpers"
+
+@beforeEach
+local function start()
+    startBags()
+end
+
+@afterEach
+local function cleanup()
+    cleanupBags()
+end
+
+@test("familyName: each special bag's kind")
+@cases({
+    { 1, "Quiver" },
+    { 2, "Ammo pouch" },
+    { 4, "Soul bag" },
+    { 32, "Herb bag" },
+    { 64, "Enchanting bag" },
+    { 1024, "Mining bag" },
+    { 4096, "Special bag" },
+})
+local function families(family: number, out: string)
+    expect(familyName(family)).toBe(out)
+end
+
+@test("which bag is which: the keyring, the reagent bag, the bank's tabs")
+local function indexes()
+    expect(containers.KEYRING).toBe(-1)
+    expect(containers.REAGENT).toBe(5)
+    expect(containers.isBank(containers.BANK_FIRST)).toBe(true)
+    expect(containers.isBank(containers.BANK_LAST)).toBe(true)
+    expect(containers.isBank(containers.BANK_LAST + 1)).toBe(false)
+    expect(containers.isBank(0)).toBe(false)
+    expect(containers.isBank(containers.KEYRING)).toBe(false)
+    expectNoErrors()
+end
+
+@test("a bag's slots and free count, the keyring's keys, a saved copy of the bags (not the keyring's)")
+local function slotsAndSnapshot()
+    expect(containers.numSlots(0)).toBe(16)
+    expect(containers.freeSlots(0)).toBe(14)
+    mock.setBag(-1, { slots = 12, items = { [2] = { id = KEY, count = 1 }, [5] = { id = KEY, count = 1 } } })
+    expect(containers.keySlots(12)).toEqual({ 2, 5 })
+    local copy = containers.snapshot({ 0, -1 })
+    expect(#copy.slots).toBe(28)
+    expect(copy.size).toBe(16)
+    expect(copy.free).toBe(14)
+    local first = copy.slots[1]
+    assert(first, "nothing saved in the first slot")
+    expect(first.c).toBe(3)
+    expect(first.q).toBe(1)
+    expect(copy.slots[3]).toBe(false)
+    expectNoErrors()
+end
+
+@test("a special bag: its family from the game's free count, a section of its own; the backpack never")
+local function special()
+    mock.setBag(2, { slots = 12 })
+    mock.fake("C_Container.GetContainerNumFreeSlots", function(bag: number): (number, number)
+        return 12, bag == 2 and 1 or 0
+    end)
+    expect(containers.familyOf(2)).toBe(1)
+    expect(containers.isSpecialBag(2)).toBe(true)
+    expect(containers.isSpecialBag(3)).toBe(false)
+    expect(containers.isSpecialBag(0)).toBe(false)
+    expect(containers.bagItem(0)).toBe(nil)
+    mock.setBag(2, nil)
+    expectNoErrors()
+end
+
+@test("junk: a grey item the vendor buys, its price and count; not when locked, not another quality")
+local function junk()
+    mock.setBag(0, {
+        slots = 16,
+        items = {
+            [1] = { id = RAG, count = 2 },
+            [2] = { id = RAG, count = 1, locked = true },
+            [3] = { id = CLOTH, count = 1 },
+        },
+    })
+    local price, count = containers.junkAt(0, 1)
+    expect(price).toBe(25)
+    expect(count).toBe(2)
+    expect((containers.junkAt(0, 2))).toBe(nil)
+    expect((containers.junkAt(0, 3))).toBe(nil)
+    expect((containers.junkAt(0, 4))).toBe(nil)
+    expectNoErrors()
+end
+
+@test("the backpack's currencies: the game's list, read until it ends")
+local function currencies()
+    local watched: { iconFileID: number, quantity: number }[] = {
+        { iconFileID = 463446, quantity = 12 },
+        { iconFileID = 133784, quantity = 340 },
+    }
+    mock.fake("C_CurrencyInfo.GetBackpackCurrencyInfo", function(i: number): unknown
+        return watched[i]
+    end)
+    local list = containers.backpackCurrencies()
+    expect(#list).toBe(2)
+    expect(list[1].icon).toBe(463446)
+    expect(list[2].count).toBe(340)
+    watched = {}
+    expect(#containers.backpackCurrencies()).toBe(0)
+    expectNoErrors()
+end

@@ -1,0 +1,270 @@
+-- UI/CooldownTracker/Slots.wowlua
+-- The timers row's own frames and what they show: a fixed slot
+-- (TrackerSlot: a grey placeholder under a one-icon engine container), a
+-- reminder (TrackerReminder: the grey icon alone; auraUp says whether its
+-- aura is up), a weapon enchant slot (TrackerEnchant); an aura entry's size
+-- and looks (auraSize, auraLook), its art while nothing is up (slotArt),
+-- and its engine groups (sourceFilter, auraParts).
+
+import * as secret from "wowlua:secret"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import auraContainer, AuraOptions, UnitAuras from "/UI/Auras"
+import WeaponEnchantIcon from "/UI/WeaponEnchants"
+import EDGE, iconFor, knownRank from "./Entries"
+import type TrackerEntry, TrackerWhen from "./Entries"
+import conditionMet, staticState from "./Conditions"
+import type CondContext from "./Conditions"
+
+const S = T.space
+
+const CROP = 0.08
+
+--------------------------------------------------------------------------------
+-- Aura slots
+--------------------------------------------------------------------------------
+
+-- An aura entry's engine group: its filter, its spells, and a live member's
+-- `when`.
+export type AuraPart = { filter: string[], ids: number[], when?: TrackerWhen }
+
+-- An aura entry's looks for its engine groups.
+export type AuraLook = {
+    border?: string,
+    glow?: string,
+    drain?: string,
+    digits?: boolean,
+    stacks?: boolean,
+    expiring?: number,
+}
+
+-- An aura entry's size and looks (the Behaviour panel).
+local AURA_SIZE: { [string]: string } = { small = "icon-md", normal = "icon-lg", large = "cdm-essential" }
+export function auraSize(entry: TrackerEntry): number
+    return draw.size(AURA_SIZE[entry.size or "normal"] or "icon-lg")
+end
+export function auraLook(entry: TrackerEntry, base: AuraLook?): AuraLook
+    local look: AuraLook = {}
+    if base then
+        look.border, look.glow, look.drain = base.border, base.glow, base.drain
+        look.digits, look.stacks, look.expiring = base.digits, base.stacks, base.expiring
+    end
+    local border = entry.border
+    if border and EDGE[border] then
+        look.border = EDGE[border]
+    end
+    if entry.glow then
+        look.glow = "glow-arcane"
+    end
+    look.digits, look.stacks = entry.digits, entry.stacks
+    look.expiring = entry.expiring
+    return look
+end
+
+-- The art of a fixed slot or reminder while nothing is up: a single aura's
+-- (iconFor); a shared slot's `icon` when fixedIcon is set, else automatic:
+-- the first member (of those its conditions leave in) that you know, else
+-- the first whose `when` is met now (none: met), else `icon`. A member's art
+-- is its own `icon`, else its first ID; a member you know shows the rank you
+-- know (a spell's IDs can carry two arts: Lightning Shield's majority is
+-- another one than the one shamans cast).
+export function slotArt(entry: TrackerEntry, ctx: CondContext): number?
+    if not entry.group or entry.fixedIcon then
+        return iconFor(entry)
+    end
+    local members = entry.members or {}
+    for _, m in ipairs(members) do
+        local rank = m.ids and #m.ids > 0 and knownRank(m)
+        if rank then
+            return (C_Spell.GetSpellTexture(rank))
+        end
+    end
+    for _, m in ipairs(members) do
+        local ids = m.ids
+        if ids and #ids > 0 and conditionMet(m.when, ctx) then
+            return (C_Spell.GetSpellTexture(m.icon or ids[1]))
+        end
+    end
+    return iconFor(entry)
+end
+
+-- A fixed slot: the grey placeholder, and over it a one-icon container that
+-- shows the entry's aura while it's up (`copts`, its options). TR:Slot sets
+-- the placeholder's art.
+export class TrackerSlot extends Frame
+    readonly placeholder: Frame
+    readonly art: Texture
+    readonly container: UnitAuras?
+    readonly enchant: boolean = false
+    -- (debuffs) grey only while you have a hostile target
+    withTarget: boolean? = nil
+    -- the collection it came from
+    coll: TrackerEntry? = nil
+    whens: TrackerWhen[]? = nil
+    condOK: boolean? = nil
+    wantShown: boolean? = nil
+
+    constructor(parent: Frame, warn: boolean, max: number, size: number, unit: string, copts: AuraOptions)
+        super(nil, parent)
+        self:SetSize(max * size + (max - 1) * S["space-2"], size)
+        -- the placeholder sits under the first place (where the first member lands)
+        local placeholder = CreateFrame("Frame", nil, self)
+        self.placeholder = placeholder
+        placeholder:SetPoint("TOPLEFT")
+        placeholder:SetSize(size, size)
+        local art = placeholder:CreateTexture(nil, "ARTWORK")
+        art:SetPoint("TOPLEFT", 1, -1)
+        art:SetPoint("BOTTOMRIGHT", -1, 1)
+        art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+        art:SetDesaturated(true)
+        self.art = art
+        draw.fill(placeholder, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        draw.border(placeholder, "gilt-hairline", { layer = "OVERLAY" })
+        placeholder:SetAlpha(T.opacity["opacity-oor"])
+        -- Warn: an ember edge inside the square that pulses slowly
+        if warn then
+            draw.border(placeholder, "ember", { inset = 1, layer = "OVERLAY" })
+            local pulse = placeholder:CreateAnimationGroup()
+            pulse:SetLooping("BOUNCE")
+            local a = pulse:CreateAnimation("Alpha")
+            a:SetFromAlpha(1)
+            a:SetToAlpha(0.45)
+            a:SetDuration(0.9)
+            placeholder:SetAlpha(0.85)
+            pulse:Play()
+        end
+        local container = auraContainer(self, unit, copts)
+        self.container = container
+        if container then
+            container.container:SetPoint("TOPLEFT", self, "TOPLEFT")
+            container.container:SetFrameLevel(placeholder:GetFrameLevel() + 2)
+        end
+    end
+end
+
+-- A reminder's look-up: a filter and the spells under it.
+export type ReminderCheck = { filter: string, ids: { [number]: boolean }, when?: TrackerWhen }
+
+-- A reminder: the grey icon alone, no live aura. Shown while the aura isn't
+-- up, out of combat. TR:Reminder sets what it reminds of.
+export class TrackerReminder extends Frame
+    readonly art: Texture
+    unit: string = "player"
+    checks: ReminderCheck[] = {}
+    coll: TrackerEntry? = nil
+    whens: TrackerWhen[]? = nil
+    condOK: boolean? = nil
+
+    constructor(parent: Frame, size: number)
+        super(nil, parent)
+        self:SetSize(size, size)
+        local art = self:CreateTexture(nil, "ARTWORK")
+        art:SetPoint("TOPLEFT", 1, -1)
+        art:SetPoint("BOTTOMRIGHT", -1, 1)
+        art:SetTexCoord(CROP, 1 - CROP, CROP, 1 - CROP)
+        art:SetDesaturated(true)
+        self.art = art
+        draw.fill(self, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        draw.border(self, "gilt-hairline", { layer = "OVERLAY" })
+        self:SetAlpha(T.opacity["opacity-oor"])
+    end
+end
+
+-- A weapon enchant slot of the tracker's.
+export class TrackerEnchant extends WeaponEnchantIcon
+    readonly enchant: boolean = true
+    entry: TrackerEntry = {}
+    withTarget: boolean? = nil
+    coll: TrackerEntry? = nil
+    whens: TrackerWhen[]? = nil
+    condOK: boolean? = nil
+    wantShown: boolean? = nil
+
+    constructor(parent: Frame, size: number)
+        super(parent, size)
+    end
+end
+
+-- What shows in the timers row's fixed places: a slot or a weapon enchant.
+export type TrackerFixed = TrackerSlot | TrackerEnchant
+
+-- Whether any of a reminder's IDs is on its unit (out of combat only), each
+-- source's under its own filter; a member whose live condition isn't met
+-- doesn't count.
+export function auraUp(r: TrackerReminder, ctx: CondContext): boolean
+    for _, check in ipairs(r.checks) do
+        local counted = not check.when or conditionMet(check.when, ctx)
+        for i = 1, counted and 40 or 0 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, r.unit, i, check.filter)
+            if not ok or issecretvalue(a) or not a then
+                break
+            end
+            local id = a.spellId
+            if not secret.isSecret(id) and check.ids[id] then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- The filter for an entry: kind ("HELPFUL"/"HARMFUL") plus its source.
+-- An entry's own source (the Behaviour panel, or a group's), else the list's
+-- default (a preset's "mine" on a buff counts as its own).
+export function sourceFilter(kind: string, entry: TrackerEntry, default: string): string[]
+    local source = entry.source or (entry.group and "mine") or (entry.mine and "mine") or default
+    if source == "mine" then
+        return { kind, "PLAYER" }
+    end
+    if source == "others" then
+        return { kind, "!PLAYER" }
+    end
+    return { kind }
+end
+
+-- An engine group as auraParts gathers it.
+type Building = { filter: string[], ids: number[], seen: { [number]: boolean }, when?: TrackerWhen }
+
+-- An aura entry's engine groups, { filter, ids, when } each: one for a
+-- single aura or a group whose members share a source; else one per source
+-- its members use (a member's own, else the group's), in member order. A
+-- member with a live condition gets a group of its own, carrying its `when`
+-- (the group's max is how it's shown or hidden).
+export function auraParts(kind: string, entry: TrackerEntry, default: string, ctx: CondContext?): AuraPart[]
+    local single: AuraPart[] = { { filter = sourceFilter(kind, entry, default), ids = entry.ids or {} } }
+    if not entry.group then
+        return single
+    end
+    local own = entry.source or "mine"
+    local parts: Building[], bySource: { [string]: Building } = {}, {}
+    for i, m in ipairs(entry.members or {}) do
+        local source = m.source or own
+        local live = m.when ~= nil and staticState(m.when, ctx or {}) == "live"
+        local key = live and (source .. "#" .. i) or source
+        local p = bySource[key]
+        if not p then
+            p = {
+                filter = sourceFilter(kind, { source = source }, default),
+                ids = {},
+                seen = {},
+                when = live and m.when or nil,
+            }
+            bySource[key] = p
+            parts[#parts + 1] = p
+        end
+        for _, id in ipairs(m.ids or {}) do
+            if not p.seen[id] then
+                p.seen[id] = true
+                p.ids[#p.ids + 1] = id
+            end
+        end
+    end
+    local out: AuraPart[] = {}
+    for _, p in ipairs(parts) do
+        if #p.ids > 0 then
+            out[#out + 1] = { filter = p.filter, ids = p.ids, when = p.when }
+        end
+    end
+    local first = out[1]
+    return (#out > 1 or (first and first.when)) and out or single
+end

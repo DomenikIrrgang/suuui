@@ -1,0 +1,659 @@
+-- Units/Talents/Share.wowlua
+-- The Talents window's dialogs and sharing builds: Use build's "what fits,
+-- what's in the way" (design M), New build (a name and a class), and one
+-- dialog to copy a build out (SuuUI's text, the game's talent string) or
+-- import one (read, previewed, saved). The dialogs are classes here; the
+-- rest are functions of Units/Talents' module (its AskMismatch,
+-- AskNewBuild, ShowShare, ReadPasted … call them with itself).
+
+import SuuUI, PanelClass from "/Core/API"
+import type TalentStep, SelectOption, Select, Text, SuuButton, TextField, Segmented, Panel from "/Core/API"
+import type TalentsModule from "/Units/Talents"
+import CLASS from "/Units/Talents/Trees"
+import type ClassInfo, Classes from "/Units/Talents/Trees"
+import plural from "/Units/Talents/Builds"
+import type SavedBuild, Conflict from "/Units/Talents/Builds"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local field = tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- A dialog's height for a body `h` tall and a row of buttons under it.
+local function fitDialog(p: Panel, h: number)
+    p.body:SetHeight(h)
+    p:SetHeight(p:BodyTop() + h + S["space-5"] + 30 + 18 + S["space-4"])
+end
+
+--------------------------------------------------------------------------------
+-- Dialogs
+--------------------------------------------------------------------------------
+
+-- Use a build: what fits, what's in the way (design M).
+export class MismatchDialog extends PanelClass
+    readonly lines: Text[] = {}
+    readonly use: SuuButton
+    readonly cancel: SuuButton
+    onUse: (() -> ())? = nil
+
+    constructor()
+        super(SuuUI.Root, { title = " ", width = 480, height = 300, solid = true })
+        self.use = UI.Button(self, {
+            text = "Use",
+            variant = "primary",
+            onClick = function()
+                local fn = self.onUse
+                self:Hide()
+                if fn then
+                    fn()
+                end
+            end,
+        })
+        self.use:SetPoint("BOTTOMRIGHT", -20, 18)
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.cancel:SetPoint("RIGHT", self.use, "LEFT", -S["space-3"], 0)
+        end)
+        UI.MakeModal(self)
+    end
+end
+
+-- New build: a name and a class.
+export class NewBuildDialog extends PanelClass
+    readonly name: TextField
+    readonly classLabel: Text
+    readonly class: Select<string>
+    readonly create: SuuButton
+    readonly cancel: SuuButton
+
+    constructor(classes: Classes, onCreate: (name: string, file: string) -> ())
+        super(SuuUI.Root, { title = "New build", width = 360, height = 220, solid = true })
+        self.name = UI.TextField(self.body, { width = 320, placeholder = "Name, e.g. Levelling" })
+        self.name:SetPoint("TOPLEFT")
+        local options: SelectOption<string>[] = {}
+        for _, c in ipairs(classes.list) do
+            options[#options + 1] = { value = c.file, label = c.name, diamond = "class-" .. c.file:lower() }
+        end
+        self.classLabel = UI.Text(self.body, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.classLabel:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-5"])
+        end)
+        self.classLabel:SetValue("Class")
+        self.class = UI.Select(self.body, { width = 320, options = options, value = CLASS })
+        SuuUI.Layout.Follow(self, function()
+            self.class:SetPoint("TOPLEFT", self.classLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        end)
+        self.create = UI.Button(self, {
+            text = "Create",
+            variant = "primary",
+            onClick = function()
+                local name = strtrim(self.name.edit:GetText() or "")
+                if name == "" then
+                    self.name.edit:SetFocus()
+                    return
+                end
+                self:Hide()
+                onCreate(name, self.class.value or CLASS)
+            end,
+        })
+        self.create:SetPoint("BOTTOMRIGHT", -20, 18)
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.cancel:SetPoint("RIGHT", self.create, "LEFT", -S["space-3"], 0)
+        end)
+        self.name.edit:HookScript("OnEnterPressed", function()
+            self.create:Click()
+        end)
+        fitDialog(self, 30 + S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30)
+        UI.MakeModal(self)
+    end
+end
+
+-- What was pasted, read: a build to preview.
+export type Pasted = { name: string, class: string, steps: TalentStep[], fromGame?: boolean, note?: string }
+
+-- Sharing (design J): one dialog, Copy and Import.
+export class ShareDialog extends PanelClass
+    readonly switch: Segmented<string>
+    readonly copy: Frame
+    readonly text: TextField
+    readonly textHint: Text
+    readonly gameLabel: Text
+    readonly game: TextField
+    readonly import: Frame
+    readonly paste: TextField
+    readonly diamond: Texture
+    readonly previewName: Text
+    readonly previewClass: Text
+    readonly previewLine: Text
+    readonly previewNote: Text
+    readonly ok: SuuButton
+    readonly cancel: SuuButton
+    mode: string = "copy"
+    found: Pasted? = nil
+    -- what the copy fields hold
+    textShared: string = ""
+    gameShared: string = ""
+
+    constructor(onMode: (mode: string) -> (), onPaste: (text: string) -> (), onDone: () -> ())
+        super(SuuUI.Root, { title = " ", width = 460, height = 300, solid = true })
+        local W = 420
+        self.switch = UI.Segmented(self.body, {
+            options = { { value = "copy", label = "Copy" }, { value = "import", label = "Import" } },
+            onChange = function(v: string)
+                onMode(v)
+            end,
+        })
+        self.switch:SetPoint("TOPLEFT")
+        -- Copy
+        self.copy = CreateFrame("Frame", nil, self.body)
+        SuuUI.Layout.Follow(self, function()
+            self.copy:SetPoint("TOPLEFT", self.switch, "BOTTOMLEFT", 0, -S["space-5"])
+        end)
+        self.copy:SetSize(W, 10)
+        self.text = UI.TextField(self.copy, {
+            width = W,
+            onTextChanged = function()
+                self:Reselect()
+            end,
+        })
+        self.text:SetPoint("TOPLEFT")
+        self.textHint = UI.Text(self.copy, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.textHint:SetPoint("TOPLEFT", self.text, "BOTTOMLEFT", 0, -S["space-2"])
+        end)
+        self.textHint:SetFixedWidth(W)
+        self.textHint:SetWordWrap(true)
+        self.textHint:SetJustifyH("LEFT")
+        self.textHint:SetValue(
+            "Selected: press Ctrl+C (Cmd+C on a Mac), then paste it in chat or a guide. Fits one chat line."
+        )
+        self.gameLabel = UI.Text(self.copy, "caption", "ink-muted")
+        self.gameLabel:SetValue("The game's talent string (no order, no name)")
+        self.game = UI.TextField(self.copy, {
+            width = W,
+            onTextChanged = function()
+                self:Reselect()
+            end,
+        })
+        -- Import
+        self.import = CreateFrame("Frame", nil, self.body)
+        SuuUI.Layout.Follow(self, function()
+            self.import:SetPoint("TOPLEFT", self.switch, "BOTTOMLEFT", 0, -S["space-5"])
+        end)
+        self.import:SetSize(W, 10)
+        self.paste = UI.TextField(self.import, {
+            width = W,
+            placeholder = "Paste SuuUI text or the game's string",
+            onTextChanged = function(text: string)
+                onPaste(text)
+            end,
+        })
+        self.paste:SetPoint("TOPLEFT")
+        self.diamond = UI.Diamond(self.import, 7, "ink", "OVERLAY")
+        SuuUI.Layout.Follow(self, function()
+            self.diamond:SetPoint("TOPLEFT", self.paste, "BOTTOMLEFT", 1, -(S["space-5"] + 6))
+        end)
+        self.previewName = UI.Text(self.import, "label", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.previewName:SetPoint("LEFT", self.diamond, "RIGHT", S["space-3"], 0)
+        end)
+        self.previewClass = UI.Text(self.import, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.previewClass:SetPoint("LEFT", self.previewName, "RIGHT", S["space-4"], 0)
+        end)
+        self.previewLine = UI.Text(self.import, "caption", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.previewLine:SetPoint("TOPLEFT", self.paste, "BOTTOMLEFT", 0, -(S["space-5"] + 22))
+        end)
+        self.previewLine:SetFixedWidth(W)
+        self.previewLine:SetJustifyH("LEFT")
+        self.previewNote = UI.Text(self.import, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.previewNote:SetPoint("TOPLEFT", self.previewLine, "BOTTOMLEFT", 0, -S["space-2"])
+        end)
+        self.previewNote:SetFixedWidth(W)
+        self.previewNote:SetWordWrap(true)
+        self.previewNote:SetJustifyH("LEFT")
+        -- the buttons
+        self.ok = UI.Button(self, { text = "Done", variant = "primary", onClick = onDone })
+        self.ok:SetPoint("BOTTOMRIGHT", -20, 18)
+        self.cancel = UI.Button(self, {
+            text = "Cancel",
+            onClick = function()
+                self:Hide()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        end)
+        UI.MakeModal(self)
+    end
+
+    -- the copy fields stay as written, all selected
+    function Reselect()
+        for _, pair in ipairs({ { self.text, self.textShared }, { self.game, self.gameShared } }) do
+            local f, shared = pair[1] :: TextField, pair[2] :: string
+            if f.edit:GetText() ~= shared then
+                f.edit:SetText(shared)
+            end
+            if f.edit:HasFocus() then
+                f.edit:HighlightText()
+            end
+        end
+    end
+end
+
+-- Design M: what fits, what's in the way (and in which tree), what a reset
+-- does; nothing changes until you choose.
+export function askMismatch(
+    m: TalentsModule,
+    b: SavedBuild,
+    fits: TalentStep[],
+    conflicts: Conflict[],
+    learned: { [number]: number },
+    onUse: () -> ()
+)
+    local p = m.mismatch
+    if not p then
+        p = MismatchDialog.new()
+        m.mismatch = p
+    end
+    local dialog = p
+    for _, l in ipairs(dialog.lines) do
+        l:Hide()
+    end
+    local used, y = 0, 0
+    local function line(style: string, color: string, text: string)
+        used = used + 1
+        local t = dialog.lines[used]
+        if not t then
+            t = UI.Text(dialog.body, style, color)
+            t:SetJustifyH("LEFT")
+            t:SetWordWrap(true)
+            t:SetFixedWidth(440)
+            dialog.lines[used] = t
+        end
+        t:SetStyle(style)
+        t:SetColor(color)
+        t:SetValue(text)
+        t:ClearAllPoints()
+        t:SetPoint("TOPLEFT", dialog.body, "TOPLEFT", 0, -y)
+        t:Show()
+        local typeStyle = field(T.type, style)
+        y = y + math.max(t:GetStringHeight(), asNumber(field(typeStyle, "lineHeight")) or 0) + S["space-2"]
+    end
+    local tree = m:BuildTree(CLASS)
+    -- the fits by talent: "Flurry, rank 1 · Enhancement"
+    line("header", "gilt-text", "Fits now")
+    if #fits == 0 then
+        line("body", "ink-muted", "Nothing yet: the talents in the way come first.")
+    end
+    local i = 1
+    local seen: { [number]: number } = {}
+    while i <= #fits do
+        local id = fits[i].node
+        local j = i
+        while fits[j + 1] and fits[j + 1].node == id do
+            j = j + 1
+        end
+        local n = tree and tree.byID[id]
+        local a = (seen[id] or learned[id] or 0) + 1
+        local z = a + (j - i)
+        seen[id] = z
+        line(
+            "body",
+            "ink",
+            ("%s, %s · %s"):format(
+                n and n.name or "?",
+                a == z and ("rank " .. a) or ("ranks " .. a .. "–" .. z),
+                n and n.treeName or ""
+            )
+        )
+        i = j + 1
+    end
+    y = y + S["space-3"]
+    line("header", "gilt-text", "Not in this build")
+    for _, c in ipairs(conflicts) do
+        line(
+            "body",
+            "ink",
+            ("%s, %d %s · %s"):format(c.name, c.ranks, plural(c.ranks, "rank", "ranks"), c.treeName)
+        )
+    end
+    y = y + S["space-3"]
+    line(
+        "caption",
+        "ink-muted",
+        "These stay until a trainer resets your talents. Once you do, the whole build is planned for you to apply."
+    )
+    fitDialog(dialog, y)
+    dialog:SetTitle(("Use %s?"):format(b.name or "this build"))
+    local n = #fits
+    dialog.use:SetLabel(n == 0 and "Use it" or ("Use, plan the %d that %s"):format(n, plural(n, "fits", "fit")))
+    dialog.onUse = onUse
+    dialog:Show()
+end
+
+--------------------------------------------------------------------------------
+-- New build, and sharing (design J: one dialog, Copy and Import)
+--------------------------------------------------------------------------------
+
+-- A build just made: the window shows it, planning.
+export function openNew(m: TalentsModule, id: string?)
+    if not id then
+        return
+    end
+    -- (the window first: showing it goes back to your active build)
+    local window = m.window
+    if window and not window:IsShown() then
+        window:Show()
+    end
+    m.draft = nil
+    m.buildView, m.planning = id, true
+    m:Render()
+end
+
+export function askNewBuild(m: TalentsModule)
+    local p = m.newBuild
+    if not p then
+        p = NewBuildDialog.new(m:Classes(), function(name: string, file: string)
+            m:OpenNew(m:AddBuild(name, file, {}))
+        end)
+        m.newBuild = p
+    end
+    local dialog = p
+    m:Leave(function()
+        dialog.name:SetValue("")
+        dialog.class:SetValue(CLASS)
+        dialog:Show()
+        dialog.name.edit:SetFocus()
+    end)
+end
+
+-- The game's string for a build (any class: written from the tree as the
+-- game writes it), or nil.
+export function gameString(m: TalentsModule, b: SavedBuild): string?
+    local tree = m:BuildTree(b.class)
+    if not tree then
+        return nil
+    end
+    local version = errors.tryValue(C_Traits.GetLoadoutSerializationVersion)
+    local hash = errors.tryValue(C_Traits.GetTreeHash, tree.treeID)
+    if not (version and hash) then
+        return nil
+    end
+    local ranks: { [number]: number }, entries: { [number]: number } = {}, {}
+    for _, s in ipairs(b.steps) do
+        ranks[s.node] = (ranks[s.node] or 0) + 1
+        local n = tree.byID[s.node]
+        if n and n.choice and s.entry then
+            for i, e in ipairs(n.entryIDs or {}) do
+                if e == s.entry then
+                    entries[s.node] = i
+                end
+            end
+        end
+    end
+    local ok, text = pcall(UI.WriteGameTalentString, version, tree.specID, hash, tree, ranks, entries)
+    return ok and asString(text) or nil
+end
+
+export function shareText(m: TalentsModule, b: SavedBuild): string?
+    local tree = m:BuildTree(b.class)
+    return (UI.EncodeTalentBuild({
+        name = b.name,
+        classID = b.classID,
+        treeID = b.treeID,
+        steps = b.steps,
+    }, function(s: TalentStep): number?
+        local n = tree and tree.byID[s.node]
+        if not (n and n.choice) then
+            return nil
+        end
+        for i, e in ipairs(n.entryIDs or {}) do
+            if e == s.entry then
+                return i
+            end
+        end
+        return nil
+    end))
+end
+
+-- What was pasted: a build to preview, or nil and why not.
+export function readPasted(m: TalentsModule, given: string?): (Pasted?, string?)
+    local text = strtrim(given or "")
+    if text == "" then
+        return nil, nil
+    end
+    local classes = m:Classes().list
+    if text:find("^SuuUI:") then
+        local b, why = UI.DecodeTalentBuild(text)
+        if not b then
+            return nil, why
+        end
+        local class: ClassInfo? = nil
+        for _, c in ipairs(classes) do
+            if c.classID == b.classID then
+                class = c
+            end
+        end
+        if not class then
+            return nil, "That class has no talents here."
+        end
+        local tree = m:BuildTree(class.file)
+        if not tree then
+            return nil, "That class's talents can't be read right now."
+        end
+        local steps: TalentStep[] = {}
+        for i, s in ipairs(b.steps) do
+            local n = tree.byID[s.node]
+            local index = s.entryIndex
+            steps[i] = { node = s.node, entry = n and index and (n.entryIDs or {})[index] or nil }
+        end
+        local ok, _, problem = UI.TalentOrderCheck(steps, tree)
+        return {
+                name = b.name ~= "" and b.name or "Shared build",
+                class = class.file,
+                steps = steps,
+                note = (not ok) and ("Needs a look: " .. (problem or "")) or
+                    (b.treeID ~= tree.treeID and "Made for another version of the talents.") or
+                    nil,
+            },
+            nil
+    end
+    local version, specID = UI.ReadGameTalentHeader(text)
+    if not version then
+        return nil, "This isn't SuuUI's text or the game's talent string."
+    end
+    local class: ClassInfo? = nil
+    for _, c in ipairs(classes) do
+        if c.specID == specID then
+            class = c
+        end
+    end
+    if not class then
+        return nil, "This talent string is for a class without talents here."
+    end
+    local tree = m:BuildTree(class.file)
+    if not tree then
+        return nil, "That class's talents can't be read right now."
+    end
+    local read, why = UI.ReadGameTalentString(text, tree)
+    if not read then
+        return nil, why
+    end
+    local entries: { [number]: number } = {}
+    for id, i in pairs(read.entries) do
+        local n = tree.byID[id]
+        local entry = n and (n.entryIDs or {})[i]
+        if entry then
+            entries[id] = entry
+        end
+    end
+    local steps, all = UI.TalentStepsFromRanks(read.ranks, tree, entries)
+    return {
+            name = "Imported build",
+            class = class.file,
+            steps = steps,
+            fromGame = true,
+            note = (not all) and "Some talents don't fit their rows or arrows; check the order." or nil,
+        },
+        nil
+end
+
+-- "36 points · Arcane 5, Fire 0, Frost 31 · levels 10–45, in order"
+export function buildSummary(m: TalentsModule, file: string, steps: TalentStep[]): string
+    local tree = m:BuildTree(file)
+    local per: { name: string, n: number }[] = {}
+    for i, c in ipairs(tree and tree.trees or {}) do
+        per[i] = { name = c.name, n = 0 }
+    end
+    for _, s in ipairs(steps) do
+        local n = tree and tree.byID[s.node]
+        local index = n and n.treeIndex
+        local t = index and per[index]
+        if t then
+            t.n = t.n + 1
+        end
+    end
+    local parts: string[] = {}
+    for _, t in ipairs(per) do
+        parts[#parts + 1] = t.name .. " " .. t.n
+    end
+    local text = ("%d %s"):format(#steps, plural(#steps, "point", "points"))
+    if #parts > 0 then
+        text = text .. " · " .. table.concat(parts, ", ")
+    end
+    if #steps > 0 then
+        text = text .. (" · levels %d–%d, in order"):format(m:StepLevel(1), m:StepLevel(#steps))
+    end
+    return text
+end
+
+export function showShare(m: TalentsModule, asked: string)
+    local p = m.share
+    if not p then
+        p = ShareDialog.new(function(mode: string)
+            m:ShowShare(mode)
+        end, function(text: string)
+            m:PreviewPaste(text)
+        end, function()
+            m:ShareDone()
+        end)
+        m.share = p
+    end
+    local dialog = p
+    local b = m:Viewed()
+    local mode = asked
+    if mode == "copy" and not b then
+        mode = "import"
+    end
+    dialog.mode = mode
+    dialog.switch:SetValue(mode)
+    dialog.copy:SetShown(mode == "copy")
+    dialog.import:SetShown(mode == "import")
+    local height: number
+    local game: string? = nil
+    if mode == "copy" and b then
+        dialog:SetTitle("Share " .. (b.name or "build"))
+        dialog.textShared = m:ShareText(b) or ""
+        dialog.text:SetValue(dialog.textShared)
+        game = m:GameString(b)
+        dialog.gameShared = game or ""
+        dialog.game:SetValue(dialog.gameShared)
+        dialog.gameLabel:SetShown(game ~= nil)
+        dialog.game:SetShown(game ~= nil)
+        dialog.gameLabel:ClearAllPoints()
+        dialog.gameLabel:SetPoint("TOPLEFT", dialog.textHint, "BOTTOMLEFT", 0, -S["space-5"])
+        dialog.game:ClearAllPoints()
+        dialog.game:SetPoint("TOPLEFT", dialog.gameLabel, "BOTTOMLEFT", 0, -S["space-2"])
+        dialog.ok:SetLabel("Done")
+        dialog.ok:SetEnabledState(true)
+        dialog.cancel:Hide()
+        height = 30 + S["space-5"] + 30 + S["space-2"] + 2 * T.type.caption.lineHeight +
+            (game and (S["space-5"] + T.type.caption.lineHeight + S["space-2"] + 30) or 0)
+    else
+        dialog:SetTitle("Import a build")
+        dialog.paste:SetValue("")
+        m:PreviewPaste("")
+        dialog.ok:SetLabel("Save build")
+        dialog.cancel:Show()
+        height = 30 + S["space-5"] + 30 + S["space-5"] + 22 + T.type.caption.lineHeight * 4 + S["space-2"]
+    end
+    fitDialog(dialog, height)
+    dialog:Show()
+    if mode == "copy" then
+        m:After(0, function()
+            dialog.text.edit:SetFocus()
+            dialog.text.edit:SetCursorPosition(0)
+            dialog.text.edit:HighlightText()
+        end)
+    else
+        dialog.paste.edit:SetFocus()
+    end
+end
+
+-- The share dialog's Done: an import saved and shown; a copy closed.
+export function shareDone(m: TalentsModule)
+    local p = m.share
+    if not p then
+        return
+    end
+    if p.mode == "import" then
+        local found = p.found
+        if not found then
+            return
+        end
+        p:Hide()
+        m:OpenNew(m:AddBuild(found.name, found.class, found.steps))
+    else
+        p:Hide()
+    end
+end
+
+export function previewPaste(m: TalentsModule, text: string?)
+    local p = m.share
+    if not p then
+        return
+    end
+    local found, why = m:ReadPasted(text)
+    p.found = found
+    p.ok:SetEnabledState(found ~= nil)
+    p.diamond:SetShown(found ~= nil)
+    p.previewName:SetShown(found ~= nil)
+    p.previewClass:SetShown(found ~= nil)
+    if found then
+        local class = m:Classes().byFile[found.class]
+        UI.Paint(p.diamond, "class-" .. found.class:lower())
+        p.previewName:SetColor("class-" .. found.class:lower())
+        p.previewName:SetValue(found.name)
+        p.previewClass:SetValue(class and class.name or "")
+        p.previewLine:SetColor("ink")
+        p.previewLine:SetValue(m:BuildSummary(found.class, found.steps))
+        local note = found.note
+        if found.fromGame then
+            note = (note and (note .. " ") or "") ..
+                "From the game's string the order can't come along: the points are ordered top to bottom, and it's named \"Imported build\"."
+        end
+        p.previewNote:SetValue(note or "")
+    else
+        p.previewLine:SetColor(why and "ember-text" or "ink-muted")
+        p.previewLine:SetValue(why or "What you paste shows here before it's saved.")
+        p.previewNote:SetValue("")
+    end
+end

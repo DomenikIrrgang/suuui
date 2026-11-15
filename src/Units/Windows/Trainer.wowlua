@@ -1,0 +1,303 @@
+-- Units/Windows/Trainer.wowlua
+-- The trainer window in SuuUI's look (Units/Windows), restyled in place
+-- while the Trainer module (SuuUI's own window) is off: each service row
+-- (flat, a 32px icon in an edge, the price as SuuUI's money, ember while
+-- you can't afford it), each category row as a heading, the filter, Train
+-- and your money at the foot. skinTrainer takes the module; its method
+-- SkinTrainer calls it.
+
+import SuuUI from "/Core/API"
+import type Money from "/Core/API"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import type WindowsModule from "/Units/Windows"
+import part, button, art, clearArt from "/Units/Windows/Shared"
+
+local chromeOf = SuuUI.UI.WindowChrome
+local leave = SuuUI.UI.ReskinLeave
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try = errors.try
+local asString, asNumber, field = secret.asString, secret.asNumber, tbl.field
+local find = frames.find
+
+--------------------------------------------------------------------------------
+-- The trainer window
+--------------------------------------------------------------------------------
+
+-- What SuuUI added to a trainer row (kept here, never on the game's row).
+type TrainerRow = { money: Money }
+local trainerRows: { [Frame]: TrainerRow } = tbl.weakKeys()
+local trainerHeads: { [Frame]: boolean } = tbl.weakKeys()
+
+-- One service row after the game filled it: flat, a hairline under it, the
+-- hover and the choice in SuuUI's colours, a 32px icon in an edge, the price
+-- as SuuUI's money (ember digits while you can't afford it), and the name
+-- and rank fitted again for SuuUI's type.
+local function styleTrainerRow(given: unknown)
+    local b = frames.asButton(given)
+    local icon = b and frames.asTexture(field(b, "icon"))
+    local name, nameSub, sub = frames.asFontString(field(b, "name")),
+        frames.asFontString(field(b, "nameSubText")),
+        frames.asFontString(field(b, "subText"))
+    if not (b and icon and name and nameSub and sub) then
+        return
+    end
+    local gameMoney = part(b, "money")
+    local row = trainerRows[b]
+    if not row then
+        local n = b:GetNormalTexture()
+        if n then
+            n:SetAlpha(0)
+        end
+        local disabled = part(b, "disabledBG") or frames.asRegion(field(b, "disabledBG"))
+        if disabled then
+            disabled:SetAlpha(0)
+        end
+        local hl = b:GetHighlightTexture()
+        if hl then
+            UI.PaintFill(hl, "surface-raised")
+            hl:SetBlendMode("BLEND")
+            hl:SetAlpha(0.6)
+        end
+        local selected = frames.asTexture(field(b, "selectedTex"))
+        if selected then
+            UI.PaintFill(selected, "arcane-soft")
+            selected:SetBlendMode("BLEND")
+            selected:ClearAllPoints()
+            selected:SetAllPoints()
+        end
+        local rule = b:CreateTexture(nil, "ARTWORK")
+        UI.PaintFill(rule, "gilt-faint")
+        rule:SetHeight(1)
+        rule:SetPoint("BOTTOMLEFT", S["space-2"], 0)
+        rule:SetPoint("BOTTOMRIGHT", -S["space-2"], 0)
+        icon:SetSize(32, 32)
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        local iconEdge = CreateFrame("Frame", nil, b)
+        iconEdge:SetAllPoints(icon)
+        UI.Border(iconEdge, "gilt-hairline")
+        if gameMoney then
+            gameMoney:SetAlpha(0)
+        end
+        local money = UI.Money(b)
+        money:SetPoint("TOPRIGHT", -S["space-4"], -S["space-3"])
+        -- the row's texts are styled here, once: the general pass leaves them
+        -- (it chose a font by each text's length, so rows differed)
+        SuuUI.Fonts.Apply(name, "label")
+        SuuUI.Fonts.Apply(nameSub, "caption")
+        SuuUI.Fonts.Apply(sub, "caption")
+        UI.Paint(name, "ink")
+        UI.Paint(nameSub, "ink-muted")
+        UI.Paint(sub, "ink-muted")
+        local alternate = frames.asFontString(field(b, "alternateCost"))
+        local texts: FontString[] = { name, nameSub, sub }
+        if alternate then
+            SuuUI.Fonts.Apply(alternate, "caption")
+            texts[#texts + 1] = alternate
+        end
+        for _, fs in ipairs(texts) do
+            leave(fs, "text")
+            fs:SetShadowOffset(0, 0)
+        end
+        -- the requirements: one line under the name, to the row's right edge
+        sub:ClearAllPoints()
+        sub:SetPoint("TOPLEFT", name, "BOTTOMLEFT", 0, -4)
+        sub:SetPoint("RIGHT", b, "RIGHT", -S["space-4"], 0)
+        sub:SetHeight(14)
+        sub:SetWordWrap(false)
+        sub:SetJustifyV("TOP")
+        row = { money = money }
+        trainerRows[b] = row
+    end
+    -- the price (the game's frame stays, see-through: it still reports its state)
+    local cost = gameMoney and gameMoney:IsShown() and asNumber(try(GetTrainerServiceCost, b:GetID())) or nil
+    if cost and cost > 0 then
+        row.money:SetCopper(cost)
+        UI.Paint(row.money.text, GetMoney() >= cost and "ink" or "ember-text")
+        row.money:Show()
+    else
+        row.money:Hide()
+    end
+    -- name and rank in the room the price leaves
+    local priceW = row.money:IsShown() and (row.money:GetWidth() + S["space-4"]) or 0
+    local room = b:GetWidth() - (6 + 32 + 6) - priceW - S["space-4"]
+    local nameW = math.max(1, math.min(name:GetUnboundedStringWidth(), room))
+    name:SetWidth(nameW)
+    local rank = asString(nameSub:GetText())
+    local subRoom = room - nameW - 5
+    if rank and rank ~= "" and subRoom > 8 then
+        nameSub:SetWordWrap(false)
+        nameSub:SetWidth(math.min(nameSub:GetUnboundedStringWidth(), subRoom))
+        nameSub:Show()
+    else
+        nameSub:Hide()
+    end
+end
+
+-- A category row: its name as a SuuUI heading over a gilt-faint rule.
+local function styleTrainerCategory(given: unknown)
+    local c = frames.asFrame(given)
+    if not c or trainerHeads[c] then
+        return
+    end
+    trainerHeads[c] = true
+    for _, key in ipairs({ "LeftPiece", "RightPiece", "CenterPiece" }) do
+        local piece = frames.asRegion(field(c, key))
+        if piece then
+            piece:SetAlpha(0)
+        end
+    end
+    local label = frames.asFontString(field(c, "Label"))
+    if label then
+        SuuUI.Fonts.Apply(label, "header")
+        UI.Paint(label, "gilt-text")
+        -- the game sets its own fonts on hover: back to SuuUI's after
+        hookScript(c, "OnEnter", function()
+            SuuUI.Fonts.Apply(label, "header")
+            UI.Paint(label, "ink")
+        end)
+        hookScript(c, "OnLeave", function()
+            SuuUI.Fonts.Apply(label, "header")
+            UI.Paint(label, "gilt-text")
+        end)
+    end
+    local collapse = frames.asTexture(field(c, "CollapseIcon"))
+    if collapse then
+        UI.Paint(collapse, "gilt-text")
+    end
+    local rule = c:CreateTexture(nil, "ARTWORK")
+    UI.PaintFill(rule, "gilt-faint")
+    rule:SetHeight(1)
+    rule:SetPoint("BOTTOMLEFT", S["space-2"], 1)
+    rule:SetPoint("BOTTOMRIGHT", -S["space-2"], 1)
+end
+
+--------------------------------------------------------------------------------
+-- The trainer window (3.6): restyled in place, the game's list and Train
+-- (Blizzard_TrainerUI, loaded on demand); the trainer's name in the title.
+-- Only while the Trainer module (SuuUI's own window) is off.
+--------------------------------------------------------------------------------
+
+export function skinTrainer(self: WindowsModule)
+    local f = find("ClassTrainerFrame")
+    if not f or chromeOf(f) then
+        return
+    end
+    -- SuuUI's own trainer window takes its place while that module is on
+    local own = SuuUI.GetModule("trainer")
+    if own and own:IsEnabled() then
+        return
+    end
+    local trainerUI = { addon = "Blizzard_TrainerUI" }
+    hook(
+        _G,
+        "ClassTrainerFrame_InitServiceButton",
+        function(b: unknown)
+            styleTrainerRow(b)
+        end,
+        trainerUI
+    )
+    hook(
+        _G,
+        "ClassTrainerFrame_InitCategoryButton",
+        function(c: unknown)
+            styleTrainerCategory(c)
+        end,
+        trainerUI
+    )
+    -- a profession's next rank (Journeyman Blacksmith) sits over the list as
+    -- a row of its own, filled by the list's update
+    hook(
+        _G,
+        "ClassTrainerFrame_Update",
+        function()
+            local step = find("ClassTrainerFrameSkillStepButton")
+            if step and step:IsShown() then
+                styleTrainerRow(step)
+            end
+        end,
+        trainerUI
+    )
+    local hide = art(f)
+    for _, extra in ipairs({
+        field(_G, "ClassTrainerFrameInset", "NineSlice"),
+        field(_G, "ClassTrainerFrameInsetBg"),
+        field(_G, "ClassTrainerFrameMoneyBg"),
+        field(_G, "ClassTrainerFrameBottomInset"),
+    }) do
+        hide[#hide + 1] = extra
+    end
+    local chrome = UI.SkinWindow(f, {
+        title = "Trainer",
+        icon = "book",
+        close = button(_G, "ClassTrainerFrameCloseButton"),
+        topInset = 20,
+        under = "microMenu",
+        hide = hide,
+    })
+    -- the frame's own art away (SuuUI's glass stays)
+    clearArt(f, chrome)
+    local scrollBox, scrollBar = part(f, "ScrollBox"), part(f, "ScrollBar")
+    if scrollBox then
+        UI.ReskinScrollBox(scrollBox)
+    end
+    if scrollBar then
+        UI.ReskinScrollBar(scrollBar)
+    end
+    local status = frames.asStatusBar(field(_G, "ClassTrainerStatusBar"))
+    if status then
+        UI.ReskinStatusBar(status)
+    end
+    local d = part(f, "FilterDropdown")
+    if d then
+        UI.ReskinDropdown(d)
+        -- the game's is 18px tall: room inside for SuuUI's field, centred on
+        -- the rank bar's line, clear of the list
+        d:SetSize(130, 26)
+        d:ClearAllPoints()
+        d:SetPoint("TOPRIGHT", f, "TOPRIGHT", -13, -31)
+        local text = frames.asFontString(field(d, "Text") or field(d, "text"))
+        if text then
+            text:ClearAllPoints()
+            text:SetPoint("LEFT", S["space-4"], 0)
+            text:SetPoint("RIGHT", -(S["space-3"] + 12 + S["space-2"]), 0)
+            text:SetJustifyH("LEFT")
+        end
+    end
+    local train = button(_G, "ClassTrainerTrainButton")
+    if train then
+        UI.ReskinButton(train)
+    end
+    -- your money in SuuUI's money at the foot, the game's away
+    local money = part(f, "money") or find("ClassTrainerFrameMoney")
+    if money then
+        money:SetAlpha(0)
+    end
+    local mine = UI.Money(f)
+    mine:SetPoint("BOTTOMLEFT", S["space-5"], 9)
+    local function title()
+        local name = asString(UnitName("npc"))
+        if name and name ~= "" then
+            chrome:SetTitle(name)
+        end
+        UI.Reskin(f)
+        mine:SetCopper(GetMoney())
+    end
+    hookScript(f, "OnEvent", function(_: Frame, event: string)
+        if event == "PLAYER_MONEY" or event == "TRAINER_UPDATE" then
+            mine:SetCopper(GetMoney())
+        end
+    end)
+    hookScript(f, "OnShow", function()
+        self:After(0, title)
+    end)
+    if f:IsShown() then
+        title()
+    end
+    self.trainer = chrome
+end

@@ -1,0 +1,221 @@
+-- Units/Chat/TabBar: the tabs (their order, choosing one, the combat
+-- log's bar, unread, a right click, the order kept and reset, dragging,
+-- edit mode, sliding, a window closed mid-drag).
+
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import * as editMode from "/EditMode/EditMode"
+import internal M from "/Units/Chat"
+import expectNoErrors from "../../../helpers"
+import ready, frameOf, windowOf, findTab, tab, held, press, resetChat from "./ChatHelpers"
+
+local CF1, CF2 = ChatFrame1, ChatFrame2
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Tabs
+--------------------------------------------------------------------------------
+
+@test("the tabs: General first, then Global, the other windows, Search last; a click chooses one")
+local function tabs()
+    M:UpdateTabs()
+    local names: string[] = {}
+    for _, cf in ipairs(M:OrderedWindows()) do
+        names[#names + 1] = GetChatWindowInfo(cf:GetID())
+    end
+    expect(names[1]).toBe("General")
+    expect(names[2]).toBe("Global")
+    expect(findTab("Search") ~= nil).toBe(true)
+    expect(tab("General").active).toBe(true)
+    mock.click(tab("Log"))
+    expect(M.selected).toBe(CF2)
+    expect(frameOf(CF2)).toBeShown()
+    expect(frameOf(CF1)).never.toBeShown()
+    local bar = frames.find("CombatLogQuickButtonFrame_Custom")
+    if bar then
+        expect(bar).toBeShown()
+        expect(bar:GetParent()).toBe(M:Panel().log)
+    end
+    mock.click(tab("General"))
+    if bar then
+        expect(bar).never.toBeShown()
+    end
+    -- hovering a tab that isn't chosen
+    local log = tab("Log")
+    mock.hover(log)
+    expect(log.hover).toBe(true)
+    mock.hover(nil)
+    expect(log.hover).toBe(false)
+    mock.hover(tab("General"))
+    mock.hover(nil)
+end
+
+@test("a line in another tab marks it unread until it's chosen")
+local function unread()
+    local global = windowOf("Global")
+    global:AddMessage("news")
+    M:UpdateTabs()
+    expect(tab("Global").unread).toBeShown()
+    mock.click(tab("Global"))
+    expect(tab("Global").unread).never.toBeShown()
+end
+
+@test("a right-click on a window's tab opens Blizzard's chat settings for it; Search has none")
+local function tabSettings()
+    mock.click(tab("Global"), "RightButton")
+    expect(CURRENT_CHAT_FRAME_ID).toBe(windowOf("Global"):GetID())
+    expect(ChatConfigFrame).toBeShown()
+    M:OpenChatSettings(CF1) -- open already: again for this one
+    expect(CURRENT_CHAT_FRAME_ID).toBe(1)
+    HideUIPanel(ChatConfigFrame)
+    mock.click(tab("Search"), "RightButton")
+end
+
+@test("the tabs' order is kept per character; Reset brings the starting order back")
+local function order()
+    local global = windowOf("Global")
+    M:SaveTabOrder({ CF2, global, CF1 })
+    expect(M:HasTabOrder()).toBe(true)
+    expect(M:OrderedWindows()[1]).toBe(CF2)
+    M:UpdateTabs()
+    M:ResetTabOrder()
+    expect(M:HasTabOrder()).toBe(false)
+    expect(M:OrderedWindows()[1]).toBe(CF1)
+    mock.advanceFrames(10, 50)
+    expect(tab("General").slide).toBe(nil)
+end
+
+@test("dragging a tab along the row gives it a new place, kept; the others slide aside")
+local function dragging()
+    M:UpdateTabs()
+    local general = tab("General")
+    press(general, 120)
+    expect(M.drag ~= nil).toBe(true)
+    expect(general.plate).toBeShown()
+    mock.advanceFrames(3, 50)
+    mock.hover(general) -- let go on the row
+    held.left = false
+    mock.advanceFrames(1)
+    expect(M.drag).toBe(nil)
+    expect(M:HasTabOrder()).toBe(true)
+    expect(M:OrderedWindows()[1] ~= CF1).toBe(true)
+    -- the release isn't a click
+    mock.script(general, "OnClick", "LeftButton")
+    mock.advanceFrames(10, 50)
+    expect(general.slide).toBe(nil)
+end
+
+@test("a drag ends without a new place on Esc, a right click, or letting go away from the row")
+local function dragCancel()
+    M:UpdateTabs()
+    local general = tab("General")
+    press(general, 120)
+    -- (UI.Dismissable) keys pass on during the drag; Esc puts it back
+    local keys = assert(M:Panel().dragKeys)
+    expect(keys).toBeShown()
+    expect(keys:IsKeyboardEnabled()).toBe(true)
+    expect(keys:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("A")
+    expect(M.drag ~= nil).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(M.drag).toBe(nil)
+    expect(keys).never.toBeShown()
+    mock.advanceFrames(1)
+    expect(keys:IsKeyboardEnabled()).toBe(false)
+    expect(keys:GetPropagateKeyboardInput()).toBe(true)
+    -- a fight starting mid-drag: the keyboard let go, nothing refused
+    press(general, 120)
+    expect(keys:IsKeyboardEnabled()).toBe(true)
+    mock.player:enterCombat()
+    expect(keys:IsKeyboardEnabled()).toBe(false)
+    expect(keys:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(M.drag ~= nil).toBe(true)
+    held.right = true -- (put back)
+    mock.advanceFrames(1)
+    expect(M.drag).toBe(nil)
+    mock.player:leaveCombat()
+    expect(#mock.refusals()).toBe(0)
+    press(general, 120)
+    held.right = true
+    mock.advanceFrames(1)
+    expect(M.drag).toBe(nil)
+    press(general, 120)
+    local s = general:GetEffectiveScale()
+    local x, y = general:GetCenter()
+    mock.setCursorPosition(assert(x) * s, (assert(y) + 300) * s)
+    mock.hover(nil) -- away from the row
+    held.left = false
+    mock.advanceFrames(1)
+    expect(M.drag).toBe(nil)
+    expect(M:HasTabOrder()).toBe(false)
+    -- a press let go before it moved far enough: a click
+    press(general, 2)
+    held.left = false
+    mock.advanceFrames(1)
+    expect(M.press).toBe(nil)
+    -- with reduced motion it drops at once
+    mock.stub(SuuUI.Motion, "Reduced", function(): boolean
+        return true
+    end)
+    press(general, 120)
+    held.left = false
+    mock.advanceFrames(1)
+    expect(general.plate).never.toBeShown()
+end
+
+@test("tabs drag only in edit mode when set so; there they show grips and a hint, a press arranges")
+local function editTabs()
+    M:Set("tabReorder", "edit")
+    expect(M:CanDrag()).toBe(false)
+    M:PressTab(tab("Log"))
+    expect(M.press).toBe(nil)
+    editMode.enter()
+    expect(M:CanDrag()).toBe(true)
+    expect(M:Panel().editHint).toBeShown()
+    expect(tab("General").grip).toBeShown()
+    expect(tab("Search").grip).toBe(nil)
+    mock.click(tab("Log")) -- arranging: no switch
+    expect(M.selected).toBe(CF1)
+    editMode.exit()
+    expect(M:Panel().editHint).never.toBeShown()
+    expect(tab("General").grip).never.toBeShown()
+    -- the setting changed mid-drag ends it
+    M:Set("tabReorder", "drag")
+    press(tab("General"), 120)
+    M:Set("tabReorder", "edit")
+    expect(M.drag).toBe(nil)
+end
+
+@test("a dragged tab whose window closes mid-drag drops back where it lands")
+@cases({ { "gliding", false }, { "reduced motion", true } })
+local function closedMidDrag(_: string, reduced: boolean)
+    mock.stub(SuuUI.Motion, "Reduced", function(): boolean
+        return reduced
+    end)
+    M:OpenWhisperWindow("Otherplayer")
+    mock.advanceTime(0.01)
+    local cf = windowOf("Otherplayer")
+    M:UpdateTabs()
+    local b = tab("Otherplayer")
+    press(b, -60)
+    expect(M.drag ~= nil).toBe(true)
+    M:CloseWindow(cf)
+    held.left = false
+    mock.advanceFrames(1)
+    expect(M.drag).toBe(nil)
+    mock.advanceFrames(10, 50)
+    expect(b.y).toBe(0)
+end

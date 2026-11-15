@@ -1,0 +1,208 @@
+-- Units/Windows/WorldMap: the world map in SuuUI's look: enlarged in the
+-- middle of the screen, its title (Continent › Zone, a level up through a
+-- secure button, let go as a fight starts), enlarged by a scale and small,
+-- the status line's coordinates.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Windows"
+import expectNoErrors from "../../../helpers"
+import loadWindows, closeWindows, win, part from "./WindowsHelpers"
+
+local field = tbl.field
+
+loadWindows()
+
+@afterEach
+local function cleanup()
+    closeWindows()
+end
+
+@test("the enlarged world map opens in the middle of the screen, over the cast bar")
+local function mapInTheMiddle()
+    -- (found in game, 2026-11-13: risen above the cast bar, the enlarged map
+    -- went to the screen's top, over the micro menu)
+    local f = WorldMapFrame
+    mock.pressBinding("TOGGLEWORLDMAP")
+    mock.advanceFrames(3)
+    local chrome = assert(M.worldMap)
+    expect(M:Get("mapEnlarged")).toBe(true)
+    local point, rel, relPoint, x, y = f:GetPoint(1)
+    expect(point).toBe("CENTER")
+    expect(rel).toBe(UIParent)
+    expect(relPoint).toBe("CENTER")
+    -- (a scaled window's unseen right half and its header taken in)
+    expect(x).toBeCloseTo(chrome.cutW / 2)
+    expect(y).toBeCloseTo(-chrome.rise / 2)
+    -- under the micro menu, not over it
+    local menu = SuuUI.GetAnchor("microMenu")
+    if menu and menu:IsVisible() then
+        local top = (f:GetTop() + chrome.rise) * f:GetEffectiveScale()
+        expect(top < menu:GetBottom() * menu:GetEffectiveScale()).toBe(true)
+    end
+    HideUIPanel(f)
+    mock.advanceFrames(1)
+    expectNoErrors()
+end
+
+@test("the world map: Continent › Zone in the header; a click on it goes up a level")
+local function worldMap()
+    local f = WorldMapFrame
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    f:SetMapID(1429)
+    mock.advanceFrames(1)
+    local ch = assert(M.worldMap)
+    expect(ch.title.value).toBe("Eastern Kingdoms › Elwynn Forest")
+    -- the title's button: over the title, hung on the header itself (a
+    -- frame), not the text (a secure button over one that hung on the text
+    -- was refused: "Cannot anchor protected frames to regions", found in game)
+    local up: Frame? = nil
+    local tx, ty = ch.title:GetCenter()
+    for _, c in ipairs(frames.children(ch.head)) do
+        local l, r, b, t = c:GetLeft(), c:GetRight(), c:GetBottom(), c:GetTop()
+        if c:IsObjectType("Button") and l and r and b and t and tx and ty and l <= tx and r >= tx and b <= ty and
+            t >= ty then
+            local _, rel = c:GetPoint(1)
+            if rel == ch.head then
+                up = c
+            end
+        end
+    end
+    local button = assert(up)
+    expect((button:GetLeft() or 0) <= (ch.title:GetLeft() or 0)).toBe(true)
+    expect((button:GetRight() or 0) >= (ch.title:GetRight() or 0)).toBe(true)
+    -- hovered: a secure button over it clicks the game's breadcrumb bar's
+    -- parent level (set from SuuUI's code the map's pins were taken by it)
+    mock.hover(button)
+    local over = assert(M.upOver)
+    expect(over.button).toBeShown()
+    expect(over.button:GetAttribute("type1")).toBe("click")
+    mock.click(over.button)
+    expect(f:GetMapID()).toBe(1415)
+    mock.hover(over.button)
+    mock.hover(nil)
+    expect(over.button).never.toBeShown()
+    -- its own click does nothing (in combat there is no secure button)
+    mock.click(button)
+    expect(f:GetMapID()).toBe(1415)
+    -- the coordinates: yours off the map
+    mock.advanceTime(0.1)
+    expect(assert(M.status):GetAlpha()).toBe(1)
+end
+
+@test("the world map's title: its secure button let go as a fight starts with the mouse on it")
+local function upInCombat()
+    local f = WorldMapFrame
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    f:SetMapID(1429)
+    mock.advanceFrames(1)
+    local ch = assert(M.worldMap)
+    local up: Frame? = nil
+    local tx, ty = ch.title:GetCenter()
+    for _, c in ipairs(frames.children(ch.head)) do
+        local l, r, b, t = c:GetLeft(), c:GetRight(), c:GetBottom(), c:GetTop()
+        if c:IsObjectType("Button") and l and r and b and t and tx and ty and l <= tx and r >= tx and b <= ty and
+            t >= ty then
+            local _, rel = c:GetPoint(1)
+            if rel == ch.head then
+                up = c
+            end
+        end
+    end
+    mock.hover(nil)
+    mock.hover(assert(up))
+    local over = assert(M.upOver)
+    expect(over.button).toBeShown()
+    -- (GRP-20) the fight starts while the mouse rests there: hidden and
+    -- unhooked from the title before the lockdown
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(over.button).never.toBeShown()
+    expect(over.button:GetNumPoints()).toBe(0)
+    -- the map changed in the fight: no blocked action
+    f:SetMapID(1415)
+    mock.advanceFrames(1)
+    mock.hover(nil)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(over.button).never.toBeShown()
+    HideUIPanel(f)
+    mock.advanceFrames(1)
+    expectNoErrors()
+end
+
+@test(
+    "the world map enlarged by a scale, header and quest log at their usual size; small at the game's size; the map under the header"
+)
+local function mapSize()
+    local f = WorldMapFrame
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    -- (resized from SuuUI's code the map's zoom was written by it, and the
+    -- game refused its pins in combat: the size stays the game's)
+    local ui = UIParent:GetEffectiveScale()
+    local chrome = assert(M.worldMap)
+    expect(f:GetScale() > 1).toBe(true)
+    expect(chrome.head:GetEffectiveScale()).toBeCloseTo(ui)
+    local q = win("QuestMapFrame")
+    expect(q:GetEffectiveScale()).toBeCloseTo(ui)
+    local sc = part(f, "ScrollContainer")
+    if q:IsShown() then
+        -- right beside the map
+        expect(assert(q:GetLeft()) * ui).toBeCloseTo(assert(sc:GetRight()) * sc:GetEffectiveScale() + 3 * ui)
+    end
+    local mm = frames.asFrame(field(f, "BorderFrame", "MaximizeMinimizeFrame"))
+    if mm then
+        mock.click(part(mm, "MinimizeButton"))
+        expect(M:Get("mapEnlarged")).toBe(false)
+        expect(f:GetScale()).toBe(1)
+        expect(f:GetHeight()).toBe(534)
+        -- the map right under the header: the game's 67 px band is the header's
+        expect(assert(f:GetTop()) - assert(sc:GetTop())).toBeCloseTo(67)
+        mock.click(part(mm, "MaximizeButton"))
+        expect(M:Get("mapEnlarged")).toBe(true)
+        expect(f:GetScale() > 1).toBe(true)
+    end
+    M:Emit("SUUUI_SETTING_CHANGED", "worldmap", "enlargedSize")
+    M:Emit("SUUUI_THEME_CHANGED", "suuui")
+end
+
+@test("the map's status line: the cursor's spot over the map, yours off it")
+local function status()
+    local f = WorldMapFrame
+    mock.hover(nil) -- (the mouse away from the map)
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    f:SetMapID(1429)
+    local st = assert(M.status)
+    mock.advanceTime(0.1)
+    mock.advanceFrames(6) -- (it reads the map every 0.05 s)
+    expect(st:GetAlpha()).toBe(1)
+    local text = assert(frames.fontStrings(st)[1])
+    expect((text:GetText() or ""):find("you", 1, true) ~= nil).toBe(true)
+    -- the cursor over the map: its spot
+    local sc = part(f, "ScrollContainer")
+    local scale = sc:GetEffectiveScale()
+    mock.setCursorPosition((sc:GetLeft() + sc:GetWidth() / 2) * scale, (sc:GetBottom() + sc:GetHeight() / 2) * scale)
+    mock.hover(sc)
+    mock.advanceTime(0.1)
+    mock.advanceFrames(3)
+    local rx, ry = f:GetNormalizedCursorPosition()
+    local x, y = rx :: number, ry :: number
+    expect(text:GetText()).toBe(("%.1f, %.1f"):format(x * 100, y * 100))
+    expect(st:GetAlpha()).toBe(1)
+    -- off the map, on one you're not on: nothing
+    mock.hover(nil)
+    f:SetMapID(1414)
+    mock.advanceTime(0.1)
+    mock.advanceFrames(6)
+    expect(st:GetAlpha()).toBe(0)
+end

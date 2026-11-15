@@ -1,0 +1,67 @@
+-- Units/RaidPlanner/Text: setups shared as text, the Export and Import
+-- dialogs.
+
+import test, expect, afterEach from "wowlua:test"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Text"
+import cleanup, printed, asked, confirm, setup, slot, slotIn from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("as text: exported and imported the same, the odd characters kept; wrong text refused")
+local function asText()
+    setup()
+    local w = M:Work()
+    w.name = "Main; 40, %|"
+    slot(1, "WARRIOR", 3, "TANK")
+    local s = slotIn(2, "PRIEST")
+    s.label = "Fortitude; first"
+    s.pin = "Raider Priest"
+    slot(3)
+    local text = M:ExportText(w)
+    expect(text:sub(1, 9)).toBe("SuuRaid1;")
+    local back = assert(M:ImportText(text))
+    expect(back.name).toBe("Main; 40, %| 2")
+    expect(#back.slots).toBe(3)
+    expect(back.slots[1].spec).toBe(3)
+    expect(back.slots[1].role).toBe("TANK")
+    expect(back.slots[2].label).toBe("Fortitude; first")
+    expect(back.slots[2].pin).toBe("Raider Priest")
+    expect(back.slots[3].class).toBeNil()
+    local none, why = M:ImportText("hello")
+    expect(none).toBeNil()
+    expect(why).toBe("That isn't a raid planner setup.")
+    local _, why2 = M:ImportText("SuuRaid1;x;25")
+    expect(why2).toBe("The setup's raid size is wrong.")
+    -- what it can't read is left out: a group past the size, a sixth in a group, an unknown class or spec
+    local odd = assert(M:ImportText("SuuRaid1;;10;3,MAGE;1,DEATHKNIGHT,9;1,,,;1,,,;1,,,;1,,,;1,,,;1,MAGE,7,BOGUS"))
+    expect(odd.name).toBe("Imported setup")
+    expect(#odd.slots).toBe(5)
+    expect(odd.slots[1].class).toBeNil()
+    expect(odd.slots[1].spec).toBeNil()
+    -- the windows: export shows the text, import makes a setup and loads it
+    M:Export(nil)
+    expect(assert(asked().input).value).toBe(text)
+    M:Import()
+    confirm("nonsense")
+    expect(printed[#printed]).toBe("That isn't a raid planner setup.")
+    M:Import()
+    confirm(text)
+    expect(printed[#printed]).toBe("Imported Main; 40, %| 2.")
+    -- (the loaded one changed: asked first)
+    confirm(nil)
+    expect(M:Work().name).toBe("Main; 40, %| 2")
+end
+
+@test("escaping: the separators and the escape itself as %XX, and back")
+local function escaping()
+    expect(part.esc("a;b,c|d%e")).toBe("a%3Bb%2Cc%7Cd%25e")
+    expect(part.esc(nil)).toBe("")
+    expect(part.unesc(part.esc("Main; 40, %|"))).toBe("Main; 40, %|")
+    expect(part.exportText({ name = "Main", size = 10, slots = { { id = 1, g = 2, class = "MAGE", spec = 3 } } })).toBe(
+        "SuuRaid1;Main;10;2,MAGE,3,,,"
+    )
+end

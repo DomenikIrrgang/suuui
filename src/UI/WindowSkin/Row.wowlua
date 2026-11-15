@@ -1,0 +1,240 @@
+-- UI/WindowSkin/Row.wowlua
+-- The window row of skinned windows (the panel-position rule): they open
+-- under an anchor (the micro menu) in the order they opened, or in the
+-- middle of the screen (centerWindow), above your cast bar. A chrome
+-- made with `under` joins it through `add`; a theme change lays every
+-- header, its tabs and the row out again. Offers `windowRow` (the state),
+-- `layout`, `queue`, `centerWindow` and `add`.
+
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as anchors from "/Core/Anchors"
+import * as events from "/Core/Events"
+import chromeOf, allChromes from "/UI/WindowSkin/Chrome"
+import type WindowChrome from "/UI/WindowSkin/Chrome"
+import updatePlacers from "/UI/WindowSkin/SecurePlacement"
+
+local S = T.space
+
+--------------------------------------------------------------------------------
+-- The window row: SuuUI-headed windows open in a row under the micro menu,
+-- in the order they opened, space-5 apart (the Character window, then the
+-- spells window beside it, …). Opening, closing or resizing one lays the
+-- row out again. A protected window moves only out of combat; the row goes
+-- on from where it stands.
+--------------------------------------------------------------------------------
+
+type RowState = { list: WindowChrome[], seq: number, placing?: boolean, queued?: boolean }
+
+local Row: RowState = { list = {}, seq = 0 }
+export const windowRow = Row
+
+local function byOpening(a: WindowChrome, b: WindowChrome): boolean
+    return (a.openedAt or 0) < (b.openedAt or 0)
+end
+
+-- How far (screen units) a centred window rises so its bottom keeps above
+-- your cast bar (asked 2026-11-11: the professions window covered it), at
+-- most up to the screen's top. 0 without a cast bar, or with room enough.
+local function aboveCastBar(f: Frame, cy: number, rise: number): number
+    local bar = anchors.get("playerCastBar")
+    if not bar then
+        return 0
+    end
+    local barTop = bar:GetTop()
+    if not barTop then
+        return 0
+    end
+    local es = f:GetEffectiveScale()
+    local h = f:GetHeight() * es
+    local gap = S["space-5"] * UIParent:GetEffectiveScale()
+    local bottom = cy - h / 2
+    local need = barTop * bar:GetEffectiveScale() + gap - bottom
+    if need <= 0 then
+        return 0
+    end
+    local screenTop = UIParent:GetHeight() * UIParent:GetEffectiveScale()
+    local room = screenTop - gap - (cy + h / 2 + rise * es)
+    return math.max(0, math.min(need, room))
+end
+
+-- The windows asked to sit in the middle of the screen (their headers
+-- included), out of the row; opening one there closes the other (see
+-- add), so normally one: in the middle, above your cast bar. Should two be
+-- open at once (a protected one can't be closed from here), side by side,
+-- the group centred. A protected one moves out of combat only.
+local function centerAll(list: WindowChrome[])
+    if #list == 0 then
+        return
+    end
+    table.sort(list, byOpening)
+    local us = UIParent:GetEffectiveScale()
+    local gap = S["space-5"] * us
+    local total = 0
+    -- (by the part that shows: a scaled window's unseen right is left out)
+    for i, c in ipairs(list) do
+        total = total + (c.frame:GetWidth() - c.cutW) * c.frame:GetEffectiveScale() + (i > 1 and gap or 0)
+    end
+    local x = -total / 2
+    for _, c in ipairs(list) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        local w = (f:GetWidth() - c.cutW) * es
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+        else
+            f:ClearAllPoints()
+            local cy = UIParent:GetHeight() * us / 2 - c.rise / 2 * es
+            local up = c.overCastBar and 0 or aboveCastBar(f, cy, c.rise)
+            f:SetPoint("CENTER", UIParent, "CENTER", (x + w / 2) / es + c.cutW / 2, -c.rise / 2 + up / es)
+        end
+        x = x + w + gap
+    end
+end
+
+
+export function layout()
+    if Row.placing then
+        return
+    end
+    updatePlacers()
+    local open: WindowChrome[], middle: WindowChrome[] = {}, {}
+    for _, c in ipairs(Row.list) do
+        if c.frame:IsShown() then
+            if c.centered then
+                middle[#middle + 1] = c
+            else
+                open[#open + 1] = c
+            end
+        end
+    end
+    Row.placing = true
+    centerAll(middle)
+    Row.placing = false
+    if #open == 0 then
+        return
+    end
+    table.sort(open, byOpening)
+    local under = open[1].under
+    local anchor = under and anchors.get(under)
+    if not anchor or not anchor:IsVisible() then
+        return
+    end
+    local as = anchor:GetEffectiveScale()
+    local left, bottom = anchor:GetLeft(), anchor:GetBottom()
+    if not (left and bottom) then
+        return
+    end
+    -- in screen units (coordinates times effective scale)
+    local x = left * as
+    local top = bottom * as - S["space-5"] * as
+    local gap = S["space-5"] * as
+    Row.placing = true
+    for _, c in ipairs(open) do
+        local f = c.frame
+        local es = f:GetEffectiveScale()
+        if InCombatLockdown() and c.protected then
+            c.placeAfterCombat = true
+            local r = f:GetRight()
+            if r then
+                x = r * es + gap
+            end
+        else
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / es, top / es - c.rise)
+            x = x + f:GetWidth() * es + gap
+        end
+    end
+    Row.placing = false
+end
+
+export function queue()
+    if Row.queued then
+        return
+    end
+    Row.queued = true
+    after(0, function()
+        Row.queued = false
+        layout()
+    end)
+end
+
+-- In the middle of the screen (on) or back in the row (off): SuuUI's Talents
+-- tab centres the spells window while it shows (asked for in game). It rises
+-- to keep above your cast bar; `overCastBar`: it stays in the exact middle
+-- (the enlarged world map, 80% of the screen: the rise pushed it to the
+-- screen's top, over the micro menu; found in game 2026-11-13).
+export function centerWindow(frame: Frame?, center: unknown, opts: { overCastBar: boolean? }?)
+    local chrome = chromeOf(frame)
+    if not chrome or not chrome.under then
+        return
+    end
+    local on = center ~= nil and center ~= false
+    local over = opts ~= nil and opts.overCastBar == true
+    if chrome.centered == on and (chrome.overCastBar == true) == over then
+        return
+    end
+    chrome.centered = on
+    chrome.overCastBar = over or nil
+    layout()
+    queue()
+end
+
+export function add(chrome: WindowChrome)
+    Row.list[#Row.list + 1] = chrome
+    local f = chrome.frame
+    hookScript(f, "OnShow", function()
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        -- the middle holds one window: opening one there closes the other
+        -- (Talents and Legacy: asked for in game); protected ones aren't
+        -- closed from here
+        if chrome.centered then
+            for _, other in ipairs(Row.list) do
+                if other ~= chrome and other.centered and not other.protected and other.frame:IsShown() then
+                    other.frame:Hide()
+                end
+            end
+        end
+        layout()
+        queue()
+    end)
+    hookScript(f, "OnHide", queue)
+    hookScript(f, "OnSizeChanged", queue)
+    -- Blizzard places its panels again now and then (right after showing
+    -- one too): back in the row at once, so no frame is drawn elsewhere
+    -- (a flicker, found in game); and again a frame later
+    hook(f, "SetPoint", function()
+        if Row.placing then
+            return
+        end
+        layout()
+        queue()
+    end)
+    if f:IsShown() then
+        Row.seq = Row.seq + 1
+        chrome.openedAt = Row.seq
+        queue()
+    end
+end
+
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for _, c in ipairs(allChromes) do
+            c:PlaceHead()
+            c:LayoutTabs()
+        end
+        queue()
+    end,
+    "UI.SkinWindow"
+)
+
+events.onGame(
+    "PLAYER_REGEN_ENABLED",
+    function()
+        queue()
+    end,
+    "UI.WindowRow"
+)

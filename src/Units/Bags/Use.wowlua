@@ -1,0 +1,286 @@
+-- Units/Bags/Use.wowlua
+-- The Bags module's secure use of an item (see Units/Bags.wowlua): ItemUse
+-- moves one secure button over the bag slot under the mouse, out of combat,
+-- so a right click uses the item (and a spell waiting for an item takes it)
+-- from Blizzard's secure code; it passes every other click, the drag and
+-- the drop on to the slot. Also the windows and places whose own click on
+-- a bag item does something else (sell, deposit, attach), where it stays
+-- away. ItemUse works on the module it is made with (its useOver, useSlot,
+-- useAt and slot buttons).
+
+import type Overlay from "wowlua:secure"
+import type BagsModule from "../Bags"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as secure from "wowlua:secure"
+
+local try, field = errors.try, tbl.field
+local flag = secret.flag
+
+-- Blizzard's windows that take a bag item on a right click (its slot click
+-- checks these: sell, deposit, attach, trade, post)
+local ITEM_TAKERS = {
+    "MerchantFrame",
+    "BankFrame",
+    "GuildBankFrame",
+    "MailFrame",
+    "AuctionFrame",
+    "AuctionHouseFrame",
+    "TradeFrame",
+    "ItemUpgradeFrame",
+}
+
+-- The game's events for those places opening and closing.
+export const PLACES = {
+    MAIL_SHOW = "MAIL_CLOSED",
+    TRADE_SHOW = "TRADE_CLOSED",
+    AUCTION_HOUSE_SHOW = "AUCTION_HOUSE_CLOSED",
+    GUILDBANKFRAME_OPENED = "GUILDBANKFRAME_CLOSED",
+}
+
+-- Using an item for the Bags module `m`: the secure button over its slots.
+export class ItemUse
+    readonly m: BagsModule
+
+    constructor(m: BagsModule)
+        self.m = m
+    end
+
+    -- Using an item. In game Blizzard's own click on a bag slot was refused
+    -- after a while of playing ("Forbidden: UseContainerItem()": taint had
+    -- reached its path), so out of combat a right click uses the item through
+    -- a secure button: one, moved over the slot under the mouse (only there,
+    -- so it never covers a window in front of the bags), gone when the mouse
+    -- leaves. In combat it can't be moved or shown: the slot's own click then,
+    -- as before (a secure visibility driver hides it in combat whatever
+    -- happens). At a vendor, bank, mailbox, trade or auction house Blizzard's
+    -- click does what it does there (sell, deposit, attach, ...), so it stays
+    -- away. Every other click, the drag and the hover go on to the slot.
+    function PlainUse(): boolean
+        local m = self.m
+        if m.atMerchant or m.atBank or next(m.placesOpen) ~= nil then
+            return false
+        end
+        for _, name in ipairs(ITEM_TAKERS) do
+            local f = frames.asFrame(field(_G, name))
+            if f and f:IsShown() then
+                return false
+            end
+        end
+        return true
+    end
+
+    function UseButton(slot: Button): Overlay
+        local made = self.m.useOver
+        if made then
+            return made
+        end
+        local over = secure.overlay(slot)
+        local b = over.button
+        -- hidden in combat by the client itself, also if it was showing
+        local holder = CreateFrame("Frame", nil, UIParent)
+        secure.visibility(holder, "[combat] hide; show")
+        b:SetParent(holder)
+        b:RegisterForClicks("AnyDown", "AnyUp")
+        b:RegisterForDrag("LeftButton")
+        -- a right click without Shift, Ctrl or Alt: /use <bag> <slot>
+        over.set("type2", "macro")
+        b:SetScript("PostClick", function(_, button: string, down: boolean?)
+            self:PassClick(button, down)
+        end)
+        b:SetScript("OnDragStart", function(_, button: string)
+            -- (from the slot really under the mouse: the secure button can sit
+            -- over another one, and the drag picked up nothing from an empty
+            -- slot there, found in game)
+            local atBag, atSlot = self:SlotUnderMouse()
+            if atBag and atSlot and C_Container.GetContainerItemInfo(atBag, atSlot) then
+                try(C_Container.PickupContainerItem, atBag, atSlot)
+            else
+                self:PassTo("OnDragStart", button)
+            end
+            self.dragging = CursorHasItem() and true or false
+            if self.dragging then
+                self:WatchDrop()
+            end
+        end)
+        b:SetScript("OnReceiveDrag", function()
+            self:Drop()
+        end)
+        b:HookScript("OnEnter", function()
+            local s = self.m.useSlot
+            if s then
+                s:LockHighlight()
+            end
+        end)
+        b:HookScript("OnLeave", function()
+            local s = self.m.useSlot
+            if s then
+                s:UnlockHighlight()
+            end
+            self:HideUse()
+        end)
+        self.m.useOver = over
+        return over
+    end
+
+    -- The mouse came onto a slot (bag, slot): the secure button over it.
+    function UseOn(b: Button, bag: number, slot: number)
+        local m = self.m
+        if InCombatLockdown() or not m:IsEnabled() or not m:IsLive() then
+            return
+        end
+        local over = m.useOver
+        if over and m.useSlot == b and over.button:IsShown() then
+            return
+        end
+        if not self:PlainUse() then
+            self:HideUse()
+            return
+        end
+        over = self:UseButton(b)
+        over.set("macrotext2", ("/use %d %d"):format(bag, slot))
+        m.useSlot = b
+        m.useAt = { bag, slot }
+        self:DrawUseTarget()
+        over.show(b)
+    end
+
+    -- A spell waiting for an item (Disenchant, an enchant, a sharpening
+    -- stone, a lockpick): the left click puts it on the item securely, as
+    -- Blizzard's slot does with UseContainerItem; passed on from SuuUI's code
+    -- that was refused ("Forbidden: UseContainerItem()", reported in game).
+    -- Else the left click goes on to the slot (picking the item up).
+    function DrawUseTarget()
+        local m = self.m
+        local over, at = m.useOver, m.useAt
+        if not (over and at) or InCombatLockdown() then
+            return
+        end
+        local targets = flag(try(SpellCanTargetItem)) or flag(try(SpellCanTargetItemID)) or false
+        m.useTargets = targets
+        -- the left button goes through to the game's slot underneath (its
+        -- own pick up, drag and drop: SuuUI's button guessed the slot, and
+        -- near a cell's edge took the wrong one, found in game), except
+        -- while a spell waits for an item: then this button puts it on
+        if targets then
+            errors.tryMethod(over.button, "SetPassThroughButtons")
+        else
+            errors.tryMethod(over.button, "SetPassThroughButtons", "LeftButton")
+        end
+        over.set("type1", targets and "macro" or nil)
+        over.set("macrotext1", targets and ("/use %d %d"):format(at[1], at[2]) or nil)
+    end
+
+    function HideUse()
+        local over = self.m.useOver
+        if over and over.button:IsShown() then
+            over.hide()
+        end
+    end
+
+    -- A drag let go over a slot: the item put there, once. The secure button
+    -- follows the mouse to the slot it is let go over, so the release comes
+    -- to it twice, as the drop and as a click: each passed on, the second
+    -- picked the item up again and a drag put nothing down (asked in game:
+    -- drag and drop as well as click and click).
+    dragging: boolean = false
+    droppedAt: number? = nil
+
+    -- After a drag picked an item up: watched until the left button is let
+    -- go; the item still on the cursor then goes on the slot under the mouse.
+    -- (In game the release reached neither the drop nor the click: the item
+    -- stayed on the cursor, found in game.) Put down already: nothing.
+    dropWatch: Frame? = nil
+
+    function WatchDrop()
+        local w = self.dropWatch
+        if not w then
+            local made = CreateFrame("Frame")
+            self.dropWatch = made
+            made:SetScript("OnUpdate", function()
+                if IsMouseButtonDown("LeftButton") then
+                    return
+                end
+                made:Hide()
+                if not self.dragging then
+                    return
+                end
+                self.dragging = false
+                if not CursorHasItem() or self.droppedAt == GetTime() then
+                    return
+                end
+                local bag, slot = self:SlotUnderMouse()
+                if bag and slot then
+                    self.droppedAt = GetTime()
+                    try(C_Container.PickupContainerItem, bag, slot)
+                end
+            end)
+            w = made
+        end
+        w:Show()
+    end
+
+    -- The shown bag or bank slot under the mouse: its bag and slot.
+    function SlotUnderMouse(): (number?, number?)
+        for bag, list in pairs(self.m.buttons) do
+            for slot, b in pairs(list) do
+                if b:IsVisible() and b:IsMouseOver() then
+                    return bag, slot
+                end
+            end
+        end
+        return nil, nil
+    end
+
+    function Drop(): boolean
+        local now = GetTime()
+        if self.droppedAt == now then
+            return true
+        end
+        self.dragging = false
+        if not CursorHasItem() then
+            return false
+        end
+        self.droppedAt = now
+        -- the slot really under the mouse (the secure button may still sit over
+        -- the slot the drag began on: then it went back there, found in game
+        -- as a drop that worked only now and then)
+        local bag, slot = self:SlotUnderMouse()
+        if bag and slot then
+            try(C_Container.PickupContainerItem, bag, slot)
+        else
+            self:PassTo("OnReceiveDrag")
+        end
+        return true
+    end
+
+    -- A click the secure button doesn't use itself goes on to the slot, on
+    -- the release (the slot's clicks are registered for the release).
+    function PassClick(button: string, down: boolean?)
+        if down then
+            return
+        end
+        -- (the release of a drag: its drop)
+        if button == "LeftButton" and (self.dragging or self.droppedAt == GetTime()) and self:Drop() then
+            return
+        end
+        if button == "RightButton" and not IsModifierKeyDown() then
+            return
+        end
+        -- (a spell's target: the secure button put it on the item)
+        if button == "LeftButton" and self.m.useTargets and not IsModifierKeyDown() then
+            return
+        end
+        self:PassTo("OnClick", button)
+    end
+
+    function PassTo(script: "OnClick" | "OnDragStart" | "OnReceiveDrag", button: string?)
+        local s = self.m.useSlot
+        local fn = s and s:GetScript(script)
+        if s and fn then
+            fn(s, button, false)
+        end
+    end
+end

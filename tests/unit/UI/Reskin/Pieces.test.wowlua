@@ -1,0 +1,455 @@
+-- UI/Reskin/Pieces: the one-off pieces on Blizzard's own templates
+-- (MinimalScrollBar, ColoredProgressBarTemplate, UIPanelButtonTemplate,
+-- InputBoxTemplate, SearchBoxTemplate, UICheckButtonTemplate,
+-- SelectorButtonTemplate): the scrollbar, status and fill bars, buttons,
+-- boxes and fields. The hooks stay post-hooks: Blizzard's own methods still
+-- run (checked where a piece hooks one).
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import tokens as T from "/Core/Tokens"
+import reskinScrollBar, reskinStatusBar, reskinFillBar, reskinIconButton, reskinCheckButton, reskinButton, reskinEditBox, reskinCollapseButton from "/UI/Reskin/Pieces"
+import internal sameColor from "/UI/Reskin/Pass"
+import expectNoErrors from "../../../helpers"
+import tokenOf, themeChanged from "../WindowsHelpers"
+import GLYPHS, WHITE, host, resetHost, skin from "./ReskinHelpers"
+
+@afterEach
+local function cleanup()
+    resetHost()
+    expectNoErrors()
+end
+
+-- The parts of Blizzard's templates these tests reach (their parentKeys and
+-- mixin methods), and the stand-ins built like them.
+type ScrollBarParts = Frame & { Track: Frame & { Thumb: Frame }, Back: Frame, Forward: Frame }
+type BarParts = StatusBar & { bg: Texture, text: FontString }
+type FillBarParts = Frame
+    & {
+        Fill: Texture,
+        FillArea: Frame,
+        Text: FontString,
+        SetFillTextureByColorType: (self: Frame, colorType: unknown) -> (),
+        SetFillPercent: (self: Frame, percent: number) -> (),
+        SetText: (self: Frame, text: string) -> (),
+    }
+
+-- A ColoredProgressBarMixin colour type.
+local function colorType(name: string): unknown
+    return tbl.field(ColoredProgressBarMixin, "ColorType", name)
+end
+
+--------------------------------------------------------------------------------
+-- The scrollbar
+--------------------------------------------------------------------------------
+
+@test("reskinScrollBar: Blizzard's minimal bar as a 2px gilt-line thumb")
+local function scrollBar()
+    local bar = CreateFrame("EventFrame", nil, host(), "MinimalScrollBar") :: ScrollBarParts
+    reskinScrollBar(bar)
+    expect(skin(bar).scrollBar).toBe(true)
+    for _, t in ipairs(frames.textures(bar.Track)) do
+        expect(t:GetAlpha()).toBe(0)
+    end
+    expect(bar.Back:GetAlpha()).toBe(0)
+    expect(bar.Forward:GetAlpha()).toBe(0)
+    local thumb = bar.Track.Thumb
+    local found: Texture? = nil
+    for _, t in ipairs(frames.textures(thumb)) do
+        if tokenOf(t) == "gilt-line" then
+            found = t
+        else
+            expect(t:GetAlpha()).toBe(0)
+        end
+    end
+    expect(found).never.toBeNil()
+    local line = assert(found)
+    expect(line:GetWidth()).toBe(2)
+    -- hovered: gilt and wider
+    mock.script(thumb, "OnEnter")
+    expect(tokenOf(line)).toBe("gilt")
+    expect(line:GetWidth()).toBe(4)
+    mock.script(thumb, "OnLeave")
+    expect(tokenOf(line)).toBe("gilt-line")
+    expect(line:GetWidth()).toBe(2)
+    -- again: nothing more
+    local n = #frames.textures(thumb)
+    reskinScrollBar(bar)
+    expect(#frames.textures(thumb)).toBe(n)
+    reskinScrollBar(nil)
+end
+
+@test("reskinScrollBar: a bar without a track or a thumb")
+local function scrollBarBare()
+    local bare = CreateFrame("Frame", nil, host())
+    reskinScrollBar(bare)
+    expect(skin(bare).scrollBar).toBe(true)
+    local noThumb = CreateFrame("Frame", nil, host()) :: Frame & { Track: Frame }
+    noThumb.Track = CreateFrame("Frame", nil, noThumb)
+    noThumb.Track:CreateTexture()
+    reskinScrollBar(noThumb)
+    expect(frames.textures(noThumb.Track)[1]:GetAlpha()).toBe(0)
+    -- a thumb that is a texture (no scripts): no hover
+    local texThumb = CreateFrame("Frame", nil, host()) :: Frame & { Track: Frame & { Thumb: Texture } }
+    local track = CreateFrame("Frame", nil, texThumb) :: Frame & { Thumb: Texture }
+    track.Thumb = track:CreateTexture()
+    texThumb.Track = track
+    reskinScrollBar(texThumb)
+    expect(skin(texThumb).scrollBar).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Status bars
+--------------------------------------------------------------------------------
+
+local function statusBar(atlas: string?): BarParts
+    local bar = CreateFrame("StatusBar", nil, host()) :: BarParts
+    bar:SetSize(120, 12)
+    bar:SetPoint("CENTER")
+    local bg = bar:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bar.bg = bg
+    bar:SetStatusBarTexture(WHITE)
+    if atlas then
+        bar:GetStatusBarTexture():SetAtlas(atlas)
+    end
+    bar:SetMinMaxValues(0, 100)
+    bar:SetValue(40)
+    bar.text = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    bar.text:SetText("40 / 100")
+    return bar
+end
+
+@test("reskinStatusBar: a flat fill in its atlas's colour on a track, the text centred")
+@cases({
+    { "common-stat-bar-green", "rep-friendly" },
+    { "common-stat-bar-red", "rep-hostile" },
+    { "common-stat-bar-blue", "progress-fill" },
+    { "common-stat-bar-white", "progress-fill" },
+})
+local function statusBars(atlas: string, token: string)
+    local bar = statusBar(atlas)
+    reskinStatusBar(bar)
+    local fill = bar:GetStatusBarTexture()
+    expect(skin(bar).atlas).toBe(atlas)
+    expect(fill:GetTextureFilePath()).toBe(WHITE)
+    expect(tokenOf(fill)).toBe(token)
+    expect(bar.bg:GetAlpha()).toBe(0)
+    expect(skin(bar).track).never.toBeNil()
+    expect(tokenOf(bar.text)).toBe("ink")
+    expect(bar.text).toBeAnchoredTo(skin(bar).track, "LEFT", "LEFT")
+end
+
+@test("reskinStatusBar: Blizzard setting the fill again: flat again, Blizzard's call kept")
+local function statusBarAgain()
+    local bar = statusBar("common-stat-bar-green")
+    reskinStatusBar(bar)
+    local fill = bar:GetStatusBarTexture()
+    fill:SetAtlas("common-stat-bar-red")
+    expect(fill:GetTextureFilePath()).toBe(WHITE)
+    expect(skin(bar).atlas).toBe("common-stat-bar-red")
+    expect(tokenOf(fill)).toBe("rep-hostile")
+    bar:SetStatusBarTexture(WHITE)
+    expect(tokenOf(bar:GetStatusBarTexture())).toBe("rep-hostile")
+    -- again: one track, the hook once
+    local track = skin(bar).track
+    reskinStatusBar(bar)
+    expect(skin(bar).track).toBe(track)
+    reskinStatusBar(nil)
+end
+
+@test("reskinStatusBar: a bar without a fill gets a track of its own height")
+local function statusBarNoFill()
+    local bar = CreateFrame("StatusBar", nil, host())
+    bar:SetSize(100, 10)
+    reskinStatusBar(bar)
+    expect(assert(skin(bar).track):GetHeight()).toBe(10)
+    expect(skin(bar).fillHooked).toBeNil()
+end
+
+@test("reskinStatusBar: a mask on the fill is taken off")
+local function statusBarMask()
+    local bar = statusBar(nil)
+    local mask = bar:CreateMaskTexture()
+    bar:GetStatusBarTexture():AddMaskTexture(mask)
+    reskinStatusBar(bar)
+    expect(bar:GetStatusBarTexture():GetNumMaskTextures()).toBe(0)
+end
+
+@test("reskinFillBar: Blizzard's coloured progress bar, its share kept on resize")
+local function fillBar()
+    local bar = CreateFrame("Frame", nil, host(), "ColoredProgressBarTemplate") :: FillBarParts
+    bar:SetPoint("CENTER")
+    bar:SetFillTextureByColorType(colorType("Green"))
+    bar:SetFillPercent(0.5)
+    bar:SetText("3,210 / 6,000")
+    reskinFillBar(bar)
+    expect(skin(bar).fillBar).toBe(true)
+    expect(bar.Fill:GetTextureFilePath()).toBe(WHITE)
+    expect(skin(bar).atlasWord).toBe("green")
+    expect(sameColor("rep-friendly", bar.Fill:GetVertexColor())).toBe(true)
+    expect(skin(bar).percent).toBe(0.5)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.5 * bar.FillArea:GetWidth())
+    expect(assert(skin(bar).track):GetHeight()).toBeCloseTo(math.max(6, math.min(14, 15)))
+    -- the track round the area the fill grows in, its edge one pixel outside
+    -- (over the whole bar it left the game's 6 px inset as a gap at both
+    -- ends: found in game)
+    local track0 = assert(skin(bar).track)
+    local px = 768 / select(2, GetPhysicalScreenSize()) / bar:GetEffectiveScale()
+    expect(track0:GetLeft()).toBeCloseTo(assert(bar.FillArea:GetLeft()) - px)
+    expect(track0:GetRight()).toBeCloseTo(assert(bar.FillArea:GetRight()) + px)
+    expect(bar.Fill:GetLeft()).toBeCloseTo(assert(bar.FillArea:GetLeft()))
+    expect(tokenOf(bar.Text)).toBe("ink")
+    expect(bar.Text).toBeAnchoredTo(skin(bar).track, "LEFT", "LEFT")
+    -- Blizzard sets the share (its own method still runs) and the colour
+    bar:SetFillPercent(0.25)
+    expect(skin(bar).percent).toBe(0.25)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.25 * bar.FillArea:GetWidth())
+    bar:SetFillTextureByColorType(colorType("Red"))
+    expect(bar.Fill:GetTextureFilePath()).toBe(WHITE)
+    -- a colour set after the restyle (the game's atlas sizes the fill to its
+    -- art): back inside the track's edge
+    expect(bar.Fill:GetHeight()).toBeCloseTo(track0:GetHeight() - 2)
+    expect(sameColor("rep-hostile", bar.Fill:GetVertexColor())).toBe(true)
+    -- a tint of Blizzard's own on a word SuuUI has no colour for: kept
+    bar:SetFillTextureByColorType(colorType("White"))
+    bar.Fill:SetVertexColor(0.2, 0.4, 0.6)
+    expect(skin(bar).atlasWord).toBe("white")
+    -- the width: a share of nothing hides the fill (the emulated client
+    -- sends the FillArea no OnSizeChanged when its parent's width moves
+    -- it: sent here as the client does; see the notes)
+    bar:SetWidth(12)
+    mock.script(bar.FillArea, "OnSizeChanged", bar.FillArea:GetWidth(), bar.FillArea:GetHeight())
+    expect(bar.Fill:GetAlpha()).toBe(0)
+    bar:SetWidth(200)
+    mock.script(bar.FillArea, "OnSizeChanged", bar.FillArea:GetWidth(), bar.FillArea:GetHeight())
+    expect(bar.Fill:GetAlpha()).toBe(1)
+    expect(bar.Fill:GetWidth()).toBeCloseTo(0.25 * 188)
+    -- again: the same track
+    local track = skin(bar).track
+    reskinFillBar(bar)
+    expect(skin(bar).track).toBe(track)
+    -- a theme change tints again
+    bar:SetFillTextureByColorType(colorType("Blue"))
+    bar.Fill:SetVertexColor(1, 1, 1)
+    themeChanged()
+    expect(sameColor("progress-fill", bar.Fill:GetVertexColor())).toBe(true)
+end
+
+@test("reskinFillBar: nothing without a Fill; no share without SetFillPercent")
+local function fillBarOdd()
+    reskinFillBar(nil)
+    local plain = CreateFrame("Frame", nil, host())
+    reskinFillBar(plain)
+    expect(skin(plain).fillBar).toBeNil()
+    local own = CreateFrame("Frame", nil, host()) :: Frame & { Fill: Texture }
+    own.Fill = own:CreateTexture()
+    own.Fill:SetAtlas("common-stat-bar-blue")
+    own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    reskinFillBar(own)
+    expect(skin(own).fillBar).toBe(true)
+    expect(skin(own).sizeFill).toBeNil()
+    expect(skin(own).atlasWord).toBe("blue")
+    -- no atlas: no word, no tint
+    local blank = CreateFrame("Frame", nil, host()) :: Frame & { Fill: Texture }
+    blank.Fill = blank:CreateTexture()
+    reskinFillBar(blank)
+    expect(skin(blank).atlasWord).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- Buttons, boxes and fields
+--------------------------------------------------------------------------------
+
+@test("reskinIconButton: Blizzard's selector button as a well, gilt on hover, arcane when selected")
+local function iconButton()
+    local b = CreateFrame("Button", nil, host(), "SelectorButtonTemplate") :: Button
+        & { Icon: Texture, SelectedTexture: Texture }
+    b:SetPoint("CENTER")
+    b.Icon:SetTexture(134400)
+    reskinIconButton(b)
+    local st = assert(skin(b).icon)
+    expect(b.Icon:GetAlpha()).toBe(1)
+    expect(b:GetHighlightTexture():GetAlpha()).toBe(0)
+    expect(tokenOf(st.edge.top)).toBe("gilt-hairline")
+    mock.hover(b)
+    expect(tokenOf(st.edge.top)).toBe("gilt")
+    mock.hover(nil)
+    b.SelectedTexture:Show()
+    expect(tokenOf(st.edge.top)).toBe("arcane")
+    b.SelectedTexture:SetShown(false)
+    expect(tokenOf(st.edge.top)).toBe("gilt-hairline")
+    -- again: the same state, the art hidden again
+    reskinIconButton(b)
+    expect(skin(b).icon).toBe(st)
+    reskinIconButton(nil)
+end
+
+@test("reskinIconButton: a button with neither icon nor selected texture")
+local function iconButtonBare()
+    local b = CreateFrame("Button", nil, host())
+    b:CreateTexture()
+    reskinIconButton(b)
+    expect(tokenOf(assert(skin(b).icon).edge.top)).toBe("gilt-hairline")
+end
+
+@test("reskinCheckButton: a 16px box, the arcane check following Blizzard's state")
+local function checkButton()
+    local b = CreateFrame("CheckButton", nil, host(), "UICheckButtonTemplate")
+    b:SetPoint("CENTER")
+    reskinCheckButton(b)
+    local st = assert(skin(b).check)
+    expect(st.box).toHaveSize(16, 16)
+    expect(b:GetNormalTexture():GetAlpha()).toBe(0)
+    local check: Texture? = nil
+    for _, t in ipairs(frames.textures(st.box)) do
+        if t:GetTextureFilePath() == GLYPHS .. "check.tga" then
+            check = t
+        end
+    end
+    expect(check).never.toBeShown()
+    b:SetChecked(true)
+    expect(check).toBeShown()
+    mock.click(b)
+    expect(b:GetChecked()).toBe(false)
+    expect(check).never.toBeShown()
+    b:Hide()
+    b:SetChecked(true)
+    b:Show()
+    expect(check).toBeShown()
+    reskinCheckButton(b)
+    expect(skin(b).check).toBe(st)
+    reskinCheckButton(nil)
+end
+
+@test("reskinButton: Blizzard's panel button quiet; dimmed while disabled")
+local function panelButton()
+    local b = CreateFrame("Button", nil, host(), "UIPanelButtonTemplate") :: Button & { Left: Texture, Middle: Texture }
+    b:SetSize(100, 22)
+    b:SetText("Accept")
+    reskinButton(b)
+    expect(b.Left:GetAlpha()).toBe(0)
+    expect(b.Middle:GetAlpha()).toBe(0)
+    expect(tokenOf(b:GetFontString())).toBe("ink")
+    expect(b:GetAlpha()).toBe(1)
+    b:Disable()
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    b:Enable()
+    expect(b:GetAlpha()).toBe(1)
+    b:SetEnabled(false)
+    expect(b:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+    b:SetEnabled(true)
+    mock.hover(b)
+    local gilt = 0
+    for _, t in ipairs(frames.textures(b)) do
+        if tokenOf(t) == "gilt" then
+            gilt = gilt + 1
+        end
+    end
+    expect(gilt).toBe(4)
+    mock.hover(nil)
+    reskinButton(b)
+    reskinButton(nil)
+end
+
+@test("reskinButton: a red button's atlas art away")
+local function redButton()
+    local b = CreateFrame("Button", nil, host())
+    local art = b:CreateTexture()
+    art:SetAtlas("128-redbutton-up")
+    reskinButton(b)
+    expect(art:GetAlpha()).toBe(0)
+end
+
+@test("reskinEditBox: Blizzard's input box sunk, an arcane edge while typing")
+local function editBox()
+    local e = CreateFrame("EditBox", "SuuUITestEdit", host(), "InputBoxTemplate") :: EditBox & { Left: Texture }
+    e:SetSize(120, 20)
+    e:SetPoint("CENTER")
+    e:SetAutoFocus(false)
+    reskinEditBox(e)
+    expect(skin(e).edit).toBe(true)
+    expect(e.Left:GetAlpha()).toBe(0)
+    expect(tokenOf(e)).toBe("ink")
+    local edge: Texture[] = {}
+    local function scan(f: Frame)
+        for _, c in ipairs(frames.children(f)) do
+            for _, t in ipairs(frames.textures(c)) do
+                if tokenOf(t) == "gilt-line" or tokenOf(t) == "arcane" then
+                    edge[#edge + 1] = t
+                end
+            end
+        end
+    end
+    scan(e)
+    expect(#edge).toBe(4)
+    mock.typeText(e, "x")
+    expect(tokenOf(edge[1])).toBe("arcane")
+    e:ClearFocus()
+    expect(tokenOf(edge[1])).toBe("gilt-line")
+    reskinEditBox(e)
+    reskinEditBox(nil)
+end
+
+@test("reskinEditBox: a search box: the field itself, its hint inset")
+local function searchBox()
+    local e = CreateFrame("EditBox", nil, host(), "SearchBoxTemplate") :: EditBox & { Instructions: FontString }
+    e:SetSize(120, 20)
+    reskinEditBox(e)
+    expect(skin(e.Instructions).skip).toBe(true)
+    expect(tokenOf(e.Instructions)).toBe("ink-muted")
+    expect(e.Instructions).toBeAnchoredTo(e, "LEFT", "LEFT")
+    local l, r = e:GetTextInsets()
+    expect(l).toBe(T.space["space-3"])
+    expect(r).toBe(T.space["space-5"])
+end
+
+@test("reskinEditBox: a box with a backdrop child")
+local function editBoxChild()
+    local e = CreateFrame("EditBox", nil, host()) :: EditBox & { NineSlice: Frame }
+    local child = CreateFrame("Frame", nil, e) :: Frame & { NineSlice: Frame }
+    child.NineSlice = CreateFrame("Frame", nil, child)
+    local art = child:CreateTexture()
+    e.NineSlice = CreateFrame("Frame", nil, e)
+    reskinEditBox(e)
+    expect(child.NineSlice:GetAlpha()).toBe(0)
+    expect(art:GetAlpha()).toBe(0)
+    expect(e.NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("reskinCollapseButton: SuuUI's minus or plus, following Blizzard's texture")
+local function collapseButton()
+    local b = CreateFrame("Button", nil, host())
+    b:SetSize(16, 16)
+    b:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
+    b:SetPushedTexture("Interface\\Buttons\\UI-MinusButton-Down")
+    -- Blizzard's own click (set before SuuUI hooks it): the texture changed
+    -- without a hooked method, so only the redraw after the click sees it
+    b:SetScript("OnClick", function(self)
+        self:GetNormalTexture():SetAtlas("Objective-Header-Collapse")
+    end)
+    reskinCollapseButton(b)
+    local found: Texture? = nil
+    for _, t in ipairs(frames.textures(b)) do
+        if tokenOf(t) == "gilt-text" then
+            found = t
+        end
+    end
+    local glyph = assert(found)
+    expect(glyph:GetTextureFilePath()).toBe(GLYPHS .. "minus.tga")
+    expect(b:GetNormalTexture():GetAlpha()).toBe(0)
+    b:SetNormalTexture("Interface\\Buttons\\UI-PlusButton-Up")
+    expect(glyph:GetTextureFilePath()).toBe(GLYPHS .. "plus.tga")
+    b:SetNormalAtlas("Objective-Tracker-Collapse")
+    expect(glyph:GetTextureFilePath()).toBe(GLYPHS .. "minus.tga")
+    b:SetNormalAtlas("Objective-Tracker-Expand")
+    expect(glyph:GetTextureFilePath()).toBe(GLYPHS .. "plus.tga")
+    -- a click: drawn again a frame later
+    mock.click(b)
+    mock.advanceFrames(1)
+    expect(glyph:GetTextureFilePath()).toBe(GLYPHS .. "minus.tga")
+    reskinCollapseButton(b)
+    reskinCollapseButton(nil)
+end

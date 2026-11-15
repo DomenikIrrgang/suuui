@@ -1,0 +1,460 @@
+-- Units/Windows/Social.wowlua
+-- The social windows in SuuUI's look (Units/Windows): the friends window
+-- (Contacts and Raid as tabs), Forever's own social window (its side
+-- buttons as tabs along the header), the guild window (Blizzard's
+-- Communities window, with the Guild module's own pages as tabs) and the
+-- group finder window (wider, its side tabs along the header, a gear for
+-- its settings). Each a function taking the module; the module's methods
+-- (SkinFriends, SkinSocial, SocialTabs, SkinCommunities, SkinGroupFinder)
+-- call them.
+
+import SuuUI from "/Core/API"
+import type SkinTab from "/Core/API"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import WindowsModule from "/Units/Windows"
+import part, button, art, withGlobal, clearArt, quiet, skinMaxMin from "/Units/Windows/Shared"
+
+local chromeOf = SuuUI.UI.WindowChrome
+local markOwn = SuuUI.UI.MarkOwn
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, tryMethod = errors.try, errors.tryMethod
+local asString, asNumber, flag, field = secret.asString, secret.asNumber, secret.flag, tbl.field
+local find = frames.find
+
+--------------------------------------------------------------------------------
+-- The friends window
+--------------------------------------------------------------------------------
+
+local FRIENDS_TABS = {
+    { name = "FriendsFrameTab1", label = "Contacts", tab = 1 },
+    { name = "FriendsFrameTab3", label = "Raid", tab = 3 },
+}
+
+-- Forever's social window's tabs by the key of the page each opens (its
+-- tab data's contentFrameParentKey); another tab keeps its own name.
+const SOCIAL_PAGES: { [string]: { label: string, short?: string } } = {
+    FriendsList = { label = "Friends" },
+    RecentAlliesList = { label = "Recent allies", short = "Allies" },
+    FriendRequestsList = { label = "Requests" },
+    RaidFrame = { label = "Raid" },
+}
+-- (its RefreshTabs hooked once; its pages watched once each)
+local socialHooked = false
+local socialWatched: { [Frame]: boolean } = setmetatable({}, { __mode = "k" })
+
+--------------------------------------------------------------------------------
+-- The friends window (3.4): SuuUI's header; Contacts and Raid as tabs (the
+-- Social module puts its pages over Blizzard's); Quick Join left out
+-- (asked: not used on Forever).
+--------------------------------------------------------------------------------
+
+export function skinFriends(self: WindowsModule)
+    local f = find("FriendsFrame")
+    if not f or chromeOf(f) then
+        return
+    end
+    local chrome = UI.SkinWindow(f, {
+        title = "Social",
+        icon = "people",
+        binding = "TOGGLESOCIAL",
+        close = button(_G, "FriendsFrameCloseButton"),
+        topInset = 20,
+        under = "microMenu",
+        hide = withGlobal(art(f), "FriendsFrameInset"),
+    })
+    local list: SkinTab[] = {}
+    local function selectedTab(): number?
+        return asNumber(field(f, "selectedTab")) or asNumber(try(field(_G, "PanelTemplates_GetSelectedTab"), f))
+    end
+    for _, t in ipairs(FRIENDS_TABS) do
+        local b = find(t.name)
+        if b then
+            local index = t.tab
+            list[#list + 1] = {
+                button = b,
+                label = t.label,
+                short = t.label,
+                selected = function(): boolean
+                    return selectedTab() == index
+                end,
+            }
+        end
+    end
+    chrome:SetTabs(list)
+    -- Quick Join's tab out of sight
+    local qj = find("FriendsFrameTab4")
+    if qj then
+        quiet(qj)
+        qj:ClearAllPoints()
+        qj:SetPoint("TOPLEFT", UIParent, "TOPRIGHT", 5000, 0)
+    end
+    hookScript(f, "OnShow", function()
+        self:After(0, function()
+            chrome:UpdateTabs()
+        end)
+    end)
+    if field(_G, "PanelTemplates_SetTab") then
+        hook("PanelTemplates_SetTab", function(frame: unknown)
+            if frame == f then
+                chrome:UpdateTabs()
+            end
+        end)
+    end
+    self.friends = chrome
+end
+
+-- Forever's own social window (SocialUIFrame, O): SuuUI's header; its
+-- tabs down the right side stay Blizzard's for now.
+export function skinSocial(self: WindowsModule)
+    local f = find("SocialUIFrame")
+    if not f or chromeOf(f) then
+        return
+    end
+    local chrome = UI.SkinWindow(f, {
+        title = "Social",
+        icon = "people",
+        binding = "TOGGLESOCIAL",
+        close = button(_G, "SocialUIFrameCloseButton"),
+        topInset = 20,
+        under = "microMenu",
+        hide = {
+            field(f, "NineSlice"),
+            field(f, "PortraitContainer"),
+            field(f, "TitleContainer"),
+            field(_G, "SocialUIFrameInset"),
+            field(_G, "SocialUIFrameBg"),
+            field(f, "TopTileStreaks"),
+        },
+    })
+    -- every other texture of the window's own away too: one behind the
+    -- content (under the Battle.net bar) darkened half the page, found in
+    -- game; SuuUI's glass stays
+    clearArt(f, chrome)
+    -- its four tab buttons down the right side as text tabs along the header,
+    -- like every other window (asked for in game); top to bottom they open
+    -- the friends list, Recent Allies, Friend Requests and Raid. Which one is
+    -- lit follows the content actually shown. Set up when the window opens
+    -- (the buttons aren't there, or have no size, when it's skinned at login)
+    hookScript(f, "OnShow", function()
+        self:After(0, function()
+            self:SocialTabs()
+        end)
+    end)
+    if f:IsShown() then
+        self:SocialTabs()
+    end
+    self.social = chrome
+end
+
+export function socialTabs(self: WindowsModule)
+    local f = find("SocialUIFrame")
+    local chrome = f and chromeOf(f)
+    if not f or not chrome then
+        return
+    end
+    if not socialHooked then
+        socialHooked = true
+        -- Blizzard takes its side buttons from a pool anew on every show,
+        -- each button maybe another tab than before (a label stayed on
+        -- its button and opened another page, found in game 2026-11-13):
+        -- the row again from its own tab data, every time
+        -- (SocialUIFrameMixin's: the declarations type the window as a Frame)
+        hook(f :: unknown, "RefreshTabs", function()
+            self:SocialTabs()
+        end)
+    end
+    -- the side buttons: f's own buttons holding Blizzard's tab data, in
+    -- its order
+    local buttons: { button: Button, data: { [string]: unknown } }[] = {}
+    for _, c in ipairs(frames.children(f)) do
+        local b = frames.asButton(c)
+        local data = field(c, "tabData")
+        if b and type(data) == "table" and b:IsShown() then
+            buttons[#buttons + 1] = { button = b, data = data :: { [string]: unknown } }
+        end
+    end
+    if #buttons == 0 then
+        return
+    end
+    table.sort(buttons, function(a, b): boolean
+        return (asNumber(a.data.tabOrder) or 0) < (asNumber(b.data.tabOrder) or 0)
+    end)
+    local tabs: SkinTab[] = {}
+    for _, entry in ipairs(buttons) do
+        local key = asString(entry.data.contentFrameParentKey) or ""
+        local page = SOCIAL_PAGES[key]
+        local name = page and page.label or asString(entry.data.tabName) or key
+        local shown = frames.asFrame(entry.data.contentFrame) or part(f, key)
+        tabs[#tabs + 1] = {
+            button = entry.button,
+            label = name,
+            short = page and page.short or name,
+            selected = function(): boolean
+                return shown ~= nil and shown:IsShown()
+            end,
+        }
+        if shown and not socialWatched[shown] then
+            socialWatched[shown] = true
+            hookScript(shown, "OnShow", function()
+                chrome:UpdateTabs()
+            end)
+        end
+    end
+    chrome:SetTabs(tabs)
+end
+
+--------------------------------------------------------------------------------
+-- The guild window (Blizzard's Communities window, J; 3.4): SuuUI's header,
+-- every texture of its own away, its side tabs (Chat, Roster, Info) as text
+-- tabs along the header; the play-style tab left out for now. The Guild
+-- module puts its pages over Blizzard's.
+--------------------------------------------------------------------------------
+
+export function skinCommunities(self: WindowsModule)
+    local f = find("CommunitiesFrame")
+    if not f or chromeOf(f) then
+        return
+    end
+    local chrome = UI.SkinWindow(f, {
+        title = "Guild",
+        icon = "flag",
+        binding = "TOGGLEGUILDTAB",
+        close = button(_G, "CommunitiesFrameCloseButton"),
+        topInset = 20,
+        under = "microMenu",
+        hide = withGlobal(art(f, "PortraitOverlay"), "CommunitiesFrameInset"),
+    })
+    clearArt(f, chrome)
+    skinMaxMin(chrome, part(f, "MaxMinButtonFrame"))
+    local tabs: SkinTab[] = {}
+    -- the guild module's own pages (Log, Settings): while one shows,
+    -- Blizzard's tabs aren't the lit one
+    local function guild(): unknown
+        local g = SuuUI.GetModule("guild")
+        return g and g:IsEnabled() and g or nil
+    end
+    local function ownPage(): unknown
+        return field(guild(), "ownPage")
+    end
+    local function showOwn(key: string?)
+        tryMethod(guild(), "ShowOwn", key)
+    end
+    for _, t in ipairs({ { "ChatTab", "Chat" }, { "RosterTab", "Roster" }, { "GuildInfoTab", "Info" } }) do
+        local b = part(f, t[1])
+        if b then
+            -- check buttons: the restyle pass made them checkboxes (found in
+            -- game); they're tabs, drawn by SetTabs
+            markOwn(b)
+            local check = frames.asCheckButton(b)
+            tabs[#tabs + 1] = {
+                button = b,
+                label = t[2],
+                short = t[2],
+                selected = function(): boolean
+                    return ownPage() == nil and check ~= nil and check:GetChecked()
+                end,
+            }
+            hookScript(b, "OnClick", function()
+                showOwn(nil)
+                -- the lit tab at once (a frame later it flickered), and
+                -- again once the game has set its checks
+                chrome:UpdateTabs()
+                self:After(0, function()
+                    chrome:UpdateTabs()
+                end)
+            end)
+        end
+    end
+    local gm = SuuUI.GetModule("guild")
+    if gm and gm:Setting("enabled") then
+        local function ownTab(key: string, label: string): Button
+            local b = CreateFrame("Button", nil, f)
+            b:SetScript("OnClick", function()
+                showOwn(key)
+                chrome:UpdateTabs()
+            end)
+            tabs[#tabs + 1] = {
+                button = b,
+                label = label,
+                short = label,
+                selected = function(): boolean
+                    return ownPage() == key
+                end,
+            }
+            return b
+        end
+        self.logTab = ownTab("log", "Log")
+        -- Settings: the Guild Master's (the ranks and what each may do)
+        if flag(try(IsGuildLeader)) then
+            self.settingsTab = ownTab("settings", "Settings")
+        end
+    end
+    if #tabs > 0 then
+        chrome:SetTabs(tabs)
+    end
+    -- the play-style and benefits tabs out of sight
+    for _, key in ipairs({ "GuildPreferredPlaySettingsTab", "GuildBenefitsTab" }) do
+        local b = part(f, key)
+        if b then
+            markOwn(b)
+            quiet(b)
+        end
+    end
+    if field(f, "SetDisplayMode") then
+        local window = f :: Frame & { SetDisplayMode: (self: Frame, mode: unknown) -> () }
+        hook(window, "SetDisplayMode", function()
+            chrome:UpdateTabs()
+        end)
+    end
+    hookScript(f, "OnShow", function()
+        self:After(0, function()
+            chrome:UpdateTabs()
+        end)
+    end)
+    self.communities = chrome
+end
+
+--------------------------------------------------------------------------------
+-- The group finder window (LFGParentFrame, the vanilla-style one on Forever;
+-- probed 2026-10-14): SuuUI's header, wider (the Group Finder module's
+-- Browse page lists tool and chat entries side by side), its own art away,
+-- its three side tabs (frames that switch on a click's release:
+-- LFGParentFrame_SetActiveTab) as text tabs along the header: Browse, List
+-- yourself, Who. The Group Finder module puts its pages over Blizzard's.
+--------------------------------------------------------------------------------
+
+export function skinGroupFinder(self: WindowsModule)
+    local f = find("LFGParentFrame")
+    if not f or chromeOf(f) then
+        return
+    end
+    local size = WindowsModule.GROUP_FINDER_SIZE
+    f:SetSize(size[1], size[2])
+    local chrome = UI.SkinWindow(f, {
+        title = "Group Finder",
+        icon = "search",
+        binding = "TOGGLEGROUPFINDER",
+        close = button(_G, "LFGParentFrameCloseButton"),
+        topInset = 20,
+        under = "microMenu",
+        hide = {
+            field(f, "NineSlice"),
+            field(f, "PortraitContainer"),
+            field(f, "TitleContainer"),
+            field(_G, "LFGParentFramePortrait"),
+            field(f, "Inset"),
+            field(f, "Bg"),
+            field(f, "TopTileStreaks"),
+        },
+    })
+    clearArt(f, chrome)
+    -- the eye (strata HIGH, over the header's tabs) out of sight and out of the way
+    quiet(find("LFGParentFramePortrait"))
+    local browse, listing, who = find("LFGBrowseFrame"), find("LFGListingFrame"), find("LFGWhoListFrame")
+    -- each page is a whole Blizzard frame of its own over the window (found in
+    -- game): its metal frame, portrait ring, "Looking For Group" title and
+    -- backdrops away; its controls stay
+    for _, page in ipairs({ browse, listing, who }) do
+        for _, key in ipairs({
+            "NineSlice",
+            "PortraitContainer",
+            "TitleContainer",
+            "Bg",
+            "TopTileStreaks",
+            "BackgroundArt",
+            "headerBackground",
+            "insideFrame",
+            "BarTop",
+            "BarMiddle",
+            "Inset",
+            "RolesSection",
+            "DividerFrame",
+        }) do
+            local r = frames.asRegion(field(page, key))
+            if r then
+                r:SetAlpha(0)
+            end
+        end
+    end
+    local tabs: SkinTab[] = {}
+    local listingTab: SkinTab? = nil
+    local listingButton = part(f, "ListingTab")
+    for _, t in ipairs({
+        { part(f, "BrowsingTab"), "Browse", browse, "Browse" },
+        { listingButton, "List yourself", listing, "List" },
+        { part(f, "WhoListingTab"), "Who", who, "Who" },
+    }) do
+        local b, label, page, short = frames.asFrame(t[1]),
+            asString(t[2]) or "",
+            frames.asFrame(t[3]),
+            asString(t[4])
+        if b then
+            local tab: SkinTab = {
+                button = b,
+                label = label,
+                short = short or label,
+                selected = function(): boolean
+                    return page ~= nil and page:IsShown()
+                end,
+            }
+            tabs[#tabs + 1] = tab
+            if b == listingButton then
+                listingTab = tab
+            end
+            if page then
+                hookScript(page, "OnShow", function()
+                    chrome:UpdateTabs()
+                end)
+            end
+        end
+    end
+    chrome:SetTabs(tabs)
+    self.groupFinder = chrome
+    -- the second tab says My listing while you're listed
+    local function relabel()
+        if not listingTab then
+            return
+        end
+        local listed = flag(try(field(C_LFGList, "HasActiveEntryInfo")))
+        listingTab.label = listed and "My listing" or "List yourself"
+        listingTab.short = listed and "Listing" or "List"
+        chrome:LayoutTabs()
+    end
+    self:OnGameEvent("LFG_LIST_ACTIVE_ENTRY_UPDATE", relabel)
+    relabel()
+    -- the tab row's right: a gear that opens Settings › Group Finder
+    local gear = CreateFrame("Button", nil, chrome.head)
+    gear:SetSize(22, 22)
+    gear:SetPoint("BOTTOMRIGHT", chrome.head, "BOTTOMRIGHT", -S["space-5"], S["space-1"])
+    gear:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+    local glyph = gear:CreateTexture(nil, "ARTWORK")
+    UI.Glyph(glyph, "gear")
+    glyph:SetSize(14, 14)
+    glyph:SetPoint("CENTER")
+    UI.Paint(glyph, "ink-muted")
+    local edge = UI.Border(gear, "gilt-line")
+    edge:SetShown(false)
+    gear:SetScript("OnEnter", function(b: Button)
+        edge:SetShown(true)
+        UI.Paint(glyph, "ink")
+        UI.ShowTooltip(b, {
+            title = "Group Finder settings",
+            description = "Channels, languages, your ad and the notifications",
+        })
+    end)
+    gear:SetScript("OnLeave", function()
+        edge:SetShown(false)
+        UI.Paint(glyph, "ink-muted")
+        UI.HideTooltip()
+    end)
+    gear:SetScript("OnClick", function()
+        SuuUI.OpenSettings("groupfinder")
+    end)
+    self.gear = gear
+end

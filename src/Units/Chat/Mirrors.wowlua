@@ -1,0 +1,410 @@
+-- Units/Chat/Mirrors.wowlua
+-- SuuUI's copies of Blizzard's chat windows (Units/Chat): a mirror (a
+-- message frame of SuuUI's) per window and the lines it keeps, each in the
+-- design's form (Units/Chat/Lines does the text; this gives it the
+-- settings, Blizzard's own timestamp and the names' classes, from a line's
+-- sender or the chat events), drawn with the time or without, scrolled
+-- with the wheel; a line copied from its class diamond; the whispers kept
+-- this session, by player. The functions take the module (its mirrors,
+-- the one shown, the whispers).
+
+import SuuUI from "/Core/API"
+import type ChatModule from "../Chat"
+import askText, links, bodyFont from "./Panel"
+import fontSize from "./Windows"
+import * as chatLines from "./Lines"
+import isSecret from "wowlua:secret"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import hook from "wowlua:hooks"
+import * as chat from "wowlua:chat"
+
+local T = SuuUI.Tokens
+local field, asString = tbl.field, secret.asString
+
+-- One of Blizzard's chat windows.
+type Window = chat.Window
+-- SuuUI's own message frame (one per window).
+export type MessageFrame = ScrollingMessageFrameMixin & Frame
+-- Blizzard's text of a line, and a colour part of it: secret in an
+-- encounter's chat lockdown.
+export type ChatText = string | Secret<string>
+export type Color = number | Secret<number>
+-- The names' classes in a line, in the order they come (false: none found).
+export type Classes = chatLines.Classes
+-- A line in a mirror, kept to draw again (with or without the time, in a
+-- new theme): `text` the design's (Blizzard's when raw or secret), `src`
+-- Blizzard's (readable lines only). A divider has no text of its own.
+export type Line = {
+    text: ChatText,
+    src?: string,
+    raw?: boolean,
+    r?: Color,
+    g?: Color,
+    b?: Color,
+    at: number,
+    id?: number,
+    old?: boolean,
+    classes?: Classes,
+    divider?: boolean,
+    plainText?: string,
+}
+-- A whisper line kept for a whisper window (and across logouts).
+export type Whisper = { who: string, text: string, r?: Color, g?: Color, b?: Color, at: number, old?: boolean, shown?: Line }
+-- SuuUI's message frame for a window and the lines it holds: the combat
+-- log's raw (as Blizzard writes them), a whisper window's player.
+export type Mirror = { frame: MessageFrame, lines: Line[], raw: boolean, drawnWithTime?: boolean, target?: string }
+
+--------------------------------------------------------------------------------
+-- Lines in the design's form: the time (ink-muted, only while the chat is
+-- in use), the tag without brackets ("Party", "2. Trade", "From", "Yell"),
+-- the class diamond before a name, the name in the line's colour. Taken
+-- from Blizzard's finished line (its links stay as they are); a secret line
+-- goes in whole. The combat log's lines are left as Blizzard writes them.
+--------------------------------------------------------------------------------
+
+export const MAX_LINES = 500
+export local classByName: { [string]: string } = {}
+
+-- what follows the author in Blizzard's line → the tag the design puts first
+-- ("" for none)
+local VERBS: chatLines.Verb[]? = nil
+local function verbs(): chatLines.Verb[]
+    if VERBS then
+        return VERBS
+    end
+    local list: chatLines.Verb[] = {}
+    VERBS = list
+    local function add(fmt: unknown, tag: string)
+        local v = chatLines.verb(fmt, tag)
+        if v then
+            list[#list + 1] = v
+        end
+    end
+    add(field(_G, "CHAT_SAY_GET"), "")
+    add(field(_G, "CHAT_YELL_GET"), asString(field(_G, "CHAT_MSG_YELL")) or "Yell")
+    add(field(_G, "CHAT_WHISPER_GET"), "From")
+    add(field(_G, "CHAT_BN_WHISPER_GET"), "From")
+    return list
+end
+
+-- A player's class from their GUID, when readable.
+local function classOfGUID(guid: string): string?
+    local _, class = errors.try(GetPlayerInfoByGUID, guid)
+    return asString(class)
+end
+
+export function classOf(name: string?, lineID: string?): string?
+    local id = lineID and tonumber(lineID)
+    local guid = id and asString(errors.try(field(C_ChatInfo, "GetChatLineSenderGUID"), id))
+    local fromGUID = guid and classOfGUID(guid)
+    if fromGUID then
+        return fromGUID
+    end
+    local key = name and name:lower()
+    local known = key and classByName[key]
+    if known then
+        return known
+    end
+    local base = key and key:match("^([^%-]+)")
+    local fromBase = base and base ~= key and classByName[base]
+    if fromBase then
+        return fromBase
+    end
+    local _, class = errors.try(UnitClass, name)
+    return asString(class)
+end
+
+-- Blizzard's own timestamp (its option in Social) as a pattern for the
+-- start of a line: its date format with the numbers as wildcards.
+local function blizzardStamp(): string?
+    return chatLines.stampPatternOf(errors.try(GetCVar, "showTimestamps"))
+end
+
+-- Lines by their ID, for the diamond's copy (gone with their mirror's
+-- oldest lines)
+local lineSeq = 0
+local linesByID: { [number]: Line } = tbl.weakValues()
+
+local plainLine = chatLines.plainLine
+
+-- Whisper lines (to and from), kept for a whisper window opened later (and,
+-- with Kept chat, across logouts).
+local WHISPER_KEEP = 300
+local isWhisperLine = chatLines.isWhisperLine
+
+-- the chat events that tell a sender's class
+local CLASS_EVENTS: EventName[] = {
+    "CHAT_MSG_SAY",
+    "CHAT_MSG_YELL",
+    "CHAT_MSG_EMOTE",
+    "CHAT_MSG_PARTY",
+    "CHAT_MSG_PARTY_LEADER",
+    "CHAT_MSG_RAID",
+    "CHAT_MSG_RAID_LEADER",
+    "CHAT_MSG_RAID_WARNING",
+    "CHAT_MSG_INSTANCE_CHAT",
+    "CHAT_MSG_INSTANCE_CHAT_LEADER",
+    "CHAT_MSG_GUILD",
+    "CHAT_MSG_OFFICER",
+    "CHAT_MSG_WHISPER",
+    "CHAT_MSG_WHISPER_INFORM",
+    "CHAT_MSG_CHANNEL",
+}
+
+--------------------------------------------------------------------------------
+-- Mirrors: SuuUI's message frame for each Blizzard window
+--------------------------------------------------------------------------------
+
+export function mirrorFrame(self: ChatModule): MessageFrame
+    local m = CreateFrame("ScrollingMessageFrame", nil, self:Panel().log)
+    m:SetAllPoints()
+    m:SetJustifyH("LEFT")
+    m:SetFading(false)
+    m:SetMaxLines(MAX_LINES)
+    m:SetIndentedWordWrap(true)
+    m:EnableMouseWheel(true)
+    m:SetScript("OnMouseWheel", function(_, delta: number)
+        if IsShiftKeyDown() then
+            if delta > 0 then
+                m:ScrollToTop()
+            else
+                m:ScrollToBottom()
+            end
+        elseif delta > 0 then
+            m:ScrollUp()
+        else
+            m:ScrollDown()
+        end
+    end)
+    links(self, m)
+    m:Hide()
+    return m
+end
+
+-- Blizzard's finished line → the design's (without the time). `old`: a
+-- line kept from an earlier session (its line ids mean nothing now).
+-- `classes`: the names' classes in the order they come, filled the first
+-- time and read when the line is formatted again (a theme's new colours),
+-- so a name keeps the class it was shown with. (Units/Chat/Lines does the
+-- text; this gives it the settings and the world's answers.)
+export function formatLine(self: ChatModule, text: string, id: number?, old: boolean?, classes: Classes?): string
+    return chatLines.formatLine(text, id, old, classes, {
+        diamonds = self:Get("classDiamonds"),
+        short = self:Get("shortChannels"),
+        colored = self:Get("classNames"),
+        -- SuuUI shows the time: Blizzard's own goes
+        stamp = self:Get("timestamps") and blizzardStamp() or nil,
+        verbs = verbs(),
+        classOf = classOf,
+    })
+end
+
+export function copyLine(self: ChatModule, id: number?)
+    local line = id and linesByID[id]
+    if not line then
+        return
+    end
+    askText("Copy line", plainLine(asString(self:Render(line, true)) or ""), "Ctrl+C to copy · Esc closes")
+end
+
+-- A line for a mirror: Blizzard's text (`src`, readable lines only) and
+-- the design's. `at` and `old` for a line kept from an earlier session.
+export function newLine(self: ChatModule, m: Mirror, text: ChatText, r: Color?, g: Color?, b: Color?, at: number?, old: boolean?): Line
+    lineSeq = lineSeq + 1
+    local readable = asString(text)
+    if m.raw or not readable then
+        return { text = text, raw = true, r = r, g = g, b = b, at = at or time(), id = lineSeq, old = old }
+    end
+    local classes: Classes = {}
+    local line: Line = {
+        src = readable,
+        classes = classes,
+        text = self:FormatLine(readable, lineSeq, old, classes),
+        r = r,
+        g = g,
+        b = b,
+        at = at or time(),
+        id = lineSeq,
+        old = old,
+    }
+    linesByID[lineSeq] = line
+    return line
+end
+
+-- One line into a mirror: kept (to show again with or without the time)
+-- and shown as the chat is now.
+export function put(self: ChatModule, m: Mirror, text: ChatText, r: Color?, g: Color?, b: Color?, at: number?, old: boolean?): Line
+    local line = self:NewLine(m, text, r, g, b, at, old)
+    self:Append(m, line)
+    return line
+end
+
+export function append(self: ChatModule, m: Mirror, line: Line)
+    local lines = m.lines
+    lines[#lines + 1] = line
+    if #lines > MAX_LINES then
+        table.remove(lines, 1)
+    end
+    local withTime = self:ShowTimes()
+    -- drawn otherwise than its earlier lines: all again when it's next shown
+    if m.drawnWithTime ~= withTime then
+        m.drawnWithTime = nil
+    end
+    self:Draw(m, line, withTime)
+end
+
+export function showTimes(self: ChatModule): boolean
+    return self:Get("timestamps") and self.awake ~= false
+end
+
+export function render(self: ChatModule, line: Line, withTime: boolean?): ChatText
+    local text = line.text
+    if line.raw or not withTime then
+        return text
+    end
+    return "|cff" .. T.color["ink-muted"].hex .. date("%H:%M", line.at) .. "|r  " .. (asString(text) or "")
+end
+
+-- The mirror's lines again (the time came or went), where it was scrolled.
+export function redraw(self: ChatModule, m: Mirror)
+    local withTime = self:ShowTimes()
+    if m.raw or m.drawnWithTime == withTime then
+        return
+    end
+    m.drawnWithTime = withTime
+    local f = m.frame
+    local offset = f:GetScrollOffset()
+    f:Clear()
+    for _, line in ipairs(m.lines) do
+        self:Draw(m, line, withTime)
+    end
+    if offset > 0 then
+        pcall(f.SetScrollOffset, f, offset)
+    end
+end
+
+-- The shown window now, the others when they're chosen.
+export function redrawShown(self: ChatModule)
+    local m = self.activeMirror
+    if m then
+        self:Redraw(m)
+    end
+end
+
+-- Names' classes from the chat events (a line whose sender the client
+-- can't tell from its line id).
+export function watchClasses(self: ChatModule)
+    for _, e in ipairs(CLASS_EVENTS) do
+        self:OnGameEvent(e, function(_, ...: unknown)
+            local sender, guid = asString((select(2, ...))), asString((select(12, ...)))
+            local class = sender and guid and classOfGUID(guid)
+            if sender and class then
+                classByName[sender:lower()] = class
+            end
+        end)
+    end
+end
+
+export function keepWhisper(self: ChatModule, text: ChatText, r: Color?, g: Color?, b: Color?, event: unknown)
+    local line = asString(text)
+    if not line or not isWhisperLine(r, g, b, event) then
+        return
+    end
+    local who = line:match("|Hplayer:([^:|]+)")
+    if not who then
+        return
+    end
+    local list = self.whispers
+    -- the same line in a second window (General and the whisper window)
+    for i = #list, math.max(1, #list - 4), -1 do
+        if list[i].text == line then
+            return
+        end
+    end
+    list[#list + 1] = { who = who:lower(), text = line, r = r, g = g, b = b, at = time() }
+    if #list > WHISPER_KEEP then
+        table.remove(list, 1)
+    end
+end
+
+-- The kept lines with a player: "Name" matches "Name-Realm" too.
+export function whispersWith(self: ChatModule, name: string): Whisper[]
+    local out: Whisper[] = {}
+    local want = name:lower()
+    local base = want:match("^([^%-]+)")
+    for _, line in ipairs(self.whispers) do
+        local who = line.who
+        if who == want or who:match("^([^%-]+)") == base then
+            out[#out + 1] = line
+        end
+    end
+    return out
+end
+
+-- Every line Blizzard adds to the window, copied (a secret one whole), and
+-- what it already holds.
+export function mirror(self: ChatModule, cf: Window)
+    local made = self.mirrors[cf]
+    if made then
+        -- a whisper window Blizzard reused for someone else
+        self:WhisperWindowLines(cf, made)
+        return
+    end
+    local m: Mirror = { frame = self:MirrorFrame(), lines = {}, raw = cf == ChatFrame2 }
+    self.mirrors[cf] = m
+    self:ApplyMirrorFont(cf)
+    -- what the tab held at logout, above a divider
+    local temporary = chat.isTemporary(cf)
+    if not m.raw and not temporary then
+        self:RestoreKept(cf, m)
+    end
+    for i = 1, cf:GetNumMessages() do
+        local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
+        if ok and (isSecret(text) or text ~= nil) then
+            self:Put(m, text, r, g, b)
+            if cf == ChatFrame1 or temporary then
+                self:KeepWhisper(text, r, g, b)
+            end
+        end
+    end
+    -- a whisper window: the kept whispers with that player before its own
+    self:WhisperWindowLines(cf, m)
+    m.drawnWithTime = self:ShowTimes()
+    -- the combat log clears and refills its window on a filter change
+    hook(cf, "Clear", function()
+        m.frame:Clear()
+        wipe(m.lines)
+        m.target = nil
+    end)
+    hook(cf, "AddMessage", function(_, text: ChatText, r: Color?, g: Color?, b: Color?, ...: unknown)
+        if not isSecret(text) and text == nil then
+            return
+        end
+        self:Put(m, text, r, g, b)
+        -- whisper windows' too (Blizzard may show a whisper only there)
+        self:KeepWhisper(text, r, g, b, (select(4, ...)))
+        if m ~= self.activeMirror and cf ~= ChatFrame2 and not self.unread[cf] then
+            self.unread[cf] = true
+            -- the tab's unread mark
+            self:WindowsChanged()
+        end
+    end)
+end
+
+export function applyMirrorFont(self: ChatModule, cf: Window)
+    local m = self.mirrors[cf]
+    if not m then
+        return
+    end
+    local f = m.frame
+    f:SetFont(bodyFont(), fontSize(cf), "")
+    f:SetShadowOffset(1, -1)
+    f:SetShadowColor(0, 0, 0, 0.8)
+    -- the divider's rules are measured for the font
+    m.drawnWithTime = nil
+    if m == self.activeMirror then
+        self:Redraw(m)
+    end
+end

@@ -1,0 +1,97 @@
+-- Units/Collections/Stage: the mount's model on the stage (the icon while
+-- it loads, placed on the floor, shown); turning and zooming it.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import tokenOf from "../../SettingsUI/UiSettingsHelpers"
+import start, cleanup, open, ui, cells from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+@test(
+    "the model: the icon while it loads, then placed on the floor and shown; the same one again is left; no answer: shown anyway"
+)
+local function modelLoads()
+    open()
+    local m = ui().model
+    local stage = ui().stage
+    expect(stage.loading).toBeShown()
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return 6, 0, 1.2
+    end)
+    mock.stub(m, "GetCameraTarget", function(): ...unknown
+        return 0, 0, 1
+    end)
+    mock.stub(m, "GetModelFileID", function()
+        return 123410
+    end)
+    local placed = mock.stub(m, "SetPosition", function() end)
+    mock.script(m, "OnModelLoaded")
+    mock.advanceTime(0.2)
+    expect(stage.loading).never.toBeShown()
+    expect(placed).toHaveBeenCalled()
+    expect(m:GetAlpha() > 0).toBe(true)
+    -- the same mount again: left as it is
+    M:ShowMount(assert(M.chosen))
+    expect(stage.loading).never.toBeShown()
+    -- another, with no answer: shown after two seconds
+    mock.click(cells()[2])
+    expect(stage.loading).toBeShown()
+    mock.advanceTime(2.2)
+    expect(stage.loading).never.toBeShown()
+    -- a camera that can't be read, or reads nothing useful: not placed
+    mock.resetSpies()
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return mock.secret(1), 0, 0
+    end)
+    M:PlaceModel()
+    mock.stub(m, "GetCameraPosition", function(): ...unknown
+        return 0, 0, 1
+    end)
+    M:PlaceModel()
+    expect(placed).never.toHaveBeenCalled()
+    M:ModelLoaded()
+end
+
+@test("turning and zooming the mount: drag, the wheel, the stage's buttons")
+local function turnZoom()
+    open()
+    local m = ui().model
+    local facing = mock.stub(m, "SetFacing", function() end)
+    mock.setCursorPosition(100, 100)
+    mock.script(m, "OnMouseDown", "LeftButton")
+    mock.setCursorPosition(160, 100)
+    mock.nextFrame()
+    expect(facing).toHaveBeenCalled()
+    mock.script(m, "OnMouseUp", "LeftButton")
+    mock.script(m, "OnMouseDown", "RightButton")
+    mock.resetSpies()
+    mock.nextFrame()
+    expect(facing).never.toHaveBeenCalled()
+    local before = M.camScale
+    mock.script(m, "OnMouseWheel", 1)
+    expect(M.camScale < before).toBe(true)
+    for _ = 1, 20 do
+        M:Zoom(1)
+    end
+    mock.advanceTime(0.1)
+    local buttons = ui().stage.buttons
+    for _, b in ipairs(buttons) do
+        mock.click(b)
+    end
+    expect(facing).toHaveBeenCalled()
+    -- their look and tooltips
+    mock.hover(buttons[1])
+    expect(tokenOf(buttons[1].glyph)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(buttons[1].glyph)).toBe("ink-muted")
+end

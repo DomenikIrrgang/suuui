@@ -1,0 +1,608 @@
+-- Units/CooldownManager/Rows.wowlua
+-- The rows of the Cooldown Manager's list editor (Units/CooldownManager/
+-- Editor): an entry's row (grip, fold chevron, icon, name and summary,
+-- Move to…, Behaviour, shown, remove) with its rails, a list's head, its
+-- "+ Add" foot, the "+ Add to" row of an open collection or shared slot, and
+-- the ghost a drag carries. The rows reach the editor they sit in through
+-- RowEditor, and its module through the editor's host.
+
+import SuuUI from "/Core/API"
+import type SelectOption, Select, SuuButton, Text, Icon, Border, Toggle from "/Core/API"
+import * as Lists from "./Lists"
+import * as data from "./EditorData"
+
+local UI = SuuUI.UI
+
+type Entry = Lists.Entry
+type ListSet = Lists.ListSet
+type Path = Lists.Path
+type GroupOffer = data.GroupOffer
+
+local infoOf, kindOf, tabLists, mutate, newUid = data.infoOf, data.kindOf, data.tabLists, data.mutate, data.newUid
+local rankText, knownMember, artOf, conditionWords = data.rankText, data.knownMember, data.artOf, data.conditionWords
+local spellLookup, entryFor = data.spellLookup, data.entryFor
+local entryAt = Lists.entryAt
+local SOURCE_LABEL, LIST_SOURCE, entrySource = Lists.SOURCE_LABEL, Lists.LIST_SOURCE, Lists.entrySource
+
+export const ROW_H = 30
+export const GAP = 4
+export const WIDTH = 560
+-- Nesting: each level steps in INDENT, and a rail runs down from the row it
+-- belongs to, under that row's fold chevron (RAIL_X from its left edge).
+export const INDENT = 34
+local RAIL_X = 25
+
+local MISSING_LABEL = Lists.MISSING_LABEL
+
+--------------------------------------------------------------------------------
+-- Rows
+--------------------------------------------------------------------------------
+
+-- A small square button with a drawn ✕ (the up and down arrows it also
+-- drew were never used).
+export class RemoveButton extends Button
+    readonly border: Border
+
+    constructor(parent: Frame, onClick: () -> ())
+        super(nil, parent)
+        self:SetSize(22, 22)
+        self.border = UI.Border(self, "gilt-line")
+        self.border:SetShown(false)
+        local c = UI.Cross(self, 9, "ink-muted")
+        c:SetPoint("CENTER")
+        self:SetScript("OnEnter", function()
+            self.border:SetShown(true)
+        end)
+        self:SetScript("OnLeave", function()
+            self.border:SetShown(false)
+        end)
+        self:SetScript("OnClick", function()
+            onClick()
+        end)
+    end
+end
+
+-- The grip at a row's left edge: two columns of three dots.
+class Grip extends Frame
+    readonly dots: Texture[] = {}
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(10, 16)
+        for col = 0, 1 do
+            for row = 0, 2 do
+                local d = self:CreateTexture(nil, "OVERLAY")
+                UI.PaintFill(d, "ink-faint")
+                d:SetSize(2, 2)
+                d:SetPoint("TOPLEFT", 2 + col * 4, -(2 + row * 5))
+                self.dots[#self.dots + 1] = d
+            end
+        end
+    end
+
+    function Paint(token: string)
+        for _, d in ipairs(self.dots) do
+            UI.PaintFill(d, token)
+        end
+    end
+end
+
+-- The fold chevron of a collection or shared slot: down while open, right
+-- while folded.
+class FoldButton extends Button
+    readonly strokes: Texture[] = {}
+
+    constructor(parent: Frame, onClick: () -> ())
+        super(nil, parent)
+        self:SetSize(18, 18)
+        for n = 1, 2 do
+            local t = self:CreateTexture(nil, "OVERLAY")
+            t:SetColorTexture(1, 1, 1, 1)
+            t:SetSize(6, 1.5)
+            self.strokes[n] = t
+        end
+        self:SetColor("ink-muted")
+        self:SetOpen(false)
+        self:SetScript("OnEnter", function()
+            self:SetColor("gilt-text")
+        end)
+        self:SetScript("OnLeave", function()
+            self:SetColor("ink-muted")
+        end)
+        self:SetScript("OnClick", function()
+            onClick()
+        end)
+    end
+
+    function SetOpen(open: boolean?)
+        local a, c = self.strokes[1], self.strokes[2]
+        a:ClearAllPoints()
+        c:ClearAllPoints()
+        a:SetRotation(math.rad(-45))
+        c:SetRotation(math.rad(45))
+        if open then
+            a:SetPoint("CENTER", -2, 0)
+            c:SetPoint("CENTER", 2, 0)
+        else
+            a:SetPoint("CENTER", 0, 2)
+            c:SetPoint("CENTER", 0, -2)
+        end
+    end
+
+    function SetColor(name: string)
+        for _, t in ipairs(self.strokes) do
+            UI.Paint(t, name)
+        end
+    end
+end
+
+-- A shared slot's mark: two small stacked cards at its icon's corner.
+local function slotMark(parent: Frame, level: number): Frame
+    local m = CreateFrame("Frame", nil, parent)
+    m:SetFrameLevel(level)
+    m:SetSize(11, 11)
+    for n = 0, 1 do
+        local card = CreateFrame("Frame", nil, m)
+        card:SetFrameLevel(m:GetFrameLevel() + 1 + n)
+        card:SetSize(8, 8)
+        card:SetPoint("TOPLEFT", n * 3, -n * 3)
+        UI.Fill(card, "surface-raised"):SetAllPoints()
+        UI.Border(card, "gilt")
+    end
+    return m
+end
+
+-- A collection's glyph in place of an icon: a gilt folder outline.
+local function folderGlyph(parent: Frame): Frame
+    local g = CreateFrame("Frame", nil, parent)
+    g:SetSize(22, 22)
+    local body = CreateFrame("Frame", nil, g)
+    body:SetSize(17, 11)
+    body:SetPoint("CENTER", 0, -2)
+    UI.Border(body, "gilt")
+    local tab = CreateFrame("Frame", nil, g)
+    tab:SetSize(7, 3)
+    tab:SetPoint("BOTTOMLEFT", body, "TOPLEFT", 0, -1)
+    UI.Border(tab, "gilt")
+    return g
+end
+
+-- A rail a row sits under: its level, fainter for a shared slot's.
+export type Rail = { level: number, faint?: boolean }
+
+-- What a row shows: its list and path, its entry and kind ("entry",
+-- "slot", "collection", "member"), its level and rails, open (folds), the
+-- shared slot of a member, what may land on it.
+export type RowContext = {
+    key: string,
+    path: Path,
+    entry: Entry,
+    kind: string,
+    level: number,
+    rails: Rail[],
+    open?: boolean,
+    slot?: Entry,
+    onto?: string,
+}
+
+-- The editor the rows sit in (Editor's ListEditor): the module it edits,
+-- its folds, and what a row asks of it.
+export interface RowEditor extends Frame
+    readonly host: data.EditorHost
+    readonly fold: { [string]: boolean }
+    function ToggleFold(r: EntryRow)
+    function RemoveAt(path: Path)
+    function OpenBehaviour(path: Path)
+    function StartDrag(row: EntryRow)
+    function StopDrag()
+end
+
+-- A row or a list's foot frame, with its rails.
+export class RailedFrame extends Frame
+    readonly rails: Texture[] = {}
+
+    -- The rails of the rows a row sits under: a collection's in gilt, a
+    -- shared slot's fainter.
+    function SetRails(rails: Rail[], level: number)
+        for n, rl in ipairs(rails) do
+            local t = self.rails[n]
+            if not t then
+                t = self:CreateTexture(nil, "BACKGROUND", nil, 1)
+                t:SetWidth(1)
+                self.rails[n] = t
+            end
+            UI.PaintFill(t, rl.faint and "gilt-line" or "gilt")
+            t:ClearAllPoints()
+            t:SetPoint("TOPLEFT", self, "TOPLEFT", (rl.level - level) * INDENT + RAIL_X, 0)
+            t:SetHeight(ROW_H + GAP)
+            t:Show()
+        end
+        for n = #rails + 1, #self.rails do
+            self.rails[n]:Hide()
+        end
+    end
+end
+
+-- One row: grip, fold chevron (collections and shared slots), icon (a
+-- shared slot's with its mark, a collection's folder), name and summary,
+-- then (right to left) remove, Move to… (rows at the top of a list), Behaviour
+-- and shown. The row drags by its grip.
+export class EntryRow extends RailedFrame
+    readonly dropFill: Texture
+    readonly dropEdge: Border
+    readonly grip: Grip
+    readonly fold: FoldButton
+    readonly icon: Icon
+    readonly mark: Frame
+    readonly folder: Frame
+    readonly name: Text
+    readonly rank: Text
+    readonly strip: Icon[] = {}
+    readonly remove: RemoveButton
+    readonly move: Select<string>
+    readonly behaviour: SuuButton
+    readonly shown: Toggle
+    key: string = ""
+    path: Path = { key = "", i = 0 }
+    kind: string = "entry"
+    entry: Entry = {}
+
+    constructor(editor: RowEditor)
+        super(nil, editor)
+        self:SetSize(WIDTH, ROW_H)
+        -- lit while a dragged row would land on it
+        self.dropFill = UI.Fill(self, "arcane-soft", "BACKGROUND")
+        self.dropFill:SetAllPoints()
+        self.dropFill:Hide()
+        self.dropEdge = UI.Border(self, "arcane")
+        self.dropEdge:SetShown(false)
+        self.grip = Grip.new(self)
+        self.grip:SetPoint("LEFT")
+        self.fold = FoldButton.new(self, function()
+            editor:ToggleFold(self)
+        end)
+        self.fold:SetPoint("LEFT", self.grip, "RIGHT", 6, 0)
+        self.icon = UI.Icon(self, 22)
+        self.icon:SetPoint("LEFT", self.fold, "RIGHT", 6, 0)
+        self.mark = slotMark(self, self.icon:GetFrameLevel() + 2)
+        self.mark:SetPoint("BOTTOMRIGHT", self.icon, "BOTTOMRIGHT", 4, -4)
+        self.folder = folderGlyph(self)
+        self.folder:SetPoint("CENTER", self.icon, "CENTER")
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("TOPLEFT", self.icon, "TOPRIGHT", 8, 1)
+        self.name:SetFixedWidth(180)
+        self.rank = UI.Text(self, "caption", "ink-muted")
+        self.rank:SetFixedWidth(180)
+        self.rank:SetPoint("BOTTOMLEFT", self.icon, "BOTTOMRIGHT", 8, -1)
+        self.remove = RemoveButton.new(self, function()
+            editor:RemoveAt(self.path)
+        end)
+        self.remove:SetPoint("RIGHT")
+        self.move = UI.Select(self, {
+            width = 104,
+            placeholder = "Move to…",
+            onChange = function(to: string)
+                if not to then
+                    return
+                end
+                mutate(editor.host, function(l: ListSet)
+                    Lists.moveToList(l, self.key, self.path.i, to)
+                end)
+            end,
+        })
+        self.behaviour = UI.Button(self, {
+            text = "Behaviour",
+            width = 96,
+            onClick = function()
+                editor:OpenBehaviour(self.path)
+            end,
+        })
+        self.shown = UI.Toggle(self, {
+            onChange = function(v: boolean)
+                mutate(editor.host, function(l: ListSet)
+                    local e = entryAt(l, self.path)
+                    if e then
+                        e.hidden = (not v) or nil
+                    end
+                end)
+            end,
+        })
+        -- drag to reorder: the editor tracks the cursor and drops
+        self:EnableMouse(true)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnEnter", function()
+            self.grip:Paint("ink-muted")
+        end)
+        self:SetScript("OnLeave", function()
+            self.grip:Paint("ink-faint")
+        end)
+        self:SetScript("OnDragStart", function()
+            editor:StartDrag(self)
+        end)
+        self:SetScript("OnDragStop", function()
+            editor:StopDrag()
+        end)
+    end
+
+    function Fill(c: RowContext)
+        local e, key, kind = c.entry, c.key, c.kind
+        self.key, self.path, self.kind, self.entry = key, c.path, kind, e
+        local cooldown = kindOf(key) == "cooldown"
+        local member = kind == "member"
+        local parts: string[] = {}
+        local strip: (number | string | false)[] = {}
+        local dim = false
+        local function add(s: string?)
+            if s then
+                parts[#parts + 1] = s
+            end
+        end
+        self.icon:SetShown(kind ~= "collection")
+        self.folder:SetShown(kind == "collection")
+        self.mark:SetShown(kind == "slot")
+        self.fold:SetShown(kind == "slot" or kind == "collection")
+        self.fold:SetOpen(c.open)
+
+        -- the summary, in words
+        if kind == "collection" then
+            add("collection · " .. #(e.entries or {}))
+            -- cooldowns: how many you know (only those show: the Racials)
+            if cooldown then
+                local known = 0
+                for _, x in ipairs(e.entries or {}) do
+                    if (x.group and knownMember(x)) or (not x.group and rankText(x) ~= "Not learned") then
+                        known = known + 1
+                    end
+                end
+                add(known .. " learned")
+            end
+            if not c.open then
+                for _, x in ipairs(e.entries or {}) do
+                    strip[#strip + 1] = artOf(x, cooldown) or false
+                end
+            end
+        elseif kind == "slot" then
+            local n = #(e.members or {})
+            add("1 slot")
+            if cooldown then
+                local known = knownMember(e)
+                add(known and ("shows " .. (known.name or "?")) or "none learned")
+                add(n == 1 and "1 spell" or (n .. " spells"))
+                dim = not known
+            else
+                add(n == 1 and "1 aura" or (n .. " auras"))
+                add(SOURCE_LABEL[entrySource(e, key)])
+            end
+            if not c.open then
+                for _, m in ipairs(e.members or {}) do
+                    strip[#strip + 1] = artOf(m, cooldown) or false
+                end
+            end
+        elseif e.enchant then
+            add("weapon enchant")
+            local info = UI.WeaponEnchant(e.enchant)
+            add(info and info.name or nil)
+        else
+            local rank = rankText(e)
+            dim = rank == "Not learned"
+            add(rank)
+            local slot = c.slot
+            if member and cooldown then
+                if knownMember(slot) == e then
+                    add("shows now")
+                end
+            elseif member and slot then
+                add(SOURCE_LABEL[e.source or entrySource(slot, key)])
+            elseif cooldown then
+                if e.effect then
+                    add("shows " .. (e.effectName or "its effect"))
+                end
+            else
+                -- whose, when it isn't the list's usual
+                local src = entrySource(e, key)
+                if src ~= LIST_SOURCE[key] then
+                    add(SOURCE_LABEL[src])
+                end
+            end
+        end
+        -- its conditions, in words
+        if not (member and cooldown) then
+            add(conditionWords(e.when))
+        end
+        -- what the Behaviour panel changed, at a glance
+        local missing = e.missing
+        if not cooldown and key ~= "procs" and (kind == "entry" or kind == "slot") and not e.enchant then
+            local m = missing and MISSING_LABEL[missing]
+            if m then
+                add("missing: " .. m)
+            end
+        elseif e.enchant and missing and missing ~= "warn" then
+            add("missing: " .. (MISSING_LABEL[missing] or missing))
+        end
+        self.rank:SetValue(table.concat(parts, " · "))
+
+        if kind == "collection" then
+            -- its name in the list heads' style
+            self.name:SetValue((e.name or "Collection"):upper())
+            self.name:SetColor("gilt-text")
+        else
+            self.name:SetValue(e.name or "Shared slot")
+            self.name:SetColor(dim and "ink-muted" or "ink")
+            self.icon:SetArt(artOf(e, cooldown))
+            self.icon:SetState(dim and "dim" or "rest")
+        end
+
+        -- right to left: remove, Move to… (top rows), Behaviour (not a cooldown
+        -- slot's members: theirs is the slot's), shown (not members)
+        local top = c.level == 0
+        -- (a weapon enchant stays in Buffs on you)
+        self.move:SetShown(top and not e.enchant)
+        self.behaviour:SetShown(not (member and cooldown))
+        self.shown:SetShown(not member)
+        local anchor: Region = self.remove
+        local gap, used = 6, self.remove:GetWidth()
+        local controls: Frame[] = { self.move, self.behaviour, self.shown }
+        for _, ctl in ipairs(controls) do
+            if ctl:IsShown() then
+                ctl:ClearAllPoints()
+                ctl:SetPoint("RIGHT", anchor, "LEFT", -gap, 0)
+                used = used + gap + ctl:GetWidth()
+                anchor, gap = ctl, ctl == self.move and 8 or 10
+            end
+        end
+        if top then
+            local moves: SelectOption<string>[] = {}
+            for _, k in ipairs(tabLists(cooldown and "cooldowns" or "auras")) do
+                if k ~= key then
+                    moves[#moves + 1] = { value = k, label = infoOf(k).label }
+                end
+            end
+            self.move:SetOptions(moves)
+            self.move:SetValue(nil)
+        end
+        if not member then
+            self.shown:SetValue(not e.hidden)
+        end
+
+        -- folded: its members' icons after the summary, as many as fit
+        for _, t in ipairs(self.strip) do
+            t:Hide()
+        end
+        if #strip > 0 then
+            local x0 = math.min(self.rank:GetUnboundedStringWidth(), 180) + 6
+            local room = WIDTH - c.level * INDENT - used - 8 - 70 - x0
+            local count = math.min(#strip, math.max(0, math.floor((room + 2) / 16)))
+            for n = 1, count do
+                local t = self.strip[n] or UI.Icon(self, 14)
+                self.strip[n] = t
+                t:ClearAllPoints()
+                t:SetPoint("LEFT", self.rank, "LEFT", x0 + (n - 1) * 16, 0)
+                t:SetArt(strip[n] or nil)
+                t:Show()
+            end
+        end
+        self:Show()
+    end
+end
+
+-- A list's head: its title, note and count.
+export class ListHead extends Frame
+    readonly title: Text
+    readonly note: Text
+    readonly count: Text
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetSize(WIDTH, 34)
+        self.title = UI.Text(self, "label", "gilt-text")
+        self.title:SetPoint("TOPLEFT", 0, -4)
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetPoint("TOPLEFT", self.title, "BOTTOMLEFT", 0, -2)
+        self.count = UI.Text(self, "caption", "ink-muted")
+        self.count:SetPoint("TOPRIGHT", 0, -6)
+    end
+end
+
+-- The list's foot: "+ Add…" (a Select of candidates; a typed number finds
+-- any spell by its ID), "+ Shared slot" and "+ Collection".
+export class AddRow extends Frame
+    readonly select: Select<string>
+    readonly newSlot: SuuButton
+    readonly newCollection: SuuButton
+    key: string = ""
+    byName: { [string]: number[] } = {}
+    groups: { [string]: GroupOffer } = {}
+
+    -- (@unchecked: exported, its first closure got the constructor's
+    -- runtime checks in dev and test builds (wowlua 0.13.15), which the
+    -- class had none of while it was local: a cleared choice raised there)
+    @unchecked
+    constructor(editor: RowEditor)
+        super(nil, editor)
+        self:SetSize(WIDTH, 34)
+        self.select = UI.Select(self, {
+            width = 300,
+            placeholder = "+ Add… (name or spell ID)",
+            lookup = spellLookup,
+            onChange = function(value: string)
+                local e = entryFor(value, self.byName, self.groups)
+                if e then
+                    mutate(editor.host, function(l: ListSet)
+                        table.insert(assert(l[self.key]), e)
+                    end)
+                end
+            end,
+        })
+        self.select:SetPoint("LEFT")
+        self.newSlot = UI.Button(self, {
+            text = "+ Shared slot",
+            onClick = function()
+                local uid = newUid()
+                editor.fold[uid] = true -- open, so its "+ Add to" shows
+                mutate(editor.host, function(l: ListSet)
+                    table.insert(assert(l[self.key]), Lists.newSlot(self.key, uid))
+                end)
+            end,
+        })
+        self.newSlot:SetPoint("LEFT", self.select, "RIGHT", 8, 0)
+        self.newCollection = UI.Button(self, {
+            text = "+ Collection",
+            onClick = function()
+                mutate(editor.host, function(l: ListSet)
+                    table.insert(assert(l[self.key]), Lists.newCollection(newUid()))
+                end)
+            end,
+        })
+        self.newCollection:SetPoint("LEFT", self.newSlot, "RIGHT", 8, 0)
+    end
+end
+
+-- "+ Add to <name>…" at the foot of an open collection or shared slot.
+export class AddToRow extends RailedFrame
+    readonly select: Select<string>
+    path: Path = { key = "", i = 0 }
+    byName: { [string]: number[] } = {}
+    groups: { [string]: GroupOffer } = {}
+
+    -- (@unchecked: exported, its first closure got the constructor's
+    -- runtime checks in dev and test builds (wowlua 0.13.15), which the
+    -- class had none of while it was local: a cleared choice raised there)
+    @unchecked
+    constructor(editor: RowEditor)
+        super(nil, editor)
+        self:SetSize(WIDTH, ROW_H)
+        self.select = UI.Select(self, {
+            width = 280,
+            lookup = spellLookup,
+            onChange = function(value: string)
+                local e = entryFor(value, self.byName, self.groups)
+                if not e then
+                    return
+                end
+                mutate(editor.host, function(l: ListSet)
+                    Lists.addInto(l, self.path, e)
+                end)
+            end,
+        })
+        self.select:SetPoint("LEFT")
+    end
+end
+
+-- The row a drag carries: a ghost following the cursor.
+export class DragGhost extends Frame
+    readonly icon: Icon
+    readonly name: Text
+
+    constructor()
+        super(nil, UIParent)
+        self:SetFrameStrata("TOOLTIP")
+        self:SetSize(240, ROW_H)
+        UI.Fill(self, "surface-raised"):SetAllPoints()
+        UI.Border(self, "arcane")
+        self.icon = UI.Icon(self, 22)
+        self.icon:SetPoint("LEFT", 4, 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.icon, "RIGHT", 8, 0)
+        self:Hide()
+    end
+end
