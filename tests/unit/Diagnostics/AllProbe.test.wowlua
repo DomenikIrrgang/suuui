@@ -1,0 +1,412 @@
+-- Diagnostics/AllProbe: "/suu probe all" runs the instant checks, arms
+-- every watcher (kept across a /reload), says what each waits for, records
+-- each answer once and stops listening; "off" disarms it all. A watcher
+-- that fails records its error and leaves the others alone; nothing it
+-- saves names a player.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import asString from "wowlua:secret"
+import * as DB from "/Core/DB"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import * as hooks from "/Core/Hooks"
+import * as timers from "/Core/Timers"
+import * as allProbe from "/Diagnostics/AllProbe"
+import internal watches from "/Diagnostics/AllProbe"
+import * as kit from "/Diagnostics/Watch/Kit"
+import expectNoErrors from "../../helpers"
+
+type Result = kit.Result
+
+local function record(): kit.Record
+    return DB.probe.all :: unknown :: kit.Record
+end
+
+local function result(id: string): Result
+    return (assert(record().results[id], "no result for " .. id))
+end
+
+local function done(id: string): boolean
+    local r = record().results[id]
+    return r ~= nil and r.done == true
+end
+
+-- Whether `v` is a string with `text` in it.
+local function has(v: unknown, text: string): boolean
+    return type(v) == "string" and v:find(text, 1, true) ~= nil
+end
+
+-- What was printed from line `from` on.
+local function printedFrom(from: number): string[]
+    local all = mock.printed()
+    local out: string[] = {}
+    for i = from + 1, #all do
+        out[#out + 1] = all[i]
+    end
+    return out
+end
+
+local function anyLine(lines: string[], text: string): boolean
+    for _, l in ipairs(lines) do
+        if l:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- How much of an item's watch is still live: its listeners, armed hooks,
+-- timers.
+local function holding(id: string): number
+    local w = assert(watches[id], "no watch for " .. id)
+    return events.bus:count(w.owner) + hooks.armed(w.owner) + timers.count(w.owner)
+end
+
+-- Every string in a saved table (keys and values), for the identity check.
+local function strings(t: unknown, out: string[])
+    if type(t) == "string" then
+        out[#out + 1] = t
+        return
+    end
+    if type(t) ~= "table" then
+        return
+    end
+    for k, v in pairs(t :: { [unknown]: unknown }) do
+        strings(k, out)
+        strings(v, out)
+    end
+end
+
+@afterEach
+local function cleanup()
+    allProbe.command("off")
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    mock.player:target(nil)
+    if IsInGroup() then
+        mock.group:leave()
+    end
+    if IsInInstance() then
+        mock.leaveInstance()
+    end
+    mock.advanceTime(1)
+end
+
+@test("all: the instant answers now, every watcher armed, a summary printed")
+local function arms()
+    local from = #mock.printed()
+    allProbe.command("reset")
+    local r = record()
+    expect(r.armed).toBe(true)
+    expect(r.character).toBe("Player")
+    expect(r.build).never.toBe("")
+    for _, id in ipairs({ "client", "functions", "cvars", "taint" }) do
+        local x = result(id)
+        expect(x.done).toBe(true)
+        expect(type(x.question)).toBe("string")
+        expect(type(x.answer)).toBe("string")
+    end
+    expect(DB.probe.cvars).toBeTruthy()
+    expect(DB.probe.taint).toBeTruthy()
+    expect(tbl.contains(r.waiting, "UF-12")).toBe(true)
+    expect(tbl.contains(r.waiting, "CHAT-12")).toBe(true)
+    expect(#r.manual).toBe(1)
+    expect(assert(watches["UF-12"]).active).toBe(true)
+    local lines = printedFrom(from)
+    expect(anyLine(lines, "answered now")).toBe(true)
+    expectNoErrors()
+end
+
+@test("status: a line per waiting item saying what to do, the manual ones with why, and the count")
+local function status()
+    allProbe.command("reset")
+    local from = #mock.printed()
+    allProbe.command("status")
+    local lines = printedFrom(from)
+    expect(anyLine(lines, "UIW-11: open your bags once")).toBe(true)
+    expect(anyLine(lines, "UIW-7.width (by hand)")).toBe(true)
+    expect(anyLine(lines, "HUD-DM-1: enter a fight and deal damage for a few seconds")).toBe(true)
+    expect(anyLine(lines, "CHAT-12: right-click a SuuUI chat tab")).toBe(true)
+    expect(anyLine(lines, "still: out of combat; in a fight")).toBe(true)
+    expect(anyLine(lines, "Probe all: 4 of")).toBe(true)
+    expectNoErrors()
+end
+
+@test("off: every watcher disarmed (no listener, hook or timer left), a fight records nothing")
+local function off()
+    allProbe.command("reset")
+    expect(holding("UF-12")).toBeGreaterThan(0)
+    allProbe.command("off")
+    expect(record().armed).toBe(false)
+    for id, w in pairs(watches) do
+        expect(w.active).toBe(false)
+        expect(holding(id)).toBe(0)
+    end
+    mock.player:enterCombat()
+    mock.advanceTime(5)
+    expect(done("KEYS-combat")).toBe(false)
+    expect(done("UF-12")).toBe(false)
+    expectNoErrors()
+end
+
+@test("a fight: the combat items record once, then stop listening")
+local function fight()
+    allProbe.command("reset")
+    mock.player:enterCombat()
+    mock.advanceTime(5)
+    -- the probe's own frames: a keyboard frame, a container on its clip
+    local keys = result("KEYS-combat")
+    expect(keys.done).toBe(true)
+    expect(has(keys.answer, "SetPropagateKeyboardInput")).toBe(true)
+    expect(tbl.field(keys, "propagateOn", "error")).toBeNil()
+    local own = result("UF-12")
+    expect(own.done).toBe(true)
+    expect(has(own.answer, "re-anchoring the clip frame")).toBe(true)
+    expect(holding("KEYS-combat")).toBe(0)
+    expect(holding("UF-12")).toBe(0)
+    -- two fights wanted: one recorded, still listening
+    local meter = result("HUD-DM-1")
+    expect(#tbl.list(meter.samples)).toBe(1)
+    expect(meter.done).toBe(false)
+    expect(holding("HUD-DM-1")).toBeGreaterThan(0)
+    mock.player:leaveCombat()
+    mock.advanceTime(1)
+    -- a second fight: KEYS-combat doesn't record again
+    local at = keys.at
+    mock.player:enterCombat()
+    mock.advanceTime(5)
+    expect(result("KEYS-combat").at).toBe(at)
+    expect(result("HUD-DM-1").done).toBe(true)
+    expectNoErrors()
+end
+
+@test("a dungeon fight with a hostile NPC targeted: whether its classification is secret")
+local function identity()
+    allProbe.command("reset")
+    mock.enterInstance("party")
+    local boar = mock.spawnUnit({ name = "Mottled Boar", level = 3, reaction = "hostile", health = 80 })
+    mock.player:target(boar)
+    mock.player:enterCombat()
+    mock.advanceTime(2)
+    local r = result("HUD-UF-3")
+    local list = tbl.list(r.samples)
+    expect(#list).toBe(1)
+    expect(tbl.field(list[1], "instance")).toBe("party")
+    expect(type(tbl.field(list[1], "classificationSecret"))).toBe("boolean")
+    expectNoErrors()
+end
+
+@test("a raid fight: which roster fields are secret")
+local function roster()
+    allProbe.command("reset")
+    local mate = mock.spawnUnit({ name = "Tamsin Ashford", level = 10, reaction = "friendly", class = "PRIEST", player = true })
+    mock.group:add(mate, { raid = true, subgroup = 1 })
+    mock.player:enterCombat()
+    mock.advanceTime(3)
+    local list = tbl.list(result("GRP-4").samples)
+    expect(#list).toBe(1)
+    expect(tbl.field(list[1], "members")).toBeGreaterThan(0)
+    expect(type(tbl.field(list[1], "secretFields"))).toBe("table")
+    expectNoErrors()
+end
+
+@test("a failing watcher records its error and stops; the others go on")
+local function failing()
+    allProbe.command("reset")
+    local bad = kit.Watch.new({
+        id = "TEST-bad",
+        kind = kit.Kind.Armed,
+        question = "Does it fail?",
+        todo = "",
+        arm = function(w: kit.Watch)
+            w:on("PLAYER_REGEN_DISABLED", function()
+                error("broken on purpose")
+            end)
+        end,
+    })
+    bad:start()
+    mock.player:enterCombat()
+    mock.advanceTime(5)
+    local r = result("TEST-bad")
+    expect(r.done).toBe(true)
+    expect(has(r.answer, "the watcher failed")).toBe(true)
+    expect(has(r.error, "broken on purpose")).toBe(true)
+    expect(bad.active).toBe(false)
+    expect(events.bus:count(bad.owner)).toBe(0)
+    -- the others recorded the same fight
+    expect(done("KEYS-combat")).toBe(true)
+    expect(done("UF-12")).toBe(true)
+    record().results["TEST-bad"] = nil
+    expectNoErrors()
+end
+
+@test("the probe's square: hovered, it hides under the mouse and records whether OnLeave came")
+local function square()
+    allProbe.command("reset")
+    mock.advanceFrames(2)
+    local sq = assert(frames.find("SuuUIProbeSquare"))
+    expect(sq).toBeShown()
+    mock.hover(sq)
+    mock.advanceTime(1)
+    local r = result("CD-27.onleave")
+    expect(r.done).toBe(true)
+    expect(type(r.leaveFired)).toBe("boolean")
+    -- shown again for the drag test, which still waits
+    mock.advanceFrames(2)
+    expect(sq).toBeShown()
+    allProbe.command("off")
+    expect(sq).never.toBeShown()
+    expectNoErrors()
+end
+
+@test("addon messages: the sender's shape and which name form it equals; no name kept")
+local function senders()
+    mock.player:setName("Zorbek", nil, { quiet = true })
+    allProbe.command("reset")
+    local mate = mock.spawnUnit({ name = "Tamsin Ashford", level = 10, reaction = "friendly", class = "PRIEST", player = true })
+    mock.group:add(mate)
+    local name = assert(asString((UnitName("party1"))))
+    -- (CHAT_MSG_ADDON comes for registered prefixes: SuuUI's own)
+    mock.receiveAddonMessage("SuuUI", "hello", "PARTY", name)
+    mock.advanceFrames(1)
+    local r = result("COMM-senders")
+    local case = tbl.field(r, "cases", "a sender of your realm")
+    expect(case).toBeTruthy()
+    expect(tbl.field(case, "senderShape")).toBeTruthy()
+    expect(tbl.field(case, "matches", "UnitName")).toBe(true)
+    -- nothing saved has the member's or the player's name in it
+    local all: string[] = {}
+    strings(DB.probe.all, all)
+    local me = assert(asString((UnitName("player"))))
+    for _, s in ipairs(all) do
+        expect(s:find(name, 1, true)).toBeNil()
+        expect(s:find(me, 1, true)).toBeNil()
+    end
+    expectNoErrors()
+end
+
+@test("a loot roll: the item's name at START_LOOT_ROLL and the roll's events, ids as small numbers")
+local function rolls()
+    allProbe.command("reset")
+    mock.defineItem(990001, { name = "Test Blade", quality = 2, icon = 134400 }, { cached = true })
+    local mate = mock.spawnUnit({ name = "Tamsin Ashford", level = 10, reaction = "friendly", class = "PRIEST", player = true })
+    mock.group:add(mate)
+    local id = mock.startLootRoll({ item = 990001, bop = false })
+    mock.advanceFrames(1)
+    local list = tbl.list(result("CHAT-26").samples)
+    expect(#list).toBe(1)
+    expect(tbl.field(list[1], "name")).toBe("readable")
+    expect(type(tbl.field(list[1], "roll"))).toBe("number")
+    local log = tbl.list(result("ROLL-order").events)
+    expect(tbl.field(log[1], "event")).toBe("START_LOOT_ROLL")
+    mock.cancelLootRoll(id)
+    mock.advanceFrames(1)
+    expectNoErrors()
+end
+
+@test("everything recorded: said once in chat, and disarmed")
+local function allDone()
+    allProbe.command("reset")
+    for id, w in pairs(watches) do
+        if id ~= "KEYS-combat" and w.active then
+            w:finish("recorded in the test")
+        end
+    end
+    expect(record().armed).toBe(true)
+    local from = #mock.printed()
+    mock.player:enterCombat()
+    mock.advanceTime(3)
+    expect(done("KEYS-combat")).toBe(true)
+    expect(record().armed).toBe(false)
+    expect(#record().waiting).toBe(0)
+    local said = 0
+    for _, l in ipairs(printedFrom(from)) do
+        said += l:find("every armed question has recorded", 1, true) and 1 or 0
+    end
+    expect(said).toBe(1)
+    expectNoErrors()
+end
+
+@test("the chat settings opened from a SuuUI tab: the scan then, CURRENT_CHAT_FRAME_ID's writer")
+local function chatSettings()
+    allProbe.command("reset")
+    local chat = SuuUI.GetModule("chat") :: any
+    chat:OpenChatSettings(ChatFrame1)
+    local case = tbl.field(result("CHAT-12"), "cases", "out of combat")
+    expect(case).toBeTruthy()
+    expect(tbl.field(case, "moment")).toBe("chat settings opened from a SuuUI tab")
+    expect(has(tbl.field(case, "checks", "CURRENT_CHAT_FRAME_ID"), "written by")).toBe(true)
+    expect(done("CHAT-12")).toBe(false)
+    HideUIPanel(ChatConfigFrame)
+    expectNoErrors()
+end
+
+@test("the world map closed: the scan through Blizzard's EventRegistry, no hook on the map")
+local function map()
+    allProbe.command("reset")
+    ToggleWorldMap()
+    mock.advanceFrames(2)
+    ToggleWorldMap()
+    mock.advanceFrames(2)
+    local case = tbl.field(result("GRP-5"), "cases", "the map closed, out of combat")
+    expect(case).toBeTruthy()
+    expect(type(tbl.field(case, "newlyWritten"))).toBe("table")
+    expectNoErrors()
+end
+
+@test("the Group Finder's openings: LfgProbe's watcher armed quietly, no search of the probe's own")
+local function lfgOpens()
+    allProbe.command("reset")
+    local refusals = #mock.refusals()
+    for _ = 1, 2 do
+        mock.pressBinding("TOGGLEGROUPFINDER")
+        mock.advanceTime(6)
+        local f = frames.find("LFGParentFrame")
+        if f and f:IsShown() then
+            HideUIPanel(f)
+        end
+        mock.advanceTime(1)
+    end
+    local list = tbl.list(tbl.field(DB.probe, "lfg", "opens", "openings"))
+    expect(#list).toBeGreaterThan(0)
+    for _, o in ipairs(list) do
+        expect(tbl.field(o, "by")).never.toBe("probe")
+    end
+    expect(#mock.refusals()).toBe(refusals)
+    expect(done("LFG-opens")).toBe(false)
+    allProbe.command("off")
+    expectNoErrors()
+end
+
+@test("armed stays armed across a /reload: the watchers listen again, the results are kept")
+local function reload()
+    if mock.reloads() == 0 then
+        allProbe.command("reset")
+        mock.player:enterCombat()
+        mock.advanceTime(5)
+        mock.player:leaveCombat()
+        mock.advanceTime(1)
+        expect(done("KEYS-combat")).toBe(true)
+        mock.reloadUI()
+    end
+    -- after the reload: armed again at the login
+    local r = record()
+    expect(r.armed).toBe(true)
+    expect(done("KEYS-combat")).toBe(true)
+    expect(done("client")).toBe(true)
+    expect(assert(watches["CHAT-12"]).active).toBe(true)
+    expect(holding("CHAT-12")).toBeGreaterThan(0)
+    -- a recorded item isn't armed again
+    expect(watches["KEYS-combat"]).toBeNil()
+    -- the login items read at PLAYER_LOGIN: a /reload, not a full login
+    mock.advanceTime(1)
+    local config = tbl.list(tbl.field(r.results, "CD-17", "samples"))
+    if #config > 0 then
+        expect(tbl.field(config[1], "fullLogin")).toBe(false)
+    end
+    expectNoErrors()
+end

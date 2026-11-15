@@ -1,0 +1,320 @@
+-- Diagnostics/Watch/Login.wowlua
+-- What a login answers: whether the talent config (CD-17) and a shaman's
+-- Call spells (HUD-DM-2) are ready at PLAYER_LOGIN, when the modules enable
+-- (the probe re-arms itself then: kit.phase.login), told apart from a
+-- /reload by PLAYER_ENTERING_WORLD; UnitLevel inside PLAYER_LEVEL_UP
+-- (CHAR-27); and the callback registries of the reputation list and the Who
+-- page's filter dropdown before SuuUI registers on them (UIP-13: Blizzard
+-- frames SuuUI skins later, when they first show).
+
+import SuuUI from "/Core/API"
+import isSecret, readable, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+local function samples(r: Result): Result[]
+    local list = r.samples
+    return type(list) == "table" and list :: Result[] or {}
+end
+
+-- A reading at PLAYER_LOGIN, kept until PLAYER_ENTERING_WORLD says whether
+-- it was a full login: done once a full login's reading is in.
+local function atLogin(w: Watch, read: () -> Result?)
+    if not kit.phase.login then
+        return
+    end
+    local now = read()
+    if not now then
+        return
+    end
+    w:on("PLAYER_ENTERING_WORLD", function(_, initial: unknown, reloading: unknown)
+        -- only the login's own PLAYER_ENTERING_WORLD counts
+        w:off("PLAYER_ENTERING_WORLD")
+        now.fullLogin = initial == true
+        now.reload = reloading == true
+        w:after(0.2, function()
+            local later = read()
+            now.later = later
+            local list = tbl.listAt(w:result(), "samples")
+            list[#list + 1] = now
+            if now.fullLogin then
+                w:finish(nil)
+            end
+        end)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- CD-17
+--------------------------------------------------------------------------------
+
+local function readConfig(): Result
+    local get = kit.resolve("C_ClassTalents.GetActiveConfigID")
+    if type(get) ~= "function" then
+        return { config = "no C_ClassTalents.GetActiveConfigID" }
+    end
+    local ok, id = pcall(get :: () -> unknown)
+    if not ok then
+        return { config = "error" }
+    end
+    if isSecret(id) then
+        return { config = "secret" }
+    end
+    return { config = id == nil and "nil" or "an ID" }
+end
+
+local function sumConfig(r: Result): string
+    for _, s in ipairs(samples(r)) do
+        if s.fullLogin then
+            return ("at a full login's PLAYER_LOGIN the active talent config was %s (%s 0.2 s after PLAYER_ENTERING_WORLD)"):format(
+                tostring(s.config),
+                tostring(tbl.field(s.later, "config"))
+            )
+        end
+    end
+    return "no full login recorded"
+end
+
+--------------------------------------------------------------------------------
+-- HUD-DM-2: Call of the Ancestors (TOTEM_MULTI_CAST_SUMMON_SPELLS[2])
+--------------------------------------------------------------------------------
+
+local function knows(spellID: number?): string
+    if not spellID then
+        return "no spell"
+    end
+    local inBook = kit.resolve("C_SpellBook.IsSpellInSpellBook")
+    local bank = kit.resolve("Enum.SpellBookSpellBank.Player")
+    if type(inBook) == "function" then
+        local ok, yes = pcall(inBook :: (a: number, b: unknown, c: boolean) -> unknown, spellID, bank, false)
+        if ok then
+            return isSecret(yes) and "secret" or (yes and "known" or "not known")
+        end
+    end
+    local isPlayerSpell = kit.resolve("IsPlayerSpell")
+    if type(isPlayerSpell) == "function" then
+        local ok, yes = pcall(isPlayerSpell :: (id: number) -> unknown, spellID)
+        if ok then
+            return isSecret(yes) and "secret" or (yes and "known" or "not known")
+        end
+    end
+    return "unreadable"
+end
+
+local function readSummon(): Result?
+    local _, class = UnitClass("player")
+    if asString(class) ~= "SHAMAN" then
+        return nil
+    end
+    local list = kit.resolve("TOTEM_MULTI_CAST_SUMMON_SPELLS")
+    local id = readable(list) and type(list) == "table" and (list :: number[])[2] or 66843
+    return { spell = id, known = knows(id) }
+end
+
+local function sumSummon(r: Result): string
+    for _, s in ipairs(samples(r)) do
+        if s.fullLogin then
+            return ("at a full login's PLAYER_LOGIN Call of the Ancestors read %s (%s 0.2 s after PLAYER_ENTERING_WORLD)"):format(
+                tostring(s.known),
+                tostring(tbl.field(s.later, "known"))
+            )
+        end
+    end
+    return "no full login recorded"
+end
+
+--------------------------------------------------------------------------------
+-- CHAR-27
+--------------------------------------------------------------------------------
+
+local function armLevel(w: Watch)
+    w:on("PLAYER_LEVEL_UP", function(_, level: unknown)
+        local inside = UnitLevel("player")
+        w:after(0, function()
+            local next = UnitLevel("player")
+            local same = not isSecret(inside) and not isSecret(level) and inside == level
+            w:finish(
+                ("inside PLAYER_LEVEL_UP UnitLevel(\"player\") %s the event's level (%s the next frame)"):format(
+                    same and "already gives" or "does not give",
+                    (not isSecret(next) and not isSecret(level) and next == level) and "gives it" or "still not"
+                ),
+                { eventLevel = kit.show(level), unitLevelInside = kit.show(inside), unitLevelNextFrame = kit.show(next) }
+            )
+        end)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- UIP-13: the callback registries before SuuUI registers
+--------------------------------------------------------------------------------
+
+-- An owner as it can be saved: its kind, never the table.
+local function ownerKind(owner: unknown, frame: unknown): string
+    if owner == frame then
+        return "the frame itself"
+    end
+    local t = type(owner)
+    if t == "string" then
+        return "the string " .. (owner :: string)
+    end
+    if t == "number" then
+        return "a number (no owner given)"
+    end
+    return "another " .. t
+end
+
+-- The registry's callbacks for `event`: each owner's kind and who wrote the
+-- entry (issecurevariable reads a string owner's; a table owner's entry
+-- reads "unreadable"); nil when an addon's entry is seen (too late to see
+-- Blizzard's alone). Read only before SuuUI skins the frame: the reputation
+-- list at login (SuuUI skins it when it first shows), the Who page's
+-- dropdown as its addon loads (skinned when its filter is first used).
+local function dump(frame: unknown, event: unknown): Result?
+    if not readable(frame) or type(event) ~= "string" then
+        return nil
+    end
+    local tables = tbl.field(frame, "callbackTables")
+    if type(tables) ~= "table" then
+        return { registry = "none" }
+    end
+    local owners: string[] = {}
+    local addonWritten = false
+    for kind, byEvent in pairs(tables :: { [unknown]: unknown }) do
+        local callbacks = tbl.field(byEvent, event :: string)
+        if type(callbacks) == "table" then
+            for owner in pairs(callbacks :: { [unknown]: unknown }) do
+                local by = kit.secureState(callbacks, owner)
+                if by:find("^written by") then
+                    addonWritten = true
+                end
+                owners[#owners + 1] = ("%s (type %s, %s)"):format(ownerKind(owner, frame), tostring(kind), by)
+            end
+        end
+    end
+    if addonWritten then
+        return nil
+    end
+    table.sort(owners)
+    return { owners = owners, frameItself = (function(): boolean
+        for _, o in ipairs(owners) do
+            if o:find("the frame itself", 1, true) then
+                return true
+            end
+        end
+        return false
+    end)() }
+end
+
+local function readReputation(w: Watch)
+    if w:has("the reputation list") then
+        return
+    end
+    local box = kit.resolve("ReputationFrame.ScrollBox")
+    local d = dump(box, tbl.field(box, "Event", "OnDataRangeChanged"))
+    if d then
+        w:case("the reputation list", d)
+    end
+end
+
+local function readWho(w: Watch)
+    if w:has("the Who page's filter dropdown") then
+        return
+    end
+    local dd = kit.resolve("LFGWhoListFrame.FilterDropdown")
+    local d = dump(dd, kit.resolve("DropdownButtonMixin.Event.OnMenuOpen"))
+    if d then
+        w:case("the Who page's filter dropdown", d)
+    end
+end
+
+-- Whether SuuUI has skinned the Who page's dropdown yet (the Group Finder
+-- module's own flag).
+local function whoSkinned(): boolean
+    local ok, yes = pcall(function(): boolean
+        return tbl.field(SuuUI.GetModule("groupfinder"), "whoDropdownSkinned") == true
+    end)
+    return not ok or yes
+end
+
+local function armRegistries(w: Watch)
+    if kit.phase.login then
+        readReputation(w)
+    end
+    if not whoSkinned() then
+        readWho(w)
+    end
+    w:on("ADDON_LOADED", function(_, name: unknown)
+        if name == "Blizzard_GroupFinder_VanillaStyle" then
+            readWho(w)
+        end
+    end)
+end
+
+local function sumRegistries(r: Result): string
+    local cases = r.cases :: { [string]: Result }? or {}
+    local parts: string[] = {}
+    for _, key in ipairs({ "the reputation list", "the Who page's filter dropdown" }) do
+        local c = cases[key]
+        if c then
+            parts[#parts + 1] = ("%s: %s"):format(
+                key,
+                c.frameItself and "Blizzard registers with the frame itself as owner"
+                    or ("%d callbacks, none owned by the frame itself"):format(#tbl.list(c.owners))
+            )
+        end
+    end
+    return table.concat(parts, "; ")
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "CD-17",
+            kind = kit.Kind.Armed,
+
+            when = "a login",
+            question = "Is C_ClassTalents.GetActiveConfigID ready at PLAYER_LOGIN, when the modules enable?",
+            todo = "log out and back in (a full login, not /reload)",
+            arm = function(w: Watch)
+                atLogin(w, readConfig)
+            end,
+            summarize = sumConfig,
+        },
+        {
+            id = "HUD-DM-2",
+            kind = kit.Kind.Armed,
+
+            when = "a login",
+            question = "Does a shaman's spellbook know Call of the Ancestors (TOTEM_MULTI_CAST_SUMMON_SPELLS[2]) at a full login's PLAYER_LOGIN, when the totem bar is built?",
+            todo = "log in fully (not /reload) on a shaman who has Call of the Ancestors",
+            arm = function(w: Watch)
+                atLogin(w, readSummon)
+            end,
+            summarize = sumSummon,
+        },
+        {
+            id = "CHAR-27",
+            kind = kit.Kind.Armed,
+
+            when = "a level up",
+            question = "Inside PLAYER_LEVEL_UP, does UnitLevel(\"player\") already give the new level?",
+            todo = "gain a level",
+            arm = armLevel,
+        },
+        {
+            id = "UIP-13",
+            kind = kit.Kind.Armed,
+
+            when = "a reload",
+            question = "Does Blizzard register callbacks with the frame itself as owner on the reputation list (OnDataRangeChanged) and the Who page's filter dropdown (OnMenuOpen), before SuuUI registers?",
+            todo = "/reload (the reputation list is read at login, before it first shows), and open the Group Finder in a session where it wasn't open yet (its Who dropdown is read as it loads)",
+            cases = { "the reputation list", "the Who page's filter dropdown" },
+            arm = armRegistries,
+            summarize = sumRegistries,
+        },
+    }
+end

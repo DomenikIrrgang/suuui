@@ -1,0 +1,296 @@
+-- Diagnostics/AllProbe.wowlua
+-- "/suu probe all": every open question about the client in one command.
+-- Type it once, play as usual, /reload whenever: what the client answers is
+-- in SuuUIProbe.all.
+--
+--   /suu probe all          runs the instant checks now and arms every
+--                           watcher; says how many answered and what waits
+--   /suu probe all status   one line per item still waiting, with what to
+--                           do for it to record, and a count of what's done
+--   /suu probe all off      disarms everything (hooks stay installed,
+--                           doing nothing, until a /reload)
+--   /suu probe all reset    forgets every result and starts over
+--
+-- Armed stays armed across /reload and logins (SuuUIProbe.all.armed): each
+-- watcher records once (or its first few occurrences) and then stops
+-- listening for good. When every armed item has recorded, it says so once
+-- and disarms itself. The items and their watchers are in
+-- Diagnostics/Watch (Kit.wowlua has the rules they keep: read only, no
+-- secrets compared, no names stored, events only, each under pcall).
+--
+-- SuuUIProbe.all = { version, started, build, suuui, api, character =
+-- "Player", armed, results = { [id] = { question, answer, at, combat, done,
+-- … } }, waiting = { id, … }, manual = { { id, todo, reason, topic? } } },
+-- keyed by the review's finding ID where there is one.
+
+import print, version from "/Core/Init"
+import API_VERSION from "/Core/Modules"
+import * as DB from "/Core/DB"
+import onLogin from "wowlua:lifecycle"
+import * as kit from "/Diagnostics/Watch/Kit"
+import * as instant from "/Diagnostics/Watch/Instant"
+import * as fight from "/Diagnostics/Watch/Fight"
+import * as auras from "/Diagnostics/Watch/Auras"
+import * as ownFrames from "/Diagnostics/Watch/OwnFrames"
+import * as taint from "/Diagnostics/Watch/Taint"
+import * as loot from "/Diagnostics/Watch/Loot"
+import * as login from "/Diagnostics/Watch/Login"
+import * as social from "/Diagnostics/Watch/Social"
+import * as bags from "/Diagnostics/Watch/Bags"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+-- What can't be seen without acting on the game: listed by status, never
+-- attempted.
+local MANUAL: Item[] = {
+    {
+        id = "UIW-7.width",
+        kind = kit.Kind.Manual,
+        question = "Does a group finder category card keep the right width after the window is resized (the skin writes fixedWidth once)?",
+        todo = "choose a category in the group finder's listing, resize the window, and see whether the category cards follow the new width",
+        reason = "the width the skin wants is SuuUI's layout, not something the game tells; it shows on screen",
+    },
+}
+
+local itemList: Item[]? = nil
+
+-- Every item, in the order status lists them.
+export function items(): Item[]
+    local list = itemList
+    if list then
+        return list
+    end
+    local made: Item[] = {}
+    for _, part in ipairs({
+        instant.items(),
+        fight.items(),
+        auras.items(),
+        ownFrames.items(),
+        taint.items(),
+        loot.items(),
+        login.items(),
+        social.items(),
+        bags.items(),
+        MANUAL,
+    }) do
+        for _, item in ipairs(part) do
+            made[#made + 1] = item
+        end
+    end
+    itemList = made
+    return made
+end
+
+-- The watches of this session, by item ID.
+local watches: { [string]: Watch } = {}
+
+local function isDone(record: kit.Record, id: string): boolean
+    local r = record.results[id]
+    return r ~= nil and r.done == true
+end
+
+-- The armed items not recorded yet.
+local function waitingItems(record: kit.Record): Item[]
+    local out: Item[] = {}
+    for _, item in ipairs(items()) do
+        if item.kind == kit.Kind.Armed and not isDone(record, item.id) then
+            out[#out + 1] = item
+        end
+    end
+    return out
+end
+
+local function update(record: kit.Record)
+    local ids: string[] = {}
+    for _, item in ipairs(waitingItems(record)) do
+        ids[#ids + 1] = item.id
+    end
+    record.waiting = ids
+    local manual: Result[] = {}
+    for _, item in ipairs(MANUAL) do
+        manual[#manual + 1] = { id = item.id, question = item.question, todo = item.todo, reason = item.reason, topic = item.topic }
+    end
+    record.manual = manual
+end
+
+local disarm: (quiet: boolean) -> ()
+
+-- An item recorded: the waiting list again; the last one disarms it all.
+local function recorded(_w: Watch)
+    local record = kit.store()
+    update(record)
+    if record.armed and #record.waiting == 0 then
+        disarm(true)
+        print("Probe all: every armed question has recorded. /reload to save SuuUIProbe.all.")
+    end
+end
+
+local function arm()
+    local record = kit.store()
+    record.armed = true
+    kit.listenBlocked(true)
+    kit.baseline()
+    for _, item in ipairs(items()) do
+        if item.kind == kit.Kind.Armed and not isDone(record, item.id) then
+            local w = watches[item.id]
+            if not w then
+                w = kit.Watch.new(item)
+                w.onDone = recorded
+                watches[item.id] = w
+            end
+            w:start()
+        end
+    end
+    update(record)
+end
+
+disarm = function(quiet: boolean)
+    for _, w in pairs(watches) do
+        if w.active then
+            w:stop()
+        end
+    end
+    kit.listenBlocked(false)
+    local record = kit.store()
+    record.armed = false
+    update(record)
+    if not quiet then
+        print("Probe all: off. Hooks already installed stay, doing nothing, until a /reload. /reload to save.")
+    end
+end
+
+local function runInstants(record: kit.Record): number
+    local n = 0
+    for _, item in ipairs(items()) do
+        local run = item.run
+        if item.kind == kit.Kind.Instant and run then
+            local ok, r = pcall(run)
+            local result: Result = ok and r :: Result or { answer = "failed: " .. tostring(r), error = tostring(r) }
+            result.question = item.question
+            result.at = kit.stamp()
+            result.combat = InCombatLockdown() and true or false
+            result.done = true
+            record.results[item.id] = result
+            n += 1
+        end
+    end
+    return n
+end
+
+local function start(fresh: boolean)
+    local record = kit.store()
+    if fresh then
+        record.results = {}
+        record.started = kit.stamp()
+    end
+    local _, build = GetBuildInfo()
+    record.version = kit.LAYOUT
+    record.build = tostring(build)
+    record.suuui = version
+    record.api = API_VERSION
+    record.character = "Player"
+    local n = runInstants(record)
+    arm()
+    local done = 0
+    -- what the waiting items wait for, by `when`, in their order
+    local order: string[] = {}
+    local counts: { [string]: number } = {}
+    for _, item in ipairs(items()) do
+        if item.kind == kit.Kind.Armed then
+            if isDone(record, item.id) then
+                done += 1
+            else
+                local w = item.when or "other"
+                if not counts[w] then
+                    order[#order + 1] = w
+                end
+                counts[w] = (counts[w] or 0) + 1
+            end
+        end
+    end
+    local parts: string[] = {}
+    for _, w in ipairs(order) do
+        parts[#parts + 1] = ("%s %d"):format(w, counts[w])
+    end
+    print(("Probe all: %d answered now, %d recorded before, %d waiting for %s; %d to do by hand."):format(
+        n,
+        done,
+        #record.waiting,
+        #parts == 0 and "nothing" or table.concat(parts, ", "),
+        #MANUAL
+    ))
+    print("Probe all: armed, also after /reload. \"/suu probe all status\" says what each waits for; \"off\" stops.")
+end
+
+local function status()
+    local record = kit.store()
+    update(record)
+    local all, done = 0, 0
+    for _, item in ipairs(items()) do
+        if item.kind ~= kit.Kind.Manual then
+            all += 1
+            done += isDone(record, item.id) and 1 or 0
+        end
+    end
+    for _, item in ipairs(waitingItems(record)) do
+        local r = record.results[item.id]
+        local progress = ""
+        local samples = r and r.samples
+        if item.samples and type(samples) == "table" then
+            progress = (" (%d of %d)"):format(#(samples :: unknown[]), item.samples or 1)
+        elseif item.cases then
+            local cases = r and r.cases
+            local missing: string[] = {}
+            for _, key in ipairs(item.cases or {}) do
+                if not (type(cases) == "table" and (cases :: { [string]: unknown })[key] ~= nil) then
+                    missing[#missing + 1] = key
+                end
+            end
+            progress = " (still: " .. table.concat(missing, "; ") .. ")"
+        end
+        print(("%s: %s%s"):format(item.id, item.todo, progress))
+    end
+    for _, item in ipairs(MANUAL) do
+        print(("%s (by hand): %s. Not watched: %s%s"):format(
+            item.id,
+            item.todo,
+            item.reason or "",
+            item.topic and ("; /suu probe " .. item.topic .. " records it") or ""
+        ))
+    end
+    print(("Probe all: %d of %d recorded%s."):format(done, all, record.armed and ", armed" or ", not armed"))
+end
+
+export function command(rest: string?)
+    local arg = (rest or ""):lower()
+    if arg == "status" then
+        status()
+        return
+    end
+    if arg == "off" then
+        disarm(false)
+        return
+    end
+    start(arg == "reset")
+end
+
+-- after a /reload or a login: armed again where it was (the login
+-- watchers read now, while the modules enable)
+@onLogin
+local function resume()
+    if not DB.loaded() then
+        return
+    end
+    local record = DB.probe.all
+    if type(record) ~= "table" or (record :: { [string]: unknown }).armed ~= true then
+        return
+    end
+    kit.phase.login = true
+    local ok, err = pcall(arm)
+    kit.phase.login = false
+    if not ok then
+        print("Probe all: couldn't arm again: " .. tostring(err))
+    end
+end

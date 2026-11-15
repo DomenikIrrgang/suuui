@@ -1,0 +1,273 @@
+-- Diagnostics/Watch/OwnFrames.wowlua
+-- Questions answered on frames the probe makes itself, never on SuuUI's or
+-- Blizzard's:
+--   KEYS-combat  are SetPropagateKeyboardInput and EnableKeyboard refused in
+--                combat lockdown (UI/Dismiss's header: whether it could be
+--                simpler)? Tried on a hidden frame in the first fight.
+--   CD-27.onleave  does OnLeave fire when a frame hides under the mouse (the
+--                mouse bindings' CD-27 fix assumes it may not)?
+--   CD-24        does OnDragStop fire for a frame hidden mid-drag (the
+--                cooldown editor's rows)?
+-- The last two need the mouse: a small square ("SuuUI probe") shows at the
+-- top of the screen, out of combat, only while one of them waits. Hovered,
+-- it hides itself under the mouse a moment later; dragged (held), it hides
+-- itself mid-drag. Hidden for good once both have recorded.
+
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Watch = kit.Watch
+
+--------------------------------------------------------------------------------
+-- KEYS-combat
+--------------------------------------------------------------------------------
+
+local keys: Frame? = nil
+
+local function testKeys(w: Watch)
+    local f = keys or CreateFrame("Frame")
+    keys = f
+    f:Hide()
+    local on = kit.attempt(function()
+        f:SetPropagateKeyboardInput(true)
+    end)
+    local off = kit.attempt(function()
+        f:SetPropagateKeyboardInput(false)
+    end)
+    local enable = kit.attempt(function()
+        f:EnableKeyboard(true)
+    end)
+    -- the frame stays hidden either way: it never takes a key
+    local disable = kit.attempt(function()
+        f:EnableKeyboard(false)
+    end)
+    w:finish(
+        ("in combat lockdown, on a hidden frame of the probe's: SetPropagateKeyboardInput %s, EnableKeyboard %s"):format(
+            kit.attemptWord(on),
+            kit.attemptWord(enable)
+        ),
+        { propagateOn = on, propagateOff = off, enableKeyboard = enable, disableKeyboard = disable }
+    )
+end
+
+local function armKeys(w: Watch)
+    w:on("PLAYER_REGEN_DISABLED", function()
+        w:after(1, function()
+            if InCombatLockdown() then
+                testKeys(w)
+            end
+        end)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- The square
+--------------------------------------------------------------------------------
+
+type Square = Frame & { label: FontString }
+
+local square: Square? = nil
+local hoverWatch: Watch? = nil
+local dragWatch: Watch? = nil
+-- the test running: "hover" or "drag"
+local testing: string? = nil
+local hiding = false
+local leaveSeen, leaveWhileHiding = false, false
+local stopSeen: number? = nil
+local stopWhileHiding = false
+local hiddenAt = 0
+
+local function waiting(w: Watch?): boolean
+    return w ~= nil and w.active
+end
+
+-- Shown while one of the two waits, out of combat, no test running.
+local function refresh()
+    local s = square
+    if not s then
+        return
+    end
+    local hover, drag = waiting(hoverWatch), waiting(dragWatch)
+    if (hover or drag) and not InCombatLockdown() and testing == nil then
+        s.label:SetText(hover and "SuuUI probe: hover me" or "SuuUI probe: drag me, hold a second")
+        s:Show()
+    else
+        s:Hide()
+    end
+end
+
+local function endDrag(w: Watch)
+    if testing ~= "drag" then
+        return
+    end
+    testing = nil
+    local stop = stopSeen
+    local when = stop == nil and "never" or (stopWhileHiding and "when the frame hid" or "when the button was let go")
+    w:finish(("OnDragStop for a frame hidden mid-drag: %s"):format(when), {
+        dragStopFired = stop ~= nil,
+        firedWhileHiding = stopWhileHiding,
+        secondsAfterHide = stop and (stop - hiddenAt) or nil,
+    })
+end
+
+local function makeSquare(): Square
+    local made = square
+    if made then
+        return made
+    end
+    local f = CreateFrame("Frame", "SuuUIProbeSquare", UIParent) :: Square
+    f:SetSize(170, 26)
+    f:SetPoint("TOP", UIParent, "TOP", 0, -140)
+    f:SetFrameStrata("DIALOG")
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.1, 0.1, 0.12, 0.9)
+    local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    label:SetPoint("CENTER")
+    f.label = label
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:Hide()
+    f:SetScript("OnEnter", function()
+        local w = hoverWatch
+        if testing ~= nil or not waiting(w) then
+            return
+        end
+        local hw = assert(w)
+        testing = "hover"
+        leaveSeen, leaveWhileHiding = false, false
+        hw:after(0.6, function()
+            if not f:IsMouseOver() then
+                testing = nil
+                return
+            end
+            hiding = true
+            f:Hide()
+            hiding = false
+            hw:after(0.3, function()
+                testing = nil
+                hw:finish(("OnLeave when a frame hides under the mouse: %s"):format(
+                    leaveSeen and (leaveWhileHiding and "fires, during Hide()" or "fires, after Hide()") or "does not fire"
+                ), { leaveFired = leaveSeen, duringHide = leaveWhileHiding })
+            end)
+        end)
+    end)
+    f:SetScript("OnLeave", function()
+        if testing == "hover" then
+            leaveSeen = true
+            leaveWhileHiding = hiding
+        end
+    end)
+    f:SetScript("OnDragStart", function()
+        local w = dragWatch
+        if testing ~= nil or not waiting(w) then
+            return
+        end
+        local dw = assert(w)
+        testing = "drag"
+        stopSeen, stopWhileHiding, hiddenAt = nil, false, 0
+        dw:after(0.5, function()
+            -- let go before it hid: not a test (tried again on the next drag)
+            if testing ~= "drag" then
+                return
+            end
+            hiddenAt = GetTime()
+            hiding = true
+            f:Hide()
+            hiding = false
+            -- let go (GLOBAL_MOUSE_UP), or at most 5 s
+            dw:after(5, function()
+                endDrag(dw)
+            end)
+        end)
+    end)
+    f:SetScript("OnDragStop", function()
+        if testing ~= "drag" then
+            return
+        end
+        if f:IsShown() and not hiding then
+            testing = nil
+            return
+        end
+        stopSeen = GetTime()
+        stopWhileHiding = hiding
+    end)
+    square = f
+    return f
+end
+
+local function armSquare(w: Watch)
+    makeSquare()
+    w:on("PLAYER_REGEN_DISABLED", function()
+        local s = square
+        if s and testing == nil then
+            s:Hide()
+        end
+    end)
+    w:on("PLAYER_REGEN_ENABLED", refresh)
+    w:after(0, refresh)
+end
+
+local function armHover(w: Watch)
+    hoverWatch = w
+    armSquare(w)
+end
+
+local function armDrag(w: Watch)
+    dragWatch = w
+    armSquare(w)
+    w:on("GLOBAL_MOUSE_UP", function()
+        if testing == "drag" and hiddenAt > 0 and not (square and square:IsShown()) then
+            w:after(0.2, function()
+                endDrag(w)
+            end)
+        end
+    end)
+end
+
+-- One of the two done or off: the square for the other, else away.
+local function stopSquare()
+    if testing ~= nil and not (waiting(hoverWatch) or waiting(dragWatch)) then
+        testing = nil
+    end
+    local s = square
+    if s and not waiting(hoverWatch) and not waiting(dragWatch) then
+        s:Hide()
+        return
+    end
+    refresh()
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "KEYS-combat",
+            kind = kit.Kind.Armed,
+
+            when = "a fight",
+            question = "Are SetPropagateKeyboardInput and EnableKeyboard refused in combat lockdown (on a frame of the probe's own)?",
+            todo = "enter a fight (the probe tries both on its own hidden frame)",
+            arm = armKeys,
+        },
+        {
+            id = "CD-27.onleave",
+            kind = kit.Kind.Armed,
+
+            when = "the probe square",
+            question = "Does OnLeave fire when a frame hides while the mouse is over it?",
+            todo = "hover the small \"SuuUI probe\" square at the top of the screen for a second (it hides itself under the mouse)",
+            arm = armHover,
+            stop = stopSquare,
+        },
+        {
+            id = "CD-24",
+            kind = kit.Kind.Armed,
+
+            when = "the probe square",
+            question = "Does OnDragStop fire for a frame hidden in the middle of a drag (the cooldown editor's rows)?",
+            todo = "drag the small \"SuuUI probe\" square at the top of the screen and hold the button a second (it hides itself mid-drag)",
+            arm = armDrag,
+            stop = stopSquare,
+        },
+    }
+end

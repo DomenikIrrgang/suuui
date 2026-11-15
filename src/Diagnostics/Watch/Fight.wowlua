@@ -1,0 +1,374 @@
+-- Diagnostics/Watch/Fight.wowlua
+-- The questions a fight answers: which unit values are secret in combat
+-- (HUD-UF-3, GRP-4, HUD-DM-1), whether a bag slot button is protected in
+-- combat (UIW-11), and which swings the game tells while you melee with a
+-- ranged weapon (HUD-4). Each reads a second or more into the fight (the
+-- lockdown starts after PLAYER_REGEN_DISABLED), a few values, and returns.
+
+import isSecret, readable, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+-- fn once per fight, `delay` seconds after it starts, if still in lockdown.
+local function inFights(w: Watch, delay: number, fn: () -> ())
+    w:on("PLAYER_REGEN_DISABLED", function()
+        w:after(delay, function()
+            if InCombatLockdown() then
+                fn()
+            end
+        end)
+    end)
+end
+
+local function instanceType(): string
+    local _, kind = IsInInstance()
+    return asString(kind) or "none"
+end
+
+local function samples(r: Result): Result[]
+    local list = r.samples
+    return type(list) == "table" and list :: Result[] or {}
+end
+
+--------------------------------------------------------------------------------
+-- HUD-UF-3: UnitClassification and UnitIsBossMob on a hostile NPC in a
+-- dungeon fight
+--------------------------------------------------------------------------------
+
+local function readTarget(w: Watch)
+    if not InCombatLockdown() or instanceType() == "none" then
+        return
+    end
+    if not UnitExists("target") then
+        return
+    end
+    -- a hostile NPC; where the game keeps that secret, the target is taken
+    -- (and the answer says so)
+    local isPlayer = UnitIsPlayer("target")
+    local canAttack = UnitCanAttack("player", "target")
+    if not isSecret(isPlayer) and isPlayer then
+        return
+    end
+    if not isSecret(canAttack) and not canAttack then
+        return
+    end
+    local okC, c = pcall(UnitClassification, "target")
+    local boss = kit.resolve("UnitIsBossMob")
+    local okB, b = false, nil :: unknown
+    if type(boss) == "function" then
+        okB, b = pcall(boss :: (unit: string) -> unknown, "target")
+    end
+    w:sample({
+        instance = instanceType(),
+        hostilitySecret = isSecret(canAttack) or isSecret(isPlayer),
+        classification = okC and kit.show(c) or ("error: " .. tostring(c)),
+        classificationSecret = okC and isSecret(c),
+        bossMob = type(boss) ~= "function" and "missing" or (okB and kit.show(b) or ("error: " .. tostring(b))),
+        bossMobSecret = okB and isSecret(b),
+    })
+end
+
+local function armIdentity(w: Watch)
+    inFights(w, 1, function()
+        readTarget(w)
+    end)
+    w:on("PLAYER_TARGET_CHANGED", function()
+        readTarget(w)
+    end)
+end
+
+local function sumIdentity(r: Result): string
+    local list = samples(r)
+    local c, b = 0, 0
+    for _, s in ipairs(list) do
+        c += s.classificationSecret and 1 or 0
+        b += s.bossMobSecret and 1 or 0
+    end
+    return ("in %d dungeon or raid fights on a hostile NPC target: UnitClassification secret %d times, UnitIsBossMob secret %d times"):format(
+        #list,
+        c,
+        b
+    )
+end
+
+--------------------------------------------------------------------------------
+-- GRP-4: GetRaidRosterInfo's fields in raid combat
+--------------------------------------------------------------------------------
+
+const ROSTER_FIELDS: string[] = {
+    "name",
+    "rank",
+    "subgroup",
+    "level",
+    "class",
+    "fileName",
+    "zone",
+    "online",
+    "isDead",
+    "role",
+    "isML",
+    "combatRole",
+}
+
+local function readRoster(w: Watch)
+    if not IsInRaid() then
+        return
+    end
+    local n = GetNumGroupMembers()
+    local secretCount: { [string]: number } = {}
+    local rows = 0
+    for i = 1, math.min(isSecret(n) and 5 or n, 5) do
+        local values = { pcall(GetRaidRosterInfo, i) }
+        if values[1] then
+            rows += 1
+            for f, field in ipairs(ROSTER_FIELDS) do
+                if isSecret(values[f + 1]) then
+                    secretCount[field] = (secretCount[field] or 0) + 1
+                end
+            end
+        end
+    end
+    local secret: string[] = {}
+    for _, field in ipairs(ROSTER_FIELDS) do
+        if secretCount[field] then
+            secret[#secret + 1] = field
+        end
+    end
+    w:sample({ members = rows, countSecret = isSecret(n), secretFields = secret })
+end
+
+local function sumRoster(r: Result): string
+    local seen: { [string]: boolean } = {}
+    local list = samples(r)
+    for _, s in ipairs(list) do
+        for _, f in ipairs(tbl.list(s.secretFields) :: string[]) do
+            seen[f] = true
+        end
+    end
+    local names = tbl.keys(seen)
+    table.sort(names)
+    if #names == 0 then
+        return ("in %d raid fights every GetRaidRosterInfo field read was readable"):format(#list)
+    end
+    return ("in %d raid fights these GetRaidRosterInfo fields were secret: %s"):format(#list, table.concat(names, ", "))
+end
+
+--------------------------------------------------------------------------------
+-- UIW-11: a bag slot button's IsProtected() in combat
+--------------------------------------------------------------------------------
+
+local function protectedOf(name: string): Result?
+    local b = wf.find(name)
+    if not b then
+        return nil
+    end
+    local ok, prot, explicit = pcall(b.IsProtected, b)
+    return { protected = ok and kit.show(prot) or "error", explicit = ok and kit.show(explicit) or nil }
+end
+
+local function readSlots(w: Watch)
+    -- SuuUI's backpack slot (Blizzard's slot template, Core/TaintScan's
+    -- name for it) and Blizzard's own first bag slot
+    local suu = protectedOf("SuuUIBag2Slot1")
+    local blizzard = protectedOf("ContainerFrame1Item1")
+    if not suu and not blizzard then
+        return
+    end
+    local function word(p: Result?): string
+        if not p then
+            return "not made"
+        end
+        return p.protected == true and "protected" or (p.protected == false and "not protected" or tostring(p.protected))
+    end
+    w:finish(("in combat SuuUI's bag slot button is %s; Blizzard's first bag slot is %s"):format(word(suu), word(blizzard)), {
+        suuui = suu,
+        blizzard = blizzard,
+    })
+end
+
+--------------------------------------------------------------------------------
+-- HUD-DM-1: your own damage meter source's combatSpells in combat
+--------------------------------------------------------------------------------
+
+local function readMeter(w: Watch)
+    local get = kit.resolve("C_DamageMeter.GetCombatSessionSourceFromType")
+    local session = kit.resolve("Enum.DamageMeterSessionType.Current")
+    local kind = kit.resolve("Enum.DamageMeterType.DamageDone")
+    if type(get) ~= "function" or session == nil or kind == nil then
+        w:finish("this client has no C_DamageMeter.GetCombatSessionSourceFromType (or its enums)", {})
+        return
+    end
+    -- (the GUID goes to the game only; never kept)
+    local guid = UnitGUID("player") :: any
+    local ok, src = pcall(get :: (a: unknown, b: unknown, c: unknown) -> unknown, session, kind, guid)
+    if not ok then
+        w:sample({ error = tostring(src) })
+        return
+    end
+    if isSecret(src) then
+        w:sample({ source = "secret" })
+        return
+    end
+    if src == nil then
+        w:sample({ source = "nil" })
+        return
+    end
+    if not readable(src) then
+        w:sample({ source = "a table addons may not read", sourceSecretTable = true })
+        return
+    end
+    local spells = tbl.field(src, "combatSpells")
+    local fields: Result = { source = "readable", combatSpells = kit.state(spells) }
+    if isSecret(spells) then
+        fields.combatSpells = "secret"
+    elseif readable(spells) and type(spells) == "table" then
+        fields.spells = #(spells :: unknown[])
+    elseif spells ~= nil then
+        fields.combatSpells = "a table addons may not read"
+        fields.combatSpellsSecretTable = true
+    end
+    w:sample(fields)
+end
+
+local function sumMeter(r: Result): string
+    local list = samples(r)
+    local secret = 0
+    for _, s in ipairs(list) do
+        if s.combatSpells == "secret" or s.combatSpellsSecretTable or s.sourceSecretTable then
+            secret += 1
+        end
+    end
+    return ("in %d fights your own source's combatSpells (or the source) came back secret %d times"):format(#list, secret)
+end
+
+--------------------------------------------------------------------------------
+-- HUD-4: PLAYER_SWING kinds while you melee with a ranged weapon and Auto
+-- Shot off
+--------------------------------------------------------------------------------
+
+local function kindName(kind: unknown): string
+    if isSecret(kind) then
+        return "secret"
+    end
+    local enum = kit.resolve("Enum.PlayerSwingType")
+    if type(enum) == "table" then
+        for name, v in pairs(enum :: { [string]: unknown }) do
+            if v == kind then
+                return name
+            end
+        end
+    end
+    return tostring(kind)
+end
+
+local function armSwing(w: Watch)
+    local shooting = false
+    local counts: { [string]: number } = {}
+    local whileShooting: { [string]: number } = {}
+    local seen = 0
+    w:on("START_AUTOREPEAT_SPELL", function()
+        shooting = true
+    end)
+    w:on("STOP_AUTOREPEAT_SPELL", function()
+        shooting = false
+    end)
+    w:on("PLAYER_SWING", function(_, _length: unknown, kind: unknown)
+        -- a ranged weapon carried (the ranged slot, 18)
+        if not GetInventoryItemID("player", 18) then
+            return
+        end
+        local name = kindName(kind)
+        if shooting then
+            whileShooting[name] = (whileShooting[name] or 0) + 1
+            return
+        end
+        counts[name] = (counts[name] or 0) + 1
+        seen += 1
+        if seen >= 12 then
+            local _, class = UnitClass("player")
+            w:finish(
+                ("%s with a ranged weapon, Auto Shot off: %d swings, Ranged %d of them (MainHand %d, OffHand %d)"):format(
+                    tostring(kit.show(class)),
+                    seen,
+                    counts.Ranged or 0,
+                    counts.MainHand or 0,
+                    counts.OffHand or 0
+                ),
+                { class = kit.show(class), notShooting = counts, shooting = whileShooting }
+            )
+        end
+    end)
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "HUD-UF-3",
+            kind = kit.Kind.Armed,
+
+            when = "a dungeon fight",
+            question = "Are UnitClassification(\"target\") and UnitIsBossMob(\"target\") secret on a hostile NPC in dungeon combat?",
+            todo = "fight a hostile NPC (an elite) in a dungeon or raid with it targeted",
+            samples = 3,
+            arm = armIdentity,
+            summarize = sumIdentity,
+        },
+        {
+            id = "GRP-4",
+            kind = kit.Kind.Armed,
+
+            when = "a raid fight",
+            question = "Are GetRaidRosterInfo's rank, group and online fields secret in raid combat?",
+            todo = "enter a fight while in a raid group",
+            samples = 2,
+            arm = function(w: Watch)
+                inFights(w, 2, function()
+                    readRoster(w)
+                end)
+            end,
+            summarize = sumRoster,
+        },
+        {
+            id = "UIW-11",
+            kind = kit.Kind.Armed,
+
+            when = "a fight",
+            question = "Is a bag slot button protected (IsProtected) in combat?",
+            todo = "open your bags once (so the slots exist), then enter a fight",
+            arm = function(w: Watch)
+                inFights(w, 1, function()
+                    readSlots(w)
+                end)
+            end,
+        },
+        {
+            id = "HUD-DM-1",
+            kind = kit.Kind.Armed,
+
+            when = "a fight",
+            question = "Is your own damage meter source's combatSpells a secret table in combat?",
+            todo = "enter a fight and deal damage for a few seconds",
+            samples = 2,
+            arm = function(w: Watch)
+                inFights(w, 4, function()
+                    readMeter(w)
+                end)
+            end,
+            summarize = sumMeter,
+        },
+        {
+            id = "HUD-4",
+            kind = kit.Kind.Armed,
+
+            when = "melee with a ranged weapon",
+            question = "Does PLAYER_SWING tell Ranged swings while you melee with a ranged weapon and Auto Shot off?",
+            todo = "melee for a while with a ranged weapon equipped and Auto Shot off (a hunter, or a warrior carrying a bow)",
+            arm = armSwing,
+        },
+    }
+end

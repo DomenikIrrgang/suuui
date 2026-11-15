@@ -1,0 +1,463 @@
+-- Diagnostics/Watch/Loot.wowlua
+-- Loot and loot rolls: whether a roll's item can be nameless or secret at
+-- START_LOOT_ROLL (CHAT-26), the order of the roll events for the next few
+-- rolls (ROLL-order: ids replaced by small numbers of this session, no
+-- item names, no player names: a chat line is kept as its kind only), the
+-- game's popups when several Bind on Pickup rolls are confirmed at once or
+-- an invite comes while one is up (CHAT-25), and the loot frame's taint and
+-- a toast while a roll is open (CHAT-19).
+
+import SuuUI from "/Core/API"
+import isSecret, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+local function samples(r: Result): Result[]
+    local list = r.samples
+    return type(list) == "table" and list :: Result[] or {}
+end
+
+-- Small numbers of this session for the game's ids (rolls, loots).
+local numbers: { [unknown]: number } = {}
+local nextNumber = 0
+local function number(id: unknown): unknown
+    if isSecret(id) then
+        return "secret"
+    end
+    if id == nil then
+        return nil
+    end
+    local n = numbers[id]
+    if not n then
+        nextNumber += 1
+        n = nextNumber
+        numbers[id] = n
+    end
+    return n
+end
+
+-- The rolls open now (by the game's roll id), for CHAT-19's toast.
+local openRolls: { [unknown]: boolean } = {}
+local function anyRollOpen(): boolean
+    return next(openRolls) ~= nil
+end
+
+--------------------------------------------------------------------------------
+-- CHAT-26: the item at START_LOOT_ROLL
+--------------------------------------------------------------------------------
+
+local function armRollItem(w: Watch)
+    w:on("START_LOOT_ROLL", function(_, rollID: unknown)
+        local ok, _texture, name, _count, _quality, bop = pcall(GetLootRollItemInfo, rollID :: number)
+        local okL, link = pcall(GetLootRollItemLink, rollID :: number)
+        w:sample({
+            roll = number(rollID),
+            name = not ok and "error" or (isSecret(name) and "secret" or (name == nil or name == "") and "missing" or "readable"),
+            link = not okL and "error" or kit.state(link),
+            bindOnPickup = ok and kit.show(bop) or nil,
+        })
+    end)
+end
+
+local function sumRollItem(r: Result): string
+    local list = samples(r)
+    local missing, secret = 0, 0
+    for _, s in ipairs(list) do
+        missing += s.name == "missing" and 1 or 0
+        secret += s.name == "secret" and 1 or 0
+    end
+    return ("%d rolls: the item's name was missing %d times and secret %d times at START_LOOT_ROLL"):format(#list, missing, secret)
+end
+
+--------------------------------------------------------------------------------
+-- ROLL-order
+--------------------------------------------------------------------------------
+
+-- A loot line's kind (its text is never kept: it names players and items).
+local LINE_KINDS: string[] = {
+    "LOOT_ROLL_YOU_WON",
+    "LOOT_ROLL_WON",
+    "LOOT_ROLL_ALL_PASSED",
+    "LOOT_ROLL_NEED",
+    "LOOT_ROLL_GREED",
+    "LOOT_ROLL_PASSED",
+    "LOOT_ROLL_ROLLED_NEED",
+    "LOOT_ROLL_ROLLED_GREED",
+}
+
+local function lineKind(text: unknown): string?
+    if isSecret(text) then
+        return "secret"
+    end
+    if type(text) ~= "string" then
+        return nil
+    end
+    for _, key in ipairs(LINE_KINDS) do
+        local p = kit.pattern(tbl.field(_G, key))
+        if p and text:find(p) then
+            return key
+        end
+    end
+    return nil
+end
+
+local function armRollOrder(w: Watch)
+    local started = 0
+    local ended = 0
+    local t0: number? = nil
+    local log: Result[] = {}
+    w:result().events = log
+    local function add(event: string, fields: Result)
+        local t = t0
+        if not t then
+            return
+        end
+        if #log >= 80 then
+            return
+        end
+        fields.event = event
+        fields.t = math.floor((GetTime() - t) * 10 + 0.5) / 10
+        log[#log + 1] = fields
+    end
+    w:on("START_LOOT_ROLL", function(_, rollID: unknown, rollTime: unknown, lootHandle: unknown)
+        if not t0 then
+            t0 = GetTime()
+        end
+        started += 1
+        add("START_LOOT_ROLL", { roll = number(rollID), seconds = kit.show(rollTime), loot = number(lootHandle) })
+    end)
+    w:on("CANCEL_LOOT_ROLL", function(_, rollID: unknown)
+        add("CANCEL_LOOT_ROLL", { roll = number(rollID) })
+        ended += 1
+    end)
+    w:on("CONFIRM_LOOT_ROLL", function(_, rollID: unknown, rollType: unknown)
+        add("CONFIRM_LOOT_ROLL", { roll = number(rollID), rollType = kit.show(rollType) })
+    end)
+    w:on("LOOT_HISTORY_UPDATE_DROP", function(_, encounterID: unknown, lootListID: unknown)
+        add("LOOT_HISTORY_UPDATE_DROP", { encounter = number(encounterID), drop = number(lootListID) })
+    end)
+    w:on("LOOT_ROLLS_COMPLETE", function(_, lootHandle: unknown)
+        add("LOOT_ROLLS_COMPLETE", { loot = number(lootHandle) })
+        -- three rolls started and ended: the order is known
+        if started >= 3 and ended >= 3 then
+            w:finish(nil)
+        end
+    end)
+    w:on("CHAT_MSG_LOOT", function(_, text: unknown)
+        local kind = lineKind(text)
+        if kind then
+            add("CHAT_MSG_LOOT", { line = kind })
+        end
+    end)
+end
+
+local function sumRollOrder(r: Result): string
+    local list = tbl.list(r.events)
+    local names: string[] = {}
+    for i, e in ipairs(list) do
+        if i <= 12 then
+            local line = tbl.field(e, "line")
+            names[#names + 1] = tostring(tbl.field(e, "event")) .. (line and ("(" .. tostring(line) .. ")") or "")
+        end
+    end
+    return ("%d roll events recorded (see events); first: %s"):format(#list, table.concat(names, ", "))
+end
+
+--------------------------------------------------------------------------------
+-- CHAT-25: several confirmations at once, an invite while one is up
+--------------------------------------------------------------------------------
+
+type Popup = { name: string, which: string, roll: unknown, onScreen: boolean, anchoredTo?: string }
+
+local function onScreen(f: Frame): boolean
+    local ok, top, bottom, left, right = pcall(function(): (unknown, unknown, unknown, unknown)
+        return f:GetTop(), f:GetBottom(), f:GetLeft(), f:GetRight()
+    end)
+    if not ok or type(top) ~= "number" or type(bottom) ~= "number" or type(left) ~= "number" or type(right) ~= "number" then
+        return false
+    end
+    local h, wd = UIParent:GetHeight(), UIParent:GetWidth()
+    return bottom >= 0 and top <= h and left >= 0 and right <= wd
+end
+
+-- The game's popups shown now: which dialog, its roll (as a small number),
+-- on screen or not, what its first point hangs on.
+local function popups(): Popup[]
+    local out: Popup[] = {}
+    for i = 1, 4 do
+        local name = ("StaticPopup%d"):format(i)
+        local f = wf.find(name)
+        if f and f:IsShown() then
+            local which = asString(tbl.field(f, "which")) or "?"
+            local okP, _, rel = pcall(f.GetPoint, f, 1)
+            local relName: string? = nil
+            if okP and rel ~= nil then
+                local okN, n = pcall(function(): unknown
+                    return (rel :: Frame):GetName()
+                end)
+                relName = okN and asString(n) or "a frame without a name"
+            end
+            out[#out + 1] = {
+                name = name,
+                which = which,
+                roll = which == "CONFIRM_LOOT_ROLL" and number(tbl.field(f, "data")) or nil,
+                onScreen = onScreen(f),
+                anchoredTo = relName,
+            }
+        end
+    end
+    return out
+end
+
+local function requestsSetting(): unknown
+    local ok, v = pcall(function(): unknown
+        local m = SuuUI.GetModule("notifications")
+        if not m then
+            return "no Notifications module"
+        end
+        local get = tbl.field(m, "Get")
+        local requests = type(get) == "function" and (get :: (self: unknown, key: string) -> unknown)(m, "requests") or "?"
+        return { enabled = m:IsEnabled(), requests = kit.show(requests) }
+    end)
+    return ok and v or "unreadable"
+end
+
+local function armConfirms(w: Watch)
+    local recent: number[] = {}
+    w:on("CONFIRM_LOOT_ROLL", function()
+        local now = GetTime()
+        recent[#recent + 1] = now
+        local n = 0
+        for _, t in ipairs(recent) do
+            if now - t <= 1 then
+                n += 1
+            end
+        end
+        if n >= 2 and not w:has("several confirmations at once") then
+            w:after(0.5, function()
+                local shown = popups()
+                local forRolls = 0
+                for _, p in ipairs(shown) do
+                    forRolls += p.which == "CONFIRM_LOOT_ROLL" and 1 or 0
+                end
+                w:case("several confirmations at once", { asked = n, shownForRolls = forRolls, popups = shown })
+            end)
+        end
+    end)
+    w:on("PARTY_INVITE_REQUEST", function()
+        w:after(0.5, function()
+            local shown = popups()
+            local hostedRoll = false
+            for _, p in ipairs(shown) do
+                if p.which == "CONFIRM_LOOT_ROLL" then
+                    hostedRoll = true
+                end
+            end
+            if hostedRoll then
+                w:case("an invite while a roll's confirmation is up", { popups = shown, notifications = requestsSetting() })
+            end
+        end)
+    end)
+end
+
+local function sumConfirms(r: Result): string
+    local cases = r.cases :: { [string]: Result }? or {}
+    local parts: string[] = {}
+    local several = cases["several confirmations at once"]
+    if several then
+        parts[#parts + 1] = ("%s confirmations asked at once: %s of the game's popups shown for them"):format(
+            tostring(several.asked),
+            tostring(several.shownForRolls)
+        )
+    end
+    local invite = cases["an invite while a roll's confirmation is up"]
+    if invite then
+        local on = "?"
+        for _, p in ipairs(tbl.list(invite.popups)) do
+            if tbl.field(p, "which") == "PARTY_INVITE" then
+                on = tbl.field(p, "onScreen") and "on screen" or "off screen"
+            end
+        end
+        parts[#parts + 1] = "an invite while a confirmation was up: its popup " .. on
+    end
+    return table.concat(parts, "; ")
+end
+
+--------------------------------------------------------------------------------
+-- CHAT-19: the loot frame (edit mode's?), its taint after looting and edit
+-- mode, a toast while a roll is open
+--------------------------------------------------------------------------------
+
+local function lootFrameChecks(): Result
+    local loot = kit.resolve("LootFrame")
+    return {
+        lootFrameSetPointBase = type(kit.resolve("LootFrame.SetPointBase")) == "function",
+        lootFrameSystem = kit.show(kit.resolve("LootFrame.system")),
+        rollContainerSetPointBase = type(kit.resolve("GroupLootContainer.SetPointBase")) == "function",
+        written = kit.writtenFields("LootFrame", loot),
+    }
+end
+
+-- The toasts shown now (each alert system's pool), and where they are.
+local function toasts(): Result[]
+    local out: Result[] = {}
+    local systems = kit.resolve("AlertFrame.alertFrameSubSystems")
+    if type(systems) ~= "table" then
+        return out
+    end
+    local container = wf.find("GroupLootContainer")
+    for _, sys in ipairs(systems :: unknown[]) do
+        local active = tbl.field(sys, "alertFramePool", "activeObjects")
+        if type(active) == "table" then
+            for frame in pairs(active :: { [unknown]: unknown }) do
+                local f = frame :: Frame
+                local okP, _, rel = pcall(f.GetPoint, f, 1)
+                out[#out + 1] = {
+                    onScreen = onScreen(f),
+                    onRollContainer = okP and container ~= nil and rel == container,
+                }
+            end
+        end
+    end
+    return out
+end
+
+const TOAST_EVENTS: string[] = {
+    "ACHIEVEMENT_EARNED",
+    "CRITERIA_EARNED",
+    "LOOT_ITEM_ROLL_WON",
+    "SHOW_LOOT_TOAST",
+    "QUEST_TURNED_IN",
+    "QUEST_LOOT_RECEIVED",
+    "NEW_MOUNT_ADDED",
+    "NEW_PET_ADDED",
+    "NEW_TOY_ADDED",
+    "NEW_RECIPE_LEARNED",
+}
+
+local function armLootFrame(w: Watch)
+    w:result().loot = lootFrameChecks()
+    w:on("LOOT_CLOSED", function()
+        if not InCombatLockdown() then
+            w:case("after looting", kit.moment("after looting", lootFrameChecks(), 0.5))
+        end
+    end)
+    w:onRegistry("EditMode.Enter", function()
+        if w:has("after looting") then
+            w:case("edit mode after looting", kit.moment("edit mode opened after looting", lootFrameChecks(), 0.5))
+        end
+    end)
+    for _, e in ipairs(TOAST_EVENTS) do
+        w:on(e, function()
+            if not anyRollOpen() then
+                return
+            end
+            w:after(1, function()
+                local list = toasts()
+                if #list > 0 then
+                    w:case("a toast while a roll is open", { event = e, toasts = list })
+                end
+            end)
+        end)
+    end
+end
+
+local function sumLootFrame(r: Result): string
+    local loot = r.loot :: Result? or {}
+    local cases = r.cases :: { [string]: Result }? or {}
+    local parts: string[] = {
+        ("LootFrame.SetPointBase %s (edit mode system: %s)"):format(
+            loot.lootFrameSetPointBase and "exists" or "missing",
+            tostring(loot.lootFrameSystem)
+        ),
+    }
+    for _, key in ipairs({ "after looting", "edit mode after looting" }) do
+        local c = cases[key]
+        if c then
+            local n = #tbl.list(c.newlyWritten)
+            parts[#parts + 1] = ("%s: %d new addon-written values, %d blocked"):format(key, n, #tbl.list(c.blocked))
+        end
+    end
+    local toast = cases["a toast while a roll is open"]
+    if toast then
+        local off = 0
+        for _, t in ipairs(tbl.list(toast.toasts)) do
+            off += tbl.field(t, "onScreen") and 0 or 1
+        end
+        parts[#parts + 1] = ("a toast while a roll was open: %d of %d off screen"):format(off, #tbl.list(toast.toasts))
+    end
+    return table.concat(parts, "; ")
+end
+
+-- Keeps openRolls (CHAT-19's toast) while that item waits.
+local function trackRolls(w: Watch)
+    w:on("START_LOOT_ROLL", function(_, rollID: unknown)
+        if not isSecret(rollID) and rollID ~= nil then
+            openRolls[rollID] = true
+        end
+    end)
+    w:on("CANCEL_LOOT_ROLL", function(_, rollID: unknown)
+        if not isSecret(rollID) and rollID ~= nil then
+            openRolls[rollID] = nil
+        end
+    end)
+    w:on("CANCEL_ALL_LOOT_ROLLS", function()
+        openRolls = {}
+    end)
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "CHAT-26",
+            kind = kit.Kind.Armed,
+
+            when = "loot",
+            question = "Can GetLootRollItemInfo give no name, or a secret one, at START_LOOT_ROLL?",
+            todo = "roll on loot in a group (the more rolls, the better: items you haven't seen this session)",
+            samples = 5,
+            arm = armRollItem,
+            summarize = sumRollItem,
+        },
+        {
+            id = "ROLL-order",
+            kind = kit.Kind.Armed,
+
+            when = "loot",
+            question = "In which order do START_LOOT_ROLL, CANCEL_LOOT_ROLL, LOOT_HISTORY_UPDATE_DROP, LOOT_ROLLS_COMPLETE and the loot lines (won, passed, rolled) arrive?",
+            todo = "roll on loot in a group until three rolls have ended",
+            arm = armRollOrder,
+            summarize = sumRollOrder,
+        },
+        {
+            id = "CHAT-25",
+            kind = kit.Kind.Armed,
+
+            when = "loot",
+            question = "Greed on all with two Bind on Pickup rolls: does the game show one confirmation at a time? And is a party invite's popup on screen while a roll's confirmation is up?",
+            todo = "use Greed on all when two or more Bind on Pickup items are up; and get a party invite while a Bind on Pickup confirmation is up (Notifications' requests off)",
+            cases = { "several confirmations at once", "an invite while a roll's confirmation is up" },
+            arm = armConfirms,
+            summarize = sumConfirms,
+        },
+        {
+            id = "CHAT-19",
+            kind = kit.Kind.Armed,
+
+            when = "loot",
+            question = "Does LootFrame have SetPointBase (an edit mode frame)? Does looting, then edit mode, taint? Is a toast off screen while a roll is open?",
+            todo = "loot something, then open edit mode; and get a toast (an achievement, a new mount or pet) while a loot roll is open",
+            cases = { "after looting", "edit mode after looting", "a toast while a roll is open" },
+            arm = function(w: Watch)
+                trackRolls(w)
+                armLootFrame(w)
+            end,
+            summarize = sumLootFrame,
+        },
+    }
+end

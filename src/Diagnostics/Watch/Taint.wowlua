@@ -1,0 +1,555 @@
+-- Diagnostics/Watch/Taint.wowlua
+-- The "does X taint Y" questions. Each takes the taint scan
+-- (Core/TaintScan, through kit.moment: what it newly lists since the
+-- previous moment, and the blocked actions around it) at the moment the
+-- review names, plus the values that moment is about (issecurevariable),
+-- and where the question is about what follows, the blocked actions of the
+-- next fight. The moments come from events, Blizzard's EventRegistry (its
+-- listeners run through secureexecuterange: their taint stays theirs), secure
+-- post-hooks on SuuUI's own module (Chat's OpenChatSettings) and on two
+-- Blizzard globals the scan doesn't check (PaperDollFrame_SetPet,
+-- PaperDollFrame_SetSidebar), a script hook on SuuUI's own windows
+-- (OnHide), and one on the chat edit boxes' OnTabPressed (a key's own
+-- handler: nothing of the game's runs after it). Never a hook inside a flow
+-- of the game's (an edit box's attribute change, the map's OnShow).
+
+import SuuUI from "/Core/API"
+import asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+local function stateOf(path: string, key: string): string
+    local t = kit.resolve(path)
+    if t == nil then
+        return "missing"
+    end
+    return kit.secureState(t, key)
+end
+
+-- The chat windows' edit boxes there are.
+local function editBoxes(): Frame[]
+    local out: Frame[] = {}
+    for i = 1, 10 do
+        local box = wf.find(("ChatFrame%dEditBox"):format(i))
+        if box then
+            out[#out + 1] = box
+        end
+    end
+    return out
+end
+
+-- In the next fight (or the one going on), and at its end: fn(blocked
+-- actions since it started).
+local function afterFight(w: Watch, fn: (blocked: string[]) -> ())
+    local started = InCombatLockdown() and GetTime() or nil
+    w:on("PLAYER_REGEN_DISABLED", function()
+        started = GetTime()
+    end)
+    w:on("PLAYER_REGEN_ENABLED", function()
+        local t = started
+        if t then
+            started = nil
+            fn(kit.blockedSince(t))
+        end
+    end)
+end
+
+local function blockedWords(list: string[]): string
+    return #list == 0 and "nothing blocked" or ("blocked: " .. table.concat(list, "; "))
+end
+
+local function newlyWords(m: Result): string
+    local list = m.newlyWritten
+    local n = type(list) == "table" and #(list :: unknown[]) or 0
+    return n == 0 and "no new addon-written values" or ("%d new addon-written values"):format(n)
+end
+
+--------------------------------------------------------------------------------
+-- CHAT-12 and X-6.3: the chat settings opened from a SuuUI tab
+--------------------------------------------------------------------------------
+
+local function chatModule(): unknown
+    local ok, m = pcall(SuuUI.GetModule, "chat")
+    return ok and m or nil
+end
+
+local function chatSettingsMoment(): Result
+    local config = wf.find("ChatConfigFrame")
+    return kit.moment("chat settings opened from a SuuUI tab", {
+        CURRENT_CHAT_FRAME_ID = kit.secureState(nil, "CURRENT_CHAT_FRAME_ID"),
+        settingsShown = config and config:IsShown() or false,
+    }, 0.5)
+end
+
+local function armChatSettings(w: Watch)
+    local m = chatModule()
+    if not m then
+        w:finish("the Chat module isn't there: nothing to record", {})
+        return
+    end
+    w:hook(m, "OpenChatSettings", function()
+        w:case(InCombatLockdown() and "in a fight" or "out of combat", chatSettingsMoment())
+    end)
+end
+
+local function sumChatSettings(r: Result): string
+    local cases = r.cases :: { [string]: Result }? or {}
+    local parts: string[] = {}
+    for _, key in ipairs({ "out of combat", "in a fight" }) do
+        local c = cases[key]
+        if c then
+            local checks = c.checks :: Result? or {}
+            parts[#parts + 1] = ("%s: settings %s, CURRENT_CHAT_FRAME_ID %s, %s, %s"):format(
+                key,
+                checks.settingsShown and "shown" or "not shown",
+                tostring(checks.CURRENT_CHAT_FRAME_ID),
+                newlyWords(c),
+                blockedWords(tbl.list(c.blocked) :: string[])
+            )
+        end
+    end
+    return table.concat(parts, "; ")
+end
+
+local function armChatGlobal(w: Watch)
+    local m = chatModule()
+    if not m then
+        w:finish("the Chat module isn't there: nothing to record", {})
+        return
+    end
+    local opened: Result? = nil
+    w:hook(m, "OpenChatSettings", function()
+        if not opened and not InCombatLockdown() then
+            opened = chatSettingsMoment()
+        end
+    end)
+    afterFight(w, function(blocked: string[])
+        local o = opened
+        if not o then
+            return
+        end
+        local checks = o.checks :: Result? or {}
+        w:finish(
+            ("after the chat settings opened from a SuuUI tab, CURRENT_CHAT_FRAME_ID was %s; the next fight: %s"):format(
+                tostring(checks.CURRENT_CHAT_FRAME_ID),
+                blockedWords(blocked)
+            ),
+            { opened = o, nextFight = kit.moment("the end of the next fight"), blockedInFight = blocked }
+        )
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- X-6.1: Tab in a chat edit box in a fight
+--------------------------------------------------------------------------------
+
+local function armTab(w: Watch)
+    local pressed: Result? = nil
+    for _, box in ipairs(editBoxes()) do
+        w:hookScript(box, "OnTabPressed", function()
+            if pressed or not InCombatLockdown() then
+                return
+            end
+            pressed = kit.moment("Tab in a chat edit box, in a fight", {
+                ChatEdit_CustomTabPressed = kit.secureState(nil, "ChatEdit_CustomTabPressed"),
+            }, 0.5)
+        end)
+    end
+    afterFight(w, function(blocked: string[])
+        local p = pressed
+        if not p then
+            return
+        end
+        w:finish(("Tab in a chat edit box in a fight: %s at the press; the rest of the fight: %s"):format(
+            newlyWords(p),
+            blockedWords(blocked)
+        ), { pressed = p, blockedInFight = blocked })
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- X-6.2: a SuuUI window closed in a fight while a protected Blizzard window
+-- is open (Escape walks UISpecialFrames)
+--------------------------------------------------------------------------------
+
+const BLIZZARD_WINDOWS: string[] = {
+    "PlayerSpellsFrame",
+    "SpellBookFrame",
+    "PlayerTalentFrame",
+    "ClassTalentFrame",
+    "CollectionsJournal",
+    "CharacterFrame",
+    "WorldMapFrame",
+    "FriendsFrame",
+    "PVEFrame",
+    "AchievementFrame",
+    "MacroFrame",
+    "EncounterJournal",
+}
+
+-- The protected Blizzard windows shown now, by name.
+local function protectedOpen(): string[]
+    local out: string[] = {}
+    for _, name in ipairs(BLIZZARD_WINDOWS) do
+        local f = wf.find(name)
+        if f then
+            local ok, shown, prot = pcall(function(): (boolean, unknown)
+                local p = f:IsProtected()
+                return f:IsShown(), p
+            end)
+            if ok and shown and prot == true then
+                out[#out + 1] = name
+            end
+        end
+    end
+    return out
+end
+
+local function armEscape(w: Watch)
+    local hooked: { [string]: boolean } = {}
+    local busy = false
+    local function onHide()
+        if busy or not InCombatLockdown() then
+            return
+        end
+        local open = protectedOpen()
+        if #open == 0 then
+            return
+        end
+        busy = true
+        local t = GetTime()
+        local m = kit.moment("a SuuUI window closed in a fight with a protected Blizzard window open", nil, 0.5)
+        w:after(1, function()
+            local still: string[] = {}
+            for _, name in ipairs(open) do
+                local f = wf.find(name)
+                if f and f:IsShown() then
+                    still[#still + 1] = name
+                end
+            end
+            local blocked = kit.blockedSince(t - 0.5)
+            w:finish(
+                ("a SuuUI window closed in a fight with %s open: %s still open a second later; %s; %s"):format(
+                    table.concat(open, ", "),
+                    #still == 0 and "none" or table.concat(still, ", "),
+                    newlyWords(m),
+                    blockedWords(blocked)
+                ),
+                { open = open, stillOpen = still, moment = m, blockedAfter = blocked }
+            )
+        end)
+    end
+    -- SuuUI's windows in the list Escape walks (made when first opened:
+    -- looked for again at each fight's start)
+    local function hookNew()
+        local list = tbl.field(_G, "UISpecialFrames")
+        if type(list) ~= "table" then
+            return
+        end
+        for _, name in ipairs(list :: unknown[]) do
+            local n = asString(name)
+            if n and not hooked[n] and n:find("^SuuUI") then
+                local f = wf.find(n)
+                if f then
+                    hooked[n] = true
+                    w:hookScript(f, "OnHide", onHide)
+                end
+            end
+        end
+    end
+    hookNew()
+    w:on("PLAYER_REGEN_DISABLED", hookNew)
+end
+
+--------------------------------------------------------------------------------
+-- UIW-7: a group finder listing posted
+--------------------------------------------------------------------------------
+
+local function categoryChecks(): { [string]: string }
+    local out: { [string]: string } = {}
+    local buttons = kit.resolve("LFGListingFrame.CategoryView.CategoryButtons")
+    if type(buttons) == "table" then
+        for i, b in ipairs(buttons :: unknown[]) do
+            out[("CategoryButtons[%d].fixedWidth"):format(i)] = kit.secureState(b, "fixedWidth")
+            out[("CategoryButtons[%d].fixedHeight"):format(i)] = kit.secureState(b, "fixedHeight")
+        end
+    end
+    return out
+end
+
+local function armListing(w: Watch)
+    w:on("LFG_LIST_ACTIVE_ENTRY_UPDATE", function(_, created: unknown)
+        if created ~= true then
+            return
+        end
+        local checks = categoryChecks()
+        local written = 0
+        for _, s in pairs(checks) do
+            if s:find("^written") then
+                written += 1
+            end
+        end
+        local m = kit.moment("a group finder listing posted", checks, 2)
+        w:finish(("listing posted: %d of the category buttons' fixed sizes written by addon code; %s; %s"):format(
+            written,
+            newlyWords(m),
+            blockedWords(tbl.list(m.blocked) :: string[])
+        ), { moment = m })
+    end)
+    -- a post the game refused never sends the update
+    for _, e in ipairs({ "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
+        w:on(e, function(_, _addon: unknown, func: unknown)
+            local f = tostring(func)
+            if f:find("LFGList") or f:find("Listing") then
+                local m = kit.moment("a group finder listing refused", categoryChecks(), 1)
+                w:finish(("posting a listing was refused (%s %s)"):format(e, f), { moment = m })
+            end
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- CHAR-28: the Pet tab out of combat, then the side panes in a fight
+--------------------------------------------------------------------------------
+
+local function paperDollChecks(): { [string]: string }
+    return {
+        ["PaperDollFrame.currentSideBar"] = stateOf("PaperDollFrame", "currentSideBar"),
+        PaperDollFrame_SetSidebar = kit.secureState(nil, "PaperDollFrame_SetSidebar"),
+        PaperDollFrame_SetPet = kit.secureState(nil, "PaperDollFrame_SetPet"),
+    }
+end
+
+local function armPetTab(w: Watch)
+    local hasPet = w:hook("PaperDollFrame_SetPet", nil, function()
+        if not InCombatLockdown() then
+            w:case("the Pet tab, out of combat", kit.moment("the Pet tab, out of combat", paperDollChecks(), 0.5))
+        end
+    end)
+    local hasSidebar = w:hook("PaperDollFrame_SetSidebar", nil, function()
+        if InCombatLockdown() and w:has("the Pet tab, out of combat") then
+            w:case("side panes switched in a fight", kit.moment("side panes switched in a fight", paperDollChecks(), 0.5))
+        end
+    end)
+    if not hasPet and not hasSidebar then
+        w:finish("this client has no PaperDollFrame_SetPet or PaperDollFrame_SetSidebar", {})
+    end
+end
+
+local function sumCases(keys: string[]): (r: Result) -> string
+    return function(r: Result): string
+        local cases = r.cases :: { [string]: Result }? or {}
+        local parts: string[] = {}
+        for _, key in ipairs(keys) do
+            local c = cases[key]
+            if c then
+                parts[#parts + 1] = ("%s: %s, %s"):format(key, newlyWords(c), blockedWords(tbl.list(c.blocked) :: string[]))
+            end
+        end
+        return table.concat(parts, "; ")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- GRP-5: the world map opened, enlarged and closed, then opened in a fight
+--------------------------------------------------------------------------------
+
+local function mapChecks(): { [string]: unknown }
+    return {
+        maximizeMinimize = kit.writtenFields("MaximizeMinimizeFrame", kit.resolve("WorldMapFrame.BorderFrame.MaximizeMinimizeFrame")),
+        questMap = kit.writtenFields("QuestMapFrame", kit.resolve("QuestMapFrame")),
+    }
+end
+
+local function armMap(w: Watch)
+    local openedInFight: Result? = nil
+    local enlarged = false
+    w:onRegistry("WorldMapMaximized", function()
+        enlarged = true
+    end)
+    w:onRegistry("WorldMapOnHide", function()
+        if not InCombatLockdown() then
+            local m = kit.moment("the map closed, out of combat", mapChecks(), 0.5)
+            m.enlargedWhileOpen = enlarged
+            w:case("the map closed, out of combat", m)
+        end
+        enlarged = false
+    end)
+    w:onRegistry("WorldMapOnShow", function()
+        if InCombatLockdown() and not openedInFight and w:has("the map closed, out of combat") then
+            openedInFight = kit.moment("the map opened in a fight", mapChecks(), 0.5)
+        end
+    end)
+    afterFight(w, function(blocked: string[])
+        local o = openedInFight
+        if o then
+            o.blockedInFight = blocked
+            openedInFight = nil
+            w:case("the map opened in a fight (a quest item used?)", o)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- WHISPER-taint: a whisper SuuUI starts out of combat, then a line sent in
+-- a fight
+--------------------------------------------------------------------------------
+
+-- Whether the code that asked for the whisper is SuuUI's: the first frame
+-- of the stack below the game's SendTell (and SendTellWithMessage) that
+-- isn't the C side.
+export function startedBySuuUI(stack: string): boolean
+    local seenTell = false
+    for line in stack:gmatch("[^\n]+") do
+        if line:find("SendTell", 1, true) then
+            seenTell = true
+        elseif seenTell and not line:find("[C]", 1, true) then
+            return line:find("AddOns[/\\]SuuUI[/\\]") ~= nil
+        end
+    end
+    return false
+end
+
+-- The chat type of the edit box the game says opened.
+local function chatTypeOf(box: unknown): string?
+    local ok, t = pcall(function(): unknown
+        return (box :: Frame):GetAttribute("chatType")
+    end)
+    return ok and asString(t) or nil
+end
+
+local function armWhisper(w: Watch)
+    local started: Result? = nil
+    -- an edit box opened (or focused) out of combat: a whisper SuuUI asked
+    -- for? (the stack read now, the chat type a frame later, once the game
+    -- has parsed the line)
+    local function opened(box: unknown)
+        if started or InCombatLockdown() then
+            return
+        end
+        local bySuuUI = startedBySuuUI(debugstack(1, 40, 0) or "")
+        if not bySuuUI then
+            return
+        end
+        w:after(0, function()
+            if not started and chatTypeOf(box) == "WHISPER" then
+                started = kit.moment("a whisper started from a SuuUI click, out of combat", nil, 0.5)
+                w:result().started = started
+            end
+        end)
+    end
+    w:onRegistry("ChatFrame.OnEditBoxShow", opened)
+    w:onRegistry("ChatFrame.OnEditBoxFocusGained", opened)
+    -- a line about to be sent in a fight: the scan then, the blocked
+    -- actions half a second later
+    w:onRegistry("ChatFrame.OnEditBoxPreSendText", function()
+        local s = started
+        if not s or not InCombatLockdown() then
+            return
+        end
+        local m = kit.moment("a chat line sent in a fight", nil, 0)
+        local t = GetTime()
+        w:after(0.5, function()
+            local blocked = kit.blockedSince(t)
+            local sendBlocked = false
+            for _, b in ipairs(blocked) do
+                if b:find("SendChatMessage") then
+                    sendBlocked = true
+                end
+            end
+            m.blocked = blocked
+            w:finish(("after a SuuUI-started whisper, a line sent in a fight: %s, %s"):format(
+                sendBlocked and "SendChatMessage was blocked" or "not blocked",
+                newlyWords(m)
+            ), { started = s, sent = m, sendBlocked = sendBlocked })
+        end)
+    end)
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "CHAT-12",
+            kind = kit.Kind.Armed,
+
+            when = "chat",
+            question = "Does opening the chat settings from a SuuUI chat tab taint, out of combat and in a fight?",
+            todo = "right-click a SuuUI chat tab and open its chat settings, once out of combat and once in a fight",
+            cases = { "out of combat", "in a fight" },
+            arm = armChatSettings,
+            summarize = sumChatSettings,
+        },
+        {
+            id = "X-6.3",
+            kind = kit.Kind.Armed,
+
+            when = "chat",
+            question = "After the chat settings open from a SuuUI tab (CURRENT_CHAT_FRAME_ID written), is anything blocked in the next fight?",
+            todo = "open the chat settings from a SuuUI chat tab out of combat, then play through a fight (moving or docking a chat window in it, if you can)",
+            arm = armChatGlobal,
+        },
+        {
+            id = "X-6.1",
+            kind = kit.Kind.Armed,
+
+            when = "chat",
+            question = "Does Tab in a chat edit box in a fight (ChatEdit_CustomTabPressed, replaced by SuuUI) taint, and is anything blocked later in that fight?",
+            todo = "in a fight, open the chat input and press Tab, then finish the fight",
+            arm = armTab,
+        },
+        {
+            id = "X-6.2",
+            kind = kit.Kind.Armed,
+
+            when = "windows",
+            question = "Escape in a fight with a SuuUI window and a protected Blizzard window open: does the Blizzard window close, and what is blocked?",
+            todo = "in a fight, have a SuuUI window (settings or talents) and the spellbook or talents open, then press Escape",
+            arm = armEscape,
+        },
+        {
+            id = "UIW-7",
+            kind = kit.Kind.Armed,
+
+            when = "the group finder",
+            question = "After choosing a category and posting a group finder listing, are the category buttons' fixed sizes addon-written, and was the post blocked?",
+            todo = "list yourself in the group finder (choose a category and post)",
+            arm = armListing,
+        },
+        {
+            id = "CHAR-28",
+            kind = kit.Kind.Armed,
+
+            when = "windows",
+            question = "Does the Pet tab clicked out of combat, then the Character window's side panes switched in a fight, taint (PaperDollFrame.currentSideBar)?",
+            todo = "with a pet out, click the Character window's Pet tab out of combat; later, in a fight, open the Character window and switch its side panes",
+            cases = { "the Pet tab, out of combat", "side panes switched in a fight" },
+            arm = armPetTab,
+            summarize = sumCases({ "the Pet tab, out of combat", "side panes switched in a fight" }),
+        },
+        {
+            id = "GRP-5",
+            kind = kit.Kind.Armed,
+
+            when = "the map",
+            question = "Does opening, enlarging and closing the world map, then opening it in a fight (and using a quest item), taint or get blocked?",
+            todo = "open the world map, enlarge it and close it; later, in a fight, open the map (use a quest item from it if you can) and finish the fight",
+            cases = { "the map closed, out of combat", "the map opened in a fight (a quest item used?)" },
+            arm = armMap,
+            summarize = sumCases({ "the map closed, out of combat", "the map opened in a fight (a quest item used?)" }),
+        },
+        {
+            id = "WHISPER-taint",
+            kind = kit.Kind.Armed,
+
+            when = "chat",
+            question = "Does a whisper started from a SuuUI click out of combat taint a line sent later in a fight (SendChatMessage blocked)?",
+            todo = "out of combat, start a whisper from SuuUI (the Social window's Whisper, a name in SuuUI's chat); later, in a fight, send any chat line",
+            arm = armWhisper,
+        },
+    }
+end

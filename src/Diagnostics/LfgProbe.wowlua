@@ -28,6 +28,9 @@
 -- wrapped while armed); where it didn't search (the list younger than a
 -- minute, or the module off) the probe searches the same way, its refusal
 -- expected (no error line). Saved in SuuUIProbe.lfg.opens.
+-- ("/suu probe all" arms the same watcher with opensTest's options: keep
+-- the openings recorded before, print nothing, and search nothing itself:
+-- an opening the module didn't search on is recorded as by "none".)
 -- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
 -- window. "/suu probe lfg delist": a button whose click delists you.
 -- "/suu probe lfg live": starts ForeverLFG and reports its events;
@@ -952,8 +955,14 @@ type OpenCall = {
     button?: string, -- GetMouseButtonClicked(): set inside a click handler
     mouseDown: boolean,
 }
+-- How "/suu probe all" arms it: `keep` the openings recorded before,
+-- `quiet` (nothing printed), `passive` (an opening the module didn't search
+-- on is recorded without a search of the probe's), `onOpening` after each.
+export type OpensOptions = { keep?: boolean, quiet?: boolean, passive?: boolean, onOpening?: (list: Record[]) -> () }
+
 -- The opens probe's state: armed, its listener, the library's own Refresh
--- while it is wrapped, what the listener counted, the last search.
+-- while it is wrapped, what the listener counted, the last search, how it
+-- was armed.
 type Opens = {
     armed: boolean,
     hooked: boolean,
@@ -963,6 +972,7 @@ type Opens = {
     lastBlocked?: string,
     results: number,
     call?: OpenCall,
+    opts?: OpensOptions,
 }
 local opens: Opens = { armed = false, hooked = false, blocked = 0, results = 0 }
 
@@ -1028,6 +1038,15 @@ local function recordOpening(list: Record[])
     local now = GetTime()
     local by = "module"
     local call = opens.call
+    local opts = opens.opts
+    if not (call and call.at == now) and opts and opts.passive then
+        list[#list + 1] = { at = date("%H:%M:%S"), by = "none", combat = InCombatLockdown() and true or false }
+        local onOpening = opts.onOpening
+        if onOpening then
+            onOpening(list)
+        end
+        return
+    end
     if not (call and call.at == now) then
         by = "probe"
         local LFG: ForeverLFG = foreverLFG
@@ -1051,37 +1070,54 @@ local function recordOpening(list: Record[])
         stack = call.stack,
     }
     list[#list + 1] = rec
-    print(("LFG probe: opening %d, search %s (%s)."):format(#list, call.refused and "refused" or "not refused", by))
+    if not (opts and opts.quiet) then
+        print(("LFG probe: opening %d, search %s (%s)."):format(#list, call.refused and "refused" or "not refused", by))
+    end
     local category, before = call.category, call.before
     after(5, function()
         local later = lastSearch(category)
         rec.ageChanged = later ~= nil and later ~= before
         rec.results = opens.results > results
+        local onOpening = opts and opts.onOpening
+        if onOpening then
+            onOpening(list)
+        end
     end)
 end
 
 -- "/suu probe lfg opens" (on: true) and "/suu probe lfg opens off". Off on
--- a /reload too: nothing of it is kept but what it recorded.
-export function opensTest(on: boolean)
+-- a /reload too: nothing of it is kept but what it recorded. Whether it is
+-- armed now (false: the Group Finder isn't loaded yet).
+export function opensTest(on: boolean, opts: OpensOptions?): boolean
     local LFG: ForeverLFG = foreverLFG
+    local quiet = opts and opts.quiet
     if not on then
         if opens.armed and opens.original then
             LFG.Refresh = opens.original
         end
-        opens.armed, opens.original = false, nil
+        opens.armed, opens.original, opens.opts = false, nil, nil
         if opens.frame then
             opens.frame:UnregisterAllEvents()
         end
-        print("LFG probe: openings no longer recorded; /reload to save them.")
-        return
+        if not quiet then
+            print("LFG probe: openings no longer recorded; /reload to save them.")
+        end
+        return false
     end
     local parent = wf.find("LFGParentFrame")
     if not parent then
-        print("LFG probe: open the Group Finder once first, then run it again.")
-        return
+        if not quiet then
+            print("LFG probe: open the Group Finder once first, then run it again.")
+        end
+        return false
     end
+    opens.opts = opts
     local s = store()
     local list: Record[] = {}
+    local earlier = opts and opts.keep and tbl.field(s.opens, "openings")
+    if type(earlier) == "table" then
+        list = earlier :: Record[]
+    end
     -- functions of the client that might say whether a key press or click
     -- is running (none known)
     local hardware: string[] = {}
@@ -1125,9 +1161,12 @@ export function opensTest(on: boolean)
             end
         end)
     end
-    print(
-        "LFG probe: recording each opening of the Group Finder. Open it with its key five times, then with the micro menu button five times, then /reload (\"/suu probe lfg opens off\" stops)."
-    )
+    if not quiet then
+        print(
+            "LFG probe: recording each opening of the Group Finder. Open it with its key five times, then with the micro menu button five times, then /reload (\"/suu probe lfg opens off\" stops)."
+        )
+    end
+    return true
 end
 
 -- after a /reload: recording again if it was on
