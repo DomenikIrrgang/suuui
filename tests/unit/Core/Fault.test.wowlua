@@ -445,6 +445,95 @@ local function blockedScan()
     expect((last().stack :: string):find("Written by addon code", 1, true)).toBeNil()
 end
 
+@test("expectRefusal: the first blocked action during the call is noted, not reported; fn's results after it")
+local function expectedRefusal()
+    local got: { refused?: boolean, a?: number, b?: string } = {}
+    local out = printedBy(function()
+        got.refused, got.a, got.b = fault.expectRefusal(function(x: number): (number, string)
+            mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "UNKNOWN()")
+            return x + 1, "r"
+        end, 1)
+    end)
+    expect(got).toEqual({ refused = true, a = 2, b = "r" })
+    expect(#fault.entries()).toBe(0)
+    expect(out).toEqual({})
+    -- nothing blocked: false
+    local none, c = fault.expectRefusal(function(): string
+        return "fine"
+    end)
+    expect(none).toBe(false)
+    expect(c).toBe("fine")
+    -- forbidden counts, and so does one blamed on another addon (not kept
+    -- in the saved list either)
+    expect(fault.expectRefusal(function()
+        mock.fireEvent("ADDON_ACTION_FORBIDDEN", "OtherAddon", "TargetUnit")
+    end)).toBe(true)
+    expect(#fault.entries()).toBe(0)
+    expect(#DB.list("blocked")).toBe(0)
+end
+
+@test("expectRefusal: only the first; a second during the call and any after it are reported")
+local function expectedOnlyOnce()
+    local refused = fault.expectRefusal(function()
+        mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "First")
+        mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "Second")
+    end)
+    expect(refused).toBe(true)
+    expect(#fault.entries()).toBe(1)
+    expect(last().message).toBe("Blocked: Second")
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "After")
+    expect(#fault.entries()).toBe(2)
+    expect(last().message).toBe("Blocked: After")
+end
+
+@test("expectRefusal: an error in fn reaches the caller and ends the scope; a nested scope is its own")
+local function expectedError()
+    local ok, err = pcall(fault.expectRefusal, function()
+        error("expect-boom", 0)
+    end)
+    expect(ok).toBe(false)
+    expect(err).toBe("expect-boom")
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "AfterError")
+    expect(last().message).toBe("Blocked: AfterError")
+    -- nested: the inner call takes its own refusal; the outer one still
+    -- waits for one
+    local inner: boolean[] = {}
+    local outer = fault.expectRefusal(function()
+        inner[1] = fault.expectRefusal(function()
+            mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "Inner")
+        end)
+        mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "Outer")
+    end)
+    expect(inner).toEqual({ true })
+    expect(outer).toBe(true)
+    expect(#fault.entries()).toBe(1)
+end
+
+@test("expectRefusal: the emulated client's own refusal of a search without a click")
+local function expectedGameRefusal()
+    local refusals = #mock.refusals()
+    local refused = fault.expectRefusal(function()
+        pcall(C_LFGList.Search, 2, 0, 0, nil, false, nil, nil)
+    end)
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(refused).toBe(true)
+    expect(#fault.entries()).toBe(0)
+end
+
+@test("a log of its own: takeExpected only inside its scope, once")
+local function ownExpected()
+    local log = fault.FaultLog.new(FakeOutput.new(), FakeMeter.new())
+    expect(log:takeExpected()).toBe(false)
+    local taken: boolean[] = {}
+    local refused = log:expectRefusal(function()
+        taken[1] = log:takeExpected()
+        taken[2] = log:takeExpected()
+    end)
+    expect(taken).toEqual({ true, false })
+    expect(refused).toBe(true)
+    expect(log:takeExpected()).toBe(false)
+end
+
 @test("blocked for another addon: kept quietly in the saved variables, the newest 30")
 local function blockedOther()
     mock.fireEvent("ADDON_ACTION_FORBIDDEN", "OtherAddon", "TargetUnit")

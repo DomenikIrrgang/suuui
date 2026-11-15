@@ -17,6 +17,17 @@
 -- "/suu probe lfg open": the next time the Group Finder opens (press I or
 -- the micro menu), its opening searches the tool; records whether the game
 -- allowed that (is opening the window a click enough?).
+-- "/suu probe lfg opens": until "/suu probe lfg opens off" or a /reload,
+-- every opening of the Group Finder: how it was opened as far as the code
+-- can tell (the stack: the key binding, a click handler, the micro button,
+-- the panel manager's SetAttribute; the mouse button of a click handler; the
+-- client's functions named Hardware, if any), whether the search on opening
+-- was refused (the game's blocked action during the call), whether the
+-- tool's last search moved and results came within 5 s, in combat or not.
+-- The Group Finder module's own search is watched (the library's Refresh
+-- wrapped while armed); where it didn't search (the list younger than a
+-- minute, or the module off) the probe searches the same way, its refusal
+-- expected (no error line). Saved in SuuUIProbe.lfg.opens.
 -- "/suu probe lfg join": joins LookingForGroup and takes it off every chat
 -- window. "/suu probe lfg delist": a button whose click delists you.
 -- "/suu probe lfg live": starts ForeverLFG and reports its events;
@@ -29,6 +40,8 @@
 -- Saved in SuuUIProbe.lfg on /reload; only on this computer.
 
 import * as DB from "/Core/DB"
+import * as fault from "/Core/Fault"
+import * as coreSettings from "/Core/Settings"
 import print from "/Core/Init"
 import lfg as foreverLFG from "foreverlfg"
 import type ForeverLFG, Entry from "foreverlfg"
@@ -924,6 +937,199 @@ export function record(on: boolean)
     end
 end
 
+--------------------------------------------------------------------------------
+-- Each opening of the Group Finder and its search
+--------------------------------------------------------------------------------
+
+-- What a search through the library's Refresh did while "opens" is armed.
+type OpenCall = {
+    at: number, -- GetTime() of the call
+    category: number?,
+    refused: boolean, -- a blocked action came during the call
+    blocked?: string,
+    before?: number, -- the tool's last search (LFG.Now() time) before it
+    stack: string,
+    button?: string, -- GetMouseButtonClicked(): set inside a click handler
+    mouseDown: boolean,
+}
+-- The opens probe's state: armed, its listener, the library's own Refresh
+-- while it is wrapped, what the listener counted, the last search.
+type Opens = {
+    armed: boolean,
+    hooked: boolean,
+    frame?: Frame,
+    original?: (category: number?) -> boolean,
+    blocked: number,
+    lastBlocked?: string,
+    results: number,
+    call?: OpenCall,
+}
+local opens: Opens = { armed = false, hooked = false, blocked = 0, results = 0 }
+
+-- The tool's last search of `category` (LFG.Now() time), or nil.
+local function lastSearch(category: number?): number?
+    local LFG: ForeverLFG = foreverLFG
+    local age = LFG.ToolAge(category)
+    return age and (LFG.Now() - age) or nil
+end
+
+-- The tool category the Group Finder module searches (its category setting).
+local function moduleCategory(): number
+    local c = coreSettings.get("groupfinder", "category")
+    if c == "zone" or c == "world" then
+        return 116
+    end
+    return c == "custom" and 120 or 2
+end
+
+-- What the stack of a search on opening says about how the window opened.
+local function openedBy(stack: string): { [string]: boolean }
+    local function has(s: string): boolean
+        return stack:find(s, 1, true) ~= nil
+    end
+    return {
+        -- (the game names the binding, "[TOGGLEGROUPFINDER]:1"; the
+        -- emulator its file, "[Bindings.xml]")
+        binding = has("TOGGLEGROUPFINDER") or has("Bindings.xml"),
+        click = has("OnClick"),
+        microButton = has("MicroButton"),
+        panelManager = has("SetAttribute"),
+        toggle = has("ToggleFrame"),
+    }
+end
+
+-- The library's Refresh while armed: the call, and whether the game refused
+-- it (its blocked action comes during the call).
+local function watchedRefresh(category: number?): boolean
+    local original = assert(opens.original)
+    local blockedBefore = opens.blocked
+    local before = lastSearch(category)
+    local okB, clicked = attempt(field(_G, "GetMouseButtonClicked"))
+    local stack = debugstack(2) or ""
+    local ok = original(category)
+    local refused = opens.blocked > blockedBefore
+    opens.call = {
+        at = GetTime(),
+        category = category,
+        refused = refused,
+        blocked = refused and opens.lastBlocked or nil,
+        before = before,
+        stack = stack:sub(1, 2000),
+        button = okB and clicked ~= nil and tostring(clicked) or nil,
+        mouseDown = IsMouseButtonDown() and true or false,
+    }
+    return ok
+end
+
+-- An opening: the module's search in this frame (its OnShow hook runs
+-- before this one), else the probe's own, the same way; the tool's last
+-- search again 5 s later.
+local function recordOpening(list: Record[])
+    local now = GetTime()
+    local by = "module"
+    local call = opens.call
+    if not (call and call.at == now) then
+        by = "probe"
+        local LFG: ForeverLFG = foreverLFG
+        fault.expectRefusal(LFG.Refresh, moduleCategory())
+        call = opens.call
+    end
+    if not call then
+        return
+    end
+    local results = opens.results
+    local rec: Record = {
+        at = date("%H:%M:%S"),
+        by = by,
+        combat = InCombatLockdown() and true or false,
+        refused = call.refused,
+        blocked = call.blocked,
+        category = call.category,
+        openedBy = openedBy(call.stack),
+        button = call.button,
+        mouseDown = call.mouseDown,
+        stack = call.stack,
+    }
+    list[#list + 1] = rec
+    print(("LFG probe: opening %d, search %s (%s)."):format(#list, call.refused and "refused" or "not refused", by))
+    local category, before = call.category, call.before
+    after(5, function()
+        local later = lastSearch(category)
+        rec.ageChanged = later ~= nil and later ~= before
+        rec.results = opens.results > results
+    end)
+end
+
+-- "/suu probe lfg opens" (on: true) and "/suu probe lfg opens off". Off on
+-- a /reload too: nothing of it is kept but what it recorded.
+export function opensTest(on: boolean)
+    local LFG: ForeverLFG = foreverLFG
+    if not on then
+        if opens.armed and opens.original then
+            LFG.Refresh = opens.original
+        end
+        opens.armed, opens.original = false, nil
+        if opens.frame then
+            opens.frame:UnregisterAllEvents()
+        end
+        print("LFG probe: openings no longer recorded; /reload to save them.")
+        return
+    end
+    local parent = wf.find("LFGParentFrame")
+    if not parent then
+        print("LFG probe: open the Group Finder once first, then run it again.")
+        return
+    end
+    local s = store()
+    local list: Record[] = {}
+    -- functions of the client that might say whether a key press or click
+    -- is running (none known)
+    local hardware: string[] = {}
+    for k, v in pairs(_G) do
+        if type(k) == "string" and type(v) == "function" and k:find("Hardware") then
+            hardware[#hardware + 1] = k
+        end
+    end
+    table.sort(hardware)
+    s.opens = { armed = date("%Y-%m-%d %H:%M:%S"), hardwareFunctions = hardware, openings = list }
+    if not opens.armed then
+        opens.original = LFG.Refresh
+        LFG.Refresh = watchedRefresh
+    end
+    opens.armed = true
+    local f = opens.frame or CreateFrame("Frame")
+    opens.frame = f
+    for _, e in ipairs({
+        "ADDON_ACTION_BLOCKED",
+        "ADDON_ACTION_FORBIDDEN",
+        "LFG_LIST_SEARCH_RESULTS_RECEIVED",
+    }) do
+        f:RegisterEvent(e)
+    end
+    f:SetScript("OnEvent", function(_, event: string, _a: unknown, func: unknown)
+        if event == "LFG_LIST_SEARCH_RESULTS_RECEIVED" then
+            opens.results += 1
+        else
+            opens.blocked += 1
+            opens.lastBlocked = event .. " " .. tostring(func)
+        end
+    end)
+    if not opens.hooked then
+        opens.hooked = true
+        hookScript(parent, "OnShow", function()
+            if opens.armed then
+                local current = tbl.field(DB.probe, "lfg", "opens", "openings")
+                if type(current) == "table" then
+                    recordOpening(current :: Record[])
+                end
+            end
+        end)
+    end
+    print(
+        "LFG probe: recording each opening of the Group Finder. Open it with its key five times, then with the micro menu button five times, then /reload (\"/suu probe lfg opens off\" stops)."
+    )
+end
+
 -- after a /reload: recording again if it was on
 @onLogin
 local function resume()
@@ -952,6 +1158,10 @@ export function command(arg: string?)
     end
     if rest == "open" then
         openTest()
+        return
+    end
+    if rest == "opens" or rest == "opens off" then
+        opensTest(rest == "opens")
         return
     end
     if rest == "join" then

@@ -88,6 +88,22 @@ and `builtIn` is false (`/suu modules` lists them as "- ?" instead of
 
 Repro: `expect(debugstack(1, 3, 0)).toEqual("")` in any test file.
 
+<a id="v2"></a>
+
+### V2. A search from the Group Finder's OnShow, opened with its key binding: allowed in the VM, refused in the game
+
+`mock.pressBinding("TOGGLEGROUPFINDER")` runs as the user's action, so
+`C_LFGList.Search` from the window's OnShow (SuuUI's search on opening) is
+allowed. The game refused that same call out of combat on 2026-11-10, 11,
+13 and 15 (`ADDON_ACTION_BLOCKED`, `UNKNOWN()` through `pcall`), with the
+same stack: the binding, `LFGVanilla_ToggleFrame`, the panel manager's
+`ShowUIPanel` → `SetAttribute` → `Show`, the OnShow hook. (A probe on
+2026-10-15 saw it allowed.) Opened by code the VM refuses it, as the game
+does; the Group Finder's tests use that for the refused case.
+`/suu probe lfg opens` records the game's answer per opening; what decides
+it (the panel manager's secure attribute handler, the key's down or up, a
+client change) is not known yet.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not

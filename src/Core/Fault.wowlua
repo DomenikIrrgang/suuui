@@ -122,6 +122,9 @@ export class FaultLog implements Reporter
     private kbStarts: number[] = {}
     private kbChilds: number[] = {}
     private depth: number = 0
+    -- an expected refusal's scope (expectRefusal): nil outside one, false
+    -- while nothing was refused in it, true once something was
+    private expected: boolean? = nil
 
     constructor(
         private output: FaultOutput = ChatOutput.new(),
@@ -209,6 +212,38 @@ export class FaultLog implements Reporter
         return self:finishTimed(source, xpcall(fn, self.handler, ...))
     end
 
+    -- Calls fn(...) with the game's refusal of a protected call it makes
+    -- expected: the first blocked action (ADDON_ACTION_BLOCKED or _FORBIDDEN,
+    -- which the game fires during the refused call) while fn runs is noted,
+    -- not reported (no error, no chat line). Returns whether one came, then
+    -- fn's results. Anything else blocked, a second one during fn or any
+    -- after it, is reported as always. An error in fn ends the scope and
+    -- goes on to the caller.
+    function expectRefusal<A..., R...>(fn: (A...) -> R..., ...: A...): (boolean, R...)
+        local outer = self.expected
+        self.expected = false
+        return self:endExpected(outer, pcall(fn, ...))
+    end
+
+    private function endExpected<R...>(outer: boolean?, ok: boolean, ...: R...): (boolean, R...)
+        local refused = self.expected == true
+        self.expected = outer
+        if not ok then
+            error((...), 0)
+        end
+        return refused, ...
+    end
+
+    -- A blocked action arrived: true when a scope expected it (it is then
+    -- taken as that scope's refusal, and not reported).
+    function takeExpected(): boolean
+        if self.expected == false then
+            self.expected = true
+            return true
+        end
+        return false
+    end
+
     -- Timing on or off (on: from zero), and what it has counted.
     function setTiming(enabled: boolean)
         self.timing = enabled and true or false
@@ -243,6 +278,10 @@ end
 
 export function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
     return log:call(source, fn, ...)
+end
+
+export function expectRefusal<A..., R...>(fn: (A...) -> R..., ...: A...): (boolean, R...)
+    return log:expectRefusal(fn, ...)
 end
 
 export function setTiming(enabled: boolean)
@@ -318,8 +357,11 @@ enum Blocked { Blocked = "ADDON_ACTION_BLOCKED", Forbidden = "ADDON_ACTION_FORBI
 -- AddOn"): in combat, or out of it where a call needs the user's click or
 -- key press (the group finder's search). The game names only the function,
 -- so that is what is kept, with SuuUI's stack at the moment it fired when
--- there is one.
+-- there is one. A refusal a caller expected (expectRefusal) is neither.
 local function blocked(event: Blocked, addon: unknown, func: unknown)
+    if log:takeExpected() then
+        return
+    end
     local what = event == Blocked.Forbidden and "Forbidden" or (InCombatLockdown() and "Blocked in combat" or "Blocked")
     if addon ~= ADDON then
         -- blamed on someone else (another addon, or a name the game makes
