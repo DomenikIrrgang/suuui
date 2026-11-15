@@ -7,7 +7,9 @@
 -- wowlua:combat's queue does the waiting (first queued, first run; work left
 -- when combat starts again mid-flush waits for the next end); the keys are
 -- SuuUI's: the first request for a key takes the place in the queue, the
--- latest one's function runs.
+-- latest one's function runs, once (also when the request comes while the
+-- queue is being run at the end of combat). `cancel(prefix)` drops waiting
+-- work by key prefix: a module's ("m:<id>:") goes when it turns off.
 --
 -- The queue is a CombatQueue: whether the client is in lockdown and what
 -- runs work after it (a CombatState) and what reports errors (a Reporter)
@@ -35,7 +37,10 @@ export class GameCombat implements CombatState
     end
 end
 
-type Job = { fn: () -> (), source: string }
+-- One key's place in the queue: the latest request's function and source
+-- (a later request for the key changes them in place); `cancelled` when the
+-- owner let it go before it ran.
+type Job = { fn: () -> (), source: string, cancelled: boolean }
 
 export class CombatQueue
     private waiting: { [unknown]: Job } = {}
@@ -44,32 +49,59 @@ export class CombatQueue
     constructor(private combat: CombatState = GameCombat.new(), private reporter: fault.Reporter = fault.log) end
 
     -- Runs fn now or after combat. `source` names it in error reports.
+    -- A key that still has work waiting (in combat, or at its end while the
+    -- waiting work is being run) gets the latest function in that work's
+    -- place, run once: never the new one now and the older one after it.
     function run(key: unknown, fn: () -> (), source: string?)
         local from = source or tostring(key)
+        local waiting = self.waiting[key]
+        if waiting then
+            waiting.fn = fn
+            waiting.source = from
+            return
+        end
         if not self.combat:inCombat() then
             self.reporter:call(from, fn)
             return
         end
-        local job: Job = { fn = fn, source = from }
-        if self.waiting[key] then
-            self.waiting[key] = job
-            return
-        end
+        local job: Job = { fn = fn, source = from, cancelled = false }
         self.waiting[key] = job
         self.pending += 1
         self.combat:defer(function()
-            local latest = self.waiting[key]
+            if job.cancelled then
+                return
+            end
             self.waiting[key] = nil
             self.pending -= 1
-            if latest then
-                self.reporter:call(latest.source, latest.fn)
-            end
+            self.reporter:call(job.source, job.fn)
         end)
     end
 
-    -- How much work waits for the end of combat.
-    function pendingCount(): number
-        return self.pending
+    -- Drops the waiting work of every string key that starts with `prefix`
+    -- (a module's "m:<id>:" when it turns off): it never runs.
+    function cancel(prefix: string)
+        for key, job in pairs(self.waiting) do
+            if type(key) == "string" and key:sub(1, #prefix) == prefix then
+                job.cancelled = true
+                self.waiting[key] = nil
+                self.pending -= 1
+            end
+        end
+    end
+
+    -- How much work waits for the end of combat (with `prefix`: of the
+    -- string keys that start with it).
+    function pendingCount(prefix: string?): number
+        if not prefix then
+            return self.pending
+        end
+        local n = 0
+        for key in pairs(self.waiting) do
+            if type(key) == "string" and key:sub(1, #prefix) == prefix then
+                n += 1
+            end
+        end
+        return n
     end
 end
 
@@ -80,6 +112,10 @@ export function run(key: unknown, fn: () -> (), source: string?)
     queue:run(key, fn, source)
 end
 
-export function pendingCount(): number
-    return queue:pendingCount()
+export function cancel(prefix: string)
+    queue:cancel(prefix)
+end
+
+export function pendingCount(prefix: string?): number
+    return queue:pendingCount(prefix)
 end

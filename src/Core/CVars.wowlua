@@ -1,0 +1,202 @@
+-- Core/CVars.wowlua
+-- Game CVars a module changes (M:SetCVar), given back when it lets go.
+--
+--   set(id, name, value)   the first time a module sets a CVar, the value the
+--                          player had is remembered; then the CVar is set
+--   restore(id, name)      that CVar given back now, and forgotten
+--   restoreAll(id)         every CVar the module set (when it turns off or
+--                          fails, and at login for a module that starts off)
+--   remembered(id)         how many it holds
+--
+-- The player's values are kept per character, outside profiles (SuuUIDB's
+-- character data, namespace "core", which no module can have: "core" is a
+-- reserved id), under the module's id: a profile switch neither loses nor
+-- repeats them, an exported profile doesn't carry them, and they survive a
+-- reload, so a module that turns off only at a reload (reloadToToggle, whose
+-- OnDisable never runs in a session) still gives them back at the next login.
+--
+-- Writes and restores go through the combat queue (key "cvar:<name>"): some
+-- CVars can't be changed in combat (the nameplates'), so in combat they wait
+-- for its end, the latest one for a CVar winning. A CVar the client doesn't
+-- know is never remembered or set.
+--
+-- The registry is a CVarOwners: where the values are kept, how the game's
+-- CVars are read and written, and what runs work out of combat come in
+-- through its constructor, so a test builds one of its own. `cvars` is
+-- SuuUI's; the module's functions are its methods.
+
+import * as settings from "./Settings"
+import * as combat from "./Combat"
+
+-- Each module's remembered values: module id -> CVar -> the player's value.
+export type Memory = { [string]: { [string]: string } }
+
+-- Where the memory lives: the table (made when `create`), or nil when there
+-- is none (yet).
+export type MemoryStore = (create: boolean) -> Memory?
+
+-- The game's CVars.
+export interface CVarAccess
+    -- nil: the client has no such CVar
+    function get(name: string): string?
+    function set(name: string, value: string): boolean
+end
+
+export class GameCVars implements CVarAccess
+    function get(name: string): string?
+        local ok, value = pcall(C_CVar.GetCVar, name)
+        if ok and type(value) == "string" then
+            return value
+        end
+        return nil
+    end
+
+    function set(name: string, value: string): boolean
+        local ok, done = pcall(C_CVar.SetCVar, name, value)
+        return ok and done ~= false
+    end
+end
+
+-- SuuUI's: this character's data, namespace "core", field "cvars".
+local function charMemory(create: boolean): Memory?
+    local data = create and settings.charData("core") or settings.peekCharData("core")
+    if not data then
+        return nil
+    end
+    local memory = data.cvars
+    if type(memory) ~= "table" then
+        if not create then
+            return nil
+        end
+        memory = {}
+        data.cvars = memory
+    end
+    return memory :: unknown :: Memory
+end
+
+local function text(value: unknown): string
+    if value == true then
+        return "1"
+    elseif value == false then
+        return "0"
+    end
+    return tostring(value)
+end
+
+export class CVarOwners
+    -- CVar -> the value a restore waiting for the end of combat gives back
+    -- (the player's, still: a module setting it again meanwhile remembers it)
+    private restoring: { [string]: string } = {}
+
+    constructor(
+        private memory: MemoryStore = charMemory,
+        private game: CVarAccess = GameCVars.new(),
+        private runner: combat.CombatQueue = combat.queue
+    )
+    end
+
+    -- Sets the CVar for the module, remembering the player's value first.
+    -- True when it was written now; false when the client refused it, has
+    -- no such CVar, or it waits for the end of combat.
+    function set(id: string, name: string, value: string | number | boolean): boolean
+        local all = self.memory(false)
+        local mine = all and all[id]
+        if not (mine and mine[name] ~= nil) then
+            local was = self.restoring[name] or self.game:get(name)
+            if was == nil then
+                return false
+            end
+            local made = assert(self.memory(true))
+            mine = made[id] or {}
+            made[id] = mine
+            mine[name] = was
+        end
+        self.restoring[name] = nil
+        local wanted = text(value)
+        local done = false
+        self.runner:run("cvar:" .. name, function()
+            done = self.game:set(name, wanted)
+        end, "CVars")
+        return done
+    end
+
+    -- Gives the CVar back as the player had it and forgets it. False when
+    -- the module holds no value for it.
+    function restore(id: string, name: string): boolean
+        local all = self.memory(false)
+        local mine = all and all[id]
+        local was = mine and mine[name]
+        if not (all and mine and was) then
+            return false
+        end
+        mine[name] = nil
+        if next(mine) == nil then
+            all[id] = nil
+        end
+        self.restoring[name] = was
+        self.runner:run("cvar:" .. name, function()
+            self.restoring[name] = nil
+            self.game:set(name, was)
+        end, "CVars")
+        return true
+    end
+
+    function restoreAll(id: string)
+        local all = self.memory(false)
+        local mine = all and all[id]
+        if not mine then
+            return
+        end
+        local names: string[] = {}
+        for name in pairs(mine) do
+            names[#names + 1] = name
+        end
+        table.sort(names)
+        for _, name in ipairs(names) do
+            self:restore(id, name)
+        end
+    end
+
+    -- The value the module remembered for a CVar (the player's), or nil.
+    function rememberedValue(id: string, name: string): string?
+        local all = self.memory(false)
+        local mine = all and all[id]
+        return mine and mine[name]
+    end
+
+    -- How many CVars the module holds a value for.
+    function remembered(id: string): number
+        local all = self.memory(false)
+        local mine = all and all[id]
+        local n = 0
+        if mine then
+            for _ in pairs(mine) do
+                n += 1
+            end
+        end
+        return n
+    end
+end
+
+-- SuuUI's, and its methods as the module's functions.
+export const cvars = CVarOwners.new()
+
+export function set(id: string, name: string, value: string | number | boolean): boolean
+    return cvars:set(id, name, value)
+end
+
+export function restore(id: string, name: string): boolean
+    return cvars:restore(id, name)
+end
+
+export function restoreAll(id: string)
+    cvars:restoreAll(id)
+end
+
+export function rememberedValue(id: string, name: string): string?
+    return cvars:rememberedValue(id, name)
+end
+
+export function remembered(id: string): number
+    return cvars:remembered(id)
+end

@@ -12,6 +12,11 @@ import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/MicroMenu"
 import type MenuButton from "/UI/MicroMenu"
 import expectNoErrors from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
+import * as visibility from "/UI/Visibility"
 import * as frames from "wowlua:frames"
 
 local function button(key: string): MenuButton
@@ -437,14 +442,35 @@ local function offButtons()
     expect(b.glyph:GetAlpha()).toBe(1)
 end
 
--- (last: the module off)
-@test("stopped: hidden, its anchor withdrawn")
+-- (last: the module off) Micro menu is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: hidden, its anchor withdrawn, its visibility let go; on again, shown")
 local function disabled()
-    M:OnDisable()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    expect(visibility.count(M)).toBe(1)
+    settings.set("micromenu", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     for tip in ((rawget(_G, "HelpTip") :: {}) :: {
         framePool: { EnumerateActive: ({}) -> ((unknown, unknown) -> Frame?, unknown, unknown) },
     }).framePool:EnumerateActive() do
         expect(tip:GetAlpha()).toBe(1)
     end
     expect(M.menu).never.toBeShown()
+    expect(SuuUI.GetAnchor("microMenu")).toBeNil()
+    expect(visibility.count(M)).toBe(0)
+    -- edit mode opening and closing no longer shows it
+    events.emit("SUUUI_EDITMODE_CHANGED", true)
+    events.emit("SUUUI_EDITMODE_CHANGED", false)
+    mock.advanceFrames(2)
+    expect(M.menu).never.toBeShown()
+    -- on again: its "Shows" mode applies anew
+    settings.set("micromenu", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(M.menu).toBeShown()
+    expect(visibility.count(M)).toBe(1)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

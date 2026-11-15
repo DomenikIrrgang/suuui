@@ -16,6 +16,7 @@ import SuuUI from "/Core/API"
 import internal M, inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
 import type Bind from "/Units/MouseBindings"
 import expectNoErrors from "../../helpers"
+import * as settings from "/Core/Settings"
 
 -- A spell the character knows: its name and highest rank's ID.
 local function known(): (string, number)
@@ -717,4 +718,36 @@ local function friendClick()
     mock.setModifiers({})
     expect(casts[#casts] and casts[#casts].id).toBe(id)
     expect(casts[#casts] and casts[#casts].unit).toBe("player")
+end
+
+@test("turned off through the registry: keys, frame clicks and the moved Target click are given back; on again, all set again")
+local function offAndOn()
+    local name, id = known()
+    local profile = clickBindings()
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    M:Add(bind("SHIFT-F", name, id), nil)
+    M:Add(bind("SHIFT-BUTTON1", name, id), nil)
+    M:SetClick("target", "ALT-BUTTON1", 48)
+    expect(player:GetAttribute("shift-type1")).toBe("spell")
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(ours("SHIFT-F")).toBe(true)
+    local _, mods = interaction(profile, 1)
+    expect(mods).toBe(48)
+    settings.set("mousebindings", "enabled", false)
+    expect(M:IsEnabled()).toBe(false)
+    mock.advanceFrames(15, 20)
+    expect(ours("SHIFT-F")).toBe(false)
+    expect(player:GetAttribute("shift-type1")).toBe(nil)
+    local button
+    button, mods = interaction(profile, 1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(0)
+    settings.set("mousebindings", "enabled", true)
+    mock.advanceFrames(15, 20)
+    expect(player:GetAttribute("shift-type1")).toBe("spell")
+    expect(ours("SHIFT-F")).toBe(true)
+    _, mods = interaction(profile, 1)
+    expect(mods).toBe(48)
 end

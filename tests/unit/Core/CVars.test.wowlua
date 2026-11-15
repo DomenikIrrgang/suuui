@@ -1,0 +1,107 @@
+-- Core/CVars: the player's value remembered once per module and CVar, given
+-- back on restore; writes in combat wait for its end.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as cvars from "/Core/CVars"
+import * as combat from "/Core/Combat"
+import * as settings from "/Core/Settings"
+import FakeCombat, FakeReporter from "../../fakes"
+import expectNoErrors from "../../helpers"
+
+const CVAR = "nameplateMaxAlpha"
+
+@afterEach
+local function cleanup()
+    cvars.restoreAll("zzcvar")
+    cvars.restoreAll("zzcvar2")
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+end
+
+-- A game of its own: CVars in a table.
+class FakeCVars implements cvars.CVarAccess
+    values: { [string]: string } = {}
+    writes: string[] = {}
+
+    function get(name: string): string?
+        return self.values[name]
+    end
+
+    function set(name: string, value: string): boolean
+        self.values[name] = value
+        self.writes[#self.writes + 1] = name .. "=" .. value
+        return true
+    end
+end
+
+@test("set: remembers the player's value once, in this character's data; restore gives it back")
+local function setAndRestore()
+    C_CVar.SetCVar(CVAR, "0.9")
+    expect(cvars.set("zzcvar", CVAR, 0.5)).toBe(true)
+    expect(cvars.set("zzcvar", CVAR, true)).toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("1")
+    expect(cvars.rememberedValue("zzcvar", CVAR)).toBe("0.9")
+    local data = assert(settings.peekCharData("core"))
+    expect((data.cvars :: cvars.Memory).zzcvar).toEqual({ [CVAR] = "0.9" })
+    expect(cvars.restore("zzcvar", CVAR)).toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.9")
+    expect(cvars.remembered("zzcvar")).toBe(0)
+    expect((data.cvars :: cvars.Memory).zzcvar).toBeNil()
+    expect(cvars.restore("zzcvar", CVAR)).toBe(false)
+    expectNoErrors()
+end
+
+@test("a CVar the client doesn't know: neither remembered nor set")
+local function unknownCVar()
+    expect(cvars.set("zzcvar", "zzNoSuchCVar", 1)).toBe(false)
+    expect(cvars.remembered("zzcvar")).toBe(0)
+end
+
+@test("in combat: the write waits for its end; a restore while it waits wins, and a set after it remembers the player's value")
+local function inCombat()
+    C_CVar.SetCVar(CVAR, "0.8")
+    mock.player:enterCombat()
+    expect(cvars.set("zzcvar", CVAR, "0.2")).toBe(false)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.8")
+    mock.player:leaveCombat()
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.2")
+    mock.player:enterCombat()
+    cvars.restore("zzcvar", CVAR)
+    -- set again before the restore ran: the value to remember is still the player's
+    cvars.set("zzcvar2", CVAR, "0.3")
+    expect(cvars.rememberedValue("zzcvar2", CVAR)).toBe("0.8")
+    mock.player:leaveCombat()
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.3")
+    cvars.restoreAll("zzcvar2")
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.8")
+    expectNoErrors()
+end
+
+@test("a registry of its own: memory, game and fight of its own; nothing made until something is remembered")
+local function ownRegistry()
+    local memory: cvars.Memory? = nil
+    local made = 0
+    local game = FakeCVars.new()
+    game.values.a = "1"
+    game.values.b = "x"
+    local fight = FakeCombat.new()
+    local own = cvars.CVarOwners.new(function(create: boolean): cvars.Memory?
+        if create and not memory then
+            made += 1
+            memory = {}
+        end
+        return memory
+    end, game, combat.CombatQueue.new(fight, FakeReporter.new()))
+    expect(own:remembered("m")).toBe(0)
+    own:restoreAll("m")
+    expect(made).toBe(0)
+    own:set("m", "a", 0)
+    own:set("m", "b", "y")
+    expect(memory).toEqual({ m = { a = "1", b = "x" } })
+    own:restoreAll("m")
+    expect(game.values).toEqual({ a = "1", b = "x" })
+    expect(game.writes).toEqual({ "a=0", "b=y", "a=1", "b=x" })
+    expect(memory).toEqual({})
+end

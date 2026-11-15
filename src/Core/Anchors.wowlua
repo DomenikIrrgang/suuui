@@ -4,6 +4,8 @@
 -- others look it up, and hear when it appears, changes or goes away.
 --
 --   SuuUI.PublishAnchor("target", frame)    -- nil unpublishes
+--   SuuUI.PublishAnchor("target", frame, M) -- 0.47: owned by module M, taken
+--                                           -- back when M is released
 --   SuuUI.GetAnchor("target")               -- the frame, or nil
 --   message SUUUI_ANCHOR_CHANGED (name, frame)
 --
@@ -16,9 +18,13 @@
 import * as events from "./Events"
 
 local frames: { [string]: Frame } = {}
+local owners: { [string]: unknown } = {} -- name -> the module that published it
 
--- `frame` nil: the anchor is gone.
-export function publish(anchorName: string, frame: Frame?)
+-- `frame` nil: the anchor is gone. `owner` (0.47, optional): the module it
+-- belongs to; when that module is released (turned off, or failed) the
+-- anchor is unpublished, unless someone else has published that name since.
+export function publish(anchorName: string, frame: Frame?, owner: unknown?)
+    owners[anchorName] = frame and owner or nil
     if frames[anchorName] == frame then
         return
     end
@@ -28,4 +34,32 @@ end
 
 export function get(anchorName: string): Frame?
     return frames[anchorName]
+end
+
+-- Every anchor `owner` published, unpublished.
+export function release(owner: unknown)
+    if owner == nil then
+        return
+    end
+    local names: string[] = {}
+    for anchorName, o in pairs(owners) do
+        if o == owner then
+            names[#names + 1] = anchorName
+        end
+    end
+    table.sort(names)
+    for _, anchorName in ipairs(names) do
+        publish(anchorName, nil)
+    end
+end
+
+-- How many anchors `owner` has published.
+export function count(owner: unknown): number
+    local n = 0
+    for _, o in pairs(owners) do
+        if o == owner then
+            n += 1
+        end
+    end
+    return n
 end

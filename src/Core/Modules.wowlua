@@ -21,11 +21,25 @@
 --
 -- A module that is off is never initialised: no frames, no events. Its
 -- "enabled" setting lives in its own namespace, so it is saved per profile.
--- Everything a module registers through its own methods (events, setting
--- watchers, chat commands) belongs to it and is removed when it turns off;
--- register those in OnEnable. Turning a module on or off waits for the end
--- of combat. A module whose callback errors is marked errored and turned off;
--- SuuUI and the other modules keep running.
+-- Everything a module registers through its own methods belongs to it and
+-- is taken away when it turns off (or fails): events and messages, setting
+-- watchers and vetoes, chat commands, settings sections, movers, Each/Hook/
+-- Override, services, menu and list entries, timers (M:After, M:Every; they
+-- are cancelled), secure hooks (M:SecureHook, M:HookScript; disarmed, they do
+-- nothing until armed again), work waiting for the end of combat
+-- (M:RunOutOfCombat; dropped), CVars (M:SetCVar; the player's values given
+-- back), and what it handed SuuUI with itself as the owner (UI.SetVisibility,
+-- SuuUI.PublishAnchor). Register those in OnEnable. Turning a module on or off
+-- waits for the end of combat. A module whose callback errors is marked
+-- errored and turned off; SuuUI and the other modules keep running.
+--
+-- IsEnabled() (0.47) is true from just before OnEnable runs and false from
+-- just before OnDisable runs, so the code both call reads the state being
+-- reached. A module registered after login starts on the next frame, once
+-- the file that registered it has run to its end (its callbacks assigned
+-- after the RegisterModule call are there by then). A module that starts off
+-- at login is released once, so CVars it set in an earlier session (a
+-- reloadToToggle module turned off) are given back.
 --
 -- The registry is a ModuleRegistry: the settings it keeps "enabled" in,
 -- what runs work out of combat and whether combat is on, what reports a
@@ -43,6 +57,11 @@ import * as combat from "./Combat"
 import * as extend from "./Extend"
 import * as services from "./Services"
 import * as themes from "./Themes"
+import * as timers from "./Timers"
+import * as hooks from "./Hooks"
+import * as cvars from "./CVars"
+import * as anchors from "./Anchors"
+import * as visibility from "/UI/Visibility"
 import * as settingsRegistry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import * as tbl from "wowlua:table"
@@ -50,7 +69,7 @@ import * as tbl from "wowlua:table"
 -- A settings section as a module registers it (SettingsUI/Registry).
 export type SettingsSection = settingsRegistry.SectionDef
 
-export const API_VERSION = "0.46.0"
+export const API_VERSION = "0.47.0"
 
 -- Where a module is in its life.
 export enum ModuleState {
@@ -406,8 +425,62 @@ export class Module<D extends Settings> implements AnyModule
     end
 
     -- Keys get an "m:" prefix so a module's never collide with the core's own.
+    -- (0.47: work still waiting when the module turns off is dropped)
     function RunOutOfCombat(key: string | number, fn: () -> ())
         combat.run("m:" .. self.id .. ":" .. tostring(key), fn, self.name)
+    end
+
+    -- 0.47: timers the module owns (Core/Timers.wowlua): fn runs under the
+    -- module's name in Fault; every one is cancelled when the module turns
+    -- off. The handle's Cancel() stops one sooner. Every: fn(ticker) each
+    -- `seconds`, `times` times or until cancelled.
+    function After(seconds: number, fn: () -> ()): TimerHandle
+        return timers.after(self, self.name, seconds, fn)
+    end
+    function Every(seconds: number, fn: (ticker: TickerHandle) -> (), times: number?): TickerHandle
+        return timers.every(self, self.name, seconds, fn, times)
+    end
+
+    -- 0.47: secure post-hooks the module owns (Core/Hooks.wowlua), on a
+    -- global function (`SecureHook("Name", fn)`) or a table's method
+    -- (`SecureHook(table or "GlobalTable", "Method", fn, { addon = "..." })`),
+    -- or on a frame's script. One per module and target for the session: a
+    -- second call (the module on again) re-arms it with the new function;
+    -- while the module is not enabled the hook does nothing.
+    function SecureHook(target: unknown, method: string | function, fn: function?, opts: hooks.HookOptions?)
+        local live = function(): boolean
+            return self:IsEnabled()
+        end
+        if type(method) == "function" then
+            hooks.secureHook(self, self.name, live, target, nil, method, nil)
+            return
+        end
+        assert(type(method) == "string" and type(fn) == "function", "SecureHook: (name, fn) or (target, method, fn, opts)")
+        hooks.secureHook(self, self.name, live, target, method, fn, opts)
+    end
+    function HookScript(frame: ScriptRegion | string, script: string, fn: function)
+        hooks.hookScript(
+            self,
+            self.name,
+            function(): boolean
+                return self:IsEnabled()
+            end,
+            frame,
+            script,
+            fn
+        )
+    end
+
+    -- 0.47: a game CVar the module changes (Core/CVars.wowlua). The first
+    -- SetCVar of a name remembers the player's value for this character
+    -- (not per profile); RestoreCVar gives it back and forgets it, and so
+    -- does turning the module off, for every CVar it set. In combat the
+    -- write waits for its end. True when written now.
+    function SetCVar(cvarName: string, value: string | number | boolean): boolean
+        return cvars.set(self.id, cvarName, value)
+    end
+    function RestoreCVar(cvarName: string): boolean
+        return cvars.restore(self.id, cvarName)
     end
 
     function RegisterCommand(cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?)
@@ -497,6 +570,8 @@ export class Module<D extends Settings> implements AnyModule
         print("|cffa39b8b" .. self.name .. ":|r", ...)
     end
 
+    -- 0.47: true while OnEnable runs, false while OnDisable runs (the state
+    -- changes just before each)
     function IsEnabled(): boolean
         return self.state == ModuleState.Enabled
     end
@@ -576,6 +651,12 @@ export type ModuleOf<D> = {
     ForgetCharData: (self: ModuleOf<D>, key: string) -> boolean,
     Guard: <A..., R...>(self: ModuleOf<D>, fn: (A...) -> R...) -> (A...) -> (boolean, R...),
     RunOutOfCombat: (self: ModuleOf<D>, key: string | number, fn: () -> ()) -> (),
+    After: (self: ModuleOf<D>, seconds: number, fn: () -> ()) -> TimerHandle,
+    Every: (self: ModuleOf<D>, seconds: number, fn: (ticker: TickerHandle) -> (), times: number?) -> TickerHandle,
+    SecureHook: (self: ModuleOf<D>, target: unknown, method: string | function, fn: function?, opts: hooks.HookOptions?) -> (),
+    HookScript: (self: ModuleOf<D>, frame: ScriptRegion | string, script: string, fn: function) -> (),
+    SetCVar: (self: ModuleOf<D>, cvarName: string, value: string | number | boolean) -> boolean,
+    RestoreCVar: (self: ModuleOf<D>, cvarName: string) -> boolean,
     RegisterCommand: (self: ModuleOf<D>, cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?) -> (),
     RegisterSettings: (self: ModuleOf<D>, def: SettingsSection) -> settingsRegistry.Section,
     RegisterMover: (self: ModuleOf<D>, frame: Region, opts: editMode.MoverOptions?) -> editMode.Mover,
@@ -583,6 +664,7 @@ export type ModuleOf<D> = {
     Hook: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string, fn: (this: extend.KindInstances[K], ...unknown) -> ()) -> (),
     Override: <K extends extend.Kinds>(self: ModuleOf<D>, kind: K, method: string, fn: (this: extend.KindInstances[K], original: extend.Method, ...unknown) -> ...unknown) -> (),
     Provide: (self: ModuleOf<D>, serviceName: string, impl: { [string]: unknown }) -> (),
+    ProvideService: <T>(self: ModuleOf<D>, key: services.ServiceKey<T>, impl: T) -> (),
     ExtendMenu: (self: ModuleOf<D>, id: string, fn: extend.MenuExtension) -> (),
     AddMicroItem: (self: ModuleOf<D>, item: unknown) -> (),
     AddGameMenuItem: (self: ModuleOf<D>, item: unknown) -> (),
@@ -613,7 +695,7 @@ export type LooseDef<D> = {
 --------------------------------------------------------------------------------
 
 -- Everything a module registered through its own methods, taken away.
-local function releaseAll(m: unknown)
+local function releaseAll(m: AnyModule)
     events.offAll(m)
     settings.unwatch(m)
     unregisterCommands(m)
@@ -621,6 +703,12 @@ local function releaseAll(m: unknown)
     editMode.unregister(m)
     extend.unregister(m)
     services.unregister(m)
+    timers.cancelAll(m)
+    hooks.release(m)
+    combat.cancel("m:" .. m.id .. ":")
+    visibility.release(m)
+    anchors.release(m)
+    cvars.restoreAll(m.id)
 end
 
 export class ModuleRegistry
@@ -634,7 +722,9 @@ export class ModuleRegistry
         private lockdown: combat.CombatState = combat.GameCombat.new(),
         private reporter: fault.Reporter = fault.log,
         private notifier: events.Notifier = events.bus,
-        private release: (owner: unknown) -> () = releaseAll
+        private release: (m: AnyModule) -> () = releaseAll,
+        -- what starts a module registered after login: the next frame
+        private later: extend.NextFrame = extend.GameNextFrame.new()
     )
     end
 
@@ -665,13 +755,15 @@ export class ModuleRegistry
             end
             ownOf(m :: table).initialized = true
         end
+        -- on before OnEnable runs, so what it calls reads the state it is
+        -- bringing about (0.47)
+        ownOf(m :: table).state = ModuleState.Enabled
+        ownOf(m :: table).error = nil
         if not self.reporter:call(m.name, function()
             m:OnEnable()
         end) then
             return self:fail(m, "OnEnable")
         end
-        ownOf(m :: table).state = ModuleState.Enabled
-        ownOf(m :: table).error = nil
         self.notifier:emit("SUUUI_MODULE_ENABLED", m.id)
     end
 
@@ -682,11 +774,12 @@ export class ModuleRegistry
             end
             return
         end
+        -- off before OnDisable runs (0.47), as on before OnEnable
+        ownOf(m :: table).state = ModuleState.Disabled
         self.reporter:call(m.name, function()
             m:OnDisable()
         end)
         self.release(m)
-        ownOf(m :: table).state = ModuleState.Disabled
         self.notifier:emit("SUUUI_MODULE_DISABLED", m.id)
     end
 
@@ -734,6 +827,7 @@ export class ModuleRegistry
             ownOf(m :: table).enabledAtLoad = false
             ownOf(m :: table).state = ModuleState.Disabled
             self.store:watch(m.id, "enabled", function() end, "Modules")
+            self.release(m)
             return
         end
         ownOf(m :: table).enabledAtLoad = self.store:get(m.id, "enabled") and true or false
@@ -746,6 +840,7 @@ export class ModuleRegistry
             "Modules"
         )
         if m.state == ModuleState.Incompatible then
+            self.release(m)
             return
         end
         if m.enabledAtLoad then
@@ -767,6 +862,9 @@ export class ModuleRegistry
             end
         else
             ownOf(m :: table).state = ModuleState.Disabled
+            -- off at login: what an earlier session left (a CVar a
+            -- reloadToToggle module set before it was turned off) goes now
+            self.release(m)
         end
     end
 
@@ -784,7 +882,10 @@ export class ModuleRegistry
     ----------------------------------------------------------------------------
 
     -- A module made (a built-in one's class, or a plugin's PluginModule):
-    -- its settings registered, started at once after login.
+    -- its settings registered. After login it starts on the next frame
+    -- (0.47), once the file that registered it has run to its end: a
+    -- plugin that assigns `function M:OnEnable()` after RegisterModule (as
+    -- the plugin guide does) has its callbacks in place by then.
     function add<M extends AnyModule>(m: M): M
         local id = m.id
         assert(not self.byId[id] and not RESERVED[id], "SuuUI.RegisterModule: the id " .. id .. " is taken")
@@ -799,7 +900,9 @@ export class ModuleRegistry
         self.byId[id] = m
         self.notifier:emit("SUUUI_MODULE_REGISTERED", id)
         if self.started then
-            self:start(m)
+            self.later:run(function()
+                self:start(m)
+            end)
         end
         return m
     end

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- For plugin authors (API 0.47): a module now owns more of what it leaves behind, and SuuUI takes it away when the module turns off: timers (`M:After`, `M:Every`), hooks on the game's functions and frames (`M:SecureHook`, `M:HookScript`: one per target, quiet while the module is off), game CVars (`M:SetCVar`, `M:RestoreCVar`: your own values come back, kept per character, not per profile), and frames handed to `SuuUI.UI.SetVisibility` or `SuuUI.PublishAnchor` with the module as their owner.
+
+### Changed
+
+- For plugin authors (API 0.47): `M:IsEnabled()` is now already true while `OnEnable` runs and already false while `OnDisable` runs (it was the other way round), so code both call knows which way things are going. A module registered after login (a plugin that loads on demand) now starts on the next frame, so a `function M:OnEnable()` written after `RegisterModule`, as the plugin guide shows, runs.
+
+### Fixed
+
+- Turning Mouseover bindings off now takes your bindings off at once: keys and clicks stop casting on the unit under the mouse, and a Target or Menu click you moved goes back to the game's own. Turning it on again puts them all back.
+- Loot rolls still running when you log in or `/reload` show in the roll tray at once, instead of only at the next roll event (Blizzard's roll frames were already out of sight).
+- Encounter timeline: "Hide their own display" keeps DBM's warnings hidden after a `/reload` or login.
+- Convergences: turning the module on or off with the world map open shows or removes its pins at once.
+- World map: quest pins already on the map are styled as soon as the module turns on; turning the module off and on no longer makes the quest log restyle its pins once more each time.
+- The micro menu and the objective tracker no longer come back on screen (in edit mode, keybind mode or a fight) after they failed to start.
+- Work a module had waiting for the end of combat no longer runs after the module was turned off, and a later request for the same work made as combat ends no longer runs before an older one.
+
 ## 0.17.0 (2026-11-14)
 
 ### New

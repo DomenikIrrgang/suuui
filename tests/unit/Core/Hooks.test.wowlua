@@ -1,0 +1,97 @@
+-- Core/Hooks: secure hooks kept per owner and target, installed once,
+-- re-armed instead of stacked, silent while disarmed or not live.
+
+import test, expect from "wowlua:test"
+import * as hooks from "/Core/Hooks"
+import FakeReporter from "../../fakes"
+import expectNoErrors from "../../helpers"
+
+type Target = { Method: (self: Target, n: number) -> () }
+const G = _G :: unknown :: { [string]: unknown }
+
+local function yes(): boolean
+    return true
+end
+
+@test("a global function: installed once, re-armed with the latest function, disarmed by release")
+local function globalHook()
+    local owner = { name = "Hooks Test Global" }
+    rawset(G, "CoreHooksTestGlobal", function(_: number) end)
+    local heard: string[] = {}
+    local function call(n: number)
+        (G.CoreHooksTestGlobal :: (n: number) -> ())(n)
+    end
+    hooks.secureHook(owner, "Test", yes, "CoreHooksTestGlobal", nil, function(n: number)
+        heard[#heard + 1] = "first " .. n
+    end)
+    call(1)
+    hooks.secureHook(owner, "Test", yes, "CoreHooksTestGlobal", nil, function(n: number)
+        heard[#heard + 1] = "second " .. n
+    end)
+    call(2)
+    expect(heard).toEqual({ "first 1", "second 2" })
+    expect(hooks.installed(owner)).toBe(1)
+    hooks.release(owner)
+    expect(hooks.armed(owner)).toBe(0)
+    call(3)
+    expect(heard).toEqual({ "first 1", "second 2" })
+    expectNoErrors()
+end
+
+@test("a table's method and a frame's script; not live: nothing runs")
+local function methodAndScript()
+    local owner = { name = "Hooks Test Method" }
+    local live = false
+    local function isLive(): boolean
+        return live
+    end
+    local t: Target = { Method = function(_: Target, _n: number) end }
+    local f = CreateFrame("Frame")
+    local heard: string[] = {}
+    hooks.secureHook(owner, "Test", isLive, t, "Method", function(_: Target, n: number)
+        heard[#heard + 1] = "method " .. n
+    end)
+    hooks.hookScript(owner, "Test", isLive, f, "OnShow", function()
+        heard[#heard + 1] = "show"
+    end)
+    t:Method(1)
+    f:Hide()
+    f:Show()
+    expect(heard).toEqual({})
+    live = true
+    t:Method(2)
+    f:Hide()
+    f:Show()
+    expect(heard).toEqual({ "method 2", "show" })
+    expect(hooks.armed(owner)).toBe(2)
+    -- another owner's hook on the same target is its own
+    local other = { name = "Hooks Test Other" }
+    hooks.secureHook(other, "Other", yes, t, "Method", function()
+        heard[#heard + 1] = "other"
+    end)
+    t:Method(3)
+    expect(heard).toEqual({ "method 2", "show", "method 3", "other" })
+    expectNoErrors()
+end
+
+@test("a target that doesn't exist: an error, and nothing kept")
+local function missing()
+    local owner = { name = "Hooks Test Missing" }
+    expect(function()
+        hooks.secureHook(owner, "Test", yes, "CoreHooksTestNothing", "Method", function() end)
+    end).toThrow("does not exist")
+    expect(hooks.installed(owner)).toBe(0)
+end
+
+@test("a registry of its own: a hook's error goes under the source")
+local function ownErrors()
+    local r = FakeReporter.new()
+    local own = hooks.HookOwners.new(r)
+    local owner = { name = "Hooks Test Own" }
+    local t: Target = { Method = function(_: Target, _n: number) end }
+    own:secureHook(owner, "Hooks Source", yes, t, "Method", function()
+        error("hooks-boom")
+    end)
+    t:Method(1)
+    expect(r.errors).toEqual({ "Hooks Source: hooks-boom" })
+end
