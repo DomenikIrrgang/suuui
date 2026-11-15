@@ -19,7 +19,11 @@ import * as events from "/Core/Events"
 import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import internal M, TabButton, SearchPage, SearchHeader, SearchChip, WindowsEditor, WindowRow, Mirror, Line, Kept from "/Units/Chat"
-import expectNoErrors, newParent, captureMenus, choose, captureConfirm, testRow, TestRow, useTheme, layoutThemes, COMPACT from "../../helpers"
+import expectNoErrors, newParent, captureMenus, choose, captureConfirm, testRow, TestRow, useTheme, layoutThemes, COMPACT, holdings, NOTHING, errorsSoFar from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
+import * as fault from "/Core/Fault"
 import printedSince, printedCount, hasLine, themeChanged from "../SettingsUI/UiSettingsHelpers"
 
 local UI = SuuUI.UI
@@ -1324,5 +1328,44 @@ local function themeSpacing()
     useTheme(nil)
     mock.advanceFrames(1)
     expect(look()).toEqual(design)
+    expectNoErrors()
+end
+
+-- (last: the module through the registry) X-11.a7: Chat is reloadToToggle,
+-- so its OnDisable runs only after a failed OnEnable. Here it toggles live
+-- for the test, so the registry's own disable, enable and fail run, and the
+-- enable fails right after the anchor is published.
+@test("an OnEnable that fails after the anchor: the panel and its driver hidden, the anchor withdrawn; on again, back")
+local function failedEnable()
+    ready()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    settings.set("chat", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    local target = M :: unknown :: { [string]: unknown }
+    rawset(target, "RegisterSettings", function()
+        error("chat-enable-failed")
+    end)
+    settings.set("chat", "enabled", true)
+    rawset(target, "RegisterSettings", nil)
+    expect(M.state).toBe(modules.ModuleState.Errored)
+    expect(M:Panel():IsShown()).toBe(false)
+    expect(assert(M.driver):IsShown()).toBe(false)
+    expect(SuuUI.GetAnchor("chat")).toBeNil()
+    expect(holdings(M)).toEqual(NOTHING)
+    local said = errorsSoFar()
+    expect(#said).toBe(1)
+    expect(said[1]).toContain("chat-enable-failed")
+    fault.log:clear()
+    -- on again (a retry): shown, the anchor published, the driver running
+    own.state = modules.ModuleState.Disabled
+    settings.set("chat", "enabled", false)
+    settings.set("chat", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(M:Panel():IsShown()).toBe(true)
+    expect(assert(M.driver):IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("chat")).toBe(M:Panel().box)
+    own.reloadToToggle = true
     expectNoErrors()
 end

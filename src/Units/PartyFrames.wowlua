@@ -38,7 +38,6 @@ import type StandInPerson, UnitApi, UnitFrameOptions, GroupDefensives from "/UI/
 import type UnitAuras, AuraGroup from "/UI/Auras"
 import type Icon from "/UI/Icon"
 import * as secret from "wowlua:secret"
-import after, every from "wowlua:timer"
 import * as tbl from "wowlua:table"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -793,7 +792,6 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     indicatorTimer: TimerHandle? = nil
     previewSet: PreviewSet? = nil
     previewView: Frame? = nil
-    rangeTicker: TickerHandle? = nil
     -- edit mode's group preview
     screenSet: PreviewSet? = nil
 
@@ -1271,7 +1269,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         if timer then
             timer:Cancel()
         end
-        self.indicatorTimer = after(1, function()
+        self.indicatorTimer = self:After(1, function()
             self.indicatorTimer = nil
             self:RunOutOfCombat("indicators", function()
                 self:ApplyIndicators()
@@ -1318,15 +1316,34 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- The frames listen and draw only while their holder shows: in a raid
+    -- (its state driver hides it), solo, or with SuuUI's UI hidden they
+    -- stand still, and are drawn afresh when it shows. (Activate and
+    -- Deactivate touch only events and the frames' own art, so they are
+    -- fine in combat.)
+    function SetFramesActive(on: boolean)
+        for _, f in ipairs(self:AllFrames()) do
+            if on then
+                f:Activate()
+            else
+                f:Deactivate()
+            end
+        end
+    end
+
     override function OnEnable()
         standDownBlizzard()
         local holder = self.holder or build(self)
-        for _, f in ipairs(self:AllFrames()) do
-            f:Activate()
-        end
+        self:HookScript(holder, "OnShow", function()
+            self:SetFramesActive(true)
+        end)
+        self:HookScript(holder, "OnHide", function()
+            self:SetFramesActive(false)
+        end)
+        self:SetFramesActive(holder:IsVisible())
         -- its state driver shows it, not edit mode (and each frame its unit watch)
         self:RegisterMover(holder, { key = "position", label = "Party frames", managedShow = true })
-        SuuUI.PublishAnchor("party", holder)
+        SuuUI.PublishAnchor("party", holder, self)
         self:RegisterSettings(SECTION)
         self:RunOutOfCombat("layout", function()
             self:Layout()
@@ -1490,7 +1507,7 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            after(0, function()
+            self:After(0, function()
                 presence()
             end)
         end)
@@ -1498,7 +1515,8 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             presence()
         end)
         -- range has no event worth trusting: a light poll while shown
-        self.rangeTicker = every(0.25, function()
+        -- (the module's: cancelled when it turns off)
+        self:Every(0.25, function()
             if holder:IsVisible() then
                 self:UpdateRange()
             end
@@ -1507,12 +1525,9 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
 
     override function OnDisable()
         -- Only reached when the module errors: the module toggles on reload.
-        SuuUI.PublishAnchor("party", nil)
-        local ticker = self.rangeTicker
-        if ticker then
-            ticker:Cancel()
-        end
-        for _, f in ipairs(self.frames) do
+        -- (The registry takes the anchor, the range poll and the holder's
+        -- hooks away.)
+        for _, f in ipairs(self:AllFrames()) do
             f:Deactivate()
             UnregisterUnitWatch(f)
             f:Hide()

@@ -10,7 +10,9 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/UnitFrames"
-import expectNoErrors, expectPingable, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
+import expectNoErrors, expectPingable, layoutThemes, useTheme, COMPACT, ROOMY, holdings, NOTHING from "../../helpers"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import * as frames from "wowlua:frames"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
@@ -828,14 +830,37 @@ local function tappedTarget()
     expect(target.tappedLook).toBe(false)
 end
 
--- (last: the module off)
-@test("stopped: the frames gone, their anchors withdrawn")
+-- Unit frames are reloadToToggle: the registry turns them off in a session
+-- only when OnEnable fails. Here they toggle live, as a module that isn't
+-- would, so the registry's own disable and release run. (It ends with them
+-- on again.)
+@test("stopped through the registry: the frames gone, their anchors withdrawn, nothing held; on again, all back")
 local function stopped()
-    assert(M.OnDisable)(M)
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    mock.advanceFrames(2)
+    local before = holdings(M)
+    -- the fade's enter and leave on each single frame
+    expect(before.hooks).toBe(10)
+    expect(before.anchors).toBe(10)
+    settings.set("unitframes", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(holdings(M)).toEqual(NOTHING)
     expect(assert(M.frames).player:IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("player")).toBeNil()
+    expect(SuuUI.GetAnchor("boss1")).toBeNil()
     expect(assert(M.frames).player.onTooltip).toBeNil()
     expect(assert(M.combatBadge):IsShown()).toBe(false)
+    -- on again
+    settings.set("unitframes", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(holdings(M)).toEqual(before)
+    expect(assert(M.frames).player:IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("player")).toBe(assert(M.frames).player)
+    expect(SuuUI.GetAnchor("boss1")).toBe(M.bosses[1])
+    own.reloadToToggle = true
+    expectNoErrors()
 end
 
 @test(

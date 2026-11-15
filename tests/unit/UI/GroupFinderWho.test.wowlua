@@ -2,7 +2,7 @@
 
 import test, cases, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import groupFinderWho, GroupFinderWho, WhoData, WhoResult, WhoColumn from "/UI/GroupFinderWho"
+import groupFinderWho, GroupFinderWho, WhoRow, WhoData, WhoResult, WhoColumn from "/UI/GroupFinderWho"
 import internal columns, countText from "/UI/GroupFinderWho"
 import expectNoErrors from "../../helpers"
 import tokenOf, host, cleanup from "./SocialHelpers"
@@ -270,6 +270,75 @@ local function filter()
     w.filter:Hide()
     w.filter:Show()
     expect(w.filter:GetWidth()).toBe(want)
+    expectNoErrors()
+end
+
+-- `n` players (placeholder names).
+local function crowd(n: number): WhoResult[]
+    local out: WhoResult[] = {}
+    for i = 1, n do
+        out[i] = { name = "Player" .. i, level = 60, race = "Human", class = "MAGE", className = "Mage", zone = "Duskwood" }
+    end
+    return out
+end
+
+-- The row in sight showing a player (nil: none).
+local function rowFor(w: GroupFinderWho, result: WhoResult): WhoRow?
+    for _, r in ipairs(w.rows) do
+        if r:IsShown() and r.data == result then
+            return r
+        end
+    end
+    return nil
+end
+
+@test("300 players: rows only for those in sight; a refresh keeps the scroll and the choice")
+local function crowded()
+    local w = page()
+    local results = crowd(300)
+    w:SetData({ state = "results", total = 300, results = results })
+    local inSight = math.ceil(w.list:GetHeight() / 24)
+    expect(#w.rows <= inSight + 3).toBe(true)
+    expect(w.list.child:GetHeight()).toBe(300 * 24)
+    w.list:SetVerticalScroll(100 * 24)
+    mock.script(w.list, "OnVerticalScroll", 100 * 24)
+    local made = #w.rows
+    expect(made <= inSight + 3).toBe(true)
+    -- a click chooses: two rows drawn at most
+    local binds = w.view.binds
+    mock.click(rowFor(w, results[103]) :: WhoRow)
+    expect(w.selected).toBe(103)
+    expect(w:Chosen()).toBe(results[103])
+    expect(w.view.binds).toBe(binds + 1)
+    expect((rowFor(w, results[103]) :: WhoRow).selected).toBeShown()
+    -- the same results again: nothing drawn, the scroll kept
+    w:SetData({ state = "results", total = 300, results = results })
+    expect(w.view.binds).toBe(binds + 1)
+    expect(w.list:GetVerticalScroll()).toBe(100 * 24)
+    -- sorted again in place: the choice stays with the player, not the place
+    local player = w:Chosen()
+    table.sort(results, function(a: WhoResult, b: WhoResult): boolean
+        return (a.name or "") > (b.name or "")
+    end)
+    w:SetData({ state = "results", total = 300, results = results })
+    expect(w:Chosen()).toBe(player)
+    expect(w.selected ~= 103).toBe(true)
+    for _, r in ipairs(w.rows) do
+        if r:IsShown() then
+            expect(r.selected:IsShown()).toBe(r.data == player)
+        end
+    end
+    expect(#w.rows).toBe(made)
+    -- a new search with the same players (new tables): rows taken over, not drawn
+    local again = w.view.binds
+    local copy: WhoResult[] = {}
+    for i, r in ipairs(results) do
+        copy[i] = { name = r.name, level = r.level, race = r.race, class = r.class, className = r.className, zone = r.zone }
+    end
+    w:SetData({ state = "results", total = 300, results = copy })
+    expect(w.selected).toBeNil()
+    expect(w.view.binds - again <= 1).toBe(true)
+    expect(rowFor(w, copy[101])).never.toBeNil()
     expectNoErrors()
 end
 

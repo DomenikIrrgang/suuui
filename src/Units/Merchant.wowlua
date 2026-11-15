@@ -17,7 +17,6 @@ import ItemSlot from "/UI/Inventory"
 import type ScrollArea, WindowFrame, Panel from "/UI/Panel"
 import type Select, SelectOption from "/UI/Select"
 import type Text from "/UI/Text"
-import after, every from "wowlua:timer"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
@@ -338,6 +337,9 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
     money: Money? = nil
     -- between the game's MERCHANT_SHOW and MERCHANT_CLOSED
     open: boolean? = nil
+    -- one more at each MERCHANT_SHOW and MERCHANT_CLOSED: a purchase queued
+    -- or asked about at one visit stops at the next
+    visit: number = 0
     -- the quantities typed at this vendor, by item
     qty: { [string]: number } = {}
     refreshPending: boolean? = nil
@@ -408,8 +410,31 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         return e
     end
 
+    -- Where the item of `e` is in the merchant's list now, by its link (its
+    -- name when it has none); nil when it's gone. The index read when the
+    -- row was drawn names another item once the filter changed the list.
+    function Locate(e: Entry): number?
+        local function same(i: number): boolean
+            if e.link then
+                return secret.asString(errors.try(GetMerchantItemLink, i)) == e.link
+            end
+            return secret.asString(tbl.field(errors.try(C_MerchantFrame.GetItemInfo, i), "name")) == e.name
+        end
+        if same(e.index) then
+            return e.index
+        end
+        for i = 1, (secret.asNumber(errors.try(GetMerchantNumItems)) or 0) do
+            if i ~= e.index and same(i) then
+                return i
+            end
+        end
+        return nil
+    end
+
     -- Buys `items` of a merchant item, in calls the merchant takes (whole stacks,
-    -- up to its most a time), a moment apart.
+    -- up to its most a time), a moment apart. Each call finds the item again
+    -- (the list may have changed meanwhile) and the queue stops when it's
+    -- gone or the visit ended.
     function Buy(e: Entry, items: number)
         if items <= 0 then
             return
@@ -421,16 +446,20 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
             queue[#queue + 1] = n
             left = left - n
         end
-        local k = 0
+        local k, visit = 0, self.visit
         local function step()
             k = k + 1
             local n = queue[k]
-            if not n or not self.open then
+            if not n or not self.open or self.visit ~= visit then
                 return
             end
-            BuyMerchantItem(e.index, n)
+            local index = self:Locate(e)
+            if not index then
+                return
+            end
+            BuyMerchantItem(index, n)
             if queue[k + 1] then
-                after(0.3, step)
+                self:After(0.3, step)
             end
         end
         step()
@@ -450,12 +479,16 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
             self:Buy(e, items)
             return
         end
+        -- (confirmed after the vendor closed, or at the next one: nothing)
+        local visit = self.visit
         UI.Confirm({
             title = "Buy " .. e.name .. "?",
             text = ("%d × %s for %s."):format(items, e.name, table.concat(costs, ", ")),
             confirm = "Buy",
             onConfirm = function()
-                self:Buy(e, items)
+                if self.visit == visit then
+                    self:Buy(e, items)
+                end
             end,
         })
     end
@@ -854,7 +887,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         if self.selling then
             return
         end
-        self.selling = every(0.2, function(ticker: TickerHandle)
+        self.selling = self:Every(0.2, function(ticker: TickerHandle)
             local list = junkSlots()
             local first = list[1]
             if not self.open or not first or InCombatLockdown() then
@@ -980,7 +1013,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.refreshPending = true
-        after(0.05, function()
+        self:After(0.05, function()
             self.refreshPending = nil
             self:Refresh()
         end)
@@ -1007,6 +1040,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         end
         self:OnGameEvent("MERCHANT_SHOW", function()
             self.open = true
+            self.visit += 1
             self.qty = {} -- quantities start over at every vendor
             self:Away(frames.find("MerchantFrame"))
             errors.try(ResetSetMerchantFilter)
@@ -1017,6 +1051,7 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("MERCHANT_CLOSED", function()
             self.open = false
+            self.visit += 1
             if InRepairMode and InRepairMode() then
                 HideRepairCursor()
             end
@@ -1061,6 +1096,9 @@ class MerchantModule extends Module<typeof(DEFAULTS)>
         if w then
             w:Hide()
         end
+        -- (their timers went with the module: started afresh when on again)
+        self.selling = nil
+        self.refreshPending = nil
     end
 end
 

@@ -15,7 +15,8 @@ import type Attachable, Watched, CountKey, SizeKey, GapKey, VisKey, AttachKey, O
 import migrations as settingMigrations from "/Core/Settings"
 import internal moverList from "/EditMode/EditMode"
 import type Mover from "/EditMode/EditMode"
-import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, holdings, COMPACT, ROOMY from "../../helpers"
+import type Target, SuppressOptions from "/Core/Blizzard"
 import type ConfirmDialog, ConfirmOptions from "/UI/Panel"
 import * as frames from "wowlua:frames"
 
@@ -134,6 +135,58 @@ local function blizzard()
     expect(main:GetAlpha()).toBe(0)
     expect(game("ActionButton1"):IsMouseEnabled()).toBe(false)
     expect(game("MultiBarBottomLeft"):GetAlpha() == 0 or not game("MultiBarBottomLeft"):IsVisible()).toBe(true)
+end
+
+@test("the XP bar or the totem bar turned on later: Blizzard's stands down then (out of combat), not at the next reload")
+local function standDownLater()
+    local asked: { [string]: number } = {}
+    local real = SuuUI.SuppressBlizzard
+    mock.stub(SuuUI, "SuppressBlizzard", function(target: Target?, opts: SuppressOptions?)
+        if type(target) == "string" then
+            asked[target] = (asked[target] or 0) + 1
+        end
+        real(target, opts)
+    end)
+    -- (Blizzard's totem bar stood down at login already: as if it weren't)
+    local realSuppressed = SuuUI.IsSuppressed
+    mock.stub(SuuUI, "IsSuppressed", function(target: Target?): boolean
+        if target == "MultiCastActionBarFrame" then
+            return false
+        end
+        return realSuppressed(target)
+    end)
+    M:Set("showXP", false)
+    M:Set("showTotem", false)
+    -- (the first Set ran with the totem bar still on)
+    asked = {}
+    M:ApplyOptions()
+    expect(asked.MainMenuExpBar).toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBeNil()
+    -- turned on in a fight: after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Set("showXP", true)
+    M:Set("showTotem", true)
+    expect(asked.MainMenuExpBar).toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBeNil()
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(asked.MainMenuExpBar).toBe(1)
+    expect(frames.find("MultiCastActionBarFrame")).never.toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBe(1)
+    -- the re-check at each loading screen, whatever showXP was at enable
+    asked = {}
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, false)
+    expect(asked.MainMenuExpBar).toBe(1)
+    M:Set("showXP", false)
+    asked = {}
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, false)
+    expect(asked.MainMenuExpBar).toBeNil()
+end
+
+@test("the dock's and bars 5-8's visibility are the module's: let go when it turns off")
+local function visibilityOwned()
+    expect(holdings(M).visibility).toBe(5)
 end
 
 @test("the dock: bars 1-4 at its button size; stance and pet at 9/10; out of combat")

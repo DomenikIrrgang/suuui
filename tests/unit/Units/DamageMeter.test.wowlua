@@ -11,7 +11,13 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/DamageMeter"
 import type MeterViewChange, RecapEvent from "/UI/DamageMeter"
-import expectNoErrors from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import * as cvars from "/Core/CVars"
+import migrations as settingMigrations from "/Core/Settings"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
+
+const CVAR = "damageMeterEnabled"
 
 @afterEach
 local function cleanup()
@@ -46,10 +52,97 @@ local function countRefreshes(): { n: number }
     return count
 end
 
-@test("Blizzard's meter off while SuuUI's runs, what it was kept")
+@test("Blizzard's meter off while SuuUI's runs, what it was kept per character (not in the profile)")
 local function blizzardOff()
-    expect(C_CVar.GetCVar("damageMeterEnabled")).toBe("0")
-    expect(M:Get("blizzardWas") ~= "").toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0")
+    expect(cvars.remembered("damagemeter")).toBe(1)
+    expect(cvars.rememberedValue("damagemeter", CVAR) ~= "0").toBe(true)
+end
+
+@test("a profile switch that turns the meter off gives Blizzard's setting back; back again, off again")
+local function profileSwitch()
+    -- the player's own: Blizzard's meter on
+    settings.set("damagemeter", "enabled", false)
+    C_CVar.SetCVar(CVAR, "1")
+    settings.set("damagemeter", "enabled", true)
+    local was = cvars.rememberedValue("damagemeter", CVAR)
+    expect(was).toBe("1")
+    local before = settings.profiles.current()
+    settings.profiles.create("ZZ Meter Off")
+    settings.profiles.use("ZZ Meter Off")
+    settings.set("damagemeter", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(C_CVar.GetCVar(CVAR)).toBe(was)
+    settings.profiles.use(before)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0")
+    expect(cvars.rememberedValue("damagemeter", CVAR)).toBe(was)
+    settings.profiles.delete("ZZ Meter Off")
+end
+
+@test("migration: the value an older SuuUI kept in the profile moves to this character's data once")
+local function migration()
+    local found = false
+    for _, m in ipairs(settingMigrations()) do
+        if m.namespace == "damagemeter" and m.id == "blizzardWas-cvar" then
+            found = true
+            local data = M:CharData()
+            data.blizzardWas = nil
+            -- nothing kept (""): the key goes, nothing moves
+            local empty: { [string]: unknown } = { blizzardWas = "", rows = 5 }
+            m.fn(empty)
+            expect(empty).toEqual({ rows = 5 })
+            expect(data.blizzardWas).toBeNil()
+            -- a value: moved; a second profile's doesn't replace it
+            local one: { [string]: unknown } = { blizzardWas = "1" }
+            m.fn(one)
+            expect(one.blizzardWas).toBeNil()
+            expect(data.blizzardWas).toBe("1")
+            local two: { [string]: unknown } = { blizzardWas = "0" }
+            m.fn(two)
+            expect(data.blizzardWas).toBe("1")
+            -- again, or without the key: nothing changes
+            m.fn(one)
+            m.fn({})
+            expect(data.blizzardWas).toBe("1")
+            data.blizzardWas = nil
+        end
+    end
+    expect(found).toBe(true)
+end
+
+@test("a value moved by the migration is handed to the CVar memory at the next enable, then given back on off")
+local function legacyHandover()
+    -- as after an update: an older SuuUI turned the meter off ("0") and
+    -- kept the player's "1" in the profile; the memory holds nothing
+    settings.set("damagemeter", "enabled", false)
+    C_CVar.SetCVar(CVAR, "0")
+    M:CharData().blizzardWas = "1"
+    settings.set("damagemeter", "enabled", true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0")
+    expect(cvars.rememberedValue("damagemeter", CVAR)).toBe("1")
+    expect(M:CharData().blizzardWas).toBeNil()
+    settings.set("damagemeter", "enabled", false)
+    expect(C_CVar.GetCVar(CVAR)).toBe("1")
+    settings.set("damagemeter", "enabled", true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0")
+end
+
+@test("in combat the hand-over waits for its end")
+local function legacyInCombat()
+    settings.set("damagemeter", "enabled", false)
+    C_CVar.SetCVar(CVAR, "0")
+    M:CharData().blizzardWas = "1"
+    mock.player:enterCombat()
+    M:BlizzardOff()
+    expect(M:CharData().blizzardWas).toBe("1")
+    mock.player:leaveCombat()
+    expect(M:CharData().blizzardWas).toBeNil()
+    expect(cvars.rememberedValue("damagemeter", CVAR)).toBe("1")
+    -- (the module is off: its memory given back by hand)
+    cvars.restoreAll("damagemeter")
+    expect(C_CVar.GetCVar(CVAR)).toBe("1")
+    settings.set("damagemeter", "enabled", true)
 end
 
 @test("windows: one by default; more from a window's menu, at most three, stacked; their views kept, a past fight not")
@@ -247,19 +340,37 @@ local function rowsWait()
     expect(why).toBe("Show the damage meter first.")
 end
 
--- (last: the module off)
-@test("stopped: the meter gone, Blizzard's setting back")
+-- (last: the module off) The meter toggles live: turned off through the
+-- registry nothing of it stays; on again, it all comes back.
+@test("turned off through the registry: the meter gone, its anchor and Blizzard's setting back, nothing held; on again, all back")
 local function disabled()
-    local was = M:Get("blizzardWas")
+    settings.set("damagemeter", "enabled", false)
+    C_CVar.SetCVar(CVAR, "1")
+    settings.set("damagemeter", "enabled", true)
     -- (0.39) published while on: tooltips open clear of it
     expect(SuuUI.GetAnchor("damageMeter")).toBe(M.frame)
-    M:OnDisable()
+    local c = cycle("damagemeter")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expect(assert(M.frame):IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("damageMeter")).toBe(M.frame)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0")
+    -- a refresh waiting when it turns off doesn't block the next one
+    mock.fireEvent("DAMAGE_METER_RESET")
+    expect(M.pending).toBe(true)
+    settings.set("damagemeter", "enabled", false)
+    settings.set("damagemeter", "enabled", true)
+    local count = countRefreshes()
+    mock.fireEvent("DAMAGE_METER_RESET")
+    mock.advanceTime(0.3)
+    expect(count.n).toBe(1)
+    -- off: hidden, the anchor gone, Blizzard's setting back
+    settings.set("damagemeter", "enabled", false)
     expect(assert(M.frame):IsShown()).toBe(false)
+    expect(assert(M.driver):IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("damageMeter")).toBeNil()
-    SuuUI.PublishAnchor("damageMeter", M.frame)
-    expect(C_CVar.GetCVar("damageMeterEnabled")).toBe(was)
-    expect(M:Get("blizzardWas")).toBe("")
-    -- on again: off again, kept again
-    M:BlizzardOff()
-    expect(C_CVar.GetCVar("damageMeterEnabled")).toBe("0")
+    expect(C_CVar.GetCVar(CVAR)).toBe("1")
+    expectNoErrors()
 end

@@ -8,7 +8,11 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M, powerFor from "/Units/PartyFrames"
 import type PartyFrame from "/Units/PartyFrames"
-import expectNoErrors, expectPingable from "../../helpers"
+import expectNoErrors, expectPingable, holdings, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import migrations as settingMigrations from "/Core/Settings"
 import SuuUI from "/Core/API"
 import type Indicator from "/UI/UnitFrame"
@@ -427,15 +431,6 @@ local function migrations()
     end
 end
 
--- (last: the frames stay off for the rest of the file)
-@test("the module stopped by an error: its frames off and hidden")
-local function disabled()
-    mock.group:add(tank)
-    settle()
-    M:OnDisable()
-    expect(frame("party1")).never.toBeShown()
-end
-
 --------------------------------------------------------------------------------
 -- Pets
 --------------------------------------------------------------------------------
@@ -445,6 +440,91 @@ local function petOf(owner: mock.MockUnit, name: string): mock.MockUnit
     local p = mock.spawnUnit({ name = name, reaction = "friendly", health = 800, healthMax = 1000, distance = 10 })
     mock.setPet(p, { owner = owner })
     return p
+end
+
+@test("in a raid the hidden frames stand still; back in a party they listen and draw again")
+local function standStillInRaid()
+    mock.group:add(tank)
+    settle()
+    local f = frame("party1")
+    expect(f.active).toBe(true)
+    expect(events.bus:count(f) > 0).toBe(true)
+    -- a raid: the holder hidden by its state driver, every frame off
+    mock.group:leave()
+    mock.group:add(tank, true)
+    settle()
+    expect(partyHolder()).never.toBeShown()
+    for _, each in ipairs(M:AllFrames()) do
+        expect(each.active == true).toBe(false)
+        expect(events.bus:count(each)).toBe(0)
+    end
+    -- a party again: listening, and drawn afresh
+    mock.group:leave()
+    mock.group:add(tank)
+    settle()
+    expect(partyHolder()).toBeShown()
+    f = frame("party1")
+    expect(f.active).toBe(true)
+    expect(events.bus:count(f) > 0).toBe(true)
+    expect(f.name).toHaveText("Brannoc Ironhand")
+    -- the same in a fight: the driver hides and shows the holder in combat
+    mock.player:enterCombat()
+    mock.group:leave()
+    mock.group:add(tank, true)
+    settle()
+    expect(partyHolder()).never.toBeShown()
+    expect(frame("player").active == true).toBe(false)
+    mock.group:leave()
+    mock.group:add(tank)
+    settle()
+    expect(partyHolder()).toBeShown()
+    expect(frame("party1").active).toBe(true)
+    mock.player:leaveCombat()
+    expectNoErrors()
+end
+
+-- Party frames are reloadToToggle: the registry turns them off in a session
+-- only when OnEnable fails. Here they toggle live, as a module that isn't
+-- would, so the registry's own disable and release run. (It ends with them
+-- on again.)
+@test("turned off through the registry: frames and pets off and hidden, the anchor withdrawn, nothing held; on again, all back")
+local function registryCycle()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    mock.group:add(tank)
+    local wolf = petOf(tank, "Wolf")
+    settle()
+    local before = holdings(M)
+    expect(before.hooks).toBe(2)
+    expect(before.timers).toBe(1)
+    expect(SuuUI.GetAnchor("party")).toBe(partyHolder())
+    settings.set("party", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(holdings(M)).toEqual(NOTHING)
+    expect(SuuUI.GetAnchor("party")).toBeNil()
+    for _, each in ipairs(M:AllFrames()) do
+        expect(each).never.toBeShown()
+        expect(each.active == true).toBe(false)
+    end
+    -- the holder's hooks quiet: hidden and shown, nothing comes back on
+    partyHolder():Hide()
+    partyHolder():Show()
+    expect(frame("party1").active == true).toBe(false)
+    settle()
+    expect(frame("party1")).never.toBeShown()
+    -- on again: everything back, nothing doubled
+    settings.set("party", "enabled", true)
+    settle()
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(holdings(M)).toEqual(before)
+    expect(SuuUI.GetAnchor("party")).toBe(partyHolder())
+    expect(frame("party1")).toBeShown()
+    expect(frame("party1").active).toBe(true)
+    expect(M.pets[2]).toBeShown()
+    own.reloadToToggle = true
+    mock.setPet(nil, { owner = tank })
+    wolf:despawn()
+    expectNoErrors()
 end
 
 @test("pets: a member's pet on their row, beside them in a column past their auras, under them in a row; only while there is one")

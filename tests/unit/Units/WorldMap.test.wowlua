@@ -28,7 +28,8 @@ import internal M as campsite from "/Units/Campsite"
 import internal M as flightMap from "/Units/FlightMap"
 import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
 import forgetCompleted, completedSet from "/Units/WorldMap/Quests"
-import expectNoErrors, captureMenus, choose from "../../helpers"
+import expectNoErrors, captureMenus, choose, holdings, cycle, NOTHING from "../../helpers"
+import * as modules from "/Core/Modules"
 import type Checkbox from "/UI/Inputs"
 import type SuuButton from "/UI/Controls"
 import type Border from "/UI/Draw"
@@ -906,14 +907,33 @@ local function skyborneMenu()
     expect(M.skyborneMenu).toBe(true)
 end
 
-@test("turned off: no pins, the game's filter button back; on again")
+@test("turned off: no pins, the game's filter button back, nothing held; on again, all back, nothing doubled")
 local function offAndOn()
     openMap()
+    -- a layout waiting as it turns off: its timer goes with the module
+    M:QueueLayout()
     M:Set("enabled", false)
     expect(#M.pins).toBe(0)
     expect(M.menu).never.toBeShown()
+    expect(holdings(M)).toEqual(NOTHING)
+    expect(M.layoutQueued).toBe(false)
+    local track = frames.asFrame(tbl.field(WorldMapFrame, "WorldMapTrackingOptionsButton"))
+    if track then
+        expect(track:GetAlpha()).toBe(1)
+    end
     M:Reset("enabled")
     expect(M.menu).toBeShown()
+    -- laid out again on the next change
+    local layout = mock.stub(M, "Layout", M.Layout)
+    M:QueueLayout()
+    mock.advanceFrames(1)
+    expect(layout).toHaveBeenCalled()
+    local c = cycle("worldmap")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expectNoErrors()
 end
 
 @test("turned off and on again: one quest log hook, which does nothing while off")

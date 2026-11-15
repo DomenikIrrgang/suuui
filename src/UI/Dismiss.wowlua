@@ -1,0 +1,414 @@
+-- UI/Dismiss.wowlua
+-- How a popup closes (0.47, SuuUI.UI.Dismissable): Esc, a click outside, a
+-- dimmed screen under it. The caller gives the frame and what closes it;
+-- nothing else touches the frame's keyboard state.
+--
+--   local d = dismissable(frame, {
+--       close = fn,          -- what Esc and a click outside do (default: frame:Hide())
+--       esc = true,          -- Esc closes it (false: the frame never takes a key)
+--       outside = "catch",   -- a click outside: "catch", a screen-wide catcher
+--                            -- under the frame takes the click and closes it;
+--                            -- "pass", the click goes on to what is under it
+--                            -- and closes it too; nil: nothing
+--       inside = { button }, -- "pass": regions whose click isn't outside (the
+--                            -- button that opened it)
+--       shade = true,        -- the screen dimmed under it; a click on the
+--                            -- shade closes it
+--   })
+--   d:Top()                  -- shown again while open: on top of the others
+--
+-- The open frames stack in the order they were shown: Esc closes the top one
+-- that takes Esc (a frame higher on the screen that isn't the top passes the
+-- key on), the catcher sits under the top one that catches (none while a
+-- shaded one is above it), and the shade under the top one with a shade:
+-- closing a dialog opened over a modal leaves the modal dimmed. Frames come
+-- and go from the stack by their own OnShow and OnHide, however they are
+-- shown.
+--
+-- Keys and combat. A frame taking the keyboard keeps every key unless it
+-- passes them on (SetPropagateKeyboardInput(true)); on Forever a key script
+-- alone turns the keyboard on (OnKeyDown given: wowlua's recorded client).
+-- Whether the client refuses SetPropagateKeyboardInput or EnableKeyboard in
+-- combat lockdown on Forever has not been probed (a probe says the flag is
+-- protected there; nobody saw what happens). So this is right whichever way
+-- the client behaves:
+--   - the keyboard is only taken out of combat: when the frame shows (its key
+--     script set then, the first time, after keys were set to pass on), and
+--     again at the end of a fight for a frame still shown;
+--   - at rest every key passes on. Only Esc, out of combat, is kept, for that
+--     one key: passing on again from the next frame;
+--   - PLAYER_REGEN_DISABLED (it comes before the lockdown) puts every frame
+--     that took the keyboard into the safe state: keys pass on and the
+--     keyboard is let go. A client that ignored the flag for a frame in a
+--     fight would then still get its keys;
+--   - in lockdown nothing here calls either function (every call is guarded
+--     by InCombatLockdown() and the fight's own flag, and wrapped in pcall, so
+--     a refusal can't raise). A frame first shown in a fight takes Esc only
+--     once the fight is over; its buttons, the catcher and the shade close it
+--     meanwhile (plain frames, allowed in combat).
+
+import after from "wowlua:timer"
+import * as frames from "wowlua:frames"
+import * as events from "/Core/Events"
+import * as combat from "/Core/Combat"
+import root from "/Core/Root"
+import * as draw from "./Draw"
+
+export type DismissOutside = "catch" | "pass"
+
+export type DismissOptions = {
+    close?: () -> (),
+    esc?: boolean,
+    outside?: DismissOutside,
+    inside?: Region[],
+    shade?: boolean,
+}
+
+-- A frame that closes by Esc, a click outside or its shade.
+export class Dismiss
+    readonly frame: Frame
+    readonly close: () -> ()
+    readonly esc: boolean
+    readonly outside: DismissOutside?
+    readonly inside: Region[]
+    readonly shade: boolean
+    -- the keyboard taken (EnableKeyboard(true) from here)
+    keys: boolean = false
+    -- its key script set (the first time it took the keyboard)
+    scripted: boolean = false
+    -- Esc kept back (propagation off) for the key just pressed
+    held: boolean = false
+    -- a look at its keyboard waiting for the next frame
+    settling: boolean = false
+
+    constructor(frame: Frame, opts: DismissOptions)
+        self.frame = frame
+        self.close = opts.close or function()
+            frame:Hide()
+        end
+        self.esc = opts.esc ~= false
+        self.outside = opts.outside
+        self.inside = opts.inside or {}
+        self.shade = opts.shade == true
+    end
+
+    -- Shown again while open: on top of the others.
+    function Top()
+        if self.frame:IsVisible() then
+            opened(self)
+        end
+    end
+end
+
+-- Every frame given (frames are never freed, nor are these), and the open
+-- ones in the order they were shown.
+local all: { [Dismiss]: boolean } = {}
+local open: Dismiss[] = {}
+-- a fight began (PLAYER_REGEN_DISABLED, before the lockdown) and hasn't ended
+local fighting = false
+
+local function locked(): boolean
+    return fighting or InCombatLockdown()
+end
+
+-- The screen-wide catcher: under the top frame that catches, its click
+-- closes that frame (and goes no further).
+local catcher = CreateFrame("Button", nil, UIParent) :: Button & { owner: Dismiss? }
+catcher:SetAllPoints(UIParent)
+catcher:SetFrameStrata("FULLSCREEN_DIALOG")
+catcher:RegisterForClicks("AnyDown")
+catcher:Hide()
+catcher:SetScript("OnClick", function(self)
+    local d = self.owner
+    if d then
+        d.close()
+    end
+end)
+
+-- The shade: full screen on the dialog layer, dimmed, taking every click;
+-- a click closes the frame it is under (`owner`).
+local shade = CreateFrame("Button", nil, root) :: Button & { owner: Frame?, entry: Dismiss? }
+shade:SetAllPoints(root)
+shade:SetFrameStrata("DIALOG")
+shade:EnableMouse(true)
+shade:RegisterForClicks("AnyUp")
+do
+    local t = shade:CreateTexture(nil, "BACKGROUND")
+    t:SetAllPoints()
+    draw.paintFill(t, "shade", 0.8)
+end
+shade:Hide()
+shade:SetScript("OnClick", function(self)
+    local d = self.entry
+    if d then
+        d.close()
+    end
+end)
+
+local function indexOf(d: Dismiss): number?
+    for i, x in ipairs(open) do
+        if x == d then
+            return i
+        end
+    end
+    return nil
+end
+
+-- The top open frame that takes Esc.
+local function topEsc(): Dismiss?
+    for i = #open, 1, -1 do
+        local d = open[i]
+        if d.esc then
+            return d
+        end
+    end
+    return nil
+end
+
+-- Keys pass on, then the keyboard is taken for Esc: out of a fight only.
+local function arm(d: Dismiss)
+    if not d.esc or d.keys or locked() or not d.frame:IsVisible() then
+        return
+    end
+    local f = d.frame
+    pcall(f.SetPropagateKeyboardInput, f, true)
+    d.held = false
+    if not d.scripted then
+        d.scripted = true
+        f:SetScript("OnKeyDown", function(_, key: string)
+            keyDown(d, key)
+        end)
+    end
+    d.keys = pcall(f.EnableKeyboard, f, true)
+end
+
+-- The safe state: keys pass on, the keyboard let go. Not in lockdown (there
+-- nothing that could be refused is called; the fight's start did it).
+local function disarm(d: Dismiss)
+    if InCombatLockdown() then
+        return
+    end
+    local f = d.frame
+    pcall(f.SetPropagateKeyboardInput, f, true)
+    d.held = false
+    if d.keys or d.scripted then
+        pcall(f.EnableKeyboard, f, false)
+    end
+    d.keys = false
+end
+
+-- Next frame (the key that closed it is done by then): a frame still shown
+-- passes keys on again, a hidden one lets the keyboard go.
+local function settle(d: Dismiss)
+    if d.settling then
+        return
+    end
+    d.settling = true
+    after(0, function()
+        d.settling = false
+        if InCombatLockdown() then
+            return
+        end
+        if d.frame:IsVisible() then
+            if d.held then
+                pcall(d.frame.SetPropagateKeyboardInput, d.frame, true)
+                d.held = false
+            end
+        elseif d.keys or d.held then
+            disarm(d)
+        end
+    end)
+end
+
+-- Esc closes the top frame (and is kept); every other key passes on. In
+-- lockdown nothing is called: the flag at rest passes every key on.
+function keyDown(d: Dismiss, key: string)
+    if InCombatLockdown() then
+        return
+    end
+    local f = d.frame
+    if key == "ESCAPE" and topEsc() == d then
+        pcall(f.SetPropagateKeyboardInput, f, false)
+        d.held = true
+        d.close()
+        settle(d)
+    else
+        pcall(f.SetPropagateKeyboardInput, f, true)
+    end
+end
+
+-- The highest level of a frame and everything on it.
+local function deepest(f: Frame): number
+    local level = f:GetFrameLevel()
+    for _, c in ipairs(frames.children(f)) do
+        level = math.max(level, deepest(c))
+    end
+    return level
+end
+
+-- The shade under a frame. Alone it sits at level 1 under every dialog (the
+-- frame raised); over another shaded frame, the shade goes above all of that
+-- one's (and its children's) and the frame above the shade, so the one below
+-- is dimmed and can't be clicked.
+local function placeShade(d: Dismiss, under: Dismiss?)
+    local f = d.frame
+    shade:Hide()
+    shade:SetFrameStrata(f:GetFrameStrata())
+    f:SetFrameLevel(math.max(f:GetFrameLevel(), 10))
+    f:Raise()
+    if under then
+        local level = math.max(f:GetFrameLevel(), deepest(under.frame) + 1)
+        shade:SetFrameLevel(level)
+        f:SetFrameLevel(level + 1)
+    else
+        shade:SetFrameLevel(1)
+    end
+    shade.owner, shade.entry = f, d
+    shade:SetAlpha(1)
+    shade:Show()
+end
+
+-- The catcher and the shade where the stack wants them.
+local function place()
+    -- the shade: under the top shaded frame
+    local top: Dismiss?, below: Dismiss? = nil, nil
+    for i = #open, 1, -1 do
+        local d = open[i]
+        if d.shade then
+            if top then
+                below = d
+                break
+            end
+            top = d
+        end
+    end
+    if top then
+        if shade.entry ~= top or not shade:IsShown() then
+            placeShade(top, below)
+        end
+    else
+        shade:Hide()
+        shade.owner, shade.entry = nil, nil
+    end
+    -- the catcher: under the top frame that catches, unless a shaded one is
+    -- above it (the shade is that one's catcher; a catcher over it would
+    -- take its clicks)
+    local catching: Dismiss? = nil
+    for i = #open, 1, -1 do
+        local d = open[i]
+        if d.shade then
+            break
+        end
+        if d.outside == "catch" then
+            catching = d
+            break
+        end
+    end
+    if catching then
+        local f = catching.frame
+        catcher:SetFrameStrata(f:GetFrameStrata())
+        catcher:SetFrameLevel(math.max(0, f:GetFrameLevel() - 1))
+        catcher.owner = catching
+        catcher:Show()
+    else
+        catcher.owner = nil
+        catcher:Hide()
+    end
+end
+
+-- Shown (or shown again): on top of the stack, the keyboard taken.
+function opened(d: Dismiss)
+    local i = indexOf(d)
+    if i then
+        table.remove(open, i)
+    end
+    open[#open + 1] = d
+    if d.shade and shade.entry == d then
+        -- shown again: raised again over the others
+        shade.entry = nil
+    end
+    arm(d)
+    place()
+end
+
+local function closed(d: Dismiss)
+    local i = indexOf(d)
+    if i then
+        table.remove(open, i)
+    end
+    place()
+    settle(d)
+end
+
+-- A frame that Esc, a click outside or its shade closes (see the header).
+export function dismissable(frame: Frame, opts: DismissOptions?): Dismiss
+    local d = Dismiss.new(frame, opts or {})
+    all[d] = true
+    frame:HookScript("OnShow", function()
+        opened(d)
+    end)
+    frame:HookScript("OnHide", function()
+        closed(d)
+    end)
+    if frame:IsVisible() then
+        opened(d)
+    end
+    return d
+end
+
+-- The start of a fight (before the lockdown): every frame that took the
+-- keyboard passes keys on and lets it go.
+events.onGame(
+    "PLAYER_REGEN_DISABLED",
+    function()
+        for d in pairs(all) do
+            if d.keys or d.held then
+                disarm(d)
+            end
+        end
+        fighting = true
+    end,
+    "UI.Dismiss"
+)
+
+-- The end of a fight: the frames still open take Esc again (through the
+-- combat queue: now, or once a lockdown still on is over).
+events.onGame(
+    "PLAYER_REGEN_ENABLED",
+    function()
+        fighting = false
+        for _, d in ipairs(open) do
+            if d.esc and not d.keys then
+                combat.run(d, function()
+                    arm(d)
+                end, "UI.Dismiss")
+            end
+        end
+    end,
+    "UI.Dismiss"
+)
+
+-- A click outside a frame that lets it pass ("pass") closes it.
+events.onGame(
+    "GLOBAL_MOUSE_DOWN",
+    function()
+        local now: Dismiss[] = {}
+        for i, d in ipairs(open) do
+            now[i] = d
+        end
+        for _, d in ipairs(now) do
+            if d.outside == "pass" and d.frame:IsVisible() and not d.frame:IsMouseOver() then
+                local over = false
+                for _, r in ipairs(d.inside) do
+                    if r:IsMouseOver() then
+                        over = true
+                    end
+                end
+                if not over then
+                    d.close()
+                end
+            end
+        end
+    end,
+    "UI.Dismiss"
+)

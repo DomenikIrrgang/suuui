@@ -16,7 +16,8 @@ import type MenuDescription from "/UI/ContextMenu"
 import type RaidPlanner as PlannerWindow, PlannerListItem, PlannerChip, PlannerMoves, PlannerSlot, PlannerSetup, PaletteClass, PlannerPerson, PlannerStat, PlannerButton from "/UI/RaidPlanner"
 import field from "wowlua:table"
 import type FamilyChecks from "/Units/RaidPlanner"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
+import * as comm from "/Core/Comm"
 
 local UI = SuuUI.UI
 
@@ -513,6 +514,66 @@ local function specMessages()
     expect(#planner()).toBe(before + 2)
 end
 
+@test("specs from strangers and other channels: a whisper or party message is ignored; questions answered once in 30 s")
+local function specMessagesGuarded()
+    setup()
+    raid({ { unit = mage, g = 1 } })
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "WHISPER", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "PARTY", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "GUILD", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t02x", "RAID", "Raider Mage")
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t0", "RAID", "Raider Mage")
+    mock.advanceTime(0.6)
+    expect(M:KnownTree("Raider Mage", false)).toBeNil()
+    -- the exact text an older SuuUI sends, on the raid's channel
+    mock.receiveAddonMessage("SuuUI", "RPSPEC\t2", "RAID", "Raider Mage")
+    expect(M:KnownTree("Raider Mage", false)).toBe(2)
+    -- a question by whisper: no answer; many from the raid: one in 30 s
+    mock.stub(SuuUI, "Spec", function()
+        return 1
+    end)
+    mock.advanceTime(31)
+    local before = #planner()
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "WHISPER", "Stranger")
+    mock.advanceTime(2.1)
+    expect(#planner()).toBe(before)
+    for _ = 1, 10 do
+        mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Mage")
+        mock.advanceTime(2.1)
+    end
+    expect(#planner()).toBe(before + 1)
+    mock.advanceTime(10)
+    mock.receiveAddonMessage("SuuUI", "RPSPECQ", "RAID", "Raider Mage")
+    mock.advanceTime(2.1)
+    expect(#planner()).toBe(before + 2)
+    -- a flood of specs from one member: five in ten seconds
+    local noted = mock.spy(M.NoteSpec)
+    mock.stub(M, "NoteSpec", noted)
+    for _ = 1, 30 do
+        mock.receiveAddonMessage("SuuUI", "RPSPEC\t3", "RAID", "Raider Mage")
+    end
+    expect(noted).toHaveBeenCalledTimes(5)
+    expectNoErrors()
+end
+
+@test("a spec from another realm's player is theirs: a raid member of the same name keeps their own")
+local function specOtherRealm()
+    setup()
+    M:NoteSpec("Raider Hunter", 1, "message")
+    M:NoteSpec("Raider Hunter-Elsewhere", 3, "message")
+    expect(assert(M:Data().specs["Raider Hunter"]).tree).toBe(1)
+    expect(assert(M:Data().specs["Raider Hunter-Elsewhere"]).tree).toBe(3)
+    expect(M:KnownTree("Raider Hunter", false)).toBe(1)
+    expect(M:KnownTree("Raider Hunter-Elsewhere", false)).toBe(3)
+    -- only the other realm's known: not taken for the one of yours
+    M:Data().specs["Raider Hunter"] = nil
+    expect(M:KnownTree("Raider Hunter", false)).toBeNil()
+    -- your own realm's suffix: the bare name
+    local _, realm = UnitFullName("player")
+    M:NoteSpec("Raider Bowman-" .. tostring(realm), 2, "message")
+    expect(M:KnownTree("Raider Bowman", false)).toBe(2)
+end
+
 @test("specs a day old are forgotten as the module starts")
 local function staleSpecs()
     setup()
@@ -520,7 +581,7 @@ local function staleSpecs()
     M:Data().specs["Raider Old"] = { tree = 1, at = time() - 2 * 86400 }
     rawset(M:Data().specs, "Raider Bad", 5)
     -- (started again: what it registers once left alone)
-    for _, name in ipairs({ "RegisterSettings", "Provide", "RegisterCommand", "OnGameEvent", "On", "Watch" }) do
+    for _, name in ipairs({ "RegisterSettings", "Provide", "RegisterCommand", "OnGameEvent", "On", "Watch", "OnAddonMessage" }) do
         mock.stub(M, name, function() end)
     end
     M:OnEnable()
@@ -1073,6 +1134,17 @@ local function migration()
     end
     expect(ran).toBe(true)
     expect(field(values, "tracked", "graceOfAir")).toBe(true)
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handlers too), nothing doubled")
+local function leavesNothing()
+    -- (a first cycle settles what "specs a day old" doubled by starting it by hand)
+    cycle("raidplanner")
+    local c = cycle("raidplanner")
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(comm.count(M)).toBe(2)
+    expectNoErrors()
 end
 
 -- (last: the module off)

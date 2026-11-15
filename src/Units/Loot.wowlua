@@ -19,7 +19,6 @@ import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
 import type LootWindow, LootItem, LootRow from "/UI/Loot"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -112,6 +111,10 @@ local SECTION: SettingsSection = {
 -- Lifecycle
 --------------------------------------------------------------------------------
 
+-- One of the game's loot frame's points, and how it was before SuuUI moved it.
+type FramePointAt = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint, x: number, y: number }
+type FrameHome = { points: FramePointAt[], clamped: boolean }
+
 class LootModule extends Module<typeof(DEFAULTS)>
     window: LootWindow? = nil
     preview: LootWindow? = nil
@@ -119,6 +122,9 @@ class LootModule extends Module<typeof(DEFAULTS)>
     open: boolean? = nil
     hooked: boolean? = nil
     moving: boolean? = nil
+    -- the game's loot frame before it went away (given back when the module
+    -- turns off)
+    home: FrameHome? = nil
 
     constructor()
         super({
@@ -214,28 +220,50 @@ class LootModule extends Module<typeof(DEFAULTS)>
 
     function HideBlizzardLoot()
         local f = frames.find("LootFrame")
-        if not f or self.hooked then
+        if not f then
             return
         end
-        self.hooked = true
-        f:SetClampedToScreen(false)
-        hook(f, "SetPoint", function()
-            if self.moving or not self:IsEnabled() then
-                return
+        if not self.hooked then
+            self.hooked = true
+            local points: FramePointAt[] = {}
+            for i = 1, f:GetNumPoints() do
+                local point, rel, relPoint, x, y = f:GetPoint(i)
+                points[i] = { point = point, rel = rel, relPoint = relPoint, x = x, y = y }
             end
-            f:SetAlpha(0)
-            after(0, function()
+            self.home = { points = points, clamped = f:IsClampedToScreen() and true or false }
+            hook(f, "SetPoint", function()
+                if self.moving or not self:IsEnabled() then
+                    return
+                end
+                f:SetAlpha(0)
+                self:After(0, function()
+                    self:Away()
+                end)
+            end)
+            hookScript(f, "OnShow", function()
                 if self:IsEnabled() then
                     self:Away()
                 end
             end)
-        end)
-        hookScript(f, "OnShow", function()
-            if self:IsEnabled() then
-                self:Away()
-            end
-        end)
+        end
+        f:SetClampedToScreen(false)
         self:Away()
+    end
+
+    -- The game's loot frame as it was: seen, where it was, clamped as before.
+    function GiveBack()
+        local f, home = frames.find("LootFrame"), self.home
+        if not f or not home then
+            return
+        end
+        f:SetAlpha(1)
+        f:SetClampedToScreen(home.clamped)
+        self.moving = true
+        f:ClearAllPoints()
+        for _, p in ipairs(home.points) do
+            f:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y)
+        end
+        self.moving = false
     end
 
     function PreviewView(parent: Frame): LootWindow
@@ -312,7 +340,7 @@ class LootModule extends Module<typeof(DEFAULTS)>
             self.open = true
             if secret.readable(autoLoot) and autoLoot then
                 -- auto loot: only what stays behind
-                after(0.3, function()
+                self:After(0.3, function()
                     if self.open and not window:IsShown() then
                         self:Open()
                     end
@@ -335,11 +363,14 @@ class LootModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- (reached after a failed OnEnable: the module toggles with a reload)
     override function OnDisable()
         local w = self.window
         if w then
             w:Hide()
         end
+        -- the game's loot frame seen again: the game's own loot window
+        self:GiveBack()
     end
 end
 

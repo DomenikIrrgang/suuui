@@ -45,7 +45,6 @@ import type Crest from "/UI/Crest"
 import type CastBar from "/UI/CastBar"
 import type UnitAuras from "/UI/Auras"
 import type Icon from "/UI/Icon"
-import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -658,7 +657,7 @@ export class Nameplate extends Frame
         else
             self.ghostValue = amount(cur)
             if not timer then
-                self.ghostTimer = after(GHOST_HOLD, function()
+                self.ghostTimer = M:After(GHOST_HOLD, function()
                     self.ghostTimer = nil
                     self.ghost:SetValue(self.ghostValue, INTERPOLATE)
                 end)
@@ -1063,9 +1062,9 @@ local function fill()
                 return
             end
         end
-        after(0, step)
+        M:After(0, step)
     end
-    after(0, step)
+    M:After(0, step)
 end
 
 -- A plate from the pool, or a new one; nil when the pool is empty and a
@@ -1120,12 +1119,18 @@ end
 -- The game's "show friendly players' plates": current clients call it
 -- nameplateShowFriendlyPlayers, older ones nameplateShowFriends. Written to
 -- whichever this client has (an unknown name reads back nil).
+-- (0.47) Every game CVar the module writes goes through M:SetCVar: the
+-- player's own value is remembered (per character, outside profiles) and
+-- given back once the module is off (it turns off only at a reload, so at
+-- the next login with it off). The CVars: the seven of CVARS below,
+-- nameplateShowEnemies, the friendly players' (whichever of these two the
+-- client has) and nameplateShowFriendlyNPCs.
 local FRIENDLY_CVARS = { "nameplateShowFriendlyPlayers", "nameplateShowFriends" }
 
 local function showFriendly(on: boolean)
     for _, name in ipairs(FRIENDLY_CVARS) do
         if C_CVar.GetCVar(name) ~= nil then
-            pcall(C_CVar.SetCVar, name, on and "1" or "0")
+            M:SetCVar(name, on and "1" or "0")
         end
     end
 end
@@ -1540,7 +1545,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             -- look once more
             if not self.recheck[unit] then
                 self.recheck[unit] = true
-                after(0.2, function()
+                self:After(0.2, function()
                     self.recheck[unit] = nil
                     local f = byUnit[unit]
                     if self:IsEnabled() and UnitExists(unit) and flag(UnitCanAttack("player", unit)) and
@@ -1639,7 +1644,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
     end
 
     function NextWaiting()
-        after(0, function()
+        self:After(0, function()
             local unit = table.remove(self.waiting, 1)
             if not unit then
                 return
@@ -1719,7 +1724,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             -- at all matters more than its debuffs)
             if builtThisFrame() or #self.waiting > 0 then
                 f.auraWait = true
-                after(0, function()
+                self:After(0, function()
                     if f.unit == unit and f.auraWait then
                         self:ApplyAuraCount(f)
                     end
@@ -1820,7 +1825,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
     function ApplyGameSettings()
         self:RunOutOfCombat("cvars", function()
             for k, v in pairs(CVARS) do
-                pcall(C_CVar.SetCVar, k, v)
+                self:SetCVar(k, v)
             end
             errors.try(C_NamePlate.SetNamePlateSize, self:Get("width"), plateH() + 8)
         end)
@@ -1836,7 +1841,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         self:RunOutOfCombat("shown", function()
             local on = self:Get("showPlates")
             if C_CVar.GetCVar("nameplateShowEnemies") ~= nil then
-                pcall(C_CVar.SetCVar, "nameplateShowEnemies", on and "1" or "0")
+                self:SetCVar("nameplateShowEnemies", on and "1" or "0")
             end
             if on then
                 self:ApplyFriendly(true)
@@ -1859,7 +1864,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 return
             end
             local on = self:Get("showPlates") and self:Get("friendlyNPCs") and not inInstance()
-            pcall(C_CVar.SetCVar, "nameplateShowFriendlyNPCs", on and "1" or "0")
+            self:SetCVar("nameplateShowFriendlyNPCs", on and "1" or "0")
         end)
     end
 
@@ -1982,7 +1987,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         self:ApplyFriendlyNPCs()
         -- your level up: the plates' levels change colour
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
-            after(0.5, function()
+            self:After(0.5, function()
                 for _, f in pairs(byUnit) do
                     f:UpdateLevel()
                 end
@@ -2004,7 +2009,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 return
             end
             questDirty = true
-            after(0.5, function()
+            self:After(0.5, function()
                 questDirty = false
                 for _, f in pairs(byUnit) do
                     f:UpdateQuest()
@@ -2049,7 +2054,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             fill()
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            after(REFILL_DELAY, function()
+            self:After(REFILL_DELAY, function()
                 if self:IsEnabled() then
                     fill()
                 end

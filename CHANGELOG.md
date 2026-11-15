@@ -5,20 +5,56 @@
 ### New
 
 - For plugin authors (API 0.47): a module now owns more of what it leaves behind, and SuuUI takes it away when the module turns off: timers (`M:After`, `M:Every`), hooks on the game's functions and frames (`M:SecureHook`, `M:HookScript`: one per target, quiet while the module is off), game CVars (`M:SetCVar`, `M:RestoreCVar`: your own values come back, kept per character, not per profile), and frames handed to `SuuUI.UI.SetVisibility` or `SuuUI.PublishAnchor` with the module as their owner.
+- For plugin authors (API 0.47): `SuuUI.UI.Dismissable(frame, { close, esc, outside, inside, shade })` gives your own popups the same Esc, click-outside and dimmed-screen handling, safe in combat.
+- For plugin authors (API 0.47): addon messages through SuuUI's own receiver (`M:OnAddonMessage`, `M:SendAddonMessage`, `SuuUI.Comm`): it checks each message from another player (the channel it came on, the sender's rank, how many a sender sends, your own coming back) and gives you readers that check a message's numbers, maps and names.
+- For plugin authors (API 0.47): `SuuUI.UI.VirtualList`, a scrolling list that makes only the rows on screen and hands them on as it scrolls (the guild roster, friends and Who lists use it).
 
 ### Changed
 
+- Long lists (the guild roster, your friends, the Who results) scroll and refresh without rebuilding every row: only the rows on screen exist, and a roster update or a click on a member draws again only what changed, so a large guild no longer makes the window hitch.
 - For plugin authors (API 0.47): `M:IsEnabled()` is now already true while `OnEnable` runs and already false while `OnDisable` runs (it was the other way round), so code both call knows which way things are going. A module registered after login (a plugin that loads on demand) now starts on the next frame, so a `function M:OnEnable()` written after `RegisterModule`, as the plugin guide shows, runs.
+- Cooldown Manager: "Seen recently" in "+ Add" is now kept per character instead of in the profile, so an exported profile no longer carries your cast history (your class's list moves over once).
+- Action bars: the "Stance and form bar" setting now says what off does: no stance bar at all (Blizzard's stays hidden).
 
 ### Fixed
 
 - Turning Mouseover bindings off now takes your bindings off at once: keys and clicks stop casting on the unit under the mouse, and a Target or Menu click you moved goes back to the game's own. Turning it on again puts them all back.
 - Loot rolls still running when you log in or `/reload` show in the roll tray at once, instead of only at the next roll event (Blizzard's roll frames were already out of sight).
 - Encounter timeline: "Hide their own display" keeps DBM's warnings hidden after a `/reload` or login.
+- Strangers can no longer start or cancel your pull countdown: SuuUI's pull message is taken only from your group's leader or an assistant (anyone in a party), never by whisper, never in a fight, and a few at most from one player.
+- Strangers can no longer fill your map marks: shared marks come only from your group, ten a minute and thirty at most from one player, their names without colour codes or icons, and never at the cost of your own marks.
+- Readiness sends far less: your cooldowns go out only when they changed, when someone joins or when asked (once every 10 seconds at most), and it asks the group only when its panel is shown and only for players it hasn't heard from. Players who left are forgotten.
+- Raid planner, Convergences and Campfire take shared specs, convergences and campfires only from your raid, group or guild (never by whisper); a player of another realm with a raid member's name no longer overwrites that member's spec; a shared convergence or campfire never pushes out one you found, and a campfire you found goes out on time even if others keep reporting it.
+- Convergences: "Share all" stops when you leave the group or turn the module off, and a burst of shared convergences shows one notice.
+- Encounter timeline: turned off, it no longer shows itself again on DBM or BigWigs timers, and your buffs no longer leave room for it. DBM's "Hide DBM warnings" is remembered per character, not in the profile, so a profile switch gives it back, and at logout DBM saves your own setting.
+- Map marks: turning the module off while a mark shows the way gives the game's navigation setting back, clears the waypoint it set and shows the game's own waypoint pin again.
+- Campfire: turning the module off right after a fight no longer leaves its "Resting by the fire" alert running.
 - Convergences: turning the module on or off with the world map open shows or removes its pins at once.
 - World map: quest pins already on the map are styled as soon as the module turns on; turning the module off and on no longer makes the quest log restyle its pins once more each time.
 - The micro menu and the objective tracker no longer come back on screen (in edit mode, keybind mode or a fight) after they failed to start.
 - Work a module had waiting for the end of combat no longer runs after the module was turned off, and a later request for the same work made as combat ends no longer runs before an older one.
+- Menus and the welcome panel no longer hold back your keys when a fight starts: a right-click menu, a filter menu, a dialog or the welcome open as combat begins (or opened during it) lets every key through to the game, and Esc closes it again once the fight is over. The welcome's dimmed screen no longer takes your clicks on the world in a fight.
+- A question asked over a dialog (talents, cooldown manager) no longer leaves that dialog undimmed once answered, and the dialog under the question can no longer be clicked while it is open.
+- Filter menus (world map, professions, auction house) open at SuuUI's scale, the same size as their field, and follow Appearance › Scale.
+- Damage meter and Cooldown Manager: turning SuuUI's off gives Blizzard's own back also after a profile switch or a settings reset; the game's setting is now remembered per character, not in the profile (a value kept by an earlier version moves over once).
+- Alerts, damage meter, Cooldown Manager, flight map, durability and the Quests module no longer act on a delayed step after you turn them off, and a refresh still waiting when they were turned off no longer stops the next one once they are on again.
+- After a `/reload` in combat, the command palette and your aura filter lists work at once instead of only when the fight ends.
+- Durability: turning the module off now says that the game's own durability figure comes back after a reload.
+- Action bars: turning the XP bar or the shaman totem bar on now hides Blizzard's own at once, not only after a reload.
+- Game menu: when a fight starts while "Exit the game?" is open, the question closes; the next question in that fight no longer exits the game when confirmed.
+- Guild: "Invite to the guild" closes when a fight starts, so it can't invite a name typed before the fight or sit over the next question.
+- Guild: turning the module off gives the game's "show offline members" setting back as you had it (after the reload).
+- Chat: if SuuUI's chat fails to start, its empty panel no longer stays on screen.
+- If the dressing room, loot window or loot roll modules fail to start, the game's own dressing room (with its model), loot window and roll frames are visible again instead of staying hidden off screen.
+- Auction house: a scan that ends while the list is being read stops reading it.
+- Nameplates: turning the module off gives the game's nameplate settings back as you had them (after the reload): the plates' fading and scaling, "show enemy nameplates" (off if SuuUI's "Show nameplates" was off) and the friendly players' and NPCs' plates.
+- World map: turning the Windows module off gives back the game's fullscreen map if you had chosen it (after the reload).
+- World map: a fight starting while the mouse rests on the map's title no longer leaves the title's secure button hanging on the map for the fight.
+- Merchant: buying several stacks buys the item you picked even when the list changes meanwhile (a filter), stops when the item is gone, and a purchase queued or confirmed at one vendor no longer buys at the next.
+- Micro menu: if it fails to start, the game's own Game Menu button shows its tooltip again.
+- Mouseover bindings: turning the module off also closes an open binding box (a box left open no longer holds your keys in the next fight) and stops its mouseover watch; a character that logs in with the module off (on another profile) gets the game's own Target and Menu clicks back; "Turn it off" for the Mac's Cmd-click setting is given back too when the module turns off.
+- Unit frames: turning the focus, pet or boss frames on no longer leaves the game's own showing beside them until the next reload.
+- Party frames: while you are in a raid (or they are hidden), the party frames and their pets no longer keep updating in the background.
 
 ## 0.17.0 (2026-11-14)
 

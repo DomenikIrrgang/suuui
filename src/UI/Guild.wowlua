@@ -22,6 +22,9 @@
 --   "remove", "guildInvite"), r.onMenu(member, owner), r.onRowEnter(row, member) and
 --   r.onRowLeave(row) (a layer over the hovered row: the row's own scripts are
 --   row:Click(button), row's OnEnter/OnLeave/OnDoubleClick)
+-- The members are a VirtualList (0.47): rows only for those in sight, drawn
+-- again only when a member's data or the selection changed; r.rows holds the
+-- rows made so far (a row shows row.member, whoever is at its place now).
 
 import tokens as T from "/Core/Tokens"
 import * as fonts from "/Core/Fonts"
@@ -32,10 +35,12 @@ import * as controls from "/UI/Controls"
 import * as inputs from "/UI/Inputs"
 import * as panel from "/UI/Panel"
 import * as tooltip from "/UI/Tooltip"
+import * as virtualList from "/UI/VirtualList"
 import Text from "/UI/Text"
 import SuuButton from "/UI/Controls"
 import TextField, Checkbox from "/UI/Inputs"
 import ScrollArea from "/UI/Panel"
+import VirtualList from "/UI/VirtualList"
 
 export type GuildMember = {
     key?: string,
@@ -151,8 +156,41 @@ local function columnsFor(w: number): RosterColumn[]
     return out
 end
 
+-- Whether two column layouts are the same.
+local function sameColumns(a: RosterColumn[], b: RosterColumn[]?): boolean
+    if not b or #a ~= #b then
+        return false
+    end
+    for i, c in ipairs(a) do
+        local o = b[i]
+        if o.x ~= c.x or o.w ~= c.w then
+            return false
+        end
+    end
+    return true
+end
+
+-- What a member's cell says (no table per row).
+local function cellText(m: GuildMember, key: string): string
+    if key == "name" then
+        return m.name or ""
+    elseif key == "level" then
+        return m.level and tostring(m.level) or ""
+    elseif key == "class" then
+        return m.className or ""
+    elseif key == "zone" then
+        return m.online and (m.zone or "") or (m.lastOnline or "Offline")
+    elseif key == "rank" then
+        return m.rank or ""
+    end
+    return m.note or ""
+end
+
 export class RosterRow extends Button
     member?: GuildMember
+    readonly roster: GuildRoster
+    -- the columns its cells were placed by
+    laid?: RosterColumn[]
     sel: Texture
     edge: Texture
     hover: Texture
@@ -163,6 +201,7 @@ export class RosterRow extends Button
 
     constructor(g: GuildRoster)
         super(nil, g.list.child)
+        self.roster = g
         self:SetHeight(ROW_H)
         self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         self.sel = draw.fill(self, "arcane-soft", "BACKGROUND")
@@ -226,11 +265,97 @@ export class RosterRow extends Button
             end
         end)
     end
+
+    -- Draws a member (the VirtualList's bind: nothing made here). The cells
+    -- move only when the roster's columns changed.
+    function Bind(m: GuildMember, on: boolean)
+        self.member = m
+        local cols = self.roster.cols
+        if self.laid ~= cols then
+            self.laid = cols
+            self.diamond:ClearAllPoints()
+            self.diamond:SetPoint("CENTER", self, "LEFT", cols[1].x - 8, 0)
+            for i, t in ipairs(self.cells) do
+                local key = COLUMNS[i].key
+                -- the class column: its icon, then its name
+                local indent = key == "class" and (16 + S["space-3"]) or 0
+                t:ClearAllPoints()
+                t:SetPoint("LEFT", self, "LEFT", cols[i].x + indent, 0)
+                t:SetWidth(cols[i].w - indent)
+                if key == "class" then
+                    self.classIcon:ClearAllPoints()
+                    self.classIcon:SetPoint("LEFT", self, "LEFT", cols[i].x, 0)
+                end
+            end
+        end
+        -- the name in its class colour, online or not (asked for in game);
+        -- an offline member's other columns stay ink-faint
+        local color = draw.classColor(m.class, m.online and "ink" or "ink-faint")
+        -- offline: still the class colour, greyed out like the rest of the row
+        local fade = m.online and 1 or T.opacity["opacity-disabled"]
+        draw.paint(self.diamond, color, fade)
+        for i, t in ipairs(self.cells) do
+            local key = COLUMNS[i].key
+            t:SetValue(cellText(m, key))
+            if i == 1 then
+                t:SetColor(color, fade)
+            else
+                t:SetColor(m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint")
+            end
+            if key == "class" then
+                local atlas: string? = m.class and GetClassAtlas and GetClassAtlas(m.class)
+                local coords: number[]? = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
+                if atlas then
+                    self.classIcon:SetAtlas(atlas)
+                    self.classIcon:SetTexCoord(0, 1, 0, 1)
+                elseif coords then
+                    self.classIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
+                    self.classIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+                end
+                self.classIcon:SetShown((atlas or coords) and true or false)
+                self.classIcon:SetDesaturated(not m.online)
+                self.classIcon:SetAlpha(fade)
+            end
+        end
+        local status = m.busy and "Busy" or (m.away and "Away") or nil
+        self.badge:SetShown(status ~= nil and m.online)
+        if status then
+            self.badge.text:SetValue(status)
+            self.badge:SetWidth(math.ceil(self.badge.text:GetUnboundedStringWidth()) + S["space-3"] * 2)
+            self.badge:ClearAllPoints()
+            self.badge:SetPoint(
+                "LEFT",
+                self,
+                "LEFT",
+                cols[1].x + math.min(cols[1].w - 30, math.ceil(self.cells[1]:GetUnboundedStringWidth()) + S["space-3"]),
+                0
+            )
+        end
+        self.sel:SetShown(on)
+        self.edge:SetShown(on)
+    end
 end
 
 local function makeRow(g: GuildRoster): RosterRow
     return RosterRow.new(g)
 end
+
+-- the VirtualList's hands: draw, take a new table that shows the same, identity
+local function bindRow(row: Frame, m: GuildMember, on: boolean)
+    (row :: RosterRow):Bind(m, on)
+end
+
+local function adoptRow(row: Frame, m: GuildMember)
+    (row :: RosterRow).member = m
+end
+
+local function memberKey(m: GuildMember): unknown
+    return m.key
+end
+
+-- the live rosters, drawn again when the theme changes (their columns come
+-- from the spacing; their rows draw again by themselves)
+local rosters: { [GuildRoster]: boolean } = setmetatable({}, { __mode = "k" })
 
 local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): RosterButton
     return RosterButton.new(parent, text, variant, onClick)
@@ -246,7 +371,11 @@ export class GuildRoster extends Frame
     guildInvite: RosterButton
     box: Frame
     headRow: Frame
+    -- the members (only rows in sight) and its scroll area
+    view: VirtualList<GuildMember>
     list: ScrollArea
+    -- the columns now, for the headings and the rows
+    cols: RosterColumn[]
     empty: Text
     selectedMember: GuildMember? = nil
     data: RosterData? = nil
@@ -261,7 +390,7 @@ export class GuildRoster extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self.rows, self.heads, self.buttons = {}, {}, {}
+        self.heads, self.buttons, self.cols = {}, {}, {}
         -- the top: search, Show offline, the count
         self.search = inputs.textField(self, {
             width = 200,
@@ -357,11 +486,23 @@ export class GuildRoster extends Frame
             end)
             self.heads[i] = h
         end
-        self.list = panel.scrollArea(self.box, 2)
-        self.list:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT", 0, -1)
+        self.view = virtualList.virtualList(self.box, {
+            rowHeight = ROW_H,
+            bar = 2,
+            make = function(): Frame
+                return makeRow(self)
+            end,
+            bind = bindRow,
+            adopt = adoptRow,
+            key = memberKey,
+            same = virtualList.sameFields,
+        })
+        self.view:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT", 0, -1)
         draw.layout(self, function()
-            self.list:SetPoint("BOTTOMRIGHT", self.box, "BOTTOMRIGHT", -S["space-4"], S["space-2"])
+            self.view:SetPoint("BOTTOMRIGHT", self.box, "BOTTOMRIGHT", -S["space-4"], S["space-2"])
         end)
+        self.list = self.view.scroll
+        self.rows = self.view:Rows() :: unknown :: RosterRow[]
         self.list:HookScript("OnSizeChanged", function()
             if self.data then
                 self:Draw()
@@ -370,14 +511,18 @@ export class GuildRoster extends Frame
         self.empty = uiText.text(self.box, "caption", "ink-muted")
         self.empty:SetPoint("CENTER")
         self.empty:SetValue("No one matches.")
+        rosters[self] = true
     end
 
     function Draw()
         local d: RosterData = self.data or {}
-        local child = self.list.child
         local w = math.max(1, self.list:GetWidth())
-        child:SetWidth(w)
         local cols = columnsFor(w)
+        -- new columns (a new width or spacing): every row's cells move
+        local moved = not sameColumns(cols, self.cols)
+        if moved then
+            self.cols = cols
+        end
         -- the headings
         for i, h in ipairs(self.heads) do
             h:ClearAllPoints()
@@ -387,89 +532,23 @@ export class GuildRoster extends Frame
             h.text:SetColor(on and "gilt-text" or "ink-muted")
             h.text:SetJustifyH(COLUMNS[i].align or "LEFT")
         end
-        local y, selected = 0, nil :: GuildMember?
-        for n, m in ipairs(d.members or {}) do
-            local r = self.rows[n] or makeRow(self)
-            self.rows[n] = r
-            r.member = m
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT", child, "RIGHT")
-            -- the name in its class colour, online or not (asked for in game);
-            -- an offline member's other columns stay ink-faint
-            local color = draw.classColor(m.class, m.online and "ink" or "ink-faint")
-            -- offline: still the class colour, greyed out like the rest of the row
-            local fade = m.online and 1 or T.opacity["opacity-disabled"]
-            draw.paint(r.diamond, color, fade)
-            r.diamond:ClearAllPoints()
-            r.diamond:SetPoint("CENTER", r, "LEFT", cols[1].x - 8, 0)
-            local values: { [string]: string? } = {
-                name = m.name,
-                level = m.level and tostring(m.level) or "",
-                class = m.className or "",
-                zone = m.online and (m.zone or "") or (m.lastOnline or "Offline"),
-                rank = m.rank or "",
-                note = m.note or "",
-            }
-            for i, t in ipairs(r.cells) do
-                local key = COLUMNS[i].key
-                -- the class column: its icon, then its name
-                local indent = key == "class" and (16 + S["space-3"]) or 0
-                t:ClearAllPoints()
-                t:SetPoint("LEFT", r, "LEFT", cols[i].x + indent, 0)
-                t:SetWidth(cols[i].w - indent)
-                t:SetValue(values[key] or "")
-                if i == 1 then
-                    t:SetColor(color, fade)
-                else
-                    t:SetColor(m.online and (key == "note" and "ink-muted" or "ink") or "ink-faint")
-                end
-                if key == "class" then
-                    local atlas: string? = m.class and GetClassAtlas and GetClassAtlas(m.class)
-                    local coords: number[]? = m.class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[m.class]
-                    if atlas then
-                        r.classIcon:SetAtlas(atlas)
-                        r.classIcon:SetTexCoord(0, 1, 0, 1)
-                    elseif coords then
-                        r.classIcon:SetTexture("Interface\\TargetingFrame\\UI-Classes-Circles")
-                        r.classIcon:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
-                    end
-                    r.classIcon:SetShown((atlas or coords) and true or false)
-                    r.classIcon:SetDesaturated(not m.online)
-                    r.classIcon:SetAlpha(fade)
-                    r.classIcon:ClearAllPoints()
-                    r.classIcon:SetPoint("LEFT", r, "LEFT", cols[i].x, 0)
+        -- the members: the rows in sight, drawn where something changed
+        local members = d.members or {}
+        self.view:SetSelected(d.selected)
+        if moved then
+            self.view:Invalidate()
+        end
+        self.view:SetItems(members)
+        local selected: GuildMember? = nil
+        if d.selected ~= nil then
+            for _, m in ipairs(members) do
+                if m.key == d.selected then
+                    selected = m
+                    break
                 end
             end
-            local status = m.busy and "Busy" or (m.away and "Away") or nil
-            r.badge:SetShown(status ~= nil and m.online)
-            if status then
-                r.badge.text:SetValue(status)
-                r.badge:SetWidth(math.ceil(r.badge.text:GetUnboundedStringWidth()) + S["space-3"] * 2)
-                r.badge:ClearAllPoints()
-                r.badge:SetPoint(
-                    "LEFT",
-                    r,
-                    "LEFT",
-                    cols[1].x +
-                        math.min(cols[1].w - 30, math.ceil(r.cells[1]:GetUnboundedStringWidth()) + S["space-3"]),
-                    0
-                )
-            end
-            local on = m.key == d.selected
-            r.sel:SetShown(on)
-            r.edge:SetShown(on)
-            if on then
-                selected = m
-            end
-            r:Show()
-            y = y + ROW_H
         end
-        for n = #(d.members or {}) + 1, #self.rows do
-            self.rows[n]:Hide()
-        end
-        self.empty:SetShown(#(d.members or {}) == 0)
-        child:SetHeight(math.max(1, y))
+        self.empty:SetShown(#members == 0)
         -- the foot
         local a = d.actions or {}
         for key, b in pairs(self.buttons) do
@@ -888,6 +967,11 @@ end
 events.on(
     "SUUUI_THEME_CHANGED",
     function()
+        for r in pairs(rosters) do
+            if r.data then
+                r:Draw()
+            end
+        end
         for i in pairs(infos) do
             placeEdit(i.info)
             if i.data then

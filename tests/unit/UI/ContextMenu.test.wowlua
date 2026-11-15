@@ -4,12 +4,12 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import * as frames from "wowlua:frames"
 import tokens as T from "/Core/Tokens"
 import * as extend from "/Core/Extend"
 import * as tooltip from "/UI/Tooltip"
 import measureText from "/UI/Text"
 import contextMenu, contextMenuFrom, closeContextMenu, MenuOptions, MenuFrame from "/UI/ContextMenu"
+import internal catcher as dismissCatcher from "/UI/Dismiss"
 import expectNoErrors, newParent from "../../helpers"
 import tokenOf from "./WindowsHelpers"
 
@@ -39,16 +39,9 @@ local function cleanup()
     expectNoErrors()
 end
 
--- The screen-wide catcher under the menu: the button whose click is close.
-local function catcher(): Button?
-    for _, c in ipairs(frames.children(UIParent)) do
-        local b = frames.asButton(c)
-        if b and not b:IsForbidden() and b:GetObjectType() == "Button" and
-            b:GetScript("OnClick") == closeContextMenu then
-            return b
-        end
-    end
-    return nil
+-- The screen-wide catcher under the menu (UI/Dismiss's).
+local function catcher(): Button
+    return dismissCatcher
 end
 
 local function open(opts: MenuOptions?)
@@ -242,6 +235,26 @@ local function combatKeys()
     mock.script(m, "OnKeyDown", "ESCAPE")
     expect(m).toBeShown()
     mock.player:leaveCombat()
+end
+
+@test("keys pass on from the moment it opens; a fight lets the keyboard go, Esc comes back after it")
+local function fightKeys()
+    local m = open({ items = { { label = "A" } } })
+    expect(m:IsKeyboardEnabled()).toBe(true)
+    expect(m:GetPropagateKeyboardInput()).toBe(true)
+    mock.player:enterCombat()
+    expect(m:IsKeyboardEnabled()).toBe(false)
+    expect(m:GetPropagateKeyboardInput()).toBe(true)
+    -- a click outside still closes it, and it opens again without the keyboard
+    mock.click(catcher())
+    expect(m).never.toBeShown()
+    m = open({ items = { { label = "A" } } })
+    expect(m:IsKeyboardEnabled()).toBe(false)
+    mock.player:leaveCombat()
+    expect(m:IsKeyboardEnabled()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(m).never.toBeShown()
+    expect(#mock.refusals()).toBe(0)
 end
 
 @test("with an id, plugins' entries join with the context")

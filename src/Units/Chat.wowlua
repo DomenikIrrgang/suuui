@@ -2333,7 +2333,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return
         end
         local cf = chat.asWindow(errors.try(open, name))
-        after(0, function()
+        self:After(0, function()
             if not self:IsEnabled() then
                 return
             end
@@ -2352,7 +2352,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     -- tab): skinned, the whispers with that player so far put in
     -- (Blizzard's starts empty), and shown.
     function OpenedWindow(cf: Window?, name: string?)
-        after(0, function()
+        self:After(0, function()
             if not self:IsEnabled() then
                 return
             end
@@ -3345,7 +3345,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.windowsPending = true
-        after(0, function()
+        self:After(0, function()
             self.windowsPending = nil
             if self:IsEnabled() then
                 self:RefreshWindows()
@@ -3566,20 +3566,15 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     function Layout()
         local w, h = self:PanelSize()
         self:Panel():SetSize(w, h)
-        after(0, function()
-            if self:IsEnabled() then
-                self:PlaceChat()
-            end
+        self:After(0, function()
+            self:PlaceChat()
         end)
     end
 
     -- Skinned and placed a frame later (never while the chat code is
     -- mid-update).
     function SkinSoon()
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
+        self:After(0, function()
             self:SkinAll()
             self:PlaceChat()
             self:RefreshWindows()
@@ -3594,13 +3589,14 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         end
         local p = self.panel or ChatPanel.new()
         self.panel = p
+        p:Show()
         -- the kept chat, before the first window's mirror is made
         self:LoadHistory()
         self:Layout()
         self:RegisterMover(p, { key = "position", label = "Chat", managedShow = true })
         -- the lines' box (tabs and lines, without the input): the command
         -- palette opens over it
-        SuuUI.PublishAnchor("chat", p.box)
+        SuuUI.PublishAnchor("chat", p.box, self)
         self:RegisterSettings(SECTION)
         self:Wake()
         self:SkinSoon()
@@ -3611,7 +3607,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 if self.placing or not self:IsEnabled() then
                     return
                 end
-                after(0, function()
+                self:After(0, function()
                     self:PlaceChat()
                 end)
             end)
@@ -3632,11 +3628,9 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         -- a whisper opens a temporary window: skinned a frame later
         for _, e in ipairs(WHISPER_EVENTS) do
             self:OnGameEvent(e, function()
-                after(0, function()
-                    if self:IsEnabled() then
-                        self:SkinAll()
-                        self:RefreshWindows()
-                    end
+                self:After(0, function()
+                    self:SkinAll()
+                    self:RefreshWindows()
                 end)
             end)
         end
@@ -3652,17 +3646,13 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:ApplyGlobalTab()
         end)
         -- the channels settle a moment after login; joins and leaves later
-        after(3, function()
-            if self:IsEnabled() then
-                self:ApplyGlobalTab()
-            end
+        self:After(3, function()
+            self:ApplyGlobalTab()
         end)
         for _, e in ipairs(CHANNEL_EVENTS) do
             self:OnGameEvent(e, function()
-                after(0.5, function()
-                    if self:IsEnabled() then
-                        self:ApplyGlobalTab()
-                    end
+                self:After(0.5, function()
+                    self:ApplyGlobalTab()
                 end)
             end)
         end
@@ -3687,7 +3677,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:ApplyGlobalTab()
         end)
         self:Watch("position", function()
-            after(0, function()
+            self:After(0, function()
                 self:PlaceChat()
             end)
         end)
@@ -3706,7 +3696,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:EditModeChanged(on)
         end)
         self:On("SUUUI_ROOT_SCALED", function()
-            after(0, function()
+            self:After(0, function()
                 self:PlaceChat()
             end)
         end)
@@ -3727,6 +3717,21 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                     self:Tick()
                 end
             end)
+        end
+        assert(self.driver):Show()
+    end
+
+    -- Only after a failed OnEnable (reloadToToggle; X-11.a7): the panel and
+    -- the driver away. The anchor "chat" goes with the release, and so do
+    -- the timers that would have moved Blizzard's chat into the panel.
+    override function OnDisable()
+        local p = self.panel
+        if p then
+            p:Hide()
+        end
+        local driver = self.driver
+        if driver then
+            driver:Hide()
         end
     end
 end

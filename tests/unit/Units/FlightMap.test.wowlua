@@ -20,7 +20,10 @@ import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/FlightMap"
 import short from "/Units/FlightMap/Route"
 import type TaxiNode, RouteRecord from "/Units/FlightMap/Route"
-import expectNoErrors from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as store from "/Core/Settings"
+import * as registry from "/SettingsUI/Registry"
+import expectNoErrors, cycle, holdings, NOTHING from "../../helpers"
 
 local KALIMDOR, ORGRIMMAR = 1414, 1454
 
@@ -968,4 +971,72 @@ local function forgetAndTheme()
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
     mock.advanceFrames(2)
     expect(M.bar).toBeShown()
+end
+
+@test("the world map not there at enable: the service now, the rest once it loads; the listener goes then (X-11.a5)")
+local function worldMapLater()
+    local enabled = holdings(M)
+    local world = M.world
+    store.set("flightmap", "enabled", false)
+    M.world = nil
+    local loaded = false
+    mock.stub(M, "Attach", function(self: typeof(M))
+        if loaded then
+            self.world = world
+        end
+    end)
+    local starts = 0
+    local start = M.Start
+    mock.stub(M, "Start", function(self: typeof(M))
+        starts += 1
+        start(self)
+    end)
+    store.set("flightmap", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(SuuUI.Service("flightmap") ~= nil).toBe(true)
+    expect(registry.get("flightmap")).toBeNil()
+    expect(holdings(M).listeners).toBe(1)
+    -- another addon loads: still no world map
+    mock.fireEvent("ADDON_LOADED", "ZZ Other", false)
+    expect(starts).toBe(0)
+    loaded = true
+    mock.fireEvent("ADDON_LOADED", "Blizzard_WorldMap", false)
+    expect(starts).toBe(1)
+    expect(registry.get("flightmap") ~= nil).toBe(true)
+    expect(holdings(M)).toEqual(enabled)
+    mock.fireEvent("ADDON_LOADED", "ZZ Other", false)
+    expect(starts).toBe(1)
+    expectNoErrors()
+end
+
+-- (last) The module toggles live: turned off through the registry nothing
+-- of it stays; on again, it all comes back.
+@test("turned off through the registry: the layers and the flight bar hidden, nothing held; on again, all back")
+local function disabled()
+    local world = assert(M.world)
+    expect(world.layer:IsShown()).toBe(true)
+    -- a layout queued as it turns off doesn't stop the next one
+    M:QueueLayout()
+    expect(M.layoutQueued).toBe(true)
+    store.set("flightmap", "enabled", false)
+    expect(M.layoutQueued).toBe(false)
+    store.set("flightmap", "enabled", true)
+    local c = cycle("flightmap")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expect(world.layer:IsShown()).toBe(true)
+    store.set("flightmap", "enabled", false)
+    expect(world.layer:IsShown()).toBe(false)
+    expect(assert(M.timer):IsShown()).toBe(false)
+    store.set("flightmap", "enabled", true)
+    local layouts = 0
+    mock.stub(M, "Layout", function()
+        layouts += 1
+    end)
+    M:QueueLayout()
+    mock.advanceFrames(2)
+    expect(layouts).toBe(1)
+    expectNoErrors()
 end

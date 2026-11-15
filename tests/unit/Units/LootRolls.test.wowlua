@@ -19,6 +19,9 @@ import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import unregisterCommands from "/Core/Init"
 import expectNoErrors from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import tokenOf from "../UI/PrimitivesHelpers"
 
 import M from "/Units/LootRolls"
@@ -715,4 +718,42 @@ local function settingsAndMover()
     local root = SuuUI.Root
     expect(math.floor((t:GetLeft() + t:GetRight()) / 2 + 0.5)).toBe(math.floor(root:GetWidth() / 2 + 0.5))
     expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(80)
+end
+
+-- (last: the module off) Loot rolls is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable runs.
+@test("turned off through the registry: the tray gone, Blizzard's roll frames seen again where they were; on again, away with the rolls still running")
+local function turnedOff()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    local f = assert(frames.find("GroupLootContainer"))
+    local home = assert(M.rollsHome)
+    roll(7)
+    expect(tray()).toBeShown()
+    settings.set("lootrolls", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(tray()).never.toBeShown()
+    expect(next(M.rolls)).toBeNil()
+    expect(f:GetAlpha()).toBe(1)
+    expect(f:IsClampedToScreen() and true or false).toBe(home.clamped)
+    -- (where they were: none at login, the game places them with a roll)
+    expect(f:GetNumPoints()).toBe(#home.points)
+    -- the game placing them: they stay there, seen
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect((f:GetPoint(1))).toBe("CENTER")
+    expect(f:GetAlpha()).toBe(1)
+    -- on again: away at once; the roll still running back in the tray
+    mock.stub(_G, "GetActiveLootRollIDs", function(): unknown
+        return { 7 }
+    end)
+    settings.set("lootrolls", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(f:GetAlpha()).toBe(0)
+    expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
+    expect(row(7) ~= nil).toBe(true)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

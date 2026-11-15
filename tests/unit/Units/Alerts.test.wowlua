@@ -7,7 +7,9 @@ import SuuUI from "/Core/API"
 import * as editMode from "/EditMode/EditMode"
 import internal M, URGENCY, SECTION from "/Units/Alerts"
 import type AlertsUI from "/Units/Alerts"
-import newParent, expectNoErrors from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import newParent, expectNoErrors, cycle, NOTHING from "../../helpers"
 
 -- what the module built
 local function ui(): AlertsUI
@@ -307,18 +309,18 @@ local function testButton()
     expect(M.current).toBeNil()
 end
 
-@test("Test's later steps skip while the module is off")
+@test("Test's later steps don't run once the module is off; it no longer counts as testing")
 local function testWhileOff()
     mock.player:leaveCombat()
     M:Test()
     mock.advanceTime(0.01)
-    mock.stub(M, "IsEnabled", function(): boolean
-        return false
-    end)
-    M:Hide(nil, true)
-    mock.advanceTime(4)
+    expect(M.current).toBe("test")
+    settings.set("alerts", "enabled", false)
+    expect(M.testing).toBeNil()
     expect(M.current).toBeNil()
-    mock.advanceTime(8.1)
+    mock.advanceTime(12)
+    expect(M.current).toBeNil()
+    settings.set("alerts", "enabled", true)
     expect(M.testing).toBeNil()
 end
 
@@ -370,4 +372,35 @@ local function offAndOn()
     -- the keys allowed out of combat come back with the service
     SuuUI.ShowAlert("offon", "danger", "Aggro")
     expect(M.current).toBe("offon")
+end
+
+-- (last) Through the registry: nothing held while off, nothing doubled on
+-- again; a card held under the mouse lets go, a card fading out still ends
+-- hidden.
+@test("turned off through the registry: nothing held, the hold ticker gone, a fading card still hidden at the end; on again, all back")
+local function disabled()
+    mock.player:leaveCombat()
+    local c = cycle("alerts")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    -- a card held under the mouse
+    mock.player:enterCombat()
+    mock.stub(ui().card, "IsHovered", function(): boolean
+        return true
+    end)
+    SuuUI.ShowLevelUp("level", { title = "Level 12" })
+    SuuUI.HideAlert("level")
+    expect(M.holding).toBeTruthy()
+    mock.player:leaveCombat()
+    settings.set("alerts", "enabled", false)
+    expect(M.holding).toBeNil()
+    expect(M.current).toBeNil()
+    -- the card fades, and is hidden at the end
+    mock.advanceTime(2)
+    expect(ui().frame).never.toBeShown()
+    expect(ui().frame:GetAlpha()).toBe(1)
+    settings.set("alerts", "enabled", true)
+    expect(M:IsEnabled()).toBe(true)
 end

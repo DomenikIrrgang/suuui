@@ -1,0 +1,335 @@
+-- UI/Dismiss: a popup closed by Esc, a click outside or its shade: keys
+-- passed on from the moment it shows, Esc kept for one key, the keyboard let
+-- go once it closes; the catcher ("catch") and the clicks that pass
+-- ("pass"); the stack (Esc and the catcher for the top one, the shade under
+-- the top shaded one, given back to the one under it); and a fight: before
+-- the first key, while open, a frame opened during it.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import dismissable, Dismiss, DismissOptions from "/UI/Dismiss"
+import internal catcher, shade, open from "/UI/Dismiss"
+import expectNoErrors, newParent from "../../helpers"
+
+-- the game under the popups: a keyboard frame at the bottom keeping every
+-- key that reaches it (what the popups pass on)
+local game = CreateFrame("Frame", nil, UIParent)
+game:SetFrameStrata("BACKGROUND")
+game:SetPropagateKeyboardInput(false)
+game:EnableKeyboard(true)
+local reached: string[] = {}
+game:SetScript("OnKeyDown", function(_, key: string)
+    reached[#reached + 1] = key
+end)
+game:Hide()
+
+local made: Frame[] = {}
+
+@beforeEach
+local function fresh()
+    -- the first-run welcome (it takes Esc too) stays away
+    SuuUI.AccountData("welcome").seen = true
+    local before: Dismiss[] = {}
+    for i, d in ipairs(open) do
+        before[i] = d
+    end
+    for _, d in ipairs(before) do
+        local parent = d.frame:GetParent()
+        if parent and parent ~= UIParent and parent ~= SuuUI.Root then
+            parent:Hide()
+        end
+        d.frame:Hide()
+    end
+    reached = {}
+    game:Show()
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    for _, f in ipairs(made) do
+        f:Hide()
+    end
+    made = {}
+    game:Hide()
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(#open).toBe(0)
+    expect(#mock.refusals()).toBe(0)
+    expectNoErrors()
+end
+
+-- A popup frame (hidden), given to the helper.
+local function popup(opts: DismissOptions?, strata: FrameStrata?): (Frame, Dismiss)
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetSize(100, 60)
+    f:SetPoint("CENTER")
+    f:SetFrameStrata(strata or "FULLSCREEN_DIALOG")
+    f:SetFrameLevel(10)
+    f:EnableMouse(true)
+    f:Hide()
+    made[#made + 1] = f
+    return f, dismissable(f, opts)
+end
+
+@test("shown: keys pass on before any key; Esc closes it and is kept; then the keyboard is let go")
+local function escape()
+    local f = popup()
+    -- nothing taken while hidden
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    f:Show()
+    expect(f:IsKeyboardEnabled()).toBe(true)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("A")
+    expect(reached).toEqual({ "A" })
+    expect(f).toBeShown()
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+    expect(reached).toEqual({ "A" })
+    -- the next frame: passing on again, the keyboard let go (never a stale
+    -- `false` for the next opening)
+    mock.advanceFrames(1)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    -- opened again: Esc again
+    f:Show()
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+end
+
+@test("the close given runs instead of Hide; a close that leaves it shown passes keys on from the next frame")
+local function ownClose()
+    local closes = 0
+    local f = popup({
+        close = function()
+            closes = closes + 1
+        end,
+    })
+    f:Show()
+    mock.pressKey("ESCAPE")
+    expect(closes).toBe(1)
+    expect(f).toBeShown()
+    mock.advanceFrames(1)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("B")
+    expect(reached).toEqual({ "B" })
+end
+
+@test("esc = false: the frame never takes a key")
+local function noEsc()
+    local f = popup({ esc = false })
+    f:Show()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    mock.pressKey("ESCAPE")
+    expect(f).toBeShown()
+    expect(reached).toEqual({ "ESCAPE" })
+end
+
+@test("catch: the catcher under it on its layer takes a click outside and closes it")
+local function catching()
+    local f = popup({ outside = "catch" }, "DIALOG")
+    expect(catcher).never.toBeShown()
+    f:Show()
+    expect(catcher).toBeShown()
+    expect(catcher:GetFrameStrata()).toBe("DIALOG")
+    expect(catcher:GetFrameLevel()).toBe(f:GetFrameLevel() - 1)
+    mock.click(catcher)
+    expect(f).never.toBeShown()
+    expect(catcher).never.toBeShown()
+    -- nothing open: its click does nothing
+    mock.script(catcher, "OnClick", "LeftButton")
+end
+
+@test("pass: a click outside it and its inside regions closes it, the click goes on")
+local function passing()
+    local opener = newParent(30, 30)
+    made[#made + 1] = opener
+    local f = popup({ outside = "pass", inside = { opener }, esc = false })
+    f:Show()
+    expect(catcher).never.toBeShown()
+    mock.hover(f)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(f).toBeShown()
+    mock.hover(opener)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(f).toBeShown()
+    mock.hover(nil)
+    mock.fireEvent("GLOBAL_MOUSE_DOWN", "LeftButton")
+    expect(f).never.toBeShown()
+end
+
+@test("a frame given while shown is open at once")
+local function givenShown()
+    local f = CreateFrame("Frame", nil, UIParent)
+    f:SetFrameStrata("DIALOG")
+    made[#made + 1] = f
+    dismissable(f, { outside = "catch" })
+    expect(open[#open].frame).toBe(f)
+    expect(catcher).toBeShown()
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+end
+
+@test("stacked: Esc and the catcher close the top one first, then the one under it")
+local function stacked()
+    local a = popup({ outside = "catch" })
+    local b = popup({ outside = "catch" })
+    a:Show()
+    b:Show()
+    expect(catcher:GetFrameLevel()).toBe(b:GetFrameLevel() - 1)
+    mock.pressKey("ESCAPE")
+    expect(b).never.toBeShown()
+    expect(a).toBeShown()
+    mock.pressKey("ESCAPE")
+    expect(a).never.toBeShown()
+    expect(reached).toEqual({})
+    -- the catcher: the top one, then the one under it
+    a:Show()
+    b:Show()
+    mock.click(catcher)
+    expect(b).never.toBeShown()
+    expect(a).toBeShown()
+    expect(catcher).toBeShown()
+    mock.click(catcher)
+    expect(a).never.toBeShown()
+end
+
+@test("stacked by the order shown, not the layer: a higher frame under the top passes Esc on to it")
+local function stackOrder()
+    local high = popup({}, "FULLSCREEN_DIALOG")
+    local low = popup({}, "DIALOG")
+    high:Show()
+    low:Show()
+    mock.pressKey("ESCAPE")
+    expect(low).never.toBeShown()
+    expect(high).toBeShown()
+    -- shown again: on top again
+    low:Show()
+    mock.pressKey("ESCAPE")
+    expect(low).never.toBeShown()
+    mock.pressKey("ESCAPE")
+    expect(high).never.toBeShown()
+    expect(reached).toEqual({})
+end
+
+@test("Top(): a frame shown again while open goes on top; a hidden one stays out")
+local function top()
+    local a, da = popup()
+    local b = popup()
+    da:Top()
+    expect(#open).toBe(0)
+    a:Show()
+    b:Show()
+    da:Top()
+    expect(open[#open].frame).toBe(a)
+    mock.pressKey("ESCAPE")
+    expect(a).never.toBeShown()
+    expect(b).toBeShown()
+end
+
+@test("the shade: under the top shaded frame; closing it gives the shade back to the one under it (UIP-9)")
+local function shadeStack()
+    local a = popup({ shade = true }, "DIALOG")
+    local b = popup({ shade = true }, "DIALOG")
+    a:Show()
+    expect(shade).toBeShown()
+    expect(shade.owner).toBe(a)
+    expect(shade:GetFrameLevel()).toBe(1)
+    expect(a:GetFrameLevel() >= 10).toBe(true)
+    b:Show()
+    expect(shade.owner).toBe(b)
+    -- a and everything on it under the shade, b over it
+    expect(shade:GetFrameLevel() > a:GetFrameLevel()).toBe(true)
+    expect(b:GetFrameLevel() > shade:GetFrameLevel()).toBe(true)
+    b:Hide()
+    expect(shade).toBeShown()
+    expect(shade.owner).toBe(a)
+    expect(shade:GetFrameLevel()).toBe(1)
+    -- a click on the shade closes the frame it is under
+    mock.click(shade)
+    expect(a).never.toBeShown()
+    expect(shade).never.toBeShown()
+    expect(shade.owner).toBeNil()
+    mock.script(shade, "OnClick", "LeftButton")
+end
+
+@test("a catching frame under a shaded one: no catcher over the shaded one until it closes")
+local function catchUnderShade()
+    local menu = popup({ outside = "catch" })
+    local modal = popup({ shade = true }, "DIALOG")
+    menu:Show()
+    modal:Show()
+    expect(catcher).never.toBeShown()
+    modal:Hide()
+    expect(catcher).toBeShown()
+    expect(catcher:GetFrameLevel()).toBe(menu:GetFrameLevel() - 1)
+end
+
+@test("a fight before the first key: the keyboard let go, every key passes on; Esc again after it")
+local function fightBeforeKey()
+    local f = popup({ outside = "catch" })
+    f:Show()
+    mock.player:enterCombat()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("A")
+    mock.pressKey("ESCAPE")
+    expect(reached).toEqual({ "A", "ESCAPE" })
+    expect(f).toBeShown()
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+    expect(f:IsKeyboardEnabled()).toBe(true)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+end
+
+@test("a fight right after Esc was kept: passing on before the lockdown, opened in it without the keyboard")
+local function fightAfterEsc()
+    local f = popup({ outside = "catch" })
+    f:Show()
+    mock.pressKey("ESCAPE")
+    expect(f:GetPropagateKeyboardInput()).toBe(false)
+    mock.player:enterCombat()
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    f:Show()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    mock.pressKey("ESCAPE")
+    expect(reached).toEqual({ "ESCAPE" })
+    -- the catcher still closes it
+    mock.click(catcher)
+    expect(f).never.toBeShown()
+    mock.advanceFrames(1)
+    expect(#mock.refusals()).toBe(0)
+end
+
+@test("a frame first opened in a fight: no keyboard, closable by a click outside; Esc once the fight is over")
+local function openedInFight()
+    mock.player:enterCombat()
+    local f = popup({ outside = "catch" })
+    f:Show()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    expect(f:GetScript("OnKeyDown")).toBeNil()
+    mock.pressKey("A")
+    expect(reached).toEqual({ "A" })
+    mock.click(catcher)
+    expect(f).never.toBeShown()
+    f:Show()
+    mock.player:leaveCombat()
+    expect(f:IsKeyboardEnabled()).toBe(true)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+    -- closed in a fight: the keyboard isn't taken back after it
+    f:Show()
+    mock.player:enterCombat()
+    f:Hide()
+    mock.player:leaveCombat()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    expect(#mock.refusals()).toBe(0)
+end

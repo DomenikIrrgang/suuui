@@ -16,7 +16,10 @@
 -- find or use goes to both by addon message, and Share all in the settings
 -- sends every one you know. Every character with SuuUI saves what it's
 -- sent, whatever its race, so your Skyborne alts have them; a shared one
--- reads "Shared by" until you use Skysight there yourself.
+-- reads "Shared by" until you use Skysight there yourself. Taken (0.47)
+-- from the group's channels and the guild only (never a whisper), checked,
+-- 30 per sender a session, and never at the cost of one you found or
+-- confirmed; a burst from one sender is told once.
 --
 -- Only Skyborne characters see them: the world map's Skyborne filters
 -- (through the convergences service), and the minimap when near.
@@ -31,7 +34,6 @@ import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
 import CONVERGENCES from "/Core/ServiceKeys"
 import type ConvergenceOnMap from "/Core/ServiceKeys"
-import after from "wowlua:timer"
 import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type MapPinData from "/UI/MapPin"
 import * as secret from "wowlua:secret"
@@ -68,8 +70,9 @@ local SAME_SPOT = 40 -- yards
 local PENDING_FOR = 20 * 60 -- seconds a cast waits to be read
 local MAX_SPOTS = 200
 local MAX_PER_SENDER = 30 -- shared spots taken from one sender a session
-local PREFIX = "SuuUI"
 local TAG = "CONV"
+-- where they're taken from: the group's channels and the guild
+local CHANNELS = { "PARTY", "RAID", "INSTANCE_CHAT", "GUILD" }
 
 local SEED: Spot = { map = 2521, x = 0.4828, y = 0.2062, seed = true, confirmed = true }
 
@@ -142,23 +145,29 @@ local function changed(self: ConvergencesModule)
     self:UpdateMinimap()
 end
 
--- (room for one more: the oldest shared one not confirmed goes first)
-local function makeRoom(list: Spot[])
+-- Room for one more: the oldest shared one not confirmed goes first, then
+-- (for one you found) the oldest that isn't SuuUI's data. A shared one never
+-- pushes out one you found or confirmed: false then (GRP-24).
+local function makeRoom(list: Spot[], shared: boolean?): boolean
     if #list < MAX_SPOTS then
-        return
+        return true
     end
     for i, s in ipairs(list) do
         if s.from and not s.confirmed then
             table.remove(list, i)
-            return
+            return true
         end
+    end
+    if shared then
+        return false
     end
     for i, s in ipairs(list) do
         if not s.seed then
             table.remove(list, i)
-            return
+            return true
         end
     end
+    return true
 end
 
 --------------------------------------------------------------------------------
@@ -204,41 +213,15 @@ end
 -- Sharing: your group and your guild
 --------------------------------------------------------------------------------
 
-local function groupChannel(): string?
-    if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then
-        return "INSTANCE_CHAT"
-    end
-    if secret.flag(IsInRaid()) then
-        return "RAID"
-    end
-    if secret.flag(IsInGroup()) then
-        return "PARTY"
-    end
-end
-
--- (names can't break the message: no tabs, newlines or escapes)
+-- (names can't break the message, nor carry the UI's escapes: no tabs,
+-- newlines or "|"; 40 bytes at most)
 local function clean(s: unknown): string
-    return (tostring(s or ""):gsub("[\t\n\r|]", " "):sub(1, 40))
+    return SuuUI.Comm.Name(type(s) == "string" and s or "", 40) or ""
 end
 
-local function message(spot: Spot): string
-    return ("%s\t1\t%d\t%.4f\t%.4f\t%s\t%d"):format(TAG, spot.map, spot.x, spot.y, clean(spot.by), spot.at or 0)
-end
-
-local function send(text: string, channels: string[])
-    if not (C_ChatInfo and C_ChatInfo.SendAddonMessage) then
-        return
-    end
-    for _, ch in ipairs(channels) do
-        pcall(C_ChatInfo.SendAddonMessage, PREFIX, text, ch)
-    end
-end
-
-local function fromMe(sender: string): boolean?
-    local n, r = UnitFullName("player")
-    -- (your own name and realm: never secret; cast for strict mode)
-    local name, realm = n :: string, r :: string
-    return sender == name or (realm and (sender == name .. "-" .. realm or sender == name .. " " .. realm))
+-- A spot's message after its tag: "CONV\t1\t<map>\t<x>\t<y>\t<by>\t<at>".
+local function payloadOf(spot: Spot): string
+    return ("1\t%d\t%.4f\t%.4f\t%s\t%d"):format(spot.map, spot.x, spot.y, clean(spot.by), spot.at or 0)
 end
 
 --------------------------------------------------------------------------------
@@ -362,8 +345,13 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
     mmLayer: Frame? = nil
     mmPins: ConvergencePin[] = {}
     pending: Pending? = nil
-    -- shared spots taken this session, by sender
+    -- shared spots taken this session, by sender (only group and guild
+    -- members can send: it stays small)
     taken: { [string]: number }? = nil
+    -- Share all under way (a newer one stops it)
+    shareTicker: TickerHandle? = nil
+    -- shared spots not told yet: one sender's burst, told once
+    burst: { from: string, count: number, last: Spot }? = nil
 
     constructor()
         super({
@@ -405,7 +393,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
 
     function Add(spot: Spot): Spot
         local list = self:Spots()
-        makeRoom(list)
+        makeRoom(list, false)
         list[#list + 1] = spot
         changed(self)
         return spot
@@ -487,7 +475,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.pending = { map = map, x = x, y = y, cast = GetTime() }
-        after(0.5, function()
+        self:After(0.5, function()
             self:Resolve()
         end)
     end
@@ -547,15 +535,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
     end
 
     function Channels(): string[]
-        local list: string[] = {}
-        local g = groupChannel()
-        if g then
-            list[#list + 1] = g
-        end
-        if secret.flag(IsInGuild()) then
-            list[#list + 1] = "GUILD"
-        end
-        return list
+        return SuuUI.Comm.GroupAndGuild()
     end
 
     -- One spot, when you find or use it (Sharing › Send on).
@@ -563,42 +543,59 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         if not self:Get("send") then
             return
         end
-        local channels = self:Channels()
-        if #channels > 0 then
-            send(message(spot), channels)
+        for _, ch in ipairs(self:Channels()) do
+            self:SendAddonMessage(TAG, payloadOf(spot), ch)
         end
     end
 
-    -- Every spot you know (the settings' Share all), a few a second.
+    -- Every spot you know (the settings' Share all), four a second, to where
+    -- you are at each send (X-4.4: before, to where you were at the click,
+    -- also after leaving the group or turning the module off); a second
+    -- click starts over.
     function ShareAll()
-        local channels = self:Channels()
-        if #channels == 0 then
+        if #self:Channels() == 0 then
             return
         end
+        local was = self.shareTicker
+        if was then
+            was:Cancel()
+        end
+        local spots: Spot[] = {}
         for i, spot in ipairs(self:Spots()) do
-            after((i - 1) * 0.25, function()
-                send(message(spot), channels)
-            end)
+            spots[i] = spot
+        end
+        local i = 0
+        local function nextOne(ticker: TickerHandle?)
+            i += 1
+            local spot = spots[i]
+            local channels = self:Channels()
+            if not spot or #channels == 0 then
+                if ticker then
+                    ticker:Cancel()
+                end
+                self.shareTicker = nil
+                return
+            end
+            for _, ch in ipairs(channels) do
+                self:SendAddonMessage(TAG, payloadOf(spot), ch)
+            end
+        end
+        nextOne(nil)
+        if spots[2] then
+            self.shareTicker = self:Every(0.25, nextOne)
         end
     end
 
-    -- A spot from someone else's SuuUI: untrusted, so checked before it's kept.
-    function OnMessage(prefix: unknown, text: unknown, channel: unknown, sender: unknown)
-        if prefix ~= PREFIX or not (secret.readable(text) and secret.readable(sender)) or type(text) ~= "string" or
-            type(sender) ~= "string" then
+    -- A spot from someone else's SuuUI (the receiver took it from the group
+    -- or the guild, held to a rate; your own was dropped there): untrusted,
+    -- so checked before it's kept.
+    function OnSpot(payload: string, sender: string)
+        local version, mapText, xText, yText, byText, atText = strsplit("\t", payload)
+        if version ~= "1" or not self:Get("receive") then
             return
         end
-        local tag, version, mapText, xText, yText, byText, atText = strsplit("\t", text)
-        if tag ~= TAG or version ~= "1" or not self:Get("receive") or fromMe(sender) then
-            return
-        end
-        local map, x, y, at = tonumber(mapText), tonumber(xText), tonumber(yText), tonumber(atText)
-        if not (map and x and y and map == math.floor(map) and map > 0 and map < 100000 and x >= 0 and x <= 1 and
-            y >= 0 and
-            y <= 1) then
-            return
-        end
-        if not C_Map.GetMapInfo(map) then
+        local map, x, y = SuuUI.Comm.Map(mapText), SuuUI.Comm.Fraction(xText), SuuUI.Comm.Fraction(yText)
+        if not (map and x and y) then
             return
         end
         local taken = self.taken or {}
@@ -607,27 +604,65 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
             return
         end
         local spot: Spot = { map = map, x = x, y = y }
-        if self:Near(spot) then
+        if self:Near(spot) or not makeRoom(self:Spots(), true) then
             return
         end
         taken[sender] = (taken[sender] or 0) + 1
         local now = time()
-        spot.at = (at and at > 1.6e9 and at <= now + 86400) and math.floor(at) or now
-        local by = byText and clean(byText) or ""
+        spot.at = SuuUI.Comm.Int(atText, 1.6e9, now + 86400) or now
+        local by = clean(byText)
         spot.by = by ~= "" and by or nil
         local from = clean(sender)
         spot.from = from
         self:Add(spot)
-        if self:Shown() then
-            SuuUI.Notify({
-                id = "suu:convergence:shared",
-                kind = "timed",
-                category = "Skysight",
-                icon = { glyph = "tornado", color = "arcane" },
-                title = "Convergence of Elements shared",
-                body = self:Where(spot) .. ". Shared by " .. from .. ", saved for all your characters.",
-            })
+        self:TellShared(spot, from)
+    end
+
+    -- A shared spot told: one notice for a sender's burst (Share all sends
+    -- every spot one after another), a second after the last.
+    function TellShared(spot: Spot, from: string)
+        if not self:Shown() then
+            return
         end
+        local burst = self.burst
+        if burst and burst.from == from then
+            burst.count += 1
+            burst.last = spot
+        else
+            if burst then
+                self:Told()
+            end
+            burst = { from = from, count = 1, last = spot }
+            self.burst = burst
+        end
+        local mine = burst
+        self:After(1, function()
+            if self.burst == mine and mine.last == spot then
+                self:Told()
+            end
+        end)
+    end
+
+    function Told()
+        local burst = self.burst
+        self.burst = nil
+        if not burst then
+            return
+        end
+        local one = burst.count == 1
+        SuuUI.Notify({
+            id = "suu:convergence:shared",
+            kind = "timed",
+            category = "Skysight",
+            icon = { glyph = "tornado", color = "arcane" },
+            title = one and "Convergence of Elements shared" or "Convergences of Elements shared",
+            body = one and (self:Where(burst.last) .. ". Shared by " .. burst.from .. ", saved for all your characters.") or
+                ("%d convergences, the last at %s. Shared by %s, saved for all your characters."):format(
+                    burst.count,
+                    self:Where(burst.last),
+                    burst.from
+                ),
+        })
     end
 
     -- The world map's pin: the tornado in arcane on an arcane edge, glowing
@@ -774,11 +809,9 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
             end,
         })
         self:RegisterSettings(SECTION)
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-        end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
-            self:OnMessage(...)
+        -- (Share all sends four a second: room for it, not for a flood)
+        self:OnAddonMessage(TAG, { channels = CHANNELS, rate = { count = 24, seconds = 5 } }, function(payload, sender)
+            self:OnSpot(payload, sender)
         end)
         self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
             if secret.readable(spellID) and spellID == SKYSIGHT then
@@ -792,7 +825,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            after(0.5, function()
+            self:After(0.5, function()
                 readBlessing(self)
                 self:Resolve()
             end)
@@ -800,10 +833,7 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
         self:Watch("minimap", function()
             self:UpdateMinimap()
         end)
-        after(1, function()
-            if not self:IsEnabled() then
-                return
-            end
+        self:After(1, function()
             readBlessing(self)
             self:UpdateMinimap()
         end)
@@ -811,7 +841,8 @@ class ConvergencesModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
-        self.pending = nil
+        -- (its timers are cancelled: Share all stops, a burst isn't told)
+        self.pending, self.shareTicker, self.burst = nil, nil, nil
         local layer = self.mmLayer
         if layer then
             layer:Hide()

@@ -1,0 +1,586 @@
+-- Core/Comm: SuuUI's addon messages. A receiver of the test's own (a fake
+-- game: its clock, who the player is, the group's ranks) for every gate a
+-- message passes (the channel set, secret or odd arguments, the player's
+-- own, the length, the rank, the rate and its bookkeeping, the reply floor)
+-- and the sending side (format, the 255 bytes, lockdown, "unless the same");
+-- the field readers; SuuUI's own receiver on the emulated game's messages,
+-- the player's name and the group.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as comm from "/Core/Comm"
+import FakeReporter from "../../fakes"
+import expectNoErrors from "../../helpers"
+
+type Sent = { prefix: string, text: string, channel: string, target: string? }
+
+class FakeGame implements comm.CommGame
+    receiver: ((...unknown) -> ())? = nil
+    listens: number = 0
+    clock: number = 100
+    lockedNow: boolean = false
+    me: string = "Me Myself"
+    ranks: { [string]: comm.Membership } = {}
+    raid: boolean = false
+    sent: Sent[] = {}
+    answer: unknown = 0
+    fails: boolean = false
+
+    function listen(receive: (...unknown) -> ())
+        self.receiver = receive
+        self.listens += 1
+    end
+
+    function send(prefix: string, text: string, channel: string, target: string?): (boolean, unknown)
+        if self.fails then
+            return false, "throttled"
+        end
+        self.sent[#self.sent + 1] = { prefix = prefix, text = text, channel = channel, target = target }
+        return true, self.answer
+    end
+
+    function now(): number
+        return self.clock
+    end
+
+    function locked(): boolean
+        return self.lockedNow
+    end
+
+    function isMe(sender: string): boolean
+        return sender == self.me
+    end
+
+    function membership(sender: string): comm.Membership?
+        return self.ranks[sender]
+    end
+
+    function inRaid(): boolean
+        return self.raid
+    end
+end
+
+const OWNER = { name = "Comm Test" }
+const OTHER = { name = "Comm Test Other" }
+
+-- A receiver of its own; `heard` keeps "payload|sender|channel" per call.
+type Rig = { c: comm.AddonComm, game: FakeGame, reporter: FakeReporter, heard: string[] }
+local function rig(): Rig
+    local game = FakeGame.new()
+    local reporter = FakeReporter.new()
+    return { c = comm.AddonComm.new(game, reporter), game = game, reporter = reporter, heard = {} }
+end
+
+local function listen(r: Rig, verb: string, opts: comm.VerbOptions?)
+    r.c:on(OWNER, verb, opts, function(payload: string, sender: string, channel: string)
+        r.heard[#r.heard + 1] = payload .. "|" .. sender .. "|" .. channel
+    end)
+end
+
+local function msg(r: Rig, text: unknown, channel: unknown, sender: unknown)
+    local receive = assert(r.game.receiver, "not listening")
+    receive("SuuUI", text, channel, sender, "", 0, 0, "", 0)
+end
+
+@afterEach
+local function cleanup()
+    comm.release(OWNER)
+    comm.release(OTHER)
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    mock.group:leave()
+end
+
+--------------------------------------------------------------------------------
+-- Receiving: the verb, the handlers
+--------------------------------------------------------------------------------
+
+@test("a verb up to the first tab; the payload after it, empty for a bare verb")
+local function verbs()
+    local r = rig()
+    expect(r.game.listens).toBe(0)
+    listen(r, "PULL")
+    listen(r, "RDYQ")
+    -- one listener for every verb
+    expect(r.game.listens).toBe(1)
+    msg(r, "PULL\t10", "PARTY", "Member1")
+    msg(r, "RDYQ", "PARTY", "Member1")
+    msg(r, "PULL\t", "PARTY", "Member1")
+    msg(r, "MARK\t1\t2", "PARTY", "Member1")
+    msg(r, "PULLX\t3", "PARTY", "Member1")
+    expect(r.heard).toEqual({ "10|Member1|PARTY", "|Member1|PARTY", "|Member1|PARTY" })
+end
+
+@test("every handler of a verb runs; one that errors is reported under its owner and the rest still run")
+local function handlers()
+    local r = rig()
+    r.c:on(OTHER, "FIRE", nil, function()
+        error("comm-test-boom")
+    end)
+    listen(r, "FIRE")
+    msg(r, "FIRE\t1", "RAID", "Member1")
+    expect(r.heard).toEqual({ "1|Member1|RAID" })
+    expect(r.reporter.errors[1]).toContain("Comm Test Other: ")
+    expect(r.reporter.errors[1]).toContain("comm-test-boom")
+end
+
+@test("released with the owner: no more handlers, no more calls; one released during a message isn't called")
+local function released()
+    local r = rig()
+    listen(r, "PULL")
+    expect(r.c:count(OWNER)).toBe(1)
+    r.c:release(OWNER)
+    expect(r.c:count(OWNER)).toBe(0)
+    msg(r, "PULL\t5", "PARTY", "Member1")
+    expect(r.heard).toEqual({})
+    -- the first handler lets the second's owner go: the second isn't called
+    r.c:on(OTHER, "PULL", nil, function()
+        r.c:release(OWNER)
+    end)
+    listen(r, "PULL")
+    msg(r, "PULL\t5", "PARTY", "Member1")
+    expect(r.heard).toEqual({})
+    r.c:release(OTHER)
+    -- still one listener with the game
+    listen(r, "PULL")
+    expect(r.game.listens).toBe(1)
+end
+
+@test("a handler needs an owner, a verb without tabs and a function; a rate needs a count and seconds")
+local function asserts()
+    local r = rig()
+    local function fails(fn: () -> ())
+        expect(pcall(fn)).toBe(false)
+    end
+    local noop = function(_: string, _s: string, _c: string) end
+    fails(function()
+        r.c:on(nil, "X", nil, noop)
+    end)
+    fails(function()
+        r.c:on(OWNER, "X\tY", nil, noop)
+    end)
+    fails(function()
+        r.c:on(OWNER, "", nil, noop)
+    end)
+    fails(function()
+        r.c:on(OWNER, "X", { rate = { count = 0, seconds = 5 } }, noop)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- The gates
+--------------------------------------------------------------------------------
+
+@test("the channel: the group's by default; GUILD, WHISPER and others only when the verb names them")
+@cases({
+    { "PARTY", true },
+    { "RAID", true },
+    { "INSTANCE_CHAT", true },
+    { "GUILD", false },
+    { "OFFICER", false },
+    { "WHISPER", false },
+    { "CHANNEL", false },
+    { "SAY", false },
+})
+local function defaultChannels(channel: string, taken: boolean)
+    local r = rig()
+    listen(r, "PULL")
+    msg(r, "PULL\t1", channel, "Member1")
+    expect(#r.heard).toBe(taken and 1 or 0)
+end
+
+@test("the channel: a verb's own set; a whisper only when named")
+local function ownChannels()
+    local r = rig()
+    listen(r, "CONV", { channels = { "PARTY", "RAID", "INSTANCE_CHAT", "GUILD" } })
+    msg(r, "CONV\t1", "GUILD", "Member1")
+    msg(r, "CONV\t1", "WHISPER", "Stranger")
+    expect(r.heard).toEqual({ "1|Member1|GUILD" })
+    local w = rig()
+    listen(w, "PING", { channels = { "WHISPER" } })
+    msg(w, "PING", "WHISPER", "Friend")
+    msg(w, "PING", "PARTY", "Member1")
+    expect(w.heard).toEqual({ "|Friend|WHISPER" })
+end
+
+@test("secret or odd arguments are dropped before anything is compared")
+local function oddArguments()
+    local r = rig()
+    listen(r, "PULL")
+    local receive = assert(r.game.receiver)
+    receive(mock.secret("SuuUI"), "PULL\t1", "PARTY", "Member1")
+    receive("SuuUI", mock.secret("PULL\t1"), "PARTY", "Member1")
+    receive("SuuUI", "PULL\t1", mock.secret("PARTY"), "Member1")
+    receive("SuuUI", "PULL\t1", "PARTY", mock.secret("Member1"))
+    receive("SuuUI", 42, "PARTY", "Member1")
+    receive("SuuUI", "PULL\t1", nil, "Member1")
+    receive("SuuUI", "PULL\t1", "PARTY", nil)
+    receive("SuuUI", "PULL\t1", "PARTY", "")
+    receive("Other", "PULL\t1", "PARTY", "Member1")
+    receive(nil, "PULL\t1", "PARTY", "Member1")
+    expect(r.heard).toEqual({})
+    expect(r.reporter.errors).toEqual({})
+end
+
+@test("the player's own message coming back is dropped")
+local function ownMessage()
+    local r = rig()
+    listen(r, "PULL")
+    msg(r, "PULL\t1", "PARTY", "Me Myself")
+    msg(r, "PULL\t1", "PARTY", "Member1")
+    expect(r.heard).toEqual({ "1|Member1|PARTY" })
+end
+
+@test("the length: the whole text at most 255 bytes; a verb's payload at most its maxLength")
+local function lengths()
+    local r = rig()
+    listen(r, "NOTE")
+    listen(r, "TAG", { maxLength = 4 })
+    msg(r, "NOTE\t" .. string.rep("x", 250), "PARTY", "Member1")
+    msg(r, "NOTE\t" .. string.rep("x", 251), "PARTY", "Member1")
+    expect(#r.heard).toBe(1)
+    msg(r, "TAG\tabcd", "PARTY", "Member1")
+    msg(r, "TAG\tabcde", "PARTY", "Member1")
+    expect(r.heard[2]).toBe("abcd|Member1|PARTY")
+    expect(#r.heard).toBe(2)
+end
+
+@test("rank assist: in a raid the leader and assistants; in a party anyone in it; someone not found never")
+local function rankAssist()
+    local r = rig()
+    listen(r, "PULL", { rank = "assist" })
+    r.game.ranks = { Leader = "lead", Helper = "assist", Member = "member" }
+    r.game.raid = true
+    for _, who in ipairs({ "Leader", "Helper", "Member", "Unknown" }) do
+        msg(r, "PULL\t1", "RAID", who)
+    end
+    expect(r.heard).toEqual({ "1|Leader|RAID", "1|Helper|RAID" })
+    r.heard = {}
+    r.game.raid = false
+    for _, who in ipairs({ "Leader", "Member", "Unknown" }) do
+        msg(r, "PULL\t2", "PARTY", who)
+    end
+    expect(r.heard).toEqual({ "2|Leader|PARTY", "2|Member|PARTY" })
+end
+
+@test("rank lead: the leader only")
+local function rankLead()
+    local r = rig()
+    listen(r, "BOSS", { rank = "lead" })
+    r.game.ranks = { Leader = "lead", Helper = "assist", Member = "member" }
+    for _, who in ipairs({ "Leader", "Helper", "Member", "Unknown" }) do
+        msg(r, "BOSS", "PARTY", who)
+    end
+    expect(r.heard).toEqual({ "|Leader|PARTY" })
+end
+
+@test("the rate: so many per sender per window, each sender on their own; the next window starts again")
+local function rate()
+    local r = rig()
+    listen(r, "MARK", { rate = { count = 3, seconds = 60 } })
+    for _ = 1, 5 do
+        msg(r, "MARK\ta", "PARTY", "Member1")
+    end
+    msg(r, "MARK\tb", "PARTY", "Member2")
+    expect(#r.heard).toBe(4)
+    r.game.clock += 59
+    msg(r, "MARK\ta", "PARTY", "Member1")
+    expect(#r.heard).toBe(4)
+    r.game.clock += 1
+    msg(r, "MARK\ta", "PARTY", "Member1")
+    expect(#r.heard).toBe(5)
+end
+
+@test("the rate's bookkeeping: senders whose window is over are forgotten; never more than 500 kept")
+local function ratePruned()
+    local r = rig()
+    listen(r, "MARK", { rate = { count = 1, seconds = 10 } })
+    for i = 1, 20 do
+        msg(r, "MARK\tx", "PARTY", "Member" .. i)
+    end
+    expect(r.c:tracked(OWNER, "MARK")).toBe(20)
+    r.game.clock += 11
+    msg(r, "MARK\tx", "PARTY", "Member1")
+    expect(r.c:tracked(OWNER, "MARK")).toBe(1)
+    -- a flood of names within one window: kept bounded
+    for i = 1, 1200 do
+        msg(r, "MARK\tx", "PARTY", "Flood" .. i)
+    end
+    expect(r.c:tracked(OWNER, "MARK") <= 500).toBe(true)
+    expect(#r.heard).toBe(21 + 1200)
+end
+
+@test("the reply floor: a question runs its handler at most once per interval, whoever asks")
+local function replyFloor()
+    local r = rig()
+    listen(r, "RDYQ", { replyEvery = 10 })
+    msg(r, "RDYQ", "RAID", "Member1")
+    msg(r, "RDYQ", "RAID", "Member2")
+    r.game.clock += 9
+    msg(r, "RDYQ", "RAID", "Member3")
+    expect(#r.heard).toBe(1)
+    r.game.clock += 1
+    msg(r, "RDYQ", "RAID", "Member3")
+    expect(#r.heard).toBe(2)
+    -- a refused question (wrong channel) doesn't use the floor up
+    r.game.clock += 20
+    msg(r, "RDYQ", "WHISPER", "Stranger")
+    msg(r, "RDYQ", "RAID", "Member1")
+    expect(#r.heard).toBe(3)
+end
+
+--------------------------------------------------------------------------------
+-- Sending
+--------------------------------------------------------------------------------
+
+@test("send: the verb, a tab and the payload on the channel; a bare verb without one")
+local function sends()
+    local r = rig()
+    local ok, result, tried = r.c:send(OWNER, "PULL", "10", "PARTY")
+    expect({ ok, result, tried }).toEqual({ true, "0", true })
+    r.c:send(OWNER, "RDYQ", nil, "RAID")
+    r.c:send(OWNER, "RDY", "", "RAID")
+    r.c:send(OWNER, "PING", nil, "WHISPER", "Friend")
+    local wanted: Sent[] = {
+        { prefix = "SuuUI", text = "PULL\t10", channel = "PARTY", target = nil },
+        { prefix = "SuuUI", text = "RDYQ", channel = "RAID", target = nil },
+        { prefix = "SuuUI", text = "RDY\t", channel = "RAID", target = nil },
+        { prefix = "SuuUI", text = "PING", channel = "WHISPER", target = "Friend" },
+    }
+    expect(r.game.sent).toEqual(wanted)
+end
+
+@test("send refuses: no channel, a whisper without a target, more than 255 bytes, in lockdown")
+local function refuses()
+    local r = rig()
+    expect({ r.c:send(OWNER, "PULL", "1", nil) }).toEqual({ false, "no channel", false })
+    expect({ r.c:send(OWNER, "PING", nil, "WHISPER") }).toEqual({ false, "no target", false })
+    expect({ r.c:send(OWNER, "NOTE", string.rep("x", 251), "PARTY") }).toEqual({ false, "too long", false })
+    expect((r.c:send(OWNER, "NOTE", string.rep("x", 250), "PARTY"))).toBe(true)
+    r.game.lockedNow = true
+    expect({ r.c:send(OWNER, "PULL", "1", "PARTY") }).toEqual({ false, "lockdown", false })
+    expect(#r.game.sent).toBe(1)
+end
+
+@test("send: the game's error or a secret answer as the result")
+local function answers()
+    local r = rig()
+    r.game.fails = true
+    expect({ r.c:send(OWNER, "RDYQ", nil, "RAID") }).toEqual({ false, "throttled", true })
+    r.game.fails = false
+    r.game.answer = mock.secret(0)
+    expect({ r.c:send(OWNER, "RDYQ", nil, "RAID") }).toEqual({ true, "secret", true })
+end
+
+@test("unlessSame: not again what this owner sent last of the verb on the channel")
+local function unlessSame()
+    local r = rig()
+    local same = { unlessSame = true }
+    expect((r.c:send(OWNER, "RDY", "1:0", "RAID", nil, same))).toBe(true)
+    expect({ r.c:send(OWNER, "RDY", "1:0", "RAID", nil, same) }).toEqual({ false, "unchanged", false })
+    -- another channel, another owner, another payload, or without the option: sent
+    expect((r.c:send(OWNER, "RDY", "1:0", "PARTY", nil, same))).toBe(true)
+    expect((r.c:send(OTHER, "RDY", "1:0", "RAID", nil, same))).toBe(true)
+    expect((r.c:send(OWNER, "RDY", "1:0", "RAID"))).toBe(true)
+    expect((r.c:send(OWNER, "RDY", "2:0", "RAID", nil, same))).toBe(true)
+    -- `within`: the same again once that long has passed
+    r.game.clock += 31
+    expect((r.c:send(OWNER, "RDY", "2:0", "RAID", nil, { unlessSame = true, within = 30 }))).toBe(true)
+    -- a failed send isn't remembered
+    r.game.fails = true
+    r.c:send(OWNER, "RDY", "3:0", "RAID", nil, same)
+    r.game.fails = false
+    expect((r.c:send(OWNER, "RDY", "3:0", "RAID", nil, same))).toBe(true)
+    -- released: forgotten
+    r.c:release(OWNER)
+    expect((r.c:send(OWNER, "RDY", "3:0", "RAID", nil, same))).toBe(true)
+end
+
+@test("unlessSame with a function: it decides, told how long ago the last went")
+local function unlessSameFn()
+    local r = rig()
+    local asked: string[] = {}
+    local opts: comm.SendOptions = {
+        unlessSame = function(last: string, now: string, age: number): boolean
+            asked[#asked + 1] = last .. ">" .. now .. "@" .. age
+            return tonumber(last) == (tonumber(now) or 0) + age
+        end,
+    }
+    r.c:send(OWNER, "CD", "60", "RAID", nil, opts)
+    r.game.clock += 20
+    expect((r.c:send(OWNER, "CD", "40", "RAID", nil, opts))).toBe(false)
+    expect((r.c:send(OWNER, "CD", "50", "RAID", nil, opts))).toBe(true)
+    expect(asked).toEqual({ "60>40@20", "60>50@20" })
+end
+
+--------------------------------------------------------------------------------
+-- Field readers
+--------------------------------------------------------------------------------
+
+@test("int: a whole number written plainly, within the range")
+@cases({
+    { "12", 12 },
+    { "-3", -3 },
+    { "0", 0 },
+    { "61", nil },
+    { "-61", nil },
+    { "1.5", nil },
+    { "1e3", nil },
+    { "0x10", nil },
+    { " 5", nil },
+    { "", nil },
+    { "nan", nil },
+    { "inf", nil },
+    { "99999999999999", nil },
+})
+local function ints(s: string, out: number?)
+    expect(comm.int(s, -60, 60)).toBe(out)
+end
+
+@test("number and fraction: plain decimals within the range")
+@cases({
+    { "0.4200", 0.42 },
+    { "1", 1 },
+    { "0", 0 },
+    { ".5", 0.5 },
+    { "1.0001", nil },
+    { "-0.1", nil },
+    { "1e-1", nil },
+    { "nan", nil },
+    { "inf", nil },
+    { "0x1", nil },
+    { "", nil },
+})
+local function fractions(s: string, out: number?)
+    expect(comm.fraction(s)).toBe(out)
+end
+
+@test("the readers take only strings, never secrets")
+local function readersOnStrings()
+    expect(comm.int(12, 0, 20)).toBeNil()
+    expect(comm.int(mock.secret("12"), 0, 20)).toBeNil()
+    expect(comm.number(nil, 0, 1)).toBeNil()
+    expect(comm.name(42)).toBeNil()
+    expect(comm.name(mock.secret("Name"))).toBeNil()
+    expect(comm.oneOf(mock.secret("star"), { "star" })).toBeNil()
+    expect(comm.number("-1.5", -2, 0)).toBe(-1.5)
+end
+
+@test("map: a map the client knows")
+local function maps()
+    expect(comm.map("1429")).toBe(1429)
+    expect(comm.map("1429.5")).toBeNil()
+    expect(comm.map("0")).toBeNil()
+    expect(comm.map("100000")).toBeNil()
+    expect(comm.map("-1429")).toBeNil()
+    expect(comm.map("99998")).toBeNil()
+    expect(comm.map("1e300")).toBeNil()
+end
+
+@test("name: plain text, the UI's escapes and control characters made spaces, cut without breaking a character")
+local function names()
+    expect(comm.name("Boss")).toBe("Boss")
+    expect(comm.name("|cffff0000Red|r")).toBe(" cffff0000Red r")
+    expect(comm.name("|TInterface\\Icons\\x:64|t")).toBe(" TInterface\\Icons\\x:64 t")
+    expect(comm.name("|Hplayer:Member1|h[Member1]|h")).toBe(" Hplayer:Member1 h[Member1] h")
+    expect(comm.name("a\tb\nc\rd\0e")).toBe("a b c d e")
+    expect(comm.name(string.rep("x", 50))).toBe(string.rep("x", 40))
+    expect(comm.name(string.rep("x", 50), 10)).toBe(string.rep("x", 10))
+    -- "é" is two bytes: cut after its first, it goes whole
+    expect(comm.name(string.rep("x", 39) .. "é")).toBe(string.rep("x", 39))
+    expect(comm.name(string.rep("x", 38) .. "é")).toBe(string.rep("x", 38) .. "é")
+    -- a three-byte character
+    expect(comm.name("ab€", 4)).toBe("ab")
+    expect(comm.name("")).toBe("")
+end
+
+@test("oneOf: one of the list's values")
+local function oneOf()
+    local list = { "star", "moon" }
+    expect(comm.oneOf("moon", list)).toBe("moon")
+    expect(comm.oneOf("Moon", list)).toBeNil()
+    expect(comm.oneOf(nil, list)).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- SuuUI's own receiver, on the emulated game
+--------------------------------------------------------------------------------
+
+@test("SuuUI's receiver: the game's messages reach a handler; the player's own come back and are dropped")
+local function gameMessages()
+    local heard: string[] = {}
+    comm.on(OWNER, "ZZCOMM", nil, function(payload: string, sender: string, channel: string)
+        heard[#heard + 1] = payload .. "|" .. sender .. "|" .. channel
+    end)
+    expect(C_ChatInfo.IsAddonMessagePrefixRegistered("SuuUI")).toBe(true)
+    mock.receiveAddonMessage("SuuUI", "ZZCOMM\thi", "PARTY", "Member1-Realm")
+    mock.receiveAddonMessage("SuuUI", "ZZCOMM\thi", "WHISPER", "Stranger-Realm")
+    expect(heard).toEqual({ "hi|Member1-Realm|PARTY" })
+    -- your own: sent to the party, heard back on the next frame
+    local friend = mock.spawnUnit({ name = "Member1", player = true, reaction = "friendly" })
+    mock.group:add(friend)
+    expect((comm.send(OWNER, "ZZCOMM", "mine", "PARTY"))).toBe(true)
+    local out = mock.sentAddonMessages()
+    expect(out[#out].message).toBe("ZZCOMM\tmine")
+    mock.advanceFrames(2)
+    expect(#heard).toBe(1)
+    expectNoErrors()
+end
+
+@test("who the player is: their whole name, Name-Realm, Name Realm")
+local function playerNames()
+    local name, realm = UnitFullName("player")
+    local first, second = tostring(name), tostring(realm)
+    expect(comm.isMe(first .. "-" .. second)).toBe(true)
+    expect(comm.isMe(first .. " " .. second)).toBe(true)
+    expect(comm.isMe(GetUnitName("player", true))).toBe(true)
+    expect(comm.isMe(first .. "-Elsewhere")).toBe(false)
+    expect(comm.isMe("Member1")).toBe(false)
+    expect(comm.isMe(mock.secret(first))).toBe(false)
+    expect(comm.isMe(nil)).toBe(false)
+end
+
+@test("the group's ranks: a member found by name, the leader; someone not in the group not found")
+local function memberships()
+    local game = comm.GameComm.new()
+    local friend = mock.spawnUnit({ name = "Member1", player = true, reaction = "friendly" })
+    mock.group:add(friend)
+    expect(game:membership("Member1")).toBe("member")
+    expect(game:membership(tostring(GetUnitName("party1", true)))).toBe("member")
+    expect(game:membership("Stranger")).toBeNil()
+    expect(game:inRaid()).toBe(false)
+    C_PartyInfo.PromoteToLeader("party1")
+    -- (the server's answer, a round trip later)
+    mock.advanceTime(1)
+    expect(game:membership("Member1")).toBe("lead")
+    -- a raid
+    local other = mock.spawnUnit({ name = "Member2", player = true, reaction = "friendly" })
+    mock.group:add(other, true)
+    expect(game:inRaid()).toBe(true)
+    expect(game:membership("Member2")).toBe("member")
+    expect(game:membership("Member1")).never.toBeNil()
+end
+
+@test("the group's channel and the guild")
+local function channels()
+    expect(comm.groupChannel()).toBeNil()
+    local friend = mock.spawnUnit({ name = "Member1", player = true, reaction = "friendly" })
+    mock.group:add(friend)
+    expect(comm.groupChannel()).toBe("PARTY")
+    expect(comm.groupAndGuild()[1]).toBe("PARTY")
+    local other = mock.spawnUnit({ name = "Member2", player = true, reaction = "friendly" })
+    mock.group:add(other, true)
+    expect(comm.groupChannel()).toBe("RAID")
+end
+
+@test("lockdown: nothing is sent in combat or the chat lockdown")
+local function gameLockdown()
+    local game = comm.GameComm.new()
+    expect(game:locked()).toBe(false)
+    mock.player:enterCombat()
+    expect(game:locked()).toBe(true)
+    mock.player:leaveCombat()
+    expect(game:locked()).toBe(false)
+    expectNoErrors()
+end

@@ -27,6 +27,7 @@ import * as hooks from "/Core/Hooks"
 import * as cvars from "/Core/CVars"
 import * as anchors from "/Core/Anchors"
 import * as visibility from "/UI/Visibility"
+import * as comm from "/Core/Comm"
 
 config({ lifecycle = "manual" })
 
@@ -1322,6 +1323,44 @@ local function visibilityAndAnchors()
     mock.advanceFrames(2)
     expect(f).toBeShown()
     mock.player:leaveCombat()
+    m:Set("enabled", false)
+end
+
+@test("OnAddonMessage and SendAddonMessage: the module's handlers, under its name, gone when it turns off")
+local function ownedAddonMessages()
+    local heard: string[] = {}
+    local m = register({
+        id = nextId(),
+        name = "ZZ Comm",
+        OnEnable = function(self: Module)
+            self:OnAddonMessage("ZZMPING", { channels = { "PARTY", "WHISPER" } }, function(payload, sender, channel)
+                heard[#heard + 1] = payload .. "|" .. sender .. "|" .. channel
+            end)
+            self:OnAddonMessage("ZZMBOOM", nil, function()
+                error("modules-err-comm")
+            end)
+        end,
+    })
+    expect(comm.count(m)).toBe(2)
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\thi", "WHISPER", "Member1-Realm")
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\thi", "GUILD", "Member1-Realm")
+    expect(heard).toEqual({ "hi|Member1-Realm|WHISPER" })
+    mock.receiveAddonMessage("SuuUI", "ZZMBOOM", "PARTY", "Member1-Realm")
+    expect((faultWith("modules-err-comm") :: fault.Entry).source).toBe("ZZ Comm")
+    -- sending: "verb\tpayload" on the channel, refused without one
+    expect({ m:SendAddonMessage("ZZMPING", "x", nil) }).toEqual({ false, "no channel", false })
+    local before = #mock.sentAddonMessages()
+    m:SendAddonMessage("ZZMPING", "x", "WHISPER", "Member1")
+    local sent = mock.sentAddonMessages()
+    expect(#sent).toBe(before + 1)
+    expect(sent[#sent].message).toBe("ZZMPING\tx")
+    expect(sent[#sent].target).toBe("Member1")
+    m:Set("enabled", false)
+    expect(comm.count(m)).toBe(0)
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\tagain", "WHISPER", "Member1-Realm")
+    expect(#heard).toBe(1)
+    m:Set("enabled", true)
+    expect(comm.count(m)).toBe(2)
     m:Set("enabled", false)
 end
 

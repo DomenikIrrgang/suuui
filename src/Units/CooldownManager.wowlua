@@ -34,7 +34,6 @@ import Panel as PanelClass from "/UI/Panel"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
-import after from "wowlua:timer"
 import * as Lists from "./CooldownManager/Lists"
 import * as Conditions from "./CooldownManager/Conditions"
 import * as migrations from "./CooldownManager/Migrations"
@@ -54,8 +53,9 @@ type EditedWhen = Conditions.EditedWhen
 type Choice = Conditions.Choice
 type ClassTalent = Conditions.ClassTalent
 
--- What "+ Add" offers first ("Seen recently"), newest first, by class and kind.
-type RecentByClass = { [string]: { [string]: Recent[] } }
+-- What "+ Add" offers first ("Seen recently"), newest first, by kind. (0.47:
+-- this character's, in its data; before, by class in the profile.)
+type RecentByKind = { [string]: Recent[] }
 
 local DEFAULTS = {
     position = { point = "BOTTOM", x = 0, y = 322 } :: Position,
@@ -70,12 +70,10 @@ local DEFAULTS = {
     utilityInline = false,
     readyPop = true,
     procHighlight = true,
-    -- recent[CLASS] = { cooldown = { { name, ids } … }, aura = { … } }:
-    -- what "+ Add" offers first ("Seen recently"), newest first
-    recent = {} :: RecentByClass,
-    -- this module switched Blizzard's Cooldown Manager off (its CVar), so
-    -- turning the module off switches it back on
-    viewerOff = false,
+    -- (0.47: "Seen recently" (recent) and whether this module switched
+    -- Blizzard's Cooldown Manager off (viewerOff) are no longer settings:
+    -- the character's data and the module's CVar memory keep them; the
+    -- migrations at the end of the file move the old values)
     -- the resource bar under the rows (design B): your power, combo
     -- points, a druid's mana in forms; as wide as your cast bar
     resource = "both", -- "off", "power" or "both" (with points)
@@ -429,30 +427,35 @@ local function candidates(kind: string): ({ [string]: number[] }, { [string]: Gr
 end
 
 -- "Seen recently": spells you cast and auras on you and your target (out of
--- combat, when the game shows them), newest first, RECENT_MAX per kind and
--- class. A name already near the top isn't written again.
+-- combat, when the game shows them), newest first, RECENT_MAX per kind. A
+-- name already near the top isn't written again. (0.47) Kept in this
+-- character's data, not the profile: it isn't a choice, an export
+-- shouldn't carry it, and a cast in combat writes no setting.
 local RECENT_MAX = 12
+
+local function recentKinds(): RecentByKind
+    local data = M:CharData()
+    local all = data.recent
+    if type(all) ~= "table" then
+        all = {}
+        data.recent = all
+    end
+    return all :: unknown :: RecentByKind
+end
 
 local function remember(kind: string, name: string?, id: number?)
     if not (name and id) then
         return
     end
-    local all = M:Get("recent")
-    local mine = all[CLASS]
-    local recentList = Lists.pushRecent(mine and mine[kind] or {}, name, id, RECENT_MAX)
-    if not recentList then
-        return
+    local mine = recentKinds()
+    local recentList = Lists.pushRecent(mine[kind] or {}, name, id, RECENT_MAX)
+    if recentList then
+        mine[kind] = recentList
     end
-    local changed = copy(all)
-    local byKind = changed[CLASS] or {}
-    changed[CLASS] = byKind
-    byKind[kind] = recentList
-    M:Set("recent", changed)
 end
 
 local function recent(kind: string): Recent[]
-    local mine = M:Get("recent")[CLASS]
-    return mine and mine[kind] or {}
+    return recentKinds()[kind] or {}
 end
 
 -- Out of combat: the auras on you (anyone's) and yours on the target. Only
@@ -480,14 +483,9 @@ local function rememberAuras()
         end
     end
     local fresh = Lists.mergeRecent(recent("aura"), scanned, RECENT_MAX)
-    if not fresh then
-        return
+    if fresh then
+        recentKinds().aura = fresh
     end
-    local all = copy(M:Get("recent"))
-    local byKind = all[CLASS] or {}
-    all[CLASS] = byKind
-    byKind.aura = fresh
-    M:Set("recent", all)
 end
 
 -- A spell you cast, if it's one of yours with a cooldown (or a preset's).
@@ -3392,17 +3390,36 @@ class CooldownsModule extends Module<typeof(DEFAULTS)>
             return
         end
         local pos = self:Get("position")
-        UI.SetVisibility(t, pos.hidden and "hidden" or self:Get("shows"))
+        UI.SetVisibility(t, pos.hidden and "hidden" or self:Get("shows"), nil, self)
+    end
+
+    -- Blizzard's own manager would show beside this one: off through the
+    -- module's CVar memory (0.47), which gives the player's value back when
+    -- this module turns off.
+    function ViewerOff()
+        local data = self:CharData()
+        if data.viewerOff == true then
+            -- an older SuuUI switched it off and noted that in the profile
+            -- (moved here by the "viewerOff-cvar" migration): while the game
+            -- still has its "0", put the player's "1" back first, so the
+            -- memory takes it as theirs. Out of combat, like the write.
+            if InCombatLockdown() then
+                self:RunOutOfCombat("viewer", function()
+                    self:ViewerOff()
+                end)
+                return
+            end
+            local ok, now = pcall(C_CVar.GetCVar, "cooldownViewerEnabled")
+            if ok and now == "0" then
+                pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "1")
+            end
+            data.viewerOff = nil
+        end
+        self:SetCVar("cooldownViewerEnabled", "0")
     end
 
     override function OnEnable()
-        -- Blizzard's own manager would show beside this one (it comes back when
-        -- this module turns off).
-        if C_CVar and C_CVar.GetCVar and C_CVar.GetCVar("cooldownViewerEnabled") == "1" then
-            if pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "0") then
-                self:Set("viewerOff", true)
-            end
-        end
+        self:ViewerOff()
         local tracker = self.tracker
         if not tracker then
             tracker = UI.CooldownTracker(SuuUI.Root, { name = "SuuUICooldownManager" })
@@ -3453,27 +3470,31 @@ class CooldownsModule extends Module<typeof(DEFAULTS)>
         self:WatchAll({ "shows", "position" }, function()
             self:ApplyVisibility()
         end)
-        -- "Seen recently" for "+ Add" (aura changes settle first)
+        -- "Seen recently" for "+ Add" (aura changes settle first; one scan
+        -- waiting at a time, whichever event asked for it)
         local pending = false
-        self:OnUnitEvent("UNIT_AURA", { "player", "target" }, function()
+        local function scanSoon(delay: number)
             if pending or InCombatLockdown() then
                 return
             end
             pending = true
-            after(1, function()
+            self:After(delay, function()
                 pending = false
                 rememberAuras()
             end)
+        end
+        self:OnUnitEvent("UNIT_AURA", { "player", "target" }, function()
+            scanSoon(1)
         end)
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
-            after(0.5, rememberAuras)
+            scanSoon(0.5)
         end)
         self:OnUnitEvent("UNIT_SPELLCAST_SUCCEEDED", { "player" }, function(_, _, _, spellID)
             rememberCast(spellID)
         end)
         -- respecs and new talent points switch the setup
         local function respec()
-            after(0.2, function()
+            self:After(0.2, function()
                 self:UpdateSpec()
             end)
         end
@@ -3486,25 +3507,18 @@ class CooldownsModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED", respec)
     end
 
-    -- Off: no events, driver or aura sounds, hidden in edit and keybind mode
-    -- too, and Blizzard's manager back if this module switched it off.
+    -- Off: no events, driver or aura sounds, hidden. The registry lets the
+    -- tracker go from visibility (so edit and keybind mode no longer show
+    -- it), cancels the timers and gives Blizzard's manager back (0.47).
     override function OnDisable()
         local tracker = self.tracker
         if tracker then
             tracker:Stop()
-            UI.SetVisibility(tracker, "hidden")
+            tracker:Hide()
         end
         local resource = self.resource
         if resource then
             resource:Stop()
-        end
-        if self:Get("viewerOff") then
-            self:Set("viewerOff", false)
-            self:RunOutOfCombat("viewer", function()
-                if C_CVar and C_CVar.SetCVar then
-                    pcall(C_CVar.SetCVar, "cooldownViewerEnabled", "1")
-                end
-            end)
         end
     end
 end
@@ -3523,6 +3537,25 @@ end)
 -- (a preset's IDs fixed: a new key per fix, so it reaches saved setups)
 M:Migrate("preset-ids-eclipse-" .. CLASS, function(values: Values)
     migrations.presetIDs(values, CLASS, presets())
+end)
+-- 0.47: "this module switched Blizzard's manager off" was a profile setting
+-- (viewerOff), lost on a profile switch or reset. It moves to this
+-- character's data once, for the next enable to hand to the CVar memory
+-- (ViewerOff); the profile key goes. (A profile shared by several
+-- characters gives it to the one that loads first.)
+M:Migrate("viewerOff-cvar", function(values: Values)
+    local off = values.viewerOff
+    values.viewerOff = nil
+    if off == true then
+        M:CharData().viewerOff = true
+    end
+end)
+-- 0.47: "Seen recently" was a profile setting by class; each class's list
+-- moves to the data of the first character of that class that loads (one
+-- migration per class), unless it has a list already, and leaves the
+-- profile.
+M:Migrate("recent-chardata-" .. CLASS, function(values: Values)
+    migrations.recentToCharData(values, CLASS, M:CharData())
 end)
 -- (0.6.38's run of it gave a shared slot's member its siblings' IDs: undone)
 M:Migrate("preset-ids-untangle-" .. CLASS, function(values: Values)

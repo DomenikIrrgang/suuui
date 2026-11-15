@@ -52,7 +52,6 @@ import type Text from "/UI/Text"
 import type Icon from "/UI/Icon"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
-import after from "wowlua:timer"
 import * as tbl from "wowlua:table"
 
 local UI = SuuUI.UI
@@ -795,7 +794,7 @@ class MacNote
     readonly text: Text
     readonly button: SuuButton
 
-    constructor(body: Frame, redraw: () -> ())
+    constructor(owner: MouseBindingsModule, body: Frame, redraw: () -> ())
         self.text = UI.Text(body, "caption", "gilt-text")
         self.text:SetJustifyH("LEFT")
         self.text:SetWordWrap(true)
@@ -806,8 +805,10 @@ class MacNote
             text = "Turn it off",
             variant = "quiet",
             onClick = function()
+                -- (0.47: the module's CVar: the player's setting back once
+                -- the module is off)
                 if not InCombatLockdown() then
-                    try(C_CVar.SetCVar, MAC_CMD_CVAR, "0")
+                    owner:SetCVar(MAC_CMD_CVAR, "0")
                 end
                 redraw()
             end,
@@ -1012,7 +1013,7 @@ class CaptureBox
                 self:Close()
             end,
         })
-        self.mac = MacNote.new(body, function()
+        self.mac = MacNote.new(owner, body, function()
             self:Draw()
         end)
         p:Hide()
@@ -1337,7 +1338,7 @@ class ClickBox
                 self:Draw()
             end,
         })
-        self.mac = MacNote.new(body, function()
+        self.mac = MacNote.new(owner, body, function()
             self:Draw()
         end)
         p:Hide()
@@ -1841,6 +1842,8 @@ export class MouseBindingsModule extends Module<{}>
 
     -- an apply waiting (events come in bursts)
     applySoon: boolean = false
+    -- the owner's mouseover state driver: registered while the module is on
+    moDriven: boolean = false
 
     constructor()
         super({
@@ -2201,7 +2204,7 @@ export class MouseBindingsModule extends Module<{}>
         owner:SetAttribute("_onstate-mo", [=[ self:RunAttribute("_refresh") ]=])
         owner:SetAttribute("_onstate-frame", [=[ self:RunAttribute("_refresh") ]=])
         owner:SetAttribute("_refresh", "self:ClearBindings()")
-        RegisterStateDriver(owner, "mo", MOUSEOVER_STATE)
+        -- (its "mo" state driver: registered by Apply while the module is on)
         self.owner, self.worldButton, self.frameButton = owner, world, frame
     end
 
@@ -2322,6 +2325,15 @@ export class MouseBindingsModule extends Module<{}>
             end
             slot[b.react] = b
         end
+        -- the mouseover state driver only while on: off, a mouseover runs
+        -- no restricted code of the module's
+        if on and not self.moDriven then
+            RegisterStateDriver(owner, "mo", MOUSEOVER_STATE)
+            self.moDriven = true
+        elseif not on and self.moDriven then
+            UnregisterStateDriver(owner, "mo")
+            self.moDriven = false
+        end
         local frameKeys: SnippetKey[] = {}
         local worldKeys: SnippetKey[] = {}
         -- Target and Menu: the game's click bindings' (asked 2026-11-10)
@@ -2426,7 +2438,7 @@ export class MouseBindingsModule extends Module<{}>
             return
         end
         self.applySoon = true
-        after(0.2, function()
+        self:After(0.2, function()
             self.applySoon = false
             self:Apply()
         end)
@@ -2492,8 +2504,41 @@ export class MouseBindingsModule extends Module<{}>
     end
 
     override function OnDisable()
+        -- the boxes closed: no fight's start closes them now, and a box left
+        -- open that last kept a key from the game would swallow the keyboard
+        -- in the next fight
+        local box = self.box
+        if box then
+            box:Close()
+        end
+        local clickBox = self.clickBox
+        if clickBox and clickBox.panel:IsShown() then
+            clickBox:Close()
+        end
+        -- (its timer went with the module)
+        self.applySoon = false
         self:Apply()
     end
 end
 
 export const M = SuuUI.AddModule(MouseBindingsModule.new())
+
+-- The game keeps its click bindings, not SuuUI. A character whose Target or
+-- Menu click SuuUI moved, logging in with the module off ("enabled" is per
+-- profile, the clicks per character; or turned off before a reload), gets
+-- the game's own clicks back once, out of combat (X-11.b5): the module's
+-- OnDisable never runs for it.
+local clicksBack = CreateFrame("Frame")
+clicksBack:RegisterEvent("PLAYER_ENTERING_WORLD")
+clicksBack:SetScript("OnEvent", function(f: Frame)
+    if InCombatLockdown() then
+        f:UnregisterEvent("PLAYER_ENTERING_WORLD")
+        f:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    f:UnregisterAllEvents()
+    if M:IsEnabled() or M:Get("enabled") or not M:Store().clickSynced then
+        return
+    end
+    M:SyncClickBindings()
+end)

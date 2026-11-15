@@ -15,7 +15,9 @@ import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
 import internal M, inputText, chipText, clickPrefix, clickSuffix, cmdMark, reachFor, isPlainClick, judge, judgeClick, castAttributes, refreshSnippet, ranksOf, bindLine from "/Units/MouseBindings"
 import type Bind from "/Units/MouseBindings"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings, cycle, NOTHING from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as cvars from "/Core/CVars"
 import * as settings from "/Core/Settings"
 
 -- A spell the character knows: its name and highest rank's ID.
@@ -558,6 +560,11 @@ local function macCmdLeft()
     mock.click(box.mac.button)
     expect(set).toHaveBeenCalledWith(CVAR, "0")
     expect(box.mac.text:IsShown()).toBe(false)
+    -- (the module's CVar: the player's setting remembered, back when it lets go)
+    expect(cvars.remembered("mousebindings")).toBe(1)
+    M:RestoreCVar(CVAR)
+    expect(cvar).toBe("1")
+    expect(cvars.remembered("mousebindings")).toBe(0)
     box:Close()
     -- the spell's box too; with the setting off, no note
     local name, id = known()
@@ -750,4 +757,65 @@ local function offAndOn()
     expect(ours("SHIFT-F")).toBe(true)
     _, mods = interaction(profile, 1)
     expect(mods).toBe(48)
+end
+
+-- (TEST-3) Off through the registry nothing of the module's stays on a unit
+-- frame or the game: no key override, no click attribute, no mouseover state
+-- driver, its boxes closed; on again, all of it back, nothing doubled.
+@test("turned off: no override, no frame attribute, no state driver, the boxes closed, nothing held; on again, all back")
+local function offLeavesNothing()
+    local name, id = known()
+    clickBindings()
+    M:Add(bind("SHIFT-F", name, id), nil)
+    M:Add(bind("SHIFT-BUTTON1", name, id), nil)
+    local owner = assert(M.owner)
+    local mob = mock.spawnUnit({ name = "Kobold", reaction = "hostile", distance = 5 })
+    local friend = mock.spawnUnit({ name = "Member1", player = true, reaction = "friendly", distance = 5 })
+    -- on: the mouseover drives the owner's state
+    mock.player:mouseover(mob)
+    mock.advanceFrames(15, 20)
+    expect(owner:GetAttribute("state-mo")).toBe("harm")
+    expect(ours("SHIFT-F")).toBe(true)
+    -- both boxes open as the module turns off
+    M:Edit({ name = name, spellID = id })
+    local box = assert(M.box)
+    expect(box.panel).toBeShown()
+    M:EditClick("target")
+    local clickBox = assert(M.clickBox)
+    clickBox.cancelled, clickBox.after = nil, nil
+    expect(clickBox.panel).toBeShown()
+    settings.set("mousebindings", "enabled", false)
+    mock.advanceFrames(15, 20)
+    expect(box.panel).never.toBeShown()
+    expect(clickBox.panel).never.toBeShown()
+    expect(holdings(M)).toEqual(NOTHING)
+    expect(ours("SHIFT-F")).toBe(false)
+    for _, f in ipairs(SuuUI.UI.SecureUnitFrames()) do
+        expect(f:GetAttribute("shift-type1")).toBe(nil)
+        expect(f:GetAttribute("shift-spell1")).toBe(nil)
+    end
+    expect(next(M.frameAttrs)).toBe(nil)
+    expect(#M.buttonAttrs).toBe(0)
+    expect(assert(M.worldButton):GetAttribute("type-v1")).toBe(nil)
+    -- no state driver: the mouseover no longer reaches the owner
+    mock.player:mouseover(friend)
+    mock.advanceFrames(15, 20)
+    expect(owner:GetAttribute("state-mo")).toBe("harm")
+    expect(ours("SHIFT-F")).toBe(false)
+    -- on again: all back
+    settings.set("mousebindings", "enabled", true)
+    mock.advanceFrames(15, 20)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(owner:GetAttribute("state-mo")).toBe("help")
+    expect(ours("SHIFT-F")).toBe(true)
+    expect(assert(frames.find("SuuUIPlayerFrame")):GetAttribute("shift-type1")).toBe("spell")
+    -- and once more: nothing held while off, nothing doubled after
+    local c = cycle("mousebindings")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    mob:despawn()
+    friend:despawn()
+    expectNoErrors()
 end

@@ -25,7 +25,7 @@ import type Alert, AlertTone, FormatArg from "/UI/Alert"
 import type LevelUpCard, LevelUpDef from "/UI/LevelUp"
 import ALERTS from "/Core/ServiceKeys"
 import type Position from "/EditMode/EditMode"
-import after, every from "wowlua:timer"
+import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
 
 local UI = SuuUI.UI
@@ -208,7 +208,7 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
         if ui and not now and key and key == self.current and ui.card:IsShown() and ui.card:IsHovered() then
             if not self.holding then
                 local away = 0
-                self.holding = every(0.2, function()
+                self.holding = self:Every(0.2, function()
                     if self.current ~= key then
                         return self:StopHolding()
                     end
@@ -243,6 +243,8 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
                 if fading then
                     fading:Cancel()
                 end
+                -- (a plain timer: the fade that turning the module off
+                -- starts must still end with the frame hidden)
                 self.fading = after(d, function()
                     self.fading = nil
                     if not self.current then
@@ -275,16 +277,13 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
         }
         self.testing = true
         for i, s in ipairs(samples) do
-            after((i - 1) * TEST_TIME, function()
-                if not self:IsEnabled() then
-                    return
-                end
+            self:After((i - 1) * TEST_TIME, function()
                 self.testing = true
                 self.current = nil
                 self:Show("test", s.tone, s.title, s.detail)
             end)
         end
-        after(#samples * TEST_TIME, function()
+        self:After(#samples * TEST_TIME, function()
             self.testing = nil
             self:Hide("test")
         end)
@@ -360,7 +359,10 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- (0.47) The hold ticker and the test's timers go with the module;
+    -- a test cut short no longer counts as running.
     override function OnDisable()
+        self.testing = nil
         self:Hide()
     end
 end

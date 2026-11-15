@@ -42,6 +42,7 @@ import text, measureText, Text from "./Text"
 import panel, Panel from "./Panel"
 import checkbox, check, chevron, textField, Checkbox, Glyph, TextField from "./Inputs"
 import showTooltip, hideTooltip from "./Tooltip"
+import dismissable from "./Dismiss"
 
 local S = T.space
 local colors = T.color :: { [string]: Color }
@@ -216,7 +217,8 @@ export interface SelectList<V extends SelectValue> extends Panel
 end
 
 --------------------------------------------------------------------------------
--- One list at a time, plus a screen-wide catcher that closes it.
+-- One list at a time, a screen-wide catcher under it that closes it
+-- (UI/Dismiss's; the list takes no key).
 --------------------------------------------------------------------------------
 
 -- the open one (a select of any values): closed when another opens
@@ -224,16 +226,6 @@ interface Closable
     function Close()
 end
 local openList: Closable? = nil
-local catcher = CreateFrame("Button", nil, UIParent)
-catcher:SetAllPoints(UIParent)
-catcher:SetFrameStrata("FULLSCREEN_DIALOG")
-catcher:Hide()
-catcher:RegisterForClicks("AnyDown")
-catcher:SetScript("OnClick", function()
-    if openList then
-        openList:Close()
-    end
-end)
 
 local function contains<V extends SelectValue>(list: V[], v: V?): boolean
     for _, x in ipairs(list) do
@@ -422,7 +414,12 @@ export class Select<V extends SelectValue> extends Button
         if self.multiple then
             self.values = type(v) == "table" and { unpack(v :: V[]) } or {}
         else
-            self.value = type(v) ~= "table" and (v :: V?) or nil
+            -- (a `false` value is a choice too)
+            if type(v) ~= "table" then
+                self.value = v :: V?
+            else
+                self.value = nil
+            end
         end
         local summary = self:Summary()
         self.text:SetValue(summary)
@@ -470,7 +467,6 @@ export class Select<V extends SelectValue> extends Button
         end
         if openList == self then
             openList = nil
-            catcher:Hide()
         end
     end
 
@@ -776,6 +772,14 @@ export class Select<V extends SelectValue> extends Button
                 self.offset = (self.offset or 0) - delta * 3
                 self:Refresh()
             end)
+            -- a click elsewhere closes it (no Esc: the list never took keys)
+            dismissable(list, {
+                close = function()
+                    self:Close()
+                end,
+                esc = false,
+                outside = "catch",
+            })
             self.list = list
         end
         -- the links' widths on each open (a theme may have changed the caption size)
@@ -794,8 +798,6 @@ export class Select<V extends SelectValue> extends Button
         end
         motion.enter(list, T.duration["dur-fast"])
         openList = self
-        catcher:SetFrameLevel(math.max(0, list:GetFrameLevel() - 1))
-        catcher:Show()
     end
 end
 

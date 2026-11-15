@@ -34,7 +34,6 @@ import type Select, SelectOption from "/UI/Select"
 import type Border from "/UI/Draw"
 import type ModelStage from "/UI/Stage"
 import type TooltipLine from "/UI/Tooltip"
-import after, every from "wowlua:timer"
 import hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -2458,7 +2457,7 @@ class CollectionsModule extends Module<{}>
         w:HookScript("OnShow", function()
             self:Refresh()
             self:UpdateGifts()
-            after(0, function()
+            self:After(0, function()
                 self.showing = nil
                 self:Refresh()
             end)
@@ -2887,7 +2886,7 @@ class CollectionsModule extends Module<{}>
             end
             return
         end
-        after(0, function()
+        self:After(0, function()
             self:SettlePresent(token, scene, tries + 1)
         end)
     end
@@ -2977,7 +2976,7 @@ class CollectionsModule extends Module<{}>
             -- the frame it shows again (found in game: placed right only
             -- after choosing another and back), so shown once more a frame
             -- later, as on opening the window
-            after(0, function()
+            self:After(0, function()
                 self.showing = nil
                 self:Refresh()
             end)
@@ -3116,7 +3115,7 @@ class CollectionsModule extends Module<{}>
         try(model.SetFacing, model, FACING)
         -- no answer from the game in two seconds: shown anyway
         local id = e.id
-        after(2, function()
+        self:After(2, function()
             if self.waiting == id then
                 self:ModelLoaded()
             end
@@ -3178,7 +3177,7 @@ class CollectionsModule extends Module<{}>
         local model = ui.model
         self.waiting = nil
         try(model.SetCamDistanceScale, model, self.camScale)
-        after(0.1, function()
+        self:After(0.1, function()
             if self.showing ~= id then
                 return
             end
@@ -3216,7 +3215,7 @@ class CollectionsModule extends Module<{}>
         )
         try(m.SetCamDistanceScale, m, self.camScale)
         -- on the floor again at the new distance
-        after(0.05, function()
+        self:After(0.05, function()
             self:PlaceModel()
         end)
     end
@@ -3227,14 +3226,14 @@ class CollectionsModule extends Module<{}>
         local e = self.chosen
         if e and e.kind == "appearance" then
             try(field(C_TransmogCollection, "SetIsAppearanceFavorite"), e.visualID, not e.favourite)
-            after(0.1, function()
+            self:After(0.1, function()
                 self:Refresh()
             end)
             return
         end
         if e and e.kind == "toy" then
             try(field(C_ToyBox, "SetIsFavorite"), e.itemID, not e.favourite)
-            after(0.1, function()
+            self:After(0.1, function()
                 self:Refresh()
             end)
             return
@@ -3245,7 +3244,7 @@ class CollectionsModule extends Module<{}>
                 -- (1 or 0, as the game's own journal: Forever refuses true
                 -- with "Usage: SetFavorite(petID, bool)", found in game)
                 try(field(C_PetJournal, "SetFavorite"), guid, e.favourite and 0 or 1)
-                after(0.1, function()
+                self:After(0.1, function()
                     self:Refresh()
                 end)
             end
@@ -3257,7 +3256,7 @@ class CollectionsModule extends Module<{}>
         local i = self:MountIndex(e.id)
         if i and mountCanFavourite(i) then
             try(field(C_MountJournal, "SetIsFavorite"), i, not e.favourite)
-            after(0.1, function()
+            self:After(0.1, function()
                 self:Refresh()
             end)
         end
@@ -3516,7 +3515,7 @@ class CollectionsModule extends Module<{}>
             try(m.TryOn, m, e.sourceID)
             -- no answer in two seconds: shown anyway
             local id = e.id
-            after(2, function()
+            self:After(2, function()
                 if b.shownID == id and b.loading then
                     b.loading = false
                     b.icon:Hide()
@@ -3770,7 +3769,7 @@ class CollectionsModule extends Module<{}>
             return
         end
         try(field(C_ToyBox, "SetIsFavorite"), e.itemID, not e.favourite)
-        after(0.1, function()
+        self:After(0.1, function()
             self:Refresh()
         end)
     end
@@ -4009,7 +4008,7 @@ class CollectionsModule extends Module<{}>
         self:OnGameEvent("PET_JOURNAL_LIST_UPDATE", function()
             if self.tab == "pets" and self:Shown() and not self.petRefreshQueued then
                 self.petRefreshQueued = true
-                after(0.1, function()
+                self:After(0.1, function()
                     self.petRefreshQueued = false
                     self:Refresh()
                 end)
@@ -4048,7 +4047,7 @@ class CollectionsModule extends Module<{}>
         -- the gifts waiting, on the tabs and the micro menu: once the game has
         -- the journals
         self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
-            after(1, function()
+            self:After(1, function()
                 self:UpdateGifts()
             end)
         end)
@@ -4070,7 +4069,7 @@ class CollectionsModule extends Module<{}>
             if self.namesTimer then
                 return
             end
-            self.namesTimer = after(0.3, function()
+            self.namesTimer = self:After(0.3, function()
                 self.namesTimer = nil
                 self:Refresh()
             end)
@@ -4089,13 +4088,12 @@ class CollectionsModule extends Module<{}>
                 self:Refresh()
             end
         end)
-        if not self.ticker then
-            self.ticker = every(1, function()
-                if self.tab == "toys" and self:Shown() then
-                    self:DrawCooldowns()
-                end
-            end)
-        end
+        -- (the module's own: turning it off stops it, so each OnEnable starts one)
+        self.ticker = self:Every(1, function()
+            if self.tab == "toys" and self:Shown() then
+                self:DrawCooldowns()
+            end
+        end)
         self:HookJournal()
         self:OnGameEvent("ADDON_LOADED", function(_, name)
             if name == "Blizzard_Collections" then

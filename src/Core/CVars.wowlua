@@ -15,6 +15,33 @@
 -- reload, so a module that turns off only at a reload (reloadToToggle, whose
 -- OnDisable never runs in a session) still gives them back at the next login.
 --
+-- Per character or shared: the game keeps some CVars per character and
+-- others for the whole account or machine, and says which
+-- (C_CVar.GetCVarInfo's fourth value; probed 2026-11-15 with /suu probe
+-- cvars: miniWorldMap, damageMeterEnabled, cooldownViewerEnabled and the
+-- nameplates' alpha and scale are per character; communitiesShowOffline,
+-- showInGameNavigation, nameplateShowEnemies and the friendly-plate CVars
+-- are the account's; nameplateNotSelectedAlpha is the machine's).
+--   * A per-character CVar: what this character had is the player's value,
+--     whatever it is, and is what a restore gives back.
+--   * A shared CVar: a second character logs in to find the module's value
+--     already set by the first one's module, and that is not the player's.
+--     So a character that finds the CVar already at the value being set,
+--     with nothing remembered for it, remembers no value of its own: its
+--     entry is `true` ("holds the module's value; the player's is the
+--     account's"). The first player's value captured for a module and CVar
+--     on any character is kept for the whole account too (SuuUIDB's account
+--     part, "cvars", outside profiles and characters), and given back for a
+--     character whose entry is `true`. A restore forgets the character's
+--     entry, and the account's value only once no character holds an entry
+--     for that module and CVar (a character that never turned the module
+--     off still holds the CVar at the module's value, and may need the
+--     account's value to give back).
+--   * A client that doesn't say (no GetCVarInfo): treated as shared, which
+--     is right for a shared CVar and, for a per-character one, differs only
+--     on a character whose own value already was the module's (it gets the
+--     account's value back).
+--
 -- Writes and restores go through the combat queue (key "cvar:<name>"): some
 -- CVars can't be changed in combat (the nameplates'), so in combat they wait
 -- for its end, the latest one for a CVar winning. A CVar the client doesn't
@@ -28,18 +55,33 @@
 import * as settings from "./Settings"
 import * as combat from "./Combat"
 
--- Each module's remembered values: module id -> CVar -> the player's value.
-export type Memory = { [string]: { [string]: string } }
+-- A character's entries: module id -> CVar -> the player's value, or true
+-- (holds the module's value; the player's is the account's original).
+export type Memory = { [string]: { [string]: string | boolean } }
 
--- Where the memory lives: the table (made when `create`), or nil when there
--- is none (yet).
-export type MemoryStore = (create: boolean) -> Memory?
+-- The account's originals: module id -> CVar -> the first player's value
+-- captured on any character.
+export type Originals = { [string]: { [string]: string } }
+
+-- Where the entries live. Each table is made only when `create`, and nil
+-- while there is none (yet).
+export interface CVarStore
+    -- this character's entries
+    function mine(create: boolean): Memory?
+    -- the account's originals
+    function originals(create: boolean): Originals?
+    -- whether another character than this one holds an entry
+    function heldElsewhere(id: string, name: string): boolean
+end
 
 -- The game's CVars.
 export interface CVarAccess
     -- nil: the client has no such CVar
     function get(name: string): string?
     function set(name: string, value: string): boolean
+    -- whether the game keeps it per character (false: for the account or
+    -- the machine; nil: the client doesn't say)
+    function perCharacter(name: string): boolean?
 end
 
 export class GameCVars implements CVarAccess
@@ -55,23 +97,68 @@ export class GameCVars implements CVarAccess
         local ok, done = pcall(C_CVar.SetCVar, name, value)
         return ok and done ~= false
     end
-end
 
--- SuuUI's: this character's data, namespace "core", field "cvars".
-local function charMemory(create: boolean): Memory?
-    local data = create and settings.charData("core") or settings.peekCharData("core")
-    if not data then
-        return nil
-    end
-    local memory = data.cvars
-    if type(memory) ~= "table" then
-        if not create then
+    function perCharacter(name: string): boolean?
+        local info = C_CVar.GetCVarInfo
+        if not info then
             return nil
         end
-        memory = {}
-        data.cvars = memory
+        -- value, default, kept for the account, kept for the character
+        local ok, _, _, _, character = pcall(info, name)
+        if ok and type(character) == "boolean" then
+            return character
+        end
+        return nil
     end
-    return memory :: unknown :: Memory
+end
+
+-- SuuUI's: each character's data, namespace "core", field "cvars"; the
+-- account's values, key "cvars".
+export class SavedCVars implements CVarStore
+    function mine(create: boolean): Memory?
+        local data = create and settings.charData("core") or settings.peekCharData("core")
+        if not data then
+            return nil
+        end
+        local memory = data.cvars
+        if type(memory) ~= "table" then
+            if not create then
+                return nil
+            end
+            memory = {}
+            data.cvars = memory
+        end
+        return memory :: unknown :: Memory
+    end
+
+    function originals(create: boolean): Originals?
+        local all = settings.account("cvars")
+        if type(all) ~= "table" then
+            if not create then
+                return nil
+            end
+            all = {}
+            settings.setAccount("cvars", all)
+        end
+        return all :: unknown :: Originals
+    end
+
+    function heldElsewhere(id: string, name: string): boolean
+        if not settings.ready() then
+            return false
+        end
+        local me = settings.getCharKey()
+        for key, data in pairs(settings.allCharData("core")) do
+            local memory = data.cvars
+            if key ~= me and type(memory) == "table" then
+                local entries = (memory :: { [string]: unknown })[id]
+                if type(entries) == "table" and (entries :: { [string]: unknown })[name] ~= nil then
+                    return true
+                end
+            end
+        end
+        return false
+    end
 end
 
 local function text(value: unknown): string
@@ -89,30 +176,59 @@ export class CVarOwners
     private restoring: { [string]: string } = {}
 
     constructor(
-        private memory: MemoryStore = charMemory,
+        private store: CVarStore = SavedCVars.new(),
         private game: CVarAccess = GameCVars.new(),
         private runner: combat.CombatQueue = combat.queue
     )
+    end
+
+    -- The account's original for a module and CVar, or nil.
+    private function original(id: string, name: string): string?
+        local all = self.store:originals(false)
+        local entries = all and all[id]
+        return entries and entries[name]
+    end
+
+    -- Keeps `value` as the account's original unless it has one.
+    private function keepOriginal(id: string, name: string, value: string)
+        if self:original(id, name) ~= nil then
+            return
+        end
+        local all = assert(self.store:originals(true))
+        local entries = all[id] or {}
+        all[id] = entries
+        entries[name] = value
     end
 
     -- Sets the CVar for the module, remembering the player's value first.
     -- True when it was written now; false when the client refused it, has
     -- no such CVar, or it waits for the end of combat.
     function set(id: string, name: string, value: string | number | boolean): boolean
-        local all = self.memory(false)
+        local wanted = text(value)
+        local all = self.store:mine(false)
         local mine = all and all[id]
         if not (mine and mine[name] ~= nil) then
-            local was = self.restoring[name] or self.game:get(name)
+            local waiting = self.restoring[name]
+            local was = waiting or self.game:get(name)
             if was == nil then
                 return false
             end
-            local made = assert(self.memory(true))
+            local entry: string | boolean = was
+            if self.game:perCharacter(name) == true then
+                -- this character's own value, whatever it is
+            elseif waiting == nil and was == wanted then
+                -- already the module's value: not the player's to remember
+                -- (a shared CVar another character's module set)
+                entry = true
+            else
+                self:keepOriginal(id, name, was)
+            end
+            local made = assert(self.store:mine(true))
             mine = made[id] or {}
             made[id] = mine
-            mine[name] = was
+            mine[name] = entry
         end
         self.restoring[name] = nil
-        local wanted = text(value)
         local done = false
         self.runner:run("cvar:" .. name, function()
             done = self.game:set(name, wanted)
@@ -121,28 +237,49 @@ export class CVarOwners
     end
 
     -- Gives the CVar back as the player had it and forgets it. False when
-    -- the module holds no value for it.
+    -- the module holds no entry for it. An entry without a value of its own
+    -- gives back the account's original (nothing when there is none).
     function restore(id: string, name: string): boolean
-        local all = self.memory(false)
+        local all = self.store:mine(false)
         local mine = all and all[id]
-        local was = mine and mine[name]
-        if not (all and mine and was) then
+        local entry = mine and mine[name]
+        if not (all and mine and entry ~= nil) then
             return false
+        end
+        local was: string? = nil
+        if type(entry) == "string" then
+            was = entry
+        else
+            was = self:original(id, name)
         end
         mine[name] = nil
         if next(mine) == nil then
             all[id] = nil
         end
-        self.restoring[name] = was
+        if not self.store:heldElsewhere(id, name) then
+            local originals = self.store:originals(false)
+            local entries = originals and originals[id]
+            if originals and entries then
+                entries[name] = nil
+                if next(entries) == nil then
+                    originals[id] = nil
+                end
+            end
+        end
+        if was == nil then
+            return true
+        end
+        local value: string = was
+        self.restoring[name] = value
         self.runner:run("cvar:" .. name, function()
             self.restoring[name] = nil
-            self.game:set(name, was)
+            self.game:set(name, value)
         end, "CVars")
         return true
     end
 
     function restoreAll(id: string)
-        local all = self.memory(false)
+        local all = self.store:mine(false)
         local mine = all and all[id]
         if not mine then
             return
@@ -157,16 +294,23 @@ export class CVarOwners
         end
     end
 
-    -- The value the module remembered for a CVar (the player's), or nil.
+    -- The value a restore would give back for the module and CVar (the
+    -- player's, or the account's original), or nil.
     function rememberedValue(id: string, name: string): string?
-        local all = self.memory(false)
+        local all = self.store:mine(false)
         local mine = all and all[id]
-        return mine and mine[name]
+        local entry = mine and mine[name]
+        if type(entry) == "string" then
+            return entry
+        elseif entry ~= nil then
+            return self:original(id, name)
+        end
+        return nil
     end
 
-    -- How many CVars the module holds a value for.
+    -- How many CVars the module holds an entry for (on this character).
     function remembered(id: string): number
-        local all = self.memory(false)
+        local all = self.store:mine(false)
         local mine = all and all[id]
         local n = 0
         if mine then

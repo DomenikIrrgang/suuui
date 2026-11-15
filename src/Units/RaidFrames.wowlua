@@ -37,7 +37,6 @@ import type Position from "/EditMode/EditMode"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
-import after, every from "wowlua:timer"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -1141,7 +1140,6 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     previewSet: PreviewSet? = nil
     previewSize: number? = nil
     previewView: Frame? = nil
-    rangeTicker: TickerHandle? = nil
     -- edit mode's group preview
     screenSet: PreviewSet? = nil
     tierHeight: number? = nil
@@ -1233,7 +1231,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             -- (this button's alone: every button's for each of a roster's
             -- reassignments was a pass over the raid per button)
             self:UpdateOfflineOf(btn)
-            if unit then
+            -- (a module turned off by an error leaves its buttons off)
+            if unit and self:IsEnabled() then
                 if not btn.active then
                     btn:Activate()
                 end
@@ -1287,7 +1286,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             end
             local unit = secret.asString(value)
             btn:SetUnit(unit, true)
-            if unit then
+            if unit and self:IsEnabled() then
                 if not btn.active then
                     btn:Activate()
                 end
@@ -1494,7 +1493,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         if timer then
             timer:Cancel()
         end
-        self.indicatorTimer = after(1, function()
+        self.indicatorTimer = self:After(1, function()
             self.indicatorTimer = nil
             self:RunOutOfCombat("indicators", function()
                 self:ApplyIndicators()
@@ -1822,6 +1821,19 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             own:SetSize(1, 1)
             self.petPlaceFrame = own
             self.petHeader = PetHeader.new(self, holder)
+        else
+            -- on again (after an error turned it off): the buttons that
+            -- show someone listen again
+            for _, f in ipairs(self.buttons) do
+                if f.unit then
+                    f:Activate()
+                end
+            end
+            for _, f in ipairs(self.petButtons) do
+                if f.unit then
+                    f:Activate()
+                end
+            end
         end
         self:RegisterMover(assert(self.petPlaceFrame), {
             key = "petPosition",
@@ -1830,7 +1842,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         })
         -- its state driver shows it, not edit mode
         self:RegisterMover(holder, { key = "position", label = "Raid frames", managedShow = true })
-        SuuUI.PublishAnchor("raid", holder)
+        SuuUI.PublishAnchor("raid", holder, self)
         self:RegisterSettings(SECTION)
         self:RunOutOfCombat("build", function()
             self:Layout()
@@ -2020,7 +2032,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             end
         end)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            after(0, function()
+            self:After(0, function()
                 presence()
             end)
         end)
@@ -2036,7 +2048,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end)
-        self.rangeTicker = every(0.3, function()
+        -- (the module's: cancelled when it turns off)
+        self:Every(0.3, function()
             if holder:IsVisible() then
                 self:UpdateRange()
             end
@@ -2045,11 +2058,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
 
     override function OnDisable()
         -- Only reached when the module errors: the module toggles on reload.
-        SuuUI.PublishAnchor("raid", nil)
-        local ticker = self.rangeTicker
-        if ticker then
-            ticker:Cancel()
-        end
+        -- (The registry takes the anchor and the range poll away.)
         for _, f in ipairs(self.buttons) do
             f:Deactivate()
         end

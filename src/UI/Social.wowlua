@@ -21,6 +21,9 @@
 --   c.onView(view), c.onStatus(status), c.onSelect(key), c.onWhisper(row),
 --   c.onInvite(row), c.onAdd(), c.onIgnore(), c.onUnignore(name),
 --   c.onMenu(row, owner)   -- a right click on a friend
+-- The list is a VirtualList (0.47): rows and headings only for what is in
+-- sight, drawn again only where a friend, a heading or the selection
+-- changed; c.rows and c.heads hold the ones made so far.
 
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
@@ -31,11 +34,13 @@ import * as inputs from "/UI/Inputs"
 import * as uiSelect from "/UI/Select"
 import * as panel from "/UI/Panel"
 import * as tooltip from "/UI/Tooltip"
+import * as virtualList from "/UI/VirtualList"
 import Text from "/UI/Text"
 import SuuButton from "/UI/Controls"
 import Segmented from "/UI/Inputs"
 import Select from "/UI/Select"
 import ScrollArea from "/UI/Panel"
+import VirtualList from "/UI/VirtualList"
 
 export type Friend = {
     key?: string,
@@ -57,6 +62,12 @@ export type Friend = {
     inviteName?: string,
     sort?: string,
 }
+
+-- What the contacts list shows: a friend, an ignored name, a heading, or the
+-- gap before the second heading.
+export type ContactHeading = { heading: string }
+export type ContactGap = { gap: true }
+export type ContactItem = Friend | string | ContactHeading | ContactGap
 
 export type ContactsData = {
     view?: string, -- "friends" or "ignored"
@@ -213,10 +224,103 @@ export class ContactRow extends Button
             end
         end)
     end
+
+    -- Draws a friend (the VirtualList's bind: nothing made here).
+    function BindFriend(f: Friend, on: boolean)
+        self.row, self.ignoredName = f, nil
+        placeDiamond(self)
+        self.unignore:Hide()
+        self.diamond:SetShown(not f.bnet)
+        self.glyph:SetShown(f.bnet and true or false)
+        draw.paint(self.diamond, f.online and (f.color or "ink") or "ink-faint")
+        draw.paint(self.glyph, f.online and "arcane" or "ink-faint")
+        -- Battle.net: their name, then the character in its class colour
+        local name = f.name or ""
+        if f.bnet and f.character and f.character ~= "" then
+            name = name .. "  |cff" .. draw.hex(f.color or "ink") .. f.character .. "|r"
+        end
+        self.name:SetValue(name)
+        self.name:SetColor(f.online and (f.bnet and "ink" or (f.color or "ink")) or "ink-muted")
+        local detail = f.detail or ""
+        if f.note and f.note ~= "" then
+            detail = detail ..
+                (detail ~= "" and "  " or "") .. "|cff" .. T.color["ink-faint"].hex .. "\"" .. f.note .. "\"|r"
+        end
+        self.detail:SetValue(detail)
+        self.detail:Show()
+        local status = f.busy and "Busy" or (f.away and "Away") or nil
+        self.away:SetShown(status ~= nil)
+        if status then
+            self.away.text:SetValue(status)
+            self.away:SetWidth(math.ceil(self.away.text:GetUnboundedStringWidth()) + S["space-4"] * 2)
+        end
+        self.name:SetPoint("RIGHT", status and self.away or self, status and "LEFT" or "RIGHT", -S["space-4"], 0)
+        self.sel:SetShown(on)
+        self.edge:SetShown(on)
+    end
+
+    -- Draws an ignored name.
+    function BindIgnored(name: string)
+        self.row, self.ignoredName = nil, name
+        placeDiamond(self)
+        self.diamond:Show()
+        draw.paint(self.diamond, "ink-faint")
+        self.glyph:Hide()
+        self.away:Hide()
+        self.name:SetValue(name)
+        self.name:SetColor("ink-muted")
+        self.name:SetPoint("RIGHT", self.unignore, "LEFT", -S["space-4"], 0)
+        self.detail:Hide()
+        self.unignore:Show()
+        self.sel:Hide()
+        self.edge:Hide()
+    end
 end
 
 local function makeRow(c: Contacts): ContactRow
     return ContactRow.new(c)
+end
+
+-- the contacts list's hands: draw a row or a heading, take a new table that
+-- shows the same, each item's kind and identity
+local function bindContact(row: Frame, item: ContactItem, on: boolean)
+    local r = row :: ContactRow
+    if type(item) == "string" then
+        r:BindIgnored(item)
+    else
+        r:BindFriend(item :: Friend, on)
+    end
+end
+
+local function adoptContact(row: Frame, item: ContactItem)
+    if type(item) ~= "string" then
+        (row :: ContactRow).row = item :: Friend
+    end
+end
+
+local function contactKind(item: ContactItem): string
+    if type(item) == "string" then
+        return "row"
+    end
+    local t = item :: { heading?: string, gap?: boolean }
+    if t.heading then
+        return "head"
+    elseif t.gap then
+        return "gap"
+    end
+    return "row"
+end
+
+-- a friend by their key, an ignored name by itself, headings by their place
+local function contactKey(item: ContactItem): unknown
+    if type(item) == "string" then
+        return item
+    end
+    local t = item :: { heading?: string, gap?: boolean, key?: string }
+    if t.heading or t.gap then
+        return nil
+    end
+    return t.key
 end
 
 export class ListHead extends Frame
@@ -242,6 +346,25 @@ local function makeHead(c: Contacts | PeopleList): ListHead
     return ListHead.new(c)
 end
 
+local function bindHead(row: Frame, item: ContactItem, _on: boolean)
+    local h = row :: ListHead
+    h.text:SetValue((item :: ContactHeading).heading)
+    h:SetHeight(headH())
+end
+
+-- a heading's room in the list: itself and space-1 below; the gap before
+-- the second heading
+local function headRoom(): number
+    return headH() + S["space-1"]
+end
+
+local function gapRoom(): number
+    return S["space-3"]
+end
+
+-- the one gap (no frame; its identity doesn't matter)
+local GAP: ContactGap = { gap = true }
+
 local STATUS_COLOR: { [string]: string } = { available = "arcane", away = "amber", busy = "ember" }
 
 local function footButton(parent: Frame, text: string, variant: string, onClick: () -> ()): ReasonButton
@@ -260,6 +383,8 @@ export class Contacts extends Frame
     invite: ReasonButton
     whisper: ReasonButton
     box: Frame
+    -- the friends or ignored names (only rows in sight) and its scroll area
+    view: VirtualList<ContactItem>
     list: ScrollArea
     empty: Text
     selectedRow: Friend? = nil
@@ -276,7 +401,6 @@ export class Contacts extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self.rows, self.heads = {}, {}
         -- the top: Friends / Ignored, how many are online, your status
         -- you: status diamond and BattleTag, the status menu on the right
         self.meDot = draw.diamond(self, 9, "arcane")
@@ -347,16 +471,35 @@ export class Contacts extends Frame
         end)
         draw.fill(self.box, "surface-sunk"):SetAllPoints()
         draw.border(self.box, "gilt-faint")
-        self.list = panel.scrollArea(self.box, 2)
+        self.view = virtualList.virtualList(self.box, {
+            rowHeight = ROW_H,
+            bar = 2,
+            make = function(): Frame
+                return makeRow(self)
+            end,
+            bind = bindContact,
+            adopt = adoptContact,
+            kinds = {
+                head = {
+                    height = headRoom,
+                    make = function(): Frame
+                        return makeHead(self)
+                    end,
+                    bind = bindHead,
+                },
+                gap = { height = gapRoom },
+            },
+            kindOf = contactKind,
+            key = contactKey,
+            same = virtualList.sameFields,
+        })
         draw.layout(self, function()
-            self.list:SetPoint("TOPLEFT", 1, -S["space-2"])
-            self.list:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
+            self.view:SetPoint("TOPLEFT", 1, -S["space-2"])
+            self.view:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-2"])
         end)
-        self.list:HookScript("OnSizeChanged", function()
-            if self.data then
-                self:Draw()
-            end
-        end)
+        self.list = self.view.scroll
+        self.rows = self.view:Rows() :: unknown :: ContactRow[]
+        self.heads = self.view:Rows("head") :: unknown :: ListHead[]
         self.empty = uiText.text(self.box, "caption", "ink-muted")
         self.empty:SetPoint("CENTER")
         contactPages[self] = true
@@ -365,33 +508,8 @@ export class Contacts extends Frame
     function Draw()
         local d: ContactsData = self.data or {}
         local view = d.view or "friends"
-        local child = self.list.child
-        child:SetWidth(math.max(1, self.list:GetWidth()))
-        local y, nRow, nHead = 0, 0, 0
-        local function head(text: string)
-            nHead = nHead + 1
-            local h = self.heads[nHead] or makeHead(self)
-            self.heads[nHead] = h
-            h.text:SetValue(text)
-            h:SetHeight(headH())
-            h:ClearAllPoints()
-            h:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            h:SetPoint("RIGHT", child, "RIGHT")
-            h:Show()
-            y = y + headH() + S["space-1"]
-        end
-        local function row(): ContactRow
-            nRow = nRow + 1
-            local r = self.rows[nRow] or makeRow(self)
-            self.rows[nRow] = r
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-            r:SetPoint("RIGHT", child, "RIGHT")
-            placeDiamond(r)
-            r:Show()
-            y = y + ROW_H
-            return r
-        end
+        local items: ContactItem[] = {}
+        local rows = 0
         local selected: Friend? = nil
         if view == "friends" then
             local online: Friend[], offline: Friend[] = {}, {}
@@ -401,83 +519,37 @@ export class Contacts extends Frame
                 else
                     offline[#offline + 1] = f
                 end
+                if d.selected ~= nil and f.key == d.selected then
+                    selected = f
+                end
             end
             for gi, group in ipairs({ { label = "Online", list = online }, { label = "Offline", list = offline } }) do
                 if #group.list > 0 then
                     if gi == 2 and #online > 0 then
-                        y = y + S["space-3"]
+                        items[#items + 1] = GAP
                     end
-                    head(group.label .. " · " .. #group.list)
+                    items[#items + 1] = { heading = group.label .. " · " .. #group.list }
                     for _, f in ipairs(group.list) do
-                        local r = row()
-                        r.row, r.ignoredName = f, nil
-                        r.unignore:Hide()
-                        r.diamond:SetShown(not f.bnet)
-                        r.glyph:SetShown(f.bnet and true or false)
-                        draw.paint(r.diamond, f.online and (f.color or "ink") or "ink-faint")
-                        draw.paint(r.glyph, f.online and "arcane" or "ink-faint")
-                        -- Battle.net: their name, then the character in its class colour
-                        local name = f.name or ""
-                        if f.bnet and f.character and f.character ~= "" then
-                            name = name .. "  |cff" .. draw.hex(f.color or "ink") .. f.character .. "|r"
-                        end
-                        r.name:SetValue(name)
-                        r.name:SetColor(f.online and (f.bnet and "ink" or (f.color or "ink")) or "ink-muted")
-                        local detail = f.detail or ""
-                        if f.note and f.note ~= "" then
-                            detail = detail ..
-                                (detail ~= "" and "  " or "") ..
-                                    "|cff" .. T.color["ink-faint"].hex .. "\"" .. f.note .. "\"|r"
-                        end
-                        r.detail:SetValue(detail)
-                        r.detail:Show()
-                        local status = f.busy and "Busy" or (f.away and "Away") or nil
-                        r.away:SetShown(status ~= nil)
-                        if status then
-                            r.away.text:SetValue(status)
-                            r.away:SetWidth(math.ceil(r.away.text:GetUnboundedStringWidth()) + S["space-4"] * 2)
-                        end
-                        r.name:SetPoint("RIGHT", status and r.away or r, status and "LEFT" or "RIGHT", -S["space-4"], 0)
-                        local on = f.key == d.selected
-                        r.sel:SetShown(on)
-                        r.edge:SetShown(on)
-                        if on then
-                            selected = f
-                        end
+                        items[#items + 1] = f
                     end
+                    rows += #group.list
                 end
             end
             self.empty:SetValue("No friends yet: Add friend, bottom left.")
         else
             local ignored = d.ignored or {}
             if #ignored > 0 then
-                head("Ignored · " .. #ignored)
+                items[#items + 1] = { heading = "Ignored · " .. #ignored }
             end
             for _, name in ipairs(ignored) do
-                local r = row()
-                r.row, r.ignoredName = nil, name
-                r.diamond:Show()
-                draw.paint(r.diamond, "ink-faint")
-                r.glyph:Hide()
-                r.away:Hide()
-                r.name:SetValue(name)
-                r.name:SetColor("ink-muted")
-                r.name:SetPoint("RIGHT", r.unignore, "LEFT", -S["space-4"], 0)
-                r.detail:Hide()
-                r.unignore:Show()
-                r.sel:Hide()
-                r.edge:Hide()
+                items[#items + 1] = name
             end
+            rows = #ignored
             self.empty:SetValue("You aren't ignoring anyone.")
         end
-        for i = nRow + 1, #self.rows do
-            self.rows[i]:Hide()
-        end
-        for i = nHead + 1, #self.heads do
-            self.heads[i]:Hide()
-        end
-        self.empty:SetShown(nRow == 0)
-        child:SetHeight(math.max(1, y))
+        self.view:SetSelected(view == "friends" and d.selected or nil)
+        self.view:SetItems(items)
+        self.empty:SetShown(rows == 0)
         -- the foot
         local friends = view == "friends"
         self.add:SetLabel(friends and "Add friend" or "Ignore a player")

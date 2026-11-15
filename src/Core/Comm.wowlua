@@ -1,0 +1,653 @@
+-- Core/Comm.wowlua
+-- SuuUI's addon messages: one prefix ("SuuUI"), one CHAT_MSG_ADDON listener,
+-- and the checks a message from another player passes before a module's
+-- handler sees it (0.47; before, six modules each listened and checked, or
+-- didn't, on their own).
+--
+--   on(owner, verb, opts, fn)          fn(payload, sender, channel) for the
+--                                      verb (the text up to the first tab;
+--                                      payload: what follows it, "" for a
+--                                      bare verb), released with the owner
+--   send(owner, verb, payload, channel, target?, opts?)
+--   release(owner) / count(owner)
+--
+-- The wire format is the modules' own and stays as it is: other players run
+-- older versions. "PULL\t10", "RDYQ", "MARK\t<map>\t…": verb, tab, payload.
+--
+-- What every message passes, in this order, before any handler runs:
+--   - the prefix, the text, the channel and the sender readable (not
+--     secret) strings, checked before anything is compared (CD-26);
+--   - the whole text at most 255 bytes;
+--   - not from the player (their own group and guild messages come back:
+--     "Name", "Name-Realm" or Forever's "First Last").
+-- Then, per handler (opts):
+--   - channels: the set the verb accepts, the group's (PARTY, RAID,
+--     INSTANCE_CHAT) by default. The server delivers those and GUILD only
+--     from members, so the channel is the membership check: no roster
+--     lookup. WHISPER (anyone on the realm) only when a verb names it;
+--   - maxLength: the payload's bytes at most;
+--   - rank "lead" or "assist": the sender leads (or assists) the group; in
+--     a party without a raid "assist" is anyone in it. A sender who can't be
+--     matched to a unit of the group is refused (how Forever names members
+--     of other realms in CHAT_MSG_ADDON is unverified: to check in game);
+--   - rate { count, seconds }: at most that many from one sender per
+--     window; the bookkeeping is swept every window and dropped whole past
+--     500 senders, so it cannot grow for the session;
+--   - replyEvery: for a question ("RDYQ"), the handler runs at most once per
+--     that many seconds, whoever asks.
+-- Field readers (int, number, fraction, map, name, oneOf) give the payload's
+-- parts back checked, or nil.
+--
+-- Sending: the text at most 255 bytes, a channel (and a target for WHISPER
+-- and CHANNEL), never in combat or the chat lockdown (addon messages are
+-- restricted there), and `unlessSame`: not again what this owner sent last
+-- of this verb on this channel (a periodic share that changed nothing).
+--
+-- The receiver is an AddonComm: what reaches the game (listening, sending,
+-- the clock, who the player is, the group's ranks) comes in as a CommGame,
+-- and what reports a handler's error as a Reporter, so a test drives one of
+-- its own. `comm` is SuuUI's; the module's functions are its methods.
+
+import * as events from "./Events"
+import * as fault from "./Fault"
+import ownerName from "./Util"
+import * as secret from "wowlua:secret"
+
+export const PREFIX = "SuuUI"
+-- what the client sends of one message
+export const MAX_BYTES = 255
+-- the group's channels: the default set
+export const GROUP_CHANNELS: string[] = { "PARTY", "RAID", "INSTANCE_CHAT" }
+
+-- senders a handler's rate keeps at most (then it starts over)
+local MAX_SENDERS = 500
+
+-- What the sender is in the group, when they can be found in it.
+export type Membership = "lead" | "assist" | "member"
+
+-- What a verb's handler accepts (see the top of this file).
+export type VerbOptions = {
+    channels?: string[],
+    rank?: "lead" | "assist",
+    rate?: { count: number, seconds: number },
+    replyEvery?: number,
+    maxLength?: number,
+}
+
+-- A verb's handler: the payload (after the verb's tab, "" for a bare verb),
+-- the sender as the game named them, the channel it came on.
+export type Handler = (payload: string, sender: string, channel: string) -> ()
+
+-- Whether what is sent now repeats what was sent last (`age` seconds ago),
+-- for `unlessSame`; both payloads as sent ("" for a bare verb).
+export type Same = (last: string, now: string, age: number) -> boolean
+
+export type SendOptions = {
+    -- skip the send when it repeats this owner's last of the verb on the
+    -- channel: true compares the text, a function decides
+    unlessSame?: boolean | Same,
+    -- …unless that was more than this many seconds ago
+    within?: number,
+}
+
+-- What reaches the game.
+export interface CommGame
+    -- registers the prefix and calls `receive` with each CHAT_MSG_ADDON's
+    -- values from now on
+    function listen(@deferred receive: (...unknown) -> ())
+    -- sends; the call's success (no error) and what it returned or raised
+    function send(prefix: string, text: string, channel: string, target: string?): (boolean, unknown)
+    function now(): number
+    -- nothing may be sent (combat, the chat lockdown)
+    function locked(): boolean
+    function isMe(sender: string): boolean
+    -- the sender found in the group, or nil
+    function membership(sender: string): Membership?
+    function inRaid(): boolean
+end
+
+--------------------------------------------------------------------------------
+-- Names: the player, and a sender matched to a unit
+--------------------------------------------------------------------------------
+
+local function plainText(v: unknown): string?
+    if secret.isSecret(v) or type(v) ~= "string" or v == "" then
+        return nil
+    end
+    return v
+end
+
+-- Whether `sender` names the unit: its whole name as the game writes it
+-- ("First Last", with "-Realm" for another realm; the own realm's suffix
+-- ignored), or "Name", "Name-Realm", "Name Realm" from UnitFullName (Forever
+-- gives a surname there; found with /suu probe marks).
+local function names(sender: string, unit: string): boolean
+    local full = plainText(GetUnitName(unit, true))
+    if full and (sender == full or Ambiguate(sender, "none") == Ambiguate(full, "none")) then
+        return true
+    end
+    local n, r = UnitFullName(unit)
+    local first, realm = plainText(n), plainText(r)
+    if not first then
+        return false
+    end
+    if realm then
+        return sender == first .. "-" .. realm or sender == first .. " " .. realm
+    end
+    return sender == first
+end
+
+-- Whether a sender is the player (their own message come back).
+export function isMe(sender: unknown): boolean
+    local s = plainText(sender)
+    return s ~= nil and names(s, "player")
+end
+
+-- The group's channel: the instance group's, the raid's or the party's; nil
+-- out of a group.
+export function groupChannel(): ("INSTANCE_CHAT" | "RAID" | "PARTY")?
+    if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then
+        return "INSTANCE_CHAT"
+    end
+    if secret.flag(IsInRaid()) then
+        return "RAID"
+    end
+    if secret.flag(IsInGroup()) then
+        return "PARTY"
+    end
+    return nil
+end
+
+-- The group's channel and GUILD (in a guild): where shared finds go.
+export function groupAndGuild(): string[]
+    local list: string[] = {}
+    local g = groupChannel()
+    if g then
+        list[#list + 1] = g
+    end
+    if secret.flag(IsInGuild()) then
+        list[#list + 1] = "GUILD"
+    end
+    return list
+end
+
+-- The game as SuuUI's receiver uses it.
+export class GameComm implements CommGame
+    function listen(receive: (...unknown) -> ())
+        local register = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix
+        if register then
+            pcall(register, PREFIX)
+        end
+        events.onGame("CHAT_MSG_ADDON", function(_, ...)
+            receive(...)
+        end, "Comm")
+    end
+
+    function send(prefix: string, text: string, channel: string, target: string?): (boolean, unknown)
+        local fn = C_ChatInfo and C_ChatInfo.SendAddonMessage
+        if not fn then
+            return false, "no addon messages"
+        end
+        return pcall(fn, prefix, text, channel, target)
+    end
+
+    function now(): number
+        return GetTime()
+    end
+
+    -- (not AreOutgoingAddonChatMessagesRestricted: Forever answers it true out
+    -- of combat and alone, found by the raid planner's full probe)
+    function locked(): boolean
+        if InCombatLockdown() then
+            return true
+        end
+        local f = C_ChatInfo and C_ChatInfo.InChatMessagingLockdown
+        if not f then
+            return false
+        end
+        local ok, r = pcall(f)
+        return ok and (secret.isSecret(r) or r == true)
+    end
+
+    function isMe(sender: string): boolean
+        return isMe(sender)
+    end
+
+    function membership(sender: string): Membership?
+        local raid = secret.flag(IsInRaid())
+        local kind, size = raid and "raid" or "party", raid and 40 or 4
+        for i = 1, size do
+            local unit = kind .. i
+            if secret.flag(UnitExists(unit)) and names(sender, unit) then
+                if secret.flag(UnitIsGroupLeader(unit)) then
+                    return "lead"
+                end
+                if secret.flag(UnitIsGroupAssistant(unit)) then
+                    return "assist"
+                end
+                return "member"
+            end
+        end
+        return nil
+    end
+
+    function inRaid(): boolean
+        return secret.flag(IsInRaid())
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The receiver
+--------------------------------------------------------------------------------
+
+-- One sender's messages in the current window.
+type Window = { start: number, count: number }
+
+-- A handler as the receiver keeps it.
+type Entry = {
+    verb: string,
+    owner: unknown,
+    source: string,
+    fn: Handler,
+    channels: { [string]: boolean },
+    rank: ("lead" | "assist")?,
+    rate: { count: number, seconds: number }?,
+    replyEvery: number?,
+    maxLength: number?,
+    windows: { [string]: Window },
+    senders: number,
+    swept: number,
+    replied: number?,
+    live: boolean,
+}
+
+-- What an owner sent last of a verb on a channel.
+type Sent = { payload: string, at: number }
+
+local function setOf(list: string[]): { [string]: boolean }
+    local set: { [string]: boolean } = {}
+    for _, v in ipairs(list) do
+        set[v] = true
+    end
+    return set
+end
+
+export class AddonComm
+    private byVerb: { [string]: Entry[] } = {}
+    private byOwner: { [unknown]: Entry[] } = {}
+    private sent: { [unknown]: { [string]: Sent } } = {}
+    private listening: boolean = false
+
+    constructor(private game: CommGame = GameComm.new(), private reporter: fault.Reporter = fault.log) end
+
+    -- fn for the verb, with the checks `opts` asks for.
+    function on(owner: unknown, verb: string, opts: VerbOptions?, fn: Handler)
+        assert(owner ~= nil, "SuuUI Comm: an owner is required")
+        assert(type(verb) == "string" and verb ~= "" and not verb:find("\t"), "SuuUI Comm: a verb without tabs")
+        assert(type(fn) == "function", "SuuUI Comm: a handler is required")
+        local o: VerbOptions = opts or {}
+        local rate = o.rate
+        assert(rate == nil or (rate.count >= 1 and rate.seconds > 0), "SuuUI Comm: a rate is { count, seconds }")
+        local entry: Entry = {
+            verb = verb,
+            owner = owner,
+            source = ownerName(owner),
+            fn = fn,
+            channels = setOf(o.channels or GROUP_CHANNELS),
+            rank = o.rank,
+            rate = rate,
+            replyEvery = o.replyEvery,
+            maxLength = o.maxLength,
+            windows = {},
+            senders = 0,
+            swept = self.game:now(),
+            replied = nil,
+            live = true,
+        }
+        local list = self.byVerb[verb] or {}
+        self.byVerb[verb] = list
+        list[#list + 1] = entry
+        local mine = self.byOwner[owner] or {}
+        self.byOwner[owner] = mine
+        mine[#mine + 1] = entry
+        if not self.listening then
+            self.listening = true
+            self.game:listen(function(...: unknown)
+                self:receive(...)
+            end)
+        end
+    end
+
+    -- Every handler of the owner's gone, and what it sent forgotten.
+    function release(owner: unknown)
+        local mine = self.byOwner[owner]
+        self.sent[owner] = nil
+        if not mine then
+            return
+        end
+        self.byOwner[owner] = nil
+        for _, entry in ipairs(mine) do
+            entry.live = false
+            local list = self.byVerb[entry.verb]
+            if list then
+                for i = #list, 1, -1 do
+                    if list[i] == entry then
+                        table.remove(list, i)
+                    end
+                end
+                if #list == 0 then
+                    self.byVerb[entry.verb] = nil
+                end
+            end
+        end
+    end
+
+    -- What the owner sent is forgotten: its next send goes out even when
+    -- `unlessSame` (a share someone asked for, a test).
+    function forgetSent(owner: unknown)
+        self.sent[owner] = nil
+    end
+
+    -- How many handlers the owner has.
+    function count(owner: unknown): number
+        local mine = self.byOwner[owner]
+        return mine and #mine or 0
+    end
+
+    -- How many senders a handler of the owner's for the verb keeps in its
+    -- rate's bookkeeping (for tests: it stays bounded).
+    function tracked(owner: unknown, verb: string): number
+        local n = 0
+        for _, entry in ipairs(self.byOwner[owner] or {}) do
+            if entry.verb == verb then
+                n += entry.senders
+            end
+        end
+        return n
+    end
+
+    -- One CHAT_MSG_ADDON: prefix, text, channel, sender (and the rest).
+    function receive(prefix: unknown, text: unknown, channel: unknown, sender: unknown)
+        -- (nothing compared before all four are known to be plain)
+        if secret.isSecret(prefix) or secret.isSecret(text) or secret.isSecret(channel) or secret.isSecret(sender) then
+            return
+        end
+        if prefix ~= PREFIX or type(text) ~= "string" or type(channel) ~= "string" or type(sender) ~= "string" then
+            return
+        end
+        if #text > MAX_BYTES or sender == "" then
+            return
+        end
+        local verb, payload = text:match("^([^\t]*)\t(.*)$")
+        if not verb then
+            verb, payload = text, ""
+        end
+        local list = self.byVerb[verb]
+        if not list or self.game:isMe(sender) then
+            return
+        end
+        -- (a copy: a handler may register or release)
+        local entries: Entry[] = {}
+        for i, e in ipairs(list) do
+            entries[i] = e
+        end
+        for _, entry in ipairs(entries) do
+            if entry.live then
+                self:deliver(entry, payload or "", sender, channel)
+            end
+        end
+    end
+
+    -- Whether one more message from the sender fits the handler's rate.
+    private function admit(entry: Entry, sender: string, now: number): boolean
+        local rate = entry.rate
+        if not rate then
+            return true
+        end
+        -- swept once a window: senders whose window is over are forgotten
+        if now - entry.swept >= rate.seconds then
+            for who, w in pairs(entry.windows) do
+                if now - w.start >= rate.seconds then
+                    entry.windows[who] = nil
+                    entry.senders -= 1
+                end
+            end
+            entry.swept = now
+        end
+        local w = entry.windows[sender]
+        if not w then
+            if entry.senders >= MAX_SENDERS then
+                entry.windows = {}
+                entry.senders = 0
+            end
+            w = { start = now, count = 0 }
+            entry.windows[sender] = w
+            entry.senders += 1
+        elseif now - w.start >= rate.seconds then
+            w.start, w.count = now, 0
+        end
+        if w.count >= rate.count then
+            return false
+        end
+        w.count += 1
+        return true
+    end
+
+    private function deliver(entry: Entry, payload: string, sender: string, channel: string)
+        if not entry.channels[channel] then
+            return
+        end
+        local maxLength = entry.maxLength
+        if maxLength and #payload > maxLength then
+            return
+        end
+        local rank = entry.rank
+        if rank then
+            local is = self.game:membership(sender)
+            if not is then
+                return
+            end
+            if rank == "lead" and is ~= "lead" then
+                return
+            end
+            if rank == "assist" and is == "member" and self.game:inRaid() then
+                return
+            end
+        end
+        local now = self.game:now()
+        if not self:admit(entry, sender, now) then
+            return
+        end
+        local every = entry.replyEvery
+        if every then
+            local replied = entry.replied
+            if replied and now - replied < every then
+                return
+            end
+            entry.replied = now
+        end
+        self.reporter:call(entry.source, entry.fn, payload, sender, channel)
+    end
+
+    -- Sends "verb" or "verb\tpayload" on the channel. True when the game took
+    -- it without an error; else false and why ("no channel", "no target",
+    -- "too long", "lockdown", "unchanged", or the game's error). The third
+    -- value: whether the game was asked at all.
+    function send(
+        owner: unknown,
+        verb: string,
+        payload: string?,
+        channel: string?,
+        target: string?,
+        opts: SendOptions?
+    ): (boolean, string, boolean)
+        if type(channel) ~= "string" or channel == "" then
+            return false, "no channel", false
+        end
+        if (channel == "WHISPER" or channel == "CHANNEL") and not target then
+            return false, "no target", false
+        end
+        local text = payload ~= nil and (verb .. "\t" .. payload) or verb
+        if #text > MAX_BYTES then
+            return false, "too long", false
+        end
+        if self.game:locked() then
+            return false, "lockdown", false
+        end
+        local now = self.game:now()
+        local key = verb .. "\31" .. channel .. "\31" .. (target or "")
+        local body = payload or ""
+        local mine = self.sent[owner]
+        local unlessSame = opts and opts.unlessSame
+        if unlessSame and mine then
+            local last = mine[key]
+            local within = opts and opts.within
+            if last and (not within or now - last.at < within) then
+                local same = false
+                if type(unlessSame) == "function" then
+                    same = unlessSame(last.payload, body, now - last.at)
+                else
+                    same = last.payload == body
+                end
+                if same then
+                    return false, "unchanged", false
+                end
+            end
+        end
+        local ok, result = self.game:send(PREFIX, text, channel, target)
+        if ok then
+            if not mine then
+                mine = {}
+                self.sent[owner] = mine
+            end
+            mine[key] = { payload = body, at = now }
+        end
+        return ok, secret.isSecret(result) and "secret" or tostring(result), true
+    end
+end
+
+-- SuuUI's receiver, and its methods as the module's functions.
+export const comm = AddonComm.new()
+
+export function on(owner: unknown, verb: string, opts: VerbOptions?, fn: Handler)
+    comm:on(owner, verb, opts, fn)
+end
+
+export function send(
+    owner: unknown,
+    verb: string,
+    payload: string?,
+    channel: string?,
+    target: string?,
+    opts: SendOptions?
+): (boolean, string, boolean)
+    return comm:send(owner, verb, payload, channel, target, opts)
+end
+
+export function release(owner: unknown)
+    comm:release(owner)
+end
+
+export function count(owner: unknown): number
+    return comm:count(owner)
+end
+
+--------------------------------------------------------------------------------
+-- Field readers: a payload's parts checked, or nil
+--------------------------------------------------------------------------------
+
+-- A whole number written plainly ("12", "-3": no decimals, exponent, hex,
+-- spaces) within lo..hi.
+export function int(s: unknown, lo: number, hi: number): number?
+    if type(s) ~= "string" or secret.isSecret(s) or #s > 12 or not s:match("^%-?%d+$") then
+        return nil
+    end
+    local n = tonumber(s)
+    if not n or n < lo or n > hi then
+        return nil
+    end
+    return n
+end
+
+-- A number written plainly ("0.4200", "3", "-1.5": never nan, inf, an
+-- exponent or hex) within lo..hi.
+export function number(s: unknown, lo: number, hi: number): number?
+    if type(s) ~= "string" or secret.isSecret(s) or #s > 24 then
+        return nil
+    end
+    if not (s:match("^%-?%d+%.?%d*$") or s:match("^%-?%.%d+$")) then
+        return nil
+    end
+    local n = tonumber(s)
+    if not n or n < lo or n > hi then
+        return nil
+    end
+    return n
+end
+
+-- A place on a map: 0..1.
+export function fraction(s: unknown): number?
+    return number(s, 0, 1)
+end
+
+-- A map the client knows: a whole number 1..99999 C_Map.GetMapInfo answers.
+export function map(s: unknown): number?
+    local m = int(s, 1, 99999)
+    if not m or not (C_Map and C_Map.GetMapInfo) then
+        return nil
+    end
+    local ok, info = pcall(C_Map.GetMapInfo, m)
+    if ok and info ~= nil and not secret.isSecret(info) then
+        return m
+    end
+    return nil
+end
+
+-- `s` cut to `max` bytes, never inside a character (UTF-8).
+local function cut(s: string, max: number): string
+    if #s <= max then
+        return s
+    end
+    local out = s:sub(1, max)
+    local i, back = #out, 0
+    while i > 0 do
+        local b = out:byte(i) or 0
+        if b < 0x80 then
+            break
+        end
+        if b >= 0xC0 then
+            local need = (b >= 0xF0 and 4) or (b >= 0xE0 and 3) or 2
+            if back + 1 < need then
+                out = out:sub(1, i - 1)
+            end
+            break
+        end
+        back += 1
+        i -= 1
+    end
+    return out
+end
+
+-- Plain text for a name or a label: tabs, newlines and every other control
+-- character, and "|" (the start of the UI's escapes: colours, links,
+-- textures), turned into spaces; at most `max` bytes (40 by default).
+export function name(s: unknown, max: number?): string?
+    if type(s) ~= "string" or secret.isSecret(s) then
+        return nil
+    end
+    local plain = s:gsub("[%c|]", " ")
+    return cut(plain, max or 40)
+end
+
+-- `s` when it is one of `list`.
+export function oneOf<T extends string>(s: unknown, list: T[]): T?
+    if type(s) ~= "string" or secret.isSecret(s) then
+        return nil
+    end
+    for _, v in ipairs(list) do
+        if v == s then
+            return v
+        end
+    end
+    return nil
+end

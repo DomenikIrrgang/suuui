@@ -19,6 +19,7 @@ import button, SuuButton from "./Controls"
 import textField, TextField from "./Inputs"
 import tabMarker, TabMarker from "./TabMarker"
 import showTooltip, hideTooltip from "./Tooltip"
+import dismissable from "./Dismiss"
 
 local S = T.space
 
@@ -363,36 +364,10 @@ end
 --                -- confirm (the dialog stays; only the button does)
 --------------------------------------------------------------------------------
 
--- One shade for every modal, made up front: full screen, on the DIALOG layer
--- under the modal, taking every click.
-local shade = CreateFrame("Button", nil, root) :: Button & { owner: Frame? }
-shade:SetAllPoints(root)
-shade:SetFrameStrata("DIALOG")
-shade:EnableMouse(true)
-shade:RegisterForClicks("AnyUp")
-do
-    local t = shade:CreateTexture(nil, "BACKGROUND")
-    t:SetAllPoints()
-    draw.paintFill(t, "shade", 0.8)
-end
-shade:Hide()
-shade:SetScript("OnClick", function(self)
-    if self.owner then
-        self.owner:Hide()
-    end
-end)
-
-local function attach(modal: Frame)
-    if not modal:IsShown() then
-        return
-    end
-    shade.owner = modal
-    shade:SetFrameLevel(1)
-    modal:SetFrameLevel(math.max(modal:GetFrameLevel(), 10))
-    shade:SetAlpha(1)
-    shade:Show()
-    modal:Raise()
-end
+-- One shade for every modal (UI/Dismiss's): full screen, on the DIALOG layer
+-- under the modal, taking every click. Modals stack: a dialog opened over a
+-- modal has the shade under it, and closing it gives the shade back to the
+-- modal under it.
 
 --------------------------------------------------------------------------------
 -- scrollArea(parent[, bar]): a scrolling area, mouse wheel only, content in
@@ -567,27 +542,15 @@ export function makeModal<F extends Frame>(modal: F): F
     modal:SetClampedToScreen(true)
     modal:ClearAllPoints()
     modal:SetPoint("CENTER", root, "CENTER", 0, 40)
-    -- Esc closes it (other keys pass on to the game)
-    modal:EnableKeyboard(true)
-    modal:SetScript("OnKeyDown", function(self, key)
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            self:Hide()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
-    end)
-    -- the shade comes with the panel, however it is shown
+    -- Esc closes it (other keys pass on to the game; out of a fight:
+    -- UI/Dismiss), and the shade comes with the panel, however it is shown
+    local d = dismissable(modal, { shade = true })
     modal:HookScript("OnShow", function(self)
-        attach(self)
         motion.enter(self, T.duration["dur-fast"])
     end)
-    hook(modal, "Show", attach)
-    modal:HookScript("OnHide", function(self)
-        if shade.owner == self then
-            shade:Hide()
-            shade.owner = nil
-        end
+    -- shown again while open: on top again, the shade under it
+    hook(modal, "Show", function()
+        d:Top()
     end)
     -- a new frame is already shown: start hidden so the first Show counts
     modal:Hide()

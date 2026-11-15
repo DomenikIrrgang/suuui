@@ -24,7 +24,6 @@ import type Select, SelectOption from "/UI/Select"
 import type ConfirmDialog from "/UI/Panel"
 import type Overlay from "wowlua:secure"
 import type AwayHandle from "wowlua:frames"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -221,6 +220,8 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     readonly placedBoxes: { [Frame]: SuuButton } = {}
     readonly infoOvers: { [string]: Overlay } = {}
     inviteOver: Overlay? = nil
+    -- the shared confirm dialog while it asks for the name to invite
+    inviteAsking: ConfirmDialog? = nil
     rowOver: Overlay? = nil
     rowOverRow: RosterRow? = nil
     readonly away: { [Frame]: AwayHandle } = {}
@@ -389,7 +390,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                         btn:SetLabel("Remove")
                         made.set("type1", nil)
                     end
-                    after(0.5, askRoster)
+                    self:After(0.5, askRoster)
                 end)
                 self.overs[key] = made
                 over = made
@@ -483,7 +484,8 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.renderQueued = true
-        after(0.15, function()
+        -- (the guard stays: the pages' callbacks can ask with the module off)
+        self:After(0.15, function()
             self.renderQueued = false
             if self:IsEnabled() then
                 self:Render()
@@ -523,7 +525,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             self.memberListHooked = true
             local function again()
                 if not self.placingList then
-                    after(0, function()
+                    self:After(0, function()
                         self:SizeBlizzList()
                     end)
                 end
@@ -788,21 +790,31 @@ class GuildModule extends Module<typeof(DEFAULTS)>
     -- on a secure button. The confirm dialog asks for the name; a secure button
     -- over its Invite runs /ginvite with what's typed (out of combat; anchored
     -- only while the dialog shows, so the dialog itself never turns protected).
+    -- (GRP-1) The dialog is the one every question shares: as a fight starts
+    -- (before the lockdown) the question closes and the cover with it
+    -- (StandDownInvite), so no name typed later goes unseen into a /ginvite
+    -- the cover kept; a cover the lockdown kept is hidden as the fight ends.
     function InviteOverlay(p: ConfirmDialog)
         local over = self.inviteOver
         if not over then
             local made = secure.overlay(p.ok, { strata = "FULLSCREEN_DIALOG" })
             made.set("type1", "macro")
             made.button:HookScript("PostClick", function()
-                after(0, function()
+                self:After(0, function()
                     if p:IsShown() then
                         p:Hide()
                     end
                 end)
-                after(1, askRoster)
+                self:After(1, askRoster)
             end)
+            -- (once, on the shared dialog: it runs for every question that closes)
             p:HookScript("OnHide", function()
-                made.hide()
+                self.inviteAsking = nil
+                if not made.hide() then
+                    self:RunOutOfCombat("inviteOver", function()
+                        made.hide()
+                    end)
+                end
             end)
             p.field.edit:HookScript("OnTextChanged", function(box: EditBox)
                 if made.button:IsShown() then
@@ -813,7 +825,21 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             over = made
         end
         over.set("macrotext1", "/ginvite ")
+        self.inviteAsking = p
         over.show()
+    end
+
+    -- A fight starting (PLAYER_REGEN_DISABLED runs before the lockdown): the
+    -- invite question closes, its cover with it.
+    function StandDownInvite()
+        local asking = self.inviteAsking
+        if asking then
+            asking:Hide()
+        end
+        local over = self.inviteOver
+        if over then
+            over.hide()
+        end
     end
 
     function Act(action: string, m: Member?)
@@ -853,7 +879,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         elseif action == "invite" then
             groupInvite(m.full)
         end
-        after(0.5, askRoster)
+        self:After(0.5, askRoster)
     end
 
     function Menu(m: Member, owner: Frame)
@@ -1197,7 +1223,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
                 local made = secure.overlay(button)
                 made.set("type1", "click")
                 made.button:HookScript("PostClick", function()
-                    after(0, function()
+                    self:After(0, function()
                         self:SkinTextEdit()
                     end)
                 end)
@@ -1247,7 +1273,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             hookScript(box, "OnHide", function()
                 askRoster()
                 for _, t in ipairs({ 0.3, 1.5 }) do
-                    after(t, function()
+                    self:After(t, function()
                         self:RenderInfo()
                         self:RenderBanner()
                     end)
@@ -1430,7 +1456,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             self.foldHooked = true
             local function again()
                 if not self.folding then
-                    after(0, function()
+                    self:After(0, function()
                         self:FoldList()
                     end)
                 end
@@ -1576,7 +1602,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             self.chatHooked = true
             local function again()
                 if not self.layingChat then
-                    after(0, function()
+                    self:After(0, function()
                         self:LayChat()
                     end)
                 end
@@ -1674,7 +1700,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         local key = tostring(mode)
         if not self.reskinned[key] and not self.reskinQueued then
             self.reskinQueued = true
-            after(0, function()
+            self:After(0, function()
                 self.reskinQueued = false
                 if f:IsShown() and not self.reskinned[key] then
                     self.reskinned[key] = true
@@ -1785,7 +1811,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         end
         if f.SelectClub then
             hook(f, "SelectClub", function()
-                after(0, function()
+                self:After(0, function()
                     self:Follow()
                 end)
             end)
@@ -1813,8 +1839,11 @@ class GuildModule extends Module<typeof(DEFAULTS)>
         -- the game's member list with offline members too (notes for them go
         -- through it). It reads this setting once, when it loads, and may load
         -- before SuuUI (found in game): saved every time, so it holds from the
-        -- next load on; SuuUI can't change the loaded list without tainting it
-        try(field(C_CVar, "SetCVar") or field(_G, "SetCVar"), "communitiesShowOffline", "1")
+        -- next load on; SuuUI can't change the loaded list without tainting it.
+        -- The player's own value is remembered (per character) and given back
+        -- when the module is off: at the next login, as it is reloadToToggle
+        -- (the registry releases a module that starts off)
+        self:SetCVar("communitiesShowOffline", "1")
         self:HookNotePopup()
         self:Build()
         self:OnGameEvent("ADDON_LOADED", function()
@@ -1836,6 +1865,7 @@ class GuildModule extends Module<typeof(DEFAULTS)>
             if row then
                 row.button:Hide()
             end
+            self:StandDownInvite()
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self:QueueRender()

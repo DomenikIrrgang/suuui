@@ -34,6 +34,81 @@ class FakeCVars implements cvars.CVarAccess
         self.writes[#self.writes + 1] = name .. "=" .. value
         return true
     end
+
+    -- what the game says about where it keeps its CVars (nil: it doesn't)
+    kept: boolean? = nil
+    function perCharacter(_: string): boolean?
+        return self.kept
+    end
+end
+
+-- A store of its own, with characters: `me` is the one logged in.
+class FakeStore implements cvars.CVarStore
+    chars: { [string]: cvars.Memory } = {}
+    account: cvars.Originals? = nil
+    made: number = 0
+
+    constructor(public me: string)
+    end
+
+    function mine(create: boolean): cvars.Memory?
+        local memory = self.chars[self.me]
+        if create and not memory then
+            self.made += 1
+            memory = {}
+            self.chars[self.me] = memory
+        end
+        return memory
+    end
+
+    function originals(create: boolean): cvars.Originals?
+        if create and not self.account then
+            self.account = {}
+        end
+        return self.account
+    end
+
+    function heldElsewhere(id: string, name: string): boolean
+        for key, memory in pairs(self.chars) do
+            local entries = memory[id]
+            if key ~= self.me and entries and entries[name] ~= nil then
+                return true
+            end
+        end
+        return false
+    end
+end
+
+-- A game whose CVars are per character: each character's own FakeCVars.
+class PerCharacterCVars implements cvars.CVarAccess
+    games: { [string]: FakeCVars } = {}
+
+    constructor(private store: FakeStore)
+    end
+
+    function of(key: string): FakeCVars
+        local game = self.games[key] or FakeCVars.new()
+        self.games[key] = game
+        return game
+    end
+
+    function get(name: string): string?
+        return self:of(self.store.me):get(name)
+    end
+
+    function set(name: string, value: string): boolean
+        return self:of(self.store.me):set(name, value)
+    end
+
+    -- nil: a client that doesn't say; true: it says per character
+    says: boolean? = nil
+    function perCharacter(_: string): boolean?
+        return self.says
+    end
+end
+
+local function ownQueue(): combat.CombatQueue
+    return combat.CombatQueue.new(FakeCombat.new(), FakeReporter.new())
 end
 
 @test("set: remembers the player's value once, in this character's data; restore gives it back")
@@ -45,10 +120,14 @@ local function setAndRestore()
     expect(cvars.rememberedValue("zzcvar", CVAR)).toBe("0.9")
     local data = assert(settings.peekCharData("core"))
     expect((data.cvars :: cvars.Memory).zzcvar).toEqual({ [CVAR] = "0.9" })
+    -- and the account's original
+    expect((settings.account("cvars") :: cvars.Originals).zzcvar).toEqual({ [CVAR] = "0.9" })
     expect(cvars.restore("zzcvar", CVAR)).toBe(true)
     expect(C_CVar.GetCVar(CVAR)).toBe("0.9")
     expect(cvars.remembered("zzcvar")).toBe(0)
     expect((data.cvars :: cvars.Memory).zzcvar).toBeNil()
+    -- no character holds it any more: the account's original is dropped too
+    expect((settings.account("cvars") :: cvars.Originals).zzcvar).toBeNil()
     expect(cvars.restore("zzcvar", CVAR)).toBe(false)
     expectNoErrors()
 end
@@ -79,29 +158,155 @@ local function inCombat()
     expectNoErrors()
 end
 
-@test("a registry of its own: memory, game and fight of its own; nothing made until something is remembered")
+@test("a CVar already at the module's value: nothing remembered as the player's; restore writes nothing")
+local function alreadySet()
+    C_CVar.SetCVar(CVAR, "0.4")
+    expect(cvars.set("zzcvar", CVAR, "0.4")).toBe(true)
+    expect(cvars.remembered("zzcvar")).toBe(1)
+    expect(cvars.rememberedValue("zzcvar", CVAR)).toBeNil()
+    local data = assert(settings.peekCharData("core"))
+    expect((data.cvars :: cvars.Memory).zzcvar).toEqual({ [CVAR] = true })
+    expect(settings.account("cvars") == nil or (settings.account("cvars") :: cvars.Originals).zzcvar == nil).toBe(true)
+    -- a later change by the player while it is held isn't taken as theirs either
+    C_CVar.SetCVar(CVAR, "0.6")
+    cvars.set("zzcvar", CVAR, "0.4")
+    expect(cvars.rememberedValue("zzcvar", CVAR)).toBeNil()
+    expect(cvars.restore("zzcvar", CVAR)).toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.4")
+    expect(cvars.remembered("zzcvar")).toBe(0)
+    expectNoErrors()
+end
+
+@test("a registry of its own: store, game and fight of its own; nothing made until something is remembered")
 local function ownRegistry()
-    local memory: cvars.Memory? = nil
-    local made = 0
+    local store = FakeStore.new("Player-Realm")
     local game = FakeCVars.new()
     game.values.a = "1"
     game.values.b = "x"
-    local fight = FakeCombat.new()
-    local own = cvars.CVarOwners.new(function(create: boolean): cvars.Memory?
-        if create and not memory then
-            made += 1
-            memory = {}
-        end
-        return memory
-    end, game, combat.CombatQueue.new(fight, FakeReporter.new()))
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
     expect(own:remembered("m")).toBe(0)
     own:restoreAll("m")
-    expect(made).toBe(0)
+    expect(store.made).toBe(0)
+    expect(store.account).toBeNil()
     own:set("m", "a", 0)
     own:set("m", "b", "y")
-    expect(memory).toEqual({ m = { a = "1", b = "x" } })
+    expect(store.chars).toEqual({ ["Player-Realm"] = { m = { a = "1", b = "x" } } })
+    expect(store.account).toEqual({ m = { a = "1", b = "x" } })
     own:restoreAll("m")
     expect(game.values).toEqual({ a = "1", b = "x" })
     expect(game.writes).toEqual({ "a=0", "b=y", "a=1", "b=x" })
-    expect(memory).toEqual({})
+    expect(store.chars).toEqual({ ["Player-Realm"] = {} })
+    expect(store.account).toEqual({})
+end
+
+@test("two characters, an account-wide CVar: A sets, B logs in and finds the module's value, B turns it off, then A")
+local function twoCharactersAccountWide()
+    local store = FakeStore.new("Player-Realm")
+    local game = FakeCVars.new() -- one value for the whole account
+    game.values.x = "0.9"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    own:set("m", "x", "0.5")
+    expect(store.chars["Player-Realm"]).toEqual({ m = { x = "0.9" } })
+    expect(store.account).toEqual({ m = { x = "0.9" } })
+    -- B logs in: the CVar is already the module's; B's module sets it again
+    store.me = "Lastname-Realm"
+    own:set("m", "x", "0.5")
+    expect(store.chars["Lastname-Realm"]).toEqual({ m = { x = true } })
+    expect(own:rememberedValue("m", "x")).toBe("0.9")
+    -- B's module turned off: the account's original back, which A still needs
+    own:restoreAll("m")
+    expect(game.values.x).toBe("0.9")
+    expect(store.chars["Lastname-Realm"]).toEqual({})
+    expect(store.account).toEqual({ m = { x = "0.9" } })
+    -- A logs in (its module sets the CVar again), then turns it off
+    store.me = "Player-Realm"
+    own:set("m", "x", "0.5")
+    expect(store.chars["Player-Realm"]).toEqual({ m = { x = "0.9" } })
+    own:restoreAll("m")
+    expect(game.values.x).toBe("0.9")
+    expect(store.chars["Player-Realm"]).toEqual({})
+    expect(store.account).toEqual({})
+    expect(game.writes).toEqual({ "x=0.5", "x=0.5", "x=0.9", "x=0.5", "x=0.9" })
+end
+
+@test("two characters, a per-character CVar on a client that doesn't say: each gets its own value back; one whose own value was the module's gets the account's")
+local function twoCharactersPerCharacter()
+    local store = FakeStore.new("Player-Realm")
+    local game = PerCharacterCVars.new(store)
+    game:of("Player-Realm").values.x = "0.9"
+    game:of("Lastname-Realm").values.x = "0.7"
+    game:of("Member1-Realm").values.x = "0.5"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    own:set("m", "x", "0.5")
+    store.me = "Lastname-Realm"
+    own:set("m", "x", "0.5")
+    expect(store.chars["Lastname-Realm"]).toEqual({ m = { x = "0.7" } })
+    -- the first character's value stays the account's original
+    expect(store.account).toEqual({ m = { x = "0.9" } })
+    own:restoreAll("m")
+    expect(game:of("Lastname-Realm").values.x).toBe("0.7")
+    expect(store.account).toEqual({ m = { x = "0.9" } })
+    -- the case a probe would tell apart: own value already the module's
+    store.me = "Member1-Realm"
+    own:set("m", "x", "0.5")
+    expect(store.chars["Member1-Realm"]).toEqual({ m = { x = true } })
+    own:restoreAll("m")
+    expect(game:of("Member1-Realm").values.x).toBe("0.9")
+    store.me = "Player-Realm"
+    own:restoreAll("m")
+    expect(game:of("Player-Realm").values.x).toBe("0.9")
+    expect(store.account).toEqual({})
+end
+
+@test("two characters, a CVar the game says is per character: each gets its own value back, also one whose own value was the module's")
+local function twoCharactersSaidPerCharacter()
+    local store = FakeStore.new("Player-Realm")
+    local game = PerCharacterCVars.new(store)
+    game.says = true
+    game:of("Player-Realm").values.x = "0.9"
+    game:of("Member1-Realm").values.x = "0.5"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    own:set("m", "x", "0.5")
+    expect(store.chars["Player-Realm"]).toEqual({ m = { x = "0.9" } })
+    -- nothing kept for the account: no character needs another's value
+    expect(store.account).toBeNil()
+    store.me = "Member1-Realm"
+    own:set("m", "x", "0.5")
+    expect(store.chars["Member1-Realm"]).toEqual({ m = { x = "0.5" } })
+    own:restoreAll("m")
+    expect(game:of("Member1-Realm").values.x).toBe("0.5")
+    store.me = "Player-Realm"
+    own:restoreAll("m")
+    expect(game:of("Player-Realm").values.x).toBe("0.9")
+    expect(store.chars["Player-Realm"]).toEqual({})
+end
+
+@test("the game's own answer: a per-character CVar, an account's, and one it doesn't know")
+local function gameAnswer()
+    local game = cvars.GameCVars.new()
+    expect(game:perCharacter("zzNoSuchCVarAtAll")).toBeFalsy()
+    local answer = game:perCharacter("nameplateShowEnemies")
+    expect(answer == nil or type(answer) == "boolean").toBe(true)
+    expectNoErrors()
+end
+
+@test("the stored shapes may be absent or partial")
+local function absentShapes()
+    local store = FakeStore.new("Player-Realm")
+    local game = FakeCVars.new()
+    game.values.x = "1"
+    local own = cvars.CVarOwners.new(store, game, ownQueue())
+    -- an entry `true` with no account original: forgotten, nothing written
+    store.chars["Player-Realm"] = { m = { x = true } }
+    expect(own:rememberedValue("m", "x")).toBeNil()
+    expect(own:restore("m", "x")).toBe(true)
+    expect(game.writes).toEqual({})
+    -- an original with no character holding it: a set keeps it, a restore drops it
+    store.account = { m = { x = "0.2" } }
+    own:set("m", "x", "0.5")
+    expect(store.account).toEqual({ m = { x = "0.2" } })
+    expect(own:rememberedValue("m", "x")).toBe("1")
+    own:restore("m", "x")
+    expect(game.values.x).toBe("1")
+    expect(store.account).toEqual({})
 end

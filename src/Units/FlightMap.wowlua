@@ -57,7 +57,6 @@ import type Money from "/UI/Inventory"
 import type Bar from "/UI/Bar"
 import type TooltipData, TooltipLine from "/UI/Tooltip"
 import type Position from "/EditMode/EditMode"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -1066,7 +1065,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         if not self:HideGameMap() then
             return
         end
-        after(0, function()
+        self:After(0, function()
             self:EnterMaster(true)
         end)
     end
@@ -1079,7 +1078,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         if not s then
             -- (the nodes a moment later; else the game's own map after all)
             if retry then
-                after(0.2, function()
+                self:After(0.2, function()
                     self:EnterMaster(false)
                 end)
             else
@@ -1486,7 +1485,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         side:SetFrameLevel(f:GetFrameLevel() + 100)
         side.edge:SetShown(false)
         -- the rows as wide as the list, laid out again
-        after(0, function()
+        self:After(0, function()
             if self.session and side:IsShown() then
                 self:FillSide()
             end
@@ -1974,7 +1973,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.layoutQueued = true
-        after(0, function()
+        self:After(0, function()
             self:Layout()
         end)
     end
@@ -1984,7 +1983,7 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.inkQueued = true
-        after(0, function()
+        self:After(0, function()
             if self.inkQueued then
                 self:DrawInk()
             end
@@ -2522,18 +2521,25 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             end,
         })
         self:Attach()
-        local world = self.world
-        if not world then
-            self:OnGameEvent("ADDON_LOADED", function()
-                if not self.world and frames.find("WorldMapFrame") then
-                    self:Attach()
-                    if self.world then
-                        self:OnEnable()
-                    end
-                end
-            end)
+        if self.world then
+            self:Start()
             return
         end
+        -- (where the world map loads later: the rest once it's there; the
+        -- listener goes then, X-11.a5)
+        self:OnGameEvent("ADDON_LOADED", function()
+            if not self.world and frames.find("WorldMapFrame") then
+                self:Attach()
+                if self.world then
+                    self:Off("ADDON_LOADED")
+                    self:Start()
+                end
+            end
+        end)
+    end
+
+    -- Everything else, once the world map is attached.
+    function Start()
         self:RegisterSettings(SECTION)
         local timer = self:BuildTimer()
         -- (shown only in the air, and in edit mode)
@@ -2570,13 +2576,13 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
         -- on a taxi a moment after control goes; landed when it comes back
         self:OnGameEvent("PLAYER_CONTROL_LOST", function()
             local at = GetTime()
-            after(0.5, function()
+            self:After(0.5, function()
                 self:FlightStarted(at)
             end)
         end)
         self:OnGameEvent("PLAYER_CONTROL_GAINED", function()
             local at = GetTime()
-            after(0.3, function()
+            self:After(0.3, function()
                 if not UnitOnTaxi("player") then
                     self:FlightEnded(at)
                 end
@@ -2625,16 +2631,17 @@ class FlightMapModule extends Module<typeof(DEFAULTS)>
             self:UpdateTimer()
             self:QueueLayout()
         end)
-        -- (once the module counts as on)
-        after(0, function()
-            self:UpdateTimer()
-        end)
+        -- (0.47: the module counts as on inside OnEnable)
+        self:UpdateTimer()
     end
 
     override function OnDisable()
         -- (at a flight master: the game's own map back, the session open)
         self:LeaveMaster(false)
         self.flight, self.pending = nil, nil
+        -- (0.47) the registry cancels the module's timers: a layout or
+        -- drawing still queued never runs, so let the next one queue
+        self.layoutQueued, self.inkQueued = false, false
         local timer = self.timer
         if timer then
             timer:Hide()

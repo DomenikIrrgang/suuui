@@ -1,0 +1,44 @@
+-- Units/Guild at login with the module turned off (GRP-7, X-11.a4): the
+-- last session's Guild set communitiesShowOffline to 1 and remembered the
+-- player's 0; the player then turned Guild off, which (reloadToToggle)
+-- takes effect at this login. Its OnEnable never runs, so nothing of the
+-- module's own code can give the CVar back: the registry releases a module
+-- that starts off, and the release gives back every CVar it set.
+
+import test, expect, config, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as cvars from "/Core/CVars"
+import * as modules from "/Core/Modules"
+import expectNoErrors from "../../helpers"
+
+config({ lifecycle = "manual" })
+
+type Seen = { state: modules.ModuleState?, value: string?, remembered: number }
+local seen: Seen
+
+@beforeAll
+local function logInWithGuildOff()
+    mock.setCVar("communitiesShowOffline", "1")
+    local key = (UnitName("player") :: string) .. " - " .. GetRealmName()
+    _G.SuuUIDB = {
+        profiles = { Main = { guild = { enabled = false } } },
+        chars = { [key] = "Main" },
+        charData = { [key] = { core = { cvars = { guild = { communitiesShowOffline = "0" } } } } },
+    }
+    mock.login()
+    mock.advanceFrames(2)
+    local m = modules.get("guild")
+    seen = {
+        state = m and m.state,
+        value = C_CVar.GetCVar("communitiesShowOffline"),
+        remembered = cvars.remembered("guild"),
+    }
+end
+
+@test("Guild off at login: communitiesShowOffline given back as the player had it, nothing held any more")
+local function givenBack()
+    expect(seen.state).toBe(modules.ModuleState.Disabled)
+    expect(seen.value).toBe("0")
+    expect(seen.remembered).toBe(0)
+    expectNoErrors()
+end

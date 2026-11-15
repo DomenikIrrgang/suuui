@@ -22,7 +22,6 @@ import type Select, SelectOption from "/UI/Select"
 import type ItemSlot from "/UI/Inventory"
 import type ModelStage from "/UI/Stage"
 import type Text from "/UI/Text"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -131,6 +130,11 @@ end
 
 -- A piece as its row shows it.
 type Piece = { name?: string, quality?: number, icon?: number, itemID?: number, link?: string }
+
+-- One of the game's model scene's points, and where the scene was before
+-- SuuUI's stage borrowed it.
+type ScenePoint = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint, x: number, y: number }
+type SceneHome = { parent: Frame?, points: ScenePoint[], level: number, alphas: { [Region]: number } }
 
 -- A piece's name, quality, icon and link from its appearance source.
 local function piece(sourceID: number): Piece
@@ -416,6 +420,11 @@ end
 class DressingRoomModule extends Module<typeof(DEFAULTS)>
     bar: Frame? = nil
     borrowed: boolean? = nil
+    -- where the game's model scene was before it was borrowed (given back
+    -- when the module turns off): its parent, points, level, its regions'
+    -- alpha
+    sceneHome: SceneHome? = nil
+    ctlHooked: boolean? = nil
     card: PreviewCard? = nil
     -- the saved outfit chosen (its custom set ID)
     chosen: number? = nil
@@ -584,6 +593,18 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.borrowed = true
+        if not self.sceneHome then
+            local points: ScenePoint[] = {}
+            for i = 1, s:GetNumPoints() do
+                local point, rel, relPoint, x, y = s:GetPoint(i)
+                points[i] = { point = point, rel = rel, relPoint = relPoint, x = x, y = y }
+            end
+            local alphas: { [Region]: number } = {}
+            for _, r in ipairs({ s:GetRegions() }) do
+                alphas[r] = r:GetAlpha()
+            end
+            self.sceneHome = { parent = s:GetParent(), points = points, level = s:GetFrameLevel(), alphas = alphas }
+        end
         s:SetParent(stage)
         s:ClearAllPoints()
         s:SetPoint("TOPLEFT", stage, "TOPLEFT", 1, -1)
@@ -595,9 +616,36 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         local ctl = frames.asFrame(tbl.field(s, "ControlFrame"))
         if ctl then
             ctl:SetAlpha(0)
-            hookScript(ctl, "OnShow", function(c: Frame)
-                c:Hide()
-            end)
+            if not self.ctlHooked then
+                self.ctlHooked = true
+                hookScript(ctl, "OnShow", function(c: Frame)
+                    if self.borrowed then
+                        c:Hide()
+                    end
+                end)
+            end
+        end
+    end
+
+    -- The game's model scene back in its window, as it was before Borrow.
+    function GiveBack()
+        local s, home = scene(), self.sceneHome
+        if not s or not home or not self.borrowed then
+            return
+        end
+        self.borrowed = nil
+        s:SetParent(home.parent)
+        s:ClearAllPoints()
+        for _, p in ipairs(home.points) do
+            s:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y)
+        end
+        s:SetFrameLevel(home.level)
+        for r, a in pairs(home.alphas) do
+            r:SetAlpha(a)
+        end
+        local ctl = frames.asFrame(tbl.field(s, "ControlFrame"))
+        if ctl then
+            ctl:SetAlpha(1)
         end
     end
 
@@ -881,12 +929,13 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
     end
 
     -- Changes come in bursts (an outfit dresses every slot): drawn once, a frame later.
+    -- (Not while the module is off: the game's hooks still call this.)
     function QueueDraw()
-        if self.queued then
+        if self.queued or not self:IsEnabled() then
             return
         end
         self.queued = true
-        after(0, function()
+        self:After(0, function()
             self.queued = nil
             self:Draw()
         end)
@@ -907,7 +956,6 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.hooked = true
-        self:Borrow()
         -- the game's window out of sight while the module is on: see-through
         -- and off screen, still shown
         self.away = frames.keepAway(f, {
@@ -953,6 +1001,12 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
             self:Build()
         end
         self:HookGame()
+        self:Borrow()
+        -- (on again in the session: away again at once)
+        local away = self.away
+        if away then
+            away.apply()
+        end
         for _, e in ipairs({
             "TRANSMOG_CUSTOM_SETS_CHANGED",
             "TRANSMOG_COLLECTION_ITEM_UPDATE",
@@ -965,10 +1019,23 @@ class DressingRoomModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- (reached after a failed OnEnable: the module toggles with a reload)
     override function OnDisable()
         local w = self.window
         if w then
             w:Hide()
+        end
+        self.queued = nil
+        -- the game's dressing room as the game shows it: its model back, seen
+        -- again (keepAway's `when` stops moving it; its alpha stays 0 until
+        -- given back), closed if it was open off screen
+        self:GiveBack()
+        local f = dressUp()
+        if f then
+            if f:IsShown() then
+                HideUIPanel(f)
+            end
+            f:SetAlpha(1)
         end
     end
 end

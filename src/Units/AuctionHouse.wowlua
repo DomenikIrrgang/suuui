@@ -44,7 +44,6 @@ import type LoadingMark from "/UI/LoadingMark"
 import type TabMarker from "/UI/TabMarker"
 import type Border, Cross from "/UI/Draw"
 import type Icon from "/UI/Icon"
-import after, every from "wowlua:timer"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -1818,6 +1817,8 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     sellKey: ItemKey? = nil
     scanning: Scanning? = nil
     scanTicker: TickerHandle? = nil
+    -- the scan's reader, a slice of the list a frame (X-4.5)
+    readTicker: TickerHandle? = nil
     waitTicker: TickerHandle? = nil
     -- the secure clicks on the game's page: over a result row, an auction
     -- row, Buy out and Back; what each does after its click
@@ -3087,13 +3088,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             buy.scanMark:Start()
         end
         -- the progress, four times a second
-        self.scanTicker = every(0.25, function()
+        self.scanTicker = self:Every(0.25, function()
             if self.scanning then
                 self:DrawScan()
             end
         end)
         -- no answer in a minute: the game didn't run it
-        after(60, function()
+        self:After(60, function()
             if self.scanning == sc and not sc.reading then
                 self:EndScan()
                 self:Note("The scan didn't come back; try again later.", "error")
@@ -3109,6 +3110,11 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if ticker then
             ticker:Cancel()
             self.scanTicker = nil
+        end
+        local reader = self.readTicker
+        if reader then
+            reader:Cancel()
+            self.readTicker = nil
         end
         local buy = self.buy
         if buy then
@@ -3130,8 +3136,13 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         sc.read, sc.total = 0, n
         local offers: { [number]: Offer[] } = {}
         local i = 0
-        local ticker: TickerHandle
-        ticker = every(0, function()
+        -- (kept: a scan ended meanwhile stops it, and so does the module
+        -- turning off)
+        self.readTicker = self:Every(0, function(ticker)
+            if self.scanning ~= sc then
+                ticker:Cancel()
+                return
+            end
             local stop = math.min(n, i + 2500)
             for k = i, stop - 1 do
                 local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
@@ -3153,6 +3164,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:DrawScan()
             if i >= n then
                 ticker:Cancel()
+                self.readTicker = nil
                 local items = 0
                 for itemID, offered in pairs(offers) do
                     self:Seen(itemID, self:Market(offered))
@@ -3328,7 +3340,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         else
             try(AH.SendSearchQuery, key, sorts(), false)
         end
-        after(5, function()
+        self:After(5, function()
             if sell.asking ~= asking or asking.tries ~= tries then
                 return
             end
@@ -4012,7 +4024,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.refreshPending = true
-        after(0.05, function()
+        self:After(0.05, function()
             self.refreshPending = false
             self:Refresh()
         end)
@@ -4040,7 +4052,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self.awayHooked = true
             hook(frame, "SetPoint", function()
                 if not self.placing then
-                    after(0, away)
+                    self:After(0, away)
                 end
             end)
         end
@@ -4100,7 +4112,7 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
             self.open = true
             self.view, self.searched, self.catPath = "browse", false, {}
-            after(0, function()
+            self:After(0, function()
                 local f = frames.find("AuctionHouseFrame")
                 self:Away(f)
                 -- a bag item right-clicked here goes to the game's sell form:
@@ -4243,13 +4255,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                 return e and { price = e.price, at = e.at } or nil
             end,
         })
-        -- the wait counts down while the window is open (kept, so turning the
-        -- module off stops it; a second OnEnable doesn't start another)
-        local ticker = self.waitTicker
-        if ticker then
-            ticker:Cancel()
-        end
-        self.waitTicker = every(30, function()
+        -- the wait counts down while the window is open (the module's own:
+        -- turning it off stops it, so a second OnEnable doesn't start another)
+        self.waitTicker = self:Every(30, function()
             if window:IsShown() then
                 self:DrawScan()
             end
@@ -4296,12 +4304,9 @@ class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- (its tickers and timers, a scan's reader among them, go with the
+    -- release)
     override function OnDisable()
-        local ticker = self.waitTicker
-        if ticker then
-            ticker:Cancel()
-            self.waitTicker = nil
-        end
         local window = self.window
         if window then
             window:Hide()

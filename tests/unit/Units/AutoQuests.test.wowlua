@@ -7,7 +7,9 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M, tooLow from "/Units/AutoQuests"
-import expectNoErrors from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
 
 local giver = mock.spawnUnit({ name = "Scout Rolan", level = 30, reaction = "friendly", distance = 3 })
 local OFFERED = 9301
@@ -310,4 +312,26 @@ local function acceptConfirm()
     M:Set("shared", true)
     M:OnAcceptConfirm()
     expect(confirmed).toHaveBeenCalled()
+end
+
+-- (last) The module toggles live: nothing held while off, nothing doubled
+-- on again; the conversation's end-timer goes with it.
+@test("turned off through the registry: nothing held, the conversation forgotten; on again, all back")
+local function disabled()
+    local c = cycle("autoquests")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    M.npc = "Creature-0-0-0-0-1-0"
+    M:End()
+    settings.set("autoquests", "enabled", false)
+    expect(M.npc).toBeNil()
+    mock.advanceTime(1)
+    settings.set("autoquests", "enabled", true)
+    expect(M.npc).toBeNil()
+    -- on again: a quest offered is accepted
+    capture()
+    talkTo(giver)
+    expect(inLog(OFFERED)).toBe(true)
 end

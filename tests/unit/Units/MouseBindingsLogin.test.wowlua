@@ -1,0 +1,73 @@
+-- Units/MouseBindings at a login with the module off
+-- (tests/profiles/mousebindings-off.json): this character had moved Target to
+-- Alt-Left, which SuuUI wrote into the game's click bindings (the game saves
+-- them), and the module is off on this profile. Its OnDisable never runs at
+-- this login, so a check at login gives the game's own clicks back (X-11.b5):
+-- plain Left click targets on unit frames again.
+-- The engine's click bindings are stubbed before logging in.
+
+import test, expect, config, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../helpers"
+
+import M from "/Units/MouseBindings"
+
+config({ profile = "mousebindings-off", lifecycle = "manual" })
+
+type ClickBinding = { type: number, actionID: number, button: string, modifiers: number }
+
+-- the game's click bindings as the last session left them
+local profile: ClickBinding[] = {
+    { type = 3, actionID = 1, button = "LeftButton", modifiers = 48 },
+    { type = 3, actionID = 2, button = "RightButton", modifiers = 0 },
+    { type = 1, actionID = 139, button = "MiddleButton", modifiers = 0 },
+}
+local writes = 0
+
+@beforeAll
+local function logInOff()
+    local CB = rawget(_G, "C_ClickBindings") :: { [string]: unknown }
+    rawset(CB, "GetProfileInfo", function(): ClickBinding[]
+        return profile
+    end)
+    rawset(CB, "SetProfileByInfo", function(info: ClickBinding[])
+        writes += 1
+        profile = info
+    end)
+    mock.login()
+    mock.advanceFrames(2)
+end
+
+local function interaction(id: number): (string?, number?)
+    for _, e in ipairs(profile) do
+        if e.type == 3 and e.actionID == id then
+            return e.button, e.modifiers
+        end
+    end
+    return nil, nil
+end
+
+@test("logged in with the module off: the game's Target and Menu clicks back once, its other click bindings kept")
+local function clicksBack()
+    expect(assert(SuuUI.GetModule("mousebindings")):IsEnabled()).toBe(false)
+    expect(writes).toBe(1)
+    local button, mods = interaction(1)
+    expect(button).toBe("LeftButton")
+    expect(mods).toBe(0)
+    button, mods = interaction(2)
+    expect(button).toBe("RightButton")
+    expect(mods).toBe(0)
+    local kept = false
+    for _, e in ipairs(profile) do
+        if e.type == 1 and e.actionID == 139 and e.button == "MiddleButton" then
+            kept = true
+        end
+    end
+    expect(kept).toBe(true)
+    -- given back: nothing more to give back at the next login
+    expect(M:Store().clickSynced).toBeNil()
+    -- (and no secure frame of the module's made for it)
+    expect(M.owner).toBeNil()
+    expectNoErrors()
+end

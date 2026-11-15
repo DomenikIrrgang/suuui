@@ -1,11 +1,16 @@
 -- Units/Readiness: the group's big cooldowns (everyone's own SuuUI shares
--- them by addon message), and the panel that shows them between pulls.
+-- them by addon message), and the panel that shows them between pulls; how
+-- little it sends (only what changed, a question only for those not heard
+-- from and only with the panel wanted), what it takes (the group's channels,
+-- checked, held to a rate), who left forgotten.
 
 import test, cases, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, game, encodeShare, decodeShare, rowBefore, wanted, roster from "/Units/Readiness"
-import expectNoErrors, newParent from "../../helpers"
+import expectNoErrors, newParent, cycle, NOTHING from "../../helpers"
+import * as comm from "/Core/Comm"
+import * as settings from "/Core/Settings"
 
 -- The world around the module: the group, the spells you know. Replaced
 -- in the module's `game` table, not in _G (a replacement there taints
@@ -82,20 +87,31 @@ local function knowSpells(known: { [number]: boolean }, cooldowns: { [number]: u
     end)
 end
 
+-- What went out (prefix, text, channel), through SuuUI's sender: the
+-- game's own refuses a party message out of a real group.
 local sent: { [number]: unknown }[] = {}
 local function captureSends()
     sent = {}
-    mock.stub(game, "SendAddonMessage", function(...: unknown): boolean
+    mock.stub(C_ChatInfo, "SendAddonMessage", function(...: unknown): boolean
         sent[#sent + 1] = { ... }
         return true
     end)
+end
+local function sentTexts(): string[]
+    local out: string[] = {}
+    for _, m in ipairs(sent) do
+        out[#out + 1] = tostring(m[2])
+    end
+    return out
 end
 
 @beforeEach
 local function fresh()
     -- anything queued by an earlier test runs out first
-    mock.advanceTime(3)
+    mock.advanceTime(12)
     M.heard, M.own, M.lastSend, M.shareQueued, M.encounter = nil, nil, nil, nil, nil
+    M.members, M.newcomers, M.askedAt, M.shareForced = nil, nil, nil, nil
+    comm.comm:forgetSent(M)
     sent = {}
 end
 
@@ -257,7 +273,7 @@ local function send()
     expect(assert(M.lastSend).result).toBe("true")
     expect(assert(M.lastSend).text).toBe("RDYQ")
     inWorld({ raid = true })
-    M:Send(string.rep("x", 60))
+    M:Send("RDY", string.rep("1", 60))
     expect(sent[2][3]).toBe("RAID")
     expect(#assert(M.lastSend).text).toBe(40)
     mock.player:enterCombat()
@@ -268,13 +284,13 @@ end
 @test("Send: what the game answered, an error or a secret")
 local function sendAnswers()
     inWorld({ group = true })
-    mock.stub(game, "SendAddonMessage", function(): unknown
+    mock.stub(C_ChatInfo, "SendAddonMessage", function(): unknown
         error("throttled")
     end)
     M:Send("RDYQ")
     expect(assert(M.lastSend).ok).toBe(false)
     expect(assert(M.lastSend).result).toContain("throttled")
-    mock.stub(game, "SendAddonMessage", function(): unknown
+    mock.stub(C_ChatInfo, "SendAddonMessage", function(): unknown
         return mock.secret(0)
     end)
     M:Send("RDYQ")
@@ -282,7 +298,7 @@ local function sendAnswers()
     expect(assert(M.lastSend).result).toBe("secret")
 end
 
-@test("Share: your cooldowns as one message; nothing in combat")
+@test("Share: your cooldowns as one message, only when they changed; nothing in combat or without any")
 local function share()
     captureSends()
     inWorld({ group = true })
@@ -290,13 +306,39 @@ local function share()
     knowSpells({ [20484] = true }, { [20484] = { startTime = now - 100, duration = 600 } })
     M:Share()
     expect(#sent).toBe(1)
+    -- the exact text an older SuuUI reads
     expect(sent[1][2]).toBe("RDY\t20484:500")
-    mock.player:enterCombat()
+    -- the same a while later (the time left counted down): not again
+    mock.advanceTime(20)
     M:Share()
     expect(#sent).toBe(1)
+    -- asked for: sent whatever
+    M:Share(true)
+    expect(#sent).toBe(2)
+    expect(sent[2][2]).toBe("RDY\t20484:480")
+    -- the cooldown changed (used again): sent
+    knowSpells({ [20484] = true }, { [20484] = { startTime = GetTime(), duration = 600 } })
+    M:Share()
+    expect(#sent).toBe(3)
+    -- ready now: sent once
+    knowSpells({ [20484] = true }, {})
+    M:Share()
+    M:Share()
+    expect(#sent).toBe(4)
+    expect(sent[4][2]).toBe("RDY\t20484:0")
+    mock.player:enterCombat()
+    M:Share(true)
+    expect(#sent).toBe(4)
+    mock.player:leaveCombat()
+    -- a class without big cooldowns: nothing at all
+    mock.stub(game, "UnitClass", function(): (string, string)
+        return "Rogue", "ROGUE"
+    end)
+    M:Share(true)
+    expect(#sent).toBe(4)
 end
 
-@test("ShareSoon: a burst makes one share, two seconds on")
+@test("ShareSoon: a burst makes one share, two seconds on; an answer a moment later, sent whatever")
 local function shareSoon()
     local s = mock.stub(M, "Share")
     M:ShareSoon()
@@ -305,64 +347,107 @@ local function shareSoon()
     expect(s).never.toHaveBeenCalled()
     mock.advanceTime(2.1)
     expect(s).toHaveBeenCalledTimes(1)
+    expect(s).toHaveBeenCalledWith(M, nil)
     expect(M.shareQueued).toBe(nil)
-    -- turned off meanwhile: no share
-    mock.stub(M, "IsEnabled", function(): boolean
-        return false
-    end)
+    M:ShareSoon(true)
     M:ShareSoon()
-    mock.advanceTime(2.1)
-    expect(s).toHaveBeenCalledTimes(1)
+    mock.advanceTime(4.1)
+    expect(s).toHaveBeenCalledTimes(2)
+    expect(s).toHaveBeenCalledWith(M, true)
 end
 
 --------------------------------------------------------------------------------
 -- Hearing
 --------------------------------------------------------------------------------
 
-@test("OnMessage: a share from someone else is kept")
+@test("a share from someone in the group is kept, as an older SuuUI sends it")
 local function hears()
     inWorld({})
     local now = GetTime()
-    M:OnMessage("SuuUI", "RDY\t20484:0,29166:60", "PARTY", "Thessaly Moonbrook-Realm")
-    local h = assert(assert(M.heard)["Thessaly Moonbrook"])
-    expect(h).toBeTruthy()
+    mock.receiveAddonMessage("SuuUI", "RDY\t20484:0,29166:60", "PARTY", "Member1 Lastname-Realm")
+    local h = assert(assert(M.heard)["Member1 Lastname"])
     expect(h.at).toBe(now)
     expect(#h.spells).toBe(2)
     expect(h.spells[2].endsAt).toBe(now + 60)
-    -- a newer share replaces it
-    M:OnMessage("SuuUI", "RDY\t", "PARTY", "Thessaly Moonbrook")
-    expect(#assert(assert(M.heard)["Thessaly Moonbrook"]).spells).toBe(0)
+    -- a newer share replaces it (one without spells too)
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "RDY\t", "RAID", "Member1 Lastname")
+    expect(#assert(assert(M.heard)["Member1 Lastname"]).spells).toBe(0)
 end
 
-@test("OnMessage: what isn't a share is ignored")
+@test("what isn't a share from the group is ignored: other prefixes, secrets, whispers, guild, your own")
 local function ignores()
     inWorld({})
-    M:OnMessage("Other", "RDY\t1:1", "PARTY", "Thessaly")
-    M:OnMessage("SuuUI", mock.secret("RDY\t1:1"), "PARTY", "Thessaly")
-    M:OnMessage("SuuUI", 42, "PARTY", "Thessaly")
-    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", mock.secret("Thessaly"))
-    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", nil)
-    M:OnMessage("SuuUI", "MARK\t1\t0.5\t0.5", "PARTY", "Thessaly")
+    local function event(prefix: unknown, text: unknown, channel: unknown, sender: unknown)
+        mock.fireEvent("CHAT_MSG_ADDON", prefix, text, channel, sender, "", 0, 0, "", 0)
+    end
+    event("Other", "RDY\t1:1", "PARTY", "Member1")
+    event("SuuUI", mock.secret("RDY\t1:1"), "PARTY", "Member1")
+    event("SuuUI", "RDY\t1:1", "PARTY", mock.secret("Member1"))
+    event("SuuUI", "MARK\t1\t0.5\t0.5", "PARTY", "Member1")
+    event("SuuUI", "RDY\t1:1", "WHISPER", "Stranger")
+    event("SuuUI", "RDY\t1:1", "GUILD", "Member1")
     -- your own message coming back
-    M:OnMessage("SuuUI", "RDY\t1:1", "PARTY", "Ayla Dawnfeather")
+    event("SuuUI", "RDY\t1:1", "PARTY", GetUnitName("player", true))
     expect(M.heard).toBe(nil)
+    expectNoErrors()
 end
 
-@test("OnMessage: RDYQ asks for yours (soon)")
+@test("a share checked: spell IDs and seconds in range, at most twenty spells")
+local function checked()
+    inWorld({})
+    local now = GetTime()
+    mock.receiveAddonMessage("SuuUI", "RDY\t0:5,20484:999999,99999999999:1,871:-3,740:60", "PARTY", "Member1")
+    local spells = assert(assert(M.heard).Member1).spells
+    expect(#spells).toBe(1)
+    expect(spells[1].id).toBe(740)
+    expect(spells[1].endsAt).toBe(now + 60)
+    local many: string[] = {}
+    for i = 1, 30 do
+        many[i] = (1000 + i) .. ":0"
+    end
+    mock.receiveAddonMessage("SuuUI", "RDY\t" .. table.concat(many, ","), "PARTY", "Member2")
+    expect(#assert(assert(M.heard).Member2).spells).toBe(20)
+end
+
+@test("one sender's shares held to five in ten seconds; the panel drawn once for a burst")
+local function shareFlood()
+    inWorld({})
+    local update = mock.stub(M, "Update")
+    for i = 1, 50 do
+        mock.receiveAddonMessage("SuuUI", "RDY\t740:" .. i, "PARTY", "Member1")
+    end
+    local spells = assert(assert(M.heard).Member1).spells
+    expect(spells[1].endsAt).toBe(GetTime() + 5)
+    mock.advanceTime(0.6)
+    expect(update).toHaveBeenCalledTimes(1)
+end
+
+@test("RDYQ asks for yours: answered once per ten seconds, whoever asks; never a whisper's")
 local function asked()
     inWorld({})
     local s = mock.stub(M, "ShareSoon")
-    M:OnMessage("SuuUI", "RDYQ", "RAID", "Thessaly")
+    mock.receiveAddonMessage("SuuUI", "RDYQ", "WHISPER", "Stranger")
+    expect(s).never.toHaveBeenCalled()
+    mock.receiveAddonMessage("SuuUI", "RDYQ", "RAID", "Member1")
     expect(s).toHaveBeenCalledTimes(1)
+    expect(s).toHaveBeenCalledWith(M, true)
+    for i = 1, 20 do
+        mock.receiveAddonMessage("SuuUI", "RDYQ", "RAID", "Member" .. i)
+    end
+    expect(s).toHaveBeenCalledTimes(1)
+    mock.advanceTime(10.1)
+    mock.receiveAddonMessage("SuuUI", "RDYQ", "RAID", "Member3")
+    expect(s).toHaveBeenCalledTimes(2)
     expect(M.heard).toBe(nil)
 end
 
 @test("a real addon message reaches it")
 local function wired()
     inWorld({})
-    mock.receiveAddonMessage("SuuUI", "RDY\t20484:30", "PARTY", "Brannoc")
+    mock.receiveAddonMessage("SuuUI", "RDY\t20484:30", "PARTY", "Member1")
     mock.advanceFrames(1)
-    expect(M.heard and assert(assert(M.heard)["Brannoc"])).toBeTruthy()
+    expect(M.heard and assert(assert(M.heard)["Member1"])).toBeTruthy()
 end
 
 --------------------------------------------------------------------------------
@@ -557,12 +642,104 @@ end
 @test("the roster changing while solo: an update, no message")
 local function rosterEventSolo()
     captureSends()
+    inWorld({})
     local soon = mock.stub(M, "ShareSoon")
     local update = mock.stub(M, "Update")
     mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(1.1)
     expect(update).toHaveBeenCalled()
     expect(#sent).toBe(0)
     expect(soon).never.toHaveBeenCalled()
+end
+
+@test("a burst of roster events: read once; someone new gets yours, and one question for who stays silent")
+local function rosterBurst()
+    captureSends()
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "group")
+    local members = { party1 = { name = "Member1", class = "WARRIOR" } }
+    inWorld({ group = true, members = members })
+    local changed = mock.spy(M.RosterChanged)
+    mock.stub(M, "RosterChanged", changed)
+    for _ = 1, 5 do
+        mock.fireEvent("GROUP_ROSTER_UPDATE")
+    end
+    mock.advanceTime(1.1)
+    expect(changed).toHaveBeenCalledTimes(1)
+    -- yours a moment later (asked for: whatever it was); then the question,
+    -- Member1 being silent
+    mock.advanceTime(4)
+    expect(sentTexts()).toEqual({ "RDY	20484:0" })
+    mock.advanceTime(1.1)
+    expect(sentTexts()).toEqual({ "RDY	20484:0", "RDYQ" })
+    -- the same roster again: nothing new, nothing sent
+    for _ = 1, 5 do
+        mock.fireEvent("GROUP_ROSTER_UPDATE")
+    end
+    mock.advanceTime(12)
+    expect(#sent).toBe(2)
+    -- someone new who shares at once: no question
+    members.party2 = { name = "Member2", class = "MAGE" }
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(1.1)
+    mock.receiveAddonMessage("SuuUI", "RDY	871:0", "PARTY", "Member2")
+    mock.advanceTime(12)
+    expect(sentTexts()).toEqual({ "RDY	20484:0", "RDYQ", "RDY	20484:0" })
+end
+
+@test("with the panel off: yours still shared (others use it), never a question")
+local function panelOff()
+    captureSends()
+    knowSpells({ [20484] = true }, {})
+    M:Set("shows", "off")
+    inWorld({ group = true, members = { party1 = { name = "Member1", class = "WARRIOR" } } })
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(12)
+    expect(sentTexts()).toEqual({ "RDY	20484:0" })
+    -- asked: answered
+    mock.receiveAddonMessage("SuuUI", "RDYQ", "PARTY", "Member1")
+    mock.advanceTime(4.1)
+    expect(sentTexts()).toEqual({ "RDY	20484:0", "RDY	20484:0" })
+    -- turned on: the silent are asked
+    M:Set("shows", "group")
+    mock.advanceTime(10.1)
+    expect(sentTexts()[3]).toBe("RDYQ")
+end
+
+@test("who left is forgotten; leaving the group forgets everyone")
+local function forgets()
+    inWorld({
+        group = true,
+        members = { party1 = { name = "Member1", class = "WARRIOR" }, party2 = { name = "Member2", class = "MAGE" } },
+    })
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(1.1)
+    mock.receiveAddonMessage("SuuUI", "RDY	871:0", "PARTY", "Member1")
+    mock.receiveAddonMessage("SuuUI", "RDY	871:0", "PARTY", "Member2")
+    expect(assert(M.heard).Member2).toBeTruthy()
+    inWorld({ group = true, members = { party1 = { name = "Member1", class = "WARRIOR" } } })
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(1.1)
+    expect(assert(M.heard).Member1).toBeTruthy()
+    expect(assert(M.heard).Member2).toBeNil()
+    inWorld({})
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceTime(1.1)
+    expect(M.heard).toBeNil()
+end
+
+@test("casting between pulls: nothing sent while your cooldowns stay as they were")
+local function castsUnchanged()
+    captureSends()
+    knowSpells({ [20484] = true }, {})
+    inWorld({ group = true })
+    M:Share(true)
+    for _ = 1, 10 do
+        mock.fireEvent("SPELL_UPDATE_COOLDOWN")
+        mock.advanceTime(0.5)
+    end
+    mock.advanceTime(35)
+    expect(#sent).toBe(1)
 end
 
 @test("a cooldown changing: a share soon, in a group and out of combat")
@@ -635,11 +812,11 @@ local function command()
     expect(out[before + 2]).toContain("nothing sent yet")
     inWorld({ group = true })
     captureSends()
-    M:OnMessage("SuuUI", "RDY\t1:1,2:2", "PARTY", "Oren")
+    mock.receiveAddonMessage("SuuUI", "RDY\t1:1,2:2", "PARTY", "Member1")
     M:Send("RDYQ")
     mock.slash("/suu ready")
     out = mock.printed()
-    expect(out[before + 3]).toContain("heard from Oren (2)")
+    expect(out[before + 3]).toContain("heard from Member1 (2)")
     expect(out[before + 4]).toContain("ok, true (RDYQ)")
     assert(M.lastSend).ok = false
     mock.slash("/suu ready")
@@ -654,6 +831,23 @@ local function readyCheck()
     expect(panelShown()).toBe(true)
     mock.click(assert(M.panel).action)
     expect(s).toHaveBeenCalledTimes(1)
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handlers too), nothing doubled")
+local function leavesNothing()
+    -- (a first cycle settles what earlier tests queued)
+    cycle("readiness")
+    local c = cycle("readiness")
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(comm.count(M)).toBe(2)
+    settings.set("readiness", "enabled", false)
+    expect(comm.count(M)).toBe(0)
+    -- off: neither a share nor a question is taken
+    mock.receiveAddonMessage("SuuUI", "RDY\t871:0", "PARTY", "Member1")
+    expect(M.heard).toBeNil()
+    settings.set("readiness", "enabled", true)
+    expectNoErrors()
 end
 
 @test("turned off: the panel goes")
@@ -672,18 +866,30 @@ local function disable()
 end
 
 -- Last: a real group stays for the rest of the file.
-@test("joining a party: a question for everyone's cooldowns, then yours")
+@test("joining a real party: yours to them, then a question for the silent, on the game's own channel")
 local function joinParty()
-    local share = mock.stub(M, "Share")
+    M:Set("shows", "group")
+    knowSpells({ [20484] = true }, {})
+    -- (you: a druid; the rest of the world the game's own)
+    local unitClass = game.UnitClass
+    mock.stub(game, "UnitClass", function(unit: string): (unknown, unknown)
+        if unit == "player" then
+            return "Druid", "DRUID"
+        end
+        local name, file = unitClass(unit)
+        return name, file
+    end)
     local before = #mock.sentAddonMessages()
-    local brannoc = mock.spawnUnit({ name = "Brannoc", class = "WARRIOR", player = true })
-    mock.group:add(brannoc)
+    local member = mock.spawnUnit({ name = "Member1", class = "WARRIOR", player = true })
+    mock.group:add(member)
+    -- (nothing at once: the roster is read once it settles)
+    expect(#mock.sentAddonMessages()).toBe(before)
+    mock.advanceTime(10)
     local sentNow = mock.sentAddonMessages()
-    expect(#sentNow).toBe(before + 1)
-    expect(sentNow[#sentNow].prefix).toBe("SuuUI")
-    expect(sentNow[#sentNow].message).toBe("RDYQ")
-    expect(sentNow[#sentNow].chatType).toBe("PARTY")
-    mock.advanceTime(2.1)
-    expect(share).toHaveBeenCalledTimes(1)
+    expect(#sentNow).toBe(before + 2)
+    expect(sentNow[before + 1].prefix).toBe("SuuUI")
+    expect(sentNow[before + 1].message).toBe("RDY\t20484:0")
+    expect(sentNow[before + 1].chatType).toBe("PARTY")
+    expect(sentNow[before + 2].message).toBe("RDYQ")
     expectNoErrors()
 end

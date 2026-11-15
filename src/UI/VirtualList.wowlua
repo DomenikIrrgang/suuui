@@ -1,0 +1,594 @@
+-- UI/VirtualList.wowlua
+-- VirtualList (0.47): a scrolling list that makes only the rows it shows.
+-- The roster, the friends list and the who results made a frame per entry
+-- and drew every one again on each refresh and each click (the review's
+-- UIW-6). Here the rows come from the caller's factory, as many as fit the
+-- area plus one above and below; scrolling moves them with the content and
+-- hands the ones that leave to the entries coming in. The wheel, the thin
+-- scrollbar and the settling when the content gets shorter are the scroll
+-- area's (Panel's scrollArea: the same look, step and clamp).
+--
+--   local list = virtualList(parent, {
+--       rowHeight = 24,        -- px, or a function read when measured (tokens)
+--       make = function(list) return MyRow.new(list.child) end,
+--       bind = function(row, item, selected) ... end,
+--       key = function(item) return item.key end, -- identity; default: the item
+--       same = sameFields,     -- a new table that shows the same (optional)
+--       adopt = function(row, item) row.item = item end, -- then, instead of bind
+--       bar = 2,               -- the scroll area's bar, `bar` px right of it
+--       -- more than one kind of row (headings, gaps): each its own height
+--       kinds = { head = { height = 20, make = …, bind = … }, gap = { height = 6 } },
+--       kindOf = function(item) return item.heading and "head" or "row" end,
+--   })
+--   list:SetItems(items)    the entries (read, never changed)
+--   list:SetSelected(key)   the chosen entry by its key (nil: none)
+--   list:Refresh()          every row drawn again (a column layout changed);
+--                           list:Invalidate() only marks them, for the next update
+--   list:Rows(kind?)        the rows made so far ("row" by default), in order
+--   list:ItemOf(row), list:IndexOf(row)   what a row in sight shows
+--   list.scroll, list.child the scroll area and its content
+--
+-- The rules:
+-- - make(list) builds a row once, with every frame, texture, font string and
+--   script it will ever need; its scripts read the row's own fields (the
+--   item bind left there). bind(row, item, selected) only sets what the item
+--   shows: it must not create frames, regions or closures, since it runs
+--   again whenever a row is handed to another entry. The list itself makes
+--   nothing per update either: its tables are kept and reused.
+-- - Identity: key(item) says which entry an item is. A refresh with new
+--   items re-binds only the rows whose entry, content (`same`) or selection
+--   changed; the scroll stays where it is; the selection is a key, so it
+--   follows its entry through a new order and goes with it (never an index
+--   that points at someone else after a refresh). Items without a key (nil)
+--   keep the row at their position.
+-- - Kinds: one height a kind (rowHeight is the kind "row"); a kind without
+--   `make` is a gap with no frame. Heights per item would go into the same
+--   measuring later without a change for callers.
+-- - Theme: colours through draw.paint / Text:SetColor (they follow a theme
+--   by themselves) and spacing from the tokens in make or bind. A theme
+--   change measures the kinds again and re-binds the rows in sight (the
+--   others when they come into view): no registry of every row ever made.
+--   Row tops sit on whole physical pixels.
+-- - Out of sight: SetItems, SetSelected, a resize or a theme change only
+--   mark the list; it binds once it shows.
+-- - Rows hold no secure or protected frames: rows move and change in
+--   combat. A row a protected frame got anchored to (a secure overlay over
+--   the hovered row) is left where it is until combat ends.
+-- - sameFields compares items field by field (one level), with readable
+--   values only: a secret value counts as changed.
+
+import * as secret from "wowlua:secret"
+import * as events from "/Core/Events"
+import * as combat from "/Core/Combat"
+import * as pixel from "/Core/Pixel"
+import * as panel from "./Panel"
+import ScrollArea from "./Panel"
+
+-- px, or a function read whenever the list measures (a token's value)
+export type ListHeight = number | (() -> number)
+
+-- One kind of row: its height, how a row is made and drawn (none: a gap).
+export type ListKind<T> = {
+    height: ListHeight,
+    make?: (list: VirtualList<T>) -> Frame,
+    bind?: (row: Frame, item: T, selected: boolean) -> (),
+    adopt?: (row: Frame, item: T) -> (),
+}
+
+export type VirtualListOptions<T> = {
+    -- the kind "row"
+    rowHeight?: ListHeight,
+    make?: (list: VirtualList<T>) -> Frame,
+    bind?: (row: Frame, item: T, selected: boolean) -> (),
+    adopt?: (row: Frame, item: T) -> (),
+    -- more kinds, and which an item is (default: "row")
+    kinds?: { [string]: ListKind<T> },
+    kindOf?: (item: T) -> string,
+    key?: (item: T) -> unknown,
+    same?: (a: T, b: T) -> boolean,
+    bar?: number,
+    overscan?: number,
+}
+
+-- What a theme change reaches: the lists, never their rows.
+interface Themed
+    function ThemeChanged()
+end
+
+local lists: { [Themed]: boolean } = setmetatable({}, { __mode = "k" })
+
+local ROW = "row"
+
+-- Whether two items show the same: the same table, or tables whose fields
+-- (one level down) are equal. Secret values count as different.
+export function sameFields(a: unknown, b: unknown): boolean
+    if not (secret.readable(a) and secret.readable(b)) then
+        return false
+    end
+    if a == b then
+        return true
+    end
+    if type(a) ~= "table" or type(b) ~= "table" then
+        return false
+    end
+    local ta, tb = a :: { [unknown]: unknown }, b :: { [unknown]: unknown }
+    local n = 0
+    for k, v in pairs(ta) do
+        local w = tb[k]
+        if not (secret.readable(v) and secret.readable(w)) or v ~= w then
+            return false
+        end
+        n += 1
+    end
+    for _ in pairs(tb) do
+        n -= 1
+        if n < 0 then
+            return false
+        end
+    end
+    return n == 0
+end
+
+local function itself(item: unknown): unknown
+    return item
+end
+
+-- (the default kindOf: known by identity, a list of one kind measures
+-- without calling it)
+local function rowKind(_item: unknown): string
+    return ROW -- wowlua: coverage ignore (never called: see above)
+end
+
+local function plain(v: unknown): number
+    return secret.asNumber(v) or 0
+end
+
+local function heightOf(h: ListHeight): number
+    if type(h) == "function" then
+        return h()
+    end
+    return h :: number
+end
+
+export class VirtualList<T> extends Frame implements Themed
+    readonly scroll: ScrollArea
+    readonly child: Frame
+    -- what it shows (the caller's list, read only) and how many
+    items: T[]
+    count: number = 0
+    -- the chosen entry's key
+    selected: unknown = nil
+    -- the rows made, per kind, in the order made
+    readonly pools: { [string]: Frame[] }
+    -- rows made and binds run, every kind (for the tests and profiling)
+    made: number = 0
+    binds: number = 0
+    -- something waits for the list to show (or for combat to end)
+    dirty: boolean = false
+    kinds: { [string]: ListKind<T> }
+    kindOf: (item: T) -> string
+    keyOf: (item: T) -> unknown
+    same: ((a: T, b: T) -> boolean)? = nil
+    overscan: number
+    -- measured: each kind's height, one for every item (nil: the tops)
+    heights: { [string]: number }
+    uniform: number? = nil
+    tops: number[]
+    kindAt: string[]
+    total: number = 0
+    width: number = 0
+    childH: number = 0
+    -- the range the last update placed
+    first: number = 1
+    last: number = 0
+    -- per row: its kind, the index and item it shows, its key, selection,
+    -- top, and whether it has to be drawn again
+    rowKind: { [Frame]: string }
+    rowIndex: { [Frame]: number }
+    rowItem: { [Frame]: T }
+    rowKey: { [Frame]: unknown }
+    rowSel: { [Frame]: boolean }
+    rowTop: { [Frame]: number }
+    stale: { [Frame]: boolean }
+    -- the rows in sight, and the tables an update works in (kept)
+    shown: Frame[]
+    spare: Frame[]
+    byKey: { [unknown]: Frame }
+    byIndex: { [number]: Frame }
+    slot: { [number]: Frame }
+    keyAt: { [number]: unknown }
+    claimed: { [Frame]: boolean }
+    cursor: { [string]: number }
+
+    constructor(parent: Frame, opts: VirtualListOptions<T>)
+        super(nil, parent)
+        self.scroll = panel.scrollArea(self, opts.bar)
+        self.scroll:SetAllPoints()
+        self.child = self.scroll.child
+        self.items = {}
+        local kinds: { [string]: ListKind<T> } = {}
+        for name, kind in pairs(opts.kinds or {}) do
+            kinds[name] = kind
+        end
+        if opts.make then
+            kinds[ROW] = { height = opts.rowHeight or 24, make = opts.make, bind = opts.bind, adopt = opts.adopt }
+        end
+        self.kinds = kinds
+        self.pools = {}
+        for name, kind in pairs(kinds) do
+            if kind.make then
+                self.pools[name] = {}
+            end
+        end
+        self.kindOf = opts.kindOf or rowKind
+        self.keyOf = opts.key or itself
+        self.same = opts.same
+        self.overscan = math.max(0, opts.overscan or 1)
+        self.heights, self.tops, self.kindAt = {}, {}, {}
+        self.rowKind, self.rowIndex, self.rowItem, self.rowKey = {}, {}, {}, {}
+        self.rowSel, self.rowTop, self.stale = {}, {}, {}
+        self.shown, self.spare, self.byKey, self.byIndex, self.slot, self.keyAt = {}, {}, {}, {}, {}, {}
+        self.claimed, self.cursor = {}, {}
+        self:Measure()
+        self.scroll:HookScript("OnVerticalScroll", function()
+            self:Scrolled()
+        end)
+        self.scroll:HookScript("OnSizeChanged", function()
+            self:Update()
+        end)
+        self:HookScript("OnShow", function()
+            if self.dirty then
+                self:Update()
+            end
+        end)
+        lists[self] = true
+    end
+
+    -- The entries to show. The rows in sight keep their entries (by key),
+    -- and only those whose entry, content or selection changed draw again.
+    function SetItems(items: T[])
+        self.items = items
+        self.count = #items
+        self:Measure()
+        self:Update()
+    end
+
+    -- The chosen entry, by its key: the rows that gain or lose it draw again.
+    function SetSelected(key: unknown)
+        if key == self.selected then
+            return
+        end
+        self.selected = key
+        if not self:IsVisible() then
+            self.dirty = true
+            return
+        end
+        for _, row in ipairs(self.shown) do
+            local k = self.rowKey[row]
+            local on = k ~= nil and k == key
+            local item = self.rowItem[row]
+            if on ~= self.rowSel[row] and item ~= nil then
+                self.rowSel[row] = on
+                self:Bind(row, item, on)
+            end
+        end
+    end
+
+    -- Every row draws again on the next update (a column layout changed).
+    function Invalidate()
+        for _, pool in pairs(self.pools) do
+            for _, row in ipairs(pool) do
+                self.stale[row] = true
+            end
+        end
+    end
+
+    -- Every row in sight draws again now, the others when they come into view.
+    function Refresh()
+        self:Invalidate()
+        self:Update()
+    end
+
+    function ThemeChanged()
+        self:Measure()
+        self:Refresh()
+    end
+
+    -- The rows made so far of a kind ("row" by default), in the order made
+    -- (the same table as the list grows).
+    function Rows(kind: string?): Frame[]
+        return self.pools[kind or ROW] or {}
+    end
+
+    -- What a row in sight shows, and where (nil: it's spare).
+    function ItemOf(row: Frame): T?
+        if self.rowIndex[row] == nil then
+            return nil
+        end
+        return self.rowItem[row]
+    end
+
+    function IndexOf(row: Frame): number?
+        return self.rowIndex[row]
+    end
+
+    -- Each kind's height now, each item's kind and top (no frames, nothing
+    -- drawn: a few numbers per item).
+    function Measure()
+        local heights = self.heights
+        for name, kind in pairs(self.kinds) do
+            heights[name] = heightOf(kind.height)
+        end
+        local n = self.count
+        if self.kindOf == rowKind then
+            local h = heights[ROW] or 0
+            self.uniform = h
+            self.total = n * h
+            return
+        end
+        self.uniform = nil
+        local tops, kindAt, items, kindOf = self.tops, self.kindAt, self.items, self.kindOf
+        local y = 0
+        for i = 1, n do
+            local kind = kindOf(items[i])
+            kindAt[i] = kind
+            tops[i] = y
+            y += heights[kind] or 0
+        end
+        tops[n + 1] = y
+        self.total = y
+    end
+
+    -- The last item whose top is at or above `y` (the tops).
+    function Find(y: number): number
+        local tops = self.tops
+        local lo, hi = 1, self.count
+        while lo < hi do
+            local mid = math.floor((lo + hi + 1) / 2)
+            if (tops[mid] or 0) <= y then
+                lo = mid
+            else
+                hi = mid - 1
+            end
+        end
+        return lo
+    end
+
+    -- The items in sight, with the overscan (first > last: none).
+    function Range(): (number, number)
+        local n = self.count
+        if n == 0 then
+            return 1, 0
+        end
+        local viewH = math.max(0, plain(self.scroll:GetHeight()))
+        -- past the end (the content got shorter): the bottom, where the
+        -- scroll area's settling is about to put it
+        local top = math.max(0, math.min(plain(self.scroll:GetVerticalScroll()), self.total - viewH))
+        local first: number, last: number
+        local u = self.uniform
+        if u then
+            if u <= 0 then
+                return 1, 0
+            end
+            -- (item i covers (i - 1) * u to i * u: the last one reaching
+            -- into the bottom edge, not one starting on it)
+            first = math.floor(top / u) + 1
+            last = math.max(first, math.ceil((top + viewH) / u))
+        else
+            first = self:Find(top)
+            last = self:Find(math.max(top, top + viewH - 0.01))
+        end
+        return math.max(1, first - self.overscan), math.min(n, last + self.overscan)
+    end
+
+    function Bind(row: Frame, item: T, selected: boolean)
+        local kind = self.kinds[self.rowKind[row] or ROW]
+        local bind = kind and kind.bind
+        self.stale[row] = nil
+        self.binds += 1
+        if bind then
+            bind(row, item, selected)
+        end
+    end
+
+    -- A row of the kind no entry in sight holds (made when there is none).
+    function Free(kind: string): Frame?
+        local def = self.kinds[kind]
+        local make = def and def.make
+        local pool = self.pools[kind]
+        if not (make and pool) then
+            return nil
+        end
+        local busy = InCombatLockdown()
+        local i = self.cursor[kind] or 1
+        while i <= #pool do
+            local row = pool[i]
+            i += 1
+            -- (a row a protected frame hangs on stays put in combat)
+            if not self.claimed[row] and not (busy and row:IsProtected()) then
+                self.cursor[kind] = i
+                return row
+            end
+        end
+        self.cursor[kind] = i
+        local row = make(self)
+        if row:GetParent() ~= self.child then
+            row:SetParent(self.child)
+        end
+        pool[#pool + 1] = row
+        self.rowKind[row] = kind
+        self.made += 1
+        return row
+    end
+
+    -- The scroll moved: an update only when other items come into sight
+    -- (dragging the bar scrolls a little every frame).
+    function Scrolled()
+        if not self.dirty and self:IsVisible() then
+            local first, last = self:Range()
+            if first == self.first and last == self.last then
+                return
+            end
+        end
+        self:Update()
+    end
+
+    -- Places and draws the rows for what is in sight now.
+    function Update()
+        if not self:IsVisible() then
+            self.dirty = true
+            return
+        end
+        self.dirty = false
+        local child = self.child
+        local w = plain(self.scroll:GetWidth())
+        if w > 0 and w ~= self.width then
+            self.width = w
+            child:SetWidth(w)
+        end
+        local h = math.max(1, self.total)
+        if h ~= self.childH then
+            self.childH = h
+            child:SetHeight(h)
+        end
+        local first, last = self:Range()
+        self.first, self.last = first, last
+        local items, kinds, keyOf = self.items, self.kinds, self.keyOf
+        local byKey, byIndex, slot, keyAt, claimed = self.byKey, self.byIndex, self.slot, self.keyAt, self.claimed
+        local rowKey, rowIndex, rowKindOf = self.rowKey, self.rowIndex, self.rowKind
+        wipe(byKey)
+        wipe(byIndex)
+        wipe(slot)
+        wipe(keyAt)
+        wipe(claimed)
+        wipe(self.cursor)
+        -- the rows in sight before: by their entry's key, or their place
+        for _, row in ipairs(self.shown) do
+            local k = rowKey[row]
+            if k ~= nil then
+                if byKey[k] == nil then
+                    byKey[k] = row
+                end
+            else
+                local at = rowIndex[row]
+                if at then
+                    byIndex[at] = row
+                end
+            end
+        end
+        local uniform = self.uniform
+        local kindAt = self.kindAt
+        -- each entry in sight keeps its row
+        for i = first, last do
+            local kind = uniform and ROW or kindAt[i]
+            local def = kinds[kind]
+            if def and def.make then
+                local item = items[i]
+                local k = keyOf(item)
+                keyAt[i] = k
+                local row: Frame?
+                if k ~= nil then
+                    row = byKey[k]
+                else
+                    row = byIndex[i]
+                end
+                if row and rowKindOf[row] == kind and not claimed[row] then
+                    claimed[row] = true
+                    slot[i] = row
+                end
+            end
+        end
+        -- the others take a free row; in combat a protected one keeps its place
+        local busy = InCombatLockdown()
+        for i = first, last do
+            if slot[i] == nil then
+                local kind = uniform and ROW or kindAt[i]
+                local row = self:Free(kind)
+                if row then
+                    claimed[row] = true
+                    slot[i] = row
+                end
+            end
+        end
+        -- place and draw what changed
+        local px = pixel.size(child)
+        local same, selected = self.same, self.selected
+        local rowItem, rowSel, rowTop, stale = self.rowItem, self.rowSel, self.rowTop, self.stale
+        local spare = self.spare
+        wipe(spare)
+        local waits = false
+        for i = first, last do
+            local row = slot[i]
+            if row then
+                local item = items[i]
+                local k = keyAt[i]
+                local on = k ~= nil and k == selected
+                local old = rowItem[row]
+                local top = uniform and (i - 1) * uniform or (self.tops[i] or 0)
+                top = math.floor(top / px + 0.5) * px
+                if rowTop[row] ~= top then
+                    if busy and row:IsProtected() then
+                        waits = true -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+                    else
+                        rowTop[row] = top
+                        row:ClearAllPoints()
+                        row:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -top)
+                        row:SetPoint("RIGHT", child, "RIGHT")
+                    end
+                end
+                rowKey[row], rowIndex[row] = k, i
+                if stale[row] or old == nil or rowSel[row] ~= on or (old ~= item and not (same and same(old, item))) then
+                    rowItem[row], rowSel[row] = item, on
+                    self:Bind(row, item, on)
+                elseif old ~= item then
+                    rowItem[row] = item
+                    local def = kinds[rowKindOf[row] or ROW]
+                    local adopt = def and def.adopt
+                    if adopt then
+                        adopt(row, item)
+                    end
+                end
+                if not row:IsShown() then
+                    row:Show()
+                end
+                spare[#spare + 1] = row
+            end
+        end
+        -- the rows that left: hidden, spare (a protected one stays as it is,
+        -- in sight, until the end of combat)
+        for _, row in ipairs(self.shown) do
+            if not claimed[row] then
+                if busy and row:IsProtected() then
+                    waits = true -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+                    spare[#spare + 1] = row -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+                else
+                    row:Hide()
+                    rowIndex[row], rowKey[row] = nil, nil
+                end
+            end
+        end
+        self.spare, self.shown = self.shown, spare
+        if waits then
+            self.dirty = true -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+            combat.run("virtuallist:" .. tostring(self), function() -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+                self:Update() -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+            end, "VirtualList") -- wowlua: coverage ignore (the emulator makes no frame protected by an anchor)
+        end
+    end
+end
+
+export function virtualList<T>(parent: Frame, opts: VirtualListOptions<T>): VirtualList<T>
+    return VirtualList.new(parent, opts)
+end
+
+-- A theme can change the text styles and spacing: the lists measure again
+-- and draw the rows in sight (colour codes and widths from the tokens).
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for list in pairs(lists) do
+            list:ThemeChanged()
+        end
+    end,
+    "VirtualList"
+)

@@ -268,6 +268,62 @@ local function exitGame()
     expect(asked).toBeNil()
 end
 
+-- (CD-1) The question shares its dialog with every other one: the /quit
+-- cover must never outlive it, also when a fight starts.
+@test("Exit Game's question as a fight starts: closed, its cover hidden; the next question has no cover")
+local function exitGameFight()
+    open()
+    item("Exit Game"):Click()
+    mock.advanceFrames(2)
+    local over = assert(M.quitOver).button
+    local d = assert(M.quitAsking)
+    expect(over:IsShown()).toBe(true)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(d:IsShown()).toBe(false)
+    expect(over:IsShown()).toBe(false)
+    expect(M.quitAsking).toBeNil()
+    -- another question in the fight: its OK is its own
+    local confirmed = mock.spy(function() end)
+    local other = SuuUI.UI.Confirm({ title = "Something else?", onConfirm = confirmed })
+    expect(other).toBe(d)
+    expect(over:IsShown()).toBe(false)
+    other:Hide()
+end
+
+@test("a cover the lockdown kept: hidden as the fight ends")
+local function exitGameKept()
+    open()
+    item("Exit Game"):Click()
+    mock.advanceFrames(2)
+    local over = assert(M.quitOver).button
+    local d = assert(M.quitAsking)
+    -- (as before the fix: nothing stands it down as the fight starts)
+    mock.stub(M, "StandDownQuit", function() end)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    d:Hide()
+    -- refused in the lockdown: waits for its end
+    expect(over:IsShown()).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(over:IsShown()).toBe(false)
+end
+
+@test("the /quit cover clicked: the question closes a frame after, its cover with it")
+local function exitGameClicked()
+    open()
+    item("Exit Game"):Click()
+    mock.advanceFrames(2)
+    local over = assert(M.quitOver).button
+    local d = assert(M.quitAsking)
+    mock.script(over, "PostClick")
+    expect(d:IsShown()).toBe(true)
+    mock.advanceFrames(2)
+    expect(d:IsShown()).toBe(false)
+    expect(over:IsShown()).toBe(false)
+end
+
 @test("on the way out already: Log Out and Exit Game say so")
 local function onTheWayOut()
     mock.stub(_G, "StaticPopup_Visible", function(which: string): Frame?

@@ -16,7 +16,6 @@ import Module from "/Core/Modules"
 import type SettingsSection from "/Core/Modules"
 import type DamageMeter, MeterApi, RecapApi, RecapEvent, MeterSession, MeterView from "/UI/DamageMeter"
 import type Position from "/EditMode/EditMode"
-import after from "wowlua:timer"
 import * as ahead from "/Core/Ahead"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -38,7 +37,6 @@ local DEFAULTS = {
     pinYou = true,
     windowCount = 1,
     views = { { type = "damage" }, { type = "healing" }, { type = "deaths" } } :: View[],
-    blizzardWas = "", -- Blizzard's damageMeterEnabled before SuuUI turned it off
 }
 
 local M: DamageMeterModule
@@ -449,25 +447,30 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         })
     end
 
+    -- (0.47) Blizzard's meter off through the module's CVar memory: the
+    -- player's value is kept per character, outside profiles, and given
+    -- back when the module turns off (the registry does it).
     function BlizzardOff()
-        local ok, was = pcall(C_CVar.GetCVar, "damageMeterEnabled")
-        if not ok or was == nil then
-            return
+        local data = self:CharData()
+        local was = data.blizzardWas
+        if type(was) == "string" then
+            -- the player's value an older SuuUI kept in the profile (moved
+            -- here by the "blizzardWas-cvar" migration), while the game
+            -- still has SuuUI's "0": put back first, so the memory takes it
+            -- as the player's. Out of combat only, like the write itself.
+            if InCombatLockdown() then
+                self:RunOutOfCombat("blizzardOff", function()
+                    self:BlizzardOff()
+                end)
+                return
+            end
+            local ok, now = pcall(C_CVar.GetCVar, "damageMeterEnabled")
+            if ok and now == "0" and was ~= "0" then
+                pcall(C_CVar.SetCVar, "damageMeterEnabled", was)
+            end
+            data.blizzardWas = nil
         end
-        if self:Get("blizzardWas") == "" then
-            self:Set("blizzardWas", was)
-        end
-        if was ~= "0" then
-            pcall(C_CVar.SetCVar, "damageMeterEnabled", "0")
-        end
-    end
-
-    function BlizzardBack()
-        local was = self:Get("blizzardWas")
-        if was ~= "" then
-            pcall(C_CVar.SetCVar, "damageMeterEnabled", was)
-            self:Set("blizzardWas", "")
-        end
+        self:SetCVar("damageMeterEnabled", "0")
     end
 
     function ViewOf(i: number): View
@@ -627,10 +630,10 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.pending = true
-        after(delay or 0.2, function()
+        self:After(delay or 0.2, function()
             self.pending = nil
             local frame = self.frame
-            if self:IsEnabled() and frame and frame:IsShown() then
+            if frame and frame:IsShown() then
                 self:Refresh()
             end
         end)
@@ -693,7 +696,7 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         self:Layout()
         self:BuildAhead()
         -- (0.39) where the meters sit: tooltips open clear of them
-        SuuUI.PublishAnchor("damageMeter", frame)
+        SuuUI.PublishAnchor("damageMeter", frame, self)
         self:RegisterMover(frame, {
             key = "position",
             label = "Damage meter",
@@ -746,15 +749,11 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
             self:UpdateVisibility()
             -- the numbers turn readable a moment after combat
-            after(0.5, function()
-                if self:IsEnabled() then
-                    self:Refresh()
-                end
+            self:After(0.5, function()
+                self:Refresh()
             end)
-            after(1.5, function()
-                if self:IsEnabled() then
-                    self:Refresh()
-                end
+            self:After(1.5, function()
+                self:Refresh()
             end)
         end)
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
@@ -779,9 +778,28 @@ class DamageMeterModule extends Module<typeof(DEFAULTS)>
         if self.frame then
             self.frame:Hide()
         end
-        SuuUI.PublishAnchor("damageMeter", nil)
-        self:BlizzardBack()
+        -- (0.47) the refresh timer is cancelled with the module: let the
+        -- next one be set. The anchor and Blizzard's meter setting are
+        -- given back by the registry.
+        self.pending = nil
     end
 end
 
 M = SuuUI.AddModule(DamageMeterModule.new())
+
+-- 0.47: Blizzard's meter setting was kept in the profile ("blizzardWas",
+-- "" when SuuUI held nothing), so a profile switch lost it. The value moves
+-- to this character's data once, for the next enable to hand to the CVar
+-- memory (BlizzardOff); the profile key goes. Every profile gives its value
+-- to the character that loads first after the update: the first non-empty
+-- one is kept.
+M:Migrate("blizzardWas-cvar", function(values: { [string]: unknown })
+    local was = values.blizzardWas
+    values.blizzardWas = nil
+    if type(was) == "string" and was ~= "" then
+        local data = M:CharData()
+        if data.blizzardWas == nil then
+            data.blizzardWas = was
+        end
+    end
+end)

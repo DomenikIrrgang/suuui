@@ -1,6 +1,7 @@
 -- Units/Campsite: the campfire alerts (nearby, resting, rested), the
 -- benefits read from the buff's tooltip, and the fires remembered for the
--- world map.
+-- world map; theirs shared from the group and guild only, held to a rate,
+-- never at the cost of yours.
 
 import test, expect, beforeEach, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -8,7 +9,8 @@ import SuuUI from "/Core/API"
 import internal clock, aura, effectOf, restLeft, SECTION, M from "/Units/Campsite"
 import firesOf, addFire, channels, fireMessage from "/Units/Campsite"
 import CAMPFIRES from "/Core/ServiceKeys"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
+import * as comm from "/Core/Comm"
 
 const NEARBY = 1283391
 const WELCOMING = 1229739
@@ -55,7 +57,6 @@ local function undo()
     M:Reset("shareFires")
     M:Reset("showShared")
     M:CharData().fires = nil
-    M.taken = {}
     M.sentAt = setmetatable({}, { __mode = "k" })
     mock.advanceTime(20)
 end
@@ -407,8 +408,9 @@ local function inGroup(group: string?, guild: boolean)
     end)
 end
 
-local function shared(text: string, sender: string?)
-    M:OnMessage("SuuUI", text, "GUILD", sender or "Brannoc")
+-- A fire from the guild (by default), as the game delivers it.
+local function shared(text: string, sender: string?, channel: string?)
+    mock.receiveAddonMessage("SuuUI", text, channel or "GUILD", sender or "Brannoc")
 end
 
 local function foundFires(): { x: number, by: string? }[]
@@ -431,7 +433,7 @@ end
 @test("addFire: a new one, the same seen again; one you found stays yours")
 local function addFires()
     local data: { [string]: unknown } = {}
-    local f = addFire(data, 1412, 0.4, 0.6, "Brannoc")
+    local f = assert(addFire(data, 1412, 0.4, 0.6, "Brannoc"))
     expect(f.by).toBe("Brannoc")
     f.seen = time() - 300
     -- someone else saw it again: theirs now, its 10 minutes from now
@@ -441,9 +443,33 @@ local function addFires()
     -- you did: yours
     addFire(data, 1412, 0.4, 0.6)
     expect(f.by).toBeNil()
-    addFire(data, 1412, 0.4, 0.6, "Tam")
+    -- someone else's report of yours: still yours, and it doesn't keep it burning
+    f.seen = time() - 300
+    expect(addFire(data, 1412, 0.4, 0.6, "Tam")).toBe(f)
     expect(f.by).toBeNil()
+    expect(f.seen).toBe(time() - 300)
     expect(#firesOf(data)).toBe(1)
+end
+
+@test("addFire at the most fires: a shared one goes first; a shared one never pushes out one of yours")
+local function addFiresFull()
+    local data: { [string]: unknown } = {}
+    local fires = firesOf(data)
+    fires[1] = { map = 1, x = 0.001, y = 0, seen = time(), by = "Member1" }
+    for i = 2, 100 do
+        fires[i] = { map = 1, x = i / 1000, y = 0, seen = time() }
+    end
+    -- yours: the shared one goes
+    expect(addFire(data, 2, 0.5, 0.5) ~= nil).toBe(true)
+    expect(#fires).toBe(100)
+    expect(fires[1].by).toBeNil()
+    -- theirs, with only yours left: refused
+    expect(addFire(data, 2, 0.9, 0.9, "Member2")).toBeNil()
+    expect(#fires).toBe(100)
+    -- yours again: the oldest of yours goes
+    expect(addFire(data, 3, 0.5, 0.5) ~= nil).toBe(true)
+    expect(#fires).toBe(100)
+    expect(fires[100].map).toBe(3)
 end
 
 @test("a fire you pass goes to your group and guild, not again within a minute; not with Send off")
@@ -510,22 +536,27 @@ local function receiveChecked()
     mock.fake("UnitFullName", function(): (string, string)
         return "Suu", "Camelot"
     end)
-    shared("FIRE\t1\t1420\t0.5\t0.5", "Suu")
+    shared("FIRE\t1\t1420\t0.5\t0.5", "Suu Camelot")
     shared("FIRE\t1\t1420\t0.5\t0.5", "Suu-Camelot")
-    M:OnMessage("Other", "FIRE\t1\t1420\t0.5\t0.5", "GUILD", "Brannoc")
-    M:OnMessage("SuuUI", mock.secret("FIRE\t1\t1420\t0.5\t0.5"), "GUILD", "Brannoc")
-    M:OnMessage("SuuUI", "FIRE\t1\t1420\t0.5\t0.5", "GUILD", mock.secret("Brannoc"))
-    M:OnMessage("SuuUI", 5, "GUILD", "Brannoc")
+    mock.receiveAddonMessage("Other", "FIRE\t1\t1420\t0.5\t0.5", "GUILD", "Brannoc")
+    -- a whisper from anyone, another channel
+    shared("FIRE\t1\t1420\t0.5\t0.5", "Stranger", "WHISPER")
+    shared("FIRE\t1\t1420\t0.5\t0.5", "Stranger", "CHANNEL")
     shared("CONV\t1\t1420\t0.5\t0.5")
     shared("FIRE\t2\t1420\t0.5\t0.5")
     shared("FIRE\t1\t1420.5\t0.5\t0.5")
     shared("FIRE\t1\t1420\t1.5\t0.5")
     shared("FIRE\t1\t1420\tx\t0.5")
+    shared("FIRE\t1\t1e3\t0.5\t0.5")
+    shared("FIRE\t1\t1420\tnan\t0.5")
+    shared("FIRE\t1\t1420\t0.5")
+    shared("FIRE")
     maps = false
     shared("FIRE\t1\t1420\t0.5\t0.5")
     expect(M:CharData().fires == nil or #firesOf(M:CharData()) == 0).toBe(true)
-    -- one sender: 10 a minute
+    -- one sender: 10 a minute (what was refused above counted too)
     maps = true
+    mock.advanceTime(61)
     for i = 1, 12 do
         shared(("FIRE\t1\t1420\t%.2f\t0.5"):format(i / 20))
     end
@@ -704,6 +735,39 @@ local function theme()
     end)
     M:Emit("SUUUI_THEME_CHANGED", "suuui")
     expect(#said).toBe(0)
+end
+
+@test("turned off within moments of combat's end: nothing said, no ticker started (X-11.a1)")
+local function offAfterCombat()
+    apply(WELCOMING)
+    M:Update()
+    M:Alert(nil)
+    said = {}
+    mock.fireEvent("PLAYER_REGEN_ENABLED")
+    M:Set("enabled", false)
+    mock.advanceTime(1)
+    expect(M.ticker).toBeNil()
+    for _, s in ipairs(said) do
+        expect(s[1]).toBe("hide")
+    end
+    expect(M.phase).toBeNil()
+    M:Reset("enabled")
+    mock.advanceTime(1.1)
+    expectNoErrors()
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handler too), nothing doubled")
+local function leavesNothing()
+    mock.advanceTime(1.1)
+    local c = cycle("campsite")
+    expect(c.off).toEqual(NOTHING)
+    expect(comm.count(M)).toBe(1)
+    mock.advanceTime(1.1)
+    -- (the check a second after enabling has run)
+    local again = cycle("campsite")
+    expect(again.off).toEqual(NOTHING)
+    mock.advanceTime(1.1)
+    expectNoErrors()
 end
 
 @test("off and on: alerts and their timers gone")

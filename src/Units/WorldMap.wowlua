@@ -2223,7 +2223,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.layoutQueued = true
-        after(0, function()
+        self:After(0, function()
             self:Layout()
         end)
     end
@@ -2737,7 +2737,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- (a frame later: the window skin lays its row out on the same change)
         hook(f, "OnMapChanged", function()
             if self:IsEnabled() then
-                after(0, function()
+                self:After(0, function()
                     self:PlaceFilters()
                 end)
             end
@@ -2798,19 +2798,27 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         })
         self:QuestObjectivesOnce()
         self:Attach()
-        local f, layer, reveal, menu, provider = self.map, self.layer, self.reveal, self.menu, self.provider
-        if not (f and layer and reveal and menu and provider) then
+        if not self:OnMap() then
+            -- the map not there yet (it loads with an addon): the rest once
+            -- it is (X-11.b4: OnEnable itself ran again from here, its
+            -- service and data callback registered twice)
             self:OnGameEvent("ADDON_LOADED", function()
                 if not self.map and frames.find("WorldMapFrame") then
                     self:Attach()
-                    if self.map then
-                        self:OnEnable()
-                    end
+                    self:OnMap()
                 end
             end)
-            return
         end
-        -- (here, past the wait for the map: this runs once)
+    end
+
+    -- The part of OnEnable that needs the world map (made by Attach): false
+    -- while it isn't there yet.
+    function OnMap(): boolean
+        local f, layer, reveal, menu, provider = self.map, self.layer, self.reveal, self.menu, self.provider
+        if not (f and layer and reveal and menu and provider) then
+            return false
+        end
+        -- (here, past the wait for the map: this runs once per enable)
         self:RegisterSettings(SECTION)
         -- Shift pressed or let go over a quest pin: its objectives, or not
         self:OnGameEvent("MODIFIER_STATE_CHANGED", function(_, key)
@@ -2875,7 +2883,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         }) do
             self:OnGameEvent(event, function()
                 if f:IsShown() then
-                    after(0.2, function()
+                    self:After(0.2, function()
                         self:Refresh()
                     end)
                 end
@@ -2905,7 +2913,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- the flight masters this character has found (the game's list at a
         -- flight master; its nodes are in a moment after it opens)
         self:OnGameEvent("TAXIMAP_OPENED", function()
-            after(0.2, function()
+            self:After(0.2, function()
                 self:RecordTaxiNodes()
             end)
         end)
@@ -2922,9 +2930,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end)
         errors.try(field(C_Calendar, "OpenCalendar"))
         readCalendar()
+        return true
     end
 
     override function OnDisable()
+        -- (its layout timer went with the module: queued afresh when on again)
+        self.layoutQueued = false
         local f, provider = self.map, self.provider
         if not f then
             return

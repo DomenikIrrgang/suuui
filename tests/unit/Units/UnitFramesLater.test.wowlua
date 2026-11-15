@@ -1,0 +1,37 @@
+-- Units/UnitFrames, logged in with the focus, pet and boss frames off
+-- (tests/profiles/unitframes-few.json): Blizzard's own are left to the game
+-- at login, and stood down once SuuUI's are turned on in the session
+-- (UF-3: they showed side by side until the next reload).
+
+import test, expect, config from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/UnitFrames"
+import expectNoErrors from "../../helpers"
+
+config({ profile = "unitframes-few" })
+
+@test("focus, pet and boss frames turned on mid-session: Blizzard's stood down then, the pet's after a fight")
+local function turnedOnLater()
+    expect(M:IsEnabled()).toBe(true)
+    -- at login: Blizzard's kept, SuuUI's off
+    expect(SuuUI.IsSuppressed("FocusFrame")).toBe(false)
+    expect(SuuUI.IsSuppressed("PetFrame")).toBe(false)
+    expect(SuuUI.IsSuppressed("Boss1TargetFrame")).toBe(false)
+    -- the focus frame on: Blizzard's stood down at once
+    M:Set("showFocus", true)
+    expect(SuuUI.IsSuppressed("FocusFrame")).toBe(true)
+    expect(SuuUI.IsSuppressed("PetFrame")).toBe(false)
+    -- in a fight: after it
+    mock.player:enterCombat()
+    M:Set("showPet", true)
+    expect(SuuUI.IsSuppressed("PetFrame")).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(SuuUI.IsSuppressed("PetFrame")).toBe(true)
+    -- the bosses: the container and each frame
+    M:Set("showBoss", true)
+    expect(SuuUI.IsSuppressed("BossTargetFrameContainer")).toBe(true)
+    expect(SuuUI.IsSuppressed("Boss1TargetFrame")).toBe(true)
+    expectNoErrors()
+end

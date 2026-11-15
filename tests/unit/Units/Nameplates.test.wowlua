@@ -16,7 +16,10 @@ import internal M, byUnit, SECTION, pool, groupsAhead from "/Units/Nameplates"
 import type Nameplate from "/Units/Nameplates"
 import type UnitApi from "/UI/UnitFrame"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY, holdings, NOTHING from "../../helpers"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
+import * as cvars from "/Core/CVars"
 import * as coreSettings from "/Core/Settings"
 import * as themes from "/Core/Themes"
 import * as healthFill from "/UI/HealthFill"
@@ -1108,4 +1111,61 @@ local function questOncePerKind()
     a:hideNameplate()
     b:hideNameplate()
     mock.advanceFrames(2)
+end
+
+-- (last: the module off) Nameplates is reloadToToggle: the registry turns it
+-- off in a session only when its OnEnable fails, and otherwise at the next
+-- login (tests/unit/Units/NameplatesLogin.test.wowlua). Here it toggles live,
+-- as a module that isn't would, so the registry's release runs now.
+@test("each game CVar it writes is the module's: the player's value remembered, given back when it lets go; on again, SuuUI's")
+local function cvarsGivenBack()
+    -- the player's own values before SuuUI writes them (the client's
+    -- defaults here are SuuUI's)
+    for name, v in pairs({ nameplateMinAlpha = "0.6", nameplateSelectedScale = "1.2" }) do
+        M:RestoreCVar(name)
+        C_CVar.SetCVar(name, v)
+    end
+    M:ApplyGameSettings()
+    expect(C_CVar.GetCVar("nameplateMinAlpha")).toBe("1")
+    M:Set("showPlates", false)
+    M:Set("showPlates", true)
+    local memory = tbl.field(coreSettings.peekCharData("core"), "cvars", "nameplates") :: { [string]: unknown }
+    local names = {
+        "nameplateMinAlpha",
+        "nameplateMaxAlpha",
+        "nameplateSelectedAlpha",
+        "nameplateNotSelectedAlpha",
+        "nameplateMinScale",
+        "nameplateMaxScale",
+        "nameplateSelectedScale",
+        "nameplateShowEnemies",
+    }
+    for _, name in ipairs(names) do
+        expect(memory[name] ~= nil).toBe(true)
+    end
+    -- the player's own, where they differed from SuuUI's
+    local players: { [string]: string } = {}
+    for name, v in pairs(memory) do
+        if type(v) == "string" then
+            players[name] = v
+        end
+    end
+    expect(players.nameplateMinAlpha).toBe("0.6")
+    expect(players.nameplateSelectedScale).toBe("1.2")
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    coreSettings.set("nameplates", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    for name, v in pairs(players) do
+        expect(C_CVar.GetCVar(name)).toBe(v)
+    end
+    expect(cvars.remembered("nameplates")).toBe(0)
+    expect(holdings(M)).toEqual(NOTHING)
+    coreSettings.set("nameplates", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    own.reloadToToggle = true
+    expect(C_CVar.GetCVar("nameplateMinAlpha")).toBe("1")
+    expect(C_CVar.GetCVar("nameplateSelectedScale")).toBe("1")
+    expect(cvars.remembered("nameplates") >= 7).toBe(true)
+    expectNoErrors()
 end

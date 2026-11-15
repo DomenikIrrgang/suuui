@@ -13,7 +13,7 @@ import * as draw from "/UI/Draw"
 import measureText from "/UI/Text"
 import closeButton, keyChip, panel, scrollArea, makeModal, confirm, sectionHeader, windowFrame, Panel, PanelOptions, ScrollArea, TabButton, WindowFrame, WindowOptions, ConfirmOptions, ConfirmDialog from "/UI/Panel"
 import type TabMarker from "/UI/TabMarker"
-import internal shade from "/UI/Panel"
+import internal shade from "/UI/Dismiss"
 import expectNoErrors, newParent, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
 import tokenOf, pointOf, themeChanged, reduceMotion from "./PrimitivesHelpers"
 import type Point from "./PrimitivesHelpers"
@@ -563,6 +563,44 @@ local function shadeOwner()
     expect(shade).toBeShown()
     b:Hide()
     expect(shade).never.toBeShown()
+end
+
+@test("a question over a modal: the modal stays dimmed under the shade, and keeps it once answered (UIP-9)")
+local function confirmOverModal()
+    local f = modal()
+    f:Show()
+    local p = confirm({ title = "Sure?" })
+    made[#made + 1] = p
+    expect(shade.owner).toBe(p)
+    -- the modal under the question can't be clicked: the shade is above it
+    expect(shade:GetFrameLevel() > f:GetFrameLevel()).toBe(true)
+    expect(p:GetFrameLevel() > shade:GetFrameLevel()).toBe(true)
+    mock.click(p.cancel)
+    expect(f).toBeShown()
+    expect(shade).toBeShown()
+    expect(shade.owner).toBe(f)
+    -- Esc now closes the modal
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
+    expect(shade).never.toBeShown()
+end
+
+@test("a modal open when a fight starts lets the keyboard go; keys pass on, Esc after the fight")
+local function modalInFight()
+    local f = modal()
+    f:Show()
+    expect(f:IsKeyboardEnabled()).toBe(true)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.player:enterCombat()
+    expect(f:IsKeyboardEnabled()).toBe(false)
+    expect(f:GetPropagateKeyboardInput()).toBe(true)
+    mock.script(f, "OnKeyDown", "ESCAPE")
+    expect(f).toBeShown()
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+    expect(f:IsKeyboardEnabled()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(f).never.toBeShown()
 end
 
 --------------------------------------------------------------------------------

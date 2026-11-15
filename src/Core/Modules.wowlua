@@ -28,8 +28,8 @@
 -- are cancelled), secure hooks (M:SecureHook, M:HookScript; disarmed, they do
 -- nothing until armed again), work waiting for the end of combat
 -- (M:RunOutOfCombat; dropped), CVars (M:SetCVar; the player's values given
--- back), and what it handed SuuUI with itself as the owner (UI.SetVisibility,
--- SuuUI.PublishAnchor). Register those in OnEnable. Turning a module on or off
+-- back), addon message handlers (M:OnAddonMessage), and what it handed SuuUI
+-- with itself as the owner (UI.SetVisibility, SuuUI.PublishAnchor). Register those in OnEnable. Turning a module on or off
 -- waits for the end of combat. A module whose callback errors is marked
 -- errored and turned off; SuuUI and the other modules keep running.
 --
@@ -61,6 +61,7 @@ import * as timers from "./Timers"
 import * as hooks from "./Hooks"
 import * as cvars from "./CVars"
 import * as anchors from "./Anchors"
+import * as comm from "./Comm"
 import * as visibility from "/UI/Visibility"
 import * as settingsRegistry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
@@ -483,6 +484,25 @@ export class Module<D extends Settings> implements AnyModule
         return cvars.restore(self.id, cvarName)
     end
 
+    -- 0.47: SuuUI's addon messages (prefix "SuuUI", Core/Comm.wowlua):
+    -- fn(payload, sender, channel) for messages "verb" or "verb\t<payload>"
+    -- from other players that pass `opts`' checks (channels, rank, rate,
+    -- replyEvery, maxLength); gone when the module turns off. Send: "verb"
+    -- (payload nil) or "verb\t<payload>" on a channel; true when the game
+    -- took it, else false and why.
+    function OnAddonMessage(verb: string, opts: comm.VerbOptions?, fn: comm.Handler)
+        comm.on(self, verb, opts, fn)
+    end
+    function SendAddonMessage(
+        verb: string,
+        payload: string?,
+        channel: string?,
+        target: string?,
+        opts: comm.SendOptions?
+    ): (boolean, string, boolean)
+        return comm.send(self, verb, payload, channel, target, opts)
+    end
+
     function RegisterCommand(cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?)
         registerCommand(cmd, help, fn, self, args)
     end
@@ -657,6 +677,8 @@ export type ModuleOf<D> = {
     HookScript: (self: ModuleOf<D>, frame: ScriptRegion | string, script: string, fn: function) -> (),
     SetCVar: (self: ModuleOf<D>, cvarName: string, value: string | number | boolean) -> boolean,
     RestoreCVar: (self: ModuleOf<D>, cvarName: string) -> boolean,
+    OnAddonMessage: (self: ModuleOf<D>, verb: string, opts: comm.VerbOptions?, fn: comm.Handler) -> (),
+    SendAddonMessage: (self: ModuleOf<D>, verb: string, payload: string?, channel: string?, target: string?, opts: comm.SendOptions?) -> (boolean, string, boolean),
     RegisterCommand: (self: ModuleOf<D>, cmd: string, help: string, fn: (rest: string) -> (), args: CommandArgs?) -> (),
     RegisterSettings: (self: ModuleOf<D>, def: SettingsSection) -> settingsRegistry.Section,
     RegisterMover: (self: ModuleOf<D>, frame: Region, opts: editMode.MoverOptions?) -> editMode.Mover,
@@ -709,6 +731,7 @@ local function releaseAll(m: AnyModule)
     visibility.release(m)
     anchors.release(m)
     cvars.restoreAll(m.id)
+    comm.release(m)
 end
 
 export class ModuleRegistry

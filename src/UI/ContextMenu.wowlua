@@ -20,6 +20,7 @@ import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
 import Panel from "/UI/Panel"
 import hideTooltip from "/UI/Tooltip"
+import dismissable from "/UI/Dismiss"
 
 local S = T.space
 
@@ -31,14 +32,10 @@ local MIN_W = 160
 export type MenuOptions = { title?: string, items?: extend.MenuItem[], id?: string, context?: extend.MenuContext }
 
 local menu: MenuFrame? = nil
-local catcher: Button? = nil
 
 local function close()
     if menu then
         menu:Hide()
-    end
-    if catcher then
-        catcher:Hide()
     end
 end
 export const closeContextMenu = close
@@ -101,21 +98,6 @@ export class MenuFrame extends Panel
             self.heading:SetPoint("TOPLEFT", S["space-5"], -S["space-5"])
         end)
         self.title = self.heading
-        -- Esc closes it (out of combat: the key can't be held back in one)
-        self:EnableKeyboard(true)
-    end
-
-    @script("OnKeyDown")
-    function keyDown(key: string)
-        if InCombatLockdown() then
-            return
-        end
-        if key == "ESCAPE" then
-            self:SetPropagateKeyboardInput(false)
-            close()
-        else
-            self:SetPropagateKeyboardInput(true)
-        end
     end
 
     function row(i: number): MenuRow
@@ -141,19 +123,14 @@ export class MenuFrame extends Panel
 end
 
 local function build(): MenuFrame
-    local c = CreateFrame("Button", nil, UIParent)
-    c:SetAllPoints(UIParent)
-    c:SetFrameStrata("FULLSCREEN_DIALOG")
-    c:RegisterForClicks("AnyDown")
-    c:SetScript("OnClick", close)
-    c:Hide()
-    catcher = c
     local m = MenuFrame.new(suuRoot)
     m:SetFrameStrata("FULLSCREEN_DIALOG")
-    m:SetFrameLevel(c:GetFrameLevel() + 10)
+    m:SetFrameLevel(10)
     m:SetClampedToScreen(true)
     m:EnableMouse(true)
     m:Hide()
+    -- Esc closes it (out of a fight: UI/Dismiss), a click outside too
+    dismissable(m, { close = close, outside = "catch" })
     menu = m
     return m
 end
@@ -233,9 +210,6 @@ export function contextMenu(owner: Region?, given: MenuOptions?): MenuFrame
     m:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x / scale + 2, cy / scale - 2)
     GameTooltip:Hide()
     hideTooltip()
-    if catcher then
-        catcher:Show()
-    end
     m:Show()
     return m
 end

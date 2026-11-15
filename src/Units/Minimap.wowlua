@@ -23,7 +23,6 @@ import type SettingsSection from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
 import isSecret, isNumber from "wowlua:secret"
 import hook from "wowlua:hooks"
-import after, every from "wowlua:timer"
 import defer from "wowlua:combat"
 import type Text from "/UI/Text"
 import type TooltipData, TooltipLine from "/UI/Tooltip"
@@ -396,7 +395,6 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
     pendingTheme: boolean? = nil
     placing: boolean? = nil
     preview: MapBlock? = nil
-    ticker: TickerHandle? = nil
 
     constructor()
         super({
@@ -563,10 +561,8 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
                 return
             end
             if Minimap:GetParent() ~= block.disc then
-                after(0, function()
-                    if self:IsEnabled() then
-                        self:PlaceMinimap()
-                    end
+                self:After(0, function()
+                    self:PlaceMinimap()
                 end)
             end
         end)
@@ -743,10 +739,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         self:RegisterMover(block, { key = "position", label = "Minimap" })
         self:RegisterSettings(SECTION)
         -- one frame later: moving it during a panel opening taints map pins
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
+        self:After(0, function()
             self:PlaceMinimap()
             self:GuardParent()
             if not self.overlay then
@@ -796,13 +789,9 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("CVAR_UPDATE", function()
             self:UpdateClock()
         end)
-        if not self.ticker then
-            self.ticker = every(10, function()
-                if self:IsEnabled() then
-                    self:UpdateClock()
-                end
-            end)
-        end
+        self:Every(10, function()
+            self:UpdateClock()
+        end)
         self:WatchAll({ "size", "zone", "clock" }, function()
             self:Relayout()
             local preview = self.preview

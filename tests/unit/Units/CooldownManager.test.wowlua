@@ -21,10 +21,15 @@ import type Segmented, SegmentValue from "/UI/Inputs"
 import type Select, SelectValue from "/UI/Select"
 import type Text from "/UI/Text"
 import type Entry, ListSet, Recent from "/Units/CooldownManager/Lists"
+import * as Lists from "/Units/CooldownManager/Lists"
 import type When, Condition from "/Units/CooldownManager/Conditions"
 import type ToggleChips from "/UI/Pickers"
 import internal M, PresetBar, ListEditor, EntryRow, BehaviourPanel, AddToRow, rankText from "/Units/CooldownManager"
-import expectNoErrors, newParent, testRow, TestRow from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as cvars from "/Core/CVars"
+import migrations as settingMigrations from "/Core/Settings"
+import type Values from "/Core/Settings"
+import expectNoErrors, newParent, testRow, TestRow, cycle, NOTHING from "../../helpers"
 
 local UI = SuuUI.UI
 
@@ -61,7 +66,6 @@ local function cleanup()
     M.editSpec = nil
     M:ResetAll({
         "setups",
-        "recent",
         "lists",
         "preset",
         "shows",
@@ -72,6 +76,7 @@ local function cleanup()
         "resourcePoints",
         "essentialSize",
     })
+    M:CharData().recent = nil
     for _, b in ipairs(panels) do
         b:Hide()
     end
@@ -185,9 +190,10 @@ local function named(key: string, name: string): Entry?
     end
     return nil
 end
--- The kinds of "Seen recently" of this warrior.
+-- The kinds of "Seen recently" of this warrior (this character's data).
 local function recentOf(kind: string): Recent[]
-    return (assert(assert(M:Get("recent").WARRIOR)[kind]))
+    local all = assert(M:CharData().recent) :: { [string]: Recent[] }
+    return (assert(all[kind]))
 end
 
 -- The Behaviour panel for a row.
@@ -375,9 +381,10 @@ local function applied()
     expect(setLists).toHaveBeenCalledTimes(1)
     local vis = mock.stub(UI, "SetVisibility", function(_: unknown, _: string?) end)
     M:Set("shows", "combat")
-    expect(vis).toHaveBeenCalledWith(tracker, "combat")
+    -- (0.47: the module as the owner)
+    expect(vis).toHaveBeenCalledWith(tracker, "combat", nil, M)
     M:Set("position", { point = "BOTTOM", x = 0, y = 322, hidden = true })
-    expect(vis).toHaveBeenCalledWith(tracker, "hidden")
+    expect(vis).toHaveBeenCalledWith(tracker, "hidden", nil, M)
     local width: number? = nil
     local bar = assert(M.resource)
     mock.stub(bar, "SetOptions", function(_: unknown, o: { width?: number })
@@ -596,7 +603,7 @@ end
 
 @test("+ Add: seen recently first, then everything by name; a typed ID finds any spell")
 local function adding()
-    M:Set("recent", { WARRIOR = { cooldown = { { name = "Recent Spell", ids = { 133 } } } } })
+    M:CharData().recent = { cooldown = { { name = "Recent Spell", ids = { 133 } } } }
     local f = editor()
     local add = f.adds[1].select
     local opts = options(add)
@@ -1006,21 +1013,150 @@ local function seenRecently()
     expect(recentOf("aura")[1].name).toBe("Battle Shout")
 end
 
+@test("seen recently: kept out of the profile (no setting written on a cast); one scan waits at a time; none after the module is off")
+local function seenRecentlyQuiet()
+    mock.fake("IsPlayerSpell", function(id: number): boolean
+        return id == 100
+    end)
+    mock.fake("GetSpellBaseCooldown", function(id: number): number
+        return id == 100 and 15000 or 0
+    end)
+    local heard = 0
+    events.on("SUUUI_SETTING_CHANGED", function(_: string, namespace: string)
+        if namespace == "cooldowns" then
+            heard += 1
+        end
+    end, "zz cooldowns test")
+    mock.fireUnitEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 100)
+    expect(recentOf("cooldown")[1].ids).toEqual({ 100 })
+    expect(heard).toBe(0)
+    events.offAll("zz cooldowns test")
+    -- target changes and aura changes share one waiting scan
+    local scans = 0
+    mock.stub(Lists, "mergeRecent", function(): unknown
+        scans += 1
+        return nil
+    end)
+    for _ = 1, 5 do
+        mock.fireEvent("PLAYER_TARGET_CHANGED")
+    end
+    mock.player:applyAura({ spellId = 6673, name = "Battle Shout" })
+    mock.advanceTime(1.1)
+    expect(scans).toBe(1)
+    -- a scan waiting when the module turns off doesn't run
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    settings.set("cooldowns", "enabled", false)
+    mock.advanceTime(1.1)
+    expect(scans).toBe(1)
+    settings.set("cooldowns", "enabled", true)
+    mock.fireEvent("PLAYER_TARGET_CHANGED")
+    mock.advanceTime(0.6)
+    expect(scans).toBe(2)
+end
+
 --------------------------------------------------------------------------------
 -- Blizzard's Cooldown Manager, the settings rows
 --------------------------------------------------------------------------------
 
+const VIEWER = "cooldownViewerEnabled"
+
 @test("Blizzard's Cooldown Manager is switched off while this runs, and back on after")
 local function blizzardViewer()
     settings.set("cooldowns", "enabled", false)
-    C_CVar.SetCVar("cooldownViewerEnabled", "1")
+    C_CVar.SetCVar(VIEWER, "1")
     settings.set("cooldowns", "enabled", true)
-    expect(C_CVar.GetCVar("cooldownViewerEnabled")).toBe("0")
-    expect(M:Get("viewerOff")).toBe(true)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("0")
+    expect(cvars.rememberedValue("cooldowns", VIEWER)).toBe("1")
     settings.set("cooldowns", "enabled", false)
-    expect(C_CVar.GetCVar("cooldownViewerEnabled")).toBe("1")
-    expect(M:Get("viewerOff")).toBe(false)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("1")
+    expect(cvars.remembered("cooldowns")).toBe(0)
+    -- the player had it off: it stays off
+    C_CVar.SetCVar(VIEWER, "0")
     settings.set("cooldowns", "enabled", true)
+    settings.set("cooldowns", "enabled", false)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("0")
+    C_CVar.SetCVar(VIEWER, "1")
+    settings.set("cooldowns", "enabled", true)
+end
+
+@test("a profile switch that turns the module off gives Blizzard's manager back (X-11.a2)")
+local function viewerProfileSwitch()
+    settings.set("cooldowns", "enabled", false)
+    C_CVar.SetCVar(VIEWER, "1")
+    settings.set("cooldowns", "enabled", true)
+    local before = settings.profiles.current()
+    settings.profiles.create("ZZ Cooldowns Off")
+    settings.profiles.use("ZZ Cooldowns Off")
+    settings.set("cooldowns", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("1")
+    settings.profiles.use(before)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("0")
+    settings.profiles.delete("ZZ Cooldowns Off")
+end
+
+@test("migration: viewerOff leaves the profile for this character's data, handed to the CVar memory at the next enable")
+local function viewerMigration()
+    local found = false
+    for _, m in ipairs(settingMigrations()) do
+        if m.namespace == "cooldowns" and m.id == "viewerOff-cvar" then
+            found = true
+            local data = M:CharData()
+            local off: Values = { viewerOff = false, shows = "combat" }
+            m.fn(off)
+            expect(off).toEqual({ shows = "combat" })
+            expect(data.viewerOff).toBeNil()
+            local on: Values = { viewerOff = true }
+            m.fn(on)
+            expect(on.viewerOff).toBeNil()
+            expect(data.viewerOff).toBe(true)
+            m.fn(on)
+            m.fn({})
+            expect(data.viewerOff).toBe(true)
+        end
+    end
+    expect(found).toBe(true)
+    -- as after an update: an older SuuUI switched it off ("0"), the memory
+    -- holds nothing
+    settings.set("cooldowns", "enabled", false)
+    C_CVar.SetCVar(VIEWER, "0")
+    settings.set("cooldowns", "enabled", true)
+    expect(cvars.rememberedValue("cooldowns", VIEWER)).toBe("1")
+    expect(M:CharData().viewerOff).toBeNil()
+    expect(C_CVar.GetCVar(VIEWER)).toBe("0")
+    settings.set("cooldowns", "enabled", false)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("1")
+    settings.set("cooldowns", "enabled", true)
+end
+
+@test("migration: this class's Seen recently leaves the profile for the character's data")
+local function recentMigration()
+    local found = false
+    for _, m in ipairs(settingMigrations()) do
+        if m.namespace == "cooldowns" and m.id == "recent-chardata-WARRIOR" then
+            found = true
+            M:CharData().recent = nil
+            local stored: Values = {
+                recent = {
+                    WARRIOR = { cooldown = { { name = "Recent Spell", ids = { 133 } } } },
+                    MAGE = { aura = { { name = "Arcane Intellect", ids = { 1459 } } } },
+                },
+            }
+            m.fn(stored)
+            expect(recentOf("cooldown")[1].name).toBe("Recent Spell")
+            expect(stored).toEqual({ recent = { MAGE = { aura = { { name = "Arcane Intellect", ids = { 1459 } } } } } })
+            -- a character with a list keeps it; the class's entry still goes
+            local again: Values = { recent = { WARRIOR = { aura = {} } } }
+            m.fn(again)
+            expect(recentOf("cooldown")[1].name).toBe("Recent Spell")
+            expect(again).toEqual({})
+            local odd: Values = { recent = "x" }
+            m.fn(odd)
+            expect(odd).toEqual({})
+        end
+    end
+    expect(found).toBe(true)
 end
 
 @test("the resource rows need the bar; combo points and druid mana are for their classes")
@@ -1097,4 +1233,34 @@ local function talentLists()
     expect(r.addTalent.options[2].value).toBe("12294")
     pick(r.talentClassSelect, "WARRIOR") -- read once, kept
     mock.click(b.cond.rows[1].remove)
+end
+
+-- (last) The module toggles live: turned off through the registry nothing
+-- of it stays; on again, it all comes back.
+@test("turned off through the registry: the tracker hidden and let go, Blizzard's manager back, nothing held; on again, all back")
+local function disabled()
+    settings.set("cooldowns", "enabled", false)
+    C_CVar.SetCVar(VIEWER, "1")
+    settings.set("cooldowns", "enabled", true)
+    local t = assert(M.tracker)
+    expect(t:IsShown()).toBe(true)
+    local c = cycle("cooldowns")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expect(t:IsShown()).toBe(true)
+    expect(t.running).toBe(true)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("0")
+    settings.set("cooldowns", "enabled", false)
+    expect(t:IsShown()).toBe(false)
+    expect(t.running).toBe(false)
+    expect(C_CVar.GetCVar(VIEWER)).toBe("1")
+    -- edit mode doesn't bring it back
+    SuuUI.EditMode.Enter()
+    expect(t:IsShown()).toBe(false)
+    SuuUI.EditMode.Exit()
+    settings.set("cooldowns", "enabled", true)
+    expect(t:IsShown()).toBe(true)
+    expectNoErrors()
 end

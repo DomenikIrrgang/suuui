@@ -7,8 +7,9 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
-import internal M, worldOf, yards, makeRoom, clean, message, fromMe, day, blessing, groupChannel, shareReason, SECTION, MAX_SPOTS from "/Units/Convergences"
-import expectNoErrors from "../../helpers"
+import internal M, worldOf, yards, makeRoom, payloadOf, day, blessing, shareReason, SECTION, MAX_SPOTS from "/Units/Convergences"
+import expectNoErrors, cycle, holdings, NOTHING from "../../helpers"
+import * as comm from "/Core/Comm"
 import * as settings from "/Core/Settings"
 import type TooltipData from "/UI/Tooltip"
 
@@ -93,7 +94,7 @@ end
 local function setup()
     local d = SuuUI.AccountData("convergences")
     d.spots, d.seeded = nil, nil
-    M.pending, M.blessed, M.taken = nil, nil, nil
+    M.pending, M.blessed, M.taken, M.burst = nil, nil, nil, nil
     changes = 0
     notes = {}
     events.on(
@@ -358,7 +359,7 @@ local function castFinds()
     expect(sent[1][1]).toBe("SuuUI")
     expect(sent[1][3]).toBe("PARTY")
     expect(sent[2][3]).toBe("GUILD")
-    expect(sent[1][2]).toBe(message(s))
+    expect(sent[1][2]).toBe("CONV\t" .. payloadOf(s))
     expect(notes[1].title).toBe("Convergence of Elements found")
     expect(notes[1].body).toBe("Zephra's Isle 70.0, 70.0. Saved for all your characters.")
     expectNoErrors()
@@ -442,6 +443,7 @@ end
 
 @test("Channels: instance, raid or party, and the guild")
 local function channels()
+    local groupChannel = SuuUI.Comm.GroupChannel
     expect(M:Channels()).toEqual({})
     expect(groupChannel()).toBeNil()
     inGroup(true, true)
@@ -463,15 +465,15 @@ local function channels()
     expect(groupChannel()).toBeNil()
 end
 
-@test("clean and message: one line, nothing to break it")
+@test("the message as an older SuuUI reads it: one line, nothing to break it")
 local function texts()
-    expect(clean("a\tb\nc|d\re")).toBe("a b c d e")
-    expect(clean(nil)).toBe("")
-    expect(#clean(("x"):rep(60))).toBe(40)
-    expect(message({ map = 2521, x = 0.48281, y = 0.2, by = "Suu", at = 1700000000 })).toBe(
+    expect("CONV\t" .. payloadOf({ map = 2521, x = 0.48281, y = 0.2, by = "Suu", at = 1700000000 })).toBe(
         "CONV\t1\t2521\t0.4828\t0.2000\tSuu\t1700000000"
     )
-    expect(message({ map = 1, x = 0, y = 1 })).toBe("CONV\t1\t1\t0.0000\t1.0000\t\t0")
+    expect("CONV\t" .. payloadOf({ map = 1, x = 0, y = 1 })).toBe("CONV\t1\t1\t0.0000\t1.0000\t\t0")
+    expect(payloadOf({ map = 1, x = 0, y = 1, by = "a\tb\nc|d" .. ("x"):rep(60) })).toBe(
+        "1\t1\t0.0000\t1.0000\ta b c d" .. ("x"):rep(33) .. "\t0"
+    )
 end
 
 @test("Send: off by the setting, nothing without a channel")
@@ -511,19 +513,38 @@ local function shareAll()
     expect(sent).toHaveBeenCalledTimes(3)
 end
 
-@test("fromMe: your name, with or without the realm")
-local function mine()
-    mock.fake("UnitFullName", function(): (string, string)
-        return "Suu", "Realm"
-    end)
-    expect(fromMe("Suu")).toBe(true)
-    expect(fromMe("Suu-Realm")).toBe(true)
-    expect(fromMe("Suu Realm")).toBe(true)
-    expect(fromMe("Bram")).toBe(false)
+@test("ShareAll: a second click starts over; it stops when there's nobody left to tell, or the module goes off")
+local function shareAllStops()
+    local sent = mock.fake("C_ChatInfo.SendAddonMessage", function() end)
+    for i = 1, 6 do
+        M:Add({ map = 2521, x = i / 10, y = 0.9, at = i })
+    end
+    inGroup(false, true)
+    M:ShareAll()
+    mock.advanceTime(0.3)
+    expect(sent).toHaveBeenCalledTimes(2)
+    -- again: from the first
+    M:ShareAll()
+    mock.advanceTime(0.3)
+    expect(sent).toHaveBeenCalledTimes(4)
+    -- out of the guild (and no group): the rest isn't sent
+    inGroup(false, false)
+    mock.advanceTime(2)
+    expect(sent).toHaveBeenCalledTimes(4)
+    expect(M.shareTicker).toBeNil()
+    -- turned off mid-way: stopped
+    inGroup(false, true)
+    M:ShareAll()
+    settings.set("convergences", "enabled", false)
+    mock.advanceTime(2)
+    expect(sent).toHaveBeenCalledTimes(5)
+    settings.set("convergences", "enabled", true)
+    mock.advanceTime(1.1)
 end
 
-local function receive(text: string, sender: string?)
-    M:OnMessage("SuuUI", text, "GUILD", sender or "Bram Stoker")
+-- A spot from the guild (by default), as the game delivers it.
+local function receive(text: string, sender: string?, channel: string?)
+    mock.receiveAddonMessage("SuuUI", text, channel or "GUILD", sender or "Bram Stoker")
 end
 
 @test("OnMessage: a shared spot is checked, saved and told")
@@ -534,6 +555,9 @@ local function onMessage()
     receive("CONV\t1\t2521\t0.9000\t0.9000\tTam|sin\t1700000000")
     local s = M:Spots()[2]
     expect(s).toEqual({ map = 2521, x = 0.9, y = 0.9, at = 1700000000, by = "Tam sin", from = "Bram Stoker" })
+    -- told a moment later (a burst is told once)
+    expect(#notes).toBe(0)
+    mock.advanceTime(1.1)
     expect(notes[1].body).toBe("Zephra's Isle 90.0, 90.0. Shared by Bram Stoker, saved for all your characters.")
     -- a time from the future or the past: now; no finder
     receive("CONV\t1\t2521\t0.1000\t0.9000\t\t99999999999")
@@ -556,13 +580,14 @@ local function onMessageBad()
     mock.fake("UnitFullName", function(): (string, string)
         return "Suu", "Realm"
     end)
-    M:OnMessage("Other", "CONV\t1\t2521\t0.5\t0.5", "GUILD", "Bram")
-    M:OnMessage("SuuUI", mock.secret("CONV\t1\t2521\t0.5\t0.5"), "GUILD", "Bram")
-    M:OnMessage("SuuUI", "CONV\t1\t2521\t0.5\t0.5", "GUILD", mock.secret("Bram"))
-    M:OnMessage("SuuUI", 5, "GUILD", "Bram")
+    mock.receiveAddonMessage("Other", "CONV\t1\t2521\t0.5\t0.5", "GUILD", "Bram")
     receive("XXXX\t1\t2521\t0.5\t0.5")
     receive("CONV\t2\t2521\t0.5\t0.5")
-    receive("CONV\t1\t2521\t0.5\t0.5", "Suu")
+    -- your own coming back; a whisper, a channel, the officers
+    receive("CONV\t1\t2521\t0.5\t0.5", "Suu Realm")
+    receive("CONV\t1\t2521\t0.5\t0.5", "Stranger", "WHISPER")
+    receive("CONV\t1\t2521\t0.5\t0.5", "Stranger", "CHANNEL")
+    receive("CONV\t1\t2521\t0.5\t0.5", "Bram", "OFFICER")
     receive("CONV\t1\t2521.5\t0.5\t0.5")
     receive("CONV\t1\t0\t0.5\t0.5")
     receive("CONV\t1\t100000\t0.5\t0.5")
@@ -585,16 +610,66 @@ local function onMessageCap()
         return { name = "Isle" }
     end)
     skyborne(false)
-    -- a grid 100 yards apart
+    -- a grid 100 yards apart (a few seconds apart: the rate holds a burst)
     for i = 1, 35 do
         receive(
             ("CONV\t1\t2521\t%.4f\t%.4f\tX\t0"):format((i % 10) / 10 + 0.05, math.floor(i / 10) / 10 + 0.05),
             "Spammer"
         )
+        if i % 10 == 0 then
+            mock.advanceTime(5.1)
+        end
     end
     expect(#M:Spots()).toBe(31)
     expect(assert(M.taken).Spammer).toBe(30)
     expect(#notes).toBe(0)
+end
+
+@test("shared spots flooded: one sender held to a rate; a burst told once; your finds never pushed out")
+local function sharedFlood()
+    mock.fake("C_Map.GetMapInfo", function(): unknown
+        return { name = "Isle" }
+    end)
+    local taken = 0
+    -- (a grid 100 yards apart)
+    for i = 1, 99 do
+        receive(("CONV\t1\t2521\t%.4f\t%.4f\tX\t0"):format((i % 10) / 10 + 0.05, math.floor(i / 10) / 10 + 0.05), "Member1")
+    end
+    taken = #M:Spots() - 1
+    expect(taken).toBe(24)
+    mock.advanceTime(1.1)
+    expect(#notes).toBe(1)
+    expect(notes[1].title).toBe("Convergences of Elements shared")
+    expect(notes[1].body).toContain("24 convergences")
+    expect(notes[1].body).toContain("Shared by Member1")
+    -- a full list of your own finds: a shared one refused
+    local d = SuuUI.AccountData("convergences")
+    local spots: Spot[] = { { map = 2521, x = 0.4828, y = 0.2062, seed = true, confirmed = true } }
+    for i = 2, MAX_SPOTS do
+        spots[i] = { map = 7000, x = (i % 20) / 20, y = math.floor(i / 20) / 20, confirmed = true }
+    end
+    d.spots = spots
+    mock.advanceTime(5.1)
+    receive("CONV\t1\t2521\t0.9000\t0.9000\tX\t0", "Member2")
+    expect(#M:Spots()).toBe(MAX_SPOTS)
+    for _, spot in ipairs(M:Spots()) do
+        expect(spot.from).toBeNil()
+    end
+    expectNoErrors()
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handler too), nothing doubled")
+local function leavesNothing()
+    mock.advanceTime(1.1)
+    local c = cycle("convergences")
+    expect(M:IsEnabled()).toBe(true)
+    expect(c.off).toEqual(NOTHING)
+    expect(comm.count(M)).toBe(1)
+    -- (the read a second after enabling is a timer of its own: gone once run)
+    expect(c.after.timers).toBe(c.before.timers + 1)
+    mock.advanceTime(1.1)
+    expect(holdings(M)).toEqual(c.before)
+    expectNoErrors()
 end
 
 @test("A real addon message reaches it")

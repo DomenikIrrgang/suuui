@@ -18,7 +18,10 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
-import expectNoErrors, layoutThemes, useTheme, COMPACT from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, COMPACT, holdings, NOTHING from "../../helpers"
+import * as coreSettings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import internal M, SECTION, TableRow, AuctionTable, ResultRow, OfferRow, AuctionRow, SellRow, CatButton, BuyPage, SellPage, AuctionsPage, Category, HistoryRow from "/Units/AuctionHouse"
 import internal M as Bags from "/Units/Bags"
@@ -1606,6 +1609,38 @@ local function scanRunning()
     expect(M.scanning).toBe(nil)
 end
 
+-- (X-4.5) The reader is kept: a scan that ends while its list is read
+-- stops it, so no slice is read and nothing is told after.
+@test("a scan ended while its list is read: the reader stops, nothing kept or told")
+local function scanEndedMidRead()
+    open()
+    local d = M:CharData()
+    d.scanCount = 7
+    local _, setGot = replicate()
+    mock.click(buy().scanButton)
+    setGot(5000)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    mock.advanceTime(0.01)
+    expect(buy().scanCaption:GetText()).toBe("Reading 2,500 of 5,000…")
+    local reader = assert(M.readTicker)
+    M:EndScan()
+    expect(M.readTicker).toBe(nil)
+    expect(reader:IsCancelled()).toBe(true)
+    mock.advanceTime(0.1)
+    expect(note():find("^Scan done") == nil).toBe(true)
+    expect(d.scanCount).toBe(7)
+    -- a reader still running when its scan is gone stops itself
+    mock.click(buy().scanButton)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    local again = assert(M.readTicker)
+    M.scanning = nil
+    mock.advanceTime(0.01)
+    expect(again:IsCancelled()).toBe(true)
+    expect(note():find("^Scan done") == nil).toBe(true)
+    expect(d.scanCount).toBe(7)
+    M:EndScan()
+end
+
 @test(
     "Scan all's wait counts down while the window is open; the last scan's time; its size for the next one's progress"
 )
@@ -2930,17 +2965,6 @@ local function historyCloses()
     expect(list).never.toBeShown()
 end
 
-@test("turned off: the window closes, the wait's ticker stops")
-local function off()
-    open()
-    local ticker = M.waitTicker
-    M:OnDisable()
-    expect(win()).never.toBeShown()
-    expect(M.waitTicker).toBe(nil)
-    expect(assert(ticker):IsCancelled()).toBe(true)
-    M:OnDisable()
-end
-
 @test("a theme's spacing: the search bar, the categories and the results column placed again; SuuUI's again exactly")
 local function themeSpacing()
     layoutThemes()
@@ -2958,5 +2982,38 @@ local function themeSpacing()
     expect(look()).toEqual({ search = 2, main = 170 + 4 + 8 })
     useTheme(nil)
     expect(look()).toEqual(design)
+    expectNoErrors()
+end
+
+-- (last: the module off) Auction house is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: the window closes; its tickers, a scan's reader among them, stop; on again")
+local function off()
+    open()
+    local _, setGot = replicate()
+    mock.click(buy().scanButton)
+    setGot(5000)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    mock.advanceTime(0.01)
+    local wait, scan, reader = assert(M.waitTicker), assert(M.scanTicker), assert(M.readTicker)
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    coreSettings.set("auctionhouse", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(win()).never.toBeShown()
+    expect(wait:IsCancelled()).toBe(true)
+    expect(scan:IsCancelled()).toBe(true)
+    expect(reader:IsCancelled()).toBe(true)
+    expect(holdings(M)).toEqual(NOTHING)
+    mock.advanceTime(0.1)
+    expect(note():find("^Scan done") == nil).toBe(true)
+    -- on again: the wait's ticker anew
+    coreSettings.set("auctionhouse", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    local fresh = assert(M.waitTicker)
+    expect(fresh ~= wait).toBe(true)
+    expect(fresh:IsCancelled()).toBe(false)
+    own.reloadToToggle = true
     expectNoErrors()
 end

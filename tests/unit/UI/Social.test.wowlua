@@ -3,7 +3,7 @@
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import contacts, raidGroups, peopleList, Contacts, Friend, ContactsData, RaidGroups, RaidMember, RaidData, RaidGhost, PeopleList, PeopleRowData from "/UI/Social"
+import contacts, raidGroups, peopleList, Contacts, ContactRow, Friend, ContactsData, RaidGroups, RaidMember, RaidData, RaidGhost, PeopleList, PeopleRowData from "/UI/Social"
 import SuuButton from "/UI/Controls"
 import tokens as T from "/Core/Tokens"
 import * as tooltipModule from "/UI/Tooltip"
@@ -357,6 +357,107 @@ local function contactsRedraw()
     c.me.value = nil
     themeChanged()
     expect(c.me).toHaveText("Player" .. FAINT .. "#1234|r")
+    expectNoErrors()
+end
+
+-- `n` friends (placeholder names), every third offline, as the module builds
+-- them per render: new tables each time.
+local function many(n: number): Friend[]
+    local out: Friend[] = {}
+    for i = 1, n do
+        out[i] = {
+            key = "f" .. i,
+            name = "Friend" .. i,
+            color = "class-mage",
+            online = i % 3 ~= 0,
+            detail = "Level 60 Mage",
+            whisper = true,
+            invite = true,
+        }
+    end
+    return out
+end
+
+-- The friend's row in sight (nil: none).
+local function rowFor(c: Contacts, key: string): ContactRow?
+    for _, r in ipairs(c.rows) do
+        local f = r.row
+        if r:IsShown() and f and f.key == key then
+            return r
+        end
+    end
+    return nil
+end
+
+@test("300 friends: rows only for those in sight; a refresh keeps the scroll and the choice")
+local function manyFriends()
+    local c = page()
+    c:SetData(friends({ friends = many(300), online = 200, total = 300, selected = "f50" }))
+    local headH = T.type.caption.lineHeight + 6
+    -- two headings, 300 rows, the gap before Offline
+    expect(c.list.child:GetHeight()).toBe(2 * (headH + 2) + 300 * 40 + 6)
+    local inSight = math.ceil(c.list:GetHeight() / 40)
+    expect(#c.rows <= inSight + 3).toBe(true)
+    expect(#c.heads).toBe(1)
+    -- down to f50 (online: the 34th online row)
+    c.list:SetVerticalScroll(30 * 40)
+    mock.script(c.list, "OnVerticalScroll", 30 * 40)
+    local made = #c.rows
+    expect(made <= inSight + 3).toBe(true)
+    local chosen = rowFor(c, "f50") :: ContactRow
+    expect(chosen.sel).toBeShown()
+    expect(chosen.name).toHaveText("Friend50")
+    expect(c.selectedRow and (c.selectedRow :: Friend).key).toBe("f50")
+    -- the module's refresh: new tables, the same friends; nothing drawn again
+    local binds = c.view.binds
+    c:SetData(friends({ friends = many(300), online = 200, total = 300, selected = "f50" }))
+    expect(c.view.binds).toBe(binds)
+    expect(c.list:GetVerticalScroll()).toBe(30 * 40)
+    expect(rowFor(c, "f50")).toBe(chosen)
+    -- a click on another: selected through the module, two rows drawn
+    c.onSelect = function(key: string?)
+        c:SetData(friends({ friends = many(300), online = 200, total = 300, selected = key }))
+    end
+    mock.click(rowFor(c, "f52") :: ContactRow)
+    expect(c.view.binds).toBe(binds + 2)
+    expect(chosen.sel).never.toBeShown()
+    expect((rowFor(c, "f52") :: ContactRow).sel).toBeShown()
+    expect(c.selectedRow and (c.selectedRow :: Friend).key).toBe("f52")
+    -- f52 goes offline: it moves to the Offline group, its row drawn again
+    local later = many(300)
+    later[52].online = false
+    c:SetData(friends({ friends = later, online = 199, total = 300, selected = "f52" }))
+    expect(rowFor(c, "f52")).toBeNil()
+    expect(c.selectedRow and (c.selectedRow :: Friend).key).toBe("f52")
+    -- down at the offline ones: the heading comes into view, f52 still chosen
+    c.list:SetVerticalScroll(199 * 40)
+    mock.script(c.list, "OnVerticalScroll", 199 * 40)
+    -- (the one heading row handed on: Online is out of sight)
+    expect(#c.heads).toBe(1)
+    expect(c.heads[1]).toBeShown()
+    expect(c.heads[1].text).toHaveText("Offline · 101")
+    -- f52 is the 18th offline friend
+    c.list:SetVerticalScroll(199 * 40 + 500)
+    mock.script(c.list, "OnVerticalScroll", 199 * 40 + 500)
+    expect((rowFor(c, "f52") :: ContactRow).sel).toBeShown()
+    expect(#c.rows <= made + 1).toBe(true)
+    -- the ignored view on the same list
+    local names: string[] = {}
+    for i = 1, 200 do
+        names[i] = "Player" .. i
+    end
+    c:SetData({ view = "ignored", ignored = names })
+    expect(c.list.child:GetHeight()).toBe(headH + 2 + 200 * 40)
+    local shown = 0
+    for _, r in ipairs(c.rows) do
+        if r:IsShown() then
+            shown += 1
+            expect(r.unignore).toBeShown()
+            expect(r.sel).never.toBeShown()
+        end
+    end
+    expect(shown > 0).toBe(true)
+    expect(#c.rows <= made + 1).toBe(true)
     expectNoErrors()
 end
 

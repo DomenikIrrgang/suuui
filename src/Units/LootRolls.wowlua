@@ -29,7 +29,6 @@ import type SettingsSection from "/Core/Modules"
 import type Position from "/EditMode/EditMode"
 import type LootRollTray, RollRowData, RollChoiceData, RollResultData, RollTrayData from "/UI/LootRollTray"
 import type SuuButton from "/UI/Controls"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -596,6 +595,9 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
     hooked: { [Frame]: boolean } = {}
     rollsHooked: boolean? = nil
     movingRolls: boolean? = nil
+    -- Blizzard's roll frames before they went away: given back when the
+    -- module turns off
+    rollsHome: { points: Point[], clamped: boolean }? = nil
     wired: boolean? = nil
 
     constructor()
@@ -992,7 +994,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
         self:HostConfirm(id)
         -- (the popup shows from the game's own handler: maybe after this one)
-        after(0, function()
+        self:After(0, function()
             self:HostConfirm(id)
         end)
     end
@@ -1125,7 +1127,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             self:Release(h)
             -- closed without OK (Cancel, Esc): the choice taken back, a
             -- frame later (OK has answered by then)
-            after(0, function()
+            self:After(0, function()
                 self.lastHosted, self.lastYes = nil, nil
                 self:Answered(id, false)
             end)
@@ -1236,12 +1238,12 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             end
             local left = duration - (GetTime() - start)
             if left > 0 then
-                after(left + ROLL_GRACE, overdue)
+                self:After(left + ROLL_GRACE, overdue)
                 return
             end
             self:EndRoll(rollID)
         end
-        after(duration + ROLL_GRACE, overdue)
+        self:After(duration + ROLL_GRACE, overdue)
     end
 
     -- A roll in the tray (the folded tray opens, as the setting says).
@@ -1432,30 +1434,59 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         GameTooltip:Show()
     end
 
-    -- Blizzard's roll frames off screen while the tray shows the rolls.
+    -- Blizzard's roll frames off screen while the tray shows the rolls (while
+    -- the module is on: a failed enable gives them back, review 2026-11-15).
     function HideBlizzardRolls()
         local f = frames.find("GroupLootContainer")
-        if not f or self.rollsHooked then
+        if not f then
             return
         end
-        self.rollsHooked = true
-        local function away()
-            f:SetAlpha(0)
-            self.movingRolls = true
-            f:ClearAllPoints()
-            f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
-            self.movingRolls = false
+        if not self.rollsHooked then
+            self.rollsHooked = true
+            self.rollsHome = { points = savePoints(f), clamped = f:IsClampedToScreen() and true or false }
+            hook(f, "SetPoint", function()
+                if self.movingRolls or not self:IsEnabled() then
+                    return
+                end
+                f:SetAlpha(0)
+                self:After(0, function()
+                    self:RollsAway()
+                end)
+            end)
+            hookScript(f, "OnShow", function()
+                if self:IsEnabled() then
+                    self:RollsAway()
+                end
+            end)
         end
         f:SetClampedToScreen(false)
-        hook(f, "SetPoint", function()
-            if self.movingRolls then
-                return
-            end
-            f:SetAlpha(0)
-            after(0, away)
-        end)
-        hookScript(f, "OnShow", away)
-        away()
+        self:RollsAway()
+    end
+
+    function RollsAway()
+        local f = frames.find("GroupLootContainer")
+        if not f then
+            return
+        end
+        f:SetAlpha(0)
+        self.movingRolls = true
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+        self.movingRolls = false
+    end
+
+    -- Blizzard's roll frames as they were: seen, where they were.
+    function GiveBackRolls()
+        local f, home = frames.find("GroupLootContainer"), self.rollsHome
+        if not f or not home then
+            return
+        end
+        f:SetAlpha(1)
+        f:SetClampedToScreen(home.clamped)
+        -- (none at login: the game places them when a roll shows)
+        self.movingRolls = true
+        restorePoints(f, home.points)
+        self.movingRolls = false
     end
 
     --------------------------------------------------------------------------------
@@ -1502,7 +1533,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             end,
         }
         self:Add(roll)
-        after(duration, function()
+        self:After(duration, function()
             if self.rolls[id] ~= roll then
                 return
             end
@@ -1556,7 +1587,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end
         local picks: ChoiceKey[] = { "pass", "pass", "pass", "greed", "greed", "need" }
         for i = 1, #order - 3 do
-            after(1 + i * 0.6, function()
+            self:After(1 + i * 0.6, function()
                 if self.rolls[id] ~= roll then
                     return
                 end
@@ -1597,7 +1628,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             votes = { need = { "Morrow" }, pass = { "Ysolde" } },
         })
         -- someone makes up their mind, to see the counts change
-        after(8, function()
+        self:After(8, function()
             if self.rolls[helm.id] == helm then
                 table.insert(helm.votes.greed, "Kaelith")
                 self:Refresh()
@@ -1763,6 +1794,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- (reached after a failed OnEnable: the module toggles with a reload)
     override function OnDisable()
         local tray = self.tray
         if tray then
@@ -1771,6 +1803,15 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if self.driver then
             self.driver:Hide()
         end
+        -- the Bind on Pickup popup back where the game had it
+        local h = self.host
+        if h then
+            self:Release(h)
+        end
+        -- the rolls are Blizzard's frames' again (their timers went with the
+        -- module; on again, the ones still running are read back)
+        self.rolls = {}
+        self:GiveBackRolls()
     end
 end
 

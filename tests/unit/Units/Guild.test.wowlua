@@ -17,6 +17,7 @@ import type GuildRoster, RosterData, GuildInfoData, GuildLogData from "/UI/Guild
 import type ConfirmDialog, ConfirmOptions from "/UI/Panel"
 import type Overlay from "wowlua:secure"
 import expectNoErrors, captureMenus, choose from "../../helpers"
+import * as cvars from "/Core/CVars"
 
 local UI = SuuUI.UI
 
@@ -383,6 +384,60 @@ local function whisperInvite()
     mock.advanceFrames(1)
     act("guildInvite", nil)
     expect(said[1]).toBe("Inviting to the guild works out of combat.")
+end
+
+-- (GRP-1) The question shares its dialog with every other one: the secure
+-- /ginvite must never outlive it, nor keep a name from before a fight.
+@test("Invite to guild as a fight starts: the question closed, its cover hidden; the next question has no cover")
+local function inviteFight()
+    joinGuild()
+    tabTo("RosterTab")
+    M:Act("guildInvite", nil)
+    local d = assert(M.inviteAsking)
+    local cover = assert(M.inviteOver).button
+    mock.typeText(d.field.edit, "Kael")
+    expect(cover:GetAttribute("macrotext1")).toBe("/ginvite Kael")
+    expect(cover:IsShown()).toBe(true)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    expect(d:IsShown()).toBe(false)
+    expect(cover:IsShown()).toBe(false)
+    expect(M.inviteAsking).toBeNil()
+    -- another question in the fight: its OK is its own
+    local other = UI.Confirm({ title = "Something else?", onConfirm = function() end })
+    expect(other).toBe(d)
+    expect(cover:IsShown()).toBe(false)
+    other:Hide()
+end
+
+@test("Invite to guild: a cover the lockdown kept is hidden as the fight ends")
+local function inviteKept()
+    joinGuild()
+    tabTo("RosterTab")
+    M:Act("guildInvite", nil)
+    local d = assert(M.inviteAsking)
+    local cover = assert(M.inviteOver).button
+    -- (as before the fix: nothing stands it down as the fight starts)
+    mock.stub(M, "StandDownInvite", function() end)
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    d:Hide()
+    -- refused in the lockdown: waits for its end
+    expect(cover:IsShown()).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(cover:IsShown()).toBe(false)
+end
+
+-- (GRP-7, X-11.a4) Through the module's CVar memory: given back when the
+-- module is off (at the next login: tests/unit/Units/GuildLogin.test.wowlua).
+@test("communitiesShowOffline: on for the game's member list, held by the module to give back")
+local function showOffline()
+    expect(C_CVar.GetCVar("communitiesShowOffline")).toBe("1")
+    expect(cvars.remembered("guild")).toBe(1)
+    -- (the client's default is already the module's value: no value of the
+    -- player's of its own to give back)
+    expect(cvars.rememberedValue("guild", "communitiesShowOffline")).toBeNil()
 end
 
 @test("a member's details beside the window: who, where, the notes; whisper and invite there")
