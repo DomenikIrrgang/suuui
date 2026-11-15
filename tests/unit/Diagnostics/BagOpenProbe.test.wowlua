@@ -1,0 +1,132 @@
+-- Diagnostics/BagOpenProbe: "/suu probe bagopen" records the Bags module's
+-- state and flags, then walks the open path a step at a time (each under
+-- xpcall), and the window before, after and half a second later.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as secret from "wowlua:secret"
+import * as DB from "/Core/DB"
+import * as bagOpenProbe from "/Diagnostics/BagOpenProbe"
+import type BagOpen, Step from "/Diagnostics/BagOpenProbe"
+import internal M from "/Units/Bags"
+import expectNoErrors from "../../helpers"
+
+local function saved(): BagOpen
+    return DB.probe.bagOpen :: unknown :: BagOpen
+end
+
+local function step(name: string): Step
+    for _, s in ipairs(saved().steps) do
+        if s.step == name then
+            return s
+        end
+    end
+    error("no step " .. name)
+end
+
+-- every string in a record, nested
+local function strings(v: unknown, out: string[])
+    if type(v) == "string" then
+        out[#out + 1] = v
+    elseif type(v) == "table" then
+        for k, x in pairs(v :: { [unknown]: unknown }) do
+            strings(k, out)
+            strings(x, out)
+        end
+    end
+end
+
+local function shown(): boolean
+    local inv = M.inv
+    assert(inv, "no bags window")
+    return inv:IsShown()
+end
+
+@afterEach
+local function close()
+    M:SetOpen(false)
+    mock.advanceTime(1)
+end
+
+@test("bags closed: every step runs, the window opens, and half a second later it is still shown")
+local function opens()
+    expect(shown()).toBe(false)
+    bagOpenProbe.command()
+    local rec = saved()
+    expect(rec.module.found).toBe(true)
+    expect(rec.module.enabled).toBe(true)
+    expect(rec.owned.timerStarts).toBe(true)
+    expect(rec.flags.inv).toBe(true)
+    expect(rec.flags.syncQueued).toBe(false)
+    expect(rec.game.combinedBags).toBeTruthy()
+    expect(rec.game.OPENALLBAGS).toBeTruthy()
+    expect(rec.before.shown).toBe(false)
+    for _, s in ipairs(rec.steps) do
+        expect(s.ok).toBe(true)
+        expect(s.question ~= "").toBe(true)
+    end
+    expect(#rec.steps).toBe(8)
+    expect(step("toggle").answer).toBe("SetOpen(true): the window reads hidden")
+    expect(rec.after.shown).toBe(true)
+    expect(rec.after.visible).toBe(true)
+    expect(shown()).toBe(true)
+    expect(#rec.summary).toBe(4)
+    expect(rec.later).toBeNil()
+    mock.advanceTime(0.6)
+    local later = rec.later
+    assert(later, "no later reading")
+    expect(later.shown).toBe(true)
+    expect(#rec.summary).toBe(5)
+    expectNoErrors()
+end
+
+@test("a step that fails: its error and stack kept, the steps after it still run")
+local function failing()
+    mock.stub(M.savedBags, "UpdatePicker", function(_: unknown)
+        error("picker broke")
+    end)
+    bagOpenProbe.command()
+    local s = step("updatePicker")
+    expect(s.ok).toBe(false)
+    expect((s.error or ""):find("picker broke", 1, true) ~= nil).toBe(true)
+    expect(#(s.trace or {}) > 0).toBe(true)
+    expect(step("refresh").ok).toBe(true)
+    expect(saved().summary[3]:find("updatePicker", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+@test("a stuck flag and an open window read as they are")
+local function stuck()
+    M:SetOpen(true)
+    M.syncQueued = true
+    bagOpenProbe.command()
+    local rec = saved()
+    expect(rec.flags.syncQueued).toBe(true)
+    expect(rec.before.shown).toBe(true)
+    expect(step("toggle").answer).toBe("SetOpen(false): the window reads shown")
+    expect(step("window").answer).toBe("yes, already shown (Sync would do nothing)")
+    M.syncQueued = false
+    expectNoErrors()
+end
+
+@test("nothing personal kept: no character name, no link, no colour")
+local function noNames()
+    bagOpenProbe.command()
+    local all: string[] = {}
+    strings(saved(), all)
+    local me = assert(secret.asString(UnitName("player")))
+    for _, s in ipairs(all) do
+        expect(s:find(me, 1, true) == nil).toBe(true)
+    end
+    expect(saved().flags.who).toBe("nil")
+    expectNoErrors()
+end
+
+@test("clean: links, colours and secrets out, long text cut")
+local function cleaned()
+    expect(bagOpenProbe.clean("|cffffffff|Hitem:1::|h[Thing]|h|r broke")).toBe("[link] broke")
+    expect(bagOpenProbe.clean(mock.secret(5))).toBe("secret")
+    expect(#bagOpenProbe.clean(("x"):rep(500), 10)).toBe(10 + #"…")
+    expect(bagOpenProbe.frameState(nil).exists).toBe(false)
+    expectNoErrors()
+end
