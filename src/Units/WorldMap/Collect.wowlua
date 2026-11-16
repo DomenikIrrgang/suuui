@@ -281,6 +281,56 @@ local function continentOf(mapID: number?): number?
     return nil
 end
 
+-- Whether a quest in your log is ready to turn in.
+local function readyToTurnIn(id: number): boolean
+    local ready = C_QuestLog.ReadyForTurnIn or C_QuestLog.IsComplete
+    return ready ~= nil and secret.flag(errors.tryValue(ready, id)) == true
+end
+
+-- Your quests ready to turn in, on a continent's map (asked 2026-11-16: the
+-- game shows only the selected one there): each zone's turn-in places, as
+-- the game gives them for the zone (C_QuestLog.GetQuestsOnMap), where the
+-- zone lies on the continent. The selected quest is left to the game's own
+-- pin; a quest counts once.
+local function continentTurnIns(continent: number): Item[]
+    local out: Item[] = {}
+    local zoneType = asNumber(field(Enum, "UIMapType", "Zone")) or 3
+    local selected = C_SuperTrack and asNumber(errors.tryValue(C_SuperTrack.GetSuperTrackedQuestID)) or nil
+    local seen: { [number]: boolean } = {}
+    local children = errors.tryValue(C_Map.GetMapChildrenInfo, continent, zoneType, true)
+    for _, child in ipairs(tbl.list(children)) do
+        local zoneID = asNumber(field(child, "mapID"))
+        local zoneName = asString(field(child, "name"))
+        local ok, minX, maxX, minY, maxY = false, nil, nil, nil, nil
+        if zoneID then
+            ok, minX, maxX, minY, maxY = pcall(C_Map.GetMapRectOnMap, zoneID, continent)
+        end
+        local x0, x1, y0, y1 = asNumber(minX), asNumber(maxX), asNumber(minY), asNumber(maxY)
+        if ok and zoneID and x0 and x1 and y0 and y1 then
+            for _, q in ipairs(tbl.list(errors.tryValue(C_QuestLog.GetQuestsOnMap, zoneID))) do
+                local id = asNumber(field(q, "questID"))
+                local x, y = asNumber(field(q, "x")), asNumber(field(q, "y"))
+                if id and x and y and not seen[id] and id ~= selected and readyToTurnIn(id) then
+                    seen[id] = true
+                    local title = asString(errors.tryValue(C_QuestLog.GetTitleForQuestID, id)) or questName(nil, id)
+                    out[#out + 1] = {
+                        x = x0 + x * (x1 - x0),
+                        y = y0 + y * (y1 - y0),
+                        key = "turnIn",
+                        kindName = "Quests to turn in",
+                        pin = { char = "?", color = "arcane", edge = "arcane" },
+                        name = title,
+                        detail = "Ready to turn in" .. (zoneName and (" · " .. zoneName) or ""),
+                        uid = "t" .. id,
+                        quests = { id },
+                    }
+                end
+            end
+        end
+    end
+    return out
+end
+
 -- Taxi nodes the client still lists that no one flies to (an old copy of
 -- Powderfuse Port, transports, quest flights)
 local function junkTaxiNode(name: unknown): boolean
@@ -505,6 +555,15 @@ export function collect(self: WorldMapModule, mapID: number): Item[]
                     quests = ids,
                 }
             end
+        end
+    end
+
+    -- your quests to turn in, on a continent's map (the game's own pins
+    -- show them on a zone's)
+    local continentType = asNumber(field(Enum, "UIMapType", "Continent")) or 2
+    if on.quests.objectives and info and info.mapType == continentType then
+        for _, t in ipairs(continentTurnIns(mapID)) do
+            items[#items + 1] = t
         end
     end
 

@@ -326,3 +326,62 @@ local function judgedAndFire()
     expect(again).toEqual(first)
     expectNoErrors()
 end
+
+@test("a continent's map: your quests ready to turn in, where their zones lie on it; the selected one left to the game's pin; each once")
+local function continentTurnIns()
+    const KALIMDOR = 1414
+    const DUROTAR = 1411
+    const ORGRIMMAR = 1454
+    mock.fake("C_Map.GetMapInfo", function(id: number): unknown
+        if id == KALIMDOR then
+            return { mapID = KALIMDOR, mapType = 2, name = "Kalimdor", parentMapID = 947 }
+        end
+        return { mapID = id, mapType = 3, name = "Durotar", parentMapID = KALIMDOR }
+    end)
+    mock.fake("C_Map.GetMapChildrenInfo", function(_: number): unknown
+        return { { mapID = DUROTAR, name = "Durotar", mapType = 3 }, { mapID = ORGRIMMAR, name = "Orgrimmar", mapType = 3 } }
+    end)
+    mock.fake("C_Map.GetMapRectOnMap", function(id: number): (number, number, number, number)
+        if id == DUROTAR then
+            return 0.5, 0.7, 0.4, 0.6
+        end
+        return 0.55, 0.6, 0.35, 0.4
+    end)
+    mock.fake("C_QuestLog.GetQuestsOnMap", function(id: number): unknown
+        if id == DUROTAR then
+            return { { questID = 901, x = 0.5, y = 0.5 }, { questID = 902, x = 0.1, y = 0.1 }, { questID = 903, x = 0.2, y = 0.2 } }
+        end
+        -- (901 again: once)
+        return { { questID = 901, x = 0.3, y = 0.3 } }
+    end)
+    local ready: { [number]: boolean } = { [901] = true, [903] = true }
+    mock.fake("C_QuestLog.ReadyForTurnIn", function(id: number): boolean
+        return ready[id] == true
+    end)
+    mock.fake("C_QuestLog.GetTitleForQuestID", function(id: number): string
+        return "Quest " .. id
+    end)
+    -- 903 selected: the game's own pin shows it
+    mock.fake("C_SuperTrack.GetSuperTrackedQuestID", function(): number
+        return 903
+    end)
+    local got = collect(KALIMDOR)
+    local q = assert(got["Quest 901"], "no turn-in pin")
+    expect(q.key).toBe("turnIn")
+    expect(q.detail).toBe("Ready to turn in · Durotar")
+    -- Durotar's middle, on Kalimdor
+    expect(math.abs(q.x - 0.6) < 0.001).toBe(true)
+    expect(math.abs(q.y - 0.5) < 0.001).toBe(true)
+    -- not ready, and the selected one: none
+    expect(got["Quest 902"]).toBeNil()
+    expect(got["Quest 903"]).toBeNil()
+    local n = 0
+    for _, it in pairs(got) do
+        if it.key == "turnIn" then
+            n += 1
+        end
+    end
+    expect(n).toBe(1)
+    -- a zone's map: the game's own pins, none of SuuUI's
+    expect(collect(DUROTAR)["Quest 901"]).toBeNil()
+end

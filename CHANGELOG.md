@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- World map: the continent maps (Kalimdor, Eastern Kingdoms) now show every quest you can turn in, where you turn it in, not only the one you selected. Several at one place share a pin that lists them. They follow the "Quest objectives" map filter.
+
 ## 0.19.0 (2026-11-16)
 
 ### New
