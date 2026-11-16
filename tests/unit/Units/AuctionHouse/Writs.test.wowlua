@@ -1,0 +1,162 @@
+-- Units/AuctionHouse/Writs: WoW Forever's crafting orders from the last Scan
+-- all: each writ with its tier, its price, the requested item's and the two
+-- together, cheapest first; a requested item not on the house is "Not
+-- listed"; the tier chosen above the table. The engine's house has no Scan
+-- all: stubbed, as the helpers' replicate, with names.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/AuctionHouse"
+import * as writs from "/Units/AuctionHouse/Writs"
+import type WritRow from "/Units/AuctionHouse/Writs"
+import buy, setUp, tearDown, open, shown from "./AuctionHouseHelpers"
+
+local AH = C_AuctionHouse
+
+-- the writs and the items they ask for (placeholder items)
+const VEST_WRIT = 990401
+const BELT_WRIT = 990402
+const HELM_WRIT = 990403
+const VEST = 990411
+const BELT = 990412
+
+-- name, its tier (writs), buyout, count
+type Auction = { id: number, name: string, buyout: number, count?: number }
+
+local AUCTIONS: Auction[] = {
+    { id = VEST_WRIT, name = "Craftsman's Writ: Ghostweave Vest", buyout = 400 },
+    { id = VEST_WRIT, name = "Craftsman's Writ: Ghostweave Vest", buyout = 500 },
+    { id = BELT_WRIT, name = "Craftsman's Writ: Earthen Silk Belt", buyout = 463 },
+    -- its helm isn't on the house
+    { id = HELM_WRIT, name = "Craftsman's Writ: Heavy Scorpid Helm", buyout = 300 },
+    { id = VEST, name = "Ghostweave Vest", buyout = 90000 },
+    { id = BELT, name = "Earthen Silk Belt", buyout = 30000 },
+    -- the belt as a stack of two: 25000 each
+    { id = BELT, name = "Earthen Silk Belt", buyout = 50000, count = 2 },
+}
+
+local TIER: { [number]: string } = { [VEST_WRIT] = "Artisan", [BELT_WRIT] = "Expert", [HELM_WRIT] = "Artisan" }
+
+-- Scan all: the house's every auction (the list above) read.
+local function scan()
+    mock.stub(AH, "ReplicateItems", function() end)
+    mock.stub(AH, "GetNumReplicateItems", function()
+        return #AUCTIONS
+    end)
+    mock.stub(AH, "GetReplicateItemInfo", function(k: number): ...unknown
+        local a = AUCTIONS[k + 1]
+        return a.name, nil, a.count or 1, nil, nil, nil, nil, nil, nil, a.buyout, nil, nil, nil, nil, nil, nil, a.id
+    end)
+    mock.fake("C_TooltipInfo.GetItemByID", function(id: number): unknown
+        return { lines = { { leftText = "?" }, { leftText = TIER[id] or "This Item Begins a Quest" } } }
+    end)
+    mock.click(buy().scanButton)
+    mock.fireEvent("REPLICATE_ITEM_LIST_UPDATE")
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+end
+
+-- The Writs' rows shown: the requested item's name, the tier, the total.
+local function rows(): WritRow[]
+    return shown(buy().writs)
+end
+
+local function writsButton(): Button
+    for _, b in ipairs(buy().catButtons) do
+        if b:IsShown() and b.text:GetText() == "Writs" then
+            return b
+        end
+    end
+    error("no Writs in the categories")
+end
+
+@beforeEach
+local function start()
+    setUp()
+    for _, a in ipairs(AUCTIONS) do
+        mock.defineItem(a.id, { name = a.name, quality = 2, icon = 134939 })
+    end
+end
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+@test("a writ's requested item: from its name; any other name none")
+local function target()
+    expect(writs.writTarget("Craftsman's Writ: Ghostweave Vest")).toBe("Ghostweave Vest")
+    expect(writs.writTarget("Ghostweave Vest")).toBeNil()
+    expect(writs.writTarget("Craftsman's Writ: ")).toBeNil()
+    expect(writs.writTarget(nil)).toBeNil()
+end
+
+@test("before any Scan all: Writs in the categories, asking for one")
+local function beforeScan()
+    open()
+    mock.click(writsButton())
+    expect(M.view).toBe("writs")
+    expect(buy().writs).toBeShown()
+    expect(buy().tierBar).toBeShown()
+    expect(buy().results).never.toBeShown()
+    expect(#rows()).toBe(0)
+    expect(buy().empty:GetText()).toBe("Scan all to find the writs on the auction house.")
+end
+
+@test("after Scan all: each writ, its tier, its price, the item's and the total, cheapest first; Not listed last")
+local function listed()
+    open()
+    scan()
+    local d = M:CharData()
+    expect(assert(d.writs)[VEST_WRIT].targetID).toBe(VEST)
+    expect(assert(d.writs)[HELM_WRIT].targetID).toBeNil()
+    mock.click(writsButton())
+    local r = rows()
+    expect(#r).toBe(3)
+    -- the belt: 463 + 25000 (each of the stack), the vest: 400 + 90000
+    expect(r[1].name:GetText()).toBe("Earthen Silk Belt")
+    expect(r[1].tier:GetText()).toBe("Expert")
+    expect(r[1].writ.copper).toBe(463)
+    expect(r[1].item.copper).toBe(25000)
+    expect(r[1].total.copper).toBe(25463)
+    expect(r[2].name:GetText()).toBe("Ghostweave Vest")
+    expect(r[2].tier:GetText()).toBe("Artisan")
+    expect(r[2].writ.copper).toBe(400)
+    expect(r[2].total.copper).toBe(90400)
+    -- the helm isn't on the house: Not listed, no total
+    expect(r[3].name:GetText()).toBe("Heavy Scorpid Helm")
+    expect(r[3].missing).toBeShown()
+    expect(r[3].item).never.toBeShown()
+    expect(r[3].total).never.toBeShown()
+    expect(r[3].none).toBeShown()
+    -- a click: the writ's auctions, to buy it
+    local searched: (number | string)? = nil
+    mock.stub(M, "SearchItem", function(_: unknown, item: number | string): boolean
+        searched = item
+        return true
+    end)
+    mock.click(r[1])
+    expect(searched).toBe(BELT_WRIT)
+end
+
+@test("the tier above the table: only that tier's writs; none of it said so; a search back to the results")
+local function tiers()
+    open()
+    scan()
+    mock.click(writsButton())
+    M.writTier = "Artisan"
+    M:Refresh()
+    local r = rows()
+    expect(#r).toBe(2)
+    expect(r[1].name:GetText()).toBe("Ghostweave Vest")
+    expect(r[2].name:GetText()).toBe("Heavy Scorpid Helm")
+    M.writTier = "Journeyman"
+    M:Refresh()
+    expect(#rows()).toBe(0)
+    expect(buy().empty:GetText()).toBe("No Journeyman writs in the last scan.")
+    -- a search: the results again
+    M:Search("ore")
+    expect(M.view).toBe("browse")
+    expect(buy().writs).never.toBeShown()
+    expect(buy().tierBar).never.toBeShown()
+end

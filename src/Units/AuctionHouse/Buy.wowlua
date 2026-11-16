@@ -7,7 +7,7 @@
 -- call the functions here; an item's view is AuctionHouse/ItemView.
 
 import SuuUI from "/Core/API"
-import type ScrollArea, Panel, SuuButton, Text, TextField, ItemSlot, Money, FilterMenu, FilterValues, FilterChoice, FilterValue, LoadingMark, Border from "/Core/API"
+import type ScrollArea, Panel, SuuButton, Text, TextField, ItemSlot, Money, FilterMenu, FilterValues, FilterChoice, FilterValue, LoadingMark, Border, Segmented from "/Core/API"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -16,6 +16,7 @@ import * as itemData from "wowlua:item"
 import trimmed, keyInfo, qualityToken, keyTooltip, QUALITY, sorts from "./Common"
 import TableRow, AuctionTable from "./Tables"
 import ItemView from "./ItemView"
+import WritRow, TIERS from "./Writs"
 import type HistoryRow from "./History"
 import type AuctionHouseModule from "../AuctionHouse"
 
@@ -204,6 +205,9 @@ export class BuyPage extends Frame
     readonly catButtons: CatButton[] = {}
     readonly main: Frame
     readonly results: AuctionTable<ResultRow>
+    -- the Writs (AuctionHouse/Writs): their tier, their table
+    readonly tierBar: Segmented<string>
+    readonly writs: AuctionTable<WritRow>
     readonly empty: Text
     readonly more: SuuButton
     readonly itemView: ItemView
@@ -385,6 +389,35 @@ export class BuyPage extends Frame
         self.results.onSort = function(key: string)
             m:SortBy(key)
         end
+        -- the Writs: the tier above their table (cheapest total first)
+        local tiers: { value: string, label: string }[] = { { value = "all", label = "All" } }
+        for _, tier in ipairs(TIERS) do
+            tiers[#tiers + 1] = { value = tier, label = tier }
+        end
+        self.tierBar = UI.Segmented(main, {
+            options = tiers,
+            value = "all",
+            onChange = function(v: string)
+                m.writTier = v
+                m:Refresh()
+            end,
+        })
+        self.tierBar:SetPoint("TOPLEFT")
+        self.tierBar:Hide()
+        self.writs = AuctionTable.new(main, {
+            { label = "Writ for" },
+            { label = "Tier", w = 80 },
+            { label = "Writ", w = 100, right = true },
+            { label = "Item", w = 100, right = true },
+            { label = "Total", w = 110, right = true },
+        }, function(p: Frame): WritRow
+            return WritRow.new(p)
+        end)
+        SuuUI.Layout.Follow(self, function()
+            self.writs:SetPoint("TOPLEFT", 0, -(self.tierBar:GetHeight() + S["space-3"]))
+        end)
+        self.writs:SetPoint("BOTTOMRIGHT")
+        self.writs:Hide()
         self.empty = UI.Text(main, "body", "ink-muted")
         self.empty:SetPoint("TOP", 0, -60)
         self.more = UI.Button(main, {
@@ -685,6 +718,29 @@ export function drawCategories(self: AuctionHouseModule)
         end
     end
     draw(categories(), 0)
+    -- last: the Writs (AuctionHouse/Writs), from the last Scan all
+    n = n + 1
+    local w = buy.catButtons[n]
+    if not w then
+        w = CatButton.new(c)
+        buy.catButtons[n] = w
+    end
+    local chosen = self.view == "writs"
+    w.depth, w.chosen, w.opened = 0, chosen, false
+    w:ClearAllPoints()
+    w:SetPoint("TOPLEFT", 0, -y)
+    w:SetPoint("RIGHT", c, "RIGHT")
+    w.text:SetStyle("body")
+    w.text:SetValue("Writs")
+    w.text:SetColor(chosen and "arcane" or w:Ink())
+    w.sel:SetShown(chosen)
+    w.hover:SetShown(not chosen and w:IsMouseOver() and w:IsVisible())
+    w.chevron:Hide()
+    w:SetScript("OnClick", function()
+        self:ChooseWrits()
+    end)
+    w:Show()
+    y = y + 24
     for i = n + 1, #buy.catButtons do
         buy.catButtons[i]:Hide()
     end

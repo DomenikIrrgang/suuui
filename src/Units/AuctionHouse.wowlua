@@ -67,6 +67,8 @@ import * as ahPrices from "./AuctionHouse/Prices"
 import type Offer, Market, SeenEntry, PostedEntry from "./AuctionHouse/Prices"
 import * as ahScan from "./AuctionHouse/Scan"
 import type Scanning from "./AuctionHouse/Scan"
+import * as ahWrits from "./AuctionHouse/Writs"
+import type WritEntry from "./AuctionHouse/Writs"
 import * as ahSell from "./AuctionHouse/Sell"
 import SellPage from "./AuctionHouse/Sell"
 import type Posting from "./AuctionHouse/Sell"
@@ -204,6 +206,8 @@ export type CharStore = {
     scanAsked?: number,
     -- your searches, newest first
     history?: HistoryEntry[],
+    -- the writs the last Scan all found, by itemID (AuctionHouse/Writs)
+    writs?: { [number]: WritEntry },
 }
 
 --------------------------------------------------------------------------------
@@ -221,7 +225,10 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- the house: open; the tab; the Buy page's view and what it searched
     open: boolean = false
     tab: string = "buy"
+    -- "browse" (the results), "writs" (AuctionHouse/Writs) or an item's view
     view: string = "browse"
+    -- the Writs' tier: "all" or one of Writs' TIERS
+    writTier: string = "all"
     query: AuctionHouseBrowseQuery? = nil
     searched: boolean = false
     -- the chosen category and those above it, top first (Armor, Plate, Head)
@@ -371,6 +378,17 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
 
     function DrawResults()
         ahBuy.drawResults(self)
+    end
+
+    -- The Writs (AuctionHouse/Writs): chosen in the categories' list.
+    function ChooseWrits()
+        self.view = "writs"
+        self.catPath = {}
+        self:Refresh()
+    end
+
+    function DrawWrits()
+        ahWrits.drawWrits(self)
     end
 
     function HookLinks()
@@ -787,14 +805,21 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if self.scanning then
             buy.results:Hide()
             buy.itemView:Hide()
+            buy.writs:Hide()
+            buy.tierBar:Hide()
             buy.empty:Hide()
             buy.more:Hide()
             return
         end
-        local browse = self.view == "browse"
+        local browse, writs = self.view == "browse", self.view == "writs"
         buy.results:SetShown(browse)
-        buy.itemView:SetShown(not browse)
-        if browse then
+        buy.writs:SetShown(writs)
+        buy.tierBar:SetShown(writs)
+        buy.itemView:SetShown(not (browse or writs))
+        if writs then
+            buy.more:Hide()
+            self:DrawWrits()
+        elseif browse then
             buy.empty:SetShown(false)
             self:DrawResults()
         else
