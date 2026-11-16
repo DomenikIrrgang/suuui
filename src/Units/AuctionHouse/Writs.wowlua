@@ -1,0 +1,278 @@
+-- Units/AuctionHouse/Writs.wowlua
+-- The Buy page's Writs (Units/AuctionHouse): WoW Forever's crafting orders,
+-- "Craftsman's Writ: <item>", each starting a quest for one <item>. From
+-- the last Scan all: each writ on the house with its tier (Journeyman,
+-- Expert, Artisan: its tooltip's line under the name), its lowest buyout,
+-- the requested item's lowest and the two together, cheapest first; a
+-- requested item that wasn't on the house is "Not listed" (asked
+-- 2026-11-16; the quest's reward is random coin, so no profit is shown).
+-- A click searches the requested item's name: the writ ("Craftsman's Writ:
+-- <item>") and the item both among the results, bought as any other (a
+-- single auction only through the game's own page; asked 2026-11-16).
+
+import SuuUI from "/Core/API"
+import type ItemSlot, Money, Text from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import keyInfo, keyTooltip, qualityToken, QUALITY from "./Common"
+import TableRow from "./Tables"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local tryValue, field, list = errors.tryValue, tbl.field, tbl.list
+local asString = secret.asString
+
+export const WRIT_PREFIX = "Craftsman's Writ: "
+
+-- The tiers, lowest first (as their tooltips name them).
+export const TIERS: string[] = { "Journeyman", "Expert", "Artisan" }
+local IS_TIER: { [string]: boolean } = { Journeyman = true, Expert = true, Artisan = true }
+local TIER_RANK: { [string]: number } = { Journeyman = 1, Expert = 2, Artisan = 3 }
+
+-- A writ the last Scan all found: the item it asks for (its name, and its
+-- itemID when that item was on the house too); its tier once read.
+export type WritEntry = { target: string, targetID?: number, tier?: string }
+
+-- The item a writ's name asks for ("Craftsman's Writ: Ghostweave Vest":
+-- "Ghostweave Vest"), nil for any other name.
+export function writTarget(name: string?): string?
+    if not name or name:sub(1, #WRIT_PREFIX) ~= WRIT_PREFIX then
+        return nil
+    end
+    local target = name:sub(#WRIT_PREFIX + 1)
+    return target ~= "" and target or nil
+end
+
+-- The writs of a Scan all: `writNames` the writs' names by itemID, `byName`
+-- every scanned item's itemID by name. Tiers already read are kept.
+export function fromScan(
+    writNames: { [number]: string },
+    byName: { [string]: number },
+    before: { [number]: WritEntry }?
+): { [number]: WritEntry }
+    local out: { [number]: WritEntry } = {}
+    for id, name in pairs(writNames) do
+        local target = writTarget(name)
+        if target then
+            local old = before and before[id]
+            out[id] = { target = target, targetID = byName[target], tier = old and old.tier }
+        end
+    end
+    return out
+end
+
+-- A tooltip line's text as words: colour codes off, trimmed.
+local function plainText(v: unknown): string?
+    local text = asString(v)
+    if not text then
+        return nil
+    end
+    text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return (text:match("^%s*(.-)%s*$"))
+end
+
+-- A hidden tooltip read line by line where the game has no C_TooltipInfo.
+local scanTip: GameTooltip? = nil
+local function tipLines(itemID: number): string[]
+    local out: string[] = {}
+    local info = C_TooltipInfo and C_TooltipInfo.GetItemByID
+    if info then
+        for _, line in ipairs(list(field(tryValue(info, itemID), "lines"))) do
+            local text = plainText(field(line, "leftText"))
+            if text then
+                out[#out + 1] = text
+            end
+        end
+        return out
+    end
+    local tip = scanTip
+    if not tip then
+        tip = CreateFrame("GameTooltip", "SuuUIWritTip", nil, "GameTooltipTemplate") :: GameTooltip
+        tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        scanTip = tip
+    end
+    tip:ClearLines()
+    errors.try(tip.SetItemByID, tip, itemID)
+    for i = 1, tip:NumLines() do
+        local fs = _G["SuuUIWritTipTextLeft" .. i] :: FontString?
+        local text = fs and plainText(fs:GetText())
+        if text then
+            out[#out + 1] = text
+        end
+    end
+    return out
+end
+
+-- A writ's tier from its tooltip (a line names it, under the name in game;
+-- any line read, the game's order not counted on); nil while the game
+-- hasn't loaded the item.
+export function tierOf(itemID: number): string?
+    for _, text in ipairs(tipLines(itemID)) do
+        if IS_TIER[text] then
+            return text
+        end
+    end
+    return nil
+end
+
+-- A row's figures: the writ, the requested item, the two together (nil:
+-- not listed).
+export type WritLine = { id: number, entry: WritEntry, writ: number?, item: number?, total: number? }
+
+-- The scanned writs of `tier` ("all": every one), cheapest total first,
+-- then the ones whose item isn't listed (cheapest writ first).
+export function writLines(self: AuctionHouseModule, tier: string): WritLine[]
+    local out: WritLine[] = {}
+    local writs = self:Saved().writs or {}
+    for id, entry in pairs(writs) do
+        if not entry.tier then
+            entry.tier = tierOf(id)
+        end
+        if tier == "all" or entry.tier == tier then
+            local w = self:LowestSeen(id)
+            local targetID = entry.targetID
+            local it = targetID and self:LowestSeen(targetID)
+            local writ = w and w.price
+            local item = it and it.price
+            out[#out + 1] = {
+                id = id,
+                entry = entry,
+                writ = writ,
+                item = item,
+                total = (writ and item) and writ + item or nil,
+            }
+        end
+    end
+    -- (not listed: last, whatever the order)
+    local key, reverse = self.writSortKey, self.writSortReverse
+    local function value(l: WritLine): number
+        if key == "tier" then
+            return TIER_RANK[l.entry.tier or ""] or 0
+        elseif key == "writ" then
+            return l.writ or 0
+        elseif key == "item" then
+            return l.item or 0
+        end
+        return l.total or l.writ or 0
+    end
+    table.sort(out, function(a: WritLine, b: WritLine): boolean
+        local la, lb = a.total ~= nil, b.total ~= nil
+        if la ~= lb then
+            return la
+        end
+        if key == "name" and a.entry.target ~= b.entry.target then
+            if reverse then
+                return a.entry.target > b.entry.target
+            end
+            return a.entry.target < b.entry.target
+        end
+        local va, vb = value(a), value(b)
+        if va ~= vb then
+            if reverse then
+                return va > vb
+            end
+            return va < vb
+        end
+        return a.id < b.id
+    end)
+    return out
+end
+
+-- A writ's row: the requested item's name (the writ's icon), the tier, the
+-- writ's price, the item's (or Not listed), the total.
+export class WritRow extends TableRow
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly tier: Text
+    readonly writ: Money
+    readonly item: Money
+    readonly missing: Text
+    readonly total: Money
+    readonly none: Text
+    itemID: number? = nil
+
+    constructor(parent: Frame)
+        super(parent)
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetWordWrap(false)
+        self.tier = UI.Text(self, "caption", "ink-muted")
+        self.writ = UI.Money(self)
+        self.item = UI.Money(self)
+        self.missing = UI.Text(self, "caption", "ink-faint")
+        self.missing:SetJustifyH("RIGHT")
+        self.missing:SetValue("Not listed")
+        self.total = UI.Money(self)
+        self.none = UI.Text(self, "caption", "ink-faint")
+        self.none:SetJustifyH("RIGHT")
+        self.none:SetValue("—")
+    end
+end
+
+export function drawWrits(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local t = buy.writs
+    buy.tierBar:SetValue(self.writTier)
+    t:ShowSort(self.writSortKey, self.writSortReverse)
+    local lines = writLines(self, self.writTier)
+    local n = 0
+    for i, w in ipairs(lines) do
+        n = i
+        local row = t:Line(i)
+        local key: ItemKey = { itemID = w.id, itemLevel = 0, itemSuffix = 0, battlePetSpeciesID = 0 }
+        local info = keyInfo(key)
+        local quality = info and info.quality
+        row.slot.skin:SetItem({ icon = info and info.iconFileID, quality = QUALITY[quality or 1] or "common" })
+        row.name:SetValue(w.entry.target)
+        row.name:SetColor(qualityToken(quality))
+        row.tier:SetValue(w.entry.tier or "")
+        local writ, item, total = w.writ, w.item, w.total
+        row.writ:SetCopper(writ or 0)
+        row.writ:SetShown(writ ~= nil)
+        row.item:SetCopper(item or 0)
+        row.item:SetShown(item ~= nil)
+        row.missing:SetShown(item == nil)
+        row.total:SetCopper(total or 0)
+        row.total:SetShown(total ~= nil)
+        row.none:SetShown(total == nil)
+        local places = t:Places(t.list:GetWidth())
+        row.slot:ClearAllPoints()
+        row.slot:SetPoint("LEFT", places[1].x, 0)
+        row.name:ClearAllPoints()
+        row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
+        row.name:SetWidth(math.max(20, places[1].w - 24 - S["space-3"]))
+        t:PlaceCells(row, {
+            false,
+            row.tier,
+            row.writ,
+            item ~= nil and row.item or row.missing,
+            total ~= nil and row.total or row.none,
+        })
+        row.itemID = w.id
+        row.onEnter = function()
+            keyTooltip(row, key)
+        end
+        -- the requested item's name searched: the writ and the item both
+        -- among the results
+        row:SetScript("OnClick", function()
+            self:Search(w.entry.target)
+        end)
+        row:Show()
+    end
+    t:Fit(n)
+    buy.empty:SetShown(n == 0)
+    if n == 0 then
+        local tier = self.writTier
+        buy.empty:SetValue(
+            not self:Saved().writs and "Scan all to find the writs on the auction house." or
+                tier == "all" and "No writs in the last scan." or
+                ("No " .. tier .. " writs in the last scan.")
+        )
+    end
+end

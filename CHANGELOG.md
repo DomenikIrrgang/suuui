@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Writs in the auction house**: a "Writs" entry under the Buy tab's categories lists the Craftsman's Writs from your last Scan all, with their tier (choose Journeyman, Expert or Artisan above the list), the writ's price, the requested item's and the two together, cheapest first. A writ whose item isn't on the auction house says "Not listed". Click a column's header to sort by it. Click a writ to search for its item: the writ and the item show up together, ready to buy. Run Scan all once after updating.
+
 ## 0.18.0 (2026-11-16)
 
 ### New

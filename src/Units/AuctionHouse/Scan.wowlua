@@ -8,8 +8,10 @@
 
 import SuuUI from "/Core/API"
 import * as errors from "wowlua:errors"
+import * as secret from "wowlua:secret"
 import when from "./Common"
 import type Offer from "./Prices"
+import writTarget, fromScan from "./Writs"
 import type AuctionHouseModule, CharStore from "../AuctionHouse"
 
 local T = SuuUI.Tokens
@@ -246,6 +248,10 @@ export function readScan(self: AuctionHouseModule)
     local n = tryValue(AH.GetNumReplicateItems) or 0
     sc.read, sc.total = 0, n
     local offers: { [number]: Offer[] } = {}
+    -- the writs (AuctionHouse/Writs) and every item's ID by name, of the
+    -- auctions with a buyout: a writ's requested item found by its name
+    local byName: { [string]: number } = {}
+    local writNames: { [number]: string } = {}
     local i = 0
     -- (kept: a scan ended meanwhile stops it, and so does the module
     -- turning off)
@@ -256,11 +262,20 @@ export function readScan(self: AuctionHouseModule)
         end
         local stop = math.min(n, i + 2500)
         for k = i, stop - 1 do
-            local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
+            local ok, name, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
                 AH.GetReplicateItemInfo,
                 k
             )
             if ok and itemID and buyout and buyout > 0 then
+                local named = secret.asString(name)
+                if named then
+                    if byName[named] == nil then
+                        byName[named] = itemID
+                    end
+                    if writTarget(named) then
+                        writNames[itemID] = named
+                    end
+                end
                 local qty = math.max(1, count or 1)
                 local offered = offers[itemID]
                 if not offered then
@@ -282,6 +297,7 @@ export function readScan(self: AuctionHouseModule)
                 items = items + 1
             end
             local d = self:Saved()
+            d.writs = fromScan(writNames, byName, d.writs)
             local seconds = GetTime() - sc.started
             d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
             self:EndScan()
