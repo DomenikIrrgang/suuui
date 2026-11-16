@@ -171,6 +171,59 @@ local function deletingGood()
     h.dialog:Hide()
 end
 
+@test("a blue item: DELETE typed into the card's box and confirmed, the item gone (a player's game crashed here)")
+local function deletingBlue()
+    -- the game's popup box has its font in place: as its font object it
+    -- gives itself, and given back to itself the game recursed until it
+    -- crashed (STACK_OVERFLOW on closing the popup, Yes or No, found in game)
+    local selfFont = false
+    for i = 1, 4 do
+        local eb = frames.asEditBox(frames.find("StaticPopup" .. i .. "EditBox"))
+        if eb then
+            local set = eb.SetFontObject
+            mock.stub(eb, "GetFontObject", function(): unknown
+                return eb
+            end)
+            mock.stub(eb, "SetFontObject", function(self: EditBox, font: unknown)
+                if font == self then
+                    selfFont = true
+                    return
+                end
+                set(self, font :: Font)
+            end)
+        end
+    end
+    local ITEM = 990303
+    mock.defineItem(ITEM, { name = "Masons Fraternity Ring", quality = 3, icon = 133345 })
+    mock.setBag(0, { slots = 16, items = { [3] = ITEM } })
+    C_Container.PickupContainerItem(0, 3)
+    mock.clickWorld()
+    mock.advanceFrames(3)
+    local h = host()
+    expect(h.kind.confirm).toBe(true)
+    local eb = assert(h.editBox, "no edit box")
+    expect(eb).toBeShown()
+    mock.typeText(eb, DELETE_ITEM_CONFIRM_STRING or "DELETE")
+    mock.advanceFrames(3)
+    expect(eb:GetText()).toBe(DELETE_ITEM_CONFIRM_STRING or "DELETE")
+    for _, x in ipairs(h.buttons()) do
+        if x.index == 1 then
+            expect(x.button:IsEnabled()).toBe(true)
+            -- (the player's click: deleting needs one)
+            mock.click(x.button)
+        end
+    end
+    expect(GetCursorInfo()).toBeNil()
+    -- (the server removes it a round trip later)
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    expect(C_Container.GetContainerItemID(0, 3)).toBeNil()
+    expect(hosted()).toBeNil()
+    -- put back as it was, never its own font object
+    expect(selfFont).toBe(false)
+    expectNoErrors()
+end
+
 @test(
     "logging out: the countdown on its card; a party invite; a popup a plugin added; one SuuUI doesn't know stays Blizzard's"
 )

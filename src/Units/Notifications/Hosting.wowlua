@@ -58,6 +58,8 @@ export type Saved = {
     font?: Font,
     fs?: FontString,
     color?: number[],
+    -- an edit box's font as it was (file, size, flags)
+    editFont?: { file: string, size: number, flags: ("" | "MONOCHROME" | "OUTLINE" | "THICKOUTLINE" | "SLUG")? },
 }
 
 -- A hosted window: its parts, its card's data and card, what was changed.
@@ -222,7 +224,14 @@ export function remember(m: NotificationsModule, h: Host, f: Frame): Saved
     end
     local eb = frames.asEditBox(f)
     if eb then
-        s.font = eb:GetFontObject()
+        -- its font as it is, not its font object: Blizzard's popup box sets
+        -- its font in place, and given back to itself as its own font object
+        -- the game recursed until it crashed (STACK_OVERFLOW on closing a
+        -- type-DELETE popup, found in game)
+        local file, size, flags = eb:GetFont()
+        if file then
+            s.editFont = { file = file, size = size, flags = flags }
+        end
     end
     saved[f] = s
     return s
@@ -250,15 +259,16 @@ export function undo(m: NotificationsModule, h: Host)
             r:SetAlpha(a)
         end
         local fs, font, color = s.fs, s.font, s.color
-        if fs and font then
+        -- (never an object's own font as its font object)
+        if fs and font and font ~= fs then
             fs:SetFontObject(font)
         end
         if fs and color then
             fs:SetTextColor(color[1], color[2], color[3], color[4])
         end
-        local eb = frames.asEditBox(f)
-        if eb and font then
-            eb:SetFontObject(font)
+        local eb, editFont = frames.asEditBox(f), s.editFont
+        if eb and editFont then
+            eb:SetFont(editFont.file, editFont.size, editFont.flags or "")
         end
         local art = m.arts[f]
         if art then
