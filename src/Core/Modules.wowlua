@@ -68,6 +68,7 @@ import * as hooks from "./Hooks"
 import * as cvars from "./CVars"
 import * as anchors from "./Anchors"
 import * as comm from "./Comm"
+import type Gate from "./Util"
 import type SectionDef, Section from "/SettingsUI/Registry"
 import type Mover, MoverOptions from "/EditMode/EditMode"
 import * as tbl from "wowlua:table"
@@ -191,6 +192,9 @@ type Own = {
     source: string,
     builtIn: boolean,
     state: ModuleState,
+    -- on exactly while `state` is Enabled (setState keeps them together):
+    -- what its hooks and timers read (Core/Hooks, Core/Timers)
+    gate: Gate,
     error?: string,
     pendingReload?: boolean,
     enabledAtLoad?: boolean,
@@ -209,6 +213,13 @@ local owns: { [table]: Own } = setmetatable({}, { __mode = "k" })
 -- the class takes none for this).
 local function ownOf(m: table): Own
     return assert(owns[m])
+end
+
+-- A module's state, and its gate with it.
+local function setState(m: table, state: ModuleState)
+    local own = ownOf(m)
+    own.state = state
+    own.gate.on = state == ModuleState.Enabled
 end
 
 -- A module whatever its settings: what the registry, the settings window
@@ -297,6 +308,7 @@ export class Module<D extends Settings> implements AnyModule
             source = source,
             builtIn = source == ADDON,
             state = ModuleState.Registered,
+            gate = { on = false },
             replaces = def.replaces,
             defaults = defaults,
             layout = def.layout,
@@ -355,13 +367,15 @@ export class Module<D extends Settings> implements AnyModule
     function OnEnable() end
     function OnDisable() end
 
-    -- Its settings (the defaults' keys and types, and "enabled").
+    -- Its settings (the defaults' keys and types, and "enabled"). (Get,
+    -- Peek and IsEnabled read the module's own fields directly, not through
+    -- its properties: they run all the time, and a property is a call more.)
     function Get<K extends keyof WithEnabled<D>>(key: K): WithEnabled<D>[K]
-        return settings.get(self.id, key) :: WithEnabled<D>[K]
+        return settings.get(ownOf(self).id, key) :: WithEnabled<D>[K]
     end
     -- 0.17: the value itself, not a copy, to read only (large tables read often)
     function Peek<K extends keyof WithEnabled<D>>(key: K): WithEnabled<D>[K]
-        return settings.peek(self.id, key) :: WithEnabled<D>[K]
+        return settings.peek(ownOf(self).id, key) :: WithEnabled<D>[K]
     end
     function Set<K extends keyof WithEnabled<D>>(key: K, value: WithEnabled<D>[K]): (boolean, string?)
         return settings.set(self.id, key, value)
@@ -467,14 +481,12 @@ export class Module<D extends Settings> implements AnyModule
     -- from OnDisable), a timer never starts: the handle is already
     -- cancelled. A timer that must outlive the module uses wowlua:timer.
     function After(seconds: number, fn: () -> ()): TimerHandle
-        return timers.after(self, self.name, function(): boolean
-            return self:IsEnabled()
-        end, seconds, fn)
+        local own = ownOf(self)
+        return timers.after(self, own.name, own.gate, seconds, fn)
     end
     function Every(seconds: number, fn: (ticker: TickerHandle) -> (), times: number?): TickerHandle
-        return timers.every(self, self.name, function(): boolean
-            return self:IsEnabled()
-        end, seconds, fn, times)
+        local own = ownOf(self)
+        return timers.every(self, own.name, own.gate, seconds, fn, times)
     end
 
     -- 0.47: secure post-hooks the module owns (Core/Hooks.wowlua), on a
@@ -484,27 +496,17 @@ export class Module<D extends Settings> implements AnyModule
     -- second call (the module on again) re-arms it with the new function;
     -- while the module is not enabled the hook does nothing.
     function SecureHook(target: unknown, method: string | function, fn: function?, opts: hooks.HookOptions?)
-        local live = function(): boolean
-            return self:IsEnabled()
-        end
+        local own = ownOf(self)
         if type(method) == "function" then
-            hooks.secureHook(self, self.name, live, target, nil, method, nil)
+            hooks.secureHook(self, own.name, own.gate, target, nil, method, nil)
             return
         end
         assert(type(method) == "string" and type(fn) == "function", "SecureHook: (name, fn) or (target, method, fn, opts)")
-        hooks.secureHook(self, self.name, live, target, method, fn, opts)
+        hooks.secureHook(self, own.name, own.gate, target, method, fn, opts)
     end
     function HookScript(frame: ScriptRegion | string, script: string, fn: function)
-        hooks.hookScript(
-            self,
-            self.name,
-            function(): boolean
-                return self:IsEnabled()
-            end,
-            frame,
-            script,
-            fn
-        )
+        local own = ownOf(self)
+        hooks.hookScript(self, own.name, own.gate, frame, script, fn)
     end
 
     -- 0.47: a game CVar the module changes (Core/CVars.wowlua). The first
@@ -632,7 +634,7 @@ export class Module<D extends Settings> implements AnyModule
     -- 0.47: true while OnEnable runs, false while OnDisable runs (the state
     -- changes just before each)
     function IsEnabled(): boolean
-        return self.state == ModuleState.Enabled
+        return ownOf(self).state == ModuleState.Enabled
     end
 
     function Setting(key: string): unknown
@@ -792,7 +794,7 @@ export class ModuleRegistry
     end
 
     private function fail(m: AnyModule, phase: string)
-        ownOf(m :: table).state = ModuleState.Errored
+        setState(m :: table, ModuleState.Errored)
         ownOf(m :: table).error = phase .. " failed"
         -- Undo what a failed OnEnable got as far as building (frames shown,
         -- anchors published). The reporter reports an error here and
@@ -820,7 +822,7 @@ export class ModuleRegistry
         end
         -- on before OnEnable runs, so what it calls reads the state it is
         -- bringing about (0.47)
-        ownOf(m :: table).state = ModuleState.Enabled
+        setState(m :: table, ModuleState.Enabled)
         ownOf(m :: table).error = nil
         if not self.reporter:call(m.name, function()
             m:OnEnable()
@@ -833,12 +835,12 @@ export class ModuleRegistry
     private function disable(m: AnyModule)
         if m.state ~= ModuleState.Enabled then
             if m.state ~= ModuleState.Incompatible then
-                ownOf(m :: table).state = ModuleState.Disabled
+                setState(m :: table, ModuleState.Disabled)
             end
             return
         end
         -- off before OnDisable runs (0.47), as on before OnEnable
-        ownOf(m :: table).state = ModuleState.Disabled
+        setState(m :: table, ModuleState.Disabled)
         self.reporter:call(m.name, function()
             m:OnDisable()
         end)
@@ -888,7 +890,7 @@ export class ModuleRegistry
         if by then
             ownOf(m :: table).replacedBy = by.name
             ownOf(m :: table).enabledAtLoad = false
-            ownOf(m :: table).state = ModuleState.Disabled
+            setState(m :: table, ModuleState.Disabled)
             self.store:watch(m.id, "enabled", function() end, "Modules")
             self.release(m)
             return
@@ -924,7 +926,7 @@ export class ModuleRegistry
                 )
             end
         else
-            ownOf(m :: table).state = ModuleState.Disabled
+            setState(m :: table, ModuleState.Disabled)
             -- off at login: what an earlier session left (a CVar a
             -- reloadToToggle module set before it was turned off) goes now
             self.release(m)
@@ -963,7 +965,7 @@ export class ModuleRegistry
         self.store:register(id, ownOf(m :: table).defaults, ownOf(m :: table).layout)
         local api = m.api
         if api and not apiAtLeast(api) then
-            ownOf(m :: table).state = ModuleState.Incompatible
+            setState(m :: table, ModuleState.Incompatible)
             ownOf(m :: table).error = ("needs SuuUI API %s; this SuuUI has %s"):format(tostring(api), API_VERSION)
             print(("%s (%s) can't load: it %s."):format(m.name, m.source, tostring(m.error)))
         end
@@ -1088,7 +1090,7 @@ local function toggle(arg: string, on: boolean)
             print(("%s tries again after a /reload."):format(m.name))
             return _G.print(describe(m))
         end
-        ownOf(m :: table).state = ModuleState.Disabled
+        setState(m :: table, ModuleState.Disabled)
         if settings.get(m.id, "enabled") then
             registry:sync(m)
         end

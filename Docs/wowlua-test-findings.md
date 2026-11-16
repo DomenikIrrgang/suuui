@@ -76,6 +76,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [R21](#r21) | mock | low | fixed 0.9.6 | Mock declarations lacked fields and methods the engine has |
 | [R22](#r22) | mock | medium | fixed after 0.9.6 (T246) | A test could not be listed in the group finder |
 | [R23](#r23) | mock | low | fixed after 0.9.6 (T257) | `mock.hover` doesn't move the cursor |
+| [R25](#r25) | runner | medium | open (0.13.15) | The dev monitor's script wrapper counts what runs under it as the addon's in `--profile-out` profiles |
 | [K4](#k4) | checker | medium | done 0.9.6 (W2061) | `a and nil or b` is always `b` |
 | [K5](#k5) | checker | medium | done after 0.9.6 (W2062, S40, S41) | A value read past what a function gives |
 | [K6](#k6) | checker | low | fixed after 0.9.6 (T259) | `GetCursorInfo` is declared without its results |
@@ -119,6 +120,7 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V54](#v54) | VM | medium | open | No group loot |
 | [V55](#v55) | VM | low | as designed | `mock.advanceTime` runs no `OnUpdate`: a fade stands still while the clock moves |
 | [V56](#v56) | VM | low | open (unverified) | `SetText`'s `OnTextChanged` arrives a frame later |
+| [V57](#v57) | VM | low | open | `SetFontObject` keeps a font string's colour; the game's sets the font object's |
 
 ## Test runner and mock issues
 
@@ -402,6 +404,14 @@ Code that reads the cursor over a hovered frame (`GetNormalizedCursorPosition`, 
 *Status: open (the roll tray, Units/LootRolls).*
 
 The engine has no group loot: nothing starts a roll (`START_LOOT_ROLL`), `GetLootRollItemInfo` answers nothing, `GetLootRollItemLink` nil and `GetLootRollTimeLeft` 0, `RollOnLoot` and `ConfirmLootRoll` do nothing, and no roll sends `CONFIRM_LOOT_ROLL`, `CANCEL_LOOT_ROLL`, `LOOT_ROLLS_COMPLETE`, the others' choices and numbers as `CHAT_MSG_LOOT` lines, the winner, or the loot history (`C_LootHistory`, `LOOT_HISTORY_UPDATE_DROP`). The tests stub the roll API (a stubbed `GetLootRollItemInfo` runs Blizzard's roll frame and its Bind on Pickup popup tainted) and fire the events and lines by hand. Wanted: a `mock` call that starts a roll for the group (the item, its time, Need/Greed allowed and why not), group members choosing and rolling (the game's lines, in its order), the winner, a roll cancelled, and the Bind on Pickup question from `RollOnLoot`.
+
+<a id="r25"></a>
+
+### R25. The dev monitor's script wrapper counts what runs under it as the addon's
+
+*Status: open (0.13.15; SuuUI measures without it, `tools/perf.py`).*
+
+With `"monitor": true` in the profile `wowlua test` builds from (SuuUI's `test` profile since `b9348dff`), every `SetScript`, `HookScript` and timer the addon makes runs inside the monitor's timing wrapper (`wowlua/runtime.lua`, `mon.setScript`: a table lookup, `perf.begin`, `perf.finish`, about 50 instructions a call). The wrapper is a file of the addon's own folder, so in a `--profile-out` profile it is the outermost frame of the addon's on every wrapped script, and whatever runs below it counts as the addon's: the test files' own scripts too (they are built with the monitor as well), and through them the game's handlers for the events they fire. The perf scenarios drive each frame from an `OnUpdate` in `tests/perf/util.wowlua`; with the monitor on, everything that driver fires, Blizzard's UI included, was SuuUI's. `python3 -I tools/perf.py run idle` on `fa15e335`, SuuUI's instructions a frame: 977 with the monitor and runtime checks, 931 with the monitor only, 455 with the checks only, 409 with neither (and a phase driven by events far more: the raid boss fight 9,640 under the `test` profile, 2,064 with neither). Wanted: the wrapper and the code under a test file's scripts kept apart in the profile (the wrapper as wowlua's own, not the addon's), or a way to choose the profile per run (wowlua#266); until then `tools/perf.py run` rewrites the `test` profile for the run (`tests/perf/README.md`). (perf scenarios 2026-11-16)
 
 ## Compiler and checker issues
 
@@ -1021,6 +1031,14 @@ The NPC dialogue fades `UIParent` with `Motion.AlphaTo` (an `OnUpdate`): after `
 *Status: open (unverified in game).*
 
 Since V3's fix, `EditBox:SetText` runs `OnTextChanged` on the next frame, not inside the call. Code that tells an edit from its own `SetText` by comparing with the text it set last (Forever never passes `userInput` true) must keep that text until the late event. Whether the game runs it at once or a frame later is unrecorded. `tests/unit/UI/GroupFinderListed.test.wowlua` ("an edit on Forever") and `tests/unit/Diagnostics/Probe.test.wowlua` advance a frame before the event and fire `OnTextChanged` with `userInput` false themselves. (bug fixes 2026-11-15)
+
+<a id="v57"></a>
+
+### V57. `SetFontObject` keeps a font string's colour; the game's sets the font object's
+
+*Status: open.*
+
+In the game, `FontString:SetFontObject(font)` gives the string the font object's colour (and shadow) as well as its face and size: a text coloured with `SetTextColor` before reads the font object's colour after. The emulator's keeps the colour set before: a `GameFontNormal` string set to red with `SetTextColor(1, 0, 0)`, then `SetFontObject("GameFontHighlightSmall")` (white), still reads `1, 0, 0` (wowlua 0.13.15). Code that reads a text's colour to decide its style must read it before it puts a font object on (`src/UI/Reskin/Pass.wowlua`, `reskinText`), and a test of the game reusing a text in another role sets the game's colour itself after `SetFontObject` (`tests/unit/UI/Reskin/Pass.test.wowlua`, "a text the game gives another font is styled from it again, once": `title:SetTextColor(1, 0.82, 0)` after `SetFontObject("GameFontNormalSmall")`). (reskin text styles 2026-11-16)
 
 ## Not bugs (for test writers)
 

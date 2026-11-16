@@ -108,26 +108,70 @@ local function colorOf(fs: FontString): (number?, number, number)
     return nil, 0, 0
 end
 
+-- The style for a text by the font the game gave it (its size, its font
+-- object's name) and its length: a category row's name and a big title
+-- `header`, a number `numeric`, small text `caption`, long text `body`,
+-- the rest `label`.
+local function styleFor(isHead: boolean, size: number, foName: string, long: boolean): string
+    if isHead or (not long and (size >= 14 or foName:find("Med") or foName:find("Large"))) then
+        return "header"
+    end
+    if foName:find("Number") then
+        return "numeric"
+    end
+    if size < 11 then
+        return "caption"
+    end
+    return long and "body" or "label"
+end
+
+-- Whether a text still shows the style SuuUI set on it last: that style's
+-- font object, at the object's size (which follows the theme). The game's
+-- own font object or a size of its own (SetFont) since: not.
+local function showsStyle(fs: FontString, style: string): boolean
+    local font = fonts.get(style)
+    if errors.tryMethod(fs, "GetFontObject") ~= font then
+        return false
+    end
+    local _, size = errors.tryMethod(fs, "GetFont")
+    local _, want = font:GetFont()
+    return type(size) == "number" and type(want) == "number" and math.abs(size - want) < 0.01
+end
+
+-- A text's style is decided from the font the game gave it, which is
+-- remembered (skinOf(fs).gameSize, gameFont): once SuuUI's font is on, the
+-- text's own font says nothing of what it was (a header's 13 px would read
+-- as a label's), and passes run again on every pane show, ScrollBox update
+-- and theme change. It is read again only when the game put a font of its
+-- own on since SuuUI's last (a pooled row's text in another role). A text
+-- that shows its style and colour still is left as it is: no setter.
 local function reskinText(fs: FontString, isHead: boolean)
     if skipped(fs) then
         return
     end
     local s = skinOf(fs)
-    local _, given = errors.tryMethod(fs, "GetFont")
-    local size = tonumber(given) or 12
-    local fo = errors.tryMethod(fs, "GetFontObject")
-    local foName = fo and askString(fo, "GetName") or ""
+    local was = s.style
+    local ours = was ~= nil and showsStyle(fs, was)
+    if not ours then
+        local _, given = errors.tryMethod(fs, "GetFont")
+        local fo = errors.tryMethod(fs, "GetFontObject")
+        s.gameSize = tonumber(given) or 12
+        s.gameFont = fo and askString(fo, "GetName") or ""
+    end
     local text = errors.tryMethod(fs, "GetText")
     local long = type(text) == "string" and not secret.isSecret(text) and #text > 40
-    if isHead then
-        fonts.apply(fs, "header")
-        draw.paint(fs, "gilt-text")
-    elseif not long and (size >= 14 or foName:find("Med") or foName:find("Large")) then
-        fonts.apply(fs, "header")
-        draw.paint(fs, "gilt-text")
+    local style = styleFor(isHead, s.gameSize or 12, s.gameFont or "", long)
+    local header = style == "header"
+    -- (the colour is read before a font object goes on: it brings its own)
+    local r: number?, g: number, b: number = nil, 0, 0
+    local token: string? = nil
+    if header then
+        -- (kept for a later pass that finds it in another role, its colour
+        -- still gilt-text: painted, not set raw)
+        s.token = "gilt-text"
     else
-        local r, g, b = colorOf(fs)
-        local token = textColor(r, g, b)
+        r, g, b = colorOf(fs)
+        token = textColor(r, g, b)
         -- a text an earlier pass coloured still has its token's colour: kept
         -- (a theme's colours may read as none of Blizzard's)
         local kept = s.token
@@ -135,17 +179,24 @@ local function reskinText(fs: FontString, isHead: boolean)
             token = kept
         end
         s.token = token
-        fonts.apply(
-            fs,
-            foName:find("Number") and "numeric" or (size < 11 and "caption" or (long and "body" or "label"))
-        )
-        if token then
-            draw.paint(fs, token)
-        elseif r then
-            fs:SetTextColor(r, g, b)
-        end
     end
-    fs:SetShadowOffset(0, 0)
+    local set = not ours or style ~= was
+    if set then
+        fonts.apply(fs, style)
+        s.style = style
+    end
+    -- (a paint still kept with the same token sets nothing)
+    if header then
+        draw.paint(fs, "gilt-text")
+    elseif token then
+        draw.paint(fs, token)
+    elseif r and set then
+        fs:SetTextColor(r, g, b)
+    end
+    local sx, sy = errors.tryMethod(fs, "GetShadowOffset")
+    if set or sx ~= 0 or sy ~= 0 then
+        fs:SetShadowOffset(0, 0)
+    end
 end
 
 --------------------------------------------------------------------------------

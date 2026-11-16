@@ -12,6 +12,9 @@
 --       growth = { "LEFT", "DOWN" },
 --       lineWidth = 520,           -- px before wrapping to the next line (nil: never)
 --       lazy = true,               -- 0.17: a group with no count yet waits (see addGroup)
+--       roster = false,            -- a party or raid unit's container whose owner
+--                                  -- re-scans it after a roster change (a group
+--                                  -- module, once per burst): it doesn't itself
 --       groups = {
 --           { key = "debuffs", filter = { "HARMFUL", "PLAYER" }, max = 16,
 --             dispel = true,       -- the dispel-type border on typed debuffs
@@ -105,6 +108,7 @@ export type AuraOptions = {
     growth?: string[],
     lineWidth?: number,
     lazy?: boolean,
+    roster?: boolean,
     groups: AuraGroup[],
 }
 
@@ -883,10 +887,13 @@ export class UnitAuras
         pcall(self.container.SetAlpha, self.container, 1)
     end
 
-    -- Re-scans whenever the unit's token may point at someone new.
+    -- Re-scans whenever the unit's token may point at someone new (a group
+    -- token's: not with opts.roster = false, whose owner re-scans it).
     private function listen(unit: string)
-        local event: EventName? = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT") or
-            ((unit:find("^party") or unit:find("^raid")) and "GROUP_ROSTER_UPDATE")
+        local event: EventName? = RESCAN[unit] or (unit:find("^boss") and "INSTANCE_ENCOUNTER_ENGAGE_UNIT") or nil
+        if not event and self.opts.roster ~= false and (unit:find("^party") or unit:find("^raid")) then
+            event = "GROUP_ROSTER_UPDATE"
+        end
         if event then
             events.onGame(
                 event,

@@ -29,6 +29,7 @@ import * as fault from "/Core/Fault"
 import * as events from "/Core/Events"
 import * as hooks from "/Core/Hooks"
 import * as timers from "/Core/Timers"
+import type Gate from "/Core/Util"
 import scan from "/Core/TaintScan"
 import isSecret, readable from "wowlua:secret"
 import * as tbl from "wowlua:table"
@@ -341,6 +342,9 @@ export class Watch
     item: Item
     owner: { name: string }
     active: boolean = false
+    -- `active` as the hook and timer registries read it (start and stop
+    -- set both)
+    gate: Gate = { on = false }
     -- the EventRegistry events it listens to (taken off when it stops)
     registry: string[] = {}
     -- AllProbe's: called when the item has recorded
@@ -426,9 +430,7 @@ export class Watch
     -- A secure post-hook: a global function (`method` nil) or a table's
     -- method; false when it can't be installed (no such function).
     function hook(target: unknown, method: string?, fn: (...unknown) -> ()): boolean
-        local ok = pcall(hooks.secureHook, self.owner, self.owner.name, function(): boolean
-            return self.active
-        end, target, method, self:guard(fn))
+        local ok = pcall(hooks.secureHook, self.owner, self.owner.name, self.gate, target, method, self:guard(fn))
         return ok
     end
 
@@ -437,18 +439,14 @@ export class Watch
         if frame == nil then
             return false
         end
-        local ok = pcall(hooks.hookScript, self.owner, self.owner.name, function(): boolean
-            return self.active
-        end, frame :: any, script, self:guard(fn))
+        local ok = pcall(hooks.hookScript, self.owner, self.owner.name, self.gate, frame :: any, script, self:guard(fn))
         return ok
     end
 
     -- Once, `sec` seconds from now, while still armed.
     function after(sec: number, fn: () -> ())
         local body = self:guard(fn)
-        timers.after(self.owner, self.owner.name, function(): boolean
-            return self.active
-        end, sec, function()
+        timers.after(self.owner, self.owner.name, self.gate, sec, function()
             body()
         end)
     end
@@ -546,6 +544,7 @@ export class Watch
             return
         end
         self.active = true
+        self.gate.on = true
         local ok, err = pcall(arm, self)
         if not ok then
             self:fail(err)
@@ -556,6 +555,7 @@ export class Watch
     -- the probe's own frames put away.
     function stop()
         self.active = false
+        self.gate.on = false
         events.offAll(self.owner)
         if #self.registry > 0 then
             local reg = resolve("EventRegistry")

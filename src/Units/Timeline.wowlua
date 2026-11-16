@@ -362,6 +362,8 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     pullID: number? = nil
     pullTicker: TickerHandle? = nil
     refreshToken: table? = nil
+    -- a refresh is due on the next frame (Later)
+    refreshDue: boolean = false
     timeline: EncounterTimeline? = nil
     trackerOff: boolean? = nil
     voiceToken: table? = nil
@@ -404,7 +406,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             badge = badge,
             endsAt = GetTime() + seconds,
         }
-        self:Refresh()
+        self:Later()
     end
 
     function AddonTimerStop(source: string, id: unknown)
@@ -416,7 +418,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         else
             self.addonTimers[tostring(id)] = nil
         end
-        self:Refresh()
+        self:Later()
     end
 
     function AddonTimerPause(source: string, id: unknown, paused: boolean)
@@ -430,7 +432,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         elseif not paused and pausedLeft then
             t.endsAt, t.paused = GetTime() + pausedLeft, nil
         end
-        self:Refresh()
+        self:Later()
     end
 
     --------------------------------------------------------------------------------
@@ -565,7 +567,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
                 local t = self:IsEnabled() and self:Get("source") == "dbm" and self.addonTimers[tostring(id)] or nil
                 if t and isNumber(elapsed) and isNumber(total) then
                     t.endsAt, t.paused = GetTime() + math.max(0, total - elapsed), nil
-                    self:Refresh()
+                    self:Later()
                 end
             end)
         end
@@ -661,8 +663,27 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         return list
     end
 
+    -- What changes the timeline comes in bursts (a cancel or an expiry is
+    -- two or three of the game's events in one frame, a boss mod starts its
+    -- timers one by one): each marks a refresh due, and one runs on the next
+    -- frame. (What the player does, /suu pull, the test, a setting, refreshes
+    -- at once; it takes a due one along.) The timeline shows a frame after
+    -- the game's first event: not to be seen.
+    function Later()
+        if self.refreshDue or not self:IsEnabled() then
+            return
+        end
+        self.refreshDue = true
+        self:After(0, function()
+            if self.refreshDue then
+                self:Refresh()
+            end
+        end)
+    end
+
     function Refresh()
         local timeline = self.timeline
+        self.refreshDue = false
         -- (off: hidden by OnDisable, and nothing shows it again, CD-3)
         if not timeline or not self:IsEnabled() then
             return
@@ -690,7 +711,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             self.refreshToken = token
             self:After(math.max(0.05, soonest - GetTime() + 0.05), function()
                 if self.refreshToken == token then
-                    self:Refresh()
+                    self:Later()
                 end
             end)
         end
@@ -1029,7 +1050,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             "ENCOUNTER_TIMELINE_STATE_UPDATED",
         }) do
             self:OnGameEvent(e, function()
-                self:Refresh()
+                self:Later()
             end)
         end
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
@@ -1076,6 +1097,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         -- (CD-3); the anchor goes with the module (published with it as owner)
         self.addonTimers = {}
         self.refreshToken = nil
+        self.refreshDue = false
         self.awaiting = nil
         local timeline = self.timeline
         if timeline then

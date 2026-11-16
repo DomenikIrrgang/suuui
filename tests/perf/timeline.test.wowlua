@@ -1,0 +1,89 @@
+-- Perf scenario: a boss fight's encounter timeline. Twelve abilities of mixed
+-- lengths (6 s to 70 s: some past the 30-second window, named right of the
+-- line) arrive on the game's timeline one every ten frames, one of them
+-- paused; they ride toward now, the short ones run out, one is cancelled,
+-- and later the last ones of the window run out too. What the timeline
+-- costs per frame while it moves, and per ability that comes or goes.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+local ET = C_EncounterTimeline
+
+type Ability = { spell: number, icon: number, seconds: number, name: string, paused?: boolean }
+const ABILITIES: Ability[] = {
+    { spell = 871, icon = 132362, seconds = 6, name = "Shield Wall" },
+    { spell = 122, icon = 135848, seconds = 9, name = "Frost Nova" },
+    { spell = 5740, icon = 136186, seconds = 12, name = "Rain of Fire" },
+    { spell = 6789, icon = 136145, seconds = 15, name = "Death Coil" },
+    { spell = 1680, icon = 132369, seconds = 18, name = "Whirlwind" },
+    { spell = 2484, icon = 136102, seconds = 22, name = "Earthbind" },
+    { spell = 8122, icon = 136184, seconds = 26, name = "Psychic Scream" },
+    { spell = 5782, icon = 136183, seconds = 30, name = "Fear" },
+    { spell = 1953, icon = 135736, seconds = 36, name = "Blink", paused = true },
+    { spell = 11426, icon = 135988, seconds = 42, name = "Ice Barrier" },
+    { spell = 20484, icon = 136080, seconds = 50, name = "Rebirth" },
+    { spell = 16190, icon = 135861, seconds = 70, name = "Mana Tide" },
+}
+
+local ids: number[] = {}
+
+@if(features.perf)
+@test("setup: login, warm-up, the fight begins")
+local function setup()
+    perf.settle(perf.AFTER_LOGIN)
+    mock.player:enterCombat()
+end
+
+@if(features.perf)
+@test("abilities arrive")
+local function arrive()
+    perf.run(120, function(n: number)
+        local a = n % 10 == 0 and ABILITIES[n // 10] or nil
+        if a then
+            local id = ET.AddScriptEvent({
+                spellID = a.spell,
+                iconFileID = a.icon,
+                duration = a.seconds,
+                overrideName = a.name,
+                paused = a.paused,
+            })
+            ids[#ids + 1] = id
+        end
+    end)
+end
+
+@if(features.perf)
+@test("the fight: riding toward now, one cancelled, the short ones run out")
+local function fight()
+    perf.run(240, function(n: number)
+        if n == 120 then
+            -- Earthbind cancelled
+            ET.CancelScriptEvent(assert(ids[6]))
+        end
+    end)
+end
+
+@if(features.perf)
+@test("setup: ten seconds later")
+local function later()
+    -- (in long frames: the profile keeps the newest 600 frames)
+    mock.advanceFrames(20, 500)
+end
+
+@if(features.perf)
+@test("the last ones of the window")
+local function last()
+    perf.run(180)
+    mock.player:leaveCombat()
+end
+
+@if(features.perf)
+@test("setup: no errors")
+local function clean()
+    perf.expectClean()
+end

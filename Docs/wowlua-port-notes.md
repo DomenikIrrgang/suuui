@@ -128,6 +128,36 @@ tests failed on it (0 x 0) before the fix.
 Repro: a frame with `SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -28, 28)`
 and no size: `GetLeft()` is a number in the VM, nil in the game.
 
+<a id="v4"></a>
+
+### V4. The VM keeps every C_Timer it made: memory grows with each timer
+
+In `wowlua test` (0.13.15), each `C_Timer.NewTimer` keeps about 176 bytes
+after a full collection, fired or cancelled, and each `C_Timer.After` about
+88 (10,000 of each with a function that does nothing, in a client logged in
+with SuuUI: +1,718 KB and +860 KB; `wowlua:timer`'s `after` and `every`, and
+so a module's `M:After`/`M:Every`, are `NewTimer`/`NewTicker`). Nothing of
+SuuUI's holds them: a walk over every table reachable from `_G` and SuuUI's
+modules found none that grew. A scenario that makes timers as it plays
+shows that as memory per thing seen: in `tests/perf/churn` about a third of
+the growth per player (2026-11-16: 0.27 timers per player, the nameplates'
+look again at a friendly plate 0.2 s after it came). Whether the game frees
+them is not known; nothing in the game's own UI suggests it doesn't.
+
+The rest of `churn`'s growth (about 168 bytes per player seen in all,
+before and after the 2026-11-15 refactor: 108 bytes at 0.17.0) is also only
+there with the Nameplates module on (each other module off in turn: no
+change; Nameplates off: none), and was not found in any table reachable
+from `_G` or SuuUI's modules, nor in frames (`EnumerateFrames`), hooks
+(`hooksecurefunc` isn't called while players come and go) or unit event
+registrations. Turning off the plates' attach (`OnPlateAdded`), the
+hiding of the game's plates, its aura frames' stash, the quest marks, the
+casts, auras and threat did not stop it. Not found yet.
+
+Repro: `C_Timer.NewTimer(0.05, function() end)` 10,000 times, frames between,
+then `collectgarbage("collect")`: `collectgarbage("count")` is about 1.7 MB
+higher.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not

@@ -13,6 +13,8 @@ them.
 | `pull` | Twelve mobs with nameplates, threat, target switches, debuffs, deaths; again; then thirty at once |
 | `party` | A dungeon boss with four others: heals, incoming heals, shields, dispels, boss casts |
 | `raid` | Forty players: aura churn, damage and heals, a wipe, the mass resurrect |
+| `roster` | A raid of forty whose roster keeps changing: thirty join in bursts, then people leave and come back, go offline, change raid group and role (three to five roster updates in one frame), out of combat and in a fight with damage and heals |
+| `timeline` | A boss fight's encounter timeline: twelve abilities (6 s to 70 s, one paused) arrive one every ten frames, ride toward now, one is cancelled, the short ones run out; ten seconds later the last ones of the window run out |
 | `pet` | A hunter's pet fighting: the pet frame and bar, happiness, its experience |
 | `travel` | Running through zones with ten quests in the log, mounting |
 | `loot` | The bags open, a burst of kills and loot (bag updates), the bags closed |
@@ -54,11 +56,64 @@ tests/perf/…` (two files at a time; `PERF_JOBS=1` for one), then writes
   full collection) and the size of the data tables.
 
 Instruction and byte counts are exact: the same code gives the same numbers
-on every machine and every run. Host times (`suu_ms_*` in the JSON) depend on
+on every machine and every run (under the same settings, below). Host times (`suu_ms_*` in the JSON) depend on
 the machine and are never compared. The emulator is not the game: the
 numbers say where SuuUI's work and garbage go and whether a change made them
 smaller, not how many milliseconds a frame takes in WoW. For that, record in
 the game with `wowlua dev`'s dev window and `wowlua prof report`.
+
+### What the numbers measure: a player's build
+
+`run` measures SuuUI as players get it: **no runtime checks and no dev
+monitor**, as in release builds. It prints which settings it used:
+
+```console
+perf: measuring under the `test` profile set to runtime-checks "none", monitor false for this run (a player's build; wowlua.json is put back afterwards)
+```
+
+The unit tests keep both: `wowlua test` builds from the `test` profile of
+`wowlua.json`, which has `"runtime-checks": "exports"` (each exported
+function and public method checks its arguments on entry, about five
+instructions a parameter) and `"monitor": true` (the dev build's script
+monitor: every `SetScript`, `HookScript` and timer of SuuUI's runs inside a
+timing wrapper). Both cost instructions a player never runs, and the
+wrapper does more: it is SuuUI's code (its runtime), so whatever runs under
+a wrapped script counts as SuuUI's, the scenario's own driving (its
+`OnUpdate` driver, `util.wowlua`) and the game's handlers for the events it
+fires included. On the same sources (2026-11-16) the raid boss fight reads
+9,640 instructions a frame under the `test` profile and 2,064 as `run`
+measures it; `idle` 977 with both, 455 with the checks only, 931 with the
+monitor only, 409 with neither.
+
+wowlua 0.13.15 can't build `wowlua test` from another profile when the
+package is a workspace root (wowlua#266), so `run` rewrites the `test`
+profile in `wowlua.json` for the run's duration and puts the file back byte
+for byte afterwards. A workaround until wowlua can choose the profile per
+run:
+
+- it refuses to start while `wowlua.json` has uncommitted changes (commit
+  or undo them first), or while a backup from an earlier run is there (a
+  second run at the same time included);
+- the file as it was is kept beside it in `wowlua.json.perf-backup` (ignored
+  by git) and renamed back at the end: after the run, a failed run, Ctrl-C,
+  `SIGTERM` or `SIGHUP`;
+- only a killed run (`SIGKILL`, a crash of the machine) leaves the backup:
+  check `wowlua.json`, then
+
+  ```console
+  $ python3 -I tools/perf.py restore     # wowlua.json back from the backup
+  ```
+
+- while it runs, `wowlua.json` shows as changed: don't commit, and don't run
+  `wowlua test` in the same checkout (it would build with the perf settings).
+
+The results (`dist/perf/results.json`) and the baseline name the settings
+they were measured with (`"settings"`), and `compare` refuses two results
+measured under different settings, or one without any (from before the
+tool recorded them): their counts don't compare. The release profile's
+optimizations (inlining, cached globals, dead code) are not applied here.
+Outside a git checkout (an exported tree) there is nothing to check
+`wowlua.json` against; the backup still puts it back.
 
 ## Compare
 
@@ -71,9 +126,16 @@ $ python3 -I tools/perf.py compare                     # the last run with the b
 $ python3 -I tools/perf.py compare old.json new.json   # any two results
 ```
 
+With `--fail` (`run --fail`, `compare --fail`) it ends with the metrics that
+are `WORSE` and exits 1 when there is one: a check a merge can wait on.
+Every scenario also ends with `setup: no errors` (`perf.expectClean()`): an
+error SuuUI caught, the game's, or a protected call the emulated client
+refused fails it, so a handler that broke can't pass as a speed-up.
+
 A run of some scenarios compares only those. The baseline names the wowlua
 version it was made with: another version's emulator or Blizzard UI may
-change the numbers by itself.
+change the numbers by itself. It also names the build settings: a result
+measured otherwise is not compared (exit status 2).
 
 ## Where the time goes
 
@@ -113,7 +175,8 @@ isn't measured; every other one is a phase. Drive a phase with
 inside each frame, so what it fires lands in that frame. Keep a file's
 measured frames under 600 (the profiler keeps the newest 600), use
 `perf.random(seed)` for choices, and `perf.record(name, { kb = … })` for a
-memory figure. Start with `perf.settle(perf.AFTER_LOGIN)`: five seconds, so
+memory figure. End with a test `setup: no errors` that calls `perf.expectClean()`.
+Start with `perf.settle(perf.AFTER_LOGIN)`: five seconds, so
 what SuuUI builds ahead after a login (the nameplate pool, the bags' buttons,
 the command catalog) is done before the first phase, as it is by the time you
 move in game.
@@ -125,4 +188,5 @@ cast, mount and catch the mouse; `channelLine` says a line in General or
 LookingForGroup; `addonKB` is SuuUI's own memory where wowlua measures it per
 addon (after 0.13.9; the whole client's before). A memory record that grows
 from one point of a scenario to the next (`churn`) is memory SuuUI keeps per
-player it has seen.
+player it has seen, or the emulator keeps for it: in wowlua 0.13.15 every
+timer made stays (`Docs/wowlua-port-notes.md`, V4).

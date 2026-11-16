@@ -1147,6 +1147,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
     -- the last group with someone in it the layout went by (groups growing
     -- up, pets below): another, laid out again
     laidGroup: number? = nil
+    -- the roster pass waiting for the next frame
+    rosterTimer: TimerHandle? = nil
 
     constructor()
         super({
@@ -1199,6 +1201,8 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             badgeTop = self:Get("arrangement") == "rows",
             -- and the name runs under the icons
             nameUnderIcons = self:Get("arrangement") == "rows",
+            -- (redrawn by the roster pass, once a burst)
+            rosterRefresh = false,
         })
         SuuUI.TagInstance(f, { module = M.id, role = "raid" })
         if not InCombatLockdown() then
@@ -1209,29 +1213,41 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         f:SetIndicators(UI.IndicatorsFor(UI.GroupIndicators(), UI.GroupTier()))
         f:SetWardSpells(UI.GroupDefensives().warded)
         self.buttons[#self.buttons + 1] = f
-        -- the header sets the unit; the frame and its auras follow
+        -- the header sets the unit; the frame and its auras follow: its
+        -- events at once, the rest on the roster pass (a roster change
+        -- reassigns many buttons, some several times, in one burst)
         f:HookScript("OnAttributeChanged", function(btn, name, value: unknown)
             if name ~= "unit" then
                 return
             end
             local unit = secret.asString(value)
-            btn:SetUnit(unit, true)
-            btn:UpdateIsMe()
-            btn:ApplyWho()
-            local auras = btn.auras
-            if auras then
-                auras:SetUnit(unit or "none")
-            end
-            -- (this button's alone: every button's for each of a roster's
-            -- reassignments was a pass over the raid per button)
-            self:UpdateOfflineOf(btn)
             -- (a module turned off by an error leaves its buttons off)
-            if unit and self:IsEnabled() then
+            local live = unit ~= nil and self:IsEnabled()
+            btn:SetUnit(unit, true, live)
+            if live then
                 if not btn.active then
-                    btn:Activate()
+                    btn:Activate(true)
                 end
-                btn:Refresh()
-                self:UpdateState(btn)
+                self:QueueRoster()
+                return
+            end
+            -- no one, or the module off: as it is, at once (no one: its
+            -- auras let go; whose groups they take, the next unit's pass)
+            btn:UpdateIsMe()
+            if unit then
+                btn:ApplyWho()
+            end
+            local auras = btn.auras
+            local target = unit or "none"
+            if auras and auras.unit ~= target then
+                auras:SetUnit(target)
+            end
+            self:UpdateOfflineOf(btn)
+        end)
+        -- shown again after a pass that skipped it while hidden: drawn anew
+        f:HookScript("OnShow", function(btn)
+            if btn.unit and btn.active and (btn.occupant == nil or btn.unitMoved) then
+                self:QueueRoster()
             end
         end)
         local unit = secret.asString(f:GetAttribute("unit"))
@@ -1267,6 +1283,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
             lowHealth = false,
             lowTint = self:Get("lowHealth"),
             incoming = self:Get("incoming"),
+            rosterRefresh = false,
         })
         SuuUI.TagInstance(f, { module = M.id, role = "raidPet" })
         if not InCombatLockdown() then
@@ -1279,12 +1296,18 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 return
             end
             local unit = secret.asString(value)
-            btn:SetUnit(unit, true)
-            if unit and self:IsEnabled() then
+            local live = unit ~= nil and self:IsEnabled()
+            btn:SetUnit(unit, true, live)
+            if live then
                 if not btn.active then
-                    btn:Activate()
+                    btn:Activate(true)
                 end
-                btn:Refresh()
+                self:QueueRoster()
+            end
+        end)
+        f:HookScript("OnShow", function(btn)
+            if btn.unit and btn.active and (btn.occupant == nil or btn.unitMoved) then
+                self:QueueRoster()
             end
         end)
         local unit = secret.asString(f:GetAttribute("unit"))
@@ -1513,6 +1536,85 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 end
             end
             f:SetWardSpells(d.warded)
+        end
+    end
+
+    -- One roster pass on the next frame for a burst of roster changes,
+    -- role changes and the headers' reassignments (the game sends several a
+    -- second while a raid forms or people come and go).
+    function QueueRoster()
+        if self.rosterTimer then
+            return
+        end
+        self.rosterTimer = self:After(0, function()
+            self.rosterTimer = nil
+            self:RosterPass()
+        end)
+    end
+
+    -- The roster pass: each shown button whose token now shows someone else
+    -- (or a token the header gave it) is drawn anew and its auras re-scanned;
+    -- the others only follow a role or raid group change (UnitFrame's
+    -- RosterUpdate). A hidden one is drawn when it shows. In combat too:
+    -- nothing here touches the secure buttons (the layout waits).
+    function RosterPass()
+        for _, f in ipairs(self.buttons) do
+            if f.unit and f.active then
+                if f:IsVisible() then
+                    self:RosterButton(f)
+                else
+                    f.occupant = nil
+                end
+            end
+        end
+        for _, f in ipairs(self.petButtons) do
+            if f.unit and f.active then
+                if f:IsVisible() then
+                    f:RosterUpdate()
+                else
+                    f.occupant = nil
+                end
+            end
+        end
+        self:UpdateStates()
+        self:UpdateSelected()
+        self:UpdateRange()
+        -- indicators limited to some group sizes
+        if UI.GroupTier() ~= self.indicatorTier then
+            self:QueueIndicators()
+        end
+        -- crossing 20 players changes the bar height and the columns
+        -- side by side (out of combat)
+        if barHeight() ~= self.tierHeight or isLarge() ~= self.tierLarge or
+            (self.laidGroup ~= nil and lastGroup() ~= self.laidGroup) then
+            self:RunOutOfCombat("layout", function()
+                self:Layout()
+                self:ApplyOptions()
+            end)
+        end
+    end
+
+    -- A button on the roster pass: the frame, then whose groups and filters
+    -- its auras take, and its auras on the token (re-pointed, or re-scanned
+    -- for someone else on the same token).
+    function RosterButton(f: RaidButton)
+        local unit = assert(f.unit)
+        local moved = f.unitMoved
+        local someoneElse = f:RosterUpdate()
+        if someoneElse or moved then
+            f:UpdateIsMe()
+            f:ApplyWho()
+        end
+        local auras = f.auras
+        if auras then
+            if auras.unit ~= unit then
+                auras:SetUnit(unit)
+            elseif someoneElse then
+                auras:Refresh()
+            end
+        end
+        if someoneElse or moved then
+            self:UpdateOfflineOf(f)
         end
     end
 
@@ -1829,13 +1931,17 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end
-        self:RegisterMover(assert(self.petPlaceFrame), {
-            key = "petPosition",
-            label = "Raid pets",
-            managedShow = true,
-        })
+        -- (a pass after it was off: its timers went with it)
+        self.rosterTimer = nil
+        self:QueueRoster()
+        self:RegisterMover(assert(self.petPlaceFrame), { key = "petPosition", label = "Raid pets", managedShow = true })
         -- its state driver shows it, not edit mode
-        self:RegisterMover(holder, { key = "position", label = "Raid frames", managedShow = true, apartFrom = "party.position" })
+        self:RegisterMover(holder, {
+            key = "position",
+            label = "Raid frames",
+            managedShow = true,
+            apartFrom = "party.position",
+        })
         SuuUI.PublishAnchor("raid", holder, self)
         self:RegisterSettings(SECTION)
         self:RunOutOfCombat("build", function()
@@ -1949,59 +2055,15 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("UNIT_CONNECTION", function()
             self:UpdateOffline()
         end)
+        -- a token can now be someone else, or someone's role or raid group
+        -- changed: one pass on the next frame for the burst
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
-            -- a token can now be someone else: redraw, re-scan auras (the
-            -- indicators' too)
-            for _, f in ipairs(self.buttons) do
-                if f.unit then
-                    f:UpdateIsMe()
-                    f:ApplyWho()
-                    local auras = f.auras
-                    if auras then
-                        auras:Refresh()
-                    end
-                    for _, list in pairs(f.dispelSets) do
-                        for _, c in ipairs(list) do
-                            c:Refresh()
-                        end
-                    end
-                    for _, c in ipairs(f.indicatorContainers) do
-                        c:Refresh()
-                    end
-                end
-            end
-            self:UpdateStates()
-            self:UpdateSelected()
-            self:UpdateRange()
-            -- someone changed raid group or role: "my group" and role-limited
-            -- indicators follow
-            for _, f in ipairs(self.buttons) do
-                f:UpdateIndicatorPresence()
-            end
-            -- indicators limited to some group sizes
-            if UI.GroupTier() ~= self.indicatorTier then
-                self:QueueIndicators()
-            end
-            -- crossing 20 players changes the bar height and the columns
-            -- side by side (out of combat)
-            if
-                barHeight() ~= self.tierHeight
-                or isLarge() ~= self.tierLarge
-                or (self.laidGroup ~= nil and lastGroup() ~= self.laidGroup)
-            then
-                self:RunOutOfCombat("layout", function()
-                    self:Layout()
-                    self:ApplyOptions()
-                end)
-            end
+            self:QueueRoster()
         end)
-        -- a role chosen or changed: indicators limited to roles follow, on
-        -- the buttons whose person's role changed (a roster change reads
-        -- every button's above)
+        -- a role chosen or changed: the markers, power lines and indicators
+        -- limited to roles follow, on the buttons whose person's role changed
         local function rolesChanged()
-            for _, f in ipairs(self.buttons) do
-                f:UpdateIndicatorRole()
-            end
+            self:QueueRoster()
         end
         self:OnGameEvent("PLAYER_ROLES_ASSIGNED", rolesChanged)
         self:OnGameEvent("ROLE_CHANGED_INFORM", rolesChanged)

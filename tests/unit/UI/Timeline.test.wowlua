@@ -293,11 +293,346 @@ local function theme()
     t:SetEvents({ inSec(1, "Axe", 4) })
     local before = t.listTop
     expect(before).toBe(S["space-4"] * 2 + T.type.header.lineHeight + 1 + S["space-4"])
+    local layouts = t.layouts
     themeChanged()
     expect(t.listTop).toBe(before)
     expect(pointOf(t.rows[1]).y).toBe(-t.listTop)
-    -- a list that is a track now: placed, not laid out
+    -- laid out once for it
+    expect(t.layouts).toBe(layouts + 1)
+    -- a list that is a track now: its rule placed, the track laid out
     t:SetVariant("track")
+    layouts = t.layouts
     themeChanged()
+    expect(t.layouts).toBe(layouts + 1)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- What it shows over time: the same as when it laid everything out every
+-- frame (the expected lines were recorded from that code, 2026-11-16, with
+-- the same events and the same clock moves: advanceTime to each sample,
+-- then one frame)
+--------------------------------------------------------------------------------
+
+-- Eight events: some ending, two paused (one in the window, one after it),
+-- some arriving in the window as time goes, some passing a paused one. (The
+-- odd times keep every sample at least 9 ms from a change of pixel or of
+-- text: the clock counts whole milliseconds.)
+local function fixedEvents(): Event[]
+    local now = GetTime()
+    return {
+        { id = "a", label = "Axe", endsAt = now + 2.966, badge = { tone = "danger", text = "Tank" } },
+        { id = "b", label = "Breath", endsAt = now + 12.215 },
+        { id = "c", label = "Cleave", paused = 20 },
+        { id = "d", label = "Doom", endsAt = now + 27.633 },
+        { id = "e", label = "Eruption", endsAt = now + 30.965 },
+        { id = "f", label = "Fire", endsAt = now + 44.98 },
+        { id = "g", label = "Gale", paused = 50 },
+        { id = "h", label = "Hex", endsAt = now + 74.98 },
+    }
+end
+
+local SAMPLES = { 0, 0.5, 1.05, 2.97, 3.5, 8, 15, 19.9, 25, 33 }
+
+-- Each sample as a line: the shown parts in order ("i:" their slot), or,
+-- where events that ended tie at 0 (the old order among them was the sort's
+-- whim), sorted and without their slot.
+local function sampled(t: Timeline, read: (t: Timeline) -> string[]): string[]
+    local out: string[] = {}
+    local at = 0
+    for _, s in ipairs(SAMPLES) do
+        mock.advanceTime(s - at)
+        at = s
+        mock.nextFrame()
+        out[#out + 1] = ("@%s %s"):format(tostring(s), table.concat(read(t), " "))
+    end
+    return out
+end
+
+local function tieFree(parts: string[], i: number, part: string, tied: boolean)
+    if tied then
+        parts[#parts + 1] = part
+        table.sort(parts)
+    else
+        parts[#parts + 1] = ("%d:%s"):format(i, part)
+    end
+end
+
+local function readTrack(t: Timeline): string[]
+    local parts: string[] = {}
+    local tied = 0
+    for _, f in ipairs(t.evs) do
+        if f:IsShown() and f.time:GetText() == "0.0s" then
+            tied += 1
+        end
+    end
+    for i, f in ipairs(t.evs) do
+        if f:IsShown() then
+            local part = ("%s|%s|%d|%s|%s"):format(
+                f.name:GetText() or "",
+                f.time:GetText() or "",
+                pointOf(f).x,
+                tokenOf(f.time) or "?",
+                tokenOf(f.name) or "?"
+            )
+            tieFree(parts, i, part, tied > 2 and i <= tied)
+        end
+    end
+    local later = t.later :: Text
+    parts[#parts + 1] = later:IsShown() and ("L:" .. (later:GetText() or "")) or "L-"
+    return parts
+end
+
+local function readList(t: Timeline): string[]
+    local parts: string[] = {}
+    local tied = 0
+    for _, r in ipairs(t.rows) do
+        if r:IsShown() and r.time:GetText() == "0.0s" then
+            tied += 1
+        end
+    end
+    for i, r in ipairs(t.rows) do
+        if r:IsShown() then
+            local part = ("%s|%s|%.0f|%s|%s"):format(
+                r.name:GetText() or "",
+                r.time:GetText() or "",
+                r.drain:GetWidth(),
+                tokenOf(r.time) or "?",
+                tokenOf(r.drain) or "?"
+            )
+            local isTied = tied > 2 and i <= tied
+            tieFree(parts, i, isTied and part or ("%s|%d"):format(part, pointOf(r).y), isTied)
+        end
+    end
+    parts[#parts + 1] = ("H%.1f"):format(t:GetHeight())
+    return parts
+end
+
+@test("the track over time: the same places, order, texts and colours as before")
+local function trackOverTime()
+    local t = make()
+    t:SetEvents(fixedEvents())
+    expect(sampled(t, readTrack)).toEqual({
+        "@0 1:Axe|2.9s|63|amber|ink 2:Breath|12s|260|ink|ink-muted 3:Cleave|20s|427|ink|ink-muted 4:Doom|27s|589|ink|ink-muted L:then Eruption in 30s · +3 more",
+        "@0.5 1:Axe|2.4s|52|amber|ink 2:Breath|11s|249|ink|ink-muted 3:Cleave|20s|427|ink|ink-muted 4:Doom|27s|578|ink|ink-muted L:then Eruption in 30s · +3 more",
+        "@1.05 1:Axe|1.9s|40|amber|ink 2:Breath|11s|237|ink|ink-muted 3:Cleave|20s|427|ink|ink-muted 4:Doom|26s|566|ink|ink-muted 5:Eruption|29s|637|ink|ink-muted L:then Fire in 43s · +2 more",
+        "@2.97 1:Axe|0.0s|0|amber|ink 2:Breath|9.2s|196|ink|ink-muted 3:Cleave|20s|427|ink|ink-muted 4:Doom|24s|525|ink|ink-muted 5:Eruption|27s|596|ink|ink-muted L:then Fire in 41s · +2 more",
+        "@3.5 1:Axe|0.0s|0|amber|ink 2:Breath|8.6s|184|ink|ink-muted 3:Cleave|20s|427|ink|ink-muted 4:Doom|24s|513|ink|ink-muted 5:Eruption|27s|584|ink|ink-muted L:then Fire in 41s · +2 more",
+        "@8 1:Axe|0.0s|0|amber|ink 2:Breath|4.1s|88|amber|ink 3:Doom|19s|417|ink|ink-muted 4:Cleave|20s|427|ink|ink-muted 5:Eruption|22s|488|ink|ink-muted L:then Fire in 36s · +2 more",
+        "@15 1:Axe|0.0s|0|amber|ink 2:Breath|0.0s|0|amber|ink 3:Doom|12s|267|ink|ink-muted 4:Eruption|15s|338|ink|ink-muted 5:Cleave|20s|427|ink|ink-muted 6:Fire|29s|637|ink|ink-muted L:then Gale in 50s · +1 more",
+        "@19.9 1:Axe|0.0s|0|amber|ink 2:Breath|0.0s|0|amber|ink 3:Doom|7.6s|162|ink|ink-muted 4:Eruption|10s|233|ink|ink-muted 5:Cleave|20s|427|ink|ink-muted 6:Fire|24s|532|ink|ink-muted L:then Gale in 50s · +1 more",
+        "@25 1:Axe|0.0s|0|amber|ink 2:Breath|0.0s|0|amber|ink 3:Doom|2.5s|53|amber|ink 4:Eruption|5.8s|124|ink|ink-muted 5:Fire|19s|423|ink|ink-muted 6:Cleave|20s|427|ink|ink-muted L:then Hex in 49s · +1 more",
+        "@33 Axe|0.0s|0|amber|ink Breath|0.0s|0|amber|ink Doom|0.0s|0|amber|ink Eruption|0.0s|0|amber|ink 5:Fire|11s|252|ink|ink-muted 6:Cleave|20s|427|ink|ink-muted L:then Hex in 41s · +1 more",
+    })
+    expectNoErrors()
+end
+
+@test("the list over time: the same rows, texts, drains and colours as before")
+local function listOverTime()
+    local t = make({ variant = "list" })
+    t:SetEvents(fixedEvents())
+    expect(sampled(t, readList)).toEqual({
+        "@0 1:Axe|2.9s|25|amber|amber|-41 2:Breath|12s|104|ink|ink-muted|-77 3:Cleave|20s|171|ink|ink-muted|-113 4:Doom|27s|236|ink|ink-muted|-149 5:Eruption|30s|256|ink|ink-muted|-185 6:Fire|44s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:14|256|ink|ink-muted|-293 H335.0",
+        "@0.5 1:Axe|2.4s|21|amber|amber|-41 2:Breath|11s|100|ink|ink-muted|-77 3:Cleave|20s|171|ink|ink-muted|-113 4:Doom|27s|231|ink|ink-muted|-149 5:Eruption|30s|256|ink|ink-muted|-185 6:Fire|44s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:14|256|ink|ink-muted|-293 H335.0",
+        "@1.05 1:Axe|1.9s|16|amber|amber|-41 2:Breath|11s|95|ink|ink-muted|-77 3:Cleave|20s|171|ink|ink-muted|-113 4:Doom|26s|226|ink|ink-muted|-149 5:Eruption|29s|255|ink|ink-muted|-185 6:Fire|43s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:13|256|ink|ink-muted|-293 H335.0",
+        "@2.97 1:Axe|0.0s|1|amber|amber|-41 2:Breath|9.2s|78|ink|ink-muted|-77 3:Cleave|20s|171|ink|ink-muted|-113 4:Doom|24s|210|ink|ink-muted|-149 5:Eruption|27s|238|ink|ink-muted|-185 6:Fire|41s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:11|256|ink|ink-muted|-293 H335.0",
+        "@3.5 1:Axe|0.0s|1|amber|amber|-41 2:Breath|8.6s|74|ink|ink-muted|-77 3:Cleave|20s|171|ink|ink-muted|-113 4:Doom|24s|205|ink|ink-muted|-149 5:Eruption|27s|234|ink|ink-muted|-185 6:Fire|41s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:11|256|ink|ink-muted|-293 H335.0",
+        "@8 1:Axe|0.0s|1|amber|amber|-41 2:Breath|4.1s|35|amber|amber|-77 3:Doom|19s|167|ink|ink-muted|-113 4:Cleave|20s|171|ink|ink-muted|-149 5:Eruption|22s|195|ink|ink-muted|-185 6:Fire|36s|256|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|1:06|256|ink|ink-muted|-293 H335.0",
+        "@15 1:Axe|0.0s|1|amber|amber|-41 2:Breath|0.0s|1|amber|amber|-77 3:Doom|12s|107|ink|ink-muted|-113 4:Eruption|15s|135|ink|ink-muted|-149 5:Cleave|20s|171|ink|ink-muted|-185 6:Fire|29s|255|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|59s|256|ink|ink-muted|-293 H335.0",
+        "@19.9 1:Axe|0.0s|1|amber|amber|-41 2:Breath|0.0s|1|amber|amber|-77 3:Doom|7.6s|65|ink|ink-muted|-113 4:Eruption|10s|93|ink|ink-muted|-149 5:Cleave|20s|171|ink|ink-muted|-185 6:Fire|24s|213|ink|ink-muted|-221 7:Gale|50s|256|ink|ink-muted|-257 8:Hex|54s|256|ink|ink-muted|-293 H335.0",
+        "@25 1:Axe|0.0s|1|amber|amber|-41 2:Breath|0.0s|1|amber|amber|-77 3:Doom|2.5s|21|amber|amber|-113 4:Eruption|5.8s|50|ink|ink-muted|-149 5:Fire|19s|169|ink|ink-muted|-185 6:Cleave|20s|171|ink|ink-muted|-221 7:Hex|49s|256|ink|ink-muted|-257 8:Gale|50s|256|ink|ink-muted|-293 H335.0",
+        "@33 Axe|0.0s|1|amber|amber Breath|0.0s|1|amber|amber Doom|0.0s|1|amber|amber Eruption|0.0s|1|amber|amber 5:Fire|11s|101|ink|ink-muted|-185 6:Cleave|20s|171|ink|ink-muted|-221 7:Hex|41s|256|ink|ink-muted|-257 8:Gale|50s|256|ink|ink-muted|-293 H335.0",
+    })
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Per event, per frame (X-2.1): laid out when the events change, and per
+-- frame only what moved
+--------------------------------------------------------------------------------
+
+-- How often each of a region's setters ran.
+local function counting(region: Region, names: string[]): { [string]: number }
+    local calls: { [string]: number } = {}
+    for _, name in ipairs(names) do
+        calls[name] = 0
+        hooksecurefunc(region, name, function()
+            calls[name] = (calls[name] or 0) + 1
+        end)
+    end
+    return calls
+end
+
+@test("laid out once per change of the events, never per frame")
+local function layoutPerChange()
+    local t = make()
+    local layouts = t.layouts
+    t:SetEvents({ inSec(1, "Axe", 20), inSec(2, "Bolt", 8), { id = 3, label = "Hold", paused = 12 } })
+    expect(t.layouts).toBe(layouts + 1)
+    -- 100 frames: moving, not laid out
+    mock.advanceFrames(100)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(t.evs[1].name).toHaveText("Bolt")
+    -- one added, one cancelled: once each
+    t:SetEvents({ inSec(1, "Axe", 18), inSec(2, "Bolt", 6), { id = 3, label = "Hold", paused = 12 }, inSec(4, "Doom", 9) })
+    expect(t.layouts).toBe(layouts + 2)
+    t:SetEvents({ inSec(1, "Axe", 18), { id = 3, label = "Hold", paused = 12 }, inSec(4, "Doom", 9) })
+    expect(t.layouts).toBe(layouts + 3)
+    -- the same variant again (the module sets it at each refresh): nothing
+    t:SetVariant("track")
+    expect(t.layouts).toBe(layouts + 3)
+    -- one ending: the frames go on without a layout, the one left by the
+    -- owner's next list is one more
+    mock.advanceTime(9.5)
+    mock.advanceFrames(2)
+    expect(t.layouts).toBe(layouts + 3)
+    expect(t.evs[1].time).toHaveText("0.0s")
+    t:SetEvents({ inSec(1, "Axe", 8.5), { id = 3, label = "Hold", paused = 12 } })
+    expect(t.layouts).toBe(layouts + 4)
+    expectNoErrors()
+end
+
+@test("a resize lays it out once, with the new width")
+local function resized()
+    local t = make()
+    -- (placed, as the module's mover does: a frame without a place has no
+    -- size to change)
+    t:SetPoint("TOP")
+    t:SetEvents({ { id = 1, label = "Hold", paused = 15 } })
+    mock.nextFrame()
+    local layouts = t.layouts
+    local track = t.track :: Frame
+    track:SetWidth(320)
+    mock.nextFrame()
+    expect(t.layouts).toBe(layouts + 1)
+    expect(pointOf(t.evs[1]).x).toBe(160)
+    -- the same width again: nothing
+    track:SetWidth(320)
+    mock.nextFrame()
+    expect(t.layouts).toBe(layouts + 1)
+    expectNoErrors()
+end
+
+@test("per frame: a frame moves when its pixel changes, its text when its value does, its colours when it turns amber")
+local function onlyWhatChanged()
+    local t = make()
+    -- (20.5 s: whole seconds, never amber; 6.05 s: tenths, amber after 1.05 s)
+    t:SetEvents({ inSec(1, "Axe", 20.5), inSec(2, "Bolt", 6.05) })
+    local bolt, axe = t.evs[1], t.evs[2]
+    local axeFrame = counting(axe, { "SetPoint", "ClearAllPoints", "Show" })
+    local axeTime = counting(axe.time, { "SetText", "SetTextColor" })
+    local axeRing = counting(axe.ring.top, { "SetVertexColor", "SetColorTexture" })
+    local boltTime = counting(bolt.time, { "SetText", "SetTextColor" })
+    local seen: string[] = {}
+    hooksecurefunc(bolt.time, "SetText", function(_: FontString, text: string)
+        seen[#seen + 1] = text
+    end)
+    mock.advanceFrames(100)
+    -- Axe: 20.5 s to 18.8 s along 640 px of 30 s: about 36 pixels, not 100
+    -- moves; its text twice (20s, 19s, 18s); no colour
+    expect(axeFrame.SetPoint).toBeLessThan(40)
+    expect(axeFrame.SetPoint).toBeGreaterThan(30)
+    expect(axeFrame.ClearAllPoints).toBe(axeFrame.SetPoint)
+    expect(axeFrame.Show).toBe(0)
+    expect(axeTime.SetText).toBe(2)
+    expect(axeTime.SetTextColor).toBe(0)
+    expect(axeRing).toEqual({ SetVertexColor = 0, SetColorTexture = 0 })
+    expect(axe.time).toHaveText("18s")
+    -- Bolt: a text per tenth (6.0s down to 4.4s), each a new one; amber once
+    expect(boltTime.SetText).toBe(#seen)
+    expect(#seen).toBeLessThan(20)
+    for i = 2, #seen do
+        expect(seen[i] ~= seen[i - 1]).toBe(true)
+    end
+    expect(boltTime.SetTextColor).toBe(1)
+    expect(tokenOf(bolt.time)).toBe("amber")
+    expectNoErrors()
+end
+
+@test("per frame: no garbage while the events stay the same")
+local function noGarbage()
+    local t = make()
+    t:SetEvents({ inSec(1, "Axe", 25.2), inSec(2, "Bolt", 16.4), { id = 3, label = "Hold", paused = 12 }, inSec(4, "Rain", 52) })
+    local list = make({ variant = "list" })
+    list:SetEvents({ inSec(1, "Axe", 25.2), inSec(2, "Bolt", 16.4), { id = 3, label = "Hold", paused = 12 } })
+    -- 100 frames' ticks of each, the clock moved between them (the whole
+    -- seconds change once or twice: a few short strings)
+    local kb = 0
+    for _ = 1, 100 do
+        mock.advanceTime(1 / 60)
+        local before = collectgarbage("count")
+        t:Tick()
+        list:Tick()
+        kb += collectgarbage("count") - before
+    end
+    expect(kb).toBeLessThan(1)
+    expect(t.later).toHaveText("then Rain in 50s")
+    expectNoErrors()
+end
+
+@test("nothing per frame while nothing moves: empty, all paused, every one ended, or hidden")
+local function idle()
+    local t = make()
+    t:SetEvents({})
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    -- paused ones are drawn, then nothing moves
+    t:SetEvents({ { id = 1, label = "Hold", paused = 12 }, { id = 2, label = "Wait", paused = 3 } })
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    expect(t.evs[1].name).toHaveText("Wait")
+    expect(t.evs[2].time).toHaveText("12s")
+    -- the last running one ends: the updates stop on that frame
+    t:SetEvents({ inSec(1, "Axe", 0.5), { id = 2, label = "Wait", paused = 3 } })
+    expect(t:GetScript("OnUpdate") ~= nil).toBe(true)
+    mock.advanceTime(0.6)
+    mock.nextFrame()
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    expect(t.evs[1].time).toHaveText("0.0s")
+    -- hidden: its OnUpdate doesn't run; shown again, it catches up
+    t:SetEvents({ inSec(1, "Axe", 20) })
+    local moves = counting(t.evs[1], { "SetPoint" })
+    t:Hide()
+    mock.advanceFrames(60)
+    expect(moves.SetPoint).toBe(0)
+    t:Show()
+    mock.nextFrame()
+    expect(moves.SetPoint).toBe(1)
+    expect(t.evs[1].time).toHaveText("18s")
+    expectNoErrors()
+end
+
+@test("one passing a paused one changes places on the frame it does")
+local function passing()
+    local t = make()
+    t:SetEvents({ { id = 1, label = "Hold", paused = 10 }, inSec(2, "Axe", 10.5) })
+    expect(t.evs[1].name).toHaveText("Hold")
+    mock.advanceTime(0.4)
+    mock.nextFrame()
+    expect(t.evs[1].name).toHaveText("Hold")
+    mock.advanceTime(0.2)
+    mock.nextFrame()
+    expect(t.evs[1].name).toHaveText("Axe")
+    expect(t.evs[2].name).toHaveText("Hold")
+    expect(t.evs[1].time).toHaveText("9.9s")
+    expectNoErrors()
+end
+
+@test("the list: a row's event, time and drain set per frame only when they change")
+local function listPerFrame()
+    local t = make({ variant = "list" })
+    t:SetEvents({ inSec(1, "Axe", 20.5), { id = 2, label = "Hold", paused = 12 } })
+    local layouts = t.layouts
+    local row = t.rows[2]
+    local name = counting(row.name, { "SetText" })
+    local drain = counting(row.drain, { "SetWidth" })
+    local frame = counting(row, { "SetPoint" })
+    mock.advanceFrames(100)
+    expect(t.layouts).toBe(layouts)
+    expect(name.SetText).toBe(0)
+    expect(frame.SetPoint).toBe(0)
+    -- 20.5 s to 18.8 s of 30 over 256 px: about 15 pixels
+    expect(drain.SetWidth).toBeLessThan(18)
+    expect(drain.SetWidth).toBeGreaterThan(12)
+    expect(t.rows[2].time).toHaveText("18s")
+    expect(t.rows[1].name).toHaveText("Hold")
     expectNoErrors()
 end

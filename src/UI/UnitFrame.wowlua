@@ -41,8 +41,17 @@
 --                           -- frames, asked 2026-11-08); f:FitRow() after
 --       api = nil,          -- a stand-in for the game's Unit* functions (previews);
 --                           -- such a frame isn't activated, call :Refresh()
+--       rosterRefresh = true, -- false: a group module's frame, which redraws
+--                           -- nothing itself on a roster or role change: its
+--                           -- module calls f:RosterUpdate() once per burst
 --   })
 --   f:SetUnit(unit)          -- another unit (out of combat: it's a secure button)
+--   f:SetUnit(unit, true, true) -- a header's new token: only the events follow
+--                            -- now; the owner's next f:RosterUpdate() draws it
+--   f:RosterUpdate()         -- after a roster change (the owner's pass): someone
+--                            -- else on the token is drawn anew and their auras
+--                            -- re-scanned; the same person only gets what a
+--                            -- roster change can change (role, raid group)
 --   f:SetDispelBadges(mode)  -- "all", "removable" or "off": debuff-type border
 --                            -- and badge, in combat too (out of combat to set)
 --   f:Resize(width, height)  -- out of combat
@@ -55,6 +64,13 @@
 --
 -- A disconnected player shows "Offline" where the health text goes, the bar
 -- empty and the name faint, as a dead unit does.
+--
+-- Events mark, one driver draws: a health event only notes what it changed
+-- (the values, the range, or the heals and shields on the way), and the
+-- driver's next frame draws each frame once (a heal raises three events).
+-- A hidden frame keeps what it missed and draws it when it shows. Roster,
+-- role, raid marker, world and theme changes are one listener each for all
+-- the active frames; the roster's is drawn once a frame too.
 --
 -- Secret values: health, max health, power, incoming heals and absorbs go
 -- straight to StatusBars, which take them as they are. The health % text is
@@ -69,9 +85,11 @@ import * as timer from "wowlua:timer"
 import tokens as T from "/Core/Tokens"
 import mixins from "/Core/Init"
 import * as dress from "./Dress"
+import watchUnit from "wowlua:events"
+import type UnitWatch from "wowlua:events"
 import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
 import * as extend from "/Core/Extend"
-import debug from "/Core/Settings"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
@@ -80,7 +98,6 @@ import * as crest from "/UI/Crest"
 import * as healthFill from "/UI/HealthFill"
 import * as powerCost from "/UI/PowerCost"
 import type CastCost, CostApi from "/UI/PowerCost"
-import trail from "/UI/Bar"
 import auraContainer, UnitAuras, AuraGroup, AuraOptions, AuraButton from "/UI/Auras"
 
 const S = T.space
@@ -674,6 +691,37 @@ local function indicatorArt(ind: Indicator): number?
     return first and (C_Spell.GetSpellTexture(first)) or nil
 end
 
+-- Your own raid subgroup from the game's roster, kept until the roster
+-- changes (a walk over the raid for each frame was 40 by 40 checks on a
+-- roster change): whether it was read, and what it was (nil: unreadable or
+-- none). An unsure answer (a secret one) is not kept.
+local subgroupRead = false
+local subgroupKept: number? = nil
+local function yourSubgroup(A: GroupApi): number?
+    if A == GROUP and subgroupRead then
+        return subgroupKept
+    end
+    local mine: number? = nil
+    local sure = true
+    local count = A.GetNumGroupMembers and A.GetNumGroupMembers() or 0
+    for i = 1, count do
+        local me = A.UnitIsUnit("raid" .. i, "player")
+        if secret.isSecret(me) then
+            sure = false
+            break
+        end
+        if me then
+            local _, _, s = A.GetRaidRosterInfo(i)
+            mine = s
+            break
+        end
+    end
+    if A == GROUP and sure then
+        subgroupRead, subgroupKept = true, mine
+    end
+    return mine
+end
+
 -- Whether a group member is in your own raid group (in a party, or for a
 -- party token in a raid: yes). Read out of combat; an unreadable answer is yes.
 -- (A: where the group is read from, the game's functions; a parameter for tests)
@@ -686,18 +734,8 @@ local function inYourGroup(unit: string, A: GroupApi = GROUP): boolean
         return true
     end
     local _, _, sub = A.GetRaidRosterInfo(idx)
-    local count = A.GetNumGroupMembers and A.GetNumGroupMembers() or 0
-    for i = 1, count do
-        local me = A.UnitIsUnit("raid" .. i, "player")
-        if secret.isSecret(me) then
-            return true
-        end
-        if me then
-            local _, _, mine = A.GetRaidRosterInfo(i)
-            return sub == nil or mine == nil or sub == mine
-        end
-    end
-    return true
+    local mine = yourSubgroup(A)
+    return sub == nil or mine == nil or sub == mine
 end
 
 -- Group sizes an indicator can be limited to (ind.sizes = { ["10"] = true,
@@ -762,6 +800,17 @@ local function anyRoleLimited(list: Indicator[]?): boolean
     for _, ind in ipairs(list or {}) do
         local roles = ind.roles
         if roles and next(roles) ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+-- Whether any indicator of `list` (or its missing look) is limited to your
+-- own raid group.
+local function anyGroupScoped(list: Indicator[]?): boolean
+    for _, ind in ipairs(list or {}) do
+        if (ind.on or ind.missingOn) == "group" then
             return true
         end
     end
@@ -959,6 +1008,7 @@ local function buildDispelSet(f: UnitFrame, set: string): UnitAuras[]
         local c = auraContainer(f, f.unit or "none", {
             size = 1,
             anchor = "TOPLEFT",
+            roster = f.opts.rosterRefresh ~= false,
             groups = { { key = kind, filter = filter, max = 1, dispelTypes = { kind }, initialize = init } },
         })
         if c then
@@ -1033,21 +1083,211 @@ end
 -- Events
 --------------------------------------------------------------------------------
 
-local HEALTH_EVENTS: EventName[] = {
+-- What a health event changes, kept per frame until the driver draws it
+-- (below): the values, the text and dead or alive (UNIT_HEALTH); the bars'
+-- range as well (UNIT_MAXHEALTH); only the heals on the way and the
+-- shields (the other two). PART_ALL: everything (any other caller).
+const PART_HEALTH = 1
+const PART_MAX = 2
+const PART_INCOMING = 4
+const PART_ALL = 7
+
+local function hasPart(parts: number, part: number): boolean
+    return parts % (part * 2) >= part
+end
+
+-- The parts of both.
+local function joinParts(a: number, b: number): number
+    local out = a
+    if hasPart(b, PART_HEALTH) and not hasPart(out, PART_HEALTH) then
+        out = out + PART_HEALTH
+    end
+    if hasPart(b, PART_MAX) and not hasPart(out, PART_MAX) then
+        out = out + PART_MAX
+    end
+    if hasPart(b, PART_INCOMING) and not hasPart(out, PART_INCOMING) then
+        out = out + PART_INCOMING
+    end
+    return out
+end
+
+-- The unit's own events, on one watch per frame (wowlua:events'
+-- watchUnit: its own event frame, re-pointed to another token without
+-- subscribing again; a client without one of them never sends it): what
+-- each health event changes, and the power and identity events.
+local HEALTH_PART: { [string]: number } = {
+    UNIT_HEALTH = PART_HEALTH,
+    UNIT_MAXHEALTH = PART_MAX,
+    UNIT_HEAL_PREDICTION = PART_INCOMING,
+    UNIT_ABSORB_AMOUNT_CHANGED = PART_INCOMING,
+}
+local POWER_EVENT: { [string]: boolean } = { UNIT_POWER_UPDATE = true, UNIT_MAXPOWER = true, UNIT_DISPLAYPOWER = true }
+local IDENTITY_EVENT: { [string]: boolean } = {
+    UNIT_NAME_UPDATE = true,
+    UNIT_LEVEL = true,
+    UNIT_FACTION = true,
+    UNIT_CLASSIFICATION_CHANGED = true,
+}
+local UNIT_EVENTS: string[] = {
     "UNIT_HEALTH",
     "UNIT_MAXHEALTH",
     "UNIT_HEAL_PREDICTION",
     "UNIT_ABSORB_AMOUNT_CHANGED",
+    "UNIT_POWER_UPDATE",
+    "UNIT_MAXPOWER",
+    "UNIT_DISPLAYPOWER",
+    "UNIT_NAME_UPDATE",
+    "UNIT_LEVEL",
+    "UNIT_FACTION",
+    "UNIT_CLASSIFICATION_CHANGED",
+    -- going offline or coming back: the bar, the text, the name and the power line
+    "UNIT_CONNECTION",
+    -- a reaction the client didn't know yet (seen in game: a party pet's
+    -- frame kept the theme's bar until a /reload, no UNIT_FACTION telling
+    -- when it was known): asked again on the unit's UNIT_FLAGS, which comes
+    -- often (probed on a party member), only while unknown
+    "UNIT_FLAGS",
 }
-local POWER_EVENTS: EventName[] = { "UNIT_POWER_UPDATE", "UNIT_MAXPOWER", "UNIT_DISPLAYPOWER" }
-local IDENTITY_EVENTS: EventName[] = { "UNIT_NAME_UPDATE", "UNIT_LEVEL", "UNIT_FACTION", "UNIT_CLASSIFICATION_CHANGED" }
 
--- Registers a unit event if this client has it (a few retail events may not).
-local function onUnit(f: UnitFrame, unit: string, event: EventName, fn: () -> ())
-    local ok = pcall(events.onUnit, event, unit, fn, f)
-    if not ok then
-        debug("UnitFrame: no event", event)
+--------------------------------------------------------------------------------
+-- The driver: one hidden frame whose OnUpdate draws, once a frame, what the
+-- events marked (the health of each frame, a roster change for the frames
+-- that redraw themselves on one) and moves the ghosts whose hold is over.
+-- It shows only while something waits. Nothing is made per event: the
+-- marks go into tables kept for good (two, swapped on each draw).
+--------------------------------------------------------------------------------
+
+const SOURCE = "Unit frames"
+
+-- The ghost's hold before it follows the fill, and the engine's easing
+-- (as UI/Bar's trail; none on a client without it: the ghost then jumps).
+const GHOST_HOLD = 0.15
+local GHOST_EASE = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut
+
+-- frames whose health waits, with the parts it waits for
+local due: { [UnitFrame]: number } = {}
+local drawing: { [UnitFrame]: number } = {}
+-- frames whose ghost waits out its hold
+local trails: { [UnitFrame]: boolean } = {}
+-- the active frames, for the listeners shared by all of them
+local live: { [UnitFrame]: boolean } = {}
+-- a roster change waits for the frames that redraw themselves on one
+local rosterDue = false
+local driver = CreateFrame("Frame")
+driver:Hide()
+
+local function updateHealthOf(f: UnitFrame)
+    f:UpdateHealth()
+end
+
+-- The parts of a frame's health that changed, drawn now (the driver, or
+-- the frame showing). A hidden frame keeps them until it shows.
+local function drawHealth(f: UnitFrame, parts: number)
+    if not f.active or not f.unit then
+        return
     end
+    if not f:IsVisible() then
+        f.healthStale = joinParts(f.healthStale, parts)
+        return
+    end
+    f.healthParts = parts
+    fault.log:run(SOURCE, updateHealthOf, f)
+    f.healthParts = PART_ALL
+end
+
+-- A health event: what it changed, drawn on the driver's next frame.
+local function markHealth(f: UnitFrame, part: number)
+    local parts = due[f]
+    if parts == nil then
+        due[f] = part
+        driver:Show()
+    elseif not hasPart(parts, part) then
+        due[f] = parts + part
+    end
+end
+
+-- The ghost after the fill took `v`: it holds GHOST_HOLD (later values
+-- inside the hold move its target, never restart it), then the engine eases
+-- it to the latest value. `instant` (a new unit) moves it at once and drops
+-- a waiting hold. Only SetValue touches `v`: it may be secret.
+local function trailGhost(f: UnitFrame, v: number | Secret<number>, instant: boolean?)
+    if instant or not GHOST_EASE then
+        if f.ghostDue then
+            f.ghostDue = nil
+            trails[f] = nil
+        end
+        f.ghost:SetValue(v)
+        return
+    end
+    f.ghostValue = v
+    if not f.ghostDue then
+        f.ghostDue = GetTime() + GHOST_HOLD
+        trails[f] = true
+        driver:Show()
+    end
+end
+
+-- A roster change for a frame that redraws itself on one (not a group
+-- module's): a group token can be someone else, so everything; any other
+-- unit's role marker and power line.
+local function rosterRedraw(f: UnitFrame)
+    local u = f.unit
+    if u and (u:find("^party") or u:find("^raid")) then
+        f:Refresh()
+    else
+        f:UpdateIdentity()
+        f:UpdatePower()
+    end
+end
+
+driver:SetScript("OnUpdate", function()
+    if next(due) ~= nil then
+        local list = due
+        due, drawing = drawing, list
+        for f, parts in pairs(list) do
+            list[f] = nil
+            drawHealth(f, parts)
+        end
+    end
+    if rosterDue then
+        rosterDue = false
+        for f in pairs(live) do
+            if f.opts.rosterRefresh ~= false then
+                fault.log:run(SOURCE, rosterRedraw, f)
+            end
+        end
+    end
+    if next(trails) ~= nil then
+        local now = GetTime()
+        for f in pairs(trails) do
+            local at = f.ghostDue
+            if not at or now >= at then
+                trails[f] = nil
+                f.ghostDue = nil
+                if at then
+                    f.ghost:SetValue(f.ghostValue, GHOST_EASE)
+                end
+            end
+        end
+    end
+    if next(due) == nil and next(trails) == nil and not rosterDue then
+        driver:Hide()
+    end
+end)
+
+-- Who a token shows, as far as it can be read: the unit's GUID, or false
+-- (nobody, or a secret GUID).
+local function occupantOf(unit: string): string | false
+    return secret.asString(UnitGUID(unit)) or false
+end
+
+-- A role as the frame keeps it to compare: the answer, or false for a
+-- secret one.
+local function roleKey(role: unknown): string | false
+    if secret.isSecret(role) or type(role) ~= "string" then
+        return false
+    end
+    return role
 end
 
 -- What unitFrame takes (see the header).
@@ -1080,6 +1320,7 @@ export type UnitFrameOptions = {
     api?: UnitApi,
     tapped?: boolean,
     powerCost?: boolean,
+    rosterRefresh?: boolean,
 }
 
 -- A missing look shown now, and what decides it.
@@ -1146,8 +1387,36 @@ export class UnitFrame extends Button
     markerLayer: Frame
     marker: Texture
     rightW: number = 0
+    -- where the ghost follows to, and when its hold ends (GetTime; nil: none waits)
     ghostValue: number | Secret<number> = 0
-    ghostTimer: TimerHandle? = nil
+    ghostDue: number? = nil
+    -- the bars that take the health's range
+    rangeBars: StatusBar[] = {}
+    -- what the next UpdateHealth draws (PART_*: all of it, unless the driver
+    -- says what changed), and what changed while the frame was hidden
+    healthParts: number = PART_ALL
+    healthStale: number = 0
+    -- the health text as last set: its look ("gone" or "numeric"), what it
+    -- shows ("percent", "value", "both", "none", or the word: "Dead"...;
+    -- nil: a secret text, or none yet) and, for readable values, what it was
+    -- made from (the rounded percent, the health)
+    rightLook: string? = nil
+    textMode: string? = nil
+    textPct: number | false = false
+    textCur: number | false = false
+    -- the role the marker was drawn for (false: a secret one or none; nil:
+    -- not drawn yet)
+    roleShown: string | false | nil = nil
+    -- whether an indicator in use is limited to your own raid group
+    groupScoped: boolean = false
+    -- whom the token showed when the frame was last drawn for its owner's
+    -- roster pass: the unit's GUID, false when unreadable, nil when unknown
+    -- (inactive since: the owner's next pass draws it anew)
+    occupant: string | false | nil = nil
+    -- its token changed since that pass (SetUnit's `later`)
+    unitMoved: boolean = false
+    -- the unit's events (made on the first Activate, kept)
+    watch: UnitWatch? = nil
     dead: boolean? = nil
     offline: boolean? = nil
     stateTone: string? = nil
@@ -1318,6 +1587,23 @@ export class UnitFrame extends Button
         overEdge:SetWidth(2)
         draw.paintFill(overEdge, "ward")
         self.overAbsorb = overHatch
+        self.rangeBars = {
+            self.health,
+            self.healthLow,
+            self.ghost,
+            self.incoming,
+            self.absorb,
+            self.absorbReach,
+            self.absorbOver,
+        }
+        -- shown again: the health it missed while hidden
+        self:HookScript("OnShow", function()
+            local stale = self.healthStale
+            if stale ~= 0 then
+                self.healthStale = 0
+                drawHealth(self, stale)
+            end
+        end)
 
         -- The power line: along the bottom; inside the anchor frame on the player.
         -- Under it, while your cast's cost shows (the player's frame), your
@@ -1433,7 +1719,56 @@ export class UnitFrame extends Button
         end
     end
 
+    -- The health: the bars, the ghost, the heals and shields on the way, the
+    -- text. From the driver only the parts its events changed (healthParts:
+    -- a heal or a shield alone redraws those bars, the range only follows
+    -- UNIT_MAXHEALTH); from anyone else all of it. Nothing is made here, and
+    -- the text, its font and its colour are set only when they change.
     function UpdateHealth(instant: boolean?)
+        local parts = self.healthParts
+        self.healthParts = PART_ALL
+        if not self.unit then
+            return
+        end
+        if parts == PART_ALL then
+            -- (all of it now: what the events marked is drawn too)
+            due[self] = nil
+        end
+        if parts == PART_INCOMING then
+            self:DrawIncoming((self.dead or self.offline) == true)
+        else
+            self:DrawHealth(parts, instant)
+        end
+        local after = self.onHealth
+        if after then
+            after(self)
+        end
+    end
+
+    -- The heals on the way and the shield (none while dead or offline, or
+    -- with incoming = false), each starting where the one before ends.
+    private function DrawIncoming(gone: boolean)
+        local A, u = self.api, self.unit
+        if not u then
+            return
+        end
+        local heals: (number | Secret<number>)?, absorbs: (number | Secret<number>)? = nil, nil
+        if not gone and self.opts.incoming ~= false then
+            if UnitGetIncomingHeals then
+                heals = A.UnitGetIncomingHeals(u)
+            end
+            if UnitGetTotalAbsorbs then
+                absorbs = A.UnitGetTotalAbsorbs(u)
+            end
+        end
+        self.incoming:SetValue(amount(heals))
+        local shield = amount(absorbs)
+        self.absorb:SetValue(shield)
+        -- (the shield past full health: where it starts, from the right end)
+        self.absorbReach:SetValue(shield)
+    end
+
+    private function DrawHealth(parts: number, instant: boolean?)
         local A = self.api
         local u = self.unit
         if not u then
@@ -1443,17 +1778,11 @@ export class UnitFrame extends Button
         local offline = isOffline(A, u)
         -- dead or offline: an empty bar
         local gone = dead or offline
-        local max = A.UnitHealthMax(u)
-        for _, b in ipairs({
-            self.health,
-            self.healthLow,
-            self.ghost,
-            self.incoming,
-            self.absorb,
-            self.absorbReach,
-            self.absorbOver,
-        }) do
-            b:SetMinMaxValues(0, amount(max))
+        if hasPart(parts, PART_MAX) then
+            local max = amount(A.UnitHealthMax(u))
+            for _, b in ipairs(self.rangeBars) do
+                b:SetMinMaxValues(0, max)
+            end
         end
         local cur = gone and 0 or amount(A.UnitHealth(u))
         self.health:SetValue(cur)
@@ -1474,72 +1803,16 @@ export class UnitFrame extends Button
         self.tint:SetAlpha(tintAlpha)
 
         -- The ghost trails the fill: after a hold, the engine eases it down.
-        trail(self, self.ghost, cur, instant)
+        trailGhost(self, cur, instant)
 
-        local noIncoming = gone or self.opts.incoming == false
-        local heals: (number | Secret<number>)?, absorbs: (number | Secret<number>)? = nil, nil
-        if not noIncoming and UnitGetIncomingHeals then
-            heals = A.UnitGetIncomingHeals(u)
+        -- (the heals and shield with their own events; again when the unit
+        -- dies, goes offline or comes back: none while gone)
+        if hasPart(parts, PART_INCOMING) or gone ~= ((self.dead or self.offline) == true) then
+            self:DrawIncoming(gone)
         end
-        if not noIncoming and UnitGetTotalAbsorbs then
-            absorbs = A.UnitGetTotalAbsorbs(u)
-        end
-        self.incoming:SetValue(amount(heals))
-        self.absorb:SetValue(amount(absorbs))
-        -- (the shield past full health: where it starts, from the right end)
-        self.absorbReach:SetValue(amount(absorbs))
         self.absorbOver:SetValue(cur)
+        self:DrawHealthText(gone, offline, cur)
 
-        if gone then
-            self.right:SetStyle("caption")
-            self.right:SetColor("ink-muted")
-            self.right:SetValue(offline and "Offline" or (uiText.flag(A.UnitIsGhost(u)) and "Ghost" or "Dead"))
-        elseif self.opts.healthText ~= "none" and (self.opts.size ~= "sm" or self.opts.textOnSmall) then
-            self.right:SetStyle("numeric")
-            self.right:SetColor("ink")
-            local mode = self.opts.healthText or "percent"
-            -- plain ifs: `x and secret or nil` would test the secret
-            local pct: number | Secret<number> | nil = nil
-            local value: ShortNumber? = nil
-            if mode ~= "value" then
-                pct = healthPercent(A, u)
-            end
-            if mode ~= "percent" then
-                value = shortNumber(cur)
-            end
-            -- secret parts go to the engine's own formatting, never through Lua
-            if secret.isSecret(pct) or secret.isSecret(value) then
-                -- (a part that is missing: empty, 0)
-                local shownValue: ShortNumber = ""
-                if secret.isSecret(value) then
-                    shownValue = value
-                elseif value then
-                    shownValue = value
-                end
-                local shownPct: number | Secret<number> = 0
-                if secret.isSecret(pct) then
-                    shownPct = pct
-                elseif pct then
-                    shownPct = pct
-                end
-                if mode == "value" then
-                    self.right:SetFormattedText("%s", shownValue)
-                elseif mode == "both" then
-                    self.right:SetFormattedText("%s · %d%%", shownValue, shownPct)
-                else
-                    self.right:SetFormattedText("%d%%", shownPct)
-                end
-                self.right.value = nil
-            elseif mode == "value" then
-                self.right:SetValue(value or "")
-            elseif mode == "both" then
-                self.right:SetValue(pct and ("%s · %d%%"):format(value or "", pct + 0.5) or (value or ""))
-            else
-                self.right:SetValue(pct and ("%d%%"):format(pct + 0.5) or "")
-            end
-        else
-            self.right:SetValue("")
-        end
         if self.dead ~= dead or self.offline ~= offline then
             local power = self.offline ~= offline
             self.dead, self.offline = dead, offline
@@ -1548,9 +1821,102 @@ export class UnitFrame extends Button
                 self:UpdatePower()
             end -- an offline unit has none
         end
-        local after = self.onHealth
-        if after then
-            after(self)
+    end
+
+    -- The health text: the word when dead or offline, else the percent,
+    -- the value or both. Readable values are compared with what the text
+    -- was made from, so an unchanged one sets nothing; secret parts go to
+    -- the engine's own formatting each time (nothing can be compared).
+    private function DrawHealthText(gone: boolean, offline: boolean, cur: number | Secret<number>)
+        local A, u, right = self.api, self.unit, self.right
+        if not u then
+            return
+        end
+        if gone then
+            if self.rightLook ~= "gone" then
+                self.rightLook = "gone"
+                right:SetStyle("caption")
+                right:SetColor("ink-muted")
+            end
+            local word = offline and "Offline" or (uiText.flag(A.UnitIsGhost(u)) and "Ghost" or "Dead")
+            if self.textMode ~= word then
+                self.textMode = word
+                right:SetValue(word)
+            end
+            return
+        end
+        local mode = self.opts.healthText or "percent"
+        if mode == "none" or (self.opts.size == "sm" and not self.opts.textOnSmall) then
+            if self.textMode ~= "none" then
+                self.textMode = "none"
+                right:SetValue("")
+            end
+            return
+        end
+        if self.rightLook ~= "numeric" then
+            self.rightLook = "numeric"
+            right:SetStyle("numeric")
+            right:SetColor("ink")
+        end
+        -- plain ifs: `x and secret or nil` would test the secret
+        local pct: number | Secret<number> | nil = nil
+        if mode ~= "value" then
+            pct = healthPercent(A, u)
+        end
+        local withValue = mode ~= "percent"
+        -- secret parts go to the engine's own formatting, never through Lua
+        if secret.isSecret(pct) or (withValue and secret.isSecret(cur)) then
+            self.textMode = nil
+            local value: ShortNumber? = nil
+            if withValue then
+                value = shortNumber(cur)
+            end
+            -- (a part that is missing: empty, 0)
+            local shownValue: ShortNumber = ""
+            if secret.isSecret(value) then
+                shownValue = value
+            elseif value then
+                shownValue = value
+            end
+            local shownPct: number | Secret<number> = 0
+            if secret.isSecret(pct) then
+                shownPct = pct
+            elseif pct then
+                shownPct = pct
+            end
+            if mode == "value" then
+                right:SetFormattedText("%s", shownValue)
+            elseif mode == "both" then
+                right:SetFormattedText("%s · %d%%", shownValue, shownPct)
+            else
+                right:SetFormattedText("%d%%", shownPct)
+            end
+            right.value = nil
+            return
+        end
+        -- what the text is made from: the same as last time, nothing to set
+        local pctKey: number | false = false
+        if pct and not secret.isSecret(pct) then
+            pctKey = math.floor(pct + 0.5)
+        end
+        local curKey: number | false = false
+        if withValue and not secret.isSecret(cur) then
+            curKey = cur
+        end
+        if self.textMode == mode and self.textPct == pctKey and self.textCur == curKey then
+            return
+        end
+        self.textMode, self.textPct, self.textCur = mode, pctKey, curKey
+        local value: string? = nil
+        if withValue then
+            value = secret.asString(shortNumber(cur))
+        end
+        if mode == "value" then
+            right:SetValue(value or "")
+        elseif mode == "both" then
+            right:SetValue(pct and ("%s · %d%%"):format(value or "", pct + 0.5) or (value or ""))
+        else
+            right:SetValue(pct and ("%d%%"):format(pct + 0.5) or "")
         end
     end
 
@@ -1613,6 +1979,7 @@ export class UnitFrame extends Button
 
         -- The marker before the name: a role icon, else the class diamond.
         local role = UnitGroupRolesAssigned and A.UnitGroupRolesAssigned(u)
+        self.roleShown = roleKey(role)
         local isPlayer = uiText.flag(A.UnitIsPlayer(u))
         local _, class = A.UnitClass(u)
         local classColor: string? = nil
@@ -1906,6 +2273,7 @@ export class UnitFrame extends Button
     -- and hidden.
     function SetIndicators(list: Indicator[]?)
         self.roleLimited = anyRoleLimited(list)
+        self.groupScoped = anyGroupScoped(list)
         for _, c in ipairs(self.indicatorContainers) do
             c.container:Hide()
             c:SetUnit("none")
@@ -1945,7 +2313,12 @@ export class UnitFrame extends Button
             elseif ids and #ids > 0 then
                 local filter = ind.source == "any" and { "HELPFUL" } or { "HELPFUL", "PLAYER" }
                 local group: AuraGroup = { key = "i" .. i, filter = filter, max = 1, include = ids }
-                local opts: AuraOptions = { size = ind.size or 10, anchor = "TOPLEFT", groups = { group } }
+                local opts: AuraOptions = {
+                    size = ind.size or 10,
+                    anchor = "TOPLEFT",
+                    roster = self.opts.rosterRefresh ~= false,
+                    groups = { group },
+                }
                 if ind.kind == "icon" then
                     group.stacks, group.digits = false, (ind.size or 10) >= 16
                 else
@@ -2102,37 +2475,112 @@ export class UnitFrame extends Button
         end
     end
 
-    -- keepAttribute: the unit attribute is already set (a group header did it)
-    function SetUnit(unit: string?, keepAttribute: boolean?)
+    -- keepAttribute: the unit attribute is already set (a group header did it).
+    -- later (a group module's frame, rosterRefresh = false): only its events
+    -- follow the token now; its aura containers, indicators and drawing wait
+    -- for the owner's next RosterUpdate, once per burst of reassignments
+    -- (the same person on another token then needs no drawing at all).
+    function SetUnit(unit: string?, keepAttribute: boolean?, later: boolean?)
         if unit == self.unit then
             return
         end
+        local defer = later == true and unit ~= nil
         local wasActive = self.active
+        local occupant = self.occupant
         if wasActive then
             self:Deactivate()
         end
         self.unit = unit
-        -- another person: their role is read anew
-        self.indicatorRole = nil
         if self.opts.secure ~= false and not keepAttribute then
             self:SetAttribute("unit", unit)
         end
+        if defer then
+            -- (whether it is someone else, the pass reads)
+            self.unitMoved = true
+            self.occupant = occupant
+        else
+            -- another person: their role is read anew
+            self.indicatorRole = nil
+            self.unitMoved = false
+            self:SyncContainers(unit or "none", unit ~= nil)
+            self:UpdateIndicatorPresence()
+            -- (drawn now, when it listens: in step with whoever it shows)
+            self.occupant = unit and occupantOf(unit) or nil
+        end
+        if wasActive and unit then
+            self:Activate(defer)
+        end
+    end
+
+    -- The aura containers this frame made (the debuff types', the
+    -- indicators', Warded's) on `unit`: re-pointed where they show another
+    -- token (which re-scans them), the others re-scanned with `rescan`
+    -- (someone else on the same token: a container doesn't notice).
+    private function SyncContainers(unit: string, rescan: boolean)
         for _, list in pairs(self.dispelSets) do
             for _, c in ipairs(list) do
-                c:SetUnit(unit or "none")
+                if c.unit ~= unit then
+                    c:SetUnit(unit)
+                elseif rescan then
+                    c:Refresh()
+                end
             end
         end
         for _, c in ipairs(self.indicatorContainers) do
-            c:SetUnit(unit or "none")
+            if c.unit ~= unit then
+                c:SetUnit(unit)
+            elseif rescan then
+                c:Refresh()
+            end
         end
         local ward = self.wardSlot
         if ward then
-            ward:SetUnit(unit or "none")
+            if ward.unit ~= unit then
+                ward:SetUnit(unit)
+            elseif rescan then
+                ward:Refresh()
+            end
         end
+    end
+
+    -- After a roster change, from the frame's owner (a group module's pass,
+    -- once per burst). Someone else on the token (or unknown: a secret GUID,
+    -- or not drawn for its owner since it was activated): drawn anew, the
+    -- containers re-scanned, the indicators read again; true. The same
+    -- person, on the same token or another: only what a roster change can
+    -- change for them, their role (the marker, the power line,
+    -- role-limited indicators) and their raid group (indicators limited to
+    -- yours); false.
+    function RosterUpdate(): boolean
+        local u = self.unit
+        self.unitMoved = false
+        if not u then
+            return false
+        end
+        local now = occupantOf(u)
+        local same = now ~= false and now == self.occupant
+        self:SyncContainers(u, not same)
+        if same then
+            local A = self.api
+            local role: unknown = nil
+            if UnitGroupRolesAssigned then
+                role = A.UnitGroupRolesAssigned(u)
+            end
+            if roleKey(role) ~= self.roleShown then
+                self:UpdateIdentity()
+                self:UpdatePower()
+            end
+            self:UpdateIndicatorRole()
+            if self.groupScoped then
+                self:UpdateIndicatorPresence()
+            end
+            return false
+        end
+        self.occupant = now
+        self.indicatorRole = nil
         self:UpdateIndicatorPresence()
-        if wasActive and unit then
-            self:Activate()
-        end
+        self:Refresh()
+        return true
     end
 
     -- The type's border and badge over this frame, on `parent` (a slot's button,
@@ -2198,6 +2646,7 @@ export class UnitFrame extends Button
         local c = auraContainer(self, self.unit or "none", {
             size = 1,
             anchor = "TOPLEFT",
+            roster = self.opts.rosterRefresh ~= false,
             groups = { { key = "ward", filter = { "HELPFUL" }, max = 1, include = ids, initialize = init } },
         })
         if c then
@@ -2222,31 +2671,54 @@ export class UnitFrame extends Button
         self:UpdateRaidMarker()
     end
 
-    function Activate()
+    -- One of the unit's events (UNIT_EVENTS): a health event marks what it
+    -- changed for the driver; power and identity redraw at once.
+    private function OnUnitEvent(name: string)
+        local part = HEALTH_PART[name]
+        if part then
+            markHealth(self, part)
+        elseif POWER_EVENT[name] then
+            self:UpdatePower()
+        elseif IDENTITY_EVENT[name] then
+            self:UpdateIdentity()
+            -- (a tag changed: the health's colour)
+            if name == "UNIT_FACTION" then
+                self:UpdateHealth(true)
+            end
+        elseif name == "UNIT_CONNECTION" then
+            self:Refresh()
+        elseif name == "UNIT_FLAGS" then
+            if self.reactionUnknown then
+                self:UpdateIdentity()
+            end
+        end
+    end
+
+    -- later: listening only, drawn by the owner's next RosterUpdate (a
+    -- header's new token: SetUnit's `later`)
+    function Activate(later: boolean?)
         local u = self.unit
         if self.active or not u then
             return
         end
         self.active = true
-        -- class colours on or off (the setting or the theme): the name's
-        -- colour with it (the fill repaints itself)
-        events.on(
-            "SUUUI_THEME_CHANGED",
-            function()
-                self:UpdateIdentity()
-            end,
-            self
-        )
-        for _, e in ipairs(HEALTH_EVENTS) do
-            onUnit(self, u, e, function()
-                self:UpdateHealth()
-            end)
+        live[self] = true
+        -- (class colours on or off, the raid marker, the world, roles and the
+        -- roster: one listener each for every active frame, below)
+        -- the unit's events: one watch for the frame's life, pointed at
+        -- the token (another token later: re-pointed, nothing made)
+        local watch = self.watch
+        if not watch then
+            watch = watchUnit(
+                UNIT_EVENTS,
+                function(name: string)
+                    self:OnUnitEvent(name)
+                end,
+                self
+            )
+            self.watch = watch
         end
-        for _, e in ipairs(POWER_EVENTS) do
-            onUnit(self, u, e, function()
-                self:UpdatePower()
-            end)
-        end
+        watch:setUnit(u)
         -- the player's frame: your cast's cost faded at the power line's end
         if u == "player" and self.opts.powerCost ~= false then
             local cast = self.cast or powerCost.castCost(self.api :: CostApi)
@@ -2255,66 +2727,6 @@ export class UnitFrame extends Button
                 self:UpdatePower()
             end)
         end
-        for _, e in ipairs(IDENTITY_EVENTS) do
-            onUnit(self, u, e, function()
-                self:UpdateIdentity()
-                -- (a tag changed: the health's colour)
-                if e == "UNIT_FACTION" then
-                    self:UpdateHealth(true)
-                end
-            end)
-        end
-        -- a reaction the client didn't know yet (seen in game: a party pet's
-        -- frame kept the theme's bar until a /reload, no UNIT_FACTION telling
-        -- when it was known): asked again on the unit's UNIT_FLAGS, which
-        -- comes often (probed on a party member), only while unknown
-        onUnit(self, u, "UNIT_FLAGS", function()
-            if self.reactionUnknown then
-                self:UpdateIdentity()
-            end
-        end)
-        -- going offline or coming back: the bar, the text, the name and the power line
-        onUnit(self, u, "UNIT_CONNECTION", function()
-            self:Refresh()
-        end)
-        events.onGame(
-            "RAID_TARGET_UPDATE",
-            function()
-                self:UpdateRaidMarker()
-            end,
-            self
-        )
-        events.onGame(
-            "PLAYER_ENTERING_WORLD",
-            function()
-                self:Refresh()
-            end,
-            self
-        )
-        -- a group unit can become another person: redraw everything
-        local grouped = u:find("^party") or u:find("^raid")
-        -- a role change moves the marker and may turn the power line on or off
-        -- (powerFor: tanks and healers)
-        events.onGame(
-            "GROUP_ROSTER_UPDATE",
-            function()
-                if grouped then
-                    self:Refresh()
-                else
-                    self:UpdateIdentity()
-                    self:UpdatePower()
-                end
-            end,
-            self
-        )
-        events.onGame(
-            "PLAYER_ROLES_ASSIGNED",
-            function()
-                self:UpdateIdentity()
-                self:UpdatePower()
-            end,
-            self
-        )
         if u == "target" then
             events.onGame(
                 "PLAYER_TARGET_CHANGED",
@@ -2378,7 +2790,9 @@ export class UnitFrame extends Button
                 end
             end)
         end
-        self:Refresh()
+        if not later then
+            self:Refresh()
+        end
     end
 
     function Deactivate()
@@ -2386,6 +2800,15 @@ export class UnitFrame extends Button
             return
         end
         self.active = false
+        live[self] = nil
+        -- (what it waited for is moot; who it shows is unknown from now on)
+        due[self] = nil
+        self.healthStale = 0
+        self.occupant = nil
+        local watch = self.watch
+        if watch then
+            watch:setUnit(nil)
+        end
         events.offAll(self)
         local ticker = self.ticker
         if ticker then
@@ -2403,6 +2826,81 @@ export class UnitFrame extends Button
     end
 end
 mixins.UnitFrame = UnitFrame
+
+--------------------------------------------------------------------------------
+-- The listeners every active frame shares: one each, walking the active
+-- frames (each frame's own, 4 to 5 per frame, were a dispatch per frame on
+-- every one of these events: some 400 in a raid with its pets)
+--------------------------------------------------------------------------------
+
+local function eachLive(fn: (f: UnitFrame) -> ())
+    for f in pairs(live) do
+        fault.log:run(SOURCE, fn, f)
+    end
+end
+
+local function redrawIdentity(f: UnitFrame)
+    f:UpdateIdentity()
+end
+local function redrawMarker(f: UnitFrame)
+    f:UpdateRaidMarker()
+end
+local function redrawAll(f: UnitFrame)
+    f:Refresh()
+end
+-- A role chosen or changed: the marker and the power line (powerFor: tanks
+-- and healers). A group module's frames: their module's roster pass reads it.
+local function redrawRole(f: UnitFrame)
+    if f.opts.rosterRefresh ~= false then
+        f:UpdateIdentity()
+        f:UpdatePower()
+    end
+end
+
+-- class colours on or off (the setting or the theme): the name's colour with
+-- it (the fill repaints itself)
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        eachLive(redrawIdentity)
+    end,
+    SOURCE
+)
+events.onGame(
+    "RAID_TARGET_UPDATE",
+    function()
+        eachLive(redrawMarker)
+    end,
+    SOURCE
+)
+events.onGame(
+    "PLAYER_ENTERING_WORLD",
+    function()
+        eachLive(redrawAll)
+    end,
+    SOURCE
+)
+events.onGame(
+    "PLAYER_ROLES_ASSIGNED",
+    function()
+        eachLive(redrawRole)
+    end,
+    SOURCE
+)
+-- A roster change: once a frame (the game sends them in bursts), for the
+-- frames that redraw themselves on one (rosterRedraw); a group module's
+-- frames are its module's (RosterUpdate). Your raid group is read anew.
+events.onGame(
+    "GROUP_ROSTER_UPDATE",
+    function()
+        subgroupRead = false
+        if next(live) ~= nil then
+            rosterDue = true
+            driver:Show()
+        end
+    end,
+    SOURCE
+)
 
 -- 0.29: SuuUI's secure unit frames (a copy of the list), in the order they
 -- were made: the frames a secure click binding goes on.

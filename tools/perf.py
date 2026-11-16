@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 # tools/perf.py: SuuUI's performance scenarios (tests/perf/README.md).
 #
-#   python3 -I tools/perf.py run [filter ...]   run the scenarios (all, or the
+#   python3 -I tools/perf.py run [filter ...] [--fail]
+#                                               run the scenarios (all, or the
 #                                               files matching a filter), then
 #                                               summarize and compare
 #   python3 -I tools/perf.py summarize          summarize the last run's profiles
-#   python3 -I tools/perf.py compare [A] [B]    compare results A (default: the
+#   python3 -I tools/perf.py compare [A] [B] [--fail]
+#                                               compare results A (default: the
 #                                               last run) with B (default: the
-#                                               baseline)
+#                                               baseline); --fail: exit 1 when a
+#                                               metric is WORSE (past 2 %)
 #   python3 -I tools/perf.py baseline           make the last run the baseline
+#   python3 -I tools/perf.py restore            put back wowlua.json from the
+#                                               backup a killed run left
 #   python3 -I tools/perf.py top <scenario> [phase] [--frame N] [--event NAME]
 #                                               where a phase's (or one frame's)
 #                                               work goes: SuuUI's entry points
@@ -18,7 +23,11 @@
 # A run is `wowlua test --features perf -u --profile-out dist/perf/profiles
 # tests/perf/...`: each scenario file's tests run in one emulated client, its
 # profile (speedscope JSON with wowlua's per-frame trees) lands in
-# dist/perf/profiles. The summary (dist/perf/results.json) has, per scenario
+# dist/perf/profiles. It measures what players get: no runtime checks, no
+# dev monitor (MEASURED). wowlua 0.13.15 builds `wowlua test` only from the
+# `test` profile (wowlua#266), so for the run that profile in wowlua.json is
+# rewritten, and the file is put back byte for byte afterwards (the backup
+# beside it, MANIFEST_BACKUP). The summary (dist/perf/results.json) has, per scenario
 # and measured phase (a test whose name does not start with "setup"):
 #   frames                 frames the phase ran
 #   suu_instr_*            Lua instructions run by SuuUI (its code and the
@@ -33,7 +42,7 @@
 #   worst_frame            the frame with SuuUI's most instructions, with its
 #                          top entry points
 # and the memory each scenario recorded (tests/perf/__snapshots__).
-import json, os, re, subprocess, sys, collections, datetime, glob
+import json, os, re, subprocess, sys, collections, datetime, glob, shutil, signal
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'dist', 'perf')
@@ -41,6 +50,17 @@ PROFILES = os.path.join(OUT, 'profiles')
 RESULTS = os.path.join(OUT, 'results.json')
 BASELINE = os.path.join(ROOT, 'tests', 'perf', 'baseline.json')
 SNAPSHOTS = os.path.join(ROOT, 'tests', 'perf', '__snapshots__')
+MANIFEST = os.path.join(ROOT, 'wowlua.json')
+# Ignored by git (.gitignore): wowlua.json as it was before a run rewrote it.
+MANIFEST_BACKUP = os.path.join(ROOT, 'wowlua.json.perf-backup')
+# The settings of the last run (summarize reads them)
+RUN_SETTINGS = os.path.join(OUT, 'settings.json')
+
+# The build a run measures: a player's (release builds have neither runtime
+# checks nor the dev monitor, whose script wrapper costs instructions and
+# makes everything under it, the scenario's driving and the game's handlers,
+# count as SuuUI's). Set on the `test` profile for the run's duration.
+MEASURED = collections.OrderedDict([('runtime-checks', 'none'), ('monitor', False)])
 WOWLUA = os.environ.get('WOWLUA', 'wowlua')
 
 # Compared metrics: (key, label, lower is better)
@@ -55,6 +75,10 @@ COMPARED = [
 ]
 
 HARNESS = ('/std/mock.lua', '/std/test.lua', 'tests/')
+
+# A change past this (in percent) is marked: `better`, or `WORSE` (which
+# `--fail` turns into exit status 1).
+THRESHOLD = 2
 
 
 def load_profile(path):
@@ -285,6 +309,7 @@ def summarize():
         'date': datetime.date.today().isoformat(),
         'wowlua': wowlua_version(),
         'commit': git_head(),
+        'settings': read_run_settings(),
         'scenarios': scenarios,
     }
     os.makedirs(OUT, exist_ok=True)
@@ -295,8 +320,28 @@ def summarize():
     return results
 
 
+def read_run_settings():
+    """the settings `run` measured the profiles with; None when unknown (no
+    record, or a profile newer than it: made by hand, not by `run`)"""
+    try:
+        written = os.path.getmtime(RUN_SETTINGS)
+        if any(os.path.getmtime(p) > written for p in glob.glob(os.path.join(PROFILES, '*.speedscope.json'))):
+            return None
+        with open(RUN_SETTINGS) as f:
+            return json.load(f, object_pairs_hook=collections.OrderedDict)
+    except (OSError, ValueError):
+        return None
+
+
+def describe(settings):
+    if not settings:
+        return 'settings not recorded'
+    return ', '.join('%s %s' % (k, json.dumps(v)) for k, v in settings.items())
+
+
 def print_results(results):
-    print('\nwowlua %s, commit %s, %s' % (results['wowlua'], results['commit'], results['date']))
+    print('\nwowlua %s, commit %s, %s (%s)' % (results['wowlua'], results['commit'], results['date'],
+                                          describe(results.get('settings'))))
     print('%-34s %6s %9s %9s %9s %8s %8s %8s %9s' % (
         'scenario / phase', 'frames', 'instr/f', 'p95', 'worst', 'KB/f', 'KB p95', 'KB max', 'all/f'))
     for name, s in results['scenarios'].items():
@@ -313,16 +358,33 @@ def print_results(results):
             print('    %s: %.1f MB%s' % (k, v / 1024, what))
 
 
+class SettingsDiffer(Exception):
+    pass
+
+
 def compare(a_path=RESULTS, b_path=BASELINE):
+    """prints each metric's change; returns how many are WORSE. Raises
+    SettingsDiffer when the two were recorded under different build settings
+    (or one of them without any recorded): their numbers don't compare."""
     with open(a_path) as f:
         a = json.load(f)
     with open(b_path) as f:
         b = json.load(f)
+    sa, sb = a.get('settings'), b.get('settings')
+    if not sa or not sb or dict(sa) != dict(sb):
+        raise SettingsDiffer(
+            'not comparing: the two were measured under different build settings\n'
+            '  %s: %s\n  %s: %s\n'
+            'Runtime checks and the dev monitor change every count; measure both the same way '
+            '(tools/perf.py run records its settings; a result without them is from before it did).' % (
+                os.path.relpath(a_path, ROOT), describe(sa), os.path.relpath(b_path, ROOT), describe(sb)))
     print('now:      wowlua %s, commit %s, %s' % (a['wowlua'], a['commit'], a['date']))
     print('baseline: wowlua %s, commit %s, %s' % (b['wowlua'], b['commit'], b['date']))
+    print('settings: %s' % describe(sa))
     if a['wowlua'] != b['wowlua']:
         print('note: another wowlua version; the emulator and the game UI it loads may differ')
     print('%-40s %-20s %12s %12s %8s' % ('scenario / phase', 'metric', 'baseline', 'now', 'change'))
+    worse = []
     for name, s in a['scenarios'].items():
         bs = b['scenarios'].get(name)
         if not bs:
@@ -338,7 +400,9 @@ def compare(a_path=RESULTS, b_path=BASELINE):
                 if old is None or new is None:
                     continue
                 ch = ((new - old) / old * 100) if old else (0 if new == old else float('inf'))
-                mark = '' if abs(ch) < 2 else ('  better' if ch < 0 else '  WORSE')
+                mark = '' if abs(ch) < THRESHOLD else ('  better' if ch < 0 else '  WORSE')
+                if ch >= THRESHOLD:
+                    worse.append('%s / %s %s' % (name, phase, label))
                 print('%-40s %-20s %12s %12s %+7.1f%%%s' % (
                     (name + ' / ' + phase)[:40], label, fmt(old), fmt(new), ch, mark))
         for k, v in s.get('memory_kb', {}).items():
@@ -346,6 +410,11 @@ def compare(a_path=RESULTS, b_path=BASELINE):
             if old:
                 print('%-40s %-20s %12s %12s %+7.1f%%' % (
                     name[:40], ('mem ' + k)[:20], fmt(old), fmt(v), (v - old) / old * 100))
+    if worse:
+        print('\n%d metric(s) WORSE than the baseline by %d %% or more:' % (len(worse), THRESHOLD))
+        for w in worse:
+            print('  ' + w)
+    return len(worse)
 
 
 def fmt(v):
@@ -415,21 +484,158 @@ def top(scenario, phase=None, frame=None, k=20, event=None):
             print('  %10.0f instr %9.2f KB  %8.0f calls  %s' % (v[0] / n, v[1] / 1024 / n, v[2] / n, lab[:140]))
 
 
-def run(filters):
+def manifest_dirty():
+    """why wowlua.json may not be rewritten, or None"""
+    if os.path.exists(MANIFEST_BACKUP):
+        return ('%s is there: a run was killed before it put wowlua.json back. '
+                'Check wowlua.json, then `python3 -I tools/perf.py restore` puts the backup back.'
+                % os.path.relpath(MANIFEST_BACKUP, ROOT))
+    try:
+        r = subprocess.run(['git', '-C', ROOT, 'status', '--porcelain', '--', 'wowlua.json'],
+                           capture_output=True, text=True)
+    except OSError as e:
+        return 'git could not tell whether wowlua.json has changes (%s)' % e
+    if r.returncode != 0 and 'not a git repository' in r.stderr:
+        # (an exported tree: nothing to compare with; the backup still puts it back)
+        print('perf: not a git checkout; wowlua.json is put back from its backup', file=sys.stderr)
+        return None
+    if r.returncode != 0:
+        return 'git could not tell whether wowlua.json has changes: %s' % r.stderr.strip()
+    if r.stdout.strip():
+        return ('wowlua.json has uncommitted changes; commit or undo them first '
+                '(a run rewrites it for its duration and puts back what was committed)')
+    return None
+
+
+def measured_manifest(original):
+    """wowlua.json's text with the `test` profile set to MEASURED"""
+    data = json.loads(original.decode('utf-8'), object_pairs_hook=collections.OrderedDict)
+    profiles = data.setdefault('profiles', collections.OrderedDict())
+    test = profiles.setdefault('test', collections.OrderedDict())
+    for k, v in MEASURED.items():
+        test[k] = v
+    return (json.dumps(data, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+
+
+class Interrupted(Exception):
+    pass
+
+
+def write_atomic(path, data, mode_from):
+    """path holds data or what it held before, never a part of data"""
+    tmp = path + '.perf-tmp'
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        shutil.copymode(mode_from, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def restore_manifest(original, written):
+    """puts the backup back in place (an atomic rename) and checks it"""
+    try:
+        with open(MANIFEST, 'rb') as f:
+            now = f.read()
+    except OSError:
+        now = None
+    if now is not None and now != written and now != original:
+        os.makedirs(OUT, exist_ok=True)
+        kept = os.path.join(OUT, 'wowlua.json.changed-during-run')
+        with open(kept, 'wb') as f:
+            f.write(now)
+        print('perf: wowlua.json was changed during the run; that version is kept in %s'
+              % os.path.relpath(kept, ROOT), file=sys.stderr)
+    os.replace(MANIFEST_BACKUP, MANIFEST)
+    with open(MANIFEST, 'rb') as f:
+        if f.read() != original:
+            sys.exit('perf: wowlua.json is not what it was before the run; check it (git diff wowlua.json)')
+
+
+def with_measured_profile(work):
+    """runs work() with wowlua.json's `test` profile set to MEASURED, and
+    puts the file back byte for byte afterwards: after an error, Ctrl-C,
+    SIGTERM or SIGHUP too (only a SIGKILL leaves the backup: `restore`)"""
+    why = manifest_dirty()
+    if why:
+        sys.exit('perf: not running: ' + why)
+    with open(MANIFEST, 'rb') as f:
+        original = f.read()
+    written = measured_manifest(original)
+    caught = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {sig: signal.getsignal(sig) for sig in caught}
+
+    def stop(sig, frame):
+        raise Interrupted(signal.Signals(sig).name)
+
+    for sig in caught:
+        signal.signal(sig, stop)
+    try:
+        try:
+            # No backup was there (manifest_dirty): one there now is this run's.
+            write_atomic(MANIFEST_BACKUP, original, MANIFEST)
+            write_atomic(MANIFEST, written, MANIFEST_BACKUP)
+            print('perf: measuring under the `test` profile set to %s for this run (a player\'s build; '
+                  'wowlua.json is put back afterwards)' % describe(MEASURED), file=sys.stderr)
+            return work()
+        finally:
+            for sig in caught:
+                signal.signal(sig, signal.SIG_IGN)
+            if os.path.exists(MANIFEST_BACKUP):
+                restore_manifest(original, written)
+                print('perf: wowlua.json put back', file=sys.stderr)
+    except Interrupted as e:
+        sys.exit('perf: stopped (%s)' % e)
+    finally:
+        for sig in caught:
+            signal.signal(sig, previous[sig])
+
+
+def restore():
+    if not os.path.exists(MANIFEST_BACKUP):
+        print('perf: nothing to restore (no %s)' % os.path.relpath(MANIFEST_BACKUP, ROOT))
+        return
+    os.replace(MANIFEST_BACKUP, MANIFEST)
+    print('perf: wowlua.json put back from %s; `git diff wowlua.json` shows what differs from the commit'
+          % os.path.relpath(MANIFEST_BACKUP, ROOT))
+
+
+def run(filters, fail=False):
     os.makedirs(PROFILES, exist_ok=True)
     for old in glob.glob(os.path.join(PROFILES, '*.speedscope.json')):
         os.remove(old)
+    if os.path.exists(RUN_SETTINGS):
+        os.remove(RUN_SETTINGS)
     targets = ['tests/perf/' + f for f in filters] or ['tests/perf/']
     jobs = os.environ.get('PERF_JOBS', '2')
     cmd = [WOWLUA, 'test', '--features', 'perf', '-u', '-j', jobs, '--profile-out', PROFILES] + targets
-    print(' '.join(cmd), file=sys.stderr)
-    r = subprocess.run(cmd, cwd=ROOT)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
+
+    def test():
+        print(' '.join(cmd), file=sys.stderr)
+        return subprocess.run(cmd, cwd=ROOT).returncode
+
+    code = with_measured_profile(test)
+    if code != 0:
+        sys.exit(code)
+    with open(RUN_SETTINGS, 'w') as f:
+        json.dump(MEASURED, f)
+        f.write('\n')
     summarize()
     if os.path.exists(BASELINE):
         print()
-        compare()
+        try:
+            worse = compare()
+        except SettingsDiffer as e:
+            print(e)
+            if fail:
+                sys.exit(2)
+            return
+        if worse and fail:
+            sys.exit(1)
 
 
 def main(argv):
@@ -437,12 +643,22 @@ def main(argv):
         print(__doc__ or open(__file__).read().split('\nimport ')[0])
         return
     cmd, rest = argv[0], argv[1:]
+    fail = '--fail' in rest
+    rest = [r for r in rest if r != '--fail']
     if cmd == 'run':
-        run(rest)
+        run(rest, fail)
     elif cmd == 'summarize':
         summarize()
     elif cmd == 'compare':
-        compare(*(rest[:2] or []))
+        try:
+            worse = compare(*(rest[:2] or []))
+        except SettingsDiffer as e:
+            print(e, file=sys.stderr)
+            sys.exit(2)
+        if worse and fail:
+            sys.exit(1)
+    elif cmd == 'restore':
+        restore()
     elif cmd == 'baseline':
         with open(RESULTS) as f:
             data = f.read()
