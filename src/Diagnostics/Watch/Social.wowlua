@@ -8,7 +8,8 @@
 --                 SuuUI's Who page (who-to-UI left on)
 --   COMM-senders  how CHAT_MSG_ADDON names its sender compared with
 --                 UnitName / GetUnitName of the group's unit: only whether
---                 the forms match and their shape, never a name
+--                 the forms match and their shape, never a name (one
+--                 case: WoW Forever has no realms)
 
 import SuuUI from "/Core/API"
 import * as DB from "/Core/DB"
@@ -193,19 +194,22 @@ local function groupUnits(): string[]
     return out
 end
 
--- How the sender matches the group's unit: which form equals it, and
--- whether the unit is of another realm. Nothing of the names is kept.
+-- How the sender matches the group's unit: which form equals it, and what
+-- UnitName's second return held (WoW Forever has no realms: its names are
+-- "First Second", and the second part may come there). Nothing of the
+-- names is kept.
 local function match(sender: string): Result?
     for _, unit in ipairs(groupUnits()) do
         if UnitExists(unit) then
-            local name, realm = UnitName(unit)
+            local name, second = UnitName(unit)
             local full = GetUnitName(unit, true)
-            local n, r, f = asString(name), asString(realm), asString(full)
+            local n, r, f = asString(name), asString(second), asString(full)
             if n then
-                local other = r ~= nil and r ~= ""
+                local hasSecond = r ~= nil and r ~= ""
                 local forms: { [string]: boolean } = {
                     ["UnitName"] = sender == n,
-                    ["UnitName-realm"] = other and sender == (n .. "-" .. (r or "")) or false,
+                    ["UnitName-second"] = hasSecond and sender == (n .. "-" .. (r or "")) or false,
+                    ["UnitName second"] = hasSecond and sender == (n .. " " .. (r or "")) or false,
                     ["GetUnitName(unit, true)"] = f ~= nil and sender == f,
                 }
                 local any = false
@@ -215,7 +219,11 @@ local function match(sender: string): Result?
                 -- the sender's name part is the unit's: the same person
                 local base = sender:match("^([^-]+)") or sender
                 if any or base == n then
-                    return { unitRealm = other and "other realm" or "same realm", matches = forms, unitNameShape = shape(f or n) }
+                    return {
+                        unitNameSecond = hasSecond and "present" or "empty",
+                        matches = forms,
+                        unitNameShape = shape(f or n),
+                    }
                 end
             end
         end
@@ -223,7 +231,31 @@ local function match(sender: string): Result?
     return nil
 end
 
+-- Whether the sender is the player (their own messages come back too):
+-- any form of the player's name.
+local function isMe(sender: string): boolean
+    local name, second = UnitName("player")
+    local n, r = asString(name), asString(second)
+    local full = asString(GetUnitName("player", true))
+    if n == nil then
+        return false
+    end
+    return sender == n
+        or sender == full
+        or sender:match("^([^-]+)") == n
+        or (r ~= nil and r ~= "" and (sender == n .. " " .. r or sender == n .. "-" .. r))
+end
+
+const MEMBER = "a group member"
+
 local function armSenders(w: Watch)
+    -- recorded under the old cases (a sender of your realm, of another
+    -- realm): that is the answer
+    local cases = w:result().cases
+    if type(cases) == "table" and next(cases :: { [string]: unknown }) ~= nil then
+        w:finish(nil)
+        return
+    end
     -- this session's senders seen (memory only, never saved)
     local seen: { [string]: boolean } = {}
     w:on("CHAT_MSG_ADDON", function(_, _prefix: unknown, _text: unknown, channel: unknown, sender: unknown)
@@ -234,8 +266,7 @@ local function armSenders(w: Watch)
             return
         end
         seen[sender] = true
-        local me = asString((UnitName("player")))
-        if me and (sender == me or sender:match("^([^-]+)") == me) then
+        if isMe(sender) then
             return
         end
         local m = match(sender)
@@ -244,17 +275,12 @@ local function armSenders(w: Watch)
             for k, v in pairs(m) do
                 fields[k] = v
             end
-        else
-            fields.unitRealm = "no unit of the group matched"
-        end
-        local key = fields.unitRealm == "other realm" and "a sender of another realm" or "a sender of your realm"
-        if not w:has(key) and fields.unitRealm ~= "no unit of the group matched" then
-            w:case(key, fields)
+            w:case(MEMBER, fields)
             return
         end
-        -- more of the same: kept as samples (up to eight)
-        local r = w:result()
-        local more = tbl.listAt(r, "samples")
+        -- no unit of the group matched: kept as samples (up to eight)
+        fields.unit = "no unit of the group matched"
+        local more = tbl.listAt(w:result(), "samples")
         if #more < 8 then
             fields.at = kit.stamp()
             more[#more + 1] = fields
@@ -264,23 +290,26 @@ end
 
 local function sumSenders(r: Result): string
     local cases = r.cases :: { [string]: Result }? or {}
+    local keys: string[] = {}
+    for key in pairs(cases) do
+        keys[#keys + 1] = key
+    end
+    table.sort(keys)
     local parts: string[] = {}
-    for _, key in ipairs({ "a sender of your realm", "a sender of another realm" }) do
+    for _, key in ipairs(keys) do
         local c = cases[key]
-        if c then
-            local forms: string[] = {}
-            for form, yes in pairs(tbl.field(c, "matches") :: { [string]: boolean }? or {}) do
-                if yes then
-                    forms[#forms + 1] = form
-                end
+        local forms: string[] = {}
+        for form, yes in pairs(tbl.field(c, "matches") :: { [string]: boolean }? or {}) do
+            if yes then
+                forms[#forms + 1] = form
             end
-            table.sort(forms)
-            parts[#parts + 1] = ("%s: shaped %s, equal to %s"):format(
-                key,
-                tostring(c.senderShape),
-                #forms == 0 and "no form of the unit's name" or table.concat(forms, " and ")
-            )
         end
+        table.sort(forms)
+        parts[#parts + 1] = ("%s: shaped %s, equal to %s"):format(
+            key,
+            tostring(tbl.field(c, "senderShape")),
+            #forms == 0 and "no form of the unit's name" or table.concat(forms, " and ")
+        )
     end
     return table.concat(parts, "; ")
 end
@@ -314,9 +343,9 @@ export function items(): Item[]
             kind = kit.Kind.Armed,
 
             when = "a group",
-            question = "How does CHAT_MSG_ADDON name a group member, compared with UnitName and GetUnitName(unit, true), for your realm and another realm?",
-            todo = "be in a group with SuuUI or other addon users (any addon that talks to the group), one of them from another realm",
-            cases = { "a sender of your realm", "a sender of another realm" },
+            question = "How does CHAT_MSG_ADDON name a group member, compared with UnitName and GetUnitName(unit, true)? (WoW Forever has no realms: one case.)",
+            todo = "be in a group with someone who runs SuuUI or another addon that talks to the group",
+            cases = { MEMBER },
             arm = armSenders,
             summarize = sumSenders,
         },

@@ -132,6 +132,8 @@ local function status()
     expect(anyLine(lines, "HUD-DM-1: enter a fight and deal damage for a few seconds")).toBe(true)
     expect(anyLine(lines, "CHAT-12: right-click a SuuUI chat tab")).toBe(true)
     expect(anyLine(lines, "still: out of combat; in a fight")).toBe(true)
+    expect(anyLine(lines, "WHISPER-taint: out of combat, left-click a player's name in SuuUI's chat")).toBe(true)
+    expect(anyLine(lines, "(no whisper seen yet)")).toBe(true)
     expect(anyLine(lines, "Probe all: 4 of")).toBe(true)
     expectNoErrors()
 end
@@ -274,10 +276,14 @@ local function senders()
     mock.receiveAddonMessage("SuuUI", "hello", "PARTY", name)
     mock.advanceFrames(1)
     local r = result("COMM-senders")
-    local case = tbl.field(r, "cases", "a sender of your realm")
+    local case = tbl.field(r, "cases", "a group member")
     expect(case).toBeTruthy()
     expect(tbl.field(case, "senderShape")).toBeTruthy()
     expect(tbl.field(case, "matches", "UnitName")).toBe(true)
+    expect(type(tbl.field(case, "unitNameSecond"))).toBe("string")
+    -- one group member answers it (WoW Forever has no realms)
+    expect(r.done).toBe(true)
+    expect(has(r.answer, "a group member: shaped")).toBe(true)
     -- nothing saved has the member's or the player's name in it
     local all: string[] = {}
     strings(DB.probe.all, all)
@@ -286,6 +292,22 @@ local function senders()
         expect(s:find(name, 1, true)).toBeNil()
         expect(s:find(me, 1, true)).toBeNil()
     end
+    expectNoErrors()
+end
+
+@test("addon messages: a record with the old realm cases counts as answered")
+local function sendersOld()
+    allProbe.command("reset")
+    allProbe.command("off")
+    record().results["COMM-senders"] = {
+        question = "",
+        done = false,
+        cases = { ["a sender of another realm"] = { senderShape = "Name Surname", matches = { ["GetUnitName(unit, true)"] = true } } },
+    }
+    allProbe.command("")
+    local r = result("COMM-senders")
+    expect(r.done).toBe(true)
+    expect(has(r.answer, "a sender of another realm: shaped Name Surname, equal to GetUnitName(unit, true)")).toBe(true)
     expectNoErrors()
 end
 
