@@ -17,12 +17,14 @@ import type GroupFinderBrowse from "/UI/GroupFinder"
 import type GroupFinderListed, ListedData, ListedFacts, ListedAd from "/UI/GroupFinderListed"
 import type GroupFinderWho, WhoData from "/UI/GroupFinderWho"
 import * as tbl from "wowlua:table"
-import errorsSoFar, newParent from "../../helpers"
+import errorsSoFar, expectNoErrors, newParent from "../../helpers"
 
 type Entry = logic.Entry
 
 const ID = "groupfinder"
 local LFG = SuuUI.LFG
+-- the library's own search (the tests stub it; some use it through gameSearch)
+local realRefresh = LFG.Refresh
 
 local NAMES: { [string]: string } = {
     ["dungeon:rfk"] = "Razorfen Kraul",
@@ -219,6 +221,7 @@ local function fakeLibrary()
         dismissed[#dismissed + 1] = id
     end)
     M.held, M.noted, M.search, M.searching, M.editing, M.adEdited, M.adText = nil, {}, nil, nil, nil, nil, nil
+    M.searchOnClick, M.clickSearchAt = nil, nil
     M.lastPost, M.listedAt, M.lastListing, M.delistedByYou = nil, nil, nil, nil
 end
 
@@ -453,6 +456,146 @@ local function searchOnOpen()
     M:SearchOnOpen()
     expect(refreshed).toEqual({ 120 })
     expect(M.searching).toBe(true)
+    expect(M.searchOnClick).toBeNil()
+end
+
+-- The library's search as the game answers it (the emulator refuses a
+-- search without the user's click or key press, as the game did on opening
+-- by key binding), each call recorded.
+local function gameSearch()
+    mock.stub(LFG, "Refresh", function(category: number?): boolean
+        refreshed[#refreshed + 1] = category
+        return realRefresh(category)
+    end)
+end
+
+-- SuuUI's chat lines printed while fn runs (the game's own "Interface
+-- action failed because of an AddOn", once a session, is not SuuUI's).
+local function printedBy(fn: () -> ()): string[]
+    local before = #mock.printed()
+    fn()
+    local out: string[] = {}
+    local all = mock.printed()
+    for i = before + 1, #all do
+        if all[i]:find("SuuUI", 1, true) then
+            out[#out + 1] = all[i]
+        end
+    end
+    return out
+end
+
+@test("a search on opening the game refuses: no error, no chat line, not searching; the first press in the page searches, once")
+local function refusedOnOpen()
+    toolAge = nil
+    gameSearch()
+    local refusals = #mock.refusals()
+    local lines = printedBy(function()
+        openBrowse()
+    end)
+    -- (the emulator refused it: opened by code, not by the player)
+    expect(refreshed).toEqual({ 2 })
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(lines).toEqual({})
+    expect(errorsSoFar()).toEqual({})
+    expect(M.searching).toBeNil()
+    expect(M.searchOnClick).toBe(true)
+    -- (never searched: no age, nothing searching, no skeleton rows)
+    expect(assert(browsePage().data).tool).toEqual({})
+    -- a press anywhere in the page (here the checkbox): the search, allowed
+    mock.click(browsePage().fits)
+    expect(refreshed).toEqual({ 2, 2 })
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(M.searching).toBe(true)
+    expect(M.searchOnClick).toBeNil()
+    expect(assert(browsePage().data).tool).toEqual({ searching = true, loading = true })
+    -- once
+    mock.click(browsePage().fits)
+    mock.click(browsePage())
+    expect(refreshed).toEqual({ 2, 2 })
+    mock.advanceTime(0.3)
+    expectNoErrors()
+end
+
+@test("a refused search on opening: a press on Refresh searches once (its click doesn't again)")
+local function refusedThenRefresh()
+    toolAge = nil
+    gameSearch()
+    local refusals = #mock.refusals()
+    openBrowse()
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(M.searchOnClick).toBe(true)
+    mock.click(browsePage().refresh)
+    expect(refreshed).toEqual({ 2, 2 })
+    expect(M.searching).toBe(true)
+    -- a later click on Refresh searches as always
+    mock.advanceTime(1)
+    mock.click(browsePage().refresh)
+    expect(refreshed).toEqual({ 2, 2, 2 })
+    expectNoErrors()
+end
+
+@test("a refused search on opening: nothing on the first press once the list is fresh; nothing waits after closing")
+local function refusedThenFresh()
+    toolAge = nil
+    gameSearch()
+    local refusals = #mock.refusals()
+    openBrowse()
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(M.searchOnClick).toBe(true)
+    -- searched meanwhile (results from elsewhere): younger than a minute
+    toolAge = 10
+    mock.click(browsePage())
+    expect(refreshed).toEqual({ 2 })
+    expect(M.searchOnClick).toBeNil()
+    -- refused again; closing the window lets it go
+    toolAge = nil
+    HideUIPanel(gameFrame("LFGParentFrame"))
+    openBrowse()
+    expect(#mock.refusals()).toBe(refusals + 2)
+    expect(M.searchOnClick).toBe(true)
+    HideUIPanel(gameFrame("LFGParentFrame"))
+    expect(M.searchOnClick).toBeNil()
+    -- fresh on opening: no search, nothing waits for a press
+    toolAge = 30
+    openBrowse()
+    expect(refreshed).toEqual({ 2, 2 })
+    expect(M.searchOnClick).toBeNil()
+    mock.click(browsePage())
+    expect(refreshed).toEqual({ 2, 2 })
+    expectNoErrors()
+end
+
+@test("a search on opening the game allows (opened with the key): searching as before; the first press doesn't search again")
+local function allowedOnOpen()
+    toolAge = nil
+    gameSearch()
+    local refusals = #mock.refusals()
+    mock.pressBinding("TOGGLEGROUPFINDER")
+    expect(gameFrame("LFGParentFrame")).toBeShown()
+    expect(refreshed).toEqual({ 2 })
+    expect(#mock.refusals()).toBe(refusals)
+    expect(M.searching).toBe(true)
+    expect(M.searchOnClick).toBeNil()
+    openBrowse()
+    mock.click(browsePage().fits)
+    expect(refreshed).toEqual({ 2 })
+    expectNoErrors()
+end
+
+@test("a refused search on opening is quiet; another blocked action in the same session is still reported")
+local function otherBlockedReported()
+    toolAge = nil
+    gameSearch()
+    local refusals = #mock.refusals()
+    openBrowse()
+    expect(#mock.refusals()).toBe(refusals + 1)
+    expect(errorsSoFar()).toEqual({})
+    mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "CastSpellByName")
+    local errs = errorsSoFar()
+    expect(#errs).toBe(1)
+    expect(errs[1]:find("Taint: Blocked: CastSpellByName", 1, true)).toBe(1)
+    mock.slash("/suu errors clear")
+    expectNoErrors()
 end
 
 @test("Render and QueueRender: the page's data once, 0.2 s later; nothing while hidden")
@@ -590,6 +733,43 @@ local function renderListed()
     listedPage().data = nil
     M:RenderListed()
     expect(listedPage().data).toBeNil()
+end
+
+@test(
+    "the ad edited on Forever (UIW-1): the 15 s refresh keeps it, after the field loses focus too; From my listing brings the written one back"
+)
+local function adEditKept()
+    listing = listingOf({ activities = { "dungeon:sfk" }, roles = { tank = true } })
+    local f = gameFrame("LFGParentFrame")
+    ShowUIPanel(f)
+    gameFrame("LFGListingFrame"):Show()
+    M:Follow()
+    local p = listedPage()
+    expect(p:IsVisible()).toBe(true)
+    local written = M:AdFromListing(listing)
+    local e = p.ad.edit
+    expect(e:GetText()).toBe(written)
+    -- typed as on Forever: the change comes with userInput false
+    mock.click(p.ad.field)
+    e:SetText("my own words")
+    mock.script(e, "OnTextChanged", false)
+    expect(M.adEdited).toBe(true)
+    -- the refresh while typing, then after Escape: the words stay
+    mock.advanceTime(15)
+    expect(e:GetText()).toBe("my own words")
+    mock.pressKey("ESCAPE")
+    expect(e:HasFocus()).toBe(false)
+    mock.advanceTime(15)
+    mock.advanceTime(15)
+    expect(ad().text).toBe("my own words")
+    expect(e:GetText()).toBe("my own words")
+    -- a refresh from code (the written text set again) is not an edit
+    mock.click(p.ad.rewrite)
+    expect(M.adEdited).toBe(false)
+    expect(e:GetText()).toBe(written)
+    mock.advanceFrames(2)
+    expect(M.adEdited).toBe(false)
+    HideUIPanel(f)
 end
 
 @test("AdFromListing: empty without a listing, else the ad for who you are now")

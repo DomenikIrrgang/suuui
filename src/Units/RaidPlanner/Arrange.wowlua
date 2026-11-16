@@ -1,0 +1,174 @@
+-- Units/RaidPlanner/Arrange.wowlua
+-- Arrange groups (Units/RaidPlanner): whether it can run and why not, the
+-- moves it would make, and the moves themselves (SetRaidSubgroup into a group
+-- with room, SwapRaidSubgroup into a full one), in rounds until the raid has
+-- caught up. The module's CanArrange, Moves, Arrange and RunMoves call these.
+
+import type PlannerMove from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import after from "wowlua:timer"
+import MAX_GROUP from "/Units/RaidPlanner/Catalog"
+import type Member from "/Units/RaidPlanner/Fill"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local try = errors.try
+
+-- A move Arrange groups asks the game for: into a group (`g`), or a swap
+-- with another (`b`).
+export type RaidMove = { a: number, g?: number, b?: number }
+
+--------------------------------------------------------------------------------
+-- Arrange groups
+--------------------------------------------------------------------------------
+
+-- Whether Arrange groups can run, and the reason when it can't: in a raid
+-- as the last roster read found it (the view says the same), leading or
+-- assisting (the roster's rank too), out of combat, someone to move.
+export function canArrange(self: RaidPlannerModule): (boolean, string?)
+    if not self.inRaid then
+        return false, "Not in a raid."
+    end
+    local me = self.me
+    local leads = secret.flag(UnitIsGroupLeader("player")) or secret.flag(UnitIsGroupAssistant("player")) or
+        (me ~= nil and (me.lead or me.assist))
+    if not leads then
+        return false, "Only the raid leader or an assistant can move players."
+    end
+    if InCombatLockdown() then
+        return false, "Not in combat."
+    end
+    if #self:Work().slots == 0 then
+        return false, "The setup has no slots yet."
+    end
+    if not (self.fill and next(self.fill.placed)) then
+        return false, "Nobody in the raid fills a slot yet."
+    end
+    if #self:Moves() == 0 then
+        return false, "Everyone is in their slot's group already."
+    end
+    return true, nil
+end
+
+-- Who goes from which group to which: everyone placed in a slot of another group.
+export function moves(self: RaidPlannerModule): PlannerMove[]
+    local out: PlannerMove[] = {}
+    local fill = self.fill
+    if not fill then
+        return out
+    end
+    for _, s in ipairs(self:Work().slots) do
+        local f = fill.slot[s.id]
+        if f and f.m.group ~= s.g then
+            out[#out + 1] = {
+                name = f.m.name,
+                class = f.m.class,
+                icon = self:TreeIcon(f.m.class, f.m.tree),
+                known = f.m.tree ~= nil,
+                from = f.m.group,
+                to = s.g,
+            }
+        end
+    end
+    return out
+end
+
+export function arrange(self: RaidPlannerModule)
+    local ok, why = self:CanArrange()
+    if not ok then
+        self:Print(why)
+        return
+    end
+    local window = self.window
+    if not window then
+        return
+    end
+    window:ShowMoves({
+        moves = self:Moves(),
+        note = "Open slots stay open; a player without a slot moves only when a full group needs their place. You lead; out of combat. The raid sees the moves.",
+    }, function()
+        self:RunMoves(1)
+    end)
+end
+
+-- One round of moves: into a group with room, a set; into a full one, a swap
+-- with someone there who doesn't belong (whose own group is best). Then,
+-- once the raid has caught up, another round for what's left (a few at most).
+export function runMoves(self: RaidPlannerModule, round: number)
+    if InCombatLockdown() or round > 4 then
+        return
+    end
+    self:ReadRoster()
+    local ok = self:CanArrange()
+    local fill = self.fill
+    if not (ok and fill) then
+        return
+    end
+    local roster = self.roster
+    local count: { [number]: number } = {}
+    local target: { [string]: number } = {}
+    for _, m in ipairs(roster) do
+        count[m.group] = (count[m.group] or 0) + 1
+    end
+    for _, s in ipairs(self:Work().slots) do
+        local f = fill.slot[s.id]
+        if f then
+            target[f.m.key] = s.g
+        end
+    end
+    local plan: RaidMove[] = {}
+    local done: { [string]: boolean } = {}
+    for _, m in ipairs(roster) do
+        local to = target[m.key]
+        if to and to ~= m.group and not done[m.key] then
+            if (count[to] or 0) < MAX_GROUP then
+                plan[#plan + 1] = { a = m.index, g = to }
+                count[m.group] = (count[m.group] or 0) - 1
+                count[to] = (count[to] or 0) + 1
+                m.group = to
+            else
+                local swap: Member? = nil
+                for _, x in ipairs(roster) do
+                    if x.group == to and not done[x.key] and target[x.key] ~= to then
+                        if target[x.key] == m.group then
+                            swap = x
+                            break
+                        end
+                        swap = swap or x
+                    end
+                end
+                if swap then
+                    plan[#plan + 1] = { a = m.index, b = swap.index }
+                    swap.group, m.group = m.group, to
+                    done[swap.key] = target[swap.key] == swap.group
+                end
+            end
+            done[m.key] = true
+        end
+    end
+    if #plan == 0 then
+        return
+    end
+    for i, p in ipairs(plan) do
+        after((i - 1) * 0.1, function()
+            if InCombatLockdown() then
+                return
+            end
+            if p.g then
+                try(SetRaidSubgroup, p.a, p.g)
+            else
+                try(SwapRaidSubgroup, p.a, p.b)
+            end
+        end)
+    end
+    -- the roster update comes 0.4-0.7 s after a move (probed)
+    after(#plan * 0.1 + 1.5, function()
+        if not self:IsEnabled() then
+            return
+        end
+        self:Refill()
+        if #self:Moves() > 0 then
+            self:RunMoves(round + 1)
+        end
+    end)
+end

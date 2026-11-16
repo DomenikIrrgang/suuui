@@ -14,6 +14,11 @@ import type QuestPlace from "/Units/ObjectiveTracker"
 import type QuestRow, TrackerQuest from "/UI/ObjectiveTracker"
 import type MenuDescription from "/UI/ContextMenu"
 import expectNoErrors from "../../helpers"
+import * as coreSettings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
+import * as visibility from "/UI/Visibility"
 
 local UI = SuuUI.UI
 
@@ -630,9 +635,26 @@ local function scrolled()
     expect(laid).toHaveBeenCalled()
 end
 
--- (last: the tracker off)
-@test("stopped: hidden")
+-- (last: the tracker off) The tracker is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: hidden, its visibility let go; on again, shown")
 local function disabled()
-    M:OnDisable()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    expect(visibility.count(M)).toBe(1)
+    coreSettings.set("tracker", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(parts()).never.toBeShown()
+    expect(visibility.count(M)).toBe(0)
+    events.emit("SUUUI_EDITMODE_CHANGED", true)
+    events.emit("SUUUI_EDITMODE_CHANGED", false)
+    mock.advanceFrames(2)
+    expect(parts()).never.toBeShown()
+    coreSettings.set("tracker", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(parts()).toBeShown()
+    own.reloadToToggle = true
+    expectNoErrors()
 end

@@ -5,7 +5,8 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as init from "/Core/Init"
 import * as fault from "/Core/Fault"
-import * as settingsWindow from "/SettingsUI/Window"
+import onBareCommand from "/Core/Init"
+import * as frames from "wowlua:frames"
 import API_VERSION from "/Core/Modules"
 
 const PREFIX = "|cff9fd3c7SuuUI|r "
@@ -108,12 +109,15 @@ local function argFunctions()
     expect((info("coreatestbad") :: init.CommandInfo).args).toBeNil()
 end
 
-@test("unregisterCommands: the owner's commands go, the others keep their order")
+@test("unregisterCommands: the owner's commands go, the others keep their order; countCommands")
 local function unregisters()
     init.registerCommand("coreatesta", "A.", function() end, OWNER)
     init.registerCommand("coreatestb", "B.", function() end, OTHER)
     init.registerCommand("coreatestc", "C.", function() end, OWNER)
+    expect(init.countCommands(OWNER)).toBe(2)
+    expect(init.countCommands(OTHER)).toBe(1)
     init.unregisterCommands(OWNER)
+    expect(init.countCommands(OWNER)).toBe(0)
     expect(info("coreatesta")).toBeNil()
     expect(info("coreatestc")).toBeNil()
     expect(info("coreatestb")).never.toBeNil()
@@ -188,15 +192,19 @@ local function versionCommand()
     })
 end
 
-@test("/suu alone toggles the settings window")
+@test("/suu alone does what the settings window handed over: it opens and closes the window")
 local function bare()
-    local original = settingsWindow.toggle
     local toggled = mock.spy(function() end)
-    mock.module(settingsWindow, { toggle = toggled })
+    local window = onBareCommand(toggled)
     mock.slash("/suu")
     mock.slash("/suu   ")
-    mock.module(settingsWindow, { toggle = original })
+    expect(onBareCommand(window)).toBe(toggled)
     expect(toggled).toHaveBeenCalledTimes(2)
+    -- the window's own: open, then closed
+    mock.slash("/suu")
+    expect(assert(frames.find("SuuUISettings")):IsShown()).toBe(true)
+    mock.slash("/suu")
+    expect(assert(frames.find("SuuUISettings")):IsShown()).toBe(false)
 end
 
 @test("/rl reloads the interface")

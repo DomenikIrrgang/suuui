@@ -1,0 +1,148 @@
+-- Units/MouseBindings/Ranks.wowlua
+-- Mouseover bindings' spell ranks (Units/MouseBindings): a spell ID's rank,
+-- every spell's learned ranks by name from your spellbook (read once until
+-- the book changes), the spell ID a binding casts now, on whom a new
+-- binding casts, and a binding's line under its spell.
+
+import type BindSpell from "/Core/API"
+import type Bind, React from "./Inputs"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local try = errors.try
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+--------------------------------------------------------------------------------
+-- Ranks
+--------------------------------------------------------------------------------
+
+local BANK = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+
+-- A spell ID's rank ("Rank 3" → 3), or nil.
+export function rankNumber(id: number): number?
+    local sub = asString(try(C_Spell.GetSpellSubtext, id))
+    return sub and tonumber(sub:match("(%d+)")) or nil
+end
+
+-- Every learned rank of a spell in your spellbook: { id, rank } by rank.
+-- Every spell's ranks in your book, by name: read once until the book
+-- changes (each binding's lookup read the whole book, 80 KB of garbage a
+-- time, on every apply).
+type Ranks = { id: number, rank: number }[]
+local rankIndex: { [string]: Ranks }? = nil
+local bookWatch = CreateFrame("Frame")
+bookWatch:RegisterEvent("SPELLS_CHANGED")
+bookWatch:SetScript("OnEvent", function()
+    rankIndex = nil
+end)
+
+export function ranksOf(name: string): Ranks
+    local index = rankIndex
+    if not index then
+        index = readRanks()
+        rankIndex = index
+    end
+    local list = index[name]
+    if not list then
+        return {}
+    end
+    -- (a copy: the caller's to keep)
+    local out: Ranks = {}
+    for i, r in ipairs(list) do
+        out[i] = r
+    end
+    return out
+end
+
+-- Forget the book's ranks (a test's spells changed without the game's event).
+export function forgetRanks()
+    rankIndex = nil
+end
+
+function readRanks(): { [string]: Ranks }
+    local byName: { [string]: Ranks } = {}
+    local lines = asNumber(try(C_SpellBook.GetNumSpellBookSkillLines)) or 0
+    for l = 1, lines do
+        local info = try(C_SpellBook.GetSpellBookSkillLineInfo, l) :: {
+            itemIndexOffset?: unknown,
+            numSpellBookItems?: unknown,
+        }?
+        local offset = info and asNumber(info.itemIndexOffset) or 0
+        local count = info and asNumber(info.numSpellBookItems) or 0
+        for slot = offset + 1, offset + count do
+            local item = try(C_SpellBook.GetSpellBookItemInfo, slot, BANK) :: {
+                name?: unknown,
+                spellID?: unknown,
+                subName?: unknown,
+                isPassive?: unknown,
+            }?
+            local n = item and asString(item.name)
+            local id = item and asNumber(item.spellID)
+            if n and id and not flag(item and item.isPassive) then
+                local sub = item and asString(item.subName) or ""
+                local list = byName[n] or {}
+                byName[n] = list
+                list[#list + 1] = { id = id, rank = tonumber(sub:match("(%d+)")) or 0 }
+            end
+        end
+    end
+    for _, list in pairs(byName) do
+        table.sort(list, function(a: { rank: number }, b: { rank: number }): boolean
+            return a.rank < b.rank
+        end)
+    end
+    return byName
+end
+
+-- The spell ID a binding casts now: its rank, or the highest you know.
+export function castID(b: Bind): number?
+    if b.rank == "fixed" and b.spellID then
+        return b.spellID
+    end
+    local ranks = ranksOf(b.spell)
+    local top = ranks[#ranks]
+    return top and top.id or b.spellID
+end
+
+-- On whom a new binding of the spell casts: friends for a helpful spell,
+-- enemies for a harmful one, anyone otherwise.
+export function defaultReact(s: BindSpell): React
+    local id = s.spellID
+    local helpful = flag(try(rawget(C_Spell, "IsSpellHelpful"), id or s.name)) or
+        flag(try(rawget(_G, "IsHelpfulSpell"), s.name))
+    local harmful = flag(try(rawget(C_Spell, "IsSpellHarmful"), id or s.name)) or
+        flag(try(rawget(_G, "IsHarmfulSpell"), s.name))
+    if helpful and not harmful then
+        return "help"
+    elseif harmful and not helpful then
+        return "harm"
+    end
+    return "any"
+end
+
+-- A binding's line under its spell: its rank, where and on whom.
+export function bindLine(b: Bind): string
+    local parts: string[] = {}
+    if b.rank == "fixed" and b.spellID then
+        local r = rankNumber(b.spellID)
+        parts[#parts + 1] = r and ("Rank " .. r .. " only") or "This rank only"
+    else
+        local ranks = ranksOf(b.spell)
+        local top = ranks[#ranks]
+        if top and top.rank > 0 then
+            parts[#parts + 1] = "Highest rank · now Rank " .. top.rank
+        end
+    end
+    if b.reach == "frames" then
+        parts[#parts + 1] = "unit frames only"
+    elseif b.reach == "world" then
+        parts[#parts + 1] = "in the world only"
+    end
+    if b.react == "help" then
+        parts[#parts + 1] = "friends"
+    elseif b.react == "harm" then
+        parts[#parts + 1] = "enemies"
+    end
+    local line = table.concat(parts, " · ")
+    return line ~= "" and (line:sub(1, 1):upper() .. line:sub(2)) or ""
+end

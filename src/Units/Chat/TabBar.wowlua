@@ -1,0 +1,863 @@
+-- Units/Chat/TabBar.wowlua
+-- The chat's tab bar (Units/Chat): SuuUI's own tab buttons, one per
+-- Blizzard window in this character's order and Search last, with edit
+-- mode's look (dashed outline, grip) and the plate a lifted tab rides on;
+-- choosing a tab (its mirror shown, the combat log's filter bar), a right
+-- click on one, laying the row out, the tabs' order kept and reset, the
+-- glide to a new place and dragging a tab along the row. The functions
+-- take the module (its state: the tab chosen, the press and the drag);
+-- Units/Chat/Tabs does the order and the geometry as data.
+
+import SuuUI from "/Core/API"
+import type Text from "/Core/API"
+import type ChatModule from "../Chat"
+import EditHint, TABS_H from "./Panel"
+import type ChatPanel from "./Panel"
+import windowName, globalFrame from "./Windows"
+import * as chatTabs from "./Tabs"
+import * as tbl from "wowlua:table"
+import * as chat from "wowlua:chat"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local field = tbl.field
+local chatFrames = chat.windows
+
+-- One of Blizzard's chat windows.
+type Window = chat.Window
+-- What a tab shows: a window, or the Search tab.
+export type TabOf = Window | "search"
+local SEARCH: TabOf = "search"
+-- A tab's glide: from (fx, fy) to tx, since `start`.
+export type Slide = { fx: number, fy: number, tx: number, start: number }
+-- A press on a tab, and the drag it became: the others in their order,
+-- its place among them, where it started, where the pointer holds it.
+export type Press = { b: TabButton, x0: number }
+export type Drag = {
+    b: TabButton,
+    x0: number,
+    others: Window[],
+    index: number,
+    start: number,
+    grab: number,
+    maxX: number,
+    slotX?: number,
+}
+
+--------------------------------------------------------------------------------
+-- Tabs: SuuUI's own buttons, one per Blizzard window, in SuuUI's order
+--------------------------------------------------------------------------------
+
+-- Edit mode's look of a tab (asked 2026-10-19; design board "Chat tabs ·
+-- drag to reorder", C).
+local GRIP_W = 10 -- the grip (6 px) and its gap, in edit mode
+local EDIT_PAD = 4 -- edit mode's wider padding (6 px a side, not 4)
+local PLATE_OUT = 4 -- a lifted tab's plate reaches past it on each side
+
+-- a tab's name: header's face a px under its size (12 px in the design's;
+-- again when a theme changes it)
+export function tabFace(label: Text)
+    label:SetFont(SuuUI.Fonts.File("header"), math.max(8, T.type.header.size - 1), "")
+end
+
+-- A dashed outline around `frame` (3 px dashes, 2 px gaps, one physical pixel
+-- thick, inside its edge).
+class DashedOutline
+    readonly frame: Frame
+    readonly parts: Texture[] = {}
+    color: string = "gilt-line"
+    w: number? = nil
+    h: number? = nil
+
+    constructor(frame: Frame)
+        self.frame = frame
+    end
+
+    function Layout(w: number, h: number)
+        local px = SuuUI.Pixel.Size(self.frame)
+        local n = 0
+        for _, d in ipairs(chatTabs.dashes(w, h, px)) do
+            n = n + 1
+            local t = self.parts[n]
+            if not t then
+                t = self.frame:CreateTexture(nil, "BORDER")
+                self.parts[n] = t
+            end
+            UI.PaintFill(t, self.color)
+            t:ClearAllPoints()
+            t:SetPoint("TOPLEFT", self.frame, "TOPLEFT", d.x, -d.y)
+            t:SetSize(d.w, d.h)
+            t:Show()
+        end
+        for i = n + 1, #self.parts do
+            self.parts[i]:Hide()
+        end
+        self.w, self.h = w, h
+    end
+
+    function SetColor(token: string)
+        self.color = token
+        for _, t in ipairs(self.parts) do
+            UI.PaintFill(t, token)
+        end
+    end
+
+    function Hide()
+        for _, t in ipairs(self.parts) do
+            t:Hide()
+        end
+        self.w = nil
+    end
+end
+
+-- Six 2 px dots, two across and three down (the board's grip).
+local function grip(b: Frame): Frame
+    local g = CreateFrame("Frame", nil, b)
+    g:SetSize(6, 10)
+    g:SetPoint("LEFT", 6, 1)
+    for i = 0, 5 do
+        local t = g:CreateTexture(nil, "ARTWORK")
+        UI.PaintFill(t, "gilt-line")
+        t:SetSize(2, 2)
+        t:SetPoint("TOPLEFT", (i % 2) * 4, -math.floor(i / 2) * 4)
+    end
+    return g
+end
+
+export class TabButton extends Button
+    readonly label: Text
+    readonly unread: Texture
+    hover: boolean = false
+    active: boolean = false
+    cf: TabOf? = nil
+    -- where it sits in the row (its marker's span), its glide
+    x: number? = nil
+    y: number? = nil
+    slide: Slide? = nil
+    markWidth: number? = nil
+    markLeft: number? = nil
+    dragged: boolean? = nil
+    -- edit mode's look: "none", "grip" or "fixed" (Search)
+    look: string? = nil
+    grip: Frame? = nil
+    outline: DashedOutline? = nil
+    -- the plate under it while lifted
+    plate: Frame? = nil
+
+    constructor(m: ChatModule, p: ChatPanel)
+        super(nil, p.tabs)
+        self:SetHeight(TABS_H)
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self.label = UI.Text(self, "header", "ink-muted")
+        tabFace(self.label)
+        self.label:SetShadowed(true)
+        -- centred over the underline (it was left of it: measured in header's
+        -- own size, wider than the 12 px name)
+        self.label:SetPoint("CENTER", 0, 1)
+        self.label:SetJustifyH("CENTER")
+        self.label:SetWordWrap(false)
+        self.unread = UI.Diamond(self, 4, "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.unread:SetPoint("LEFT", self.label, "RIGHT", S["space-2"], 1)
+        end)
+        self:SetScript("OnEnter", function()
+            self.hover = true
+            if not self.active then
+                self.label:SetColor("ink")
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover = false
+            if not self.active then
+                self.label:SetColor("ink-muted")
+            end
+        end)
+        p.marker:Track(self)
+        self:SetScript("OnMouseDown", function(_, button: string)
+            self.dragged = nil
+            if button == "LeftButton" then
+                m:PressTab(self)
+            end
+        end)
+        self:SetScript("OnClick", function(_, button: string)
+            -- the release that ends a drag isn't a click
+            if self.dragged then
+                self.dragged = nil
+                return
+            end
+            if button == "RightButton" then
+                m:TabMenu(self)
+                return
+            end
+            -- in edit mode a press on a tab arranges; it doesn't switch
+            if m:Arranging() then
+                return
+            end
+            local cf = self.cf
+            if cf then
+                m:Select(cf)
+            end
+        end)
+    end
+
+    -- Edit mode's look: a dashed outline and a grip (Search: a fainter
+    -- outline, no grip). Returns the width it adds to the tab.
+    function EditLook(arranging: boolean, fixed: boolean): number
+        local extra = 0
+        if arranging then
+            extra = EDIT_PAD + (fixed and 0 or GRIP_W)
+        end
+        local look = arranging and (fixed and "fixed" or "grip") or "none"
+        if self.look ~= look then
+            self.look = look
+            self.label:ClearAllPoints()
+            self.label:SetPoint("CENTER", look == "grip" and GRIP_W / 2 or 0, 1)
+            if look == "grip" and not self.grip then
+                self.grip = grip(self)
+            end
+            local g = self.grip
+            if g then
+                g:SetShown(look == "grip")
+            end
+            local outline = self.outline
+            if look ~= "none" then
+                outline = outline or DashedOutline.new(self)
+                self.outline = outline
+                outline:SetColor(look == "fixed" and "gilt-faint" or "gilt-line")
+            elseif outline then
+                outline:Hide()
+            end
+        end
+        local outline = self.outline
+        if look ~= "none" and outline then
+            local w = math.floor(self.label:GetWidth() + 8 + extra + 0.5)
+            if outline.w ~= w then
+                outline:Layout(w, TABS_H)
+            end
+        end
+        return extra
+    end
+
+    -- The plate under it when lifted: surface-raised, a gilt edge, the
+    -- panel's shadow; it reaches PLATE_OUT past the tab on each side.
+    function Plate(): Frame
+        local made = self.plate
+        if made then
+            return made
+        end
+        -- beside the tab, not in it (a child would cover its name); it moves
+        -- with the tab
+        local f = CreateFrame("Frame", nil, self:GetParent())
+        f:SetPoint("TOPLEFT", self, "TOPLEFT", -PLATE_OUT, 0)
+        f:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", PLATE_OUT, 0)
+        UI.Fill(f, "surface-raised", "BACKGROUND"):SetAllPoints()
+        UI.Border(f, "gilt")
+        UI.Shadow(f, "shadow-panel")
+        f:Hide()
+        self.plate = f
+        return f
+    end
+
+    function HidePlate()
+        local pl = self.plate
+        if pl then
+            pl:Hide()
+        end
+    end
+end
+
+-- The combat log's filter bar (Blizzard's: My actions, What happened to me?
+-- …), shown at the top of the lines while the Combat Log tab is.
+local FILTER_H = 24
+
+-- Tab order (asked 2026-10-19; design board "Chat tabs · drag to reorder",
+-- B and C, the user's pick): every tab but Search can be dragged along the
+-- row (Search stays last). After 6 px the tab lifts onto a gilt-edged plate
+-- and moves with the pointer, and the tabs it passes slide aside, so the
+-- row always shows the order you'll get (B). Setting "Reorder tabs": by
+-- dragging anytime (B), or only in SuuUI's edit mode, where the tabs get
+-- dashed outlines and grips and any press-and-move drags (C; also there
+-- with B). Esc, a right click or letting go away from the row puts the tab
+-- back. The order is kept per character by window ID; a whisper tab by its
+-- player, only while it's open (a new one comes in before Search).
+local DRAG_START = 6 -- px along the row before a press becomes a drag
+local LIFT = 4 -- the dragged tab rides this far up on its plate
+local SLIDE = T.duration["dur-fast"]
+local smooth = chatTabs.smooth
+
+-- The pointer's x along the row, in the row's units.
+local function cursorX(row: Frame): number
+    local x = GetCursorPosition()
+    return x / row:GetEffectiveScale() - (row:GetLeft() or 0)
+end
+
+--------------------------------------------------------------------------------
+-- The tabs as the module shows them
+--------------------------------------------------------------------------------
+
+-- The windows as tabs: docked ones (General first, Global second, the rest
+-- in the dock's order), then whisper windows.
+export function tabWindows(self: ChatModule): Window[]
+    local out: Window[] = {}
+    local seen: { [Window]: boolean } = {}
+    local function add(cf: Window?)
+        if cf and not seen[cf] then
+            seen[cf] = true
+            out[#out + 1] = cf
+        end
+    end
+    local docked = chat.docked()
+    local function named(wanted: string): Window?
+        for _, cf in ipairs(docked) do
+            local name = windowName(cf)
+            if name and name:lower() == wanted then
+                return cf
+            end
+        end
+        return nil
+    end
+    add(ChatFrame1)
+    add(named("global"))
+    for _, cf in ipairs(docked) do
+        if not chat.isTemporary(cf) then
+            add(cf)
+        end
+    end
+    for _, cf in ipairs(docked) do
+        add(cf)
+    end
+    -- whisper windows Blizzard didn't dock (a closed one is hidden)
+    for _, cf in ipairs(chatFrames()) do
+        if chat.isTemporary(cf) and cf:IsShown() then
+            add(cf)
+        end
+    end
+    return out
+end
+
+-- The button showing a window's tab (a free one, or a new one).
+export function tabFor(self: ChatModule, cf: TabOf): TabButton
+    local p = self:Panel()
+    local made = p.tabFor[cf]
+    if made then
+        return made
+    end
+    local b: TabButton? = nil
+    for _, free in ipairs(p.tabButtons) do
+        if not free.cf then
+            b = free
+            break
+        end
+    end
+    local tab = b or TabButton.new(self, p)
+    if not b then
+        p.tabButtons[#p.tabButtons + 1] = tab
+    end
+    -- placed at once where it first shows
+    tab.cf, tab.x, tab.y, tab.slide = cf, nil, nil, nil
+    p.tabFor[cf] = tab
+    return tab
+end
+
+-- The combat log's filter bar, shown at the top of the lines while the
+-- Combat Log tab is: Blizzard shows it only while its own dock has the
+-- combat log selected, which it no longer is. The lines move down to
+-- make room.
+export function combatFilterBar(self: ChatModule, show: boolean)
+    local bar = globalFrame("CombatLogQuickButtonFrame_Custom")
+    local mirror = self.mirrors[ChatFrame2]
+    if mirror then
+        local f = mirror.frame
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", 0, (show and bar) and -(FILTER_H + S["space-1"]) or 0)
+        f:SetPoint("BOTTOMRIGHT")
+    end
+    if not bar then
+        return
+    end
+    if show then
+        local log = self:Panel().log
+        -- out of ChatFrame2 (always hidden now: Blizzard's dock stays on
+        -- General) into the lines' area
+        if bar:GetParent() ~= log then
+            bar:SetParent(log)
+        end
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", log, "TOPLEFT", 0, 0)
+        bar:SetPoint("TOPRIGHT", log, "TOPRIGHT", 0, 0)
+        bar:SetHeight(FILTER_H)
+        bar:SetFrameStrata("MEDIUM")
+        bar:Show()
+    else
+        bar:Hide()
+    end
+end
+
+-- Right click on a tab: Blizzard's chat settings for its window (asked
+-- 2026-10-18); on a whisper tab, a menu to close it. The windows' font
+-- size, name, new and closing are in SuuUI's settings, Chat › Windows.
+export function tabMenu(self: ChatModule, b: TabButton)
+    local cf = b.cf
+    if not cf or cf == "search" then
+        return
+    end
+    if not chat.isTemporary(cf) then
+        self:OpenChatSettings(cf)
+        return
+    end
+    if not field(_G, "FCF_Close") then
+        return
+    end
+    UI.ContextMenuFrom(b, function(_, root)
+        root:CreateButton("Close", function()
+            self:CloseWindow(cf)
+        end)
+    end, "chatTab", { chatFrame = cf })
+end
+
+export function selectTab(self: ChatModule, cf: TabOf)
+    self.selected = cf
+    self.activeMirror = nil
+    for frame, mirror in pairs(self.mirrors) do
+        mirror.frame:SetShown(frame == cf)
+        if frame == cf then
+            self.activeMirror = mirror
+            self.unread[frame] = nil
+        end
+    end
+    self:ShowSearch(cf == "search")
+    self:RedrawShown()
+    self:CombatFilterBar(cf == ChatFrame2)
+    self:UpdateTabs()
+end
+
+export function updateTabs(self: ChatModule)
+    local p = self:Panel()
+    local windows = self:OrderedWindows()
+    local selected = self.selected
+    if not selected or (selected ~= "search" and not tContains(windows, selected)) then
+        self.selected = nil
+        self:Select(ChatFrame1)
+        return
+    end
+    -- its mirror may have come after the choice
+    local mirror = selected ~= "search" and self.mirrors[selected] or nil
+    if mirror and not mirror.frame:IsShown() then
+        self:Select(selected)
+        return
+    end
+    -- a drag lays the row out itself until it ends
+    if self.drag then
+        return
+    end
+    -- the Search tab last, after the whispers
+    local tabs: TabOf[] = { unpack(windows) }
+    tabs[#tabs + 1] = SEARCH
+    local arranging = self:Arranging()
+    local glide = self.glideOnce
+    self.glideOnce = nil
+    local x = 0
+    local chosen: TabButton? = nil
+    local used: { [TabButton]: boolean } = {}
+    for _, cf in ipairs(tabs) do
+        local b = self:TabFor(cf)
+        used[b] = true
+        local name: string? = nil
+        if cf == "search" then
+            name = "Search"
+        else
+            name = windowName(cf)
+            local _, target = chat.conversation(cf)
+            if target then
+                name = target
+            end
+        end
+        b.label:SetText(name or "")
+        b.label.value = nil
+        local w = 60
+        if name then
+            w = math.min(140, math.ceil(b.label:GetUnboundedStringWidth()) + 2)
+        end
+        b.label:SetWidth(w)
+        local active = cf == selected
+        b.active = active
+        -- the hover's ink kept (this runs every tick: it reset it at once)
+        b.label:SetColor(self:TabInk(b, arranging))
+        b.unread:SetShown(not active and cf ~= "search" and self.unread[cf] == true)
+        local tw = w + 8 + b:EditLook(arranging, cf == "search")
+        b:SetWidth(tw)
+        b.markWidth = tw
+        b:Show()
+        self:PlaceTab(b, x, glide)
+        if active then
+            chosen = b
+        end
+        x = x + tw + S["space-5"]
+    end
+    for _, b in ipairs(p.tabButtons) do
+        if not used[b] then
+            local cf = b.cf
+            if cf then
+                p.tabFor[cf] = nil
+            end
+            b.cf, b.slide = nil, nil
+            b:Hide()
+        end
+    end
+    p.marker:SetChosen(chosen)
+end
+
+-- A tab's name colour: the chosen one gilt, the hovered one ink; Search
+-- faint while the tabs are arranged.
+export function tabInk(self: ChatModule, b: TabButton, arranging: boolean): string
+    if b.active then
+        return "gilt-text"
+    end
+    if arranging and b.cf == "search" then
+        return "ink-faint"
+    end
+    local d = self.drag
+    if b.hover or (d and d.b == b) then
+        return "ink"
+    end
+    return "ink-muted"
+end
+
+-- The windows in this character's order: the kept ones first as kept,
+-- then the rest in the starting order (a new whisper tab at the end).
+export function orderedWindows(self: ChatModule): Window[]
+    local windows = self:Windows()
+    local kept = self:CharData().tabOrder
+    if type(kept) ~= "table" then
+        return windows
+    end
+    -- (a whisper keeps its place only while its tab is open)
+    return chatTabs.ordered(windows, tbl.list(kept), chatTabs.tabKey)
+end
+
+export function saveTabOrder(self: ChatModule, list: Window[])
+    self:CharData().tabOrder = chatTabs.keysOf(list, chatTabs.tabKey)
+end
+
+export function hasTabOrder(self: ChatModule): boolean
+    return type(self:CharData().tabOrder) == "table"
+end
+
+-- Back to the starting order: General and Global, the other windows, whispers.
+export function resetTabOrder(self: ChatModule)
+    self:CharData().tabOrder = nil
+    if not self.panel then
+        return
+    end
+    self.glideOnce = true
+    self:UpdateTabs()
+end
+
+-- Tabs arranged in edit mode (grips, a press on a tab drags).
+export function isArranging(self: ChatModule): boolean
+    return SuuUI.EditMode.IsActive() and true or false
+end
+
+-- Whether a press on a tab may drag it now.
+export function canDrag(self: ChatModule): boolean
+    if self:Arranging() then
+        return true
+    end
+    return self:Get("tabReorder") == "drag"
+end
+
+--------------------------------------------------------------------------------
+-- Placing and sliding the tabs
+--------------------------------------------------------------------------------
+
+export function setTab(self: ChatModule, b: TabButton, x: number, y: number)
+    local p = self:Panel()
+    b:ClearAllPoints()
+    b:SetPoint("BOTTOMLEFT", p.tabs, "BOTTOMLEFT", x, y)
+    b.x, b.y, b.markLeft = x, y, x
+    if b.active then
+        p.marker:Aim()
+    end
+end
+
+-- A tab to its place in the row: at once, or gliding there (dur-fast; at
+-- once with reduced motion). A glide on its way turns to a new place.
+export function placeTab(self: ChatModule, b: TabButton, x: number, glide: boolean?)
+    local d = self.drag
+    if d and d.b == b then
+        return
+    end
+    local sl = b.slide
+    if sl then
+        if sl.tx ~= x then
+            b.slide = { fx = b.x or 0, fy = b.y or 0, tx = x, start = GetTime() }
+        end
+        return
+    end
+    if b.x == x and (b.y or 0) == 0 then
+        return
+    end
+    local from = b.x
+    if glide and from and not SuuUI.Motion.Reduced() then
+        b.slide = { fx = from, fy = b.y or 0, tx = x, start = GetTime() }
+        self:RunSlides()
+    else
+        self:SetTab(b, x, 0)
+        b:HidePlate()
+    end
+end
+
+export function runSlides(self: ChatModule)
+    local p = self:Panel()
+    local slider = p.slider or CreateFrame("Frame", nil, p.tabs)
+    p.slider = slider
+    slider:SetScript("OnUpdate", function()
+        local moving = false
+        for _, b in ipairs(p.tabButtons) do
+            local sl = b.slide
+            if sl then
+                local t = (GetTime() - sl.start) / SLIDE
+                if t >= 1 or not b.cf then
+                    b.slide = nil
+                    self:SetTab(b, sl.tx, 0)
+                    -- the plate drops back into the row as it lands
+                    b:HidePlate()
+                    if b.cf then
+                        b.label:SetColor(self:TabInk(b, self:Arranging()))
+                    end
+                else
+                    local e = smooth(t)
+                    self:SetTab(b, sl.fx + (sl.tx - sl.fx) * e, sl.fy * (1 - e))
+                    moving = true
+                end
+            end
+        end
+        if not moving then
+            slider:SetScript("OnUpdate", nil)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- Dragging a tab
+--------------------------------------------------------------------------------
+
+export function pressTab(self: ChatModule, b: TabButton)
+    if b.cf == "search" or self.drag or not self:CanDrag() then
+        return
+    end
+    local p = self:Panel()
+    self.press = { b = b, x0 = cursorX(p.tabs) }
+    local dragger = p.dragger or CreateFrame("Frame", nil, p.tabs)
+    p.dragger = dragger
+    dragger:SetScript("OnUpdate", function()
+        self:DragStep()
+    end)
+end
+
+export function stopDragger(self: ChatModule)
+    local p = self:Panel()
+    local dragger = p.dragger
+    self.press = nil
+    if dragger then
+        dragger:SetScript("OnUpdate", nil)
+    end
+    local keys = p.dragKeys
+    if keys then
+        keys:Hide()
+    end
+end
+
+export function dragStep(self: ChatModule)
+    local press = self.press
+    local tabs = self:Panel().tabs
+    if not press or not tabs:IsVisible() then
+        return self:EndDrag(false)
+    end
+    local cx = cursorX(tabs)
+    if not self.drag then
+        -- released before it moved far enough: a click
+        if not IsMouseButtonDown("LeftButton") then
+            return self:StopDragger()
+        end
+        local threshold = self:Arranging() and 2 or DRAG_START
+        if math.abs(cx - press.x0) < threshold then
+            return
+        end
+        self:BeginDrag(press)
+    end
+    if IsMouseButtonDown("RightButton") then
+        return self:EndDrag(false)
+    end
+    if not IsMouseButtonDown("LeftButton") then
+        -- let go on the row: there; away from it: back
+        return self:EndDrag(tabs:IsMouseOver(12, -12, -24, 24) and true or false)
+    end
+    self:MoveDrag(cx)
+end
+
+export function beginDrag(self: ChatModule, press: Press)
+    local p = self:Panel()
+    local b = press.b
+    -- the others in their order, without it; its place among them
+    local others: Window[] = {}
+    local index = 1
+    for _, cf in ipairs(self:OrderedWindows()) do
+        if cf == b.cf then
+            index = #others + 1
+        else
+            others[#others + 1] = cf
+        end
+    end
+    -- it may go as far as the place before Search
+    local span = b:GetWidth()
+    for _, cf in ipairs(others) do
+        local o = p.tabFor[cf]
+        if o then
+            span = span + S["space-5"] + o:GetWidth()
+        end
+    end
+    self.drag = {
+        b = b,
+        x0 = press.x0,
+        others = others,
+        index = index,
+        start = index,
+        grab = press.x0 - (b.x or 0),
+        maxX = span - b:GetWidth(),
+    }
+    b.dragged = true
+    b.slide = nil
+    -- it lifted onto its plate, both over the others as it passes them
+    local base = p.tabs:GetFrameLevel()
+    for _, o in ipairs(p.tabButtons) do
+        o:SetFrameLevel(base + (o == b and 2 or 0))
+    end
+    local pl = b:Plate()
+    pl:SetFrameLevel(base + 1)
+    pl:Show()
+    b.label:SetColor(self:TabInk(b, self:Arranging()))
+    -- Esc puts it back; every other key passes on (the helper takes the
+    -- keyboard only out of combat, and lets it go when a fight starts)
+    local keys = p.dragKeys
+    if not keys then
+        keys = CreateFrame("Frame", nil, p.tabs)
+        keys:Hide()
+        UI.Dismissable(keys, {
+            close = function()
+                self:EndDrag(false)
+            end,
+        })
+        p.dragKeys = keys
+    end
+    keys:Show()
+end
+
+-- The row for the dragged tab at `index`: the others slide to their places.
+export function layoutDrag(self: ChatModule, d: Drag, index: number)
+    local p = self:Panel()
+    local x = 0
+    for i = 1, #d.others + 1 do
+        local b: TabButton? = nil
+        if i == index then
+            b = d.b
+            d.slotX = x
+        else
+            b = p.tabFor[d.others[i < index and i or i - 1]]
+            if b then
+                self:PlaceTab(b, x, true)
+            end
+        end
+        if b then
+            x = x + b:GetWidth() + S["space-5"]
+        end
+    end
+end
+
+export function moveDrag(self: ChatModule, cx: number)
+    local d = self.drag
+    if not d then
+        return
+    end
+    local p = self:Panel()
+    local b = d.b
+    local x = math.max(0, math.min(d.maxX, cx - d.grab))
+    -- its place: after every other tab whose middle it has passed
+    local centre = x + b:GetWidth() / 2
+    local mids: (number | false)[] = {}
+    for i, cf in ipairs(d.others) do
+        local o = p.tabFor[cf]
+        local sl = o and o.slide
+        mids[i] = o and ((sl and sl.tx or o.x or 0) + o:GetWidth() / 2) or false
+    end
+    local index = chatTabs.dropIndex(mids, centre)
+    if index ~= d.index or not d.slotX then
+        d.index = index
+        self:LayoutDrag(d, index)
+    end
+    self:SetTab(b, x, LIFT)
+end
+
+-- The drag ends: kept in its new place (and saved), or back where it was.
+export function endDrag(self: ChatModule, keep: boolean)
+    local d = self.drag
+    local p = self:Panel()
+    self:StopDragger()
+    if not d then
+        return
+    end
+    self.drag = nil
+    for _, o in ipairs(p.tabButtons) do
+        o:SetFrameLevel(p.tabs:GetFrameLevel() + 1)
+    end
+    local b = d.b
+    -- its plate under it again as it drops
+    local pl = b.plate
+    if pl then
+        pl:SetFrameLevel(p.tabs:GetFrameLevel())
+    end
+    local cf = b.cf
+    if keep and d.index ~= d.start and cf and cf ~= "search" then
+        local list: Window[] = {}
+        for _, o in ipairs(d.others) do
+            list[#list + 1] = o
+        end
+        table.insert(list, d.index, cf)
+        self:SaveTabOrder(list)
+    end
+    -- it glides to its place (the new one or its own) as its plate drops
+    self.glideOnce = true
+    self:UpdateTabs()
+    local x, y = b.x or 0, b.y
+    if y and y ~= 0 and not b.slide then
+        if SuuUI.Motion.Reduced() then
+            self:SetTab(b, x, 0)
+            b:HidePlate()
+        else
+            b.slide = { fx = x, fy = y, tx = x, start = GetTime() }
+            self:RunSlides()
+        end
+    end
+end
+
+-- Edit mode in or out: the tabs over the chat's own outline while it shows
+-- (so they take the press), the hint under them; a drag in play ends.
+export function editModeChanged(self: ChatModule, on: boolean?)
+    local p = self.panel
+    if not p then
+        return
+    end
+    if self.drag or self.press then
+        self:EndDrag(false)
+    end
+    p.tabs:SetFrameStrata(on and "FULLSCREEN_DIALOG" or "MEDIUM")
+    if on and not p.editHint then
+        p.editHint = EditHint.new(p)
+    end
+    local hint = p.editHint
+    if hint then
+        hint:SetShown(on and true or false)
+    end
+    self:Wake()
+    self:UpdateTabs()
+end

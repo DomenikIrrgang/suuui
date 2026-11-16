@@ -22,19 +22,31 @@
 -- about another) answers with ConfirmLootRoll. Votes and the results come
 -- from the game's loot lines in chat and its loot history. Blizzard's roll
 -- frames keep running off screen.
+--
+-- A roll is its game roll ID. The loot lines and the loot history name the
+-- item, not the roll, and two open rolls of one item are common: which roll
+-- such a line is about follows the rules in LootRolls/Rolls (your vote to
+-- the roll you answered; another's to the oldest they haven't voted on; a
+-- result to the roll it fits, ending a row only when that is certain). A
+-- line that can't be put on a roll for certain never answers, locks or
+-- removes a row you haven't answered. A row goes when the game ends its
+-- roll ID or its time runs out.
+--
+-- Drawing: a vote line redraws only its roll's row (LootRollTray:SetRow),
+-- once a frame at most, and nothing while the tray is folded or hidden
+-- (drawn when it shows again). Names get their class colour from one map
+-- of the group read once a roster change (LootRolls/Group).
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Position from "/EditMode/EditMode"
-import type LootRollTray, RollRowData, RollChoiceData, RollResultData, RollTrayData from "/UI/LootRollTray"
-import type SuuButton from "/UI/Controls"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position, LootRollTray, RollRowData, RollChoiceData, RollResultData, RollTrayData, SuuButton from "/Core/API"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import * as item from "wowlua:item"
+import * as lines from "/Units/LootRolls/Lines"
+import * as rolls from "/Units/LootRolls/Rolls"
+import GroupNames, short from "/Units/LootRolls/Group"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -76,7 +88,8 @@ local TICK = 0.1
 -- Rolls
 --------------------------------------------------------------------------------
 
-export type ChoiceKey = "need" | "greed" | "pass"
+export type ChoiceKey = rolls.ChoiceKey
+export type Roll = rolls.Roll
 type Choice = { key: ChoiceKey, label: string, type: number }
 -- (WoW Forever has no Disenchant)
 local CHOICES: Choice[] = {
@@ -91,222 +104,35 @@ for _, c in ipairs(CHOICES) do
     CHOICE_BY_KEY[c.key] = c
 end
 
-type Votes = { need: string[], greed: string[], pass: string[] }
--- A number someone rolled: the choice's label and the value.
-type Rolled = { label: string, value?: number }
--- One group roll as the tray knows it (a test roll has `test`, its own
--- roster and classes). `confirm`: the game asks for your choice's
--- confirmation (Bind on Pickup; its roll type).
-export type Roll = {
-    id: number,
-    seq: number,
-    test?: boolean,
-    icon?: number | string,
-    name: string,
-    quality: string,
-    link?: string,
-    duration: number,
-    bop?: boolean,
-    can: { [string]: boolean },
-    reason: { [string]: string? },
-    votes: Votes,
-    rolled: { [string]: Rolled },
-    remaining: () -> number,
-    roster?: string[],
-    classes?: { [string]: string },
-    choice?: ChoiceKey,
-    confirm?: number,
-    endedAt?: number,
-    reported?: boolean,
-    -- the loot it's from (START_LOOT_ROLL's): LOOT_ROLLS_COMPLETE ends its rolls
-    lootHandle?: number,
-}
-
--- A decided roll: who won it (nil: everyone passed).
-export type Result = { roll: Roll, winner?: string, at: number }
-
--- The game's loot line formats as patterns: the pattern and the order of
--- its captures.
-type Pattern = { pattern: string, order: number[] }
--- What a loot line says: what, who, the item, the choice, the number.
-type Captures = { [number]: string }
-type LineFn = (c: Captures) -> (string, string?, string?, ChoiceKey?, number?)
-type Line = { pattern: Pattern, fn: LineFn }
--- "%s has selected Need for: %s" → "^(.+) has selected Need for: (.+)$".
--- `shift`: numbered arguments (%2$s) counted from one later (the loot
--- history link, the first, taken off).
-local function pattern(fmt: unknown, shift: number?): Pattern?
-    if type(fmt) ~= "string" then
-        return nil
-    end
-    local out: string[], order: number[], auto, i = { "^" }, {}, 0, 1
-    while i <= #fmt do
-        local c = fmt:sub(i, i)
-        if c == "%" then
-            local pos, typed = fmt:match("^%%(%d)%$([sd])", i)
-            local t: string? = typed
-            if pos then
-                order[#order + 1] = (tonumber(pos) or 0) - (shift or 0)
-                out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
-                i = i + 4
-            else
-                t = fmt:match("^%%([sd])", i)
-                if t then
-                    auto = auto + 1
-                    order[#order + 1] = auto
-                    out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
-                else
-                    out[#out + 1] = "%%" -- "%%": a percent sign
-                end
-                i = i + 2
-            end
-        else
-            out[#out + 1] = c:find("[%^%$%(%)%.%[%]%*%+%-%?]") and ("%" .. c) or c
-            i = i + 1
-        end
-    end
-    out[#out + 1] = "$"
-    return { pattern = table.concat(out), order = order }
-end
-
-local function match(pat: Pattern?, text: string): Captures?
-    if not pat then
-        return nil
-    end
-    local caps = { text:match(pat.pattern) }
-    if #caps == 0 then
-        return nil
-    end
-    local out: Captures = {}
-    for i, at in ipairs(pat.order) do
-        out[at] = caps[i]
-    end
-    return out
-end
-
--- This client's loot lines start with a link to the loot history
--- ("|HlootHistory:%d|h[Loot]|h: %s has selected Need for: %s"): it goes
--- from the formats and the lines, so the captures are who, the item, the
--- number (counted from the start, the history's number came first and no
--- vote, number or winner was ever matched).
-local HISTORY_FORMAT = "^|HlootHistory:%%[%d%$]*d|h%[.-%]|h:%s*"
-local HISTORY_LINE = "^|HlootHistory:%d+|h%[.-%]|h:%s*"
-
-local LINES: Line[]?
-local function lines(): Line[]
-    if LINES then
-        return LINES
-    end
-    -- the whole name (Forever's characters have surnames: SuuUI.FullName)
-    local me = SuuUI.FullName("player") :: string -- yours: never secret
-    me = me:match("^([^%-]+)") or me
-    local list: Line[] = {}
-    LINES = list
-    local function add(global: string, fn: LineFn)
-        local given = tbl.field(_G, global)
-        -- (without the loot history link: HISTORY_FORMAT)
-        local fmt: unknown, shift = given, 0
-        if type(given) == "string" then
-            fmt, shift = given:gsub(HISTORY_FORMAT, "")
-        end
-        local p = pattern(fmt, shift)
-        if p then
-            list[#list + 1] = { pattern = p, fn = fn }
-        end
-    end
-    -- The specific lines before the general ones: "You passed on: X",
-    -- "Everyone passed on: X" and "You won: X" fit "%s passed on: %s" and
-    -- "%s won: %s" too, with "You" or "Everyone" as a player.
-    -- the end, yours and everyone's
-    add("LOOT_ROLL_ALL_PASSED", function(c: Captures)
-        return "allPassed", nil, c[1]
-    end)
-    add("LOOT_ROLL_YOU_WON", function(c: Captures)
-        return "won", me, c[1]
-    end)
-    -- your votes: (item)
-    add("LOOT_ROLL_NEED_SELF", function(c: Captures)
-        return "vote", me, c[1], "need"
-    end)
-    add("LOOT_ROLL_GREED_SELF", function(c: Captures)
-        return "vote", me, c[1], "greed"
-    end)
-    add("LOOT_ROLL_PASSED_SELF", function(c: Captures)
-        return "vote", me, c[1], "pass"
-    end)
-    add("LOOT_ROLL_PASSED_SELF_AUTO", function(c: Captures)
-        return "vote", me, c[1], "pass"
-    end)
-    -- others' votes: (who, item)
-    add("LOOT_ROLL_NEED", function(c: Captures)
-        return "vote", c[1], c[2], "need"
-    end)
-    add("LOOT_ROLL_GREED", function(c: Captures)
-        return "vote", c[1], c[2], "greed"
-    end)
-    add("LOOT_ROLL_PASSED", function(c: Captures)
-        return "vote", c[1], c[2], "pass"
-    end)
-    add("LOOT_ROLL_PASSED_AUTO", function(c: Captures)
-        return "vote", c[1], c[2], "pass"
-    end)
-    add("LOOT_ROLL_PASSED_AUTO_FEMALE", function(c: Captures)
-        return "vote", c[1], c[2], "pass"
-    end)
-    -- the numbers: (value, item, who)
-    add("LOOT_ROLL_ROLLED_NEED", function(c: Captures)
-        return "rolled", c[3], c[2], "need", tonumber(c[1])
-    end)
-    add("LOOT_ROLL_ROLLED_GREED", function(c: Captures)
-        return "rolled", c[3], c[2], "greed", tonumber(c[1])
-    end)
-    -- someone else won
-    add("LOOT_ROLL_WON", function(c: Captures)
-        return "won", c[1], c[2]
-    end)
-    return list
-end
-
-local function itemKey(link: string?): string?
-    return link and (link:match("item:(%d+)") or link) or nil
-end
-
--- A name without its realm ("" for none).
-local function short(name: unknown): string
-    if type(name) ~= "string" then
-        return ""
-    end
-    return name:match("^([^%-]+)") or name
-end
-
-local function me(): string
-    return short(SuuUI.FullName("player"))
-end
-
--- A group member's class ("MAGE"), by name.
-local function classOf(name: string): string?
-    if short(name) == me() then
-        local _, class = UnitClass("player")
-        return secret.asString(class)
-    end
-    local prefix, n = IsInRaid() and "raid" or "party", GetNumGroupMembers()
-    for i = 1, n do
-        local unit = prefix .. i
-        local un = SuuUI.FullName(unit)
-        if secret.readable(un) and short(un) == short(name) then
-            local _, class = UnitClass(unit)
-            return secret.asString(class)
-        end
+-- Your vote on a drop as the loot history says it
+-- (Enum.EncounterLootDropRollState: NeedMainSpec, NeedOffSpec, Transmog,
+-- Greed, NoRoll, Pass).
+local function mineOf(state: number?): rolls.Mine?
+    if state == 0 or state == 1 then
+        return "need"
+    elseif state == 3 then
+        return "greed"
+    elseif state == 4 then
+        return "none"
+    elseif state == 5 then
+        return "pass"
     end
     return nil
 end
 
+-- A decided roll: who won it (nil: everyone passed); the sources that told
+-- (a decision comes as a chat line and as the loot history's drop: one
+-- result for both).
+export type Result = { roll: Roll, winner?: string, at: number, sources: { line?: boolean, drop?: boolean } }
+
+-- s a roll stays among the ended ones for a line about it that comes late
+local ENDED_KEPT = 30
+-- s a result from one source waits for the same decision from the other
+local SAME_DECISION = 10
+-- s a decided drop of the loot history is known as told (its later updates)
+local DROP_KEPT = 300
+
 local COLORS: { [string]: { hex: string } } = T.color
-local function classColored(name: string, known: { [string]: string }?): string
-    local class = (known and known[short(name)]) or classOf(name)
-    local c = class and COLORS["class-" .. class:lower()]
-    return c and ("|cff" .. c.hex .. short(name) .. "|r") or short(name)
-end
 
 local function colored(token: string, s: string): string
     local c = COLORS[token]
@@ -317,33 +143,22 @@ local function qualityName(roll: Roll): string
     return roll.quality ~= "common" and colored("quality-" .. roll.quality, roll.name) or roll.name
 end
 
+-- A name in its class colour (a test roll's own classes, else the group's).
+local function classColored(name: string, roll: Roll, group: GroupNames): string
+    local s = short(name)
+    local known = roll.classes
+    local class = (known and known[s]) or group:ClassOf(s)
+    local c = class and COLORS["class-" .. class:lower()]
+    return c and ("|cff" .. c.hex .. s .. "|r") or s
+end
+
 -- Everyone in your group but you, by name (the roll's own list in a test).
-local function roster(roll: Roll): string[]
-    local given = roll.roster
-    if given then
-        return given
-    end
-    local out: string[] = {}
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do
-            local name = SuuUI.FullName("raid" .. i)
-            if secret.readable(name) and name and not UnitIsUnit("raid" .. i, "player") then
-                out[#out + 1] = short(name)
-            end
-        end
-    else
-        for i = 1, GetNumSubgroupMembers() do
-            local name = SuuUI.FullName("party" .. i)
-            if secret.readable(name) and name then
-                out[#out + 1] = short(name)
-            end
-        end
-    end
-    return out
+local function roster(roll: Roll, group: GroupNames): string[]
+    return roll.roster or group:Others()
 end
 
 -- Who hasn't chosen yet (you aren't listed: your own row says whether you have).
-local function waitingOn(roll: Roll): string[]
+local function waitingOn(roll: Roll, group: GroupNames): string[]
     local chose: { [string]: boolean } = {}
     for _, c in ipairs(CHOICES) do
         for _, name in ipairs(roll.votes[c.key]) do
@@ -351,7 +166,7 @@ local function waitingOn(roll: Roll): string[]
         end
     end
     local out: string[] = {}
-    for _, name in ipairs(roster(roll)) do
+    for _, name in ipairs(roster(roll, group)) do
         if not chose[short(name)] then
             out[#out + 1] = name
         end
@@ -360,11 +175,11 @@ local function waitingOn(roll: Roll): string[]
 end
 
 -- Names in class colours, `most` at most (default all) and how many more.
-local function nameList(roll: Roll, names: string[], most: number?): string
+local function nameList(roll: Roll, group: GroupNames, names: string[], most: number?): string
     local cap = most or #names
     local shown: string[] = {}
     for i = 1, math.min(#names, cap) do
-        shown[i] = classColored(names[i], roll.classes)
+        shown[i] = classColored(names[i], roll, group)
     end
     local s = table.concat(shown, ", ")
     if #names > cap then
@@ -385,7 +200,7 @@ end
 -- The line of who chose what, in one row's width: as many names per
 -- choice as fit (NAMES_SHOWN at most), the rest counted ("+12"). A raid
 -- of 40 comes down to one name a choice, or only the counts.
-local function whoLine(roll: Roll, groups: WhoGroup[]): string?
+local function whoLine(roll: Roll, group: GroupNames, groups: WhoGroup[]): string?
     if #groups == 0 then
         return nil
     end
@@ -393,7 +208,7 @@ local function whoLine(roll: Roll, groups: WhoGroup[]): string?
     for most = NAMES_SHOWN, 0, -1 do
         local parts: string[] = {}
         for i, g in ipairs(groups) do
-            parts[i] = colored("ink-muted", g.label) .. " " .. nameList(roll, g.names, most)
+            parts[i] = colored("ink-muted", g.label) .. " " .. nameList(roll, group, g.names, most)
         end
         line = table.concat(parts, colored("ink-faint", "  ·  "))
         if plainLength(line) <= WHO_CHARS then
@@ -423,6 +238,49 @@ local function describe(roll: Roll): string
         end
     end
     return table.concat(parts, " · ")
+end
+
+-- A roll's item read from the game (nil name: not readable yet, the item's
+-- data not in or the name secret).
+type ItemRead = {
+    name?: string,
+    icon?: number | string,
+    quality: string,
+    link?: string,
+    bop: boolean,
+    can: { [string]: boolean },
+    reason: { [string]: string? },
+}
+
+local function readItem(rollID: number): ItemRead
+    local icon, name, _, quality, bop, canNeed, canGreed, _, reasonNeed, reasonGreed = GetLootRollItemInfo(rollID)
+    local function reason(r: unknown): string?
+        local n = secret.asNumber(r)
+        return n and n > 0 and secret.asString(tbl.field(_G, "LOOT_ROLL_INELIGIBLE_REASON" .. n)) or nil
+    end
+    return {
+        name = secret.asString(name),
+        icon = secret.readable(icon) and (secret.asNumber(icon) or secret.asString(icon)) or nil,
+        quality = secret.readable(quality) and QUALITY[quality] or "common",
+        link = secret.asString(GetLootRollItemLink(rollID)),
+        bop = secret.readable(bop) and bop == true,
+        can = {
+            need = secret.readable(canNeed) and canNeed or false,
+            greed = secret.readable(canGreed) and canGreed or false,
+            pass = true,
+        },
+        reason = { need = reason(reasonNeed), greed = reason(reasonGreed) },
+    }
+end
+
+-- What a roll shows while its item's name can't be read: the link's
+-- name, else the game's own placeholder.
+local function placeholder(link: string?): string
+    local fromLink = link and link:match("|h%[(.-)%]|h")
+    if fromLink and fromLink ~= "" then
+        return fromLink
+    end
+    return secret.asString(tbl.field(_G, "RETRIEVING_ITEM_INFO")) or "Item"
 end
 
 -- A made-up 40-player raid: 39 others, votes coming in over the roll.
@@ -596,7 +454,18 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
     hooked: { [Frame]: boolean } = {}
     rollsHooked: boolean? = nil
     movingRolls: boolean? = nil
+    -- Blizzard's roll frames before they went away: given back when the
+    -- module turns off
+    rollsHome: { points: Point[], clamped: boolean }? = nil
     wired: boolean? = nil
+    -- your group by name and class (read once a roster change)
+    group: GroupNames = GroupNames.new()
+    -- rows whose votes changed, drawn on the next frame the tray shows;
+    -- `stale`: the rows were last built while the tray didn't show
+    dirty: { [number]: boolean } = {}
+    stale: boolean = false
+    -- the loot history's decided drops ("encounter:key"), each told once
+    drops: { [string]: number } = {}
 
     constructor()
         super({
@@ -635,16 +504,27 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         return out
     end
 
-    function Row(roll: Roll): RollRowData
+    function Me(): string
+        return self.group:Me()
+    end
+
+    -- A roll's row. `light`: without the names (the tray doesn't show:
+    -- counted only, the names drawn when it shows).
+    function Row(roll: Roll, light: boolean?): RollRowData
+        local group = self.group
         local choices: RollChoiceData[] = {}
         local note: string? = nil
         for _, c in ipairs(CHOICES) do
             local who = roll.votes[c.key]
             local can = roll.can[c.key] ~= false
             local reason = roll.reason[c.key]
-            local names: string[] = {}
-            for _, name in ipairs(who) do
-                names[#names + 1] = classColored(name, roll.classes)
+            local tooltip: { title: string, description: string }? = nil
+            if #who > 0 and not light then
+                local names: string[] = {}
+                for _, name in ipairs(who) do
+                    names[#names + 1] = classColored(name, roll, group)
+                end
+                tooltip = { title = c.label .. " · " .. #who, description = table.concat(names, ", ") }
             end
             choices[#choices + 1] = {
                 key = c.key,
@@ -652,8 +532,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
                 count = #who,
                 unavailable = not can,
                 reason = reason,
-                tooltip = #who > 0 and { title = c.label .. " · " .. #who, description = table.concat(names, ", ") } or
-                    nil,
+                tooltip = tooltip,
             }
             if not can and reason and not note then
                 note = c.label .. ": " .. reason
@@ -661,7 +540,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end
         -- who chose what, and who's still choosing: a line always shown
         -- (as many names as fit), every name on hovering the row
-        local waiting = waitingOn(roll)
+        local waiting = waitingOn(roll, group)
         local groups: WhoGroup[] = {}
         for _, c in ipairs(CHOICES) do
             local who = roll.votes[c.key]
@@ -672,9 +551,15 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if #waiting > 0 then
             groups[#groups + 1] = { label = "Choosing", names = waiting }
         end
-        local full: string[] = {}
-        for i, g in ipairs(groups) do
-            full[i] = colored("ink-muted", g.label .. " · " .. #g.names) .. "\n" .. nameList(roll, g.names)
+        local whoText: string? = nil
+        local whoTip: { title: string, description: string, maxWidth: number }? = nil
+        if not light and #groups > 0 then
+            local full: string[] = {}
+            for i, g in ipairs(groups) do
+                full[i] = colored("ink-muted", g.label .. " · " .. #g.names) .. "\n" .. nameList(roll, group, g.names)
+            end
+            whoText = whoLine(roll, group, groups)
+            whoTip = { title = "Who chose what", description = table.concat(full, "\n\n"), maxWidth = 360 }
         end
         local sub = describe(roll)
         if roll.choice and #waiting > 0 then
@@ -697,18 +582,17 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             choices = choices,
             choice = roll.choice,
             confirm = confirm,
-            who = whoLine(roll, groups),
-            whoTip = #groups > 0 and
-                { title = "Who chose what", description = table.concat(full, "\n\n"), maxWidth = 360 } or
-                nil,
+            who = whoText,
+            whoTip = whoTip,
             note = note,
         }
     end
 
     function ResultRow(r: Result): RollResultData
         local roll = r.roll
+        local me = self:Me()
         local name = qualityName(roll)
-        local mine = roll.rolled[me()]
+        local mine = roll.rolled[me]
         local winner = r.winner
         if not winner then
             return {
@@ -720,7 +604,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             }
         end
         local theirs = roll.rolled[short(winner)]
-        if short(winner) == me() then
+        if short(winner) == me then
             return {
                 icon = roll.icon,
                 quality = roll.quality,
@@ -741,7 +625,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         return {
             icon = roll.icon,
             quality = roll.quality,
-            text = classColored(winner, roll.classes) .. " won " .. name,
+            text = classColored(winner, roll, self.group) .. " won " .. name,
             right = #parts > 0 and table.concat(parts, " · ") or nil,
             dim = true,
         }
@@ -754,41 +638,57 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         return name ~= "" and name or nil
     end
 
-    function Data(): RollTrayData
-        local open = self:Open()
-        local rows: RollRowData[] = {}
-        local answered = #open > 0
+    -- Every open roll has your choice (and no question left).
+    function AllAnswered(open: Roll[]): boolean
+        if #open == 0 then
+            return false
+        end
+        for _, roll in ipairs(open) do
+            if not roll.choice or roll.confirm then
+                return false
+            end
+        end
+        return true
+    end
+
+    -- The head's line: how many are open and where, or who it waits on.
+    function Meta(open: Roll[], answered: boolean): string
+        if #open == 0 then
+            return "none open"
+        end
+        if not answered then
+            local place = self:Place()
+            return #open .. " open" .. (place and (" · " .. place) or "")
+        end
         local waiting: { [string]: boolean } = {}
         local nWaiting = 0
-        for i, roll in ipairs(open) do
-            rows[i] = self:Row(roll)
-            if not roll.choice or roll.confirm then
-                answered = false
-            end
-            for _, name in ipairs(waitingOn(roll)) do
+        for _, roll in ipairs(open) do
+            for _, name in ipairs(waitingOn(roll, self.group)) do
                 if not waiting[name] then
                     waiting[name] = true
                     nWaiting = nWaiting + 1
                 end
             end
         end
-        local meta: string
-        if #open == 0 then
-            meta = "none open"
-        elseif answered then
-            meta = nWaiting > 0 and (("waiting on %d player%s"):format(nWaiting, nWaiting == 1 and "" or "s")) or
-                "waiting on the rolls"
-        else
-            local place = self:Place()
-            meta = #open .. " open" .. (place and (" · " .. place) or "")
+        return nWaiting > 0 and (("waiting on %d player%s"):format(nWaiting, nWaiting == 1 and "" or "s")) or
+            "waiting on the rolls"
+    end
+
+    -- What the tray shows (`light`: the rows without their names).
+    function Data(light: boolean?): RollTrayData
+        local open = self:Open()
+        local rows: RollRowData[] = {}
+        for i, roll in ipairs(open) do
+            rows[i] = self:Row(roll, light)
         end
+        local answered = self:AllAnswered(open)
         local results: RollResultData[] = {}
         if self:Get("results") then
             for i, r in ipairs(self.results) do
                 results[i] = self:ResultRow(r)
             end
         end
-        local d: RollTrayData = { rolls = rows, results = results, meta = meta, answered = answered }
+        local d: RollTrayData = { rolls = rows, results = results, meta = self:Meta(open, answered), answered = answered }
         if self.asking then
             local greed = self:GreedTargets()
             if #greed > 0 then
@@ -819,6 +719,13 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         return next(self.rolls) ~= nil or (#self.results > 0 and self:Get("results"))
     end
 
+    -- Whether the rows can be seen (the tray shown, not folded into its tab).
+    function Drawn(): boolean
+        local tray = self.tray
+        return tray ~= nil and not self.folded and tray:IsVisible()
+    end
+
+    -- Everything again: rolls come and go, your choices, the results.
     function Refresh()
         local tray = self.tray
         if not tray or not self:IsEnabled() then
@@ -827,25 +734,64 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if not self:HasContent() then
             tray:Hide()
             self.asking = false
+            self.dirty, self.stale = {}, false
             if self.driver then
                 self.driver:Hide()
             end
             return
         end
-        tray:SetData(self:Data())
-        if tray.folded ~= self.folded then
-            tray:SetFolded(self.folded)
-        end
         tray:Show()
         if self.driver then
             self.driver:Show()
         end
+        if tray.folded ~= self.folded then
+            tray:SetFolded(self.folded)
+        end
+        -- (not seen: counted only, the names when it shows)
+        local drawn = self:Drawn()
+        tray:SetData(self:Data(not drawn))
+        self.dirty, self.stale = {}, not drawn
         self:SyncHost()
+    end
+
+    -- A roll's votes changed: its row again, on the next frame the tray shows.
+    function QueueRow(roll: Roll)
+        if self.rolls[roll.id] == roll then
+            self.dirty[roll.id] = true
+        end
+    end
+
+    -- The rows whose votes changed (each frame while the tray shows): only
+    -- those rows, and the head's line once every roll is answered.
+    function Flush()
+        local tray = self.tray
+        if not tray or not self:Drawn() then
+            return
+        end
+        if self.stale then
+            self:Refresh()
+            return
+        end
+        if next(self.dirty) == nil then
+            return
+        end
+        local dirty = self.dirty
+        self.dirty = {}
+        for id in pairs(dirty) do
+            local roll = self.rolls[id]
+            if roll and not tray:SetRow(self:Row(roll)) then
+                self:Refresh()
+                return
+            end
+        end
+        if tray.data.answered then
+            tray:SetMeta(self:Meta(self:Open(), true))
+        end
     end
 
     -- Every tick while the tray shows: the seconds, and each result going
     -- RESULTS_STAY s after its roll was decided (each on its own, open rolls
-    -- or not, in combat too).
+    -- or not, in combat too); a roll's item named once the game has it.
     function Tick()
         local tray = self.tray
         if not tray then
@@ -855,6 +801,9 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             local times: { [number]: number } = {}
             for id, roll in pairs(self.rolls) do
                 times[id] = roll.remaining()
+                if roll.unnamed then
+                    self:FillItem(roll)
+                end
             end
             tray:SetRemaining(times)
         end
@@ -892,15 +841,16 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             if roll.bop and key ~= "pass" then
                 roll.confirm = choice.type
             else
-                table.insert(roll.votes[key], me())
+                table.insert(roll.votes[key], self:Me())
             end
             self:Refresh()
             return
         end
         -- (chosen first: the game sends CANCEL_LOOT_ROLL from inside
         -- RollOnLoot, its own roll frame done with you; and a Bind on Pickup
-        -- item asks from inside it, CONFIRM_LOOT_ROLL)
-        roll.choice = key
+        -- item asks from inside it, CONFIRM_LOOT_ROLL. `sent`: the game's
+        -- line about your vote goes to this roll, the one you answered)
+        roll.choice, roll.sent = key, key
         RollOnLoot(roll.id, choice.type)
         self:Refresh()
     end
@@ -932,10 +882,10 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         roll.confirm = nil
         if yes then
             if roll.test and roll.choice then
-                table.insert(roll.votes[roll.choice], me())
+                table.insert(roll.votes[roll.choice], self:Me())
             end
         else
-            roll.choice = nil
+            roll.choice, roll.sent = nil, nil
         end
         self:Refresh()
     end
@@ -992,7 +942,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
         self:HostConfirm(id)
         -- (the popup shows from the game's own handler: maybe after this one)
-        after(0, function()
+        self:After(0, function()
             self:HostConfirm(id)
         end)
     end
@@ -1125,7 +1075,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             self:Release(h)
             -- closed without OK (Cancel, Esc): the choice taken back, a
             -- frame later (OK has answered by then)
-            after(0, function()
+            self:After(0, function()
                 self.lastHosted, self.lastYes = nil, nil
                 self:Answered(id, false)
             end)
@@ -1185,34 +1135,28 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if not secret.readable(rollID) or type(rollID) ~= "number" then
             return
         end
-        local icon, name, _, quality, bop, canNeed, canGreed, _, reasonNeed, reasonGreed = GetLootRollItemInfo(rollID)
-        local itemName = secret.asString(name)
-        if not itemName then
-            return
-        end
-        local function reason(r: unknown): string?
-            local n = secret.asNumber(r)
-            return n and n > 0 and secret.asString(tbl.field(_G, "LOOT_ROLL_INELIGIBLE_REASON" .. n)) or nil
-        end
+        local read = readItem(rollID)
+        -- (a name not readable yet: the roll is kept under the link's name
+        -- or a placeholder, and named once the item's data is in. Blizzard's
+        -- own roll frame drops such a roll, and it is off screen anyway:
+        -- review 2026-11-15, CHAT-26)
         local start, duration = GetTime(), (secret.asNumber(rollTime) or 60000) / 1000
         self.seq = self.seq + 1
         local roll: Roll = {
             id = rollID,
             seq = self.seq,
-            icon = secret.readable(icon) and (secret.asNumber(icon) or secret.asString(icon)) or nil,
-            name = itemName,
-            quality = secret.readable(quality) and QUALITY[quality] or "common",
-            link = secret.asString(GetLootRollItemLink(rollID)),
+            icon = read.icon,
+            name = read.name or placeholder(read.link),
+            unnamed = read.name == nil or nil,
+            quality = read.quality,
+            link = read.link,
             duration = duration,
-            bop = secret.readable(bop) and bop == true,
-            can = {
-                need = secret.readable(canNeed) and canNeed or false,
-                greed = secret.readable(canGreed) and canGreed or false,
-                pass = true,
-            },
-            reason = { need = reason(reasonNeed), greed = reason(reasonGreed) },
+            bop = read.bop,
+            can = read.can,
+            reason = read.reason,
             votes = { need = {}, greed = {}, pass = {} },
             rolled = {},
+            decided = {},
             remaining = function(): number
                 local left = secret.asNumber(GetLootRollTimeLeft(rollID))
                 if left then
@@ -1236,12 +1180,30 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             end
             local left = duration - (GetTime() - start)
             if left > 0 then
-                after(left + ROLL_GRACE, overdue)
+                self:After(left + ROLL_GRACE, overdue)
                 return
             end
             self:EndRoll(rollID)
         end
-        after(duration + ROLL_GRACE, overdue)
+        self:After(duration + ROLL_GRACE, overdue)
+    end
+
+    -- A roll whose item couldn't be read when it started: read again (the
+    -- item's data in by now), its row named.
+    function FillItem(roll: Roll)
+        if not roll.unnamed or roll.test or self.rolls[roll.id] ~= roll then
+            return
+        end
+        local read = readItem(roll.id)
+        local name = read.name
+        if not name then
+            return
+        end
+        roll.name, roll.unnamed = name, nil
+        roll.icon, roll.quality, roll.bop = read.icon or roll.icon, read.quality, read.bop
+        roll.can, roll.reason = read.can, read.reason
+        roll.link = read.link or roll.link
+        self:Refresh()
     end
 
     -- A roll in the tray (the folded tray opens, as the setting says).
@@ -1250,11 +1212,17 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if self.folded and self:Get("unfold") then
             self.folded = false
         end
-        -- the item's kind and bind, once the game has its data
+        -- (a group that changed since: read again, once, at the next look)
+        self.group:Invalidate()
+        -- the item's kind and bind (and its name, if it had none), once the
+        -- game has its data
         local link = roll.link
         if link and not item.get(link) then
             item.load(link, function()
                 if self.rolls[roll.id] == roll then
+                    if roll.unnamed then
+                        self:FillItem(roll)
+                    end
                     self:Refresh()
                 end
             end)
@@ -1276,41 +1244,80 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
     end
 
     -- One item's drop in the loot history: decided (a winner, or everyone
-    -- passed), its open roll ends, its result kept if the loot line hasn't.
+    -- passed): its roll's result, and its row goes if that's certain. The
+    -- drop names no roll ID: it says the item and your vote on it (CHAT-23).
     function DropDecided(encounterID: unknown, lootListKey: unknown)
         local enc, key = secret.asNumber(encounterID), secret.asNumber(lootListKey)
         if not (enc and key and C_LootHistory and C_LootHistory.GetSortedInfoForDrop) then
+            return
+        end
+        local drop = enc .. ":" .. key
+        -- (told already: every later update of the drop is the same decision)
+        local told = self.drops[drop]
+        if told and GetTime() - told < DROP_KEPT then
             return
         end
         local ok, info = pcall(C_LootHistory.GetSortedInfoForDrop, enc, key)
         if not ok or type(info) ~= "table" or not secret.readable(info) then
             return
         end
-        local drop = info :: { itemHyperlink?: unknown, winner?: { playerName?: unknown }, allPassed?: unknown }
-        local winner = drop.winner
-        local passed = drop.allPassed == true
+        local d = info :: {
+            itemHyperlink?: unknown,
+            winner?: { playerName?: unknown },
+            allPassed?: unknown,
+            playerRollState?: unknown,
+        }
+        local winner = d.winner
+        local passed = d.allPassed == true
         if not (winner or passed) then
             return
         end
-        local roll = self:RollFor(secret.asString(drop.itemHyperlink))
-        if not roll then
+        local link = secret.asString(d.itemHyperlink)
+        if not link then
             return
         end
-        if not roll.reported then
-            roll.reported = true
-            self:Result(roll, winner and secret.asString(winner.playerName) or nil)
-        end
-        if self.rolls[roll.id] == roll then
-            self:EndRoll(roll.id)
+        local mine = mineOf(secret.asNumber(d.playerRollState))
+        if self:Decided(link, "drop", winner and secret.asString(winner.playerName) or nil, mine) then
+            local now = GetTime()
+            for k, at in pairs(self.drops) do
+                if now - at >= DROP_KEPT then
+                    self.drops[k] = nil
+                end
+            end
+            self.drops[drop] = now
         end
     end
 
-    function EndRoll(rollID: number)
-        local roll = self.rolls[rollID]
+    -- A result for the item (`source`: the chat line or the loot history):
+    -- on the roll it fits; that roll's row goes if it's certainly that one,
+    -- or every open roll of the item is decided. False: no roll for it.
+    function Decided(link: string, source: rolls.Source, winner: string?, mine: rolls.Mine?): boolean
+        local list = self:Candidates(link)
+        local roll, certain = rolls.resultOf(list, source, mine, self.group:Others())
         if not roll then
+            return false
+        end
+        roll.decided[source] = true
+        self:Result(roll, winner, source)
+        if certain then
+            self:EndRoll(roll.id, roll)
+        end
+        if rolls.allDecided(list, source) then
+            for _, r in ipairs(list) do
+                self:EndRoll(r.id, r)
+            end
+        end
+        return true
+    end
+
+    -- A roll over (`roll`: only if it's still that one).
+    function EndRoll(rollID: number, which: Roll?)
+        local roll = self.rolls[rollID]
+        if not roll or (which and which ~= roll) then
             return
         end
         self.rolls[rollID] = nil
+        self.dirty[rollID] = nil
         local h = self.host
         if h and h.rollID == rollID then
             -- (its popup stays out of sight until the game closes it)
@@ -1325,93 +1332,125 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         self:Refresh()
     end
 
-    -- The roll a chat line is about: the oldest open one for that item (else
-    -- one just ended, for the result).
-    function RollFor(link: string?): Roll?
-        local key = itemKey(link)
-        local best: Roll? = nil
+    -- The rolls a line about an item can be about, oldest first: the open
+    -- ones (and, unless `openOnly`, the ones ended in the last ENDED_KEPT s).
+    function Candidates(link: string, openOnly: boolean?): Roll[]
+        local list: Roll[] = {}
         for _, roll in pairs(self.rolls) do
-            if itemKey(roll.link) == key then
-                if not best or roll.seq < best.seq then
-                    best = roll
+            list[#list + 1] = roll
+        end
+        if not openOnly then
+            local now = GetTime()
+            for _, roll in ipairs(self.ended) do
+                if now - (roll.endedAt or 0) < ENDED_KEPT and self.rolls[roll.id] ~= roll then
+                    list[#list + 1] = roll
                 end
             end
         end
-        if best then
-            return best
-        end
-        for i = #self.ended, 1, -1 do
-            local roll = self.ended[i]
-            if itemKey(roll.link) == key and GetTime() - (roll.endedAt or 0) < 30 then
-                return roll
-            end
-        end
-        return nil
+        table.sort(list, function(a: Roll, b: Roll): boolean
+            return a.seq < b.seq
+        end)
+        return rolls.sameItem(list, link)
     end
 
-    -- A roll decided: under the rows, with who won.
-    function Result(roll: Roll, winner: string?)
+    -- A decision under the rows, with who won (once a decision: the chat
+    -- line and the loot history both tell it).
+    function Result(roll: Roll, winner: string?, source: rolls.Source)
+        local now, key, who = GetTime(), rolls.itemKey(roll.link), short(winner)
         for _, r in ipairs(self.results) do
-            if r.roll == roll then
+            if r.roll == roll and r.sources[source] then
+                return
+            end
+            if
+                not r.sources[source] and
+                    rolls.itemKey(r.roll.link) == key and
+                    short(r.winner) == who and
+                    now - r.at < SAME_DECISION
+            then
+                r.sources[source] = true
                 return
             end
         end
-        self.results[#self.results + 1] = { roll = roll, winner = winner, at = GetTime() }
+        self.results[#self.results + 1] = { roll = roll, winner = winner, at = now, sources = { [source] = true } }
         while #self.results > RESULTS_KEPT do
             table.remove(self.results, 1)
         end
         self:Refresh()
     end
 
+    -- Whether a loot line can be about a roll: one open, or ended lately.
+    function Listening(): boolean
+        if next(self.rolls) ~= nil then
+            return true
+        end
+        local last = self.ended[#self.ended]
+        return last ~= nil and GetTime() - (last.endedAt or 0) < ENDED_KEPT
+    end
+
     function OnLootLine(given: unknown)
-        if not secret.readable(given) or type(given) ~= "string" then
+        if not secret.readable(given) or type(given) ~= "string" or not self:Listening() then
             return
         end
-        local text = given:gsub(HISTORY_LINE, "")
-        for _, line in ipairs(lines()) do
-            local caps = match(line.pattern, text)
-            if caps then
-                local what, who, link, choice, value = line.fn(caps)
-                if what == "vote" and choice then
-                    local roll = self:RollFor(link)
-                    if roll then
-                        for _, c in ipairs(CHOICES) do
-                            local list = roll.votes[c.key]
-                            for i = #list, 1, -1 do
-                                if list[i] == short(who) then
-                                    table.remove(list, i)
-                                end
-                            end
-                        end
-                        table.insert(roll.votes[choice], short(who))
-                        if short(who) == me() then
-                            roll.choice = choice
-                            roll.confirm = nil
-                        end
-                        if self.rolls[roll.id] then
-                            self:Refresh()
-                        end
-                    end
-                elseif what == "rolled" then
-                    local roll = self:RollFor(link)
-                    if roll then
-                        local c = choice and CHOICE_BY_KEY[choice]
-                        roll.rolled[short(who)] = { label = c and c.label or choice or "", value = value }
-                    end
-                elseif what == "won" or what == "allPassed" then
-                    local roll = self:RollFor(link)
-                    if roll and not roll.reported then
-                        roll.reported = true
-                        self:Result(roll, what == "won" and who or nil)
-                    end
-                    -- decided: its row goes (the game doesn't always say,
-                    -- CANCEL_LOOT_ROLL missing once you've rolled: found in game)
-                    if roll and self.rolls[roll.id] == roll then
-                        self:EndRoll(roll.id)
-                    end
-                end
-                return
+        local r = lines.read(given)
+        if not r then
+            return
+        end
+        local choice = r.choice
+        if r.what == "vote" and choice then
+            if r.mine then
+                self:OwnVote(r.link, choice)
+            else
+                self:OthersVote(r.link, short(r.who), choice)
             end
+        elseif r.what == "rolled" and choice then
+            local name = short(r.who)
+            local roll = rolls.rolledOn(self:Candidates(r.link), name, choice, name == self:Me())
+            if roll then
+                local c = CHOICE_BY_KEY[choice]
+                roll.rolled[name] = { label = c and c.label or choice, value = r.value }
+            end
+        elseif r.what == "won" then
+            if r.mine then
+                self:Decided(r.link, "line", self:Me(), "rolled")
+            else
+                self:Decided(r.link, "line", r.who, nil)
+            end
+        elseif r.what == "allPassed" then
+            self:Decided(r.link, "line", nil, nil)
+        end
+    end
+
+    -- The game's line about your vote: on the roll you answered (locked
+    -- there, the game's word); with none answered, on the item's only roll
+    -- without your vote, else on no open roll at all.
+    function OwnVote(link: string, choice: ChoiceKey)
+        local roll, certain = rolls.ownVote(self:Candidates(link), choice)
+        if not roll then
+            return
+        end
+        rolls.addVote(roll, self:Me(), choice)
+        roll.heard = choice
+        if roll.sent == choice then
+            roll.sent = nil
+        end
+        if certain and self.rolls[roll.id] == roll and (roll.choice ~= choice or roll.confirm) then
+            roll.choice, roll.confirm, roll.sent = choice, nil, nil
+            self:Refresh()
+            return
+        end
+        self:QueueRow(roll)
+    end
+
+    -- Another player's vote: on the oldest open roll of the item they
+    -- haven't voted on.
+    function OthersVote(link: string, name: string, choice: ChoiceKey)
+        if name == "" then
+            return
+        end
+        local roll = rolls.othersVote(self:Candidates(link, true), name)
+        if roll then
+            rolls.addVote(roll, name, choice)
+            self:QueueRow(roll)
         end
     end
 
@@ -1432,30 +1471,59 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         GameTooltip:Show()
     end
 
-    -- Blizzard's roll frames off screen while the tray shows the rolls.
+    -- Blizzard's roll frames off screen while the tray shows the rolls (while
+    -- the module is on: a failed enable gives them back, review 2026-11-15).
     function HideBlizzardRolls()
         local f = frames.find("GroupLootContainer")
-        if not f or self.rollsHooked then
+        if not f then
             return
         end
-        self.rollsHooked = true
-        local function away()
-            f:SetAlpha(0)
-            self.movingRolls = true
-            f:ClearAllPoints()
-            f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
-            self.movingRolls = false
+        if not self.rollsHooked then
+            self.rollsHooked = true
+            self.rollsHome = { points = savePoints(f), clamped = f:IsClampedToScreen() and true or false }
+            hook(f, "SetPoint", function()
+                if self.movingRolls or not self:IsEnabled() then
+                    return
+                end
+                f:SetAlpha(0)
+                self:After(0, function()
+                    self:RollsAway()
+                end)
+            end)
+            hookScript(f, "OnShow", function()
+                if self:IsEnabled() then
+                    self:RollsAway()
+                end
+            end)
         end
         f:SetClampedToScreen(false)
-        hook(f, "SetPoint", function()
-            if self.movingRolls then
-                return
-            end
-            f:SetAlpha(0)
-            after(0, away)
-        end)
-        hookScript(f, "OnShow", away)
-        away()
+        self:RollsAway()
+    end
+
+    function RollsAway()
+        local f = frames.find("GroupLootContainer")
+        if not f then
+            return
+        end
+        f:SetAlpha(0)
+        self.movingRolls = true
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+        self.movingRolls = false
+    end
+
+    -- Blizzard's roll frames as they were: seen, where they were.
+    function GiveBackRolls()
+        local f, home = frames.find("GroupLootContainer"), self.rollsHome
+        if not f or not home then
+            return
+        end
+        f:SetAlpha(1)
+        f:SetClampedToScreen(home.clamped)
+        -- (none at login: the game places them when a roll shows)
+        self.movingRolls = true
+        restorePoints(f, home.points)
+        self.movingRolls = false
     end
 
     --------------------------------------------------------------------------------
@@ -1497,22 +1565,24 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             reason = { need = def.need == false and reasonNeed or nil },
             votes = { need = votes.need or {}, greed = votes.greed or {}, pass = votes.pass or {} },
             rolled = {},
+            decided = {},
             remaining = function(): number
                 return math.max(0, duration - (GetTime() - start))
             end,
         }
         self:Add(roll)
-        after(duration, function()
+        self:After(duration, function()
             if self.rolls[id] ~= roll then
                 return
             end
             -- decided: you, on Need (or Greed with no Need); else the first
             -- who chose Need, else Greed
             local mine = roll.choice
+            local me = self:Me()
             local need = #roll.votes.need > 0
             local winner: string? = nil
             if mine == "need" or (mine == "greed" and not need) then
-                winner = me()
+                winner = me
             else
                 winner = roll.votes.need[1] or roll.votes.greed[1]
             end
@@ -1520,12 +1590,12 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             if winner then
                 roll.rolled[winner] = { label = label, value = 87 }
             end
-            if roll.choice and roll.choice ~= "pass" and winner ~= me() then
+            if roll.choice and roll.choice ~= "pass" and winner ~= me then
                 local c = CHOICE_BY_KEY[roll.choice]
-                roll.rolled[me()] = { label = c and c.label or "", value = 42 }
+                roll.rolled[me] = { label = c and c.label or "", value = 42 }
             end
             self:EndRoll(id)
-            self:Result(roll, winner)
+            self:Result(roll, winner, "line")
         end)
         return roll
     end
@@ -1556,12 +1626,12 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end
         local picks: ChoiceKey[] = { "pass", "pass", "pass", "greed", "greed", "need" }
         for i = 1, #order - 3 do
-            after(1 + i * 0.6, function()
+            self:After(1 + i * 0.6, function()
                 if self.rolls[id] ~= roll then
                     return
                 end
                 table.insert(roll.votes[assert(picks[math.random(#picks)])], order[i])
-                self:Refresh()
+                self:QueueRow(roll)
             end)
         end
         self:Refresh()
@@ -1597,10 +1667,10 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
             votes = { need = { "Morrow" }, pass = { "Ysolde" } },
         })
         -- someone makes up their mind, to see the counts change
-        after(8, function()
+        self:After(8, function()
             if self.rolls[helm.id] == helm then
                 table.insert(helm.votes.greed, "Kaelith")
-                self:Refresh()
+                self:QueueRow(helm)
             end
         end)
     end
@@ -1677,6 +1747,10 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         driver:Hide()
         local wait = 0
         driver:SetScript("OnUpdate", function(_: Frame, elapsed: number)
+            -- (rows whose votes changed: each frame)
+            if self.stale or next(self.dirty) ~= nil then
+                self:Flush()
+            end
             wait = wait - elapsed
             if wait > 0 then
                 return
@@ -1751,6 +1825,17 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("CHAT_MSG_LOOT", function(_, text)
             self:OnLootLine(text)
         end)
+        -- the group's names and classes read again at the next look (one
+        -- walk however many roster events come before it)
+        self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
+            self.group:Invalidate()
+        end)
+        self:OnGameEvent("UNIT_NAME_UPDATE", function(_, unit)
+            local u = secret.asString(unit)
+            if u and (u:find("^raid%d") or u:find("^party%d")) then
+                self.group:Invalidate()
+            end
+        end)
         -- rolls already running (a /reload mid-roll)
         if GetActiveLootRollIDs then
             local ok: boolean, ids: unknown = pcall(GetActiveLootRollIDs)
@@ -1763,6 +1848,7 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- (reached after a failed OnEnable: the module toggles with a reload)
     override function OnDisable()
         local tray = self.tray
         if tray then
@@ -1771,6 +1857,16 @@ class LootRollsModule extends Module<typeof(DEFAULTS)>
         if self.driver then
             self.driver:Hide()
         end
+        -- the Bind on Pickup popup back where the game had it
+        local h = self.host
+        if h then
+            self:Release(h)
+        end
+        -- the rolls are Blizzard's frames' again (their timers went with the
+        -- module; on again, the ones still running are read back)
+        self.rolls = {}
+        self.dirty, self.stale = {}, false
+        self:GiveBackRolls()
     end
 end
 

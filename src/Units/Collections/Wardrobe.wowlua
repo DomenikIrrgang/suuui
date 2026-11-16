@@ -1,0 +1,546 @@
+-- Units/Collections/Wardrobe.wowlua
+-- The collections window's Appearances tab (Units/Collections; design: the
+-- paper doll): you on the stage (Doll), the 14 round slots in two columns
+-- with yours of all (SlotButton), the class and the weapon kind (Wardrobe),
+-- the strip's framed 3D tiles of the slot's appearances (Tile). The
+-- module's DrawSlot, DrawTileState, DrawTile, LayoutTiles, WardrobeEntries
+-- and DrawWardrobe as functions taking the module (its methods call them).
+
+import SuuUI from "/Core/API"
+import type SuuButton, Text, Select, SelectOption, Border from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry, WeaponKind from "./Catalog"
+import slotDef from "./Catalog"
+import sourceLine from "./Sources"
+import RoundButton, favouriteTip, DOLL_L, DOLL_R from "./Stage"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, field = errors.try, tbl.field
+local asNumber, asString, isSecret = secret.asNumber, secret.asString, secret.isSecret
+
+export local TILES = 10 -- Appearances: framed 3D tiles a page
+
+local MEDIA = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+-- (the portrait's round cut: a shape, not the theme's disc)
+local MASK_DISC = MEDIA .. "CircleFill.tga"
+
+--------------------------------------------------------------------------------
+-- Appearances (design: the paper doll): you in the middle of the stage, the
+-- 14 slots in two columns around you with yours of all, the class and the
+-- weapon kind at the top right; the strip is 10 framed 3D tiles of the
+-- slot's appearances; the chosen one tried on you, its card at the left,
+-- the star and Undress at the bottom right.
+--------------------------------------------------------------------------------
+
+local QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
+local SLOT = 30
+local SLOTS_L = { "HEADSLOT", "SHOULDERSLOT", "BACKSLOT", "CHESTSLOT", "SHIRTSLOT", "TABARDSLOT", "WRISTSLOT" }
+local SLOTS_R = { "HANDSSLOT", "WAISTSLOT", "LEGSSLOT", "FEETSLOT", "MAINHANDSLOT", "SECONDARYHANDSLOT", "RANGEDSLOT" }
+local SLOT_ATLAS: { [string]: string } = {
+    HEADSLOT = "transmog-nav-slot-head",
+    SHOULDERSLOT = "transmog-nav-slot-shoulder",
+    BACKSLOT = "transmog-nav-slot-back",
+    CHESTSLOT = "transmog-nav-slot-chest",
+    SHIRTSLOT = "transmog-nav-slot-shirt",
+    TABARDSLOT = "transmog-nav-slot-tabard",
+    WRISTSLOT = "transmog-nav-slot-wrist",
+    HANDSSLOT = "transmog-nav-slot-hands",
+    WAISTSLOT = "transmog-nav-slot-waist",
+    LEGSSLOT = "transmog-nav-slot-legs",
+    FEETSLOT = "transmog-nav-slot-feet",
+    MAINHANDSLOT = "transmog-nav-slot-mainhand",
+    SECONDARYHANDSLOT = "transmog-nav-slot-secondaryhand",
+    RANGEDSLOT = "transmog-nav-slot-ranged",
+}
+
+local function qualityToken(quality: number?): string?
+    return quality and quality ~= 1 and ("quality-" .. (QUALITY[quality] or "common")) or nil
+end
+
+-- The classes the game has, for the class choice.
+local function classes(): SelectOption<number>[]
+    local out: SelectOption<number>[] = {}
+    for id = 1, 13 do
+        local name = asString(try(field(_G, "GetClassInfo"), id))
+        if name then
+            out[#out + 1] = { value = id, label = name }
+        end
+    end
+    return out
+end
+
+-- One round slot: the game's slot art in a disc, the arcane glow under the
+-- chosen one, yours of all under it.
+export class SlotButton extends Button
+    readonly glow: Texture
+    readonly ring: Texture
+    readonly disc: Texture
+    readonly art: Texture
+    readonly n: Text
+    readonly slot: string
+    hover: boolean = false
+
+    constructor(parent: Frame, slot: string, m: CollectionsModule)
+        super(nil, parent)
+        self.slot = slot
+        self:SetSize(SLOT, SLOT)
+        self.glow = self:CreateTexture(nil, "BACKGROUND", nil, 1)
+        UI.Skin(self.glow, "circle-soft")
+        self.glow:SetSize(50, 50)
+        self.glow:SetPoint("CENTER")
+        UI.Paint(self.glow, "arcane")
+        self.glow:SetAlpha(0.55)
+        self.ring = self:CreateTexture(nil, "BACKGROUND", nil, 2)
+        UI.Skin(self.ring, "circle-fill")
+        self.ring:SetAllPoints()
+        self.disc = self:CreateTexture(nil, "BACKGROUND", nil, 3)
+        UI.Skin(self.disc, "circle-fill")
+        self.disc:SetPoint("TOPLEFT", 1, -1)
+        self.disc:SetPoint("BOTTOMRIGHT", -1, 1)
+        UI.Paint(self.disc, "surface-sunk")
+        local art = self:CreateTexture(nil, "ARTWORK")
+        self.art = art
+        art:SetPoint("TOPLEFT", 2, -2)
+        art:SetPoint("BOTTOMRIGHT", -2, 2)
+        if not pcall(art.SetAtlas, art, SLOT_ATLAS[slot] or "") then
+            UI.Glyph(art, "shield")
+        end
+        local mask = self:CreateMaskTexture()
+        mask:SetTexture(MASK_DISC, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        mask:SetAllPoints(art)
+        art:AddMaskTexture(mask)
+        self.n = UI.Text(self, "micro", "ink-muted")
+        self.n:SetPoint("TOP", self, "BOTTOM", 0, -1)
+        self:SetScript("OnEnter", function()
+            self.hover = true
+            m:DrawSlot(self)
+            local def = assert(slotDef(self.slot))
+            local counts = m.slotCounts
+            local c = counts and counts[self.slot]
+            UI.ShowTooltip(self, {
+                title = def.label,
+                description = (c and c.reason) or ("%d of %d collected"):format(c and c.have or 0, c and c.all or 0),
+            })
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover = false
+            m:DrawSlot(self)
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", function()
+            local counts = m.slotCounts
+            local c = counts and counts[self.slot]
+            if c and c.reason then
+                return
+            end
+            m.slot, m.chosen, m.page = self.slot, nil, 1
+            m:Refresh()
+        end)
+    end
+end
+
+-- A token's colour times `k` (a shade of it), opaque.
+local function shadeOf(token: string, k: number): ColorMixin
+    local r, g, b = UI.RGBA(token)
+    return CreateColor(math.min(1, r * k), math.min(1, g * k), math.min(1, b * k), 1)
+end
+
+-- A tile's ground: surface-sunk darkened at the bottom up to surface-raised
+-- at the top (the design's warm browns; kept: Bind, so a theme's surfaces
+-- show).
+local function tileShade(t: Texture)
+    t:SetGradient("VERTICAL", shadeOf("surface-sunk", 0.62), shadeOf("surface-raised", 0.93))
+end
+
+-- A tile: a framed preview of you wearing only that piece (the game's
+-- appearance camera), its icon until the model has loaded.
+export class Tile extends Button
+    readonly bg: Texture
+    readonly model: DressUpModel
+    readonly dim: Texture
+    readonly icon: Texture
+    readonly edge: Border
+    readonly worn: Text
+    readonly star: Texture
+    readonly jewel: Texture
+    hover: boolean = false
+    entry: Entry? = nil
+    shownID: number? = nil
+    loading: boolean = false
+    sizedW: number? = nil
+
+    constructor(parent: Frame, m: CollectionsModule)
+        super(nil, parent)
+        self.bg = self:CreateTexture(nil, "BACKGROUND", nil, -8)
+        self.bg:SetAllPoints()
+        self.bg:SetColorTexture(1, 1, 1, 1)
+        UI.Bind(self.bg, tileShade)
+        self.model = CreateFrame("DressUpModel", nil, self)
+        self.model:SetPoint("TOPLEFT", 1, -1)
+        self.model:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.model:SetScript("OnModelLoaded", function()
+            if self.loading then
+                self.loading = false
+                self.icon:Hide()
+                self.model:SetAlpha(1)
+                SuuUI.Motion.FadeIn(self.model, T.duration["dur-base"])
+            end
+        end)
+        self.dim = self:CreateTexture(nil, "OVERLAY", nil, 1)
+        self.dim:SetAllPoints()
+        UI.PaintFill(self.dim, "shade", 0.45)
+        self.icon = self:CreateTexture(nil, "OVERLAY", nil, 2)
+        self.icon:SetSize(32, 32)
+        self.icon:SetPoint("CENTER")
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.edge = UI.Border(self, "gilt-faint", { layer = "OVERLAY", sublevel = 3 })
+        self.worn = UI.Text(self, "micro", "gilt-text")
+        self.worn:SetPoint("BOTTOM", 0, 2)
+        self.worn:SetValue("Worn")
+        self.star = self:CreateTexture(nil, "OVERLAY", nil, 4)
+        UI.Glyph(self.star, "star")
+        self.star:SetSize(11, 11)
+        self.star:SetPoint("TOPRIGHT", -2, -2)
+        UI.Paint(self.star, "gilt-text")
+        self.jewel = UI.Diamond(self, 5, "gilt", "OVERLAY", 5)
+        self.jewel:SetPoint("CENTER", self, "BOTTOM", 0, -4)
+        self:SetScript("OnEnter", function()
+            self.hover = true
+            m:DrawTileState(self)
+            local e = self.entry
+            if not e then
+                return
+            end
+            UI.ShowTooltip(self, {
+                title = e.name,
+                titleColor = qualityToken(e.quality),
+                subtitle = e.worn and "Worn" or (e.collected and "Collected" or "Not collected"),
+                description = sourceLine(e.source, "appearance", e.sourceType),
+            })
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover = false
+            m:DrawTileState(self)
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", function()
+            m:Choose(self.entry)
+        end)
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            m:Page(-delta)
+        end)
+    end
+end
+
+-- You on the Appearances stage: turned by drag, zoomed by the wheel.
+class Doll extends DressUpModel
+    dragX: number? = nil
+    dressed: boolean = false
+
+    constructor(parent: Frame, m: CollectionsModule)
+        super(nil, parent)
+        self:SetPoint("TOPLEFT", DOLL_L + 40, -S["space-4"])
+        self:SetPoint("BOTTOMRIGHT", -(DOLL_R + 40), S["space-4"])
+        self:EnableMouse(true)
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseDown", function(_: Frame, button: string)
+            if button == "LeftButton" then
+                self.dragX = (GetCursorPosition())
+            end
+        end)
+        self:SetScript("OnMouseUp", function()
+            self.dragX = nil
+        end)
+        self:SetScript("OnUpdate", function()
+            local from = self.dragX
+            if not from then
+                return
+            end
+            local x = GetCursorPosition()
+            local delta = (x - from) / (self:GetEffectiveScale() * 100)
+            self.dragX = x
+            if delta ~= 0 then
+                try(self.SetFacing, self, (asNumber(try(self.GetFacing, self)) or 0) + delta)
+            end
+        end)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            m:Zoom(-delta)
+        end)
+    end
+end
+
+-- Appearances' stage: the doll, the slots, the class and the weapon kind,
+-- the star and Undress.
+export class Wardrobe extends Frame
+    readonly doll: Doll
+    readonly slots: SlotButton[] = {}
+    readonly class: Select<number>
+    readonly kind: Select<number>
+    readonly star: RoundButton
+    readonly undress: SuuButton
+
+    constructor(stage: Frame, m: CollectionsModule)
+        super(nil, stage)
+        self:SetAllPoints()
+        self:SetFrameLevel(stage:GetFrameLevel() + 2)
+        self:Hide()
+        -- you, between the two columns of slots
+        self.doll = Doll.new(self, m)
+        -- the slots
+        local function column(names: string[], x: number, fromRight: boolean)
+            local top, bottom = S["space-6"], S["space-6"] + 14
+            local height = stage:GetHeight()
+            local span = height > 0 and height or 410
+            local step = (span - top - bottom - SLOT) / (#names - 1)
+            for i, slot in ipairs(names) do
+                local b = SlotButton.new(self, slot, m)
+                if fromRight then
+                    b:SetPoint("TOPRIGHT", self, "TOPRIGHT", -x, -(top + (i - 1) * step))
+                else
+                    b:SetPoint("TOPLEFT", self, "TOPLEFT", x, -(top + (i - 1) * step))
+                end
+                self.slots[#self.slots + 1] = b
+            end
+        end
+        column(SLOTS_L, DOLL_L, false)
+        column(SLOTS_R, DOLL_R, true)
+        -- the class and the weapon kind
+        local classID = asNumber((select(3, UnitClass("player"))))
+        self.class = UI.Select(self, {
+            options = classes(),
+            value = classID,
+            width = 140,
+            onChange = function(id: number)
+                try(field(C_TransmogCollection, "SetClassFilter"), id)
+                m.weaponKind, m.chosen, m.page, m.slotCounts = {}, nil, 1, nil
+                m:Refresh()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.class:SetPoint("TOPRIGHT", -S["space-6"], -S["space-6"])
+        end)
+        self.class:SetFrameLevel(self:GetFrameLevel() + 10)
+        self.kind = UI.Select(self, {
+            options = {},
+            width = 180,
+            onChange = function(cat: number)
+                local weapon = slotDef(m.slot)?.weapon
+                if weapon then
+                    m.weaponKind[weapon] = cat
+                end
+                m.chosen, m.page = nil, 1
+                m:Refresh()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.kind:SetPoint("TOPRIGHT", self.class, "BOTTOMRIGHT", 0, -S["space-3"])
+        end)
+        self.kind:SetFrameLevel(self:GetFrameLevel() + 10)
+        -- bottom right: the star and Undress
+        self.star = RoundButton.new(self, "star", favouriteTip, function()
+            m:ToggleFavourite()
+        end)
+        self.star:SetFrameLevel(self:GetFrameLevel() + 10)
+        self.undress = UI.Button(self, {
+            text = "Undress",
+            icon = "reset",
+            width = 110,
+            onClick = function()
+                try(self.doll.Dress, self.doll)
+                m.tried = nil
+            end,
+        })
+        self.undress.tooltip = { title = "Undress", description = "Back to what you wear." }
+        SuuUI.Layout.Follow(self, function()
+            self.undress:SetPoint("BOTTOMRIGHT", -S["space-6"], S["space-6"])
+        end)
+        self.undress:SetFrameLevel(self:GetFrameLevel() + 10)
+        SuuUI.Layout.Follow(self, function()
+            self.star:SetPoint("RIGHT", self.undress, "LEFT", -S["space-4"], 0)
+        end)
+    end
+end
+
+----------------------------------------------------------------------------
+-- Appearances
+----------------------------------------------------------------------------
+
+export function drawSlot(self: CollectionsModule, b: SlotButton)
+    local counts = self.slotCounts
+    local c = counts and counts[b.slot]
+    local on = self.slot == b.slot
+    local off = c ~= nil and c.reason ~= nil
+    b.glow:SetShown(on)
+    UI.Paint(b.ring, on and "arcane" or (b.hover and not off) and "gilt" or off and "gilt-faint" or "gilt-line")
+    b:SetAlpha(off and T.opacity["opacity-disabled"] or 1)
+    b.art:SetDesaturated(off)
+    b.n:SetValue(off and "—" or ((c and c.have or 0) .. "/" .. (c and c.all or 0)))
+end
+
+export function drawTileState(self: CollectionsModule, b: Tile)
+    local e = b.entry
+    if not e then
+        return
+    end
+    local chosen = self.chosen ~= nil and self.chosen.id == e.id
+    b.edge:SetColor(
+        (chosen or b.hover) and "gilt" or e.worn and "gilt" or e.collected and "gilt-line" or "gilt-faint"
+    )
+    b.dim:SetShown(not e.collected and not b.hover)
+    b.jewel:SetShown(chosen)
+end
+
+-- One tile with its entry (or hidden).
+export function drawTile(self: CollectionsModule, b: Tile)
+    local e = b.entry
+    if not e then
+        b:Hide()
+        return
+    end
+    b:Show()
+    b.worn:SetShown(e.worn and true or false)
+    b.star:SetShown(e.favourite and true or false)
+    local w = b:GetWidth()
+    if not w or w < 2 then
+        return
+    end
+    if b.shownID ~= e.id then
+        b.shownID = e.id
+        b.loading = true
+        b.icon:SetTexture(e.icon)
+        b.icon:Show()
+        local m = b.model
+        m:SetAlpha(0)
+        try(m.SetUnit, m, "player")
+        try(m.Undress, m)
+        local apply = field(_G, "Model_ApplyUICamera")
+        if e.camera and apply then
+            try(apply, m, e.camera)
+        end
+        try(m.TryOn, m, e.sourceID)
+        -- no answer in two seconds: shown anyway
+        local id = e.id
+        self:After(2, function()
+            if b.shownID == id and b.loading then
+                b.loading = false
+                b.icon:Hide()
+                m:SetAlpha(1)
+            end
+        end)
+    end
+    self:DrawTileState(b)
+end
+
+export function layoutTiles(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local grid = ui.strip.tileGrid
+    local w, h = grid:GetWidth(), grid:GetHeight()
+    if not (w and h) or isSecret(w) or isSecret(h) or w <= 0 then
+        return
+    end
+    local gap = S["space-4"]
+    local tw = (w - (TILES - 1) * gap) / TILES
+    for i, b in ipairs(ui.strip.tiles) do
+        b:ClearAllPoints()
+        b:SetSize(tw, h - 6)
+        b:SetPoint("TOPLEFT", (i - 1) * (tw + gap), 0)
+        -- a tile drawn before it had its size showed nothing (seen in game:
+        -- empty on opening the tab): loaded again at its size
+        if b.entry and b.sizedW ~= tw then
+            b.sizedW = tw
+            b.shownID = nil
+            self:DrawTile(b)
+        end
+    end
+end
+
+-- The slot's appearances (the chosen weapon kind for a weapon slot).
+export function wardrobeEntries(self: CollectionsModule): Entry[]
+    local def = slotDef(self.slot) or assert(slotDef("CHESTSLOT"))
+    local cat, kindLabel = def.category, nil
+    local weapon = def.weapon
+    if weapon then
+        local kinds = self:WeaponKinds(weapon)
+        local chosen = self.weaponKind[weapon]
+        local found: WeaponKind? = nil
+        for _, k in ipairs(kinds) do
+            if k.category == chosen then
+                found = k
+            end
+        end
+        found = found or kinds[1]
+        cat, kindLabel = found and found.category, found and found.name
+        self.kinds = kinds
+        if found then
+            self.weaponKind[weapon] = found.category
+        end
+    end
+    self.slotTitle = def.label .. (kindLabel and (" · " .. kindLabel) or "")
+    if not cat then
+        return {}
+    end
+    return self:Appearances(cat, def.slot)
+end
+
+-- The stage for Appearances: the doll, the slots, the picks, the card.
+export function drawWardrobe(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local w, e = ui.wardrobe, self.chosen
+    if not self.slotCounts then
+        local classID = w.class.value
+        local className = classID and asString(try(field(_G, "GetClassInfo"), classID))
+        self.slotCounts = self:SlotCounts(className and (className .. "s"))
+    end
+    for _, b in ipairs(w.slots) do
+        self:DrawSlot(b)
+    end
+    local weapon = slotDef(self.slot)?.weapon
+    w.kind:SetShown(weapon ~= nil)
+    if weapon then
+        local opts: SelectOption<number>[] = {}
+        for _, k in ipairs(self.kinds) do
+            opts[#opts + 1] = { value = k.category, label = k.name }
+        end
+        w.kind:SetOptions(opts)
+        w.kind:SetValue(self.weaponKind[weapon])
+    end
+    if not w.doll.dressed then
+        w.doll.dressed = true
+        try(w.doll.SetUnit, w.doll, "player")
+    end
+    ui.card:SetShown(e ~= nil)
+    w.star:SetShown(e ~= nil)
+    if e then
+        ui.card:Draw(e, e.worn and "Worn" or nil)
+        local quality = qualityToken(e.quality)
+        if quality then
+            ui.card.name:SetColor(quality)
+        end
+        w.star.on = e.favourite and true or false
+        w.star:Draw(false)
+        if self.tried ~= e.sourceID then
+            self.tried = e.sourceID
+            try(w.doll.TryOn, w.doll, e.sourceID)
+        end
+    end
+end

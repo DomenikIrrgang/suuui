@@ -1,0 +1,441 @@
+-- Units/AuctionHouse/Sell: the Sell page: your items, the item, its price
+-- filled in from the house, the deposit, why Post is off, asking before a
+-- cheap post, posting; the background search's answers.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../SettingsUI/UiSettingsHelpers"
+import internal M from "/Units/AuctionHouse"
+import tryMethod from "wowlua:errors"
+import ORE, BLADE, RING, BAUBLE, GEM, key, house, state, asked, confirm, sellPage, setUp, tearDown, open, win, gameFrame, note, typeInto, money, tipText, plain, at from "./AuctionHouseHelpers"
+import SellRow from "/Units/AuctionHouse/Sell"
+import type AuctionHouseModule from "/Units/AuctionHouse"
+import newParent from "../../../helpers"
+
+local AH = C_AuctionHouse
+
+@beforeEach
+local function start()
+    setUp()
+end
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- Sell
+--------------------------------------------------------------------------------
+
+local function openSell()
+    open()
+    win():SetTab("sell")
+    mock.advanceTime(0.1)
+end
+
+local function sellRows(): SellRow[]
+    local out: SellRow[] = {}
+    for _, r in ipairs(sellPage().rows) do
+        if r:IsShown() then
+            out[#out + 1] = r
+        end
+    end
+    return out
+end
+
+local function sellRow(name: string): SellRow
+    for _, r in ipairs(sellRows()) do
+        if r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no item " .. name)
+end
+
+local function lowest(): string
+    return plain(sellPage().lowest:GetText() or "")
+end
+
+@test("Sell: your items the house takes, one row per item with its count and the lowest buyout seen; none")
+local function sellList()
+    M:Seen(RING, 2500)
+    openSell()
+    local s = sellPage()
+    expect(s.name:GetText()).toBe("Drop an item here, or choose one from your items")
+    expect(tokenOf(s.name)).toBe("ink-muted")
+    expect(tipText(s.post)).toBe("Choose an item.")
+    local names: string[] = {}
+    for _, r in ipairs(sellRows()) do
+        names[#names + 1] = mock.textOf(r.name)
+    end
+    table.sort(names)
+    expect(names).toEqual({ "Test Blade", "Test Ore", "Test Ring" })
+    expect(sellRow("Test Ring").seen).toBeShown()
+    expect(sellRow("Test Ring").seen.copper).toBe(2500)
+    expect(sellRow("Test Ore").seen).never.toBeShown()
+    expect(tokenOf(sellRow("Test Blade").name)).toBe("quality-rare")
+    -- two stacks of one item: one row, counted together
+    mock.setBag(0, { slots = 16, items = { [1] = { id = ORE, count = 20 }, [5] = { id = ORE, count = 7 } } })
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    mock.advanceTime(0.1)
+    expect(#sellRows()).toBe(1)
+    -- a row's tooltip: its bag item
+    local bag = mock.stub(GameTooltip, "SetBagItem", function() end)
+    mock.hover(sellRows()[1])
+    expect(bag).toHaveBeenCalledWith(GameTooltip, 0, 1)
+    mock.hover(nil)
+    -- the reagent bag's items too, counted with the bags' (they were missing:
+    -- found in game)
+    mock.setBag(5, { slots = 16, items = { [2] = { id = ORE, count = 5 }, [3] = { id = GEM, count = 4 } } })
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    mock.advanceTime(0.1)
+    expect(#sellRows()).toBe(2)
+    expect(sellRow("Test Gem")).toBeShown()
+    mock.setBag(5, nil)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    mock.advanceTime(0.1)
+    -- nothing to sell
+    mock.setBag(0, { slots = 16, items = {} })
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    mock.advanceTime(0.1)
+    expect(#sellRows()).toBe(0)
+    expect(s.none).toBeShown()
+end
+
+@test(
+    "a commodity to sell: its unit price filled in 1c under what most sell it for, the quantity all you have, the deposit"
+)
+local function sellCommodity()
+    openSell()
+    local s = sellPage()
+    mock.stub(AH, "CalculateCommodityDeposit", function(_: number, _: number, qty: number): number
+        return 15 * qty
+    end)
+    mock.click(sellRow("Test Ore"))
+    expect(s.name:GetText()).toBe("Test Ore")
+    expect(tokenOf(s.name)).toBe("ink")
+    expect(s.commodity).toBe(true)
+    expect(s.priceLabel:GetText()).toBe("Unit price")
+    expect(s.bidHolder).never.toBeShown()
+    expect(s.qty:GetValue()).toBe("20")
+    expect(lowest()).toBe("Asking the house…")
+    expect(sellRow("Test Ore").sel:IsShown()).toBe(true)
+    mock.advanceTime(1)
+    expect(s.offered).toBe(true)
+    expect(s.price:GetCopper()).toBe(149)
+    expect(lowest():find("^Lowest buyout seen: 1s · today") ~= nil).toBe(true)
+    expect(s.deposit.copper).toBe(300)
+    expect(s.total.copper).toBe(149 * 20)
+    expect(s.post:IsEnabled()).toBe(true)
+    -- why Post is off
+    typeInto(s.qty, "0")
+    expect(tipText(s.post)).toBe("How many?")
+    typeInto(s.qty, "21")
+    expect(tipText(s.post)).toBe("You don't have that many.")
+    mock.click(s.max)
+    expect(s.qty:GetValue()).toBe("20")
+    money(s.price, 0)
+    expect(tipText(s.post)).toBe("Give it a unit price.")
+    money(s.price, 149)
+    mock.player:setMoney(100)
+    M:DrawSell()
+    expect(plain(assert(tipText(s.post)))).toBe("Not enough money for the deposit (3s).")
+    -- right-click: no item
+    mock.click(s.slot, "RightButton")
+    expect(s.loc).toBe(nil)
+end
+
+@test("Post: the game's post and its confirmation; the price remembered and filled in next time; posting, it waits")
+local function postCommodity()
+    openSell()
+    local s = sellPage()
+    local posts: number[][] = {}
+    mock.stub(AH, "PostCommodity", function(_: unknown, dur: number, qty: number, price: number): boolean
+        posts[#posts + 1] = { dur, qty, price }
+        return true
+    end)
+    local confirmPost = mock.stub(AH, "ConfirmPostCommodity", function()
+        return true
+    end)
+    mock.click(sellRow("Test Ore"))
+    mock.advanceTime(1)
+    s.duration:SetValue(3)
+    mock.click(s.post)
+    expect(posts[1]).toEqual({ 3, 20, 149 })
+    expect(confirmPost).toHaveBeenCalled()
+    expect(state.confirmed).toBeNil()
+    expect(s.post:IsEnabled()).toBe(false)
+    mock.fireEvent("AUCTION_HOUSE_AUCTION_CREATED", 77)
+    expect(note()).toBe("Posted: Test Ore ×20.")
+    expect(s.loc).toBe(nil)
+    expect(assert(M:LastPosted(ORE)).price).toBe(149)
+    -- the next time: the price you posted at, then the house's
+    mock.stub(AH, "SendSearchQuery", function() end)
+    mock.click(sellRow("Test Ore"))
+    expect(s.price:GetCopper()).toBe(149)
+    expect(plain(s.last:GetText() or ""):find("^Last posted at 1s 49c · today") ~= nil).toBe(true)
+    -- a post with no confirmation needed
+    mock.stub(AH, "PostCommodity", function()
+        return false
+    end)
+    mock.resetSpies()
+    mock.click(s.post)
+    expect(confirmPost).never.toHaveBeenCalled()
+    -- the game's no
+    mock.fireEvent("AUCTION_HOUSE_POST_ERROR")
+    expect(M.posting).toBe(nil)
+    expect(note()).toBe("Couldn't post.")
+    mock.stub(AH, "PostCommodity", function()
+        error("busy")
+    end)
+    mock.click(s.post)
+    expect(M.posting).toBe(nil)
+    expect(note():find("^Couldn't post: ") ~= nil).toBe(true)
+    -- state.confirmed with nothing posting: nothing
+    M:Posted()
+    expect(note():find("^Couldn't post: ") ~= nil).toBe(true)
+end
+
+@test("a price far under the rest: Post asks first, saying how far under and how few sell that cheap")
+local function postCheap()
+    openSell()
+    local s = sellPage()
+    local post = mock.stub(AH, "PostCommodity", function()
+        return false
+    end)
+    mock.click(sellRow("Test Ore"))
+    mock.advanceTime(1)
+    money(s.price, 50)
+    expect(s.priceTyped).toBe(true)
+    mock.click(s.post)
+    expect(post).never.toHaveBeenCalled()
+    expect(asked().title).toBe("Post this cheap?")
+    expect(plain(asked().text or "")).toBe(
+        "Your price is 67% under what most sell it for (1s 50c each). Only 10 of the 300 offered are that cheap."
+    )
+    confirm(nil)
+    expect(post).toHaveBeenCalled()
+    -- under the far-under line: no question
+    state.confirmed = nil
+    money(s.price, 140)
+    mock.click(s.post)
+    expect(state.confirmed).toBeNil()
+    -- the check off: no question
+    M:Set("cheapCheck", false)
+    money(s.price, 50)
+    mock.click(s.post)
+    expect(state.confirmed).toBeNil()
+    M:Set("cheapCheck", true)
+    -- the house's answer doesn't overwrite a typed price
+    M:SellLowest(150, false)
+    expect(s.price:GetCopper()).toBe(50)
+end
+
+@test(
+    "an item to sell: gear asked for by its item ID alone; the buyout 1c under the cheapest; posted with the game's own post"
+)
+local function sellItem()
+    openSell()
+    local s = sellPage()
+    local askedKey: { itemID: number, itemLevel?: number }? = nil
+    local sellSearch = AH.SendSellSearchQuery
+    mock.stub(AH, "SendSellSearchQuery", function(k: ItemKey, sorts: AuctionHouseSortType[], separate: boolean)
+        askedKey = { itemID = k.itemID, itemLevel = k.itemLevel }
+        sellSearch(k, sorts, separate)
+    end)
+    mock.click(sellRow("Test Blade"))
+    expect(askedKey).toEqual({ itemID = BLADE, itemLevel = 0 })
+    expect(s.commodity).toBe(false)
+    expect(s.priceLabel:GetText()).toBe("Buyout")
+    expect(s.bidHolder).toBeShown()
+    expect(s.qty:GetValue()).toBe("1")
+    expect(tokenOf(s.name)).toBe("quality-rare")
+    mock.advanceTime(1)
+    expect(s.price:GetCopper()).toBe(49999)
+    expect(s.deposit.copper).toBe(100)
+    -- a bid over the buyout; neither
+    money(s.bid, 60000)
+    expect(tipText(s.post)).toBe("The starting bid is above the buyout.")
+    money(s.price, 0)
+    money(s.bid, 0)
+    expect(tipText(s.post)).toBe("Give it a buyout or a starting bid.")
+    money(s.price, 30000)
+    -- far under the cheapest: asked
+    mock.click(s.post)
+    expect(plain(asked().text or "")).toBe("Your price is 40% under the cheapest offer (5g).")
+    state.confirmed = nil
+    money(s.price, 48000)
+    mock.click(s.post)
+    mock.advanceTime(1)
+    expect(note()).toBe("Posted: Test Blade ×1.")
+    expect(assert(M:LastPosted(BLADE)).price).toBe(48000)
+    -- a bid only: posted, no price remembered
+    mock.stub(AH, "PostItem", function()
+        return false
+    end)
+    mock.click(sellRow("Test Ring"))
+    mock.advanceTime(1)
+    money(s.price, 0)
+    money(s.bid, 500)
+    mock.click(s.post)
+    mock.fireEvent("AUCTION_HOUSE_AUCTION_CREATED", 78)
+    expect(M:LastPosted(RING)).toBe(nil)
+    -- the game asks to confirm
+    local confirmPost = mock.stub(AH, "ConfirmPostItem", function()
+        return true
+    end)
+    mock.stub(AH, "PostItem", function()
+        return true
+    end)
+    mock.click(sellRow("Test Ring"))
+    money(s.bid, 500)
+    mock.click(s.post)
+    expect(confirmPost).toHaveBeenCalled()
+end
+
+@test("Sell: a row of several at one price is that price each, not divided by how many")
+local function sellGroupedRow()
+    -- (3 at 3g 58s read as 1g 19s 33c in the sell view, reported 2026-11-10)
+    local data = house()
+    data.items[RING] = {
+        { auctionID = 21, itemKey = key(RING), quantity = 3, buyoutAmount = 35800 },
+        { auctionID = 22, itemKey = key(RING), quantity = 1, buyoutAmount = 45800 },
+    }
+    open(data)
+    win():SetTab("sell")
+    mock.advanceTime(0.1)
+    mock.click(sellRow("Test Ring"))
+    mock.advanceTime(1)
+    expect(assert(M:LowestSeen(RING)).price).toBe(35800)
+    -- the buyout offered: just under the cheapest, not a third of it
+    expect(sellPage().price:GetCopper()).toBe(35799)
+    expectNoErrors()
+end
+
+@test("nobody selling it, no answer, a dropped query sent again; another item's answer; your own the cheapest")
+local function sellAsking()
+    openSell()
+    local s = sellPage()
+    -- nobody sells the bauble
+    mock.setBag(0, { slots = 16, items = { [2] = { id = BLADE }, [3] = { id = RING }, [5] = { id = BAUBLE } } })
+    M:DrawSell()
+    mock.click(sellRow("Test Bauble"))
+    mock.advanceTime(1)
+    expect(s.offered).toBe(false)
+    expect(lowest()).toBe("Nobody sells it right now.")
+    -- no answer: asked again after 5 s, then given up
+    local sent = mock.stub(AH, "SendSearchQuery", function() end)
+    mock.click(sellRow("Test Ring"))
+    expect(sent).toHaveBeenCalledTimes(1)
+    mock.advanceTime(5)
+    expect(sent).toHaveBeenCalledTimes(2)
+    mock.advanceTime(5)
+    expect(s.asking).toBe(nil)
+    mock.advanceTime(0.1)
+    expect(lowest()).toBe("The house didn't answer.")
+    -- dropped: sent again once the house is ready
+    mock.resetSpies()
+    mock.click(sellRow("Test Ring"))
+    mock.fireEvent("AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED")
+    expect(s.resend).toBe(true)
+    mock.fireEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    expect(s.resend).toBe(false)
+    expect(sent).toHaveBeenCalledTimes(2)
+    -- ready with nothing dropped: nothing
+    mock.fireEvent("AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
+    expect(sent).toHaveBeenCalledTimes(2)
+    -- another item's answer, or on another tab: not the price
+    s.asking = { itemID = RING, tries = 1 }
+    mock.fireEvent("ITEM_SEARCH_RESULTS_UPDATED", key(BLADE), nil)
+    expect(s.asking ~= nil).toBe(true)
+    win():SetTab("buy")
+    mock.fireEvent("ITEM_SEARCH_RESULTS_UPDATED", key(RING), nil)
+    expect(s.asking ~= nil).toBe(true)
+    win():SetTab("sell")
+    -- your own auction the cheapest: the same price, not under yourself
+    M:SellLowest(160, true)
+    expect(s.price:GetCopper()).toBe(160)
+    expect(s.bid:GetCopper()).toBe(0)
+    -- an item the house hasn't the info of: gear by its class
+    local queried: number? = nil
+    mock.stub(AH, "GetItemKeyInfo", function()
+        return nil
+    end)
+    mock.stub(AH, "SendSellSearchQuery", function(k: ItemKey)
+        queried = k.itemLevel
+    end)
+    mock.click(sellRow("Test Blade"))
+    expect(queried).toBe(0)
+    -- no key for it: not asked
+    mock.stub(AH, "GetItemKeyFromItem", function()
+        return nil
+    end)
+    mock.resetSpies()
+    mock.click(sellRow("Test Ring"))
+    expect(sent).never.toHaveBeenCalled()
+end
+
+@test("the item to sell: dropped on the slot, from the bags' right-click, refused, or gone from the bags")
+local function sellItemIn()
+    openSell()
+    local s = sellPage()
+    mock.stub(AH, "SendSearchQuery", function() end)
+    -- dropped: from the cursor
+    C_Container.PickupContainerItem(0, 3)
+    mock.script(s.slot, "OnReceiveDrag")
+    expect(s.itemID).toBe(RING)
+    expect(GetCursorInfo()).toBe(nil)
+    -- a click with nothing in hand: nothing
+    mock.click(s.slot)
+    expect(s.itemID).toBe(RING)
+    C_Container.PickupContainerItem(0, 1)
+    mock.click(s.slot)
+    expect(s.itemID).toBe(ORE)
+    -- its tooltip
+    local bag = mock.stub(GameTooltip, "SetBagItem", function() end)
+    mock.hover(nil)
+    mock.hover(s.slot)
+    expect(bag).toHaveBeenCalledWith(GameTooltip, 0, 1)
+    mock.hover(nil)
+    -- refused: a bound item
+    M:SetSellItem(at(4))
+    expect(note()).toBe("The auction house doesn't take that.")
+    expect(s.itemID).toBe(ORE)
+    -- gone from the bags: no item
+    mock.setBag(0, { slots = 16, items = { [3] = { id = RING } } })
+    M:DrawSell()
+    expect(s.loc).toBe(nil)
+    mock.resetSpies()
+    mock.hover(s.slot)
+    expect(bag).never.toHaveBeenCalled()
+    mock.hover(nil)
+    M:Post()
+    M:AskSellPrice()
+    -- an item right-clicked in the bags goes to Sell
+    win():SetTab("buy")
+    tryMethod(gameFrame(), "SetPostItem", at(3))
+    mock.advanceTime(0.1)
+    expect(M.tab).toBe("sell")
+    expect(s.itemID).toBe(RING)
+    -- not with the module off
+    mock.stub(M, "IsEnabled", function()
+        return false
+    end)
+    M:SetSellItem(nil)
+    tryMethod(gameFrame(), "SetPostItem", at(3))
+    expect(s.itemID).toBe(nil)
+end
+
+@test("one of your items acts on the module it is given: chosen to sell")
+local function givenModule()
+    local chosen = mock.spy()
+    local fake: AuctionHouseModule = mock.partial({ SetSellItem = chosen })
+    local parent = newParent()
+    local r = SellRow.new(parent, fake)
+    r.loc = at(1)
+    mock.click(r)
+    expect(chosen).toHaveBeenCalledWith(fake, r.loc)
+    parent:Hide()
+end

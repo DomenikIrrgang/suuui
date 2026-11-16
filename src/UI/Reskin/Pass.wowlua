@@ -1,0 +1,560 @@
+-- UI/Reskin/Pass.wowlua
+-- The generic pass over one of Blizzard's frames (UI/Reskin.wowlua): it
+-- walks the frame and what's in it and restyles each part by what it finds
+-- (the pieces of Reskin/Pieces and Reskin/Menu for the parts it knows, the
+-- textures by their atlas, the texts by their colour and size), the rows of
+-- a ScrollBox after every update, and Blizzard's small dialogs.
+--
+--   reskin(frame)                 -- the frame and everything in it, once more
+--   reskinPart(frame, depth)      -- one part, as the window's pass does it there
+--   reskinScrollBox(box)          -- its rows now and after every update
+--   reskinDialog(frame)           -- a small dialog as a SuuUI panel
+import after from "wowlua:timer"
+import hook, hookScript from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import askString, atlasOf, isOwn, markOwn, markArt, flagged, fade, textures, skinOf, skipped from "./Registry"
+import reskinScrollBar, reskinStatusBar, reskinFillBar, reskinCheckButton, reskinButton, reskinEditBox, reskinCollapseButton from "./Pieces"
+import reskinDropdown from "./Menu"
+
+local S = T.space
+
+local HIDE: string[] = {
+    "collapseexpand",
+    "scrollline",
+    "insideframe",
+    "stat%-bar%-bg",
+    "stat%-bg",
+    "%-info%-.*%-bg",
+    "stattab",
+    "button%-list%-header",
+    "common%-search%-border",
+    "plunderstorm",
+}
+
+local function matchesAny(s: string, list: string[]): boolean
+    for _, p in ipairs(list) do
+        if s:find(p) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isPanelButton(b: Button): boolean
+    if tbl.field(b, "Left") and tbl.field(b, "Right") and (tbl.field(b, "Middle") or tbl.field(b, "Center")) then
+        return true
+    end
+    -- art with "button" in its atlas (not a list's collapse bar or a minus/plus)
+    for _, t in ipairs(textures(b)) do
+        local a = atlasOf(t)
+        if a:find("button") and not a:find("list") and not a:find("minus") and not a:find("plus") then
+            return true
+        end
+    end
+    local t = frames.asTexture(errors.tryMethod(b, "GetNormalTexture"))
+    if not t then
+        return false
+    end
+    local name = (askString(t, "GetAtlas") or askString(t, "GetTextureFilePath") or
+        tostring(errors.tryMethod(t, "GetTexture") or "")):lower()
+    return (name:find("panel%-button") or name:find("redbutton") or name:find("128%-red") or
+        name:find("common%-button")) ~=
+        nil
+end
+
+--------------------------------------------------------------------------------
+-- Text
+--------------------------------------------------------------------------------
+
+local function textColor(r: number?, g: number, b: number): string?
+    if not r then
+        return "ink"
+    end
+    if r > 0.9 and g > 0.7 and g < 0.9 and b < 0.2 then
+        return "ink"
+    end -- Blizzard's yellow
+    if r > 0.85 and g > 0.85 and b > 0.85 then
+        return "ink"
+    end
+    if g > 0.7 and r < 0.5 and b < 0.5 then
+        return "fel"
+    end
+    if r > 0.8 and g < 0.4 and b < 0.4 then
+        return "ember-text"
+    end
+    if math.abs(r - g) < 0.1 and math.abs(g - b) < 0.1 and r < 0.75 then
+        return "ink-muted"
+    end
+    return nil -- another colour of Blizzard's (a quality, a standing): kept
+end
+
+local function sameColor(token: string, r: number, g: number, b: number): boolean
+    local tr, tg, tb = draw.rgba(token)
+    return math.abs(r - tr) < 0.01 and math.abs(g - tg) < 0.01 and math.abs(b - tb) < 0.01
+end
+
+-- A text's colour, read safely (nil: unreadable).
+local function colorOf(fs: FontString): (number?, number, number)
+    local r, g, b = errors.tryMethod(fs, "GetTextColor")
+    if type(r) == "number" and type(g) == "number" and type(b) == "number" then
+        return r, g, b
+    end
+    return nil, 0, 0
+end
+
+local function reskinText(fs: FontString, isHead: boolean)
+    if skipped(fs) then
+        return
+    end
+    local s = skinOf(fs)
+    local _, given = errors.tryMethod(fs, "GetFont")
+    local size = tonumber(given) or 12
+    local fo = errors.tryMethod(fs, "GetFontObject")
+    local foName = fo and askString(fo, "GetName") or ""
+    local text = errors.tryMethod(fs, "GetText")
+    local long = type(text) == "string" and not secret.isSecret(text) and #text > 40
+    if isHead then
+        fonts.apply(fs, "header")
+        draw.paint(fs, "gilt-text")
+    elseif not long and (size >= 14 or foName:find("Med") or foName:find("Large")) then
+        fonts.apply(fs, "header")
+        draw.paint(fs, "gilt-text")
+    else
+        local r, g, b = colorOf(fs)
+        local token = textColor(r, g, b)
+        -- a text an earlier pass coloured still has its token's colour: kept
+        -- (a theme's colours may read as none of Blizzard's)
+        local kept = s.token
+        if kept and r and sameColor(kept, r, g, b) then
+            token = kept
+        end
+        s.token = token
+        fonts.apply(
+            fs,
+            foName:find("Number") and "numeric" or (size < 11 and "caption" or (long and "body" or "label"))
+        )
+        if token then
+            draw.paint(fs, token)
+        elseif r then
+            fs:SetTextColor(r, g, b)
+        end
+    end
+    fs:SetShadowOffset(0, 0)
+end
+
+--------------------------------------------------------------------------------
+-- A pass over a frame
+--------------------------------------------------------------------------------
+
+-- Blizzard's scrolling text (a side pane's description): it measures its
+-- text for the font it has when the text is set, so after SuuUI's font goes
+-- on the box was a line short and its first line out of view (the skills'
+-- description, seen 2026-10-18). Measured again, from the top, a frame
+-- after SuuUI's pass and after each text.
+local function refitScrollingFont(f: Frame)
+    local fs = frames.asFontString(errors.tryMethod(f, "GetFontString"))
+    local box = frames.asFrame(errors.tryMethod(f, "GetScrollBox"))
+    local container = frames.asFrame(errors.tryMethod(f, "GetFontStringContainer"))
+    if not (fs and box and container) then
+        return
+    end
+    container:SetHeight(fs:GetStringHeight())
+    local consts = ScrollBoxConstants or {}
+    errors.tryMethod(box, "FullUpdate", tbl.field(consts, "UpdateImmediately"))
+    errors.tryMethod(box, "ScrollToBegin", tbl.field(consts, "NoScrollInterpolation"))
+end
+
+local function reskinScrollingFont(f: Frame)
+    local s = skinOf(f)
+    if not s.scrollingFont then
+        s.scrollingFont = true
+        hook(f :: unknown, "SetText", function()
+            after(0, function()
+                refitScrollingFont(f)
+            end)
+        end)
+    end
+    after(0, function()
+        refitScrollingFont(f)
+    end)
+end
+
+-- A pass's context: the depth of the row it started at, and whether that
+-- row is a category bar.
+type Ctx = { rowDepth: number, head?: boolean }
+
+local function reskinTexture(t: Texture, ctx: Ctx)
+    local a = atlasOf(t)
+    local layer = errors.tryMethod(t, "GetDrawLayer")
+    if a ~= "" and matchesAny(a, HIDE) then
+        if a:find("collapseexpand") then
+            ctx.head = true
+        end
+        t:SetAlpha(0)
+    elseif a:find("checkmark") and not a:find("minimal") and not skinOf(t).moved then
+        -- a list row's check (the equipment set you wear): its top right corner
+        local parent = t:GetParent()
+        skinOf(t).moved = true
+        t:ClearAllPoints()
+        t:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -S["space-2"], -S["space-2"])
+        t:SetSize(12, 12)
+    elseif a:find("minus") or a:find("plus") then
+        t:SetDesaturated(true)
+        draw.paint(t, "gilt-text")
+    elseif a:find("select") then
+        -- the chosen fill goes behind what it marks (an icon, a row's text)
+        draw.paintFill(t, "arcane-soft")
+        t:SetDrawLayer("BACKGROUND", 2)
+    elseif layer == "HIGHLIGHT" or a:find("highlight") or a:find("hover") then
+        draw.paintFill(t, "surface-raised")
+        t:SetAlpha(0.6)
+    end
+end
+
+local function pass(f: Frame, depth: number, ctx: Ctx)
+    if depth > 6 or errors.tryMethod(f, "IsForbidden") then
+        return
+    end
+    -- SuuUI's own frames inside a Blizzard window (pages, the skin's header):
+    -- never restyled
+    if isOwn(f) then
+        return
+    end
+    local kind = askString(f, "GetObjectType")
+    if tbl.field(f, "GetFontStringContainer") and tbl.field(f, "ScrollBox") and tbl.field(f, "SetText") then
+        reskinScrollingFont(f)
+    end
+    -- Blizzard's coloured progress bar (a Fill it sizes itself: the
+    -- reputation's and the skills' bars, the skills' a StatusBar)
+    local fill = tbl.field(f, "Fill")
+    if fill and tbl.field(f, "FillArea") and tbl.field(f, "SetFillPercent") then
+        reskinFillBar(f)
+        return
+    end
+    if kind == "StatusBar" then
+        reskinStatusBar(f)
+        return
+    end
+    if kind == "CheckButton" and not flagged(f, "check") then
+        reskinCheckButton(f)
+    end
+    if kind == "EditBox" then
+        reskinEditBox(f)
+    end
+    local s = skinOf(f)
+    if kind == "DropdownButton" or
+        (tbl.field(f, "Arrow") and tbl.field(f, "Text") and kind == "Button" and not s.button) then
+        reskinDropdown(f)
+        return
+    end
+    if askString(fill, "GetObjectType") == "Texture" then
+        if atlasOf(fill):find("stat%-bar") or s.fillBar then
+            reskinFillBar(f)
+            return
+        end
+    end
+    local b = kind == "Button" and frames.asButton(f) or nil
+    if b then
+        local key = askString(b, "GetParentKey") or ""
+        if key:find("Collapse") or key:find("Expand") then
+            reskinCollapseButton(b)
+        elseif not flagged(b, "button") and isPanelButton(b) then
+            reskinButton(b)
+        end
+        local collapse, button = s.collapse, s.button
+        if collapse then
+            collapse.draw()
+        end
+        if button then
+            button.draw()
+        end
+    end
+    -- a ScrollBar (Blizzard's minimal one)
+    if tbl.field(f, "Track") and tbl.field(f, "Back") and tbl.field(f, "Forward") then
+        reskinScrollBar(f)
+        return
+    end
+    -- a ScrollBox: its rows, one by one, now and after every update
+    if tbl.field(f, "ScrollTarget") and tbl.field(f, "ForEachFrame") then
+        reskinScrollBox(f)
+        return
+    end
+    local texts: FontString[] = {}
+    for _, r in ipairs({ f:GetRegions() }) do
+        local t = r:GetObjectType()
+        if t == "Texture" then
+            reskinTexture(r :: Texture, ctx)
+        elseif t == "FontString" then
+            texts[#texts + 1] = r :: FontString
+        end
+    end
+    -- a category row: its name as a head, a rule under it
+    if ctx.head and depth == ctx.rowDepth then
+        for _, fs in ipairs(texts) do
+            reskinText(fs, true)
+        end
+        if not s.headRule then
+            local rule = f:CreateTexture(nil, "ARTWORK")
+            draw.paintFill(rule, "gilt-faint")
+            rule:SetHeight(1)
+            rule:SetPoint("BOTTOMLEFT", S["space-3"], 0)
+            rule:SetPoint("BOTTOMRIGHT", -S["space-3"], 0)
+            s.headRule = rule
+        end
+    else
+        for _, fs in ipairs(texts) do
+            reskinText(fs, false)
+        end
+    end
+    for _, c in ipairs(frames.children(f)) do
+        pass(c, depth + 1, ctx)
+    end
+end
+
+export function reskin(given: unknown)
+    local frame = frames.asFrame(given)
+    if not frame then
+        return
+    end
+    pass(frame, 0, { rowDepth = 0 })
+end
+
+-- One part of a window reskinned as the window's own pass (reskin) does it
+-- at that depth (`depth`: how many parents up to the window), once the
+-- window had its pass: a list's rows made since, without walking the whole
+-- window again.
+export function reskinPart(given: unknown, depth: number)
+    local frame = frames.asFrame(given)
+    if not frame then
+        return
+    end
+    pass(frame, depth, { rowDepth = 0 })
+end
+
+-- One row: a fresh context, so a category bar marks only its own row.
+local function reskinRow(given: unknown)
+    local row = frames.asFrame(given)
+    if not row then
+        return
+    end
+    local ctx: Ctx = { rowDepth = 0 }
+    -- a category bar is a texture of the row itself: look first
+    for _, t in ipairs(textures(row)) do
+        if atlasOf(t):find("collapseexpand") then
+            ctx.head = true
+        end
+    end
+    pass(row, 0, ctx)
+end
+
+-- a scroll box's rows restyled for at most this many ms a frame
+local ROWS_MS = 1.5
+
+export function reskinScrollBox(given: unknown)
+    local box = frames.asFrame(given)
+    if not box then
+        return
+    end
+    local s = skinOf(box)
+    if s.scrollBox then
+        return
+    end
+    s.scrollBox = true
+    -- Each update restyled every row at once (up to 30 ms in game for a
+    -- guild's roster, also while the window was closed): now once a frame at
+    -- most, only while the box shows (when it shows again otherwise), and a
+    -- frame's rows within a time budget, the rest on the next frames.
+    local queued = false
+    local function rows(): Frame[]
+        local out: Frame[] = {}
+        local function add(item: unknown)
+            local r = frames.asFrame(item)
+            if r then
+                out[#out + 1] = r
+            end
+        end
+        if tbl.field(box, "ForEachFrame") then
+            -- (no view yet: the box updates as it is sized, before its list is set)
+            if tbl.field(box, "GetView") and not errors.tryMethod(box, "GetView") then
+                return out
+            end
+            errors.tryMethod(box, "ForEachFrame", add)
+        else
+            local target = frames.asFrame(tbl.field(box, "ScrollTarget"))
+            if target then
+                for _, child in ipairs(frames.children(target)) do
+                    add(child)
+                end
+            end
+        end
+        return out
+    end
+    local function drain(list: Frame[], from: number)
+        local stop = debugprofilestop() + ROWS_MS
+        local i = from
+        while i <= #list do
+            reskinRow(list[i])
+            i += 1
+            if debugprofilestop() > stop then
+                break
+            end
+        end
+        if i <= #list then
+            after(0, function()
+                if box:IsVisible() then
+                    drain(list, i)
+                end
+            end)
+        end
+    end
+    -- (closed: nothing; its OnShow restyles it)
+    local function all()
+        if queued or not box:IsVisible() then
+            return
+        end
+        queued = true
+        after(0, function()
+            queued = false
+            if box:IsVisible() then
+                drain(rows(), 1)
+            end
+        end)
+    end
+    if tbl.field(box, "Update") then
+        hook(box :: unknown, "Update", all)
+    end
+    local changed = tbl.field(tbl.field(box, "Event"), "OnDataRangeChanged")
+    if tbl.field(box, "RegisterCallback") and changed then
+        errors.tryMethod(box, "RegisterCallback", changed, all, box)
+    end
+    hookScript(box, "OnShow", function()
+        after(0, all)
+    end)
+    fade(tbl.field(box, "Shadows"))
+    -- the rows it has now: at once (within the budget)
+    drain(rows(), 1)
+end
+
+-- One of Blizzard's small dialogs (the guild's text editor for the message
+-- of the day and the information) as a SuuUI panel: its frame art away,
+-- surface-glass inside a gilt-line edge with the gilt corner diamond, its
+-- title in `header` gilt-text, its corner close as SuuUI's cross, the box
+-- inside on surface-sunk in a gilt-line edge, the rest (buttons, the text,
+-- the scrollbar) by the usual pass. Its clicks stay Blizzard's.
+local function dialogBox(c: Frame)
+    -- a frame holding the text (Blizzard's inset box): its own art away
+    local s = skinOf(c)
+    if s.box then
+        return
+    end
+    s.box = true
+    fade(tbl.field(c, "NineSlice"))
+    for _, t in ipairs(textures(c)) do
+        t:SetAlpha(0)
+    end
+    local bg = c:CreateTexture(nil, "BACKGROUND", nil, -7)
+    draw.paintFill(bg, "surface-sunk")
+    bg:SetAllPoints()
+    markArt(bg)
+    draw.border(c, "gilt-line")
+    -- the text inside: the box is its field already (no second edge)
+    local function walk(fr: Frame, depth: number)
+        if depth > 4 then
+            return
+        end
+        for _, k in ipairs(frames.children(fr)) do
+            local e = k:GetObjectType() == "EditBox" and frames.asEditBox(k) or nil
+            if e then
+                skinOf(e).edit = true
+                e:SetFontObject(fonts.get("body"))
+                draw.paint(e, "ink")
+            end
+            walk(k, depth + 1)
+        end
+    end
+    walk(c, 0)
+end
+
+export function reskinDialog(given: unknown)
+    local f = frames.asFrame(given)
+    if not f or errors.tryMethod(f, "IsForbidden") then
+        return
+    end
+    local s = skinOf(f)
+    if not s.dialog then
+        s.dialog = true
+        for _, r in ipairs({ f:GetRegions() }) do
+            local kind = r:GetObjectType()
+            if kind == "Texture" then
+                r:SetAlpha(0)
+            elseif kind == "FontString" then
+                local fs = r :: FontString
+                fonts.apply(fs, "header")
+                draw.paint(fs, "gilt-text")
+                fs:SetShadowOffset(0, 0)
+                skinOf(fs).skip = true
+            end
+        end
+        for _, key in ipairs({ "NineSlice", "Border", "Bg", "TitleBg" }) do
+            fade(tbl.field(f, key))
+        end
+        local panel = CreateFrame("Frame", nil, f)
+        panel:SetAllPoints()
+        panel:SetFrameLevel(f:GetFrameLevel())
+        panel:EnableMouse(false)
+        markOwn(panel)
+        local ground = draw.fill(panel, "surface-glass")
+        ground:SetAllPoints()
+        draw.pattern(ground, "surface-pattern")
+        draw.border(panel, "gilt-line", { texture = "border" })
+        draw.shadow(panel, "shadow-panel")
+        draw.ornament(panel, 7, "corner", "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        local closeButton = tbl.field(f, "CloseButton")
+        for _, c in ipairs(frames.children(f)) do
+            local kind = c:GetObjectType()
+            local name = c:GetName() or ""
+            local text = errors.tryMethod(c, "GetText")
+            local close = kind == "Button" and frames.asButton(c) or nil
+            if close and (name:find("Close") or c == closeButton) and (not text or text == "") then
+                -- the corner close: SuuUI's cross
+                for _, get in ipairs({
+                    "GetNormalTexture",
+                    "GetPushedTexture",
+                    "GetHighlightTexture",
+                    "GetDisabledTexture",
+                }) do
+                    fade(errors.tryMethod(close, get))
+                end
+                for _, t in ipairs(textures(close)) do
+                    t:SetAlpha(0)
+                end
+                close:SetSize(22, 22)
+                close:ClearAllPoints()
+                close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -S["space-3"], -S["space-3"])
+                local border = draw.border(close, "gilt-line")
+                border:SetShown(false)
+                local cross = draw.cross(close, 10, "ink-muted")
+                cross:SetPoint("CENTER")
+                hookScript(close, "OnEnter", function()
+                    border:SetShown(true)
+                    cross:SetColor("ink")
+                end)
+                hookScript(close, "OnLeave", function()
+                    border:SetShown(false)
+                    cross:SetColor("ink-muted")
+                end)
+            elseif kind == "Frame" or kind == "ScrollFrame" then
+                if (c:GetWidth() or 0) > 100 and (c:GetHeight() or 0) > 40 then
+                    dialogBox(c)
+                end
+            end
+        end
+    end
+    pass(f, 0, { rowDepth = 0 })
+end

@@ -24,15 +24,10 @@
 -- fight starts.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type KeyChip, ScrollArea from "/UI/Panel"
-import type Text from "/UI/Text"
-import type ItemSlot, Money from "/UI/Inventory"
-import type Border from "/UI/Draw"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, KeyChip, ScrollArea, Text, ItemSlot, Money, Border from "/Core/API"
 import hook, hookScript from "wowlua:hooks"
+import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
@@ -54,6 +49,8 @@ local try, asString, asNumber = errors.try, secret.asString, secret.asNumber
 local BAR_W = 1080
 local LOW_Y = 28 -- over the action bars, with the UI shown
 local HIGH_SHARE = 0.2 -- a fifth up the screen when the rest is faded out
+local BACK_GRACE = 0.25 -- seconds past the fade back that still count as fading (HideUI)
+local AUTO_RECHECK = 0.1 -- seconds between looks while AutoQuests answers a step (Draw)
 local PAD, PAD_R = S["space-5"], S["space-6"]
 local PORT_W, PORT_H = 200, 220
 local function GAP(): number
@@ -627,11 +624,25 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
     shown: number = 0
     speakerGUID: string? = nil
     talking: boolean? = nil
+    -- the bar's keys (ArmKeys): its key script set, the keyboard taken, a
+    -- fight on (from PLAYER_REGEN_DISABLED, before the lockdown), the flag
+    -- put back next frame
+    keyScript: boolean = false
+    keys: boolean = false
+    fighting: boolean = false
+    settling: boolean = false
     typed: number = 0
+    -- UIParent's alpha to return to, read as the UI fades out; until
+    -- `backUntil` (GetTime) the UI is still fading back to it, so a
+    -- conversation opening then keeps it instead of reading the half-way
+    -- alpha of our own fade (MAP-1)
     uiAlpha: number? = nil
+    backUntil: number = 0
     uiHidden: boolean = false
     -- the minimap hidden with the rest (it was shown)
     minimapHidden: boolean = false
+    -- a look again queued while AutoQuests answers the step (AwaitAuto)
+    awaiting: boolean = false
 
     constructor()
         super({
@@ -717,22 +728,73 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
         self:PlaceBar()
 
         -- keys: 1-9, Space, Enter; everything else goes on to the game
-        bar:EnableKeyboard(true)
-        if not InCombatLockdown() then
-            bar:SetPropagateKeyboardInput(true)
-        end
-        bar:SetScript("OnKeyDown", function(f, key)
-            if InCombatLockdown() then
-                return
-            end
-            local handled = self:Key(key)
-            f:SetPropagateKeyboardInput(not handled)
-        end)
+        self:ArmKeys()
         -- typing the line in
         bar:SetScript("OnUpdate", function(_, elapsed)
             self:Type(elapsed)
         end)
         self:SetFaces()
+    end
+
+    -- The bar's keys, by UI.Dismissable's rules (it is no popup: it answers
+    -- 1-9, Space and Enter): the keyboard taken only out of a fight, with
+    -- every key passing on first (the key script set then: on Forever a key
+    -- script alone turns the keyboard on, so a scene built in a fight must
+    -- not set it); a key it answers kept for that key only, passing on again
+    -- from the next frame; the keyboard let go as a fight starts. Nothing is
+    -- called in lockdown, and every call is in pcall.
+    function ArmKeys()
+        local scene = self.scene
+        if not scene or self.fighting or InCombatLockdown() then
+            return
+        end
+        local bar = scene.bar
+        pcall(bar.SetPropagateKeyboardInput, bar, true)
+        if not self.keyScript then
+            self.keyScript = true
+            bar:SetScript("OnKeyDown", function(f, key)
+                if InCombatLockdown() then
+                    return
+                end
+                if self:Key(key) then
+                    pcall(f.SetPropagateKeyboardInput, f, false)
+                    self:SettleKeys()
+                else
+                    pcall(f.SetPropagateKeyboardInput, f, true)
+                end
+            end)
+        end
+        if pcall(bar.EnableKeyboard, bar, true) then
+            self.keys = true
+        end
+    end
+
+    -- A fight starting (before the lockdown): keys pass on, the keyboard let go.
+    function LetGoKeys()
+        local scene = self.scene
+        if not scene or InCombatLockdown() then
+            return
+        end
+        local bar = scene.bar
+        pcall(bar.SetPropagateKeyboardInput, bar, true)
+        if self.keys or self.keyScript then
+            pcall(bar.EnableKeyboard, bar, false)
+        end
+        self.keys = false
+    end
+
+    function SettleKeys()
+        if self.settling then
+            return
+        end
+        self.settling = true
+        after(0, function()
+            self.settling = false
+            local scene = self.scene
+            if scene and not InCombatLockdown() then
+                pcall(scene.bar.SetPropagateKeyboardInput, scene.bar, true)
+            end
+        end)
     end
 
     -- The texts set in a style's face at their own size (again after a theme
@@ -1196,11 +1258,40 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
         }
     end
 
+    -- AutoQuests about to answer the step on screen itself (its service;
+    -- nil while it is off, or replaced by a module without it) (MAP-20).
+    function Automated(): boolean
+        local auto = SuuUI.UseService(SuuUI.Services.AUTO_QUESTS)
+        local handling = auto and auto.Handling
+        return handling ~= nil and handling() == true
+    end
+
+    -- A step AutoQuests answers: looked at again shortly, so what is still
+    -- open once it moved on (it stopped, or the game refused it) shows as
+    -- it would have. (A timer, not QueueDraw: Draw runs in one.)
+    function AwaitAuto()
+        if self.awaiting then
+            return
+        end
+        self.awaiting = true
+        self:After(AUTO_RECHECK, function()
+            self.awaiting = false
+            self:Draw()
+        end)
+    end
+
     function Draw()
         local scene = self:Scene()
         local view = self:View()
         if not view then
             scene.root:Hide()
+            return
+        end
+        -- a step AutoQuests answers: no scene for it, the rest of the UI
+        -- and the minimap left as they are (a conversation already shown
+        -- stays and follows)
+        if not scene.root:IsShown() and self:Automated() then
+            self:AwaitAuto()
             return
         end
         if not scene.root:IsShown() then
@@ -1403,11 +1494,9 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.queued = true
-        after(0, function()
+        self:After(0, function()
             self.queued = nil
-            if self:IsEnabled() then
-                self:Draw()
-            end
+            self:Draw()
         end)
     end
 
@@ -1476,18 +1565,20 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
         end
         -- in combat the keys stay the game's (a frame's key handling can't change then)
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            self:Scene().bar:EnableKeyboard(false)
+            self.fighting = true
+            self:LetGoKeys()
             -- a fight: the UI back at once
             self:HideUI(false)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            local bar = self:Scene().bar
-            bar:EnableKeyboard(true)
-            bar:SetPropagateKeyboardInput(true)
+            self.fighting = false
+            self:ArmKeys()
         end)
     end
 
     override function OnDisable()
+        -- (its timer goes with the module)
+        self.awaiting = false
         local scene = self.scene
         if scene then
             scene.root:Hide()
@@ -1525,8 +1616,17 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
                 f:SetIgnoreParentAlpha(on)
             end
         end
+        local duration = T.duration["dur-base"] or 0.2
         if on then
-            self.uiAlpha = UIParent:GetAlpha()
+            -- read only when no fade back of ours runs (its alpha is half-way)
+            if not self.uiAlpha or GetTime() >= self.backUntil then
+                self.uiAlpha = UIParent:GetAlpha()
+            end
+            self.backUntil = 0
+        else
+            -- (the fade's last step lands on the first frame after its end:
+            -- a little longer, so a slow frame can't be read as the end)
+            self.backUntil = GetTime() + duration + BACK_GRACE
         end
         -- the minimap's own drawing (your arrow, its icons, quest areas)
         -- doesn't take the alpha: hidden for the talk, back after (seen in
@@ -1538,7 +1638,7 @@ class NpcDialogueModule extends Module<typeof(DEFAULTS)>
             Minimap:Show()
             self.minimapHidden = false
         end
-        SuuUI.Motion.AlphaTo(UIParent, on and 0 or (self.uiAlpha or 1), T.duration["dur-base"] or 0.2)
+        SuuUI.Motion.AlphaTo(UIParent, on and 0 or (self.uiAlpha or 1), duration)
     end
 end
 

@@ -1,0 +1,154 @@
+-- Units/Windows/Shared: what the restyled windows share: parts by key, the
+-- art SkinWindow hides, a part out of sight, a tab's label, whether a part
+-- shows, a glyph button on SuuUI's edge, the maximise/minimise pair.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import * as shared from "/Units/Windows/Shared"
+import expectNoErrors, newParent from "../../../helpers"
+
+@test("a part by its key(s): a frame or a button, nil for anything else")
+local function parts()
+    local f = newParent()
+    local inner = CreateFrame("Frame", nil, f)
+    local b = CreateFrame("Button", nil, inner)
+    rawset(f, "Inner", inner)
+    rawset(inner, "Go", b)
+    rawset(f, "Label", "text")
+    expect(shared.part(f, "Inner")).toBe(inner)
+    expect(shared.part(f, "Inner", "Go")).toBe(b)
+    expect(shared.button(f, "Inner", "Go")).toBe(b)
+    expect(shared.button(f, "Inner")).toBeNil()
+    expect(shared.part(f, "Label")).toBeNil()
+    expect(shared.part(f, "Missing")).toBeNil()
+    expect(shared.part(nil, "Inner")).toBeNil()
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("the art SkinWindow hides: the usual five parts and more by key; a global added")
+local function artList()
+    local f = newParent()
+    local usual: Frame[] = {}
+    for i, key in ipairs({ "NineSlice", "PortraitContainer", "TitleContainer", "Bg", "TopTileStreaks" }) do
+        usual[i] = CreateFrame("Frame", nil, f)
+        rawset(f, key, usual[i])
+    end
+    local extra = CreateFrame("Frame", nil, f)
+    rawset(f, "PortraitOverlay", extra)
+    local list = shared.art(f, "PortraitOverlay")
+    for i, r in ipairs(usual) do
+        expect(list[i]).toBe(r)
+    end
+    expect(list[6]).toBe(extra)
+    local n = #list
+    expect(n).toBe(6)
+    _G.SuuUITestWindowsInset = extra
+    expect(shared.withGlobal(list, "SuuUITestWindowsInset")).toBe(list)
+    expect(list[n + 1]).toBe(extra)
+    _G.SuuUITestWindowsInset = nil
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("a part out of sight and out of the mouse's way; nil left alone")
+local function quieted()
+    local f = newParent()
+    local b = CreateFrame("Button", nil, f)
+    b:EnableMouse(true)
+    shared.quiet(b)
+    expect(b:GetAlpha()).toBe(0)
+    expect(b:IsMouseEnabled()).toBe(false)
+    shared.quiet(nil)
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("a tab's own label, from Text or text; whether a part shows")
+local function labelsAndShows()
+    local f = newParent()
+    local b = CreateFrame("Button", nil, f)
+    local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    fs:SetText("Talents")
+    rawset(b, "Text", fs)
+    expect(shared.tabLabel(b)).toBe("Talents")
+    local other = CreateFrame("Button", nil, f)
+    expect(shared.tabLabel(other)).toBeNil()
+    expect(shared.shows(b)).toBe(true)
+    b:Hide()
+    expect(shared.shows(b)).toBe(false)
+    expect(shared.shows(nil)).toBe(false)
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("a window's own textures away, SuuUI's glass kept")
+local function clearedArt()
+    local f = newParent()
+    local own = f:CreateTexture(nil, "ARTWORK")
+    local glass = f:CreateTexture(nil, "BACKGROUND")
+    local chrome = { bg = glass } :: any
+    shared.clearArt(f, chrome)
+    expect(own:GetAlpha()).toBe(0)
+    expect(glass:GetAlpha()).toBe(1)
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("a glyph button: the game's art away, the glyph ink-muted, ink with its edge on hover")
+local function glyphButton()
+    local f = newParent()
+    local b = CreateFrame("Button", nil, f)
+    b:SetPoint("CENTER")
+    local old = b:CreateTexture(nil, "ARTWORK")
+    shared.glyphOn(b, "plus", 12)
+    expect(old:GetAlpha()).toBe(0)
+    expect(b:GetWidth()).toBe(22)
+    expect(b:GetHeight()).toBe(22)
+    local glyph: Texture? = nil
+    for _, t in ipairs(frames.textures(b)) do
+        if t ~= old and t:GetWidth() == 12 then
+            glyph = t
+        end
+    end
+    local g = assert(glyph)
+    local mr, mg, mb = SuuUI.UI.RGBA("ink-muted")
+    local r, gg, bb = g:GetVertexColor()
+    expect(r).toBeCloseTo(mr)
+    expect(gg).toBeCloseTo(mg)
+    expect(bb).toBeCloseTo(mb)
+    mock.hover(b)
+    local ir, ig, ib = SuuUI.UI.RGBA("ink")
+    r, gg, bb = g:GetVertexColor()
+    expect(r).toBeCloseTo(ir)
+    expect(gg).toBeCloseTo(ig)
+    expect(bb).toBeCloseTo(ib)
+    mock.hover(nil)
+    r = g:GetVertexColor()
+    expect(r).toBeCloseTo(mr)
+    f:Hide()
+    expectNoErrors()
+end
+
+@test("the maximise/minimise pair: plus and minus glyphs, left of the header's key chip or close")
+local function maxMin()
+    local f = newParent()
+    local chrome = SuuUI.UI.SkinWindow(f, { title = "Test", topInset = 20 })
+    local mm = CreateFrame("Frame", nil, f)
+    local max, min = CreateFrame("Button", nil, mm), CreateFrame("Button", nil, mm)
+    rawset(mm, "MaximizeButton", max)
+    rawset(mm, "MinimizeButton", min)
+    shared.skinMaxMin(chrome, mm)
+    expect(max:GetWidth()).toBe(22)
+    expect(min:GetWidth()).toBe(22)
+    expect(mm:GetWidth()).toBe(22)
+    local right: Frame = chrome.key or chrome.close or chrome.head
+    expect(mm).toBeAnchoredTo(right, "RIGHT", "LEFT")
+    expect(mm:GetFrameLevel()).toBe(chrome.head:GetFrameLevel() + 3)
+    -- none: nothing done
+    shared.skinMaxMin(chrome, nil)
+    f:Hide()
+    expectNoErrors()
+end

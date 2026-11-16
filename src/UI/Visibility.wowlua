@@ -1,12 +1,20 @@
 -- UI/Visibility.wowlua
 -- When a frame shows: always, only in combat, on mouseover, or never.
 --
---   setVisibility(frame, "always" | "combat" | "mouseover" | "hidden", also)
+--   setVisibility(frame, "always" | "combat" | "mouseover" | "hidden", also, owner)
+--   release(owner)
 --
 -- `also` (0.9, optional): frames outside `frame` whose hover counts as its
 -- own for "mouseover" (bars attached to the dock, which fade with it but sit
 -- outside it). Setting the mode a frame already has changes nothing (a
 -- hovered mouseover frame stays faded in).
+--
+-- `owner` (0.47, optional): the module the frame belongs to. When it is
+-- released (turned off, or failed) its frames are let go: the state driver
+-- is unregistered, edit mode, keybind mode and combat no longer show them,
+-- the hover fade stops, and the frame is left as its module's OnDisable left
+-- it. Setting a mode again afterwards (the module on again) applies it. A
+-- frame set without an owner is managed for the session.
 --
 -- "combat" is a secure state driver, so it works for frames holding secure
 -- buttons and switches in combat too. "mouseover" keeps the frame shown at
@@ -23,6 +31,7 @@ import tokens as T from "/Core/Tokens"
 import type SelectOption from "./Select"
 import * as events from "/Core/Events"
 import * as combat from "/Core/Combat"
+import * as modules from "/Core/Modules"
 import * as motion from "/Core/Motion"
 import * as editMode from "/EditMode/EditMode"
 import * as keybindMode from "./KeybindMode"
@@ -31,6 +40,7 @@ local modes: { [Frame]: string } = {} -- frame -> mode
 local hover: { [Frame]: boolean } = {} -- frames fading on mouseover
 local hoverOn: { [Frame]: boolean } = setmetatable({}, { __mode = "k" }) -- shown by the mouse now
 local also: { [Frame]: Frame[] } = {} -- frame -> frames whose hover counts as its own
+local owners: { [Frame]: unknown } = {} -- frame -> the module it belongs to
 local forced = false
 
 export const VISIBILITY_OPTIONS: SelectOption<string>[] = {
@@ -66,14 +76,58 @@ local function apply(frame: Frame)
     end
 end
 
-export function setVisibility(frame: Frame, mode: string?, extra: Frame[]?)
+export function setVisibility(frame: Frame, mode: string?, extra: Frame[]?, owner: unknown?)
     mode = mode or "always"
     also[frame] = extra
+    if owner ~= nil then
+        owners[frame] = owner
+    end
     if modes[frame] == mode then
         return
     end
     modes[frame] = mode
     apply(frame)
+end
+
+-- Lets go of every frame `owner` set: what its mode did is undone (the
+-- state driver, through the combat queue as `apply` does: the same key, so
+-- an apply still waiting is replaced), but the frame isn't shown or hidden.
+export function release(owner: unknown)
+    if owner == nil then
+        return
+    end
+    for frame, o in pairs(owners) do
+        if o == owner then
+            owners[frame] = nil
+            modes[frame] = nil
+            hover[frame] = nil
+            hoverOn[frame] = nil
+            also[frame] = nil
+            motion.alphaTo(frame, 1, 0)
+            combat.run(
+                "visibility:" .. tostring(frame),
+                function()
+                    UnregisterStateDriver(frame, "visibility")
+                end,
+                "Visibility"
+            )
+        end
+    end
+end
+
+-- What a module gave with itself as the owner goes when it turns off
+-- (Core/Modules).
+modules.onRelease(release)
+
+-- How many frames `owner` has set.
+export function count(owner: unknown): number
+    local n = 0
+    for _, o in pairs(owners) do
+        if o == owner then
+            n += 1
+        end
+    end
+    return n
 end
 
 local function reapply()

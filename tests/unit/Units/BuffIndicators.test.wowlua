@@ -13,7 +13,8 @@ import SuuUI from "/Core/API"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as roles from "/Core/Roles"
-import expectNoErrors, newParent from "../../helpers"
+import * as modules from "/Core/Modules"
+import expectNoErrors, newParent, cycle, NOTHING from "../../helpers"
 
 import internal M, buildEditor from "/Units/BuffIndicators"
 import type IndicatorEditor, IndicatorRow, IndicatorEditPanel from "/Units/BuffIndicators"
@@ -511,4 +512,24 @@ local function previewRoles()
     local p = editPanel(f, 1)
     expect(p.roles.control:GetValue()).toEqual({ "TANK" })
     -- (the modal stays open: `wowlua screenshot` of this test shows the row)
+end
+
+-- (last) The module toggles live: turned off through the registry nothing
+-- of it stays; on again, nothing is doubled.
+@test("turned off through the registry: nothing held, the group frames' indicators withdrawn; on again, all back")
+local function disabled()
+    local c = cycle("indicators")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    -- (each editor the earlier tests built watches the lists for the
+    -- module, until it turns off: a new settings page builds a new one; on
+    -- again, only OnEnable's own watcher)
+    expect(c.after.watchers).toBe(1)
+    c.after.watchers = c.before.watchers
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    settings.set("indicators", "enabled", false)
+    expect(#(UI.GroupIndicators())).toBe(0)
+    settings.set("indicators", "enabled", true)
+    expectNoErrors()
 end

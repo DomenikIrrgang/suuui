@@ -1,0 +1,413 @@
+-- tests/unit/Units/Collections/CollectionsHelpers.wowlua
+-- Shared by the collections window's tests (tests/unit/Units/Collections
+-- and its parts' in tests/unit/Units/Collections/): SuuUI's source data and
+-- the account's mounts as the tests give them; start() and cleanup() (each
+-- file's @beforeEach and @afterEach); the window opened and its parts; the
+-- game's toys, wardrobe and pet journal as the tests set them; the game's
+-- wrapped present.
+--
+-- The game's journals answer from the account's mounts, toys and
+-- collected appearances the tests set (`mock.setMounts`, `mock.setToys`,
+-- `mock.setAppearances`; the wardrobe's catalogue is the client's); the
+-- tests give SuuUI's source data themselves.
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M, Parts from "/Units/Collections"
+import type Entry from "/Units/Collections/Catalog"
+import GIFT_ICON from "/Units/Collections/Catalog"
+import type Cell from "/Units/Collections/Strip"
+import type SlotButton from "/Units/Collections/Wardrobe"
+import type CollectionSources from "/Data/CollectionSources"
+import * as lazyData from "/Core/Data"
+import type TooltipData from "/UI/Tooltip"
+import expectNoErrors from "../../../helpers"
+
+-- SuuUI's generated sources: creatures and objects by ID, then each
+-- mount's, toy's and item's sources.
+export local SOURCES: CollectionSources = {
+    npc = { [1] = "Vendor Brom|Elwynn Forest|20|Alliance", [2] = "Kobold Miner|Elwynn Forest|5|", [3] = "Boar|||" },
+    obj = { [1] = "Old Chest|Westfall", [2] = "Crate|" },
+    mount = { [101] = { v = { 1, 2 } }, [102] = { q = { 10, 11 } } },
+    toys = { 201, 202, 203 },
+    toy = { [201] = { x = "From a holiday" } },
+    item = { [56] = { d = { 2 }, dn = 3 } },
+}
+
+-- The account's mounts, by mount ID: the game's journal holds them.
+local MOUNTS: { [number]: mock.MountData } = {}
+export function mount(
+    id: number,
+    name: string,
+    opts: { favorite?: boolean, collected?: boolean, hidden?: boolean, usable?: boolean }?
+)
+    local o = opts or {}
+    MOUNTS[id] = {
+        name = name,
+        spellID = id * 10,
+        icon = 132000 + id,
+        sourceType = 1,
+        display = 9000 + id,
+        favorite = o.favorite,
+        collected = o.collected,
+        hidden = o.hidden,
+        usable = o.usable,
+    }
+end
+
+-- The account's mounts as the tests set them (for mock.setMounts).
+export function mountData(): { [number]: mock.MountData }
+    return MOUNTS
+end
+
+local mounted = false
+
+-- Mounted or not, as the game says.
+export function setMounted(on: boolean)
+    mounted = on
+end
+
+export function start()
+    MOUNTS = {}
+    mount(101, "Brown Horse")
+    mount(102, "Swift Ram", { favorite = true })
+    mount(103, "Zebra", { collected = false })
+    mount(104, "Hidden Steed", { hidden = true })
+    mount(105, "Night Saber", { usable = false })
+    mock.setMounts(MOUNTS)
+    mounted = false
+    -- (the real sources built, as after the window's first open; the
+    -- test's in their place)
+    lazyData.collectionSources:Get()
+    mock.stub(SuuUI, "CollectionSources", function()
+        return SOURCES
+    end)
+    mock.fake("IsMounted", function()
+        return mounted
+    end)
+    mock.stub(C_QuestLog, "GetTitleForQuestID", function(id: number): string?
+        return id == 10 and "The Ram Trial" or nil
+    end)
+end
+
+-- The window's parts (built as the module started).
+export function ui(): Parts
+    return assert(M.ui)
+end
+
+-- An entry with only what a test needs.
+export function entry(fields: { [string]: unknown }): Entry
+    return mock.partial(fields)
+end
+
+-- What SuuUI.UI.ShowTooltip was asked last.
+export function captureTooltips(): () -> TooltipData
+    local shown: TooltipData? = nil
+    mock.stub(SuuUI.UI, "ShowTooltip", function(_: unknown, opts: TooltipData)
+        shown = opts
+    end)
+    return function(): TooltipData
+        return (assert(shown, "no tooltip"))
+    end
+end
+
+export function cleanup()
+    if ui().window:IsShown() then
+        ui().window:Hide()
+    end
+    mock.advanceTime(0.5)
+    M.chosen, M.page, M.slotCounts, M.weaponKind, M.tried = nil, 1, nil, {}, nil
+    ui().tools.search:SetValue("")
+    ui().tools.have:SetValue("all")
+    ui().tools.list:SetValue("all")
+    M:Saved().learned, M:Saved().last = nil, nil
+    expectNoErrors()
+end
+
+export function open(tab: string?)
+    M:Toggle(tab or "mounts")
+    mock.advanceTime(0.01)
+end
+
+export function cells(): Cell[]
+    local out: Cell[] = {}
+    for _, b in ipairs(ui().strip.cells) do
+        if b:IsShown() then
+            out[#out + 1] = b
+        end
+    end
+    return out
+end
+
+-- The wardrobe is the client's (its categories, appearances and sources):
+-- the chest has 438 appearances to show, the main hand's kinds (one-handed
+-- swords and maces, two-handed maces) 242. Yours: the chest's 63239 (the
+-- robe, item 56) and 63305 (by its second source, the vest), a sword
+-- (130253); 63305 a favourite. You wear item 57 (the chest's 63240).
+export const CHEST_ALL = 438
+export const MAIN_ALL = 242
+export function wardrobeData()
+    mock.defineItem(56, { name = "Gilded Robe", quality = 4, equipLoc = "INVTYPE_ROBE" })
+    mock.defineItem(57, { name = "Worn Tunic", quality = 1, equipLoc = "INVTYPE_CHEST" })
+    mock.defineItem(281284, { name = "Plain Vest", quality = 1, equipLoc = "INVTYPE_CHEST" })
+    mock.setAppearances({ collected = { 156056, 316091, 311021 }, favorites = { 63305 } })
+    mock.player:equip(5, 57)
+end
+
+-- Three toys: the drum yours, the wand yours (a favourite, not usable
+-- here), the kite not yet. The game's toy tooltip has only the name: what
+-- a toy does is the test's.
+export function toyData()
+    mock.defineItem(201, { name = "Toy Drum", icon = 134201 })
+    mock.defineItem(202, { name = "Bubble Wand", icon = 134202 })
+    mock.defineItem(203, { name = "Kite", icon = 134203 })
+    mock.setToys({ [201] = {}, [202] = { favorite = true, usable = false }, [203] = { collected = false } })
+    mock.stub(C_TooltipInfo, "GetToyByItemID", function(id: number): unknown
+        if id == 201 then
+            return { lines = { { leftText = "Toy Drum" }, { leftText = "Use: Plays a drum." } } }
+        end
+        return { lines = {} }
+    end)
+end
+
+export function slotButton(slot: string): SlotButton
+    for _, b in ipairs(ui().wardrobe.slots) do
+        if b.slot == slot then
+            return b
+        end
+    end
+    error("no slot " .. slot)
+end
+
+-- The gift icon as a texture answers it (the game's file for the path).
+export function giftTexture(): number | string | nil
+    local probe = UIParent:CreateTexture()
+    probe:SetTexture(GIFT_ICON)
+    return probe:GetTexture()
+end
+
+-- Mount 102 (the Swift Ram) wrapped until the game is told it was opened.
+export function wrappedRam(): { number }
+    local cleared: { number } = {}
+    local unwrapped = false
+    mock.fake("C_MountJournal.NeedsFanfare", function(id: number): boolean
+        return id == 102 and not unwrapped
+    end)
+    mock.fake("C_MountJournal.GetNumMountsNeedingFanfare", function(): number
+        return unwrapped and 0 or 1
+    end)
+    mock.fake("C_MountJournal.ClearFanfare", function(id: number)
+        cleared[#cleared + 1] = id
+        unwrapped = true
+    end)
+    return cleared
+end
+
+-- The game's present in a mount's model scene (the tests' client has no
+-- model scenes): its "wrapped" actor, the unwrap playing 3 seconds.
+export function fakePresent(): { file?: number, scale?: number, z?: number }
+    local gift = ui().gift :: {}
+    local playing = false
+    -- (the game's display for it missing, as in Forever: no model)
+    local actor: {
+        file?: number,
+        scale?: number,
+        z?: number,
+        GetModelFileID: () -> number?,
+        SetModelByFileID: (unknown, number) -> (),
+        GetPosition: () -> (number, number, number),
+        SetPosition: (unknown, number, number, number) -> (),
+        SetScale: (unknown, number) -> (),
+        GetScale: () -> number,
+    } = {
+        GetModelFileID = function(): number?
+            return nil
+        end,
+        SetModelByFileID = function(_: unknown, _id: number) end,
+        GetPosition = function(): (number, number, number)
+            return 0, 0, 0
+        end,
+        SetPosition = function(_: unknown, _x: number, _y: number, _z: number) end,
+        SetScale = function(_: unknown, _k: number) end,
+        GetScale = function(): number
+            return 1
+        end,
+    }
+    actor.SetPosition = function(_: unknown, _x: number, _y: number, z: number)
+        actor.z = z
+    end
+    actor.SetScale = function(_: unknown, k: number)
+        actor.scale = k
+    end
+    actor.GetScale = function(): number
+        return actor.scale or 1
+    end
+    actor.SetModelByFileID = function(_: unknown, id: number)
+        actor.file = id
+    end
+    mock.stub(gift, "GetActorByTag", function(_: unknown, tag: string): {}?
+        return tag == "wrapped" and actor or nil
+    end)
+    mock.stub(gift, "StartUnwrapAnimation", function(_: unknown, done: () -> ())
+        playing = true
+        C_Timer.After(3, function()
+            playing = false
+            done()
+        end)
+    end)
+    mock.stub(gift, "IsUnwrapAnimating", function(): boolean
+        return playing
+    end)
+    -- its ground point 100 px over the frame's bottom, 20 px left of its middle
+    mock.stub(gift, "Transform3DPointTo2D", function(): (number, number)
+        local s = ui().gift:GetEffectiveScale()
+        return (760 / 2 - 20) * s, 100 * s
+    end)
+    return actor
+end
+
+-- The game's pet journal as the tests' client has none: its rows (a pet you
+-- own once a row, one you lack once), what was asked of it.
+type PetRow = { guid?: string, species: number, owned: boolean, fav?: boolean, name: string }
+export type PetCalls = {
+    summoned?: string,
+    wrapped?: string,
+    locked?: boolean,
+    cleared: string[],
+    favourite: { unknown }[],
+    random: boolean[],
+    links: string[],
+    searchCleared: boolean,
+    filters: number[],
+}
+export function petJournal(): PetCalls
+    M.petListOpen = false
+    local rows: PetRow[] = {
+        { guid = "Pet-A", species = 1, owned = true, name = "Mechanical Squirrel" },
+        { guid = "Pet-B", species = 1, owned = true, fav = true, name = "Mechanical Squirrel" },
+        { guid = "Pet-C", species = 2, owned = true, name = "Black Tabby Cat" },
+        { species = 3, owned = false, name = "Prairie Dog" },
+    }
+    local calls: PetCalls = {
+        cleared = {},
+        favourite = {},
+        random = {},
+        links = {},
+        searchCleared = false,
+        filters = {},
+    }
+    local PJ = "C_PetJournal."
+    mock.fake(PJ .. "GetNumPets", function(): (number, number)
+        return #rows, 3
+    end)
+    mock.fake(PJ .. "GetPetInfoByIndex", function(i: number): ...unknown
+        local r = rows[i]
+        if not r then
+            return nil
+        end
+        local source = r.species == 3 and "|cFFFFD200Vendor: |rNat Pagle|n|cFFFFD200Zone: |rDustwallow Marsh" or
+            r.species == 2 and "" or
+            "|cFFFFD200Profession: |rEngineering"
+        local desc = r.species == 2 and "" or "A small friend."
+        return r.guid,
+            r.species,
+            r.owned,
+            nil,
+            1,
+            r.fav or false,
+            false,
+            r.name,
+            130000 + r.species,
+            1,
+            0,
+            source,
+            desc,
+            false,
+            false,
+            true,
+            false,
+            true
+    end)
+    mock.fake(PJ .. "GetPetInfoBySpeciesID", function(s: number): ...unknown
+        return "", 0, 1, 0, "|cFFFFD200Drop: |rA stray", "A cat.", false, false, true, false, true, 7000 + s
+    end)
+    mock.fake(PJ .. "GetPetModelSceneInfoBySpeciesID", function(_: number): (number, number)
+        return 99, 98
+    end)
+    mock.fake(PJ .. "GetSummonedPetGUID", function(): string?
+        return calls.summoned
+    end)
+    mock.fake(PJ .. "SummonPetByGUID", function(g: string)
+        calls.summoned = g
+    end)
+    mock.fake(PJ .. "DismissSummonedPet", function(_: string)
+        calls.summoned = nil
+    end)
+    mock.fake(PJ .. "GetPetSummonInfo", function(_: string): (boolean, number, string)
+        return true, 0, ""
+    end)
+    -- (as Forever: 1 or 0, true refused; found in game)
+    mock.fake(PJ .. "SetFavorite", function(g: string, v: unknown)
+        if type(v) ~= "number" then
+            error("Usage: SetFavorite(petID, bool)")
+        end
+        calls.favourite[#calls.favourite + 1] = { g, v }
+    end)
+    mock.fake(PJ .. "IsJournalUnlocked", function(): boolean
+        return not calls.locked
+    end)
+    mock.fake(PJ .. "HasFavoritePets", function(): boolean
+        return true
+    end)
+    mock.fake(PJ .. "SummonRandomPet", function(fav: boolean)
+        calls.random[#calls.random + 1] = fav
+    end)
+    mock.fake(PJ .. "GetNonBattlePetLinkByIndex", function(i: number): string
+        return "|cff1eff00|Hcompanion:" .. i .. "|h[pet]|h|r"
+    end)
+    mock.fake(PJ .. "PetNeedsFanfare", function(g: string): boolean
+        return calls.wrapped == g
+    end)
+    mock.fake(PJ .. "GetNumPetsNeedingFanfare", function(): number
+        return calls.wrapped and 1 or 0
+    end)
+    mock.fake(PJ .. "ClearFanfare", function(g: string)
+        calls.cleared[#calls.cleared + 1] = g
+        calls.wrapped = nil
+    end)
+    mock.fake(PJ .. "GetPetInfoByPetID", function(g: string): ...unknown
+        for _, r in ipairs(rows) do
+            if r.guid == g then
+                return r.species, nil, 1, 0, 0, 0, false, r.name
+            end
+        end
+        return nil
+    end)
+    -- the game's journal searched and filtered (SuuUI opens it up)
+    mock.fake(PJ .. "GetSearchFilter", function(): string
+        return calls.searchCleared and "" or "squ"
+    end)
+    mock.fake(PJ .. "ClearSearchFilter", function()
+        calls.searchCleared = true
+    end)
+    mock.fake(PJ .. "IsFilterChecked", function(_: number): boolean
+        return false
+    end)
+    mock.fake(PJ .. "SetFilterChecked", function(f: number, _: boolean)
+        calls.filters[#calls.filters + 1] = f
+    end)
+    mock.fake(PJ .. "SetAllPetTypesChecked", function(_: boolean) end)
+    mock.fake(PJ .. "SetAllPetSourcesChecked", function(_: boolean) end)
+    return calls
+end
+
+-- The cell of the entry named so on the strip.
+export function cellNamed(name: string): Cell
+    for _, c in ipairs(cells()) do
+        local e = c.entry
+        if e and e.name == name then
+            return c
+        end
+    end
+    error("no cell " .. name)
+end

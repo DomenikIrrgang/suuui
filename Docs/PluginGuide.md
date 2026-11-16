@@ -1,6 +1,6 @@
 # Writing a SuuUI plugin
 
-A SuuUI plugin is an ordinary addon that adds a **module** to SuuUI. SuuUI's own features are modules written against the same public API, so a plugin can do anything they do: build its own frames from SuuUI's components, add to SuuUI's frames, change how they draw, add to its menus, stand in for a whole module, or bring a theme. This guide goes from an empty folder to all of that. [API.md](API.md) is the full reference.
+A SuuUI plugin is an ordinary addon that adds a **module** to SuuUI. SuuUI's own features are modules written against the same public API (API 0.47: their files import nothing of SuuUI's but its API, and a check holds them to it), so a plugin can do anything they do: build its own frames from SuuUI's components, add to SuuUI's frames, change how they draw, add to its menus, stand in for a whole module, or bring a theme. The one thing a plugin writes differently is the module itself: SuuUI's own are wowlua classes, which another addon can't extend, so a plugin hands SuuUI a definition table instead (section 2; the class style and the differences are in section 2b). This guide goes from an empty folder to all of that. [API.md](API.md) is the full reference.
 
 Two examples ship with SuuUI:
 - `Examples/SuuUI_HelloPlugin` covers a module, a setting, a chat command, events and a movable frame.
@@ -8,11 +8,10 @@ Two examples ship with SuuUI:
 
 Both are written in [wowlua](https://github.com/DomenikIrrgang/wowlua), like SuuUI itself: run `wowlua install` in either folder to build it into `Interface/AddOns` (or `wowlua build` and copy `dist/dev/<Name>` there). A plugin doesn't have to use wowlua: the plain Lua addon below works as well.
 
-**In wowlua, SuuUI is typed.** A wowlua plugin in SuuUI's workspace that lists `SuuUI` in `addon-dependencies` sees the `SuuUI` global with all its types: `SuuUI.RegisterModule` gives a module whose `M:Get(key)` has each default's type, `M:Each("unitframe", fn)` hands `fn` a `UnitFrame`, and a mistake in a call is an error when you build. You can import SuuUI's types, never its code (SuuUI's values come through the global):
+**In wowlua, SuuUI is typed.** A wowlua plugin in SuuUI's workspace that lists `SuuUI` in `addon-dependencies` sees the `SuuUI` global with all its types: `SuuUI.RegisterModule` gives a module whose `M:Get(key)` has each default's type, `M:Each("unitframe", fn)` hands `fn` a `UnitFrame`, and a mistake in a call is an error when you build. You can import SuuUI's types, never its code (SuuUI's values come through the global). The types are exported from SuuUI's API (API 0.47; API.md › Types lists them):
 
 ```lua
-import type UnitFrame from "suuui/UI/UnitFrame"
-import type Info from "suuui/Core/Extend"
+import type UnitFrame, Text, InstanceInfo from "suuui/Core/API"
 ```
 
 Keep what your plugin adds beside SuuUI's frames (a weak table by frame, as the LevelBadge example does) rather than in fields of their own: SuuUI's classes don't declare your fields, so wowlua can't type them.
@@ -55,11 +54,46 @@ end
 ```
 
 - **Turning it on:** `/suu enable myplugin`, or its toggle under Settings › Modules (plugins are listed under Plugins).
-- **When modules start:** at login, after every addon has loaded. Register everything in `OnEnable`: events (`M:OnGameEvent`, `M:OnUnitEvent`), messages (`M:On`), setting watchers (`M:Watch`), chat commands (`M:RegisterCommand`) and everything in the sections below. SuuUI removes all of it when the module turns off.
+- **When modules start:** at login, after every addon has loaded. A module registered after login (a plugin that loads on demand) starts on the next frame, once its file has run to the end, so callbacks assigned after `RegisterModule` as above are in place (API 0.47).
+- **Register everything in `OnEnable`:** events (`M:OnGameEvent`, `M:OnUnitEvent`), messages (`M:On`), setting watchers (`M:Watch`), chat commands (`M:RegisterCommand`), timers (`M:After`, `M:Every`), hooks on the game's functions and frames (`M:SecureHook`, `M:HookScript`), game CVars you change (`M:SetCVar`), addon messages you take (`M:OnAddonMessage`) and everything in the sections below. SuuUI removes all of it when the module turns off: timers are cancelled (and one asked for while the module is off never starts, so its callback needs no `IsEnabled()` check), hooks go quiet (a hook can't be taken off; enabling again re-arms the same one), the player's CVar values come back. For a frame you give to `SuuUI.UI.SetVisibility` or publish with `SuuUI.PublishAnchor`, pass your module last (`SuuUI.UI.SetVisibility(frame, "combat", nil, self)`, `SuuUI.PublishAnchor("myAnchor", frame, self)`) and SuuUI lets go of it too.
+- **`M:IsEnabled()`** is already true while `OnEnable` runs and already false while `OnDisable` runs (API 0.47), so a helper both call (`self:Refresh()`) can ask it to know which way things are going.
+- **A popup of your own** (a menu, a box, a dialog) closes the way SuuUI's do with `SuuUI.UI.Dismissable(frame, { close = ..., outside = "catch" })` (API 0.47): Esc, a click outside, a dimmed screen with `shade = true`. It takes the keyboard only out of combat and lets every key through to the game when a fight starts; don't call `EnableKeyboard` or `SetPropagateKeyboardInput` on that frame yourself.
 - **Errors stay contained.** An error in `OnEnable` turns your module off with one line in chat, and SuuUI keeps running. Errors in your events, hooks and callbacks are recorded under your module's name.
   - `/suu errors` lists them.
   - The game's own error display is off on this client by default; `/console scriptErrors 1` turns it on.
-- **Your module's own fields** (`id`, `name`, `state`…) are SuuUI's and can't be set. Keep your own values under other names. Setting one is an error that names the field.
+- **Your module's own fields** (`id`, `name`, `state`…) are SuuUI's and can't be set, and neither can its methods' names (`Get`, `Hook`, `On`, `Print`, `IsEnabled`…, API 0.47): a field of yours by one of those names would hide SuuUI's method from SuuUI and from other modules. Keep your own values under other names (one that differs only by case, `hook`, is yours). Setting one is an error that names the field.
+- **Methods of your own** can come with the definition (API 0.47): every field of the table that isn't one of SuuUI's keys stays on the module, so `Refresh = function(self) … end` in it is `M:Refresh()`. Assigning them after the call (`function M:Refresh()`) works as well.
+
+## 2b. A module as a class: how SuuUI's own are written
+
+SuuUI's built-in modules are wowlua classes. Reading one helps when you look for how SuuUI does something:
+
+```lua
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position from "/Core/API"
+
+local DEFAULTS = { greeting = "Hi", position = { point = "CENTER", x = 0, y = 0 } :: Position }
+
+class Hello extends Module<typeof(DEFAULTS)>
+    frame: Frame? = nil
+
+    constructor()
+        super({ id = "hello", name = "Hello", api = "0.47", defaults = DEFAULTS })
+    end
+
+    override function OnEnable()
+        -- the same methods as a plugin's module: self:Get, self:RegisterMover, self:Watch…
+    end
+end
+
+SuuUI.AddModule(Hello.new())
+```
+
+How it differs from section 2:
+- **Where it can be written.** Only inside SuuUI's own package: wowlua extends a class only when it can import it as a value from the same addon. A plugin can import SuuUI's types (`import type`, which can't be extended) but not its code, and `class X extends SuuUI.Module` isn't a class name to wowlua. So a plugin uses `SuuUI.RegisterModule`.
+- **The definition** goes to `super(…)` (the keys of `RegisterModule`'s table), and the callbacks are the class's `override function OnEnable()`, `OnDisable()`, `OnInitialize()`.
+- **Fields and methods** are declared in the class, so wowlua types them (a plugin's own fields are loose: wowlua types its settings, not the rest).
+- **The same everywhere else.** `SuuUI.AddModule` registers it with the same checks, it starts and stops the same way, and it has the same methods. The classes SuuUI's modules extend besides `Module` (`Panel`, `ItemSlot`, `UnitFrame`, `MapPin`, `ActionButton`) are `SuuUI.Classes`; a plugin can make their objects (`SuuUI.Classes.UnitFrame.new(…)`) but, for the same reason, not extend them.
 
 ## 3. Settings and a frame
 
@@ -155,10 +189,18 @@ local M = SuuUI.RegisterModule({ id = "myframes", name = "My Frames", api = "0.1
 ```
 
 While your module is on, SuuUI's stays off. Settings › Modules says "Replaced by My Frames", and a change takes a `/reload`. To stand in fully:
-- Provide the replaced module's **services**, if it has any. For example, a bags replacement provides `self:Provide("bags", { Toggle = … })`, so the bags key and SuuUI's other windows reach yours.
-- Publish the same **anchors** (`SuuUI.PublishAnchor("player", frame)`), so other modules attach to your frames.
+- Provide the replaced module's **services**, if it has any. For example, a bags replacement provides `self:ProvideService(SuuUI.Services.BAGS, { Toggle = … })` (or by name, `self:Provide("bags", …)`), so the bags key and SuuUI's other windows reach yours. In wowlua the key types the functions.
+- Publish the same **anchors** (`SuuUI.PublishAnchor("player", frame, self)`), so other modules attach to your frames. With your module last, the anchor is withdrawn when it turns off.
 - Register your frames as the same **kind** (`SuuUI.AddInstance("unitframe", frame, { role = "player" })`), so other plugins' `Each` and hooks reach them.
 - Give your frames **movers and settings** of your own.
+
+## 6b. What SuuUI's own modules use
+
+Everything SuuUI's modules use is in the API (0.47), so a plugin has it too. A few things worth knowing ([API.md](API.md) › What the built-in modules use):
+- **Another module's service:** `SuuUI.UseService(SuuUI.Services.WORLD_MAP)` (nil while that module is off). Ask a module for a setting with `SuuUI.GetModule(id):Setting(key)` and whether it's on with `:IsEnabled()`; its other methods are its own business.
+- **Work built ahead:** `SuuUI.BuildAhead("myplugin: rows", function() … return more end)` makes things a step a frame after login, out of combat, instead of all at once the first time they're needed.
+- **The big data tables** (`SuuUI.Data.QuestStarts`, …) build on first use: `:Ready()`, then `:Prepare(done)` to build them over a few frames; `SuuUI.QuestStarts()` builds all of it in one frame.
+- **The theme's art on your frame:** `SuuUI.UI.Dress(frame, "window")`.
 
 ## 7. A theme
 

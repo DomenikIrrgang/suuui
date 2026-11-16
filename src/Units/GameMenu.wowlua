@@ -14,10 +14,8 @@
 -- from SuuUI's code taints nothing (/suu probe gamemenu, 2026-10-17).
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type Panel from "/UI/Panel"
-import type Text from "/UI/Text"
+import SuuUI, Module from "/Core/API"
+import type Panel, ConfirmDialog, Text from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as secure from "wowlua:secure"
 import * as frames from "wowlua:frames"
@@ -283,6 +281,8 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
     panel: Panel? = nil
     perf: Text? = nil
     quitOver: Overlay? = nil
+    -- the shared confirm dialog while it asks Exit Game's question
+    quitAsking: ConfirmDialog? = nil
     secureItems: MenuItem[]? = nil
     stale: true? = nil
     ticker: TickerHandle? = nil
@@ -428,7 +428,11 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
 
     -- Exit Game's question: SuuUI's dialog, its Exit Game button covered by a
     -- secure /quit (quitting from addon code is blocked on Forever). Out of
-    -- combat; the cover goes with the dialog.
+    -- combat; the cover goes with the dialog. (CD-1) The dialog is the one
+    -- every question shares: as a fight starts (before the lockdown) the
+    -- question closes and the cover with it (StandDown); a cover the lockdown
+    -- kept is hidden as the fight ends; a click closes the question a frame
+    -- after, as the menu's covers close the menu.
     function ConfirmQuit()
         if InCombatLockdown() then
             return
@@ -447,13 +451,41 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
             made.button:SetScript("PreClick", function()
                 PlaySound(SOUNDKIT.IG_MAINMENU_QUIT)
             end)
+            made.button:SetScript("PostClick", function()
+                self:After(0, function()
+                    local asking = self.quitAsking
+                    if asking then
+                        asking:Hide()
+                    end
+                end)
+            end)
+            -- (once, on the shared dialog: it runs for every question that closes)
             d:HookScript("OnHide", function()
-                made.hide()
+                self.quitAsking = nil
+                if not made.hide() then
+                    self:RunOutOfCombat("quitOver", function()
+                        made.hide()
+                    end)
+                end
             end)
             self.quitOver = made
             over = made
         end
+        self.quitAsking = d
         over.show()
+    end
+
+    -- A fight starting (PLAYER_REGEN_DISABLED runs before the lockdown):
+    -- Exit Game's question closes, its cover with it.
+    function StandDownQuit()
+        local asking = self.quitAsking
+        if asking then
+            asking:Hide()
+        end
+        local over = self.quitOver
+        if over then
+            over.hide()
+        end
     end
 
     -- The secure buttons over Reload UI, Log Out and Exit Game: there while the
@@ -477,7 +509,7 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
                 end)
                 -- the menu closes after (closing it first would hide this button mid-click)
                 over.button:SetScript("PostClick", function()
-                    C_Timer.After(0, function()
+                    self:After(0, function()
                         if GameMenuFrame:IsShown() then
                             HideUIPanel(GameMenuFrame)
                         end
@@ -565,7 +597,7 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
                 self:Rebuild()
             end
             self:Away(g)
-            C_Timer.After(0, function()
+            self:After(0, function()
                 self:PutAway()
             end)
             self:Draw()
@@ -579,7 +611,7 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
                 end
             end)
             if not self.ticker then
-                self.ticker = C_Timer.NewTicker(1, function()
+                self.ticker = self:Every(1, function()
                     if self:Dim():IsShown() then
                         self:DrawPerf()
                     end
@@ -598,6 +630,9 @@ class GameMenuModule extends Module<typeof(DEFAULTS)>
         for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
             self:OnGameEvent(e, function()
                 self.fighting = e == "PLAYER_REGEN_DISABLED" or nil
+                if self.fighting then
+                    self:StandDownQuit()
+                end
                 if self:Dim():IsShown() then
                     self:Draw()
                 end

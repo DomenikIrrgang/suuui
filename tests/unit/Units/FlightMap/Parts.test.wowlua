@@ -1,0 +1,67 @@
+-- Units/FlightMap/Parts: the flight map's widgets, built on their own (a
+-- tag, a pin, the drawing, a destination's row, the side panel, the bar
+-- with Fly).
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as parts from "/Units/FlightMap/Parts"
+import expectNoErrors, newParent from "../../../helpers"
+
+@test("a tag: its text, as wide as it with room, shown")
+local function tag()
+    local parent = newParent()
+    local t = parts.Tag.new(parent)
+    parts.setTag(t, "~1:50", "ink-muted")
+    expect(t).toBeShown()
+    expect(t.text).toHaveText("~1:50")
+    expect(t:GetWidth()).toBe(math.ceil(t.text:GetUnboundedStringWidth()) + 10)
+    expect(t:GetHeight()).toBe(SuuUI.Tokens.type.micro.lineHeight + 2)
+    parent:Hide()
+    expectNoErrors()
+end
+
+@test("a pin with its tag on its right; the drawing with empty pools and its time left hidden")
+local function pinAndInk()
+    local parent = newParent()
+    local pin = parts.FlightPin.new(parent)
+    local point, rel, relPoint = pin.tag:GetPoint(1)
+    expect({ point, rel, relPoint }).toEqual({ "LEFT", pin, "RIGHT" })
+    expect(pin.node).toBeNil()
+    local ink = parts.Ink.new(parent)
+    expect(ink.pools.ARTWORK.n).toBe(0)
+    expect(ink.pools.BORDER.n).toBe(0)
+    expect(ink.left).never.toBeShown()
+    parent:Hide()
+    expectNoErrors()
+end
+
+@test("a destination's row, and the side panel: hidden until filled")
+local function rowAndSide()
+    local parent = newParent()
+    local row = parts.DestRow.new(parent)
+    expect(row:GetHeight()).toBe(parts.ROW_H)
+    expect(row.fill).never.toBeShown()
+    local side = parts.Side.new(parent)
+    expect(side).never.toBeShown()
+    expect(#side.rows).toBe(0)
+    parent:Hide()
+    expectNoErrors()
+end
+
+@test("the bar at the map's bottom: Fly calls back")
+local function flyBar()
+    local parent = newParent()
+    local flown = mock.spy(function() end)
+    local bar = parts.FlyBar.new(parent, function()
+        flown()
+    end)
+    expect(bar).never.toBeShown()
+    bar:SetSize(300, 40)
+    bar:SetPoint("CENTER")
+    bar:Show()
+    mock.click(bar.fly)
+    expect(flown).toHaveBeenCalledTimes(1)
+    parent:Hide()
+    expectNoErrors()
+end

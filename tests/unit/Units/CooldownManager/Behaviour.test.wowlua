@@ -1,0 +1,301 @@
+-- Units/CooldownManager/Behaviour: the Behaviour panel, opened from a row
+-- of the editor as the settings window builds it. Every kind of entry,
+-- every control, the conditions (each type's controls, talents of any
+-- class). The character is an Unspecced warrior.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type Entry from "/Units/CooldownManager/Lists"
+import type When, Condition from "/Units/CooldownManager/Conditions"
+import BehaviourPanel from "/Units/CooldownManager/Behaviour"
+import setUp, tearDown, confirm, editor, textOf, contains, row, click, auras, listOf, lastOf, membersOf, named, behaviour, options, has, pick, chips, slotOf, drag, StandInHost from "./EditorHelpers"
+import expectNoErrors from "../../../helpers"
+
+local UI = SuuUI.UI
+
+@beforeEach
+local function begin()
+    setUp()
+end
+
+@afterEach
+local function finish()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- The Behaviour panel
+--------------------------------------------------------------------------------
+
+@test("Behaviour of a cooldown: when ready, pop, sound, on cooldown, show, unusable, edge, effect")
+local function cooldownBehaviour()
+    local f = editor()
+    local b = behaviour(f, "Execute")
+    expect(textOf(b.meta)).toBe("Cooldown · Essential")
+    local played = mock.stub(UI, "TrackerSound", function(_: string) end)
+    local function exec(): Entry
+        return assert(named("essential", "Execute"))
+    end
+    click(b.ready, "glow")
+    click(b.pop, "off")
+    click(b.pop, "on")
+    pick(b.sound, "chime")
+    click(b.onCooldown, "dim")
+    click(b.show, "ready")
+    click(b.unusable, "hide")
+    click(b.cdEdge, "gilt")
+    click(b.effect, "you")
+    local e = exec()
+    expect(e.ready).toBe("glow")
+    expect(e.pop).toBe(true)
+    expect(e.sound).toBe("chime")
+    expect(played).toHaveBeenCalledWith("chime")
+    expect(e.onCooldown).toBe("dim")
+    expect(e.show).toBe("ready")
+    expect(e.unusable).toBe("hide")
+    expect(e.border).toBe("gilt")
+    expect(e.effect).toBe("you")
+    -- the effect: an aura by name, a spell by ID, the spell itself
+    pick(b.effectAura, "Battle Shout")
+    expect(exec().effectName).toBe("Battle Shout")
+    pick(b.effectAura, "id:133")
+    expect(exec().effectIDs).toEqual({ 133 })
+    expect(has(options(b.effectAura), "current")).toBe(true) -- a name the presets don't know
+    pick(b.effectAura, "current")
+    pick(b.effectAura, "self")
+    expect(exec().effectIDs).toBe(nil)
+    click(b.pop, "default")
+    pick(b.sound, "none")
+    mock.click(b.reset)
+    expect(exec().ready).toBe(nil)
+    mock.click(b.done)
+    expect(b).never.toBeShown()
+end
+
+@test("Behaviour of a cooldown shared slot: its name and shown; the note on its order")
+local function cooldownSlot()
+    local f = editor()
+    drag(row(f, "Execute"), row(f, "Thunder Clap"), "onto")
+    confirm()
+    local b = behaviour(f, "Thunder Clap + Execute")
+    expect(textOf(b.meta)).toBe("Shared slot · 2 spells")
+    expect(b.noteText:GetText()).toBe("Shows the last spell in the list you know: put upgrades last.")
+    expect(b.slotShown).toBeShown()
+    assert(b.name.onChange)("Clap or Execute")
+    assert(b.name.onChange)("")
+    assert(b.slotShown.onChange)(false)
+    local slot = assert(slotOf("essential"))
+    expect(slot.name).toBe("Clap or Execute")
+    expect(slot.hidden).toBe(true)
+    -- its members (it opened as it was made) have no Behaviour of their own
+    expect(row(f, "Execute").behaviour).never.toBeShown()
+end
+
+@test("Behaviour of a single aura: whose, when missing, edge, size, glow, timer, stacks, amber, sounds")
+local function auraBehaviour()
+    local f = editor()
+    auras(f)
+    local b = behaviour(f, "Battle Shout")
+    expect(textOf(b.meta)).toBe("Single aura")
+    expect(b.missing).toBeShown()
+    mock.stub(UI, "TrackerSound", function(_: string) end)
+    click(b.source, "mine")
+    click(b.missing, "hide")
+    click(b.auEdge, "ink")
+    click(b.size, "large")
+    assert(b.glow.onChange)(true)
+    assert(b.digits.onChange)(false)
+    assert(b.stacks.onChange)(false)
+    assert(b.expiring.onChange)(5)
+    pick(b.soundAppear, "proc")
+    pick(b.soundStack, "ping")
+    pick(b.soundDrop, "none")
+    local e = listOf("buffs")[1]
+    expect(e.source).toBe("mine")
+    expect(e.missing).toBe("hide")
+    expect(e.border).toBe("ink")
+    expect(e.size).toBe("large")
+    expect(e.glow).toBe(true)
+    expect(e.digits).toBe(false)
+    expect(e.stacks).toBe(false)
+    expect(e.expiring).toBe(5)
+    expect(e.soundAppear).toBe("proc")
+    expect(e.soundStack).toBe("ping")
+    -- a debuff: "With a target" among the choices
+    local d = behaviour(f, "Rend")
+    expect(d.missingDebuff).toBeShown()
+    click(d.missingDebuff, "target")
+    expect(listOf("debuffs")[1].missing).toBe(nil) -- the debuffs' default
+end
+
+@test("Behaviour of an aura shared slot: name, how many at once, the icon; a member's whose; a collection's name")
+local function auraSlot()
+    local f = editor()
+    auras(f)
+    local b = behaviour(f, "Stuns")
+    expect(contains(b.meta, "Shared slot · ")).toBe(true)
+    assert(b.max.onChange)(3)
+    pick(b.icon, b.icon.options[2].value)
+    local stuns = lastOf("debuffs")
+    expect(stuns.max).toBe(3)
+    expect(stuns.fixedIcon).toBe(true)
+    pick(b.icon, "auto")
+    expect(lastOf("debuffs").fixedIcon).toBe(nil)
+    pick(b.icon, nil)
+    click(b.source, "mine")
+    expect(lastOf("debuffs").source).toBe("mine")
+    -- a member
+    mock.click(row(f, "Stuns").fold)
+    local member = assert(membersOf(row(f, "Stuns").entry)[1].name)
+    local mb = behaviour(f, member)
+    expect(textOf(mb.meta)).toBe("In Stuns")
+    click(mb.memberSource, "others")
+    expect(membersOf(lastOf("debuffs"))[1].source).toBe("others")
+    -- a collection
+    local cb = behaviour(f, "Physical Debuffs")
+    expect(contains(cb.meta, "Collection · ")).toBe(true)
+    expect(cb.condNote:GetText()).toBe("Applies to everything inside.")
+    assert(cb.name.onChange)("Armour")
+    expect(listOf("debuffs")[3].name).toBe("Armour")
+    local inner = behaviour(f, "Armor Reduction")
+    expect(contains(inner.meta, "Shared slot")).toBe(true)
+end
+
+@test("Behaviour of a weapon enchant: which weapon, when missing, the warning out of combat")
+local function enchantBehaviour()
+    local f = editor()
+    auras(f)
+    pick(f.adds[1].select, "enchant:main")
+    local b = behaviour(f, "Main-hand enchant")
+    expect(textOf(b.meta)).toBe("Weapon enchant")
+    click(b.weapon, "off")
+    expect(lastOf("buffs").enchant).toBe("off")
+    click(b.weaponMissing, "grey")
+    expect(contains(row(f, "Off-hand enchant").rank, "missing: grey")).toBe(true)
+    click(b.weaponMissing, "warn")
+    assert(b.warnOoc.onChange)(false)
+    expect(lastOf("buffs").warnCombat).toBe(true)
+end
+
+@test("conditions: added by the first unused type, turned around, retyped, each type's controls, removed")
+local function conditions()
+    local f = editor()
+    local b = behaviour(f, "Execute")
+    local function when(): When?
+        return assert(named("essential", "Execute")).when
+    end
+    local function first(): Condition
+        return (assert(assert(assert(when()).conditions)[1]))
+    end
+    expect(b.condSentence:GetText()).toBe("Always shows.")
+    mock.click(b.addCondition)
+    expect(first().type).toBe("group")
+    local r = b.cond.rows[1]
+    mock.click(r.notButton)
+    expect(first()["not"]).toBe(true)
+    click(r.group, "raid")
+    expect(first().value).toBe("raid")
+    for _, t in ipairs({ "classes", "role", "stance", "combat", "instance", "target", "talent" }) do
+        pick(r.type, t)
+        expect(first().type).toBe(t)
+        expect(first()["not"]).toBe(true) -- Not carries over
+    end
+    pick(r.type, nil)
+    pick(r.type, "classes")
+    for _, chip in ipairs(r.classesA.chips) do
+        if chip.option.value == "DRUID" then
+            mock.click(chip)
+        end
+    end
+    expect(first().classes).toEqual({ "DRUID", "WARRIOR" })
+    click(r.classesOthers, "others")
+    expect(first().others).toBe(true)
+    pick(r.type, "role")
+    chips(r.roles, { "HEALER" })
+    pick(r.type, "stance")
+    chips(assert(r.stances), { "berserker" })
+    pick(r.type, "instance")
+    chips(r.instance, { "raid" })
+    pick(r.type, "target")
+    chips(r.target, { "boss" })
+    expect(first().kinds).toEqual({ "boss" })
+    pick(r.type, "combat")
+    expect(r.plain:GetText()).toBe("No options: while you're in combat.")
+    -- talents: added from a class's list or by ID, removed
+    pick(r.type, "talent")
+    pick(r.talentClassSelect, "PRIEST")
+    pick(r.talentClassSelect, nil)
+    pick(r.addTalent, "id:133")
+    pick(r.addTalent, "133")
+    pick(r.addTalent, "words")
+    expect(first().talents).toEqual({ 133 })
+    mock.click(r.talentRows[1].remove)
+    expect(first().talents).toEqual({})
+    -- two conditions, any of them
+    mock.click(b.addCondition)
+    click(b.match, "any")
+    expect(assert(when()).match).toBe("any")
+    expect(contains(b.condSentence, "Execute shows when ")).toBe(true) -- (the talent one, empty, has no words)
+    mock.click(b.cond.rows[2].remove)
+    mock.click(b.cond.rows[1].remove)
+    expect(when()).toBe(nil)
+end
+
+@test("talent conditions: any class's talents from the generated list; your own read live without it")
+local function talentLists()
+    local f = editor()
+    local b = behaviour(f, "Execute")
+    mock.click(b.addCondition)
+    local r = b.cond.rows[1]
+    pick(r.type, "talent")
+    expect(#r.addTalent.options > 0).toBe(true)
+    expect(r.addTalent.options[1].heading ~= nil).toBe(true) -- by tree
+    -- no generated list: your class's read from the talent trees, another's none
+    mock.stub(SuuUI, "ClassTalents", function(class: string): { id: number }[]
+        if class == "PRIEST" then
+            return { { id = 17 } }
+        end -- a nameless entry: named by its spell
+        return {}
+    end)
+    pick(r.talentClassSelect, "PRIEST")
+    expect(r.addTalent.options[2].label).toBe(C_Spell.GetSpellName(17))
+    pick(r.talentClassSelect, "MAGE")
+    expect(#r.addTalent.options).toBe(0)
+    -- your own class read from the active config's trees (once, every spell once)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown
+        return { treeIDs = { 1 } }
+    end)
+    mock.stub(C_Traits, "GetTreeNodes", function(_: number): unknown
+        return { 21, 22 }
+    end)
+    mock.stub(C_Traits, "GetNodeInfo", function(_: number, _: number): unknown
+        return { entryIDs = { 31 } }
+    end)
+    mock.stub(C_Traits, "GetEntryInfo", function(_: number, _: number): unknown
+        return { definitionID = 41 }
+    end)
+    mock.stub(C_Traits, "GetDefinitionInfo", function(_: number): unknown
+        return { spellID = 12294 }
+    end)
+    pick(r.talentClassSelect, "WARRIOR")
+    expect(r.addTalent.options[2].value).toBe("12294")
+    pick(r.talentClassSelect, "WARRIOR") -- read once, kept
+    mock.click(b.cond.rows[1].remove)
+end
+
+@test("the panel edits the host it is given: its entry from the host's lists, changes through it; gone: closed")
+local function ownHost()
+    local host = StandInHost.new()
+    host.saved[0] = { essential = { { name = "Spell One", ids = { 133 } } } }
+    local b = BehaviourPanel.new(host)
+    b:Open({ key = "essential", i = 1 }, assert(assert(assert(host.saved[0]).essential)[1]))
+    expect(b).toBeShown()
+    expect(textOf(b.meta)).toBe("Cooldown · Essential")
+    click(b.ready, "glow")
+    expect(assert(assert(host.saved[0]).essential)[1].ready).toBe("glow")
+    host.saved[0] = { essential = {} }
+    b:Refresh()
+    expect(b).never.toBeShown()
+    expectNoErrors()
+end

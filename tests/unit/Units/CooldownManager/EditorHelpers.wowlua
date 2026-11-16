@@ -1,0 +1,328 @@
+-- Helpers for the Cooldown Manager's tests (the module's and its editor's:
+-- Units/CooldownManager, Units/CooldownManager/Rows, Behaviour, Editor).
+-- The editor is built as the settings window builds it, from the module's
+-- section; the character is an Unspecced warrior.
+--
+--   setUp(), tearDown()     a test file's @beforeEach and @afterEach: the
+--                           questions caught, no talents spent; settings,
+--                           "Seen recently" and panels undone, no errors
+--   asked(), confirm(), askedText(), lastAsked(), forgetAsked()
+--                           the question UI.Confirm was given last
+--   section(), build(n), presetBar(), editor()
+--                           the settings section and its custom rows
+--   row(f, name), hasRow(f, name), addToNamed(f, placeholder)
+--                           the editor's shown rows
+--   behaviour(f, name)      the Behaviour panel of a row (hidden after)
+--   lists(), listOf(key), lastOf(key), named(key, name), slotOf(key),
+--   membersOf(e), inside(e), names(list), replaced(l, key, list)
+--                           the edited setup's lists
+--   click(seg, v), pick(sel, v), chips(c, values), auras(f),
+--   options(sel), has(list, v), textOf(t), contains(t, part)
+--                           controls driven as if used, and read
+--   cursorOn(r, where), drag(from, to, where)
+--                           dragging a row before, onto or after another
+--   StandInHost             an EditorHost of a test's own, not the module
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as registry from "/SettingsUI/Registry"
+import type ConfirmOptions from "/UI/Panel"
+import type Segmented, SegmentValue from "/UI/Inputs"
+import type Select, SelectValue from "/UI/Select"
+import type Text from "/UI/Text"
+import type ToggleChips from "/UI/Pickers"
+import type Entry, ListSet from "/Units/CooldownManager/Lists"
+import type PresetBar, ListEditor from "/Units/CooldownManager/Editor"
+import type EntryRow, AddToRow from "/Units/CooldownManager/Rows"
+import type BehaviourPanel from "/Units/CooldownManager/Behaviour"
+import type EditorHost from "/Units/CooldownManager/EditorData"
+import internal M from "/Units/CooldownManager"
+import expectNoErrors, newParent from "../../../helpers"
+
+local UI = SuuUI.UI
+
+local confirmed: ConfirmOptions? = nil
+export function asked(): ConfirmOptions
+    return (assert(confirmed, "nothing asked"))
+end
+export function confirm()
+    assert(asked().onConfirm)()
+end
+export function askedText(): string
+    return asked().text or ""
+end
+-- What was asked last (nil: nothing since the start or forgetAsked).
+export function lastAsked(): ConfirmOptions?
+    return confirmed
+end
+export function forgetAsked()
+    confirmed = nil
+end
+-- the Behaviour panels the tests opened
+local panels: BehaviourPanel[] = {}
+
+export function setUp()
+    confirmed = nil
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil
+        confirmed = opts
+        return nil
+    end)
+    -- a character with no talents spent (the engine's default warrior has
+    -- some): Unspecced
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): unknown
+        return { treeIDs = {} }
+    end)
+    M:UpdateSpec()
+end
+
+export function tearDown()
+    M.editSpec = nil
+    M:ResetAll({
+        "setups",
+        "lists",
+        "preset",
+        "shows",
+        "position",
+        "resource",
+        "resourceWidth",
+        "resourceOwnWidth",
+        "resourcePoints",
+        "essentialSize",
+    })
+    M:CharData().recent = nil
+    for _, b in ipairs(panels) do
+        b:Hide()
+    end
+    panels = {}
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    expectNoErrors()
+end
+
+export function section(): registry.Section
+    return registry.get("cooldowns") :: registry.Section
+end
+
+export function build(n: number): Frame
+    local host = newParent(700, 900)
+    local def = ((section().groups or {})[1]).rows[n]
+    local f: Frame = assert(def.build)(host, function() end, def)
+    f:SetPoint("TOPLEFT", host, "TOPLEFT")
+    return f
+end
+
+export function presetBar(): PresetBar
+    return build(1) :: unknown :: PresetBar
+end
+export function editor(): ListEditor
+    return build(2) :: unknown :: ListEditor
+end
+
+export function textOf(t: Text?): string
+    return assert(t):GetText() or ""
+end
+export function contains(t: Text?, part: string): boolean
+    return textOf(t):find(part, 1, true) ~= nil
+end
+
+-- The editor's shown row with this name (a collection's in capitals).
+export function row(f: ListEditor, name: string): EntryRow
+    for _, r in ipairs(f.rows) do
+        if r:IsShown() and (r.name:GetText() == name or r.name:GetText() == name:upper()) then
+            return r
+        end
+    end
+    error("no row " .. name)
+end
+
+export function hasRow(f: ListEditor, name: string): boolean
+    for _, r in ipairs(f.rows) do
+        if r:IsShown() and (r.name:GetText() == name or r.name:GetText() == name:upper()) then
+            return true
+        end
+    end
+    return false
+end
+
+export function names(list: Entry[]?): (string?)[]
+    local out: (string?)[] = {}
+    for _, e in ipairs(list or {}) do
+        out[#out + 1] = e.name
+    end
+    return out
+end
+
+export function click<V extends SegmentValue>(seg: Segmented<V>, value: V)
+    for _, b in ipairs(seg.buttons) do
+        if b.option.value == value then
+            mock.click(b)
+            return
+        end
+    end
+    error("no option " .. tostring(value))
+end
+
+export function auras(f: ListEditor)
+    click(f.tabs, "auras")
+end
+
+export function lists(): ListSet
+    return M:Lists(M:EditSpec())
+end
+-- A list of the edited setup; a slot's members; a collection's entries.
+export function listOf(key: string): Entry[]
+    return (assert(lists()[key], key))
+end
+export function lastOf(key: string): Entry
+    local l = listOf(key)
+    return l[#l]
+end
+export function membersOf(e: Entry?): Entry[]
+    return (assert(assert(e).members))
+end
+export function inside(e: Entry?): Entry[]
+    return (assert(assert(e).entries))
+end
+export function named(key: string, name: string): Entry?
+    for _, e in ipairs(listOf(key)) do
+        if e.name == name then
+            return e
+        end
+    end
+    return nil
+end
+
+-- The Behaviour panel for a row.
+export function behaviour(f: ListEditor, name: string): BehaviourPanel
+    mock.click(row(f, name).behaviour)
+    local b = f.behaviour
+    assert(b and b:IsShown(), "no Behaviour panel")
+    panels[#panels + 1] = b
+    return b
+end
+
+export function options<V extends SelectValue>(sel: Select<V>): string[]
+    local out: string[] = {}
+    for _, o in ipairs(sel.options) do
+        out[#out + 1] = o.heading and ("# " .. o.heading) or tostring(o.value)
+    end
+    return out
+end
+
+export function has(list: string[], v: string): boolean
+    for _, x in ipairs(list) do
+        if x == v then
+            return true
+        end
+    end
+    return false
+end
+
+-- The lists with one of them replaced.
+export function replaced(l: ListSet, key: string, list: Entry[]): ListSet
+    local out: ListSet = {}
+    for k, v in pairs(l) do
+        out[k] = v
+    end
+    out[key] = list
+    return out
+end
+
+-- A choice in a dropdown, as if picked (nil: cleared).
+export function pick<V extends SelectValue>(sel: Select<V>, value: V?)
+    assert(sel.onChange)(value :: unknown :: V)
+end
+
+-- Chips chosen, as if clicked.
+export function chips(c: ToggleChips, values: string[])
+    assert(c.onChange)(values)
+end
+
+-- The shown "+ Add to" row with this placeholder.
+export function addToNamed(f: ListEditor, placeholder: string): AddToRow
+    for _, a in ipairs(f.addTos) do
+        if a:IsShown() and a.select.placeholder == placeholder then
+            return a
+        end
+    end
+    error("no " .. placeholder)
+end
+
+-- The (last) shared slot of a list.
+export function slotOf(key: string): Entry?
+    local slot: Entry? = nil
+    for _, e in ipairs(listOf(key)) do
+        if e.group then
+            slot = e
+        end
+    end
+    return slot
+end
+
+-- A host of the editor's own, not the module: its lists per spec in
+-- `saved`, its character data in `data`; a change to the lists tells its
+-- watchers, as the setting does; it counts what it emitted.
+export class StandInHost implements EditorHost
+    spec: number = 0
+    points: number[] = { 0, 0, 0 }
+    editSpec: number? = nil
+    saved: { [number]: ListSet } = {}
+    data: { [string]: unknown } = {}
+    watchers: (() -> ())[] = {}
+    listeners: (() -> ())[] = {}
+    emitted: number = 0
+
+    function EditSpec(): number
+        return self.editSpec or self.spec
+    end
+    function Lists(spec: number?): ListSet
+        return self.saved[spec or 0] or {}
+    end
+    function SetLists(l: ListSet, spec: number?)
+        self.saved[spec or 0] = l
+        for _, fn in ipairs(self.watchers) do
+            fn()
+        end
+    end
+    function PresetId(_: number?): string
+        return ""
+    end
+    function Changes(): number
+        return 0
+    end
+    function LoadPreset(_: string, _: number?): boolean
+        return false
+    end
+    function CharData(): { [string]: unknown }
+        return self.data
+    end
+    function Watch(_: "setups", fn: () -> ())
+        self.watchers[#self.watchers + 1] = fn
+    end
+    function On(_: "SUUUI_COOLDOWNS_SETUP", fn: () -> ())
+        self.listeners[#self.listeners + 1] = fn
+    end
+    function Emit(_: "SUUUI_COOLDOWNS_SETUP")
+        self.emitted += 1
+        for _, fn in ipairs(self.listeners) do
+            fn()
+        end
+    end
+end
+
+-- The cursor at a row's top quarter (before), middle (onto) or bottom (after).
+export function cursorOn(r: Frame, where: string)
+    local s = r:GetEffectiveScale()
+    local x, top = assert(r:GetCenter()), assert(r:GetTop())
+    local h = r:GetHeight()
+    local y = where == "before" and (top - 2) or where == "onto" and (top - h / 2) or (top - h + 1)
+    mock.setCursorPosition(x * s, y * s)
+end
+
+export function drag(from: EntryRow, to: Frame, where: string)
+    mock.script(from, "OnDragStart")
+    cursorOn(to, where)
+    mock.advanceFrames(1)
+    mock.script(from, "OnDragStop")
+end

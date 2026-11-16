@@ -1,15 +1,18 @@
 -- Units/CastBars: your cast bar (Blizzard's hidden, its width, the
 -- options on it, off and hidden in edit mode) and the cast bars under the
 -- target, focus and boss frames (their switches, their width, a frame
--- gone); the settings live; stopped.
+-- gone); the settings live; turned off through the registry.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M from "/Units/CastBars"
 import internal M as unitFrames from "/Units/UnitFrames"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings, NOTHING from "../../helpers"
 import type AnyModule from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import * as frames from "wowlua:frames"
 
 @afterEach
@@ -123,12 +126,26 @@ local function frameGone()
     M:Attach("focus", SuuUI.GetAnchor("focus"))
 end
 
--- (last: the module off)
-@test("stopped: every bar stops")
+-- (last: the module off) Cast bars is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: every bar stops, playerCastBar withdrawn; on again, back")
 local function disabled()
-    (M :: AnyModule):OnDisable()
+    local own = ownOf(M :: AnyModule)
+    own.reloadToToggle = false
+    expect(holdings(M :: AnyModule).anchors).toBe(1)
+    settings.set("castbars", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(assert(M.player).active).toBe(false)
     for _, bar in pairs(M.attached) do
         expect(bar.active).toBe(false)
     end
+    expect(SuuUI.GetAnchor("playerCastBar")).toBeNil()
+    expect(holdings(M :: AnyModule)).toEqual(NOTHING)
+    settings.set("castbars", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(assert(M.player).active).toBe(true)
+    expect(SuuUI.GetAnchor("playerCastBar")).never.toBeNil()
+    own.reloadToToggle = true
+    expectNoErrors()
 end

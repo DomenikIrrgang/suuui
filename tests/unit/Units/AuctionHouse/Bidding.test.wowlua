@@ -1,0 +1,88 @@
+-- Units/AuctionHouse/Bidding: an auction found again by its id and compared
+-- with what the player saw; an amount's checks; what the player is told.
+-- Placing a bid (refused, sent, the house's answers) is driven through the
+-- pages that place them: ItemView.test (Bid) and Auctions.test (the Bids tab).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import expectNoErrors from "../../../helpers"
+import internal M from "/Units/AuctionHouse"
+import leastBid, seenOf, changed, recheck, recheckNote, bidProblem, forgetChoice from "/Units/AuctionHouse/Bidding"
+import type AuctionState from "/Units/AuctionHouse/Bidding"
+import setUp, tearDown, plain from "./AuctionHouseHelpers"
+
+@beforeEach
+local function start()
+    setUp()
+end
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+@test("the least bid: the next minimum, else the bid on it; none for a buyout-only auction")
+local function least()
+    expect(leastBid({ auctionID = 1, minBid = 2100, bidAmount = 2000 })).toBe(2100)
+    expect(leastBid({ auctionID = 1, bidAmount = 2000 })).toBe(2000)
+    expect(leastBid({ auctionID = 1, buyoutAmount = 5000 })).toBeNil()
+end
+
+@test("recheck: found by its id wherever it is now; gone; changed when its least bid, bid or buyout moved")
+local function rechecked()
+    local seen = seenOf({ auctionID = 11, minBid = 2100, bidAmount = 2000, buyoutAmount = 5000 })
+    expect(seen).toEqual({ auctionID = 11, least = 2100, bidAmount = 2000, buyout = 5000 })
+    local list: AuctionState[] = {
+        { auctionID = 12, buyoutAmount = 6000 },
+        { auctionID = 11, minBid = 2100, bidAmount = 2000, buyoutAmount = 5000 },
+    }
+    local a, why = recheck(list, seen)
+    expect(assert(a).auctionID).toBe(11)
+    expect(why).toBeNil()
+    list[2].minBid = 2300
+    a, why = recheck(list, seen)
+    expect(assert(a).auctionID).toBe(11)
+    expect(why).toBe("changed")
+    expect(changed(seen, { auctionID = 11, minBid = 2100, bidAmount = 2000, buyoutAmount = 5500 })).toBe(true)
+    expect(changed(seen, { auctionID = 11, minBid = 2100, bidAmount = 2050, buyoutAmount = 5000 })).toBe(true)
+    a, why = recheck({ list[1] }, seen)
+    expect(a).toBeNil()
+    expect(why).toBe("gone")
+end
+
+@test("what the player is told: gone; changed, with what it is now")
+local function notes()
+    expect(recheckNote("gone", nil, "bid")).toBe(
+        "That auction isn't listed any more (sold, bought out or ended): nothing was bid."
+    )
+    expect(plain(recheckNote("changed", { auctionID = 1, minBid = 23000, buyoutAmount = 50000 }, "bid"))).toBe(
+        "That auction changed since you chose it: nothing was bid. Now least bid 2g 30s, buyout 5g."
+    )
+    expect(recheckNote("changed", { auctionID = 1 }, "bought")).toBe(
+        "That auction changed since you chose it: nothing was bought."
+    )
+end
+
+@test("an amount: at least the least bid, under the buyout, at most your money")
+local function amounts()
+    expect(bidProblem(nil, 1000, 10000, nil)).toBe("This auction takes no bids.")
+    expect(plain(assert(bidProblem(2100, 2000, 10000, 5000)))).toBe("At least 21s.")
+    expect(plain(assert(bidProblem(2100, nil, 10000, 5000)))).toBe("At least 21s.")
+    expect(bidProblem(2100, 5000, 10000, 5000)).toBe("That's the buyout or more: use Buy out.")
+    expect(bidProblem(2100, 6000, 10000, 5000)).toBe("That's the buyout or more: use Buy out.")
+    expect(bidProblem(2100, 3000, 2500, 5000)).toBe("Not enough money.")
+    expect(bidProblem(2100, 2100, 10000, 5000)).toBeNil()
+    -- no buyout: any amount from the least bid up, as far as your money goes
+    expect(bidProblem(2100, 9000, 10000, nil)).toBeNil()
+    expect(bidProblem(2100, 9000, 10000, 0)).toBeNil()
+end
+
+@test("an auction bid on is no longer chosen, on Buy or on the Bids tab; another one stays")
+local function forgotten()
+    M.chosen, M.chosenSeen = 11, { auctionID = 11 }
+    forgetChoice(M, 12)
+    expect(M.chosen).toBe(11)
+    forgetChoice(M, 11)
+    expect(M.chosen).toBeNil()
+    expect(M.chosenSeen).toBeNil()
+    expectNoErrors()
+end

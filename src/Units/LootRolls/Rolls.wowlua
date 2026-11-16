@@ -1,0 +1,292 @@
+-- Units/LootRolls/Rolls.wowlua
+-- The roll records of the roll tray (Units/LootRolls) and which one a
+-- line about an item is about. The game names a roll by its ID where it
+-- can (START_LOOT_ROLL, CONFIRM_LOOT_ROLL, CANCEL_LOOT_ROLL, RollOnLoot,
+-- GetLootRollItemInfo, LOOT_ROLLS_COMPLETE by the loot's handle); its loot
+-- lines in chat name only the item and a player (their loot history link
+-- is the encounter's), and its loot history names a drop by encounter and
+-- list key, with the item, your own vote on it and the winner, but no roll
+-- ID. Two open rolls for the same item (two of one drop) are common, so
+-- such a line is put on a roll by these rules (review 2026-11-15,
+-- CHAT-23):
+--
+--   * The same item: the item's ID; where the rolls' names differ (a
+--     random suffix) the line's name narrows it.
+--   * Your own vote ("You have selected Greed for: X") goes to the roll you
+--     answered with that choice in the tray and the game hasn't confirmed
+--     yet (the oldest such; not one whose Bind on Pickup question is still
+--     open). Else, when exactly one roll of the item (open,
+--     or ended in the last 30 s) has no vote of yours from the game yet, to
+--     that one. Else to nothing open: it never answers or locks a row you
+--     didn't answer.
+--   * Another player's vote goes to the oldest open roll of the item they
+--     haven't voted on; with one open roll of the item, to it (a vote
+--     changed); else nowhere. A wrong list of votes is the worst it does.
+--   * A number rolled goes to the roll the player chose that on and has no
+--     number for yet (yours: one you can have rolled on), else the oldest.
+--   * A result (someone won, everyone passed) from one source (the chat
+--     line, or the loot history's drop) goes to a roll of the item that
+--     has none from that source yet, that fits your vote on it (the loot
+--     history says it; "You won" needs a Need or Greed), preferring one
+--     whose votes are all in, else the oldest. It is certain when only one
+--     roll is left by these rules. Its row goes only then, or once every
+--     open roll of the item has a result from that source: a line that
+--     could be about another roll never removes a row.
+--
+-- A row also goes when the game ends its roll ID: CANCEL_LOOT_ROLL (for a
+-- roll you haven't answered: the game is done with you), its loot's
+-- LOOT_ROLLS_COMPLETE, CANCEL_ALL_LOOT_ROLLS, or its time run out.
+-- Pure: the rolls come in as lists, sorted oldest first.
+
+export type ChoiceKey = "need" | "greed" | "pass"
+
+export type Votes = { need: string[], greed: string[], pass: string[] }
+-- A number someone rolled: the choice's label and the value.
+export type Rolled = { label: string, value?: number }
+-- Where a result came from: the chat line, or the loot history.
+export type Source = "line" | "drop"
+-- What your vote on a roll was, as the loot history says it: none yet, a
+-- choice, or "rolled" (Need or Greed: you won it).
+export type Mine = "none" | "rolled" | ChoiceKey
+
+-- One group roll as the tray knows it (a test roll has `test`, its own
+-- roster and classes). `choice`: yours as the tray shows it (pressed);
+-- `sent`: chosen here, the game's line about it not in yet; `heard`: your
+-- vote as the game's line said it. `confirm`: the game asks for your
+-- choice's confirmation (Bind on Pickup; its roll type). `decided`: the
+-- sources that said it's decided.
+export type Roll = {
+    id: number,
+    seq: number,
+    test?: boolean,
+    icon?: number | string,
+    name: string,
+    quality: string,
+    link?: string,
+    duration: number,
+    bop?: boolean,
+    can: { [string]: boolean },
+    reason: { [string]: string? },
+    votes: Votes,
+    rolled: { [string]: Rolled },
+    remaining: () -> number,
+    roster?: string[],
+    classes?: { [string]: string },
+    choice?: ChoiceKey,
+    sent?: ChoiceKey,
+    heard?: ChoiceKey,
+    confirm?: number,
+    endedAt?: number,
+    decided: { line?: boolean, drop?: boolean },
+    -- the loot it's from (START_LOOT_ROLL's): LOOT_ROLLS_COMPLETE ends its rolls
+    lootHandle?: number,
+    -- its name not readable yet (the item's data not in): a placeholder
+    unnamed?: boolean,
+}
+
+export const CHOICE_KEYS: ChoiceKey[] = { "need", "greed", "pass" }
+
+export function itemKey(link: string?): string?
+    return link and (link:match("item:(%d+)") or link) or nil
+end
+
+-- The name in a link ("[Dusk Mantle of the Bear]" → "Dusk Mantle of the Bear").
+local function linkName(link: string?): string?
+    return link and link:match("|h%[(.-)%]|h") or nil
+end
+
+local function open(roll: Roll): boolean
+    return roll.endedAt == nil
+end
+
+-- The rolls of a line's item (from `rolls`, oldest first).
+export function sameItem(rolls: Roll[], link: string): Roll[]
+    local key = itemKey(link)
+    local out: Roll[] = {}
+    if not key then
+        return out
+    end
+    for _, roll in ipairs(rolls) do
+        if itemKey(roll.link) == key then
+            out[#out + 1] = roll
+        end
+    end
+    -- a random suffix: the line's whole name, where it tells them apart
+    local name = linkName(link)
+    if name and #out > 1 then
+        local named: Roll[] = {}
+        for _, roll in ipairs(out) do
+            if (linkName(roll.link) or roll.name) == name then
+                named[#named + 1] = roll
+            end
+        end
+        if #named > 0 and #named < #out then
+            return named
+        end
+    end
+    return out
+end
+
+export function hasVoted(roll: Roll, name: string): boolean
+    for _, key in ipairs(CHOICE_KEYS) do
+        for _, who in ipairs(roll.votes[key]) do
+            if who == name then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- A player's vote on a roll (an earlier one of theirs on it replaced).
+export function addVote(roll: Roll, name: string, choice: ChoiceKey)
+    for _, key in ipairs(CHOICE_KEYS) do
+        local list = roll.votes[key]
+        for i = #list, 1, -1 do
+            if list[i] == name then
+                table.remove(list, i)
+            end
+        end
+    end
+    table.insert(roll.votes[choice], name)
+end
+
+-- Whether your vote on a roll certainly isn't `mine` (what the game knows:
+-- its own line about your vote, or that you never chose).
+export function cannotBe(roll: Roll, mine: Mine): boolean
+    local heard = roll.heard
+    if mine == "none" then
+        return heard ~= nil
+    end
+    if heard then
+        return not (heard == mine or (mine == "rolled" and heard ~= "pass"))
+    end
+    -- never answered here: the game has no vote of yours on it
+    return roll.choice == nil and roll.sent == nil
+end
+
+-- Every vote in: yours and everyone else's in the group.
+export function complete(roll: Roll, others: string[]): boolean
+    if not (roll.heard or (roll.choice and not roll.confirm)) then
+        return false
+    end
+    for _, name in ipairs(others) do
+        if not hasVoted(roll, name) then
+            return false
+        end
+    end
+    return true
+end
+
+-- Your own vote line: the roll it's about, and whether that's certain
+-- (only then may it lock the row). `rolls`: the item's, open or just ended.
+export function ownVote(rolls: Roll[], choice: ChoiceKey): (Roll?, boolean)
+    -- the roll you answered so in the tray, the game saying so (not one
+    -- still asking for its confirmation: the game has no vote on it yet)
+    for _, roll in ipairs(rolls) do
+        if open(roll) and roll.sent == choice and not roll.confirm then
+            return roll, true
+        end
+    end
+    local unheard: Roll[] = {}
+    for _, roll in ipairs(rolls) do
+        if not roll.heard then
+            unheard[#unheard + 1] = roll
+        end
+    end
+    local only = unheard[1]
+    if #unheard == 1 and only then
+        return only, open(only)
+    end
+    -- several: one that just ended takes it (its time ran out, the game
+    -- passing for you), never one still open
+    for _, roll in ipairs(unheard) do
+        if not open(roll) then
+            return roll, false
+        end
+    end
+    return nil, false
+end
+
+-- Another player's vote line: the roll it goes to (`rolls`: the item's, open).
+export function othersVote(rolls: Roll[], name: string): Roll?
+    for _, roll in ipairs(rolls) do
+        if not hasVoted(roll, name) then
+            return roll
+        end
+    end
+    if #rolls == 1 then
+        return rolls[1]
+    end
+    return nil
+end
+
+-- A number rolled: the roll it goes to (`rolls`: the item's, open or just
+-- ended; `mine`: your own number).
+export function rolledOn(rolls: Roll[], name: string, choice: ChoiceKey, mine: boolean): Roll?
+    local pool: Roll[] = {}
+    for _, roll in ipairs(rolls) do
+        if not roll.rolled[name] and not (mine and cannotBe(roll, choice)) then
+            pool[#pool + 1] = roll
+        end
+    end
+    for _, roll in ipairs(pool) do
+        for _, who in ipairs(roll.votes[choice]) do
+            if who == name then
+                return roll
+            end
+        end
+    end
+    return pool[1]
+end
+
+-- A result: the roll it's about, and whether that's certain. `rolls`: the
+-- item's, open or just ended; `mine`: your vote on it, where the source
+-- says it; `others`: the rest of the group.
+export function resultOf(rolls: Roll[], source: Source, mine: Mine?, others: string[]): (Roll?, boolean)
+    local pool: Roll[] = {}
+    for _, roll in ipairs(rolls) do
+        if not roll.decided[source] then
+            pool[#pool + 1] = roll
+        end
+    end
+    if mine then
+        local fits: Roll[] = {}
+        for _, roll in ipairs(pool) do
+            if not cannotBe(roll, mine) then
+                fits[#fits + 1] = roll
+            end
+        end
+        if #fits > 0 then
+            pool = fits
+        end
+    end
+    local first = pool[1]
+    if not first then
+        return nil, false
+    end
+    if #pool == 1 then
+        return first, true
+    end
+    for _, roll in ipairs(pool) do
+        if complete(roll, others) then
+            return roll, false
+        end
+    end
+    return first, false
+end
+
+-- Every open roll of the item has a result from `source`: all of them are
+-- over, whichever result was whose.
+export function allDecided(rolls: Roll[], source: Source): boolean
+    local any = false
+    for _, roll in ipairs(rolls) do
+        if open(roll) then
+            if not roll.decided[source] then
+                return false
+            end
+            any = true
+        end
+    end
+    return any
+end

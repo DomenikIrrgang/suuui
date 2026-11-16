@@ -1,0 +1,131 @@
+-- Core/Timers: timers kept per owner, their errors under the owner's name,
+-- all of an owner's cancelled at once.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as timers from "/Core/Timers"
+import FakeReporter from "../../fakes"
+import expectNoErrors from "../../helpers"
+
+const A = { name = "Timers Test A" }
+const B = { name = "Timers Test B" }
+
+-- an owner that is on
+local function alive(): boolean
+    return true
+end
+
+@afterEach
+local function cleanup()
+    timers.cancelAll(A)
+    timers.cancelAll(B)
+end
+
+@test("after: runs once, then is dropped; cancelAll stops the owner's only")
+local function afterRuns()
+    local ran: string[] = {}
+    timers.after(A, "A", alive, 1, function()
+        ran[#ran + 1] = "a"
+    end)
+    timers.after(B, "B", alive, 1, function()
+        ran[#ran + 1] = "b"
+    end)
+    timers.after(A, "A", alive, 2, function()
+        ran[#ran + 1] = "a2"
+    end)
+    expect(timers.count(A)).toBe(2)
+    mock.advanceTime(1.1)
+    expect(ran).toEqual({ "a", "b" })
+    expect(timers.count(A)).toBe(1)
+    expect(timers.count(B)).toBe(0)
+    timers.cancelAll(A)
+    mock.advanceTime(2)
+    expect(ran).toEqual({ "a", "b" })
+    expect(timers.count(A)).toBe(0)
+    expectNoErrors()
+end
+
+@test("every: each interval, `times` times; a handle cancelled by its owner doesn't count")
+local function everyTicks()
+    local n, m = 0, 0
+    timers.every(A, "A", alive, 1, function()
+        n += 1
+    end, 2)
+    local ticker = timers.every(A, "A", alive, 1, function()
+        m += 1
+    end)
+    mock.advanceTime(3.5)
+    expect(n).toBe(2)
+    expect(m).toBe(3)
+    expect(timers.count(A)).toBe(1)
+    ticker:Cancel()
+    expect(timers.count(A)).toBe(0)
+    mock.advanceTime(2)
+    expect(m).toBe(3)
+    expectNoErrors()
+end
+
+@test("a registry of its own: an error goes under the source")
+local function ownErrors()
+    local r = FakeReporter.new()
+    local own = timers.TimerOwners.new(r)
+    own:after(A, "Timers Source", alive, 0.5, function()
+        error("timers-boom")
+    end)
+    mock.advanceTime(1)
+    expect(r.errors).toEqual({ "Timers Source: timers-boom" })
+    expect(own:count(A)).toBe(0)
+end
+
+@test("an owner is required")
+local function needsOwner()
+    expect(function()
+        timers.after(nil, "x", alive, 1, function() end)
+    end).toThrow("an owner is required")
+end
+
+@test("an owner that is off: nothing starts, nothing is kept, the handle is already cancelled")
+local function offOwner()
+    local on = false
+    local function live(): boolean
+        return on
+    end
+    local ran = 0
+    local once = timers.after(A, "A", live, 1, function()
+        ran += 1
+    end)
+    local ticker = timers.every(A, "A", live, 1, function()
+        ran += 1
+    end)
+    expect(once:IsCancelled()).toBe(true)
+    expect(ticker:IsCancelled()).toBe(true)
+    expect(timers.count(A)).toBe(0)
+    -- turned on later: the refused ones stay refused
+    on = true
+    mock.advanceTime(3)
+    expect(ran).toBe(0)
+    expectNoErrors()
+end
+
+@test("asked for while on: the release (cancelAll) is what stops it, not the owner's state later")
+local function goesOff()
+    local on = true
+    local function live(): boolean
+        return on
+    end
+    local ran: string[] = {}
+    timers.after(A, "A", live, 1, function()
+        ran[#ran + 1] = "once"
+    end)
+    timers.every(A, "A", live, 1, function()
+        ran[#ran + 1] = "tick"
+    end, 2)
+    on = false
+    mock.advanceTime(1.1)
+    expect(ran).toEqual({ "once", "tick" })
+    timers.cancelAll(A)
+    mock.advanceTime(2)
+    expect(ran).toEqual({ "once", "tick" })
+    expect(timers.count(A)).toBe(0)
+    expectNoErrors()
+end

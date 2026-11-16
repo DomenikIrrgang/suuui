@@ -1,0 +1,168 @@
+-- Diagnostics/Watch/Instant.wowlua
+-- What "/suu probe all" answers at once: the client and SuuUI's version,
+-- which functions the open questions name exist here, and what
+-- "/suu probe cvars" and "/suu probe taint" record (run quietly, their own
+-- records in SuuUIProbe.cvars and SuuUIProbe.taint).
+
+import version from "/Core/Init"
+import API_VERSION from "/Core/Modules"
+import * as DB from "/Core/DB"
+import * as cvarProbe from "/Diagnostics/CVarProbe"
+import * as taintProbe from "/Diagnostics/TaintProbe"
+import * as tbl from "wowlua:table"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+
+-- The functions (and frame methods) the open questions are about.
+const FUNCTIONS: string[] = {
+    "UnitClassification",
+    "UnitIsBossMob",
+    "GetRaidRosterInfo",
+    "C_DamageMeter.GetCombatSessionSourceFromType",
+    "C_ClassTalents.GetActiveConfigID",
+    "C_SpellBook.IsSpellInSpellBook",
+    "IsPlayerSpell",
+    "GetLootRollItemInfo",
+    "ConfirmLootRoll",
+    "GetMacroInfo",
+    "GetMacroSpell",
+    "C_AuctionHouse.ConfirmCommoditiesPurchase",
+    "C_FriendList.SetWhoToUi",
+    "C_FriendList.SendWho",
+    "ChatEdit_CustomTabPressed",
+    "PaperDollFrame_SetSidebar",
+    "PaperDollFrame_SetPet",
+    "ChatFrameUtil.SendTell",
+    "ChatFrame_SendTell",
+    "C_ChatInfo.SendChatMessage",
+    "SendChatMessage",
+    "C_Mail.IsCommandPending",
+    "C_UnitAuras.GetAuraDataByIndex",
+    "UnitAura",
+    "issecretvalue",
+    "issecrettable",
+    "canaccessvalue",
+    "GetUnitName",
+    "UnitFullName",
+    "Ambiguate",
+    "GetMouseFoci",
+    "GetMouseFocus",
+    "LootFrame.SetPointBase",
+    "GroupLootContainer.SetPointBase",
+    "ChatFrame1.SetPointBase",
+}
+
+local function client(): Result
+    local clientVersion, build, buildDate, toc = GetBuildInfo()
+    return {
+        answer = ("client %s build %s (interface %s), SuuUI %s, API %s"):format(
+            tostring(clientVersion),
+            tostring(build),
+            tostring(toc),
+            version,
+            API_VERSION
+        ),
+        client = clientVersion,
+        build = build,
+        buildDate = buildDate,
+        toc = toc,
+        locale = GetLocale(),
+        suuui = version,
+        api = API_VERSION,
+    }
+end
+
+local function functions(): Result
+    local found: { [string]: string } = {}
+    local missing: string[] = {}
+    for _, path in ipairs(FUNCTIONS) do
+        local v = kit.resolve(path)
+        local t = type(v)
+        found[path] = t == "function" and "function" or (v == nil and "missing" or t)
+        if v == nil then
+            missing[#missing + 1] = path
+        end
+    end
+    return {
+        answer = #missing == 0 and ("all %d exist"):format(#FUNCTIONS)
+            or ("%d of %d exist; missing: %s"):format(#FUNCTIONS - #missing, #FUNCTIONS, table.concat(missing, ", ")),
+        functions = found,
+    }
+end
+
+local function cvars(): Result
+    cvarProbe.command("", true)
+    local rows = tbl.field(DB.probe, "cvars", "rows")
+    local counts: { [string]: number } = {}
+    local n = 0
+    if type(rows) == "table" then
+        for _, row in pairs(rows :: { [string]: unknown }) do
+            local where = tostring(tbl.field(row, "where"))
+            counts[where] = (counts[where] or 0) + 1
+            n += 1
+        end
+    end
+    return {
+        answer = ("%d CVars read: %d per character, %d per account, %d for the whole machine, %d unknown (each in SuuUIProbe.cvars)"):format(
+            n,
+            counts.character or 0,
+            counts.account or 0,
+            counts.machine or 0,
+            n - (counts.character or 0) - (counts.account or 0) - (counts.machine or 0)
+        ),
+        where = counts,
+    }
+end
+
+local function taint(): Result
+    taintProbe.command(true)
+    local list = tbl.field(DB.probe, "taint", "tainted")
+    local written: string[] = {}
+    if type(list) == "table" then
+        for i, line in ipairs(list :: string[]) do
+            if i <= 40 then
+                written[#written + 1] = line
+            end
+        end
+    end
+    local n = type(list) == "table" and #(list :: string[]) or 0
+    return {
+        answer = ("%d values on Blizzard's protected paths written by addon code now (SuuUIProbe.taint lists them)"):format(n),
+        written = written,
+    }
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "client",
+            kind = kit.Kind.Instant,
+            question = "Which client build and which SuuUI recorded this?",
+            todo = "",
+            run = client,
+        },
+        {
+            id = "functions",
+            kind = kit.Kind.Instant,
+            question = "Do the functions the open questions name exist on this client?",
+            todo = "",
+            run = functions,
+        },
+        {
+            id = "cvars",
+            kind = kit.Kind.Instant,
+            question = "Where does the game keep the CVars SuuUI's modules write (per character, account or machine)? (/suu probe cvars)",
+            todo = "",
+            run = cvars,
+        },
+        {
+            id = "taint",
+            kind = kit.Kind.Instant,
+            question = "Which values on Blizzard's protected paths are written by addon code right now? (/suu probe taint)",
+            todo = "",
+            run = taint,
+        },
+    }
+end

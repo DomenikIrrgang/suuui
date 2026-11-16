@@ -1,0 +1,302 @@
+-- UI/Notification/Stack: the stack (order, combat, more, dismiss all, notes
+-- hidden, reuse, cards made ahead) and the theme change that lays out lone
+-- cards and stacks again.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import notification from "/UI/Notification/Card"
+import type NotificationData from "/UI/Notification/Card"
+import notificationStack, NotificationStack from "/UI/Notification/Stack"
+import expectNoErrors, newParent from "../../../helpers"
+import tokenOf, themeChanged from "../WindowsHelpers"
+
+local WIDTH = T.size["notice-w"]
+
+local parent: Frame? = nil
+
+local function make()
+    parent = parent or newParent()
+    return notification(assert(parent))
+end
+
+local function stack(max: number?)
+    parent = parent or newParent()
+    return notificationStack(assert(parent), max and { max = max } or nil)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    mock.resetSpies()
+    expectNoErrors()
+end
+
+@test("a card made ahead waits among the spares; the next note takes it")
+local function builtAhead()
+    local s = stack()
+    expect(s:BuildAhead()).toBe(false)
+    expect(#s.spare).toBe(1)
+    local card = s.spare[1]
+    expect(card).never.toBeShown()
+    -- one is enough
+    s:BuildAhead()
+    expect(#s.spare).toBe(1)
+    s:SetItems({ { id = "a", title = "Hello", kind = "sticky" } })
+    expect(s:CardFor("a")).toBe(card)
+    expect(#s.spare).toBe(0)
+    -- the spare used: another ready for the next card
+    s:BuildAhead()
+    expect(#s.spare).toBe(1)
+    s:SetItems({ { id = "a", title = "Hello", kind = "sticky" }, { id = "b", title = "Again", kind = "sticky" } })
+    expect(#s.spare).toBe(0)
+end
+
+@test("a theme change lays out a lone card again; a stack's cards through the stack")
+local function themeLone()
+    local n = make()
+    local data = { title = "T" }
+    n:SetData(data)
+    local blank = notification(assert(parent))
+    local set, setBlank = mock.spy(), mock.spy()
+    mock.stub(n, "SetData", set)
+    mock.stub(blank, "SetData", setBlank)
+    themeChanged()
+    expect(set).toHaveBeenCalledWith(n, data)
+    expect(setBlank).never.toHaveBeenCalled()
+end
+
+--------------------------------------------------------------------------------
+-- The stack
+--------------------------------------------------------------------------------
+
+local function ids(s: NotificationStack): (string | number)[]
+    -- the shown cards' ids, top to bottom
+    local list: { id: string | number, y: number }[] = {}
+    for id, card in pairs(s.cards) do
+        if card:IsShown() then
+            local _, _, _, _, y = card:GetPoint(1)
+            list[#list + 1] = { id = id, y = y }
+        end
+    end
+    table.sort(list, function(a: { id: string | number, y: number }, b: { id: string | number, y: number }): boolean
+        return a.y > b.y
+    end)
+    local out: (string | number)[] = {}
+    for i, e in ipairs(list) do
+        out[i] = e.id
+    end
+    return out
+end
+
+@test("a new stack: notice-w wide, five at most, the foot hidden")
+local function freshStack()
+    local s = stack()
+    expect(s:GetWidth()).toBe(WIDTH)
+    expect(s.max).toBe(5)
+    expect(s.foot).never.toBeShown()
+    local named = notificationStack(assert(parent), { name = "SuuUITestStack" })
+    expect(_G["SuuUITestStack"]).toBe(named)
+end
+
+@test("requests first, then conditions, notes, timed ones; in order within")
+local function order()
+    local s = stack(10)
+    s:SetItems({
+        { id = "t1", title = "timed 1" },
+        { id = "s1", kind = "sticky", title = "sticky" },
+        { id = "u1", kind = "until", title = "until" },
+        { id = "a1", kind = "action", title = "action" },
+        { id = "r1", kind = "roll", title = "roll" },
+        { id = "x1", kind = "odd", title = "unknown kind" },
+    })
+    expect(ids(s)).toEqual({ "a1", "r1", "u1", "s1", "t1", "x1" })
+    expect(assert(s:CardFor("a1")):GetFrameStrata()).toBe("DIALOG")
+    expect(assert(s:CardFor("a1")).request).toBe(true)
+    expect(assert(s:CardFor("t1")):GetFrameStrata()).toBe(s:GetFrameStrata())
+    expect(s:CardFor("nope")).toBeNil()
+end
+
+@test("at most max cards; +N more expands them")
+local function more()
+    local s = stack(2)
+    local items: NotificationData[] = {}
+    for i = 1, 4 do
+        items[i] = { id = "n" .. i, title = "Note " .. i }
+    end
+    local onExpand = mock.spy()
+    s.onExpand = onExpand
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+    expect(s.foot).toBeShown()
+    expect(s.moreLink).toBeShown()
+    expect(s.moreLink.label).toHaveText("+2 more")
+    expect(s.moreLink:GetWidth()).toBe(math.ceil(s.moreLink.label:GetUnboundedStringWidth()))
+    mock.click(s.moreLink)
+    expect(s.expanded).toBe(true)
+    expect(onExpand).toHaveBeenCalledTimes(1)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(4)
+    expect(s.moreLink).never.toBeShown()
+    -- without onExpand: only expands
+    s.onExpand = nil
+    mock.script(s.moreLink, "OnClick", "LeftButton")
+end
+
+@test("expanded (UIP-11): open until the list fits the cap again; the next burst is capped")
+local function expandedResets()
+    local s = stack(2)
+    local items: NotificationData[] = {}
+    for i = 1, 4 do
+        items[i] = { id = "n" .. i, title = "Note " .. i }
+    end
+    s:SetItems(items)
+    mock.click(s.moreLink)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(4)
+    -- still more than the cap: stays open
+    s:SetItems({ items[1], items[2], items[3] })
+    expect(s.expanded).toBe(true)
+    expect(#ids(s)).toBe(3)
+    -- down to the cap: closed again
+    s:SetItems({ items[1], items[2] })
+    expect(s.expanded).toBe(false)
+    -- a new burst: capped, "+N more" again
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+    expect(s.moreLink).toBeShown()
+    expect(s.moreLink.label).toHaveText("+2 more")
+    -- emptied: closed too
+    mock.click(s.moreLink)
+    s:SetItems(nil)
+    expect(s.expanded).toBe(false)
+    s:SetItems(items)
+    expect(#ids(s)).toBe(2)
+end
+
+@test("a stack's reused card shows no button of the note before it")
+local function stackReuse()
+    local s = stack()
+    local accept, ok = mock.spy(), mock.spy()
+    s:SetItems({
+        {
+            id = "invite",
+            kind = "action",
+            actions = { { label = "Decline" }, { label = "Accept", variant = "primary", onClick = accept } },
+        },
+    })
+    local card = assert(s:CardFor("invite"))
+    -- the invite goes; the next note takes its card from the spares
+    s:SetItems(nil)
+    s:SetItems({ { id = "note", kind = "sticky", actions = { { label = "OK", onClick = ok } } } })
+    expect(s:CardFor("note")).toBe(card)
+    local shown: Button[] = {}
+    for _, pool in pairs(card.buttons) do
+        for _, b in pairs(pool) do
+            if b:IsShown() then
+                shown[#shown + 1] = b
+            end
+        end
+    end
+    expect(#shown).toBe(1)
+    expect(shown[1]).toBe(assert(card.buttons.quiet)[1])
+    mock.click(shown[1])
+    expect(ok).toHaveBeenCalledTimes(1)
+    expect(assert(card.buttons.primary)[2]).never.toBeShown()
+    expect(accept).never.toHaveBeenCalled()
+end
+
+@test("in combat only requests and conditions; the rest wait, said in the foot")
+local function combat()
+    local s = stack()
+    s:SetItems(
+        { { id = "a", kind = "action" }, { id = "u", kind = "until" }, { id = "s", kind = "sticky" }, { id = "t" } },
+        true
+    )
+    expect(ids(s)).toEqual({ "a", "u" })
+    expect(s.heldText).toBeShown()
+    expect(s.heldText).toHaveText("2 waiting for the end of combat")
+    expect(s.foot).toBeShown()
+    expect(s.clearLink).never.toBeShown()
+    -- the more link before the held text, left to right
+    s:SetItems({ { id = "a", kind = "action" }, { id = "b", kind = "action" }, { id = "t" } }, true)
+end
+
+@test("two notes or more: Dismiss all")
+local function dismissAll()
+    local s = stack()
+    local onClearAll = mock.spy()
+    s.onClearAll = onClearAll
+    s:SetItems({ { id = "s1", kind = "sticky" } })
+    expect(s.clearLink).never.toBeShown()
+    expect(s.foot).never.toBeShown()
+    s:SetItems({ { id = "s1", kind = "sticky" }, { id = "s2", kind = "sticky" } })
+    expect(s.clearLink).toBeShown()
+    expect(s.foot).toBeShown()
+    mock.click(s.clearLink)
+    expect(onClearAll).toHaveBeenCalledTimes(1)
+    mock.hover(s.clearLink)
+    expect(tokenOf(s.clearLink.label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(s.clearLink.label)).toBe("gilt-text")
+    s.onClearAll = nil
+    mock.click(s.clearLink)
+end
+
+@test("cards leaving go to the spares and come back for new ids")
+local function spares()
+    local s = stack()
+    s:SetItems({ { id = "a" }, { id = "b" } })
+    local a = assert(s:CardFor("a"))
+    s:SetItems({ { id = "b" } })
+    expect(a).never.toBeShown()
+    expect(a.data).toBeNil()
+    expect(s:CardFor("a")).toBeNil()
+    expect(s.spare).toContain(a)
+    s:SetItems({ { id = "b" }, { id = "c" } })
+    expect(s:CardFor("c")).toBe(a)
+    expect(#s.spare).toBe(0)
+    s:SetItems(nil)
+    expect(#ids(s)).toBe(0)
+    expect(s:GetHeight()).toBe(1)
+end
+
+@test("notes hidden under a window; requests stay; the foot fades")
+local function notesHidden()
+    local s = stack()
+    s:SetItems({ { id = "a", kind = "action" }, { id = "s1", kind = "sticky" }, { id = "s2", kind = "sticky" } })
+    s:SetNotesHidden(true)
+    expect(s:CardFor("a")).toBeShown()
+    expect(s:CardFor("s1")).never.toBeShown()
+    expect(s.foot:GetAlpha()).toBe(0)
+    -- new items while hidden: notes stay hidden
+    s:SetItems({ { id = "a", kind = "action" }, { id = "s3", kind = "sticky" } })
+    expect(s:CardFor("s3")).never.toBeShown()
+    s:SetNotesHidden(true)
+    s:SetNotesHidden(false)
+    expect(s:CardFor("s3")).toBeShown()
+    expect(s.foot:GetAlpha()).toBe(1)
+end
+
+@test("a theme change lays a stack out again with its items")
+local function themeStack()
+    local s = stack()
+    local items: NotificationData[] = { { id = "a" } }
+    s:SetItems(items, false)
+    local set = mock.spy()
+    mock.stub(s, "SetItems", set)
+    local empty = notificationStack(assert(parent))
+    local setEmpty = mock.spy()
+    mock.stub(empty, "SetItems", setEmpty)
+    local cardSet = mock.spy()
+    mock.stub(s:CardFor("a"), "SetData", cardSet)
+    themeChanged()
+    expect(set).toHaveBeenCalledWith(s, items, false)
+    expect(setEmpty).never.toHaveBeenCalled()
+    -- a stack's card is laid out by its stack, not alone
+    expect(cardSet).never.toHaveBeenCalled()
+end

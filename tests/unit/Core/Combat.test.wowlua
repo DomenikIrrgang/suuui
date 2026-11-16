@@ -144,7 +144,8 @@ local function restart()
     )
     mock.player:leaveCombat()
     expect(order).toEqual({ "r1" })
-    expect(combat.pendingCount()).toBe(1)
+    -- (this test's own: a window open at the fight's end queues work too)
+    expect(combat.pendingCount("coreatest:")).toBe(1)
     -- a new request for the waiting key still replaces it
     combat.run(
         "coreatest:r2",
@@ -153,7 +154,7 @@ local function restart()
         end,
         "Test"
     )
-    expect(combat.pendingCount()).toBe(1)
+    expect(combat.pendingCount("coreatest:")).toBe(1)
     mock.player:leaveCombat()
     expect(order).toEqual({ "r1", "r2 latest" })
     expect(combat.pendingCount()).toBe(0)
@@ -235,4 +236,94 @@ local function ownQueueError()
     fight:finish()
     expect(r.errors).toEqual({ "Bars: queue-boom" })
     expect(ran).toBe(true)
+end
+
+@test("a request for a waiting key while the queue runs at combat's end: the latest runs once, in the waiting one's place")
+local function requestDuringFlush()
+    local ran: string[] = {}
+    mock.player:enterCombat()
+    combat.run(
+        "coreatest:fa",
+        function()
+            ran[#ran + 1] = "a1"
+            combat.run(
+                "coreatest:fb",
+                function()
+                    ran[#ran + 1] = "b2"
+                end,
+                "Test"
+            )
+        end,
+        "Test"
+    )
+    combat.run(
+        "coreatest:fb",
+        function()
+            ran[#ran + 1] = "b1"
+        end,
+        "Test"
+    )
+    mock.player:leaveCombat()
+    expect(ran).toEqual({ "a1", "b2" })
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("cancel: the waiting work of keys with the prefix never runs; the count follows")
+local function cancels()
+    local ran: string[] = {}
+    mock.player:enterCombat()
+    combat.run("coreatest:mine:a", function()
+        ran[#ran + 1] = "mine a"
+    end)
+    combat.run("coreatest:mine:b", function()
+        ran[#ran + 1] = "mine b"
+    end)
+    combat.run("coreatest:other", function()
+        ran[#ran + 1] = "other"
+    end)
+    combat.run({}, function()
+        ran[#ran + 1] = "table key"
+    end)
+    expect(combat.pendingCount()).toBe(4)
+    expect(combat.pendingCount("coreatest:mine:")).toBe(2)
+    combat.cancel("coreatest:mine:")
+    expect(combat.pendingCount()).toBe(2)
+    expect(combat.pendingCount("coreatest:mine:")).toBe(0)
+    -- queued again after the cancel: runs, once
+    combat.run("coreatest:mine:a", function()
+        ran[#ran + 1] = "mine a again"
+    end)
+    expect(combat.pendingCount()).toBe(3)
+    mock.player:leaveCombat()
+    expect(ran).toEqual({ "other", "table key", "mine a again" })
+    expect(combat.pendingCount()).toBe(0)
+end
+
+@test("a queue of its own: a request made by waiting work replaces the older one still waiting")
+local function ownQueueFlush()
+    local fight, r = FakeCombat.new(), FakeReporter.new()
+    local q = combat.CombatQueue.new(fight, r)
+    local ran: string[] = {}
+    fight.fighting = true
+    q:run("A", function()
+        ran[#ran + 1] = "A1"
+        q:run("B", function()
+            ran[#ran + 1] = "B2"
+        end)
+    end)
+    q:run("B", function()
+        ran[#ran + 1] = "B1"
+    end)
+    fight:finish()
+    expect(ran).toEqual({ "A1", "B2" })
+    expect(q:pendingCount()).toBe(0)
+    -- and a cancel in a queue of its own
+    fight.fighting = true
+    q:run("m:x:1", function()
+        ran[#ran + 1] = "x"
+    end)
+    q:cancel("m:x:")
+    fight:finish()
+    expect(ran).toEqual({ "A1", "B2" })
+    expect(r.errors).toEqual({})
 end

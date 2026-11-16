@@ -14,15 +14,13 @@
 -- mod, /countdown) shows here, and SuuUI's shows in theirs and, without
 -- any addon, as Blizzard's numbers. While SuuUI's alert shows the countdown,
 -- Blizzard's own numbers (TimerTracker) stay away. On a
--- client without it, SuuUI sends its own message to everyone with SuuUI.
+-- client without it, SuuUI sends its own message to everyone with SuuUI
+-- ("PULL\t<seconds>", 0 or less cancels), taken only from the group's
+-- leader or an assistant (in a party: anyone in it), out of combat, one a
+-- second at most per sender (0.47: before, from anyone, by whisper too).
 
-import SuuUI from "/Core/API"
-import type SelectOption from "/UI/Select"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type EncounterTimeline, TimelineEvent from "/UI/Timeline"
-import type Position from "/EditMode/EditMode"
-import after, every from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SelectOption, SettingsSection, EncounterTimeline, TimelineEvent, Position from "/Core/API"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as secret from "wowlua:secret"
@@ -41,12 +39,14 @@ local DEFAULTS = {
     pullVoice = "Bella", -- a voice in Media/Sounds/Countdown, or "off": the last ten seconds spoken
     source = "suui", -- "suui" | "dbm" | "bigwigs": where boss timers come from
     hideTheirs = true, -- with a boss mod as the source: its own bars (and DBM's warnings) hidden
-    dbmWarningsWas = "", -- DBM's HideDBMWarnings before SuuUI set it ("" none)
+    -- (before 0.47: DBM's HideDBMWarnings before SuuUI set it, "" none; kept
+    -- per character outside profiles since, CharData's dbmWarningsWas, and
+    -- moved there at the first enable)
+    dbmWarningsWas = "",
 }
 
 local M: TimelineModule
 
-local PREFIX = "SuuUI"
 local PULL_SPELL, PULL_ICON = 100, 132337 -- Charge's spell and art
 local ET = C_EncounterTimeline
 
@@ -324,7 +324,7 @@ local SECTION: SettingsSection = {
                     onClick = function()
                         local voice = M:Get("pullVoice")
                         for i, n in ipairs({ "3", "2", "1", "pull" }) do
-                            after(i - 1, function()
+                            M:After(i - 1, function()
                                 M:Speak(n, voice)
                             end)
                         end
@@ -388,9 +388,12 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         return opts
     end
 
-    -- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }
+    -- The boss mod's timers, by its own id: { label, icon, badge, endsAt or paused }.
+    -- (Its callbacks stay registered for the session: while the module is
+    -- off they do nothing, CD-3.)
     function AddonTimer(source: string, id: unknown, text: unknown, seconds: unknown, icon: unknown, badge: Badge?)
-        if self:Get("source") ~= source or not isNumber(seconds) or seconds <= 0 or isPull(text) then
+        if not self:IsEnabled() or self:Get("source") ~= source or not isNumber(seconds) or seconds <= 0 or
+            isPull(text) then
             return
         end
         local key = tostring(id)
@@ -405,7 +408,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     end
 
     function AddonTimerStop(source: string, id: unknown)
-        if self:Get("source") ~= source then
+        if not self:IsEnabled() or self:Get("source") ~= source then
             return
         end
         if id == nil then
@@ -417,7 +420,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     end
 
     function AddonTimerPause(source: string, id: unknown, paused: boolean)
-        local t = self:Get("source") == source and self.addonTimers[tostring(id)] or nil
+        local t = self:IsEnabled() and self:Get("source") == source and self.addonTimers[tostring(id)] or nil
         if not t then
             return
         end
@@ -442,19 +445,35 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         return self:IsEnabled() and self:Get("hideTheirs") and self:Get("source") == source
     end
 
+    -- DBM's warnings: on while DBM feeds the timeline, your own setting back
+    -- otherwise. Your own ("true" or "false") is kept for this character,
+    -- outside profiles (CD-4: kept in the profile, a switch to another
+    -- profile recorded SuuUI's value as yours, or never gave yours back).
     function ApplySuppression()
-        -- DBM's warnings: on while DBM feeds the timeline, your own setting back otherwise
         local options = dbmOptions()
-        if options then
-            local want = self:Suppressing("dbm")
-            local was = self:Get("dbmWarningsWas")
-            if want and was == "" then
-                self:Set("dbmWarningsWas", options.HideDBMWarnings and "true" or "false")
-                options.HideDBMWarnings = true
-            elseif not want and was ~= "" then
-                options.HideDBMWarnings = was == "true"
-                self:Set("dbmWarningsWas", "")
+        if not options then
+            return
+        end
+        local data = self:CharData()
+        local was = data.dbmWarningsWas
+        if self:Suppressing("dbm") then
+            if was == nil then
+                data.dbmWarningsWas = options.HideDBMWarnings and "true" or "false"
             end
+            options.HideDBMWarnings = true
+        elseif was ~= nil then
+            options.HideDBMWarnings = was == "true"
+            data.dbmWarningsWas = nil
+        end
+    end
+
+    -- Logging out: DBM saves your own value, not SuuUI's (it is set again at
+    -- the next login).
+    function GiveBackForLogout()
+        local options = dbmOptions()
+        local was = self:CharData().dbmWarningsWas
+        if options and was ~= nil then
+            options.HideDBMWarnings = was == "true"
         end
     end
 
@@ -543,7 +562,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
                 self:AddonTimerPause("dbm", id, false)
             end)
             on("DBM_TimerUpdate", function(_: unknown, id: unknown, elapsed: unknown, total: unknown)
-                local t = self:Get("source") == "dbm" and self.addonTimers[tostring(id)] or nil
+                local t = self:IsEnabled() and self:Get("source") == "dbm" and self.addonTimers[tostring(id)] or nil
                 if t and isNumber(elapsed) and isNumber(total) then
                     t.endsAt, t.paused = GetTime() + math.max(0, total - elapsed), nil
                     self:Refresh()
@@ -644,7 +663,8 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
 
     function Refresh()
         local timeline = self.timeline
-        if not timeline then
+        -- (off: hidden by OnDisable, and nothing shows it again, CD-3)
+        if not timeline or not self:IsEnabled() then
             return
         end
         local variant = self:Get("variant")
@@ -668,8 +688,8 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         if soonest then
             local token = {}
             self.refreshToken = token
-            after(math.max(0.05, soonest - GetTime() + 0.05), function()
-                if self.refreshToken == token and self:IsEnabled() then
+            self:After(math.max(0.05, soonest - GetTime() + 0.05), function()
+                if self.refreshToken == token then
                     self:Refresh()
                 end
             end)
@@ -696,13 +716,13 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             return
         end
         for n = math.min(10, math.floor(seconds)), 1, -1 do
-            after(seconds - n, function()
+            self:After(seconds - n, function()
                 if self.voiceToken == token then
                     self:Speak(n, voice)
                 end
             end)
         end
-        after(seconds, function()
+        self:After(seconds, function()
             if self.voiceToken == token then
                 self:Speak("pull", voice)
             end
@@ -761,7 +781,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             if left <= 0 then
                 if mode ~= "off" then
                     SuuUI.ShowAlert("pull", "info", "Pull!", detail)
-                    after(1.5, function()
+                    self:After(1.5, function()
                         SuuUI.HideAlert("pull")
                     end)
                 end
@@ -776,7 +796,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
                 SuuUI.ShowAlert("pull", "info", ("Pull in %d"):format(math.ceil(left)), detail)
             end
         end
-        self.pullTicker = every(0.25, tick)
+        self.pullTicker = self:Every(0.25, tick)
         tick()
         self:Refresh()
     end
@@ -800,7 +820,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
                     self:CancelPull()
                     return
                 end
-                after(0.5, function()
+                self:After(0.5, function()
                     if self.awaiting == token then
                         self.awaiting = nil
                         if not self.pullEnds then
@@ -812,10 +832,8 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             end
             self.awaiting = nil
         end
-        if secret.flag(IsInGroup()) then
-            local channel = secret.flag(IsInRaid()) and "RAID" or "PARTY"
-            pcall(C_ChatInfo.SendAddonMessage, PREFIX, ("PULL\t%d"):format(seconds), channel)
-        end
+        -- (out of a group there's nobody to tell)
+        self:SendAddonMessage("PULL", ("%d"):format(seconds), SuuUI.Comm.GroupChannel())
         self:StartPull(seconds)
     end
 
@@ -883,23 +901,17 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
-        if prefix ~= PREFIX or type(text) ~= "string" or isSecret(text) then
+    -- "PULL\t<seconds>" from the group's leader or an assistant (the
+    -- receiver checked the channel, the rank and the rate; our own came back
+    -- and was dropped there). An hour at most either way (an old SuuUI sends
+    -- what was typed: a negative number cancels, more than 60 is held to 60
+    -- by StartPull); out of combat only, as the game's own countdown.
+    function OnPull(payload: string, sender: string)
+        local seconds = SuuUI.Comm.Int(payload, -3600, 3600)
+        if not seconds or InCombatLockdown() then
             return
         end
-        local seconds = text:match("^PULL\t(%-?%d+)$")
-        if not seconds then
-            return
-        end
-        if isSecret(sender) or type(sender) ~= "string" then
-            return
-        end
-        -- our own message comes back: already started
-        local me = Ambiguate(SuuUI.FullName("player") :: string, "short")
-        if Ambiguate(sender, "short") == me then
-            return
-        end
-        self:StartPull(tonumber(seconds), Ambiguate(sender, "short"))
+        self:StartPull(seconds, Ambiguate(sender, "short"))
     end
 
     function Test()
@@ -958,7 +970,20 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         end
         self:HookSources()
         self:HookDisplays()
+        -- (the player's value kept in the profile before 0.47: moved to this
+        -- character's data)
+        local legacy = self:Get("dbmWarningsWas")
+        if legacy ~= "" then
+            local data = self:CharData()
+            if data.dbmWarningsWas == nil then
+                data.dbmWarningsWas = legacy
+            end
+            self:Set("dbmWarningsWas", "")
+        end
         self:ApplySuppression()
+        self:OnGameEvent("PLAYER_LOGOUT", function()
+            self:GiveBackForLogout()
+        end)
         self:OnGameEvent("ADDON_LOADED", function()
             self:HookDisplays()
         end)
@@ -975,6 +1000,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             key = "position",
             label = "Encounter timeline",
             managedShow = true,
+            apartFrom = "flightmap.timerPosition",
             enabled = function()
                 return self:Get("variant") ~= "off"
             end,
@@ -983,7 +1009,7 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
         -- (your buffs stop short of it)
         local function publish()
             local on = self:Get("variant") ~= "off" and not self:Get("position").hidden
-            SuuUI.PublishAnchor("encounterTimeline", on and timeline or nil)
+            SuuUI.PublishAnchor("encounterTimeline", on and timeline or nil, self)
         end
         publish()
         self:RegisterSettings(SECTION)
@@ -991,11 +1017,9 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
             self:Pull(arg)
         end)
         SuuUI.AllowAlertOutOfCombat("pull")
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-        end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
-            self:OnMessage(...)
+        -- (one start a second per sender, and a cancel: GRP-21)
+        self:OnAddonMessage("PULL", { rank = "assist", rate = { count = 2, seconds = 2 } }, function(payload, sender)
+            self:OnPull(payload, sender)
         end)
         for _, e in ipairs({
             "ENCOUNTER_TIMELINE_EVENT_ADDED",
@@ -1046,12 +1070,13 @@ class TimelineModule extends Module<typeof(DEFAULTS)>
     override function OnDisable()
         self:BlizzardNumbers(true)
         -- DBM's own setting back (Suppressing is false once disabled)
-        local options = dbmOptions()
-        if options and self:Get("dbmWarningsWas") ~= "" then
-            options.HideDBMWarnings = self:Get("dbmWarningsWas") == "true"
-            self:Set("dbmWarningsWas", "")
-        end
+        self:ApplySuppression()
         self:CancelPull(true)
+        -- the boss mod's timers forgotten; its callbacks stay, doing nothing
+        -- (CD-3); the anchor goes with the module (published with it as owner)
+        self.addonTimers = {}
+        self.refreshToken = nil
+        self.awaiting = nil
         local timeline = self.timeline
         if timeline then
             timeline:Hide()

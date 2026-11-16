@@ -1,0 +1,515 @@
+-- UI/CooldownTracker/Conditions.wowlua
+-- The conditions engine ("Show only when"; what each condition means is in
+-- the tracker's header, UI/CooldownTracker.wowlua): reading the world (your
+-- stance or form, the target's kind, the instance, the classes in your
+-- group, the talents you've learned, kept until forgetTalents), whether a
+-- `when` is met now (conditionMet, cooldownConditionMet) or as a build sees
+-- it (staticState, stateOf), several `when`s that must all hold (chain,
+-- allMet), and a group without the members that can't show
+-- (withMetMembers). No frames.
+
+import * as secret from "wowlua:secret"
+import * as roles from "/Core/Roles"
+import * as tbl from "wowlua:table"
+import copyEntry from "./Entries"
+import type TrackerCondition, TrackerWhen, TrackerEntry from "./Entries"
+
+-- A value addon code can read, or the fallback when it is secret or missing.
+local known = secret.known
+
+--------------------------------------------------------------------------------
+-- Conditions ("Show only when")
+--------------------------------------------------------------------------------
+
+-- What a pass over many conditions looks up once (lookUp), and `combat`:
+-- the tracker's own idea of combat (it knows the moment combat starts and
+-- ends).
+export type CondContext = { [string]: unknown }
+
+-- Static types are checked when the tracker builds (and again when the
+-- group, role, zone or talents change); live ones in place, in combat too.
+local LIVE: { [string]: boolean } = { stance = true, combat = true, target = true }
+
+-- The list a condition chooses from; with nothing chosen it counts as absent.
+local CHOICES: { [string]: string } = {
+    classes = "classes",
+    role = "roles",
+    stance = "stances",
+    instance = "kinds",
+    target = "kinds",
+    talent = "talents",
+}
+
+-- Shapeshift forms by spell (checked against Forever's spell scan); the
+-- names of these spells, in the client's language, catch other IDs.
+local FORMS: { [number]: string } = {
+    [2457] = "battle",
+    [71] = "defensive",
+    [2458] = "berserker",
+    [5487] = "bear",
+    [9634] = "bear",
+    [768] = "cat",
+    [24858] = "moonkin",
+    [783] = "travel",
+    [1066] = "aquatic",
+    [1784] = "stealth",
+    [15473] = "shadowform",
+}
+local formNames: { [string]: string }? = nil
+local function formByName(name: string): string?
+    local names = formNames
+    if not names then
+        local made: { [string]: string } = {}
+        for id, key in pairs(FORMS) do
+            local n = C_Spell.GetSpellName(id)
+            if not issecretvalue(n) and n then
+                made[n] = key
+            end
+        end
+        formNames = made
+        names = made
+    end
+    return names[name]
+end
+
+-- Your stance or form as a key: "caster" in none; a rogue in any form is in
+-- Stealth (every rank).
+local function currentStance(): string?
+    local index = GetShapeshiftForm and GetShapeshiftForm()
+    if index == nil or secret.isSecret(index) then
+        return nil
+    end
+    if index == 0 then
+        return "caster"
+    end
+    local _, class = UnitClass("player")
+    if not issecretvalue(class) and class == "ROGUE" then
+        return "stealth"
+    end
+    local _, _, _, spellID = GetShapeshiftFormInfo(index)
+    if spellID == nil or secret.isSecret(spellID) then
+        return nil
+    end
+    local form = FORMS[spellID]
+    if form then
+        return form
+    end
+    local name = C_Spell.GetSpellName(spellID)
+    if not issecretvalue(name) and name then
+        return formByName(name)
+    end
+    return nil
+end
+
+-- Your target as one kind: player, boss, elite or normal (nil: none).
+-- Anything the game keeps secret reads as not that.
+local function targetKind(): string?
+    if not known(UnitExists("target"), false) then
+        return nil
+    end
+    if known(UnitIsPlayer("target"), false) then
+        return "player"
+    end
+    local class = known(UnitClassification("target"), nil)
+    if class == "worldboss" or known(UnitLevel("target"), 0) == -1 or
+        (UnitIsBossMob and known(UnitIsBossMob("target"), false)) then
+        return "boss"
+    end
+    if class == "elite" or class == "rareelite" then
+        return "elite"
+    end
+    return "normal"
+end
+
+-- IsInInstance's type as a kind (an arena is pvp, a scenario a dungeon);
+-- the design's names are taken too.
+local INSTANCE: { [string]: string } = {
+    none = "none",
+    party = "party",
+    raid = "raid",
+    pvp = "pvp",
+    arena = "pvp",
+    scenario = "party",
+}
+local INSTANCE_ALIAS: { [string]: string } = { world = "none", dungeon = "party", battleground = "pvp" }
+local function instanceKind(): string
+    local inside, kind = IsInInstance()
+    if not known(inside, false) then
+        return "none"
+    end
+    return INSTANCE[known(kind, "none")] or "none"
+end
+
+-- The classes in your group as a set: you included, or (others) only the
+-- others. A class the game keeps secret counts as nobody's.
+local function rosterClasses(others: boolean): { [string]: boolean }
+    local set: { [string]: boolean } = {}
+    local function add(unit: string)
+        if others and known(UnitIsUnit(unit, "player"), false) then
+            return
+        end
+        local _, class = UnitClass(unit)
+        if not issecretvalue(class) and class then
+            set[class] = true
+        end
+    end
+    if not others then
+        add("player")
+    end
+    if known(IsInRaid and IsInRaid(), false) then
+        for i = 1, 40 do
+            add("raid" .. i)
+        end
+    else
+        for i = 1, 4 do
+            add("party" .. i)
+        end
+    end
+    return set
+end
+
+-- The talents you've learned, as a set of spell IDs: every node of the
+-- active talent config with a rank (Forever lays the three trees out in one),
+-- its chosen entry's spell (else every entry's). Read once and kept until
+-- the talents or the spellbook change (forgetTalents); nil while there's no
+-- config to read (right after login), so it's read again next time.
+local talentCache: { [number]: boolean }? = nil
+
+-- A node's ranks, as the game (or a test) gives them.
+type NodeRanks = { ranksPurchased?: unknown, activeRank?: unknown, currentRank?: unknown }
+
+local function ranked(r: unknown): boolean
+    return not secret.isSecret(r) and type(r) == "number" and r > 0
+end
+
+local function hasRank(ni: NodeRanks): boolean
+    return ranked(ni.ranksPurchased) or ranked(ni.activeRank) or ranked(ni.currentRank)
+end
+
+local function readTalents(): { [number]: boolean }?
+    local cfg = C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_ClassTalents.GetActiveConfigID()
+    if cfg == nil or secret.isSecret(cfg) or not C_Traits then
+        return nil
+    end
+    local info = C_Traits.GetConfigInfo(cfg)
+    if not (info and info.treeIDs) then
+        return nil
+    end
+    local set: { [number]: boolean } = {}
+    local function addEntry(entryID: unknown)
+        if entryID == nil or secret.isSecret(entryID) or type(entryID) ~= "number" then
+            return
+        end
+        local ei = C_Traits.GetEntryInfo(cfg, entryID)
+        local def = ei and ei.definitionID
+        if not def or secret.isSecret(def) then
+            return
+        end
+        local di = C_Traits.GetDefinitionInfo(def)
+        if not di then
+            return
+        end
+        local spellID, overridden = di.spellID, di.overriddenSpellID
+        if not issecretvalue(spellID) and spellID then
+            set[spellID] = true
+        end
+        if not issecretvalue(overridden) and overridden then
+            set[overridden] = true
+        end
+    end
+    for _, treeID in ipairs(info.treeIDs) do
+        for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+            local ni = C_Traits.GetNodeInfo(cfg, nodeID)
+            if ni and hasRank(ni) then
+                local activeEntry = ni.activeEntry
+                local active = activeEntry and activeEntry.entryID
+                if active ~= nil and not secret.isSecret(active) then
+                    addEntry(active)
+                else
+                    for _, entryID in ipairs(ni.entryIDs or {}) do
+                        addEntry(entryID)
+                    end
+                end
+            end
+        end
+    end
+    return set
+end
+
+local function learnedTalents(): { [number]: boolean }
+    if not talentCache then
+        local ok, set = pcall(readTalents)
+        talentCache = ok and set or nil
+    end
+    return talentCache or {}
+end
+
+export function forgetTalents()
+    talentCache = nil
+end
+
+-- What a pass over many conditions looks up once (ctx[key], from fn; none:
+-- false, so it isn't looked up again).
+local function lookUp<V>(ctx: CondContext, key: string, fn: () -> V?): V | false
+    local v = ctx[key]
+    if v == nil then
+        local read = fn()
+        if read == nil then
+            ctx[key] = false
+            return false
+        end
+        ctx[key] = read
+        return read
+    end
+    return v :: V | false
+end
+
+local function listHas(list: string[]?, value: string | false, alias: { [string]: string }?): boolean
+    for _, v in ipairs(list or {}) do
+        if v == value or (alias and alias[v] == value) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Travel Form counts as caster form (asked 2026-11-10: between fights, the
+-- caster's cooldowns in sight): a condition with caster holds in it too.
+local STANCE_ALIAS: { [string]: string } = { caster = "travel" }
+
+-- Each type's test, before "not". ctx.combat, when set, is the tracker's
+-- own idea of combat (it knows the moment combat starts and ends).
+local TEST: { [string]: (c: TrackerCondition, ctx: CondContext) -> boolean } = {
+    group = function(c: TrackerCondition, _: CondContext): boolean
+        local raid = known(IsInRaid and IsInRaid(), false)
+        if c.value == "raid" then
+            return raid
+        end
+        local group = raid or known(IsInGroup and IsInGroup(), false)
+        if c.value == "solo" then
+            return not group
+        end
+        return group
+    end,
+    classes = function(c: TrackerCondition, ctx: CondContext): boolean
+        local others = c.others == true
+        local roster = lookUp(ctx, others and "rosterOthers" or "roster", function(): { [string]: boolean }
+            return rosterClasses(others)
+        end)
+        for _, class in ipairs(c.classes or {}) do
+            if roster and roster[class] then
+                return true
+            end
+        end
+        return false
+    end,
+    role = function(c: TrackerCondition, ctx: CondContext): boolean
+        return listHas(
+            c.roles,
+            lookUp(ctx, "role", function(): string
+                return (roles.current())
+            end)
+        )
+    end,
+    instance = function(c: TrackerCondition, ctx: CondContext): boolean
+        return listHas(c.kinds, lookUp(ctx, "instance", instanceKind), INSTANCE_ALIAS)
+    end,
+    stance = function(c: TrackerCondition, ctx: CondContext): boolean
+        return listHas(c.stances, lookUp(ctx, "stance", currentStance), STANCE_ALIAS)
+    end,
+    combat = function(_: TrackerCondition, ctx: CondContext): boolean
+        local fight = ctx.combat
+        if fight ~= nil then
+            return fight == true
+        end
+        return InCombatLockdown() or known(UnitAffectingCombat("player"), false)
+    end,
+    target = function(c: TrackerCondition, ctx: CondContext): boolean
+        return listHas(c.kinds, lookUp(ctx, "target", targetKind))
+    end,
+    -- any of them learned: in the talent config, else a spell you know
+    talent = function(c: TrackerCondition, ctx: CondContext): boolean
+        local learned = lookUp(ctx, "talents", learnedTalents)
+        for _, id in ipairs(c.talents or {}) do
+            if type(id) == "number" then
+                if learned and learned[id] then
+                    return true
+                end
+                if IsPlayerSpell and known(IsPlayerSpell(id), false) then
+                    return true
+                end
+            end
+        end
+        return false
+    end,
+}
+
+-- A condition that counts: a known type, and something chosen. (Saved
+-- settings: anything may be there.)
+local function counts(c: unknown): c is TrackerCondition
+    if type(c) ~= "table" then
+        return false
+    end
+    local fields = c :: { [string]: unknown }
+    local kind = fields.type
+    if type(kind) ~= "string" or not TEST[kind] then
+        return false
+    end
+    local field = CHOICES[kind]
+    if not field then
+        return true
+    end
+    local chosen = fields[field]
+    return #tbl.list(chosen) > 0
+end
+
+local function test(c: TrackerCondition, ctx: CondContext): boolean
+    -- (counts(c) has checked that TEST has c.type)
+    local r = (TEST[c.type :: string] :: (c: TrackerCondition, ctx: CondContext) -> boolean)(c, ctx)
+    if c["not"] then
+        return not r
+    end
+    return r
+end
+
+-- The conditions of a `when` (saved settings: none, or not a list).
+local function conditionsOf(when: unknown): unknown[]?
+    if type(when) ~= "table" then
+        return nil
+    end
+    local list = (when :: { [string]: unknown }).conditions
+    if type(list) ~= "table" then
+        return nil
+    end
+    return tbl.list(list)
+end
+
+-- Whether a `when` is met now (no conditions: always).
+export function conditionMet(when: TrackerWhen?, context: CondContext?): boolean
+    local list = conditionsOf(when)
+    if not when or not list then
+        return true
+    end
+    local ctx = context or {}
+    local any, counted = when.match == "any", false
+    for _, c in ipairs(list) do
+        if counts(c) then
+            counted = true
+            local r = test(c, ctx)
+            if any and r then
+                return true
+            end
+            if not any and not r then
+                return false
+            end
+        end
+    end
+    return not (any and counted)
+end
+
+export function cooldownConditionMet(when: TrackerWhen?): boolean
+    return conditionMet(when, {})
+end
+
+-- A `when` as the build sees it, from its static conditions alone: "met",
+-- "unmet", or "live" (it turns on stance, combat or the target: built, and
+-- shown or hidden in place). With "any", one static condition met is enough;
+-- otherwise it is live while a live one could still make it true.
+export function staticState(when: TrackerWhen?, ctx: CondContext): string
+    local list = conditionsOf(when)
+    if not when or not list then
+        return "met"
+    end
+    local any, counted, live = when.match == "any", false, false
+    for _, c in ipairs(list) do
+        if counts(c) then
+            if LIVE[c.type :: string] then
+                live = true
+            else
+                counted = true
+                local r = test(c, ctx)
+                if any and r then
+                    return "met"
+                end
+                if not any and not r then
+                    return "unmet"
+                end
+            end
+        end
+    end
+    if live then
+        return "live"
+    end
+    return (any and counted) and "unmet" or "met"
+end
+
+-- Several `when`s that must all hold (a collection's and its entry's, a
+-- slot's and its member's): their list with `when` added (nil ones left out).
+export function chain(whens: TrackerWhen[]?, when: TrackerWhen?): TrackerWhen[]
+    local out: TrackerWhen[] = {}
+    for _, w in ipairs(whens or {}) do
+        out[#out + 1] = w
+    end
+    if when then
+        out[#out + 1] = when
+    end
+    return out
+end
+
+export function stateOf(whens: TrackerWhen[], ctx: CondContext): string
+    local live = false
+    for _, w in ipairs(whens) do
+        local s = staticState(w, ctx)
+        if s == "unmet" then
+            return "unmet"
+        end
+        if s == "live" then
+            live = true
+        end
+    end
+    return live and "live" or "met"
+end
+
+export function allMet(whens: TrackerWhen[]?, ctx: CondContext): boolean
+    for _, w in ipairs(whens or {}) do
+        if not conditionMet(w, ctx) then
+            return false
+        end
+    end
+    return true
+end
+
+-- A group without the members whose condition can't be met now: a copy,
+-- its IDs their union. Anything else as it is. (Members with a live
+-- condition stay: auraParts gives each its own engine group.)
+export function withMetMembers(entry: TrackerEntry, ctx: CondContext): TrackerEntry
+    if not entry.group then
+        return entry
+    end
+    local conditional = false
+    for _, m in ipairs(entry.members or {}) do
+        if m.when then
+            conditional = true
+            break
+        end
+    end
+    if not conditional then
+        return entry
+    end
+    local e = copyEntry(entry)
+    local members: TrackerEntry[], ids: number[], seen: { [number]: boolean } = {}, {}, {}
+    for _, m in ipairs(entry.members or {}) do
+        if staticState(m.when, ctx) ~= "unmet" then
+            members[#members + 1] = m
+            for _, id in ipairs(m.ids or {}) do
+                if not seen[id] then
+                    seen[id] = true
+                    ids[#ids + 1] = id
+                end
+            end
+        end
+    end
+    table.sort(ids)
+    e.members, e.ids = members, ids
+    return e
+end

@@ -8,14 +8,15 @@
 -- allows them: daily and repeatable quests, quests a party member shares or
 -- an escort starting, turn-ins that take gold, turn-ins that hand in items.
 -- Holding Shift as you talk to an NPC leaves that conversation to you.
+-- (0.47) A step it is about to answer is told to the NPC dialogue (the
+-- autoquests service's Handling), which then draws nothing for it: no
+-- flash of the scene, no fade of the rest of the UI (MAP-20).
 -- Works with the game's quest and gossip frames, or SuuUI's NPC dialogue
 -- over them: the game's own quest functions, none protected.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
@@ -30,6 +31,10 @@ local DEFAULTS = {
     gold = false, -- turn-ins that take gold
     items = false, -- turn-ins that hand in items
 }
+
+-- How long a step counts as being answered without the game moving on (a
+-- call it refused): the NPC dialogue shows it after that.
+local HANDLING_FOR = 1
 
 local M: AutoQuestsModule
 
@@ -149,6 +154,12 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
     tried: { [string]: boolean } = {}
     leftAlone: { [number]: boolean } = {}
     levels: { [number]: number } = {}
+    -- (0.47) about to answer the step on screen itself (the service's
+    -- Handling): set just before the game is asked, cleared when the
+    -- conversation moves on or closes, or HANDLING_FOR later; `handlingRun`
+    -- tells the backstop of an earlier step from this one's
+    handling: boolean = false
+    handlingRun: number = 0
 
     constructor()
         super({
@@ -175,10 +186,31 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
         return not self.paused
     end
 
+    -- About to answer the step on screen (just before the game is asked):
+    -- the NPC dialogue leaves it alone until the conversation moves on, or
+    -- HANDLING_FOR later if the game never answers.
+    function Handle()
+        self.handling = true
+        self.handlingRun += 1
+        local run = self.handlingRun
+        self:After(HANDLING_FOR, function()
+            if self.handlingRun == run then
+                self.handling = false
+            end
+        end)
+    end
+
+    -- The conversation moved on (a quest or gossip event) or closed: what
+    -- is on screen now isn't being answered, unless its handler says so.
+    function Moved()
+        self.handling = false
+        self.handlingRun += 1
+    end
+
     -- The conversation over (the game's frames closed, also under SuuUI's
     -- dialogue): the next starts afresh.
     function End()
-        after(0.5, function()
+        self:After(0.5, function()
             if not (shown("GossipFrame") or shown("QuestFrame")) then
                 self.npc = nil
             end
@@ -220,6 +252,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
                         flag(info.repeatable) or false
                     ) then
                     self.tried[key] = true
+                    self:Handle()
                     try(field(G, "SelectActiveQuest"), id)
                     return
                 end
@@ -240,6 +273,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
                     if level then
                         self.levels[id] = level
                     end
+                    self:Handle()
                     try(field(G, "SelectAvailableQuest"), id)
                     return
                 end
@@ -259,6 +293,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
                 local key = "a" .. (id or ("#" .. i))
                 if flag(done) and not self.tried[key] then
                     self.tried[key] = true
+                    self:Handle()
                     try(SelectActiveQuest, i)
                     return
                 end
@@ -277,6 +312,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
                     if id and level then
                         self.levels[id] = level
                     end
+                    self:Handle()
                     try(SelectAvailableQuest, i)
                     return
                 end
@@ -310,6 +346,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
             return
         end
         local title = asString(try(GetTitleText))
+        self:Handle()
         try(AcceptQuest)
         if title then
             self:Print("Accepted: " .. title)
@@ -337,6 +374,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
             end
             return
         end
+        self:Handle()
         try(CompleteQuest)
     end
 
@@ -354,6 +392,7 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
             return
         end
         local title = asString(try(GetTitleText))
+        self:Handle()
         try(GetQuestReward, choices == 1 and 1 or 0)
         if title then
             self:Print("Turned in: " .. title)
@@ -371,30 +410,54 @@ class AutoQuestsModule extends Module<typeof(DEFAULTS)>
 
     override function OnEnable()
         self:RegisterSettings(SECTION)
+        -- (0.47) whether the step on screen is about to be answered (the
+        -- NPC dialogue draws nothing for it); gone with the module
+        self:ProvideService(SuuUI.Services.AUTO_QUESTS, {
+            Handling = function(): boolean
+                return self.handling
+            end,
+        })
+        -- each step: the last one's answer is over (Moved), this one's
+        -- handled or left
         self:OnGameEvent("GOSSIP_SHOW", function()
+            self:Moved()
             self:OnGossip()
         end)
         self:OnGameEvent("QUEST_GREETING", function()
+            self:Moved()
             self:OnGreeting()
         end)
         self:OnGameEvent("QUEST_DETAIL", function()
+            self:Moved()
             self:OnDetail()
         end)
         self:OnGameEvent("QUEST_PROGRESS", function()
+            self:Moved()
             self:OnProgress()
         end)
         self:OnGameEvent("QUEST_COMPLETE", function()
+            self:Moved()
             self:OnComplete()
         end)
         self:OnGameEvent("QUEST_ACCEPT_CONFIRM", function()
             self:OnAcceptConfirm()
         end)
         self:OnGameEvent("GOSSIP_CLOSED", function()
+            self:Moved()
             self:End()
         end)
         self:OnGameEvent("QUEST_FINISHED", function()
+            self:Moved()
             self:End()
         end)
+    end
+
+    -- (0.47) The conversation's end-timer goes with the module: the next
+    -- conversation after it is on again starts afresh. A step it was
+    -- answering is no longer (its backstop timer goes too).
+    override function OnDisable()
+        self.npc = nil
+        self:Moved()
     end
 end
 

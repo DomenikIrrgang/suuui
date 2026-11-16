@@ -1,0 +1,152 @@
+-- Units/Collections/Wardrobe: Appearances: the doll, the slots with yours
+-- of all, the tiles, one tried on; a slot's hover and click, a weapon
+-- slot's kind, the class; the tiles' ground.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Collections"
+import Tile from "/Units/Collections/Wardrobe"
+import useTheme, recordGradients, expectRGB from "../../../helpers"
+import tokenOf from "../../SettingsUI/UiSettingsHelpers"
+import start, cleanup, open, ui, captureTooltips, wardrobeData, slotButton, CHEST_ALL from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- The Appearances tab
+--------------------------------------------------------------------------------
+
+@test("Appearances: the doll, the slots with yours of all, the chest's tiles; one chosen tried on with its card")
+local function wardrobe()
+    wardrobeData()
+    mock.defineItem(60, { name = "Silk Tunic", quality = 2, equipLoc = "INVTYPE_CHEST" })
+    open("wardrobe")
+    expect(ui().wardrobe).toBeShown()
+    expect(ui().tools.title:GetText()).toBe("Chest")
+    expect(slotButton("CHESTSLOT").n:GetText()).toBe("2/" .. CHEST_ALL)
+    expect(slotButton("RANGEDSLOT").n:GetText()).toBe("—")
+    expect(slotButton("CHESTSLOT").glow).toBeShown()
+    M:LayoutTiles()
+    local tiles = ui().strip.tiles
+    expect(tiles[1]).toBeShown()
+    expect(tiles[1].worn).toBeShown()
+    expect(tiles[3].star).toBeShown()
+    expect(tiles[4]).toBeShown()
+    -- the first is chosen and tried on, its card with Worn
+    expect(assert(M.chosen).visualID).toBe(63240)
+    expect(ui().card.extra:GetText()).toBe("Worn")
+    local try = mock.stub(ui().wardrobe.doll, "TryOn", function() end)
+    mock.click(tiles[2])
+    expect(try).toHaveBeenCalledWith(ui().wardrobe.doll, 156056)
+    expect(tokenOf(ui().card.name)).toBe("quality-epic")
+    -- a tile's tooltip
+    local shown = captureTooltips()
+    mock.hover(tiles[4])
+    expect(shown().subtitle).toBe("Not collected")
+    expect(shown().titleColor).toBe("quality-uncommon")
+    expect(tiles[4].dim).never.toBeShown()
+    mock.hover(nil)
+    expect(tiles[4].dim).toBeShown()
+    -- the tile's model loaded, or after two seconds
+    mock.script(tiles[1].model, "OnModelLoaded")
+    expect(tiles[1].icon).never.toBeShown()
+    mock.advanceTime(2.1)
+    -- Undress: back to what you wear
+    local dress = mock.stub(ui().wardrobe.doll, "Dress", function() end)
+    mock.click(ui().wardrobe.undress)
+    expect(dress).toHaveBeenCalled()
+    expect(M.tried).toBe(nil)
+    -- another tab and back: each tile dressed again (a hidden model loses
+    -- what it wears; found in game: empty tiles)
+    local dressed = mock.spy(function() end)
+    mock.stub(tiles[1].model, "TryOn", dressed)
+    M:Toggle("mounts")
+    mock.advanceFrames(2)
+    expect(tiles[1].shownID).toBeNil()
+    M:Toggle("wardrobe")
+    mock.advanceFrames(2)
+    M:LayoutTiles()
+    expect(dressed).toHaveBeenCalled()
+    -- the tiles' page by the wheel
+    mock.script(tiles[1], "OnMouseWheel", -1)
+    -- no Summon here
+    mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+    expect(ui().act).never.toBeShown()
+end
+
+@test("a slot: hover says yours of all or why not; a click chooses it; a weapon slot's kind; the class")
+local function wardrobeSlots()
+    wardrobeData()
+    open("wardrobe")
+    local shown = captureTooltips()
+    mock.hover(slotButton("CHESTSLOT"))
+    expect(shown().description).toBe("2 of " .. CHEST_ALL .. " collected")
+    mock.hover(slotButton("RANGEDSLOT"))
+    expect((shown().description or ""):find("^No ranged weapons for ") ~= nil).toBe(true)
+    mock.hover(nil)
+    -- a slot without a kind: not chosen
+    mock.click(slotButton("RANGEDSLOT"))
+    expect(M.slot).toBe("CHESTSLOT")
+    -- the main hand: its kind chosen, shown in the title
+    mock.click(slotButton("MAINHANDSLOT"))
+    expect(M.slot).toBe("MAINHANDSLOT")
+    expect(ui().tools.title:GetText()).toBe("Main hand · One-Handed Swords")
+    expect(ui().wardrobe.kind).toBeShown()
+    assert(ui().wardrobe.kind.onChange)(15)
+    expect(M.weaponKind.main).toBe(15)
+    -- the class
+    assert(ui().wardrobe.class.onChange)(2)
+    expect(C_TransmogCollection.GetClassFilter()).toBe(2)
+    expect(M.slotCounts ~= nil).toBe(true)
+    -- the doll turns and zooms
+    local d = ui().wardrobe.doll
+    local facing = mock.stub(d, "SetFacing", function() end)
+    M:Turn(1)
+    expect(facing).toHaveBeenCalled()
+    for _ = 1, 15 do
+        M:Zoom(1)
+    end
+    expect(M.dollScale).toBe(2.5)
+    for _ = 1, 15 do
+        M:Zoom(-1)
+    end
+    expect(M.dollScale).toBe(0.6)
+    mock.setCursorPosition(100, 100)
+    mock.script(d, "OnMouseDown", "LeftButton")
+    mock.setCursorPosition(130, 100)
+    mock.nextFrame()
+    mock.script(d, "OnMouseUp", "LeftButton")
+    mock.script(d, "OnMouseWheel", 1)
+    M.slot = "CHESTSLOT"
+end
+
+@test(
+    "a tile's ground: shades of surface-sunk and surface-raised, the design's warm browns; a theme's surfaces show, live"
+)
+local function tileGround()
+    local tile = Tile.new(UIParent, M)
+    local seen = recordGradients(tile.bg)
+    SuuUI.RegisterTheme({
+        id = "test-tile-ground",
+        colors = { ["surface-sunk"] = { 0.5, 0.25, 0.1 }, ["surface-raised"] = { 0.2, 0.4, 0.6 } },
+    })
+    useTheme("test-tile-ground")
+    local g = assert(seen[#seen])
+    expectRGB(g.from, 0.31, 0.155, 0.062)
+    expectRGB(g.to, 0.186, 0.372, 0.558)
+    -- SuuUI's again: the browns it had before themes reached it (within 2/255)
+    useTheme(nil)
+    g = assert(seen[#seen])
+    expectRGB(g.from, 0.051, 0.043, 0.035, 2)
+    expectRGB(g.to, 0.102, 0.09, 0.075, 2)
+    tile:Hide()
+end

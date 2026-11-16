@@ -1,0 +1,241 @@
+-- UI/CooldownTracker/Cell.wowlua
+-- A cooldown cell (TrackerCell): SuuUI's own icon for one spell, its sweep
+-- from the engine's duration object, the ready edge, pop and pulse, and the
+-- "use now" ring of reactive abilities (REACTIVE); the digits' fonts, kept
+-- per size and set again when the theme changes. The tracker's Cell() fills
+-- one. Update runs for every cell on each cooldown or usable change, in
+-- combat too, so what it calls (cooldownFlags, known, EDGE, trackerSound)
+-- is bound in this file.
+
+import * as secret from "wowlua:secret"
+import tokens as T from "/Core/Tokens"
+import * as events from "/Core/Events"
+import * as motion from "/Core/Motion"
+import * as draw from "/UI/Draw"
+import icon, Icon from "/UI/Icon"
+import type UnitAuras from "/UI/Auras"
+import EDGE from "./Entries"
+import type TrackerEntry, TrackerOptions, TrackerWhen from "./Entries"
+import trackerSound from "./Sounds"
+
+--------------------------------------------------------------------------------
+-- Cooldown cells
+--------------------------------------------------------------------------------
+
+-- A value addon code can read, or the fallback when it is secret or missing.
+local known = secret.known
+
+-- A cooldown read's isActive and isOnGCD, false while unknown. (The read is
+-- typed as possibly secret as a whole: such a table counts as unknown.)
+local function cooldownFlags(
+    info: SpellCooldownInfoSecret | SpellCooldownInfo | Secret<SpellCooldownInfo> | nil
+): (boolean, boolean)
+    if issecretvalue(info) or not info then
+        return false, false
+    end
+    return known(info.isActive, false), known(info.isOnGCD, false)
+end
+
+export local REACTIVE: { [string]: boolean } = {
+    ["Overpower"] = true,
+    ["Revenge"] = true,
+    ["Riposte"] = true,
+    ["Mongoose Bite"] = true,
+    ["Counterattack"] = true,
+    ["Hammer of Wrath"] = true,
+    ["Execute"] = true,
+    ["Victory Rush"] = true,
+}
+
+-- px nil: the micro style's own size. A theme can change the style's face
+-- and size, so each font is kept and set again then.
+type DigitFont = { name: string, font: Font, px: number? }
+local digitFonts: { [string | number]: DigitFont } = {} -- key -> { name, font, px }
+local function setDigitFont(d: DigitFont)
+    local micro = T.type["micro"]
+    d.font:SetFont(micro.file, d.px or micro.size, "OUTLINE")
+end
+local function digitFont(px: number?): string
+    local key: string | number = px and math.floor(px) or "Micro"
+    local d = digitFonts[key]
+    if not d then
+        local fontName = "SuuUITrackerDigits" .. key
+        d = { name = fontName, font = CreateFont(fontName), px = px }
+        setDigitFont(d)
+        digitFonts[key] = d
+    end
+    return d.name
+end
+events.on(
+    "SUUUI_THEME_CHANGED",
+    function()
+        for _, d in pairs(digitFonts) do
+            setDigitFont(d)
+        end
+    end,
+    "CooldownTracker"
+)
+
+-- A cell of one size, not yet holding a spell (TR:Cell fills it).
+export class TrackerCell extends Frame
+    icon: Icon
+    cooldown: Cooldown
+    ring: draw.Border
+    flash: Texture
+    pulse: AnimationGroup
+    onCooldown: boolean? = nil
+    wantShown: boolean? = nil
+    -- what it shows, set by the tracker's Cell()
+    entry: TrackerEntry = {}
+    spellID: number = 0
+    reactive: boolean = false
+    -- the effect's aura container (UI/Auras)
+    container: UnitAuras? = nil
+    dirty: boolean? = nil
+    whens: TrackerWhen[]? = nil
+    condOK: boolean? = nil
+
+    constructor(parent: Frame, size: number)
+        super(nil, parent)
+        self:SetSize(size, size)
+        self.icon = icon(self, size)
+        self.icon:SetAllPoints()
+        self.cooldown = CreateFrame("Cooldown", nil, self.icon, "CooldownFrameTemplate")
+        self.cooldown:SetPoint("TOPLEFT", 1, -1)
+        self.cooldown:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.cooldown:SetDrawEdge(false)
+        self.cooldown:SetDrawBling(false)
+        self.cooldown:SetSwipeColor(0, 0, 0, 0.7)
+        self.cooldown:SetHideCountdownNumbers(false)
+        if self.cooldown.SetCountdownFont then
+            pcall(self.cooldown.SetCountdownFont, self.cooldown, digitFont(size >= 30 and 12 or nil))
+        end
+        self.cooldown:HookScript("OnCooldownDone", function()
+            self.dirty = true
+        end)
+        local over = CreateFrame("Frame", nil, self)
+        over:SetAllPoints()
+        over:SetFrameLevel(self.cooldown:GetFrameLevel() + 2)
+        self.ring = draw.border(over, "arcane", { inset = 3, layer = "OVERLAY" })
+        self.ring:SetShown(false)
+        self.flash = over:CreateTexture(nil, "OVERLAY", nil, 3)
+        self.flash:SetAllPoints()
+        draw.paintFill(self.flash, "arcane", 0.35)
+        self.flash:SetAlpha(0)
+        -- "Pulse" when ready: the icon breathes
+        self.pulse = self.icon:CreateAnimationGroup()
+        self.pulse:SetLooping("BOUNCE")
+        local a = self.pulse:CreateAnimation("Alpha")
+        a:SetFromAlpha(1)
+        a:SetToAlpha(0.55)
+        a:SetDuration(0.6)
+        self:EnableMouse(false)
+    end
+
+    -- `light`: only what is usable changed (power, the target): the cooldown
+    -- stays as last read. (Its read makes a table and a duration object, and
+    -- power changes many times a second in a fight.)
+    function Update(opts: TrackerOptions, light: boolean?)
+        local id, e = self.spellID, self.entry
+        local was = self.onCooldown
+        local onCooldown: boolean
+        if light and was ~= nil then
+            onCooldown = was
+        else
+            onCooldown = self:ReadCooldown(id)
+        end
+        if was and not onCooldown then
+            -- came ready: the pop (per entry, else the global setting) and its sound
+            local pop = e.pop
+            if pop == nil then
+                pop = opts.readyPop ~= false
+            end
+            if pop then
+                self.icon:Pop()
+                self.flash:SetAlpha(1)
+                motion.alphaTo(self.flash, 0, T.duration["dur-slow"])
+            end
+            if e.sound then
+                trackerSound(e.sound)
+            end
+        end
+        self.onCooldown = onCooldown
+
+        local usable, noMana = C_Spell.IsSpellUsable(id)
+        local canUse = known(usable, true) and not known(noMana, false)
+        -- A reactive ability lights up only while the game says it's usable. In
+        -- combat that answer can be secret: then it looks neither ready nor
+        -- "use now", just neutral.
+        local unsure = self.reactive and not onCooldown and secret.isSecret(usable)
+        local useNow = self.reactive and not onCooldown and not secret.isSecret(usable) and usable == true
+
+        -- whether it shows at all: only when ready / only on cooldown, and hide
+        -- on cooldown or while unusable
+        local show, want = e.show or "always", true
+        if (show == "ready" and onCooldown) or (show == "cooldown" and not onCooldown) then
+            want = false
+        end
+        if onCooldown and e.onCooldown == "hide" then
+            want = false
+        end
+        if not onCooldown and not canUse and e.unusable == "hide" then
+            want = false
+        end
+        -- and its live conditions (stance, combat, target), when it has any
+        self.wantShown = want and self.condOK ~= false
+
+        local ready = e.ready or "normal"
+        local pulse = false
+        if onCooldown then
+            self.icon:SetBorder(nil)
+            -- grey (desaturated) or dim (full colour, faded)
+            self.icon:SetState(e.onCooldown == "dim" and "rest" or "dim")
+            self.icon:SetGlow(nil)
+        elseif useNow then
+            self.icon:SetBorder(nil)
+            self.icon:SetState("ready")
+        elseif unsure then
+            self.icon:SetState("rest")
+            self.icon:SetBorder(nil)
+            self.icon:SetGlow(nil)
+        else
+            self.icon:SetState("rest")
+            self.icon:SetBorder(e.border and EDGE[e.border] or "arcane")
+            self.icon:SetGlow((ready == "glow" or ready == "pulse") and "glow-arcane" or nil)
+            pulse = ready == "pulse"
+        end
+        -- "Pulse" keeps breathing across updates (they come many times a
+        -- second): it starts once and stops only when the cell leaves it
+        if pulse and not self.pulse:IsPlaying() then
+            self.pulse:Play()
+        elseif not pulse and self.pulse:IsPlaying() then
+            self.pulse:Stop()
+            self.icon:SetAlpha(1)
+        end
+        self.ring:SetShown(useNow)
+        local alpha = 1
+        if onCooldown and e.onCooldown == "dim" then
+            alpha = T.opacity["opacity-oor"]
+        elseif not onCooldown and not canUse then
+            alpha = T.opacity["opacity-disabled"]
+        end
+        self:SetAlpha(alpha)
+    end
+
+    -- The spell's cooldown onto the sweep; whether it is on cooldown (not
+    -- just the global one).
+    function ReadCooldown(id: number): boolean
+        local info = C_Spell.GetSpellCooldown(id)
+        local active, gcd = cooldownFlags(info or nil)
+        if active then
+            local d = C_Spell.GetSpellCooldownDuration and C_Spell.GetSpellCooldownDuration(id)
+            if d then
+                self.cooldown:SetCooldownFromDurationObject(d)
+            end
+            self.cooldown:SetHideCountdownNumbers(gcd)
+        else
+            self.cooldown:Clear()
+        end
+        return active and not gcd
+    end
+end

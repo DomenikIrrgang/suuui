@@ -1,0 +1,222 @@
+-- Units/Bags/Containers.wowlua
+-- The Bags module's reads of the game's bags (see Units/Bags.wowlua): which
+-- bag is which (the keyring, the reagent bag, the bank tabs), a bag's slots
+-- and free count, its family and the special bags' kinds, the keyring's
+-- filled slots, a slot's cooldown and quest mark, the backpack's currencies,
+-- a saved copy of the listed bags and a grey item the vendor buys. Plain
+-- functions over the game's container API; the module draws.
+
+import type InventoryCurrency from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as chars from "./Characters"
+
+local try, field = errors.try, tbl.field
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+export const KEYRING = -1
+
+-- Whether the item in a slot starts a quest: the game names its quest and
+-- you don't have it yet (asked 2026-11-14: marked as the game's bags do).
+export function startsQuest(bag: number, slot: number): boolean
+    local get = C_Container.GetContainerItemQuestInfo
+    local q = get and errors.tryValue(get, bag, slot)
+    if type(q) ~= "table" then
+        return false
+    end
+    local id = asNumber(q.questID)
+    return id ~= nil and id > 0 and not flag(q.isActive)
+end
+export const REAGENT = 5
+export const BANK_FIRST: number = asNumber(field(Enum, "BagIndex", "CharacterBankTab_1")) or 6
+export const BANK_LAST: number = asNumber(field(Enum, "BagIndex", "CharacterBankTab_9")) or 14
+export const BANK_TYPE: number? = asNumber(field(Enum, "BankType", "Character"))
+
+export function isBank(bag: number): boolean
+    return bag >= BANK_FIRST and bag <= BANK_LAST
+end
+
+export function numSlots(bag: number): number
+    return asNumber(C_Container.GetContainerNumSlots(bag)) or 0
+end
+
+export function freeSlots(bag: number): number?
+    return asNumber((C_Container.GetContainerNumFreeSlots(bag)))
+end
+
+-- The currencies the game shows on its backpack (the Currency tab's "Show on
+-- Backpack"): SuuUI's bags replace that backpack, so the click showed them
+-- nowhere (found in game 2026-11-11). Shown in the foot by the gold
+-- (asked); hover: the game's tooltip, a click: the Currency tab.
+export function backpackCurrencies(): InventoryCurrency[]
+    local out: InventoryCurrency[] = {}
+    local get = C_CurrencyInfo and C_CurrencyInfo.GetBackpackCurrencyInfo
+    if not get then
+        return out
+    end
+    for i = 1, 10 do
+        local ok, info = pcall(get, i)
+        if not ok or not info then
+            break
+        end
+        local icon, count = asNumber(info.iconFileID), asNumber(info.quantity)
+        if icon and count then
+            local index = i
+            out[#out + 1] = {
+                icon = icon,
+                count = count,
+                tooltip = function(owner: Frame)
+                    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+                    pcall(GameTooltip.SetBackpackToken, GameTooltip, index)
+                    GameTooltip:Show()
+                end,
+                onClick = function()
+                    -- (the character window opens through the game's panels:
+                    -- refused to addon code in combat)
+                    if not InCombatLockdown() then
+                        ToggleCharacter("TokenFrame")
+                    end
+                end,
+            }
+        end
+    end
+    return out
+end
+
+-- The keyring's slots that hold a key, in order: only those show (asked
+-- 2026-11-11: "only the slots that are taken, not empty ones"; the game
+-- puts a key there by itself).
+export function keySlots(n: number): number[]
+    local out: number[] = {}
+    for slot = 1, n do
+        if C_Container.GetContainerItemID(KEYRING, slot) ~= nil then
+            out[#out + 1] = slot
+        end
+    end
+    return out
+end
+
+-- A bag's family: what it takes (0: anything). The game's free count tells
+-- it; when that says 0, the bag's own item does (a profession bag sorted as
+-- an ordinary one got items the game refused: found in game).
+export function familyOf(bag: number): number
+    local _, f = C_Container.GetContainerNumFreeSlots(bag)
+    local family = asNumber(f) or 0
+    if family == 0 and bag ~= 0 then
+        local slot = asNumber(errors.tryValue(C_Container.ContainerIDToInventoryID, bag))
+        local id = slot and asNumber(GetInventoryItemID("player", slot))
+        if id then
+            family = asNumber((try(field(C_Item, "GetItemFamily"), id))) or 0
+        end
+    end
+    return family
+end
+
+-- The special bags' kinds by their family bit (asked 2026-11-05: each a
+-- section of its own, like the reagent bag).
+local FAMILIES: { { number | string } } = {
+    { 1, "Quiver" },
+    { 2, "Ammo pouch" },
+    { 4, "Soul bag" },
+    { 8, "Leatherworking bag" },
+    { 16, "Inscription bag" },
+    { 32, "Herb bag" },
+    { 64, "Enchanting bag" },
+    { 128, "Engineering bag" },
+    { 512, "Gem bag" },
+    { 1024, "Mining bag" },
+}
+
+-- A bag's own item (nil: the backpack, an empty slot).
+export function bagItem(bag: number): number?
+    if bag == 0 then
+        return nil
+    end
+    local slot = asNumber(errors.tryValue(C_Container.ContainerIDToInventoryID, bag))
+    return slot and asNumber(GetInventoryItemID("player", slot))
+end
+
+-- A plain bag (Container, Bag): it takes anything.
+export function plainBag(id: number): boolean
+    local _, _, _, _, _, cls, sub = try(field(C_Item, "GetItemInfoInstant"), id)
+    return asNumber(cls) == 1 and asNumber(sub) == 0
+end
+
+-- What a family's bag is called.
+export function familyName(family: number): string
+    for _, f in ipairs(FAMILIES) do
+        local bit = f[1] :: number
+        if family % (bit * 2) >= bit then
+            return f[2] :: string
+        end
+    end
+    return "Special bag"
+end
+
+-- One of bags 1-4 that takes only its own kind (a quiver, a soul bag, a
+-- herb bag, ...): a section of its own, its slots not in your free count.
+export function isSpecialBag(bag: number): boolean
+    return bag >= 1 and bag <= (NUM_BAG_SLOTS or 4) and familyOf(bag) ~= 0
+end
+
+-- A slot button's cooldown (its template's).
+export function cooldownOf(b: Frame): Cooldown?
+    local name = b:GetName()
+    return frames.asCooldown(field(b, "Cooldown")) or (name and frames.asCooldown(field(_G, name .. "Cooldown")) or nil)
+end
+
+-- What the listed bags hold now: { slots = { {t, c, q, l} or false … }, size, free, seen }.
+type SavedItem = chars.SavedItem
+type Snapshot = chars.Snapshot
+export function snapshot(bags: number[]): Snapshot
+    local slots: (SavedItem | false)[] = {}
+    local size, free = 0, 0
+    for _, bag in ipairs(bags) do
+        local n = numSlots(bag)
+        for slot = 1, n do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            local icon = info and asNumber(info.iconFileID)
+            local e: SavedItem | false = false
+            if info and icon then
+                e = {
+                    t = icon,
+                    c = asNumber(info.stackCount) or 1,
+                    q = asNumber(info.quality) or 1,
+                    l = asString(info.hyperlink),
+                }
+            end
+            slots[#slots + 1] = e
+        end
+        if bag ~= REAGENT and bag ~= KEYRING and not isSpecialBag(bag) then
+            size = size + n
+            free = free + (freeSlots(bag) or 0)
+        end
+    end
+    return { slots = slots, size = size, free = free, seen = time() }
+end
+
+--------------------------------------------------------------------------------
+-- Sell junk
+--------------------------------------------------------------------------------
+
+-- A grey item the vendor will buy: its sell price per item, or nil.
+export function junkAt(bag: number, slot: number): (number?, number?)
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    if not (info and asNumber(info.quality) == 0) then
+        return nil, nil
+    end
+    if flag(info.hasNoValue) then
+        return nil, nil
+    end
+    if flag(info.isLocked) then
+        return nil, nil
+    end
+    local price = 0
+    local link = asString(info.hyperlink)
+    if link then
+        price = asNumber((select(11, try(field(C_Item, "GetItemInfo"), link)))) or 0
+    end
+    return price, asNumber(info.stackCount) or 1
+end

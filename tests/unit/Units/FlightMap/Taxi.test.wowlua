@@ -1,0 +1,56 @@
+-- Units/FlightMap/Taxi: what the game gives the flight map (a map's
+-- continent, the flight masters' places on a map, your place on one, the
+-- session read away from a flight master).
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as taxi from "/Units/FlightMap/Taxi"
+import expectNoErrors from "../../../helpers"
+
+local KALIMDOR, ORGRIMMAR = 1414, 1454
+
+@test("a map's continent: up a zone's parents; none for no map")
+local function continent()
+    expect(taxi.continentOf(ORGRIMMAR)).toBe(KALIMDOR)
+    expect(taxi.continentOf(KALIMDOR)).toBe(KALIMDOR)
+    expect(taxi.continentOf(nil)).toBeNil()
+    expectNoErrors()
+end
+
+@test("every flight master's place on a map, by nodeID; nothing for no map")
+local function places()
+    local nodes = C_TaxiMap.GetTaxiNodesForMap(KALIMDOR)
+    local first = nodes[1]
+    assert(first, "no flight masters on Kalimdor")
+    local x, y = first.position:GetXY()
+    local at = taxi.positions(KALIMDOR)
+    expect(at[first.nodeID]).toEqual({ x, y })
+    expect(taxi.positions(nil)).toEqual({})
+    expectNoErrors()
+end
+
+@test("your place on a map: where the game puts you; none for no map")
+local function yourPlace()
+    mock.moveTo({ mapID = ORGRIMMAR, x = 0.451, y = 0.639 })
+    local x, y = taxi.myPlace(ORGRIMMAR)
+    expect(x).toBeCloseTo(0.451, 3)
+    expect(y).toBeCloseTo(0.639, 3)
+    expect({ taxi.myPlace(nil) }).toEqual({})
+    expectNoErrors()
+end
+
+@test("a place inside the map: a little over its edge still counts")
+local function insideTheMap()
+    expect(taxi.inside({ 0.5, 0.5 })).toBe(true)
+    expect(taxi.inside({ 1.005, -0.005 })).toBe(true)
+    expect(taxi.inside({ 1.2, 0.5 })).toBe(false)
+    expect(taxi.inside({ 0.5, -0.2 })).toBe(false)
+    expectNoErrors()
+end
+
+@test("away from a flight master: no session, no quest steps")
+local function noSession()
+    expect(taxi.readSession()).toBeNil()
+    expect(taxi.questSteps(nil)).toEqual({})
+    expectNoErrors()
+end

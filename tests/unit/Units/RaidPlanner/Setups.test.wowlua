@@ -1,0 +1,199 @@
+-- Units/RaidPlanner/Setups: setups (made, saved, changed, loaded, duplicated,
+-- renamed, deleted, made from the raid), slots (added, changed, removed, a
+-- spec or a player dropped), pinned by hand.
+
+import test, expect, afterEach from "wowlua:test"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Setups"
+import type Slot from "/Units/RaidPlanner/Setups"
+import type PlannerPerson from "/UI/RaidPlanner"
+import cleanup, warrior, priest, mage, mage2, raid, seen, printed, asked, confirm, setup, slot, slotIn, placed, saved, view from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("setups: a new one, saved, changed, its name kept unique, duplicated, renamed, deleted")
+local function setups()
+    setup()
+    local w = M:Work()
+    expect(w.name).toBe("New setup")
+    expect(w.size).toBe(40)
+    expect(M:Changed()).toBe(true)
+    slot(1, "WARRIOR", 3)
+    M:Save()
+    expect(w.id).toBe(1)
+    expect(M:Changed()).toBe(false)
+    expect(saved(1).slots[1].class).toBe("WARRIOR")
+    slot(1, "PRIEST")
+    expect(M:Changed()).toBe(true)
+    expect(M:UniqueName("New setup")).toBe("New setup 2")
+    M:Duplicate(1)
+    expect(saved(2).name).toBe("New setup (copy)")
+    expect(printed[1]).toBe("New setup saved as New setup (copy).")
+    M:Rename(2, "Molten Core")
+    expect(saved(2).name).toBe("Molten Core")
+    M:Rename("work", "Main")
+    expect(w.name).toBe("Main")
+    M:Rename(1, "")
+    expect(w.name).toBe("Main")
+    -- loading another drops the changes: asked first
+    M:Load(2)
+    expect(asked().title).toBe("Load Molten Core?")
+    confirm(nil)
+    expect(M:Work().id).toBe(2)
+    expect(#M:Work().slots).toBe(1)
+    -- unchanged: at once
+    seen.confirmed = nil
+    M:Load(1)
+    expect(seen.confirmed).toBeNil()
+    expect(M:Work().id).toBe(1)
+    M:Load(99)
+    -- deleted: the loaded one stays open, unsaved
+    M:Delete(nil)
+    expect(asked().title).toBe("Delete New setup?")
+    confirm(nil)
+    expect(M:Data().setups[1]).toBeNil()
+    expect(M:Work().id).toBeNil()
+    -- the unsaved one: discarded, a new one after
+    M:Delete(nil)
+    expect(asked().title).toBe("Discard New setup?")
+    confirm(nil)
+    expect(#M:Work().slots).toBe(0)
+    -- an empty unsaved one: nothing to discard
+    seen.confirmed = nil
+    M:Delete(nil)
+    expect(seen.confirmed).toBeNil()
+end
+
+@test("save as new: under its own name; a new setup asks first when the loaded one changed")
+local function saveAsNew()
+    setup()
+    slot(1, "MAGE")
+    M:Save()
+    M:SaveAsNew()
+    expect(assert(asked().input).value).toBe("New setup 2")
+    confirm("Onyxia")
+    expect(M:Work().id).toBe(2)
+    expect(saved(2).name).toBe("Onyxia")
+    slot(2, "PRIEST")
+    seen.confirmed = nil
+    M:New(false)
+    expect(asked().title).toBe("A new setup?")
+    confirm(nil)
+    expect(#M:Work().slots).toBe(0)
+    expect(M:Work().name).toBe("New setup 2")
+end
+
+@test("slots: added up to five a group, changed (a spec brings its role), removed; a spec or a player dropped")
+local function slots()
+    setup()
+    for _ = 1, 5 do
+        expect(slot(1) ~= nil).toBe(true)
+    end
+    expect(slot(1)).toBeNil()
+    expect(slot(9)).toBeNil()
+    local s = M:SlotsIn(1)[1]
+    M:ChangeSlot(s.id, { class = "SHAMAN" })
+    M:ChangeSlot(s.id, { spec = 3 })
+    expect(s.role).toBe("HEALER")
+    M:ChangeSlot(s.id, { class = "PRIEST", label = "" })
+    expect(s.spec).toBeNil()
+    expect(s.label).toBeNil()
+    M:ChangeSlot(s.id, { pin = "Raider Priest" })
+    M:ChangeSlot(M:SlotsIn(1)[2].id, { pin = "Raider Priest" })
+    expect(s.pin).toBeNil()
+    M:ChangeSlot(s.id, { role = false })
+    M:ChangeSlot(999, { class = "MAGE" })
+    M:RemoveSlot(s.id)
+    expect(#M:SlotsIn(1)).toBe(4)
+    -- a spec from the palette: onto a slot, onto a group (a new slot)
+    local t = M:SlotsIn(1)[1]
+    M:Drop({ spec = { class = "MAGE", spec = 3 } }, { slot = t.id })
+    expect(t.class).toBe("MAGE")
+    expect(t.role).toBe("DAMAGER")
+    M:Drop({ spec = { class = "DRUID", spec = 2, role = "TANK" } }, { group = 2 })
+    expect(M:SlotsIn(2)[1].role).toBe("TANK")
+end
+
+@test("pinned by hand: dropped onto a slot, two players swapped, let go, a slot made for a player")
+local function pinned()
+    setup()
+    raid({ { unit = mage, g = 1 }, { unit = mage2, g = 1 } })
+    local a = slotIn(1, "MAGE")
+    local b = slotIn(2, "MAGE")
+    M:Refill()
+    M:Drop({ player = "Raider Frostmage" }, { slot = a.id })
+    expect(a.pin).toBe("Raider Frostmage")
+    expect(placed(a).how).toBe("pinned")
+    -- the one there moves to the dragged one's slot
+    local inA = "Raider Frostmage"
+    local inB = placed(b).m.name
+    M:Drop({ player = inB, from = b.id }, { slot = a.id })
+    expect(a.pin).toBe(inB)
+    expect(b.pin).toBe(inA)
+    -- let go: without a slot, said so
+    M:Drop({ player = inA }, { unplaced = true })
+    expect(b.pin).toBeNil()
+    local v = view()
+    local found: PlannerPerson? = nil
+    for _, u in ipairs(v.unplaced) do
+        if u.name == inA then
+            found = u
+        end
+    end
+    expect((assert(found).detail or ""):find("let go by hand", 1, true) ~= nil).toBe(true)
+    -- dropped on a group: a slot asking for them, pinned
+    M:Drop({ player = inA }, { group = 4 })
+    expect(M:SlotsIn(4)[1].pin).toBe(inA)
+    expect(M:SlotsIn(4)[1].class).toBe("MAGE")
+    M:Drop({ player = inA }, { slot = 999 })
+    -- a requirement of another class drops the pin
+    M:SetRequirement(M:SlotsIn(4)[1], { class = "PRIEST" })
+    expect(M:SlotsIn(4)[1].pin).toBeNil()
+end
+
+@test("a new setup from the raid as it is: a slot per player in their group, sized to fit")
+local function fromRaid()
+    setup()
+    raid({ { unit = warrior, g = 1 }, { unit = priest, g = 3 } })
+    M:NoteSpec("Raider Warrior", 3, "message")
+    M:Refill()
+    M:New(true)
+    local w = M:Work()
+    expect(w.size).toBe(20)
+    expect(#w.slots).toBe(3)
+    local s = M:SlotsIn(1)
+    local tank: Slot? = nil
+    for _, x in ipairs(s) do
+        if x.class == "WARRIOR" and x.spec == 3 then
+            tank = x
+        end
+    end
+    expect(assert(tank).role).toBe("TANK")
+    expect(M:SlotsIn(3)[1].class).toBe("PRIEST")
+end
+
+@test("a setup's helpers: new, its next slot ID, a saved one by ID, the same layout, a copy as saved, a spec's number")
+local function helpers()
+    local a = part.newSetup("Main")
+    expect(a.size).toBe(40)
+    expect(part.newSetup("Small", 10).size).toBe(10)
+    expect(part.takeSlotId(a)).toBe(1)
+    expect(part.takeSlotId(a)).toBe(2)
+    a.slots[1] = { id = 3, g = 1, class = "MAGE" }
+    local b = part.saved(a)
+    expect(b.id).toBeNil()
+    expect(part.sameLayout(a, b)).toBe(true)
+    b.slots[1].pin = "Player"
+    expect(part.sameLayout(a, b)).toBe(false)
+    expect(part.sameLayout(a, nil)).toBe(false)
+    local d = M:Data()
+    d.setups[7] = b
+    expect(part.setupIn(d, 7)).toBe(b)
+    expect(part.setupIn(d, "work")).toBeNil()
+    expect(part.specNumber(2)).toBe(2)
+    expect(part.specNumber("any")).toBeNil()
+    expect(part.specNumber(false)).toBeNil()
+end

@@ -5,24 +5,23 @@
 -- beside it, Collect all and Collect money, a form to send, and the mails
 -- this character sent. None of it is protected (/suu probe windows,
 -- 2026-10-16); sending money goes through the game's own confirmation.
+-- Mail/Inbox reads the inbox and finds a mail again after it moved (nothing
+-- acts on an inbox index kept from before); Mail/Collect is Collect all.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import inlineMark from "/UI/Draw"
-import Module from "/Core/Modules"
-import type WindowFrame, ScrollArea from "/UI/Panel"
-import ItemSlot from "/UI/Inventory"
-import type Text from "/UI/Text"
-import type SuuButton from "/UI/Controls"
-import type TextField, Segmented, MoneyInput from "/UI/Inputs"
-import type Color from "/Core/Tokens"
+import SuuUI, Module, ItemSlotClass from "/Core/API"
+import type WindowFrame, ScrollArea, Text, SuuButton, TextField, Segmented, MoneyInput, Color, ItemSlot, ConfirmDialog from "/Core/API"
 import type AwayHandle from "wowlua:frames"
-import after, every from "wowlua:timer"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
 import * as format from "wowlua:format"
+import * as mails from "./Mail/Inbox"
+import Collector, nextTake from "./Mail/Collect"
+import type Left from "./Mail/Collect"
+
+local inlineMark = SuuUI.UI.InlineMark
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -35,7 +34,6 @@ local M: MailModule
 local WIDTH, HEIGHT = 720, 560
 local LIST_W = 300
 local ROW_H = 44
-local ATTACH_IN = ATTACHMENTS_MAX_RECEIVE or 16
 local ATTACH_OUT = ATTACHMENTS_MAX_SEND or 12
 local SENT_MAX = 50
 local QUALITY: { [number]: string } = {
@@ -48,7 +46,6 @@ local QUALITY: { [number]: string } = {
     "legendary",
     "legendary",
 }
-local ENVELOPE = "Interface\\Icons\\INV_Letter_15"
 
 local function hex(token: string): string
     return assert(colors[token]).hex
@@ -98,86 +95,12 @@ end
 local try, asString, asNumber, flag = errors.try, secret.asString, secret.asNumber, secret.flag
 
 --------------------------------------------------------------------------------
--- The inbox
+-- The inbox (read in Mail/Inbox; Collect all in Mail/Collect)
 --------------------------------------------------------------------------------
 
--- One mail's header as the list shows it.
-export type Header = {
-    index: number,
-    icon: number | string,
-    sender: string,
-    subject: string,
-    money: number,
-    cod: number,
-    days: number?,
-    items: number,
-    read: boolean,
-    returned: boolean,
-    canReply: boolean,
-    gm: boolean,
-}
-local function header(i: number): Header?
-    local packageIcon, _, sender, subject, money, cod, days, itemCount, wasRead, wasReturned, _, canReply, isGM = try(
-        GetInboxHeaderInfo,
-        i
-    )
-    local who, about = asString(sender), asString(subject)
-    if about == nil and who == nil then
-        return nil
-    end
-    local items = asNumber(itemCount) or 0
-    local firstIcon: (number | string)? = nil
-    if items > 0 then
-        for a = 1, ATTACH_IN do
-            local _, _, texture = try(GetInboxItem, i, a)
-            local tex = asNumber(texture) or asString(texture)
-            if tex then
-                firstIcon = tex
-                break
-            end
-        end
-    end
-    return {
-        index = i,
-        icon = firstIcon or asNumber(packageIcon) or asString(packageIcon) or ENVELOPE,
-        sender = who or "?",
-        subject = about or "",
-        money = asNumber(money) or 0,
-        cod = asNumber(cod) or 0,
-        days = asNumber(days),
-        items = items,
-        read = flag(wasRead),
-        returned = flag(wasReturned),
-        canReply = flag(canReply),
-        gm = flag(isGM),
-    }
-end
-
-local function inboxCount(): (number, number)
-    local n, total = try(GetInboxNumItems)
-    return asNumber(n) or 0, asNumber(total) or 0
-end
-
--- What Collect all takes next: the money, else an attachment, of the first
--- mail it may take from (not COD, not from a game master).
-local function nextTake(moneyOnly: boolean): (number?, number?)
-    for i = 1, (inboxCount()) do
-        local h = header(i)
-        if h and h.cod == 0 and not h.gm then
-            if h.money > 0 then
-                return i, nil
-            end
-            if not moneyOnly and h.items > 0 then
-                for a = ATTACH_IN, 1, -1 do
-                    if flag(try(HasInboxItem, i, a)) then
-                        return i, a
-                    end
-                end
-            end
-        end
-    end
-    return nil, nil
-end
+export type Header = mails.Header
+type MailId = mails.MailId
+local header, inboxCount, ATTACH_IN, ENVELOPE = mails.header, mails.inboxCount, mails.ATTACH_IN, mails.ENVELOPE
 
 -- A row of the inbox or of Sent: the item or envelope, who and what, the
 -- time left or since, and what's attached.
@@ -190,6 +113,8 @@ export class MailRow extends Button
     readonly sender: Text
     readonly subject: Text
     index: number? = nil
+    -- the mail drawn on it (a click finds it again by this)
+    mail: MailId? = nil
     selected: boolean = false
 
     constructor(parent: Frame)
@@ -242,7 +167,7 @@ export class MailRow extends Button
 end
 
 -- An attachment's slot in the open mail.
-class AttachSlot extends ItemSlot
+class AttachSlot extends ItemSlotClass
     attachment: number = 0
 end
 
@@ -277,10 +202,11 @@ export class OpenMail extends Frame
         self.delete = UI.Button(self, {
             text = "Delete",
             onClick = function()
-                local i = m.openIndex
+                local i = m:OpenNow()
                 if i then
+                    m:TakeOver()
                     try(DeleteInboxItem, i)
-                    m.openIndex = nil
+                    m.openIndex, m.openId = nil, nil
                 end
             end,
         })
@@ -288,10 +214,11 @@ export class OpenMail extends Frame
         self.ret = UI.Button(self, {
             text = "Return",
             onClick = function()
-                local i = m.openIndex
+                local i = m:OpenNow()
                 if i then
+                    m:TakeOver()
                     try(ReturnInboxItem, i)
-                    m.openIndex = nil
+                    m.openIndex, m.openId = nil, nil
                 end
             end,
         })
@@ -301,7 +228,7 @@ export class OpenMail extends Frame
         self.reply = UI.Button(self, {
             text = "Reply",
             onClick = function()
-                local i = m.openIndex
+                local i = m:OpenNow()
                 local h = i and header(i)
                 if not h then
                     return
@@ -327,8 +254,9 @@ export class OpenMail extends Frame
             text = "Take",
             width = 70,
             onClick = function()
-                local i = m.openIndex
+                local i = m:OpenNow()
                 if i then
+                    m:TakeOver()
                     try(TakeInboxMoney, i)
                 end
             end,
@@ -364,7 +292,7 @@ export class OpenMail extends Frame
                 GameTooltip:Hide()
             end)
             b:SetScript("OnClick", function()
-                local i = m.openIndex
+                local i = m:OpenNow()
                 if not i then
                     return
                 end
@@ -404,6 +332,7 @@ export type Inbox = {
     collect: SuuButton,
     money: SuuButton,
     count: Text,
+    note: Text,
     list: ScrollArea,
     empty: Text,
     open: OpenMail,
@@ -574,10 +503,21 @@ export type Sent = { rows: MailRow[], list: ScrollArea, empty: Text }
 class MailModule extends Module<typeof(DEFAULTS)>
     away: AwayHandle? = nil
     awayOpen: AwayHandle? = nil
-    collecting: TickerHandle? = nil
+    -- Collect all and Collect money (Mail/Collect)
+    readonly collector: Collector
     inbox: Inbox? = nil
     open: boolean = false
+    -- raised each time the mailbox opens or closes: a question asked on an
+    -- earlier visit acts on nothing
+    visit: number = 0
+    -- the open mail: where it was, and what it was when last drawn (acting
+    -- on it finds it again by this, see Mail/Inbox)
     openIndex: number? = nil
+    openId: MailId? = nil
+    -- the open question to pay a COD, and its answer (the dialog is shared:
+    -- it is ours while it holds that answer)
+    codAsk: ConfirmDialog? = nil
+    codYes: (() -> ())? = nil
     readonly pages: { [string]: Frame } = {}
     pending: SentMail? = nil
     refreshPending: boolean? = nil
@@ -599,6 +539,20 @@ class MailModule extends Module<typeof(DEFAULTS)>
             reloadToToggle = true,
             defaults = DEFAULTS,
         })
+        self.collector = Collector.new({
+            open = function(): boolean
+                return self.open
+            end,
+            after = function(seconds: number, fn: () -> ())
+                self:After(seconds, fn)
+            end,
+            changed = function()
+                self:Refresh()
+            end,
+            done = function(left: Left[], took: number)
+                self:CollectDone(left, took)
+            end,
+        })
     end
 
     -- What this character keeps (its data, typed).
@@ -606,30 +560,110 @@ class MailModule extends Module<typeof(DEFAULTS)>
         return self:CharData() :: unknown :: MailChar
     end
 
-    -- Takes one thing a moment until nothing is left, the bags are full or the
-    -- mailbox closes.
+    -- Takes one thing at a time, each once the game has answered the last,
+    -- until nothing it may take is left or the mailbox closes (Mail/Collect).
     function CollectAll(moneyOnly: boolean)
-        if self.collecting then
+        if self.collector.running then
             return
         end
-        self.collecting = every(0.25, function(ticker)
-            if C_Mail.IsCommandPending and flag(try(C_Mail.IsCommandPending)) then
-                return
+        self:Note("")
+        self.collector:Start(moneyOnly)
+    end
+
+    function Collecting(): boolean
+        return self.collector.running
+    end
+
+    -- The player acts on a mail: Collect all stops first (one request at a
+    -- time, and the answer is the player's take, not the run's).
+    function TakeOver()
+        if self.collector.running then
+            self.collector:Stop()
+            self:Note("Collect all stopped.")
+        end
+    end
+
+    -- A line by the inbox's count: what just happened.
+    function Note(text: string)
+        local inbox = self.inbox
+        if inbox then
+            inbox.note:SetValue(text)
+        end
+    end
+
+    -- A run ended: what stayed in the mail, and why (the game's words when
+    -- it gave any), by the count and in chat.
+    function CollectDone(left: Left[], took: number)
+        if #left == 0 then
+            self:Note(took > 0 and "Collected." or "")
+            return
+        end
+        local reasons: { [string]: boolean }, first: string? = {}, nil
+        local count = 0
+        for _, l in ipairs(left) do
+            if not reasons[l.why] then
+                reasons[l.why] = true
+                count = count + 1
+                first = first or l.why
             end
-            local i, a = nextTake(moneyOnly)
-            local full = a and (asNumber(try(C_Container.CalculateTotalNumberOfFreeBagSlots)) or 1) == 0
-            if not self.open or not i or full then
-                ticker:Cancel()
-                self.collecting = nil
-                self:Refresh()
-                return
+        end
+        local what = #left == 1 and "1 thing" or (#left .. " things")
+        self:Note(what .. " left in the mail: " .. (count == 1 and (first or "") or "see chat"))
+        self:Print("Collect all left " .. what .. " in the mail:")
+        local SHOWN = 10
+        for k, l in ipairs(left) do
+            if k > SHOWN then
+                self:Print(("  and %d more"):format(#left - SHOWN))
+                break
             end
-            if a then
-                TakeInboxItem(i, a)
-            else
-                TakeInboxMoney(i)
+            local thing = l.money and coins(l.count) or
+                ((l.name ~= "" and l.name or "an item") .. (l.count > 1 and (" x" .. l.count) or ""))
+            self:Print(("  %s from %s: %s"):format(thing, l.sender, l.why))
+        end
+    end
+
+    -- The open mail's index if it is still exactly the mail the pane shows;
+    -- else nil, nothing is to be done, and the pane is drawn again.
+    function OpenNow(): number?
+        local id = self.openId
+        local j = id and mails.find(id, self.openIndex)
+        if not j then
+            if id then
+                self:Note("That mail changed: nothing was done. Look at it again.")
             end
-        end)
+            self:Refresh()
+            return nil
+        end
+        self.openIndex = j
+        return j
+    end
+
+    -- Where the open mail is now: the mail last drawn, or the same mail with
+    -- less in it (taken from since); nil when it is gone.
+    function ResolveOpen(): number?
+        local id = self.openId
+        local j = id and (mails.find(id, self.openIndex) or mails.find(id, self.openIndex, mails.follows))
+        self.openIndex = j
+        if not j then
+            self.openId = nil
+        end
+        return j
+    end
+
+    -- A row clicked: its mail opened, found again by what the row showed (a
+    -- modified click loots it whole, never a COD).
+    function OpenRow(r: MailRow)
+        local id = r.mail
+        local j = id and mails.find(id, r.index)
+        if not id or not j then
+            self:Refresh()
+            return
+        end
+        if IsModifiedClick("AUTOLOOTTOGGLE") and id.cod == 0 then
+            self:TakeOver()
+            try(AutoLootMailItem, j)
+        end
+        self.openIndex, self.openId = j, id
         self:Refresh()
     end
 
@@ -641,9 +675,11 @@ class MailModule extends Module<typeof(DEFAULTS)>
             total > n and ("%d mails, %d more once these are gone"):format(n, total - n) or
                 (n == 1 and "1 mail" or (n .. " mails"))
         )
-        inbox.collect:SetEnabledState(not self.collecting and nextTake(false) ~= nil)
-        inbox.collect:SetLabel(self.collecting and "Collecting…" or "Collect all")
-        inbox.money:SetEnabledState(not self.collecting and nextTake(true) ~= nil)
+        local collecting = self.collector.running
+        inbox.collect:SetEnabledState(not collecting and nextTake(false) ~= nil)
+        inbox.collect:SetLabel(collecting and "Collecting…" or "Collect all")
+        inbox.money:SetEnabledState(not collecting and nextTake(true) ~= nil)
+        local open = self:ResolveOpen()
         local rows = inbox.rows
         for i = 1, math.max(n, #rows) do
             local r = rows[i]
@@ -651,12 +687,16 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 if not r then
                     r = MailRow.new(c)
                     rows[i] = r
+                    r:SetScript("OnClick", function(row)
+                        self:OpenRow(row)
+                    end)
                 end
                 local h = header(i)
                 r:ClearAllPoints()
                 r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
                 r:SetPoint("RIGHT", c, "RIGHT")
                 r.index = i
+                r.mail = mails.identify(i)
                 r.slot.skin:SetItem({ icon = h and h.icon or ENVELOPE, quality = "common" })
                 r.sender:SetValue(h and h.sender or "")
                 r.sender:SetColor(h and not h.read and "gilt-text" or "ink")
@@ -674,17 +714,10 @@ class MailModule extends Module<typeof(DEFAULTS)>
                     end
                 end
                 r.right2:SetValue(what)
-                r.selected = self.openIndex == i
+                r.selected = open == i
                 r.hl:SetShown(r.selected)
                 r.hl:SetAlpha(1)
                 r.rule:SetShown(i < n)
-                r:SetScript("OnClick", function()
-                    if IsModifiedClick("AUTOLOOTTOGGLE") and h and h.cod == 0 then
-                        try(AutoLootMailItem, i)
-                    end
-                    self.openIndex = i
-                    self:Refresh()
-                end)
                 r:Show()
             elseif r then
                 r:Hide()
@@ -692,10 +725,6 @@ class MailModule extends Module<typeof(DEFAULTS)>
         end
         c:SetHeight(math.max(1, n * ROW_H))
         inbox.empty:SetShown(n == 0)
-        local open = self.openIndex
-        if open and open > n then
-            self.openIndex = nil
-        end
         self:DrawOpen()
     end
 
@@ -708,8 +737,11 @@ class MailModule extends Module<typeof(DEFAULTS)>
         p:SetShown(h ~= nil)
         inbox.none:SetShown(h == nil)
         if not i or not h then
+            self.openIndex, self.openId = nil, nil
             return
         end
+        -- what the pane shows from here on: what acting on it must find again
+        self.openId = mails.identify(i)
         local body, _, _, _, isInvoice = try(GetInboxText, i)
         p.subject:SetValue(h.subject ~= "" and h.subject or "(no subject)")
         p.from:SetValue("From " .. h.sender .. (h.returned and "  ·  returned" or ""))
@@ -775,31 +807,61 @@ class MailModule extends Module<typeof(DEFAULTS)>
 
     -- Takes an attachment of the open mail; asks first for COD.
     function Take(a: number)
-        local i = self.openIndex
-        local h = i and header(i)
-        if not i or not h then
+        local i = self:OpenNow()
+        local id = self.openId
+        local it = id and mails.attachmentAt(id, a)
+        if not i or not id or not it then
             return
         end
-        if h.cod > 0 then
-            if h.cod > (GetMoney() or 0) then
+        if id.cod > 0 then
+            if id.cod > (GetMoney() or 0) then
                 UI.Confirm({
                     title = "Not enough money",
-                    text = "Cash on delivery: " .. coins(h.cod) .. ". You have " .. coins(GetMoney() or 0) .. ".",
+                    text = "Cash on delivery: " .. coins(id.cod) .. ". You have " .. coins(GetMoney() or 0) .. ".",
                     confirm = "OK",
+                    cancel = false,
                 })
                 return
             end
-            UI.Confirm({
+            local visit = self.visit
+            local thing = (it.name ~= "" and it.name or "this") .. (it.count > 1 and (" x" .. it.count) or "")
+            local onConfirm = function()
+                self:TakeCod(visit, id, a)
+            end
+            self.codYes = onConfirm
+            self.codAsk = UI.Confirm({
                 title = "Pay cash on delivery?",
-                text = ("Pay %s to %s for this?"):format(coins(h.cod), h.sender),
+                text = ("Pay %s to %s for %s?"):format(coins(id.cod), id.sender, thing),
                 confirm = "Pay",
-                onConfirm = function()
-                    TakeInboxItem(i, a)
-                end,
+                onConfirm = onConfirm,
             })
             return
         end
-        TakeInboxItem(i, a)
+        self:TakeOver()
+        try(TakeInboxItem, i, a)
+    end
+
+    -- The COD confirmed: taken (and paid) only from the very mail the
+    -- question was about, on the same visit to the mailbox, with the money
+    -- there; if it has gone or changed, nothing.
+    function TakeCod(visit: number, id: MailId, a: number)
+        self.codAsk, self.codYes = nil, nil
+        if not self.open or self.visit ~= visit then
+            self:Print("The mailbox closed: nothing was taken or paid.")
+            return
+        end
+        local j = mails.find(id, self.openIndex)
+        if not j then
+            self:Note("That mail changed or is gone: nothing was taken or paid.")
+            self:Refresh()
+            return
+        end
+        if id.cod > (GetMoney() or 0) then
+            self:Note("Not enough money for the cash on delivery: nothing was taken.")
+            return
+        end
+        self:TakeOver()
+        try(TakeInboxItem, j, a)
     end
 
     function BuildInbox(page: Frame)
@@ -825,6 +887,14 @@ class MailModule extends Module<typeof(DEFAULTS)>
         money:SetPoint("LEFT", collect, "RIGHT", S["space-2"], 0)
         local count = UI.Text(page, "caption", "ink-muted")
         count:SetPoint("LEFT", money, "RIGHT", S["space-4"], 0)
+        -- what just happened: what Collect all left, an act refused
+        local note = UI.Text(page, "caption", "amber")
+        SuuUI.Layout.Follow(page, function()
+            note:SetPoint("LEFT", count, "RIGHT", S["space-4"], 0)
+        end)
+        note:SetPoint("RIGHT")
+        note:SetJustifyH("LEFT")
+        note:SetWordWrap(false)
         local BAR = S["space-3"]
         local list = UI.ScrollArea(page, BAR)
         list:SetPoint("TOPLEFT", 0, -(30 + S["space-4"]))
@@ -846,6 +916,7 @@ class MailModule extends Module<typeof(DEFAULTS)>
             collect = collect,
             money = money,
             count = count,
+            note = note,
             list = list,
             empty = empty,
             open = p,
@@ -1080,7 +1151,7 @@ class MailModule extends Module<typeof(DEFAULTS)>
         -- never stuck: if neither success nor failure comes, Send comes back
         local mark = {}
         self.sendMark = mark
-        after(30, function()
+        self:After(30, function()
             if self.sending and self.sendMark == mark then
                 self:SendDone(false)
             end
@@ -1251,7 +1322,7 @@ class MailModule extends Module<typeof(DEFAULTS)>
         )
         -- leaving the field closes the list, unless the mouse is on it (its bar)
         edit:HookScript("OnEditFocusLost", function()
-            after(0.15, function()
+            self:After(0.15, function()
                 if not d:IsMouseOver() then
                     d:Hide()
                 end
@@ -1513,7 +1584,7 @@ class MailModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.refreshPending = true
-        after(0.05, function()
+        self:After(0.05, function()
             self.refreshPending = nil
             self:Refresh()
         end)
@@ -1539,10 +1610,13 @@ class MailModule extends Module<typeof(DEFAULTS)>
     -- with it, collecting stopped.
     function Closed()
         self.open = false
-        local collecting = self.collecting
-        if collecting then
-            collecting:Cancel()
-            self.collecting = nil
+        self.visit = self.visit + 1
+        self.collector:Stop()
+        -- a question to pay a COD goes with the mailbox
+        local ask, yes = self.codAsk, self.codYes
+        self.codAsk, self.codYes = nil, nil
+        if ask and yes and ask:IsShown() and ask.onConfirm == yes then
+            ask:Hide()
         end
         local window = self.window
         if window then
@@ -1608,13 +1682,16 @@ class MailModule extends Module<typeof(DEFAULTS)>
             probe.mailSuggest = { at = date("%H:%M:%S"), lines = lines }
         end)
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
-            after(1, function()
+            self:After(1, function()
                 self:RememberMe()
             end)
         end)
         self:OnGameEvent("MAIL_SHOW", function()
+            self.collector:Stop()
             self.open = true
-            self.openIndex = nil
+            self.visit = self.visit + 1
+            self.openIndex, self.openId = nil, nil
+            self:Note("")
             self:Away()
             local window = assert(self.window)
             window:Show()
@@ -1635,8 +1712,18 @@ class MailModule extends Module<typeof(DEFAULTS)>
                 self:Closed()
             end
         end)
+        -- the game's answers to Collect all's takes (Mail/Collect)
+        self:OnGameEvent("MAIL_INBOX_UPDATE", function()
+            self.collector:OnInboxUpdate()
+            self:QueueRefresh()
+        end)
+        self:OnGameEvent("MAIL_SUCCESS", function()
+            self.collector:OnSuccess()
+        end)
+        self:OnGameEvent("UI_ERROR_MESSAGE", function(_, _, message)
+            self.collector:OnError(asString(message))
+        end)
         for _, e in ipairs({
-            "MAIL_INBOX_UPDATE",
             "MAIL_SEND_INFO_UPDATE",
             "CLOSE_INBOX_ITEM",
             "PLAYER_MONEY",
@@ -1663,8 +1750,11 @@ class MailModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("MAIL_SEND_SUCCESS", function()
             self:SendDone(true)
         end)
-        self:OnGameEvent("MAIL_FAILED", function()
-            if self.sending then
+        self:OnGameEvent("MAIL_FAILED", function(_, itemID)
+            local item = asNumber(itemID)
+            self.collector:OnFailed(item, self.sending)
+            -- (an item's failure is a take's, not the mail being sent)
+            if self.sending and not item then
                 self:SendDone(false)
             end
         end)
@@ -1677,6 +1767,7 @@ class MailModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnDisable()
+        self.collector:Stop()
         local window = self.window
         if window then
             window:Hide()

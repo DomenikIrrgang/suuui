@@ -1,0 +1,576 @@
+-- Units/FlightMap/Canvas.wowlua
+-- The flight map's drawing on a map canvas (Units/FlightMap): a surface
+-- (the layer over the map's art, the lines, the pins, the data provider
+-- that says when to draw again) on the world map or the flight master's
+-- window, and what's drawn on it: the masters' pins, a route the way it's
+-- flown, the network faint, the hovered or chosen route solid, your flight
+-- in the air with the time left; the layout and the queued redraws. The
+-- module's methods (PassThrough, Pin, Line, Dashes, Way, Solid, Dot,
+-- ClearDrawing, ClearInk, DrawMaster, InkMaster, Along, DrawFlight, Layout,
+-- DrawInk, QueueLayout, QueueInk, MakeSurface, Surfaces, Use) forward here,
+-- each function taking the module.
+
+import SuuUI from "/Core/API"
+import type TooltipData from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import clock, dashes, nearest, alongByShare, timeText from "/Units/FlightMap/Route"
+import type TaxiNode from "/Units/FlightMap/Route"
+import hopYards, hopWay, positions, myPlace, inside from "/Units/FlightMap/Taxi"
+import FlightPin, Ink, setTag from "/Units/FlightMap/Parts"
+import type Dot from "/Units/FlightMap/Parts"
+import type FlightMapModule from "/Units/FlightMap"
+
+local UI = SuuUI.UI
+local field = tbl.field
+local asNumber = secret.asNumber
+
+-- A map to draw on: its masters' places (0-1) and its size in px (M:Way).
+export type View = { map: number, pos: { [number]: number[] }, w: number, h: number }
+
+local PIN = 26 -- UI.MapPin's size
+local MAX_DASHES = 120 -- on one dashed line
+
+-- Where the flight map draws: a map canvas with the layer over its art, the
+-- lines, the pins and the data provider that says when to draw again. The
+-- world map's (in the air), or the flight master window's.
+export type Surface = {
+    map: typeof(WorldMapFrame),
+    layer: Frame,
+    ink: Ink,
+    provider: { [string]: unknown },
+    pins: FlightPin[],
+    free: FlightPin[],
+}
+
+--------------------------------------------------------------------------------
+-- On the map's canvas: pins, routes, times
+--------------------------------------------------------------------------------
+
+-- A right-click through a pin to the map (it zooms out). Refused in
+-- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
+-- a pin was made while the map opened in a fight, found in game): then
+-- after it.
+export function passThrough(self: FlightMapModule, pin: Frame)
+    if not InCombatLockdown() then
+        errors.tryMethod(pin, "SetPassThroughButtons", "RightButton")
+        return
+    end
+    self.passLater[#self.passLater + 1] = pin
+    self:RunOutOfCombat("passThrough", function()
+        local list = self.passLater
+        self.passLater = {}
+        for _, p in ipairs(list) do
+            errors.tryMethod(p, "SetPassThroughButtons", "RightButton")
+        end
+    end)
+end
+
+export function makePin(self: FlightMapModule, layer: Frame): FlightPin
+    local pin = table.remove(self.free)
+    if not pin then
+        local made = FlightPin.new(layer)
+        made:RegisterForClicks("LeftButtonUp")
+        made:SetScript("OnEnter", function(p)
+            local node = p.node
+            if not node then
+                return
+            end
+            if node.kind == "REACHABLE" then
+                self.hovered = node
+                self:QueueInk()
+            end
+            UI.ShowTooltip(p, function(): TooltipData
+                local now = p.node
+                return now and self:Tip(now) or {}
+            end)
+        end)
+        made:SetScript("OnLeave", function()
+            self.hovered = nil
+            self:QueueInk()
+            UI.HideTooltip()
+        end)
+        made:SetScript("OnClick", function(p)
+            self:Choose(p.node)
+        end)
+        self:PassThrough(made)
+        pin = made
+    end
+    pin:Show()
+    self.pins[#self.pins + 1] = pin
+    return pin
+end
+
+-- one line of the drawing (pooled per layer: the dark underlay under the gilt)
+export function drawLine(
+    self: FlightMapModule,
+    layer: "BORDER" | "ARTWORK",
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    thickness: number,
+    token: string,
+    alpha: number?
+)
+    local ink = self.ink
+    if not ink then
+        return
+    end
+    local pool = layer == "BORDER" and ink.pools.BORDER or ink.pools.ARTWORK
+    pool.n = pool.n + 1
+    local line = pool[pool.n]
+    if not line then
+        line = ink:CreateLine(nil, layer)
+        pool[pool.n] = line
+    end
+    line:SetThickness(thickness)
+    UI.PaintFill(line, token, alpha)
+    line:SetStartPoint("TOPLEFT", ink, x1, -y1)
+    line:SetEndPoint("TOPLEFT", ink, x2, -y2)
+    line:Show()
+end
+
+-- dashes along a route's points: dash px drawn, gap px left out, the
+-- pattern carried on round its bends
+export function drawDashes(
+    self: FlightMapModule,
+    layer: "BORDER" | "ARTWORK",
+    points: number[][],
+    dash: number,
+    gap: number,
+    thickness: number,
+    token: string,
+    alpha: number?
+)
+    -- (zoomed far in, longer dashes: no more than MAX_DASHES on a line)
+    for _, d in ipairs(dashes(points, dash, gap, MAX_DASHES)) do
+        self:Line(layer, d[1], d[2], d[3], d[4], thickness, token, alpha)
+    end
+end
+
+-- A route on the shown map (or `view`: { map, pos, w, h }), in px: its hops
+-- the way they fly (or straight) one after another, and where each master
+-- on it falls among the points; nil when one isn't on this map.
+export function routeWay(self: FlightMapModule, path: number[], view: View?): (number[][]?, number[]?)
+    local v = view or self.view
+    if not v then
+        return nil, nil
+    end
+    local points: number[][], stops: number[] = {}, {}
+    for i, id in ipairs(path) do
+        local p = v.pos[id]
+        if not p then
+            return nil, nil
+        end
+        local before = i > 1 and v.pos[path[i - 1]] or nil
+        if before then
+            -- (the hop's own ends left out: it runs from pin to pin)
+            local way = hopWay(v.map, path[i - 1], id, before, p)
+            if way then
+                for k = 2, #way - 1 do
+                    points[#points + 1] = { way[k][1] * v.w, way[k][2] * v.h }
+                end
+            end
+        end
+        points[#points + 1] = { p[1] * v.w, p[2] * v.h }
+        stops[#stops + 1] = #points
+    end
+    return points, stops
+end
+
+-- A route solid: the gilt line on a dark underlay, so it reads on any art.
+export function drawSolid(self: FlightMapModule, points: number[][], width: number, token: string)
+    for i = 1, #points - 1 do
+        local a, b = points[i], points[i + 1]
+        self:Line("BORDER", a[1], a[2], b[1], b[2], width + 3, "surface", 0.65)
+        self:Line("ARTWORK", a[1], a[2], b[1], b[2], width, token)
+    end
+end
+
+-- a stop on a route in flight: a small gilt disc on a surface rim
+export function drawDot(self: FlightMapModule, x: number, y: number)
+    local ink = self.ink
+    if not ink then
+        return
+    end
+    local n = ink.dotN + 1
+    ink.dotN = n
+    local d = ink.dots[n]
+    if not d then
+        local made: Dot = {
+            rim = ink:CreateTexture(nil, "OVERLAY", nil, 1),
+            fill = ink:CreateTexture(nil, "OVERLAY", nil, 2),
+        }
+        UI.Skin(made.rim, "circle-fill")
+        made.rim:SetSize(9, 9)
+        UI.Paint(made.rim, "surface")
+        UI.Skin(made.fill, "circle-fill")
+        made.fill:SetSize(6, 6)
+        UI.Paint(made.fill, "gilt-text")
+        ink.dots[n] = made
+        d = made
+    end
+    for _, t in ipairs({ d.rim, d.fill }) do
+        t:ClearAllPoints()
+        t:SetPoint("CENTER", ink, "TOPLEFT", x, -y)
+        t:Show()
+    end
+end
+
+export function clearDrawing(self: FlightMapModule)
+    for _, pin in ipairs(self.pins) do
+        pin:Hide()
+        pin:ClearAllPoints()
+        pin:SetHighlight(nil)
+        pin.tag:Hide()
+        pin.node = nil
+        table.insert(self.free, pin)
+    end
+    self.pins = {}
+    self.view = nil
+    self:ClearInk()
+end
+
+export function clearInk(self: FlightMapModule)
+    local ink = self.ink
+    if not ink then
+        return
+    end
+    for _, pool in ipairs({ ink.pools.BORDER, ink.pools.ARTWORK }) do
+        for i = 1, pool.n do
+            local line = pool[i]
+            if line then
+                line:Hide()
+            end
+        end
+        pool.n = 0
+    end
+    for _, d in ipairs(ink.dots) do
+        d.rim:Hide()
+        d.fill:Hide()
+    end
+    ink.dotN = 0
+    ink.left:Hide()
+end
+
+-- The flight master's map: a pin for every node of yours on this map,
+-- the time beside each destination.
+export function drawMaster(self: FlightMapModule, pos: { [number]: number[] }, w: number, h: number, cs: number)
+    local s, layer = self.session, self.layer
+    if not (s and layer) then
+        return
+    end
+    local base = layer:GetFrameLevel()
+    for _, n in ipairs(s.nodes) do
+        local p = pos[n.id]
+        if p and inside(p) then
+            local pin = self:Pin(layer)
+            pin.node = n
+            if n.kind == "DISTANT" then
+                pin:SetData({ glyph = "wing", color = "ink-faint", edge = "ink-faint" })
+                UI.Skin(pin.edge, "circle-dash")
+                pin:SetBaseAlpha(0.8)
+                pin.tag:Hide()
+            else
+                local here = n.kind == "CURRENT"
+                pin:SetData({
+                    glyph = "wing",
+                    color = "gilt-text",
+                    edge = here and "arcane" or "gilt-line",
+                    ring = here and "arcane" or nil,
+                })
+                UI.Skin(pin.edge, "circle-fill")
+                pin:SetBaseAlpha(1)
+                if here then
+                    setTag(pin.tag, "You are here", "arcane")
+                else
+                    local t, measured = self:FlightTime(n.path)
+                    setTag(pin.tag, timeText(t, measured), measured and "ink" or "ink-muted")
+                end
+            end
+            pin:SetScale(1 / cs)
+            pin:SetFrameLevel(base + (n.kind == "DISTANT" and 2 or 5))
+            pin.tag:SetFrameLevel(base + 7)
+            pin:SetPoint("CENTER", layer, "TOPLEFT", p[1] * w, -p[2] * h)
+        end
+    end
+end
+
+-- Its lines: the routes between the ones you know faint, the hovered (else
+-- the chosen) destination's route solid; that one's pin ringed.
+export function inkMaster(self: FlightMapModule, pos: { [number]: number[] })
+    local s = self.session
+    if not s then
+        return
+    end
+    local known: TaxiNode[] = {}
+    for _, n in ipairs(s.nodes) do
+        if n.kind ~= "DISTANT" and pos[n.id] then
+            known[#known + 1] = n
+        end
+    end
+    -- the network: each hop between two you know, once
+    for i = 1, #known do
+        for j = i + 1, #known do
+            local a, b = known[i], known[j]
+            if hopYards(a.id, b.id) then
+                local points = self:Way({ a.id, b.id })
+                if points then
+                    self:Dashes("ARTWORK", points, 4, 4, 1.5, "gilt-line")
+                end
+            end
+        end
+    end
+    -- the route of the one hovered, else the one chosen
+    local shown = self.hovered or self.selected
+    local path = shown and shown.path
+    if path then
+        local points = self:Way(path)
+        if points then
+            self:Solid(points, 2.5, "gilt-text")
+        end
+    end
+    for _, pin in ipairs(self.pins) do
+        local n = pin.node
+        pin:SetHighlight(n ~= nil and (n == self.selected or n == self.hovered) and true or nil)
+    end
+end
+
+-- How far along the flight you are: the point on the route nearest you
+-- (the game gives your place in flight), else by the time flown along the
+-- route's length. -> the segment it's on, and the point.
+export function along(self: FlightMapModule, points: number[][], w: number, h: number): (number, number, number)
+    local f = self.map
+    local x, y = myPlace(f and asNumber(f:GetMapID()) or nil)
+    if x and y then
+        local bk, bx, by = nearest(points, x * w, y * h)
+        if bk and bx and by then
+            return bk, bx, by
+        end
+    end
+    local fl = self.flight
+    local total = fl and fl.expected
+    if not (fl and total) then
+        return 1, points[1][1], points[1][2]
+    end
+    return alongByShare(points, math.min(1, (GetTime() - fl.started) / total))
+end
+
+-- In the air: the route flown solid, the rest dashed, a dot at each stop,
+-- the time left at the destination (landing early: up to that stop).
+export function drawFlight(self: FlightMapModule, w: number, h: number)
+    local fl, ink = self.flight, self.ink
+    if not (fl and ink) then
+        return
+    end
+    local points, stops = self:Way(fl.path)
+    if not (points and stops) then
+        return
+    end
+    local last, share = #points, 1
+    local early = fl.early
+    local route = early and self:FlightRoute(fl)
+    local stopAt, shareAt = early and stops[early], early and route and route.at[early]
+    if stopAt and shareAt then
+        last, share = stopAt, shareAt
+    end
+    local k, qx, qy = self:Along(points, w, h)
+    local flown: number[][] = {}
+    for i = 1, k do
+        flown[i] = points[i]
+    end
+    flown[#flown + 1] = { qx, qy }
+    self:Solid(flown, 3, "gilt")
+    local rest: number[][] = { { qx, qy } }
+    for i = k + 1, last do
+        rest[#rest + 1] = points[i]
+    end
+    self:Dashes("BORDER", rest, 5, 5, 5, "surface", 0.65)
+    self:Dashes("ARTWORK", rest, 5, 5, 2, "gilt-text")
+    for _, i in ipairs(stops) do
+        if i <= last then
+            self:Dot(points[i][1], points[i][2])
+        end
+    end
+    local dest = points[last]
+    local expected = fl.expected
+    if expected then
+        local left = expected * share - (GetTime() - fl.started)
+        local tag = ink.left
+        setTag(tag, (fl.measured and "" or "~") .. clock(math.max(0, left)) .. " left", "ink")
+        tag:ClearAllPoints()
+        tag:SetPoint("LEFT", ink, "TOPLEFT", dest[1] + 10, -dest[2] + PIN / 2)
+    end
+end
+
+-- Everything again (the map, its zoom, the flight master): the pins, then
+-- the lines.
+export function layout(self: FlightMapModule)
+    self.layoutQueued = false
+    self:ClearDrawing()
+    local f, layer, ink = self.map, self.layer, self.ink
+    if not (f and layer and ink and f:IsShown() and self:IsEnabled()) then
+        return
+    end
+    local flying = not self.session and self.flight ~= nil and self:Get("inFlight")
+    if not (self.session or flying) then
+        return
+    end
+    local canvas = frames.asFrame(f:GetCanvas())
+    -- (times the window's scale: the enlarged map is the window scaled,
+    -- the pins, times and lines at their usual size, as the world map's)
+    local cs = asNumber(f:GetCanvasScale())
+    cs = cs and cs * f:GetScale()
+    local mapID = asNumber(f:GetMapID())
+    if not (canvas and cs and cs > 0 and mapID) then
+        return
+    end
+    local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
+    if w <= 0 or h <= 0 then
+        return
+    end
+    ink:SetScale(1 / cs)
+    ink:ClearAllPoints()
+    ink:SetPoint("TOPLEFT", layer, "TOPLEFT")
+    ink:SetSize(w, h)
+    local view: View = { map = mapID, pos = positions(mapID), w = w, h = h }
+    self.view = view
+    if self.session then
+        self:DrawMaster(view.pos, w, h, cs)
+    end
+    self:DrawInk()
+end
+
+-- The lines alone (a hover, a choice, the clock in flight): the pins under
+-- the mouse stay (made again, they'd lose and regain it, over and over).
+export function drawInk(self: FlightMapModule)
+    self.inkQueued = false
+    self:ClearInk()
+    local v = self.view
+    if not v then
+        return
+    end
+    if self.session then
+        self:InkMaster(v.pos)
+    elseif self.flight and self:Get("inFlight") then
+        self:DrawFlight(v.w, v.h)
+    end
+end
+
+export function queueLayout(self: FlightMapModule)
+    -- (off: its timer would not start, and the flag would stay set)
+    if self.layoutQueued or not self:IsEnabled() then
+        return
+    end
+    self.layoutQueued = true
+    self:After(0, function()
+        self:Layout()
+    end)
+end
+
+export function queueInk(self: FlightMapModule)
+    if self.inkQueued or self.layoutQueued or not self:IsEnabled() then
+        return
+    end
+    self.inkQueued = true
+    self:After(0, function()
+        if self.inkQueued then
+            self:DrawInk()
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- The map
+--------------------------------------------------------------------------------
+
+-- A surface on a map canvas: the layer over its art (under the game's
+-- own pins, as the world map module's), the lines on it, the provider.
+export function makeSurface(self: FlightMapModule, f: typeof(WorldMapFrame)): Surface?
+    local canvas = frames.asFrame(f:GetCanvas())
+    if not canvas then
+        return nil
+    end
+    local layer = CreateFrame("Frame", nil, canvas)
+    layer:SetAllPoints(canvas)
+    local levels = errors.tryMethod(f, "GetPinFrameLevelsManager")
+    local above = asNumber(errors.tryMethod(levels, "GetFrameLevelStart", "PIN_FRAME_LEVEL_MAP_HIGHLIGHT"))
+    layer:SetFrameLevel(above and (above + 1) or (canvas:GetFrameLevel() + 2))
+    local ink = Ink.new(layer)
+    ink:SetFrameLevel(layer:GetFrameLevel())
+    -- the clock in flight: the time left and where you are, every second
+    local wait = 0
+    ink:SetScript("OnUpdate", function(_, elapsed)
+        wait = wait - elapsed
+        if wait > 0 then
+            return
+        end
+        wait = 1
+        if self.ink == ink and self.flight and not self.session and self:Get("inFlight") then
+            self:DrawInk()
+        end
+    end)
+    -- the drawing's data provider: Blizzard's base, and ours on it
+    local provider: { [string]: unknown } = {}
+    local base = field(_G, "MapCanvasDataProviderMixin")
+    if type(base) == "table" then
+        for k, v in pairs(base :: { [string]: unknown }) do
+            provider[k] = v
+        end
+    end
+    local function mine(): boolean
+        return self.map == f
+    end
+    provider.RefreshAllData = function()
+        if mine() then
+            self:QueueLayout()
+        end
+    end
+    provider.RemoveAllData = function()
+        if mine() then
+            self:ClearDrawing()
+        end
+    end
+    provider.OnCanvasScaleChanged = function()
+        if mine() then
+            self:QueueLayout()
+        end
+    end
+    provider.OnCanvasSizeChanged = function()
+        if mine() then
+            self:QueueLayout()
+        end
+    end
+    return { map = f, layer = layer, ink = ink, provider = provider, pins = {}, free = {} }
+end
+
+-- The surfaces made: the world map's, the flight master window's.
+export function surfaces(self: FlightMapModule): Surface[]
+    local out: Surface[] = {}
+    local world, own = self.world, self.own
+    if world then
+        out[#out + 1] = world
+    end
+    if own then
+        out[#out + 1] = own
+    end
+    return out
+end
+
+-- Drawing on this surface from now on (the other's drawing cleared).
+export function useSurface(self: FlightMapModule, s: Surface)
+    local cur = self.surface
+    if cur == s then
+        return
+    end
+    self:ClearDrawing()
+    if cur then
+        cur.pins, cur.free = self.pins, self.free
+    end
+    self.surface = s
+    self.map, self.layer, self.ink, self.provider = s.map, s.layer, s.ink, s.provider
+    self.pins, self.free = s.pins, s.free
+end

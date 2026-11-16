@@ -1,0 +1,665 @@
+-- Units/Notifications/Hosting.wowlua
+-- Blizzard's popups and request windows hosted on the Notifications
+-- module's cards (Units/Notifications.wowlua): what SuuUI changed on the
+-- game's parts and putting it back, SuuUI's look behind the game's buttons
+-- and role buttons (ButtonArt, RoleArt), a hosted window's card data, its
+-- parts onto its card, and hosting and releasing a window. The module's
+-- methods (Remember, Undo, ArtFor, StyleButton, StyleEditBox, CardData,
+-- Attach, RoleArtFor, HostRole, Host, HostFrame, Release, HookWindows) call
+-- these with the module.
+--
+-- Hosting: SuuUI never answers a popup itself. Calling Blizzard's popup code
+-- from an addon would make the popup system SuuUI's, and the game would
+-- then refuse the answers it keeps for Blizzard (deleting an item, entering
+-- a battleground, cancelling a logout: probed 2026-10-13). Instead the
+-- popup goes off screen and its own buttons (and its "type DELETE" box) are
+-- placed on the card and drawn in SuuUI's look: every click is Blizzard's
+-- (a logout cancelled from a moved popup worked). Nothing is written on
+-- Blizzard's frames but points, sizes, alphas and fonts, and all of it goes
+-- back when the popup closes. Popups SuuUI doesn't know stay Blizzard's.
+-- (The hooks on Blizzard's popups and buttons are hooksecurefunc and
+-- HookScript, through wowlua:hooks.)
+
+import SuuUI from "/Core/API"
+import type NotificationData, Notification, NotificationStack, Border, SoftEdge, Text from "/Core/API"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as item from "wowlua:item"
+import * as popups from "./Popups"
+import type Kind, Shown, Parts from "./Popups"
+import type NotificationsModule from "/Units/Notifications"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+-- The game's values, read without trusting their types.
+local field = tbl.field
+local asString, asNumber = secret.asString, secret.asNumber
+
+local kindOf, buttonsOf, textOf = popups.kindOf, popups.buttonsOf, popups.textOf
+local noTime, coinString = popups.noTime, popups.coinString
+
+local ACTION_H = 26
+export const OFF_SCREEN = 200
+
+-- A point of a part SuuUI moved, as it was.
+type Point = { point: FramePoint, rel: ScriptRegion?, relPoint: FramePoint, x: number, y: number }
+
+-- How a part of the game's window was before SuuUI moved and styled it.
+export type Saved = {
+    points: Point[],
+    width: number,
+    height: number,
+    strata: FrameStrata,
+    level: number,
+    alphas: { [Texture]: number },
+    font?: Font,
+    fs?: FontString,
+    color?: number[],
+    -- an edit box's font as it was (file, size, flags)
+    editFont?: { file: string, size: number, flags: ("" | "MONOCHROME" | "OUTLINE" | "THICKOUTLINE" | "SLUG")? },
+}
+
+-- A hosted window: its parts, its card's data and card, what was changed.
+export type Host = {
+    dialog: Frame,
+    order: number,
+    which: string,
+    kind: Kind,
+    id: string,
+    buttons: () -> Shown[],
+    text: () -> string?,
+    time: () -> (number?, number?),
+    editBox?: EditBox,
+    roles?: () -> Button[],
+    warning?: () -> string?,
+    clamped?: boolean,
+    data: NotificationData,
+    card?: Notification,
+    cost?: number,
+    saved?: { [Frame]: Saved },
+}
+
+local function savePoints(f: Frame): Point[]
+    local pts: Point[] = {}
+    for i = 1, f:GetNumPoints() do
+        local point, rel, relPoint, x, y = f:GetPoint(i)
+        pts[i] = { point = point, rel = rel, relPoint = relPoint, x = x, y = y }
+    end
+    return pts
+end
+
+local function restorePoints(f: Frame, pts: Point[])
+    f:ClearAllPoints()
+    for _, p in ipairs(pts) do
+        f:SetPoint(p.point, p.rel, p.relPoint, p.x, p.y)
+    end
+end
+
+-- SuuUI's look behind a Blizzard button: quiet (surface-raised, gilt-line),
+-- primary (arcane) or danger (ember edge); hover brightens the edge.
+export class ButtonArt extends Frame
+    readonly fill: Texture
+    readonly edge: Border
+    readonly glow: SoftEdge
+    variant: string = "quiet"
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self.fill = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.fill:SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.glow = UI.Shadow(self, "glow-arcane")
+        self.glow:SetShown(false)
+    end
+end
+
+-- A group invite's role buttons (the game's, with their checkboxes, clicks
+-- and tooltips) as SuuUI's round role toggles on the card: the icon in a
+-- circle, the role's name under it, a 14px box on its corner. On: arcane;
+-- one the game has disabled (your class can't, or the group has no room;
+-- its tooltip says which) at opacity-disabled.
+local ROLE_TEX: { [string]: string } = { TANK = "role-tank", HEALER = "role-healer", DAMAGER = "role-damage" }
+local ROLE_WORD: { [string]: string } = {
+    TANK = TANK or "Tank",
+    HEALER = HEALER or "Healer",
+    DAMAGER = DAMAGER or "Damage",
+}
+
+-- (`token`: a circle texture token, the theme's)
+local function circle(owner: Frame, token: string, layer: DrawLayer): Texture
+    local t = owner:CreateTexture(nil, layer)
+    UI.Skin(t, token)
+    t:SetAllPoints()
+    return t
+end
+
+export class RoleArt extends Frame
+    readonly fill: Texture
+    readonly edge: Texture
+    readonly glyph: Texture
+    readonly word: Text
+    readonly box: Frame
+    readonly boxFill: Texture
+    readonly boxEdge: Border
+    readonly tick: Texture
+    hover: boolean = false
+
+    constructor(parent: Frame, readonly button: Button, readonly check: CheckButton?)
+        super(nil, parent)
+        self:EnableMouse(false)
+        self.fill = circle(self, "circle-fill", "BACKGROUND")
+        self.edge = circle(self, "circle-band", "BORDER")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(18, 18)
+        self.glyph:SetPoint("CENTER")
+        self.word = UI.Text(self, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.word:SetPoint("TOP", self, "BOTTOM", 0, -S["space-2"])
+        end)
+        self.box = CreateFrame("Frame", nil, self)
+        self.box:SetSize(14, 14)
+        self.box:EnableMouse(false)
+        self.boxFill = UI.Fill(self.box, "surface-sunk")
+        self.boxFill:SetAllPoints()
+        self.boxEdge = UI.Border(self.box, "gilt-line")
+        self.tick = self.box:CreateTexture(nil, "OVERLAY")
+        UI.Glyph(self.tick, "check")
+        self.tick:SetSize(10, 10)
+        self.tick:SetPoint("CENTER")
+        UI.Paint(self.tick, "on-signal")
+    end
+
+    function Draw()
+        if not self:IsShown() then
+            return
+        end
+        local cb = self.check
+        local on = cb ~= nil and cb:GetChecked() and true or false
+        UI.Paint(self.edge, on and "arcane" or (self.hover and "gilt" or "gilt-line"))
+        UI.Paint(self.fill, on and "surface-raised" or "surface-sunk")
+        UI.Paint(self.glyph, on and "ink" or "ink-faint")
+        self.word:SetColor(on and "ink" or "ink-muted")
+        self.box:SetShown(cb ~= nil and cb:IsShown() and true or false)
+        UI.PaintFill(self.boxFill, on and "arcane" or "surface-sunk")
+        self.boxEdge:SetColor(on and "arcane" or "gilt-line")
+        self.tick:SetShown(on)
+        self:SetAlpha(self.button:IsEnabled() and 1 or T.opacity["opacity-disabled"])
+    end
+end
+
+-- What we change on a Blizzard button or edit box, and how it was.
+export function remember(m: NotificationsModule, h: Host, f: Frame): Saved
+    local saved = h.saved or {}
+    h.saved = saved
+    local known = saved[f]
+    if known then
+        return known
+    end
+    local s: Saved = {
+        points = savePoints(f),
+        width = f:GetWidth(),
+        height = f:GetHeight(),
+        alphas = {},
+        strata = f:GetFrameStrata(),
+        level = f:GetFrameLevel(),
+    }
+    for _, r in ipairs(frames.textures(f)) do
+        s.alphas[r] = r:GetAlpha()
+    end
+    local b = frames.asButton(f)
+    if b then
+        -- a button's state textures (not always among its regions)
+        for _, t in ipairs(frames.stateTextures(b)) do
+            if s.alphas[t] == nil then
+                s.alphas[t] = t:GetAlpha()
+            end
+        end
+        local fs = b:GetFontString()
+        if fs then
+            s.font, s.fs, s.color = fs:GetFontObject(), fs, { fs:GetTextColor() }
+        end
+    end
+    local eb = frames.asEditBox(f)
+    if eb then
+        -- its font as it is, not its font object: Blizzard's popup box sets
+        -- its font in place, and given back to itself as its own font object
+        -- the game recursed until it crashed (STACK_OVERFLOW on closing a
+        -- type-DELETE popup, found in game)
+        local file, size, flags = eb:GetFont()
+        if file then
+            s.editFont = { file = file, size = size, flags = flags }
+        end
+        -- its frame is a child's (the popup box's backdrop, a nine-slice):
+        -- hidden too (seen in game: Blizzard's gold edge inside the card's)
+        for _, child in ipairs({ eb:GetChildren() }) do
+            for _, r in ipairs(frames.textures(child)) do
+                if s.alphas[r] == nil then
+                    s.alphas[r] = r:GetAlpha()
+                end
+            end
+        end
+    end
+    saved[f] = s
+    return s
+end
+
+export function undo(m: NotificationsModule, h: Host)
+    local saved = h.saved
+    if not saved then
+        return
+    end
+    -- every part loose first: the buttons hang off each other here (each
+    -- beside the next) and in Blizzard's layout the other way round, so
+    -- restoring one by one anchored a button to one depending on it (an
+    -- error, found in game)
+    for f in pairs(saved) do
+        f:ClearAllPoints()
+    end
+    for f, s in pairs(saved) do
+        m.widths[f] = nil
+        restorePoints(f, s.points)
+        f:SetSize(s.width, s.height)
+        f:SetFrameStrata(s.strata)
+        f:SetFrameLevel(s.level)
+        for r, a in pairs(s.alphas) do
+            r:SetAlpha(a)
+        end
+        local fs, font, color = s.fs, s.font, s.color
+        -- (never an object's own font as its font object)
+        if fs and font and font ~= fs then
+            fs:SetFontObject(font)
+        end
+        if fs and color then
+            fs:SetTextColor(color[1], color[2], color[3], color[4])
+        end
+        local eb, editFont = frames.asEditBox(f), s.editFont
+        if eb and editFont then
+            eb:SetFont(editFont.file, editFont.size, editFont.flags or "")
+        end
+        local art = m.arts[f]
+        if art then
+            art:Hide()
+        end
+        local roleArt = m.roleArts[f]
+        if roleArt then
+            roleArt:Hide()
+        end
+    end
+    h.saved = nil
+end
+
+-- SuuUI's look behind a Blizzard button (ButtonArt).
+export function artFor(m: NotificationsModule, b: Button, stack: NotificationStack): ButtonArt
+    local known = m.arts[b]
+    if known then
+        return known
+    end
+    local art = ButtonArt.new(stack)
+    m.arts[b] = art
+    hookScript(b, "OnEnter", function()
+        if not art:IsShown() then
+            return
+        end
+        if art.variant == "primary" then
+            art.glow:SetShown(true)
+        else
+            art.edge:SetColor(art.variant == "danger" and "ember" or "gilt")
+        end
+    end)
+    hookScript(b, "OnLeave", function()
+        if not art:IsShown() then
+            return
+        end
+        art.glow:SetShown(false)
+        art.edge:SetColor(art.variant == "primary" and "arcane" or art.variant == "danger" and "ember" or "gilt-line")
+    end)
+    return art
+end
+
+export function styleButton(
+    m: NotificationsModule,
+    h: Host,
+    b: Button,
+    variant: string,
+    stack: NotificationStack
+): number
+    local s = m:Remember(h, b)
+    for r in pairs(s.alphas) do
+        r:SetAlpha(0)
+    end
+    local fs = b:GetFontString()
+    if fs then
+        fs:SetFontObject(SuuUI.Fonts.Get("label"))
+        -- the game's own text: set plainly, again by Rebuild after a theme change
+        fs:SetTextColor(UI.RGBA(variant == "primary" and "on-signal" or variant == "danger" and "ember-text" or "ink"))
+    end
+    local w = math.max(64, math.ceil((fs and fs:GetUnboundedStringWidth() or 40) + S["space-4"] * 2))
+    -- and kept: Blizzard sizes its popup buttons again after showing them
+    -- (both 120 wide on the death popup, found in game: Release Spirit
+    -- over Recap)
+    m.widths[b] = w
+    if not m.widthHooked[b] then
+        m.widthHooked[b] = true
+        local function keep()
+            local want = m.widths[b]
+            if not want or m.sizing or math.abs(b:GetWidth() - want) < 0.5 then
+                return
+            end
+            m.sizing = true
+            b:SetSize(want, ACTION_H)
+            m.sizing = false
+        end
+        hook(b, "SetWidth", keep)
+        hook(b, "SetSize", keep)
+    end
+    b:SetSize(w, ACTION_H)
+    local art = m:ArtFor(b, stack)
+    art.variant = variant
+    art:SetFrameStrata(b:GetFrameStrata())
+    art:SetFrameLevel(math.max(0, b:GetFrameLevel() - 1))
+    art:ClearAllPoints()
+    art:SetAllPoints(b)
+    UI.PaintFill(art.fill, variant == "primary" and "arcane" or "surface-raised")
+    art.edge:SetColor(variant == "primary" and "arcane" or variant == "danger" and "ember" or "gilt-line")
+    art.glow:SetShown(false)
+    art:Show()
+    return w
+end
+
+export function styleEditBox(m: NotificationsModule, h: Host, eb: EditBox, box: Frame)
+    local s = m:Remember(h, eb)
+    for r in pairs(s.alphas) do
+        r:SetAlpha(0)
+    end
+    eb:SetFontObject(SuuUI.Fonts.Get("body"))
+    eb:ClearAllPoints()
+    eb:SetPoint("TOPLEFT", box, "TOPLEFT", S["space-4"], 0)
+    eb:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -S["space-4"], 0)
+end
+
+-- The card's data for a hosted popup.
+export function cardData(m: NotificationsModule, h: Host): NotificationData
+    local kind = h.kind
+    local roles, warn = h.roles, h.warning
+    local d: NotificationData = {
+        id = h.id,
+        kind = "action",
+        tone = kind.tone,
+        category = kind.category,
+        title = h.text() or kind.title or "",
+        icon = { glyph = kind.glyph },
+        host = { buttons = #h.buttons(), roles = roles and #roles() or nil },
+    }
+    local warning = warn and warn()
+    if warning and warning ~= "" then
+        d.warning = warning
+    end
+    local duration, remaining = h.time()
+    if duration then
+        d.duration, d.remaining = duration, remaining
+    end
+    if kind.item then
+        local what = GetCursorInfo()
+        local link = asString((select(3, GetCursorInfo())))
+        if what == "item" and link then
+            local data = item.get(link)
+            local qualities: { [number]: string } = { [0] = "poor", "common", "uncommon", "rare", "epic", "legendary" }
+            d.item = {
+                icon = data and data.icon,
+                label = data and data.name or link,
+                quality = qualities[data and data.quality or 1] or "common",
+            }
+        end
+    end
+    -- a cost the game's popup shows in its money frame, on its own line
+    local costOf = kind.cost
+    local cost = costOf and costOf(h.dialog)
+    h.cost = cost
+    if cost then
+        d.body = "Costs " .. coinString(cost)
+    end
+    local eb = h.editBox
+    if kind.confirm and eb and eb:IsShown() then
+        d.confirmText = DELETE_ITEM_CONFIRM_STRING or "DELETE"
+    end
+    return d
+end
+
+-- The popup's own buttons and edit box onto its card.
+export function attach(m: NotificationsModule, h: Host)
+    local stack = m.stack
+    local card = stack and stack:CardFor(h.id)
+    if not (stack and card) then
+        -- not among the shown cards: its parts back in the (off screen) popup
+        m:Undo(h)
+        h.card = nil
+        return
+    end
+    h.card = card
+    local kind = h.kind
+    -- right to left, each beside the one after it: a width Blizzard sets
+    -- later can't make them overlap
+    local list = h.buttons()
+    local prev: Button? = nil
+    for k = #list, 1, -1 do
+        local b, index = list[k].button, list[k].index
+        local variant = (index == kind.primary and "primary") or (index == kind.danger and "danger") or "quiet"
+        -- over their card, which is on the dialog layer now
+        m:Remember(h, b)
+        b:SetFrameStrata(card:GetFrameStrata())
+        b:SetFrameLevel(card:GetFrameLevel() + 10)
+        m:StyleButton(h, b, variant, stack)
+        b:ClearAllPoints()
+        if prev then
+            b:SetPoint("RIGHT", prev, "LEFT", -S["space-3"], 0)
+        else
+            b:SetPoint("RIGHT", card.actionsRow, "RIGHT", 0, 0)
+        end
+        prev = b
+    end
+    local eb = h.editBox
+    local data = card.data
+    if data and data.confirmText and eb then
+        m:Remember(h, eb)
+        eb:SetFrameStrata(card:GetFrameStrata())
+        eb:SetFrameLevel(card:GetFrameLevel() + 10)
+        m:StyleEditBox(h, eb, card.confirmBox)
+    end
+    local roles = h.roles
+    if roles then
+        for i, b in ipairs(roles()) do
+            m:HostRole(h, card, b, i, stack)
+        end
+    end
+end
+
+-- A role button's toggle (RoleArt), drawn again whenever the game changes
+-- the button or its checkbox.
+export function roleArtFor(m: NotificationsModule, b: Button, cb: CheckButton?, stack: NotificationStack): RoleArt
+    local known = m.roleArts[b]
+    if known then
+        return known
+    end
+    local art = RoleArt.new(stack, b, cb)
+    local function draw()
+        art:Draw()
+    end
+    for _, method in ipairs({ "Enable", "Disable", "SetEnabled" }) do
+        hook(b, method, draw)
+    end
+    if cb then
+        for _, method in ipairs({ "SetChecked", "Show", "Hide" }) do
+            hook(cb, method, draw)
+        end
+        hookScript(cb, "OnClick", draw)
+    end
+    hookScript(b, "OnEnter", function()
+        art.hover = true
+        art:Draw()
+    end)
+    hookScript(b, "OnLeave", function()
+        art.hover = false
+        art:Draw()
+    end)
+    m.roleArts[b] = art
+    return art
+end
+
+export function hostRole(
+    m: NotificationsModule,
+    h: Host,
+    card: Notification,
+    b: Button,
+    i: number,
+    stack: NotificationStack
+)
+    local cb = frames.asCheckButton(field(b, "checkButton"))
+    local s = m:Remember(h, b)
+    for r in pairs(s.alphas) do
+        r:SetAlpha(0)
+    end
+    b:SetFrameStrata(card:GetFrameStrata())
+    b:SetFrameLevel(card:GetFrameLevel() + 10)
+    b:SetSize(36, 36)
+    b:ClearAllPoints()
+    b:SetPoint("TOP", card.rolesRow, "TOPLEFT", 30 + (i - 1) * 60, 0)
+    if cb then
+        local cs = m:Remember(h, cb)
+        for r in pairs(cs.alphas) do
+            r:SetAlpha(0)
+        end
+        -- 14px on screen (the game draws it at 0.7)
+        local scale = cb:GetScale() > 0 and cb:GetScale() or 1
+        cb:SetSize(14 / scale, 14 / scale)
+        cb:ClearAllPoints()
+        cb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 3 / scale, -3 / scale)
+    end
+    local art = m:RoleArtFor(b, cb, stack)
+    art:SetFrameStrata(card:GetFrameStrata())
+    art:SetFrameLevel(card:GetFrameLevel() + 9)
+    art:ClearAllPoints()
+    art:SetAllPoints(b)
+    local role = asString(field(b, "role")) or ""
+    UI.Skin(art.glyph, ROLE_TEX[role] or "role-damage")
+    art.word:SetValue(ROLE_WORD[role] or "")
+    if cb then
+        art.box:ClearAllPoints()
+        art.box:SetPoint("BOTTOMRIGHT", art, "BOTTOMRIGHT", 3, -3)
+    end
+    art:Show()
+    art:Draw()
+end
+
+-- A Blizzard popup: its buttons, text, time left and edit box.
+export function host(m: NotificationsModule, dialog: Frame, which: string)
+    local kind = kindOf(which)
+    if not kind then
+        return
+    end
+    -- a roll's Bind on Pickup question: asked in the roll tray's row
+    local rolls = SuuUI.GetModule("lootrolls")
+    if which == "CONFIRM_LOOT_ROLL" and rolls and rolls:IsEnabled() then
+        return
+    end
+    local info = field(_G, "StaticPopupDialogs", which)
+    m:HostFrame(dialog, which, kind, {
+        buttons = function(): Shown[]
+            return buttonsOf(dialog)
+        end,
+        text = function(): string?
+            return textOf(field(dialog, "Text"))
+        end,
+        time = function(): (number?, number?)
+            local timeout, left = asNumber(field(info, "timeout")), asNumber(field(dialog, "timeleft"))
+            if timeout and timeout > 0 and left then
+                return timeout, left
+            end
+            return nil, nil
+        end,
+        editBox = frames.asEditBox(field(dialog, "EditBox")),
+    })
+end
+
+-- Any Blizzard request window: `parts` says where its buttons ({ button,
+-- index } in order), text, time (duration, remaining) and edit box are.
+export function hostFrame(m: NotificationsModule, dialog: Frame, which: string, kind: Kind, parts: Parts)
+    if not m:Get("requests") then
+        return
+    end
+    local known = m.hosts[dialog]
+    if known and known.which ~= which then
+        m:Undo(known)
+    end
+    local h: Host = known or
+        {
+            dialog = dialog,
+            order = GetTime(),
+            which = which,
+            kind = kind,
+            id = "",
+            buttons = parts.buttons,
+            text = parts.text,
+            time = noTime,
+            data = {},
+        }
+    if not known then
+        m.hosts[dialog] = h
+        if not m.hookedHide[dialog] then
+            m.hookedHide[dialog] = true
+            hookScript(dialog, "OnHide", function()
+                m:Release(dialog)
+            end)
+        end
+    end
+    h.which, h.kind = which, kind
+    h.buttons, h.text, h.time, h.editBox = parts.buttons, parts.text, parts.time or noTime, parts.editBox
+    h.roles, h.warning = parts.roles, parts.warning
+    h.id = "popup:" .. (dialog:GetName() or tostring(dialog))
+    -- the popup itself out of sight (its parts come onto the card); kept on
+    -- screen by its clamp otherwise
+    if h.clamped == nil then
+        h.clamped = dialog:IsClampedToScreen() and true or false
+    end
+    dialog:SetClampedToScreen(false)
+    dialog:ClearAllPoints()
+    dialog:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -OFF_SCREEN, OFF_SCREEN)
+    h.data = m:CardData(h)
+    m:Rebuild()
+end
+
+export function release(m: NotificationsModule, dialog: Frame)
+    local h = m.hosts[dialog]
+    if not h then
+        return
+    end
+    m:Undo(h)
+    local clamped = h.clamped
+    if clamped ~= nil then
+        dialog:SetClampedToScreen(clamped)
+    end
+    m.hosts[dialog] = nil
+    m:Rebuild()
+end
+
+export function hookWindows(m: NotificationsModule)
+    for _, w in ipairs(popups.WINDOWS) do
+        local f = frames.find(w.name)
+        if f and not m.hookedHide[f] then
+            m.hookedHide[f] = true
+            hookScript(f, "OnShow", function(frame: Frame)
+                if m:IsEnabled() then
+                    m:HostFrame(frame, w.name, w.kind, w.parts(frame, m))
+                end
+            end)
+            hookScript(f, "OnHide", function(frame: Frame)
+                m:Release(frame)
+            end)
+            if f:IsShown() then
+                m:HostFrame(f, w.name, w.kind, w.parts(f, m))
+            end
+        end
+    end
+end

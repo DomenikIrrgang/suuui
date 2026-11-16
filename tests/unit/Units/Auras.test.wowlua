@@ -16,7 +16,10 @@ import type UnitAuras from "/UI/Auras"
 import internal M as unitFrames from "/Units/UnitFrames"
 import internal G as enchantAPI, reset as resetEnchants, scan as scanEnchants from "/UI/WeaponEnchants"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 
 local friend = mock.spawnUnit({
     name = "Tamsin Ashford",
@@ -288,13 +291,27 @@ local function migration()
     expect(found).toBe(true)
 end
 
--- (last: the module off)
-@test("stopped: every container gone")
+-- (last: the module off) Auras is reloadToToggle: the registry turns it off
+-- in a session only when its OnEnable fails. Here it toggles live, as a
+-- module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: every container gone, its anchor withdrawn; on again, back")
 local function stopped()
-    M:OnDisable()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    expect(SuuUI.GetAnchor("playerBuffs")).toBe(assert(M.own).holder)
+    expect(holdings(M).anchors).toBe(1)
+    settings.set("auras", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(ownBuffs().container:IsShown()).toBe(false)
     for _, c in pairs(M.attached) do
         expect(c.container:IsShown()).toBe(false)
     end
     expect(SuuUI.GetAnchor("playerBuffs")).toBeNil()
+    expect(holdings(M)).toEqual(NOTHING)
+    settings.set("auras", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(ownBuffs().container:IsShown()).toBe(true)
+    expect(SuuUI.GetAnchor("playerBuffs")).toBe(assert(M.own).holder)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

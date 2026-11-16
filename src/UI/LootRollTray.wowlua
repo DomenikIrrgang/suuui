@@ -16,6 +16,8 @@
 --
 --   local tray = lootRollTray(parent, { name })
 --   tray:SetData({ rolls, results, meta, answered, ask })
+--   tray:SetRow(row)  -- one roll's row again (its votes); false: not shown
+--   tray:SetMeta(text)  -- the head's line alone
 --   tray:SetRemaining({ [id] = seconds })  -- the times and bars, no layout
 --   tray:SetFolded(folded)
 --   tray.onChoose(id, key), tray.onConfirm(id, yes), tray.onPassAll(),
@@ -248,6 +250,20 @@ export class RollOption extends Button
 
     -- The option's data; chosen: yours; blocked: another is yours. Returns its width.
     function SetData(d: RollChoiceData, chosen: boolean, blocked: boolean): number
+        local was = self.data
+        if
+            was and
+                self:IsShown() and
+                was.label == d.label and
+                was.count == d.count and
+                was.unavailable == d.unavailable and
+                self.chosen == chosen and
+                self.blocked == blocked
+        then
+            -- (the same: only who chose it, for the tooltip)
+            self.data = d
+            return self:GetWidth()
+        end
         self.data, self.chosen, self.blocked = d, chosen, blocked
         local x = 10
         self.lock:ClearAllPoints()
@@ -545,6 +561,46 @@ export class LootRollRow extends Button
             self.yes:SetLabel(confirm.accept)
         end
         self:SetRemaining(d.remaining)
+    end
+
+    -- New votes for the row it shows: only the counts and the lines of who
+    -- chose what change. Returns whether the tray must lay out again (its
+    -- height or the choices' column changed; anything else changed: the
+    -- whole row set again).
+    function Update(d: RollRowData, compact: boolean): boolean
+        local was = self.data
+        local cw, dw = was and was.confirm, d.confirm
+        if
+            not was or
+                compact ~= self.compact or
+                was.id ~= d.id or
+                was.icon ~= d.icon or
+                was.name ~= d.name or
+                was.quality ~= d.quality or
+                was.locked ~= d.locked or
+                was.choice ~= d.choice or
+                was.note ~= d.note or
+                was.duration ~= d.duration or
+                (cw == nil) ~= (dw == nil) or
+                (cw and dw and (cw.text ~= dw.text or cw.accept ~= dw.accept))
+        then
+            self:SetData(d, compact)
+            return true
+        end
+        self.data = d
+        self:SetRemaining(d.remaining)
+        if compact then
+            self.sub:SetValue(d.who or d.sub or "")
+            return false
+        end
+        self.sub:SetValue(d.sub or "")
+        local w = self.choices:SetChoices(d.choices, d.choice)
+        local relayout = w ~= self.choicesW or (d.who == nil) ~= (was.who == nil)
+        self.choicesW = w
+        if d.who and not relayout then
+            self.whoLine:SetValue(d.who)
+        end
+        return relayout
     end
 
     function SetRemaining(seconds: number)
@@ -960,6 +1016,33 @@ export class LootRollTray extends Frame
             self.resultRows[i]:Hide()
         end
         self:Layout()
+    end
+
+    -- One roll's row again (its votes changed), without the others: only
+    -- the parts that changed, laid out again only when its size or the
+    -- choices' column did. False: the tray has no row for it (SetData).
+    function SetRow(r: RollRowData): boolean
+        local list = self.data.rolls
+        for i, d in ipairs(list) do
+            if d.id == r.id then
+                local row = self.rows[i]
+                if not row then
+                    return false
+                end
+                list[i] = r
+                if row:Update(r, self.data.answered == true) then
+                    self:Layout()
+                end
+                return true
+            end
+        end
+        return false
+    end
+
+    -- The head's line alone (who the answered rolls wait on).
+    function SetMeta(line: string)
+        self.data.meta = line
+        self.meta:SetValue(line)
     end
 
     -- A roll's row, while it shows.

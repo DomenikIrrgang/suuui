@@ -1,0 +1,210 @@
+-- Units/AuctionHouse/Bidding.wowlua
+-- A bid or a buyout SuuUI places itself (Units/AuctionHouse): the Buy page's
+-- Bid, the Bids tab's Bid and Buy out. What it acts on is the auction the
+-- player chose, by its auctionID, found again in the list as it is at the
+-- moment of acting and compared with what the player saw when choosing it
+-- (BAG-1: a row index pointed at another auction once the list was read
+-- again). An amount is checked before it is sent: at least the least bid,
+-- under the buyout (the buyout or more is a purchase, which Buy out does),
+-- at most the player's money.
+-- The game may refuse C_AuctionHouse.PlaceBid from SuuUI's code (a single
+-- auction's buyout is refused: found in game, see GamePage; a bid under the
+-- buyout not probed yet: /suu probe ahbid). A refused protected call raises
+-- no Lua error (BAG-32), so the call runs in SuuUI.ExpectRefusal, and a bid
+-- counts as placed only when the house says so: BID_ADDED for a bid,
+-- AUCTION_HOUSE_PURCHASE_COMPLETED for a buyout; AUCTION_HOUSE_SHOW_ERROR,
+-- the house closing or no answer in BID_WAIT seconds, not placed.
+-- The module's methods for it (PlaceBid, OnBidAdded, OnPurchaseCompleted,
+-- OnHouseError, DropBid) call the functions here.
+
+import SuuUI from "/Core/API"
+import * as errors from "wowlua:errors"
+import coins, sorts from "./Common"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local AH = C_AuctionHouse
+local try = errors.try
+
+-- How long the house has to answer a bid before SuuUI says it didn't.
+export const BID_WAIT = 10
+
+-- What a bid is checked against: an auction's id and prices.
+export type AuctionState = { auctionID: number, minBid?: number, bidAmount?: number, buyoutAmount?: number }
+
+-- An auction as the player saw it when choosing it.
+export type Seen = { auctionID: number, least?: number, bidAmount?: number, buyout?: number }
+
+-- A bid or buyout sent, waiting for the house's answer.
+export type PendingBid = { auctionID: number, amount: number, name: string, buyout: boolean, at: number }
+
+-- The least an auction takes as a bid (nil: it takes none).
+export function leastBid(a: AuctionState): number?
+    return a.minBid or a.bidAmount
+end
+
+export function seenOf(a: AuctionState): Seen
+    return { auctionID = a.auctionID, least = leastBid(a), bidAmount = a.bidAmount, buyout = a.buyoutAmount }
+end
+
+-- Whether the auction's prices are not what the player saw.
+export function changed(seen: Seen, a: AuctionState): boolean
+    return seen.least ~= leastBid(a) or seen.bidAmount ~= a.bidAmount or seen.buyout ~= a.buyoutAmount
+end
+
+-- The auction the player chose, as the list has it now: the entry, or nil
+-- and why not ("gone": not in the list; "changed": its prices aren't what
+-- the player saw, the entry returned too).
+export function recheck<T extends AuctionState>(list: T[], seen: Seen): (T?, string?)
+    for _, a in ipairs(list) do
+        if a.auctionID == seen.auctionID then
+            if changed(seen, a :: unknown :: AuctionState) then
+                return a, "changed"
+            end
+            return a, nil
+        end
+    end
+    return nil, "gone"
+end
+
+-- What the player is told when the auction they chose is gone or changed:
+-- nothing was placed, and what it is now.
+export function recheckNote(why: string, a: AuctionState?, what: string): string
+    if why == "gone" or not a then
+        return "That auction isn't listed any more (sold, bought out or ended): nothing was " .. what .. "."
+    end
+    local least, buyout = leastBid(a), a.buyoutAmount
+    local now: string[] = {}
+    if least then
+        now[#now + 1] = "least bid " .. coins(least)
+    end
+    if buyout and buyout > 0 then
+        now[#now + 1] = "buyout " .. coins(buyout)
+    end
+    return "That auction changed since you chose it: nothing was " .. what .. "." ..
+        (#now > 0 and (" Now " .. table.concat(now, ", ") .. ".") or "")
+end
+
+-- Why `amount` can't be bid (nil: it can): at least the least bid, under
+-- the buyout, at most the money the player has.
+export function bidProblem(least: number?, amount: number?, money: number, buyout: number?): string?
+    if not least then
+        return "This auction takes no bids."
+    end
+    if not amount or amount < least then
+        return "At least " .. coins(least) .. "."
+    end
+    if buyout and buyout > 0 and amount >= buyout then
+        return "That's the buyout or more: use Buy out."
+    end
+    if amount > money then
+        return "Not enough money."
+    end
+    return nil
+end
+
+-- A bid (or, `buyout`, a buyout) sent to the house. Told and nothing kept
+-- when it errors or the game refuses the call; else waiting for the house.
+export function placeBid(self: AuctionHouseModule, auctionID: number, amount: number, name: string, buyout: boolean)
+    local word = buyout and "bought" or "bid"
+    if self.bidding then
+        self:Note("Still waiting for the house's answer to your last one: nothing was " .. word .. ".", "error")
+        return
+    end
+    local ok, refused = pcall(function(): boolean
+        return (SuuUI.ExpectRefusal(AH.PlaceBid, auctionID, amount))
+    end)
+    if not ok then
+        self:Note((buyout and "Couldn't buy out: " or "Couldn't bid: ") .. tostring(refused), "error")
+        return
+    end
+    if refused then
+        self:Note(
+            buyout and "The game refused the buyout from SuuUI: nothing was bought. Open the item on Buy to buy it out there." or
+                "The game refused the bid from SuuUI: no bid was placed.",
+            "error"
+        )
+        return
+    end
+    local pending: PendingBid = { auctionID = auctionID, amount = amount, name = name, buyout = buyout, at = GetTime() }
+    self.bidding = pending
+    self:Note((buyout and "Buying out " or ("Bidding " .. coins(amount) .. " on ")) .. name .. "…")
+    self:After(BID_WAIT, function()
+        if self.bidding == pending then
+            self.bidding = nil
+            self:Note(
+                "No answer from the house about " .. name .. ": look at your bids before trying again.",
+                "error"
+            )
+            self:Refresh()
+        end
+    end)
+    self:Refresh()
+end
+
+-- BID_ADDED: the house took the bid waiting (the only one SuuUI has asked
+-- for; the game's own page, hidden, places none). Its payload is named
+-- bidID in the documentation: whether it is the auctionID on Forever is
+-- what /suu probe ahbid records, so it isn't compared.
+export function onBidAdded(self: AuctionHouseModule, _id: unknown)
+    local p = self.bidding
+    if not p or p.buyout then
+        return
+    end
+    self.bidding = nil
+    self:RememberBid(p.auctionID, p.amount)
+    self:Note("Bid " .. coins(p.amount) .. " on " .. p.name .. ".", "ok")
+    forgetChoice(self, p.auctionID)
+    -- the item's auctions as they are now (its least bid went up)
+    local key = self.itemKey
+    if key and self.view == "item" then
+        try(AH.SendSearchQuery, key, sorts(), true)
+    end
+    self:Refresh()
+end
+
+-- AUCTION_HOUSE_PURCHASE_COMPLETED for the buyout (or bid) waiting.
+export function onPurchaseCompleted(self: AuctionHouseModule, id: unknown)
+    local p = self.bidding
+    if p and p.auctionID == id then
+        self.bidding = nil
+        forgetChoice(self, p.auctionID)
+    end
+end
+
+-- An auction bid on or bought: no longer chosen (on Buy or Bids), its
+-- typed bid gone; choosing it again shows what it is now.
+export function forgetChoice(self: AuctionHouseModule, id: number)
+    local buy = self.buy
+    if self.chosen == id then
+        self.chosen, self.chosenSeen = nil, nil
+        if buy then
+            buy.itemView.bid:Clear()
+        end
+    end
+    local mine = self.mine
+    if mine and mine.chosen == id then
+        mine.chosen, mine.seen = nil, nil
+        mine.bid:Clear()
+    end
+end
+
+-- AUCTION_HOUSE_SHOW_ERROR while a bid waits: it wasn't placed. True when
+-- it was that one's answer.
+export function onHouseError(self: AuctionHouseModule, err: unknown): boolean
+    local p = self.bidding
+    if not p then
+        return false
+    end
+    self.bidding = nil
+    self:Note(
+        (p.buyout and "Nothing was bought: " or "No bid was placed: ") .. "the auction house said no (" .. tostring(err) .. ").",
+        "error"
+    )
+    self:Refresh()
+    return true
+end
+
+-- The house closed: a bid still waiting gets no answer.
+export function dropBid(self: AuctionHouseModule)
+    self.bidding = nil
+end

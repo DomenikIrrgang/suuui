@@ -1,0 +1,57 @@
+-- UI/CooldownTracker/Layout: where the rows go, and the hairlines' layers.
+-- (Rows of cells, slots and collections are laid out through the tracker:
+-- UI/CooldownTracker's tests.)
+
+import test, expect, afterEach from "wowlua:test"
+import tokens as T from "/Core/Tokens"
+import cooldownTracker, CooldownTracker from "/UI/CooldownTracker"
+import layout, AURA, TrackerSeparators from "/UI/CooldownTracker/Layout"
+import expectNoErrors, newParent from "../../../helpers"
+
+local made: CooldownTracker? = nil
+local parent: Frame? = nil
+
+@afterEach
+local function reset()
+    local t = made
+    if t then
+        t:Stop()
+        t:Hide()
+    end
+    if parent then
+        parent:Hide()
+    end
+    made, parent = nil, nil
+end
+
+@test("layout: nothing built is one aura wide; a footer sits under the rows and sets the width")
+local function empty()
+    local p = newParent(600, 400)
+    parent = p
+    local t = cooldownTracker(p, nil)
+    made = t
+    layout(t)
+    expect(t:GetWidth()).toBe(T.size[AURA])
+    expect(t:GetHeight()).toBe(1)
+    expect(t.divider).never.toBeShown()
+    expect(t.auraDivider).never.toBeShown()
+    local bar = CreateFrame("Frame", nil, t)
+    bar:SetSize(300, 10)
+    t.footer = bar
+    layout(t)
+    expect(t:GetWidth()).toBe(300)
+    expect(t:GetHeight()).toBe(10 + T.space["space-4"])
+    expectNoErrors()
+end
+
+@test("TrackerSeparators: a layer over its owner, no lines until a layout uses one")
+local function separators()
+    local owner = newParent(200, 100)
+    local s = TrackerSeparators.new(owner)
+    expect(s:GetParent()).toBe(owner)
+    expect(s:GetWidth()).toBe(200)
+    expect(#s.lines).toBe(0)
+    expect(s.used).toBe(0)
+    owner:Hide()
+    expectNoErrors()
+end

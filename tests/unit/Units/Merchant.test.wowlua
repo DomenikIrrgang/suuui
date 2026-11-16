@@ -11,7 +11,10 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import themeChanged, tokenOf from "../SettingsUI/UiSettingsHelpers"
 
 import M from "/Units/Merchant"
@@ -238,6 +241,69 @@ local function buying()
     mock.advanceTime(1)
     expect(bought).toEqual({ 1000, 1000 })
     M:Buy(M:Item(1) or {}, 0) -- nothing to buy
+end
+
+@test("Buy finds its item again at each step: the list renumbered, it buys the item, not the index; gone, it stops")
+local function buyingByItem()
+    local bought: { { number, number } } = {}
+    mock.stub(_G, "BuyMerchantItem", function(i: number, n: number)
+        bought[#bought + 1] = { i, n }
+    end)
+    open()
+    local arrow = rowNamed("Test Arrow")
+    typeQty(arrow, 3000)
+    mock.click(arrow.buy)
+    expect(bought).toEqual({ { 2, 1000 } })
+    -- the list renumbered meanwhile (another filter): the arrows now third
+    local realLink = GetMerchantItemLink
+    local arrowLink = realLink(2)
+    mock.stub(_G, "GetMerchantItemLink", function(i: number): string?
+        if i == 2 then
+            return realLink(3)
+        elseif i == 3 then
+            return arrowLink
+        end
+        return realLink(i)
+    end)
+    mock.advanceTime(0.31)
+    expect(bought).toEqual({ { 2, 1000 }, { 3, 1000 } })
+    -- and gone from the list: the queue stops
+    mock.stub(_G, "GetMerchantItemLink", function(i: number): string?
+        return i == 1 and realLink(1) or nil
+    end)
+    mock.stub(_G, "GetMerchantNumItems", function(): number
+        return 1
+    end)
+    mock.advanceTime(1)
+    expect(#bought).toBe(2)
+    expectNoErrors()
+end
+
+@test("a purchase queued or asked about at one vendor does nothing at the next")
+local function buyingNextVendor()
+    local bought: number[] = {}
+    mock.stub(_G, "BuyMerchantItem", function(_: number, n: number)
+        bought[#bought + 1] = n
+    end)
+    open()
+    local arrow = rowNamed("Test Arrow")
+    typeQty(arrow, 3000)
+    mock.click(arrow.buy)
+    expect(bought).toEqual({ 1000 })
+    -- closed and the next vendor opened within the queue's moments: the
+    -- same item there, at the same place, still isn't bought
+    mock.closeMerchant()
+    open()
+    mock.advanceTime(1)
+    expect(bought).toEqual({ 1000 })
+    -- a dear purchase confirmed after its vendor closed
+    mock.click(rowNamed("Test Tome").buy)
+    local ask = assert(confirmed)
+    mock.closeMerchant()
+    open()
+    assert(ask.onConfirm)()
+    expect(bought).toEqual({ 1000 })
+    expectNoErrors()
 end
 
 @test("a dear purchase, or one with other costs, asks first")
@@ -480,7 +546,27 @@ local function refreshes()
     mock.fireEvent("BAG_UPDATE_DELAYED")
     mock.advanceTime(0.06)
     expect(refresh).toHaveBeenCalledTimes(1)
-    assert(M.OnDisable)(M)
+    -- turned off through the registry (it is reloadToToggle: here it toggles
+    -- live, as when its OnEnable fails) with a refresh waiting
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    mock.fireEvent("MERCHANT_UPDATE")
+    settings.set("merchant", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(win()).never.toBeShown()
+    expect(holdings(M)).toEqual(NOTHING)
+    mock.advanceTime(0.06)
+    expect(refresh).toHaveBeenCalledTimes(1)
     M:Refresh() -- closed: nothing
+    -- on again: refreshes come again
+    settings.set("merchant", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    own.reloadToToggle = true
+    open()
+    refresh = mock.stub(M, "Refresh", M.Refresh)
+    mock.fireEvent("MERCHANT_UPDATE")
+    mock.advanceTime(0.06)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(win()).toBeShown()
+    expectNoErrors()
 end

@@ -2,15 +2,19 @@
 -- placed on other maps, showing the way (the game's waypoint and its
 -- navigation), posted to your group and shared back, on the minimap, the
 -- mark card (yours and a shared one), Ctrl+click on the world map, the
--- game's own waypoint pin while following, a /reload while following.
+-- game's own waypoint pin while following, a /reload while following;
+-- shared marks from strangers, other channels, floods, bad maps and names
+-- with the UI's escapes; turned off while following.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M from "/Units/Marks"
-import minimapPlace, decodeMark, isOwnSender from "/Units/Marks"
+import minimapPlace, decodeMark from "/Units/Marks"
 import type TooltipData from "/UI/Tooltip"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
+import * as comm from "/Core/Comm"
+import * as settings from "/Core/Settings"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 
@@ -157,11 +161,8 @@ local function shared()
     local name, realm = UnitFullName("player")
     -- (as the game names you: with your last name or realm when you have one)
     local own = realm and (tostring(name) .. " " .. tostring(realm)) or tostring(name)
-    M:OnMessage("SuuUI", ("MARK	%d	0.6	0.6	star	Mine"):format(ELWYNN), "PARTY", own)
+    mock.receiveAddonMessage("SuuUI", ("MARK\t%d\t0.6\t0.6\tstar\tMine"):format(ELWYNN), "PARTY", own)
     expect(#M:Marks()).toBe(1)
-    expect(isOwnSender("A B", "A", "B")).toBe(true)
-    expect(isOwnSender("A", "A", nil)).toBe(true)
-    expect(isOwnSender("C-B", "A", "B")).toBe(false)
     expect({ decodeMark("MARK\tx\t0.1\t0.1\tstar\tn") }).toEqual({})
 end
 
@@ -310,6 +311,175 @@ local function gamePin()
     M:HideGamePin(provider)
     expect(alpha).toBe(1)
     M:HideGamePin({})
+end
+
+@test("shared marks refused: a whisper, the guild, a map the client doesn't know, a place off the map")
+local function sharedRefused()
+    local function from(text: string, channel: string, sender: string?)
+        mock.receiveAddonMessage("SuuUI", text, channel, sender or "Member1-Realm")
+    end
+    from(("MARK\t%d\t0.3\t0.3\tstar\tX"):format(ELWYNN), "WHISPER", "Stranger-Realm")
+    from(("MARK\t%d\t0.3\t0.3\tstar\tX"):format(ELWYNN), "GUILD")
+    from(("MARK\t%d\t0.3\t0.3\tstar\tX"):format(ELWYNN), "CHANNEL")
+    for _, map in ipairs({ "1429.5", "-1429", "1e300", "0", "99998", "nan", "" }) do
+        from("MARK\t" .. map .. "\t0.3\t0.3\tstar\tX", "PARTY")
+    end
+    for _, xy in ipairs({ "-0.1\t0.3", "0.3\t1.5", "inf\t0.3", "0.3\tnan", "0x1\t0.3" }) do
+        from(("MARK\t%d\t"):format(ELWYNN) .. xy .. "\tstar\tX", "PARTY")
+    end
+    from("MARK", "PARTY")
+    from("MARK\t", "PARTY")
+    expect(#M:Marks()).toBe(0)
+end
+
+@test("a shared mark's name cleaned and cut, its symbol one of the eight; Post's exact text read back")
+local function sharedCleaned()
+    -- (a minute on: earlier tests' messages counted against their senders)
+    mock.advanceTime(61)
+    mock.receiveAddonMessage(
+        "SuuUI",
+        ("MARK\t%d\t0.3\t0.3\tbanana\t|cffff0000Red|r |TInterface\\Icons\\x:64|t %s"):format(
+            ELWYNN,
+            string.rep("x", 60)
+        ),
+        "RAID",
+        "Member1-Realm"
+    )
+    local m = M:Marks()[1]
+    expect(m.symbol).toBe("star")
+    expect(m.name:find("|", 1, true)).toBeNil()
+    expect(#m.name).toBe(40)
+    -- what Post sends (an older SuuUI's too), as another SuuUI reads it
+    mock.receiveAddonMessage(
+        "SuuUI",
+        ("MARK\t%d\t0.4200\t0.6500\tmoon\tHerbs here"):format(ELWYNN),
+        "INSTANCE_CHAT",
+        "Member2-Realm"
+    )
+    local herbs = M:Marks()[2]
+    expect({ herbs.map, herbs.x, herbs.y, herbs.symbol, herbs.name, herbs.from }).toEqual({
+        ELWYNN,
+        0.42,
+        0.65,
+        "moon",
+        "Herbs here",
+        "Member2-Realm",
+    })
+end
+
+@test("shared marks flooded: ten a minute and thirty kept per sender; your own never pushed out for them")
+local function sharedFlood()
+    -- (a minute on: earlier tests' messages counted against their senders)
+    mock.advanceTime(61)
+    local function mark(i: number, sender: string)
+        mock.receiveAddonMessage(
+            "SuuUI",
+            ("MARK\t%d\t%.4f\t0.5\tstar\tSpam"):format(ELWYNN, i / 1000),
+            "PARTY",
+            sender
+        )
+    end
+    for i = 1, 50 do
+        mark(i, "Member1-Realm")
+    end
+    expect(#M:Marks()).toBe(10)
+    -- minute by minute: thirty kept from one sender at most
+    for minute = 1, 4 do
+        mock.advanceTime(60)
+        for i = 1, 10 do
+            mark(minute * 100 + i, "Member1-Realm")
+        end
+    end
+    expect(#M:Marks()).toBe(30)
+    -- a full list of your own: shared ones refused, yours whole
+    clear()
+    for i = 1, 200 do
+        M:Add(ELWYNN, i / 1000, 0.25)
+    end
+    mock.advanceTime(60)
+    mark(999, "Member2-Realm")
+    expect(#M:Marks()).toBe(200)
+    for _, m in ipairs(M:Marks()) do
+        expect(m.from).toBeNil()
+    end
+    -- with a shared one among them, the next shared one takes its place
+    M:Remove(M:Marks()[1].id)
+    mark(998, "Member2-Realm")
+    expect(#M:Marks()).toBe(200)
+    mock.advanceTime(60)
+    mark(997, "Member3-Realm")
+    expect(#M:Marks()).toBe(200)
+    local shared = 0
+    for _, m in ipairs(M:Marks()) do
+        if m.from then
+            shared += 1
+            expect(m.from).toBe("Member3-Realm")
+        end
+    end
+    expect(shared).toBe(1)
+end
+
+@test("turned off while showing the way: the navigation setting back, the game's waypoint cleared, its pin shown")
+local function offWhileFollowing()
+    C_CVar.SetCVar("showInGameNavigation", "0")
+    local alpha = 0
+    local provider = {
+        pin = {
+            SetAlpha = function(_: unknown, a: number)
+                alpha = a
+            end,
+            EnableMouse = function(_: unknown, _: boolean) end,
+        },
+    }
+    local was = M.waypointProvider
+    M.waypointProvider = provider
+    local m = M:Add(ELWYNN, 0.42, 0.65)
+    M:Follow(m.id)
+    expect(C_CVar.GetCVar("showInGameNavigation")).toBe("1")
+    settings.set("marks", "enabled", false)
+    expect(C_CVar.GetCVar("showInGameNavigation")).toBe("0")
+    expect(C_Map.HasUserWaypoint()).toBe(false)
+    expect(M:Following()).toBeNil()
+    expect(alpha).toBe(1)
+    -- a waypoint of the player's own stays
+    settings.set("marks", "enabled", true)
+    M:Follow(m.id)
+    C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(ELWYNN, 0.1, 0.1))
+    settings.set("marks", "enabled", false)
+    expect(C_Map.HasUserWaypoint()).toBe(true)
+    C_Map.ClearUserWaypoint()
+    settings.set("marks", "enabled", true)
+    M.waypointProvider = was
+end
+
+@test("the navigation setting an older SuuUI kept in the character's data: given back, then kept by SuuUI")
+local function oldNavigation()
+    C_CVar.SetCVar("showInGameNavigation", "1")
+    local data = M:CharData()
+    data.navWas = "0"
+    settings.set("marks", "enabled", false)
+    settings.set("marks", "enabled", true)
+    expect(data.navWas).toBeNil()
+    expect(C_CVar.GetCVar("showInGameNavigation")).toBe("0")
+    local m = M:Add(ELWYNN, 0.42, 0.65)
+    M:Follow(m.id)
+    expect(C_CVar.GetCVar("showInGameNavigation")).toBe("1")
+    M:Follow(nil)
+    expect(C_CVar.GetCVar("showInGameNavigation")).toBe("0")
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handler too), nothing doubled")
+local function leavesNothing()
+    local m = M:Add(ELWYNN, 0.42, 0.65)
+    M:Follow(m.id)
+    local c = cycle("marks")
+    expect(c.off).toEqual(NOTHING)
+    expect(comm.count(M)).toBe(1)
+    -- (following ended when it went off: the CVar it held is given back)
+    expect(c.before.cvars).toBe(1)
+    local wanted = c.before
+    wanted.cvars = 0
+    expect(c.after).toEqual(wanted)
 end
 
 @test("a /reload while following: still following while the game kept its waypoint")

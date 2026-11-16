@@ -36,10 +36,12 @@
 
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
+import root from "/Core/Root"
 import * as draw from "/UI/Draw"
 import text, Text from "/UI/Text"
 import button, SuuButton from "/UI/Controls"
 import checkbox, segmented, textField, Checkbox, Segmented, TextField from "/UI/Inputs"
+import dismissable from "/UI/Dismiss"
 
 local S = T.space
 
@@ -91,18 +93,8 @@ export function filterList(c: FilterChoice?): FilterValue[]
     return {}
 end
 
--- One panel open at a time, and a screen-wide catcher under it that closes it.
+-- One panel open at a time (Esc and a click outside close it: UI/Dismiss).
 local openMenu: FilterMenu? = nil
-local catcher = CreateFrame("Button", nil, UIParent)
-catcher:SetAllPoints(UIParent)
-catcher:SetFrameStrata("FULLSCREEN_DIALOG")
-catcher:Hide()
-catcher:RegisterForClicks("AnyDown")
-catcher:SetScript("OnClick", function()
-    if openMenu then
-        openMenu:Close()
-    end
-end)
 
 local menus: { [FilterMenu]: boolean } = setmetatable({}, { __mode = "k" })
 
@@ -399,7 +391,12 @@ export class FilterMenu extends Button
             local v = self.value[row.group.key]
             local control = row.control
             if control then
-                control:SetValue(type(v) ~= "table" and v or nil)
+                -- (a `false` value is a choice too)
+                if type(v) ~= "table" then
+                    control:SetValue(v)
+                else
+                    control:SetValue(nil)
+                end
             end
             for _, chip in ipairs(row.chips or {}) do
                 local on = has(filterList(v), chip.option.value)
@@ -433,10 +430,11 @@ export class FilterMenu extends Button
 
     function Build()
         local menu = self
-        local p = FilterPanel.new(nil, UIParent)
+        -- under SuuUI's root, at its scale like the other popups
+        local p = FilterPanel.new(nil, root)
         self.panel = p
         p:SetFrameStrata("FULLSCREEN_DIALOG")
-        p:SetFrameLevel(catcher:GetFrameLevel() + 10)
+        p:SetFrameLevel(10)
         p:EnableMouse(true)
         p:SetClampedToScreen(true)
         local ground = draw.fill(p, "surface")
@@ -630,20 +628,14 @@ export class FilterMenu extends Button
         count:SetPoint("LEFT", p, "TOPLEFT", pad, -(y + reset:GetHeight() / 2))
         y = y + reset:GetHeight() + pad
         p:SetHeight(y)
-        -- Esc closes it (out of combat: the key can't be held back in one)
-        p:EnableKeyboard(true)
-        p:SetScript("OnKeyDown", function(panel, key: string)
-            if InCombatLockdown() then
-                return
-            end
-            if key == "ESCAPE" then
-                panel:SetPropagateKeyboardInput(false)
-                menu:Close()
-            else
-                panel:SetPropagateKeyboardInput(true)
-            end
-        end)
         p:Hide()
+        -- Esc closes it (out of a fight: UI/Dismiss), a click outside too
+        dismissable(p, {
+            close = function()
+                menu:Close()
+            end,
+            outside = "catch",
+        })
     end
 
     function Open()
@@ -658,7 +650,6 @@ export class FilterMenu extends Button
         p:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-2"])
         self:Draw()
         openMenu = self
-        catcher:Show()
         p:Show()
         self.edge:SetColor("arcane")
     end
@@ -675,7 +666,6 @@ export class FilterMenu extends Button
         end
         if openMenu == self then
             openMenu = nil
-            catcher:Hide()
         end
         self.edge:SetColor("gilt-line")
     end

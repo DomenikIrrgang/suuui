@@ -1,0 +1,293 @@
+-- Units/Talents/Trees: the game's trees read (on the stand-in trees of
+-- TalentsHelpers), through the module (Collect, Requires, Classes,
+-- BuildTree) and on their own.
+
+import internal M from "/Units/Talents"
+import test, expect, beforeEach, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import clusterNodes, gridCell from "/Units/Talents/Trees"
+import * as talentTrees from "/Units/Talents/Trees"
+import type Baseline from "/Units/Talents/Trees"
+import * as world from "../TraitWorld"
+import WARRIOR_TREE, PALADIN_TREE, CONFIG, VIEW, wt, pt, nodeIn, talent, setup, teardown from "./TalentsHelpers"
+import expectNoErrors from "../../../helpers"
+
+local w: world.World
+
+@beforeEach
+local function before()
+    w = setup()
+end
+
+@afterEach
+local function after()
+    teardown()
+end
+
+--------------------------------------------------------------------------------
+-- Pure pieces
+--------------------------------------------------------------------------------
+
+@test("clusterNodes sorts the nodes and starts a tree past the gap")
+local function clusters()
+    local nodes: { x: number, y: number }[] = {
+        { x = 3000, y = 0 },
+        { x = 0, y = 600 },
+        { x = 0, y = 0 },
+        { x = 600, y = 0 },
+        { x = 2200, y = 0 },
+    }
+    local c = clusterNodes(nodes)
+    expect(#c).toBe(2)
+    expect(#c[1].nodes).toBe(3)
+    expect(c[1].nodes[1].y).toBe(0)
+    expect(c[1].nodes[2].y).toBe(600)
+    expect(c[1].minX).toBe(0)
+    expect(c[1].maxX).toBe(600)
+    -- 2200 is 1600 past 600: another tree; 3000 is only 800 past 2200
+    expect(#c[2].nodes).toBe(2)
+    expect(c[2].minX).toBe(2200)
+    expect(c[2].maxX).toBe(3000)
+    expect(#clusterNodes({})).toBe(0)
+end
+
+@test("gridCell places columns from the left, or so the rightmost is column 3")
+@cases({
+    { 0, 0, 0, 1800, 0, 0, 0 },
+    { 1800, 1200, 0, 1800, 0, 3, 2 },
+    { 0, 0, 0, 600, 0, 2, 0 },
+    { 600, 0, 0, 600, 0, 3, 0 },
+    { 900, 300, 0, 1800, 0, 2, 1 },
+    { 5000, -600, 0, 1800, 0, 3, 0 },
+})
+local function grid(x: number, y: number, minX: number, maxX: number, minY: number, col: number, row: number)
+    local c, r = gridCell(x, y, minX, maxX, minY)
+    expect(c).toBe(col)
+    expect(r).toBe(row)
+end
+
+--------------------------------------------------------------------------------
+-- A config's trees
+--------------------------------------------------------------------------------
+
+@test("Collect: three trees laid out, their points, arrows and the points to spend")
+local function collect()
+    wt().nodes[1].rank = 1
+    wt().spent = { [501] = 4 }
+    local d = assert(M:Collect())
+    expect(d.configID).toBe(CONFIG)
+    expect(d.treeID).toBe(WARRIOR_TREE)
+    expect(#d.trees).toBe(3)
+    expect(d.trees[1].name).toBe("Arms")
+    expect(d.trees[1].icon).toBe(2001)
+    expect(d.trees[1].groupID).toBe(501)
+    -- the game's count (4) over the ranks seen (1)
+    expect(d.trees[1].points).toBe(4)
+    expect(d.trees[2].points).toBe(0)
+    local one, two, three = nodeIn(d, 11), nodeIn(d, 12), nodeIn(d, 13)
+    expect(one.rank).toBe(1)
+    expect(one.pending).toBe(0)
+    expect(one.col).toBe(2)
+    expect(one.row).toBe(0)
+    expect(two.row).toBe(1)
+    expect(three.col).toBe(3)
+    expect(one.name).toBe("Arms One")
+    expect(one.icon).toBe(1011)
+    expect(one.entryID).toBe(110)
+    expect(one.canPurchase).toBe(true)
+    expect(two.open).toBe(false)
+    expect(two.meetsEdges).toBe(false)
+    expect(#d.trees[1].links).toBe(1)
+    expect(d.trees[1].links[1].met).toBe(true)
+    expect(two.requires[1]).toBe(one)
+    expect(d.available).toBe(5)
+    expect(d.pending).toBe(0)
+    expect(d.staged).toBe(false)
+    expect(M.unseenStaged).toBe(false)
+end
+
+@test("Collect: planned ranks are pending over what was learned before")
+local function collectPlanned()
+    assert(M:Collect())
+    w.staged[13] = 1
+    local d = assert(M:Collect())
+    expect(d.staged).toBe(true)
+    expect(nodeIn(d, 13).rank).toBe(0)
+    expect(nodeIn(d, 13).pending).toBe(1)
+    expect(d.pending).toBe(1)
+    expect(d.trees[1].points).toBe(1)
+    -- another config first seen while planned: the learned rank is the active one
+    M.learnedFor = 999
+    M.learned = {}
+    d = assert(M:Collect())
+    expect(nodeIn(d, 13).rank).toBe(1)
+end
+
+@test("Collect: staged changes the ranks don't show still count one")
+local function collectUnseen()
+    w.forceStaged = true
+    local d = assert(M:Collect())
+    expect(d.pending).toBe(1)
+    expect(M.unseenStaged).toBe(true)
+end
+
+@test("Collect: nothing without a config, a tree or nodes; hidden and empty nodes left out")
+local function collectNothing()
+    mock.fake("C_ClassTalents.GetActiveConfigID", function()
+        return nil
+    end)
+    expect(M:Collect()).toBeNil()
+    expect(M:Collect(12345)).toBeNil()
+    for _, n in ipairs(wt().nodes) do
+        n.visible = false
+    end
+    expect(M:Collect(CONFIG)).toBeNil()
+    for _, n in ipairs(wt().nodes) do
+        n.visible = true
+        n.noEntry = true
+    end
+    wt().nodes[1].noEntry = false
+    wt().groups = {}
+    local d = assert(M:Collect(CONFIG))
+    expect(#d.trees).toBe(1)
+    expect(d.trees[1].name).toBe("Tree 1")
+    expect(d.trees[1].groupID).toBeNil()
+end
+
+@test("Collect: a talent without its own name takes the spell's")
+local function collectSpellName()
+    wt().nodes[1].spellName = true
+    mock.defineSpell(11, { name = "Spell Eleven", iconID = 777 })
+    local d = assert(M:Collect())
+    expect(nodeIn(d, 11).name).toBe("Spell Eleven")
+    expect(nodeIn(d, 11).icon).toBe(777)
+end
+
+@test("Requires: the tree's points, else the talent above it")
+local function requires()
+    w.conditions[7] = { isMet = false, spentAmountRequired = 5 }
+    w.conditions[8] = { isMet = true, spentAmountRequired = 10 }
+    wt().nodes[2].conditions = { 8, 7 }
+    local d = assert(M:Collect())
+    local two = nodeIn(d, 12)
+    -- (Arms with its 10 points: only the game's unmet one)
+    d.trees[1].points = 10
+    expect(M:Requires(d.configID, two)).toBe("Requires 5 points in Arms")
+    w.conditions[7].isMet = true
+    expect(M:Requires(d.configID, two)).toBe("Requires 1 point in Arms One")
+    nodeIn(d, 11).rank = 1
+    expect(M:Requires(d.configID, two)).toBeNil()
+    -- the game met (it counts every tree's points), its own tree short
+    d.trees[1].points = 3
+    expect(M:Requires(d.configID, two)).toBe("Requires 10 points in Arms")
+    d.trees[1].points = 10
+    -- a two-rank talent above
+    two.requires = { nodeIn(d, 13) }
+    expect(M:Requires(d.configID, two)).toBe("Requires 2 points in Arms Three")
+    expect(M:Requires(d.configID, nodeIn(d, 11))).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- The classes and their trees
+--------------------------------------------------------------------------------
+
+@test("Classes: every class with a tree, sorted by name, cached")
+local function classes()
+    local c = M:Classes()
+    expect(assert(c.byFile.WARRIOR).treeID).toBe(WARRIOR_TREE)
+    expect(assert(c.byFile.PALADIN).treeID).toBe(PALADIN_TREE)
+    expect(c.list[1].file).toBe("PALADIN")
+    expect(c.list[2].file).toBe("WARRIOR")
+    expect(M:Classes()).toBe(c)
+end
+
+@test("BuildTree: your class's tree from your talents, cached")
+local function buildTreeOwn()
+    local t = assert(M:BuildTree("WARRIOR"))
+    expect(t.configID).toBe(CONFIG)
+    expect(t.treeID).toBe(WARRIOR_TREE)
+    expect(#t.trees).toBe(3)
+    expect(t.trees[1].name).toBe("Arms")
+    expect(#t.trees[1].links).toBe(1)
+    expect(talent(t, 12).requires).toEqual({ 11 })
+    expect(talent(t, 12).requiresAll).toBeNil()
+    expect(talent(t, 12).row).toBe(1)
+    expect(talent(t, 13).treeName).toBe("Arms")
+    expect(talent(t, 21).treeIndex).toBe(2)
+    expect(talent(t, 11).choice).toBe(false)
+    expect(t.order).toEqual({ 11, 12, 13, 21, 22, 23, 31, 32, 33 })
+    expect(M:BuildTree("WARRIOR")).toBe(t)
+    expect(M:BuildTree("DRUID")).toBeNil()
+end
+
+@test("BuildTree: arrows that are required, drawn only, or across trees")
+local function buildTreeEdges()
+    local nodes = wt().nodes
+    nodes[1].edges = {
+        { targetNode = 12, type = Enum.TraitEdgeType.RequiredForAvailability },
+        { targetNode = 13, type = Enum.TraitEdgeType.VisualOnly },
+        { targetNode = 21 },
+    }
+    nodes[3].choice = true
+    local t = assert(M:BuildTree("WARRIOR"))
+    expect(talent(t, 12).requiresAll).toBe(true)
+    expect(talent(t, 13).requires).toEqual({})
+    expect(talent(t, 21).requires).toEqual({ 11 })
+    expect(#t.trees[1].links).toBe(1)
+    expect(talent(t, 13).choice).toBe(true)
+    expect(talent(t, 13).entryIDs).toEqual({ 130, 131 })
+end
+
+@test("BuildTree: another class's through the view loadout, else nothing")
+local function buildTreeOther()
+    local loaded: number[] = {}
+    mock.fake("C_ClassTalents.InitializeViewLoadout", function(specID: number, level: number)
+        loaded = { specID, level }
+    end)
+    mock.fake("C_ClassTalents.ViewLoadout", function(): boolean
+        return true
+    end)
+    local t = assert(M:BuildTree("PALADIN"))
+    expect(loaded[2]).toBe(60)
+    expect(loaded[1]).toBe(assert(M:Classes().byFile.PALADIN).specID)
+    expect(t.configID).toBe(VIEW)
+    expect(t.trees[1].name).toBe("Holy")
+    expect(talent(t, 111).name).toBe("Holy One")
+    -- the tree unreadable both ways
+    wipe(M.buildTrees)
+    for _, n in ipairs(pt().nodes) do
+        n.visible = false
+    end
+    expect(M:BuildTree("PALADIN")).toBeNil()
+end
+
+--------------------------------------------------------------------------------
+-- On their own
+--------------------------------------------------------------------------------
+
+@test("collect, requirement, readClasses and readBuildTree: what is kept stays with the caller")
+local function onTheirOwn()
+    local baseline: Baseline = { learned = {}, learnedFor = nil, unseenStaged = false }
+    local d = assert(talentTrees.collect(CONFIG, baseline))
+    expect(d.configID).toBe(CONFIG)
+    expect(#d.trees).toBe(3)
+    expect(baseline.learnedFor).toBe(CONFIG)
+    expect(baseline.learned[13]).toBe(0)
+    -- planned: pending over the baseline it was given, which stays
+    w.staged[13] = 1
+    d = assert(talentTrees.collect(CONFIG, baseline))
+    expect(nodeIn(d, 13).pending).toBe(1)
+    expect(baseline.learned[13]).toBe(0)
+    expect(baseline.unseenStaged).toBe(false)
+    expect(talentTrees.requirement(CONFIG, nodeIn(d, 12))).toBe("Requires 1 point in Arms One")
+    -- the classes and a tree: read again each time (the module keeps them)
+    local c = talentTrees.readClasses()
+    expect(c.list[1].file).toBe("PALADIN")
+    expect(talentTrees.readClasses()).never.toBe(c)
+    expect(M.classes).toBeNil()
+    local t = assert(talentTrees.readBuildTree("WARRIOR", assert(c.byFile.WARRIOR)))
+    expect(t.treeID).toBe(WARRIOR_TREE)
+    expect(t.configID).toBe(CONFIG)
+    expect(M.buildTrees.WARRIOR).toBeNil()
+    expectNoErrors()
+end

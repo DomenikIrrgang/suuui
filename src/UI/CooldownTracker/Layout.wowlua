@@ -1,0 +1,238 @@
+-- UI/CooldownTracker/Layout.wowlua
+-- Where the tracker's rows go: layout() does the tracker's Layout (centred
+-- rows, top to bottom: the timers row on its divider, Essential, Utility,
+-- then the footer), and TrackerSeparators is a side's layer of the
+-- collections' hairlines. It places what the last build made and creates
+-- nothing but hairlines.
+
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import type CooldownTracker from "/UI/CooldownTracker"
+import type TrackerCell from "./Cell"
+import type TrackerEntry from "./Entries"
+
+const S = T.space
+
+export const AURA = "icon-lg"
+
+-- A layer of the collections' hairlines.
+export class TrackerSeparators extends Frame
+    readonly lines: Texture[] = {}
+    used: number = 0
+    withTarget: boolean? = nil
+
+    constructor(owner: Frame)
+        super(nil, owner)
+        self:SetAllPoints()
+    end
+end
+
+-- A frame in the timers row, and the collection it came from.
+type Placed = { frame: Frame, coll: TrackerEntry? }
+
+-- The tracker's Layout (t:Layout() calls this).
+-- Centred rows, top to bottom: timers, Essential, Utility (or Utility after
+-- Essential with a gilt divider).
+export function layout(self: CooldownTracker)
+    local opts = self.opts or {}
+    local aura = draw.size(AURA)
+    local gapRow = S["space-3"]
+
+    -- a cell hidden on cooldown keeps its place while it has an effect to
+    -- show there (the effect hangs on the tracker, over the cell's spot);
+    -- one whose live conditions aren't met doesn't
+    local function cells(list: TrackerCell[]): TrackerCell[]
+        local out: TrackerCell[] = {}
+        for _, f in ipairs(list) do
+            if f.condOK ~= false and (f:IsShown() or (f.container ~= nil and f.onCooldown == true)) then
+                out[#out + 1] = f
+            end
+        end
+        return out
+    end
+    local ess, util = cells(self.built.essential), cells(self.built.utility)
+    local function rowWidth(row: TrackerCell[], spacing: number): number
+        local w = 0
+        for i, c in ipairs(row) do
+            w = w + c:GetWidth() + (i > 1 and spacing or 0)
+        end
+        return w
+    end
+    local essW = rowWidth(ess, S["space-3"])
+    local utilW = rowWidth(util, S["space-2"])
+    local inline = opts.utilityInline == true and #util > 0
+    local bottomW = inline and (essW + (essW > 0 and S["space-4"] * 2 + 1 or 0) + utilW) or essW
+
+    -- the timers row centres on its divider: buffs and procs to its left,
+    -- your debuffs to its right (packed lists grow away from it)
+    -- outward from the divider: grey slots, then reminders (then the packed)
+    local left: Placed[], right: Placed[] = {}, {}
+    -- fixed slots whose live conditions are met (the rest close up; a
+    -- weapon enchant's too while it has nothing to show)
+    for _, c in ipairs(self.built.buffs) do
+        if c.condOK ~= false and c.wantShown ~= false then
+            left[#left + 1] = { frame = c, coll = c.coll }
+        end
+    end
+    for _, c in ipairs(self.built.remindBuffs) do
+        if c:IsShown() then
+            left[#left + 1] = { frame = c, coll = c.coll }
+        end
+    end
+    for _, c in ipairs(self.built.debuffs) do
+        if c.condOK ~= false and c.wantShown ~= false then
+            right[#right + 1] = { frame = c, coll = c.coll }
+        end
+    end
+    for _, c in ipairs(self.built.remindDebuffs) do
+        if c:IsShown() then
+            right[#right + 1] = { frame = c, coll = c.coll }
+        end
+    end
+    -- a collection's fixed slots sit apart from their neighbours: a hairline
+    -- with space-2 plus space-1 either side of it
+    local SIDE = S["space-2"] + S["space-1"]
+    local function apart(a: Placed, b: Placed): boolean
+        return (a.coll ~= nil or b.coll ~= nil) and a.coll ~= b.coll
+    end
+    local function gap(a: Placed, b: Placed): number
+        return apart(a, b) and (SIDE * 2 + 1) or S["space-2"]
+    end
+    -- slots can be wider than one icon (a group showing several members)
+    local function span(list: Placed[]): number
+        local w = 0
+        for i, c in ipairs(list) do
+            w = w + c.frame:GetWidth() + (i > 1 and gap(list[i - 1], c) or 0)
+        end
+        return w
+    end
+    local leftW = span(left)
+    local rightW = span(right)
+    local half = math.max(leftW, rightW) + S["space-4"]
+    local timersW = (self.hasLeft or self.hasRight) and (half * 2 + 1) or 0
+
+    -- the footer (the resource bar) at the bottom, the rows space-4 over it
+    local footer = self.footer
+    local footW, footH = 0, 0
+    if footer and footer:IsShown() then
+        footW, footH = footer:GetWidth(), footer:GetHeight()
+    end
+    local width = math.max(timersW, bottomW, inline and 0 or utilW, aura, footW)
+    local y = footH > 0 and (footH + S["space-4"]) or 0
+    local function place(
+        row: TrackerCell[],
+        spacing: number,
+        rowW: number,
+        bottomY: number,
+        startX: number?
+    ): number
+        local x = startX or (width - rowW) / 2
+        for _, c in ipairs(row) do
+            c:ClearAllPoints()
+            c:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", math.floor(x + 0.5), bottomY)
+            x = x + c:GetWidth() + spacing
+        end
+        return x
+    end
+
+    -- Utility row (own row) at the bottom
+    if not inline and #util > 0 then
+        place(util, S["space-2"], utilW, y)
+        y = y + draw.size("icon-lg") + gapRow
+    end
+    -- Essential (and inline Utility)
+    self.divider:Hide()
+    if #ess > 0 or inline then
+        local x = place(ess, S["space-3"], bottomW, y)
+        if inline then
+            self.divider:ClearAllPoints()
+            local h = (opts.essentialSize or draw.size("cdm-essential"))
+            self.divider:SetSize(1, h)
+            self.divider:SetPoint(
+                "BOTTOMLEFT",
+                self,
+                "BOTTOMLEFT",
+                math.floor(x - S["space-3"] + S["space-4"] + 0.5),
+                y
+            )
+            self.divider:Show()
+            place(util, S["space-2"], utilW, y, x - S["space-3"] + S["space-4"] * 2 + 1)
+        end
+        y = y + (opts.essentialSize or draw.size("cdm-essential")) + gapRow
+    end
+    -- Timers
+    self.auraDivider:Hide()
+    for _, side in ipairs({ self.sepLeft, self.sepRight }) do
+        for _, h in ipairs(side.lines) do
+            h:Hide()
+        end
+        side.used = 0
+    end
+    -- a hairline on a side's layer, its left edge at x
+    local function hairline(side: TrackerSeparators, x: number, atY: number)
+        side.used = side.used + 1
+        local h = side.lines[side.used]
+        if not h then
+            h = draw.fill(side, "gilt-hairline", "ARTWORK")
+            side.lines[side.used] = h
+        end
+        h:ClearAllPoints()
+        h:SetSize(1, aura - S["space-2"] * 2)
+        h:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", math.floor(x + 0.5), atY + S["space-2"])
+        h:Show()
+    end
+    if self.hasLeft or self.hasRight then
+        local mid = math.floor(width / 2)
+        if self.hasLeft and self.hasRight then
+            self.auraDivider:ClearAllPoints()
+            self.auraDivider:SetSize(1, self.rowH or aura)
+            self.auraDivider:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", mid, y)
+            self.auraDivider:Show()
+        end
+        -- left side: fixed buff slots end space-4 left of the divider, the
+        -- packed buffs and procs continue left of them
+        local leftEnd = mid - S["space-4"]
+        -- outward from the divider: grey slots, then reminders, then packed
+        local x = leftEnd
+        for i, c in ipairs(left) do
+            if i > 1 then
+                if apart(left[i - 1], c) then
+                    hairline(self.sepLeft, x - SIDE - 1, y)
+                end
+                x = x - gap(left[i - 1], c)
+            end
+            x = x - c.frame:GetWidth()
+            c.frame:ClearAllPoints()
+            c.frame:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", x, y)
+        end
+        local leftFlow = self.leftFlow
+        if leftFlow then
+            local edge = #left > 0 and (x - S["space-2"]) or leftEnd
+            leftFlow.container:ClearAllPoints()
+            leftFlow.container:SetPoint("BOTTOMRIGHT", self, "BOTTOMLEFT", edge, y)
+        end
+        -- right side: debuffs start space-4 right of the divider
+        local rightStart = mid + 1 + S["space-4"]
+        local rx = rightStart
+        for i, c in ipairs(right) do
+            if i > 1 then
+                if apart(right[i - 1], c) then
+                    hairline(self.sepRight, rx + SIDE, y)
+                end
+                rx = rx + gap(right[i - 1], c)
+            end
+            c.frame:ClearAllPoints()
+            c.frame:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", math.floor(rx + 0.5), y)
+            rx = rx + c.frame:GetWidth()
+        end
+        local rightFlow = self.rightFlow
+        if rightFlow then
+            local edge = #right > 0 and (rx + S["space-2"]) or rightStart
+            rightFlow.container:ClearAllPoints()
+            rightFlow.container:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", edge, y)
+        end
+        y = y + (self.rowH or aura)
+    end
+
+    self:SetSize(math.max(width, 1), math.max(y, 1))
+end

@@ -40,11 +40,12 @@ local function info(frame: Frame, key: string, label: string, enabled: boolean?,
         enabled = enabled ~= false,
         custom = custom == true,
         managedShow = false,
+        anchorOnly = false,
     }
 end
 
-local function placed(id: string, label: string, pos: settings.Values, w: number, h: number): Placed
-    return { id = id, label = label, pos = pos, w = w, h = h }
+local function placed(id: string, label: string, pos: settings.Values, w: number, h: number, apartFrom: string?): Placed
+    return { id = id, label = label, pos = pos, w = w, h = h, apartFrom = apartFrom }
 end
 
 --------------------------------------------------------------------------------
@@ -179,8 +180,26 @@ local function framesAnchorOnly()
         enabled = true,
         custom = false,
         managedShow = false,
+        anchorOnly = true,
     }
     expect(framesOf({ m })).toEqual({})
+end
+
+@test("SET-7: SuuUI's own movers say what the check leaves out (no ids of other modules in it)")
+local function ownMovers()
+    local byId: { [string]: editMode.MoverInfo } = {}
+    for _, m in ipairs(editMode.movers()) do
+        byId[m.namespace .. "." .. m.key] = m
+    end
+    for _, id in ipairs({ "tooltips.position", "bags.position", "bags.bankPosition", "loot.position" }) do
+        local m = byId[id]
+        if m then
+            expect(m.anchorOnly).toBe(true)
+        end
+    end
+    local party, raid = byId["party.position"], byId["raid.position"]
+    expect(party and party.apartFrom).toBe("raid.position")
+    expect(raid and raid.apartFrom).toBe("party.position")
 end
 
 @test("a frame's size in root units: its scale against the root's")
@@ -235,9 +254,10 @@ end
 @test("party and raid frames, and the flight timer and the timeline, never show together")
 local function issuesApart()
     local frames = {
-        placed("party.position", "Party", { point = "CENTER" }, 100, 100),
-        placed("raid.position", "Raid", { point = "CENTER" }, 100, 100),
-        placed("flightmap.timerPosition", "Flight", { point = "TOP" }, 100, 100),
+        placed("party.position", "Party", { point = "CENTER" }, 100, 100, "raid.position"),
+        placed("raid.position", "Raid", { point = "CENTER" }, 100, 100, "party.position"),
+        -- (one of the two saying so is enough)
+        placed("flightmap.timerPosition", "Flight", { point = "TOP" }, 100, 100, "timeline.position"),
         placed("timeline.position", "Timeline", { point = "TOP" }, 100, 100),
     }
     expect(issuesOn(frames, 1000, 500)).toEqual({})

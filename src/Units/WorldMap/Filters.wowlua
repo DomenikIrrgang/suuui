@@ -1,0 +1,547 @@
+-- Units/WorldMap/Filters.wowlua
+-- Map filters of the world map (Units/WorldMap): its groups and their
+-- options, the saved choice (an earlier layout's carried over, new options
+-- on once), the game's own quest settings among them, and the quests to
+-- pick up this character hid, listed in it to show again. Offers the
+-- defaults and the menu's values, and the module's filter and hidden-quest
+-- methods as functions taking the module.
+
+import SuuUI from "/Core/API"
+import type MarkFilters, FilterValue, FilterValues, FilterGroup, FilterOption from "/Core/API"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import questName from "/Units/WorldMap/Quests"
+import quest from "/Units/WorldMap/Rows"
+import groupQuests from "/Units/WorldMap/Tips"
+import NO_STARTS from "/Units/WorldMap/Collect"
+import type WorldPin from "/Units/WorldMap/Canvas"
+import type WorldMapModule from "/Units/WorldMap"
+
+local CONVERGENCES = SuuUI.Services.CONVERGENCES
+
+local UI = SuuUI.UI
+
+-- What Map filters chose: each group's values on.
+export type FilterChoice = { [string]: string[] }
+-- The saved filters: each group's values (an earlier layout's groups too)
+-- and the layout's version.
+export type SavedFilters = { v?: number, [string]: string[] | number | nil }
+-- Each group's values on, as sets.
+export type On = { [string]: boolean }
+export type Layers = { quests: On, places: On, services: On, trading: On, trainers: On, rares: On, marks: On, skyborne: On }
+
+-- Map filters' values from the choice, and back (its values: strings).
+export function menuValues(f: FilterChoice): FilterValues
+    local out: FilterValues = {}
+    for k, list in pairs(f) do
+        local l: FilterValue[] = {}
+        for i, v in ipairs(list) do
+            l[i] = v
+        end
+        out[k] = l
+    end
+    return out
+end
+-- The saved filters' groups (their version left out).
+export function choiceOf(f: SavedFilters): FilterChoice
+    local out: FilterChoice = {}
+    for k, list in pairs(f) do
+        if type(list) == "table" then
+            out[k] = list
+        end
+    end
+    return out
+end
+export function chosen(v: FilterValues): FilterChoice
+    local out: FilterChoice = {}
+    for k, c in pairs(v) do
+        local l: string[] = {}
+        if type(c) == "table" then
+            for _, x in ipairs(c) do
+                if type(x) == "string" then
+                    l[#l + 1] = x
+                end
+            end
+        end
+        out[k] = l
+    end
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- The filter menu
+--------------------------------------------------------------------------------
+
+-- A group of Map filters: its options' values are strings.
+type FilterSpec = {
+    key: string,
+    label: string,
+    kind: "one" | "many" | "toggles",
+    column?: boolean,
+    options: { value: string, label: string, color?: string }[],
+}
+
+local GROUPS: FilterSpec[] = {
+    {
+        key = "quests",
+        label = "Quests",
+        kind = "toggles",
+        options = {
+            { value = "objectives", label = "Quest objectives" },
+            { value = "levels", label = "Quest levels" },
+            { value = "colours", label = "Difficulty colours" },
+            { value = "available", label = "Quests to pick up" },
+            { value = "repeatable", label = "Repeatable and daily" },
+            { value = "items", label = "Quests from items" },
+            { value = "trivial", label = "Trivial quests" },
+        },
+    },
+    {
+        key = "places",
+        label = "Places",
+        kind = "toggles",
+        options = {
+            { value = "unexplored", label = "Unexplored areas" },
+            { value = "dungeons", label = "Dungeon and raid entrances" },
+            { value = "battlegrounds", label = "Battleground entrances" },
+            { value = "flight", label = "Flight masters" },
+            { value = "campfires", label = "Campfires you found" },
+        },
+    },
+    {
+        key = "services",
+        label = "Services",
+        kind = "toggles",
+        column = true,
+        options = {
+            { value = "inn", label = "Innkeepers" },
+            { value = "repair", label = "Repair" },
+            { value = "goods", label = "General goods" },
+            { value = "food", label = "Food and drink" },
+            { value = "vendor", label = "Other vendors" },
+            { value = "stable", label = "Stable masters" },
+            { value = "battlemaster", label = "Battlemasters" },
+            { value = "guild", label = "Guild masters" },
+            { value = "tabard", label = "Tabard designers" },
+            { value = "spirit", label = "Spirit healers" },
+        },
+    },
+    {
+        key = "trading",
+        label = "Trading",
+        kind = "toggles",
+        options = {
+            { value = "auction", label = "Auctioneers" },
+            { value = "mail", label = "Mailboxes" },
+            { value = "bank", label = "Bankers" },
+        },
+    },
+    {
+        key = "trainers",
+        label = "Trainers",
+        kind = "toggles",
+        column = true,
+        options = {
+            { value = "class", label = "Your class trainer" },
+            { value = "professions", label = "Profession trainers" },
+            { value = "weapon", label = "Weapon masters" },
+            { value = "riding", label = "Riding and pet trainers" },
+        },
+    },
+    {
+        key = "rares",
+        label = "Rares and treasures",
+        kind = "toggles",
+        options = { { value = "rares", label = "Rares" }, { value = "treasures", label = "Treasure chests" } },
+    },
+    {
+        key = "marks",
+        label = "Marks",
+        kind = "toggles",
+        options = { { value = "yours", label = "Your marks" }, { value = "shared", label = "Shared marks" } },
+    },
+    -- (shown to Skyborne characters only: menuGroups)
+    {
+        key = "skyborne",
+        label = "Skyborne",
+        kind = "toggles",
+        options = { { value = "convergences", label = "Convergences of Elements" } },
+    },
+}
+
+-- Whether this character sees the Convergences of Elements (Skyborne).
+export function seesConvergences(): boolean
+    local conv = SuuUI.UseService(CONVERGENCES)
+    local shown = conv and conv.Shown
+    return shown ~= nil and shown()
+end
+
+-- The menu's groups: Skyborne only for a Skyborne character.
+export function menuGroups(): FilterGroup[]
+    local sky = seesConvergences()
+    local out: FilterGroup[] = {}
+    for _, g in ipairs(GROUPS) do
+        if sky or g.key ~= "skyborne" then
+            local options: FilterOption[] = {}
+            for i, o in ipairs(g.options) do
+                options[i] = { value = o.value, label = o.label, color = o.color }
+            end
+            out[#out + 1] = { key = g.key, label = g.label, kind = g.kind, options = options, column = g.column }
+        end
+    end
+    return out
+end
+
+-- The saved filters in the current groups: each saved choice goes to the
+-- group that has it now (mailboxes, bankers and auctioneers moved from
+-- Services to Trading, the trainers to Trainers), so an earlier layout's
+-- choices carry over; new options start off.
+local LEGACY: { [string]: { group: string, value: string } } = {
+    classTrainer = { group = "trainers", value = "class" },
+    trainers = { group = "trainers", value = "professions" },
+}
+local FILTERS_VERSION = 5 -- 2: quests from items, 3: unexplored areas, 4: marks, 5: convergences (each on for everyone once)
+-- options each layout version added, on for everyone once
+local ADDED: { since: number, group: string, value: string }[] = {
+    { since = 2, group = "quests", value = "items" },
+    { since = 3, group = "places", value = "unexplored" },
+    { since = 4, group = "marks", value = "yours" },
+    { since = 4, group = "marks", value = "shared" },
+    { since = 5, group = "skyborne", value = "convergences" },
+}
+
+-- Quests' options that are the game's own settings, not saved by SuuUI:
+-- its quest objectives on the map, and the quest log's levels ("[15]"
+-- before a title) and difficulty colours (its filter menu had them; SuuUI's
+-- Map filters takes its place)
+local GAME_SETTINGS: { value: string, cvar: string }[] = {
+    { value = "objectives", cvar = "questPOI" },
+    { value = "levels", cvar = "showQuestLevel" },
+    { value = "colours", cvar = "showQuestDifficultyColor" },
+}
+local gameSetting: { [string]: string } = {}
+for _, o in ipairs(GAME_SETTINGS) do
+    gameSetting[o.value] = o.cvar
+end
+
+export function settingOn(cvar: string): boolean
+    local ok, v = pcall(GetCVarBool, cvar)
+    return not ok or v == true
+end
+
+--------------------------------------------------------------------------------
+-- The filters (WorldMapModule:Saved, Layers, MarksShown, MenuValue,
+-- OnFilters, OpenWith)
+--------------------------------------------------------------------------------
+
+export function readSaved(self: WorldMapModule): FilterChoice
+    -- (the stored table itself, read only: a new one whenever it's set,
+    -- reset or another profile's)
+    local saved = self:Peek("filters") :: SavedFilters
+    local cached = self.savedCache
+    if cached and self.savedFor == saved then
+        return cached
+    end
+    self.savedFor, self.layersCache = saved, nil
+    local owner: { [string]: string } = {}
+    for _, g in ipairs(GROUPS) do
+        for _, o in ipairs(g.options) do
+            owner[o.value] = g.key
+        end
+    end
+    local out: FilterChoice = {}
+    for _, g in ipairs(GROUPS) do
+        out[g.key] = {}
+    end
+    for key, entry in pairs(saved) do
+        if type(entry) == "table" then
+            for _, v in ipairs(entry) do
+                local legacy = key == "services" and LEGACY[v] or nil
+                local group = legacy and legacy.group or owner[v]
+                local value = legacy and legacy.value or v
+                local list = group and out[group]
+                if list and not tbl.contains(list, value) then
+                    list[#list + 1] = value
+                end
+            end
+        end
+    end
+    local version = saved.v
+    for _, new in ipairs(ADDED) do
+        if (version or 1) < new.since then
+            local list = out[new.group]
+            if list and not tbl.contains(list, new.value) then
+                list[#list + 1] = new.value
+            end
+        end
+    end
+    self.savedCache = out
+    return out
+end
+
+-- on[group][value] from the saved filters
+export function readLayers(self: WorldMapModule): Layers
+    local saved = self:Saved()
+    local cached = self.layersCache
+    if cached then
+        return cached
+    end
+    local function set(key: string): On
+        local s: On = {}
+        for _, v in ipairs(saved[key] or {}) do
+            s[v] = true
+        end
+        return s
+    end
+    local layers: Layers = {
+        quests = set("quests"),
+        places = set("places"),
+        services = set("services"),
+        trading = set("trading"),
+        trainers = set("trainers"),
+        rares = set("rares"),
+        marks = set("marks"),
+        skyborne = set("skyborne"),
+    }
+    self.layersCache = layers
+    return layers
+end
+
+export function marksShown(self: WorldMapModule): MarkFilters
+    local layers = self:Layers()
+    local shown = self.marksShown
+    if shown and self.marksFor == layers then
+        return shown
+    end
+    local marks = layers.marks
+    local made: MarkFilters = { yours = marks.yours, shared = marks.shared }
+    self.marksShown, self.marksFor = made, layers
+    return made
+end
+
+export function menuValue(self: WorldMapModule): FilterChoice
+    local saved = self:Saved()
+    local value: FilterChoice = {}
+    for _, g in ipairs(GROUPS) do
+        local list: string[] = {}
+        if g.key == "quests" then
+            for _, o in ipairs(GAME_SETTINGS) do
+                if settingOn(o.cvar) then
+                    list[#list + 1] = o.value
+                end
+            end
+        end
+        for _, v in ipairs(saved[g.key] or {}) do
+            if not (g.key == "quests" and gameSetting[v]) then
+                list[#list + 1] = v
+            end
+        end
+        value[g.key] = list
+    end
+    -- Hidden quests: the hidden ones ticked
+    local hidden: string[] = {}
+    for id in pairs(self:Char().hiddenQuests or {}) do
+        hidden[#hidden + 1] = tostring(id)
+    end
+    value.hidden = hidden
+    return value
+end
+
+export function onFilters(self: WorldMapModule, value: FilterChoice)
+    -- Hidden quests: each listed one hidden while ticked (this
+    -- character's, not a filter)
+    local hidden = value.hidden
+    value.hidden = nil
+    if hidden then
+        local ticked: { [number]: boolean } = {}
+        for _, v in ipairs(hidden) do
+            local id = tonumber(v)
+            if id then
+                ticked[id] = true
+            end
+        end
+        local data = self:Char()
+        local set = data.hiddenQuests or {}
+        for _, id in ipairs(self.hiddenListed) do
+            set[id] = ticked[id] or nil
+        end
+        data.hiddenQuests = next(set) ~= nil and set or nil
+    end
+    -- (a character without the Skyborne group keeps its saved choice)
+    if value.skyborne == nil then
+        value.skyborne = self:Saved().skyborne
+    end
+    local want: { [string]: boolean } = {}
+    for _, v in ipairs(value.quests or {}) do
+        want[v] = true
+    end
+    -- (the map's quest pins and the quest log redraw themselves on the
+    -- CVar's change, as for the game's own filter menu, which only sets
+    -- it: a redraw from SuuUI's code took the map's pins for it, and the
+    -- map opened in combat was refused later, found in game)
+    if not InCombatLockdown() then
+        for _, o in ipairs(GAME_SETTINGS) do
+            if (want[o.value] or false) ~= settingOn(o.cvar) then
+                errors.try(SetCVar, o.cvar, want[o.value] and "1" or "0")
+            end
+        end
+    end
+    local saved: SavedFilters = { v = FILTERS_VERSION }
+    for group, list in pairs(value) do
+        saved[group] = list
+    end
+    self:Set("filters", saved)
+    self:Refresh()
+end
+
+-- One filter on for another module's "show me" (the Damaged gear note's
+-- Show repairers turns Services › Repair on, asked 2026-10-19); the menu
+-- shows it ticked. The caller opens the map, through a secure click (the
+-- minimap's zone button): opened from SuuUI's code, the map's pins were
+-- taken by it. ("services", "repair")
+export function openWith(self: WorldMapModule, group: string, item: string)
+    local value = self:MenuValue()
+    local list = value[group]
+    if list and not tbl.contains(list, item) then
+        list[#list + 1] = item
+        self:OnFilters(value)
+        local menu = self.menu
+        if menu then
+            menu:SetValue(menuValues(self:MenuValue()))
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Hidden quests: quests to pick up whose pins this character hid (a
+-- right-click on a giver's pin), listed in Map filters to show again
+--------------------------------------------------------------------------------
+
+export function isQuestHidden(self: WorldMapModule, id: number): boolean
+    local hidden = self:Char().hiddenQuests
+    return hidden ~= nil and hidden[id] == true
+end
+
+-- A quest's name from the quest data (the game's, else "Quest <id>"
+-- while it isn't built).
+export function questTitle(self: WorldMapModule, id: number): string
+    local starts = SuuUI.Data.QuestStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
+    local qrow = starts.quests[id]
+    return questName(qrow and quest(qrow) or nil, id)
+end
+
+-- The hidden quests, by name.
+export function hiddenQuests(self: WorldMapModule): number[]
+    local ids: number[] = {}
+    for id in pairs(self:Char().hiddenQuests or {}) do
+        ids[#ids + 1] = id
+    end
+    local names: { [number]: string } = {}
+    for _, id in ipairs(ids) do
+        names[id] = self:QuestTitle(id):lower()
+    end
+    table.sort(ids, function(a: number, b: number): boolean
+        local na, nb = names[a] or "", names[b] or ""
+        if na ~= nb then
+            return na < nb
+        end
+        return a < b
+    end)
+    return ids
+end
+
+-- Their pins away at once, on every map; Map filters lists them.
+export function hideQuests(self: WorldMapModule, ids: number[])
+    local data = self:Char()
+    local hidden = data.hiddenQuests or {}
+    for _, id in ipairs(ids) do
+        hidden[id] = true
+    end
+    data.hiddenQuests = next(hidden) ~= nil and hidden or nil
+    self:ListHidden(true)
+    self:Refresh()
+end
+
+-- Every hidden quest's pins back (Map filters' Show all); the list
+-- stays, unticked, until the map opens again.
+export function showAllQuests(self: WorldMapModule)
+    self:Char().hiddenQuests = nil
+    local menu = self.menu
+    if menu then
+        menu:SetValue(menuValues(self:MenuValue()))
+    end
+    self:Refresh()
+end
+
+-- Map filters' groups: Hidden quests last, while it lists any.
+export function groupsWithHidden(self: WorldMapModule): FilterGroup[]
+    local groups = menuGroups()
+    local listed = self.hiddenListed
+    if #listed > 0 then
+        local options: FilterOption[] = {}
+        for i, id in ipairs(listed) do
+            options[i] = { value = tostring(id), label = self:QuestTitle(id) }
+        end
+        groups[#groups + 1] = {
+            key = "hidden",
+            label = "Hidden quests",
+            kind = "toggles",
+            options = options,
+            action = {
+                label = "Show all",
+                onClick = function()
+                    self:ShowAllQuests()
+                end,
+            },
+        }
+    end
+    return groups
+end
+
+-- Map filters lists the hidden quests again (always: `force`; else only
+-- when they changed): the panel is built again when it next opens.
+export function listHidden(self: WorldMapModule, force: boolean?)
+    local ids = self:HiddenQuests()
+    local was = self.hiddenListed
+    local same = #ids == #was
+    for i, id in ipairs(ids) do
+        if was[i] ~= id then
+            same = false
+        end
+    end
+    self.hiddenListed = ids
+    self.hiddenNamed = SuuUI.Data.QuestStarts:Ready()
+    local menu = self.menu
+    if menu and (force or not same) then
+        menu:SetGroups(self:MenuGroups())
+        menu:SetValue(menuValues(self:MenuValue()))
+    end
+end
+
+-- Right-click on a quest giver's pin: hide its quest; a pin with
+-- several quests (a giver's, or merged) offers each of them.
+export function questMenu(self: WorldMapModule, pin: WorldPin)
+    local g = pin.group
+    if not g then
+        return
+    end
+    local ids = groupQuests(g)
+    if #ids == 0 then
+        return
+    end
+    UI.ContextMenuFrom(pin, function(_, root)
+        if #ids == 1 then
+            local id = ids[1]
+            root:CreateTitle(self:QuestTitle(id))
+            root:CreateButton("Hide this quest", function()
+                self:HideQuests({ id })
+            end)
+        else
+            for _, id in ipairs(ids) do
+                root:CreateButton("Hide " .. self:QuestTitle(id), function()
+                    self:HideQuests({ id })
+                end)
+            end
+        end
+    end)
+end

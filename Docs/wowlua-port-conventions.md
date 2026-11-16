@@ -92,15 +92,42 @@ ahead of 0.9.1.
 | `ns.Themes.DEFAULT/Register/List/Get/Applied/Apply` | `/Core/Themes`: `DEFAULT`, `register`, `all`, `get`, `appliedTheme`, `apply` |
 | `ns.Extend.KINDS/Add/Tag/Info/Instances/Each/Hook/Override/ExtendMenu/ApplyMenu/AddTo/Additions/Unregister` | `/Core/Extend`: `KINDS`, `add`, `tag`, `info`, `list` (was `Instances`), `each`, `hook`, `override`, `extendMenu`, `applyMenu`, `addTo`, `additions`, `unregister` |
 | `ns.Services.Provide/Get/Unregister` | `/Core/Services`: `provide`, `get`, `unregister` |
-| `ns.Modules.Register/Get/All/Find/APIAtLeast` | `/Core/Modules`: `register`, `get`, `all`, `find`, `apiAtLeast`; type `Module` |
+| `ns.Modules.Register/Get/All/Find/APIAtLeast` | `/Core/Modules`: `register` (a plugin's `PluginModule`, typed `RegisteredModule<D>`), `add` (a class module), `get`, `all`, `find`, `apiAtLeast`; class `Module` (a module file extends `/Core/API`'s `Module`) |
 | `ns.Serialize.Encode/Decode/Base64/FromBase64/Fletcher16` | `/Core/Serialize`: `encode`, `decode`, `base64`, `fromBase64`, `fletcher16` |
 | `ns.Perf.Report` | `/Core/Perf`: `report` |
 | `SuuUIDB`, `SuuUIProbe` (globals) | `/Core/DB`: `db`, `probe` (bound by wowlua:saved; locked until ADDON_LOADED, check `DB.loaded()` before touching them at load time) |
 | `SuuUI` (the public API global) | `/Core/API`: `SuuUI` (typed; still also the global) |
 
-**Feature modules (`src/Units`, plugins' style)** use only the public API:
-`import SuuUI from "/Core/API"` and keep their code as written against
-`SuuUI.*` and the module object's methods (`M:Get`, `M:OnGameEvent`, …).
+**Feature modules (`src/Units`)** import nothing of SuuUI's but the public
+API (API 0.47), values and types alike, so a plugin can do what they do:
+
+- values: `import SuuUI, Module from "/Core/API"` (the classes a module
+  extends: `Module`, `PanelClass`, `ItemSlotClass`, `UnitFrameClass`,
+  `MapPinClass`, `ActionButtonClass`: the API's own subclasses, as wowlua
+  extends only a class it imports as a value and has no re-export of one),
+  then `SuuUI.*`, `SuuUI.UI.*` and the module's methods (`M:Get`,
+  `M:OnGameEvent`, …). Service keys are `SuuUI.Services.X`.
+- types: `import type Text, SettingsSection from "/Core/API"`: the API
+  re-exports each type a module names (`export type Text = text.Text`, the
+  list at the end of `src/Core/API.wowlua`). A type alias can be imported
+  and used but not extended (E3008), hence the classes above.
+- besides: `wowlua:*`, `/Data/*`, the feature's own submodules
+  (`src/Units/Chat.wowlua` and `src/Units/Chat/*`), and the package's
+  dependencies (`foreverlfg`). Another feature module is reached through a
+  service (`SuuUI.UseService(SuuUI.Services.X)`), or `SuuUI.GetModule(id)`
+  for its state and `:Setting(key)`.
+- something a module needs that the API lacks is exported there (and
+  documented in `Docs/API.md` under the API version it arrives in), never
+  imported from the file it lives in.
+- in code that runs per frame or per frequent event, take what you call
+  into a file-level local once (`local curveAmount = SuuUI.UI.CurveAmount`):
+  a field read costs more than a local.
+
+`python3 -I tools/check_imports.py` checks this (and that nothing below the
+modules imports one, that Core imports the layers above it as types only,
+and that nothing the API is built from imports it); run it with
+`wowlua check`. The test emulator can't read source files, so it is a
+script, not a test.
 
 ## Standard library: use it where it fits
 

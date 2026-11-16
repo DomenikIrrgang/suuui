@@ -1,0 +1,464 @@
+-- UI/Reskin/Menu.wowlua
+-- Blizzard's menus and the dropdowns that open them in SuuUI's look
+-- (UI/Reskin.wowlua). The game reuses its menu frames for every menu, so a
+-- menu is restyled while it shows and undone when it closes; SuuUI's art
+-- lives on a panel of its own behind the rows.
+--
+--   openRoot()                    -- the open root menu, if the game has one
+--   reskinMenu(menu)              -- glass, rows hovered on arcane-soft, undone on close
+--   reskinDropdown(d, opts?)      -- a sunk field and a chevron; its menu restyled
+--
+-- (a submenu opened from a restyled menu is restyled too: a callback on the
+-- game's MenuProxy.OnShow, registered as this file loads)
+import after from "wowlua:timer"
+import hookScript from "wowlua:hooks"
+import tokens as T from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
+import * as draw from "/UI/Draw"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import atlasOf, isArt, markArt, fade, textures, fontStrings, skinOf, hideRegion, menuText from "./Registry"
+
+local S = T.space
+
+-- One of Blizzard's menus (Menu.GetManager():GetOpenMenu(), probed
+-- 2026-10-14: a common-dropdown-bg texture, 20px rows with a radio or check
+-- and a highlight, the rows' text) in the context menu's look: glass, a
+-- gilt-line edge, the gilt corner diamond, rows in body ink on arcane-soft
+-- while hovered, the chosen one marked by an arcane check. The game reuses
+-- its menu frames for every menu, so all of it is undone when it closes.
+-- A restyled menu's state: what to undo, SuuUI's art.
+type MenuState = {
+    undo: (() -> ())[],
+    panel: Frame,
+    hover: Texture,
+    marks: Texture[],
+    nMarks: number,
+    chevrons: Texture[],
+    nChevrons: number,
+    active?: boolean,
+    -- the rows restyled, and how they looked then (a choice that sets them
+    -- up again, a sort order, is restyled again)
+    rows: Frame[],
+    ticks: Texture[],
+    look: string,
+}
+
+local menus: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" })
+local rowMenu: { [Frame]: MenuState } = setmetatable({}, { __mode = "k" }) -- a row: the menu state it belongs to now
+
+-- The open root menu, if the game has one open.
+export function openRoot(): Frame?
+    local getManager = tbl.field(tbl.field(_G, "Menu"), "GetManager")
+    if type(getManager) ~= "function" then
+        return nil
+    end
+    local ok, manager = pcall(getManager :: () -> unknown)
+    if not ok then
+        return nil
+    end
+    return frames.asFrame(errors.tryMethod(manager, "GetOpenMenu"))
+end
+
+-- A hook on a script of one of the game's pooled frames (its menus, menu
+-- rows, popups) that lasts: the game sets those scripts again whenever it
+-- reuses the frame (Menu.lua: SetScript("OnEnter", …) on each row it
+-- lays out, SetScript("OnHide", …) on each menu it opens), and SetScript
+-- drops the hooks on a script; the hook goes on again right after.
+local function restoreMenu(st: MenuState)
+    for i = #st.undo, 1, -1 do
+        pcall(st.undo[i])
+    end
+    st.undo = {}
+    st.panel:Hide()
+    for _, t in pairs(st.marks) do
+        t:Hide()
+    end
+    for _, t in pairs(st.chevrons) do
+        t:Hide()
+    end
+    st.hover:Hide()
+    st.nMarks, st.nChevrons = 0, 0
+    st.active = false
+end
+
+local function menuRow(st: MenuState, row: Frame)
+    local chosen: boolean?, indicator: Texture? = nil, nil
+    local texts: FontString[] = {}
+    for _, r in ipairs({ row:GetRegions() }) do
+        local kind = r:GetObjectType()
+        if kind == "Texture" and not isArt(r) then
+            local t = r :: Texture
+            local atlas = atlasOf(t)
+            if atlas:find("common%-dropdown%-icon") then
+                -- the chosen row's tick
+                if t:IsShown() then
+                    chosen = true
+                end
+                indicator = indicator or t
+                st.ticks[#st.ticks + 1] = t
+                hideRegion(st, t)
+            elseif atlas:find("common%-dropdown%-tick") then
+                indicator = t
+                hideRegion(st, t)
+            elseif t:GetDrawLayer() == "HIGHLIGHT" or not t:IsShown() then
+                hideRegion(st, t)
+            end
+        elseif kind == "FontString" then
+            texts[#texts + 1] = r :: FontString
+        end
+    end
+    for _, fs in ipairs(texts) do
+        menuText(st, fs, "ink")
+    end
+    -- a submenu's arrow (a plain texture, the game's yellow): SuuUI's chevron
+    local arrow = frames.asRegion(tbl.field(row, "arrow"))
+    if arrow and arrow:IsShown() then
+        hideRegion(st, arrow)
+        st.nChevrons = st.nChevrons + 1
+        local chev = st.chevrons[st.nChevrons]
+        if not chev then
+            chev = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            draw.glyph(chev, "chevronRight")
+            chev:SetSize(12, 12)
+            draw.paint(chev, "ink-muted")
+            st.chevrons[st.nChevrons] = chev
+        end
+        chev:ClearAllPoints()
+        chev:SetPoint("CENTER", arrow, "CENTER", 0, 0)
+        chev:Show()
+    end
+    -- SuuUI's hover and mark: on its own panel behind the rows (the game
+    -- forbids new textures on its menu rows). No hooks on the game's rows:
+    -- they made its menus SuuUI's, and a choice that does a protected thing
+    -- was refused ("Forbidden: GuildControlSetRank()"; in combat a raid
+    -- marker, "Forbidden: SetRaidTarget()", found in game 2026-11-11). The
+    -- panel follows the mouse and the rows' look itself (menuWatch).
+    rowMenu[row] = st
+    st.rows[#st.rows + 1] = row
+    if chosen then
+        st.nMarks = st.nMarks + 1
+        local mark = st.marks[st.nMarks]
+        if not mark then
+            mark = st.panel:CreateTexture(nil, "OVERLAY", nil, 7)
+            draw.glyph(mark, "check")
+            mark:SetSize(12, 12)
+            draw.paint(mark, "arcane")
+            st.marks[st.nMarks] = mark
+        end
+        mark:ClearAllPoints()
+        if indicator then
+            mark:SetPoint("CENTER", indicator, "CENTER", 0, 0)
+        else
+            mark:SetPoint("LEFT", row, "LEFT", 2, 0)
+        end
+        mark:Show()
+    end
+end
+
+-- How a restyled menu's rows look now: which are shown and which ticks are
+-- on (a choice that sets the rows up again changes it: restyled again).
+local function rowsLook(st: MenuState): string
+    local parts: string[] = {}
+    for _, row in ipairs(st.rows) do
+        parts[#parts + 1] = row:IsShown() and "1" or "0"
+    end
+    for _, t in ipairs(st.ticks) do
+        parts[#parts + 1] = t:IsShown() and "t" or "f"
+    end
+    return table.concat(parts)
+end
+
+-- Whether a row has words in it (the game ends some menus, the unit menus,
+-- with an empty spacer: the panel stopped a row too low, found in game).
+local function hasText(row: Frame): boolean
+    local function any(f: Frame): boolean
+        for _, fs in ipairs(fontStrings(f)) do
+            if fs:IsShown() then
+                local t = fs:GetText()
+                if t and t ~= "" then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    if any(row) then
+        return true
+    end
+    for _, c in ipairs(frames.children(row)) do
+        if any(c) then
+            return true
+        end
+    end
+    return false
+end
+
+export function reskinMenu(given: unknown)
+    local menu = frames.asFrame(given)
+    if not menu or errors.tryMethod(menu, "IsForbidden") then
+        return
+    end
+    local st = menus[menu]
+    if not st then
+        local panel = CreateFrame("Frame", nil, menu)
+        panel:SetAllPoints()
+        panel:SetFrameLevel(menu:GetFrameLevel())
+        panel:EnableMouse(false)
+        local ground = draw.fill(panel, "surface-glass")
+        ground:SetAllPoints()
+        draw.pattern(ground, "surface-pattern")
+        draw.border(panel, "gilt-line", { texture = "border" })
+        draw.shadow(panel, "shadow-panel")
+        draw.ornament(panel, 7, "corner", "gilt"):SetPoint("CENTER", panel, "TOPLEFT", 0, 0)
+        local hover = panel:CreateTexture(nil, "ARTWORK")
+        draw.paintFill(hover, "arcane-soft")
+        hover:Hide()
+        local made: MenuState = {
+            undo = {},
+            panel = panel,
+            hover = hover,
+            marks = {},
+            nMarks = 0,
+            chevrons = {},
+            nChevrons = 0,
+            rows = {},
+            ticks = {},
+            look = "",
+        }
+        st = made
+        menus[menu] = made
+        -- the hover band under the row the mouse is on, and the rows
+        -- restyled again when a choice set them up again: on SuuUI's own
+        -- panel, never on the game's rows (see menuRow)
+        local since = 0
+        panel:SetScript("OnUpdate", function(_: Frame, elapsed: number)
+            if not made.active then
+                return
+            end
+            local over: Frame? = nil
+            for _, row in ipairs(made.rows) do
+                if not over and row:IsVisible() and row:IsMouseOver() then
+                    over = row
+                end
+            end
+            if over then
+                made.hover:ClearAllPoints()
+                made.hover:SetAllPoints(over)
+                made.hover:Show()
+            else
+                made.hover:Hide()
+            end
+            since = since + elapsed
+            if since >= 0.1 then
+                since = 0
+                if menu:IsShown() and rowsLook(made) ~= made.look then
+                    reskinMenu(menu)
+                end
+            end
+        end)
+        -- the game's look back when it closes: SuuUI's panel, its child, hides
+        -- with it (no hooks on the game's shared menu frames: they made its
+        -- menus SuuUI's, and a protected choice was refused)
+        panel:SetScript("OnHide", function()
+            if made.active and not menu:IsShown() then
+                restoreMenu(made)
+            end
+        end)
+    end
+    -- a second pass (the rows came later) starts from the game's look again
+    if st.active then
+        restoreMenu(st)
+    end
+    st.active = true
+    st.rows, st.ticks = {}, {}
+    st.panel:Show()
+    for _, t in ipairs(textures(menu)) do
+        hideRegion(st, t)
+    end
+    local rows: Frame[] = {}
+    for _, c in ipairs(frames.children(menu)) do
+        if c:GetObjectType() == "Button" then
+            rows[#rows + 1] = c
+        end
+    end
+    local scrollBox = frames.asFrame(tbl.field(menu, "ScrollBox"))
+    local target = frames.asFrame(tbl.field(scrollBox, "ScrollTarget"))
+    local scrolling = scrollBox ~= nil and target ~= nil and scrollBox:IsShown()
+    if target and scrolling then
+        for _, c in ipairs(frames.children(target)) do
+            if c:GetObjectType() == "Button" then
+                rows[#rows + 1] = c
+            end
+        end
+    end
+    for _, row in ipairs(rows) do
+        menuRow(st, row)
+    end
+    st.look = rowsLook(st)
+    -- the game's frame keeps room under its rows for its own drop shadow: the
+    -- panel ends under the last row instead, as far below it as the first
+    -- row is below the top
+    local top = menu:GetTop()
+    local first: Frame?, firstTop: number? = nil, nil
+    local last: Frame?, lastBottom: number? = nil, nil
+    -- every line with words counts for the edges: the buttons, and titles
+    -- and headings, which aren't buttons (a unit menu's name on top: the
+    -- panel's padding came out 28 instead of 8, found with /suu probe unitmenu)
+    local lines: Frame[] = {}
+    for _, c in ipairs(frames.children(menu)) do
+        if c ~= st.panel then
+            lines[#lines + 1] = c
+        end
+    end
+    if target and scrolling then
+        for _, c in ipairs(frames.children(target)) do
+            lines[#lines + 1] = c
+        end
+    end
+    for _, row in ipairs(lines) do
+        local t, b = row:GetTop(), row:GetBottom()
+        if row:IsShown() and t and b and hasText(row) then
+            if not firstTop or t > firstTop then
+                first, firstTop = row, t
+            end
+            if not lastBottom or b < lastBottom then
+                last, lastBottom = row, b
+            end
+        end
+    end
+    st.panel:ClearAllPoints()
+    -- (a scrolling menu's last row can sit below what shows: then all of it)
+    local bottom = menu:GetBottom()
+    if top and first and firstTop and last and lastBottom and bottom and lastBottom >= bottom then
+        local pad = math.max(0, top - firstTop)
+        st.panel:SetPoint("TOPLEFT", menu, "TOPLEFT")
+        st.panel:SetPoint("RIGHT", menu, "RIGHT")
+        st.panel:SetPoint("BOTTOM", last, "BOTTOM", 0, -pad)
+    else
+        st.panel:SetAllPoints(menu)
+    end
+end
+
+-- A submenu opened from a menu SuuUI restyled (the Who filter's Class,
+-- Race, Zone, Sort): restyled too. Every menu frame announces itself.
+local registry = tbl.field(_G, "EventRegistry")
+if tbl.field(registry, "RegisterCallback") then
+    -- (the event hands over the menu's frame, which has no GetLevel: any
+    -- menu other than the open root, while the root is restyled)
+    errors.tryMethod(
+        registry,
+        "RegisterCallback",
+        "MenuProxy.OnShow",
+        function(_: unknown, given: unknown)
+            local menu = frames.asFrame(given)
+            if not menu then
+                return
+            end
+            local root = openRoot()
+            local st = root and root ~= menu and menus[root]
+            if st and st.active then
+                reskinMenu(menu)
+                after(0, function()
+                    if menu:IsShown() then
+                        reskinMenu(menu)
+                    end
+                end)
+            end
+        end,
+        "SuuUI.Reskin"
+    )
+end
+
+-- Blizzard's dropdown (WowStyle): surface-sunk in a gilt-line edge, its text
+-- in label ink, a chevron on the right.
+export function reskinDropdown(given: unknown, opts: { glyph?: string }?)
+    local d = frames.asButton(given)
+    if not d then
+        return
+    end
+    local s = skinOf(d)
+    if s.dropdown then
+        return
+    end
+    for _, t in ipairs(textures(d)) do
+        t:SetAlpha(0)
+    end
+    for _, key in ipairs({ "Arrow", "Background" }) do
+        fade(tbl.field(d, key))
+    end
+    local text = frames.asFontString(tbl.field(d, "Text")) or frames.asFontString(tbl.field(d, "text"))
+    local glyphName = opts and opts.glyph
+    if glyphName then
+        -- an icon-only dropdown (the map's filter): a glyph, its edge on hover
+        fade(tbl.field(d, "Icon"))
+        local edge = draw.border(d, "gilt-line")
+        edge:SetShown(false)
+        local glyph = d:CreateTexture(nil, "OVERLAY", nil, 7)
+        draw.glyph(glyph, glyphName)
+        glyph:SetSize(14, 14)
+        glyph:SetPoint("CENTER")
+        draw.paint(glyph, "ink-muted")
+        markArt(glyph)
+        hookScript(d, "OnEnter", function()
+            edge:SetShown(true)
+            draw.paint(glyph, "ink")
+        end)
+        hookScript(d, "OnLeave", function()
+            edge:SetShown(false)
+            draw.paint(glyph, "ink-muted")
+        end)
+        if text then
+            text:SetAlpha(0)
+        end
+        text = nil
+    else
+        local bg = d:CreateTexture(nil, "BACKGROUND", nil, -7)
+        draw.paintFill(bg, "surface-sunk")
+        bg:SetAllPoints()
+        markArt(bg)
+        local edge = draw.border(d, "gilt-line")
+        local chev = d:CreateTexture(nil, "OVERLAY", nil, 7)
+        draw.glyph(chev, "chevronDown")
+        chev:SetSize(12, 12)
+        chev:SetPoint("RIGHT", -S["space-3"], 0)
+        draw.paint(chev, "ink-muted")
+        markArt(chev)
+        hookScript(d, "OnEnter", function()
+            edge:SetColor("gilt")
+        end)
+        hookScript(d, "OnLeave", function()
+            edge:SetColor("gilt-line")
+        end)
+    end
+    if text then
+        fonts.apply(text, "label")
+        draw.paint(text, "ink")
+        text:SetShadowOffset(0, 0)
+    end
+    -- the menu it opens: in SuuUI's look while it's this dropdown's
+    local event = tbl.field(tbl.field(tbl.field(_G, "DropdownButtonMixin"), "Event"), "OnMenuOpen")
+    if event and tbl.field(d, "RegisterCallback") then
+        errors.tryMethod(
+            d,
+            "RegisterCallback",
+            event,
+            function()
+                local menu = openRoot()
+                if not menu then
+                    return
+                end
+                reskinMenu(menu)
+                -- its rows may come a frame later
+                after(0, function()
+                    if menu:IsShown() then
+                        reskinMenu(menu)
+                    end
+                end)
+            end,
+            d
+        )
+    end
+    s.dropdown = true
+end

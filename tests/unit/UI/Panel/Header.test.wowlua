@@ -1,0 +1,135 @@
+-- UI/Panel/Header: the close button, the key chip, SectionHeader, and the
+-- section headers laid out again from the header style (relayoutHeaders).
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import measureText from "/UI/Text"
+import closeButton, keyChip, sectionHeader, relayoutHeaders from "/UI/Panel/Header"
+import expectNoErrors, newParent from "../../../helpers"
+import tokenOf, pointOf from "../PrimitivesHelpers"
+
+local S = T.space
+local HEADER_LINE = T.type.header.lineHeight
+local parent: Frame? = nil
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(800, 600)
+end
+
+@afterEach
+local function cleanup()
+    T.type.header.lineHeight = HEADER_LINE
+    mock.hover(nil)
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+local function host(): Frame
+    return parent :: Frame
+end
+
+--------------------------------------------------------------------------------
+-- close button, key chip
+--------------------------------------------------------------------------------
+
+@test("the close button: 22px, an ink-muted cross, a border on hover")
+local function close()
+    local s = mock.spy(function(_b: Button) end)
+    local b = closeButton(host(), s)
+    b:SetPoint("CENTER")
+    expect(b).toHaveSize(22, 22)
+    local cross = ({ b:GetChildren() })[1] :: draw.Cross
+    local border = { b:GetRegions() }
+    expect(#border).toBe(4)
+    expect(border[1]).never.toBeShown()
+    expect(tokenOf(cross.strokes[1])).toBe("ink-muted")
+    mock.hover(b)
+    expect(border[1]).toBeShown()
+    expect(tokenOf(cross.strokes[1])).toBe("ink")
+    mock.hover(nil)
+    expect(border[2]).never.toBeShown()
+    expect(tokenOf(cross.strokes[2])).toBe("ink-muted")
+    mock.click(b)
+    expect(s).toHaveBeenCalledWith(b)
+    local plain = closeButton(host())
+    plain:SetPoint("TOPLEFT")
+    mock.click(plain)
+end
+
+@test("the key chip: at least 20px square, as wide as its key")
+local function chip()
+    local k = keyChip(host(), "P")
+    expect(k.text).toHaveText("P")
+    expect(k).toHaveSize(math.max(20, measureText("micro", "P") + S["space-2"] * 2), 20)
+    k:SetKey("Shift-Ctrl-P")
+    expect(k:GetWidth()).toBeCloseTo(math.max(20, measureText("micro", "Shift-Ctrl-P") + S["space-2"] * 2), 3)
+    local empty = keyChip(host())
+    expect(empty.text).toHaveText("")
+    expect(empty).toHaveSize(20, 20)
+end
+
+--------------------------------------------------------------------------------
+-- sectionHeader
+--------------------------------------------------------------------------------
+
+@test("a section header: its label, a fading rule, the meta at the right")
+local function section()
+    local h = sectionHeader(host(), "Party", "5 of 5")
+    expect(h).toHaveSize(380, HEADER_LINE)
+    expect(h.label).toHaveText("Party")
+    expect(tokenOf(h.label)).toBe("gilt-text")
+    expect(h.meta).toHaveText("5 of 5")
+    local x, yy = h.label:GetShadowOffset()
+    expect({ x, yy }).toEqual({ 0, -1 })
+    expect(pointOf(h.rule)).toEqual({
+        point = "LEFT",
+        relativeTo = h.label,
+        relativePoint = "RIGHT",
+        x = S["space-4"],
+        y = 0,
+    })
+    expect(pointOf(h.rule, 2)).toEqual({
+        point = "RIGHT",
+        relativeTo = h.meta,
+        relativePoint = "LEFT",
+        x = -S["space-4"],
+        y = 0,
+    })
+    h:SetLabel("Raid", "")
+    expect(pointOf(h.rule, 2)).toEqual({ point = "RIGHT", relativeTo = h, relativePoint = "RIGHT", x = 0, y = 0 })
+    h:SetLabel(nil, nil)
+    expect(h.label).toHaveText("")
+    local w = sectionHeader(host(), nil, nil, 200)
+    expect(w:GetWidth()).toBeCloseTo(200, 3)
+end
+
+@test("relayoutHeaders: each section header as tall as the header style's line, its rule placed again")
+local function relayout()
+    local h = sectionHeader(host(), "Party", "5 of 5")
+    local plain = sectionHeader(host(), "Raid")
+    T.type.header.lineHeight = HEADER_LINE + 10
+    relayoutHeaders()
+    expect(h:GetHeight()).toBeCloseTo(HEADER_LINE + 10, 3)
+    expect(plain:GetHeight()).toBeCloseTo(HEADER_LINE + 10, 3)
+    expect(pointOf(h.rule, 2)).toEqual({
+        point = "RIGHT",
+        relativeTo = h.meta,
+        relativePoint = "LEFT",
+        x = -S["space-4"],
+        y = 0,
+    })
+    expect(pointOf(plain.rule, 2)).toEqual({
+        point = "RIGHT",
+        relativeTo = plain,
+        relativePoint = "RIGHT",
+        x = 0,
+        y = 0,
+    })
+end

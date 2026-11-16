@@ -16,7 +16,9 @@ import internal M, SECTION from "/Units/Threat"
 import type ThreatEntry, ThreatOptions from "/UI/ThreatMeter"
 import migrations as settingMigrations from "/Core/Settings"
 import * as roles from "/Core/Roles"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings, cycle, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
 
 local wolf = mock.spawnUnit({ name = "Prowler", level = 9, reaction = "hostile", distance = 10 })
 local tank = mock.spawnUnit({
@@ -96,10 +98,7 @@ local function cleanup()
         wolf:setThreat(nil, u)
     end
     M:ResetAll({ "shows", "who", "marker", "raw", "warnPull", "aggroAlert", "openWorld", "position" })
-    local dm = SuuUI.GetModule("damagemeter")
-    if dm then
-        dm:Reset("rows")
-    end
+    settings.reset("damagemeter", "rows")
     mock.advanceFrames(2)
     expectNoErrors()
 end
@@ -406,8 +405,7 @@ local function preview()
     mock.stub(assert(M.meter), "SetMaxRows", function(_: unknown, n: number)
         heights[#heights + 1] = n
     end)
-    local dm = assert(SuuUI.GetModule("damagemeter"))
-    dm:Set("rows", 6)
+    settings.set("damagemeter", "rows", 6)
     expect(heights[1]).toBe(6)
     M:Set("who", "self")
     expect(opts.show).toBe("self")
@@ -450,8 +448,9 @@ local function migration()
     expect(found).toBe(true)
 end
 
--- (last: the module off)
-@test("stopped: the meter and its warnings gone")
+-- (last: the module off) Threat toggles live: turned off through the
+-- registry, nothing of it stays; on again, everything comes back.
+@test("turned off through the registry: the meter and its warnings gone, its anchor withdrawn, nothing held; on again, all back")
 local function disabled()
     local shown = alerts()
     tank:setRole("TANK")
@@ -464,10 +463,26 @@ local function disabled()
     expect(shown["threat-pull"] ~= nil).toBe(true)
     -- (0.39) published while on: tooltips open clear of it
     expect(SuuUI.GetAnchor("threatMeter")).toBe(M.meter)
-    M:OnDisable()
+    -- off in the fight: the registry turns it off as the fight ends
+    settings.set("threat", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(shown["threat-pull"]).toBeNil()
     expect(assert(M.meter):IsShown()).toBe(false)
     expect(assert(M.driver):IsShown()).toBe(false)
     expect(SuuUI.GetAnchor("threatMeter")).toBeNil()
-    SuuUI.PublishAnchor("threatMeter", M.meter)
+    expect(holdings(M)).toEqual(NOTHING)
+    settings.set("threat", "enabled", true)
+    mock.advanceFrames(2)
+    expect(SuuUI.GetAnchor("threatMeter")).toBe(M.meter)
+    -- and once more out of combat: nothing left while off, nothing doubled
+    local c = cycle("threat")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expect(SuuUI.GetAnchor("threatMeter")).toBe(M.meter)
+    expectNoErrors()
 end

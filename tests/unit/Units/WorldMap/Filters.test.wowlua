@@ -1,0 +1,301 @@
+-- Units/WorldMap/Filters: Map filters (the defaults, each group's own,
+-- read once while they stay, an earlier layout's choices carried over, the
+-- game's quest settings, another module's "show me") and the hidden quests
+-- (hidden from a giver's pin, per character, listed in Map filters).
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/WorldMap"
+import internal M as conv from "/Units/Convergences"
+import * as filters from "/Units/WorldMap/Filters"
+import expectNoErrors, captureMenus, choose from "../../../helpers"
+import * as world from "./WorldMapHelpers"
+import flags, all, copy, collect, openMap, pinOf, shownPin, groupOf from "./WorldMapHelpers"
+import type Checkbox from "/UI/Inputs"
+import type SuuButton from "/UI/Controls"
+
+@beforeEach
+local function data()
+    world.setup()
+end
+
+@afterEach
+local function cleanup()
+    world.cleanup()
+end
+
+--------------------------------------------------------------------------------
+-- Map filters
+--------------------------------------------------------------------------------
+
+@test("the filters: the defaults, each group's own")
+local function defaults()
+    local on = M:Layers()
+    expect(on.quests.available).toBe(true)
+    expect(on.places.flight).toBe(true)
+    expect(on.services.inn).toBe(true)
+    expect(on.services.repair).toBeNil()
+    expect(on.trading.mail).toBe(true)
+    expect(on.trainers.class).toBe(true)
+    expect(M:MarksShown()).toEqual({ yours = true, shared = true })
+end
+
+@test("the filters read once while they stay: the same tables; a change reads them again")
+local function filtersCached()
+    local on = M:Layers()
+    expect(M:Layers()).toBe(on)
+    expect(M:MarksShown()).toBe(M:MarksShown())
+    local value = M:MenuValue()
+    value.marks = { "yours" }
+    M:OnFilters(value)
+    local after = M:Layers()
+    expect(after ~= on).toBe(true)
+    expect(M:MarksShown()).toEqual({ yours = true })
+    M:ResetAll({ "filters" })
+    expect(M:MarksShown()).toEqual({ yours = true, shared = true })
+    expectNoErrors()
+end
+
+@test("an earlier layout's choices carried over: mailboxes and trainers moved, new options on once")
+local function carriedOver()
+    M:Set("filters", { services = { "inn", "classTrainer", "trainers", "mail" }, quests = { "available" } })
+    local saved = M:Saved()
+    expect(saved.services).toEqual({ "inn" })
+    expect(saved.trainers).toEqual({ "class", "professions" })
+    expect(saved.trading).toEqual({ "mail" })
+    -- (the versions' new options: quests from items, unexplored areas, marks, convergences)
+    expect(saved.quests).toEqual({ "available", "items" })
+    expect(saved.places).toEqual({ "unexplored" })
+    expect(saved.marks).toEqual({ "yours", "shared" })
+    expect(saved.skyborne).toEqual({ "convergences" })
+    -- a saved layout of now: as it is
+    M:Set("filters", { v = 5, quests = {}, marks = {} })
+    expect(M:Saved().quests).toEqual({})
+    expect(M:Saved().marks).toEqual({})
+end
+
+@test("the quest options that are the game's settings: read from it, set in it")
+local function gameSettings()
+    -- (from the map's own menu: the map open)
+    WorldMapFrame:Show()
+    C_CVar.SetCVar("questPOI", "1")
+    C_CVar.SetCVar("showQuestLevel", "0")
+    C_CVar.SetCVar("showQuestDifficultyColor", "1")
+    local value = M:MenuValue()
+    local quests = value.quests or {}
+    expect(quests[1]).toBe("objectives")
+    expect(quests[2]).toBe("colours")
+    local v = copy(value)
+    v.quests = { "levels", "available" }
+    M:OnFilters(v)
+    expect(C_CVar.GetCVar("questPOI")).toBe("0")
+    expect(C_CVar.GetCVar("showQuestLevel")).toBe("1")
+    expect(C_CVar.GetCVar("showQuestDifficultyColor")).toBe("0")
+    expect(M:Get("filters").v).toBe(5)
+    -- (a character without Skyborne keeps its saved choice)
+    expect(M:Get("filters").skyborne).toEqual({ "convergences" })
+    C_CVar.SetCVar("questPOI", "1")
+    C_CVar.SetCVar("showQuestDifficultyColor", "1")
+end
+
+@test("another module's \"show me\": the filter on; the caller opens the map through a secure click")
+local function openWith()
+    WorldMapFrame:Hide()
+    M:OpenWith("services", "repair")
+    expect(M:Layers().services.repair).toBe(true)
+    -- (opened from SuuUI's code, the map's pins were taken by it)
+    expect(WorldMapFrame).never.toBeShown()
+    M:OpenWith("services", "repair")
+    expect(M:Layers().services.repair).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Hidden quests
+--------------------------------------------------------------------------------
+
+@test("hidden quests: hidden, one shown again from Map filters, Show all; listed by name")
+local function hiddenStore()
+    expect(M:IsQuestHidden(9001)).toBe(false)
+    M:HideQuests({ 9001 })
+    M:HideQuests({ 9005, 9002 })
+    expect(M:IsQuestHidden(9001)).toBe(true)
+    expect(M:Char().hiddenQuests).toEqual({ [9001] = true, [9002] = true, [9005] = true })
+    -- by name: Boar Hides, The Kobold Lord, Wolves Across the Border
+    expect(M:HiddenQuests()).toEqual({ 9002, 9005, 9001 })
+    expect(M.hiddenListed).toEqual({ 9002, 9005, 9001 })
+    -- Map filters: the hidden ones ticked; one unticked is shown again
+    local value = M:MenuValue()
+    local ticked = value.hidden or {}
+    table.sort(ticked)
+    expect(ticked).toEqual({ "9001", "9002", "9005" })
+    value.hidden = { "9001", "9005" }
+    M:OnFilters(value)
+    expect(M:IsQuestHidden(9002)).toBe(false)
+    expect(M:IsQuestHidden(9001)).toBe(true)
+    -- (not a filter: not saved with them)
+    expect(M:Get("filters").hidden).toBeNil()
+    -- a change from elsewhere (no Hidden quests in it) leaves them
+    M:OnFilters(all())
+    expect(M:IsQuestHidden(9005)).toBe(true)
+    -- (it stays listed, unticked, until the map opens again)
+    expect(M.hiddenListed).toEqual({ 9002, 9005, 9001 })
+    M:ShowAllQuests()
+    expect(M:IsQuestHidden(9001)).toBe(false)
+    expect(M:Char().hiddenQuests).toBeNil()
+    expect(M:HiddenQuests()).toEqual({})
+end
+
+@test("hidden quests are this character's: in its own data, not the profile; another's are its own")
+local function hiddenPerCharacter()
+    M:HideQuests({ 9001 })
+    local key = assert(M:CharKey())
+    expect(assert(M:AllCharData()[key]).hiddenQuests).toEqual({ [9001] = true })
+    expect(M:Get("filters").hidden).toBeNil()
+    -- another character (its own data): nothing hidden, the pin there
+    local alt: { [string]: unknown } = {}
+    local onAlt = true
+    local real = M.CharData
+    mock.stub(M, "CharData", function(_: unknown): { [string]: unknown }
+        return onAlt and alt or real(M)
+    end)
+    expect(M:IsQuestHidden(9001)).toBe(false)
+    expect(collect()["Wolves Across the Border"] ~= nil).toBe(true)
+    M:HideQuests({ 9002 })
+    expect(alt.hiddenQuests).toEqual({ [9002] = true })
+    onAlt = false
+    expect(M:IsQuestHidden(9002)).toBe(false)
+    expect(M:IsQuestHidden(9001)).toBe(true)
+end
+
+@test("right-click on a quest giver's pin: Hide this quest; its pin gone at once, back at once")
+local function hideFromPin()
+    openMap()
+    local menu = captureMenus()
+    local farmer = shownPin("Boar Hides")
+    expect(farmer.giver).toBe(true)
+    mock.click(farmer, "RightButton")
+    expect(menu["Hide this quest"] ~= nil).toBe(true)
+    choose(menu, "Hide this quest")
+    expect(M:IsQuestHidden(9002)).toBe(true)
+    -- (no reopen: the map drawn again at once)
+    expect(pinOf("Boar Hides")).toBeNil()
+    expect(pinOf("Wolves Across the Border") ~= nil).toBe(true)
+    M:ShowAllQuests()
+    expect(pinOf("Boar Hides") ~= nil).toBe(true)
+end
+
+@test("right-click on a merged quest pin: Hide for each of its quests")
+local function hideFromMerged()
+    flags.crowd = true
+    openMap()
+    local menu = captureMenus()
+    mock.click(shownPin("Wolves Across the Border"), "RightButton")
+    expect(menu["Hide Wolves Across the Border"] ~= nil).toBe(true)
+    expect(menu["Hide The Kobold Lord"] ~= nil).toBe(true)
+    expect(menu["Hide The Lost Necklace"] ~= nil).toBe(true)
+    expect(menu["Hide this quest"]).toBeNil()
+    choose(menu, "Hide The Lost Necklace")
+    expect(M:IsQuestHidden(9008)).toBe(true)
+    expect(M:IsQuestHidden(9001)).toBe(false)
+    -- Dughan's pin alone now, with both his quests
+    expect(pinOf("The Lost Necklace")).toBeNil()
+    expect(groupOf("Wolves Across the Border").distinct).toBe(1)
+    flags.crowd = false
+end
+
+-- Map filters' Hidden quests row, its checkboxes and Show all (the panel open).
+type HiddenRow = { boxes: Checkbox[], labels: string[], showAll: SuuButton }
+local function hiddenRow(): HiddenRow?
+    local menu = assert(M.menu)
+    local panel = assert(menu.panel)
+    for _, row in ipairs(panel.rows) do
+        if row.group.key == "hidden" then
+            local boxes: Checkbox[], labels: string[] = {}, {}
+            for i, b in ipairs(row.boxes or {}) do
+                boxes[i] = b.box
+                labels[i] = b.option.label
+            end
+            return { boxes = boxes, labels = labels, showAll = assert(row.action) }
+        end
+    end
+    return nil
+end
+
+@test(
+    "Map filters' Hidden quests: each by name, ticked; unticked or Show all, the pins back; gone when the map opens again"
+)
+local function hiddenMenu()
+    openMap()
+    local menu = assert(M.menu)
+    -- nothing hidden: no group
+    menu:Open()
+    expect(hiddenRow()).toBeNil()
+    menu:Close()
+    M:HideQuests({ 9001, 9002 })
+    menu:Open()
+    local row = assert(hiddenRow())
+    expect(row.labels).toEqual({ "Boar Hides", "Wolves Across the Border" })
+    expect(row.boxes[1].value).toBe(true)
+    expect(row.boxes[2].value).toBe(true)
+    expect(row.showAll).toBeShown()
+    -- unticked: Boar Hides back at once, still listed (to hide it again)
+    mock.click(row.boxes[1])
+    expect(M:IsQuestHidden(9002)).toBe(false)
+    expect(pinOf("Boar Hides") ~= nil).toBe(true)
+    expect(menu.panel).toBeShown()
+    -- ticked again: away again
+    mock.click(row.boxes[1])
+    expect(M:IsQuestHidden(9002)).toBe(true)
+    expect(pinOf("Boar Hides")).toBeNil()
+    -- Show all: every one back, the ticks off
+    mock.click(row.showAll)
+    expect(M:Char().hiddenQuests).toBeNil()
+    expect(pinOf("Boar Hides") ~= nil).toBe(true)
+    expect(pinOf("Wolves Across the Border") ~= nil).toBe(true)
+    local again = assert(hiddenRow())
+    expect(again.boxes[1].value).toBe(false)
+    expect(again.boxes[2].value).toBe(false)
+    menu:Close()
+    -- the map opened again: the group gone
+    WorldMapFrame:Hide()
+    openMap()
+    menu:Open()
+    expect(hiddenRow()).toBeNil()
+    menu:Close()
+end
+
+@test("Map filters' Reset shows the hidden quests again too")
+local function hiddenReset()
+    openMap()
+    M:HideQuests({ 9002 })
+    local menu = assert(M.menu)
+    menu:Open()
+    expect(menu:Count() > 0).toBe(true)
+    mock.click(assert(assert(menu.panel).reset))
+    expect(M:IsQuestHidden(9002)).toBe(false)
+    expect(pinOf("Boar Hides") ~= nil).toBe(true)
+    menu:Close()
+end
+
+@test("Map filters' values from a choice and back, the saved groups without their version, Skyborne's group for a Skyborne")
+local function menuData()
+    local choice: filters.FilterChoice = { quests = { "available", "items" }, marks = {} }
+    expect(filters.chosen(filters.menuValues(choice))).toEqual(choice)
+    expect(filters.choiceOf({ v = 5, quests = { "available" } })).toEqual({ quests = { "available" } })
+    local function hasSkyborne(): boolean
+        for _, g in ipairs(filters.menuGroups()) do
+            if g.key == "skyborne" then
+                return true
+            end
+        end
+        return false
+    end
+    expect(filters.seesConvergences()).toBe(false)
+    expect(hasSkyborne()).toBe(false)
+    mock.stub(conv, "Shown", function(): boolean
+        return true
+    end)
+    expect(filters.seesConvergences()).toBe(true)
+    expect(hasSkyborne()).toBe(true)
+    expectNoErrors()
+end

@@ -1,0 +1,684 @@
+-- Units/AuctionHouse/ItemView.wowlua
+-- An item's view on the Buy page of the auction house (Units/AuctionHouse):
+-- an item's auctions (Bid, Buy out) or a commodity's offers (a quantity's
+-- price, Buy now, the game's final price). The module's methods for it
+-- (OpenItem, DrawItemView, DrawItemFoot, BuyCommodity, …) call the
+-- functions here; the secure clicks on the game's page for a single
+-- auction's buyout are AuctionHouse/GamePage, a bid's checks and placing
+-- AuctionHouse/Bidding. The chosen auction is held by its auctionID.
+
+import SuuUI from "/Core/API"
+import type SuuButton, Text, TextField, MoneyInput, ItemSlot, Money, ConfirmDialog from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import keyInfo, keyTooltip, QUALITY, qualityToken, BAND, coins, sorts from "./Common"
+import TableRow, AuctionTable from "./Tables"
+import type Col, Cell from "./Tables"
+import type Offer from "./Prices"
+import leastBid, seenOf, recheck, recheckNote, bidProblem from "./Bidding"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, tryValue = errors.try, errors.tryValue
+local asNumber = secret.asNumber
+
+local AH = C_AuctionHouse
+
+--------------------------------------------------------------------------------
+-- An item's auctions, and a commodity's offers
+--------------------------------------------------------------------------------
+
+-- An offer or an auction of the item view: each cell a price or a word.
+export class OfferRow extends TableRow
+    readonly money: { [number]: Money } = {}
+    readonly texts: { [number]: Text } = {}
+    -- the auction the row shows (an item's view; nil for a commodity's offer)
+    auctionID: number? = nil
+end
+
+-- An item's auctions, or a commodity's offers: the head (the item, Back),
+-- the list, the foot (Bid and Buy out; a quantity's price and Buy now).
+export class ItemView extends Frame
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly back: SuuButton
+    readonly foot: Frame
+    readonly buyout: SuuButton
+    readonly bidButton: SuuButton
+    readonly bid: MoneyInput
+    readonly bidLabel: Text
+    readonly buyNow: SuuButton
+    readonly qtyLabel: Text
+    readonly qty: TextField
+    readonly max: SuuButton
+    readonly unitLabel: Text
+    readonly unit: Money
+    readonly totalLabel: Text
+    readonly total: Money
+    readonly table: AuctionTable<OfferRow>
+
+    constructor(main: Frame, m: AuctionHouseModule)
+        super(nil, main)
+        self:SetAllPoints()
+        self:Hide()
+        -- the head: the item, back
+        self.slot = UI.ItemSlot(self)
+        self.slot:SetPoint("TOPLEFT")
+        self.slot:SetScript("OnEnter", function()
+            local key = m.itemKey
+            if key then
+                keyTooltip(self.slot, key)
+            end
+        end)
+        self.slot:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+        self.name = UI.Text(self, "unit-name-lg", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-4"], 0)
+        end)
+        self.back = UI.Button(self, {
+            text = "Back",
+            icon = "reset",
+            onClick = function()
+                m.view = "browse"
+                m:Refresh()
+            end,
+        })
+        self.back:SetPoint("TOPRIGHT")
+        -- the foot: bid, buy out; a commodity's quantity, unit price, total, buy now
+        local foot = CreateFrame("Frame", nil, self)
+        self.foot = foot
+        foot:SetPoint("BOTTOMLEFT")
+        foot:SetPoint("BOTTOMRIGHT")
+        foot:SetHeight(30)
+        self.buyout = UI.Button(foot, {
+            text = "Buy out",
+            variant = "primary",
+            onClick = function()
+                m:BuyOut()
+            end,
+        })
+        self.buyout:SetPoint("RIGHT")
+        self.bidButton = UI.Button(foot, {
+            text = "Bid",
+            onClick = function()
+                m:Bid()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.bidButton:SetPoint("RIGHT", self.buyout, "LEFT", -S["space-2"], 0)
+        end)
+        self.bid = UI.MoneyInput(foot, {
+            onChange = function()
+                m:DrawItemFoot()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.bid:SetPoint("RIGHT", self.bidButton, "LEFT", -S["space-4"], 0)
+        end)
+        self.bidLabel = UI.Text(foot, "caption", "ink-muted")
+        self.bidLabel:SetValue("Your bid")
+        SuuUI.Layout.Follow(self, function()
+            self.bidLabel:SetPoint("RIGHT", self.bid, "LEFT", -S["space-3"], 0)
+        end)
+        self.buyNow = UI.Button(foot, {
+            text = "Buy now",
+            variant = "primary",
+            onClick = function()
+                m:BuyCommodity()
+            end,
+        })
+        self.buyNow:SetPoint("RIGHT")
+        self.qtyLabel = UI.Text(foot, "caption", "ink-muted")
+        self.qtyLabel:SetValue("Quantity")
+        self.qtyLabel:SetPoint("LEFT")
+        self.qty = UI.TextField(foot, {
+            width = 70,
+            onTextChanged = function()
+                m:DrawCommodityFoot()
+            end,
+        })
+        self.qty.edit:SetNumeric(true)
+        self.qty.edit:SetMaxLetters(6)
+        SuuUI.Layout.Follow(self, function()
+            self.qty:SetPoint("LEFT", self.qtyLabel, "RIGHT", S["space-3"], 0)
+        end)
+        self.max = UI.Button(foot, {
+            text = "Max",
+            onClick = function()
+                local total = 0
+                for _, o in ipairs(m.offers) do
+                    total = total + (o.quantity or 0)
+                end
+                self.qty:SetValue(tostring(total))
+                m:DrawCommodityFoot()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.max:SetPoint("LEFT", self.qty, "RIGHT", S["space-2"], 0)
+        end)
+        self.unitLabel = UI.Text(foot, "caption", "ink-muted")
+        self.unitLabel:SetValue("Unit price")
+        SuuUI.Layout.Follow(self, function()
+            self.unitLabel:SetPoint("LEFT", self.max, "RIGHT", S["space-5"], 0)
+        end)
+        self.unit = UI.Money(foot)
+        SuuUI.Layout.Follow(self, function()
+            self.unit:SetPoint("LEFT", self.unitLabel, "RIGHT", S["space-3"], 0)
+        end)
+        self.totalLabel = UI.Text(foot, "caption", "ink-muted")
+        self.totalLabel:SetValue("Total")
+        SuuUI.Layout.Follow(self, function()
+            self.totalLabel:SetPoint("LEFT", self.unit, "RIGHT", S["space-5"], 0)
+        end)
+        self.total = UI.Money(foot)
+        SuuUI.Layout.Follow(self, function()
+            self.total:SetPoint("LEFT", self.totalLabel, "RIGHT", S["space-3"], 0)
+        end)
+        -- the auctions or offers between head and foot
+        self.table = AuctionTable.new(self, { { label = "Buyout", w = 120 } }, function(p: Frame): OfferRow
+            return OfferRow.new(p)
+        end)
+        SuuUI.Layout.Follow(self, function()
+            self.table:SetPoint("TOPLEFT", self.slot, "BOTTOMLEFT", 0, -S["space-4"])
+            self.table:SetPoint("BOTTOMRIGHT", foot, "TOPRIGHT", 0, S["space-4"])
+        end)
+    end
+end
+
+-- A purchase asked of the house: the item, how many, the price as searched;
+-- once the game quoted its final price, the question asked (`dialog`, the
+-- confirm panel when there is one) until it is answered or dropped.
+export type Buying = {
+    itemID: number,
+    qty: number,
+    expected?: number,
+    asked?: boolean,
+    quoted?: number,
+    dialog?: ConfirmDialog,
+}
+
+export function openItem(self: AuctionHouseModule, key: ItemKey?, gameOpened: boolean?)
+    local info = keyInfo(key)
+    local commodity = info ~= nil and info.isCommodity
+    self.view = commodity and "commodity" or "item"
+    -- (a commodity's purchase still asked about is another item's: dropped)
+    self:DropPurchase()
+    self.itemKey, self.chosen, self.chosenSeen, self.offers, self.auctions = key, nil, nil, {}, {}
+    local buy = self.buy
+    if buy then
+        buy.itemView.qty:SetValue("1")
+    end
+    self:Note(commodity and "Asking for the offers…" or "Asking for the auctions…", nil, true)
+    -- (opened by the game's own page: it asks itself)
+    if key and not gameOpened then
+        try(AH.SendSearchQuery, key, sorts(), true)
+    end
+    self:Refresh()
+end
+
+export function drawItemView(self: AuctionHouseModule)
+    local buy, key = self.buy, self.itemKey
+    if not (buy and key) then
+        return
+    end
+    local v = buy.itemView
+    local info = keyInfo(key)
+    local quality = info and info.quality
+    v.slot.skin:SetItem({ icon = info and info.iconFileID, quality = QUALITY[quality or 1] or "common" })
+    v.name:SetValue(info and info.itemName or "…")
+    v.name:SetColor(qualityToken(quality))
+    local commodity = self.view == "commodity"
+    local itemParts: Region[] = { v.buyout, v.bidButton, v.bid, v.bidLabel }
+    for _, w in ipairs(itemParts) do
+        w:SetShown(not commodity)
+    end
+    local commodityParts: Region[] = {
+        v.buyNow,
+        v.qtyLabel,
+        v.qty,
+        v.max,
+        v.unitLabel,
+        v.unit,
+        v.totalLabel,
+        v.total,
+    }
+    for _, w in ipairs(commodityParts) do
+        w:SetShown(commodity)
+    end
+    local t = v.table
+    local rows: Cell[][] = {}
+    if commodity then
+        t:SetCols({
+            { label = "Unit price", w = 140 },
+            { label = "Available", w = 90, right = true },
+            { label = "Sellers" },
+        })
+        local offers: CommoditySearchResultInfo[] = {}
+        for i = 1, tryValue(AH.GetNumCommoditySearchResults, key.itemID) or 0 do
+            local o = tryValue(AH.GetCommoditySearchResultInfo, key.itemID, i)
+            if o then
+                offers[#offers + 1] = o
+            end
+        end
+        self.offers = offers
+        local priced: Offer[] = {}
+        for _, o in ipairs(offers) do
+            if o.unitPrice and o.unitPrice > 0 then
+                priced[#priced + 1] = { price = o.unitPrice, qty = o.quantity or 1 }
+            end
+        end
+        self:Seen(key.itemID, self:Market(priced))
+        for _, o in ipairs(offers) do
+            local who: string
+            local owners = o.owners
+            local sellers = o.totalNumberOfOwners or 0
+            if o.containsOwnerItem then
+                who = "|cff" .. T.color["arcane"].hex .. "Yours|r"
+            elseif owners and owners[1] and sellers <= 1 then
+                who = owners[1]
+            else
+                who = sellers == 1 and "1 seller" or (sellers .. " sellers")
+            end
+            rows[#rows + 1] = { o.unitPrice or 0, tostring(o.quantity or 0), who }
+        end
+    else
+        local auctions: ItemSearchResultInfo[] = {}
+        for i = 1, tryValue(AH.GetNumItemSearchResults, key) or 0 do
+            local a = tryValue(AH.GetItemSearchResultInfo, key, i)
+            if a then
+                auctions[#auctions + 1] = a
+            end
+        end
+        self.auctions = auctions
+        local withBid = false
+        local priced: Offer[] = {}
+        for _, a in ipairs(auctions) do
+            if a.bidAmount or a.minBid then
+                withBid = true
+            end
+            -- an item's buyout is the price of one: the game groups the
+            -- auctions at one price into a row with their count as its
+            -- quantity (its own sell frame takes buyoutAmount as the
+            -- price as it is). Divided by it, 32 at 20s read as 62c
+            -- (reported 2026-11-10).
+            local buyout, qty = a.buyoutAmount, a.quantity or 1
+            if buyout and buyout > 0 and qty > 0 then
+                priced[#priced + 1] = { price = buyout, qty = qty }
+            end
+        end
+        self:Seen(key.itemID, self:Market(priced))
+        local cols: Col[] = {}
+        if withBid then
+            cols[#cols + 1] = { label = "Bid", w = 120 }
+        end
+        cols[#cols + 1] = { label = "Buyout", w = 120 }
+        cols[#cols + 1] = { label = "Quantity", w = 70, right = true }
+        cols[#cols + 1] = { label = "Time left" }
+        t:SetCols(cols)
+        for _, a in ipairs(auctions) do
+            local cells: Cell[] = {}
+            if withBid then
+                cells[#cells + 1] = (a.bidAmount or a.minBid) or false
+            end
+            cells[#cells + 1] = a.buyoutAmount or "none"
+            cells[#cells + 1] = tostring(a.quantity or 1)
+            cells[#cells + 1] = BAND[a.timeLeft or -1] or "?"
+            rows[#rows + 1] = cells
+        end
+    end
+    for i, cells in ipairs(rows) do
+        local row = t:Line(i)
+        local placed: (Frame | FontString | false)[] = {}
+        for k, val in ipairs(cells) do
+            local money, text = row.money[k], row.texts[k]
+            if type(val) == "number" then
+                money = money or UI.Money(row)
+                row.money[k] = money
+                money:SetCopper(val)
+                money:Show()
+                if text then
+                    text:Hide()
+                end
+                placed[k] = money
+            else
+                text = text or UI.Text(row, k == 1 and "caption" or "body", "ink")
+                row.texts[k] = text
+                text:SetValue(val == false and "—" or tostring(val))
+                local col = t.cols[k]
+                text:SetJustifyH(col and col.right and "RIGHT" or "LEFT")
+                text:Show()
+                if money then
+                    money:Hide()
+                end
+                placed[k] = text
+            end
+        end
+        for k = #cells + 1, 6 do
+            local money, text = row.money[k], row.texts[k]
+            if money then
+                money:Hide()
+            end
+            if text then
+                text:Hide()
+            end
+        end
+        t:PlaceCells(row, placed)
+        -- the auction by its id: the list is read again on every refresh
+        -- and its order changes (BAG-1)
+        local a = (not commodity) and self.auctions[i] or nil
+        local id = a and a.auctionID
+        row.auctionID = id
+        row.sel:SetShown(id ~= nil and self.chosen == id)
+        row.onEnter = (not commodity) and
+            function()
+                self:OverAuction(row)
+            end or
+            nil
+        row:SetScript("OnClick", function()
+            if id then
+                self:ChooseAuction(id)
+            end
+        end)
+        -- (under the mouse: the secure click over it follows the auction the
+        -- row shows now)
+        if id and row:IsMouseOver() then
+            self:OverAuction(row)
+        end
+        row:Show()
+    end
+    t:Fit(#rows)
+    if commodity then
+        self:DrawCommodityFoot()
+    else
+        self:DrawItemFoot()
+    end
+end
+
+-- The auction chosen in an item's view, found by its id in the list as it
+-- is now (nil when it isn't listed any more).
+export function chosenAuction(self: AuctionHouseModule): ItemSearchResultInfo?
+    local id = self.chosen
+    if not id then
+        return nil
+    end
+    for _, a in ipairs(self.auctions) do
+        if a.auctionID == id then
+            return a
+        end
+    end
+    return nil
+end
+
+-- An auction chosen (its row clicked, or the game's row for it): what the
+-- player sees of it now is what a bid is checked against. Another auction:
+-- its own least bid in the field, not the one typed for the last; the
+-- same one: a typed bid under its least bid raised to it.
+export function chooseAuction(self: AuctionHouseModule, id: number)
+    local buy = self.buy
+    local a: ItemSearchResultInfo? = nil
+    for _, x in ipairs(self.auctions) do
+        if x.auctionID == id then
+            a = x
+        end
+    end
+    if not (buy and a) then
+        return
+    end
+    local v = buy.itemView
+    if self.chosen ~= id then
+        v.bid:Clear()
+    end
+    self.chosen, self.chosenSeen = id, seenOf(a)
+    local least = leastBid(a)
+    if least and (v.bid:GetCopper() or 0) < least then
+        v.bid:SetCopper(least)
+    end
+    self:DrawItemView()
+end
+
+-- An item's foot: Bid only for an auction with one, Buy out for one with a buyout.
+export function drawItemFoot(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local v = buy.itemView
+    local a = self:ChosenAuction()
+    local least = a and leastBid(a)
+    local bidParts: Region[] = { v.bidButton, v.bid, v.bidLabel }
+    for _, w in ipairs(bidParts) do
+        w:SetShown(least ~= nil)
+    end
+    -- (a typed bid under the least bid isn't raised here: it is typed now,
+    -- or the auction changed since it was chosen; Bid says why it's off)
+    local money = GetMoney() or 0
+    local buyout = a and a.buyoutAmount
+    local gone = self.chosen ~= nil and a == nil
+    local why = self.bidding and "Waiting for the house's answer to your last bid." or
+        (a and bidProblem(least, v.bid:GetCopper(), money, buyout)) or
+        nil
+    v.bidButton:SetEnabledState(a ~= nil and why == nil)
+    v.bidButton.tooltip = why and { title = "Bid", description = why } or nil
+    v.buyout:SetEnabledState(buyout ~= nil and buyout > 0 and money >= buyout)
+    v.buyout.tooltip = gone and { title = "Buy out", description = "The auction you chose isn't listed any more." } or
+        not a and { title = "Buy out", description = "Choose an auction." } or
+        (buyout and money < buyout) and { title = "Buy out", description = "Not enough money." } or
+        nil
+    self:DrawBuyOver()
+end
+
+-- A commodity's foot: what a quantity costs, cheapest offers first.
+export function commodityPrice(self: AuctionHouseModule, qty: number): (number, boolean)
+    local left, total = qty, 0
+    for _, o in ipairs(self.offers) do
+        if left <= 0 then
+            break
+        end
+        local n = math.min(left, o.quantity or 0)
+        total = total + n * (o.unitPrice or 0)
+        left = left - n
+    end
+    return total, left > 0
+end
+
+export function drawCommodityFoot(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local v = buy.itemView
+    local qty = tonumber(v.qty.edit:GetText()) or 0
+    local total, short = self:CommodityPrice(qty)
+    v.unit:SetCopper(qty > 0 and math.floor(total / qty + 0.5) or 0)
+    v.total:SetCopper(total)
+    local money = GetMoney() or 0
+    local ok = qty > 0 and not short and total <= money
+    v.buyNow:SetEnabledState(ok)
+    v.buyNow.tooltip = (not ok) and
+        {
+            title = "Buy now",
+            description = qty <= 0 and "How many?" or short and "There aren't that many." or "Not enough money.",
+        } or
+        nil
+end
+
+-- Buy out without the game's page on it (its secure click is over the
+-- button when it is): what to do instead (the game refuses SuuUI's own).
+-- The game's page has rows only for the first results and auctions it
+-- lists (BAG-34): said plainly when the chosen one has none there.
+export function buyOut(self: AuctionHouseModule)
+    local a = self:ChosenAuction()
+    if not (a and a.buyoutAmount) then
+        return
+    end
+    if not self:GameOnItem() then
+        self:Note(
+            "Buy out goes through the game's own page, which isn't on this item: go back and open it again (if it isn't among the first results, search for its name).",
+            "error"
+        )
+    elseif self:GameHasAuction(a.auctionID) then
+        self:Note("Click the auction's row again, then Buy out.", "error")
+    else
+        self:Note("The game lists only the first auctions of an item, and this one isn't among them: it can't be bought out here yet.", "error")
+    end
+end
+
+-- The item view's item, by name (for a question or a note).
+local function itemName(self: AuctionHouseModule): string
+    local info = keyInfo(self.itemKey)
+    return info and info.itemName or "this item"
+end
+
+-- Bid: the chosen auction found again by its id and checked against what
+-- the player saw when choosing it (gone or changed: nothing placed, the
+-- player told and shown it as it is now); the amount checked; asked
+-- first, as the game asks; checked again at the answer; then placed
+-- (AuctionHouse/Bidding: counted once the house says so).
+export function bid(self: AuctionHouseModule)
+    local buy, seen = self.buy, self.chosenSeen
+    if not (buy and seen and self.chosen == seen.auctionID) then
+        return
+    end
+    local v = buy.itemView
+    local name = itemName(self)
+    -- the auction now, else why not; what's shown now is what's checked next
+    local function current(): ItemSearchResultInfo?
+        local a, why = recheck(self.auctions, seen)
+        if why then
+            self:Note(recheckNote(why, a, "bid"), "error")
+            if a then
+                self.chosenSeen = seenOf(a)
+            else
+                self.chosen, self.chosenSeen = nil, nil
+                v.bid:Clear()
+            end
+            self:DrawItemView()
+            return nil
+        end
+        return a
+    end
+    local a = current()
+    if not a then
+        return
+    end
+    local amount = v.bid:GetCopper()
+    local least = leastBid(a)
+    local why = bidProblem(least, amount, GetMoney() or 0, a.buyoutAmount)
+    if why then
+        self:Note("No bid placed. " .. why, "error")
+        return
+    end
+    local id = a.auctionID
+    UI.Confirm({
+        title = "Bid on " .. name .. "?",
+        text = ("Your bid: %s (least bid %s)."):format(coins(amount), coins(least)),
+        confirm = "Bid",
+        onConfirm = function()
+            -- the same auction, as it was asked about, and the money still there
+            if self.chosen ~= id then
+                self:Note("You chose another auction meanwhile: no bid placed.", "error")
+                return
+            end
+            local now = current()
+            if not now then
+                return
+            end
+            local again = bidProblem(leastBid(now), amount, GetMoney() or 0, now.buyoutAmount)
+            if again then
+                self:Note("No bid placed. " .. again, "error")
+                return
+            end
+            self:PlaceBid(id, amount, name, false)
+        end,
+    })
+end
+
+-- Buy now asks the game; it answers with the final price (COMMODITY_PRICE_UPDATED).
+export function buyCommodity(self: AuctionHouseModule)
+    local buy, key = self.buy, self.itemKey
+    if not (buy and key) then
+        return
+    end
+    local qty = tonumber(buy.itemView.qty.edit:GetText()) or 0
+    if qty <= 0 then
+        return
+    end
+    self:DropPurchase()
+    self.buying = { itemID = key.itemID, qty = qty, expected = (self:CommodityPrice(qty)) }
+    self:Note("Asking for the final price…")
+    local ok, err = pcall(AH.StartCommoditiesPurchase, key.itemID, qty)
+    if not ok then
+        self.buying = nil
+        self:Note("Couldn't buy: " .. tostring(err), "error")
+    end
+end
+
+-- The game's final price for the purchase asked (COMMODITY_PRICE_UPDATED):
+-- asked about, the item named from the purchase itself. The purchase stays
+-- until it is answered, fails or is dropped; a later price for it (the game
+-- quotes again when offers change, BAG-16) asks again with the new one.
+export function onCommodityPrice(self: AuctionHouseModule, unit: unknown, totalR: unknown)
+    local b = self.buying
+    if not b then
+        return
+    end
+    local total = asNumber(totalR)
+    local requoted = b.asked == true and total ~= b.quoted
+    local changed = (not b.asked) and b.expected and total and total ~= b.expected
+    local name = secret.asString((C_Item.GetItemInfo(b.itemID))) or "of this"
+    -- (the question asked before: replaced, not cancelled)
+    local before = b.dialog
+    if before then
+        before.onCancel = nil
+    end
+    b.asked, b.quoted = true, total
+    local d = UI.Confirm({
+        title = ("Buy %d %s?"):format(b.qty, name),
+        text = ("The game's final price: %s (%s each).%s"):format(
+            coins(total),
+            coins(asNumber(unit)),
+            requoted and " The price changed while you were deciding." or
+                changed and " It changed since you searched: someone bought or posted." or
+                ""
+        ),
+        confirm = "Buy",
+        onConfirm = function()
+            if self.buying == b then
+                self.buying = nil
+            end
+            local ok, err = pcall(AH.ConfirmCommoditiesPurchase, b.itemID, b.qty)
+            if not ok then
+                self:Note("Couldn't buy: " .. tostring(err), "error")
+            end
+        end,
+        onCancel = function()
+            if self.buying == b then
+                self.buying = nil
+            end
+            try(AH.CancelCommoditiesPurchase)
+            self:Note("")
+        end,
+    })
+    b.dialog = d
+end
+
+-- A purchase still asked about dropped (the price gone, the house closed,
+-- another item opened or bought): its question closed, the game told.
+export function dropPurchase(self: AuctionHouseModule)
+    local b = self.buying
+    if not b then
+        return
+    end
+    self.buying = nil
+    local d = b.dialog
+    if d then
+        d.onCancel, d.onConfirm = nil, nil
+        d:Hide()
+    end
+    if b.asked then
+        try(AH.CancelCommoditiesPurchase)
+    end
+end

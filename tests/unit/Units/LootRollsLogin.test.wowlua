@@ -1,0 +1,60 @@
+-- Units/LootRolls at login: a /reload (or a login) while a roll is still
+-- running. The registry starts the module (reloadToToggle: only ever at
+-- login), its OnEnable takes the game's roll frames away and adds the rolls
+-- already running, and the tray shows them at once (it waited for the next
+-- roll event while IsEnabled() was false inside OnEnable).
+-- The engine has no group loot: the roll API is stubbed before logging in.
+
+import test, expect, config, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import expectNoErrors from "../../helpers"
+
+import M from "/Units/LootRolls"
+
+config({ lifecycle = "manual" })
+
+type Seen = { enabled: boolean, shown: boolean, row: boolean, time: string?, blizzardAlpha: number }
+local seen: Seen
+
+-- (the item known to the client: no item-data callback that refreshes the
+-- tray later anyway)
+const ITEM = 4704
+mock.defineItem(ITEM, { name = "Dusk Mantle", quality = 2, stackCount = 1, classID = 4, icon = 135033 })
+
+@beforeAll
+local function logInMidRoll()
+    rawset(_G, "GetActiveLootRollIDs", function(): number[]
+        return { 21 }
+    end)
+    rawset(_G, "GetLootRollItemInfo", function(_: number): ...unknown
+        return 135033, "Dusk Mantle", 1, 2, false, true, true, false, 0, 0, 0
+    end)
+    rawset(_G, "GetLootRollItemLink", function(_: number): string
+        return "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
+    end)
+    rawset(_G, "GetLootRollTimeLeft", function(_: number): number
+        return 20000
+    end)
+    mock.login()
+    -- (no frame passes: what OnEnable did, as it left it)
+    local tray = M.tray
+    local row = tray and tray:RowFor(21)
+    seen = {
+        enabled = M:IsEnabled(),
+        shown = tray ~= nil and tray:IsShown(),
+        row = row ~= nil,
+        time = row and row.time:GetText() or nil,
+        blizzardAlpha = assert(frames.find("GroupLootContainer")):GetAlpha(),
+    }
+end
+
+@test("logged in mid-roll: the running roll in the tray at once, the game's roll frames away")
+local function midRoll()
+    expect(seen.enabled).toBe(true)
+    expect(seen.blizzardAlpha).toBe(0)
+    expect(seen.row).toBe(true)
+    expect(seen.shown).toBe(true)
+    expect(seen.time).toBe("20")
+    expectNoErrors()
+end

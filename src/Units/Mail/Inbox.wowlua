@@ -1,0 +1,201 @@
+-- Units/Mail/Inbox.wowlua
+-- The inbox as the Mail module reads it (see Units/Mail.wowlua): a mail's
+-- header, its attachments, and how a mail is known again later.
+--
+-- Inbox indexes are not stable: a mail above one taken empty, returned,
+-- deleted or expired moves every mail under it up, and new mail comes in
+-- at the top. So nothing acts on an index kept from before (a confirmation,
+-- a click on a row drawn earlier, a take on its way): it keeps the mail's
+-- MailId and finds the mail by it at the moment of acting, and acts on
+-- nothing when the mail is gone or no longer the same.
+--
+-- A MailId is what the game gives that does not change while the mail sits
+-- there: who from, the subject, the money, the cash on delivery and every
+-- attachment (its slot, item and count). Taking money or an item changes
+-- the mail, so a MailId names the mail as it was when it was read: the same
+-- mail with less in it "follows" it (sameMail / follows). Two mails alike in
+-- all of these are the same to act on (the same things, for the same price,
+-- from the same sender); the expiry (days left read against the clock) only
+-- picks between such twins, never decides a match, since how exactly the
+-- game rounds the days left is not known.
+
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+
+local try, asString, asNumber, flag = errors.try, secret.asString, secret.asNumber, secret.flag
+
+export const ATTACH_IN: number = ATTACHMENTS_MAX_RECEIVE or 16
+export const ENVELOPE = "Interface\\Icons\\INV_Letter_15"
+
+-- One mail's header as the list shows it.
+export type Header = {
+    index: number,
+    icon: number | string,
+    sender: string,
+    subject: string,
+    money: number,
+    cod: number,
+    days: number?,
+    items: number,
+    read: boolean,
+    returned: boolean,
+    canReply: boolean,
+    gm: boolean,
+}
+
+-- The game's mail functions, protected (an index past the inbox gives
+-- nothing), their values read with wowlua:secret.
+export function header(i: number): Header?
+    local packageIcon, _, sender, subject, money, cod, days, itemCount, wasRead, wasReturned, _, canReply, isGM = try(
+        GetInboxHeaderInfo,
+        i
+    )
+    local who, about = asString(sender), asString(subject)
+    if about == nil and who == nil then
+        return nil
+    end
+    local items = asNumber(itemCount) or 0
+    local firstIcon: (number | string)? = nil
+    if items > 0 then
+        for a = 1, ATTACH_IN do
+            local _, _, texture = try(GetInboxItem, i, a)
+            local tex = asNumber(texture) or asString(texture)
+            if tex then
+                firstIcon = tex
+                break
+            end
+        end
+    end
+    return {
+        index = i,
+        icon = firstIcon or asNumber(packageIcon) or asString(packageIcon) or ENVELOPE,
+        sender = who or "?",
+        subject = about or "",
+        money = asNumber(money) or 0,
+        cod = asNumber(cod) or 0,
+        days = asNumber(days),
+        items = items,
+        read = flag(wasRead),
+        returned = flag(wasReturned),
+        canReply = flag(canReply),
+        gm = flag(isGM),
+    }
+end
+
+export function inboxCount(): (number, number)
+    local n, total = try(GetInboxNumItems)
+    return asNumber(n) or 0, asNumber(total) or 0
+end
+
+-- An attachment still in a mail: its slot, the item, how many, its name.
+export type Attachment = { slot: number, item: number, count: number, name: string }
+
+export function attachments(i: number): Attachment[]
+    local out: Attachment[] = {}
+    for a = 1, ATTACH_IN do
+        local name, itemID, _, count = try(GetInboxItem, i, a)
+        local item = asNumber(itemID)
+        if item then
+            out[#out + 1] = { slot = a, item = item, count = asNumber(count) or 1, name = asString(name) or "" }
+        end
+    end
+    return out
+end
+
+-- A mail as it was read (see the head of this file).
+export type MailId = {
+    sender: string,
+    subject: string,
+    money: number,
+    cod: number,
+    gm: boolean,
+    items: Attachment[],
+    -- when it expires, by the clock (time()); only picks between twins
+    expires: number?,
+}
+
+export function identify(i: number): MailId?
+    local h = header(i)
+    if not h then
+        return nil
+    end
+    return {
+        sender = h.sender,
+        subject = h.subject,
+        money = h.money,
+        cod = h.cod,
+        gm = h.gm,
+        items = h.items > 0 and attachments(i) or {},
+        expires = h.days and (time() + h.days * 86400) or nil,
+    }
+end
+
+-- The attachment in slot `a` of a mail as it was read.
+export function attachmentAt(id: MailId, a: number): Attachment?
+    for _, it in ipairs(id.items) do
+        if it.slot == a then
+            return it
+        end
+    end
+    return nil
+end
+
+local function sameHead(a: MailId, b: MailId): boolean
+    return a.sender == b.sender and a.subject == b.subject and a.cod == b.cod and a.gm == b.gm
+end
+
+-- The very mail `a` was, nothing taken from it: the same sender, subject,
+-- money, COD and attachments.
+export function sameMail(a: MailId, b: MailId): boolean
+    if not sameHead(a, b) or a.money ~= b.money or #a.items ~= #b.items then
+        return false
+    end
+    for k, it in ipairs(a.items) do
+        local o = b.items[k]
+        if not o or o.slot ~= it.slot or o.item ~= it.item or o.count ~= it.count then
+            return false
+        end
+    end
+    return true
+end
+
+-- `now` is the mail `before` was with nothing added: the same sender,
+-- subject and COD, no more money, and every attachment it still has was
+-- in that slot before (money or items taken since).
+export function follows(before: MailId, now: MailId): boolean
+    if not sameHead(before, now) or now.money > before.money then
+        return false
+    end
+    for _, it in ipairs(now.items) do
+        local was = attachmentAt(before, it.slot)
+        if not was or was.item ~= it.item or was.count ~= it.count then
+            return false
+        end
+    end
+    return true
+end
+
+-- Where the mail `id` is now: the index of a mail that matches it
+-- (sameMail by default); `prefer` first when it matches, else among twins
+-- the one expiring closest to it. nil when none does.
+export function find(id: MailId, prefer: number?, match: ((MailId, MailId) -> boolean)?): number?
+    local test = match or sameMail
+    if prefer then
+        local here = identify(prefer)
+        if here and test(id, here) then
+            return prefer
+        end
+    end
+    local best: number? = nil
+    local bestGap = math.huge
+    for j = 1, (inboxCount()) do
+        local other = identify(j)
+        if other and test(id, other) then
+            local gap = (id.expires and other.expires) and math.abs(id.expires - other.expires) or 0
+            if gap < bestGap then
+                best, bestGap = j, gap
+            end
+        end
+    end
+    return best
+end

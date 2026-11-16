@@ -1,0 +1,387 @@
+-- Units/Talents/Plan: the build picker and planning a build on its
+-- class's trees, through the module's methods.
+
+import internal M from "/Units/Talents"
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as talentPlan from "/Units/Talents/Plan"
+import heard, fakePage, drawn, order, lineData, store, wt, pt, steps, draft, build, planNode, setup, teardown from "./TalentsHelpers"
+import expectNoErrors, captureConfirm from "../../../helpers"
+
+@beforeEach
+local function before()
+    setup()
+end
+
+@afterEach
+local function after()
+    teardown()
+end
+
+--------------------------------------------------------------------------------
+-- The picker
+--------------------------------------------------------------------------------
+
+@test("PickerOptions: your class's builds by name, then other classes'")
+local function pickerOptions()
+    local out = M:PickerOptions()
+    expect(out[1]).toEqual({ value = "", label = "Your talents", note = "no build" })
+    expect(out[2]).toEqual({ heading = "Warrior" })
+    expect(out[3]).toEqual({ value = "__none", label = "No builds yet", disabled = true })
+    expect(#out).toBe(3)
+    local b = assert(M:AddBuild("beta", "WARRIOR", steps(11)))
+    local a = assert(M:AddBuild("Alpha", "WARRIOR", {}))
+    local h = assert(M:AddBuild("Holy", "PALADIN", {}))
+    store().builds.bx = { id = "bx", name = "Lost", class = "DRUID", steps = {} }
+    M:SetActive(b)
+    out = M:PickerOptions()
+    expect(out[3].value).toBe(a)
+    expect(out[4].value).toBe(b)
+    expect(out[4].note).toBe("1 / 0 / 0 · Active")
+    expect(out[4].diamond).toBe("class-warrior")
+    expect(out[5]).toEqual({ heading = "Other classes" })
+    -- by class name: DRUID (no class: its file) before Paladin
+    expect(out[6].value).toBe("bx")
+    expect(out[6].note).toBe(" · ")
+    expect(out[7].value).toBe(h)
+    expect(out[7].note).toBe("Paladin · 0 / 0 / 0")
+end
+
+@test("PickerFoot: new, import, and copy with a build shown")
+local function pickerFoot()
+    local news = 0
+    local shares: string[] = {}
+    mock.stub(M, "AskNewBuild", function()
+        news = news + 1
+    end)
+    mock.stub(M, "ShowShare", function(_: unknown, mode: string)
+        shares[#shares + 1] = mode
+    end)
+    local foot = M:PickerFoot()
+    expect(#foot).toBe(2)
+    assert(foot[1].onClick)()
+    assert(foot[2].onClick)()
+    M.buildView = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    foot = M:PickerFoot()
+    expect(foot[3].label).toBe("Copy this build as text")
+    assert(foot[3].onClick)()
+    expect(news).toBe(1)
+    expect(shares).toEqual({ "import", "copy" })
+end
+
+@test("HeadButtons: Plan, Use build, Your talents, Delete, Rename")
+local function headButtons()
+    expect(M:HeadButtons(nil, false)).toEqual({})
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    local b = build(id)
+    local out = M:HeadButtons(b, false)
+    expect(out[1].label).toBe("Plan")
+    assert(out[1].onClick)()
+    expect(M.planning).toBe(true)
+    -- planning a build not active
+    out = M:HeadButtons(b, true)
+    expect(out[1].label).toBe("Use build")
+    expect(out[1].disabled).toBe(false)
+    expect(out[1].reason).toBe("Follow it on this character: what fits is planned, Apply learns it.")
+    local used: string? = nil
+    mock.stub(M, "UseBuild", function(_: unknown, which: string)
+        used = which
+    end)
+    assert(out[1].onClick)()
+    expect(used).toBe(id)
+    M.buildView = id
+    assert(M:Draft()).dirty = true
+    out = M:HeadButtons(b, true)
+    expect(out[1].disabled).toBe(true)
+    expect(out[1].reason).toBe("Save it first.")
+    M.draft = nil
+    -- the active one: back to your talents
+    M:SetActive(id)
+    M.planning = true
+    out = M:HeadButtons(b, true)
+    expect(out[1].label).toBe("Your talents")
+    assert(out[1].onClick)()
+    expect(M.planning).toBe(false)
+    -- Delete and Rename ask first
+    local asked = captureConfirm().last
+    expect(out[2].label).toBe("Delete")
+    assert(out[2].onClick)()
+    expect(asked().title).toBe("Delete Arms?")
+    expect(out[3].label).toBe("Rename")
+    assert(out[3].onClick)()
+    expect(assert(asked().input).value).toBe("Arms")
+    M:Draft()
+    assert(asked().onConfirm)("Bladestorm")
+    expect(build(id).name).toBe("Bladestorm")
+    expect(draft().name).toBe("Bladestorm")
+    assert(out[2].onClick)()
+    assert(asked().onConfirm)()
+    expect(M:Builds()[id]).toBeNil()
+    -- renaming a build gone meanwhile changes nothing
+    assert(out[3].onClick)()
+    assert(asked().onConfirm)("x")
+    expect(M:Builds()[id]).toBeNil()
+    -- another class's: Delete and Rename only
+    local h = assert(M:AddBuild("Holy", "PALADIN", {}))
+    out = M:HeadButtons(build(h), true)
+    expect(out[1].label).toBe("Delete")
+    expect(#out).toBe(2)
+end
+
+@test("Picker: the head's picker for the build shown")
+local function picker()
+    local p = M:Picker(nil, false)
+    expect(p.value).toBe("")
+    expect(p.diamond).toBeNil()
+    expect(p.badge).toBeNil()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id)
+    p = M:Picker(build(id), false)
+    expect(p.value).toBe(id)
+    expect(p.diamond).toBe("class-warrior")
+    expect(p.badge).toBe("Active")
+    assert(p.onChange)("__none")
+    expect(M.buildView).toBeNil()
+    assert(p.onChange)(id)
+    expect(M.buildView).toBe(id)
+    assert(p.onChange)("")
+    expect(M.buildView).toBeNil()
+end
+
+@test("another class's builds by name within the class")
+local function othersByName()
+    assert(M:AddBuild("Retribution", "PALADIN", {}))
+    assert(M:AddBuild("Holy", "PALADIN", {}))
+    local list = M:PickerOptions()
+    local labels: string[] = {}
+    for _, o in ipairs(list) do
+        if o.label == "Holy" or o.label == "Retribution" then
+            labels[#labels + 1] = o.label
+        end
+    end
+    expect(labels).toEqual({ "Holy", "Retribution" })
+end
+
+--------------------------------------------------------------------------------
+-- Planning a build
+--------------------------------------------------------------------------------
+
+@test("FillPlan: the build's ranks on its class's trees")
+local function fillPlan()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13)))
+    M.buildView = id
+    local p = fakePage(true)
+    M.windowPage, M.page = p.page, fakePage(false).page
+    M:Render()
+    local d = drawn(p)
+    local trees = assert(d.trees)
+    expect(#trees).toBe(3)
+    expect(trees[1].points).toBe(2)
+    local nodes = assert(trees[1].nodes)
+    local one = nodes[1]
+    expect(one.id).toBe(11)
+    expect(one.rank).toBe(1)
+    expect(M.planNodes[one] ~= nil).toBe(true)
+    -- 11 is full: another rank of it can't come
+    expect(one.canSpend).toBe(false)
+    expect(one.problem).toBe("Arms One has only 1 rank; step 3 would be rank 2.")
+    local two = nodes[2]
+    expect(two.locked).toBe(true)
+    expect(assert(trees[1].links)[1].met).toBe(true)
+    expect(d.available).toBe(49)
+    expect(d.unspent).toContain("49")
+    expect(d.unspent).toContain("points left")
+    expect(d.status).toBe("Click adds the next step, right-click takes the last back · drag a line to move it")
+    expect(assert(assert(d.actions).primary).enabled).toBe(false)
+    expect(#order(p)).toBe(2)
+    expect(assert(assert(p.builds).buttons)[1].label).toBe("Use build")
+    expect(M.planTree).toBe(M:BuildTree("WARRIOR"))
+    -- changed: Save and Discard
+    draft().dirty = true
+    M:Render()
+    expect(drawn(p).status).toBe("Not saved yet · click adds the next step, right-click takes the last back")
+    expect(drawn(p).statusColor).toBe("arcane")
+    expect(assert(assert(drawn(p).actions).primary).enabled).toBe(true)
+    assert(assert(drawn(p).actions).primary).onClick()
+    expect(draft().dirty).toBe(false)
+    draft().dirty = true
+    M:Render()
+    assert(assert(drawn(p).actions).secondary).onClick()
+    -- (the saved build drawn again: a fresh draft of it, unchanged)
+    expect(draft().dirty).toBe(false)
+    expect(draft().steps).toEqual(build(draft().id).steps)
+    -- a problem
+    assert(M:Draft()).problem = "Step 3 isn't a talent of this tree any more."
+    M:Render()
+    expect(drawn(p).status).toBe("Needs a look: Step 3 isn't a talent of this tree any more.")
+    expect(drawn(p).statusColor).toBe("ember")
+end
+
+@test("FillPlan: a class whose talents can't be read")
+local function fillPlanNoTree()
+    local id = assert(M:AddBuild("Holy", "PALADIN", {}))
+    M.buildView = id
+    for _, n in ipairs(pt().nodes) do
+        n.visible = false
+    end
+    wipe(M.buildTrees)
+    local p = fakePage(true)
+    M.windowPage, M.page = p.page, fakePage(false).page
+    M:Render()
+    expect(p.drawn).toEqual({ hint = "This class's talents can't be read right now." })
+    expect(p.order).toBeNil()
+    expect(assert(p.builds).value).toBe(id)
+end
+
+@test("PlanAdd adds the next step or says why not")
+local function planAdd()
+    M:PlanAdd(planNode(11))
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M.buildView = id
+    M:PlanAdd(planNode(11, { entryID = 110 }))
+    expect(draft().steps).toEqual(steps(11))
+    expect(draft().dirty).toBe(true)
+    M:PlanAdd(planNode(11))
+    expect(#draft().steps).toBe(1)
+    local msgs: string[] = {}
+    mock.stub(UIErrorsFrame, "AddMessage", function(_: unknown, text: string)
+        msgs[#msgs + 1] = text
+    end)
+    M:PlanAdd(planNode(12))
+    expect(msgs[1]).toBe("Arms Two needs 5 points in Arms before it; at step 2 only 1 is.")
+    -- a choice keeps its entry
+    wt().nodes[3].choice = true
+    wipe(M.buildTrees)
+    M:PlanAdd(planNode(13, { entryID = 131 }))
+    expect(draft().steps[2]).toEqual({ node = 13, entry = 131 })
+end
+
+@test("PlanRemove takes a talent's last step back, if the order allows")
+local function planRemove()
+    M:PlanRemove(planNode(11))
+    -- (Arms Three with 4 ranks: Arms's 5 points for its second row)
+    wt().nodes[3].max = 4
+    wipe(M.buildTrees)
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 13, 13, 12)))
+    M.buildView = id
+    M:PlanRemove(planNode(33))
+    expect(#draft().steps).toBe(6)
+    expect(draft().dirty).toBe(false)
+    local asked = captureConfirm().last
+    M:PlanRemove(planNode(11))
+    expect(asked().title).toBe("That rank can't go")
+    expect(#draft().steps).toBe(6)
+    -- (Arms Two needs Arms's 5 points)
+    M:PlanRemove(planNode(13))
+    expect(asked().title).toBe("That rank can't go")
+    M:PlanRemove(planNode(12))
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13, 13))
+    M:PlanRemove(planNode(13))
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13))
+    expect(draft().dirty).toBe(true)
+    wipe(M.buildTrees)
+end
+
+@test("MoveLine moves a run of steps, saving at once on your active build")
+local function moveLine()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13, 21)))
+    M.buildView = id
+    local p = fakePage(true)
+    M.windowPage, M.page = p.page, fakePage(false).page
+    M:Render()
+    M:MoveLine(p.page, 9, 1)
+    -- Fury's talent to the front (planning: the draft)
+    M:MoveLine(p.page, 3, 1)
+    expect(draft().steps).toEqual(steps(21, 11, 13, 13))
+    expect(draft().dirty).toBe(true)
+    -- the run of 13 to the end
+    M:Render()
+    M:MoveLine(p.page, 3, 4)
+    expect(draft().steps).toEqual(steps(21, 11, 13, 13))
+    M:MoveLine(p.page, 3, #lineData(p) + 1)
+    expect(draft().steps).toEqual(steps(21, 11, 13, 13))
+    M:MoveLine(p.page, 2, #lineData(p) + 1)
+    expect(draft().steps).toEqual(steps(21, 13, 13, 11))
+    -- not allowed: 12 in front of what it needs (Arms Three with 4 ranks:
+    -- Arms's 5 points for its second row)
+    wt().nodes[3].max = 4
+    wipe(M.buildTrees)
+    M.draft = nil
+    build(id).steps = steps(11, 13, 13, 13, 13, 21, 23, 12)
+    M:Render()
+    local asked = captureConfirm().last
+    M:MoveLine(p.page, 5, 1)
+    expect(asked().title).toBe("Arms Two can't go there")
+    assert(asked().onConfirm)()
+    assert(asked().onCancel)()
+    expect(draft().steps).toEqual(steps(11, 13, 13, 13, 13, 21, 23, 12))
+    -- your active build shown on your talents: saved at once
+    M.draft = nil
+    M:SetActive(id)
+    M:Render()
+    wipe(heard)
+    M:MoveLine(p.page, 4, 1)
+    expect(build(id).steps).toEqual(steps(23, 11, 13, 13, 13, 13, 21, 12))
+    expect(heard.SUUUI_TALENT_BUILD_CHANGED).toBe(1)
+    -- a class that can't be read: nothing
+    wipe(M.buildTrees)
+    M.classes = nil
+    mock.fake("GetClassInfo", function()
+        return nil
+    end)
+    M:MoveLine(p.page, 1, 2)
+    M.classes = nil
+end
+
+-- GameTooltip's left texts, line by line.
+local function tipLines(): string[]
+    return mock.tooltipLines()
+end
+
+@test("ShowPlanTip: this build's rank, its steps and levels")
+local function showPlanTip()
+    M:ShowPlanTip(UIParent, planNode(0, { name = "x" }))
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11, 13, 13)))
+    M.buildView = id
+    M:Draft()
+    M:ShowPlanTip(UIParent, planNode(13, { name = "Arms Three", rank = 2, max = 2, entryID = 130, problem = "Full." }))
+    expect(GameTooltip:IsShown()).toBe(true)
+    local texts = tipLines()
+    expect(texts[1]).toBe("Arms Three")
+    expect(texts[2]).toBe("Rank 2/2 in this build")
+    expect(texts).toContain("Steps 2–3 · levels 6–7")
+    expect(texts).toContain("Full.")
+    expect(texts).toContain("Right-click takes its last step back")
+    M:ShowPlanTip(UIParent, planNode(21, { name = "Fury One", rank = 0, max = 1 }))
+    texts = tipLines()
+    expect(texts).toContain("Click: step 4, level 8")
+    M:ShowPlanTip(UIParent, planNode(11, { name = "Arms One", rank = 1, max = 1 }))
+    texts = tipLines()
+    expect(texts).toContain("Step 1 · level 5")
+    GameTooltip:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- The functions the module's methods call
+--------------------------------------------------------------------------------
+
+@test("the picker's and planning's functions take the module")
+local function onTheirOwn()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", steps(11)))
+    expect(talentPlan.pickerOptions(M)).toEqual(M:PickerOptions())
+    expect(#talentPlan.pickerFoot(M)).toBe(2)
+    expect(talentPlan.headButtons(M, build(id), false)[1].label).toBe("Plan")
+    expect(talentPlan.picker(M, build(id), false).value).toBe(id)
+    M.buildView = id
+    talentPlan.planAdd(M, planNode(13))
+    expect(draft().steps).toEqual(steps(11, 13))
+    talentPlan.planRemove(M, planNode(13))
+    expect(draft().steps).toEqual(steps(11))
+    local p = fakePage(true)
+    talentPlan.fillPlan(M, p.page)
+    expect(assert(drawn(p).trees)[1].points).toBe(1)
+    talentPlan.showPlanTip(M, UIParent, planNode(11, { name = "Arms One", rank = 1 }))
+    expect(GameTooltip:IsShown()).toBe(true)
+    GameTooltip:Hide()
+    expectNoErrors()
+end

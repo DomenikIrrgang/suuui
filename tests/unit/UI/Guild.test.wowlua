@@ -7,7 +7,7 @@ import guildRoster, guildInfo, guildLog, guildMotdBanner, GuildRoster, GuildMemb
 import internal columnsFor from "/UI/Guild"
 import tokens as T from "/Core/Tokens"
 import * as tooltipModule from "/UI/Tooltip"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, useTheme, layoutThemes, ROOMY from "../../helpers"
 import tokenOf, alphaOf, host, cleanup, themeChanged from "./SocialHelpers"
 
 @afterEach
@@ -346,6 +346,109 @@ local function rosterResize()
     -- Docs/test-notes/ui-primitives.md)
     mock.script(r.list, "OnSizeChanged", r.list:GetWidth(), r.list:GetHeight())
     expect(r.rows[1].cells[4]:GetWidth() > before).toBe(true)
+    expectNoErrors()
+end
+
+-- A guild of `n` (placeholder names), as the module builds it per render:
+-- new tables each time.
+local function guildOf(n: number, from: number?, step: number?): GuildMember[]
+    local out: GuildMember[] = {}
+    local i, s = from or 1, step or 1
+    while #out < n do
+        out[#out + 1] = {
+            key = "m" .. i,
+            name = "Member" .. i,
+            class = "MAGE",
+            className = "Mage",
+            level = 60,
+            zone = "Duskwood",
+            rank = "Member",
+            online = true,
+        }
+        i += s
+    end
+    return out
+end
+
+-- The row in sight showing a member (nil: none).
+local function rowFor(r: GuildRoster, key: string): RosterRow?
+    for _, row in ipairs(r.rows) do
+        local m = row.member
+        if row:IsShown() and m and m.key == key then
+            return row
+        end
+    end
+    return nil
+end
+
+@test("a guild of 500: rows only for those in sight; a refresh keeps the scroll and the choice")
+local function bigRoster()
+    local r = roster()
+    r:SetData({ members = guildOf(500), selected = "m40" })
+    -- the rows in sight, part of one more and one on each side
+    local inSight = math.ceil(r.list:GetHeight() / 24)
+    expect(#r.rows <= inSight + 3).toBe(true)
+    expect(r.list.child:GetHeight()).toBe(500 * 24)
+    expect(rowFor(r, "m40")).toBeNil()
+    -- scrolled down to them
+    r.list:SetVerticalScroll(30 * 24)
+    mock.script(r.list, "OnVerticalScroll", 30 * 24)
+    local made = #r.rows
+    expect(made <= inSight + 3).toBe(true)
+    local chosen = rowFor(r, "m40") :: RosterRow
+    expect(chosen.sel).toBeShown()
+    expect(chosen.cells[1]).toHaveText("Member40")
+    -- the module's refresh (new tables, the same members): nothing drawn again
+    local binds = r.view.binds
+    r:SetData({ members = guildOf(500), selected = "m40" })
+    expect(r.list:GetVerticalScroll()).toBe(30 * 24)
+    expect(r.view.binds).toBe(binds)
+    expect(rowFor(r, "m40")).toBe(chosen)
+    expect(r.selectedMember and (r.selectedMember :: GuildMember).key).toBe("m40")
+    -- a click on another: the module selects them and renders: two rows drawn
+    r.onSelect = function(key: string?)
+        r:SetData({ members = guildOf(500), selected = key })
+    end
+    mock.click(rowFor(r, "m42") :: RosterRow)
+    expect(r.view.binds).toBe(binds + 2)
+    expect(chosen.sel).never.toBeShown()
+    expect((rowFor(r, "m42") :: RosterRow).sel).toBeShown()
+    expect(r.selectedMember and (r.selectedMember :: GuildMember).key).toBe("m42")
+    -- a member's new zone: that row only
+    local moved = guildOf(500)
+    moved[41].zone = "Elwynn Forest"
+    r:SetData({ members = moved, selected = "m42" })
+    expect(r.view.binds).toBe(binds + 3)
+    expect((rowFor(r, "m41") :: RosterRow).cells[4]).toHaveText("Elwynn Forest")
+    -- sorted the other way round: the choice stays with them, wherever they are
+    r:SetData({ members = guildOf(500, 500, -1), selected = "m42" })
+    expect(rowFor(r, "m42")).toBeNil()
+    for _, row in ipairs(r.rows) do
+        if row:IsShown() then
+            expect(row.sel).never.toBeShown()
+        end
+    end
+    expect(r.selectedMember and (r.selectedMember :: GuildMember).key).toBe("m42")
+    expect(r.list:GetVerticalScroll()).toBe(30 * 24)
+    expect(#r.rows).toBe(made)
+    expectNoErrors()
+end
+
+@test("a theme with other spacing moves the columns of the rows in sight")
+local function rosterTheme()
+    layoutThemes()
+    local r = roster()
+    r:SetData({ members = guildOf(40) })
+    local row = rowFor(r, "m1") :: RosterRow
+    local before = row.cells[2]:GetWidth()
+    local x = r.cols[2].x
+    useTheme(ROOMY)
+    expect(r.cols[2].x ~= x).toBe(true)
+    expect(row.laid).toBe(r.cols)
+    expect(row.cells[2]:GetWidth()).toBe(before)
+    useTheme(nil)
+    expect(r.cols[2].x).toBe(x)
+    expect(row.laid).toBe(r.cols)
     expectNoErrors()
 end
 

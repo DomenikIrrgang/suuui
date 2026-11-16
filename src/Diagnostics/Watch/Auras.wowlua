@@ -1,0 +1,481 @@
+-- Diagnostics/Watch/Auras.wowlua
+-- The aura questions: whether an aura button's art builds when it first
+-- shows in a dungeon fight (HUD-UF-15), which of the PLAYER / !PLAYER
+-- filters a target's debuffs pass (HUD-CD-5), whether CROWD_CONTROL and
+-- !DISPELLABLE split a party member's debuffs (UF-25), and whether an
+-- engine container's frames take writes in combat (UF-12: on a container
+-- and clip frame the probe makes itself, never a module's).
+
+import * as fault from "/Core/Fault"
+import * as events from "/Core/Events"
+import * as extend from "/Core/Extend"
+import auraContainer, UnitAuras from "/UI/Auras"
+import isSecret, readable, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+local function instanceType(): string
+    local _, kind = IsInInstance()
+    return asString(kind) or "none"
+end
+
+local function samples(r: Result): Result[]
+    local list = r.samples
+    return type(list) == "table" and list :: Result[] or {}
+end
+
+-- The probe's own container for UF-12 (left out of HUD-UF-15's counts).
+local own: { clip: Frame, auras: UnitAuras }? = nil
+
+--------------------------------------------------------------------------------
+-- HUD-UF-15: buttons built during a dungeon fight
+--------------------------------------------------------------------------------
+
+-- SuuUI's aura containers (the Extend registry lists every one), but the
+-- probe's own.
+local function containers(): unknown[]
+    local out: unknown[] = {}
+    local mine = own and own.auras
+    for _, c in ipairs(extend.list(extend.Kind.AuraContainer) :: unknown[]) do
+        if c ~= mine then
+            out[#out + 1] = c
+        end
+    end
+    return out
+end
+
+local function builtCount(): number
+    local n = 0
+    for _, c in ipairs(containers()) do
+        local buttons = tbl.field(c, "buttons")
+        if type(buttons) == "table" then
+            n += #(buttons :: unknown[])
+        end
+    end
+    return n
+end
+
+-- Engine buttons shown now whose art was never built (not in their
+-- container's list): a build that failed. Read out of combat.
+local function unbuiltShown(): number
+    local n = 0
+    for _, c in ipairs(containers()) do
+        local built: { [unknown]: boolean } = {}
+        local buttons = tbl.field(c, "buttons")
+        if type(buttons) == "table" then
+            for _, b in ipairs(buttons :: unknown[]) do
+                built[tbl.field(b, "button")] = true
+            end
+        end
+        local engine = tbl.field(c, "container")
+        if type(engine) == "table" then
+            local ok, kids = pcall(function(): unknown[]
+                return { (engine :: Frame):GetChildren() }
+            end)
+            if ok then
+                for _, kid in ipairs(kids) do
+                    local okS, isShown = pcall(function(): unknown
+                        return (kid :: Frame):IsShown()
+                    end)
+                    if okS and isShown == true and not built[kid] then
+                        n += 1
+                    end
+                end
+            end
+        end
+    end
+    return n
+end
+
+local function armBuilds(w: Watch)
+    local before: number? = nil
+    local errorsBefore = 0
+    w:on("PLAYER_REGEN_DISABLED", function()
+        if instanceType() == "none" then
+            before = nil
+            return
+        end
+        before = builtCount()
+        errorsBefore = #fault.entries()
+    end)
+    w:on("PLAYER_REGEN_ENABLED", function()
+        local start = before
+        if not start then
+            return
+        end
+        before = nil
+        local built = builtCount() - start
+        local unbuilt = unbuiltShown()
+        if built > 0 or unbuilt > 0 then
+            w:sample({
+                instance = instanceType(),
+                builtInFight = built,
+                shownUnbuilt = unbuilt,
+                newFaultEntries = #fault.entries() - errorsBefore,
+            })
+        end
+    end)
+end
+
+local function sumBuilds(r: Result): string
+    local built, unbuilt = 0, 0
+    local list = samples(r)
+    for _, s in ipairs(list) do
+        built += tonumber(s.builtInFight) or 0
+        unbuilt += tonumber(s.shownUnbuilt) or 0
+    end
+    return ("%d dungeon fights: %d aura buttons built in combat; %d shown at the fight's end without their art (a failed build)%s"):format(
+        #list,
+        built,
+        unbuilt,
+        unbuilt == 0 and " (the build in combat works)" or ""
+    )
+end
+
+--------------------------------------------------------------------------------
+-- Counting a unit's auras through a filter
+--------------------------------------------------------------------------------
+
+type Count = { n: number, ids: { [unknown]: boolean }, mine: number, others: number, typed: number, typeless: number, secret: number }
+
+local function count(unit: string, filter: string): Count
+    local out: Count = { n = 0, ids = {}, mine = 0, others = 0, typed = 0, typeless = 0, secret = 0 }
+    local get = kit.resolve("C_UnitAuras.GetAuraDataByIndex")
+    if type(get) ~= "function" then
+        return out
+    end
+    for i = 1, 20 do
+        local ok, aura = pcall(get :: (u: string, i: number, f: string) -> unknown, unit, i, filter)
+        if not ok or aura == nil then
+            break
+        end
+        out.n += 1
+        if readable(aura) and type(aura) == "table" then
+            local id = tbl.field(aura, "auraInstanceID")
+            if id ~= nil and not isSecret(id) then
+                out.ids[id] = true
+            end
+            local source = tbl.field(aura, "sourceUnit")
+            if isSecret(source) then
+                out.secret += 1
+            elseif source == "player" then
+                out.mine += 1
+            elseif source ~= nil then
+                out.others += 1
+            end
+            local kind = tbl.field(aura, "dispelName")
+            if isSecret(kind) then
+                out.secret += 1
+            elseif kind ~= nil and kind ~= "" then
+                out.typed += 1
+            else
+                out.typeless += 1
+            end
+        else
+            out.secret += 1
+        end
+    end
+    return out
+end
+
+-- How many auras two lists share (by instance ID, where readable).
+local function overlap(a: Count, b: Count): number
+    local n = 0
+    for id in pairs(a.ids) do
+        if b.ids[id] then
+            n += 1
+        end
+    end
+    return n
+end
+
+--------------------------------------------------------------------------------
+-- HUD-CD-5: PLAYER and !PLAYER on the target's debuffs
+--------------------------------------------------------------------------------
+
+local function readTargetDebuffs(w: Watch)
+    if not UnitExists("target") then
+        return
+    end
+    local canAttack = UnitCanAttack("player", "target")
+    local isPlayer = UnitIsPlayer("target")
+    if isSecret(canAttack) or not canAttack or isSecret(isPlayer) then
+        return
+    end
+    local key = isPlayer and "a hostile player target" or "a mob"
+    if w:has(key) then
+        return
+    end
+    local all = count("target", "HARMFUL")
+    if all.n < (isPlayer and 1 or 2) then
+        return
+    end
+    local mine = count("target", "HARMFUL|PLAYER")
+    local notMine = count("target", "HARMFUL|!PLAYER")
+    w:case(key, {
+        harmful = all.n,
+        player = mine.n,
+        notPlayer = notMine.n,
+        both = overlap(mine, notMine),
+        sourcesMine = all.mine,
+        sourcesOthers = all.others,
+        sourcesSecret = all.secret,
+        passesBoth = mine.n + notMine.n > all.n,
+    })
+end
+
+local function armTargetFilters(w: Watch)
+    local last = 0
+    local function read()
+        if GetTime() - last < 5 then
+            return
+        end
+        last = GetTime()
+        readTargetDebuffs(w)
+    end
+    w:on("PLAYER_REGEN_DISABLED", function()
+        w:after(3, read)
+    end)
+    w:on("PLAYER_TARGET_CHANGED", function()
+        if InCombatLockdown() then
+            w:after(1, read)
+        end
+    end)
+end
+
+local function sumTargetFilters(r: Result): string
+    local cases = r.cases :: { [string]: Result }? or {}
+    local parts: string[] = {}
+    for _, key in ipairs({ "a hostile player target", "a mob" }) do
+        local c = cases[key]
+        if c then
+            parts[#parts + 1] = ("%s: %s of %s debuffs passed PLAYER, %s passed !PLAYER%s"):format(
+                key,
+                tostring(c.player),
+                tostring(c.harmful),
+                tostring(c.notPlayer),
+                c.passesBoth and " (some passed both)" or ""
+            )
+        end
+    end
+    return table.concat(parts, "; ")
+end
+
+--------------------------------------------------------------------------------
+-- UF-25: a party member's crowd control through the filters
+--------------------------------------------------------------------------------
+
+local PARTY: string[] = { "party1", "party2", "party3", "party4" }
+
+local function armCrowdControl(w: Watch)
+    local last: { [string]: number } = {}
+    w:onUnit("UNIT_AURA", PARTY, function(_, unit: unknown)
+        local u = asString(unit)
+        if not u then
+            return
+        end
+        local now = GetTime()
+        if now - (last[u] or 0) < 2 then
+            return
+        end
+        last[u] = now
+        local cc = count(u, "HARMFUL|CROWD_CONTROL")
+        if cc.n == 0 then
+            return
+        end
+        local dispellable = count(u, "HARMFUL|DISPELLABLE")
+        local ccTyped = count(u, "HARMFUL|CROWD_CONTROL|DISPELLABLE")
+        local ccUntyped = count(u, "HARMFUL|CROWD_CONTROL|!DISPELLABLE")
+        w:sample({
+            crowdControl = cc.n,
+            dispellable = dispellable.n,
+            crowdControlDispellable = ccTyped.n,
+            crowdControlNotDispellable = ccUntyped.n,
+            ccTyped = cc.typed,
+            ccTypeless = cc.typeless,
+            ccSecretFields = cc.secret,
+            passesBoth = ccTyped.n + ccUntyped.n > cc.n or overlap(ccTyped, ccUntyped) > 0,
+        })
+    end)
+end
+
+local function sumCrowdControl(r: Result): string
+    local list = samples(r)
+    local both, typed, typeless = 0, 0, 0
+    for _, s in ipairs(list) do
+        both += s.passesBoth and 1 or 0
+        typed += tonumber(s.ccTyped) or 0
+        typeless += tonumber(s.ccTypeless) or 0
+    end
+    return ("%d party members under crowd control (%d typed, %d typeless auras read): the same aura passed CROWD_CONTROL|DISPELLABLE and CROWD_CONTROL|!DISPELLABLE in %d (%s)"):format(
+        #list,
+        typed,
+        typeless,
+        both,
+        both > 0 and "the negation can't split them" or "the negation split them"
+    )
+end
+
+--------------------------------------------------------------------------------
+-- UF-12: writes to an engine container's frames in combat, on the probe's
+-- own (a clip frame with a player-buff container anchored in it, as a party
+-- frame's auraClip holds its container)
+--------------------------------------------------------------------------------
+
+local function buildOwn(): boolean
+    if own then
+        return true
+    end
+    if InCombatLockdown() then
+        return false
+    end
+    local clip = CreateFrame("Frame", nil, UIParent)
+    clip:SetSize(80, 20)
+    clip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+    clip:SetClipsChildren(true)
+    clip:SetAlpha(0)
+    clip:EnableMouse(false)
+    local auras = auraContainer(clip, "player", {
+        size = 16,
+        groups = { { key = "probe", filter = { "HELPFUL" }, max = 4 } },
+    })
+    if not auras then
+        clip:Hide()
+        return false
+    end
+    auras.container:SetPoint("TOPLEFT", clip, "TOPLEFT")
+    own = { clip = clip, auras = auras }
+    return true
+end
+
+local function testOwn(w: Watch)
+    local o = own
+    if not o then
+        return
+    end
+    local clip, container = o.clip, o.auras.container
+    local shownButtons = 0
+    local okK, kids = pcall(function(): unknown[]
+        return { container:GetChildren() }
+    end)
+    if okK then
+        for _, k in ipairs(kids) do
+            local okS, s = pcall(function(): unknown
+                return (k :: Frame):IsShown()
+            end)
+            if okS and s == true then
+                shownButtons += 1
+            end
+        end
+    end
+    local move = kit.attempt(function()
+        clip:ClearAllPoints()
+        clip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 1, 0)
+    end)
+    local hide = kit.attempt(function()
+        container:SetShown(false)
+    end)
+    local show = kit.attempt(function()
+        container:SetShown(true)
+    end)
+    local word = kit.attemptWord
+    w:finish(
+        ("in combat, re-anchoring the clip frame a container hangs on: %s; SetShown(false) on a player-buff container: %s (%d buttons shown)"):format(
+            word(move),
+            word(hide),
+            shownButtons
+        ),
+        { reanchorClip = move, hideContainer = hide, showContainer = show, shownButtons = shownButtons }
+    )
+end
+
+local function armOwn(w: Watch)
+    if not buildOwn() then
+        w:on("PLAYER_REGEN_ENABLED", function()
+            buildOwn()
+        end)
+    end
+    w:on("PLAYER_REGEN_DISABLED", function()
+        w:after(1, function()
+            if InCombatLockdown() and own then
+                testOwn(w)
+            end
+        end)
+    end)
+end
+
+-- the probe's container parked (engine containers can't be freed) and its
+-- clip hidden, out of combat (in a fight: when it ends); made again if the
+-- item is armed again
+local cleanupOwner = { name = "Probe all: UF-12 cleanup" }
+local function stopOwn()
+    local o = own
+    if not o then
+        return
+    end
+    if InCombatLockdown() then
+        events.offAll(cleanupOwner)
+        events.onGame("PLAYER_REGEN_ENABLED", function()
+            events.offAll(cleanupOwner)
+            stopOwn()
+        end, cleanupOwner)
+        return
+    end
+    own = nil
+    pcall(function()
+        o.auras:Release()
+    end)
+    o.clip:Hide()
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "HUD-UF-15",
+            kind = kit.Kind.Armed,
+
+            when = "a dungeon fight",
+            question = "In a dungeon fight, does an aura button's art build when the button first shows (its build in combat)?",
+            todo = "fight in a dungeon or raid with auras showing (debuffs on plates or group frames)",
+            samples = 3,
+            arm = armBuilds,
+            summarize = sumBuilds,
+        },
+        {
+            id = "HUD-CD-5",
+            kind = kit.Kind.Armed,
+
+            when = "a fight",
+            question = "Which of HARMFUL|PLAYER and HARMFUL|!PLAYER do a target's debuffs pass, on a hostile player and on a mob (C_UnitAuras filters)?",
+            todo = "in a fight, target a hostile player with a debuff on them (PvP or a duel), and a mob with two or more debuffs (yours and a group member's)",
+            cases = { "a hostile player target", "a mob" },
+            arm = armTargetFilters,
+            summarize = sumTargetFilters,
+        },
+        {
+            id = "UF-25",
+            kind = kit.Kind.Armed,
+
+            when = "a party",
+            question = "On a party member under crowd control, what do HARMFUL|DISPELLABLE, HARMFUL|CROWD_CONTROL and HARMFUL|CROWD_CONTROL|!DISPELLABLE list?",
+            todo = "be in a party when a member is crowd controlled (stunned, polymorphed, feared)",
+            samples = 3,
+            arm = armCrowdControl,
+            summarize = sumCrowdControl,
+        },
+        {
+            id = "UF-12",
+            kind = kit.Kind.Armed,
+
+            when = "a fight",
+            question = "In combat, are ClearAllPoints/SetPoint on a frame an engine aura container hangs on, and SetShown(false) on a player-buff container, allowed?",
+            todo = "enter a fight (the probe tests its own hidden container)",
+            arm = armOwn,
+            stop = stopOwn,
+        },
+    }
+end

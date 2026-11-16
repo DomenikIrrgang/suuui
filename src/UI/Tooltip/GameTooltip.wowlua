@@ -1,0 +1,145 @@
+-- UI/Tooltip/GameTooltip.wowlua
+-- Blizzard's tooltips (UI/Tooltip.wowlua is SuuUI's own): their art in
+-- SuuUI's look, and a spell's GameTooltip with lines of SuuUI's under it.
+--
+--   skinTooltip(tooltip)        -- GameTooltip, the compare tooltips, ItemRefTooltip
+--   isTooltipSkinned(tooltip)
+--   spellTooltip(owner, spellID, extra[, anchor])
+
+import isSecret from "wowlua:secret"
+import hook, hookScript from "wowlua:hooks"
+import * as draw from "/UI/Draw"
+
+--------------------------------------------------------------------------------
+-- Blizzard's tooltips in SuuUI's look (design board "Tooltips")
+--
+--   skinTooltip(tooltip)  -- GameTooltip, the compare tooltips, ItemRefTooltip
+--
+-- surface-glass under a gilt-line edge with the gilt diamond at the top left,
+-- drawn on the tooltip's own BACKGROUND layer; Blizzard's NineSlice at alpha
+-- 0 (again after each SharedTooltip_SetBackdropStyle, which runs on every
+-- show). Only art is added: lines, sizes, anchors and every set function stay
+-- Blizzard's.
+--------------------------------------------------------------------------------
+
+type Art = { bg: Texture, border: draw.Border, ornament: Texture }
+
+local skinned: { [Frame]: Art } = {}
+
+-- Blizzard's tooltip art (the NineSlice its template makes).
+local function hideBlizzardArt(tooltip: Frame)
+    local nineSlice = (tooltip :: { NineSlice?: Frame }).NineSlice
+    if nineSlice then
+        nineSlice:SetAlpha(0)
+    end
+end
+
+export function skinTooltip(tooltip: Frame?): Art?
+    if not tooltip or skinned[tooltip] then
+        return nil
+    end
+    local bg = tooltip:CreateTexture(nil, "BACKGROUND", nil, -8)
+    draw.paintFill(bg, "surface-glass")
+    bg:SetAllPoints()
+    draw.pattern(bg, "surface-pattern")
+    local art: Art = {
+        bg = bg,
+        border = draw.border(tooltip, "gilt-line", { layer = "BACKGROUND", sublevel = -6, texture = "border" }),
+        ornament = draw.ornament(tooltip, 7, "corner", "gilt", "OVERLAY", 7),
+    }
+    art.ornament:SetPoint("CENTER", tooltip, "TOPLEFT", 0, 0)
+    -- the edge is one physical pixel at the tooltip's scale: laid out again
+    -- when the tooltip is rescaled (the tooltips module sets SuuUI's scale
+    -- after skinning; the edge then fell under a pixel and its top and right
+    -- vanished in game, at UIParent 0.64 against SuuUI's 0.533)
+    hook(tooltip, "SetScale", function()
+        art.border:Layout()
+    end)
+    skinned[tooltip] = art
+    hideBlizzardArt(tooltip)
+    return art
+end
+
+export function isTooltipSkinned(tooltip: Frame): boolean
+    return skinned[tooltip] ~= nil
+end
+
+if type(SharedTooltip_SetBackdropStyle) == "function" then
+    hook("SharedTooltip_SetBackdropStyle", function(tooltip: Frame)
+        if skinned[tooltip] then
+            hideBlizzardArt(tooltip)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- A spell's game tooltip with lines of SuuUI's under it (0.12)
+--------------------------------------------------------------------------------
+-- spellTooltip(owner, spellID, extra[, anchor]): GameTooltip with the
+-- spell (SetSpellByID), then `extra` (text, or a list) as last lines. The
+-- game redraws the tooltip when a spell's data arrives (the first hover of a
+-- spell not loaded yet), which drops lines added after it: these are added
+-- in a post-call too, so every draw carries them (found in game: the cost
+-- showed only on the second hover).
+
+type Pending = { id: number, owner: Frame, lines: string[], added?: boolean }
+
+local pending: Pending? -- { id, lines }
+
+local function addExtra(tooltip: GameTooltip, lines: string[])
+    for _, line in ipairs(lines) do
+        tooltip:AddLine(line, 1, 1, 1, true)
+    end
+end
+
+-- The spell post-call: the pending lines on GameTooltip when it draws that
+-- spell for that owner.
+-- (data: the game's tooltip data; the id is a secret in some places)
+local function spellPostCall(tooltip: GameTooltip, data: { id?: number | Secret<number> }?)
+    local p = pending
+    if tooltip ~= GameTooltip or not p then
+        return
+    end
+    local id = data and data.id
+    if isSecret(id) then
+        return
+    end
+    if id == p.id and tooltip:GetOwner() == p.owner then
+        addExtra(tooltip, p.lines)
+        p.added = true
+    end
+end
+
+local hooked: boolean | "post" = false
+local function hookSpellTips()
+    if hooked then
+        return
+    end
+    hooked = true
+    if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum.TooltipDataType and
+        Enum.TooltipDataType.Spell then
+        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, spellPostCall)
+        hooked = "post"
+    end
+    hookScript(GameTooltip, "OnHide", function()
+        pending = nil
+    end)
+end
+
+export function spellTooltip(owner: Frame, spellID: number, extra: string | string[] | nil, anchor: TooltipAnchor?)
+    hookSpellTips()
+    local lines: string[] = type(extra) == "table" and extra or (extra and { extra } or {})
+    -- the owner first: it hides what the tooltip showed, and its OnHide
+    -- clears `pending` (found in game)
+    GameTooltip:SetOwner(owner, anchor or "ANCHOR_RIGHT")
+    local mine: Pending = { id = spellID, owner = owner, lines = lines }
+    pending = mine
+    GameTooltip:SetSpellByID(spellID)
+    -- no post-call in this client, or it didn't run: add them now
+    if hooked ~= "post" or not mine.added then
+        pending = mine
+        addExtra(GameTooltip, mine.lines)
+        mine.added = true
+    end
+    GameTooltip:Show()
+end

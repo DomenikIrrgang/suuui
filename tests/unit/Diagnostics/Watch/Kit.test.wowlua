@@ -1,0 +1,100 @@
+-- Diagnostics/Watch/Kit: the parts "/suu probe all" is made of: the game's
+-- format strings as patterns, values read without their secrets, the taint
+-- scan's moments (what a moment newly lists), a watch's samples and cases.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import * as kit from "/Diagnostics/Watch/Kit"
+import expectNoErrors from "../../../helpers"
+
+@test("the game's format strings as patterns: counts and names match anything")
+local function patterns()
+    local who = assert(kit.pattern("%d |4player:players; total"))
+    expect(("3 players total"):find(who)).toBeTruthy()
+    expect(("1 player total"):find(who)).toBeTruthy()
+    expect(("nothing like it"):find(who)).toBeNil()
+    local won = assert(kit.pattern("|HlootHistory:%d|h[Loot]|h: %s won: %s"))
+    expect(("|HlootHistory:12|h[Loot]|h: Someone won: [Blade]"):find(won)).toBeTruthy()
+    expect(kit.pattern(nil)).toBeNil()
+    expect(kit.pattern("")).toBeNil()
+end
+
+@test("values read for saving: a secret as \"secret\", tables as their type")
+local function values()
+    expect(kit.show(mock.secret("elite"))).toBe("secret")
+    expect(kit.show("elite")).toBe("elite")
+    expect(kit.show({})).toBe("table")
+    expect(kit.state(mock.secret(1))).toBe("secret")
+    expect(kit.state(nil)).toBe("nil")
+    expect(kit.state(0)).toBe("readable")
+    expect(kit.resolve("C_Timer.After")).toBe(C_Timer.After)
+    expect(kit.resolve("NoSuchTable.Field")).toBeNil()
+end
+
+@test("a moment: what the scan lists that the previous one didn't; a global's writer")
+local function moments()
+    kit.baseline()
+    local first = kit.moment("nothing new")
+    expect(#tbl.list(first.newlyWritten)).toBe(0)
+    -- a value on the scanned paths written by addon code
+    local saved = _G.FRAME_THAT_OPENED_BAGS
+    _G.FRAME_THAT_OPENED_BAGS = "test"
+    local second = kit.moment("a write")
+    local found = false
+    for _, line in ipairs(tbl.list(second.newlyWritten) :: string[]) do
+        found = found or line:find("FRAME_THAT_OPENED_BAGS", 1, true) ~= nil
+    end
+    expect(found).toBe(true)
+    expect(kit.secureState(nil, "FRAME_THAT_OPENED_BAGS")).never.toBe("secure")
+    -- again: not new any more
+    expect(#tbl.list(kit.moment("again").newlyWritten)).toBe(0)
+    _G.FRAME_THAT_OPENED_BAGS = saved
+    expectNoErrors()
+end
+
+@test("a watch: its samples until it has enough, its cases until all are in")
+local function watch()
+    local finished: string[] = {}
+    local w = kit.Watch.new({
+        id = "TEST-kit",
+        kind = kit.Kind.Armed,
+        question = "Test?",
+        todo = "",
+        samples = 2,
+        arm = function(_: kit.Watch) end,
+        summarize = function(r: kit.Result): string
+            return ("%d samples"):format(#tbl.list(r.samples))
+        end,
+    })
+    w.onDone = function(x: kit.Watch)
+        finished[#finished + 1] = x.item.id
+    end
+    w:start()
+    expect(w.active).toBe(true)
+    w:sample({ n = 1 })
+    expect(w:isDone()).toBe(false)
+    w:sample({ n = 2 })
+    expect(w:isDone()).toBe(true)
+    expect(w:result().answer).toBe("2 samples")
+    expect(finished).toEqual({ "TEST-kit" })
+    expect(w.active).toBe(false)
+    local c = kit.Watch.new({
+        id = "TEST-cases",
+        kind = kit.Kind.Armed,
+        question = "Cases?",
+        todo = "",
+        cases = { "a", "b" },
+        arm = function(_: kit.Watch) end,
+    })
+    c:start()
+    c:case("a", { x = 1 })
+    c:case("a", { x = 2 })
+    expect(tbl.field(c:result(), "cases", "a", "x")).toBe(1)
+    expect(c:isDone()).toBe(false)
+    c:case("b", {})
+    expect(c:isDone()).toBe(true)
+    kit.store().results["TEST-kit"] = nil
+    kit.store().results["TEST-cases"] = nil
+    expectNoErrors()
+end

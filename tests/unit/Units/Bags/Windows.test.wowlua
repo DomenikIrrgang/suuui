@@ -1,0 +1,122 @@
+-- Units/Bags/Windows: the bags and bank windows built once, opening and
+-- closing with Blizzard's bag calls (opened for a window and closed with
+-- it, one bag closing), the bank at a banker beside the bags with
+-- Blizzard's bank frame off screen (or back, with the setting off), and
+-- Blizzard's bag frames kept hidden.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import internal M from "/Units/Bags"
+import expectNoErrors from "../../../helpers"
+import start as startBags, cleanup as cleanupBags, inv, bank, frame, call, open, run, atBank from "./BagsHelpers"
+
+@beforeEach
+local function start()
+    startBags()
+end
+
+@afterEach
+local function cleanup()
+    cleanupBags()
+end
+
+-- Open: shown, and with a size (shown but 0 x 0 draws nothing: in a dev
+-- build on the real client the bags' panel was never fitted to its body,
+-- every flag read open and nothing showed).
+local function expectOpen(f: Frame)
+    expect(f).toBeShown()
+    expect(f:GetWidth()).toBeGreaterThan(0)
+    expect(f:GetHeight()).toBeGreaterThan(0)
+end
+
+@test("Blizzard's bag calls open and close the window; a toggle, the close button, Toggle")
+local function openClose()
+    call("ToggleAllBags")
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+    call("ToggleAllBags")
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+    call("OpenBackpack")
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+    call("CloseBag", 1) -- one bag taken off: the window stays
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+    run(inv().onClose)
+    expect(inv()).never.toBeShown()
+    M:Toggle()
+    expectOpen(inv())
+    call("CloseBackpack")
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+end
+
+@test("opened for a window (a vendor, the mail), it closes with it, unless it was open before")
+local function openedFor()
+    local mail = frame("MailFrame")
+    call("OpenAllBags", mail)
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+    call("CloseAllBags", frame("MerchantFrame")) -- another window: stays
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+    call("CloseAllBags", mail)
+    mock.advanceTime(0.01)
+    expect(inv()).never.toBeShown()
+    open()
+    call("OpenAllBags", mail) -- open already: not the mail's
+    call("CloseAllBags", mail)
+    mock.advanceTime(0.01)
+    expectOpen(inv())
+end
+
+--------------------------------------------------------------------------------
+-- The bank
+--------------------------------------------------------------------------------
+
+@test("at a banker: the bank window with its tabs, your bags beside it; away: back to their place")
+local function bankWindow()
+    open()
+    atBank()
+    expectOpen(bank())
+    expectOpen(inv())
+    expect(mock.textOf(bank().note):find("slots", 1, true) ~= nil).toBe(true)
+    expect((select(2, inv():GetPoint(1)))).toBe(bank())
+    expect(BankFrame:GetAlpha()).toBe(0)
+    BankFrame:SetPoint("CENTER") -- the game places it again: away again
+    mock.advanceTime(0.01)
+    expect((BankFrame:GetLeft() or 0) < 0).toBe(true)
+    mock.fireEvent("BANKFRAME_CLOSED")
+    expect(bank()).never.toBeShown()
+    expect(M:Char().bank ~= nil).toBe(true)
+end
+
+@test("the bank setting off: Blizzard's bank window as always")
+local function bankOff()
+    atBank()
+    M:Set("bank", false)
+    expect(bank()).never.toBeShown()
+    expect(BankFrame:GetAlpha()).toBe(1)
+    mock.fireEvent("BANKFRAME_CLOSED")
+    M:Set("bank", true)
+end
+
+@test("Blizzard's bag frames stay hidden, however the game parents them")
+local function keptHidden()
+    local f = frames.find("ContainerFrameContainer") or frame("ContainerFrameCombinedBags")
+    local hiddenParent = f:GetParent()
+    f:SetParent(UIParent)
+    mock.advanceTime(0.01)
+    expect(f:GetParent()).toBe(hiddenParent)
+end
+
+@test("Windows: made with the module; the windows built once")
+local function made()
+    expect(M.windows.m).toBe(M)
+    local before = inv()
+    M.windows:Build()
+    expect(M.inv).toBe(before)
+    expectNoErrors()
+end

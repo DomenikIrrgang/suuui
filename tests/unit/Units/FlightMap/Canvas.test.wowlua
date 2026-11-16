@@ -1,0 +1,59 @@
+-- Units/FlightMap/Canvas: a route placed on a view in px, the drawing's
+-- pooled lines and dots, the surfaces. The functions take the module
+-- (Units/FlightMap's, drawing on the world map's surface).
+
+import test, expect, afterEach from "wowlua:test"
+import internal M from "/Units/FlightMap"
+import * as flightCanvas from "/Units/FlightMap/Canvas"
+import expectNoErrors from "../../../helpers"
+
+local function ink()
+    local i = M.ink
+    assert(i, "no drawing")
+    return i
+end
+
+@afterEach
+local function cleanup()
+    flightCanvas.clearInk(M)
+    expectNoErrors()
+end
+
+@test("a route on a view: pin to pin in px, each master's point among them; nil off the view")
+local function routeOnAView()
+    local view: flightCanvas.View = { map = 1414, pos = { [23] = { 0.1, 0.2 }, [25] = { 0.3, 0.2 } }, w = 200, h = 100 }
+    local points, stops = flightCanvas.routeWay(M, { 23, 25 }, view)
+    assert(points and stops, "no route")
+    expect(points[1]).toEqual({ 20, 20 })
+    expect(points[#points]).toEqual({ 60, 20 })
+    expect(stops[1]).toBe(1)
+    expect(stops[#stops]).toBe(#points)
+    expect({ flightCanvas.routeWay(M, { 23, 30 }, view) }).toEqual({})
+end
+
+@test("the lines and dots pooled: drawn, then hidden and the pools emptied")
+local function pooled()
+    flightCanvas.drawLine(M, "ARTWORK", 0, 0, 10, 10, 2, "gilt")
+    flightCanvas.drawSolid(M, { { 0, 0 }, { 10, 0 }, { 10, 10 } }, 2, "gilt")
+    expect(ink().pools.ARTWORK.n).toBe(3)
+    expect(ink().pools.BORDER.n).toBe(2)
+    flightCanvas.drawDot(M, 5, 5)
+    expect(ink().dotN).toBe(1)
+    local line = ink().pools.ARTWORK[1]
+    flightCanvas.clearInk(M)
+    expect(ink().pools.ARTWORK.n).toBe(0)
+    expect(ink().dotN).toBe(0)
+    expect(line).never.toBeShown()
+    -- (the same line again)
+    flightCanvas.drawLine(M, "ARTWORK", 0, 0, 10, 10, 2, "gilt")
+    expect(ink().pools.ARTWORK[1]).toBe(line)
+end
+
+@test("the surfaces: the world map's, drawn on; using it again changes nothing")
+local function surfaces()
+    local world = assert(M.world)
+    expect(flightCanvas.surfaces(M)[1]).toBe(world)
+    flightCanvas.useSurface(M, world)
+    expect(M.surface).toBe(world)
+    expect(M.ink).toBe(world.ink)
+end

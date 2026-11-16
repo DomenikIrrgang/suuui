@@ -1,0 +1,204 @@
+-- Units/CooldownManager/Rows: the list editor's rows, heads and "+ Add"
+-- rows, in the editor as the settings window builds it. Rows of every kind
+-- and their summaries, folds, shown, Move to, remove, "+ Add" (Seen
+-- recently, a typed ID, the presets' shared slots, weapon enchants),
+-- shared slots and collections. The character is an Unspecced warrior.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import type Entry from "/Units/CooldownManager/Lists"
+import internal M from "/Units/CooldownManager"
+import setUp, tearDown, editor, contains, row, hasRow, auras, listOf, lastOf, membersOf, inside, options, has, pick, addToNamed from "./EditorHelpers"
+import expectNoErrors from "../../../helpers"
+
+@beforeEach
+local function begin()
+    setUp()
+end
+
+@afterEach
+local function finish()
+    tearDown()
+end
+
+--------------------------------------------------------------------------------
+-- The list editor: rows
+--------------------------------------------------------------------------------
+
+@test("Cooldowns: Essential and Utility with their counts, each spell's rank and conditions in words")
+local function cooldownRows()
+    local f = editor()
+    expect(f.heads[1].title:GetText()).toBe("Essential")
+    expect(f.heads[1].count:GetText()).toBe(#listOf("essential") .. " spells")
+    local overpower = row(f, "Overpower")
+    expect(contains(overpower.rank, "Battle")).toBe(true)
+    expect(overpower.move).toBeShown()
+    expect(contains(row(f, "Bloodrage").rank, "shows its effect")).toBe(true)
+    mock.hover(overpower)
+    mock.hover(nil)
+    expect(f.adds[1].newCollection).toBeShown() -- (the Racials are one)
+end
+
+@test("Utility ends with the Racials: a collection of every race's racial for the class, only the known ones learned")
+local function racialRows()
+    local f = editor()
+    local utility = listOf("utility")
+    local racials = assert(utility[#utility])
+    expect(racials.collection).toBe(true)
+    expect(racials.name).toBe("Racials")
+    local found: { [string]: boolean } = {}
+    for _, e in ipairs(inside(racials)) do
+        found[e.name or ""] = true
+    end
+    -- a warrior can be every race: all of them, and the Skyborne's
+    for _, n in ipairs({
+        "Perception",
+        "Stoneform",
+        "Shadowmeld",
+        "Escape Artist",
+        "Blood Fury",
+        "Will of the Forsaken",
+        "War Stomp",
+        "Berserking",
+        "Walk on Air",
+        "Read Leyline",
+        "Skysight",
+    }) do
+        expect(found[n]).toBe(true)
+    end
+    -- their buffs show on their icons while up
+    for _, e in ipairs(inside(racials)) do
+        if e.name == "Berserking" or e.name == "Blood Fury" or e.name == "Stoneform" then
+            expect(e.effect).toBe("you")
+        end
+    end
+    local coll = row(f, "Racials")
+    expect(coll.folder).toBeShown()
+    expect(contains(coll.rank, "collection · " .. #inside(racials))).toBe(true)
+    expect(contains(coll.rank, " learned")).toBe(true)
+    expect(hasRow(f, "Berserking")).toBe(true)
+    expect(row(f, "Cultivation").shown.value).toBe(false) -- (shipped hidden)
+    expectNoErrors()
+end
+
+@test("Auras: a collection open with its entries, a shared slot folded with its members' icons; folds toggle")
+local function auraRows()
+    local f = editor()
+    auras(f)
+    expect(f.heads[1].title:GetText()).toBe("Buffs on you")
+    local coll = row(f, "Physical Debuffs")
+    expect(contains(coll.rank, "collection · ")).toBe(true)
+    expect(coll.folder).toBeShown()
+    local armor = row(f, "Armor Reduction")
+    expect(armor.mark).toBeShown()
+    expect(contains(armor.rank, "1 slot · 2 auras · anyone")).toBe(true)
+    expect(armor.strip[1]).toBeShown()
+    expect(hasRow(f, "Sunder Armor")).toBe(false)
+    mock.click(armor.fold)
+    expect(hasRow(f, "Sunder Armor")).toBe(true)
+    expect(row(f, "Sunder Armor").shown).never.toBeShown() -- a member: no switch of its own
+    mock.hover(armor.fold)
+    mock.hover(nil)
+    mock.click(row(f, "Physical Debuffs").fold)
+    expect(hasRow(f, "Armor Reduction")).toBe(false)
+    expect(row(f, "Physical Debuffs").strip[1]).toBeShown()
+    local stuns = row(f, "Stuns")
+    expect(contains(stuns.rank, "missing: hide")).toBe(true)
+    expect(contains(f.heads[2].count, "entries · ")).toBe(true)
+end
+
+@test("a row's switch hides it, Move to sends it to the other list, × removes it")
+local function rowControls()
+    local f = editor()
+    mock.click(row(f, "Execute").shown)
+    local function find(name: string): (Entry?, string?)
+        for _, k in ipairs({ "essential", "utility" }) do
+            for _, e in ipairs(listOf(k)) do
+                if e.name == name then
+                    return e, k
+                end
+            end
+        end
+        return nil, nil
+    end
+    expect(assert(find("Execute")).hidden).toBe(true)
+    assert(row(f, "Execute").move.onChange)("utility")
+    local _, key = find("Execute")
+    expect(key).toBe("utility")
+    assert(row(f, "Execute").move.onChange)(nil :: unknown :: string)
+    mock.click(row(f, "Execute").remove)
+    expect(find("Execute")).toBe(nil)
+end
+
+@test("+ Add: seen recently first, then everything by name; a typed ID finds any spell")
+local function adding()
+    M:CharData().recent = { cooldown = { { name = "Recent Spell", ids = { 133 } } } }
+    local f = editor()
+    local add = f.adds[1].select
+    local opts = options(add)
+    expect(opts[1]).toBe("# Seen recently")
+    expect(opts[2]).toBe("Recent Spell")
+    expect(has(opts, "# All")).toBe(true)
+    pick(add, "Recent Spell")
+    expect(lastOf("essential").name).toBe("Recent Spell")
+    expect(assert(assert(add.lookup)("133"))[1].value).toBe("id:133")
+    expect(assert(add.lookup)("x")).toBe(nil)
+    expect(assert(add.lookup)("999999999")).toBe(nil)
+    pick(add, "id:133")
+    expect(lastOf("essential").ids).toEqual({ 133 })
+    pick(add, nil)
+    pick(add, "not a spell anyone knows")
+end
+
+@test("+ Shared slot opens a new one with its + Add to; + Collection in aura lists; adding into both")
+local function slotsAndCollections()
+    local f = editor()
+    mock.click(f.adds[1].newSlot)
+    local slot = lastOf("essential")
+    expect(slot.group).toBe(true)
+    expect(slot.name).toBe("New shared slot")
+    local addTo = f.addTos[1]
+    expect(addTo).toBeShown()
+    expect(addTo.select.placeholder).toBe("+ Add to New shared slot…")
+    pick(addTo.select, "id:133")
+    expect(membersOf(lastOf("essential"))[1].ids).toEqual({ 133 })
+    pick(addTo.select, nil)
+    pick(addTo.select, "not a spell")
+    auras(f)
+    mock.click(f.adds[2].newCollection)
+    local coll = lastOf("debuffs")
+    expect(coll.collection).toBe(true)
+    pick(addToNamed(f, "+ Add to New collection…").select, "id:133")
+    expect(inside(lastOf("debuffs"))[1].ids).toEqual({ 133 })
+end
+
+@test("a weapon enchant is offered first in Buffs on you, and stays there")
+local function enchants()
+    local f = editor()
+    auras(f)
+    local add = f.adds[1].select
+    local opts = options(add)
+    expect(opts[1]).toBe("# Weapon enchants")
+    expect(opts[2]).toBe("enchant:main")
+    pick(add, "enchant:main")
+    local e = lastOf("buffs")
+    expect(e.enchant).toBe("main")
+    local r = row(f, "Main-hand enchant")
+    expect(r.rank:GetText()).toBe("weapon enchant")
+    expect(r.move).never.toBeShown()
+    expect(has(options(f.adds[1].select), "enchant:main")).toBe(false)
+end
+
+@test("+ Add offers the presets' shared slots for the list, a copy of their own; auras on you now too")
+local function presetSlots()
+    mock.player:applyAura({ spellId = 2457, name = "Battle Stance" })
+    local f = editor()
+    auras(f)
+    local opts = options(f.adds[2].select)
+    expect(has(opts, "group:Healing Reduction")).toBe(true) -- Arms's
+    expect(has(opts, "Battle Stance") or has(options(f.adds[1].select), "Battle Stance")).toBe(true)
+    pick(f.adds[2].select, "group:Healing Reduction")
+    local slot = lastOf("debuffs")
+    expect(slot.group).toBe(true)
+    expect(slot.uid ~= nil).toBe(true)
+end

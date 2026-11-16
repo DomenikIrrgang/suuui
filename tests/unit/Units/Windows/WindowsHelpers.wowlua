@@ -1,0 +1,111 @@
+-- tests/unit/Units/Windows/WindowsHelpers.wowlua
+-- Shared by the Units/Windows tests (Windows, Social, WorldMap, QuestLog,
+-- Trainer, Collections).
+--
+--   loadWindows()      the windows' addons loaded, as opening them would (and
+--                      a level for the spells window's tabs)
+--   closeWindows()     after each test: out of combat, every window closed,
+--                      the map's size back, no errors
+--   win(name)          one of the game's windows, loaded
+--   part(f, ...)       a part of a frame by its key(s)
+--   tabs(chrome)       a chrome's tab defs by label; tab(chrome, label) one
+--   lit(chrome)        the lit tab's label
+--   labels(chrome)     the tabs' labels, in order
+--   title(chrome)      the header's title
+
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import internal M from "/Units/Windows"
+import type WindowChrome, SkinTab from "/UI/WindowSkin"
+import expectNoErrors from "../../../helpers"
+
+local field = tbl.field
+
+export function loadWindows()
+    -- (the spells window's tabs from level 10)
+    mock.setPlayer({ level = 20 })
+
+    -- The windows' addons load on demand: loaded here, as opening them would.
+    for _, a in ipairs({
+        "Blizzard_PlayerSpells",
+        "Blizzard_LegacySystem",
+        "Blizzard_Professions",
+        "Blizzard_Communities",
+        "Blizzard_Collections",
+        "Blizzard_GroupFinder_VanillaStyle",
+        "Blizzard_SocialUI",
+        "Blizzard_TrainerUI",
+    }) do
+        C_AddOns.LoadAddOn(a)
+    end
+end
+
+-- One of the game's windows, loaded above.
+export function win(name: string): Frame
+    return assert(frames.find(name))
+end
+export function part(f: unknown, ...: string): Frame
+    return assert(frames.asFrame(field(f, ...)))
+end
+
+-- A chrome's tab defs by label, and the lit one's label.
+export function tabs(chrome: WindowChrome): { [string]: SkinTab }
+    local out: { [string]: SkinTab } = {}
+    for _, def in ipairs(chrome.tabs or {}) do
+        out[def.label] = def
+    end
+    return out
+end
+
+export function tab(chrome: WindowChrome, label: string): SkinTab
+    return assert(tabs(chrome)[label])
+end
+
+export function lit(chrome: WindowChrome): string?
+    local marker = chrome.tabMarker
+    for _, def in ipairs(chrome.tabs or {}) do
+        if marker and marker.chosen == def.button then
+            return def.label
+        end
+    end
+    return nil
+end
+
+export function labels(chrome: WindowChrome): string
+    local out: string[] = {}
+    for _, def in ipairs(chrome.tabs or {}) do
+        out[#out + 1] = def.label
+    end
+    return table.concat(out, ", ")
+end
+
+export function title(chrome: WindowChrome?): unknown
+    return assert(chrome).title.value
+end
+
+export function closeWindows()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    for _, n in ipairs({
+        "PlayerSpellsFrame",
+        "LegacySystemFrame",
+        "ProfessionsFrame",
+        "FriendsFrame",
+        "SocialUIFrame",
+        "CommunitiesFrame",
+        "LFGParentFrame",
+        "WorldMapFrame",
+        "ClassTrainerFrame",
+        "CollectionsJournal",
+    }) do
+        local f = frames.find(n)
+        if f and f:IsShown() then
+            HideUIPanel(f)
+        end
+    end
+    M:Reset("mapEnlarged")
+    mock.advanceFrames(2)
+    expectNoErrors()
+end

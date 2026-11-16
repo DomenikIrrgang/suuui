@@ -1,0 +1,233 @@
+-- Core/Hooks.wowlua
+-- Secure post-hooks that belong to an owner (a module's M:SecureHook and
+-- M:HookScript). A hook on a game function or frame script can never be
+-- taken off again, so each owner gets one per target for the session:
+--
+--   secureHook(owner, source, live, name, fn)                  a global function
+--   secureHook(owner, source, live, target, method, fn, opts?)  a table's method
+--   hookScript(owner, source, live, frame, script, fn)
+--   release(owner) / armed(owner)
+--
+-- The first call installs the hook (wowlua:hooks); a later one for the same
+-- owner and target re-arms it with the new function instead of installing a
+-- second one. `release` disarms every hook of the owner's, and while a hook
+-- is disarmed, or its owner's `live()` says no (a module that is not
+-- enabled), its body returns at once. A hook's error is reported under
+-- `source` (the module's name), as its events' are.
+--
+-- `opts.addon` (a table's method): installed once that load-on-demand addon
+-- has loaded, as with wowlua:hooks.
+--
+-- The registry is a HookOwners: what reports a hook's error comes in
+-- through its constructor, so a test builds one of its own. `hooks` is
+-- SuuUI's; the module's functions are its methods.
+
+import hook as stdHook, hookScript as stdHookScript from "wowlua:hooks"
+import type Options from "wowlua:hooks"
+import * as fault from "./Fault"
+
+-- What a module's SecureHook takes besides its target: `addon`, a
+-- load-on-demand addon the target comes with.
+export type HookOptions = { addon?: string }
+
+-- One installed hook: what it runs while armed, and whether its owner is on.
+type Slot = { fn: ((...unknown) -> ())?, live: () -> boolean }
+
+-- The part of a hook target that names it besides the table or frame: a
+-- method or script name, "" for a global function.
+type Slots = { [unknown]: { [string]: Slot } }
+
+export class HookOwners
+    -- owner -> target (a table, frame or global's name) -> method -> slot
+    private byOwner: { [unknown]: Slots } = {}
+
+    constructor(private reporter: fault.Reporter = fault.log) end
+
+    private function slotOf(owner: unknown, target: unknown, method: string): Slot?
+        local slots = self.byOwner[owner]
+        local byTarget = slots and slots[target]
+        return byTarget and byTarget[method]
+    end
+
+    private function addSlot(owner: unknown, target: unknown, method: string, slot: Slot)
+        local slots = self.byOwner[owner]
+        if not slots then
+            slots = {}
+            self.byOwner[owner] = slots
+        end
+        local byTarget = slots[target]
+        if not byTarget then
+            byTarget = {}
+            slots[target] = byTarget
+        end
+        byTarget[method] = slot
+    end
+
+    private function removeSlot(owner: unknown, target: unknown, method: string)
+        local slots = self.byOwner[owner]
+        local byTarget = slots and slots[target]
+        if byTarget then
+            byTarget[method] = nil
+        end
+    end
+
+    -- The function the game calls: the slot's, while armed and live.
+    private function body(slot: Slot, source: string): (...unknown) -> ()
+        local reporter = self.reporter
+        return function(...: unknown)
+            local fn = slot.fn
+            if fn and slot.live() then
+                reporter:call(source, fn, ...)
+            end
+        end
+    end
+
+    -- Re-arms an existing hook, or makes the slot and installs it with
+    -- `install(body)` (an install that fails leaves no slot behind).
+    private function arm(
+        owner: unknown,
+        source: string,
+        live: () -> boolean,
+        target: unknown,
+        method: string,
+        fn: function,
+        install: (body: (...unknown) -> ()) -> ()
+    )
+        assert(owner ~= nil, "SuuUI Hooks: an owner is required")
+        assert(type(fn) == "function", "SuuUI Hooks: a function is required")
+        local call = fn :: (...unknown) -> ()
+        local slot = self:slotOf(owner, target, method)
+        if slot then
+            slot.fn = call
+            slot.live = live
+            return
+        end
+        local made: Slot = { fn = call, live = live }
+        self:addSlot(owner, target, method, made)
+        local ok, err = pcall(install, self:body(made, source))
+        if not ok then
+            self:removeSlot(owner, target, method)
+            error(err, 0)
+        end
+    end
+
+    -- A global function (`target` its name, `method` nil) or a table's
+    -- method (`target` the table or its global name).
+    function secureHook(
+        owner: unknown,
+        source: string,
+        live: () -> boolean,
+        target: unknown,
+        method: string?,
+        fn: function,
+        opts: HookOptions?
+    )
+        if method == nil then
+            assert(type(target) == "string", "SuuUI Hooks: a global function's name, or a table and a method")
+            local name = target :: string
+            self:arm(owner, source, live, name, "", fn, function(b: (...unknown) -> ())
+                stdHook(name, b)
+            end)
+            return
+        end
+        local options: Options = { addon = opts and opts.addon, owner = owner }
+        self:arm(owner, source, live, target, method, fn, function(b: (...unknown) -> ())
+            stdHook(target, method, b, options)
+        end)
+    end
+
+    function hookScript(
+        owner: unknown,
+        source: string,
+        live: () -> boolean,
+        frame: ScriptRegion | string,
+        script: string,
+        fn: function
+    )
+        self:arm(owner, source, live, frame, script, fn, function(b: (...unknown) -> ())
+            stdHookScript(frame, script, b, { owner = owner })
+        end)
+    end
+
+    -- Every hook of the owner's disarmed (they stay installed, doing
+    -- nothing, until the owner arms them again).
+    function release(owner: unknown)
+        local slots = self.byOwner[owner]
+        if not slots then
+            return
+        end
+        for _, byTarget in pairs(slots) do
+            for _, slot in pairs(byTarget) do
+                slot.fn = nil
+            end
+        end
+    end
+
+    -- How many of the owner's hooks are armed.
+    function armed(owner: unknown): number
+        local n = 0
+        local slots = self.byOwner[owner]
+        if slots then
+            for _, byTarget in pairs(slots) do
+                for _, slot in pairs(byTarget) do
+                    if slot.fn then
+                        n += 1
+                    end
+                end
+            end
+        end
+        return n
+    end
+
+    -- How many hooks the owner has installed, armed or not.
+    function installed(owner: unknown): number
+        local n = 0
+        local slots = self.byOwner[owner]
+        if slots then
+            for _, byTarget in pairs(slots) do
+                for _ in pairs(byTarget) do
+                    n += 1
+                end
+            end
+        end
+        return n
+    end
+end
+
+-- SuuUI's, and its methods as the module's functions.
+export const hooks = HookOwners.new()
+
+export function secureHook(
+    owner: unknown,
+    source: string,
+    live: () -> boolean,
+    target: unknown,
+    method: string?,
+    fn: function,
+    opts: HookOptions?
+)
+    hooks:secureHook(owner, source, live, target, method, fn, opts)
+end
+
+export function hookScript(
+    owner: unknown,
+    source: string,
+    live: () -> boolean,
+    frame: ScriptRegion | string,
+    script: string,
+    fn: function
+)
+    hooks:hookScript(owner, source, live, frame, script, fn)
+end
+
+export function release(owner: unknown)
+    hooks:release(owner)
+end
+
+export function armed(owner: unknown): number
+    return hooks:armed(owner)
+end
+
+export function installed(owner: unknown): number
+    return hooks:installed(owner)
+end

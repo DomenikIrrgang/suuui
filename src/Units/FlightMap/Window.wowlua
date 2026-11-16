@@ -1,0 +1,354 @@
+-- Units/FlightMap/Window.wowlua
+-- The flight master's window of the flight map (Units/FlightMap): SuuUI's
+-- window chrome round the game's map canvas, at the world map's size; a
+-- flight master's tooltip; the side panel with the destinations (their
+-- rows, stops, quest steps and times); the bar at the map's bottom with the
+-- chosen destination and Fly. The module's methods (BuildWindow,
+-- FitWindow, Tip, BuildSide, Row, PaintRow, FillSide, UpdateRows,
+-- PlaceSide, UpdateBar) forward here, each function taking the module.
+
+import SuuUI from "/Core/API"
+import type TooltipData, TooltipLine from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import coins, short, timeText, viaText, stopsText, stepsText from "/Units/FlightMap/Route"
+import type TaxiNode from "/Units/FlightMap/Route"
+import Side, DestRow, FlyBar, ROW_H from "/Units/FlightMap/Parts"
+import type Surface from "/Units/FlightMap/Canvas"
+import type FlightMapModule from "/Units/FlightMap"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, field = errors.try, tbl.field
+local asNumber, asString, flag = secret.asNumber, secret.asString, secret.flag
+
+-- The flight master window's map, in the world map's own measures: its
+-- minimized size less its frame, the map's top in it (Windows' GAME_MAP_TOP),
+-- the list beside it as wide as the quest log there.
+local MAP_W_LESS, MAP_TOP, SIDE_W = 5, 67 + 2, 333
+
+--------------------------------------------------------------------------------
+-- The flight master's window: SuuUI's window chrome round the game's map
+-- canvas (MapCanvasMixin, as the game's own flight map), the world map's
+-- size; the destinations on its right
+--------------------------------------------------------------------------------
+
+export function buildWindow(self: FlightMapModule): Surface?
+    local own = self.own
+    if own then
+        return own
+    end
+    local mixin = field(_G, "MapCanvasMixin")
+    local mix = field(_G, "Mixin")
+    if type(mixin) ~= "table" or type(mix) ~= "function" then
+        return nil
+    end
+    local win = CreateFrame("Frame", "SuuUIFlightMapWindow", UIParent)
+    win:SetFrameStrata("HIGH")
+    win:SetToplevel(true)
+    win:EnableMouse(true)
+    win:SetClampedToScreen(true)
+    win:Hide()
+    -- the canvas: its scroll container first (the canvas's code finds it
+    -- on load), then the game's canvas code on it
+    local canvas = CreateFrame("Frame", nil, win)
+    canvas:SetPoint("TOPLEFT", win, "TOPLEFT", 3, -3)
+    local sc = CreateFrame("ScrollFrame", nil, canvas, "MapCanvasFrameScrollContainerTemplate")
+    sc:ClearAllPoints()
+    sc:SetAllPoints(canvas)
+    rawset(canvas :: unknown :: { [string]: unknown }, "ScrollContainer", sc)
+    ;(mix :: (unknown, unknown) -> ())(canvas, mixin)
+    errors.tryMethod(canvas, "OnLoad")
+    canvas:SetScript("OnShow", function()
+        errors.tryMethod(canvas, "OnShow")
+    end)
+    canvas:SetScript("OnHide", function()
+        errors.tryMethod(canvas, "OnHide")
+    end)
+    canvas:SetScript("OnUpdate", function(_, elapsed)
+        errors.tryMethod(canvas, "OnUpdate", elapsed)
+    end)
+    canvas:SetScript("OnEvent", function(_, event, ...)
+        errors.tryMethod(canvas, "OnEvent", event, ...)
+    end)
+    canvas:SetScript("OnSizeChanged", function()
+        errors.tryMethod(canvas, "OnFrameSizeChanged")
+    end)
+    -- SuuUI's window chrome, as the world map's
+    local close = CreateFrame("Button", nil, win)
+    close:SetScript("OnClick", function()
+        win:Hide()
+    end)
+    UI.SkinWindow(win, { title = "Flight master", icon = "map", close = close, topInset = 3, under = "microMenu" })
+    -- closed: the flight master too
+    win:HookScript("OnHide", function()
+        if self.session and not self.closing then
+            self:LeaveMaster(false)
+            try(field(_G, "CloseTaxiMap"))
+        end
+    end)
+    local map = canvas :: unknown :: typeof(WorldMapFrame)
+    local made = self:MakeSurface(map)
+    if not made then
+        return nil
+    end
+    map:AddDataProvider(made.provider)
+    self.window, self.own = win, made
+    return made
+end
+
+-- The world map's map size (its scale, enlarged or not) and place
+-- (centred when enlarged, else in the window row).
+export function fitWindow(self: FlightMapModule)
+    local win, own = self.window, self.own
+    if not (win and own) then
+        return
+    end
+    local wm = frames.find("WorldMapFrame")
+    local k = wm and wm:GetScale() or 1
+    local minW = asNumber(field(wm, "minimizedWidth")) or 702
+    local minH = asNumber(field(wm, "minimizedHeight")) or 534
+    local w, h = (minW - MAP_W_LESS) * k, (minH - MAP_TOP) * k
+    own.map:SetSize(w, h)
+    win:SetSize(3 + w + S["space-3"] + SIDE_W + 3, 3 + h + 3)
+    local windows = SuuUI.GetModule("windows")
+    UI.CenterWindow(win, windows ~= nil and windows:Setting("mapEnlarged") == true)
+end
+
+--------------------------------------------------------------------------------
+-- A flight master's tooltip
+--------------------------------------------------------------------------------
+
+-- A flight master's tooltip on the flight map.
+export function tip(self: FlightMapModule, node: TaxiNode): TooltipData
+    local s = self.session
+    if not s then
+        return {}
+    end
+    if node.kind == "CURRENT" then
+        return { title = node.name, subtitle = "Flight master · you are here" }
+    end
+    if node.kind ~= "REACHABLE" then
+        return {
+            title = node.name,
+            subtitle = "Flight master · not found yet",
+            description = "Talk to its flight master once to fly there.",
+        }
+    end
+    local t, measured = self:FlightTime(node.path)
+    local lines: TooltipLine[] = { { "Cost", coins(node.cost) }, { "Time", timeText(t, measured, true) } }
+    -- the quests with a step near it
+    for _, id in ipairs(self.steps[node.id] or {}) do
+        local title = asString(errors.tryValue(C_QuestLog.GetTitleForQuestID, id))
+        if title then
+            lines[#lines + 1] = {
+                title,
+                flag(try(field(C_QuestLog, "IsComplete"), id)) and "turn in" or "objective",
+            }
+        end
+    end
+    return {
+        title = node.name,
+        subtitle = viaText(node.path, s.byID),
+        lines = lines,
+        meta = not self:Get("confirm") and "Click to fly" or
+            (self.selected == node and "Fly in the bar below" or "Click to choose"),
+    }
+end
+
+--------------------------------------------------------------------------------
+-- The side panel: the destinations
+--------------------------------------------------------------------------------
+
+export function buildSide(self: FlightMapModule): Side
+    local side = self.side
+    if side then
+        return side
+    end
+    local made = Side.new(self.window or self.map or UIParent)
+    self.side = made
+    return made
+end
+
+export function makeRow(self: FlightMapModule, i: number): DestRow
+    local side = self:BuildSide()
+    local known = side.rows[i]
+    if known then
+        return known
+    end
+    local row = DestRow.new(side.scroll.child)
+    row:SetScript("OnEnter", function(r)
+        r.hover = true
+        self:PaintRow(r)
+        local node = r.node
+        if node then
+            self.hovered = node
+            self:QueueInk()
+            UI.ShowTooltip(r, function(): TooltipData
+                local now = r.node
+                return now and self:Tip(now) or {}
+            end)
+        end
+    end)
+    row:SetScript("OnLeave", function(r)
+        r.hover = false
+        self:PaintRow(r)
+        self.hovered = nil
+        self:QueueInk()
+        UI.HideTooltip()
+    end)
+    row:SetScript("OnClick", function(r)
+        self:Choose(r.node)
+    end)
+    side.rows[i] = row
+    return row
+end
+
+export function paintRow(self: FlightMapModule, row: DestRow)
+    local chosen = row.node ~= nil and row.node == self.selected
+    row.fill:SetShown(row.hover or chosen)
+    row.edge:SetShown(chosen)
+end
+
+-- The destinations, by name.
+export function fillSide(self: FlightMapModule): Side
+    local side = self:BuildSide()
+    local s = self.session
+    local list: TaxiNode[] = {}
+    for _, n in ipairs(s and s.nodes or {}) do
+        if n.kind == "REACHABLE" then
+            list[#list + 1] = n
+        end
+    end
+    table.sort(list, function(a: TaxiNode, b: TaxiNode): boolean
+        return a.name < b.name
+    end)
+    -- (the list shows whatever the quests say)
+    local ok, steps = pcall(self.QuestSteps, self, s)
+    self.steps = ok and steps or {}
+    side.head:SetLabel("Destinations", tostring(#list))
+    local width = math.max(1, side.scroll:GetWidth())
+    for i, node in ipairs(list) do
+        local row = self:Row(i)
+        row.node = node
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", side.scroll.child, "TOPLEFT", 0, -(i - 1) * ROW_H)
+        row:SetWidth(width)
+        row.name:SetValue(short(node.name))
+        local stepText = stepsText(self.steps[node.id])
+        row.stops:SetValue(stopsText(node.path) .. (stepText and (" · " .. stepText) or ""))
+        row:Show()
+    end
+    for i = #list + 1, #side.rows do
+        side.rows[i]:Hide()
+        side.rows[i].node = nil
+    end
+    side.scroll.child:SetSize(width, math.max(1, #list * ROW_H))
+    self:UpdateRows()
+    return side
+end
+
+-- the rows' times and which one is chosen
+export function updateRows(self: FlightMapModule)
+    local side = self.side
+    if not side then
+        return
+    end
+    for _, row in ipairs(side.rows) do
+        local node = row.node
+        if node then
+            local t, measured = self:FlightTime(node.path)
+            row.time:SetValue(timeText(t, measured))
+            row.time:SetColor(measured and "ink" or "ink-muted")
+            self:PaintRow(row)
+        end
+    end
+end
+
+-- In the window, right of the map, as tall (where the world map's quest
+-- log is).
+export function placeSide(self: FlightMapModule)
+    local f, side, win = self.map, self.side, self.window
+    if not (f and side and win and self.session) then
+        return
+    end
+    side:SetScale(1)
+    side:ClearAllPoints()
+    side:SetPoint("TOPLEFT", f, "TOPRIGHT", S["space-3"], 0)
+    side:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", S["space-3"], 0)
+    side:SetWidth(SIDE_W)
+    side:SetFrameStrata(win:GetFrameStrata())
+    side:SetFrameLevel(f:GetFrameLevel() + 100)
+    side.edge:SetShown(false)
+    -- the rows as wide as the list, laid out again
+    self:After(0, function()
+        if self.session and side:IsShown() then
+            self:FillSide()
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- The bar at the map's bottom: the chosen destination and Fly
+--------------------------------------------------------------------------------
+
+-- The bar for the chosen destination, sized to what it says.
+export function updateBar(self: FlightMapModule)
+    local s, node, f = self.session, self.selected, self.map
+    if not (s and node and f) then
+        local bar = self.bar
+        if bar then
+            bar:Hide()
+        end
+        return
+    end
+    local bar = self.bar
+    if not bar then
+        bar = FlyBar.new(f, function()
+            self:Fly(nil)
+        end)
+        self.bar = bar
+    end
+    local t, measured = self:FlightTime(node.path)
+    bar.name:SetValue(short(node.name))
+    bar.via:SetValue(viaText(node.path, s.byID))
+    bar.money:SetCopper(node.cost)
+    bar.time:SetValue(timeText(t, measured, true))
+    bar.fly:Remeasure()
+    local gap = S["space-5"]
+    local h = math.max(T.type["unit-name"].lineHeight + T.type.caption.lineHeight, 30)
+    local x = 0
+    bar.glyph:ClearAllPoints()
+    bar.glyph:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+    x = x + 15 + S["space-4"]
+    local textW = math.ceil(math.max(bar.name:GetUnboundedStringWidth(), bar.via:GetUnboundedStringWidth()))
+    bar.name:ClearAllPoints()
+    bar.name:SetPoint("BOTTOMLEFT", bar.body, "LEFT", x, 0)
+    bar.via:ClearAllPoints()
+    bar.via:SetPoint("TOPLEFT", bar.body, "LEFT", x, 0)
+    x = x + textW + gap
+    bar.rule:ClearAllPoints()
+    bar.rule:SetPoint("TOPLEFT", bar.body, "TOPLEFT", x, 0)
+    bar.rule:SetPoint("BOTTOMLEFT", bar.body, "BOTTOMLEFT", x, 0)
+    x = x + 1 + gap
+    bar.money:ClearAllPoints()
+    bar.money:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+    x = x + bar.money:GetWidth() + gap
+    bar.clock:ClearAllPoints()
+    bar.clock:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+    x = x + 11 + S["space-2"]
+    bar.time:ClearAllPoints()
+    bar.time:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+    x = x + math.ceil(bar.time:GetUnboundedStringWidth()) + gap
+    bar.fly:ClearAllPoints()
+    bar.fly:SetPoint("LEFT", bar.body, "LEFT", x, 0)
+    x = x + bar.fly:GetWidth()
+    bar.body:SetSize(x, h)
+    -- (its usual size in the scaled window)
+    bar:SetScale(1 / f:GetScale())
+    bar:ClearAllPoints()
+    bar:SetPoint("BOTTOM", frames.asFrame(field(f, "ScrollContainer")) or f, "BOTTOM", 0, S["space-5"])
+    bar:Show()
+end

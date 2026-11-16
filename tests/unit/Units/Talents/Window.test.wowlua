@@ -1,0 +1,219 @@
+-- Units/Talents/Window: SuuUI's Talents window, the page over Blizzard's
+-- tab, the page's callbacks, through the module's methods. (Blizzard's tab
+-- with the engine's own talents: tests/unit/Units/TalentsTab.test.wowlua.)
+
+import internal M from "/Units/Talents"
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as talentWindow from "/Units/Talents/Window"
+import SuuUI from "/Core/API"
+import type OrderLineData, TalentNode from "/UI/TalentTree"
+import * as frames from "wowlua:frames"
+import heard, nodeIn, window, planNode, setup, teardown from "./TalentsHelpers"
+import expectNoErrors from "../../../helpers"
+
+@beforeEach
+local function before()
+    setup()
+end
+
+@afterEach
+local function after()
+    teardown()
+end
+
+--------------------------------------------------------------------------------
+-- The window
+--------------------------------------------------------------------------------
+
+@test("The window: Toggle, its size, your active build on show, Esc")
+local function windowShown()
+    local f = M.window
+    expect(f).never.toBeShown()
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id)
+    expect(SuuUI.ToggleTalents()).toBe(true)
+    expect(f).toBeShown()
+    expect(SuuUI.TalentsShown()).toBe(true)
+    expect(heard.SUUUI_TALENTS_SHOWN).toBe(1)
+    expect(M.buildView).toBe(id)
+    f = window()
+    expect(f:GetWidth()).toBe(SuuUI.UI.TALENT_TREE_W + 40 + SuuUI.UI.TALENT_ORDER_W)
+    M:Toggle()
+    expect(f).never.toBeShown()
+    expect(SuuUI.TalentsShown()).toBe(false)
+    -- a plan with changes stays open
+    M.buildView = id
+    assert(M:Draft()).dirty = true
+    M:Toggle()
+    expect(M.draft).never.toBeNil()
+    M:Toggle()
+    -- the height with two talent groups
+    mock.fake("GetNumSpecGroups", function(): number
+        return 2
+    end)
+    expect(M:WindowHeight()).toBe(44 + 426 + 16 + 42)
+    M.inspectUnit = "target"
+    expect(M:WindowHeight()).toBe(44 + 426 + 16)
+    M.inspectUnit = nil
+end
+
+@test("The window: another player's talents, the title, back to yours")
+local function windowInspect()
+    local other = mock.spawnUnit({ name = "Bram", level = 30, class = "WARRIOR", player = true, reaction = "friendly" })
+    mock.player:target(other)
+    M:ShowInspect(nil)
+    expect(M.window).never.toBeShown()
+    expect(SuuUI.ShowTalentsOf("target")).toBe(true)
+    expect(M.window).toBeShown()
+    expect(M.inspectUnit).toBe("target")
+    expect(assert(M.chrome).title).toHaveText("Talents · Bram")
+    -- shown already: drawn again
+    M:ShowInspect("target")
+    expect(M.window).toBeShown()
+    -- the key: back to yours
+    M:Toggle()
+    expect(M.window).toBeShown()
+    expect(M.inspectUnit).toBeNil()
+    expect(assert(M.chrome).title).toHaveText("Talents")
+    M:SetInspect(nil)
+    window():Hide()
+    mock.player:target(nil)
+end
+
+@test("The window's page: its callbacks reach the module")
+local function wire()
+    local page = assert(M.windowPage)
+    local calls: string[] = {}
+    for _, name in ipairs({
+        "PlanAdd",
+        "Purchase",
+        "PlanRemove",
+        "Refund",
+        "ShowPlanTip",
+        "ShowTip",
+        "Apply",
+        "Undo",
+        "MoveLine",
+    }) do
+        mock.stub(M, name, function()
+            calls[#calls + 1] = name
+        end)
+    end
+    -- the page's nodes: a build's planned talent, one of yours, one unknown
+    local planned, mine = planNode(11), nodeIn(M:Collect(), 11)
+    M.planNodes[planned] = planned
+    M.pageNodes[mine] = mine
+    local unknown: TalentNode = { row = 0, col = 0 }
+    for _, n in ipairs({ planned, mine, unknown }) do
+        assert(page.onClick)(n)
+    end
+    for _, n in ipairs({ planned, mine, unknown }) do
+        assert(page.onRemove)(n)
+    end
+    local button = CreateFrame("Button")
+    for _, n in ipairs({ planned, mine, unknown }) do
+        assert(page.onEnter)(button, n)
+    end
+    assert(page.onApply)()
+    assert(page.onUndo)()
+    assert(page.onOrderMove)(1, 2)
+    expect(calls).toEqual({
+        "PlanAdd",
+        "Purchase",
+        "PlanRemove",
+        "Refund",
+        "ShowPlanTip",
+        "ShowTip",
+        "Apply",
+        "Undo",
+        "MoveLine",
+    })
+    assert(page.onLeave)()
+    local line: OrderLineData = { node = 11 }
+    assert(page.onOrderEnter)(line, button)
+    assert(page.onOrderLeave)(line)
+    -- another talent group
+    local id = assert(M:AddBuild("Arms", "WARRIOR", {}))
+    M:SetActive(id, 2)
+    assert(page.onSpec)(2)
+    expect(M.viewing).toBe(2)
+    expect(M.buildView).toBe(id)
+    local active: number? = nil
+    mock.fake("C_SpecializationInfo.SetActiveSpecGroup", function(g: number)
+        active = g
+    end)
+    assert(page.onActivate)()
+    expect(active).toBe(2)
+    M.viewing = nil
+    active = nil
+    assert(page.onActivate)()
+    expect(active).toBeNil()
+    window():Show()
+    assert(page.onBack)()
+    expect(M.window).never.toBeShown()
+end
+
+@test("BindKeys binds the talents key to SuuUI's window, out of combat")
+local function bindKeys()
+    local bound: string[] = {}
+    mock.fake("GetBindingKey", function(): string
+        return "N"
+    end)
+    mock.fake("SetOverrideBindingClick", function(_: Frame, _: boolean, key: string, button: string)
+        bound[#bound + 1] = key .. ">" .. button
+    end)
+    M:BindKeys()
+    expect(bound).toEqual({ "N>SuuUITalentsToggle" })
+    mock.player:enterCombat()
+    M:BindKeys()
+    expect(M.bindAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    expect(M.bindAfterCombat).toBe(false)
+    expect(#bound).toBe(2)
+    -- the toggle button
+    local toggle = assert(frames.asButton(frames.find("SuuUITalentsToggle")))
+    mock.click(toggle)
+    expect(M.window).toBeShown()
+    mock.click(toggle)
+    expect(M.window).never.toBeShown()
+end
+
+@test("Size and Restore: the spells window at the tab's size and back")
+local function sizeRestore()
+    local f = assert(frames.find("PlayerSpellsFrame"))
+    local h, wd = f:GetHeight(), f:GetWidth()
+    M.blizzHeight, M.blizzWidth = nil, nil
+    f:SetSize(900, 700)
+    M:Size()
+    expect(f:GetWidth()).toBe(SuuUI.UI.TALENT_TREE_W + 40)
+    expect(f:GetHeight()).toBe(44 + 426 + 16)
+    expect(M.blizzHeight).toBe(700)
+    M:Size()
+    M:Restore()
+    expect(f:GetWidth()).toBe(900)
+    expect(f:GetHeight()).toBe(700)
+    expect(M.blizzHeight).toBeNil()
+    M:Restore()
+    f:SetSize(wd, h)
+end
+
+--------------------------------------------------------------------------------
+-- The functions the module's methods call
+--------------------------------------------------------------------------------
+
+@test("the window's functions take the module")
+local function onTheirOwn()
+    expect(talentWindow.windowHeight(M)).toBe(44 + 426 + 16)
+    local page = assert(M.windowPage)
+    M.data = M:Collect()
+    expect(talentWindow.pageData(M, page)).toBe(M.data)
+    M.inspectUnit = "target"
+    expect(talentWindow.pageData(M, page)).toBe(M.inspectData)
+    M.inspectUnit = nil
+    talentWindow.toggleWindow(M)
+    expect(M.window).toBeShown()
+    talentWindow.toggleWindow(M)
+    expect(M.window).never.toBeShown()
+    expectNoErrors()
+end

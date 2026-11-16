@@ -1,0 +1,454 @@
+-- Units/MouseBindings/Inputs.wowlua
+-- Mouseover bindings' inputs and what a binding comes to, without frames
+-- (Units/MouseBindings): the types of a binding and of the unit frames'
+-- Target and Menu clicks, an input's modifiers and key, its names for a
+-- person, its attribute prefix and suffix on a unit frame, where it can
+-- work and the movement keys it can't take; judge and judgeClick (refused,
+-- asked first, what it says besides, what it takes); a spec's name. The
+-- module, its boxes and its list call these; tests call them directly.
+
+import SuuUI from "/Core/API"
+import type MouseBind from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import rankNumber from "./Ranks"
+
+local try = errors.try
+local asString = secret.asString
+
+-- One binding (the service's MouseBind): the input as bindings spell it
+-- ("SHIFT-F", "ALT-BUTTON1", "MOUSEWHEELUP", "META-Q"), the spell (its
+-- name; a chosen rank's ID), where it works and on whom.
+export type Reach = "both" | "frames" | "world"
+export type React = "any" | "help" | "harm"
+export type Bind = MouseBind
+-- The unit frames' own clicks, per spec (asked 2026-11-10: one mouse click
+-- each, unit frames only, so Left and Right with any modifier can cast):
+-- the click that targets the unit and the one that opens its menu.
+export type ClickKind = "target" | "menu"
+export type Clicks = { target: string, menu: string }
+
+-- Each click's action on a unit frame: the attribute's value, the frames'
+-- own wildcard attribute for its default button, its default, its names.
+type ClickAction = { value: string, wild: string, default: string, name: string, does: string, line: string }
+export const CLICK_ACTIONS: { target: ClickAction, menu: ClickAction } = {
+    target = {
+        value = "target",
+        wild = "*type1",
+        default = "BUTTON1",
+        name = "Target",
+        does = "targets",
+        line = "Targets the unit",
+    },
+    menu = {
+        value = "togglemenu",
+        wild = "*type2",
+        default = "BUTTON2",
+        name = "Menu",
+        does = "opens the unit's menu",
+        line = "Opens the unit's menu",
+    },
+}
+export const CLICK_KINDS: ClickKind[] = { "target", "menu" }
+export const DEFAULT_CLICKS: Clicks = { target = "BUTTON1", menu = "BUTTON2" }
+
+-- The game's modifier bits by name, from its own names for them
+-- (GetStringFromModifiers; Forever: 1, 2 SHIFT, 4, 8 CTRL, 16, 32 ALT,
+-- 64, 128 META): for a click saved before its bits were kept.
+local function bitsByName(): { [string]: number }
+    local out: { [string]: number } = {}
+    local names: { { string } } = { { "SHIFT" }, { "CTRL" }, { "ALT" }, { "META", "CMD", "COMMAND" } }
+    for i = 0, 15 do
+        local bit = math.floor(2 ^ i)
+        local text = asString(try(GetStringFromModifiers, bit))
+        if text then
+            text = text:upper()
+            for _, group in ipairs(names) do
+                local key = group[1]
+                local hit = false
+                for _, n in ipairs(group) do
+                    hit = hit or text:find(n, 1, true) ~= nil
+                end
+                -- (each modifier two bits, its left and right key: the
+                -- game's own MakeModifiers holds both, Shift 3; probed in
+                -- game 2026-11-10)
+                if hit then
+                    out[key] = (out[key] or 0) + bit
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- An input's modifiers as the game's click bindings keep them (0: none).
+export function modifierMask(input: string): number
+    local mods = parseInput(input)
+    local bits = bitsByName()
+    local mask = 0
+    for _, name in ipairs({ "SHIFT", "CTRL", "ALT", "META" }) do
+        if mods[name] then
+            mask = mask + (bits[name] or 0)
+        end
+    end
+    return mask
+end
+
+--------------------------------------------------------------------------------
+-- Inputs
+--------------------------------------------------------------------------------
+
+local MODS = { "ALT", "CTRL", "SHIFT", "META" }
+local MOD_NAMES: { [string]: string } = { ALT = "Alt", CTRL = "Ctrl", SHIFT = "Shift", META = "Cmd" }
+
+-- An input's modifiers and its key: "ALT-SHIFT-F" → { ALT, SHIFT }, "F".
+export function parseInput(input: string): ({ [string]: boolean }, string)
+    local mods: { [string]: boolean } = {}
+    local rest = input
+    local changed = true
+    while changed do
+        changed = false
+        for _, m in ipairs(MODS) do
+            local pre = m .. "-"
+            if rest:sub(1, #pre) == pre and #rest > #pre then
+                mods[m] = true
+                rest = rest:sub(#pre + 1)
+                changed = true
+            end
+        end
+    end
+    return mods, rest
+end
+
+-- The mouse button an input clicks ("BUTTON1" → 1), or nil.
+export function mouseButton(input: string): number?
+    local _, key = parseInput(input)
+    local n = key:match("^BUTTON(%d+)$")
+    return n and tonumber(n) or nil
+end
+
+-- Whether an input turns the wheel.
+export function isWheel(input: string): boolean
+    local _, key = parseInput(input)
+    return key == "MOUSEWHEELUP" or key == "MOUSEWHEELDOWN"
+end
+
+local KEY_NAMES: { [string]: string } = {
+    BUTTON1 = "Left click",
+    BUTTON2 = "Right click",
+    BUTTON3 = "Middle click",
+    MOUSEWHEELUP = "Wheel up",
+    MOUSEWHEELDOWN = "Wheel down",
+}
+local SHORT_KEYS: { [string]: string } = {
+    BUTTON1 = "Left",
+    BUTTON2 = "Right",
+    BUTTON3 = "Middle",
+    MOUSEWHEELUP = "Wheel up",
+    MOUSEWHEELDOWN = "Wheel down",
+}
+
+-- An input's parts for a person: { "Shift", "Left click" }.
+export function inputParts(input: string, short: boolean?): string[]
+    local mods, key = parseInput(input)
+    local parts: string[] = {}
+    for _, m in ipairs(MODS) do
+        if mods[m] then
+            parts[#parts + 1] = MOD_NAMES[m] or m
+        end
+    end
+    local n = key:match("^BUTTON(%d+)$")
+    local names = short and SHORT_KEYS or KEY_NAMES
+    parts[#parts + 1] = names[key] or (n and ("Button " .. n)) or asString(try(GetBindingText, key)) or key
+    return parts
+end
+
+-- What the input is called for a person ("Shift-Left click", "Cmd-Q").
+export function inputText(input: string): string
+    return table.concat(inputParts(input), "-")
+end
+
+-- A binding's chip on a spell cell: "Shift-F", "Ctrl-Left"; one rank's
+-- binding carries it ("Ctrl-F R3").
+export function chipText(b: Bind): string
+    local text = table.concat(inputParts(b.input, true), "-")
+    if b.rank == "fixed" and b.spellID then
+        local r = rankNumber(b.spellID)
+        if r then
+            text = text .. " R" .. r
+        end
+    end
+    return text
+end
+
+-- A click's attribute prefix on a unit frame ("ALT-SHIFT-BUTTON1" →
+-- "alt-shift-"; the secure buttons' own order; Cmd isn't one: see
+-- clickSuffix).
+export function clickPrefix(input: string): string
+    local mods = parseInput(input)
+    return (mods.ALT and "alt-" or "") .. (mods.CTRL and "ctrl-" or "") .. (mods.SHIFT and "shift-" or "")
+end
+
+-- The secure buttons' names of the mouse buttons.
+export const BUTTON_NAMES = { "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5" }
+
+-- A click's attribute suffix on a unit frame: its button's number ("1"), or
+-- with Cmd the button the frame's wrap renames it to ("-cmd-LeftButton").
+export function clickSuffix(input: string): string
+    local m = mouseButton(input) or 1
+    if parseInput(input).META then
+        return "-cmd-" .. (BUTTON_NAMES[m] or ("Button" .. m))
+    end
+    return tostring(m)
+end
+
+-- The attribute that tells a unit frame's wrap to rename a Cmd click (none
+-- without Cmd): "suuui-cmd-shift-LeftButton".
+export function cmdMark(input: string): string?
+    if not parseInput(input).META then
+        return nil
+    end
+    local m = mouseButton(input) or 1
+    return "suuui-cmd-" .. clickPrefix(input) .. (BUTTON_NAMES[m] or ("Button" .. m))
+end
+
+-- Plain Left or Right click (no modifier): the camera's and the game's in
+-- the world (the frames' Target and Menu by default).
+export function isPlainClick(input: string): boolean
+    local n = mouseButton(input)
+    return (n == 1 or n == 2) and input == ("BUTTON" .. n)
+end
+
+-- Where an input can work: a plain Left or Right click on frames only (in
+-- the world they're the camera's and the game's).
+export function reachFor(input: string, wanted: Reach): Reach?
+    local frames = true
+    local world = not isPlainClick(input)
+    if wanted == "both" then
+        return (frames and world) and "both" or frames and "frames" or world and "world" or nil
+    elseif wanted == "frames" then
+        return frames and "frames" or nil
+    end
+    return world and "world" or nil
+end
+
+-- The movement commands a key can't take from you (keys only: a mouse
+-- button's own job, Move and Steer on the middle one, is the game's away
+-- from units, and on a unit frame a click is the frame's).
+local MOVES: { [string]: boolean } = {
+    MOVEFORWARD = true,
+    MOVEBACKWARD = true,
+    STRAFELEFT = true,
+    STRAFERIGHT = true,
+    TURNLEFT = true,
+    TURNRIGHT = true,
+    JUMP = true,
+    TOGGLEAUTORUN = true,
+}
+
+-- What a key does in the game now (your own binding, SuuUI's bars' too),
+-- or nil.
+local function gameAction(input: string): string?
+    local action = asString(try(GetBindingAction, input, false))
+    return (action and action ~= "") and action or nil
+end
+
+-- A game binding's name for a person ("Move Forward", "Action Button 3").
+local function actionName(action: string): string
+    local name = asString(rawget(_G, "BINDING_NAME_" .. action))
+    return name or action
+end
+
+-- Whether an input moves you (its game binding a movement command).
+export function movesYou(input: string): boolean
+    if mouseButton(input) or isWheel(input) then
+        return false
+    end
+    local action = gameAction(input)
+    return action ~= nil and MOVES[action] == true
+end
+
+--------------------------------------------------------------------------------
+-- Conflicts
+--------------------------------------------------------------------------------
+
+-- Whether two reactions overlap (any with either; help with help).
+local function overlap(a: React, b: React): boolean
+    return a == "any" or b == "any" or a == b
+end
+
+-- The bindings `b` takes the input from (the same input, for the same units).
+export function takenBy(binds: Bind[], b: Bind, editing: Bind?): Bind[]
+    local out: Bind[] = {}
+    for _, x in ipairs(binds) do
+        if x ~= editing and x.input == b.input and overlap(x.react, b.react) then
+            out[#out + 1] = x
+        end
+    end
+    return out
+end
+
+-- What binding `b` comes to: refused (why), asked first (the question),
+-- what it says besides, where it ends up working (`reach`), and the
+-- bindings it replaces.
+export type Verdict = {
+    refuse?: string,
+    refuseDetail?: string,
+    -- (`move`: the unit frames' Target or Menu click it would take, moved
+    -- first)
+    ask?: { title: string, text: string, confirm: string, move?: ClickKind },
+    info: string[],
+    reach?: Reach,
+    takes: Bind[],
+}
+
+-- The unit frames' click action an input is (with these clicks), or nil.
+export function clickKindOf(clicks: Clicks, input: string): ClickKind?
+    for _, kind in ipairs(CLICK_KINDS) do
+        if clicks[kind] == input then
+            return kind
+        end
+    end
+    return nil
+end
+
+export function judge(binds: Bind[], b: Bind, editing: Bind?, clicksArg: Clicks?): Verdict
+    local clicks = clicksArg or DEFAULT_CLICKS
+    local v: Verdict = { info = {}, takes = {} }
+    local name = inputText(b.input)
+    if movesYou(b.input) then
+        local action = gameAction(b.input) or ""
+        v.refuse = ("%s is %s"):format(name, actionName(action))
+        v.refuseDetail = "It can't cast on mouseover. Pick another key."
+        return v
+    end
+    local reach = reachFor(b.input, b.reach)
+    if not reach then
+        v.refuse = name .. " can't work there"
+        v.refuseDetail = "In the world it moves the camera and acts on what you click. Bind it on unit frames."
+        return v
+    end
+    v.reach = reach
+    if reach ~= b.reach then
+        v.info[#v.info + 1] = name .. " works on unit frames only."
+    end
+    -- taken by another spell: asked first
+    v.takes = takenBy(binds, b, editing)
+    local other: Bind? = nil
+    for _, x in ipairs(v.takes) do
+        if x.spell ~= b.spell then
+            other = x
+        end
+    end
+    if other then
+        v.ask = {
+            title = ("%s already casts %s"):format(name, other.spell),
+            text = ("Replace it with %s?"):format(b.spell),
+            confirm = "Replace",
+        }
+    elseif reach ~= "world" then
+        -- the frames' Target or Menu click: moved to another click first
+        -- (asked 2026-11-10)
+        local kind = clickKindOf(clicks, b.input)
+        if kind then
+            local action = CLICK_ACTIONS[kind]
+            v.ask = {
+                title = ("%s %s on unit frames"):format(name, action.does),
+                text = ("Move %s to another click? Then %s casts %s there."):format(action.name, name, b.spell),
+                confirm = "Move " .. action.name .. "…",
+                move = kind,
+            }
+        end
+    end
+    -- what the input does away from units
+    if mouseButton(b.input) == nil then
+        local action = gameAction(b.input)
+        if action and not isWheel(b.input) then
+            v.info[#v.info + 1] = ("Away from units %s stays %s."):format(name, actionName(action))
+        elseif isWheel(b.input) then
+            v.info[#v.info + 1] = "Away from units the wheel does what it did before."
+        else
+            v.info[#v.info + 1] = ("Over a unit it casts; elsewhere %s does what it did before."):format(name)
+        end
+    end
+    return v
+end
+
+-- What giving the frames' Target or Menu click `input` comes to: refused
+-- (a key, the wheel: the frames know mouse buttons, with Shift, Ctrl, Alt
+-- and Cmd), asked first (the other action's click: swapped; a
+-- spell's click on frames: taken, the spell kept in the world where it can
+-- be), what it says besides, and the spell bindings it takes.
+export type ClickVerdict = {
+    refuse?: string,
+    refuseDetail?: string,
+    ask?: { title: string, text: string, confirm: string },
+    info: string[],
+    swap: boolean,
+    takes: Bind[],
+}
+
+export function judgeClick(binds: Bind[], clicks: Clicks, kind: ClickKind, input: string): ClickVerdict
+    local v: ClickVerdict = { info = {}, swap = false, takes = {} }
+    local name = inputText(input)
+    local action = CLICK_ACTIONS[kind]
+    if not mouseButton(input) then
+        v.refuse = name .. " isn't a mouse click"
+        v.refuseDetail = action.name .. " takes a mouse button, with Shift, Ctrl, Alt or Cmd."
+        return v
+    end
+    local current = clicks[kind]
+    if input == current then
+        return v
+    end
+    local other: ClickKind = kind == "target" and "menu" or "target"
+    if clicks[other] == input then
+        local otherAction = CLICK_ACTIONS[other]
+        v.swap = true
+        v.ask = {
+            title = ("%s %s on unit frames"):format(name, otherAction.does),
+            text = ("Swap them? %s moves to %s."):format(otherAction.name, inputText(current)),
+            confirm = "Swap",
+        }
+        return v
+    end
+    -- the spells it takes on frames (one kept in the world where it can be)
+    for _, b in ipairs(binds) do
+        if b.input == input and b.reach ~= "world" then
+            v.takes[#v.takes + 1] = b
+        end
+    end
+    local first = v.takes[1]
+    if first then
+        local keeps = first.reach == "both" and reachFor(input, "world") == "world"
+        v.ask = {
+            title = ("%s casts %s on unit frames"):format(name, first.spell),
+            text = keeps and ("%s takes it; %s keeps working in the world."):format(action.name, first.spell) or
+                ("%s takes it; %s's binding goes."):format(action.name, first.spell),
+            confirm = "Replace",
+        }
+    end
+    -- the click it leaves: free for a spell (the default's, with any
+    -- modifier no spell has, comes back with the default)
+    if current == action.default then
+        v.info[#v.info + 1] = ("%s on unit frames does nothing until you bind a spell to it."):format(
+            inputText(current)
+        )
+    end
+    return v
+end
+
+-- A spec's name: its talent tree's.
+export function specName(key: string): string
+    local n = tonumber(key) or 0
+    if n == 0 then
+        return "No talents yet"
+    end
+    local _, class = UnitClass("player")
+    for _, t in ipairs(SuuUI.ClassTalents(class :: string) or {}) do
+        if t.tree == n and t.spec then
+            return t.spec
+        end
+    end
+    return "Tree " .. n
+end

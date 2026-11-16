@@ -1,0 +1,426 @@
+-- UI/Reskin/Pass: a whole pass over a frame, on Blizzard's own templates
+-- (WowScrollBoxList, ScrollingFontTemplate, BasicFrameTemplate): the text
+-- colours, which piece a part gets, ScrollBox rows, and the small dialogs.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as draw from "/UI/Draw"
+import reskin, reskinScrollBox, reskinDialog from "/UI/Reskin/Pass"
+import internal matchesAny, textColor, sameColor, isPanelButton from "/UI/Reskin/Pass"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../WindowsHelpers"
+import WHITE, host, resetHost, skin from "./ReskinHelpers"
+
+@afterEach
+local function cleanup()
+    resetHost()
+    expectNoErrors()
+end
+
+-- The parts of Blizzard's templates these tests reach (their parentKeys and
+-- mixin methods).
+type ListRow = Button & { label?: FontString }
+type ScrollBoxList = Frame
+    & {
+        Init: (self: Frame, view: ScrollBoxListLinearViewMixin) -> (),
+        SetDataProvider: (self: Frame, provider: DataProviderMixin) -> (),
+        ForEachFrame: (self: Frame, fn: (row: ListRow) -> ()) -> (),
+    }
+type ScrollingFont = Frame
+    & {
+        SetText: (self: Frame, text: string) -> (),
+        GetFontString: (self: Frame) -> FontString,
+        GetFontStringContainer: (self: Frame) -> Frame,
+    }
+
+-- Blizzard's list helpers, as these tests call them.
+local scrollUtil = ScrollUtil :: {
+    InitScrollBoxListWithScrollBar: (box: Frame, bar: Frame, view: ScrollBoxListLinearViewMixin) -> (),
+}
+local function linearView(): ScrollBoxListLinearViewMixin
+    return CreateScrollBoxListLinearView()
+end
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+@test("matchesAny: any of the patterns")
+local function matching()
+    expect(matchesAny("ui-collapseexpand-bar", { "scrollline", "collapseexpand" })).toBe(true)
+    expect(matchesAny("other", { "scrollline" })).toBe(false)
+    expect(matchesAny("x", {})).toBe(false)
+end
+
+@test("textColor: Blizzard's text colours as SuuUI tokens")
+@cases({
+    { 1, 0.82, 0, "ink" }, -- NORMAL_FONT_COLOR (yellow)
+    { 1, 1, 1, "ink" }, -- HIGHLIGHT_FONT_COLOR (white)
+    { 0.1, 1, 0.1, "fel" }, -- GREEN_FONT_COLOR
+    { 1, 0.1, 0.1, "ember-text" }, -- RED_FONT_COLOR
+    { 0.5, 0.5, 0.5, "ink-muted" }, -- GRAY_FONT_COLOR
+    { 0.64, 0.21, 0.93, "kept" }, -- a quality's purple
+})
+local function colours(r: number, g: number, b: number, want: string)
+    expect(textColor(r, g, b) ?? "kept").toBe(want)
+end
+
+@test("textColor: no colour reads as ink")
+local function noColour()
+    expect(textColor(nil, 0, 0)).toBe("ink")
+end
+
+@test("sameColor: a token's colour within a hundredth")
+local function same()
+    local r, g, b = draw.rgba("ink")
+    expect(sameColor("ink", r, g, b)).toBe(true)
+    expect(sameColor("ink", r + 0.005, g, b)).toBe(true)
+    expect(sameColor("ink", r + 0.05, g, b)).toBe(false)
+end
+
+@test("isPanelButton: Left/Middle/Right art, a button atlas, a panel button texture")
+local function panelButtons()
+    local p = host()
+    local a = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
+    expect(isPanelButton(a) and true or false).toBe(true)
+    local b = CreateFrame("Button", nil, p)
+    b:CreateTexture():SetAtlas("common-button-square-gray-up")
+    expect(isPanelButton(b) and true or false).toBe(true)
+    local c = CreateFrame("Button", nil, p)
+    c:CreateTexture():SetAtlas("128-RedButton-Minus")
+    expect(isPanelButton(c)).toBe(false)
+    local d = CreateFrame("Button", nil, p)
+    d:SetNormalTexture("Interface\\Buttons\\UI-Panel-Button-Up")
+    expect(isPanelButton(d) and true or false).toBe(true)
+    local e = CreateFrame("Button", nil, p)
+    e:SetNormalTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    expect(isPanelButton(e) and true or false).toBe(false)
+end
+
+--------------------------------------------------------------------------------
+-- A pass over a frame
+--------------------------------------------------------------------------------
+
+@test("reskin: textures by atlas, texts by colour and size, a category row's head")
+local function passTextures()
+    local f = CreateFrame("Frame", nil, host())
+    f:SetSize(200, 100)
+    local hide = f:CreateTexture()
+    hide:SetAtlas("UI-Character-Info-ScrollLine")
+    local check = f:CreateTexture()
+    check:SetAtlas("common-icon-checkmark")
+    local minimal = f:CreateTexture()
+    minimal:SetAtlas("checkmark-minimal")
+    local plus = f:CreateTexture()
+    plus:SetAtlas("128-RedButton-Minus")
+    local sel = f:CreateTexture(nil, "ARTWORK")
+    sel:SetAtlas("GarrMission_FollowerListButton-Select")
+    local hl = f:CreateTexture(nil, "HIGHLIGHT")
+    local hover = f:CreateTexture()
+    hover:SetAtlas("Options_List_Hover")
+    local plain = f:CreateTexture()
+    local function fs(font: string, r: number, g: number, b: number, text: string): FontString
+        local s = f:CreateFontString(nil, "OVERLAY", font)
+        s:SetTextColor(r, g, b)
+        s:SetText(text)
+        return s
+    end
+    local yellow = fs("GameFontNormal", 1, 0.82, 0, "Strength")
+    local grey = fs("GameFontNormalSmall", 0.5, 0.5, 0.5, "small grey")
+    local purple = fs("GameFontNormal", 0.64, 0.21, 0.93, "Epic thing")
+    local big = fs("GameFontNormalLarge", 1, 1, 1, "Title")
+    local long = fs("GameFontNormalLarge", 1, 1, 1, string.rep("long text ", 6))
+    local number = fs("NumberFontNormal", 1, 1, 1, "42")
+    reskin(f)
+    expect(hide:GetAlpha()).toBe(0)
+    expect(skin(check).moved).toBe(true)
+    expect(check).toHaveSize(12, 12)
+    expect(skin(minimal).moved).toBeNil()
+    expect(tokenOf(plus)).toBe("gilt-text")
+    expect(plus:IsDesaturated()).toBe(true)
+    expect(tokenOf(sel)).toBe("arcane-soft")
+    expect(select(1, sel:GetDrawLayer())).toBe("BACKGROUND")
+    expect(tokenOf(hl)).toBe("surface-raised")
+    expect(hl:GetAlpha()).toBeCloseTo(0.6, 2)
+    expect(tokenOf(hover)).toBe("surface-raised")
+    expect(tokenOf(plain)).toBeNil()
+    expect(tokenOf(yellow)).toBe("ink")
+    expect(tokenOf(grey)).toBe("ink-muted")
+    expect(tokenOf(purple)).toBeNil()
+    expect({ purple:GetTextColor() }).toEqual({ purple:GetTextColor() })
+    expect(tokenOf(big)).toBe("gilt-text")
+    expect(tokenOf(long)).toBe("ink")
+    expect(tokenOf(number)).toBe("ink")
+    -- a second pass keeps a coloured text's token
+    reskin(f)
+    expect(tokenOf(yellow)).toBe("ink")
+    expect(skin(check).moved).toBe(true)
+    reskin(nil)
+end
+
+@test("reskin: a text with a secret value is not measured")
+local function passSecret()
+    local f = CreateFrame("Frame", nil, host())
+    local s = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    s:SetText(mock.secret("A name"))
+    reskin(f)
+    expect(tokenOf(s)).toBe("ink")
+end
+
+@test("reskin: a category row: its name a header, a rule under it")
+local function categoryRow()
+    local f = CreateFrame("Frame", nil, host())
+    f:SetSize(200, 20)
+    local bar = f:CreateTexture()
+    bar:SetAtlas("common-button-list-collapseExpand")
+    local name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    name:SetText("Classic")
+    reskin(f)
+    expect(tokenOf(name)).toBe("gilt-text")
+    expect(skin(f).headRule).never.toBeNil()
+    expect(tokenOf(skin(f).headRule)).toBe("gilt-faint")
+    local rule = skin(f).headRule
+    reskin(f)
+    expect(skin(f).headRule).toBe(rule)
+end
+
+@test("reskin: the parts inside a frame, by kind; SuuUI's own frames left out")
+local function passChildren()
+    local f = CreateFrame("Frame", nil, host()) :: Frame & { CollapseButton: Button }
+    f:SetSize(300, 200)
+    local status = CreateFrame("StatusBar", nil, f)
+    status:SetStatusBarTexture(WHITE)
+    local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+    local noCheck = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate") :: CheckButton & { suuNoCheck: boolean }
+    noCheck.suuNoCheck = true
+    local eb = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
+    eb:SetAutoFocus(false)
+    local dd = CreateFrame("DropdownButton", nil, f, "WowStyle1DropdownTemplate")
+    local fill = CreateFrame("Frame", nil, f, "ColoredProgressBarTemplate")
+    local ownFill = CreateFrame("Frame", nil, f) :: Frame & { Fill: Texture }
+    ownFill.Fill = ownFill:CreateTexture()
+    ownFill.Fill:SetAtlas("common-stat-bar-blue")
+    local collapse = CreateFrame("Button", nil, f)
+    f.CollapseButton = collapse
+    collapse:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-Up")
+    local panel = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    local noButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate") :: Button & { suuNoButton: boolean }
+    noButton.suuNoButton = true
+    local scroll = CreateFrame("EventFrame", nil, f, "MinimalScrollBar")
+    local own = CreateFrame("Frame", nil, f) :: Frame & { suuOwn: boolean }
+    own.suuOwn = true
+    local ownText = own:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ownText:SetTextColor(1, 0.82, 0)
+    local arrowButton = CreateFrame("Button", nil, f) :: Button & { Arrow: Texture, Text: FontString }
+    arrowButton.Arrow = arrowButton:CreateTexture()
+    arrowButton.Text = arrowButton:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    reskin(f)
+    expect(skin(status).track).never.toBeNil()
+    expect(skin(cb).check).never.toBeNil()
+    expect(skin(noCheck).check).toBeNil()
+    expect(skin(eb).edit).toBe(true)
+    expect(skin(dd).dropdown).toBe(true)
+    expect(skin(arrowButton).dropdown).toBe(true)
+    expect(skin(fill).fillBar).toBe(true)
+    expect(skin(ownFill).fillBar).toBe(true)
+    expect(skin(collapse).collapse).never.toBeNil()
+    expect(collapse:GetParentKey()).toBe("CollapseButton")
+    expect(skin(panel).button).never.toBeNil()
+    expect(skin(noButton).button).toBeNil()
+    expect(skin(scroll).scrollBar).toBe(true)
+    expect(tokenOf(ownText)).toBeNil()
+    -- again: the buttons drawn again
+    panel:Disable()
+    reskin(f)
+    expect(panel:GetAlpha()).toBeCloseTo(T.opacity["opacity-disabled"], 2)
+end
+
+@test("reskin: seven levels deep at most")
+local function depth()
+    local f = CreateFrame("Frame", nil, host())
+    local cur = f
+    local texts: FontString[] = {}
+    for i = 1, 8 do
+        cur = CreateFrame("Frame", nil, cur)
+        local s = cur:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        s:SetTextColor(1, 0.82, 0)
+        texts[i] = s
+    end
+    reskin(f)
+    expect(tokenOf(texts[6])).toBe("ink")
+    expect(tokenOf(texts[7])).toBeNil()
+end
+
+@test("reskinScrollBox: Blizzard's list, its rows now and after each update")
+local function scrollBox()
+    local p = host()
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: ScrollBoxList
+    box:SetSize(200, 200)
+    box:SetPoint("CENTER")
+    local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
+    local view = linearView()
+    view:SetElementExtent(20)
+    view:SetElementInitializer("Button", function(row: ListRow, data: { name: string })
+        local label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label = label
+        label:SetAllPoints()
+        label:SetTextColor(1, 0.82, 0)
+        label:SetText(data.name)
+    end)
+    scrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
+    box:SetDataProvider(provider)
+    reskinScrollBox(box)
+    expect(skin(box).scrollBox).toBe(true)
+    local seen = 0
+    box:ForEachFrame(function(row)
+        seen = seen + 1
+        expect(tokenOf(row.label)).toBe("ink")
+    end)
+    expect(seen).toBe(2)
+    -- an update: the new rows too
+    provider:Insert({ name = "Gamma" })
+    mock.advanceFrames(2)
+    box:ForEachFrame(function(row)
+        expect(tokenOf(row.label)).toBe("ink")
+    end)
+    -- shown again: a frame later
+    box:Hide()
+    box:Show()
+    mock.advanceFrames(1)
+    reskinScrollBox(box)
+    reskinScrollBox(nil)
+end
+
+@test("reskinScrollBox: updates restyle once a frame, and nothing while the box is hidden")
+local function scrollBoxQuiet()
+    local p = host()
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: ScrollBoxList
+    box:SetSize(200, 200)
+    box:SetPoint("CENTER")
+    local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
+    local view = linearView()
+    view:SetElementExtent(20)
+    local inits = 0
+    view:SetElementInitializer("Button", function(row: ListRow, data: { name: string })
+        inits += 1
+        local label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label = label
+        label:SetAllPoints()
+        label:SetTextColor(1, 0.82, 0)
+        label:SetText(data.name)
+    end)
+    scrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
+    box:SetDataProvider(provider)
+    reskinScrollBox(box)
+    local passes = 0
+    box:ForEachFrame(function(row)
+        local label = row.label
+        mock.stub(label, "SetTextColor", function(...: any)
+            passes += 1
+        end)
+    end)
+    -- hidden: its updates restyle nothing
+    box:Hide()
+    provider:Insert({ name = "Gamma" })
+    mock.advanceFrames(2)
+    local hiddenPasses = passes
+    -- shown: restyled, once for several updates in one frame
+    box:Show()
+    box:Update()
+    box:Update()
+    mock.advanceFrames(2)
+    expect(passes > hiddenPasses).toBe(true)
+    box:ForEachFrame(function(row)
+        expect(row.label).never.toBeNil()
+    end)
+    expectNoErrors()
+end
+
+@test("reskinScrollBox: a box without ForEachFrame walks its target's children")
+local function scrollBoxPlain()
+    local box = CreateFrame("Frame", nil, host()) :: Frame & { ScrollTarget: Frame, Shadows: Frame }
+    box.ScrollTarget = CreateFrame("Frame", nil, box)
+    local row = CreateFrame("Frame", nil, box.ScrollTarget)
+    local bar = row:CreateTexture()
+    bar:SetAtlas("common-button-list-collapseExpand")
+    local s = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    s:SetText("Category")
+    box.Shadows = CreateFrame("Frame", nil, box)
+    reskinScrollBox(box)
+    expect(tokenOf(s)).toBe("gilt-text")
+    expect(box.Shadows:GetAlpha()).toBe(0)
+end
+
+@test("a pass over a frame with a ScrollBox reskins the box's rows")
+local function passScrollBox()
+    local f = CreateFrame("Frame", nil, host())
+    local box = CreateFrame("Frame", nil, f, "WowScrollBoxList") :: ScrollBoxList
+    box:Init(linearView())
+    reskin(f)
+    expect(skin(box).scrollBox).toBe(true)
+end
+
+@test("Blizzard's scrolling text: measured again a frame after the pass and each text")
+local function scrollingFont()
+    -- (the character window's side pane holds one, its font named)
+    local pane = CreateFrame("Frame", nil, host(), "CharacterFrameSidePaneTemplate") :: Frame
+        & { Description: ScrollingFont }
+    pane:SetSize(220, 200)
+    pane:SetPoint("CENTER")
+    local f = pane.Description
+    f:SetHeight(60)
+    f:SetText("A description long enough to wrap onto a few lines in the box.")
+    reskin(f)
+    mock.advanceFrames(2)
+    local container = f:GetFontStringContainer()
+    expect(container:GetHeight()).toBeCloseTo(f:GetFontString():GetStringHeight())
+    f:SetText("Shorter")
+    mock.advanceFrames(2)
+    expect(container:GetHeight()).toBeCloseTo(f:GetFontString():GetStringHeight())
+    -- a second pass: one hook
+    reskin(f)
+    expect(skin(f).scrollingFont).toBe(true)
+end
+
+--------------------------------------------------------------------------------
+-- Dialogs
+--------------------------------------------------------------------------------
+
+@test("reskinDialog: Blizzard's small dialog as a SuuUI panel; its close as the cross")
+local function dialogPanel()
+    local f = CreateFrame("Frame", "SuuUITestDialog", host(), "BasicFrameTemplate") :: Frame
+        & { TitleText: FontString, TitleBg: Texture, CloseButton: Button }
+    f:SetSize(300, 200)
+    f:SetPoint("CENTER")
+    f.TitleText:SetText("Guild Information")
+    local box = CreateFrame("Frame", nil, f) :: Frame & { NineSlice: Frame }
+    box:SetSize(260, 120)
+    box:SetPoint("CENTER")
+    box.NineSlice = CreateFrame("Frame", nil, box)
+    local edit = CreateFrame("EditBox", nil, CreateFrame("ScrollFrame", nil, box))
+    edit:SetAutoFocus(false)
+    local small = CreateFrame("Frame", nil, f)
+    small:SetSize(20, 20)
+    reskinDialog(f)
+    expect(skin(f).dialog).toBe(true)
+    expect(f.TitleBg:GetAlpha()).toBe(0)
+    expect(tokenOf(f.TitleText)).toBe("gilt-text")
+    expect(skin(f.TitleText).skip).toBe(true)
+    expect(f.CloseButton).toHaveSize(22, 22)
+    expect(f.CloseButton).toBeAnchoredTo(f, "TOPRIGHT", "TOPRIGHT")
+    expect(skin(box).box).toBe(true)
+    expect(box.NineSlice:GetAlpha()).toBe(0)
+    expect(skin(edit).edit).toBe(true)
+    expect(tokenOf(edit)).toBe("ink")
+    expect(skin(small).box).toBeNil()
+    mock.hover(f.CloseButton)
+    mock.hover(nil)
+    -- again: the pass only; the close still Blizzard's
+    reskinDialog(f)
+    mock.click(f.CloseButton)
+    expect(f).never.toBeShown()
+    reskinDialog(nil)
+end

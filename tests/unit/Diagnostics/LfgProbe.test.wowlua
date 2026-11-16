@@ -1,0 +1,77 @@
+-- Diagnostics/LfgProbe: "/suu probe lfg opens" records each opening of the
+-- Group Finder and how its search went. The emulated client refuses a
+-- search without the player's click or key press (as the game did on
+-- opening by key binding) and allows one from a key binding.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import field from "wowlua:table"
+import SuuUI from "/Core/API"
+import * as DB from "/Core/DB"
+import * as lfgProbe from "/Diagnostics/LfgProbe"
+import expectNoErrors from "../../helpers"
+
+type Opening = { [string]: unknown }
+
+local function openings(): Opening[]
+    return (field(DB.probe, "lfg", "opens", "openings") or {}) :: Opening[]
+end
+
+local function window(): Frame
+    return (assert(frames.find("LFGParentFrame")))
+end
+
+@test("opens: each opening, by whom it searched and whether it was refused; off puts the library's Refresh back")
+local function opens()
+    local original = SuuUI.LFG.Refresh
+    lfgProbe.command("opens")
+    expect(SuuUI.LFG.Refresh).never.toBe(original)
+    local refusals = #mock.refusals()
+    -- opened by code: the module's search, refused
+    ShowUIPanel(window())
+    expect(#mock.refusals()).toBe(refusals + 1)
+    mock.advanceTime(6)
+    HideUIPanel(window())
+    -- opened with the key: the module's search, allowed; results come
+    mock.pressBinding("TOGGLEGROUPFINDER")
+    expect(window()).toBeShown()
+    mock.advanceTime(6)
+    HideUIPanel(window())
+    -- again within the minute: the module doesn't search, the probe does
+    -- (opened by code: refused, quietly)
+    ShowUIPanel(window())
+    expect(#mock.refusals()).toBe(refusals + 2)
+    mock.advanceTime(6)
+    HideUIPanel(window())
+    local list = openings()
+    expect(#list).toBe(3)
+    expect({ list[1].by, list[1].refused, list[1].combat, list[1].ageChanged }).toEqual({
+        "module",
+        true,
+        false,
+        false,
+    })
+    expect({ list[2].by, list[2].refused, list[2].ageChanged, list[2].results }).toEqual({
+        "module",
+        false,
+        true,
+        true,
+    })
+    expect({ list[3].by, list[3].refused, list[3].ageChanged }).toEqual({ "probe", true, false })
+    expect(type(list[1].stack)).toBe("string")
+    -- the stack: the panel manager both times, the key binding the second
+    expect(field(list[1].openedBy, "panelManager")).toBe(true)
+    expect(field(list[1].openedBy, "binding")).toBe(false)
+    expect(field(list[2].openedBy, "binding")).toBe(true)
+    expect(field(list[2].openedBy, "toggle")).toBe(true)
+    expect(list[1].category).toBe(2)
+    lfgProbe.command("opens off")
+    expect(SuuUI.LFG.Refresh).toBe(original)
+    -- off: openings no longer recorded
+    ShowUIPanel(window())
+    mock.refusals()
+    HideUIPanel(window())
+    expect(#openings()).toBe(3)
+    expectNoErrors()
+end

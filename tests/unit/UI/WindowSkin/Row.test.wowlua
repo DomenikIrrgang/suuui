@@ -1,0 +1,313 @@
+-- UI/WindowSkin/Row: skinned windows in a row under an anchor, in the
+-- order they opened; the middle of the screen (centerWindow) above the
+-- cast bar; combat with protected windows; the queue; and the theme change
+-- that places every header and its tabs again.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import tokens as T from "/Core/Tokens"
+import * as anchors from "/Core/Anchors"
+import skinWindow, chromeOf from "/UI/WindowSkin/Chrome"
+import type WindowChrome from "/UI/WindowSkin/Chrome"
+import layout, centerWindow, queue, windowRow from "/UI/WindowSkin/Row"
+import expectNoErrors from "../../../helpers"
+import themeChanged from "../WindowsHelpers"
+import window, closeWindows, ButtonWindow from "./WindowSkinHelpers"
+
+local S = T.space
+
+@afterEach
+local function cleanup()
+    closeWindows()
+    mock.hover(nil)
+    mock.resetSpies()
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+@test("a theme change places every header and its tabs again")
+local function theme()
+    local f = window()
+    local chrome = skinWindow(f, {})
+    local place, lay = mock.spy(), mock.spy()
+    mock.stub(chrome, "PlaceHead", place)
+    mock.stub(chrome, "LayoutTabs", lay)
+    themeChanged()
+    expect(place).toHaveBeenCalledTimes(1)
+    expect(lay).toHaveBeenCalledTimes(1)
+end
+
+local anchor: Frame? = nil
+
+local function rowAnchor(): Frame
+    local a = anchor
+    if not a then
+        a = CreateFrame("Frame", nil, UIParent)
+        a:SetSize(200, 30)
+        anchor = a
+    end
+    a:ClearAllPoints()
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 50, -20)
+    a:Show()
+    anchors.publish("testRow", a)
+    return a
+end
+
+local function rowWindow(width: number?): (ButtonWindow, WindowChrome)
+    local f = window(width)
+    f:Hide()
+    local chrome = skinWindow(f, { under = "testRow" })
+    return f, chrome
+end
+
+@test("windows open in a row under the anchor, in the order they opened")
+local function row()
+    local a = rowAnchor()
+    local f1, c1 = rowWindow(300)
+    local f2, c2 = rowWindow(200)
+    expect(c1.under).toBe("testRow")
+    expect(windowRow.list).toContain(c1)
+    f2:Show()
+    f1:Show()
+    expect(assert(c1.openedAt) > assert(c2.openedAt)).toBe(true)
+    local left, bottom = a:GetLeft(), a:GetBottom()
+    local es = f2:GetEffectiveScale()
+    local _, _, _, x2, y2 = f2:GetPoint(1)
+    expect(x2).toBeCloseTo(left * a:GetEffectiveScale() / es)
+    expect(y2).toBeCloseTo((bottom - S["space-5"]) * a:GetEffectiveScale() / es - c2.rise)
+    local _, _, _, x1 = f1:GetPoint(1)
+    expect(x1).toBeCloseTo(x2 + 200 + S["space-5"])
+    -- one closes: the row again, a frame later
+    f2:Hide()
+    mock.advanceFrames(2)
+    local _, _, _, x1b = f1:GetPoint(1)
+    expect(x1b).toBeCloseTo(x2)
+end
+
+@test("Blizzard placing a row window: back in the row at once")
+local function rowSetPoint()
+    rowAnchor()
+    local f = rowWindow(300)
+    f:Show()
+    local _, _, _, x = f:GetPoint(1)
+    f:ClearAllPoints()
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    local point, _, _, x2 = f:GetPoint(1)
+    expect(point).toBe("TOPLEFT")
+    expect(x2).toBeCloseTo(x)
+end
+
+@test("a window shown when skinned joins the row at once")
+local function shownAtAdd()
+    rowAnchor()
+    local f = window(300)
+    local chrome = skinWindow(f, { under = "testRow" })
+    expect(chrome.openedAt).never.toBeNil()
+    mock.advanceFrames(2)
+    expect((f:GetPoint(1))).toBe("TOPLEFT")
+end
+
+@test("no anchor, or a hidden one: the windows stay where they are")
+local function noAnchor()
+    local f = window(300)
+    f:Hide()
+    skinWindow(f, { under = "testRowMissing" })
+    f:Show()
+    expect((f:GetPoint(1))).toBe("CENTER")
+    local a = rowAnchor()
+    local g = rowWindow(300)
+    a:Hide()
+    f:Hide()
+    g:ClearAllPoints()
+    g:SetPoint("CENTER")
+    g:Show()
+    expect((g:GetPoint(1))).toBe("CENTER")
+    a:Show()
+end
+
+@test("an anchor without a position: nothing")
+local function anchorUnplaced()
+    local a = CreateFrame("Frame", nil, UIParent)
+    anchors.publish("testRowLoose", a)
+    local f = window(300)
+    f:Hide()
+    skinWindow(f, { under = "testRowLoose" })
+    f:Show()
+    expect((f:GetPoint(1))).toBe("CENTER")
+    a:Hide()
+end
+
+@test("centerWindow: in the middle, back in the row; only skinned row windows")
+local function centering()
+    rowAnchor()
+    local f, chrome = rowWindow(300)
+    f:Show()
+    centerWindow(f, true)
+    expect(chrome.centered).toBe(true)
+    local point, rel, _, x, y = f:GetPoint(1)
+    expect(point).toBe("CENTER")
+    expect(rel).toBe(UIParent)
+    expect(x).toBeCloseTo(0)
+    expect(y).toBeCloseTo(-chrome.rise / 2)
+    centerWindow(f, true) -- unchanged: nothing
+    centerWindow(f, false)
+    expect((f:GetPoint(1))).toBe("TOPLEFT")
+    -- not skinned, or not in a row: nothing
+    centerWindow(nil, true)
+    local g = window()
+    centerWindow(g, true)
+    skinWindow(g, {})
+    centerWindow(g, true)
+    expect(assert(chromeOf(g)).centered).toBeNil()
+end
+
+@test("a window in the middle keeps above your cast bar, at most up to the screen's top; centred without one")
+local function aboveCastBar()
+    -- (asked: the professions window covered the cast bar)
+    local old = anchors.get("playerCastBar")
+    rowAnchor()
+    local f, chrome = rowWindow(300)
+    f:SetHeight(500)
+    local bar = CreateFrame("Frame", nil, UIParent)
+    bar:SetSize(240, 20)
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+    anchors.publish("playerCastBar", bar)
+    f:Show()
+    centerWindow(f, true)
+    local gap = T.space["space-5"]
+    expect(assert(f:GetBottom()) >= assert(bar:GetTop()) + gap - 0.5).toBe(true)
+    -- still in the middle across
+    local _, _, _, x = f:GetPoint(1)
+    expect(x).toBeCloseTo(0)
+    -- a bar low enough: the middle, as before
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -500)
+    layout()
+    local _, _, _, _, y = f:GetPoint(1)
+    expect(y).toBeCloseTo(-chrome.rise / 2)
+    -- a window too tall to clear it: up to the screen's top, no further
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -100)
+    f:SetHeight(UIParent:GetHeight() - 120)
+    layout()
+    expect(assert(f:GetTop()) + chrome.rise <= UIParent:GetHeight() - gap + 0.5).toBe(true)
+    -- no cast bar: the middle
+    anchors.publish("playerCastBar", nil)
+    layout()
+    local _, _, _, _, yNone = f:GetPoint(1)
+    expect(yNone).toBeCloseTo(-chrome.rise / 2)
+    centerWindow(f, false)
+    f:Hide()
+    bar:Hide()
+    anchors.publish("playerCastBar", old)
+end
+
+@test("a window centred over the cast bar (the enlarged map) stays in the exact middle")
+local function overCastBar()
+    -- (found in game: the enlarged map rose to the screen's top, over the
+    -- micro menu)
+    local old = anchors.get("playerCastBar")
+    rowAnchor()
+    local f, chrome = rowWindow(300)
+    f:SetHeight(UIParent:GetHeight() * 0.8)
+    local bar = CreateFrame("Frame", nil, UIParent)
+    bar:SetSize(240, 20)
+    bar:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+    anchors.publish("playerCastBar", bar)
+    f:Show()
+    centerWindow(f, true, { overCastBar = true })
+    local _, _, _, x, y = f:GetPoint(1)
+    expect(x).toBeCloseTo(0)
+    expect(y).toBeCloseTo(-chrome.rise / 2)
+    -- without it, the same window rises
+    centerWindow(f, true)
+    local _, _, _, _, risen = f:GetPoint(1)
+    expect(risen > -chrome.rise / 2 + 1).toBe(true)
+    centerWindow(f, false)
+    f:Hide()
+    bar:Hide()
+    anchors.publish("playerCastBar", old)
+end
+
+@test("the middle holds one window: opening one there closes the other")
+local function oneInTheMiddle()
+    rowAnchor()
+    local f1, c1 = rowWindow(300)
+    local f2 = rowWindow(200)
+    centerWindow(f1, true)
+    centerWindow(f2, true)
+    f1:Show()
+    f2:Show()
+    expect(f1).never.toBeShown()
+    expect(c1.centered).toBe(true)
+    centerWindow(f1, false)
+    centerWindow(f2, false)
+end
+
+@test("two in the middle (a protected one isn't closed): side by side, centred")
+local function twoInTheMiddle()
+    rowAnchor()
+    local f1, c1 = rowWindow(300)
+    local f2, c2 = rowWindow(200)
+    mock.protect(f1, true)
+    c1.protected = true
+    centerWindow(f1, true)
+    centerWindow(f2, true)
+    f1:Show()
+    f2:Show()
+    expect(f1).toBeShown()
+    local _, _, _, x1 = f1:GetPoint(1)
+    local _, _, _, x2 = f2:GetPoint(1)
+    local gap = S["space-5"] * UIParent:GetEffectiveScale() / f1:GetEffectiveScale()
+    expect(x1).toBeCloseTo(-(300 + gap + 200) / 2 + 150)
+    expect(x2).toBeCloseTo(x1 + 150 + gap + 100)
+    -- in combat the protected one waits
+    mock.player:enterCombat()
+    layout()
+    expect(c1.placeAfterCombat).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    centerWindow(f1, false)
+    centerWindow(f2, false)
+    mock.protect(f1, false)
+    c1.protected = false
+    expect(c2.centered).toBe(false)
+end
+
+@test("a protected row window in combat keeps its place; the next goes after it")
+local function rowCombat()
+    rowAnchor()
+    local f1, c1 = rowWindow(300)
+    local f2 = rowWindow(200)
+    c1.protected = true
+    f1:Show()
+    f2:Show()
+    local _, _, _, x2 = f2:GetPoint(1)
+    mock.player:enterCombat()
+    f1:ClearAllPoints()
+    f1:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 500, -100)
+    expect(c1.placeAfterCombat).toBe(true)
+    local _, _, _, x2b = f2:GetPoint(1)
+    expect(x2b > x2).toBe(true)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    c1.protected = false
+end
+
+@test("queue lays the row out once, a frame later; layout while placing does nothing")
+local function queued()
+    rowAnchor()
+    local f = rowWindow(300)
+    f:Show()
+    queue()
+    queue()
+    expect(windowRow.queued).toBe(true)
+    mock.advanceFrames(2)
+    expect(windowRow.queued).toBe(false)
+    windowRow.placing = true
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    layout()
+    expect((f:GetPoint(1))).toBe("CENTER")
+    windowRow.placing = false
+    layout()
+    expect((f:GetPoint(1))).toBe("TOPLEFT")
+end

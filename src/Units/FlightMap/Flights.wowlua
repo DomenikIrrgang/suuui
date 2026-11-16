@@ -1,0 +1,262 @@
+-- Units/FlightMap/Flights.wowlua
+-- A flight of the flight map (Units/FlightMap): taken (TakeTaxiNode ran),
+-- in the air, landed, and kept over a reload; its time, measured or
+-- estimated from its length at the character's speed, and what a landing
+-- teaches (the route's time for the account, the character's speed); the
+-- settings' summary of it and Forget. The entry's header tells how flights
+-- are timed. The module's methods (Speed, FlightTime, Learn, Taking,
+-- FlightStarted, FlightEnded, ResumeFlight, TimesSummary, ForgetTimes)
+-- forward here, each function taking the module.
+
+import SuuUI from "/Core/API"
+import short, flightTime from "/Units/FlightMap/Route"
+import type TaxiNode, RouteRecord from "/Units/FlightMap/Route"
+import continentOf, bestMap, positions, myPlace, pathYards from "/Units/FlightMap/Taxi"
+import type FlightMapModule from "/Units/FlightMap"
+
+-- A flight's route for the flight bar (M:FlightRoute).
+-- (placed on the continent's map; else only each master's share, at)
+export type Route = {
+    at: { [number]: number },
+    map?: number,
+    w?: number,
+    h?: number,
+    points?: number[][],
+    run?: number[],
+    total?: number,
+}
+export type PlacedRoute = {
+    at: { [number]: number },
+    map: number,
+    w: number,
+    h: number,
+    points: number[][],
+    run: number[],
+    total: number,
+}
+-- A flight in the air: its route (nodeIDs), when it started, its expected
+-- time and whether that was measured, its stops' names, the stop Land at
+-- set it down at, whether it began before a reload; worked out on the way:
+-- its route for the bar, the next stop ahead.
+export type Flight = {
+    path: number[],
+    started: number,
+    expected?: number,
+    measured?: boolean,
+    names: { [number]: string },
+    early?: number,
+    reloaded?: boolean,
+    route?: Route | false,
+    namesRead?: boolean,
+    ahead?: number,
+}
+-- A flight taken and not yet in the air (TakeTaxiNode ran).
+export type Pending = { path: number[], at: number, names: { [number]: string } }
+-- What a character keeps: its speed, how many flights taught it, its flight
+-- over a reload.
+export type Kept = { path: number[], wall?: number, names?: { [number]: string }, early?: number }
+export type FlightChar = { speed?: number, flights?: number, flight?: Kept }
+-- What the account keeps: the routes timed.
+export type FlightAccount = { routes?: { [string]: RouteRecord } }
+
+local SPEED = 30.3 -- yards a second, before a character has flown (see the header)
+local LEARN = 0.25 -- how far one flight moves the speed toward what it measured
+local TRUST = 0.2 -- a flight further than this off its expected time teaches nothing
+local BOOST = 0.03 -- speeds further apart than this: another character's time is scaled
+local KEEP = 5 -- a route's time: the mean of its last flights, up to this many
+local MAX_FLIGHT = 1800 -- s: a flight kept over a reload longer than this is stale
+
+--------------------------------------------------------------------------------
+-- Flight times
+--------------------------------------------------------------------------------
+
+-- the routes timed, for the account: [nodeID>nodeID>…] = { t (s), n, v (the
+-- flyer's speed) }
+local function timed(): { [string]: RouteRecord }
+    local data = SuuUI.AccountData("flightmap") :: unknown :: FlightAccount
+    local routes = data.routes or {}
+    data.routes = routes
+    return routes
+end
+
+export function speedOf(self: FlightMapModule): number
+    return self:Char().speed or SPEED
+end
+
+-- A flight's time in seconds and whether it was measured: one flown on
+-- this route before (scaled to your speed when its flyer's differed by
+-- more than BOOST), else its length at your speed; nil when neither is
+-- known.
+export function flightTimeOf(self: FlightMapModule, path: number[]?): (number?, boolean?)
+    if not path then
+        return nil, nil
+    end
+    local r = timed()[table.concat(path, ">")]
+    return flightTime(r, not (r and r.t) and pathYards(path) or nil, self:Speed(), BOOST)
+end
+
+-- A flight landed after `seconds`: its route's time, and the character's
+-- speed a step toward what it flew.
+export function learn(self: FlightMapModule, flight: { path: number[], expected?: number, reloaded?: boolean }, seconds: number)
+    local expected = flight.expected
+    if flight.reloaded or seconds < 5 then
+        return
+    end
+    if expected and math.abs(seconds / expected - 1) > TRUST then
+        return
+    end
+    local data = self:Char()
+    local yards = pathYards(flight.path)
+    if yards then
+        local speed = self:Speed()
+        data.speed = speed + LEARN * (yards / seconds - speed)
+        data.flights = (data.flights or 0) + 1
+    end
+    local key = table.concat(flight.path, ">")
+    local r = timed()[key] or {}
+    local n = math.min((r.n or 0) + 1, KEEP)
+    local t = r.t
+    r.n = n
+    r.t = t and (t + (seconds - t) / n) or seconds
+    r.v = self:Speed()
+    timed()[key] = r
+end
+
+--------------------------------------------------------------------------------
+-- A flight: taken, in the air, landed
+--------------------------------------------------------------------------------
+
+-- TakeTaxiNode ran (SuuUI's Fly or the game's own map): the route it asked for.
+export function taking(self: FlightMapModule, slot: number)
+    local s = self.last or self:ReadSession()
+    if not s then
+        return
+    end
+    local node: TaxiNode? = nil
+    for _, n in ipairs(s.nodes) do
+        if n.slot == slot then
+            node = n
+        end
+    end
+    local path = node and node.path
+    if not path then
+        return
+    end
+    -- (the stops' names for the flight bar: in the air there's no session)
+    local names: { [number]: string } = {}
+    for _, id in ipairs(path) do
+        local n = s.byID[id]
+        if n then
+            names[id] = short(n.name)
+        end
+    end
+    self.pending = { path = path, at = GetTime(), names = names }
+end
+
+export function flightStarted(self: FlightMapModule, at: number)
+    local p = self.pending
+    if not (p and GetTime() - p.at < 15 and UnitOnTaxi("player")) then
+        return
+    end
+    self.pending = nil
+    local expected, measured = self:FlightTime(p.path)
+    self.flight = { path = p.path, started = at, expected = expected, measured = measured, names = p.names }
+    -- kept over a reload, to show (not to time: the start isn't exact then)
+    self:Char().flight = { path = p.path, wall = time() - (GetTime() - at), names = p.names }
+    self:QueueLayout()
+    self:UpdateTimer()
+end
+
+-- Landed: at the destination, its time is learned; set down by Land at at
+-- the stop it asked for, the time of the route that far (the game flies it
+-- as that route: probed 2026-10-19, Ratchet to Crossroads of a longer
+-- flight landed in the hop's time); landed early elsewhere, nothing.
+export function flightEnded(self: FlightMapModule, at: number)
+    local f = self.flight
+    if not f then
+        return
+    end
+    self.flight = nil
+    self:Char().flight = nil
+    local seconds = at - f.started
+    local continent = continentOf(bestMap())
+    local spots = continent and positions(continent)
+    local x, y = myPlace(continent)
+    -- (where the game doesn't say, taken as there)
+    local function landedAt(id: number): boolean
+        local p = spots and spots[id]
+        if not (p and x and y) then
+            return true
+        end
+        return math.sqrt((p[1] - x) ^ 2 + (p[2] - y) ^ 2) < 0.03
+    end
+    local early = f.early
+    if early and landedAt(f.path[early]) then
+        local path: number[] = {}
+        for i = 1, early do
+            path[i] = f.path[i]
+        end
+        self:Learn({ path = path, expected = self:FlightTime(path), reloaded = f.reloaded }, seconds)
+    elseif landedAt(f.path[#f.path]) then
+        self:Learn(f, seconds)
+    end
+    self:QueueLayout()
+    self:UpdateTimer()
+end
+
+-- After a reload in the air: the flight kept, shown but not timed.
+export function resumeFlight(self: FlightMapModule)
+    local data = self:Char()
+    local kept = data.flight
+    local wall = kept and kept.wall
+    if not (kept and wall) then
+        return
+    end
+    local ago = time() - wall
+    if not UnitOnTaxi("player") or ago > MAX_FLIGHT or ago < 0 then
+        data.flight = nil
+        return
+    end
+    local expected, measured = self:FlightTime(kept.path)
+    self.flight = {
+        path = kept.path,
+        started = GetTime() - ago,
+        expected = expected,
+        measured = measured,
+        names = kept.names or {},
+        early = kept.early,
+        reloaded = true,
+    }
+end
+
+--------------------------------------------------------------------------------
+-- The settings' summary and Forget
+--------------------------------------------------------------------------------
+
+export function timesSummary(self: FlightMapModule): string
+    local n = 0
+    for _ in pairs(timed()) do
+        n = n + 1
+    end
+    local flights = self:Char().flights or 0
+    local speed = ("%.1f yards a second"):format(self:Speed())
+    local learned = flights > 0 and (" (from " .. flights .. (flights == 1 and " flight)" or " flights)")) or
+        " (not flown yet)"
+    return ("Each flight is timed; a route you've flown shows its time, others an estimate from their length at this character's speed: %s%s. Routes timed for the account: %d."):format(
+        speed,
+        learned,
+        n
+    )
+end
+
+export function forgetTimes(self: FlightMapModule)
+    local account = SuuUI.AccountData("flightmap") :: unknown :: FlightAccount
+    account.routes = {}
+    local data = self:Char()
+    data.speed, data.flights = nil, nil
+    if self.session then
+        self:UpdateRows()
+        self:UpdateBar()
+    end
+    self:QueueLayout()
+end

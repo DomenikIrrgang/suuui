@@ -1,0 +1,50 @@
+-- Diagnostics/Probe: /suu probe's report window, read-only: typing puts the
+-- report back, also without the user-input flag (Forever never sets it).
+-- (The topics with a file of their own have their own tests.)
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal show, hide from "/Diagnostics/Probe"
+import * as frames from "wowlua:frames"
+import expectNoErrors from "../../helpers"
+
+-- The window's edit box (the scroll frame's child; the window is made on
+-- the first report).
+local function reportEdit(): EditBox
+    local f = assert(frames.find("SuuUIProbeFrame"))
+    for _, child in ipairs({ f:GetChildren() }) do
+        if child:IsObjectType("ScrollFrame") then
+            return (child :: ScrollFrame):GetScrollChild() :: EditBox
+        end
+    end
+    error("no report edit box")
+end
+
+@afterEach
+local function cleanup()
+    hide()
+    expectNoErrors()
+end
+
+@test("typing in the report puts it back; the report's own text, set from code, stays")
+local function readOnly()
+    show("Found 3 of 4.")
+    local e = reportEdit()
+    -- the code's own SetText: its OnTextChanged comes a frame later
+    mock.advanceFrames(1)
+    mock.script(e, "OnTextChanged", false)
+    expect(e:GetText()).toBe("Found 3 of 4.")
+    -- typed as on Forever: the change arrives with userInput false
+    e:SetText("Found 3 of 4.x")
+    mock.script(e, "OnTextChanged", false)
+    expect(e:GetText()).toBe("Found 3 of 4.")
+    -- typed through the keyboard
+    e:SetFocus()
+    mock.typeText(e, "abc")
+    mock.advanceFrames(2)
+    expect(e:GetText()).toBe("Found 3 of 4.")
+    -- a new report: shown, not put back to the old one
+    show("Found 4 of 4.")
+    mock.advanceFrames(2)
+    expect(e:GetText()).toBe("Found 4 of 4.")
+end

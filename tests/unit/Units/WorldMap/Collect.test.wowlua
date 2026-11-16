@@ -1,0 +1,328 @@
+-- Units/WorldMap/Collect: what's on a map: quests to pick up, quests from
+-- items, entrances, services and trainers, rares and treasures, flight
+-- masters (and the ones this character found), campfires, marks,
+-- convergences; each quest judged once; a group tag the game tells late;
+-- hidden quests' pins on no map.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type QuestStarts from "/Data/QuestStarts"
+import internal M from "/Units/WorldMap"
+import internal M as marks from "/Units/Marks"
+import internal M as conv from "/Units/Convergences"
+import internal M as campsite from "/Units/Campsite"
+import type Item from "/Units/WorldMap/Arrange"
+import forgetCompleted, completedSet from "/Units/WorldMap/Quests"
+import fireLeft, judge, forgetQuests from "/Units/WorldMap/Collect"
+import expectNoErrors from "../../../helpers"
+import * as world from "./WorldMapHelpers"
+import ELWYNN, flags, starts, all, collect, line, text, pin, openMap, groupOf from "./WorldMapHelpers"
+
+@beforeEach
+local function data()
+    world.setup()
+end
+
+@afterEach
+local function cleanup()
+    world.cleanup()
+end
+
+@test("each quest is judged once until a quest event; the turned-in list read once, a turn-in added to it")
+local function judgedOnce()
+    forgetCompleted()
+    local asked = 0
+    mock.fake("C_QuestLog.IsOnQuest", function(_: number): boolean
+        asked = asked + 1
+        return false
+    end)
+    local reads = 0
+    mock.fake("C_QuestLog.GetAllCompletedQuestIDs", function(): number[]
+        reads = reads + 1
+        return {}
+    end)
+    collect()
+    local first = asked
+    expect(first > 0).toBe(true)
+    expect(reads).toBe(1)
+    -- the map drawn again (a pan, a zoom, three times as it opens): nothing read
+    collect()
+    collect()
+    expect(asked).toBe(first)
+    expect(reads).toBe(1)
+    -- a quest accepted: judged again
+    mock.fireEvent("QUEST_LOG_UPDATE")
+    collect()
+    expect(asked).toBe(2 * first)
+    -- (the turned-in list isn't read again: only a turn-in changes it)
+    expect(reads).toBe(1)
+    mock.fireEvent("QUEST_TURNED_IN", 4242, 0, 0)
+    expect(completedSet()[4242]).toBe(true)
+    expect(reads).toBe(1)
+    expectNoErrors()
+end
+
+@test("quests to pick up: a pin per giver, the best quest's colour, the others listed, a group's bar")
+local function questGivers()
+    local pins = collect()
+    local dughan = pin(pins["Wolves Across the Border"])
+    expect(dughan.key).toBe("available")
+    expect(dughan.x).toBe(0.5)
+    expect(dughan.detail).toBe("Level 2 · Marshal Dughan")
+    expect(dughan.difficulty).toBe("difficult")
+    expect(dughan.quests).toEqual({ 9001, 9005 })
+    -- his walk and the other quest
+    expect(dughan.route ~= nil).toBe(true)
+    expect(text(dughan, 1):find("Walks a route", 1, true) ~= nil).toBe(true)
+    expect(line(dughan, 2).quest).toBe(9005)
+    -- (one of them a dungeon's: the bar under the pin)
+    expect(dughan.pin.bar).toBe("quest-difficult")
+    expect(dughan.pin.arcs).toEqual({ "quest-difficult", "quest-difficult" })
+    local farmer = pin(pins["Boar Hides"])
+    expect(farmer.key).toBe("repeatable")
+    expect(farmer.detail).toBe("Repeatable · Level 1 · Farmer Saldean")
+    expect(farmer.pin.color).toBe("mana")
+    -- far above you: not offered
+    expect(pins["The Fallen Hero"]).toBeNil()
+end
+
+@test("quests from an item: where it drops, found or dropped")
+local function itemQuests()
+    local list = M:Collect(ELWYNN)
+    local drops: Item[] = {}
+    for _, it in ipairs(list) do
+        if it.key == "itemQuest" then
+            drops[#drops + 1] = it
+        end
+    end
+    expect(#drops).toBe(2)
+    expect(text(drops[1], 1)).toBe("Starts from A Torn Scroll")
+    expect(text(drops[1], 2):find("Dropped by Kobold Worker", 1, true) ~= nil).toBe(true)
+    expect(text(drops[2], 2):find("Found in Old Crate", 1, true) ~= nil).toBe(true)
+    expect(drops[1].listDetail).toBe("Level 1 · A Torn Scroll · Kobold Worker")
+end
+
+@test("entrances: yours and everyone's, the levels, an approximate door")
+local function entrances()
+    local pins = collect()
+    local mines = pin(pins["The Deadmines"])
+    expect(mines.key).toBe("entrance")
+    expect(mines.fixed).toBe(true)
+    expect((mines.detail or ""):find("^Dungeon") ~= nil).toBe(true)
+    -- the Horde's: not for you
+    expect(pins["Ragefire Chasm"]).toBeNil()
+    local wsg = pin(pins["Warsong Gulch"])
+    expect(wsg.key).toBe("battleground")
+    expect(text(wsg, #(wsg.more or {})):find("Approximate", 1, true) ~= nil).toBe(true)
+end
+
+@test("services by the filters: one pin per NPC for the first service shown; your class's trainer only")
+local function services()
+    local pins = collect()
+    expect(pin(pins["Innkeeper Farley"]).kindName).toBe("Innkeeper")
+    expect(pins["Smith Argus"]).toBeNil()
+    expect(pin(pins["Lyria Du Lac"]).kindName).toBe("Class trainer")
+    expect(pin(pins["Lyria Du Lac"]).pin.color).toBe("class-warrior")
+    -- another class's trainer never, not even as an innkeeper
+    expect(pins["Khelden Bremen"]).toBeNil()
+    expect(pins["Innkeeper Grosk"]).toBeNil()
+    expect(pin(pins["Banker Marion"]).kindName).toBe("Banker")
+    expect(pin(pins["Mailbox"]).key).toBe("mail")
+    -- the holiday's vendor only while it's on
+    expect(pins["Winter Vendor"]).toBeNil()
+end
+
+@test("with every filter on: repair, the trainers, the weapon master's weapons, rares and treasures")
+local function everything()
+    M:OnFilters(all())
+    local pins = collect()
+    expect(pin(pins["Smith Argus"]).kindName).toBe("Repair")
+    local woo = pin(pins["Woo Ping"])
+    expect(woo.kindName).toBe("Weapon master")
+    expect((woo.teaches or ""):find("Two-Handed Swords", 1, true) ~= nil).toBe(true)
+    expect(text(woo, 1):find("^Teaches ") ~= nil).toBe(true)
+    expect(pin(pins["Herbalist Pomeroy"]).kindName).toBe("Herbalism trainer")
+    expect(pin(pins["Wandering Peddler"]).route ~= nil).toBe(true)
+    local hogger = pin(pins["Hogger"])
+    expect(hogger.key).toBe("rareElite")
+    expect(hogger.detail).toBe("Rare elite · level 11")
+    expect(text(hogger, 1):find("one of 2 spots", 1, true) ~= nil).toBe(true)
+    local fang = pin(pins["Mother Fang"])
+    expect(fang.detail).toBe("Rare · level 10-12")
+    expect(fang.route ~= nil).toBe(true)
+    expect(pin(pins["Mossy Chest"]).key).toBe("treasure")
+end
+
+@test("flight masters: found by this character's record, not checked on a continent before")
+local function flightMasters()
+    local list = M:Collect(1415)
+    local masters: Item[] = {}
+    for _, it in ipairs(list) do
+        if it.pin.glyph == "wing" then
+            masters[#masters + 1] = it
+        end
+    end
+    expect(#masters > 0).toBe(true)
+    expect(masters[1].detail).toBe("Flight master · not checked yet")
+    -- this character's record: one found, the rest not
+    local id: number = 0
+    for _, n in ipairs(C_TaxiMap.GetTaxiNodesForMap(1415)) do
+        if n.name == masters[1].name then
+            id = n.nodeID
+        end
+    end
+    M:Char().taxi = { known = { [id] = true }, checked = { [1415] = true } }
+    list = M:Collect(1415)
+    local found, notFound = 0, 0
+    for _, it in ipairs(list) do
+        if it.detail == "Flight master" then
+            found = found + 1
+        end
+        if it.detail == "Flight master · not found yet" then
+            notFound = notFound + 1
+        end
+    end
+    expect(found).toBe(1)
+    expect(notFound > 0).toBe(true)
+end
+
+@test("campfires you found, marks, and a Skyborne's convergences")
+local function others()
+    campsite:CharData().fires = {
+        { map = ELWYNN, x = 0.3, y = 0.6, seen = time() },
+        { map = 1, x = 0.1, y = 0.1, seen = time() },
+    }
+    local mine = marks:Add(ELWYNN, 0.2, 0.8, { name = "Herbs" })
+    local shared = marks:Add(ELWYNN, 0.25, 0.8, { name = "", from = "Brannoc" })
+    mock.stub(conv, "Shown", function(): boolean
+        return true
+    end)
+    conv:Add({ map = ELWYNN, x = 0.9, y = 0.1 })
+    local pins = collect()
+    expect(pin(pins["Campfire"]).key).toBe("campfire")
+    expect(pin(pins["Herbs"]).mark).toBe(mine.id)
+    expect(text(pins["Mark"], 1):find("Shared by Brannoc", 1, true) ~= nil).toBe(true)
+    local c = pin(pins["Convergence of Elements"])
+    expect(c.key).toBe("convergence")
+    local tip = c.tip
+    assert(tip, "no tooltip")
+    expect(type(tip())).toBe("table")
+    marks:Remove(mine.id)
+    marks:Remove(shared.id)
+    -- found by you, or by someone in your group or guild
+    expect(pin(pins["Campfire"]).detail).toBe("One you found")
+    campsite:CharData().fires = { { map = ELWYNN, x = 0.3, y = 0.6, seen = time() - 150, by = "Tam" } }
+    local fire = pin(collect()["Campfire"])
+    expect(fire.detail).toBe("Found by Tam")
+    -- its tooltip: how long it burns (10 minutes from the last sighting)
+    local tip = assert(fire.tip)()
+    expect(tip.subtitle).toBe("Found by Tam")
+    expect(assert(tip.lines)[1]).toEqual({ "Goes out in", "7:30" })
+    campsite:CharData().fires = nil
+    local spots = conv:Spots()
+    table.remove(spots)
+end
+
+@test("the flight masters this character found, noted at a flight master's map")
+local function recordTaxi()
+    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): unknown
+        return {
+            { nodeID = 2, name = "Stormwind, Elwynn", state = 0 },
+            { nodeID = 4, name = "Sentinel Hill, Westfall", state = 1 },
+            { nodeID = 5, name = "Lakeshire, Redridge", state = 2 },
+            { nodeID = 99, name = "zzOLDSomewhere", state = 1 },
+        }
+    end)
+    openMap()
+    M:RecordTaxiNodes()
+    local taxi = M:Char().taxi
+    assert(taxi, "nothing noted")
+    expect(taxi.known).toEqual({ [2] = true, [4] = true })
+    expect(next(taxi.checked) ~= nil).toBe(true)
+    -- none of them: nothing noted
+    M:Char().taxi = nil
+    mock.fake("C_TaxiMap.GetAllTaxiNodes", function(_: number?): unknown
+        return {}
+    end)
+    M:RecordTaxiNodes()
+    expect(M:Char().taxi).toBeNil()
+end
+
+@test("a quest's group tag the game tells late: the guess first, the map again when it differs")
+local function lateTag()
+    flags.patrol = true
+    local told: unknown = nil
+    mock.fake("C_QuestLog.GetQuestTagInfo", function(id: number): unknown
+        if id == 9007 then
+            return told
+        end
+        -- (one the game knows at once: an elite quest)
+        if id == 9008 then
+            return { tagID = 1 }
+        end
+        return nil
+    end)
+    openMap()
+    expect(groupOf("Elite Patrol").items[1].pin.bar).toBe("quest-difficult")
+    told = { tagID = 0 }
+    mock.advanceTime(2.1)
+    mock.advanceFrames(2)
+    expect(groupOf("Elite Patrol").items[1].pin.bar).toBeNil()
+    -- a quest whose tag the game knows at once: its bar at once
+    flags.crowd = true
+    M:Refresh()
+    for _, it in ipairs(groupOf("The Lost Necklace").items) do
+        if it.name == "The Lost Necklace" then
+            expect(it.pin.bar).toBe("quest-difficult")
+        end
+    end
+    flags.crowd = false
+    flags.patrol = false
+end
+
+@test("a hidden quest: no pin on any map (zone, continent, an item's places); a giver's other quest keeps his pin")
+local function hiddenPins()
+    -- (the Eastern Kingdoms list Dughan too, as a continent's view does)
+    local data = starts()
+    data.maps[1415] = { { 40, 70, 101, 9001, 9005 } }
+    mock.stub(SuuUI, "QuestStarts", function(): QuestStarts
+        return data
+    end)
+    M:OnFilters(all())
+    M:HideQuests({ 9001, 9003 })
+    local pins = collect()
+    expect(pins["Wolves Across the Border"]).toBeNil()
+    -- Dughan's other quest: his pin, with it alone
+    local kobold = pin(pins["The Kobold Lord"])
+    expect(kobold.quests).toEqual({ 9005 })
+    -- the item's quest: none of its places
+    for _, it in ipairs(M:Collect(ELWYNN)) do
+        expect(it.key ~= "itemQuest").toBe(true)
+    end
+    expect(pin(collect(1415)["The Kobold Lord"]).quests).toEqual({ 9005 })
+    M:HideQuests({ 9005 })
+    expect(collect()["The Kobold Lord"]).toBeNil()
+    expect(collect(1415)["The Kobold Lord"]).toBeNil()
+    -- shown again: every pin back
+    M:ShowAllQuests()
+    expect(pin(collect()["Wolves Across the Border"]).quests).toEqual({ 9001, 9005 })
+    expect(collect(1415)["Wolves Across the Border"] ~= nil).toBe(true)
+    expect(collect()["A Torn Scroll"] ~= nil).toBe(true)
+end
+
+@test("a campfire's time left; a quest judged once until the judgements are forgotten")
+local function judgedAndFire()
+    expect(fireLeft(450)).toBe("7:30")
+    expect(fireLeft(0)).toBe("going out")
+    local row = assert(starts().quests[9001])
+    local me = M:Player()
+    local first = judge(row, 9001, me, {})
+    expect(first.name).toBe("Wolves Across the Border")
+    expect(judge(row, 9001, me, {})).toBe(first)
+    forgetQuests()
+    local again = judge(row, 9001, me, {})
+    expect(again ~= first).toBe(true)
+    expect(again).toEqual(first)
+    expectNoErrors()
+end

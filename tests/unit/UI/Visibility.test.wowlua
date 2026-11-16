@@ -1,14 +1,14 @@
 -- UI/Visibility: the four modes (always, combat through a state driver,
 -- mouseover with its hover poll and `also` frames, hidden), a change in
 -- combat waiting for its end, and edit or keybind mode showing every
--- managed frame.
+-- managed frame. An owner's frames let go when it is released.
 
 import test, expect, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as events from "/Core/Events"
 import * as editMode from "/EditMode/EditMode"
 import * as keybindMode from "/UI/KeybindMode"
-import setVisibility, VISIBILITY_OPTIONS from "/UI/Visibility"
+import setVisibility, release, count, VISIBILITY_OPTIONS from "/UI/Visibility"
 import expectNoErrors, newParent from "../../helpers"
 
 local parent: Frame? = nil
@@ -220,4 +220,68 @@ local function keybindModeShows()
     binding = false
     events.emit("SUUUI_KEYBINDMODE_CHANGED", binding)
     expect(m:GetAlpha()).toBe(0)
+end
+
+@test("release: the owner's frames are let go; edit mode and combat no longer show them; the same mode again applies")
+local function released()
+    local owner = { name = "Visibility Test Owner" }
+    local c, m, other = frame(), frame(), frame()
+    setVisibility(c, "combat", nil, owner)
+    setVisibility(m, "mouseover", nil, owner)
+    setVisibility(other, "combat")
+    mock.advanceFrames(2)
+    expect(count(owner)).toBe(2)
+    release(owner)
+    expect(count(owner)).toBe(0)
+    -- what the module's OnDisable does
+    c:Hide()
+    m:Hide()
+    editing = true
+    events.emit("SUUUI_EDITMODE_CHANGED", editing)
+    mock.advanceFrames(2)
+    expect(c).never.toBeShown()
+    expect(m).never.toBeShown()
+    expect(other).toBeShown()
+    editing = false
+    events.emit("SUUUI_EDITMODE_CHANGED", editing)
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(c).never.toBeShown()
+    expect(other).toBeShown()
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    -- no hover fading meanwhile: alpha left at full
+    expect(m:GetAlpha()).toBe(1)
+    -- on again: the same mode applies
+    setVisibility(c, "combat", nil, owner)
+    setVisibility(m, "mouseover", nil, owner)
+    mock.advanceFrames(2)
+    expect(m).toBeShown()
+    expect(m:GetAlpha()).toBe(0)
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(c).toBeShown()
+    mock.player:leaveCombat()
+    release(owner)
+end
+
+@test("release in combat: the state driver goes when the fight ends")
+local function releasedInCombat()
+    local owner = { name = "Visibility Test Fight" }
+    local c = frame()
+    setVisibility(c, "combat", nil, owner)
+    mock.advanceFrames(2)
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(c).toBeShown()
+    release(owner)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    -- left as it was (the module hides it out of combat), and the next
+    -- fight no longer shows it
+    expect(c).toBeShown()
+    c:Hide()
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(c).never.toBeShown()
 end

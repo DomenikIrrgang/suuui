@@ -1,0 +1,384 @@
+-- Units/WorldMap/QuestLook.wowlua
+-- The game's own pins on the world map in SuuUI's look (Units/WorldMap):
+-- its quest markers, on the map and in the quest log, restyled in place;
+-- the cities' little houses hidden; your arrow. Offers QuestLook, and the
+-- module's Unstyle, UnstyleQuest, StyleQuestPin, FitQuestPin,
+-- StyleQuestPins, StyleLogQuestPins, HookQuestProviders, HideTownPins and
+-- StyleArrow as functions taking the module.
+
+import SuuUI from "/Core/API"
+import type MapPinData, MapPin from "/Core/API"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import CLOSEST_GROW from "/Units/WorldMap/Arrange"
+import isGroupQuest from "/Units/WorldMap/Collect"
+import type WorldMapModule from "/Units/WorldMap"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local asNumber, flag, field = secret.asNumber, secret.flag, tbl.field
+
+--------------------------------------------------------------------------------
+-- The game's quest markers in SuuUI's look (design: MapPin types objective
+-- / turn-in / waypoint, states tracked and highlighted), restyled in
+-- place: the game's pins keep
+-- their clicks, tooltips and super-tracking; a SuuUI pin without the mouse
+-- sits in each, the game's art hidden, kept up to date after each of the
+-- game's style, selection and highlight changes, and sized like SuuUI's pins
+-- at every zoom. The objective areas stay the game's: its area drawing
+-- takes no addon texture (SuuUI's hatch and edge showed its missing-texture
+-- green, with or without the extension; found in game), and their shapes
+-- aren't given to addons to draw otherwise.
+--------------------------------------------------------------------------------
+
+local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
+
+-- SuuUI's look in one of the game's quest pins (or the quest log's
+-- markers): a pin without the mouse, a glow under it.
+export class QuestLook extends Frame
+    readonly glow: Texture
+    readonly pin: MapPin
+    hovered: boolean = false
+    grow: number = 1
+    -- what it was last drawn as (StyleQuestPin)
+    drawnKey: string? = nil
+
+    constructor(owner: Frame)
+        super(nil, owner)
+        self:SetPoint("CENTER")
+        self:SetSize(1, 1)
+        self.glow = self:CreateTexture(nil, "BACKGROUND", nil, -1)
+        UI.Skin(self.glow, "circle-soft")
+        self.glow:SetPoint("CENTER")
+        self.pin = UI.MapPin(self)
+        self.pin:EnableMouse(false)
+        self.pin:SetPoint("CENTER")
+    end
+end
+
+-- the game's art in its quest pins (and the underlays the log's have)
+local ART = { "NormalTexture", "PushedTexture", "HighlightTexture", "Glow", "Display" }
+local UNDERLAYS = { "UnderlayAtlas", "UnderlayBannerAtlas", "UnderlayBannerAtlasHighlight" }
+
+local ART_ALL: string[] = {}
+for _, list in ipairs({ ART, UNDERLAYS }) do
+    for _, key in ipairs(list) do
+        ART_ALL[#ART_ALL + 1] = key
+    end
+end
+
+-- (the game restyles its pins often: a plain read of each part, set only
+-- when it isn't at that alpha already)
+local function setArtAlpha(pin: Frame, alpha: number)
+    local parts = pin :: unknown :: { [string]: unknown }
+    for _, key in ipairs(ART_ALL) do
+        local r = rawget(parts, key)
+        if type(r) == "table" then
+            local region = frames.asRegion(r)
+            if region and secret.asNumber(region:GetAlpha()) ~= alpha then
+                region:SetAlpha(alpha)
+            end
+        end
+    end
+end
+
+-- A quest pin's kind by the game's style: "complete", "progress",
+-- "waypoint", "disabled", or nil.
+local function questStyle(pin: Frame): string?
+    local styles = field(_G, "POIButtonUtil", "Style")
+    if styles == nil then
+        return nil
+    end
+    local style = errors.tryMethod(pin, "GetStyle")
+    if style == nil then
+        return nil
+    end
+    if style == field(styles, "QuestComplete") then
+        return "complete"
+    end
+    if style == field(styles, "QuestInProgress") then
+        return "progress"
+    end
+    if style == field(styles, "Waypoint") then
+        return "waypoint"
+    end
+    if style == field(styles, "QuestDisabled") then
+        return "disabled"
+    end
+    return nil
+end
+
+-- The quest log's markers (one before each quest's title, the game's
+-- buttons from its list's pool) in the same look
+-- (see StyleLogQuestPins).
+local function logButtons(): Frame[]
+    return frames.rows(field(_G, "QuestScrollFrame", "Contents", "buttonPool"))
+end
+
+-- the game's quest titles in the log, from their row's left
+-- (QuestLogTitleTemplate)
+local LOG_TITLE_X = 31
+
+--------------------------------------------------------------------------------
+-- The module's (WorldMapModule:Unstyle, UnstyleQuest, StyleQuestPin,
+-- FitQuestPin, StyleQuestPins, StyleLogQuestPins, HookQuestProviders,
+-- HideTownPins, StyleArrow)
+--------------------------------------------------------------------------------
+
+-- The game's look back (the module off).
+export function unstyle(self: WorldMapModule, pin: Frame)
+    local o = self.looks[pin]
+    if o then
+        o:Hide()
+    end
+    setArtAlpha(pin, 1)
+    errors.tryMethod(pin, "UpdateButtonAlpha")
+end
+
+export function unstyleQuest(self: WorldMapModule)
+    local f = self.map
+    if not f then
+        return
+    end
+    for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
+        self:Unstyle(pin)
+    end
+    for _, pin in ipairs(logButtons()) do
+        self:Unstyle(pin)
+    end
+end
+
+export function styleQuestPin(self: WorldMapModule, pin: Frame)
+    if not self:IsEnabled() then
+        self:Unstyle(pin)
+        return
+    end
+    local kind = questStyle(pin)
+    local o = self.looks[pin]
+    if not kind then
+        if o then
+            o:Hide()
+        end
+        return
+    end
+    if not o then
+        local made = QuestLook.new(pin)
+        self.looks[pin] = made
+        -- ours follows the game's changes
+        local function restyle()
+            self:StyleQuestPin(pin)
+        end
+        for _, fn in ipairs({ "UpdateButtonStyle", "SetSelected", "EvaluateManagedHighlight", "SetStyle" }) do
+            if type(field(pin, fn)) == "function" then
+                hook(pin, fn, restyle)
+            end
+        end
+        hookScript(pin, "OnEnter", function()
+            made.hovered = true
+            restyle()
+        end)
+        hookScript(pin, "OnLeave", function()
+            made.hovered = false
+            restyle()
+        end)
+        o = made
+    end
+    -- the game's look away
+    setArtAlpha(pin, 0)
+    if kind == "disabled" then
+        o:Hide()
+        o.drawnKey = nil
+        return
+    end
+    o:Show()
+    local tracked = flag(errors.tryMethod(pin, "IsSelected"))
+    local highlight = frames.asRegion(field(pin, "HighlightTexture"))
+    local lit = highlight ~= nil and highlight:IsShown()
+    local inLogNow = self.logPins[pin] == true
+    -- the same look as last time (the game calls its restyles often: 8,500
+    -- in a recording): only the size, which follows the zoom
+    local questIDNow = asNumber(field(pin, "questID"))
+    local key = kind ..
+        (tracked and "t" or "") ..
+            (lit and "l" or "") ..
+                (inLogNow and "g" or "") ..
+                    (o.hovered and "h" or "") ..
+                        tostring(questIDNow) ..
+                            ":" ..
+                                tostring(self:Get("pinAlpha")) ..
+                                    ((kind == "complete" and questIDNow ~= nil and isGroupQuest(self, questIDNow)) and
+                                        "G" or
+                                        "")
+    if o.drawnKey == key then
+        self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
+        return
+    end
+    o.drawnKey = key
+    local data: MapPinData
+    if kind == "complete" then
+        -- a group quest to turn in: the arcane bar under it (design D)
+        local questID = asNumber(field(pin, "questID"))
+        local group = questID ~= nil and isGroupQuest(self, questID)
+        data = { char = "?", color = "arcane", edge = "arcane", bar = group and "arcane" or nil }
+    elseif kind == "waypoint" then
+        data = { glyph = "dash", color = "ink", edge = "ink-muted" }
+    else
+        data = { glyph = "questDots", color = "ink", edge = "ink-muted" }
+    end
+    o.pin:SetData(data)
+    -- the next step on another map: a dashed edge
+    UI.Skin(o.pin.edge, kind == "waypoint" and "circle-dash" or "circle-fill")
+    -- (Pin opacity is the map's: the log's stay solid)
+    local inLog = self.logPins[pin] == true
+    o.pin:SetBaseAlpha(inLog and 1 or self:Get("pinAlpha") / 100)
+    o.pin:SetHighlight((tracked or lit) and true or nil)
+    -- glow: arcane under a turn-in, ink at 40% while super-tracked (not in
+    -- the quest log: it would spill over the titles)
+    local size = o.pin:PinSize()
+    if inLog then
+        o.glow:Hide()
+    elseif tracked then
+        UI.Paint(o.glow, "ink", 0.4)
+        o.glow:SetSize(size + 24, size + 24)
+        o.glow:Show()
+    elseif kind == "complete" then
+        UI.Paint(o.glow, "arcane-glow")
+        o.glow:SetSize(size + 16, size + 16)
+        o.glow:Show()
+    else
+        o.glow:Hide()
+    end
+    -- SuuUI's pin size at every zoom (the game scales its own), a tenth
+    -- larger while tracked or hovered
+    self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
+end
+
+export function fitQuestPin(self: WorldMapModule, pin: Frame, grow: number?)
+    local o = self.looks[pin]
+    if not o then
+        return
+    end
+    o.grow = grow or o.grow
+    -- in the quest log: as large as the game's button, whatever the zoom
+    if self.logPins[pin] then
+        local h = pin:GetHeight()
+        o:SetScale(o.grow * (h > 0 and h or 20) / o.pin:PinSize())
+        -- (this small, a 1 px edge fell under a pixel and broke up: one
+        -- physical pixel, asked 2026-11-05)
+        o.pin:Crisp()
+        return
+    end
+    local f, layer = self.map, self.layer
+    if not (f and layer) then
+        return
+    end
+    local cs = asNumber(f:GetCanvasScale())
+    cs = cs and cs * f:GetScale()
+    local pe = pin:GetEffectiveScale()
+    if not (cs and cs > 0 and pe > 0) then
+        return
+    end
+    local closest = flag(f:IsAtMaxZoom()) and not flag(f:IsAtMinZoom()) and CLOSEST_GROW or 1
+    -- (SuuUI's pins: the layer's scale × grow / canvas scale; this sits in
+    -- the game's pin, whose own scale it takes out)
+    o:SetScale(layer:GetEffectiveScale() * closest * o.grow / cs / pe)
+end
+
+export function styleQuestPins(self: WorldMapModule)
+    local f = self.map
+    if not f then
+        return
+    end
+    for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
+        self:StyleQuestPin(pin)
+    end
+end
+
+export function styleLogQuestPins(self: WorldMapModule)
+    for _, pin in ipairs(logButtons()) do
+        self.logPins[pin] = true
+        self:StyleQuestPin(pin)
+        -- the marker in the middle of its quest's entry, title and
+        -- objectives (the game puts it at the title's top left; the row
+        -- is the entry, and it follows when the row is measured again
+        -- for SuuUI's fonts), space-4 left of the title (the game's 5 px
+        -- had them touching; found in game). The title stays where the
+        -- game put it: moved, it wrapped where the game hadn't measured.
+        -- The button with it, so the click goes where it shows.
+        local row = frames.asRegion(field(pin, "parent"))
+        if row then
+            pin:ClearAllPoints()
+            pin:SetPoint("RIGHT", row, "LEFT", LOG_TITLE_X - S["space-4"], 0)
+        end
+    end
+end
+
+-- The game's quest pins' provider: after each of its refreshes, the look.
+export function hookQuestProviders(self: WorldMapModule)
+    local f = self.map
+    if not f or self.questHooked then
+        return
+    end
+    self.questHooked = true
+    local questRefresh = field(_G, "QuestDataProviderMixin", "RefreshAllData")
+    local areaRefresh = field(_G, "AreaPOIDataProviderMixin", "RefreshAllData")
+    local providers = field(f, "dataProviders")
+    if type(providers) ~= "table" then
+        return
+    end
+    for provider in pairs(providers :: { [unknown]: unknown }) do
+        local refresh = field(provider, "RefreshAllData")
+        if questRefresh ~= nil and refresh == questRefresh then
+            hook(provider, "RefreshAllData", function()
+                if self:IsEnabled() then
+                    self:StyleQuestPins()
+                end
+            end)
+        elseif areaRefresh ~= nil and refresh == areaRefresh then
+            hook(provider, "RefreshAllData", function()
+                if self:IsEnabled() then
+                    self:HideTownPins()
+                end
+            end)
+        end
+    end
+end
+
+-- The game's little houses for the cities (asked 2026-10-19): area POIs
+-- drawn from its old POI icon sheet, no atlas (probed: Darnassus,
+-- Orgrimmar, Thunder Bluff on Kalimdor). Hidden outside instances; a
+-- battleground's bases are area POIs from the same sheet.
+export function hideTownPins(self: WorldMapModule)
+    local f = self.map
+    if not f or IsInInstance() then
+        return
+    end
+    for _, pin in ipairs(frames.mapPins(f, "AreaPOIPinTemplate")) do
+        local info = field(pin, "poiInfo")
+        if type(info) == "table" and field(info, "atlasName") == nil then
+            pin:Hide()
+        end
+    end
+end
+
+-- Your arrow: SuuUI's (the design's, made for the minimap, whose arrow
+-- Forever won't let go: no Minimap:SetPlayerTexture), on the game's group
+-- members pin, as the game sets its own; the game's again when off.
+export function styleArrow(self: WorldMapModule, on: boolean)
+    local f = self.map
+    if not f then
+        return
+    end
+    for _, pin in ipairs(frames.mapPins(f, "GroupMembersPinTemplate")) do
+        errors.tryMethod(
+            pin,
+            "SetPinTexture",
+            "player",
+            on and (TEXTURES .. "PlayerArrow.tga") or "UI-WorldMapArrow"
+        )
+    end
+end

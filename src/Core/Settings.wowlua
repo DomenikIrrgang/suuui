@@ -176,6 +176,9 @@ export class SettingsStore
     private db: SavedDB? = nil
     private profile: Profile? = nil
     private charKey: string? = nil
+    -- whether the saved data knew this character when it loaded (it played
+    -- with SuuUI in an earlier session)
+    private knownAtLoad: boolean = false
     -- the layout settings a module named (positions are found by their shape)
     private layoutKeys: { [string]: { [string]: boolean } } = {}
     -- the screen size in use ("1920x1080"), and where it comes from (Root)
@@ -396,6 +399,21 @@ export class SettingsStore
 
     function veto(namespace: string, key: string, fn: Veto, owner: unknown)
         self:addHook(self.vetoes, namespace, key, fn, owner)
+    end
+
+    -- How many watchers and vetoes the owner has.
+    function watchCount(owner: unknown): number
+        local n = 0
+        for _, map in ipairs({ self.watchers, self.vetoes }) do
+            for _, hooks in pairs(map) do
+                for _, h in ipairs(hooks) do
+                    if h.owner == owner then
+                        n += 1
+                    end
+                end
+            end
+        end
+        return n
     end
 
     function unwatch(owner: unknown)
@@ -1019,6 +1037,19 @@ export class SettingsStore
         return values
     end
 
+    -- 0.47: this character's data for a namespace if it has any, else nil
+    -- (nothing is made: for a look that shouldn't add to SuuUIDB).
+    function peekCharData(namespace: string): Values?
+        local data = self.db
+        local key = self.charKey
+        if not (data and key) then
+            return nil
+        end
+        local mine = data.charData[key]
+        local values = mine and mine[namespace]
+        return type(values) == "table" and values or nil
+    end
+
     -- Every character's data for a module ({ [charKey] = data }, this one's
     -- included: the same table charData gives), and this character's key.
     function allCharData(namespace: string): { [string]: Values }
@@ -1034,6 +1065,13 @@ export class SettingsStore
 
     function getCharKey(): string?
         return self.charKey
+    end
+
+    -- (0.47) Whether this character had played with SuuUI before this
+    -- session: the saved data knew it when it loaded. False on a fresh
+    -- install, and for a character new to SuuUI.
+    function charKnownAtLoad(): boolean
+        return self.knownAtLoad
     end
 
     -- Account-wide values that aren't per profile (the colour vision
@@ -1219,6 +1257,7 @@ export class SettingsStore
         self.db = data
         self.charKey = key
         local profileName = data.chars[key]
+        self.knownAtLoad = profileName ~= nil
         if not (profileName and data.profiles[profileName]) then
             profileName = key
         end
@@ -1302,6 +1341,9 @@ end
 export function veto(namespace: string, key: string, fn: Veto, owner: unknown)
     store:veto(namespace, key, fn, owner)
 end
+export function watchCount(owner: unknown): number
+    return store:watchCount(owner)
+end
 export function unwatch(owner: unknown)
     store:unwatch(owner)
 end
@@ -1320,11 +1362,17 @@ end
 export function charData(namespace: string): Values
     return store:charData(namespace)
 end
+export function peekCharData(namespace: string): Values?
+    return store:peekCharData(namespace)
+end
 export function allCharData(namespace: string): { [string]: Values }
     return store:allCharData(namespace)
 end
 export function getCharKey(): string?
     return store:getCharKey()
+end
+export function charKnownAtLoad(): boolean
+    return store:charKnownAtLoad()
 end
 export function account(key: string): unknown
     return store:account(key)

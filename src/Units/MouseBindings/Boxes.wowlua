@@ -1,0 +1,821 @@
+-- Units/MouseBindings/Boxes.wowlua
+-- Mouseover bindings' dialogs (Units/MouseBindings): the capture box that
+-- binds a spell (press an input, pick the rank, where and on whom) and the
+-- click box that gives the unit frames' Target or Menu its click, each with
+-- what it comes to below, and the note on the Mac's Cmd-Left click they
+-- share. The module opens them (Edit, EditClick); they save through it.
+
+import SuuUI from "/Core/API"
+import type BindSpell, Panel, Segmented, SuuButton, Text from "/Core/API"
+import type MouseBindingsModule from "/Units/MouseBindings"
+import type Bind, ClickKind from "./Inputs"
+import CLICK_ACTIONS, inputText, judge, judgeClick, specName from "./Inputs"
+import defaultReact, rankNumber from "./Ranks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import after from "wowlua:timer"
+
+local UI = SuuUI.UI
+local S = SuuUI.Tokens.space
+local try = errors.try
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- The modifiers held, as bindings spell them ("ALT-CTRL-SHIFT-META-").
+local function modifiers(): string
+    return (IsAltKeyDown() and "ALT-" or "") ..
+        (IsControlKeyDown() and "CTRL-" or "") ..
+            (IsShiftKeyDown() and "SHIFT-" or "") .. ((IsMetaKeyDown and IsMetaKeyDown()) and "META-" or "")
+end
+local MOUSE: { [string]: string } = {
+    LeftButton = "BUTTON1",
+    RightButton = "BUTTON2",
+    MiddleButton = "BUTTON3",
+    Button4 = "BUTTON4",
+    Button5 = "BUTTON5",
+}
+-- keys that are modifiers alone (waited past)
+local LONE: { [string]: boolean } = {
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+    LMETA = true,
+    RMETA = true,
+    UNKNOWN = true,
+}
+
+--------------------------------------------------------------------------------
+-- The Mac's Cmd-Left click
+--------------------------------------------------------------------------------
+
+-- The game's Mac setting (Options › Mac, "Use Command + Left Click as Right
+-- Click"): on, a Cmd-Left click comes as a plain right click, so it can't be
+-- bound (found in game, 2026-11-10: the box read "Right click").
+local MAC_CMD_CVAR = "MacUseCommandLeftClickAsRightClick"
+
+-- Whether Cmd-Left click is a right click here (a Mac with the setting on).
+export function cmdLeftIsRight(): boolean
+    local mac = rawget(_G, "IsMacClient")
+    if type(mac) ~= "function" or not mac() then
+        return false
+    end
+    return asString(try(C_CVar.GetCVar, MAC_CMD_CVAR)) == "1"
+end
+
+-- A box's note while it is: what happens, and the setting turned off
+-- (asked 2026-11-10: explain, offer to turn it off).
+export class MacNote
+    readonly text: Text
+    readonly button: SuuButton
+
+    constructor(owner: MouseBindingsModule, body: Frame, redraw: () -> ())
+        self.text = UI.Text(body, "caption", "gilt-text")
+        self.text:SetJustifyH("LEFT")
+        self.text:SetWordWrap(true)
+        self.text:SetValue(
+            "Cmd-Left click is Right click in your Mac settings (Use Command + Left Click as Right Click), so it can't be bound."
+        )
+        self.button = UI.Button(body, {
+            text = "Turn it off",
+            variant = "quiet",
+            onClick = function()
+                -- (0.47: the module's CVar: the player's setting back once
+                -- the module is off)
+                if not InCombatLockdown() then
+                    owner:SetCVar(MAC_CMD_CVAR, "0")
+                end
+                redraw()
+            end,
+        })
+        self.text:Hide()
+        self.button:Hide()
+    end
+
+    -- Placed at `y` (`w` wide) while the setting is on: the next free `y`.
+    function Place(y: number, w: number): number
+        if not cmdLeftIsRight() then
+            self.text:Hide()
+            self.button:Hide()
+            return y
+        end
+        self.text:SetWidth(w)
+        self.text:ClearAllPoints()
+        self.text:SetPoint("TOPLEFT", 0, y)
+        self.text:Show()
+        y = y - self.text:GetStringHeight() - S["space-2"]
+        self.button:ClearAllPoints()
+        self.button:SetPoint("TOPLEFT", 0, y)
+        self.button:SetEnabledState(not InCombatLockdown())
+        self.button:Show()
+        return y - self.button:GetHeight() - S["space-4"]
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The capture box
+--------------------------------------------------------------------------------
+
+local BOX_W = 300
+-- the switches' labels' column
+local LABEL_W = 52
+
+-- The box that binds a spell: press an input in it, pick the rank, where and
+-- on whom; what it comes to below, then Bind (Replace when it takes over).
+export class CaptureBox
+    readonly panel: Panel
+    readonly sub: Text
+    readonly area: Button
+    readonly areaFill: Texture
+    readonly areaTop: Text
+    readonly areaBottom: Text
+    readonly reachSeg: Segmented<string>
+    readonly reactSeg: Segmented<string>
+    readonly reachLabel: Text
+    readonly reactLabel: Text
+    readonly rankLabel: Text
+    rankSeg: Segmented<string>? = nil
+    readonly lines: Text[]
+    readonly ok: SuuButton
+    readonly cancel: SuuButton
+    readonly remove: SuuButton
+    readonly mac: MacNote
+    -- what it binds
+    spell: BindSpell = { name = "" }
+    editing: Bind? = nil
+    input: string? = nil
+    waiting: boolean = true
+    rank: string = "highest"
+    reach: string = "both"
+    react: string = "any"
+    -- the keyboard taken (Open), its key script set (the first Open)
+    keys: boolean = false
+    scripted: boolean = false
+    settling: boolean = false
+
+    constructor(private owner: MouseBindingsModule)
+        local p = UI.Panel(SuuUI.Root, {
+            title = "Bind",
+            width = BOX_W + S["space-5"] * 2,
+            solid = true,
+            closable = true,
+            onClose = function()
+                self:Close()
+            end,
+        })
+        self.panel = p
+        p:SetFrameStrata("DIALOG")
+        p:SetToplevel(true)
+        p:EnableMouse(true)
+        p:SetClampedToScreen(true)
+        local body = p.body
+        body:SetWidth(BOX_W)
+        self.sub = UI.Text(body, "caption", "ink-muted")
+        self.sub:SetPoint("TOPLEFT")
+        self.sub:SetWidth(BOX_W)
+        self.sub:SetJustifyH("LEFT")
+        -- the capture area
+        local area = CreateFrame("Button", nil, body)
+        area:SetSize(BOX_W, 64)
+        area:EnableMouseWheel(true)
+        self.areaFill = UI.Fill(area, "surface-sunk")
+        self.areaFill:SetAllPoints()
+        self.area = area
+        self.areaTop = UI.Text(area, "label", "arcane")
+        self.areaTop:SetPoint("BOTTOM", area, "CENTER", 0, 2)
+        self.areaBottom = UI.Text(area, "caption", "ink-muted")
+        self.areaBottom:SetPoint("TOP", area, "CENTER", 0, -2)
+        area:SetScript("OnMouseDown", function(_, mouse)
+            if self.waiting then
+                local key = MOUSE[mouse]
+                if key then
+                    self:Got(modifiers() .. key)
+                end
+            else
+                self.waiting = true
+                self:Draw()
+            end
+        end)
+        area:SetScript("OnMouseWheel", function(_, delta)
+            if self.waiting then
+                self:Got(modifiers() .. (delta > 0 and "MOUSEWHEELUP" or "MOUSEWHEELDOWN"))
+            end
+        end)
+        -- keys: while waiting, every key is the input (Esc cancels); else
+        -- Esc closes and the rest go on to the game. Not UI.Dismissable (a
+        -- key it captures is no dismiss), but its rules: the keyboard is
+        -- taken when the box opens (out of combat; the key script set then,
+        -- since on Forever a key script alone turns the keyboard on), at
+        -- rest every key passes on, a key it keeps is kept for that key
+        -- only (passing on again from the next frame), and the keyboard is
+        -- let go when it closes and before a fight (LetGo). Nothing here is
+        -- called in lockdown.
+        -- the choices
+        local function label(t: string): Text
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetValue(t)
+            return l
+        end
+        self.rankLabel = label("Casts")
+        self.reachLabel = label("Where")
+        self.reactLabel = label("On")
+        self.reachSeg = UI.Segmented(body, {
+            options = {
+                { value = "both", label = "Frames & world" },
+                { value = "frames", label = "Unit frames" },
+                { value = "world", label = "World" },
+            },
+            value = "both",
+            onChange = function(v: string)
+                self.reach = v
+                self:Draw()
+            end,
+        })
+        self.reactSeg = UI.Segmented(body, {
+            options = {
+                { value = "any", label = "Anyone" },
+                { value = "help", label = "Friends" },
+                { value = "harm", label = "Enemies" },
+            },
+            value = "any",
+            onChange = function(v: string)
+                self.react = v
+                self:Draw()
+            end,
+        })
+        self.lines = {}
+        for i = 1, 4 do
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetWidth(BOX_W)
+            l:SetJustifyH("LEFT")
+            l:SetWordWrap(true)
+            self.lines[i] = l
+        end
+        self.ok = UI.Button(body, {
+            text = "Bind",
+            variant = "primary",
+            onClick = function()
+                self:Confirm()
+            end,
+        })
+        self.cancel = UI.Button(body, {
+            text = "Cancel",
+            onClick = function()
+                self:Close()
+            end,
+        })
+        self.remove = UI.Button(body, {
+            text = "Remove",
+            icon = "trash",
+            onClick = function()
+                local b = self.editing
+                if b then
+                    self.owner:Remove(b)
+                end
+                self:Close()
+            end,
+        })
+        self.mac = MacNote.new(owner, body, function()
+            self:Draw()
+        end)
+        p:Hide()
+    end
+
+    function Open(spell: BindSpell, editing: Bind?)
+        self.spell, self.editing = spell, editing
+        self.input = editing and editing.input or nil
+        self.waiting = editing == nil
+        self.rank = editing and editing.rank or "highest"
+        self.reach = editing and editing.reach or "both"
+        self.react = editing and editing.react or defaultReact(spell)
+        self.panel:SetTitle((editing and "Change " or "Bind ") .. spell.name)
+        self.sub:SetValue(specName(self.owner:SpecKey()) .. " · on the unit under the mouse")
+        -- the rank switch: this spell's rank (none without ranks)
+        if self.rankSeg then
+            self.rankSeg:Hide()
+            self.rankSeg = nil
+        end
+        local rank = editing and editing.spellID and rankNumber(editing.spellID) or spell.rank
+        if rank and rank > 0 then
+            self.rankSeg = UI.Segmented(self.panel.body, {
+                options = {
+                    { value = "highest", label = "Highest rank" },
+                    { value = "fixed", label = "Rank " .. rank .. " only" },
+                },
+                value = self.rank,
+                onChange = function(v: string)
+                    self.rank = v
+                    self:Draw()
+                end,
+            })
+        end
+        self.reachSeg:SetValue(self.reach)
+        self.reactSeg:SetValue(self.react)
+        local p = self.panel
+        p:ClearAllPoints()
+        p:SetPoint("CENTER", SuuUI.Root, "CENTER", 0, 60)
+        p:Show()
+        p:Raise()
+        self:TakeKeys()
+        self:Draw()
+    end
+
+    function Close()
+        self.panel:Hide()
+        self:Settle()
+    end
+
+    -- The keyboard taken, keys passing on until one is kept (Open).
+    function TakeKeys()
+        local p = self.panel
+        if InCombatLockdown() then
+            return
+        end
+        pcall(p.SetPropagateKeyboardInput, p, true)
+        if not self.scripted then
+            self.scripted = true
+            p:SetScript("OnKeyDown", function(frame, key)
+                self:Key(frame, key)
+            end)
+        end
+        if pcall(p.EnableKeyboard, p, true) then
+            self.keys = true
+        end
+    end
+
+    -- Keys passing on and the keyboard let go: at once (a fight starting,
+    -- before the lockdown), and the frame after a key closed the box.
+    function LetGo()
+        if InCombatLockdown() then
+            return
+        end
+        local p = self.panel
+        pcall(p.SetPropagateKeyboardInput, p, true)
+        if self.keys or self.scripted then
+            pcall(p.EnableKeyboard, p, false)
+        end
+        self.keys = false
+    end
+
+    -- Next frame (the key being handled is done by then): shown, keys pass
+    -- on again; hidden, the keyboard is let go.
+    function Settle()
+        if self.settling then
+            return
+        end
+        self.settling = true
+        after(0, function()
+            self.settling = false
+            if InCombatLockdown() then
+                return
+            end
+            if self.panel:IsShown() then
+                local p = self.panel
+                pcall(p.SetPropagateKeyboardInput, p, true)
+            else
+                self:LetGo()
+            end
+        end)
+    end
+
+    function Key(frame: Frame, key: string)
+        if InCombatLockdown() then
+            return
+        end
+        if self.waiting then
+            pcall(frame.SetPropagateKeyboardInput, frame, false)
+            self:Settle()
+            if key == "ESCAPE" then
+                if self.input then
+                    self.waiting = false
+                    self:Draw()
+                else
+                    self:Close()
+                end
+            elseif not LONE[key] then
+                self:Got(modifiers() .. key)
+            end
+        elseif key == "ESCAPE" then
+            pcall(frame.SetPropagateKeyboardInput, frame, false)
+            self:Close()
+        else
+            pcall(frame.SetPropagateKeyboardInput, frame, true)
+        end
+    end
+
+    function Got(input: string)
+        self.input = input
+        self.waiting = false
+        self:Draw()
+    end
+
+    -- The binding the box would make now.
+    function Current(): Bind?
+        local input = self.input
+        if not input then
+            return nil
+        end
+        local spellID = self.editing and self.editing.spellID or self.spell.spellID
+        return {
+            input = input,
+            spell = self.spell.name,
+            rank = self.rank == "fixed" and "fixed" or "highest",
+            spellID = spellID,
+            reach = (self.reach == "frames" and "frames") or (self.reach == "world" and "world") or "both",
+            react = (self.react == "help" and "help") or (self.react == "harm" and "harm") or "any",
+        }
+    end
+
+    function Draw()
+        local body = self.panel.body
+        -- as wide as its widest switch (Where's overflowed: found in game)
+        local w = BOX_W
+        -- (the rank's switch is missing for a spell without ranks)
+        local segs: Frame[] = { self.reachSeg, self.reactSeg }
+        if self.rankSeg then
+            segs[#segs + 1] = self.rankSeg :: Frame
+        end
+        for _, seg in ipairs(segs) do
+            w = math.max(w, LABEL_W + math.ceil(seg:GetWidth()))
+        end
+        self.panel:SetWidth(w + S["space-5"] * 2)
+        body:SetWidth(w)
+        self.sub:SetWidth(w)
+        self.area:SetWidth(w)
+        for _, l in ipairs(self.lines) do
+            l:SetWidth(w)
+        end
+        local y = -(self.sub:GetStringHeight() + S["space-4"])
+        local area = self.area
+        area:ClearAllPoints()
+        area:SetPoint("TOPLEFT", 0, y)
+        y = y - 64 - S["space-4"]
+        y = self.mac:Place(y, w)
+        local b = self:Current()
+        if self.waiting or not b then
+            UI.PaintFill(self.areaFill, "surface-sunk")
+            self.areaTop:SetValue("Press a key, or click or turn the wheel in here")
+            self.areaTop:SetColor("arcane")
+            self.areaBottom:SetValue(
+                self.input and "Shift, Ctrl, Alt and Cmd combine · Esc keeps " .. inputText(self.input) or
+                    "Shift, Ctrl, Alt and Cmd combine · Esc cancels"
+            )
+        else
+            UI.PaintFill(self.areaFill, "surface-raised")
+            self.areaTop:SetValue(inputText(b.input))
+            self.areaTop:SetColor("ink")
+            self.areaBottom:SetValue("Click here to pick another")
+        end
+        -- the switches
+        local function row(l: Text, seg: Frame?)
+            if not seg then
+                l:Hide()
+                return
+            end
+            l:Show()
+            l:ClearAllPoints()
+            l:SetPoint("LEFT", body, "TOPLEFT", 0, y - 15)
+            seg:ClearAllPoints()
+            seg:SetPoint("TOPLEFT", LABEL_W, y)
+            seg:Show()
+            y = y - 30 - S["space-3"]
+        end
+        row(self.rankLabel, self.rankSeg)
+        row(self.reachLabel, self.reachSeg)
+        row(self.reactLabel, self.reactSeg)
+        -- what it comes to
+        local shown: { text: string, tone: string }[] = {}
+        local verdict = b and not self.waiting and judge(self.owner:Binds(), b, self.editing, self.owner:Clicks()) or
+            nil
+        if verdict then
+            if verdict.refuse then
+                shown[#shown + 1] = {
+                    text = verdict.refuse .. ". " .. (verdict.refuseDetail or ""),
+                    tone = "ember-text",
+                }
+            end
+            local ask = verdict.ask
+            if ask then
+                shown[#shown + 1] = { text = ask.title .. ". " .. ask.text, tone = "gilt-text" }
+            end
+            for _, line in ipairs(verdict.info) do
+                shown[#shown + 1] = { text = line, tone = "ink-muted" }
+            end
+        end
+        y = y - S["space-2"]
+        for i, l in ipairs(self.lines) do
+            local s = shown[i]
+            if s then
+                l:SetValue(s.text)
+                l:SetColor(s.tone)
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", 0, y)
+                l:Show()
+                y = y - l:GetStringHeight() - S["space-2"]
+            else
+                l:Hide()
+            end
+        end
+        -- the buttons
+        y = y - S["space-3"]
+        self.ok:SetLabel(verdict and verdict.ask and verdict.ask.confirm or (self.editing and "Save" or "Bind"))
+        self.ok:SetEnabledState(verdict ~= nil and verdict.refuse == nil and not InCombatLockdown())
+        self.ok:ClearAllPoints()
+        self.ok:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+        self.cancel:ClearAllPoints()
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        self.remove:SetShown(self.editing ~= nil)
+        self.remove:ClearAllPoints()
+        self.remove:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+        y = y - 30
+        body:SetHeight(-y)
+    end
+
+    function Confirm()
+        local b = self:Current()
+        if not b or self.waiting or InCombatLockdown() then
+            return
+        end
+        local verdict = judge(self.owner:Binds(), b, self.editing, self.owner:Clicks())
+        if verdict.refuse then
+            return
+        end
+        b.reach = verdict.reach or b.reach
+        local gone = verdict.takes
+        if self.editing then
+            gone[#gone + 1] = self.editing :: Bind
+        end
+        local ask = verdict.ask
+        local move = ask and ask.move
+        if ask and move then
+            -- the frames' Target or Menu click moved first, then bound
+            self.owner:EditClick(move :: ClickKind, function()
+                self.owner:Add(b, gone)
+                self:Close()
+            end)
+            return
+        end
+        self.owner:Add(b, gone)
+        self:Close()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The click box
+--------------------------------------------------------------------------------
+
+-- The box that gives the unit frames' Target or Menu its click: click in it
+-- (Shift, Ctrl and Alt combine), what it comes to below, then Save (Swap or
+-- Replace when it takes something over); Default puts the frames' own click
+-- back. `after` runs once it's saved (a spell waiting for the click),
+-- `cancelled` when it closes unsaved.
+export class ClickBox
+    readonly panel: Panel
+    readonly sub: Text
+    readonly area: Button
+    readonly areaFill: Texture
+    readonly areaTop: Text
+    readonly areaBottom: Text
+    readonly lines: Text[]
+    readonly ok: SuuButton
+    readonly cancel: SuuButton
+    readonly reset: SuuButton
+    readonly mac: MacNote
+    kind: ClickKind = "target"
+    input: string? = nil
+    -- its modifiers as the game read them (MakeModifiers), as it was picked
+    mods: number? = nil
+    waiting: boolean = true
+    after: (() -> ())? = nil
+    cancelled: (() -> ())? = nil
+
+    constructor(private owner: MouseBindingsModule)
+        local p = UI.Panel(SuuUI.Root, {
+            title = "Target click",
+            width = BOX_W + S["space-5"] * 2,
+            solid = true,
+            closable = true,
+            onClose = function()
+                self:Close()
+            end,
+        })
+        self.panel = p
+        p:SetFrameStrata("DIALOG")
+        p:SetToplevel(true)
+        p:EnableMouse(true)
+        p:SetClampedToScreen(true)
+        local body = p.body
+        body:SetWidth(BOX_W)
+        self.sub = UI.Text(body, "caption", "ink-muted")
+        self.sub:SetPoint("TOPLEFT")
+        self.sub:SetWidth(BOX_W)
+        self.sub:SetJustifyH("LEFT")
+        self.sub:SetWordWrap(true)
+        local area = CreateFrame("Button", nil, body)
+        area:SetSize(BOX_W, 64)
+        self.areaFill = UI.Fill(area, "surface-sunk")
+        self.areaFill:SetAllPoints()
+        self.area = area
+        self.areaTop = UI.Text(area, "label", "arcane")
+        self.areaTop:SetPoint("BOTTOM", area, "CENTER", 0, 2)
+        self.areaBottom = UI.Text(area, "caption", "ink-muted")
+        self.areaBottom:SetPoint("TOP", area, "CENTER", 0, -2)
+        area:SetScript("OnMouseDown", function(_, mouse)
+            if self.waiting then
+                local key = MOUSE[mouse]
+                if key then
+                    self.mods = asNumber(try(rawget(_G, "MakeModifiers")))
+                    self:Got(modifiers() .. key)
+                end
+            else
+                self.waiting = true
+                self:Draw()
+            end
+        end)
+        -- Esc: back to the click it had, or closed; keys go on to the game
+        UI.Dismissable(p, {
+            close = function()
+                if self.waiting and self.input then
+                    self.waiting = false
+                    self:Draw()
+                else
+                    self:Close()
+                end
+            end,
+        })
+        self.lines = {}
+        for i = 1, 3 do
+            local l = UI.Text(body, "caption", "ink-muted")
+            l:SetWidth(BOX_W)
+            l:SetJustifyH("LEFT")
+            l:SetWordWrap(true)
+            self.lines[i] = l
+        end
+        self.ok = UI.Button(body, {
+            text = "Save",
+            variant = "primary",
+            onClick = function()
+                self:Confirm()
+            end,
+        })
+        self.cancel = UI.Button(body, {
+            text = "Cancel",
+            onClick = function()
+                self:Close()
+            end,
+        })
+        self.reset = UI.Button(body, {
+            text = "Default",
+            onClick = function()
+                self.input = CLICK_ACTIONS[self.kind].default
+                self.mods = 0
+                self.waiting = false
+                self:Draw()
+            end,
+        })
+        self.mac = MacNote.new(owner, body, function()
+            self:Draw()
+        end)
+        p:Hide()
+    end
+
+    function Open(kind: ClickKind, onSaved: (() -> ())?, cancelled: (() -> ())?)
+        local pending = self.cancelled
+        self.cancelled = nil
+        if pending and self.panel:IsShown() then
+            pending()
+        end
+        self.kind, self.after, self.cancelled = kind, onSaved, cancelled
+        self.input = self.owner:Clicks()[kind]
+        self.mods = nil
+        -- moving it for a spell: a new click wanted at once
+        self.waiting = onSaved ~= nil
+        local action = CLICK_ACTIONS[kind]
+        self.panel:SetTitle(action.name .. " click")
+        self.sub:SetValue(
+            ("%s · the click that %s on unit frames. In the world the game's own clicks stay."):format(
+                specName(self.owner:SpecKey()),
+                action.does
+            )
+        )
+        local p = self.panel
+        p:ClearAllPoints()
+        p:SetPoint("CENTER", SuuUI.Root, "CENTER", 0, 40)
+        p:Show()
+        p:Raise()
+        self:Draw()
+    end
+
+    function Close()
+        local cancelled = self.cancelled
+        self.cancelled, self.after = nil, nil
+        self.panel:Hide()
+        if cancelled then
+            cancelled()
+        end
+    end
+
+    function Got(input: string)
+        self.input = input
+        self.waiting = false
+        self:Draw()
+    end
+
+    function Draw()
+        local body = self.panel.body
+        local y = -(self.sub:GetStringHeight() + S["space-4"])
+        local area = self.area
+        area:ClearAllPoints()
+        area:SetPoint("TOPLEFT", 0, y)
+        y = y - 64 - S["space-4"]
+        y = self.mac:Place(y, BOX_W)
+        local input = self.input
+        if self.waiting or not input then
+            UI.PaintFill(self.areaFill, "surface-sunk")
+            self.areaTop:SetValue("Click in here")
+            self.areaTop:SetColor("arcane")
+            self.areaBottom:SetValue(
+                input and "Shift, Ctrl, Alt and Cmd combine · Esc keeps " .. inputText(input) or
+                    "Shift, Ctrl, Alt and Cmd combine · Esc cancels"
+            )
+        else
+            UI.PaintFill(self.areaFill, "surface-raised")
+            self.areaTop:SetValue(inputText(input))
+            self.areaTop:SetColor("ink")
+            self.areaBottom:SetValue("Click here to pick another")
+        end
+        local verdict = (input and not self.waiting) and
+            judgeClick(self.owner:Binds(), self.owner:Clicks(), self.kind, input) or
+            nil
+        local shown: { text: string, tone: string }[] = {}
+        if verdict and self:Stays() then
+            -- moved for a spell: its own click again is no move
+            verdict.refuse = inputText(input or "") .. " is the click the spell takes"
+            verdict.refuseDetail = "Pick another one for " .. CLICK_ACTIONS[self.kind].name .. "."
+        end
+        if verdict then
+            if verdict.refuse then
+                shown[#shown + 1] = {
+                    text = verdict.refuse .. ". " .. (verdict.refuseDetail or ""),
+                    tone = "ember-text",
+                }
+            end
+            local ask = verdict.ask
+            if ask then
+                shown[#shown + 1] = { text = ask.title .. ". " .. ask.text, tone = "gilt-text" }
+            end
+            for _, line in ipairs(verdict.info) do
+                shown[#shown + 1] = { text = line, tone = "ink-muted" }
+            end
+        end
+        for i, l in ipairs(self.lines) do
+            local s = shown[i]
+            if s then
+                l:SetValue(s.text)
+                l:SetColor(s.tone)
+                l:ClearAllPoints()
+                l:SetPoint("TOPLEFT", 0, y)
+                l:Show()
+                y = y - l:GetStringHeight() - S["space-2"]
+            else
+                l:Hide()
+            end
+        end
+        y = y - S["space-3"]
+        self.ok:SetLabel(verdict and verdict.ask and verdict.ask.confirm or "Save")
+        self.ok:SetEnabledState(verdict ~= nil and verdict.refuse == nil and not InCombatLockdown())
+        self.ok:ClearAllPoints()
+        self.ok:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, y)
+        self.cancel:ClearAllPoints()
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        self.reset:SetEnabledState(input ~= CLICK_ACTIONS[self.kind].default)
+        self.reset:ClearAllPoints()
+        self.reset:SetPoint("TOPLEFT", body, "TOPLEFT", 0, y)
+        y = y - 30
+        body:SetHeight(-y)
+    end
+
+    -- Moved for a spell, but to the click it has now.
+    function Stays(): boolean
+        return self.after ~= nil and self.input == self.owner:Clicks()[self.kind]
+    end
+
+    function Confirm()
+        local input = self.input
+        if not input or self.waiting or InCombatLockdown() or self:Stays() then
+            return
+        end
+        local verdict = judgeClick(self.owner:Binds(), self.owner:Clicks(), self.kind, input)
+        if verdict.refuse then
+            return
+        end
+        local saved = self.after
+        self.cancelled, self.after = nil, nil
+        self.owner:SetClick(self.kind, input, self.mods)
+        self:Close()
+        if saved then
+            saved()
+        end
+    end
+end

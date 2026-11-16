@@ -1,0 +1,365 @@
+-- Units/RaidPlanner/Specs.wowlua
+-- Raid members' specs for the raid planner (Units/RaidPlanner): what's
+-- known (heard or inspected, for a day), the trees' icons (the game's own,
+-- seen in your talents or an inspect), inspecting one player at a time, and
+-- the addon messages about them ("RPSPEC\t<tree>", "RPSPECQ" asks
+-- everyone). The module's methods of the same names call these.
+
+import SuuUI from "/Core/API"
+import type PlannerArt from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import after from "wowlua:timer"
+import CLASS, key from "/Units/RaidPlanner/Catalog"
+import type SpecNote from "/Units/RaidPlanner/Setups"
+import type Member from "/Units/RaidPlanner/Fill"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local try, field, list = errors.try, tbl.field, tbl.list
+local asNumber, asString = secret.asNumber, secret.asString
+
+local INSPECT_CONFIG = asNumber(field(Constants, "TraitConsts", "INSPECT_TRAIT_CONFIG_ID")) or -1
+export const SPEC_FRESH = 24 * 3600 -- a spec heard or inspected counts for a day
+
+-- An inspect asked for.
+export type InspectJob = { m: Member, guid: string }
+
+--------------------------------------------------------------------------------
+-- Specs and their icons
+--------------------------------------------------------------------------------
+
+-- The tree whose talent group has the most points spent, by its name (the
+-- inspect config, as the Talents window reads it); else the spec ID's name.
+export function treeByName(class: string, name: unknown): number?
+    local c = CLASS[class]
+    local text = asString(name)
+    if not (c and text) then
+        return nil
+    end
+    local n = text:lower()
+    for t, spec in ipairs(c.specs) do
+        local s = spec:lower()
+        if s == n or s:find(n, 1, true) or n:find(s, 1, true) then
+            return t
+        end
+    end
+    return nil
+end
+
+local QUESTION_MARK = 134400
+
+-- A player's tree (1-3), when known: yours from your talents, others' from
+-- an inspect or their own SuuUI.
+export function knownTree(self: RaidPlannerModule, name: string, you: boolean): number?
+    if you then
+        local tree = SuuUI.Spec()
+        return tree > 0 and tree or nil
+    end
+    local specs = self:Data().specs
+    local k = key(name)
+    -- (the bare name only for a player of your own realm: another realm's
+    -- same name is someone else, GRP-3)
+    local e = specs[k] or (not k:find("-", 1, true) and specs[Ambiguate(name, "short")] or nil)
+    if e and e.tree and time() - (e.at or 0) < SPEC_FRESH then
+        return e.tree
+    end
+    return nil
+end
+
+--------------------------------------------------------------------------------
+-- Spec icons
+--------------------------------------------------------------------------------
+
+-- A tree's icon: the game's own (its talent group's in the class's trait
+-- tree, seen in your talents or an inspect, kept for the account), else the
+-- catalog's. Forever's spec IDs are one per class (probed: 1491 "Warrior",
+-- with the class icon; an inspected druid's is 1484 whatever the tree), so
+-- GetSpecializationInfoByID can't tell the trees apart.
+export function treeIcon(self: RaidPlannerModule, class: string?, tree: number?): PlannerArt?
+    if not (class and tree) then
+        return nil
+    end
+    local seen = self:Data().treeIcons[class]
+    local icon = seen and seen[tree]
+    if icon then
+        return icon
+    end
+    local c = CLASS[class]
+    return c and c.icons[tree] or nil
+end
+
+-- Keeps the icons of a class's talent groups (GetGroupDisplayInfoByTreeID).
+export function noteTreeIcons(self: RaidPlannerModule, class: string, displays: unknown)
+    if not CLASS[class] or type(displays) ~= "table" then
+        return
+    end
+    local icons = self:Data().treeIcons
+    for _, d in ipairs(list(displays)) do
+        local tree = treeByName(class, field(d, "displayName"))
+        local icon = tree and field(d, "icon")
+        local id, path = asNumber(icon), asString(icon)
+        local art: PlannerArt? = (id and id > 0 and id ~= QUESTION_MARK and id) or (path and path ~= "" and path) or
+            nil
+        if tree and art then
+            local mine = icons[class] or {}
+            icons[class] = mine
+            mine[tree] = art
+        end
+    end
+end
+
+-- Your own class's, from your talents (once they're there).
+export function noteOwnTreeIcons(self: RaidPlannerModule)
+    if self.ownIconsRead then
+        return
+    end
+    local _, class = UnitClass("player")
+    local cfg = asNumber(try(field(C_ClassTalents, "GetActiveConfigID")))
+    if not cfg then
+        return
+    end
+    local info = try(field(C_Traits, "GetConfigInfo"), cfg)
+    local treeID = asNumber(list(field(info, "treeIDs"))[1])
+    if not treeID then
+        return
+    end
+    local displays = try(field(C_Traits, "GetGroupDisplayInfoByTreeID"), treeID)
+    if #list(displays) > 0 then
+        self.ownIconsRead = true
+        self:NoteTreeIcons(asString(class) or "", displays)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Specs: inspecting, one player at a time
+--------------------------------------------------------------------------------
+
+export function inspectedTree(self: RaidPlannerModule, unit: string, class: string): number?
+    local best: unknown = nil
+    local bestSpent = 0
+    local info = try(field(C_Traits, "GetConfigInfo"), INSPECT_CONFIG)
+    local treeID = asNumber(list(field(info, "treeIDs"))[1])
+    if treeID then
+        local ids: number[] = {}
+        local groupNames: { [number]: unknown } = {}
+        local displays = try(field(C_Traits, "GetGroupDisplayInfoByTreeID"), treeID)
+        for _, d in ipairs(list(displays)) do
+            local groupID = asNumber(field(d, "groupID"))
+            if groupID then
+                ids[#ids + 1] = groupID
+                groupNames[groupID] = field(d, "displayName")
+            end
+        end
+        self:NoteTreeIcons(class, displays)
+        local groups = #ids > 0 and try(field(C_Traits, "GetGroupCurrencyInfo"), INSPECT_CONFIG, ids) or nil
+        for _, g in ipairs(list(groups)) do
+            local spent = asNumber(field(list(field(g, "currencyInfos"))[1], "spent"))
+            local groupID = asNumber(field(g, "traitNodeGroupID"))
+            if spent and spent > bestSpent then
+                best, bestSpent = groupID and groupNames[groupID], spent
+            end
+        end
+    end
+    local tree = treeByName(class, best)
+    if tree then
+        return tree
+    end
+    local getSpec = field(C_SpecializationInfo, "GetInspectSpecialization") or field(_G, "GetInspectSpecialization")
+    local id = asNumber(try(getSpec, unit))
+    if id and id > 0 then
+        local _, name = try(GetSpecializationInfoByID, id)
+        return treeByName(class, name)
+    end
+    return nil
+end
+
+export function noteSpec(self: RaidPlannerModule, name: string, tree: number?, from: string)
+    if not (tree and tree >= 1 and tree <= 3) then
+        return
+    end
+    local specs = self:Data().specs
+    local e: SpecNote = { tree = tree, at = time(), from = from }
+    local k = key(name)
+    specs[k] = e
+    -- the bare name too, only when it carries no other realm: a sender
+    -- of another realm wrote over a raid member of the same name (GRP-3)
+    local short = Ambiguate(name, "short")
+    if short ~= k and not k:find("-", 1, true) then
+        specs[short] = e
+    end
+end
+
+-- Who still lacks a spec: in the raid, online, not you, not failed lately.
+export function specQueue(self: RaidPlannerModule): Member[]
+    local out: Member[] = {}
+    for _, m in ipairs(self.roster) do
+        local failed = self.inspectFailed[m.key]
+        if not m.tree and not m.you and m.online and not (failed and GetTime() - failed < 60) then
+            out[#out + 1] = m
+        end
+    end
+    return out
+end
+
+export function unknownSpecs(self: RaidPlannerModule): number
+    local n = 0
+    for _, m in ipairs(self.roster) do
+        if not m.tree and m.online then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+-- Inspects the next player in the queue (while asked to: automatically with
+-- the planner open, or the Inspect button's round).
+export function inspectNext(self: RaidPlannerModule)
+    if self.inspecting or InCombatLockdown() or not self.inRaid then
+        return
+    end
+    local window = self.window
+    local auto = self:Get("inspect") == "auto" and window ~= nil and window:IsShown()
+    if not (auto or self.inspectRound) then
+        return
+    end
+    -- never over the player's own inspect
+    local theirs = frames.find("InspectFrame")
+    if theirs and theirs:IsShown() then
+        after(5, function()
+            if self:IsEnabled() then
+                self:InspectNext()
+            end
+        end)
+        return
+    end
+    local target: Member? = nil
+    for _, m in ipairs(self:SpecQueue()) do
+        local name = asString(try(GetUnitName, m.unit, true))
+        if secret.flag(try(CanInspect, m.unit)) and name and key(name) == m.key then
+            target = m
+            break
+        end
+        self.inspectFailed[m.key] = GetTime()
+    end
+    if not target then
+        self.inspectRound = false
+        self:Render()
+        -- those out of reach: tried again in a while, while the planner is open
+        if auto and #self:SpecQueue() < self:UnknownSpecs() and not self.retryQueued then
+            self.retryQueued = true
+            after(30, function()
+                self.retryQueued = false
+                if self:IsEnabled() then
+                    self:InspectNext()
+                end
+            end)
+        end
+        return
+    end
+    local guid = asString(try(UnitGUID, target.unit))
+    if not guid then
+        self.inspectFailed[target.key] = GetTime()
+        self:InspectNext()
+        return
+    end
+    local job: InspectJob = { m = target, guid = guid }
+    self.inspecting = job
+    try(NotifyInspect, target.unit)
+    after(5, function()
+        if self.inspecting ~= job then
+            return
+        end
+        self.inspecting = nil
+        self.inspectFailed[job.m.key] = GetTime()
+        if self:IsEnabled() then
+            self:InspectNext()
+        end
+    end)
+end
+
+export function onInspectReady(self: RaidPlannerModule, guid: unknown)
+    local job = self.inspecting
+    if not (job and asString(guid) == job.guid) then
+        return
+    end
+    self.inspecting = nil
+    local tree = self:InspectedTree(job.m.unit, job.m.class)
+    if tree then
+        self:NoteSpec(job.m.name, tree, "inspect")
+    else
+        self.inspectFailed[job.m.key] = GetTime()
+    end
+    -- the game's own inspect keeps its player; this one is let go
+    local theirs = frames.find("InspectFrame")
+    if not (theirs and theirs:IsShown()) then
+        try(ClearInspectPlayer)
+    end
+    self:RefillSoon()
+    -- slowly, so the game allows it
+    after(1.5, function()
+        if self:IsEnabled() then
+            self:InspectNext()
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- Specs from raid members' own SuuUI
+--------------------------------------------------------------------------------
+
+-- To the raid (SuuUI's sender: never in combat or the chat lockdown).
+export function send(self: RaidPlannerModule, verb: string, payload: string?)
+    if not self.inRaid then
+        return
+    end
+    self:SendAddonMessage(verb, payload, "RAID")
+end
+
+export function shareSpec(self: RaidPlannerModule)
+    if not self:Get("shareSpec") then
+        return
+    end
+    local tree = SuuUI.Spec()
+    if tree > 0 then
+        self:Send("RPSPEC", tostring(tree))
+    end
+end
+
+export function shareSoon(self: RaidPlannerModule, delay: number?)
+    if self.shareQueued then
+        return
+    end
+    self.shareQueued = true
+    after(delay or 2, function()
+        self.shareQueued = false
+        if self:IsEnabled() then
+            self:ShareSpec()
+        end
+    end)
+end
+
+-- Asks everyone's SuuUI for their spec, at most twice a minute.
+export function askSpecs(self: RaidPlannerModule)
+    if self:UnknownSpecs() == 0 then
+        return
+    end
+    local asked = self.askedAt
+    if asked and GetTime() - asked < 30 then
+        return
+    end
+    self.askedAt = GetTime()
+    self:Send("RPSPECQ")
+end
+
+-- "RPSPEC\t<1-3>" from a raid member (the receiver took it from the
+-- raid's channel only: the server sends that from members alone).
+export function onSpec(self: RaidPlannerModule, payload: string, sender: string)
+    local tree = SuuUI.Comm.Int(payload, 1, 3)
+    if not tree then
+        return
+    end
+    self:NoteSpec(sender, tree, "message")
+    self:RefillSoon()
+end

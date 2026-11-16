@@ -10,7 +10,8 @@ import test, cases, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as modules from "/Core/Modules"
 import ModuleState as State from "/Core/Modules"
-import FakeReporter, FakeNotifier, FakeCombat from "../../fakes"
+import FakeReporter, FakeNotifier, FakeCombat, FakeNextFrame from "../../fakes"
+import cycle, NOTHING, expectNoErrors from "../../helpers"
 import * as settings from "/Core/Settings"
 import * as events from "/Core/Events"
 import * as fault from "/Core/Fault"
@@ -21,16 +22,22 @@ import * as init from "/Core/Init"
 import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import * as tbl from "wowlua:table"
+import * as timers from "/Core/Timers"
+import * as hooks from "/Core/Hooks"
+import * as cvars from "/Core/CVars"
+import * as anchors from "/Core/Anchors"
+import * as visibility from "/UI/Visibility"
+import * as comm from "/Core/Comm"
 
 config({ lifecycle = "manual" })
 
 const P = "|cff9fd3c7SuuUI|r "
 const LISTENER = { name = "Modules Test Listener" }
 
--- (the loose view of a module made from a definition)
-type Module = modules.ModuleOf<modules.WithEnabled<modules.Settings>>
+-- a module made from a definition (what SuuUI.RegisterModule returns)
+type Module = modules.RegisteredModule<modules.Settings>
 type Calls = { init: number, enable: number, disable: number }
-type Def = modules.LooseDef<modules.Settings>
+type Def = modules.PluginDef<modules.Settings>
 -- a table the test hands over as it is
 type Opts = { [string]: unknown }
 -- messages a module of this file sends (as a plugin's own would be)
@@ -38,6 +45,19 @@ declare message SUUUI_ZZM_LIFE()
 declare message SUUUI_ZZM_HALF()
 
 type Message = (name: string, ...unknown) -> ()
+
+-- Whether @beforeAll has logged in: a module registered from then on starts
+-- on the next frame (0.47).
+local loggedIn = false
+
+-- A module registered, and (after login) the frame it starts on gone by.
+local function register(def: Def): Module
+    local m = modules.register(def)
+    if loggedIn then
+        mock.nextFrame()
+    end
+    return m
+end
 
 -- A module whose callbacks count their calls (a def's own callbacks are kept).
 local function tracked(def: Def): (Module, Calls)
@@ -61,7 +81,7 @@ local function tracked(def: Def): (Module, Calls)
             onDisable(self)
         end
     end
-    return modules.register(def), calls
+    return register(def), calls
 end
 
 local serial = 0
@@ -168,6 +188,7 @@ local function logIn()
     local beforeSafe, beforeFuture = snapshot(safe), snapshot(future)
     mock.player:enterCombat()
     mock.login()
+    loggedIn = true
     local inCombat = {
         safe = snapshot(safe),
         safeCalls = tbl.copy(safeCalls),
@@ -221,20 +242,20 @@ end
 
 @test("apiAtLeast: the same major, at least that minor and patch")
 @cases({
+    { "0.47", true },
+    { "0.47.0", true },
     { "0.46", true },
-    { "0.46.0", true },
-    { "0.45", true },
     { "0.1", true },
     { "0", true },
-    { "0.45.9", true },
-    { "0.46.1", false },
-    { "0.47", false },
+    { "0.46.9", true },
+    { "0.47.1", false },
+    { "0.48", false },
     { "1.0", false },
     { "bad", false },
-    { "0.46.0.1", false },
+    { "0.47.0.1", false },
 })
 local function apiAtLeast(wanted: string, out: boolean)
-    expect(modules.API_VERSION).toBe("0.46.0")
+    expect(modules.API_VERSION).toBe("0.47.0")
     expect(modules.apiAtLeast(wanted)).toBe(out)
 end
 
@@ -246,41 +267,41 @@ end
 
 @test("register: a table with a lower-case id that isn't taken")
 local function registerChecks()
-    local register = modules.register :: unknown :: (def: unknown) -> ()
+    local registerAny = modules.register :: unknown :: (def: unknown) -> ()
     expect(function()
-        register(5)
+        registerAny(5)
     end).toThrow()
     for _, bad in ipairs({ "Bad", "1a", "a-b", "" }) do
         expect(function()
-            modules.register({ id = bad })
+            register({ id = bad })
         end).toThrow("id must be lower case letters")
     end
     -- (a def of the wrong shape: the dev build's argument check says so first)
     expect(function()
-        modules.register(({} :: unknown) :: Def)
+        register(({} :: unknown) :: Def)
     end).toThrow("bad argument #1 'def' to 'register'")
     expect(function()
-        modules.register({ id = "zzmnormal" })
+        register({ id = "zzmnormal" })
     end).toThrow("the id zzmnormal is taken")
     expect(function()
-        modules.register({ id = "core" })
+        register({ id = "core" })
     end).toThrow("the id core is taken")
     expect(function()
-        modules.register({ id = "layout" })
+        register({ id = "layout" })
     end).toThrow("the id layout is taken")
     expect(function()
-        modules.register({ id = "zzmbad1", defaults = { enabled = true } })
+        register({ id = "zzmbad1", defaults = { enabled = true } })
     end).toThrow("\"enabled\" is SuuUI's own setting")
     expect(function()
-        modules.register({ id = "zzmbad2", replaces = "zzmbad2" })
+        register({ id = "zzmbad2", replaces = "zzmbad2" })
     end).toThrow("replaces names another module's id")
     expect(function()
-        modules.register(({ id = "zzmbad3", replaces = 5 } :: unknown) :: Def)
+        register(({ id = "zzmbad3", replaces = 5 } :: unknown) :: Def)
     end).toThrow("replaces names another module's id")
     expect(modules.get("zzmbad1")).toBeNil()
 end
 
-@test("register: SuuUI's fields, its settings namespace, started at once after login")
+@test("register: SuuUI's fields, its settings namespace, started on the next frame after login")
 local function registers()
     local heard = listen("SUUUI_MODULE_REGISTERED")
     local enabled = listen("SUUUI_MODULE_ENABLED")
@@ -312,24 +333,75 @@ local function registers()
     expect(settings.get(id, "enabled")).toBe(true)
     expect(settings.get(id, "greeting")).toBe("Hi")
     -- the def's defaults are copied
-    local builtIn = modules.register({ id = nextId(), addon = "SuuUI" })
+    local builtIn = register({ id = nextId(), addon = "SuuUI" })
     expect(builtIn.builtIn).toBe(true)
     expect(builtIn.name).toBe(builtIn.id)
 end
 
 @test("SuuUI's own fields can't be set; a module's own fields can")
 local function ownFields()
-    local m = modules.register({ id = nextId() })
+    local m = register({ id = nextId() })
     for _, key in ipairs({ "id", "name", "state", "error", "replacedBy", "builtIn" }) do
         expect(function()
             (m :: Opts)[key] = "x"
-        end).toThrow(("property '%s' of PluginModule is read-only"):format(key))
+        end).toThrow(("the module %s can't have a field \"%s\": it is one of SuuUI's own fields of a module"):format(m.id, key))
     end
     m.counter = 5
     expect(rawget(m, "counter")).toBe(5)
     expect(m.counter).toBe(5)
-    -- a module's own field can shadow a method name for itself only
     expect(type(m.Get)).toBe("function")
+end
+
+@test("API-5: a plugin's field may not hide a module method, at registration or after")
+local function shadowing()
+    local id = nextId()
+    expect(function()
+        register(({ id = id, Hook = {} } :: unknown) :: Def)
+    end).toThrow(("the module %s can't have a field \"Hook\": it is a method every module has"):format(id))
+    expect(modules.get(id)).toBeNil()
+    local m = register({ id = nextId() })
+    expect(function()
+        (m :: Opts).IsEnabled = true
+    end).toThrow(("the module %s can't have a field \"IsEnabled\": it is a method every module has"):format(m.id))
+    expect(function()
+        (m :: Opts).OnEnable = "soon"
+    end).toThrow(("the module %s can't have a field \"OnEnable\": it is a callback (a function)"):format(m.id))
+    -- differing by case is a name of its own; a callback assigned after is fine
+    m.hook = 1
+    m.isEnabled = 2
+    function m:OnEnable() end
+    expect(m.hook).toBe(1)
+    expect(m.isEnabled).toBe(2)
+    expect(type(m.IsEnabled)).toBe("function")
+    expect(type(rawget(m, "OnEnable"))).toBe("function")
+end
+
+@test("API-5: a definition's own fields are kept on the module (its methods too)")
+local function definitionFields()
+    local m = register(({
+        id = nextId(),
+        defaults = { size = 3 },
+        limit = 7,
+        Double = function(self: Module): number
+            return (self:Get("size") :: number) * 2
+        end,
+    } :: unknown) :: Def)
+    expect(m.limit).toBe(7)
+    expect((m.Double :: (Module) -> number)(m)).toBe(6)
+    -- SuuUI's keys of the definition are not copied onto it
+    expect(rawget(m, "defaults")).toBeNil()
+    expect(rawget(m, "id")).toBeNil()
+end
+
+@test("API-5: a built-in module's own fields are checked as it is added")
+local function builtInShadowing()
+    local id = nextId()
+    local m = modules.Module.new({ id = id })
+    rawset(m, "Print", {})
+    expect(function()
+        modules.add(m)
+    end).toThrow(("the module %s can't have a field \"Print\": it is a method every module has"):format(id))
+    expect(modules.get(id)).toBeNil()
 end
 
 @test("the source addon comes from the call stack: the first other addon, else SuuUI, else ?")
@@ -337,19 +409,19 @@ local function sourceAddon()
     mock.fake("debugstack", function(): string
         return "Interface/AddOns/SuuUI/Core/Modules.lua:1: in function\nInterface\\AddOns\\MyPlugin\\Plugin.lua:2: in main chunk"
     end)
-    local plugin = modules.register({ id = nextId() })
+    local plugin = register({ id = nextId() })
     expect(plugin.source).toBe("MyPlugin")
     expect(plugin.builtIn).toBe(false)
     mock.fake("debugstack", function(): string
         return "Interface/AddOns/SuuUI/Core/Modules.lua:1: in function"
     end)
-    local own = modules.register({ id = nextId() })
+    local own = register({ id = nextId() })
     expect(own.source).toBe("SuuUI")
     expect(own.builtIn).toBe(true)
     mock.fake("debugstack", function(): string
         return "[string \"x\"]:1: in main chunk"
     end)
-    expect(modules.register({ id = nextId() }).source).toBe("?")
+    expect(register({ id = nextId() }).source).toBe("?")
 end
 
 @test("get, all, find")
@@ -375,7 +447,7 @@ end
 
 @test("Get, Peek, Set, Reset, Watch, Veto: the module's own namespace")
 local function settingMethods()
-    local m = modules.register({ id = nextId(), defaults = { size = 1, list = { 1 } } })
+    local m = register({ id = nextId(), defaults = { size = 1, list = { 1 } } })
     local heard: unknown[] = {}
     m:Watch("size", function(v)
         heard[#heard + 1] = v
@@ -400,7 +472,7 @@ end
 
 @test("Migrate: reshapes the module's stored values once per profile")
 local function migrateMethod()
-    local m = modules.register({ id = nextId(), defaults = { size = 1 } })
+    local m = register({ id = nextId(), defaults = { size = 1 } })
     settings.set(m.id, "size", 4)
     m:Migrate("double", function(values: settings.Values)
         if values.size then
@@ -412,7 +484,7 @@ end
 
 @test("CharData, AllCharData, CharKey, ForgetCharData: the module's character data")
 local function charData()
-    local m = modules.register({ id = nextId() })
+    local m = register({ id = nextId() })
     local mine = m:CharData()
     expect(mine == settings.charData(m.id)).toBe(true)
     expect(m:CharKey()).toBe(settings.getCharKey())
@@ -422,7 +494,7 @@ end
 
 @test("Guard: the function's results, or false with the error under the module's name")
 local function guard()
-    local m = modules.register({ id = nextId(), name = "ZZ Guard" })
+    local m = register({ id = nextId(), name = "ZZ Guard" })
     local add = m:Guard(function(a: number, b: number): number
         return a + b
     end)
@@ -438,7 +510,7 @@ end
 
 @test("On, Off, Emit, OnGameEvent, OnUnitEvent: owned by the module")
 local function eventMethods()
-    local m = modules.register({ id = nextId(), name = "ZZ Events" })
+    local m = register({ id = nextId(), name = "ZZ Events" })
     local msg = mock.spy(function(_: string, ...: unknown) end)
     local game = mock.spy(function(_: string, ...: unknown) end)
     local unit = mock.spy(function(_: string, ...: unknown) end)
@@ -464,8 +536,8 @@ end
 
 @test("RunOutOfCombat: keyed per module, the latest call runs after combat")
 local function runOutOfCombat()
-    local a = modules.register({ id = nextId(), name = "ZZ A" })
-    local b = modules.register({ id = nextId(), name = "ZZ B" })
+    local a = register({ id = nextId(), name = "ZZ A" })
+    local b = register({ id = nextId(), name = "ZZ B" })
     local ran: string[] = {}
     a:RunOutOfCombat("move", function()
         ran[#ran + 1] = "now"
@@ -500,7 +572,7 @@ end
 
 @test("RegisterCommand and RegisterSettings: owned by the module")
 local function registerCommandAndSettings()
-    local m = modules.register({ id = nextId(), name = "ZZ Cmd" })
+    local m = register({ id = nextId(), name = "ZZ Cmd" })
     local got = mock.spy(function(_: string) end)
     m:RegisterCommand("zzmcmd", "A test command.", got, { "a" })
     mock.slash("/suu zzmcmd go")
@@ -518,20 +590,18 @@ end
 
 @test("RegisterMover: edit mode gets the module's namespace and name")
 local function registerMover()
-    local m = modules.register({ id = nextId(), name = "ZZ Mover" })
-    local original = editMode.register
+    local m = register({ id = nextId(), name = "ZZ Mover" })
     local defs: Opts[] = {}
     local MOVER: editMode.Mover = mock.partial({})
-    mock.module(editMode, {
-        register = function(frame: Region, opts: editMode.MoverOptions, owner: unknown): editMode.Mover
-            defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
-            return MOVER
-        end,
-    })
+    -- (edit mode hands the registry its register as it loads: SET-7)
+    modules.hostMovers(function(frame: Region, opts: editMode.MoverOptions, owner: unknown): editMode.Mover
+        defs[#defs + 1] = { frame = frame, opts = opts, owner = owner }
+        return MOVER
+    end)
     local frame = CreateFrame("Frame")
     local r1 = m:RegisterMover(frame)
     local r2 = m:RegisterMover(frame, { key = "pos2", label = "Own label" })
-    mock.module(editMode, { register = original })
+    modules.hostMovers(editMode.register)
     expect(r1).toBe(MOVER)
     expect(r2).toBe(MOVER)
     expect(defs[1].opts).toEqual({ namespace = m.id, label = "ZZ Mover" })
@@ -541,7 +611,7 @@ end
 
 @test("Each, Hook, Override, Provide, ExtendMenu: owned by the module, gone when it turns off")
 local function extensions()
-    local m = modules.register({ id = nextId(), name = "ZZ Ext" })
+    local m = register({ id = nextId(), name = "ZZ Ext" })
     local obj = {
         CoreATestPaint = function(_: unknown): string
             return "base"
@@ -582,7 +652,7 @@ end
 
 @test("AddMicroItem, AddGameMenuItem, AddNotificationKind, AddToRolePreset: SuuUI's lists")
 local function additions()
-    local m = modules.register({ id = nextId() })
+    local m = register({ id = nextId() })
     local original = extend.addTo
     local added: Opts[] = {}
     mock.module(extend, {
@@ -610,7 +680,7 @@ end
 
 @test("Print: the module's name before the line")
 local function printMethod()
-    local m = modules.register({ id = nextId(), name = "ZZ Print" })
+    local m = register({ id = nextId(), name = "ZZ Print" })
     expect(
         printedBy(function()
             m:Print("hello", 1)
@@ -672,8 +742,8 @@ end
 @test("a module registered after login in combat: combatSafe at once, the others after")
 local function registeredInCombat()
     mock.player:enterCombat()
-    local s = modules.register({ id = nextId(), combatSafe = true })
-    local n = modules.register({ id = nextId() })
+    local s = register({ id = nextId(), combatSafe = true })
+    local n = register({ id = nextId() })
     expect(s.state).toBe(State.Enabled)
     expect(s.combatSafe).toBe(true)
     expect(n.state).toBe(State.Registered)
@@ -735,7 +805,7 @@ end
 @test("an errored module turned on again from the setting retries after it is off")
 local function erroredSetting()
     local fail = true
-    local m = modules.register({
+    local m = register({
         id = nextId(),
         OnEnable = function()
             if fail then
@@ -776,7 +846,7 @@ local function reloadToToggle()
             mock.slash("/suu enable " .. m.id)
         end)
     ).toEqual({ ("  %s  ZZ Reload  |cff3fd0ffon|r  - %s"):format(m.id, shown(m)) })
-    local offAtLoad = modules.register({
+    local offAtLoad = register({
         id = nextId(),
         name = "ZZ Reload Off",
         reloadToToggle = true,
@@ -795,7 +865,7 @@ end
 
 @test("reloadToToggle and errored: retries only after a reload")
 local function reloadErrored()
-    local m = modules.register({
+    local m = register({
         id = nextId(),
         name = "ZZ Reload Err",
         reloadToToggle = true,
@@ -823,10 +893,10 @@ end
 
 @test("replaces: decided when the replaced module starts; a replacement that is off or can't load doesn't count")
 local function replaces()
-    local by = modules.register({ id = nextId(), name = "ZZ By" })
+    local by = register({ id = nextId(), name = "ZZ By" })
     local replaced, calls = tracked({ id = "zzmrep1", name = "ZZ Replaced" })
     expect(replaced.state).toBe(State.Enabled) -- registered before anything replaced it
-    local by2 = modules.register({ id = nextId(), name = "ZZ By Two", replaces = "zzmrep2" })
+    local by2 = register({ id = nextId(), name = "ZZ By Two", replaces = "zzmrep2" })
     local replaced2, calls2 = tracked({ id = "zzmrep2", name = "ZZ Replaced Two" })
     expect(replaced2.state).toBe(State.Disabled)
     expect(replaced2.replacedBy).toBe("ZZ By Two")
@@ -839,9 +909,9 @@ local function replaces()
     replaced2:Set("enabled", true)
     expect(replaced2.state).toBe(State.Disabled)
     expect(calls2.enable).toBe(0)
-    modules.register({ id = nextId(), replaces = "zzmrep3", enabledByDefault = false })
-    modules.register({ id = nextId(), replaces = "zzmrep3", api = "9.0" })
-    expect(modules.register({ id = "zzmrep3" }).state).toBe(State.Enabled)
+    register({ id = nextId(), replaces = "zzmrep3", enabledByDefault = false })
+    register({ id = nextId(), replaces = "zzmrep3", api = "9.0" })
+    expect(register({ id = "zzmrep3" }).state).toBe(State.Enabled)
     expect(by.state).toBe(State.Enabled)
     expect(by2.state).toBe(State.Enabled)
     expect(calls.enable).toBe(1)
@@ -850,9 +920,9 @@ end
 @test("incompatible: says why at registration, and never starts")
 local function incompatible()
     local out = printedBy(function()
-        modules.register({ id = "zzmlater", name = "ZZ Later", api = "2.3", addon = "Plug" })
+        register({ id = "zzmlater", name = "ZZ Later", api = "2.3", addon = "Plug" })
     end)
-    expect(out).toEqual({ P .. "ZZ Later (Plug) can't load: it needs SuuUI API 2.3; this SuuUI has 0.46.0." })
+    expect(out).toEqual({ P .. "ZZ Later (Plug) can't load: it needs SuuUI API 2.3; this SuuUI has 0.47.0." })
     local m = modules.get("zzmlater") :: Module
     expect(m.state).toBe(State.Incompatible)
     m:Set("enabled", false)
@@ -862,9 +932,9 @@ local function incompatible()
         printedBy(function()
             mock.slash("/suu enable zzmlater")
         end)
-    ).toEqual({ P .. "ZZ Later needs SuuUI API 2.3; this SuuUI has 0.46.0." })
+    ).toEqual({ P .. "ZZ Later needs SuuUI API 2.3; this SuuUI has 0.47.0." })
     expect(line(m)).toBe(
-        "  zzmlater  ZZ Later  |cffff9a80incompatible|r  - Plug  (needs SuuUI API 2.3; this SuuUI has 0.46.0)"
+        "  zzmlater  ZZ Later  |cffff9a80incompatible|r  - Plug  (needs SuuUI API 2.3; this SuuUI has 0.47.0)"
     )
 end
 
@@ -881,7 +951,7 @@ local function modulesCommand()
     expect(#out).toBe(#modules.all() + 1)
     expect(out).toContain(("  zzmnormal  ZZ Normal  |cff3fd0ffon|r  - %s"):format(shown(normal)))
     expect(out).toContain(("  zzmoff  ZZ Off  |cffa39b8boff|r  - %s"):format(shown(off)))
-    local builtIn = modules.register({ id = nextId(), name = "ZZ Built", addon = "SuuUI" })
+    local builtIn = register({ id = nextId(), name = "ZZ Built", addon = "SuuUI" })
     expect(line(builtIn)).toBe(("  %s  ZZ Built  |cff3fd0ffon|r  - built in"):format(builtIn.id))
 end
 
@@ -892,7 +962,7 @@ local function toggleCommands()
             mock.slash("/suu enable nothing")
         end)
     ).toEqual({ P .. "No module called \"nothing\". /suu modules lists them." })
-    local m = modules.register({ id = nextId(), name = "ZZ Toggle" })
+    local m = register({ id = nextId(), name = "ZZ Toggle" })
     local out = printedBy(function()
         mock.slash("/suu disable zz toggle")
     end)
@@ -1021,4 +1091,419 @@ local function ownStart()
     expect(replaced.replacedBy).toBe("ownnew")
     o.fight:finish()
     expect(new.state).toBe(State.Enabled)
+end
+
+--------------------------------------------------------------------------------
+-- 0.47: IsEnabled in the callbacks, registering after login
+--------------------------------------------------------------------------------
+
+@test("IsEnabled is true while OnEnable runs and false while OnDisable runs; the messages come after")
+local function enabledInCallbacks()
+    local order: string[] = {}
+    local m: Module? = nil
+    local function note(what: string)
+        local mod = assert(m)
+        order[#order + 1] = what .. " " .. tostring(mod:IsEnabled()) .. " " .. tostring(mod.state)
+    end
+    events.on("SUUUI_MODULE_ENABLED", function()
+        note("ENABLED")
+    end, LISTENER)
+    events.on("SUUUI_MODULE_DISABLED", function()
+        note("DISABLED")
+    end, LISTENER)
+    m = modules.register({
+        id = nextId(),
+        OnInitialize = function()
+            note("init")
+        end,
+        OnEnable = function()
+            note("enable")
+        end,
+        OnDisable = function()
+            note("disable")
+        end,
+    })
+    mock.nextFrame()
+    local mod = assert(m)
+    mod:Set("enabled", false)
+    expect(order).toEqual({
+        "init false registered",
+        "enable true enabled",
+        "ENABLED true enabled",
+        "disable false disabled",
+        "DISABLED false disabled",
+    })
+end
+
+@test("registered after login: starts on the next frame, with callbacks assigned after the call")
+local function lateCallbacks()
+    local m = modules.register({ id = nextId(), name = "ZZ Late" })
+    local calls: string[] = {}
+    m.OnInitialize = function()
+        calls[#calls + 1] = "init"
+    end
+    m.OnEnable = function()
+        calls[#calls + 1] = "enable"
+    end
+    -- meanwhile it is registered and found
+    expect(m.state).toBe(State.Registered)
+    expect(modules.get(m.id) == m).toBe(true)
+    mock.nextFrame()
+    expect(calls).toEqual({ "init", "enable" })
+    expect(m.state).toBe(State.Enabled)
+    mock.nextFrame()
+    expect(calls).toEqual({ "init", "enable" })
+end
+
+@test("a registry of its own: a module added after login starts when its next frame runs")
+local function ownLate()
+    local o = own()
+    local later = FakeNextFrame.new()
+    local reg = modules.ModuleRegistry.new(o.store, combat.CombatQueue.new(o.fight, o.reporter), o.fight, o.reporter, o.notifier, function() end, later)
+    o.store:bind({}, "Tamsin Ashford - Realm")
+    reg:startAll()
+    local ran: string[] = {}
+    local m = reg:register({ id = "ownlate" })
+    m.OnEnable = function()
+        ran[#ran + 1] = "enable"
+    end
+    expect(m.state).toBe(State.Registered)
+    later:step()
+    expect(ran).toEqual({ "enable" })
+    expect(m.state).toBe(State.Enabled)
+end
+
+--------------------------------------------------------------------------------
+-- 0.47: what a module owns and gives back
+--------------------------------------------------------------------------------
+
+@test("After and Every: under the module's name, cancelled when it turns off")
+local function ownedTimers()
+    local m = register({ id = nextId(), name = "ZZ Timers" })
+    local once, ticks = 0, 0
+    m:After(1, function()
+        once += 1
+    end)
+    m:Every(1, function()
+        ticks += 1
+    end)
+    m:After(0.5, function()
+        error("modules-err-timer")
+    end)
+    expect(timers.count(m)).toBe(3)
+    mock.advanceTime(1.1)
+    expect(once).toBe(1)
+    expect(ticks).toBe(1)
+    expect((faultWith("modules-err-timer") :: fault.Entry).source).toBe("ZZ Timers")
+    -- the ones that ran are dropped; the ticker stays
+    expect(timers.count(m)).toBe(1)
+    m:After(1, function()
+        once += 1
+    end)
+    m:Set("enabled", false)
+    expect(timers.count(m)).toBe(0)
+    mock.advanceTime(3)
+    expect(once).toBe(1)
+    expect(ticks).toBe(1)
+    -- a set number of ticks, then gone
+    m:Set("enabled", true)
+    local three = 0
+    m:Every(1, function()
+        three += 1
+    end, 3)
+    mock.advanceTime(5.5)
+    expect(three).toBe(3)
+    expect(timers.count(m)).toBe(0)
+end
+
+@test("After and Every while the module is off (a hook that outlives it, OnDisable): nothing starts")
+local function timersWhileOff()
+    local ran: string[] = {}
+    local fromDisable: TimerHandle? = nil
+    local m = register({
+        id = nextId(),
+        name = "ZZ Timers Off",
+        OnDisable = function(self: Module)
+            -- OnDisable runs with the module already off
+            fromDisable = self:After(0.5, function()
+                ran[#ran + 1] = "disable"
+            end)
+        end,
+    })
+    m:Set("enabled", false)
+    expect((fromDisable :: TimerHandle):IsCancelled()).toBe(true)
+    -- a permanent hook's callback scheduling with the module off
+    local once = m:After(1, function()
+        ran[#ran + 1] = "after"
+    end)
+    local ticker = m:Every(1, function()
+        ran[#ran + 1] = "every"
+    end)
+    expect(once:IsCancelled()).toBe(true)
+    expect(ticker:IsCancelled()).toBe(true)
+    expect(timers.count(m)).toBe(0)
+    -- on again before they would have come due: still nothing from them
+    m:Set("enabled", true)
+    mock.advanceTime(2.5)
+    expect(ran).toEqual({})
+    -- on: scheduling works again
+    m:After(1, function()
+        ran[#ran + 1] = "on"
+    end)
+    mock.advanceTime(1.1)
+    expect(ran).toEqual({ "on" })
+    m:Set("enabled", false)
+    expectNoErrors()
+end
+
+type HookTarget = { Method: (self: HookTarget, n: number) -> () }
+
+@test("SecureHook and HookScript: one hook per target, re-armed on enable, silent while off")
+local function ownedHooks()
+    local m = register({ id = nextId(), name = "ZZ Hooks" })
+    local G = _G :: unknown :: { [string]: unknown }
+    rawset(G, "ZzmHookTarget", function(_: number) end)
+    local target: HookTarget = { Method = function(_: HookTarget, _n: number) end }
+    local frame = CreateFrame("Frame")
+    local heard: string[] = {}
+    local function arm(tag: string)
+        m:SecureHook("ZzmHookTarget", function(n: number)
+            heard[#heard + 1] = tag .. " global " .. n
+        end)
+        m:SecureHook(target, "Method", function(_: HookTarget, n: number)
+            heard[#heard + 1] = tag .. " method " .. n
+        end)
+        m:HookScript(frame, "OnShow", function()
+            heard[#heard + 1] = tag .. " show"
+        end)
+    end
+    local function fire()
+        local fn = G.ZzmHookTarget :: (n: number) -> ()
+        fn(1)
+        target:Method(2)
+        frame:Hide()
+        frame:Show()
+    end
+    arm("a")
+    expect(hooks.armed(m)).toBe(3)
+    fire()
+    expect(heard).toEqual({ "a global 1", "a method 2", "a show" })
+    m:Set("enabled", false)
+    expect(hooks.armed(m)).toBe(0)
+    fire()
+    expect(#heard).toBe(3)
+    m:Set("enabled", true)
+    arm("b")
+    expect(hooks.installed(m)).toBe(3)
+    fire()
+    expect(heard).toEqual({ "a global 1", "a method 2", "a show", "b global 1", "b method 2", "b show" })
+    -- an error in one goes under the module's name
+    m:SecureHook(target, "Method", function()
+        error("modules-err-hook")
+    end)
+    target:Method(3)
+    expect((faultWith("modules-err-hook") :: fault.Entry).source).toBe("ZZ Hooks")
+end
+
+const CVAR = "nameplateMinAlpha"
+
+@test("SetCVar and RestoreCVar: the player's value remembered once, per character, given back when the module turns off")
+local function ownedCVars()
+    local m = register({ id = nextId() })
+    C_CVar.SetCVar(CVAR, "0.6")
+    expect(m:SetCVar(CVAR, 1)).toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("1")
+    expect(m:SetCVar(CVAR, "0.9")).toBe(true)
+    expect(cvars.rememberedValue(m.id, CVAR)).toBe("0.6")
+    -- outside profiles: in this character's data
+    local data = assert(settings.peekCharData("core"))
+    expect((data.cvars :: { [string]: { [string]: string } })[m.id]).toEqual({ [CVAR] = "0.6" })
+    expect(m:RestoreCVar(CVAR)).toBe(true)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.6")
+    expect(cvars.remembered(m.id)).toBe(0)
+    expect(m:RestoreCVar(CVAR)).toBe(false)
+    -- a CVar the client doesn't know: nothing
+    expect(m:SetCVar("zzmNoSuchCVar", 1)).toBe(false)
+    expect(cvars.remembered(m.id)).toBe(0)
+    m:SetCVar(CVAR, 0.2)
+    m:Set("enabled", false)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.6")
+    expect(cvars.remembered(m.id)).toBe(0)
+end
+
+@test("SetCVar: a profile switch that turns the module off gives the value back; one that turns it on remembers anew")
+local function cvarsAcrossProfiles()
+    local id = nextId()
+    C_CVar.SetCVar(CVAR, "0.7")
+    local m = register({
+        id = id,
+        OnEnable = function(self: Module)
+            self:SetCVar(CVAR, "0.3")
+        end,
+    })
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.3")
+    local was = settings.profiles.current()
+    settings.profiles.create("ZZM Off")
+    settings.profiles.use("ZZM Off")
+    settings.set(id, "enabled", false)
+    expect(m.state).toBe(State.Disabled)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.7")
+    settings.profiles.use(was)
+    expect(m.state).toBe(State.Enabled)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.3")
+    expect(cvars.rememberedValue(id, CVAR)).toBe("0.7")
+    m:Set("enabled", false)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.7")
+    settings.profiles.delete("ZZM Off")
+end
+
+@test("SetCVar: a module that starts off (a reloadToToggle one turned off last session) gives its CVars back then")
+local function cvarsAtStart()
+    local id = nextId()
+    -- what the last session left: the module had set the CVar (the player's
+    -- value 0.4 remembered), then was turned off for the next load
+    C_CVar.SetCVar(CVAR, "0.8")
+    local data = settings.charData("core")
+    local memory = (data.cvars or {}) :: { [string]: { [string]: string } }
+    data.cvars = memory
+    memory[id] = { [CVAR] = "0.4" }
+    local m = register({ id = id, reloadToToggle = true, enabledByDefault = false })
+    expect(m.state).toBe(State.Disabled)
+    expect(C_CVar.GetCVar(CVAR)).toBe("0.4")
+    expect(cvars.remembered(id)).toBe(0)
+end
+
+@test("in combat: work the module queued is dropped when it turns off; the registry's own job still runs")
+local function combatWorkDropped()
+    local ran: string[] = {}
+    local m = register({ id = nextId() })
+    mock.player:enterCombat()
+    m:Set("enabled", false)
+    m:RunOutOfCombat("layout", function()
+        ran[#ran + 1] = "layout"
+    end)
+    expect(combat.pendingCount("m:" .. m.id .. ":")).toBe(1)
+    mock.player:leaveCombat()
+    expect(m.state).toBe(State.Disabled)
+    expect(ran).toEqual({})
+    expect(combat.pendingCount("m:" .. m.id .. ":")).toBe(0)
+end
+
+@test("SetVisibility and PublishAnchor with the module as owner: let go when it turns off")
+local function visibilityAndAnchors()
+    local m = register({ id = nextId() })
+    local f = CreateFrame("Frame", nil, UIParent)
+    visibility.setVisibility(f, "combat", nil, m)
+    anchors.publish("zzmAnchor", f, m)
+    expect(visibility.count(m)).toBe(1)
+    expect(anchors.count(m)).toBe(1)
+    m:Set("enabled", false)
+    expect(visibility.count(m)).toBe(0)
+    expect(anchors.get("zzmAnchor")).toBeNil()
+    f:Hide()
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(f).never.toBeShown()
+    mock.player:leaveCombat()
+    m:Set("enabled", true)
+    -- the same mode again applies it
+    visibility.setVisibility(f, "combat", nil, m)
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(f).toBeShown()
+    mock.player:leaveCombat()
+    m:Set("enabled", false)
+end
+
+@test("OnAddonMessage and SendAddonMessage: the module's handlers, under its name, gone when it turns off")
+local function ownedAddonMessages()
+    local heard: string[] = {}
+    local m = register({
+        id = nextId(),
+        name = "ZZ Comm",
+        OnEnable = function(self: Module)
+            self:OnAddonMessage("ZZMPING", { channels = { "PARTY", "WHISPER" } }, function(payload, sender, channel)
+                heard[#heard + 1] = payload .. "|" .. sender .. "|" .. channel
+            end)
+            self:OnAddonMessage("ZZMBOOM", nil, function()
+                error("modules-err-comm")
+            end)
+        end,
+    })
+    expect(comm.count(m)).toBe(2)
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\thi", "WHISPER", "Member1-Realm")
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\thi", "GUILD", "Member1-Realm")
+    expect(heard).toEqual({ "hi|Member1-Realm|WHISPER" })
+    mock.receiveAddonMessage("SuuUI", "ZZMBOOM", "PARTY", "Member1-Realm")
+    expect((faultWith("modules-err-comm") :: fault.Entry).source).toBe("ZZ Comm")
+    -- sending: "verb\tpayload" on the channel, refused without one
+    expect({ m:SendAddonMessage("ZZMPING", "x", nil) }).toEqual({ false, "no channel", false })
+    local before = #mock.sentAddonMessages()
+    m:SendAddonMessage("ZZMPING", "x", "WHISPER", "Member1")
+    local sent = mock.sentAddonMessages()
+    expect(#sent).toBe(before + 1)
+    expect(sent[#sent].message).toBe("ZZMPING\tx")
+    expect(sent[#sent].target).toBe("Member1")
+    m:Set("enabled", false)
+    expect(comm.count(m)).toBe(0)
+    mock.receiveAddonMessage("SuuUI", "ZZMPING\tagain", "WHISPER", "Member1-Realm")
+    expect(#heard).toBe(1)
+    m:Set("enabled", true)
+    expect(comm.count(m)).toBe(2)
+    m:Set("enabled", false)
+end
+
+@test("turned off through the registry, a module leaves nothing behind, and nothing is doubled when it is on again")
+local function leavesNothing()
+    local id = nextId()
+    local f = CreateFrame("Frame", nil, UIParent)
+    local G = _G :: unknown :: { [string]: unknown }
+    rawset(G, "ZzmCycleTarget", function() end)
+    register({
+        id = id,
+        name = "ZZ Cycle",
+        defaults = { position = { point = "CENTER", x = 0, y = 0 } },
+        OnEnable = function(self: Module)
+            self:On("SUUUI_ZZM_LIFE", function() end)
+            self:Watch("enabled", function() end)
+            self:Every(1, function() end)
+            self:SecureHook("ZzmCycleTarget", function() end)
+            self:SetCVar(CVAR, "0.5")
+            visibility.setVisibility(f, "always", nil, self)
+            anchors.publish("zzmCycle", f, self)
+            self:RegisterSettings({ id = "zzmcycle", build = function() end })
+            self:RegisterMover(f)
+            self:RegisterCommand("zzmcycle", "A test command.", function() end)
+            self:Provide("zzmCycleService", { ping = function() end })
+            self:Each("unitframe", function() end)
+            self:ExtendMenu("zzmCycleMenu", function() end)
+            self:OnAddonMessage("ZZMCYCLE", nil, function() end)
+        end,
+    })
+    local c = cycle(id)
+    expect(c.stateOff).toBe(State.Disabled)
+    expect(c.stateOn).toBe(State.Enabled)
+    expect(c.before).toEqual({
+        listeners = 1,
+        watchers = 1,
+        timers = 1,
+        hooks = 1,
+        cvars = 1,
+        visibility = 1,
+        anchors = 1,
+        -- (work for after combat waits only in a fight, and the registry
+        -- turns modules off out of one: "in combat: work the module queued
+        -- is dropped" covers it)
+        combat = 0,
+        sections = 1,
+        movers = 1,
+        commands = 1,
+        services = 1,
+        extensions = 2,
+        comm = 1,
+    })
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    settings.set(id, "enabled", false)
+    expectNoErrors()
 end

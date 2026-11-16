@@ -1,0 +1,64 @@
+-- Units/AuctionHouse/Common: what the auction house's parts share: a
+-- search's text as kept, money as text, the quality tokens, the time-left
+-- bands, the house's default order, "today hh:mm / n days ago".
+
+import test, expect from "wowlua:test"
+import expectNoErrors from "../../../helpers"
+import trimmed, coins, qualityToken, QUALITY, BAND, sorts, keyInfo, when from "/Units/AuctionHouse/Common"
+
+local function plain(s: string): string
+    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+@test("a search's text as kept: without spaces around it")
+local function trimming()
+    expect(trimmed("  test ore  ")).toBe("test ore")
+    expect(trimmed("blade")).toBe("blade")
+    expect(trimmed("   ")).toBe("")
+    expectNoErrors()
+end
+
+@test("money as text: gold, silver, copper in their colours; silver between gold and copper; none is 0c")
+local function money()
+    expect(plain(coins(12345))).toBe("1g 23s 45c")
+    expect(plain(coins(10000))).toBe("1g")
+    expect(plain(coins(10005))).toBe("1g 0s 5c")
+    expect(plain(coins(250))).toBe("2s 50c")
+    expect(plain(coins(nil))).toBe("0c")
+    expect(plain(coins(-5))).toBe("0c")
+    expect(coins(1):find("|cff", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
+end
+
+@test("the quality tokens: common is ink, the others their quality's; the time-left bands")
+local function qualities()
+    expect(qualityToken(1)).toBe("ink")
+    expect(qualityToken(nil)).toBe("ink")
+    expect(qualityToken(0)).toBe("quality-poor")
+    expect(qualityToken(4)).toBe("quality-epic")
+    expect(qualityToken(99)).toBe("quality-common")
+    expect(QUALITY[2]).toBe("uncommon")
+    expect(BAND[0]).toBe("Short")
+    expect(BAND[3]).toBe("Very long")
+    expectNoErrors()
+end
+
+@test("the house's default order: price, then name; no item key, no info")
+local function order()
+    local s = sorts()
+    expect(#s).toBe(2)
+    expect(s[1].sortOrder).toBe(Enum.AuctionHouseSortOrder.Price)
+    expect(s[2].sortOrder).toBe(Enum.AuctionHouseSortOrder.Name)
+    expect(s[1].reverseSort).toBe(false)
+    expect(keyInfo(nil)).toBeNil()
+    expectNoErrors()
+end
+
+@test("when: today hh:mm, yesterday, n days ago; nothing without a time")
+local function whenSeen()
+    expect(when(nil)).toBe("")
+    expect(when(time()):match("^today %d%d:%d%d$") ~= nil).toBe(true)
+    expect(when(time() - 86400)).toBe("yesterday")
+    expect(when(time() - 3 * 86400)).toBe("3 days ago")
+    expectNoErrors()
+end

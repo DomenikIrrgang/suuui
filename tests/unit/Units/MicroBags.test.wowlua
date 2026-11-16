@@ -17,8 +17,6 @@ import * as frames from "wowlua:frames"
 import internal M from "/Units/MicroBags"
 import expectNoErrors from "../../helpers"
 
-type AnyModuleOf = modules.ModuleOf<modules.WithEnabled<modules.Settings>>
-
 -- one of the game's frames, or SuuUI's holders, by global name
 local function named(name: string): Frame
     return (assert(frames.find(name), name))
@@ -34,10 +32,10 @@ end
 -- SuuUI's micro menu and bags off, and the module set up again.
 local function withoutOwn()
     local real = SuuUI.GetModule
-    mock.stub(SuuUI, "GetModule", function(id: string): AnyModuleOf?
+    mock.stub(SuuUI, "GetModule", function(id: string): modules.AnyModule?
         if id == "micromenu" or id == "bags" then
-            local off: AnyModuleOf = mock.partial({
-                Get = function(_: unknown, _: string): unknown
+            local off: modules.AnyModule = mock.partial({
+                Setting = function(_: unknown, _: string): unknown
                     return false
                 end,
             })
@@ -101,14 +99,14 @@ local function guarded()
     expect(micro:GetParent()).toBe(holder)
 end
 
-@test("the holders show as Shows says, hidden while edit mode hid them")
+@test("the holders show as Shows says, hidden while edit mode hid them; the module owns them")
 local function shows()
     withoutOwn()
-    local vis = mock.stub(SuuUI.UI, "SetVisibility", function(_: Frame, _: string?) end)
+    local vis = mock.stub(SuuUI.UI, "SetVisibility", function(_: Frame, _: string?, _: unknown, _: unknown) end)
     M:Set("shows", "always")
-    expect(vis).toHaveBeenCalledWith(named("SuuUIMicroHolder"), "always")
+    expect(vis).toHaveBeenCalledWith(named("SuuUIMicroHolder"), "always", nil, M)
     M:Set("bagsPosition", { point = "TOP", x = 20, y = -116, hidden = true })
-    expect(vis).toHaveBeenCalledWith(named("SuuUIBagsHolder"), "hidden")
+    expect(vis).toHaveBeenCalledWith(named("SuuUIBagsHolder"), "hidden", nil, M)
     local s = registry.get("microbags") :: registry.Section
     local scale: registry.RowDef? = nil
     for _, r in ipairs((s.groups or {})[1].rows) do

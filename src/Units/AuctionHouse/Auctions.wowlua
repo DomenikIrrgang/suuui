@@ -1,0 +1,667 @@
+-- Units/AuctionHouse/Auctions.wowlua
+-- The Auctions page of the auction house (Units/AuctionHouse): two
+-- sub-tabs, your auctions (Cancel auction, what cancelling costs) and your
+-- bids (highest or outbid, your bid remembered; Bid, Buy out). The
+-- module's methods for it (SetAuctionsTab, DrawAuctions, CancelChosen,
+-- RememberBid, BidAgain, BuyOutBid, …) call the functions here.
+
+import SuuUI from "/Core/API"
+import type SuuButton, Text, MoneyInput, ItemSlot, Money, TabMarker from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import keyInfo, keyTooltip, QUALITY, qualityToken, BAND, coins from "./Common"
+import TableRow, AuctionTable from "./Tables"
+import type Col, Cell from "./Tables"
+import leastBid, seenOf, recheck, recheckNote, bidProblem from "./Bidding"
+import type Seen from "./Bidding"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, tryValue = errors.try, errors.tryValue
+local asNumber, asString = secret.asNumber, secret.asString
+
+local AH = C_AuctionHouse
+
+--------------------------------------------------------------------------------
+-- Auctions: yours (Cancel auction) and your bids (Bid, Buy out), as two
+-- sub-tabs. The house sends both lists when asked (QueryOwnedAuctions,
+-- QueryBids: each time the tab shows, and after a change).
+--------------------------------------------------------------------------------
+
+-- One of yours or one of your bids, as the lists show it.
+export type Listed = {
+    auctionID: number,
+    itemKey: ItemKey,
+    itemLink?: string,
+    quantity?: number,
+    status?: number,
+    timeLeft?: number,
+    timeLeftSeconds?: number,
+    minBid?: number,
+    bidAmount?: number,
+    buyoutAmount?: number,
+    bidder?: string,
+}
+
+local function ownedListed(o: OwnedAuctionInfo): Listed
+    return {
+        auctionID = o.auctionID,
+        itemKey = o.itemKey,
+        itemLink = o.itemLink,
+        quantity = o.quantity,
+        status = o.status,
+        timeLeft = o.timeLeft,
+        timeLeftSeconds = o.timeLeftSeconds,
+        bidAmount = o.bidAmount,
+        buyoutAmount = o.buyoutAmount,
+        bidder = o.bidder,
+    }
+end
+
+local function bidListed(b: BidInfo): Listed
+    return {
+        auctionID = b.auctionID,
+        itemKey = b.itemKey,
+        itemLink = b.itemLink,
+        timeLeft = b.timeLeft,
+        minBid = b.minBid,
+        bidAmount = b.bidAmount,
+        buyoutAmount = b.buyoutAmount,
+        bidder = b.bidder,
+    }
+end
+
+-- Time left: an owned auction's in hours or minutes, else the game's band.
+local function timeLeft(seconds: number?, band: number?): string
+    if seconds and not secret.isSecret(seconds) then
+        if seconds >= 3600 then
+            return math.floor(seconds / 3600) .. " h"
+        end
+        return math.max(1, math.floor(seconds / 60)) .. " min"
+    end
+    return BAND[band or -1] or "?"
+end
+
+-- An item's name, icon and quality: from its link, else its item key.
+local function itemOf(entry: Listed): (string?, number?, number?)
+    local info = keyInfo(entry.itemKey)
+    local name, quality, icon = info and info.itemName, info and info.quality, info and info.iconFileID
+    local link = asString(entry.itemLink)
+    if link then
+        local n, _, q, _, _, _, _, _, _, tex = C_Item.GetItemInfo(link)
+        name, quality, icon = asString(n) or name, asNumber(q) or quality, asNumber(tex) or icon
+    end
+    return name, quality, icon
+end
+
+-- A sub-tab: its key and label.
+export class SubTab extends Button
+    readonly key: string
+    readonly label: Text
+
+    constructor(parent: Frame, key: string, label: string)
+        super(nil, parent)
+        self.key = key
+        self.label = UI.Text(self, "header", "ink-muted")
+        self.label:SetPoint("CENTER", 0, 2)
+        self.label:SetValue(label)
+    end
+end
+
+-- One of yours or one of your bids: the item (slot, name, a tag), time
+-- left, two prices (or a word in a price's place).
+export class AuctionRow extends TableRow
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly tag: Text
+    readonly time: Text
+    readonly first: Money
+    readonly second: Money
+    readonly firstText: Text
+    readonly secondText: Text
+    entry: Listed? = nil
+
+    constructor(parent: Frame)
+        super(parent)
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetWordWrap(false)
+        self.tag = UI.Text(self, "micro", "fel")
+        self.time = UI.Text(self, "caption", "ink")
+        self.first, self.second = UI.Money(self), UI.Money(self)
+        self.firstText = UI.Text(self, "caption", "ink-muted")
+        self.firstText:SetJustifyH("RIGHT")
+        self.secondText = UI.Text(self, "caption", "ink-muted")
+        self.secondText:SetJustifyH("RIGHT")
+    end
+end
+
+-- The Auctions page: the sub-tabs, your auctions and their foot (Cancel),
+-- your bids and theirs (your bid, Bid, Buy out).
+export class AuctionsPage extends Frame
+    sub: string = "auctions"
+    readonly tabs: SubTab[] = {}
+    readonly marker: TabMarker
+    readonly mineFoot: Frame
+    readonly cancel: SuuButton
+    readonly cancelNote: Text
+    readonly bidsFoot: Frame
+    readonly buyout: SuuButton
+    readonly bidButton: SuuButton
+    readonly bid: MoneyInput
+    readonly mineT: AuctionTable<AuctionRow>
+    readonly bidsT: AuctionTable<AuctionRow>
+    -- the chosen one (its auctionID, and your bid's as you saw it when
+    -- choosing it), the list shown, your bids' standing, what is cancelled
+    chosen: number? = nil
+    seen: Seen? = nil
+    list: Listed[] = {}
+    readonly highest: { [number]: boolean } = {}
+    cancelling: Listed? = nil
+
+    constructor(body: Frame, m: AuctionHouseModule)
+        super(nil, body)
+        self:SetAllPoints()
+        self:Hide()
+        -- the sub-tabs: header type, the chosen one gilt-text over a gilt hairline with its jewel
+        local TAB_H = 28
+        self.marker = UI.TabMarker(self)
+        local x = 0
+        for _, t in ipairs({ { key = "auctions", label = "Auctions" }, { key = "bids", label = "Bids" } }) do
+            local b = SubTab.new(self, t.key, t.label)
+            b:SetSize(UI.MeasureText("header", t.label) + 2 * S["space-4"], TAB_H)
+            b:SetPoint("TOPLEFT", x, 0)
+            x = x + b:GetWidth() + S["space-2"]
+            b:SetScript("OnEnter", function()
+                if self.sub ~= b.key then
+                    b.label:SetColor("ink")
+                end
+            end)
+            b:SetScript("OnLeave", function()
+                if self.sub ~= b.key then
+                    b.label:SetColor("ink-muted")
+                end
+            end)
+            b:SetScript("OnClick", function()
+                m:SetAuctionsTab(b.key)
+            end)
+            self.marker:Track(b)
+            self.tabs[#self.tabs + 1] = b
+        end
+        -- the foot: Cancel auction for yours; your bid, Bid, Buy out for bids
+        local function foot(): Frame
+            local f = CreateFrame("Frame", nil, self)
+            f:SetPoint("BOTTOMLEFT")
+            f:SetPoint("BOTTOMRIGHT")
+            f:SetHeight(30)
+            return f
+        end
+        self.mineFoot = foot()
+        self.cancel = UI.Button(self.mineFoot, {
+            text = "Cancel auction",
+            icon = "close",
+            onClick = function()
+                m:CancelChosen()
+            end,
+        })
+        self.cancel:SetPoint("RIGHT")
+        self.cancelNote = UI.Text(self.mineFoot, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.cancelNote:SetPoint("RIGHT", self.cancel, "LEFT", -S["space-4"], 0)
+        end)
+        self.bidsFoot = foot()
+        self.buyout = UI.Button(self.bidsFoot, {
+            text = "Buy out",
+            variant = "primary",
+            onClick = function()
+                m:BuyOutBid()
+            end,
+        })
+        self.buyout:SetPoint("RIGHT")
+        self.bidButton = UI.Button(self.bidsFoot, {
+            text = "Bid",
+            onClick = function()
+                m:BidAgain()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.bidButton:SetPoint("RIGHT", self.buyout, "LEFT", -S["space-2"], 0)
+        end)
+        self.bid = UI.MoneyInput(self.bidsFoot, {
+            onChange = function()
+                m:DrawAuctionsFoot()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.bid:SetPoint("RIGHT", self.bidButton, "LEFT", -S["space-4"], 0)
+        end)
+        local bidLabel = UI.Text(self.bidsFoot, "caption", "ink-muted")
+        bidLabel:SetValue("Your bid")
+        SuuUI.Layout.Follow(self, function()
+            bidLabel:SetPoint("RIGHT", self.bid, "LEFT", -S["space-3"], 0)
+        end)
+        -- the lists
+        local function table(cols: Col[], f: Frame): AuctionTable<AuctionRow>
+            local t = AuctionTable.new(self, cols, function(p: Frame): AuctionRow
+                return AuctionRow.new(p)
+            end)
+            t:SetPoint("TOPLEFT", 0, -(TAB_H + S["space-4"]))
+            t:SetPoint("BOTTOMRIGHT", f, "TOPRIGHT", 0, S["space-4"])
+            return t
+        end
+        self.mineT = table(
+            {
+                { label = "Item" },
+                { label = "Time left", w = 90 },
+                { label = "Bid", w = 120, right = true },
+                { label = "Buyout", w = 120, right = true },
+            },
+            self.mineFoot
+        )
+        self.bidsT = table(
+            {
+                { label = "Item" },
+                { label = "Time left", w = 90 },
+                { label = "Your bid", w = 150, right = true },
+                { label = "Buyout", w = 120, right = true },
+            },
+            self.bidsFoot
+        )
+    end
+
+    -- The chosen one of the list shown.
+    function Chosen(): Listed?
+        for _, e in ipairs(self.list) do
+            if e.auctionID == self.chosen then
+                return e
+            end
+        end
+        return nil
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Auctions
+--------------------------------------------------------------------------------
+
+export function setAuctionsTab(self: AuctionHouseModule, key: string)
+    local a = self.mine
+    if not a then
+        return
+    end
+    a.sub = key
+    a.chosen, a.seen = nil, nil
+    for _, b in ipairs(a.tabs) do
+        local on = b.key == key
+        b.label:SetColor(on and "gilt-text" or "ink-muted")
+        if on then
+            a.marker:SetChosen(b)
+        end
+    end
+    if key == "bids" then
+        try(AH.QueryBids, {}, {})
+    else
+        try(AH.QueryOwnedAuctions, {})
+    end
+    self:DrawAuctions()
+end
+
+-- One row of either list: the item (slot, name, a tag), time left, two prices.
+export function auctionRowOf(
+    self: AuctionHouseModule,
+    t: AuctionTable<AuctionRow>,
+    i: number,
+    entry: Listed,
+    tag: string?,
+    tagColor: string?,
+    time: string,
+    first: Cell,
+    second: Cell,
+    chosen: boolean
+): AuctionRow
+    local row = t:Line(i)
+    local name, quality, icon = itemOf(entry)
+    local quantity = entry.quantity or 1
+    row.slot.skin:SetItem({
+        icon = icon,
+        quality = QUALITY[quality or 1] or "common",
+        count = quantity > 1 and quantity or nil,
+    })
+    row.name:SetValue(name or "…")
+    row.name:SetColor(qualityToken(quality))
+    row.tag:SetValue(tag or "")
+    row.tag:SetColor(tagColor or "fel")
+    row.time:SetValue(time)
+    -- a price, or a word in its place
+    local function price(money: Money, text: Text, v: Cell): Frame | FontString
+        if type(v) == "number" and v > 0 then
+            money:Show()
+            text:Hide()
+            money:SetCopper(v)
+            return money
+        end
+        money:Hide()
+        text:Show()
+        text:SetValue(type(v) == "string" and v or "")
+        return text
+    end
+    local places = t:Places(t.list:GetWidth())
+    row.slot:ClearAllPoints()
+    row.slot:SetPoint("LEFT", places[1].x, 0)
+    row.name:ClearAllPoints()
+    row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
+    local tagW = tag and (UI.MeasureText("micro", tag) + S["space-2"]) or 0
+    row.name:SetWidth(
+        math.max(20, math.min(UI.MeasureText("label", name or "…") + 2, places[1].w - 24 - S["space-3"] - tagW))
+    )
+    row.tag:ClearAllPoints()
+    row.tag:SetPoint("LEFT", row.name, "RIGHT", S["space-2"], 0)
+    t:PlaceCells(row, {
+        false,
+        row.time,
+        price(row.first, row.firstText, first),
+        price(row.second, row.secondText, second),
+    })
+    row.sel:SetShown(chosen)
+    row.entry = entry
+    row.onEnter = function()
+        local e = row.entry
+        if not e then
+            return
+        end
+        local link = asString(e.itemLink)
+        if link then
+            GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(link)
+            GameTooltip:Show()
+        else
+            keyTooltip(row, e.itemKey)
+        end
+    end
+    row:Show()
+    return row
+end
+
+export function drawAuctions(self: AuctionHouseModule)
+    local a = self.mine
+    if not a then
+        return
+    end
+    local bids = a.sub == "bids"
+    a.mineT:SetShown(not bids)
+    a.mineFoot:SetShown(not bids)
+    a.bidsT:SetShown(bids)
+    a.bidsFoot:SetShown(bids)
+    local t = bids and a.bidsT or a.mineT
+    local n = 0
+    if bids then
+        local me = asString(UnitGUID("player"))
+        local d = self:Saved()
+        local mine = d.bids or {}
+        local entries: Listed[] = {}
+        for _, b in ipairs(tryValue(AH.GetBids) or {}) do
+            entries[#entries + 1] = bidListed(b)
+        end
+        a.list = entries
+        for i, b in ipairs(entries) do
+            n = i
+            -- outbid: someone else holds the highest bid (unknown counts as yours)
+            local bidder = asString(b.bidder)
+            local outbid = bidder ~= nil and bidder ~= me
+            if outbid and a.highest[b.auctionID] then
+                local name = itemOf(b)
+                self:Note("You've been outbid on " .. (name or "an item") .. ".", "error")
+            end
+            a.highest[b.auctionID] = not outbid
+            local row = self:AuctionRowOf(
+                t,
+                i,
+                b,
+                outbid and "Outbid" or "Highest bid",
+                outbid and "ember-text" or "fel",
+                timeLeft(nil, b.timeLeft),
+                mine[b.auctionID] or b.bidAmount or false,
+                b.buyoutAmount or "none",
+                a.chosen == b.auctionID
+            )
+            row:SetScript("OnClick", function()
+                if a.chosen ~= b.auctionID then
+                    a.bid:Clear()
+                end
+                a.chosen, a.seen = b.auctionID, seenOf(b)
+                local least = leastBid(b) or 0
+                if (a.bid:GetCopper() or 0) < least then
+                    a.bid:SetCopper(least)
+                end
+                self:DrawAuctions()
+            end)
+        end
+        -- the bids you placed that the house no longer lists are over
+        local live: { [number]: boolean } = {}
+        for _, b in ipairs(entries) do
+            live[b.auctionID] = true
+        end
+        for id in pairs(mine) do
+            if not live[id] then
+                mine[id] = nil
+            end
+        end
+        t.empty:SetValue("You have no bids.")
+    else
+        local entries: Listed[] = {}
+        for i = 1, tryValue(AH.GetNumOwnedAuctions) or 0 do
+            local o = tryValue(AH.GetOwnedAuctionInfo, i)
+            if o then
+                entries[#entries + 1] = ownedListed(o)
+            end
+        end
+        a.list = entries
+        local sold = Enum.AuctionStatus.Sold
+        for i, o in ipairs(entries) do
+            n = i
+            local isSold = o.status == sold
+            local row = self:AuctionRowOf(
+                t,
+                i,
+                o,
+                isSold and "Sold" or nil,
+                "fel",
+                isSold and "" or timeLeft(o.timeLeftSeconds, o.timeLeft),
+                o.bidAmount or (isSold and "" or "no bids"),
+                o.buyoutAmount or "",
+                a.chosen == o.auctionID
+            )
+            row:SetScript("OnClick", function()
+                a.chosen, a.seen = o.auctionID, nil
+                self:DrawAuctions()
+            end)
+        end
+        t.empty:SetValue("You have no auctions.")
+    end
+    t:Fit(n)
+    t.empty:SetShown(n == 0)
+    self:DrawAuctionsFoot()
+end
+
+export function drawAuctionsFoot(self: AuctionHouseModule)
+    local a = self.mine
+    if not a then
+        return
+    end
+    local e = a:Chosen()
+    if a.sub == "bids" then
+        local amount = a.bid:GetCopper() or 0
+        local money = GetMoney() or 0
+        local waiting = self.bidding and "Waiting for the house's answer to your last bid." or nil
+        local why = not e and "Choose a bid." or waiting or (e and bidProblem(leastBid(e), amount, money, e.buyoutAmount)) or
+            nil
+        a.bidButton:SetEnabledState(why == nil)
+        a.bidButton.tooltip = why and { title = "Bid", description = why } or nil
+        local buy = e and e.buyoutAmount
+        why = not e and "Choose a bid." or not buy and "This auction has no buyout." or
+            (buy and buy > money) and "Not enough money." or
+            waiting or
+            nil
+        a.buyout:SetEnabledState(why == nil)
+        a.buyout.tooltip = why and { title = "Buy out", description = why } or nil
+    else
+        local active = e ~= nil and e.status ~= Enum.AuctionStatus.Sold
+        local can = e ~= nil and active and tryValue(AH.CanCancelAuction, e.auctionID) ~= false
+        a.cancel:SetEnabledState(can)
+        a.cancel.tooltip = not can and
+            {
+                title = "Cancel auction",
+                description = not e and "Choose one of your auctions." or not active and "It has sold." or
+                    "The house doesn't allow cancelling this one.",
+            } or
+            nil
+        -- what cancelling costs, when it costs more than the deposit
+        local cost = (can and e) and tryValue(AH.GetCancelCost, e.auctionID) or 0
+        a.cancelNote:SetValue(
+            "The deposit isn't returned when you cancel." ..
+                ((cost and cost > 0) and (" Cancelling this one costs " .. coins(cost) .. ".") or "")
+        )
+    end
+end
+
+export function cancelChosen(self: AuctionHouseModule)
+    local a = self.mine
+    local e = a and a:Chosen()
+    -- (found by its id in the list as it is now: sold meanwhile, nothing)
+    if not (a and e) or e.status == Enum.AuctionStatus.Sold then
+        return
+    end
+    a.cancelling = e
+    local id = e.auctionID
+    local ok, refused = pcall(function(): boolean
+        return (SuuUI.ExpectRefusal(AH.CancelAuction, id))
+    end)
+    if not ok or refused then
+        a.cancelling = nil
+        self:Note(refused == true and "The game refused to cancel it: nothing was cancelled." or ("Couldn't cancel: " .. tostring(refused)), "error")
+    end
+end
+
+export function onCancelled(self: AuctionHouseModule, auctionID: unknown)
+    local a = self.mine
+    local e = a and a.cancelling
+    if e and e.auctionID == auctionID then
+        local name = itemOf(e)
+        self:Note(("Cancelled: %s ×%d. The deposit isn't returned."):format(name or "?", e.quantity or 1), "ok")
+    end
+    if a then
+        a.cancelling, a.chosen = nil, nil
+    end
+    try(AH.QueryOwnedAuctions, {})
+end
+
+-- Your bid on an auction, remembered so the list shows it after you are outbid.
+export function rememberBid(self: AuctionHouseModule, auctionID: number, amount: number)
+    local d = self:Saved()
+    local bids = d.bids or {}
+    d.bids = bids
+    bids[auctionID] = amount
+end
+
+-- The chosen bid found again by its id and checked against what you saw
+-- when choosing it (gone or changed: nothing placed, you're told and shown
+-- it as it is now); nil when it isn't fit to act on.
+local function current(self: AuctionHouseModule, seen: Seen, what: string): Listed?
+    local a = self.mine
+    if not a then
+        return nil
+    end
+    local e, why = recheck(a.list, seen)
+    if why then
+        self:Note(recheckNote(why, e, what), "error")
+        if e then
+            a.seen = seenOf(e)
+        else
+            a.chosen, a.seen = nil, nil
+            a.bid:Clear()
+        end
+        self:DrawAuctions()
+        return nil
+    end
+    return e
+end
+
+-- Bid again: checked, asked first, checked again at the answer, then
+-- placed (AuctionHouse/Bidding: counted once the house says so).
+export function bidAgain(self: AuctionHouseModule)
+    local a = self.mine
+    local seen = a and a.seen
+    if not (a and seen and a.chosen == seen.auctionID) then
+        return
+    end
+    local e = current(self, seen, "bid")
+    if not e then
+        return
+    end
+    local amount = a.bid:GetCopper()
+    local why = bidProblem(leastBid(e), amount, GetMoney() or 0, e.buyoutAmount)
+    if why then
+        self:Note("No bid placed. " .. why, "error")
+        return
+    end
+    local name = itemOf(e) or "this"
+    local id = e.auctionID
+    UI.Confirm({
+        title = "Bid on " .. name .. "?",
+        text = ("Your bid: %s (least bid %s)."):format(coins(amount), coins(leastBid(e))),
+        confirm = "Bid",
+        onConfirm = function()
+            if a.chosen ~= id then
+                self:Note("You chose another bid meanwhile: no bid placed.", "error")
+                return
+            end
+            local now = current(self, seen, "bid")
+            if not now then
+                return
+            end
+            local again = bidProblem(leastBid(now), amount, GetMoney() or 0, now.buyoutAmount)
+            if again then
+                self:Note("No bid placed. " .. again, "error")
+                return
+            end
+            self:PlaceBid(id, amount, name, false)
+        end,
+    })
+end
+
+-- Buy out one of your bids: asked first; at the answer the same auction,
+-- its buyout unchanged and the money there; then sent (Forever refused a
+-- single auction's buyout from SuuUI's code before: if it does, you're told
+-- nothing was bought; bought only when the house says so).
+export function buyOutBid(self: AuctionHouseModule)
+    local a = self.mine
+    local seen = a and a.seen
+    if not (a and seen and a.chosen == seen.auctionID) then
+        return
+    end
+    local e = current(self, seen, "bought")
+    local buyout = e and e.buyoutAmount
+    if not (e and buyout and buyout > 0) then
+        return
+    end
+    local name = itemOf(e) or "this"
+    local id = e.auctionID
+    UI.Confirm({
+        title = "Buy out " .. name .. "?",
+        text = ("For %s."):format(coins(buyout)),
+        confirm = "Buy out",
+        onConfirm = function()
+            local now = current(self, seen, "bought")
+            if not now then
+                return
+            end
+            if buyout > (GetMoney() or 0) then
+                self:Note("Not enough money: nothing was bought.", "error")
+                return
+            end
+            self:PlaceBid(id, buyout, name, true)
+        end,
+    })
+end

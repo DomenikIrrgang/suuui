@@ -1,12 +1,12 @@
--- Units/RankUpgrade: a learned rank replaces your best rank before it on
+-- Units/ActionBars/RankUpgrade: a learned rank replaces your best rank before it on
 -- every action slot (lower ranks stay), says so once, waits for the end of
 -- combat and an empty cursor; off, nothing changes.
 
 import test, expect, beforeEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import RankUpgrader from "/Units/RankUpgrade"
-import type DeclinedRanks from "/Units/RankUpgrade"
-import expectNoErrors from "../../helpers"
+import RankUpgrader from "/Units/ActionBars/RankUpgrade"
+import type DeclinedRanks from "/Units/ActionBars/RankUpgrade"
+import expectNoErrors from "../../../helpers"
 
 -- Test Bolt, ranks 1 to 4 (made up)
 local R1, R2, R3, R4 = 990001, 990002, 990003, 990004
@@ -135,6 +135,36 @@ local function cursorBusy()
     mock.advanceTime(1.1)
     expect(slot(MAIN)).toBe(R4)
     expect(GetCursorInfo()).toBeNil()
+end
+
+@test("the moment-later reads and retries go through the timer it was given (Action bars': its own)")
+local function givenLater()
+    local asked: number[] = {}
+    local pending: (() -> ())[] = {}
+    local u = RankUpgrader.new(function() end, function(): boolean
+        return true
+    end, function(sec: number, fn: () -> ())
+        asked[#asked + 1] = sec
+        pending[#pending + 1] = fn
+    end)
+    u.best["Test Bolt"] = 3
+    u:BookChanged()
+    u:BookChanged()
+    expect(asked).toEqual({ 1 })
+    C_Spell.PickupSpell(990100)
+    u:Learned(R4)
+    expect(asked).toEqual({ 1, 1 })
+    -- nothing runs by itself: a timer that never comes (the module off)
+    mock.advanceTime(3)
+    expect(slot(MAIN)).toBe(R3)
+    ClearCursor()
+    for _, fn in ipairs(pending) do
+        fn()
+    end
+    expect(slot(MAIN)).toBe(R4)
+    expect(u.rereading).toBe(false)
+    expect(u.retrying).toBe(false)
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------

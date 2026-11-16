@@ -2,8 +2,12 @@
 -- sight), on the emulated mailbox. The inbox (each mail's sender, subject,
 -- days left, money, items or COD; read and unread), the open mail (its text,
 -- an invoice's lines, attachments, money, COD, Reply, Delete, Return),
--- taking (COD asks; not enough money), Collect all and Collect money (COD
--- and a game master's skipped, full bags), sending (what Send needs, money
+-- taking (COD asks; not enough money; the inbox moving before the answer:
+-- only the mail asked about, at its amount), rows and the open mail found
+-- again after the inbox moved (Delete, Return, a click, a modified click),
+-- Collect all and Collect money through the window (COD and a game
+-- master's never taken, the game's refusal told, the player taking over;
+-- the run itself: Mail/Collect), sending (what Send needs, money
 -- or COD, attachments naming the subject, success, failure, a cancelled
 -- confirmation, never stuck), To's suggestions (your characters, recent,
 -- the guild; arrows, Enter, Tab, a click), the Sent list, /suu mailsuggest.
@@ -15,10 +19,13 @@ import type Confirms from "../../helpers"
 import printedSince, printedCount, hasLine, themeChanged, tokenOf from "../SettingsUI/UiSettingsHelpers"
 import internal M from "/Units/Mail"
 import type MailRow, OpenMail, SendForm, Inbox, Sent, SuggestList from "/Units/Mail"
+import type Left from "/Units/Mail/Collect"
 import type WindowFrame from "/UI/Panel"
 import type ConfirmOptions from "/UI/Panel"
 import type TooltipData from "/UI/Tooltip"
 import * as frames from "wowlua:frames"
+import SuuUI from "/Core/API"
+import confirm from "/UI/Panel"
 
 local WATER, TOME = 990011, 990012
 mock.defineItem(WATER, { name = "Test Water", quality = 1, stackCount = 20, icon = 134400 }, { cached = true })
@@ -79,6 +86,7 @@ end
 local function start()
     confirms = captureConfirm()
     mock.player:setMoney(1000000)
+    mock.setBag(0, { slots = 20, items = {} })
 end
 
 @afterEach
@@ -158,14 +166,14 @@ local function walkAway()
     openMailbox()
     mock.stub(_G, "TakeInboxMoney", function(_: number) end)
     mock.click(inbox().collect)
-    expect(M.collecting ~= nil).toBe(true)
+    expect(M:Collecting()).toBe(true)
     -- the game hides the mailbox's interaction (the emulator's mailbox
     -- doesn't close with distance: told here as the game tells it)
     mock.fireEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", Enum.PlayerInteractionType.MailInfo)
     expect(win()).never.toBeShown()
     expect(mailFrame()).never.toBeShown()
     expect(M.open).toBe(false)
-    expect(M.collecting).toBe(nil)
+    expect(M:Collecting()).toBe(false)
     -- another interaction's hide leaves an open mailbox alone
     openMailbox()
     mock.fireEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", Enum.PlayerInteractionType.Merchant)
@@ -283,6 +291,201 @@ local function cod()
     expect(confirmed().title).toBe("Not enough money")
 end
 
+-- A confirmation's text without its colours.
+local function plain(text: string?): string
+    return ((text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+local function codBox(): Letter[]
+    return {
+        { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 9 },
+        { sender = "Tester", subject = "Pay up", cod = 20000, items = { { id = TOME, count = 1 } }, daysLeft = 3 },
+    }
+end
+local function otherCod(): Letter
+    return { sender = "Tester", subject = "Pay up", cod = 50000, items = { { id = WATER, count = 5 } }, daysLeft = 30 }
+end
+
+@test("COD: the inbox changes before the confirmation; the mail asked about is taken, at the amount shown")
+local function codShifted()
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    expect(plain(confirmed().text)).toBe("Pay 2g to Tester for Test Tome?")
+    -- Tamsin's mail deleted, two new ones at the top (one COD from the same sender)
+    local list = codBox()
+    mock.defineMailbox(assert(box), {
+        letters = { otherCod(), { sender = "Ashford", subject = "New", money = 10, daysLeft = 30 }, list[2] },
+    })
+    mock.fireEvent("MAIL_INBOX_UPDATE")
+    local take = TakeInboxItem
+    local took = mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        take(i, a)
+    end)
+    assert(confirmed().onConfirm)(nil)
+    expect(took).toHaveBeenCalledTimes(1)
+    expect(took).toHaveBeenCalledWith(3, 1)
+    mock.advanceTime(1)
+    expect(C_Item.GetItemCount(TOME)).toBe(1)
+    expect(C_Item.GetItemCount(WATER)).toBe(0)
+end
+
+@test("COD: the mail gone or another amount by the confirmation, or the mailbox closed: nothing taken")
+local function codGone()
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    -- the same sender's other COD now where it was, the one asked about gone
+    mock.defineMailbox(assert(box), { letters = { codBox()[1], otherCod() } })
+    mock.fireEvent("MAIL_INBOX_UPDATE")
+    local took = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    assert(confirmed().onConfirm)(nil)
+    expect(took).toHaveBeenCalledTimes(0)
+    expect(inbox().note:GetText()).toBe("That mail changed or is gone: nothing was taken or paid.")
+    -- asked, then the money spent elsewhere
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    mock.player:setMoney(100)
+    assert(confirmed().onConfirm)(nil)
+    expect(took).toHaveBeenCalledTimes(0)
+    expect(inbox().note:GetText()).toBe("Not enough money for the cash on delivery: nothing was taken.")
+    mock.player:setMoney(1000000)
+    -- asked, then the mailbox closed and opened again
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    local ask = confirmed()
+    CloseMail()
+    openMailbox(codBox())
+    assert(ask.onConfirm)(nil)
+    expect(took).toHaveBeenCalledTimes(0)
+end
+
+@test("the question to pay a COD closes with the mailbox; another question stays")
+local function codClosed()
+    mock.stub(SuuUI.UI, "Confirm", confirm)
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    local dialog = assert(M.codAsk)
+    expect(dialog).toBeShown()
+    CloseMail()
+    expect(dialog).never.toBeShown()
+    expect(M.codAsk).toBe(nil)
+    -- the shared dialog asking something else: left alone
+    openMailbox(codBox())
+    mock.click(row("Tester"))
+    mock.click(pane().slots[1])
+    local other = confirm({ title = "Something else" })
+    CloseMail()
+    expect(other).toBeShown()
+    other:Hide()
+end
+
+@test("Collect all never pays a COD; a COD mail's row never loots it")
+local function codUntouched()
+    openMailbox(codBox())
+    local took = mock.stub(_G, "TakeInboxItem", function(_: number, _: number) end)
+    local loot = mock.stub(_G, "AutoLootMailItem", function(_: number) end)
+    mock.click(inbox().collect)
+    mock.advanceTime(10)
+    expect(M:Collecting()).toBe(false)
+    expect(took).toHaveBeenCalledTimes(0)
+    expect(inbox().collect:IsEnabled()).toBe(false) -- nothing it may take
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    mock.click(row("Tester"))
+    expect(loot).toHaveBeenCalledTimes(0)
+end
+
+@test("a row clicked after the inbox moved opens (and loots) the mail it showed, not what is there now")
+local function rowShifted()
+    openMailbox(codBox())
+    local tamsin = row("Tamsin")
+    local list = codBox()
+    mock.defineMailbox(assert(box), { letters = { otherCod(), list[1], list[2] } })
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    local loot = mock.stub(_G, "AutoLootMailItem", function(_: number) end)
+    mock.click(tamsin) -- drawn as Tamsin's at 1; the other COD is there now
+    expect(loot).toHaveBeenCalledTimes(1)
+    expect(loot).toHaveBeenCalledWith(2)
+    expect(M.openIndex).toBe(2)
+    expect(pane().from:GetText()).toBe("From Tamsin")
+    -- a row whose mail is gone opens nothing
+    local stale = inbox().rows[3] -- (drawn again: the 20g COD, now at 3)
+    expect(stale.sender:GetText()).toBe("Tester")
+    mock.defineMailbox(assert(box), { letters = { otherCod() } })
+    mock.click(stale)
+    expect(loot).toHaveBeenCalledTimes(1)
+    expect(M.openIndex).toBe(nil)
+    expect(pane()).never.toBeShown()
+end
+
+@test("Delete and Return act on the open mail where it is now; a changed one is left alone")
+local function deleteShifted()
+    local function words(sender: string, money: number?): Letter
+        return { sender = sender, subject = "Words", text = "x", money = money, daysLeft = 5, wasRead = true }
+    end
+    openMailbox({ words("Tamsin"), words("Ashford") })
+    mock.stub(_G, "InboxItemCanDelete", function(_: number): boolean
+        return true
+    end)
+    mock.click(row("Ashford"))
+    local del = mock.stub(_G, "DeleteInboxItem", function(_: number) end)
+    mock.defineMailbox(assert(box), { letters = { words("Partyone"), words("Tamsin"), words("Ashford") } })
+    mock.click(pane().delete) -- (not drawn again yet: the pane still shows Ashford's)
+    expect(del).toHaveBeenCalledWith(3)
+    -- the open mail changed under the pane: nothing done
+    mock.stub(_G, "InboxItemCanDelete", function(_: number): boolean
+        return false
+    end)
+    mock.click(row("Tamsin"))
+    local ret = mock.stub(_G, "ReturnInboxItem", function(_: number) end)
+    mock.defineMailbox(assert(box), { letters = { words("Partyone"), words("Tamsin", 300), words("Ashford") } })
+    mock.click(pane().ret)
+    expect(ret).toHaveBeenCalledTimes(0)
+    expect(inbox().note:GetText()).toBe("That mail changed: nothing was done. Look at it again.")
+end
+
+@test("the open mail stays open as things are taken from it, and follows it when the inbox moves")
+local function openFollows()
+    openMailbox({
+        { sender = "Tamsin", subject = "Hello", money = 5000, daysLeft = 9 },
+        {
+            sender = "Ashford",
+            subject = "Bits",
+            items = { { id = WATER, count = 5 }, { id = TOME, count = 1 } },
+            daysLeft = 9,
+        },
+    })
+    mock.click(row("Ashford"))
+    local water = C_Item.GetItemCount(WATER)
+    mock.click(pane().slots[1])
+    mock.advanceTime(1)
+    expect(C_Item.GetItemCount(WATER)).toBe(water + 5)
+    expect(pane()).toBeShown()
+    expect(pane().from:GetText()).toBe("From Ashford")
+    -- Tamsin's gone: Ashford's moves up, still open
+    mock.defineMailbox(assert(box), {
+        letters = {
+            {
+                sender = "Ashford",
+                subject = "Bits",
+                items = { { id = WATER, count = 5, taken = true }, { id = TOME, count = 1 } },
+                daysLeft = 9,
+            },
+        },
+    })
+    mock.fireEvent("MAIL_INBOX_UPDATE")
+    mock.advanceTime(0.1)
+    expect(M.openIndex).toBe(1)
+    expect(pane().from:GetText()).toBe("From Ashford")
+end
+
 @test("Delete for an empty mail, Return for a player's; the open mail goes")
 local function deleteReturn()
     openMailbox({
@@ -324,40 +527,91 @@ end
 -- Collect all
 --------------------------------------------------------------------------------
 
-@test("Collect all takes every money and item a moment apart, skipping COD and a game master's")
+@test("Collect all takes every money and item, each once the game answered, skipping COD and a game master's")
 local function collectAll()
     openMailbox()
-    local took: string[] = {}
-    mock.stub(_G, "TakeInboxMoney", function(i: number)
-        took[#took + 1] = "money " .. i
+    local takeItem, takeMoney = TakeInboxItem, TakeInboxMoney
+    local items = mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        takeItem(i, a)
     end)
-    mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
-        took[#took + 1] = "item " .. i .. "." .. a
+    local money = mock.stub(_G, "TakeInboxMoney", function(i: number)
+        takeMoney(i)
     end)
+    local before = GetMoney()
+    local water, tome = C_Item.GetItemCount(WATER), C_Item.GetItemCount(TOME)
     mock.click(inbox().collect)
     expect(inbox().collect.label:GetText()).toBe("Collecting…")
     M:CollectAll(false) -- collecting already: once
-    mock.advanceTime(0.26)
-    expect(took).toEqual({ "money 1" })
-    -- full bags stop it at an item
-    mock.fireEvent("MAIL_CLOSED")
-    CloseMail()
-    openMailbox({
-        {
-            sender = "Ashford",
-            subject = "Supplies",
-            items = { { id = WATER, count = 5 } },
-            daysLeft = 20,
-            wasRead = true,
-        },
-    })
-    mock.stub(C_Container, "CalculateTotalNumberOfFreeBagSlots", function(): number
-        return 0
-    end)
-    mock.click(inbox().collect)
-    mock.advanceTime(0.26)
-    expect(M.collecting).toBe(nil)
+    expect(money).toHaveBeenCalledTimes(1)
+    mock.advanceTime(10)
+    expect(M:Collecting()).toBe(false)
     expect(inbox().collect.label:GetText()).toBe("Collect all")
+    expect(money).toHaveBeenCalledTimes(2) -- Tamsin's, the auction's
+    expect(items).toHaveBeenCalledTimes(1) -- the water; the COD's tome never
+    expect(C_Item.GetItemCount(WATER)).toBe(water + 5)
+    expect(C_Item.GetItemCount(TOME)).toBe(tome)
+    expect(GetMoney()).toBe(before + 5000 + 9000)
+    expect(inbox().note:GetText()).toBe("Collected.")
+    -- the COD mail and the game master's as they were
+    mock.click(row("Tester"))
+    expect(pane().slots[1]).toBeShown()
+    expect(row("Game Master").right2:GetText() ~= "").toBe(true)
+end
+
+@test("Collect all: what the game refuses is left, the rest collected, and the player told why")
+local function collectRefused()
+    openMailbox()
+    local takeItem = TakeInboxItem
+    mock.stub(_G, "TakeInboxItem", function(i: number, a: number)
+        local _, id = GetInboxItem(i, a)
+        if id == WATER then
+            C_Timer.After(0.4, function()
+                mock.fireEvent("UI_ERROR_MESSAGE", 1, "You can't carry any more of those items.")
+                mock.fireEvent("MAIL_FAILED", WATER)
+            end)
+            return
+        end
+        takeItem(i, a)
+    end)
+    local before = GetMoney()
+    local n = printedCount()
+    mock.click(inbox().collect)
+    mock.advanceTime(10)
+    expect(M:Collecting()).toBe(false)
+    expect(GetMoney()).toBe(before + 5000 + 9000) -- the mails after it too
+    expect(inbox().note:GetText()).toBe("1 thing left in the mail: You can't carry any more of those items.")
+    local lines = printedSince(n)
+    expect(hasLine(lines, "Collect all left 1 thing in the mail:")).toBe(true)
+    expect(hasLine(lines, "Test Water x5 from Ashford: You can't carry any more of those items.")).toBe(true)
+end
+
+@test("a long list of what was left: the first ten in chat, then how many more; reasons differing: see chat")
+local function longReport()
+    openMailbox()
+    local left: Left[] = {}
+    for k = 1, 12 do
+        left[k] = { sender = "Ashford", name = "Test Water", count = 1, money = false, why = k == 1 and "a" or "b" }
+    end
+    local n = printedCount()
+    M:CollectDone(left, 0)
+    expect(inbox().note:GetText()).toBe("12 things left in the mail: see chat")
+    local lines = printedSince(n)
+    expect(hasLine(lines, "and 2 more")).toBe(true)
+    expect(hasLine(lines, "Test Water from Ashford: a")).toBe(true)
+    M:CollectDone({}, 0)
+    expect(inbox().note:GetText()).toBe("")
+end
+
+@test("taking from the open mail stops Collect all first")
+local function takeOver()
+    openMailbox()
+    mock.stub(_G, "TakeInboxMoney", function(_: number) end)
+    mock.click(row("Tamsin"))
+    mock.click(inbox().collect)
+    expect(M:Collecting()).toBe(true)
+    mock.click(pane().takeMoney)
+    expect(M:Collecting()).toBe(false)
+    expect(inbox().note:GetText()).toBe("Collect all stopped.")
 end
 
 @test("Collect money takes only the money; a command waiting at the server waits")
@@ -385,7 +639,7 @@ local function collectMoney()
     mock.advanceTime(0.26)
     expect(took).toHaveBeenCalledTimes(1)
     mock.fireEvent("MAIL_CLOSED")
-    expect(M.collecting).toBe(nil)
+    expect(M:Collecting()).toBe(false)
 end
 
 --------------------------------------------------------------------------------

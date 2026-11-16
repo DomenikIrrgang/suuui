@@ -10,6 +10,9 @@ import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import unregisterCommands from "/Core/Init"
 import expectNoErrors, newParent from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 
 import internal M from "/Units/Loot"
 import type LootWindow, LootRow from "/UI/Loot"
@@ -246,4 +249,41 @@ local function rollsMigration()
         end
     end
     expect(found).toBe(true)
+end
+
+-- (last: the module off) Loot is reloadToToggle: the registry turns it off
+-- in a session only when its OnEnable fails. Here it toggles live, as a
+-- module that isn't would, so the registry's own disable runs.
+@test("turned off through the registry: the window closes, Blizzard's loot frame seen again where it was; on again, away")
+local function turnedOff()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    local f = assert(frames.find("LootFrame"))
+    local home = assert(M.home)
+    mock.fireEvent("LOOT_OPENED", false, false)
+    expect(win()).toBeShown()
+    settings.set("loot", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(win()).never.toBeShown()
+    expect(f:GetAlpha()).toBe(1)
+    expect(f:IsClampedToScreen() and true or false).toBe(home.clamped)
+    local point, _, _, x, y = f:GetPoint(1)
+    local first = assert(home.points[1])
+    expect(point).toBe(first.point)
+    expect(x).toBe(first.x)
+    expect(y).toBe(first.y)
+    -- the game placing it: it stays there, seen
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect((f:GetPoint(1))).toBe("CENTER")
+    expect(f:GetAlpha()).toBe(1)
+    mock.fireEvent("LOOT_CLOSED")
+    -- on again: away at once
+    settings.set("loot", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(f:GetAlpha()).toBe(0)
+    expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
+    own.reloadToToggle = true
+    expectNoErrors()
 end

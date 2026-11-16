@@ -1,0 +1,123 @@
+-- Units/Bags/Rails: the bag slot rails (cells, tooltips, lighting a bag's
+-- slots, putting a bag in and taking it off, the setting and the header's
+-- toggle) and the bank's rail with its buy cell (its cost, or why not).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as tbl from "wowlua:table"
+import internal M from "/Units/Bags"
+import expectNoErrors from "../../../helpers"
+import start as startBags, cleanup as cleanupBags, inv, open, button, run, bagRail, bankRail, entryOf, atBank from "./BagsHelpers"
+
+@beforeEach
+local function start()
+    startBags()
+end
+
+@afterEach
+local function cleanup()
+    cleanupBags()
+end
+
+--------------------------------------------------------------------------------
+-- The bag rail
+--------------------------------------------------------------------------------
+
+@test("the bag rail: the backpack, your bags, one empty slot, the reagent slot; hovering one lights its slots")
+local function rail()
+    open()
+    local r = bagRail()
+    expect(r).toBeShown()
+    local cells = tbl.filter(r.cells, function(c): boolean
+        return c:IsShown()
+    end)
+    expect(entryOf(cells[1]).kind).toBe("backpack")
+    expect(entryOf(cells[#cells]).kind).toBe("reagent")
+    mock.hover(cells[1])
+    expect(button(0, 1):GetAlpha()).toBe(1)
+    mock.hover(cells[2]) -- an empty bag slot: its tooltip
+    mock.hover(cells[#cells])
+    mock.hover(nil)
+    -- a bag in a slot: picked up or swapped
+    local pick = mock.stub(_G, "PickupBagFromSlot", function(_: number) end)
+    local put = mock.stub(_G, "PutItemInBag", function(_: number) end)
+    mock.click(cells[2])
+    expect(pick).toHaveBeenCalledTimes(1)
+    mock.stub(_G, "CursorHasItem", function(): boolean
+        return true
+    end)
+    mock.script(cells[2], "OnReceiveDrag")
+    expect(put).toHaveBeenCalledTimes(1)
+    mock.script(cells[2], "OnDragStart")
+    expect(pick).toHaveBeenCalledTimes(2)
+    mock.click(cells[1]) -- the backpack: fixed
+    expect(put).toHaveBeenCalledTimes(1)
+    -- a bag in it: the game's tooltip, its size
+    local firstBag = C_Container.ContainerIDToInventoryID(1)
+    mock.stub(_G, "GetInventoryItemTexture", function(_: string, slot: number): number?
+        return slot == firstBag and 133639 or nil
+    end)
+    M:DrawBagRail()
+    mock.hover(nil)
+    local tip = mock.stub(GameTooltip, "SetInventoryItem", function(_: unknown, _: string, _: number): boolean
+        return true
+    end)
+    mock.hover(r.cells[2])
+    expect(tip).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- off: no rail
+    M:Set("bagSlots", false)
+    expect(r).never.toBeShown()
+    local toggle = inv().slotsToggle
+    assert(toggle, "no Bags toggle")
+    run(toggle.onChange, true)
+    expect(r).toBeShown()
+end
+
+@test("the bank rail: its own slots, the bank slots bought, the buy cell with its cost or why not")
+local function bankRailCells()
+    atBank()
+    local r = bankRail()
+    expect(r).toBeShown()
+    local buy = r.buy
+    assert(buy, "no buy cell")
+    expect(buy).toBeShown()
+    mock.hover(buy)
+    expect(buy.skin.hover).toBe(true)
+    mock.hover(nil)
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: number): unknown
+        return { tabCost = 999999999, canAfford = false }
+    end)
+    M:DrawBankRail()
+    expect((buy.why or ""):find("You need ", 1, true) ~= nil).toBe(true)
+    mock.stub(C_Bank, "HasMaxBankTabs", function(_: number): boolean
+        return true
+    end)
+    M:DrawBankRail()
+    expect(buy.why).toBe("Every bank slot is bought.")
+    mock.stub(C_Bank, "HasMaxBankTabs", function(_: number): boolean
+        return false
+    end)
+    mock.stub(C_Bank, "FetchNextPurchasableBankTabData", function(_: number): unknown
+        return nil
+    end)
+    M:DrawBankRail()
+    expect(buy.why).toBe("The bank doesn't offer another slot right now.")
+    -- a bank slot's tooltip
+    mock.hover(r.cells[1])
+    mock.hover(nil)
+    mock.fireEvent("PLAYER_MONEY")
+    mock.player:enterCombat()
+    mock.player:leaveCombat()
+    mock.fireEvent("BANKFRAME_CLOSED")
+end
+
+@test("Rails: made with the module; DrawRails draws your bags' rail, the bank's only at a banker")
+local function made()
+    expect(M.rails.m).toBe(M)
+    open()
+    M.rails:DrawRails()
+    expect(bagRail()).toBeShown()
+    expect(bankRail()).never.toBeShown()
+    expectNoErrors()
+end

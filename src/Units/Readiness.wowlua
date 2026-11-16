@@ -9,14 +9,21 @@
 -- Cooldowns are read out of combat only (their times are secret in combat,
 -- and addon messages are restricted there); what a player sent last stays,
 -- counting down.
+--
+-- How much it sends (0.47; before, a question on every roster event and a
+-- share every 2 s while anyone cast, panel on or off): yours goes out when
+-- it changed (a cooldown's ready state, or its end moved by more than 2 s;
+-- a class without big cooldowns sends nothing), when someone new joins, and
+-- in answer to a question (at most once per 10 s, a moment later). Sharing
+-- your own goes on with the panel off: it serves the others. Asking ("RDYQ")
+-- only while your panel is wanted, a few seconds after someone new joined
+-- and only for players nobody heard from, at most once per 10 s. Shares and
+-- questions are taken from the group's channels only, and who left is
+-- forgotten.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Readiness, Entry as ReadinessEntry from "/UI/Readiness"
-import type Position from "/EditMode/EditMode"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Readiness, ReadinessEntry, Position from "/Core/API"
 import * as secret from "wowlua:secret"
-import after, every from "wowlua:timer"
 
 local isNumber = secret.isNumber
 
@@ -28,9 +35,6 @@ local DEFAULTS = {
 }
 
 local M: ReadinessModule
-
--- A number that may be read (not secret).
-local PREFIX = "SuuUI"
 
 -- The game's functions this file reads about the group and your spells,
 -- taken once as it loads (as the release build's cached globals are).
@@ -49,9 +53,12 @@ local game = {
     UnitIsUnit = UnitIsUnit,
     UnitIsGroupLeader = UnitIsGroupLeader,
     UnitIsGroupAssistant = UnitIsGroupAssistant,
-    SendAddonMessage = C_ChatInfo.SendAddonMessage,
 }
 local HEARTBEAT = 30
+local ASK_EVERY = 10 -- seconds between two questions, and two answers
+local ASK_AFTER = 5 -- seconds after someone joined: by then they shared
+local MAX_SPELLS = 20 -- spells taken from one share
+local SAME_WITHIN = 2 -- seconds a cooldown's end may move and stay the same
 
 -- The cooldowns a group plans around, per class (the first rank you know).
 local MAJOR: { [string]: string[] } = {
@@ -100,14 +107,36 @@ export type Heard = { at: number, spells: Shared[] }
 -- The last message sent (for /suu ready).
 export type Sent = { at: string, ok: boolean, result: string, text: string }
 
--- The share message for cooldowns { { id, left } }: "RDY\t<id>:<left>,…"
+-- A share's payload for cooldowns { { id, left } }: "<id>:<left>,…"
 -- (seconds rounded).
-local function encodeShare(own: Cooldown[]): string
+local function sharePayload(own: Cooldown[]): string
     local parts: string[] = {}
     for _, c in ipairs(own) do
         parts[#parts + 1] = ("%d:%d"):format(c.id, math.floor(c.left + 0.5))
     end
-    return "RDY\t" .. table.concat(parts, ",")
+    return table.concat(parts, ",")
+end
+
+-- The share message: "RDY\t<id>:<left>,…".
+local function encodeShare(own: Cooldown[]): string
+    return "RDY\t" .. sharePayload(own)
+end
+
+-- A share's spells and seconds left, checked: a spell ID 1..2^31, at most
+-- a day left, at most MAX_SPELLS of them (what isn't one is skipped).
+type Left = { id: number, left: number }
+local function readPayload(payload: string): Left[]
+    local out: Left[] = {}
+    for id, left in payload:gmatch("(%d+):(%d+)") do
+        local n, l = SuuUI.Comm.Int(id, 1, 2 ^ 31), SuuUI.Comm.Int(left, 0, 86400)
+        if n and l then
+            out[#out + 1] = { id = n, left = l }
+            if #out >= MAX_SPELLS then
+                break
+            end
+        end
+    end
+    return out
 end
 
 -- A share message's cooldowns as { id, endsAt } (from `now`); nil when the
@@ -118,13 +147,31 @@ local function decodeShare(text: string, now: number): Shared[]?
         return nil
     end
     local spells: Shared[] = {}
-    for id, left in payload:gmatch("(%d+):(%d+)") do
-        local n = tonumber(id)
-        if n then
-            spells[#spells + 1] = { id = n, endsAt = now + (tonumber(left) or 0) }
-        end
+    for _, c in ipairs(readPayload(payload)) do
+        spells[#spells + 1] = { id = c.id, endsAt = now + c.left }
     end
     return spells
+end
+
+-- Whether a share repeats the last one sent `age` seconds ago: the same
+-- spells, each ready then as now, or ending within SAME_WITHIN of the end
+-- told then (seconds left count down, so the text itself always changes).
+local function sameShare(last: string, now: string, age: number): boolean
+    local a, b = readPayload(last), readPayload(now)
+    if #a ~= #b then
+        return false
+    end
+    for i, was in ipairs(a) do
+        local is = b[i]
+        if was.id ~= is.id then
+            return false
+        end
+        local wasLeft = math.max(0, was.left - age)
+        if (wasLeft == 0) ~= (is.left == 0) or math.abs(wasLeft - is.left) > SAME_WITHIN then
+            return false
+        end
+    end
+    return true
 end
 
 --------------------------------------------------------------------------------
@@ -223,11 +270,22 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
     -- what each player shared last, by short name
     heard: { [string]: Heard }? = nil
     lastSend: Sent? = nil
+    -- the group's other members when the roster was last read, by short name
+    members: { [string]: boolean }? = nil
+    -- the newcomers not heard from yet, to ask
+    newcomers: { [string]: boolean }? = nil
+    -- when you last asked
+    askedAt: number? = nil
+    askQueued: true? = nil
+    rosterQueued: true? = nil
+    updateQueued: true? = nil
     -- yours, as shared ones
     own: Shared[]? = nil
     panel: Readiness? = nil
     preview: Readiness? = nil
     shareQueued: true? = nil
+    -- the share queued answers someone (sent even if unchanged)
+    shareForced: true? = nil
     ticker: TickerHandle? = nil
 
     constructor()
@@ -263,67 +321,175 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
         return out
     end
 
-    function Send(text: string)
+    -- "verb" or "verb\t<payload>" to the group (nothing solo, in combat or
+    -- the chat lockdown: SuuUI's sender refuses then). `unlessSame`: not
+    -- when it repeats the last share (sameShare).
+    function Send(verb: string, payload: string?, unlessSame: boolean?)
         local ch = channel()
-        if not ch or InCombatLockdown() then
+        if not ch then
             return
         end
-        local ok, result = pcall(game.SendAddonMessage, PREFIX, text, ch)
-        self.lastSend = {
-            at = tostring(date("%H:%M:%S")),
-            ok = ok,
-            result = secret.isSecret(result) and "secret" or tostring(result),
-            text = text:sub(1, 40),
-        }
+        local ok, result, tried = self:SendAddonMessage(
+            verb,
+            payload,
+            ch,
+            nil,
+            unlessSame and { unlessSame = sameShare } or nil
+        )
+        if not tried then
+            return
+        end
+        local text = payload and (verb .. "\t" .. payload) or verb
+        self.lastSend = { at = tostring(date("%H:%M:%S")), ok = ok, result = result, text = text:sub(1, 40) }
     end
 
-    function Share()
+    -- Yours, when it changed since the last share (`force`: whatever, it was
+    -- asked for); nothing when your class has none of the big cooldowns.
+    function Share(force: boolean?)
         local own = self:ReadOwn()
-        if not own then
+        if not own or #own == 0 then
             return
         end
-        self:Send(encodeShare(own))
+        self:Send("RDY", sharePayload(own), not force)
     end
 
-    -- One share soon (a burst of cooldown events makes one message).
-    function ShareSoon()
+    -- One share soon (a burst of cooldown events makes one message); an
+    -- answer a moment later, not all of a raid's at once.
+    function ShareSoon(force: boolean?)
+        -- (off: its timer would not start, and the flag would stay set)
+        if not self:IsEnabled() then
+            return
+        end
+        if force then
+            self.shareForced = true
+        end
         if self.shareQueued then
             return
         end
         self.shareQueued = true
-        after(2, function()
+        self:After(force and (2 + math.random() * 2) or 2, function()
             self.shareQueued = nil
-            if self:IsEnabled() then
-                self:Share()
-            end
+            local forced = self.shareForced
+            self.shareForced = nil
+            self:Share(forced)
         end)
     end
 
-    function OnMessage(prefix: unknown, text: unknown, _: unknown, sender: unknown)
-        if prefix ~= PREFIX or secret.isSecret(text) or type(text) ~= "string" then
-            return
-        end
-        if secret.isSecret(sender) or type(sender) ~= "string" then
-            return
-        end
-        local who = Ambiguate(sender, "short")
-        -- whole names: Forever's characters have surnames (SuuUI.FullName)
-        if who == playerName() then
-            return
-        end
-        if text == "RDYQ" then
-            self:ShareSoon()
-            return
-        end
+    -- "RDY\t<id>:<left>,…" from someone in the group (the receiver checked
+    -- the channel and the rate; your own was dropped there).
+    function OnShare(payload: string, sender: string)
         local now = GetTime()
-        local spells = decodeShare(text, now)
+        local spells = decodeShare("RDY\t" .. payload, now)
         if not spells then
             return
         end
         local heard = self.heard or {}
         self.heard = heard
-        heard[who] = { at = now, spells = spells }
+        -- whole names: Forever's characters have surnames (SuuUI.FullName)
+        heard[Ambiguate(sender, "short")] = { at = now, spells = spells }
+        self:UpdateSoon()
+    end
+
+    -- The panel again once a burst of shares is in.
+    function UpdateSoon()
+        -- (off: its timer would not start, and the flag would stay set)
+        if self.updateQueued or not self:IsEnabled() then
+            return
+        end
+        self.updateQueued = true
+        self:After(0.5, function()
+            self.updateQueued = nil
+            self:Update()
+        end)
+    end
+
+    -- Whether you ask the group: only while your panel is wanted here.
+    function Asks(): boolean
+        local _, kind = game.IsInInstance()
+        return wanted(self:Get("shows"), secret.flag(game.IsInGroup()), kind)
+    end
+
+    -- The roster changes in bursts: read once it settles.
+    function RosterSoon()
+        -- (off: its timer would not start, and the flag would stay set)
+        if self.rosterQueued or not self:IsEnabled() then
+            return
+        end
+        self.rosterQueued = true
+        self:After(1, function()
+            self.rosterQueued = nil
+            self:RosterChanged()
+        end)
+    end
+
+    -- Who left is forgotten; someone new gets yours, and is asked for theirs
+    -- if they haven't shared a moment later.
+    function RosterChanged()
         self:Update()
+        -- (names may be secret in combat: read again once it ends)
+        if InCombatLockdown() then
+            return
+        end
+        if not channel() then
+            self.members, self.heard = nil, nil
+            return
+        end
+        local names: { [string]: boolean } = {}
+        for _, p in ipairs(roster()) do
+            if not p.you then
+                names[p.name] = true
+            end
+        end
+        local heard = self.heard
+        if heard then
+            for who in pairs(heard) do
+                if not names[who] then
+                    heard[who] = nil
+                end
+            end
+        end
+        local known = self.members or {}
+        local newcomers = self.newcomers or {}
+        local new = false
+        for who in pairs(names) do
+            if not known[who] then
+                new = true
+                newcomers[who] = true
+            end
+        end
+        self.members = names
+        if new then
+            self.newcomers = newcomers
+            self:ShareSoon(true)
+            if self:Asks() then
+                self:AskSoon()
+            end
+        end
+    end
+
+    -- A question for those not heard from, ASK_AFTER seconds on, at most
+    -- once per ASK_EVERY.
+    function AskSoon()
+        -- (off: its timer would not start, and the flag would stay set)
+        if self.askQueued or not self:IsEnabled() then
+            return
+        end
+        self.askQueued = true
+        local asked = self.askedAt
+        local wait = math.max(ASK_AFTER, asked and (ASK_EVERY - (GetTime() - asked)) or 0)
+        self:After(wait, function()
+            self.askQueued = nil
+            local heard, members = self.heard or {}, self.members or {}
+            local newcomers = self.newcomers or {}
+            self.newcomers = nil
+            for who in pairs(newcomers) do
+                if members[who] and not heard[who] then
+                    self.askedAt = GetTime()
+                    self:Send("RDYQ")
+                    return
+                end
+            end
+        end)
     end
 
     function Rows(): Row[]
@@ -433,18 +599,16 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
                     "nothing sent yet"
             )
         end)
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-        end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, ...)
-            self:OnMessage(...)
+        self:OnAddonMessage("RDY", { rate = { count = 5, seconds = 10 } }, function(payload, sender)
+            self:OnShare(payload, sender)
+        end)
+        -- a question: answered at most once per ASK_EVERY, whoever asks
+        self:OnAddonMessage("RDYQ", { replyEvery = ASK_EVERY, rate = { count = 2, seconds = 10 } }, function()
+            self:ShareSoon(true)
         end)
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
             self:Update()
-            if channel() then
-                self:Send("RDYQ")
-                self:ShareSoon()
-            end
+            self:RosterSoon()
         end)
         self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
             self:Update()
@@ -458,11 +622,10 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
             self:Update(true)
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            after(1, function()
-                if self:IsEnabled() then
-                    self:Update()
-                    self:ShareSoon()
-                end
+            self:After(1, function()
+                self:Update()
+                self:ShareSoon()
+                self:RosterSoon()
             end)
         end)
         self:OnGameEvent("ENCOUNTER_START", function()
@@ -476,25 +639,40 @@ class ReadinessModule extends Module<typeof(DEFAULTS)>
         self:Watch("shows", function()
             self:Update()
             SuuUI.EditMode.Refresh()
+            -- wanted now: those not heard from are asked
+            if self:Asks() and channel() then
+                local newcomers = self.newcomers or {}
+                for who in pairs(self.members or {}) do
+                    newcomers[who] = true
+                end
+                self.newcomers = newcomers
+                self:AskSoon()
+            end
         end)
         self:Watch("position", function()
             self:Update()
         end)
-        -- a heartbeat: everyone's view stays fresh
-        if not self.ticker then
-            self.ticker = every(HEARTBEAT, function()
-                if self:IsEnabled() and channel() and not InCombatLockdown() then
-                    self:Share()
-                end
-            end)
-        end
+        -- a heartbeat: what changed without an event goes out (nothing
+        -- when nothing did)
+        self.ticker = self:Every(HEARTBEAT, function()
+            if channel() and not InCombatLockdown() then
+                self:Share()
+            end
+        end)
         self:Update()
+        -- (after a reload in a group: everyone is new)
+        self.members = nil
+        self:RosterSoon()
     end
 
     override function OnDisable()
         if self.panel then
             self.panel:Hide()
         end
+        -- (its timers are cancelled: nothing stays queued)
+        self.heard, self.members, self.newcomers, self.own = nil, nil, nil, nil
+        self.shareQueued, self.shareForced, self.askQueued, self.rosterQueued, self.updateQueued = nil, nil, nil, nil, nil
+        self.askedAt, self.ticker = nil, nil
     end
 end
 

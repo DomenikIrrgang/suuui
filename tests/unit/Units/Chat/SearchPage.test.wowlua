@@ -1,0 +1,111 @@
+-- Units/Chat/SearchPage: the Search tab (the kept lines with a word, by
+-- player; the chips; a long line cut to its match; your own lines; links
+-- in the rows; leaving the tab).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Chat"
+import type SearchHeader, SearchChip from "/Units/Chat/SearchPage"
+import expectNoErrors from "../../../helpers"
+import ready, tab, whisper, openSearch, resetChat from "./ChatHelpers"
+
+local CF1 = ChatFrame1
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Search
+--------------------------------------------------------------------------------
+
+@test("the Search tab: the kept lines with a word, by player, how many, where from")
+local function searching()
+    CF1:AddMessage("|Hplayer:Tamsin|h[Tamsin]|h says: the dragon flies", 1, 1, 1)
+    CF1:AddMessage("|Hplayer:Tamsin|h[Tamsin]|h says: a dragon again", 1, 1, 1)
+    CF1:AddMessage("|Hplayer:Tamsin|h[Tamsin]|h says: and one more dragon", 1, 1, 1)
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: dragonflies", 1, 1, 1)
+    CF1:AddMessage("a dragon with no one", 1, 1, 1)
+    local s = openSearch()
+    expect(s).toBeShown()
+    expect(s.note:GetText()).toBe("A player's name or a word: every tab and whisper kept.")
+    mock.typeText(s.field.edit, "dragon")
+    expect(s.count:GetText()).toBe("5 lines")
+    expect(s.headers[1].name:GetText()).toBe("Other lines")
+    expect(s.rows[1].ground).toBeShown() -- the match marked
+    local found: SearchHeader? = nil
+    for _, h in ipairs(s.headers) do
+        if h:IsShown() and h.name:GetText() == "Tamsin" then
+            found = h
+        end
+    end
+    local tamsin = assert(found)
+    expect(mock.textOf(tamsin.count):find("3 lines · last", 1, true) ~= nil).toBe(true)
+    -- two lines a player, then "1 more"
+    local more = s.mores[1]
+    expect(more).toBeShown()
+    expect(more.label:GetText()).toBe("1 more")
+    mock.hover(more)
+    mock.hover(nil)
+    mock.click(more)
+    expect(more).never.toBeShown()
+    -- the whisper button opens their window
+    local open = mock.stub(M, "OpenWhisperWindow", function(_: unknown, _: string) end)
+    mock.click(tamsin.whisper)
+    expect(open).toHaveBeenCalledTimes(1)
+    s.field.edit:SetText("zzz")
+    M:RunSearch()
+    expect(s.note:GetText()).toBe("Nothing kept matches.")
+end
+
+@test("the chips choose where to look; a whisper line is one, wherever it showed")
+local function chips()
+    M.whispers = {}
+    whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: secret plan")
+    CF1:AddMessage("|Hplayer:Otherplayer|h[Otherplayer]|h says: open plan", 1, 1, 1)
+    local s = openSearch()
+    s.field.edit:SetText("plan")
+    M:RunSearch()
+    expect(s.count:GetText()).toBe("2 lines")
+    local chip: SearchChip? = nil
+    for _, b in ipairs(s.chips) do
+        if b.value == "whisper" then
+            chip = b
+        end
+    end
+    local whispersChip = assert(chip)
+    mock.hover(whispersChip)
+    mock.hover(nil)
+    mock.click(whispersChip)
+    expect(s.count:GetText()).toBe("1 line")
+    expect(s.headers[1].count:GetText()).toBe("1 line · Whispers")
+    mock.hover(whispersChip) -- the chosen one keeps its look
+    mock.hover(nil)
+end
+
+@test("a long line is cut to show its match, the match marked; your own lines have no Whisper button")
+local function longLines()
+    local long = "|Hplayer:Player|h[Player]|h says: " .. string.rep("words and more words ", 12) .. "needle at the end"
+    CF1:AddMessage(long, 1, 1, 1)
+    local s = openSearch()
+    s.field.edit:SetText("needle")
+    M:RunSearch()
+    local row = s.rows[1]
+    expect(row).toBeShown()
+    expect(mock.textOf(row.text):find("… ", 1, true) ~= nil).toBe(true)
+    expect(s.headers[1].whisper).never.toBeShown()
+    -- links work in the rows; leaving the tab drops the field's focus
+    mock.script(row, "OnHyperlinkLeave", "", "")
+    s.field.edit:SetFocus()
+    M:Select(CF1)
+    expect(s.field.edit:HasFocus()).toBe(false)
+    mock.click(tab("General"))
+    expect(s).never.toBeShown()
+end

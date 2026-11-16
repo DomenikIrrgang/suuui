@@ -1,0 +1,54 @@
+-- Units/LootRolls/Group: your group by name and class, read in one walk
+-- and kept until it changes (CHAT-3). Its members and classes in a party,
+-- you left out of the others, one walk however many looks, read again
+-- after a change.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import expectNoErrors from "../../../helpers"
+import GroupNames, short from "/Units/LootRolls/Group"
+
+@test("a name without its realm")
+local function shortNames()
+    expect(short("Tamsin-Realm")).toBe("Tamsin")
+    expect(short("Tamsin")).toBe("Tamsin")
+    expect(short(nil)).toBe("")
+    expectNoErrors()
+end
+
+@test("your party: the others and each one's class, yours too; one walk for many looks; read again once it changed")
+local function party()
+    local tamsin = mock.spawnUnit({ name = "Tamsin", player = true, class = "MAGE", level = 60, reaction = "friendly" })
+    local ashford = mock.spawnUnit({ name = "Ashford", player = true, class = "PRIEST", level = 60, reaction = "friendly" })
+    mock.group:add(tamsin)
+    mock.group:add(ashford)
+    local reads = 0
+    local fullName = SuuUI.FullName
+    mock.stub(SuuUI, "FullName", function(unit: string?): (string | Secret<string>)?
+        reads = reads + 1
+        return fullName(unit)
+    end)
+    local g = GroupNames.new()
+    expect(g:Others()).toEqual({ "Tamsin", "Ashford" })
+    expect(g:ClassOf("Tamsin")).toBe("MAGE")
+    expect(g:ClassOf("Ashford-Realm")).toBe("PRIEST")
+    local _, mine = UnitClass("player")
+    expect(g:ClassOf(g:Me())).toBe(mine :: string)
+    expect(g:ClassOf("Nobody")).toBe(nil)
+    local first = reads
+    for _ = 1, 20 do
+        g:ClassOf("Tamsin")
+        g:Others()
+    end
+    expect(reads).toBe(first)
+    -- changed: read again, once
+    mock.group:remove(ashford)
+    g:Invalidate()
+    g:Invalidate()
+    expect(g:Others()).toEqual({ "Tamsin" })
+    g:ClassOf("Tamsin")
+    expect(reads - first).toBe(1) -- (the one left: your own name is known)
+    mock.group:leave()
+    expectNoErrors()
+end

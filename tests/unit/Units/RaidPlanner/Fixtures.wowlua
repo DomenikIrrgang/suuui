@@ -1,0 +1,218 @@
+-- tests/unit/Units/RaidPlanner/Fixtures.wowlua
+-- What the raid planner's tests share (Units/RaidPlanner and its parts):
+-- placeholder raiders and a raid of them, a fresh start, what UI.Confirm was
+-- asked and what the module printed, the context menus' buttons, the
+-- planner's addon messages sent, slots made, the fill and the window's data
+-- read. Each test file calls setup() first and cleanup() after each test:
+--
+--   @afterEach
+--   local function after() fixtures.cleanup() end
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/RaidPlanner"
+import type Slot, Setup from "/Units/RaidPlanner/Setups"
+import type Filled, Placed, Member from "/Units/RaidPlanner/Fill"
+import type ConfirmOptions from "/UI/Panel"
+import type MenuDescription from "/UI/ContextMenu"
+import type RaidPlanner as PlannerWindow, PlannerListItem, PlannerChip, PlannerSlot, PlannerSetup, PaletteClass, PlannerPerson, PlannerStat, PlannerButton from "/UI/RaidPlanner"
+import expectNoErrors from "../../../helpers"
+
+local UI = SuuUI.UI
+
+-- Placeholder raiders, made once (the engine keeps them).
+local function raider(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
+    local u = mock.spawnUnit({ name = name, player = true, class = class, level = 60, reaction = "friendly" })
+    if role then
+        u:setRole(role)
+    end
+    return u
+end
+
+export const warrior = raider("Raider Warrior", "WARRIOR", "TANK")
+export const priest = raider("Raider Priest", "PRIEST", "HEALER")
+export const mage = raider("Raider Mage", "MAGE")
+export const mage2 = raider("Raider Frostmage", "MAGE")
+export const hunter = raider("Raider Hunter", "HUNTER")
+export const hunter2 = raider("Raider Bowman", "HUNTER")
+export const shaman = raider("Raider Shaman", "SHAMAN")
+
+-- The raid: you and these, in their subgroups.
+export function raid(members: { { unit: mock.MockUnit, g: number } })
+    for i, e in ipairs(members) do
+        mock.group:add(e.unit, { raid = true, subgroup = e.g, quiet = i < #members })
+    end
+    mock.advanceTime(0.6)
+end
+
+-- A fresh start: no setups, no specs, nothing filled.
+export function fresh()
+    wipe(SuuUI.AccountData("raidplanner"))
+    M.fill, M.letGo, M.inspecting, M.inspectRound, M.inspectFailed, M.askedAt = nil, {}, nil, false, {}, nil
+end
+
+-- What UI.Confirm was asked (its onConfirm run by the test), and what the
+-- module printed.
+export const seen = { confirmed = nil } :: { confirmed: ConfirmOptions? }
+export const printed = {} :: string[]
+export function asked(): ConfirmOptions
+    return (assert(seen.confirmed, "nothing asked"))
+end
+export function confirm(text: string?)
+    assert(asked().onConfirm)(text)
+end
+
+-- What a context menu offered: its buttons by label.
+export const menu = {} :: { [string]: () -> () }
+export const enabled = {} :: { [string]: boolean }
+type FakeButton = { SetEnabled: (self: FakeButton, on: boolean) -> () }
+local function captureMenus()
+    mock.stub(UI, "ContextMenuFrom", function<O>(owner: O, describe: (owner: O, root: MenuDescription) -> ())
+        for k in pairs(menu) do
+            menu[k] = nil
+        end
+        local root = {
+            CreateTitle = function(_: unknown, _: string) end,
+            CreateDivider = function(_: unknown) end,
+            CreateButton = function(_: unknown, label: string, fn: () -> ()): FakeButton
+                menu[label] = fn
+                return {
+                    SetEnabled = function(_: FakeButton, on: boolean)
+                        enabled[label] = on
+                    end,
+                }
+            end,
+        }
+        describe(owner, root :: unknown :: MenuDescription)
+    end)
+end
+
+export function choose(label: string)
+    local fn = menu[label]
+    assert(fn, "no menu button " .. label)
+    fn()
+end
+
+-- The planner's messages sent so far (other modules send theirs too).
+export function planner(): string[]
+    local out: string[] = {}
+    for _, m in ipairs(mock.sentAddonMessages()) do
+        if m.prefix == "SuuUI" and m.message:sub(1, 6) == "RPSPEC" then
+            out[#out + 1] = m.message
+        end
+    end
+    return out
+end
+
+export function setup()
+    fresh()
+    -- (you: a damage dealer, so the raiders take the slots for their class)
+    mock.player:setRole("DAMAGER")
+    seen.confirmed = nil
+    wipe(printed)
+    mock.stub(UI, "Confirm", function(opts: ConfirmOptions): nil
+        seen.confirmed = opts
+        return nil
+    end)
+    mock.stub(M, "Print", function(_: unknown, text: string)
+        printed[#printed + 1] = text
+    end)
+    captureMenus()
+end
+
+-- After each test (each test file's @afterEach calls it).
+export function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    if M.window then
+        M.window:Hide()
+    end
+    mock.group:leave()
+    mock.player:setRole(nil)
+    M:ResetAll({ "preset", "tracked", "fill", "inspect", "flagDoubled", "shareSpec" })
+    mock.advanceTime(2)
+    fresh()
+    expectNoErrors()
+end
+
+-- A slot asking for this (nil: no room).
+export function slot(g: number, class: string?, spec: number?, role: string?): Slot?
+    return M:AddSlot(g, { class = class, spec = spec, role = role })
+end
+-- One that must fit.
+export function slotIn(g: number, class: string?, spec: number?, role: string?): Slot
+    return assert(slot(g, class, spec, role))
+end
+
+-- The fill, who fills a slot, a saved setup, a player read from the raid.
+export function filled(): Filled
+    return assert(M.fill)
+end
+export function placed(s: Slot): Placed
+    return (assert(filled().slot[s.id], "nobody in the slot"))
+end
+export function saved(id: number): Setup
+    return assert(M:Data().setups[id])
+end
+export function member(name: string): Member
+    return assert(M.byKey[name])
+end
+export function window(): PlannerWindow
+    return assert(M.window)
+end
+
+-- The window's data, its lists there.
+export type ViewGroup = { slots: PlannerSlot[], chips: PlannerChip[], kind?: string }
+export type View = {
+    meta: string,
+    note: string,
+    raidWideMeta?: string,
+    setups: PlannerSetup[],
+    palette: PaletteClass[],
+    groups: ViewGroup[],
+    raidWide: { [string]: PlannerListItem },
+    open: PlannerListItem[],
+    unplaced: PlannerPerson[],
+    stats: PlannerStat[],
+    arrange: PlannerButton,
+    inspect: PlannerButton,
+    fill: PlannerButton,
+}
+export function view(): View
+    local v = M:ViewData()
+    local groups: ViewGroup[] = {}
+    for i, g in ipairs(v.groups or {}) do
+        groups[i] = { slots = g.slots or {}, chips = g.chips or {}, kind = g.kind }
+    end
+    local rows: { [string]: PlannerListItem } = {}
+    for _, r in ipairs(v.raidWide or {}) do
+        rows[r.label or ""] = r
+    end
+    return {
+        meta = v.meta or "",
+        note = v.note or "",
+        raidWideMeta = v.raidWideMeta,
+        setups = assert(v.setups),
+        palette = assert(v.palette),
+        groups = groups,
+        raidWide = rows,
+        open = assert(v.open),
+        unplaced = assert(v.unplaced),
+        stats = assert(v.stats),
+        arrange = assert(v.arrange),
+        inspect = assert(v.inspect),
+        fill = assert(v.fill),
+    }
+end
+export function row(v: View, label: string): PlannerListItem
+    return (assert(v.raidWide[label], label))
+end
+export function chip(v: View, g: number, start: string): PlannerChip
+    for _, c in ipairs(v.groups[g].chips) do
+        if c.text:sub(1, #start) == start then
+            return c
+        end
+    end
+    error("no chip " .. start)
+end

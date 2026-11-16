@@ -11,7 +11,12 @@ import * as tbl from "wowlua:table"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/MicroMenu"
 import type MenuButton from "/UI/MicroMenu"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, holdings from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as events from "/Core/Events"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
+import * as visibility from "/UI/Visibility"
 import * as frames from "wowlua:frames"
 
 local function button(key: string): MenuButton
@@ -300,7 +305,7 @@ local function ownWindows()
     local talents = SuuUI.GetModule("talents")
     local collections = SuuUI.GetModule("collections")
     for _, it in ipairs(M:Items()) do
-        if it.key == "talents" and talents and talents:Get("enabled") then
+        if it.key == "talents" and talents and talents:Setting("enabled") then
             expect(it.click).toBeNil()
             local toggled = mock.spy(function() end)
             mock.stub(SuuUI, "ToggleTalents", toggled)
@@ -308,7 +313,7 @@ local function ownWindows()
             expect(toggled).toHaveBeenCalled()
             expect(type(assert(it.open)())).toBe("boolean")
         end
-        if it.key == "collections" and collections and collections:Get("enabled") then
+        if it.key == "collections" and collections and collections:Setting("enabled") then
             expect(it.click).toBe("SuuUICollectionsToggle")
             local _ = assert(it.open)()
         end
@@ -318,7 +323,7 @@ end
 @test("SuuUI's Collections window opened from the menu in a fight (protected: through its secure toggle)")
 local function collectionsInCombat()
     local collections = SuuUI.GetModule("collections")
-    expect(collections and collections:Get("enabled")).toBe(true)
+    expect(collections and collections:Setting("enabled")).toBe(true)
     local b = button("collections")
     expect(b:GetAttribute("clickbutton")).toBe(rawget(_G, "SuuUICollectionsToggle"))
     mock.player:enterCombat()
@@ -437,14 +442,65 @@ local function offButtons()
     expect(b.glyph:GetAlpha()).toBe(1)
 end
 
--- (last: the module off)
-@test("stopped: hidden, its anchor withdrawn")
+-- A frame's script run as the game would (with its hooks).
+local function run(f: Frame, script: string)
+    local fn = f:GetScript(script)
+    if fn then
+        (fn :: unknown :: (Frame, unknown) -> ())(f, script == "OnUpdate" and 0.1 or true)
+    end
+end
+
+-- (last: the module off) Micro menu is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable and release run.
+@test("turned off through the registry: hidden, its anchor withdrawn, its visibility let go; on again, shown")
 local function disabled()
-    M:OnDisable()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    expect(visibility.count(M)).toBe(1)
+    settings.set("micromenu", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     for tip in ((rawget(_G, "HelpTip") :: {}) :: {
         framePool: { EnumerateActive: ({}) -> ((unknown, unknown) -> Frame?, unknown, unknown) },
     }).framePool:EnumerateActive() do
         expect(tip:GetAlpha()).toBe(1)
     end
     expect(M.menu).never.toBeShown()
+    expect(SuuUI.GetAnchor("microMenu")).toBeNil()
+    expect(visibility.count(M)).toBe(0)
+    -- (CD-30) the game's menu button given back: its hooks are quiet (its
+    -- alpha its own, its scripts reach nothing of SuuUI's)
+    local blz = MainMenuMicroButton
+    expect(blz:GetParent() ~= button("menu")).toBe(true)
+    expect(blz:GetAlpha()).toBe(1)
+    blz:SetAlpha(0.5)
+    expect(blz:GetAlpha()).toBeCloseTo(0.5, 2)
+    blz:SetAlpha(1)
+    expect(holdings(M).hooks).toBe(0)
+    -- (Blizzard's micro menu stays suppressed until a reload, so the button
+    -- is not seen; its scripts run as on a hover)
+    run(blz, "OnEnter")
+    run(blz, "OnUpdate")
+    run(blz, "OnLeave")
+    -- edit mode opening and closing no longer shows it
+    events.emit("SUUUI_EDITMODE_CHANGED", true)
+    events.emit("SUUUI_EDITMODE_CHANGED", false)
+    mock.advanceFrames(2)
+    expect(M.menu).never.toBeShown()
+    -- on again: its "Shows" mode applies anew
+    settings.set("micromenu", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(M.menu).toBeShown()
+    expect(visibility.count(M)).toBe(1)
+    -- the game's button adopted again: unseen over SuuUI's, its hooks armed
+    -- again
+    expect(blz:GetParent()).toBe(button("menu"))
+    expect(blz:GetAlpha()).toBe(0)
+    blz:SetAlpha(1)
+    expect(blz:GetAlpha()).toBe(0)
+    -- (its five hooks: SetAlpha, SetPoint, OnEnter, OnLeave, OnUpdate)
+    expect(holdings(M).hooks).toBe(5)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

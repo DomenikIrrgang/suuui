@@ -39,18 +39,10 @@
 -- mouse; the others move under a hidden parent. They come back after a
 -- reload, so this module turns off or on with a reload.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Bar from "/UI/Bar"
-import type PetBar, StanceBar, TotemBar from "/UI/ClassBars"
-import type Panel from "/UI/Panel"
-import type Position from "/EditMode/EditMode"
-import type ActionBar from "/UI/ActionBar"
-import type ToggleChips from "/UI/Pickers"
-import RankUpgrader from "/Units/RankUpgrade"
-import type DeclinedRanks, StaleSlot from "/Units/RankUpgrade"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Bar, PetBar, StanceBar, TotemBar, Panel, Position, ActionBar, ToggleChips from "/Core/API"
+import RankUpgrader from "/Units/ActionBars/RankUpgrade"
+import type DeclinedRanks, StaleSlot from "/Units/ActionBars/RankUpgrade"
 import hook from "wowlua:hooks"
 import isSecret from "wowlua:secret"
 import * as frames from "wowlua:frames"
@@ -349,6 +341,28 @@ local function suppressTracking()
     end
 end
 
+-- The game's totem bar, while SuuUI's is on (once: only a reload brings it
+-- back).
+local function suppressTotems()
+    if not tbl.field(_G, "MultiCastActionBarFrame") or SuuUI.IsSuppressed("MultiCastActionBarFrame") then
+        return
+    end
+    SuuUI.SuppressBlizzard("MultiCastActionBarFrame", { noHide = true })
+    quietButtons("MultiCastActionButton")
+end
+
+-- What stands down with its own setting: the XP and reputation bars while
+-- SuuUI's XP bar is on, the totem bar while SuuUI's is on. At enable, and
+-- again when either is turned on later (out of combat: the buttons' mouse).
+local function standDownChosen()
+    if M:Get("showXP") then
+        suppressTracking()
+    end
+    if M:Get("showTotem") then
+        suppressTotems()
+    end
+end
+
 local function standDownBlizzard()
     if M:Get("showXP") then
         suppressTracking()
@@ -360,15 +374,17 @@ local function standDownBlizzard()
         intro:UnregisterEvent("SPELL_PUSHED_TO_ACTIONBAR")
         intro:UnregisterEvent("SPELL_PUSHED_TO_FLYOUT_ON_ACTIONBAR")
     end
+    -- (the stance and pet bars whatever showStance and showPet say: off
+    -- means no such bar at all)
     local extras = { { "StanceBar", "StanceButton" }, { "PetActionBar", "PetActionButton" } }
-    if M:Get("showTotem") then
-        extras[#extras + 1] = { "MultiCastActionBarFrame", "MultiCastActionButton" }
-    end
     for _, extra in ipairs(extras) do
         if tbl.field(_G, extra[1]) then
             SuuUI.SuppressBlizzard(extra[1], { noHide = true })
             quietButtons(extra[2])
         end
+    end
+    if M:Get("showTotem") then
+        suppressTotems()
     end
     for _, def in ipairs(BARS) do
         local frame = frames.find(def.blizzard)
@@ -536,7 +552,7 @@ local SECTION: SettingsSection = {
                     label = "Stance and form bar",
                     control = "toggle",
                     combat = true,
-                    description = "Above the dock's left block, for classes with stances, forms or stealth. Blizzard's own comes back after a reload.",
+                    description = "Above the dock's left block, for classes with stances, forms or stealth. Off: no stance bar at all (Blizzard's stays hidden).",
                 },
                 {
                     key = "showTotem",
@@ -789,7 +805,7 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                 attached[#attached + 1] = a.header
             end
         end
-        UI.SetVisibility(dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"), attached)
+        UI.SetVisibility(dock, self:Get("position").hidden and "hidden" or self:Get("dockVisibility"), attached, self)
         local keysOn: { [string]: boolean } = {}
         if self:Get("showKeys") then
             for _, id in ipairs(self:Get("keyBars")) do
@@ -815,7 +831,7 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                     self:Get(("size" .. id) :: SizeKey)
                 )
                 local shown = self:Get(("show" .. id) :: ShowKey) and not self:Get(("pos" .. id) :: PosKey).hidden
-                bar:SetVisibility(shown and self:Get(("vis" .. id) :: VisKey) or "hidden")
+                bar:SetVisibility(shown and self:Get(("vis" .. id) :: VisKey) or "hidden", self)
             end
         end
         stance:SetEnabled(self:Get("showStance") and not self:Get("stancePosition").hidden)
@@ -826,6 +842,9 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
         end
         pet:SetEnabled(self:Get("showPet") and not self:Get("petPosition").hidden)
         pet:SetHotkeysShown(keysOn.pet == true)
+        -- the XP or totem bar turned on: Blizzard's stands down now, not at
+        -- the next reload
+        self:RunOutOfCombat("standDown", standDownChosen)
         for _, a in ipairs(self.attachable) do
             self:RunOutOfCombat("place:" .. a.key, function()
                 self:Place(a)
@@ -1212,29 +1231,15 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
     -- game's own action buttons, each telling it its command on hover: on
     -- SuuUI's bars it bound nothing (reported by a player). While SuuUI's
     -- bars are on it opens SuuUI's keybind mode instead, and closing that
-    -- goes back to the Options, as the game's does.
-    quickHooked: boolean = false
+    -- goes back to the Options, as the game's does. (CD-31) Set up at every
+    -- enable: the listener is the module's (gone when it turns off), the
+    -- frame's hook its own (one for the session, re-armed, quiet while the
+    -- module is off), and a frame that comes later is hooked when its addon
+    -- loads.
     fromQuick: boolean = false
 
     function TakeOverQuickKeybind()
-        local quick = frames.find("QuickKeybindFrame")
-        if self.quickHooked or not quick then
-            return
-        end
-        self.quickHooked = true
-        quick:HookScript("OnShow", function()
-            if not self:IsEnabled() or InCombatLockdown() then
-                return
-            end
-            quick:Hide()
-            -- (its OnHide opens the Options again: closed for the mode)
-            if SettingsPanel and SettingsPanel:IsShown() then
-                SettingsPanel:Close(true)
-            end
-            if SuuUI.KeybindMode.Enter() then
-                self.fromQuick = true
-            end
-        end)
+        self.fromQuick = false
         self:On("SUUUI_KEYBINDMODE_CHANGED", function(_, active)
             if not active and self.fromQuick then
                 self.fromQuick = false
@@ -1243,6 +1248,33 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end)
+        local function hookQuick(): boolean
+            local quick = frames.find("QuickKeybindFrame")
+            if not quick then
+                return false
+            end
+            self:HookScript(quick, "OnShow", function()
+                if InCombatLockdown() then
+                    return
+                end
+                quick:Hide()
+                -- (its OnHide opens the Options again: closed for the mode)
+                if SettingsPanel and SettingsPanel:IsShown() then
+                    SettingsPanel:Close(true)
+                end
+                if SuuUI.KeybindMode.Enter() then
+                    self.fromQuick = true
+                end
+            end)
+            return true
+        end
+        if not hookQuick() then
+            self:OnGameEvent("ADDON_LOADED", function()
+                if hookQuick() then
+                    self:Off("ADDON_LOADED")
+                end
+            end)
+        end
     end
 
     ----------------------------------------------------------------------------
@@ -1276,7 +1308,7 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.specGroup = group
-        after(1, function()
+        self:After(1, function()
             self:OfferRanks(group)
         end)
     end
@@ -1415,13 +1447,18 @@ class ActionBarsModule extends Module<typeof(DEFAULTS)>
                 end
             end)
         end
-        if self:Get("showXP") then
-            self:OnGameEvent("PLAYER_ENTERING_WORLD", suppressTracking)
-        end
+        self:OnGameEvent("PLAYER_ENTERING_WORLD", function()
+            if self:Get("showXP") then
+                suppressTracking()
+            end
+        end)
+        -- (its moment-later reads and retries are the module's own timers)
         local ranks = RankUpgrader.new(function(text: string)
             self:Print(text)
         end, function(): boolean
             return self:Get("upgradeRanks") == true
+        end, function(sec: number, fn: () -> ())
+            self:After(sec, fn)
         end)
         self.ranks = ranks
         self.specGroup = activeSpecGroup()

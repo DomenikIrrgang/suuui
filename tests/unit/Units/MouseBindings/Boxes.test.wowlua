@@ -1,0 +1,182 @@
+-- Units/MouseBindings/Boxes: the capture box and the click box, their keys
+-- (captured or Esc kept for one key, a fight letting the keyboard go) and
+-- their note on a Mac with Cmd-Left as Right click.
+--
+-- The spellbook is the engine's (the default character: a level 1 Human
+-- warrior).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as errors from "wowlua:errors"
+import SuuUI from "/Core/API"
+import M, ranksOf from "/Units/MouseBindings"
+import CaptureBox, ClickBox from "/Units/MouseBindings/Boxes"
+import expectNoErrors from "../../../helpers"
+import * as cvars from "/Core/CVars"
+
+-- A spell the character knows: its name and highest rank's ID.
+local function known(): (string, number)
+    for _, name in ipairs({ "Heroic Strike", "Battle Shout", "Attack" }) do
+        local ranks = ranksOf(name)
+        local top = ranks[#ranks]
+        if top then
+            return name, top.id
+        end
+    end
+    error("no known spell")
+end
+
+@afterEach
+local function cleanup()
+    mock.setModifiers({})
+    mock.player:mouseover(nil)
+    mock.hover(nil)
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:Store().specs = {}
+    M:Store().clicks = {}
+    M:Store().clickSynced = nil
+    local box = M.box
+    if box then
+        box:Close()
+    end
+    local clickBox = M.clickBox
+    if clickBox and clickBox.panel:IsShown() then
+        clickBox.cancelled, clickBox.after = nil, nil
+        clickBox:Close()
+    end
+    M:Apply()
+    expectNoErrors()
+end
+
+-- (UIP-5 / SET-1's rules) The capture box keeps the key it captures and Esc,
+-- for that key only; every other key passes on, and a fight lets the
+-- keyboard go. The click box is a UI.Dismissable.
+@test("the boxes' keys: captured or Esc kept for one key, the rest pass on; a fight lets the keyboard go")
+local function boxKeys()
+    -- (the first-run welcome over everything takes Esc first)
+    SuuUI.AccountData("welcome").seen = true
+    local welcome = SuuUI.GetModule("welcome")
+    if welcome then
+        errors.tryMethod(welcome, "Close")
+    end
+    local name, id = known()
+    M:Edit({ name = name, spellID = id })
+    local box = assert(M.box)
+    local p = box.panel
+    expect(p:IsKeyboardEnabled()).toBe(true)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- waiting: the key is the input, kept for that key
+    mock.pressKey("F")
+    expect(box.input).toBe("F")
+    expect(p:GetPropagateKeyboardInput()).toBe(false)
+    mock.advanceFrames(1)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- not waiting: other keys go on to the game; Esc closes, then the
+    -- keyboard is let go
+    mock.pressKey("G")
+    expect(box.input).toBe("F")
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(p:IsShown()).toBe(false)
+    mock.advanceFrames(1)
+    expect(p:IsKeyboardEnabled()).toBe(false)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    -- open when a fight starts: closed, the keyboard let go before the lockdown
+    M:Edit({ name = name, spellID = id })
+    expect(p:IsKeyboardEnabled()).toBe(true)
+    mock.player:enterCombat()
+    expect(p:IsShown()).toBe(false)
+    expect(p:IsKeyboardEnabled()).toBe(false)
+    expect(p:GetPropagateKeyboardInput()).toBe(true)
+    mock.advanceFrames(1)
+    mock.player:leaveCombat()
+    -- the click box, as its list row opens it (the row: "the list shows
+    -- Target and Menu first")
+    M:EditClick("target")
+    local clickBox = assert(M.clickBox)
+    local cp = clickBox.panel
+    expect(cp:IsShown()).toBe(true)
+    expect(cp:IsKeyboardEnabled()).toBe(true)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("A")
+    expect(cp:IsShown()).toBe(true)
+    -- waiting with a click it had: Esc goes back to it; again: closed
+    clickBox.waiting = true
+    mock.pressKey("ESCAPE")
+    expect(cp:IsShown()).toBe(true)
+    expect(clickBox.waiting).toBe(false)
+    mock.advanceFrames(1)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(cp:IsShown()).toBe(false)
+    mock.advanceFrames(1)
+    expect(cp:IsKeyboardEnabled()).toBe(false)
+    -- open as a fight starts: the keyboard let go, the box closed
+    M:EditClick("target")
+    expect(cp:IsKeyboardEnabled()).toBe(true)
+    mock.player:enterCombat()
+    expect(cp:IsShown()).toBe(false)
+    expect(cp:IsKeyboardEnabled()).toBe(false)
+    expect(cp:GetPropagateKeyboardInput()).toBe(true)
+    mock.player:leaveCombat()
+    expect(#mock.refusals()).toBe(0)
+    expectNoErrors()
+end
+
+@test("on a Mac with Cmd-Left as Right click, both boxes say so and turn the setting off")
+local function macCmdLeft()
+    local CVAR = "MacUseCommandLeftClickAsRightClick"
+    local cvar = "1"
+    local realMac = rawget(_G, "IsMacClient")
+    rawset(_G, "IsMacClient", function(): boolean
+        return true
+    end)
+    mock.stub(C_CVar, "GetCVar", function(name: string): string?
+        return name == CVAR and cvar or nil
+    end)
+    local set = mock.stub(C_CVar, "SetCVar", function(name: string, value: string): boolean
+        if name == CVAR then
+            cvar = value
+        end
+        return true
+    end)
+    M:EditClick("target")
+    local box = assert(M.clickBox)
+    expect(box.mac.text:IsShown()).toBe(true)
+    mock.click(box.mac.button)
+    expect(set).toHaveBeenCalledWith(CVAR, "0")
+    expect(box.mac.text:IsShown()).toBe(false)
+    -- (the module's CVar: the player's setting remembered, back when it lets go)
+    expect(cvars.remembered("mousebindings")).toBe(1)
+    M:RestoreCVar(CVAR)
+    expect(cvar).toBe("1")
+    expect(cvars.remembered("mousebindings")).toBe(0)
+    box:Close()
+    -- the spell's box too; with the setting off, no note
+    local name, id = known()
+    cvar = "1"
+    M:Edit({ name = name, spellID = id })
+    local spellBox = assert(M.box)
+    expect(spellBox.mac.text:IsShown()).toBe(true)
+    cvar = "0"
+    spellBox:Draw()
+    expect(spellBox.mac.text:IsShown()).toBe(false)
+    rawset(_G, "IsMacClient", realMac)
+end
+
+@test("each box built on its own for the module: hidden until opened; the click box opens on the click it has")
+local function built()
+    local capture = CaptureBox.new(M)
+    expect(capture.panel).never.toBeShown()
+    local click = ClickBox.new(M)
+    expect(click.panel).never.toBeShown()
+    click:Open("menu")
+    expect(click.panel).toBeShown()
+    expect(click.kind).toBe("menu")
+    expect(click.input).toBe("BUTTON2")
+    expect(click.waiting).toBe(false)
+    click:Close()
+    expect(click.panel).never.toBeShown()
+end

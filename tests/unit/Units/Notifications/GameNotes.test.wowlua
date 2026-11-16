@@ -1,0 +1,285 @@
+-- Units/Notifications/GameNotes: SuuUI's own notes about the game (damaged
+-- and broken gear, closed with its x, the Durability module's names and
+-- Show repairers, full bags, talent and Legacy points).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import type DurabilityInfo, TalentNext from "/Core/ServiceKeys"
+import notification from "/UI/Notification"
+import type NotificationData from "/UI/Notification"
+import internal M from "/Units/Notifications"
+import expectNoErrors from "../../../helpers"
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+-- A chest piece that wears out, worn.
+local VEST = 990401
+mock.defineItem(VEST, { name = "Militia Vest", quality = 1, icon = 132760, equipLoc = "INVTYPE_CHEST" })
+
+-- A slot the character wears something in.
+local function worn(): number
+    for slot = 1, 19 do
+        local _, max = GetInventoryItemDurability(slot)
+        if max then
+            return slot
+        end
+    end
+    error("nothing worn")
+end
+
+-- A note, there.
+local function note(id: string): NotificationData
+    local n = M.notes[id]
+    assert(n, "no note " .. id)
+    return n
+end
+
+-- A note's action clicked (on a card of its own).
+local CARD = notification(UIParent)
+local function act(n: NotificationData, i: number?)
+    local a = n.actions and n.actions[i or 1]
+    local fn = a and a.onClick
+    assert(fn, "no action")
+    fn(CARD)
+end
+
+local function hideAll()
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() then
+            d:Hide()
+        end
+    end
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
+    hideAll()
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+@test("gear: badly damaged, then broken (the Durability module's names), gone when repaired")
+local function durability()
+    mock.player:equip(5, { id = VEST, durability = 100, maxDurability = 100 })
+    mock.advanceFrames(2)
+    mock.player:setDurability(worn(), 15, 100)
+    -- (the server tells it with its next update)
+    mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+    tick()
+    expect(note("suu:durability").tone).toBe("warning")
+    mock.player:setDurability(worn(), 0, 100)
+    mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+    tick()
+    expect(note("suu:durability").tone).toBe("danger")
+    -- without the Durability module: the game's own numbers
+    mock.stub(SuuUI, "Durability", function(): DurabilityInfo?
+        return nil
+    end)
+    M.durabilityState = nil
+    M:CheckDurability()
+    expect(note("suu:durability").title).toBe("Some of your gear is broken")
+    mock.player:setDurability(worn(), 15, 100)
+    M:CheckDurability()
+    expect(note("suu:durability").title).toBe("Your gear is badly damaged")
+    mock.player:setDurability(worn(), 100, 100)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- off: none
+    M:Set("durability", false)
+    mock.player:setDurability(worn(), 0, 100)
+    M:CheckDurability()
+    expect(M.notes["suu:durability"]).toBeNil()
+    mock.player:setDurability(worn(), 100, 100)
+end
+
+@test("gear closed with its x: away while damaged, broken too; back once repaired and damaged again")
+local function durabilityClosed()
+    -- (asked 2026-11-12: hidden even as the gear gets worse; only a repair in
+    -- between brings it back)
+    mock.player:equip(5, { id = VEST, durability = 100, maxDurability = 100 })
+    mock.advanceFrames(2)
+    local function wear(left: number)
+        mock.player:setDurability(worn(), left, 100)
+        mock.fireEvent("UPDATE_INVENTORY_DURABILITY")
+        tick()
+    end
+    wear(15)
+    assert(note("suu:durability").onClose)(mock.partial({}))
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- worse: still away, broken too
+    wear(10)
+    expect(M.notes["suu:durability"]).toBeNil()
+    wear(0)
+    expect(M.notes["suu:durability"]).toBeNil()
+    -- repaired, then damaged again: back
+    wear(100)
+    wear(15)
+    expect(note("suu:durability").tone).toBe("warning")
+    wear(100)
+    expect(M.notes["suu:durability"]).toBeNil()
+end
+
+-- The Durability module's reading, made up.
+local function reading(state: string, pieces: { [string]: unknown }[]): () -> DurabilityInfo?
+    return function(): DurabilityInfo?
+        return mock.partial({ state = state, parts = { note = true }, pieces = pieces })
+    end
+end
+
+@test("the Durability module's note: which pieces, Show repairers")
+local function namedPieces()
+    mock.stub(
+        SuuUI,
+        "Durability",
+        reading("broken", {
+            { state = "broken", label = "Chest", name = "Militia Vest" },
+            { state = "damaged", label = "Legs", percent = 15 },
+        })
+    )
+    M.durabilityState = nil
+    M:CheckDurability()
+    local n = note("suu:durability")
+    expect(n.title).toBe("Your Chest is broken")
+    expect(n.body).toBe("Militia Vest gives no stats until repaired · Legs 15%")
+    mock.stub(
+        SuuUI,
+        "Durability",
+        reading("broken", {
+            { state = "broken", label = "Chest", name = "Militia Vest" },
+            { state = "broken", label = "Feet", name = "Boots" },
+        })
+    )
+    M:CheckDurability()
+    expect(note("suu:durability").title).toBe("2 pieces are broken")
+    mock.stub(SuuUI, "Durability", reading("damaged", { { state = "damaged", label = "Legs", percent = 15 } }))
+    M:CheckDurability()
+    n = note("suu:durability")
+    expect(n.title).toBe("Your gear is badly damaged")
+    -- Show repairers: the world map through a secure click on the minimap's
+    -- zone button (its click is ToggleWorldMap), left out when the map is open
+    local a = assert(n.actions and n.actions[1])
+    expect(assert(a.click)() :: unknown).toBe(tbl.field(_G, "MinimapCluster", "ZoneTextButton"))
+    WorldMapFrame:Hide()
+    expect(assert(a.skipClick)()).toBe(false)
+    local toggled = mock.spy(function() end)
+    mock.stub(_G, "ToggleWorldMap", toggled)
+    act(n)
+    expect(toggled).never.toHaveBeenCalled()
+end
+
+@test("full bags: a note while no slot is free, gone when one is")
+local function bags()
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(_: number): (number, number)
+        return 0, 0
+    end)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(M.notes["suu:bags"] ~= nil).toBe(true)
+    mock.stub(C_Container, "GetContainerNumFreeSlots", function(bag: number): (number, number)
+        return bag == 0 and 1 or 0, 0
+    end)
+    mock.fireEvent("BAG_UPDATE_DELAYED")
+    expect(M.notes["suu:bags"]).toBeNil()
+end
+
+-- The talent currency's points, made up.
+local function points(n: number): (configID: number, treeID: number, staged: boolean) -> TreeCurrencyInfo[]
+    return function(_: number, _: number, _: boolean): TreeCurrencyInfo[]
+        local info: TreeCurrencyInfo = mock.partial({ quantity = n })
+        return { info }
+    end
+end
+
+@test("talent points to spend: the count, the next talent of a build followed, Open talents")
+local function talents()
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", points(2))
+    mock.stub(C_ClassTalents, "GetActiveConfigID", function(): number
+        return 7143862
+    end)
+    mock.stub(C_Traits, "GetConfigInfo", function(_: number): TraitConfigInfo?
+        return mock.partial({ treeIDs = { 1117 } })
+    end)
+    M.talentPointsShown = nil
+    M:CheckTalents()
+    local n = note("suu:talents")
+    expect(n.title).toBe("2 talent points to spend")
+    local opened = mock.spy(function() end)
+    mock.stub(SuuUI, "ToggleTalents", opened)
+    mock.stub(SuuUI, "TalentsShown", function(): boolean
+        return false
+    end)
+    if n.actions then
+        act(n)
+        expect(opened).toHaveBeenCalled()
+    end
+    mock.stub(SuuUI, "TalentBuildNext", function(): TalentNext?
+        return mock.partial({
+            node = 1,
+            rank = 1,
+            max = 3,
+            name = "Tactical Mastery",
+            build = "Arms leveling",
+            icon = 136031,
+        })
+    end)
+    M:CheckTalents()
+    n = note("suu:talents")
+    expect(n.title).toBe("2 talent points · next: Tactical Mastery")
+    expect(n.body).toBe("Rank 1 of 3 · Arms leveling")
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", points(0))
+    M:CheckTalents()
+    expect(M.notes["suu:talents"]).toBeNil()
+    -- after a talent event, a moment later
+    mock.fireEvent("PLAYER_TALENT_UPDATE")
+    mock.advanceTime(0.3)
+end
+
+@test("Legacy points to spend: a note with Open Legacy")
+local function legacy()
+    mock.stub(C_Traits, "GetConfigIDByTreeID", function(_: number): number
+        return 7143863
+    end)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", points(1))
+    M.legacyPointsShown = nil
+    M:CheckLegacy()
+    local n = note("suu:legacy")
+    expect(n.title).toBe("1 Legacy point to spend")
+    -- Open Legacy: the game's window shown (a stand-in: the Legacy window has its own test)
+    local legacyFrame = CreateFrame("Frame")
+    legacyFrame:Hide()
+    mock.setField(_G, "LegacySystemFrame", legacyFrame)
+    act(n)
+    expect(legacyFrame:IsShown()).toBe(true)
+    mock.stub(C_Traits, "GetTreeCurrencyInfo", points(0))
+    M:CheckLegacy()
+    expect(M.notes["suu:legacy"]).toBeNil()
+end

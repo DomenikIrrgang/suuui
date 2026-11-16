@@ -13,6 +13,9 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, outfitOptions, saveWhy, countText from "/Units/DressingRoom"
 import expectNoErrors from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import tokenOf from "../SettingsUI/UiSettingsHelpers"
 import type PieceRow from "/Units/DressingRoom"
 import type ConfirmOptions from "/UI/Panel"
@@ -544,18 +547,43 @@ local function bursts()
     expect(draw).toHaveBeenCalledTimes(1)
 end
 
-@test("off: the window closes; the game's dressing room is left as the game shows it")
+-- (last: the module off) Dressing room is reloadToToggle: the registry
+-- turns it off in a session only when its OnEnable fails. Here it toggles
+-- live, as a module that isn't would, so the registry's own disable runs.
+@test("off: the window closes; the game's dressing room as the game shows it (seen, its model back); on again, borrowed")
 local function off()
+    local own = ownOf(M)
+    own.reloadToToggle = false
     open()
-    assert(M.OnDisable)(M)
+    local f = game()
+    expect(scene():GetParent()).toBe(M.stage)
+    settings.set("dressingroom", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
     expect(M.window).never.toBeShown()
-    mock.stub(M, "IsEnabled", function()
-        return false
-    end)
-    HideUIPanel(game())
-    ShowUIPanel(game())
+    -- (it was open off screen: closed)
+    expect(f).never.toBeShown()
+    expect(f:GetAlpha()).toBe(1)
+    expect(scene():GetParent()).toBe(f)
+    ShowUIPanel(f)
     mock.advanceTime(0.01)
     expect(M.window).never.toBeShown()
-    assert(M.away).apply()
-    HideUIPanel(game())
+    expect(f:GetAlpha()).toBe(1)
+    expect(assert(f:GetLeft()) < assert(UIParent:GetRight())).toBe(true)
+    local controls = frames.asFrame(tbl.field(scene(), "ControlFrame"))
+    if controls then
+        controls:Show()
+        expect(controls).toBeShown()
+    end
+    HideUIPanel(f)
+    -- on again: the model on SuuUI's stage, the game's window away
+    settings.set("dressingroom", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(scene():GetParent()).toBe(M.stage)
+    open()
+    expect(M.window).toBeShown()
+    expect(f:GetAlpha()).toBe(0)
+    expect(assert(f:GetLeft()) > assert(UIParent:GetRight())).toBe(true)
+    HideUIPanel(f)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

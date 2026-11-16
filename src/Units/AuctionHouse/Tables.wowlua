@@ -1,0 +1,272 @@
+-- Units/AuctionHouse/Tables.wowlua
+-- The auction house's tables (Units/AuctionHouse): a header row of
+-- captions (a click on a sortable one sorts by it), then a scroll area of
+-- rows made as they are needed; a row's hover and chosen fill; a cell's
+-- price or word.
+
+import SuuUI from "/Core/API"
+import type ScrollArea, Text from "/Core/API"
+import * as frames from "wowlua:frames"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+-- a row's height
+export const ROW_H = 32
+
+--------------------------------------------------------------------------------
+-- Tables: a header row of captions, then rows of cells
+--------------------------------------------------------------------------------
+
+-- A column: its caption, its width (nil: the rest), right-aligned; the key
+-- its header sorts by (clickable when set).
+export type Col = { label?: string, w?: number, right?: boolean, sort?: string }
+-- A column's place in a row.
+export type Place = { x: number, w: number }
+
+-- A row: a button with a hover and a chosen fill, a rule under it, its
+-- cells (placed by the table's columns).
+export class TableRow extends Button
+    readonly sel: Texture
+    readonly hover: Texture
+    readonly rule: Texture
+    onEnter: ((row: TableRow) -> ())? = nil
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(ROW_H)
+        self.sel = UI.Fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        self.sel:Hide()
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:SetAlpha(0.6)
+        self.hover:Hide()
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.rule:SetHeight(1)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            local onEnter = self.onEnter
+            if onEnter then
+                onEnter(self)
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+        end)
+    end
+end
+
+-- A table: its captions, a scroll area of rows (made as they are needed).
+export class AuctionTable<R extends TableRow> extends Frame
+    cols: Col[]
+    readonly rows: R[] = {}
+    readonly head: Frame
+    readonly headCells: Text[] = {}
+    readonly headButtons: { [number]: Button } = {}
+    -- the sorted column's arrow: up in order, down reversed
+    readonly arrow: Texture
+    readonly list: ScrollArea
+    readonly empty: Text
+    readonly make: (parent: Frame) -> R
+    sortKey: string? = nil
+    sortReverse: boolean = false
+    -- a sortable header clicked: its column's key
+    onSort: ((key: string) -> ())? = nil
+
+    constructor(parent: Frame, cols: Col[], make: (parent: Frame) -> R)
+        super(nil, parent)
+        self.cols, self.make = cols, make
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT")
+        self.head:SetPoint("TOPRIGHT")
+        self.head:SetHeight(20)
+        self.arrow = self.head:CreateTexture(nil, "ARTWORK")
+        self.arrow:SetSize(8, 8)
+        UI.Paint(self.arrow, "ink")
+        self.arrow:Hide()
+        self.list = UI.ScrollArea(self, S["space-3"])
+        self.list:SetPoint("TOPLEFT", 0, -22)
+        SuuUI.Layout.Follow(self, function()
+            self.list:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+        end)
+        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number)
+            self.list.child:SetWidth(w)
+            self:LayoutCols()
+        end)
+        local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        rule:SetPoint("TOPLEFT", 0, -20)
+        rule:SetPoint("TOPRIGHT", 0, -20)
+        rule:SetHeight(1)
+        self.empty = UI.Text(self, "body", "ink-muted")
+        self.empty:SetPoint("TOP", 0, -60)
+        self.empty:Hide()
+        self:SetCols(cols)
+    end
+
+    function SetCols(c: Col[])
+        self.cols = c
+        for i, h in ipairs(self.headCells) do
+            h:SetShown(c[i] ~= nil)
+        end
+        for _, b in pairs(self.headButtons) do
+            b:Hide()
+        end
+        for i, col in ipairs(c) do
+            local h = self.headCells[i]
+            if not h then
+                h = UI.Text(self.head, "caption", "ink-muted")
+                self.headCells[i] = h
+            end
+            h:SetValue(col.label or "")
+            h:SetJustifyH(col.right and "RIGHT" or "LEFT")
+            h:Show()
+            if col.sort then
+                self:HeadButton(i):Show()
+            end
+        end
+        self:LayoutCols()
+    end
+
+    -- Column i's header button (made on first use): a click sorts by the
+    -- column, the hover lights its caption.
+    function HeadButton(i: number): Button
+        local b = self.headButtons[i]
+        if b then
+            return b
+        end
+        local made = CreateFrame("Button", nil, self.head)
+        self.headButtons[i] = made
+        made:SetScript("OnClick", function()
+            local col = self.cols[i]
+            local onSort = self.onSort
+            if col and col.sort and onSort then
+                onSort(col.sort)
+            end
+        end)
+        made:SetScript("OnEnter", function()
+            self.headCells[i]:SetColor("ink")
+        end)
+        made:SetScript("OnLeave", function()
+            self:ShowSort(self.sortKey, self.sortReverse)
+        end)
+        return made
+    end
+
+    -- The sorted column: its caption lit, the arrow by it.
+    function ShowSort(key: string?, reverse: boolean)
+        self.sortKey, self.sortReverse = key, reverse
+        local places = self:Places(self.list:GetWidth())
+        self.arrow:Hide()
+        for i, col in ipairs(self.cols) do
+            local h, p = self.headCells[i], places[i]
+            local on = key ~= nil and col.sort == key
+            if h then
+                h:SetColor(on and "ink" or "ink-muted")
+            end
+            if on and h and p then
+                local w = math.min(p.w, h:GetStringWidth())
+                self.arrow:ClearAllPoints()
+                if col.right then
+                    self.arrow:SetPoint("RIGHT", self.head, "LEFT", p.x + p.w - w - S["space-2"], 0)
+                else
+                    self.arrow:SetPoint("LEFT", self.head, "LEFT", p.x + w + S["space-2"], 0)
+                end
+                UI.Glyph(self.arrow, (reverse and "chevronDown" or "chevronUp"))
+                self.arrow:Show()
+            end
+        end
+    end
+
+    -- each column's x and width in a row of width w
+    function Places(w: number): Place[]
+        local fixed = 0
+        for _, col in ipairs(self.cols) do
+            fixed = fixed + (col.w or 0) + S["space-4"]
+        end
+        local x = S["space-3"]
+        local out: Place[] = {}
+        for i, col in ipairs(self.cols) do
+            local cw = col.w or math.max(40, w - fixed - S["space-3"] * 2)
+            out[i] = { x = x, w = cw }
+            x = x + cw + S["space-4"]
+        end
+        return out
+    end
+
+    function LayoutCols()
+        local places = self:Places(self.list:GetWidth())
+        for i, h in ipairs(self.headCells) do
+            local p = places[i]
+            if p then
+                h:ClearAllPoints()
+                h:SetPoint("LEFT", self.head, "LEFT", p.x, 0)
+                h:SetWidth(p.w)
+                local b = self.headButtons[i]
+                if b then
+                    b:ClearAllPoints()
+                    b:SetPoint("TOPLEFT", self.head, "TOPLEFT", p.x, 0)
+                    b:SetSize(p.w, 20)
+                end
+            end
+        end
+        if self.sortKey then
+            self:ShowSort(self.sortKey, self.sortReverse)
+        end
+    end
+
+    -- Row i (made on first use).
+    function Row(i: number): R
+        local r = self.rows[i]
+        if r then
+            return r
+        end
+        local made = self.make(self.list.child)
+        self.rows[i] = made
+        return made
+    end
+
+    -- Row i placed at its line.
+    function Line(i: number): R
+        local row = self:Row(i)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
+        row:SetPoint("RIGHT", self.list.child, "RIGHT")
+        return row
+    end
+
+    -- The rows past n hidden, the list's height for n.
+    function Fit(n: number)
+        for i = n + 1, #self.rows do
+            self.rows[i]:Hide()
+        end
+        self.list.child:SetHeight(math.max(1, n * ROW_H))
+    end
+
+    -- Places a row's cells (frames or font strings) by the columns.
+    function PlaceCells(r: Frame, cells: (Frame | FontString | false)[])
+        local places = self:Places(self.list:GetWidth())
+        for i, cell in ipairs(cells) do
+            local p = places[i]
+            if p and cell then
+                cell:ClearAllPoints()
+                local col = self.cols[i]
+                if col and col.right then
+                    cell:SetPoint("RIGHT", r, "LEFT", p.x + p.w, 0)
+                else
+                    cell:SetPoint("LEFT", r, "LEFT", p.x, 0)
+                end
+                local text = frames.asFontString(cell)
+                if text then
+                    text:SetWidth(p.w)
+                end
+            end
+        end
+    end
+end
+
+-- A price or a word in a cell's place.
+export type Cell = number | string | false

@@ -34,95 +34,60 @@
 -- size at every zoom. A built-in module written against the public API only.
 -- (The game's map canvas declares its methods' results `any`: each is read
 -- through wowlua:secret and wowlua:frames where it's used.)
+--
+-- This file is the module: its settings, its state, its lifecycle, the
+-- map's data provider and Map filters' place in the header. The module's
+-- methods keep their names here; the work is in its parts, each a
+-- function taking the module:
+--   Units/WorldMap/Filters    Map filters: the groups, the saved choice,
+--                             the game's quest settings, hidden quests
+--   Units/WorldMap/Collect    what's on a map: every pin before merging,
+--                             quests judged, group tags, flight masters found
+--   Units/WorldMap/GiverTips  the quest givers' index and NPC tooltips
+--   Units/WorldMap/Canvas     the pins on the canvas, the routes, the
+--                             unexplored areas
+--   Units/WorldMap/QuestLook  the game's quest markers and your arrow in
+--                             SuuUI's look
+--   Units/WorldMap/Arrange, Overlays, Quests, Rows, Tips  pure logic
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import MARKS, WORLD_MAP, CONVERGENCES, CAMPFIRES, FLIGHT_MAP from "/Core/ServiceKeys"
-
-import type MarkFilters from "/Core/ServiceKeys"
-import chromeOf from "/UI/WindowSkin"
-import MapPin from "/UI/MapPin"
-import type MapPinData from "/UI/MapPin"
-import type FilterMenu, FilterValue, FilterValues, FilterGroup, FilterOption from "/UI/FilterMenu"
-import type TooltipData from "/UI/Tooltip"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, MarkFilters, MapPinData, FilterMenu, FilterValues, FilterGroup, MapPin from "/Core/API"
 import hook, hookScript from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
-import QUEST_RANK, questPin, raceBit, completedSet, markCompleted, onQuest, readCalendar, eventOn, questName, questState from "/Units/WorldMap/Quests"
-import type Me, Offer from "/Units/WorldMap/Quests"
-import quest, npc, entrance, instanceLevels from "/Units/WorldMap/Rows"
-import CLOSEST_GROW, arrange from "/Units/WorldMap/Arrange"
-import type Item, Group, TipLine from "/Units/WorldMap/Arrange"
-import tipFor, giverGroup, groupQuests from "/Units/WorldMap/Tips"
-import unexploredTiles from "/Units/WorldMap/Overlays"
-import * as lazyData from "/Core/Data"
+import markCompleted, readCalendar from "/Units/WorldMap/Quests"
+import type Me from "/Units/WorldMap/Quests"
+import type Item, Group from "/Units/WorldMap/Arrange"
 import type QuestStarts from "/Data/QuestStarts"
-import type MapPlaces from "/Data/MapPlaces"
+import * as filters from "/Units/WorldMap/Filters"
+import menuValues, choiceOf, chosen, seesConvergences, menuGroups, settingOn from "/Units/WorldMap/Filters"
+import type FilterChoice, SavedFilters, Layers from "/Units/WorldMap/Filters"
+import * as collect from "/Units/WorldMap/Collect"
+import forgetQuests from "/Units/WorldMap/Collect"
+import * as giverTips from "/Units/WorldMap/GiverTips"
+import type GiverPlaces from "/Units/WorldMap/GiverTips"
+import * as mapCanvas from "/Units/WorldMap/Canvas"
+import type WorldPin, RouteLayer from "/Units/WorldMap/Canvas"
+import * as questLook from "/Units/WorldMap/QuestLook"
+import type QuestLook from "/Units/WorldMap/QuestLook"
 
--- A campfire's time left: m:ss, or out.
+local WORLD_MAP = SuuUI.Services.WORLD_MAP
+local FLIGHT_MAP = SuuUI.Services.FLIGHT_MAP
+
+-- A campfire's time left: m:ss, or out (Units/WorldMap/Collect).
 export function fireLeft(s: number): string
-    if s <= 0 then
-        return "going out"
-    end
-    s = math.floor(s)
-    return ("%d:%02d"):format(s / 60, s % 60)
+    return collect.fireLeft(s)
 end
+
+-- What an NPC should offer you now (Units/WorldMap/GiverTips).
+export type QuestOffer = giverTips.QuestOffer
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
 
-local asNumber, asString, flag, field = secret.asNumber, secret.asString, secret.flag, tbl.field
-
--- What Map filters chose: each group's values on.
-type FilterChoice = { [string]: string[] }
--- The saved filters: each group's values (an earlier layout's groups too)
--- and the layout's version.
-type SavedFilters = { v?: number, [string]: string[] | number | nil }
--- Each group's values on, as sets.
-type On = { [string]: boolean }
-type Layers = { quests: On, places: On, services: On, trading: On, trainers: On, rares: On, marks: On, skyborne: On }
-
--- Map filters' values from the choice, and back (its values: strings).
-local function menuValues(f: FilterChoice): FilterValues
-    local out: FilterValues = {}
-    for k, list in pairs(f) do
-        local l: FilterValue[] = {}
-        for i, v in ipairs(list) do
-            l[i] = v
-        end
-        out[k] = l
-    end
-    return out
-end
--- The saved filters' groups (their version left out).
-local function choiceOf(f: SavedFilters): FilterChoice
-    local out: FilterChoice = {}
-    for k, list in pairs(f) do
-        if type(list) == "table" then
-            out[k] = list
-        end
-    end
-    return out
-end
-local function chosen(v: FilterValues): FilterChoice
-    local out: FilterChoice = {}
-    for k, c in pairs(v) do
-        local l: string[] = {}
-        if type(c) == "table" then
-            for _, x in ipairs(c) do
-                if type(x) == "string" then
-                    l[#l + 1] = x
-                end
-            end
-        end
-        out[k] = l
-    end
-    return out
-end
+local asNumber, asString, field = secret.asNumber, secret.asString, tbl.field
 
 local DEFAULT_FILTERS: SavedFilters = {
     -- (objectives, levels and colours: the game's own settings)
@@ -147,602 +112,6 @@ local M: WorldMapModule
 -- whose pins it hid (by quest ID; none: nil).
 type Taxi = { known: { [number]: boolean }, checked: { [number]: boolean } }
 type WorldMapChar = { taxi?: Taxi, questPOIOnce?: boolean, hiddenQuests?: { [number]: boolean } }
-
---------------------------------------------------------------------------------
--- The filter menu
---------------------------------------------------------------------------------
-
--- A group of Map filters: its options' values are strings.
-type FilterSpec = {
-    key: string,
-    label: string,
-    kind: "one" | "many" | "toggles",
-    column?: boolean,
-    options: { value: string, label: string, color?: string }[],
-}
-
-local GROUPS: FilterSpec[] = {
-    {
-        key = "quests",
-        label = "Quests",
-        kind = "toggles",
-        options = {
-            { value = "objectives", label = "Quest objectives" },
-            { value = "levels", label = "Quest levels" },
-            { value = "colours", label = "Difficulty colours" },
-            { value = "available", label = "Quests to pick up" },
-            { value = "repeatable", label = "Repeatable and daily" },
-            { value = "items", label = "Quests from items" },
-            { value = "trivial", label = "Trivial quests" },
-        },
-    },
-    {
-        key = "places",
-        label = "Places",
-        kind = "toggles",
-        options = {
-            { value = "unexplored", label = "Unexplored areas" },
-            { value = "dungeons", label = "Dungeon and raid entrances" },
-            { value = "battlegrounds", label = "Battleground entrances" },
-            { value = "flight", label = "Flight masters" },
-            { value = "campfires", label = "Campfires you found" },
-        },
-    },
-    {
-        key = "services",
-        label = "Services",
-        kind = "toggles",
-        column = true,
-        options = {
-            { value = "inn", label = "Innkeepers" },
-            { value = "repair", label = "Repair" },
-            { value = "goods", label = "General goods" },
-            { value = "food", label = "Food and drink" },
-            { value = "vendor", label = "Other vendors" },
-            { value = "stable", label = "Stable masters" },
-            { value = "battlemaster", label = "Battlemasters" },
-            { value = "guild", label = "Guild masters" },
-            { value = "tabard", label = "Tabard designers" },
-            { value = "spirit", label = "Spirit healers" },
-        },
-    },
-    {
-        key = "trading",
-        label = "Trading",
-        kind = "toggles",
-        options = {
-            { value = "auction", label = "Auctioneers" },
-            { value = "mail", label = "Mailboxes" },
-            { value = "bank", label = "Bankers" },
-        },
-    },
-    {
-        key = "trainers",
-        label = "Trainers",
-        kind = "toggles",
-        column = true,
-        options = {
-            { value = "class", label = "Your class trainer" },
-            { value = "professions", label = "Profession trainers" },
-            { value = "weapon", label = "Weapon masters" },
-            { value = "riding", label = "Riding and pet trainers" },
-        },
-    },
-    {
-        key = "rares",
-        label = "Rares and treasures",
-        kind = "toggles",
-        options = { { value = "rares", label = "Rares" }, { value = "treasures", label = "Treasure chests" } },
-    },
-    {
-        key = "marks",
-        label = "Marks",
-        kind = "toggles",
-        options = { { value = "yours", label = "Your marks" }, { value = "shared", label = "Shared marks" } },
-    },
-    -- (shown to Skyborne characters only: menuGroups)
-    {
-        key = "skyborne",
-        label = "Skyborne",
-        kind = "toggles",
-        options = { { value = "convergences", label = "Convergences of Elements" } },
-    },
-}
-
--- Whether this character sees the Convergences of Elements (Skyborne).
-local function seesConvergences(): boolean
-    local conv = SuuUI.UseService(CONVERGENCES)
-    local shown = conv and conv.Shown
-    return shown ~= nil and shown()
-end
-
--- The menu's groups: Skyborne only for a Skyborne character.
-local function menuGroups(): FilterGroup[]
-    local sky = seesConvergences()
-    local out: FilterGroup[] = {}
-    for _, g in ipairs(GROUPS) do
-        if sky or g.key ~= "skyborne" then
-            local options: FilterOption[] = {}
-            for i, o in ipairs(g.options) do
-                options[i] = { value = o.value, label = o.label, color = o.color }
-            end
-            out[#out + 1] = { key = g.key, label = g.label, kind = g.kind, options = options, column = g.column }
-        end
-    end
-    return out
-end
-
--- The saved filters in the current groups: each saved choice goes to the
--- group that has it now (mailboxes, bankers and auctioneers moved from
--- Services to Trading, the trainers to Trainers), so an earlier layout's
--- choices carry over; new options start off.
-local LEGACY: { [string]: { group: string, value: string } } = {
-    classTrainer = { group = "trainers", value = "class" },
-    trainers = { group = "trainers", value = "professions" },
-}
-local FILTERS_VERSION = 5 -- 2: quests from items, 3: unexplored areas, 4: marks, 5: convergences (each on for everyone once)
--- options each layout version added, on for everyone once
-local ADDED: { since: number, group: string, value: string }[] = {
-    { since = 2, group = "quests", value = "items" },
-    { since = 3, group = "places", value = "unexplored" },
-    { since = 4, group = "marks", value = "yours" },
-    { since = 4, group = "marks", value = "shared" },
-    { since = 5, group = "skyborne", value = "convergences" },
-}
-
--- Quests' options that are the game's own settings, not saved by SuuUI:
--- its quest objectives on the map, and the quest log's levels ("[15]"
--- before a title) and difficulty colours (its filter menu had them; SuuUI's
--- Map filters takes its place)
-local GAME_SETTINGS: { value: string, cvar: string }[] = {
-    { value = "objectives", cvar = "questPOI" },
-    { value = "levels", cvar = "showQuestLevel" },
-    { value = "colours", cvar = "showQuestDifficultyColor" },
-}
-local gameSetting: { [string]: string } = {}
-for _, o in ipairs(GAME_SETTINGS) do
-    gameSetting[o.value] = o.cvar
-end
-
-local function settingOn(cvar: string): boolean
-    local ok, v = pcall(GetCVarBool, cvar)
-    return not ok or v == true
-end
-
---------------------------------------------------------------------------------
--- What's on a map
---------------------------------------------------------------------------------
-
--- service key → filter, glyph, glyph colour
-local SERVICE: { [string]: { filter: string, glyph: string, color?: string } } = {
-    spirit = { filter = "spirit", glyph = "spirit", color = "arcane" },
-    inn = { filter = "inn", glyph = "inn" },
-    bank = { filter = "bank", glyph = "bank" },
-    auction = { filter = "auction", glyph = "gavel" },
-    battlemaster = { filter = "battlemaster", glyph = "flag" },
-    guild = { filter = "guild", glyph = "scroll" },
-    tabard = { filter = "tabard", glyph = "tabard" },
-    stable = { filter = "stable", glyph = "paw" },
-    repair = { filter = "repair", glyph = "anvil" },
-    food = { filter = "food", glyph = "mug" },
-    goods = { filter = "goods", glyph = "bag" },
-    vendor = { filter = "vendor", glyph = "coin" },
-}
--- What each weapon master teaches (asked 2026-10-18), from cMaNGOS's
--- Classic world database (github.com/cmangos/classic-db ec4f596, GPL-3.0:
--- their trainer lists); Classic's lists, Forever's own not recorded yet.
-local WEAPON_MASTERS: { [number]: string } = {
-    [2704] = "Bows, One-Handed Axes, Staves, Thrown, Two-Handed Axes", -- Hanashi, Orgrimmar
-    [11865] = "Fist Weapons, Guns, One-Handed Axes, One-Handed Maces, Two-Handed Axes, Two-Handed Maces", -- Buliwyf Stonehand, Ironforge
-    [11866] = "Bows, Daggers, Fist Weapons, Staves, Thrown", -- Ilyenia Moonfire, Darnassus
-    [11867] = "Crossbows, Daggers, One-Handed Swords, Polearms, Staves, Two-Handed Swords", -- Woo Ping, Stormwind
-    [11868] = "Bows, Daggers, Fist Weapons, One-Handed Axes, Thrown, Two-Handed Axes", -- Sayoc, Orgrimmar
-    [11869] = "Guns, One-Handed Maces, Staves, Two-Handed Maces", -- Ansekhwa, Thunder Bluff
-    [11870] = "Crossbows, Daggers, One-Handed Swords, Polearms, Two-Handed Swords", -- Archibald, Undercity
-    [13084] = "Crossbows, Daggers, Thrown", -- Bixi Wobblebonk, Ironforge
-}
-
-local SERVICE_NAMES: { [string]: string } = {
-    spirit = "Spirit healer",
-    inn = "Innkeeper",
-    bank = "Banker",
-    auction = "Auctioneer",
-    battlemaster = "Battlemaster",
-    guild = "Guild master",
-    tabard = "Tabard designer",
-    stable = "Stable master",
-    repair = "Repair",
-    food = "Food and drink",
-    goods = "General goods",
-    vendor = "Vendor",
-    mail = "Mailbox",
-    classTrainer = "Class trainer",
-    trainer = "Trainer",
-}
--- (drawn after the game's own profession icons, which players know)
-local PROFESSION_GLYPH: { [string]: string } = {
-    alchemy = "profAlchemy",
-    blacksmithing = "profBlacksmithing",
-    enchanting = "profEnchanting",
-    engineering = "gear",
-    herbalism = "profHerbalism",
-    leatherworking = "profLeatherworking",
-    mining = "profMining",
-    skinning = "hide",
-    tailoring = "profTailoring",
-    cooking = "profCooking",
-    firstAid = "profFirstAid",
-    fishing = "profFishing",
-    weapon = "sword",
-    riding = "book",
-    pet = "book",
-    other = "book",
-}
-local PROFESSION_NAMES: { [string]: string } = {
-    alchemy = "Alchemy trainer",
-    blacksmithing = "Blacksmithing trainer",
-    enchanting = "Enchanting trainer",
-    engineering = "Engineering trainer",
-    herbalism = "Herbalism trainer",
-    leatherworking = "Leatherworking trainer",
-    mining = "Mining trainer",
-    skinning = "Skinning trainer",
-    tailoring = "Tailoring trainer",
-    cooking = "Cooking trainer",
-    firstAid = "First aid trainer",
-    fishing = "Fishing trainer",
-    weapon = "Weapon master",
-    riding = "Riding instructor",
-    pet = "Pet trainer",
-    other = "Trainer",
-}
--- Whether a quest needs a group, as Questie decides it: its corrections
--- where the game's tag is wrong (SuuUI's data), else the game's tag. The
--- game knows a quest it hasn't loaded only a moment after it's first asked
--- (probe questgroup: nil at first, the tag 2 to 6 s later): until it has
--- told, SuuUI's own guess (Classic's elite, dungeon and raid quests, and
--- those set in one), and the map is drawn again once the answers are in.
-local GROUP_TAGS: { [number]: boolean } = { [1] = true, [62] = true, [81] = true } -- elite, raid, dungeon
-local told: { [number]: number | false } = {}
-local waiting: { [number]: number }? = nil
-local guessed: { [number]: boolean } = {}
-
-local function askTag(id: number): number?
-    local t = errors.tryValue(C_QuestLog.GetQuestTagInfo, id)
-    return t and asNumber(t.tagID) or nil
-end
-
-local function groupTag(tag: number?): boolean
-    return tag ~= nil and GROUP_TAGS[tag] == true
-end
-
--- the quests asked and not told yet (when each was first asked): again
--- after 2 s, and after 6 s (no tag 5 s after the first ask is the game's
--- answer; a quest asked later waits for the next round); the map again
--- when one turned out otherwise than guessed
-local askAgain: (final: boolean) -> ()
-local function startRound()
-    after(2, function()
-        askAgain(false)
-    end)
-    after(6, function()
-        askAgain(true)
-    end)
-end
-askAgain = function(final: boolean)
-    local w = waiting
-    if not w then
-        return
-    end
-    local changed, now = false, GetTime()
-    for id, since in pairs(w) do
-        local tag = askTag(id)
-        if tag or (final and now - since >= 5) then
-            told[id] = tag or false
-            w[id] = nil
-            if groupTag(tag) ~= (guessed[id] or false) then
-                changed = true
-            end
-        end
-    end
-    if final then
-        if next(w) then
-            startRound()
-        else
-            waiting = nil
-        end
-    end
-    local map = M.map
-    if changed and map and map:IsShown() then
-        M:Refresh()
-    end
-end
-
--- What each quest is for you (questState, and its name), kept until
--- something it depends on changes: a quest turned in, accepted or
--- abandoned, your level, skills or reputation (forgetQuests). The map read
--- every quest on it again at each refresh: 320k instructions and 357 KB, three
--- times as it opened. An event's quest is judged each time (the holidays and
--- the map it's on decide).
-type Judged = { state?: string, difficulty?: string, level?: number, name: string }
-local judged: { [number]: Judged } = {}
-
-local function judge(qrow: unknown[], id: number, me: Me, done: { [number]: boolean }): Judged
-    local known = judged[id]
-    if known then
-        return known
-    end
-    local q = quest(qrow)
-    local state, difficulty, level = questState(q, id, me, done)
-    local j: Judged = { state = state, difficulty = difficulty, level = level, name = questName(q, id) }
-    if not q.event then
-        judged[id] = j
-    end
-    return j
-end
-
--- No quests and no places: the map's pins while the data is being built.
-const NO_STARTS: QuestStarts = {
-    quests = {},
-    objectives = {},
-    tags = {},
-    group = {},
-    maps = {},
-    drops = {},
-    items = {},
-    givers = {},
-    entrances = {},
-    routes = {},
-}
-const NO_PLACES: MapPlaces = { npcs = {}, services = {}, rares = {}, mailboxes = {}, treasures = {}, routes = {} }
-
--- (the turned-in quests stay: only a turn-in adds one, QUEST_TURNED_IN)
-local function forgetQuests()
-    judged = {}
-end
-
-local function isGroupQuest(id: number): boolean
-    -- (the data not built yet: no group bar until it is)
-    if not lazyData.questStarts:Ready() then
-        return false
-    end
-    local starts = SuuUI.QuestStarts()
-    local fixed = starts.tags[id]
-    if fixed then
-        return groupTag(fixed)
-    end
-    if told[id] == nil then
-        local tag = askTag(id)
-        if tag then
-            told[id] = tag
-        elseif not (waiting and waiting[id]) then
-            local w = waiting
-            if not w then
-                w = {}
-                waiting = w
-                startRound()
-            end
-            w[id] = GetTime()
-            errors.try(field(C_QuestLog, "RequestLoadQuestByID"), id)
-        end
-    end
-    local known = told[id]
-    if known ~= nil then
-        return known ~= false and groupTag(known)
-    end
-    local guess = starts.group[id] ~= nil
-    guessed[id] = guess
-    return guess
-end
-
--- The continent a map lies on (itself for a continent), or nil (the world).
-local function continentOf(mapID: number?): number?
-    local info = mapID and errors.tryValue(C_Map.GetMapInfo, mapID) or nil
-    local continent = asNumber(field(Enum, "UIMapType", "Continent")) or 2
-    local guard = 0
-    while info and guard < 8 do
-        if info.mapType == continent then
-            return info.mapID
-        end
-        local parent = info.parentMapID
-        info = parent and parent > 0 and errors.tryValue(C_Map.GetMapInfo, parent) or nil
-        guard = guard + 1
-    end
-    return nil
-end
-
--- Taxi nodes the client still lists that no one flies to (an old copy of
--- Powderfuse Port, transports, quest flights)
-local function junkTaxiNode(name: unknown): boolean
-    local s = asString(name)
-    return not s or s:find("^zzOLD") ~= nil or s:find("^Transport,") ~= nil or s:find("^Quest Path") ~= nil
-end
-
--- A walker's route on a map, from the data's routes by NPC.
-local function routeOf(routes: { [number]: { [number]: number[][] } }, id: number, mapID: number): number[][]?
-    local byMap = routes[id]
-    return byMap and byMap[mapID] or nil
-end
-
--- A giver's places in the data: each map and the row there, side by side
--- (mapID, row, mapID, row, …: no table a place, the index is made from
--- every quest giver's row on the first tooltip).
-type GiverPlaces = (number | number[])[]
--- the givers' rows indexed a frame (about 5,000 instructions)
-local GIVER_ROWS = 400
-
--- What an NPC should offer you now (QuestsFor), by the map's own checks.
-export type QuestOffer = {
-    id: number,
-    name?: string,
-    state?: string,
-    difficulty?: string,
-    level?: number,
-    onQuest: boolean,
-    done: boolean,
-}
-
--- A service NPC's pin before its place: its key, look and kind.
-type ServicePin = { key: string, pin: MapPinData, kindName: string }
-
---------------------------------------------------------------------------------
--- The pins on the canvas
---------------------------------------------------------------------------------
-
--- One of SuuUI's pins on the map: the pins merged into it, and whether it's
--- a quest giver's (it keeps right-clicks for its menu; the others let them
--- through to the map, which zooms out).
-class WorldPin extends MapPin
-    group: Group? = nil
-    giver: boolean = false
-
-    constructor(parent: Frame)
-        super(parent)
-    end
-end
-
--- Hovering a quest's pin rings every pin of the same quest (its giver, all
--- the places its item drops), a rare's every spot it spawns at, and fades
--- the rest, so they show at a glance.
-type Related = { quests: { [number]: boolean }, rares: { [number]: boolean } }
-local function relatedOf(g: Group): Related?
-    local quests: { [number]: boolean }, rares: { [number]: boolean } = {}, {}
-    local found = false
-    for _, it in ipairs(g.items) do
-        for _, id in ipairs(it.quests or {}) do
-            quests[id] = true
-            found = true
-        end
-        local rare = it.rare
-        if rare then
-            rares[rare] = true
-            found = true
-        end
-    end
-    return found and { quests = quests, rares = rares } or nil
-end
-
--- A walking giver's route while you hover his pin: a dotted line in his
--- pin's colour, a dot every 9 px on a surface rim, under the pins.
-local ROUTE_STEP, ROUTE_DOT = 9, 4
-type Dot = { rim: Texture, fill: Texture }
-class RouteLayer extends Frame
-    readonly dots: Dot[] = {}
-
-    constructor(parent: Frame)
-        super(nil, parent)
-    end
-end
-
---------------------------------------------------------------------------------
--- The game's quest markers in SuuUI's look (design: MapPin types objective
--- / turn-in / waypoint, states tracked and highlighted), restyled in
--- place: the game's pins keep
--- their clicks, tooltips and super-tracking; a SuuUI pin without the mouse
--- sits in each, the game's art hidden, kept up to date after each of the
--- game's style, selection and highlight changes, and sized like SuuUI's pins
--- at every zoom. The objective areas stay the game's: its area drawing
--- takes no addon texture (SuuUI's hatch and edge showed its missing-texture
--- green, with or without the extension; found in game), and their shapes
--- aren't given to addons to draw otherwise.
---------------------------------------------------------------------------------
-
-local TEXTURES = "Interface\\AddOns\\SuuUI\\Media\\Textures\\"
-
--- SuuUI's look in one of the game's quest pins (or the quest log's
--- markers): a pin without the mouse, a glow under it.
-class QuestLook extends Frame
-    readonly glow: Texture
-    readonly pin: MapPin
-    hovered: boolean = false
-    grow: number = 1
-    -- what it was last drawn as (StyleQuestPin)
-    drawnKey: string? = nil
-
-    constructor(owner: Frame)
-        super(nil, owner)
-        self:SetPoint("CENTER")
-        self:SetSize(1, 1)
-        self.glow = self:CreateTexture(nil, "BACKGROUND", nil, -1)
-        UI.Skin(self.glow, "circle-soft")
-        self.glow:SetPoint("CENTER")
-        self.pin = UI.MapPin(self)
-        self.pin:EnableMouse(false)
-        self.pin:SetPoint("CENTER")
-    end
-end
-
--- the game's art in its quest pins (and the underlays the log's have)
-local ART = { "NormalTexture", "PushedTexture", "HighlightTexture", "Glow", "Display" }
-local UNDERLAYS = { "UnderlayAtlas", "UnderlayBannerAtlas", "UnderlayBannerAtlasHighlight" }
-
-local ART_ALL: string[] = {}
-for _, list in ipairs({ ART, UNDERLAYS }) do
-    for _, key in ipairs(list) do
-        ART_ALL[#ART_ALL + 1] = key
-    end
-end
-
--- (the game restyles its pins often: a plain read of each part, set only
--- when it isn't at that alpha already)
-local function setArtAlpha(pin: Frame, alpha: number)
-    local parts = pin :: unknown :: { [string]: unknown }
-    for _, key in ipairs(ART_ALL) do
-        local r = rawget(parts, key)
-        if type(r) == "table" then
-            local region = frames.asRegion(r)
-            if region and secret.asNumber(region:GetAlpha()) ~= alpha then
-                region:SetAlpha(alpha)
-            end
-        end
-    end
-end
-
--- A quest pin's kind by the game's style: "complete", "progress",
--- "waypoint", "disabled", or nil.
-local function questStyle(pin: Frame): string?
-    local styles = field(_G, "POIButtonUtil", "Style")
-    if styles == nil then
-        return nil
-    end
-    local style = errors.tryMethod(pin, "GetStyle")
-    if style == nil then
-        return nil
-    end
-    if style == field(styles, "QuestComplete") then
-        return "complete"
-    end
-    if style == field(styles, "QuestInProgress") then
-        return "progress"
-    end
-    if style == field(styles, "Waypoint") then
-        return "waypoint"
-    end
-    if style == field(styles, "QuestDisabled") then
-        return "disabled"
-    end
-    return nil
-end
-
--- The quest log's markers (one before each quest's title, the game's
--- buttons from its list's pool) in the same look
--- (see StyleLogQuestPins).
-local function logButtons(): Frame[]
-    return frames.rows(field(_G, "QuestScrollFrame", "Contents", "buttonPool"))
-end
-
--- the game's quest titles in the log, from their row's left
--- (QuestLogTitleTemplate)
-local LOG_TITLE_X = 31
-
---------------------------------------------------------------------------------
--- Unexplored areas: the map's overlays you haven't explored, drawn as the
--- game draws the explored ones (Blizzard_SharedMapDataProviders, read
--- 2026-10-15), tinted a little darker and bluer so the map still says where
--- you haven't been. From SuuUI.MapOverlays (Forever's client tables).
---------------------------------------------------------------------------------
-
-local TINT = { 0.62, 0.7, 0.92 }
 
 -- Settings › World map: the pins at the setting's opacity.
 export class PinsPreview extends Frame
@@ -867,7 +236,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     end
 
     --------------------------------------------------------------------------------
-    -- The filters
+    -- The filters (Units/WorldMap/Filters)
     --------------------------------------------------------------------------------
 
     -- (the saved filters read once for each saved table: the marks' minimap
@@ -878,76 +247,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     layersCache: Layers? = nil
 
     function Saved(): FilterChoice
-        -- (the stored table itself, read only: a new one whenever it's set,
-        -- reset or another profile's)
-        local saved = self:Peek("filters")
-        local cached = self.savedCache
-        if cached and self.savedFor == saved then
-            return cached
-        end
-        self.savedFor, self.layersCache = saved, nil
-        local owner: { [string]: string } = {}
-        for _, g in ipairs(GROUPS) do
-            for _, o in ipairs(g.options) do
-                owner[o.value] = g.key
-            end
-        end
-        local out: FilterChoice = {}
-        for _, g in ipairs(GROUPS) do
-            out[g.key] = {}
-        end
-        for key, entry in pairs(saved) do
-            if type(entry) == "table" then
-                for _, v in ipairs(entry) do
-                    local legacy = key == "services" and LEGACY[v] or nil
-                    local group = legacy and legacy.group or owner[v]
-                    local value = legacy and legacy.value or v
-                    local list = group and out[group]
-                    if list and not tbl.contains(list, value) then
-                        list[#list + 1] = value
-                    end
-                end
-            end
-        end
-        local version = saved.v
-        for _, new in ipairs(ADDED) do
-            if (version or 1) < new.since then
-                local list = out[new.group]
-                if list and not tbl.contains(list, new.value) then
-                    list[#list + 1] = new.value
-                end
-            end
-        end
-        self.savedCache = out
-        return out
+        return filters.readSaved(self)
     end
 
-    -- on[group][value] from the saved filters
     function Layers(): Layers
-        local saved = self:Saved()
-        local cached = self.layersCache
-        if cached then
-            return cached
-        end
-        local function set(key: string): On
-            local s: On = {}
-            for _, v in ipairs(saved[key] or {}) do
-                s[v] = true
-            end
-            return s
-        end
-        local layers: Layers = {
-            quests = set("quests"),
-            places = set("places"),
-            services = set("services"),
-            trading = set("trading"),
-            trainers = set("trainers"),
-            rares = set("rares"),
-            marks = set("marks"),
-            skyborne = set("skyborne"),
-        }
-        self.layersCache = layers
-        return layers
+        return filters.readLayers(self)
     end
 
     -- The Marks filters, for the marks module's minimap too: { yours, shared }
@@ -956,348 +260,74 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     marksFor: Layers? = nil
 
     function MarksShown(): MarkFilters
-        local layers = self:Layers()
-        local shown = self.marksShown
-        if shown and self.marksFor == layers then
-            return shown
-        end
-        local marks = layers.marks
-        local made: MarkFilters = { yours = marks.yours, shared = marks.shared }
-        self.marksShown, self.marksFor = made, layers
-        return made
+        return filters.marksShown(self)
     end
 
     function MenuValue(): FilterChoice
-        local saved = self:Saved()
-        local value: FilterChoice = {}
-        for _, g in ipairs(GROUPS) do
-            local list: string[] = {}
-            if g.key == "quests" then
-                for _, o in ipairs(GAME_SETTINGS) do
-                    if settingOn(o.cvar) then
-                        list[#list + 1] = o.value
-                    end
-                end
-            end
-            for _, v in ipairs(saved[g.key] or {}) do
-                if not (g.key == "quests" and gameSetting[v]) then
-                    list[#list + 1] = v
-                end
-            end
-            value[g.key] = list
-        end
-        -- Hidden quests: the hidden ones ticked
-        local hidden: string[] = {}
-        for id in pairs(self:Char().hiddenQuests or {}) do
-            hidden[#hidden + 1] = tostring(id)
-        end
-        value.hidden = hidden
-        return value
+        return filters.menuValue(self)
     end
 
     function OnFilters(value: FilterChoice)
-        -- Hidden quests: each listed one hidden while ticked (this
-        -- character's, not a filter)
-        local hidden = value.hidden
-        value.hidden = nil
-        if hidden then
-            local ticked: { [number]: boolean } = {}
-            for _, v in ipairs(hidden) do
-                local id = tonumber(v)
-                if id then
-                    ticked[id] = true
-                end
-            end
-            local data = self:Char()
-            local set = data.hiddenQuests or {}
-            for _, id in ipairs(self.hiddenListed) do
-                set[id] = ticked[id] or nil
-            end
-            data.hiddenQuests = next(set) ~= nil and set or nil
-        end
-        -- (a character without the Skyborne group keeps its saved choice)
-        if value.skyborne == nil then
-            value.skyborne = self:Saved().skyborne
-        end
-        local want: { [string]: boolean } = {}
-        for _, v in ipairs(value.quests or {}) do
-            want[v] = true
-        end
-        -- (the map's quest pins and the quest log redraw themselves on the
-        -- CVar's change, as for the game's own filter menu, which only sets
-        -- it: a redraw from SuuUI's code took the map's pins for it, and the
-        -- map opened in combat was refused later, found in game)
-        if not InCombatLockdown() then
-            for _, o in ipairs(GAME_SETTINGS) do
-                if (want[o.value] or false) ~= settingOn(o.cvar) then
-                    errors.try(SetCVar, o.cvar, want[o.value] and "1" or "0")
-                end
-            end
-        end
-        local saved: SavedFilters = { v = FILTERS_VERSION }
-        for group, list in pairs(value) do
-            saved[group] = list
-        end
-        self:Set("filters", saved)
-        self:Refresh()
+        filters.onFilters(self, value)
     end
 
-    -- One filter on for another module's "show me" (the Damaged gear note's
-    -- Show repairers turns Services › Repair on, asked 2026-10-19); the menu
-    -- shows it ticked. The caller opens the map, through a secure click (the
-    -- minimap's zone button): opened from SuuUI's code, the map's pins were
-    -- taken by it. ("services", "repair")
     function OpenWith(group: string, item: string)
-        local value = self:MenuValue()
-        local list = value[group]
-        if list and not tbl.contains(list, item) then
-            list[#list + 1] = item
-            self:OnFilters(value)
-            local menu = self.menu
-            if menu then
-                menu:SetValue(menuValues(self:MenuValue()))
-            end
-        end
+        filters.openWith(self, group, item)
     end
 
     --------------------------------------------------------------------------------
     -- Hidden quests: quests to pick up whose pins this character hid (a
     -- right-click on a giver's pin), listed in Map filters to show again
+    -- (Units/WorldMap/Filters)
     --------------------------------------------------------------------------------
 
     function IsQuestHidden(id: number): boolean
-        local hidden = self:Char().hiddenQuests
-        return hidden ~= nil and hidden[id] == true
+        return filters.isQuestHidden(self, id)
     end
 
-    -- A quest's name from the quest data (the game's, else "Quest <id>"
-    -- while it isn't built).
     function QuestTitle(id: number): string
-        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
-        local qrow = starts.quests[id]
-        return questName(qrow and quest(qrow) or nil, id)
+        return filters.questTitle(self, id)
     end
 
-    -- The hidden quests, by name.
     function HiddenQuests(): number[]
-        local ids: number[] = {}
-        for id in pairs(self:Char().hiddenQuests or {}) do
-            ids[#ids + 1] = id
-        end
-        local names: { [number]: string } = {}
-        for _, id in ipairs(ids) do
-            names[id] = self:QuestTitle(id):lower()
-        end
-        table.sort(ids, function(a: number, b: number): boolean
-            local na, nb = names[a] or "", names[b] or ""
-            if na ~= nb then
-                return na < nb
-            end
-            return a < b
-        end)
-        return ids
+        return filters.hiddenQuests(self)
     end
 
-    -- Their pins away at once, on every map; Map filters lists them.
     function HideQuests(ids: number[])
-        local data = self:Char()
-        local hidden = data.hiddenQuests or {}
-        for _, id in ipairs(ids) do
-            hidden[id] = true
-        end
-        data.hiddenQuests = next(hidden) ~= nil and hidden or nil
-        self:ListHidden(true)
-        self:Refresh()
+        filters.hideQuests(self, ids)
     end
 
-    -- Every hidden quest's pins back (Map filters' Show all); the list
-    -- stays, unticked, until the map opens again.
     function ShowAllQuests()
-        self:Char().hiddenQuests = nil
-        local menu = self.menu
-        if menu then
-            menu:SetValue(menuValues(self:MenuValue()))
-        end
-        self:Refresh()
+        filters.showAllQuests(self)
     end
 
-    -- Map filters' groups: Hidden quests last, while it lists any.
     function MenuGroups(): FilterGroup[]
-        local groups = menuGroups()
-        local listed = self.hiddenListed
-        if #listed > 0 then
-            local options: FilterOption[] = {}
-            for i, id in ipairs(listed) do
-                options[i] = { value = tostring(id), label = self:QuestTitle(id) }
-            end
-            groups[#groups + 1] = {
-                key = "hidden",
-                label = "Hidden quests",
-                kind = "toggles",
-                options = options,
-                action = {
-                    label = "Show all",
-                    onClick = function()
-                        self:ShowAllQuests()
-                    end,
-                },
-            }
-        end
-        return groups
+        return filters.groupsWithHidden(self)
     end
 
-    -- Map filters lists the hidden quests again (always: `force`; else only
-    -- when they changed): the panel is built again when it next opens.
     function ListHidden(force: boolean?)
-        local ids = self:HiddenQuests()
-        local was = self.hiddenListed
-        local same = #ids == #was
-        for i, id in ipairs(ids) do
-            if was[i] ~= id then
-                same = false
-            end
-        end
-        self.hiddenListed = ids
-        self.hiddenNamed = lazyData.questStarts:Ready()
-        local menu = self.menu
-        if menu and (force or not same) then
-            menu:SetGroups(self:MenuGroups())
-            menu:SetValue(menuValues(self:MenuValue()))
-        end
+        filters.listHidden(self, force)
     end
 
-    -- Right-click on a quest giver's pin: hide its quest; a pin with
-    -- several quests (a giver's, or merged) offers each of them.
     function QuestMenu(pin: WorldPin)
-        local g = pin.group
-        if not g then
-            return
-        end
-        local ids = groupQuests(g)
-        if #ids == 0 then
-            return
-        end
-        UI.ContextMenuFrom(pin, function(_, root)
-            if #ids == 1 then
-                local id = ids[1]
-                root:CreateTitle(self:QuestTitle(id))
-                root:CreateButton("Hide this quest", function()
-                    self:HideQuests({ id })
-                end)
-            else
-                for _, id in ipairs(ids) do
-                    root:CreateButton("Hide " .. self:QuestTitle(id), function()
-                        self:HideQuests({ id })
-                    end)
-                end
-            end
-        end)
+        filters.questMenu(self, pin)
     end
 
     --------------------------------------------------------------------------------
-    -- What's on a map
+    -- What's on a map (Units/WorldMap/Collect; the givers and their
+    -- tooltips: Units/WorldMap/GiverTips)
     --------------------------------------------------------------------------------
 
-    -- who you are, for what you can pick up and who serves you
     function Player(): Me
-        local _, _, race = UnitRace("player")
-        local _, class, classID = UnitClass("player")
-        local raceID, classNumber = asNumber(race), asNumber(classID)
-        local faction = asString(UnitFactionGroup("player"))
-        return {
-            level = asNumber(UnitLevel("player")) or 1,
-            raceBit = raceID and raceBit(raceID) or 0,
-            classBit = classNumber and 2 ^ (classNumber - 1) or 0,
-            class = asString(class),
-            faction = faction == "Horde" and "H" or faction == "Alliance" and "A" or nil,
-        }
+        return collect.player(self)
     end
 
-    -- The flight masters this character has found, saved whenever a flight
-    -- master's map opens: the game marks none undiscovered away from one on
-    -- Forever (isUndiscovered is always false; probed 2026-10-19), but there it
-    -- lists each node of the continent with its state (0 where you are, 1 one
-    -- you can fly to, 2 not found). A continent no flight master's map has
-    -- opened on yet is "not checked".
     function RecordTaxiNodes()
-        if not C_TaxiMap then
-            return
-        end
-        local zone = errors.tryValue(C_Map.GetBestMapForUnit, "player")
-        local data = self:Char()
-        local taxi = data.taxi or { known = {}, checked = {} }
-        local function record(m: number): boolean
-            local seen = false
-            for _, n in ipairs(errors.tryValue(C_TaxiMap.GetAllTaxiNodes, m) or {}) do
-                local id, state = asNumber(n.nodeID), asNumber(n.state)
-                if id and (state == 0 or state == 1) and not junkTaxiNode(n.name) then
-                    taxi.known[id] = true
-                    seen = true
-                end
-            end
-            return seen
-        end
-        -- where you are, its continent, the flight map's (each while the one before is known)
-        local continent = continentOf(zone)
-        local taxiMap = asNumber((errors.try(field(_G, "GetTaxiMapID"))))
-        local seen = zone ~= nil and record(zone)
-        if not seen and zone and continent then
-            seen = record(continent)
-        end
-        if not seen and zone and continent and taxiMap then
-            seen = record(taxiMap)
-        end
-        if not seen then
-            return
-        end
-        if continent then
-            taxi.checked[continent] = true
-        end
-        data.taxi = taxi
-        local map = self.map
-        if map and map:IsShown() then
-            self:Refresh()
-        end
+        collect.recordTaxiNodes(self)
     end
 
-    -- What an NPC should offer you now (for /suu probe givers, which
-    -- compares it with what the NPC does offer): every quest the data has
-    -- it giving, with the state the map would show it in (nil: the map
-    -- wouldn't), whether you're on it or have done it.
     function QuestsFor(npcID: number): (QuestOffer[], { [number]: boolean })
-        local starts = SuuUI.QuestStarts()
-        local me, done = self:Player(), completedSet()
-        local out: QuestOffer[] = {}
-        local seen: { [number]: boolean } = {}
-        local places = self:GiverPlaces(npcID)
-        for k = 1, #places, 2 do
-            local row = places[k + 1] :: number[]
-            me.mapID = places[k] :: number
-            for i = 4, #row do
-                local id = row[i]
-                if not seen[id] then
-                    seen[id] = true
-                    local qrow = starts.quests[id]
-                    local j = qrow and judge(qrow, id, me, done)
-                    local state: string? = nil
-                    local difficulty: string? = nil
-                    local level: number? = nil
-                    if j then
-                        state, difficulty, level = j.state, j.difficulty, j.level
-                    end
-                    out[#out + 1] = {
-                        id = id,
-                        name = j and j.name or nil,
-                        state = state,
-                        difficulty = difficulty,
-                        level = level,
-                        onQuest = onQuest(id),
-                        done = done[id] or false,
-                    }
-                end
-            end
-        end
-        return out, done
+        return giverTips.questsFor(self, npcID)
     end
 
     -- Where each giver stands in the data, made once (QuestsFor runs for
@@ -1314,62 +344,16 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     giverStarted: boolean = false
     giverFrom: QuestStarts? = nil
 
-    -- Up to about `rows` more rows into the index (whole maps); true once
-    -- it's whole.
     function IndexGivers(rows: number): boolean
-        local starts = SuuUI.QuestStarts()
-        if self.giverFrom ~= starts then
-            -- (other data: made again from it)
-            self.giverFrom = starts
-            self.giverIndex, self.giverMade, self.giverAt = nil, nil, nil
-        end
-        if self.giverIndex then
-            return true
-        end
-        local maps = starts.maps
-        local made = self.giverMade or {}
-        self.giverMade = made
-        local left = rows
-        while left > 0 do
-            local mapID, list = next(maps, self.giverAt)
-            if mapID == nil then
-                self.giverIndex, self.giverMade, self.giverAt = made, nil, nil
-                return true
-            end
-            for _, row in ipairs(list) do
-                local giver = row[3]
-                local places = made[giver]
-                if not places then
-                    places = {}
-                    made[giver] = places
-                end
-                local n = #places
-                places[n + 1], places[n + 2] = mapID, row
-            end
-            left -= #list
-            self.giverAt = mapID
-        end
-        return false
+        return giverTips.indexGivers(self, rows)
     end
 
-    -- The index made over the next frames (the quest data is there).
     function IndexGiversSoon()
-        if self.giverStarted or self.giverIndex then
-            return
-        end
-        self.giverStarted = true
-        local function step()
-            if not self:IndexGivers(GIVER_ROWS) then
-                after(0, step)
-            end
-        end
-        -- (from the next frame: not on top of the frame that built the data)
-        after(0, step)
+        giverTips.indexGiversSoon(self)
     end
 
     function GiverPlaces(npcID: number): GiverPlaces
-        self:IndexGivers(math.huge)
-        return (self.giverIndex :: { [number]: GiverPlaces })[npcID] or {}
+        return giverTips.giverPlaces(self, npcID)
     end
 
     -- An NPC's tooltip: the quests it gives that you can pick up now, as the
@@ -1378,1163 +362,104 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
     questTipsHooked: boolean = false
 
     function HookQuestTips()
-        local add = tbl.field(TooltipDataProcessor, "AddTooltipPostCall")
-        local kind = tbl.field(tbl.field(Enum, "TooltipDataType"), "Unit")
-        if self.questTipsHooked or type(add) ~= "function" or kind == nil then
-            return
-        end
-        self.questTipsHooked = true
-        ;(add :: (unknown, (GameTooltip, unknown) -> ()) -> ())(kind, function(tooltip: GameTooltip, _: unknown)
-            if tooltip == GameTooltip then
-                self:QuestTip(tooltip)
-            end
-        end)
+        giverTips.hookQuestTips(self)
     end
 
     function QuestTip(tooltip: GameTooltip)
-        if not self:IsEnabled() then
-            return
-        end
-        local ok: boolean, _: unknown, unit: unknown = pcall(tooltip.GetUnit, tooltip)
-        if not ok or not secret.readable(unit) or type(unit) ~= "string" then
-            return
-        end
-        local isPlayer = UnitIsPlayer(unit)
-        if not secret.readable(isPlayer) or isPlayer then
-            return
-        end
-        local guid = UnitGUID(unit)
-        if not secret.readable(guid) or type(guid) ~= "string" then
-            return
-        end
-        local kind, _, _, _, _, npcID = strsplit("-", guid)
-        local id = (kind == "Creature") and tonumber(npcID) or nil
-        if not id then
-            return
-        end
-        -- (the quest data built a step a frame the first time: its lines from
-        -- the next hover on)
-        if not lazyData.questStarts:Ready() then
-            lazyData.questStarts:Prepare()
-            return
-        end
-        local on = self:Layers().quests
-        local shown: QuestOffer[] = {}
-        for _, o in ipairs((self:QuestsFor(id))) do
-            local state, difficulty = o.state, o.difficulty
-            if state and difficulty and on[state] and (difficulty ~= "trivial" or on.trivial) then
-                shown[#shown + 1] = o
-            end
-        end
-        if #shown == 0 then
-            return
-        end
-        local r, g, b = UI.RGBA("gilt-text")
-        tooltip:AddLine(" ")
-        tooltip:AddLine("Quests", r, g, b)
-        for _, o in ipairs(shown) do
-            local level = o.level
-            local qr, qg, qb = UI.RGBA("quest-" .. (o.difficulty or "standard"))
-            tooltip:AddLine((o.name or ("Quest " .. o.id)) .. (level and (" (" .. level .. ")") or ""), qr, qg, qb)
-        end
-        tooltip:Show()
+        giverTips.questTip(self, tooltip)
     end
 
-    -- every pin the map would show, before merging (Item)
     function Collect(mapID: number): Item[]
-        local items: Item[] = {}
-        local on = self:Layers()
-        local me = self:Player()
-        me.mapID = mapID
-        -- (the quest and place data not built yet: the other pins now,
-        -- these once it's there; Refresh)
-        local starts = lazyData.questStarts:Ready() and SuuUI.QuestStarts() or NO_STARTS
-        local info = errors.tryValue(C_Map.GetMapInfo, mapID)
-        local mapName = info and info.name
-        local places = lazyData.mapPlaces:Ready() and SuuUI.MapPlaces() or NO_PLACES
-        local muted = "|cff" .. T.color["ink-muted"].hex
-        local walks = muted .. "Walks a route" .. (mapName and (" through " .. mapName) or "") .. ", shown on the map|r"
-        -- the quests this character hid: none of their pins, on any map
-        local hidden = self:Char().hiddenQuests or {}
-
-        -- quests to pick up: a pin per giver's place
-        if on.quests.available or on.quests.repeatable then
-            local done = completedSet()
-            for _, row in ipairs(starts.maps[mapID] or {}) do
-                local best: { rank: number, difficulty: string, state: string }? = nil
-                local list: Offer[], ids: number[] = {}, {}
-                local giver = starts.givers[row[3]]
-                for i = 4, #row do
-                    local id = row[i]
-                    local qrow = not hidden[id] and starts.quests[id] or nil
-                    if qrow then
-                        local j = judge(qrow, id, me, done)
-                        local state, difficulty, level = j.state, j.difficulty, j.level
-                        if state and difficulty and level and on.quests[state] and
-                            (difficulty ~= "trivial" or on.quests.trivial) then
-                            list[#list + 1] = {
-                                name = j.name,
-                                level = level,
-                                difficulty = difficulty,
-                                state = state,
-                                group = isGroupQuest(id),
-                            }
-                            ids[#ids + 1] = id
-                            local rank = QUEST_RANK[difficulty] or 9
-                            if not best or rank < best.rank then
-                                best = { rank = rank, difficulty = difficulty, state = state }
-                            end
-                        end
-                    end
-                end
-                if best then
-                    local repeatable = best.state == "repeatable"
-                    local lines: TipLine[] = {}
-                    for i, o in ipairs(list) do
-                        if i > 1 then
-                            lines[#lines + 1] = {
-                                o.name .. "  " .. muted .. "Level " .. o.level .. "|r",
-                                quest = ids[i],
-                            }
-                        end
-                    end
-                    -- who gives it, after its level ("Level 15 · Gorrik")
-                    local from = giver and (" · " .. giver) or ""
-                    -- one who walks: his route, drawn while you hover the pin
-                    local route = routeOf(starts.routes, row[3], mapID)
-                    if route then
-                        table.insert(lines, 1, { walks })
-                    end
-                    local look: MapPinData = repeatable and { char = "!", color = "mana", edge = "mana" } or
-                        questPin(list, best)
-                    items[#items + 1] = {
-                        x = row[1] / 100,
-                        y = row[2] / 100,
-                        key = repeatable and "repeatable" or "available",
-                        rank = best.rank,
-                        pin = look,
-                        name = list[1].name,
-                        detail = (repeatable and "Repeatable · " or "") .. "Level " .. list[1].level .. from,
-                        more = lines,
-                        difficulty = best.difficulty,
-                        repeatable = repeatable,
-                        uid = "g" .. row[3],
-                        quests = ids,
-                        route = route,
-                    }
-                end
-            end
-        end
-
-        -- quests started by an item: where the mobs that drop it live
-        if on.quests.items then
-            local done = completedSet()
-            for _, row in ipairs(starts.drops[mapID] or {}) do
-                local source = starts.givers[row[3]] or "?"
-                local itemName = starts.items[row[4]] or "an item"
-                local best: { rank: number, difficulty: string }? = nil
-                local list: Offer[], ids: number[] = {}, {}
-                for i = 5, #row do
-                    local id = row[i]
-                    local qrow = not hidden[id] and starts.quests[id] or nil
-                    if qrow then
-                        local j = judge(qrow, id, me, done)
-                        local state, difficulty, level = j.state, j.difficulty, j.level
-                        if state and difficulty and level and (difficulty ~= "trivial" or on.quests.trivial) then
-                            list[#list + 1] = {
-                                name = j.name,
-                                level = level,
-                                difficulty = difficulty,
-                                group = isGroupQuest(id),
-                            }
-                            ids[#ids + 1] = id
-                            local rank = QUEST_RANK[difficulty] or 9
-                            if not best or rank < best.rank then
-                                best = { rank = rank, difficulty = difficulty }
-                            end
-                        end
-                    end
-                end
-                if best then
-                    local lines: TipLine[] = {
-                        { "Starts from " .. itemName },
-                        { muted .. (row[3] < 0 and "Found in " or "Dropped by ") .. source .. "|r" },
-                    }
-                    for i = 2, #list do
-                        lines[#lines + 1] = {
-                            list[i].name .. "  " .. muted .. "Level " .. list[i].level .. "|r",
-                            quest = ids[i],
-                        }
-                    end
-                    items[#items + 1] = {
-                        x = row[1] / 100,
-                        y = row[2] / 100,
-                        key = "itemQuest",
-                        rank = best.rank,
-                        pin = questPin(list, best),
-                        name = list[1].name,
-                        detail = "Level " .. list[1].level,
-                        listDetail = "Level " .. list[1].level .. " · " .. itemName .. " · " .. source,
-                        more = lines,
-                        difficulty = best.difficulty,
-                        uid = "d" .. row[3] .. ":" .. row[4],
-                        kindName = "Quests from items",
-                        quests = ids,
-                    }
-                end
-            end
-        end
-
-        -- entrances, with their recommended levels (the group finder's) and
-        -- the wings' own; one whose door isn't known yet is in its area's middle
-        local levels = SuuUI.InstanceLevels()
-        local function range(lo: number, hi: number): string
-            return lo == hi and ("level " .. lo) or ("level " .. lo .. "–" .. hi)
-        end
-        for _, raw in ipairs(starts.entrances[mapID] or {}) do
-            local e = entrance(raw)
-            local kind = e.kind
-            local show = (kind == "battleground" and on.places.battlegrounds) or
-                (kind ~= "battleground" and on.places.dungeons)
-            if show and (not e.faction or e.faction == me.faction) then
-                local detail = kind == "raid" and "Raid" or kind == "battleground" and "Battleground" or "Dungeon"
-                local ofKind = levels[kind]
-                local lvRow = ofKind and ofKind[e.name]
-                local lines: TipLine[] = {}
-                if lvRow then
-                    local lv = instanceLevels(lvRow)
-                    detail = detail .. " · " .. range(lv.min, lv.max)
-                    for _, wing in ipairs(lv.wings) do
-                        lines[#lines + 1] = { wing.name .. "  " .. muted .. range(wing.min, wing.max) .. "|r" }
-                    end
-                end
-                if e.approx then
-                    lines[#lines + 1] = { muted .. "Approximate: its door isn't known yet|r" }
-                end
-                -- entrances on one spot merge (Blackrock Mountain's four stacked,
-                -- only the top one's card to read); one place's doors count once
-                local look: MapPinData = kind == "battleground" and { glyph = "swords" } or
-                    { glyph = "swirl", spin = true, ring = kind == "raid" and "gilt" or nil }
-                items[#items + 1] = {
-                    x = e.x / 100,
-                    y = e.y / 100,
-                    fixed = true,
-                    uid = "e" .. e.name,
-                    key = kind == "battleground" and "battleground" or "entrance",
-                    kindName = kind == "battleground" and "Battlegrounds" or "Entrances",
-                    pin = look,
-                    name = e.name,
-                    detail = detail,
-                    more = #lines > 0 and lines or nil,
-                }
-            end
-        end
-
-        -- flight masters: the game's taxi nodes for this map (yours and
-        -- neutral), found or not by this character's own record (the game's
-        -- isUndiscovered is always false on Forever; see RecordTaxiNodes)
-        if on.places.flight and C_TaxiMap then
-            local nodes = errors.tryValue(C_TaxiMap.GetTaxiNodesForMap, mapID)
-            local mine = me.faction == "H" and 1 or me.faction == "A" and 2 or -1
-            local taxi = self:Char().taxi
-            local continent = continentOf(mapID)
-            local checked = taxi ~= nil and
-                ((continent ~= nil and taxi.checked[continent] == true) or
-                    (continent == nil and next(taxi.checked) ~= nil))
-            for _, n in ipairs(nodes or {}) do
-                local gx, gy = errors.tryMethod(n.position, "GetXY")
-                local x, y = asNumber(gx), asNumber(gy)
-                local side = asNumber(n.faction)
-                if x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 and (side == 0 or side == mine) and
-                    not junkTaxiNode(n.name) then
-                    local id = asNumber(n.nodeID)
-                    local known = taxi ~= nil and id ~= nil and taxi.known[id] == true
-                    items[#items + 1] = {
-                        x = x,
-                        y = y,
-                        fixed = true,
-                        pin = { glyph = "wing", color = known and "gilt-text" or "ink-muted" },
-                        name = asString(n.name) or "?",
-                        detail = known and "Flight master" or checked and "Flight master · not found yet" or
-                            "Flight master · not checked yet",
-                        more = not (known or checked) and
-                            {
-                                {
-                                    muted ..
-                                        "Open any flight master's map on this continent: SuuUI notes which ones this character has found|r",
-                                },
-                            } or
-                            nil,
-                    }
-                end
-            end
-        end
-
-        -- campfires you found (the campsite module's memory)
-        if on.places.campfires then
-            local camp = SuuUI.UseService(CAMPFIRES)
-            local fires = camp and camp.Fires
-            for _, f in ipairs(fires and fires() or {}) do
-                if f.map == mapID then
-                    local detail = f.by and ("Found by " .. f.by) or "One you found"
-                    local out = f.out
-                    items[#items + 1] = {
-                        x = f.x,
-                        y = f.y,
-                        key = "campfire",
-                        fixed = true,
-                        pin = { glyph = "campfire", color = "ember-text" },
-                        name = "Campfire",
-                        detail = detail,
-                        -- how long it burns, read as you hover (asked 2026-11-05)
-                        tip = out and
-                            function(): TooltipData
-                                return {
-                                    title = "Campfire",
-                                    subtitle = detail,
-                                    lines = { { "Goes out in", fireLeft(out - time()) } },
-                                }
-                            end or
-                            nil,
-                    }
-                end
-            end
-        end
-
-        -- services: one pin per NPC, the first of its services whose filter is on
-        local npcs = places.npcs
-        local svc = places.services[mapID] or {}
-        for i = 1, #svc, 3 do
-            local id = svc[i + 2]
-            local row = npcs[id]
-            local n = row and npc(row)
-            local services, friendly, faction = n and n.services, n and n.friendly, me.faction
-            -- (a holiday's NPC only while it's on)
-            local event = n and n.event
-            if n and services and friendly and faction and friendly:find(faction, 1, true) and
-                (not event or eventOn(event, mapID)) then
-                for kind in services:gmatch("[^,]+") do
-                    local found: ServicePin? = nil
-                    local never = false
-                    local class = kind:match("^class:(.+)$")
-                    local prof = kind:match("^trainer:(.+)$")
-                    if class then
-                        if class == me.class and on.trainers.class then
-                            local token = "class-" .. class:lower()
-                            found = {
-                                key = "classTrainer",
-                                pin = { glyph = "book", color = token, edge = token, small = true },
-                                kindName = SERVICE_NAMES.classTrainer or "Class trainer",
-                            }
-                        elseif class ~= me.class then
-                            never = true -- another class's trainer: never
-                        end
-                    elseif prof then
-                        local layer = (prof == "weapon" and "weapon") or
-                            ((prof == "riding" or prof == "pet") and "riding") or
-                            "professions"
-                        if on.trainers[layer] then
-                            found = {
-                                key = "trainer:" .. prof,
-                                pin = { glyph = PROFESSION_GLYPH[prof] or "book", small = true },
-                                kindName = PROFESSION_NAMES[prof] or "Trainer",
-                            }
-                        end
-                    else
-                        local s = SERVICE[kind]
-                        local group = (kind == "bank" or kind == "auction") and on.trading or on.services
-                        if s and group[s.filter] then
-                            found = {
-                                key = kind,
-                                pin = { glyph = s.glyph, color = s.color, small = true },
-                                kindName = SERVICE_NAMES[kind] or kind,
-                            }
-                        end
-                    end
-                    if never then
-                        break
-                    end
-                    if found then
-                        local it: Item = {
-                            x = svc[i] / 100,
-                            y = svc[i + 1] / 100,
-                            small = true,
-                            uid = "n" .. id,
-                            key = found.key,
-                            pin = found.pin,
-                            kindName = found.kindName,
-                            name = n.name,
-                            detail = n.title,
-                        }
-                        -- one who walks his round (Zixil, Kira Songshine): his
-                        -- route while you hover, like a walking rare's
-                        local route = routeOf(places.routes, id, mapID)
-                        if route then
-                            it.route = route
-                            it.more = { { walks } }
-                        end
-                        -- a weapon master: the weapons he teaches
-                        local teaches = WEAPON_MASTERS[id]
-                        if prof == "weapon" and teaches then
-                            it.teaches = teaches
-                            local more = it.more or {}
-                            table.insert(more, 1, { "Teaches " .. teaches })
-                            it.more = more
-                        end
-                        items[#items + 1] = it
-                        break
-                    end
-                end
-            end
-        end
-        if on.trading.mail then
-            local mail = places.mailboxes[mapID] or {}
-            for i = 1, #mail, 2 do
-                items[#items + 1] = {
-                    x = mail[i] / 100,
-                    y = mail[i + 1] / 100,
-                    key = "mail",
-                    small = true,
-                    pin = { glyph = "mail", small = true },
-                    name = "Mailbox",
-                    kindName = "Mailbox",
-                }
-            end
-        end
-
-        -- rares and treasures
-        if on.rares.rares then
-            local rares = places.rares[mapID] or {}
-            -- how many spots each spawns at here (hovering one rings them all)
-            local spots: { [number]: number } = {}
-            for i = 3, #rares, 3 do
-                spots[rares[i]] = (spots[rares[i]] or 0) + 1
-            end
-            for i = 1, #rares, 3 do
-                local id = rares[i + 2]
-                local row = npcs[id]
-                local n = row and npc(row)
-                local event = n and n.event
-                if n and (not event or eventOn(event, mapID)) then
-                    local elite = n.rank == "rareElite"
-                    local lo, hi = n.minLevel, n.maxLevel
-                    local level = lo and (hi and hi ~= lo and (lo .. "-" .. hi) or tostring(lo)) or nil
-                    local route = routeOf(places.routes, id, mapID)
-                    local lines: TipLine[] = {}
-                    local count = spots[id] or 1
-                    if count > 1 then
-                        lines[#lines + 1] = { muted .. "Spawns at one of " .. count .. " spots, ringed on the map|r" }
-                    end
-                    if route then
-                        lines[#lines + 1] = { walks }
-                    end
-                    local look: MapPinData = elite and
-                        { glyph = "skull", color = "gilt-text", edge = "gilt", ring = "gilt" } or
-                        { glyph = "skull", color = "ink", edge = "coin-silver" }
-                    items[#items + 1] = {
-                        x = rares[i] / 100,
-                        y = rares[i + 1] / 100,
-                        key = elite and "rareElite" or "rare",
-                        pin = look,
-                        name = n.name,
-                        detail = (elite and "Rare elite" or "Rare") .. (level and (" · level " .. level) or ""),
-                        kindName = elite and "Rare elite" or "Rare",
-                        uid = "n" .. id,
-                        rare = id,
-                        route = route,
-                        more = #lines > 0 and lines or nil,
-                    }
-                end
-            end
-        end
-        if on.rares.treasures then
-            local chests = places.treasures[mapID] or {}
-            for i = 1, #chests, 3 do
-                local x, y = asNumber(chests[i]), asNumber(chests[i + 1])
-                if x and y then
-                    items[#items + 1] = {
-                        x = x / 100,
-                        y = y / 100,
-                        key = "treasure",
-                        pin = { glyph = "chest", color = "coin-gold" },
-                        name = asString(chests[i + 2]) or "Treasure",
-                        detail = "Treasure (when it's there)",
-                        kindName = "Treasure chest",
-                    }
-                end
-            end
-        end
-        -- your marks and shared ones (the marks module's), on their map and the
-        -- maps above it; they keep their spot, and a click opens their card
-        local marks = SuuUI.UseService(MARKS)
-        local list, placeOn, mapNameOf, pinLook = marks and marks.Marks,
-            marks and marks.PlaceOn,
-            marks and marks.MapName,
-            marks and marks.PinLook
-        if list and placeOn and mapNameOf and pinLook and (on.marks.yours or on.marks.shared) then
-            for _, mark in ipairs(list()) do
-                local from = mark.from
-                if (from and on.marks.shared) or (not from and on.marks.yours) then
-                    local x, y = placeOn(mark, mapID)
-                    if x and y then
-                        local where = ("%s %.1f, %.1f"):format(mapNameOf(mark.map) or "", mark.x * 100, mark.y * 100)
-                        items[#items + 1] = {
-                            x = x,
-                            y = y,
-                            fixed = true,
-                            uid = "m" .. mark.id,
-                            mark = mark.id,
-                            pin = pinLook(mark),
-                            name = mark.name ~= "" and mark.name or "Mark",
-                            detail = where,
-                            kindName = "Marks",
-                            more = from and { { muted .. "Shared by " .. from .. "|r" } } or nil,
-                        }
-                    end
-                end
-            end
-        end
-        -- the Convergences of Elements (a Skyborne's): glowing while you lack
-        -- the blessing; their tooltip read when shown (the blessing's time left)
-        local conv = on.skyborne.convergences and SuuUI.UseService(CONVERGENCES) or nil
-        local shown, onMap, lookOf = conv and conv.Shown, conv and conv.OnMap, conv and conv.PinLook
-        if shown and onMap and lookOf and shown() then
-            local look = lookOf()
-            for i, c in ipairs(onMap(mapID)) do
-                items[#items + 1] = {
-                    x = c.x,
-                    y = c.y,
-                    fixed = true,
-                    key = "convergence",
-                    uid = "c" .. i,
-                    pin = look,
-                    name = "Convergence of Elements",
-                    kindName = "Convergences of Elements",
-                    detail = c.where,
-                    tip = c.tip,
-                }
-            end
-        end
-        return items
+        return collect.collect(self, mapID)
     end
 
     --------------------------------------------------------------------------------
-    -- The pins on the canvas
+    -- The pins on the canvas (Units/WorldMap/Canvas)
     --------------------------------------------------------------------------------
 
-    -- A right-click through a pin to the map (it zooms out; a quest giver's
-    -- pin keeps its own, for its menu: never set on it). Refused in
-    -- combat, even on SuuUI's own frame ("Blocked in combat: UNKNOWN()" as
-    -- a pin was made while the map opened in a fight, found in game): then
-    -- after it.
     function PassThrough(pin: Frame)
-        if not InCombatLockdown() then
-            errors.tryMethod(pin, "SetPassThroughButtons", "RightButton")
-            return
-        end
-        self.passLater[#self.passLater + 1] = pin
-        self:RunOutOfCombat("passThrough", function()
-            local list = self.passLater
-            self.passLater = {}
-            for _, p in ipairs(list) do
-                errors.tryMethod(p, "SetPassThroughButtons", "RightButton")
-            end
-        end)
+        mapCanvas.passThrough(self, pin)
     end
 
-    -- A pin from its pool (a quest giver's: `giver`).
     function Pin(layer: Frame, giver: boolean?): WorldPin
-        local pin = table.remove(giver and self.freeGivers or self.free)
-        if not pin then
-            local made = WorldPin.new(layer)
-            made.giver = giver == true
-            -- a giver's keeps right-clicks: its menu hides its quests
-            if giver then
-                made:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-            else
-                made:RegisterForClicks("LeftButtonUp")
-            end
-            made:SetScript("OnEnter", function(p)
-                local g = p.group
-                if not g then
-                    return
-                end
-                self.hoveredPin = p
-                UI.ShowTooltip(p, function(): TooltipData
-                    local now = p.group
-                    return now and tipFor(now) or {}
-                end)
-                self:HighlightQuests(g)
-                self:ShowRoutes(g)
-            end)
-            made:SetScript("OnLeave", function()
-                self.hoveredPin = nil
-                UI.HideTooltip()
-                self:HighlightQuests(nil)
-                self:ShowRoutes(nil)
-            end)
-            made:SetScript("OnClick", function(p, button)
-                if button == "RightButton" then
-                    if p.giver then
-                        self:QuestMenu(p)
-                    end
-                    return
-                end
-                local g = p.group
-                local first = g and g.items[1]
-                -- a mark: its card
-                local mark = g and g.distinct == 1 and first and first.mark or nil
-                if mark then
-                    local marks = SuuUI.UseService(MARKS)
-                    local open = marks and marks.OpenCard
-                    if open then
-                        open(mark, p)
-                    end
-                    return
-                end
-                -- several of a kind: no zoom (asked 2026-11-05): zoomed from
-                -- SuuUI's code, the map's pins were taken by it and opening
-                -- the map in combat was refused later; the tooltip lists them
-            end)
-            if not giver then
-                self:PassThrough(made)
-            end
-            pin = made
-        end
-        pin:Show()
-        return pin
+        return mapCanvas.poolPin(self, layer, giver)
     end
 
     function HighlightQuests(group: Group?)
-        local set = group and relatedOf(group)
-        for _, pin in ipairs(self.pins) do
-            if not set then
-                pin:SetHighlight(nil)
-            else
-                local related = false
-                local g = pin.group
-                for _, it in ipairs(g and g.items or {}) do
-                    local rare = it.rare
-                    if rare and set.rares[rare] then
-                        related = true
-                        break
-                    end
-                    for _, id in ipairs(it.quests or {}) do
-                        if set.quests[id] then
-                            related = true
-                            break
-                        end
-                    end
-                    if related then
-                        break
-                    end
-                end
-                pin:SetHighlight(related and true or "dim")
-            end
-        end
+        mapCanvas.highlightQuests(self, group)
     end
 
     function ShowRoutes(group: Group?)
-        local layer = self.layer
-        if not layer then
-            return
-        end
-        local r = self.routes
-        if not r then
-            r = RouteLayer.new(layer)
-            r:SetFrameLevel(layer:GetFrameLevel())
-            self.routes = r
-        end
-        for _, d in ipairs(r.dots) do
-            d.rim:Hide()
-            d.fill:Hide()
-        end
-        r:Hide()
-        local w, h, cs = self.lw, self.lh, self.lcs
-        if not (group and w and h and cs) then
-            return
-        end
-        local n = 0
-        local routes = r
-        local function dot(x: number, y: number, color: string)
-            n = n + 1
-            local d = routes.dots[n]
-            if not d then
-                local made: Dot = {
-                    rim = routes:CreateTexture(nil, "ARTWORK", nil, 1),
-                    fill = routes:CreateTexture(nil, "ARTWORK", nil, 2),
-                }
-                UI.Skin(made.rim, "circle-fill")
-                made.rim:SetSize(ROUTE_DOT + 2, ROUTE_DOT + 2)
-                UI.Paint(made.rim, "surface")
-                UI.Skin(made.fill, "circle-fill")
-                made.fill:SetSize(ROUTE_DOT, ROUTE_DOT)
-                routes.dots[n] = made
-                d = made
-            end
-            UI.Paint(d.fill, color)
-            for _, t in ipairs({ d.rim, d.fill }) do
-                t:ClearAllPoints()
-                t:SetPoint("CENTER", routes, "TOPLEFT", x, -y)
-                t:Show()
-            end
-        end
-        local drawn: { [number[][]]: boolean } = {}
-        for _, it in ipairs(group.items) do
-            local color = it.pin.color or "ink"
-            local route = it.route
-            if route and not drawn[route] then
-                for _, path in ipairs(route) do
-                    -- walk the path, a dot each ROUTE_STEP px of it
-                    local left = 0
-                    for i = 1, #path - 3, 2 do
-                        local ax, ay = path[i] / 100 * w, path[i + 1] / 100 * h
-                        local bx, by = path[i + 2] / 100 * w, path[i + 3] / 100 * h
-                        local len = math.sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
-                        local t = left
-                        while t <= len do
-                            local k = len > 0 and t / len or 0
-                            dot(ax + (bx - ax) * k, ay + (by - ay) * k, color)
-                            t = t + ROUTE_STEP
-                        end
-                        left = t - len
-                    end
-                end
-            end
-            if route then
-                drawn[route] = true
-            end
-        end
-        if n == 0 then
-            return
-        end
-        r:SetScale(1 / cs)
-        r:ClearAllPoints()
-        r:SetPoint("TOPLEFT", layer, "TOPLEFT")
-        r:SetSize(w, h)
-        r:Show()
+        mapCanvas.showRoutes(self, group)
     end
 
     function ClearPins()
-        self:ShowRoutes(nil)
-        for _, pin in ipairs(self.pins) do
-            pin:Hide()
-            pin:ClearAllPoints()
-            pin:SetHighlight(nil)
-            pin.group = nil
-            table.insert(pin.giver and self.freeGivers or self.free, pin)
-        end
-        self.pins = {}
+        mapCanvas.clearPins(self)
     end
 
     function Layout()
-        self.layoutQueued = false
-        local f, layer, items = self.map, self.layer, self.items
-        if not (f and layer and items and f:IsShown()) then
-            return
-        end
-        self:ClearPins()
-        local canvas = frames.asFrame(f:GetCanvas())
-        -- (times the window's scale: the enlarged map is the window scaled,
-        -- its pins at their usual size, as far apart as on screen)
-        local cs = asNumber(f:GetCanvasScale())
-        cs = cs and cs * f:GetScale()
-        if not (canvas and cs and cs > 0) then
-            return
-        end
-        local w, h = canvas:GetWidth() * cs, canvas:GetHeight() * cs
-        if w <= 0 or h <= 0 then
-            return
-        end
-        self.lw, self.lh, self.lcs = w, h, cs
-        -- zoomed all the way in (on a map that zooms), every pin stays on its
-        -- exact spot, so you find it there: none move, and only those on one
-        -- spot merge (they'd hide each other)
-        local groups, grow = arrange(items, w, h, flag(f:IsAtMaxZoom()) and not flag(f:IsAtMinZoom()))
-        local base = layer:GetFrameLevel()
-        for _, g in ipairs(groups) do
-            local pin = self:Pin(layer, giverGroup(g))
-            local data = g.items[1].pin
-            if g.distinct > 1 then
-                -- a merged quest pin takes its most useful quest's colour
-                if g.key == "available" or g.key == "itemQuest" or g.key == "repeatable" then
-                    local best = g.items[1]
-                    for _, it in ipairs(g.items) do
-                        if (it.rank or 9) < (best.rank or 9) then
-                            best = it
-                        end
-                    end
-                    data = best.pin
-                end
-                data = {
-                    glyph = data.glyph,
-                    char = data.char,
-                    color = data.color,
-                    edge = data.edge,
-                    small = data.small,
-                    ring = data.ring,
-                    spin = data.spin,
-                    edgeWidth = data.edgeWidth,
-                    glow = data.glow,
-                    count = g.distinct,
-                }
-            end
-            pin:SetData(data)
-            pin:SetBaseAlpha(self:Get("pinAlpha") / 100)
-            pin.group = g
-            pin:SetScale(grow / cs)
-            -- (three tiers in a few levels, under the game's own pins: small ones,
-            -- then the rest, then places and marks; a count tab just above its pin)
-            local tier = g.small and 1 or (g.fixed and 5 or 3)
-            pin:SetFrameLevel(base + tier)
-            pin.countTab:SetFrameLevel(base + tier + 1)
-            pin:ClearAllPoints()
-            pin:SetPoint("CENTER", layer, "TOPLEFT", g.x / grow, -g.y / grow)
-            self.pins[#self.pins + 1] = pin
-        end
-        -- a mark's open card follows its pin
-        local marks = SuuUI.UseService(MARKS)
-        local cardOf, anchor = marks and marks.CardMark, marks and marks.AnchorCard
-        local cardMark = cardOf and cardOf()
-        if cardMark and anchor then
-            anchor(self:PinForMark(cardMark))
-        end
-        -- the game's quest markers sized again for the zoom (it scales its own)
-        for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
-            if self.looks[pin] then
-                self:FitQuestPin(pin)
-            end
-        end
+        mapCanvas.layout(self)
     end
 
-    -- The pin showing a mark (the marks module's card sits under it).
     function PinForMark(id: number): WorldPin?
-        for _, pin in ipairs(self.pins) do
-            local g = pin.group
-            if g and g.distinct == 1 and g.items[1].mark == id then
-                return pin
-            end
-        end
-        return nil
+        return mapCanvas.pinForMark(self, id)
     end
 
     function QueueLayout()
-        if self.layoutQueued then
-            return
-        end
-        self.layoutQueued = true
-        after(0, function()
-            self:Layout()
-        end)
+        mapCanvas.queueLayout(self)
     end
 
     --------------------------------------------------------------------------------
-    -- The game's quest markers in SuuUI's look
+    -- The game's quest markers in SuuUI's look (Units/WorldMap/QuestLook)
     --------------------------------------------------------------------------------
 
-    -- The game's look back (the module off).
     function Unstyle(pin: Frame)
-        local o = self.looks[pin]
-        if o then
-            o:Hide()
-        end
-        setArtAlpha(pin, 1)
-        errors.tryMethod(pin, "UpdateButtonAlpha")
+        questLook.unstyle(self, pin)
     end
 
     function UnstyleQuest()
-        local f = self.map
-        if not f then
-            return
-        end
-        for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
-            self:Unstyle(pin)
-        end
-        for _, pin in ipairs(logButtons()) do
-            self:Unstyle(pin)
-        end
+        questLook.unstyleQuest(self)
     end
 
     function StyleQuestPin(pin: Frame)
-        if not self:IsEnabled() then
-            self:Unstyle(pin)
-            return
-        end
-        local kind = questStyle(pin)
-        local o = self.looks[pin]
-        if not kind then
-            if o then
-                o:Hide()
-            end
-            return
-        end
-        if not o then
-            local made = QuestLook.new(pin)
-            self.looks[pin] = made
-            -- ours follows the game's changes
-            local function restyle()
-                self:StyleQuestPin(pin)
-            end
-            for _, fn in ipairs({ "UpdateButtonStyle", "SetSelected", "EvaluateManagedHighlight", "SetStyle" }) do
-                if type(field(pin, fn)) == "function" then
-                    hook(pin, fn, restyle)
-                end
-            end
-            hookScript(pin, "OnEnter", function()
-                made.hovered = true
-                restyle()
-            end)
-            hookScript(pin, "OnLeave", function()
-                made.hovered = false
-                restyle()
-            end)
-            o = made
-        end
-        -- the game's look away
-        setArtAlpha(pin, 0)
-        if kind == "disabled" then
-            o:Hide()
-            o.drawnKey = nil
-            return
-        end
-        o:Show()
-        local tracked = flag(errors.tryMethod(pin, "IsSelected"))
-        local highlight = frames.asRegion(field(pin, "HighlightTexture"))
-        local lit = highlight ~= nil and highlight:IsShown()
-        local inLogNow = self.logPins[pin] == true
-        -- the same look as last time (the game calls its restyles often: 8,500
-        -- in a recording): only the size, which follows the zoom
-        local questIDNow = asNumber(field(pin, "questID"))
-        local key = kind ..
-            (tracked and "t" or "") ..
-                (lit and "l" or "") ..
-                    (inLogNow and "g" or "") ..
-                        (o.hovered and "h" or "") ..
-                            tostring(questIDNow) ..
-                                ":" ..
-                                    tostring(self:Get("pinAlpha")) ..
-                                        ((kind == "complete" and questIDNow ~= nil and isGroupQuest(questIDNow)) and
-                                            "G" or
-                                            "")
-        if o.drawnKey == key then
-            self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
-            return
-        end
-        o.drawnKey = key
-        local data: MapPinData
-        if kind == "complete" then
-            -- a group quest to turn in: the arcane bar under it (design D)
-            local questID = asNumber(field(pin, "questID"))
-            local group = questID ~= nil and isGroupQuest(questID)
-            data = { char = "?", color = "arcane", edge = "arcane", bar = group and "arcane" or nil }
-        elseif kind == "waypoint" then
-            data = { glyph = "dash", color = "ink", edge = "ink-muted" }
-        else
-            data = { glyph = "questDots", color = "ink", edge = "ink-muted" }
-        end
-        o.pin:SetData(data)
-        -- the next step on another map: a dashed edge
-        UI.Skin(o.pin.edge, kind == "waypoint" and "circle-dash" or "circle-fill")
-        -- (Pin opacity is the map's: the log's stay solid)
-        local inLog = self.logPins[pin] == true
-        o.pin:SetBaseAlpha(inLog and 1 or self:Get("pinAlpha") / 100)
-        o.pin:SetHighlight((tracked or lit) and true or nil)
-        -- glow: arcane under a turn-in, ink at 40% while super-tracked (not in
-        -- the quest log: it would spill over the titles)
-        local size = o.pin:PinSize()
-        if inLog then
-            o.glow:Hide()
-        elseif tracked then
-            UI.Paint(o.glow, "ink", 0.4)
-            o.glow:SetSize(size + 24, size + 24)
-            o.glow:Show()
-        elseif kind == "complete" then
-            UI.Paint(o.glow, "arcane-glow")
-            o.glow:SetSize(size + 16, size + 16)
-            o.glow:Show()
-        else
-            o.glow:Hide()
-        end
-        -- SuuUI's pin size at every zoom (the game scales its own), a tenth
-        -- larger while tracked or hovered
-        self:FitQuestPin(pin, (tracked or o.hovered) and 1.1 or 1)
+        questLook.styleQuestPin(self, pin)
     end
 
     function FitQuestPin(pin: Frame, grow: number?)
-        local o = self.looks[pin]
-        if not o then
-            return
-        end
-        o.grow = grow or o.grow
-        -- in the quest log: as large as the game's button, whatever the zoom
-        if self.logPins[pin] then
-            local h = pin:GetHeight()
-            o:SetScale(o.grow * (h > 0 and h or 20) / o.pin:PinSize())
-            -- (this small, a 1 px edge fell under a pixel and broke up: one
-            -- physical pixel, asked 2026-11-05)
-            o.pin:Crisp()
-            return
-        end
-        local f, layer = self.map, self.layer
-        if not (f and layer) then
-            return
-        end
-        local cs = asNumber(f:GetCanvasScale())
-        cs = cs and cs * f:GetScale()
-        local pe = pin:GetEffectiveScale()
-        if not (cs and cs > 0 and pe > 0) then
-            return
-        end
-        local closest = flag(f:IsAtMaxZoom()) and not flag(f:IsAtMinZoom()) and CLOSEST_GROW or 1
-        -- (SuuUI's pins: the layer's scale × grow / canvas scale; this sits in
-        -- the game's pin, whose own scale it takes out)
-        o:SetScale(layer:GetEffectiveScale() * closest * o.grow / cs / pe)
+        questLook.fitQuestPin(self, pin, grow)
     end
 
     function StyleQuestPins()
-        local f = self.map
-        if not f then
-            return
-        end
-        for _, pin in ipairs(frames.mapPins(f, "QuestPinTemplate")) do
-            self:StyleQuestPin(pin)
-        end
+        questLook.styleQuestPins(self)
     end
 
     function StyleLogQuestPins()
-        for _, pin in ipairs(logButtons()) do
-            self.logPins[pin] = true
-            self:StyleQuestPin(pin)
-            -- the marker in the middle of its quest's entry, title and
-            -- objectives (the game puts it at the title's top left; the row
-            -- is the entry, and it follows when the row is measured again
-            -- for SuuUI's fonts), space-4 left of the title (the game's 5 px
-            -- had them touching; found in game). The title stays where the
-            -- game put it: moved, it wrapped where the game hadn't measured.
-            -- The button with it, so the click goes where it shows.
-            local row = frames.asRegion(field(pin, "parent"))
-            if row then
-                pin:ClearAllPoints()
-                pin:SetPoint("RIGHT", row, "LEFT", LOG_TITLE_X - S["space-4"], 0)
-            end
-        end
+        questLook.styleLogQuestPins(self)
     end
 
-    -- The game's quest pins' provider: after each of its refreshes, the look.
     function HookQuestProviders()
-        local f = self.map
-        if not f or self.questHooked then
-            return
-        end
-        self.questHooked = true
-        local questRefresh = field(_G, "QuestDataProviderMixin", "RefreshAllData")
-        local areaRefresh = field(_G, "AreaPOIDataProviderMixin", "RefreshAllData")
-        local providers = field(f, "dataProviders")
-        if type(providers) ~= "table" then
-            return
-        end
-        for provider in pairs(providers :: { [unknown]: unknown }) do
-            local refresh = field(provider, "RefreshAllData")
-            if questRefresh ~= nil and refresh == questRefresh then
-                hook(provider, "RefreshAllData", function()
-                    if self:IsEnabled() then
-                        self:StyleQuestPins()
-                    end
-                end)
-            elseif areaRefresh ~= nil and refresh == areaRefresh then
-                hook(provider, "RefreshAllData", function()
-                    if self:IsEnabled() then
-                        self:HideTownPins()
-                    end
-                end)
-            end
-        end
+        questLook.hookQuestProviders(self)
     end
 
-    -- The game's little houses for the cities (asked 2026-10-19): area POIs
-    -- drawn from its old POI icon sheet, no atlas (probed: Darnassus,
-    -- Orgrimmar, Thunder Bluff on Kalimdor). Hidden outside instances; a
-    -- battleground's bases are area POIs from the same sheet.
     function HideTownPins()
-        local f = self.map
-        if not f or IsInInstance() then
-            return
-        end
-        for _, pin in ipairs(frames.mapPins(f, "AreaPOIPinTemplate")) do
-            local info = field(pin, "poiInfo")
-            if type(info) == "table" and field(info, "atlasName") == nil then
-                pin:Hide()
-            end
-        end
+        questLook.hideTownPins(self)
     end
 
-    -- Your arrow: SuuUI's (the design's, made for the minimap, whose arrow
-    -- Forever won't let go: no Minimap:SetPlayerTexture), on the game's group
-    -- members pin, as the game sets its own; the game's again when off.
     function StyleArrow(on: boolean)
-        local f = self.map
-        if not f then
-            return
-        end
-        for _, pin in ipairs(frames.mapPins(f, "GroupMembersPinTemplate")) do
-            errors.tryMethod(
-                pin,
-                "SetPinTexture",
-                "player",
-                on and (TEXTURES .. "PlayerArrow.tga") or "UI-WorldMapArrow"
-            )
-        end
+        questLook.styleArrow(self, on)
     end
 
     --------------------------------------------------------------------------------
-    -- Unexplored areas
+    -- Unexplored areas (Reveal: Units/WorldMap/Canvas), the map's data
     --------------------------------------------------------------------------------
 
     function Reveal(mapID: number?)
-        for _, t in ipairs(self.revealUsed) do
-            t:Hide()
-            table.insert(self.revealFree, t)
-        end
-        self.revealUsed = {}
-        local f, reveal = self.map, self.reveal
-        if not (mapID and f and reveal and self:Layers().places.unexplored) then
-            return
-        end
-        -- the overlays are the base layer's: drawn only on it
-        local layerIndex = asNumber(errors.tryMethod(f:GetCanvasContainer(), "GetCurrentLayerIndex")) or 1
-        self.revealLayer = layerIndex
-        if layerIndex ~= 1 then
-            return
-        end
-        -- (the overlays' data built a step a frame the first time: Refresh
-        -- reveals again once it's there)
-        if not lazyData.mapOverlays:Ready() then
-            return
-        end
-        local art = errors.tryValue(C_Map.GetMapArtID, mapID)
-        local overlays = art and SuuUI.MapOverlays()[art]
-        local layers = errors.tryValue(C_Map.GetMapArtLayers, mapID)
-        local layer = layers and layers[1]
-        if not (overlays and layer) then
-            return
-        end
-        local explored = errors.tryValue(C_MapExplorationInfo.GetExploredMapTextures, mapID) or {}
-        for _, tile in ipairs(unexploredTiles(overlays, explored, layer.tileWidth, layer.tileHeight)) do
-            local t = table.remove(self.revealFree) or reveal:CreateTexture(nil, "ARTWORK")
-            t:SetTexture(tile.file, nil, nil, "TRILINEAR")
-            t:SetSize(tile.w, tile.h)
-            t:SetTexCoord(0, tile.u, 0, tile.v)
-            t:ClearAllPoints()
-            t:SetPoint("TOPLEFT", reveal, "TOPLEFT", tile.x, -tile.y)
-            t:SetVertexColor(TINT[1], TINT[2], TINT[3])
-            t:Show()
-            self.revealUsed[#self.revealUsed + 1] = t
-        end
+        mapCanvas.revealUnexplored(self, mapID)
     end
 
     -- Whether the map's data is built (Core/Data).
     function DataReady(): boolean
-        return lazyData.questStarts:Ready() and lazyData.mapPlaces:Ready() and lazyData.mapOverlays:Ready()
+        return SuuUI.Data.QuestStarts:Ready() and SuuUI.Data.MapPlaces:Ready() and SuuUI.Data.MapOverlays:Ready()
     end
 
     -- The map's data built a step a frame, then the map drawn again.
@@ -2545,9 +470,9 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
                 self:Refresh()
             end
         end
-        lazyData.mapOverlays:Prepare(done, "worldmap")
-        lazyData.mapPlaces:Prepare(done, "worldmap")
-        lazyData.questStarts:Prepare(done, "worldmap")
+        SuuUI.Data.MapOverlays:Prepare(done, "worldmap")
+        SuuUI.Data.MapPlaces:Prepare(done, "worldmap")
+        SuuUI.Data.QuestStarts:Prepare(done, "worldmap")
     end
 
     function Refresh()
@@ -2579,7 +504,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- Hidden quests listed before the quest data was built: their names
         -- from it now (not under an open Map filters: it would close)
         local menu = self.menu
-        if menu and not self.hiddenNamed and #self.hiddenListed > 0 and lazyData.questStarts:Ready() then
+        if menu and not self.hiddenNamed and #self.hiddenListed > 0 and SuuUI.Data.QuestStarts:Ready() then
             local panel = menu.panel
             if not (panel and panel:IsShown()) then
                 self:ListHidden(true)
@@ -2608,7 +533,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
             return
         end
         menu:ClearAllPoints()
-        local chrome = chromeOf(f)
+        local chrome = SuuUI.UI.WindowChrome(f)
         local head = chrome and chrome.head
         if chrome and head then
             menu:SetParent(head)
@@ -2737,7 +662,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- (a frame later: the window skin lays its row out on the same change)
         hook(f, "OnMapChanged", function()
             if self:IsEnabled() then
-                after(0, function()
+                self:After(0, function()
                     self:PlaceFilters()
                 end)
             end
@@ -2777,7 +702,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         self:HookQuestTips()
         -- (the givers' index for the NPCs' tooltips, made over frames once
         -- the quest data is there)
-        lazyData.questStarts:Then(function()
+        SuuUI.Data.QuestStarts:Then(function()
             self:IndexGiversSoon()
         end, "givers")
         -- the Marks filters and the marks' pins, for the marks module; the
@@ -2798,19 +723,27 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         })
         self:QuestObjectivesOnce()
         self:Attach()
-        local f, layer, reveal, menu, provider = self.map, self.layer, self.reveal, self.menu, self.provider
-        if not (f and layer and reveal and menu and provider) then
+        if not self:OnMap() then
+            -- the map not there yet (it loads with an addon): the rest once
+            -- it is (X-11.b4: OnEnable itself ran again from here, its
+            -- service and data callback registered twice)
             self:OnGameEvent("ADDON_LOADED", function()
                 if not self.map and frames.find("WorldMapFrame") then
                     self:Attach()
-                    if self.map then
-                        self:OnEnable()
-                    end
+                    self:OnMap()
                 end
             end)
-            return
         end
-        -- (here, past the wait for the map: this runs once)
+    end
+
+    -- The part of OnEnable that needs the world map (made by Attach): false
+    -- while it isn't there yet.
+    function OnMap(): boolean
+        local f, layer, reveal, menu, provider = self.map, self.layer, self.reveal, self.menu, self.provider
+        if not (f and layer and reveal and menu and provider) then
+            return false
+        end
+        -- (here, past the wait for the map: this runs once per enable)
         self:RegisterSettings(SECTION)
         -- Shift pressed or let go over a quest pin: its objectives, or not
         self:OnGameEvent("MODIFIER_STATE_CHANGED", function(_, key)
@@ -2823,12 +756,11 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         self:HookQuestProviders()
         self:StyleQuestPins()
         self:StyleArrow(true)
-        -- (the log lays its quests out again on every change)
+        -- (the log lays its quests out again on every change; the module's
+        -- own hook: installed once, re-armed on each enable, silent while off)
         if type(field(_G, "QuestLogQuests_Update")) == "function" then
-            hook("QuestLogQuests_Update", function()
-                if self:IsEnabled() then
-                    self:StyleLogQuestPins()
-                end
+            self:SecureHook("QuestLogQuests_Update", function()
+                self:StyleLogQuestPins()
             end)
         end
         self:StyleLogQuestPins()
@@ -2876,7 +808,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         }) do
             self:OnGameEvent(event, function()
                 if f:IsShown() then
-                    after(0.2, function()
+                    self:After(0.2, function()
                         self:Refresh()
                     end)
                 end
@@ -2906,7 +838,7 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         -- the flight masters this character has found (the game's list at a
         -- flight master; its nodes are in a moment after it opens)
         self:OnGameEvent("TAXIMAP_OPENED", function()
-            after(0.2, function()
+            self:After(0.2, function()
                 self:RecordTaxiNodes()
             end)
         end)
@@ -2923,9 +855,12 @@ export class WorldMapModule extends Module<typeof(DEFAULTS)>
         end)
         errors.try(field(C_Calendar, "OpenCalendar"))
         readCalendar()
+        return true
     end
 
     override function OnDisable()
+        -- (its layout timer went with the module: queued afresh when on again)
+        self.layoutQueued = false
         local f, provider = self.map, self.provider
         if not f then
             return

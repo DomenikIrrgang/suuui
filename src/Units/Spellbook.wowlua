@@ -45,21 +45,16 @@
 -- SuuUI.ShowLevelUp) in the alerts' place, out of combat (a level gained in
 -- combat waits for its end). /suu levelup [level] shows it without one.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Spellbook, SpellCell, BookSpell, BookSchool, BookAll from "/UI/Spellbook"
-import type LevelUpCard, LevelUpDef, LevelUpSpell from "/UI/LevelUp"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Spellbook, SpellCell, BookSpell, BookSchool, BookAll, LevelUpCard, LevelUpDef, LevelUpSpell, BindSpell, Color from "/Core/API"
 import type TrainerSpell from "/Data/Trainer"
-import MOUSE_BINDINGS from "/Core/ServiceKeys"
-import type BindSpell from "/Core/ServiceKeys"
-import type Color from "/Core/Tokens"
 import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
 import hook, hookScript from "wowlua:hooks"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
-import * as ahead from "/Core/Ahead"
+
+local MOUSE_BINDINGS = SuuUI.Services.MOUSE_BINDINGS
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 
@@ -465,6 +460,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
     -- the Bindings tab shown
     bindMode: boolean = false
     catcher: Frame? = nil
+    catcherArmed: boolean = false
     hoverCell: number? = nil
     bindingsShown: boolean = false
     -- the Pet school shown (decided out of combat)
@@ -999,9 +995,9 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if self.staleTimer then
             return
         end
-        self.staleTimer = after(STALE_DELAY, function()
+        self.staleTimer = self:After(STALE_DELAY, function()
             self.staleTimer = nil
-            ahead.schedule("spellbook: page", function(): boolean
+            SuuUI.BuildAhead("spellbook: page", function(): boolean
                 -- (drawn already: opened, or a fight started)
                 if self.stale and self:IsEnabled() then
                     self:Render(true)
@@ -1287,7 +1283,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         -- a sweep ended: the game can call it active a moment longer
         book.onCooldownDone = function()
             self:UpdateCooldowns()
-            after(0.1, function()
+            self:After(0.1, function()
                 self:UpdateCooldowns()
             end)
         end
@@ -1361,8 +1357,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if on and self.bindingsShown then
             self:ShowBindings(false)
         end
-        local catcher = self.catcher or self:BuildCatcher()
-        catcher:SetShown(on and not InCombatLockdown())
+        self:ShowCatcher(on)
         if on then
             self:DrawStrip()
         else
@@ -1371,11 +1366,36 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         self:Render()
     end
 
+    -- The catcher shown (bind mode on, out of combat) or hidden. It keeps
+    -- every key by design, so it is shown only out of a fight and hidden as
+    -- one starts (PLAYER_REGEN_DISABLED, before the lockdown); its keyboard
+    -- and key script are set the first time it shows, out of combat (on
+    -- Forever a key script alone turns the keyboard on, and whether either
+    -- call is refused in lockdown is unprobed).
+    function ShowCatcher(on: boolean)
+        local c = self.catcher or self:BuildCatcher()
+        if not on or InCombatLockdown() then
+            c:Hide()
+            return
+        end
+        if not self.catcherArmed then
+            self.catcherArmed = true
+            self:ArmCatcher(c)
+        end
+        c:Show()
+    end
+
     function BuildCatcher(): Frame
         local c = CreateFrame("Frame", nil, UIParent)
         -- (under the dialogs: a question asked first takes Esc)
         c:SetFrameStrata("HIGH")
-        c:EnableKeyboard(true)
+        c:Hide()
+        self.catcher = c
+        return c
+    end
+
+    function ArmCatcher(c: Frame)
+        pcall(c.EnableKeyboard, c, true)
         c:SetScript("OnKeyDown", function(frame, key)
             if InCombatLockdown() then
                 return
@@ -1399,9 +1419,6 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 end
             end
         end)
-        c:Hide()
-        self.catcher = c
-        return c
     end
 
     -- The strip: the spell hovered, or what to do. `combat`: a fight
@@ -1503,19 +1520,19 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
             -- (a frame later, each step: closed and opened again from inside
             -- its showing, both stayed shut, found in game)
             f:HookScript("OnShow", function()
-                after(0, function()
+                self:After(0, function()
                     if not f:IsShown() or InCombatLockdown() or not self:IsEnabled() or
                         SuuUI.UseService(MOUSE_BINDINGS) == nil then
                         return
                     end
                     -- (closing it closes the spells window it opened)
                     HideUIPanel(f)
-                    after(0, function()
+                    self:After(0, function()
                         if InCombatLockdown() then
                             return
                         end
                         self:OpenBook()
-                        after(0, function()
+                        self:After(0, function()
                             self:ShowBindings(true)
                         end)
                     end)
@@ -1621,11 +1638,8 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if self.sayTimer then
             return
         end
-        self.sayTimer = after(1, function()
+        self.sayTimer = self:After(1, function()
             self.sayTimer = nil
-            if not self:IsEnabled() then
-                return
-            end
             local ok, n, cost = pcall(self.CountToTrain, self)
             if ok then
                 self:Emit("SUUUI_SPELLS_TO_TRAIN", n, self:Get("trainingCost") and cost or nil)
@@ -1741,6 +1755,8 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if stay <= 0 then
             stay = 4 + math.min(n, SHOWN)
         end
+        -- (not the module's timer: the card it showed goes away on time even
+        -- if the module has turned off meanwhile)
         self.levelTimer = after(stay, function()
             self.levelTimer = nil
             SuuUI.HideAlert(LEVEL_UP)
@@ -1756,7 +1772,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         if InCombatLockdown() then
             return
         end
-        after(0.5, function()
+        self:After(0.5, function()
             local from, to = self.levelFrom, self.levelTo
             if not to or InCombatLockdown() then
                 return
@@ -1862,7 +1878,7 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
         local cf = frames.find("CharacterFrame")
         if cf then
             hookScript(cf, "OnShow", function()
-                after(0, function()
+                self:After(0, function()
                     self:MeasureCharacter()
                 end)
             end)
@@ -2002,15 +2018,14 @@ export class SpellbookModule extends Module<typeof(DEFAULTS)>
                 return
             end
             self:OpenBook()
-            after(0, function()
+            self:After(0, function()
                 self:BindMode(true)
             end)
         end)
         self:TakeOverClickCasting()
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            local c = self.catcher
-            if c and self.bindMode then
-                c:Show()
+            if self.catcher and self.bindMode then
+                self:ShowCatcher(true)
                 self:DrawStrip()
             end
             if self.levelTo then

@@ -1,0 +1,503 @@
+-- Core/CVars.wowlua
+-- Game CVars a module changes (M:SetCVar), given back when it lets go.
+--
+--   set(id, name, value, opts?)  the first time a module sets a CVar, the
+--                          value the player had is remembered; then the
+--                          CVar is set (opts.seedDefault: below)
+--   restore(id, name)      that CVar given back now, and forgotten
+--   restoreAll(id)         every CVar the module set (when it turns off or
+--                          fails, and at login for a module that starts off)
+--   remembered(id)         how many it holds
+--   noteCharacter()        at login: whether this character played with
+--                          SuuUI before the memory existed (below)
+--
+-- The player's values are kept per character, outside profiles (SuuUIDB's
+-- character data, namespace "core", which no module can have: "core" is a
+-- reserved id), under the module's id: a profile switch neither loses nor
+-- repeats them, an exported profile doesn't carry them, and they survive a
+-- reload, so a module that turns off only at a reload (reloadToToggle, whose
+-- OnDisable never runs in a session) still gives them back at the next login.
+--
+-- Per character or shared: the game keeps some CVars per character and
+-- others for the whole account or machine, and says which
+-- (C_CVar.GetCVarInfo's fourth value; probed 2026-11-15 with /suu probe
+-- cvars: miniWorldMap, damageMeterEnabled, cooldownViewerEnabled and the
+-- nameplates' alpha and scale are per character; communitiesShowOffline,
+-- showInGameNavigation, nameplateShowEnemies and the friendly-plate CVars
+-- are the account's; nameplateNotSelectedAlpha is the machine's).
+--   * A per-character CVar: what this character had is the player's value,
+--     whatever it is, and is what a restore gives back.
+--   * A shared CVar: a second character logs in to find the module's value
+--     already set by the first one's module, and that is not the player's.
+--     So a character that finds the CVar already at the value being set,
+--     with nothing remembered for it, remembers no value of its own: its
+--     entry is `true` ("holds the module's value; the player's is the
+--     account's"). The first player's value captured for a module and CVar
+--     on any character is kept for the whole account too (SuuUIDB's account
+--     part, "cvars", outside profiles and characters), and given back for a
+--     character whose entry is `true`. A restore forgets the character's
+--     entry, and the account's value only once no character holds an entry
+--     for that module and CVar (a character that never turned the module
+--     off still holds the CVar at the module's value, and may need the
+--     account's value to give back).
+--   * A client that doesn't say (no GetCVarInfo): treated as shared, which
+--     is right for a shared CVar and, for a per-character one, differs only
+--     on a character whose own value already was the module's (it gets the
+--     account's value back).
+--
+-- Players upgrading from before 0.47. Until then Nameplates, Windows and
+-- Guild wrote their CVars without remembering the player's value (Damage
+-- meter, Cooldown Manager and Map marks kept it in their own data, and hand
+-- it over). On a character that played with SuuUI before, such a CVar holds
+-- the module's value when the module first sets it here, so the rule above
+-- would remember the module's value as the player's (per character) or
+-- nothing (shared), and turning the module off would give nothing back.
+-- Those modules mark their writes (`opts.seedDefault`, M:SetCVar's option).
+-- For such a write the game's default for the CVar (C_CVar.GetCVarDefault,
+-- or GetCVarInfo's second value) is remembered as the player's instead,
+-- when all of these hold:
+--   * this character is an upgrading one: the saved data knew it when it
+--     loaded, at its first login with this memory (`noteCharacter`, at
+--     every login, decides it once and keeps it as the character's
+--     core.cvarsSince: "upgrade" or "fresh"). A fresh install, and a
+--     character new to SuuUI, are never seeded: their first capture is the
+--     truth;
+--   * nothing is remembered for the module and CVar on this character, no
+--     restore of it is waiting, and the CVar holds exactly the value being
+--     set (a value of the player's own that differs is theirs, and kept);
+--   * it was not seeded before: per character for a per-character CVar
+--     (the default becomes this character's own value), once for the
+--     account for a shared one (the default becomes the account's original,
+--     only when none is kept, and the character's entry is `true`); the
+--     marks are core.cvarSeeds in the character's data and cvarSeeds in the
+--     account's.
+-- The assumption, plainly: the default stands in for a value that was never
+-- recorded. A player who had chosen another value before installing SuuUI
+-- gets the game's default back, not their choice.
+--
+-- Writes and restores go through the combat queue (key "cvar:<name>"): some
+-- CVars can't be changed in combat (the nameplates'), so in combat they wait
+-- for its end, the latest one for a CVar winning. A CVar the client doesn't
+-- know is never remembered or set.
+--
+-- The registry is a CVarOwners: where the values are kept, how the game's
+-- CVars are read and written, and what runs work out of combat come in
+-- through its constructor, so a test builds one of its own. `cvars` is
+-- SuuUI's; the module's functions are its methods.
+
+import * as settings from "./Settings"
+import * as combat from "./Combat"
+
+-- What a module says about a write: `seedDefault`, SuuUI set this CVar
+-- before 0.47 without remembering the player's value (see the top).
+export type SetOptions = { seedDefault?: boolean }
+
+-- A character's entries: module id -> CVar -> the player's value, or true
+-- (holds the module's value; the player's is the account's original).
+export type Memory = { [string]: { [string]: string | boolean } }
+
+-- The account's originals: module id -> CVar -> the first player's value
+-- captured on any character.
+export type Originals = { [string]: { [string]: string } }
+
+-- Where the entries live. Each table is made only when `create`, and nil
+-- while there is none (yet).
+export interface CVarStore
+    -- this character's entries
+    function mine(create: boolean): Memory?
+    -- the account's originals
+    function originals(create: boolean): Originals?
+    -- whether another character than this one holds an entry
+    function heldElsewhere(id: string, name: string): boolean
+    -- whether this character played with SuuUI before the memory existed
+    function upgraded(): boolean
+    -- decides that once for this character (`knownBefore`: the saved data
+    -- knew it when it loaded) and keeps it
+    function noteCharacter(knownBefore: boolean)
+    -- whether a module's CVar was seeded with the default, on this character
+    -- or (`account`) for the account; and marking it so
+    function seeded(id: string, name: string, account: boolean): boolean
+    function markSeeded(id: string, name: string, account: boolean)
+end
+
+-- The game's CVars.
+export interface CVarAccess
+    -- nil: the client has no such CVar
+    function get(name: string): string?
+    function set(name: string, value: string): boolean
+    -- whether the game keeps it per character (false: for the account or
+    -- the machine; nil: the client doesn't say)
+    function perCharacter(name: string): boolean?
+    -- the game's default for it (nil: the client doesn't say)
+    function default(name: string): string?
+end
+
+export class GameCVars implements CVarAccess
+    function get(name: string): string?
+        local ok, value = pcall(C_CVar.GetCVar, name)
+        if ok and type(value) == "string" then
+            return value
+        end
+        return nil
+    end
+
+    function set(name: string, value: string): boolean
+        local ok, done = pcall(C_CVar.SetCVar, name, value)
+        return ok and done ~= false
+    end
+
+    function perCharacter(name: string): boolean?
+        local info = C_CVar.GetCVarInfo
+        if not info then
+            return nil
+        end
+        -- value, default, kept for the account, kept for the character
+        local ok, _, _, _, character = pcall(info, name)
+        if ok and type(character) == "boolean" then
+            return character
+        end
+        return nil
+    end
+
+    function default(name: string): string?
+        local getDefault = C_CVar.GetCVarDefault
+        if getDefault then
+            local ok, value = pcall(getDefault, name)
+            if ok and type(value) == "string" then
+                return value
+            end
+        end
+        local info = C_CVar.GetCVarInfo
+        if info then
+            local ok, _, value = pcall(info, name)
+            if ok and type(value) == "string" then
+                return value
+            end
+        end
+        return nil
+    end
+end
+
+-- SuuUI's: each character's data, namespace "core", field "cvars"; the
+-- account's values, key "cvars".
+export class SavedCVars implements CVarStore
+    function mine(create: boolean): Memory?
+        local data = create and settings.charData("core") or settings.peekCharData("core")
+        if not data then
+            return nil
+        end
+        local memory = data.cvars
+        if type(memory) ~= "table" then
+            if not create then
+                return nil
+            end
+            memory = {}
+            data.cvars = memory
+        end
+        return memory :: unknown :: Memory
+    end
+
+    function originals(create: boolean): Originals?
+        local all = settings.account("cvars")
+        if type(all) ~= "table" then
+            if not create then
+                return nil
+            end
+            all = {}
+            settings.setAccount("cvars", all)
+        end
+        return all :: unknown :: Originals
+    end
+
+    function upgraded(): boolean
+        local data = settings.peekCharData("core")
+        return data ~= nil and data.cvarsSince == "upgrade"
+    end
+
+    function noteCharacter(knownBefore: boolean)
+        if not settings.ready() then
+            return
+        end
+        local seen = settings.peekCharData("core")
+        if seen and seen.cvarsSince ~= nil then
+            return
+        end
+        settings.charData("core").cvarsSince = knownBefore and "upgrade" or "fresh"
+    end
+
+    private function seeds(account: boolean, create: boolean): { [string]: { [string]: boolean } }?
+        local all: unknown = nil
+        if account then
+            all = settings.account("cvarSeeds")
+            if type(all) ~= "table" and create then
+                all = {}
+                settings.setAccount("cvarSeeds", all)
+            end
+        else
+            local data = create and settings.charData("core") or settings.peekCharData("core")
+            all = data and data.cvarSeeds
+            if data and type(all) ~= "table" and create then
+                all = {}
+                data.cvarSeeds = all
+            end
+        end
+        return type(all) == "table" and (all :: { [string]: { [string]: boolean } }) or nil
+    end
+
+    function seeded(id: string, name: string, account: boolean): boolean
+        local all = self:seeds(account, false)
+        local entries = all and all[id]
+        return type(entries) == "table" and entries[name] == true
+    end
+
+    function markSeeded(id: string, name: string, account: boolean)
+        local all = assert(self:seeds(account, true))
+        local entries = all[id]
+        if type(entries) ~= "table" then
+            entries = {}
+            all[id] = entries
+        end
+        entries[name] = true
+    end
+
+    function heldElsewhere(id: string, name: string): boolean
+        if not settings.ready() then
+            return false
+        end
+        local me = settings.getCharKey()
+        for key, data in pairs(settings.allCharData("core")) do
+            local memory = data.cvars
+            if key ~= me and type(memory) == "table" then
+                local entries = (memory :: { [string]: unknown })[id]
+                if type(entries) == "table" and (entries :: { [string]: unknown })[name] ~= nil then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+end
+
+local function text(value: unknown): string
+    if value == true then
+        return "1"
+    elseif value == false then
+        return "0"
+    end
+    return tostring(value)
+end
+
+export class CVarOwners
+    -- CVar -> the value a restore waiting for the end of combat gives back
+    -- (the player's, still: a module setting it again meanwhile remembers it)
+    private restoring: { [string]: string } = {}
+
+    constructor(
+        private store: CVarStore = SavedCVars.new(),
+        private game: CVarAccess = GameCVars.new(),
+        private runner: combat.CombatQueue = combat.queue
+    )
+    end
+
+    -- The account's original for a module and CVar, or nil.
+    private function original(id: string, name: string): string?
+        local all = self.store:originals(false)
+        local entries = all and all[id]
+        return entries and entries[name]
+    end
+
+    -- Keeps `value` as the account's original unless it has one.
+    private function keepOriginal(id: string, name: string, value: string)
+        if self:original(id, name) ~= nil then
+            return
+        end
+        local all = assert(self.store:originals(true))
+        local entries = all[id] or {}
+        all[id] = entries
+        entries[name] = value
+    end
+
+    -- The default to remember for an upgrading player's CVar that holds the
+    -- module's value (see the top), marked as seeded; nil when it isn't
+    -- that case.
+    private function seedFor(id: string, name: string, wanted: string, perCharacter: boolean): string?
+        if not self.store:upgraded() or self.store:seeded(id, name, not perCharacter) then
+            return nil
+        end
+        if not perCharacter and self:original(id, name) ~= nil then
+            return nil
+        end
+        local default = self.game:default(name)
+        if default == nil or default == wanted then
+            return nil
+        end
+        self.store:markSeeded(id, name, not perCharacter)
+        return default
+    end
+
+    -- Sets the CVar for the module, remembering the player's value first.
+    -- True when it was written now; false when the client refused it, has
+    -- no such CVar, or it waits for the end of combat.
+    function set(id: string, name: string, value: string | number | boolean, opts: SetOptions?): boolean
+        local wanted = text(value)
+        local all = self.store:mine(false)
+        local mine = all and all[id]
+        if not (mine and mine[name] ~= nil) then
+            local waiting = self.restoring[name]
+            local was = waiting or self.game:get(name)
+            if was == nil then
+                return false
+            end
+            local entry: string | boolean = was
+            local perCharacter = self.game:perCharacter(name) == true
+            local seed: string? = nil
+            if opts and opts.seedDefault and waiting == nil and was == wanted then
+                seed = self:seedFor(id, name, wanted, perCharacter)
+            end
+            if perCharacter then
+                -- this character's own value, whatever it is (an upgrading
+                -- player's: the default, standing in for it)
+                if seed then
+                    entry = seed
+                end
+            elseif waiting == nil and was == wanted then
+                -- already the module's value: not the player's to remember
+                -- (a shared CVar another character's module set; an
+                -- upgrading player's: the default kept as the account's)
+                entry = true
+                if seed then
+                    self:keepOriginal(id, name, seed)
+                end
+            else
+                self:keepOriginal(id, name, was)
+            end
+            local made = assert(self.store:mine(true))
+            mine = made[id] or {}
+            made[id] = mine
+            mine[name] = entry
+        end
+        self.restoring[name] = nil
+        local done = false
+        self.runner:run("cvar:" .. name, function()
+            done = self.game:set(name, wanted)
+        end, "CVars")
+        return done
+    end
+
+    -- Gives the CVar back as the player had it and forgets it. False when
+    -- the module holds no entry for it. An entry without a value of its own
+    -- gives back the account's original (nothing when there is none).
+    function restore(id: string, name: string): boolean
+        local all = self.store:mine(false)
+        local mine = all and all[id]
+        local entry = mine and mine[name]
+        if not (all and mine and entry ~= nil) then
+            return false
+        end
+        local was: string? = nil
+        if type(entry) == "string" then
+            was = entry
+        else
+            was = self:original(id, name)
+        end
+        mine[name] = nil
+        if next(mine) == nil then
+            all[id] = nil
+        end
+        if not self.store:heldElsewhere(id, name) then
+            local originals = self.store:originals(false)
+            local entries = originals and originals[id]
+            if originals and entries then
+                entries[name] = nil
+                if next(entries) == nil then
+                    originals[id] = nil
+                end
+            end
+        end
+        if was == nil then
+            return true
+        end
+        local value: string = was
+        self.restoring[name] = value
+        self.runner:run("cvar:" .. name, function()
+            self.restoring[name] = nil
+            self.game:set(name, value)
+        end, "CVars")
+        return true
+    end
+
+    -- At login: this character's upgrade or fresh start, decided once.
+    function noteCharacter(knownBefore: boolean)
+        self.store:noteCharacter(knownBefore)
+    end
+
+    function restoreAll(id: string)
+        local all = self.store:mine(false)
+        local mine = all and all[id]
+        if not mine then
+            return
+        end
+        local names: string[] = {}
+        for name in pairs(mine) do
+            names[#names + 1] = name
+        end
+        table.sort(names)
+        for _, name in ipairs(names) do
+            self:restore(id, name)
+        end
+    end
+
+    -- The value a restore would give back for the module and CVar (the
+    -- player's, or the account's original), or nil.
+    function rememberedValue(id: string, name: string): string?
+        local all = self.store:mine(false)
+        local mine = all and all[id]
+        local entry = mine and mine[name]
+        if type(entry) == "string" then
+            return entry
+        elseif entry ~= nil then
+            return self:original(id, name)
+        end
+        return nil
+    end
+
+    -- How many CVars the module holds an entry for (on this character).
+    function remembered(id: string): number
+        local all = self.store:mine(false)
+        local mine = all and all[id]
+        local n = 0
+        if mine then
+            for _ in pairs(mine) do
+                n += 1
+            end
+        end
+        return n
+    end
+end
+
+-- SuuUI's, and its methods as the module's functions.
+export const cvars = CVarOwners.new()
+
+export function set(id: string, name: string, value: string | number | boolean, opts: SetOptions?): boolean
+    return cvars:set(id, name, value, opts)
+end
+
+export function noteCharacter()
+    cvars:noteCharacter(settings.charKnownAtLoad())
+end
+
+export function restore(id: string, name: string): boolean
+    return cvars:restore(id, name)
+end
+
+export function restoreAll(id: string)
+    cvars:restoreAll(id)
+end
+
+export function rememberedValue(id: string, name: string): string?
+    return cvars:rememberedValue(id, name)
+end
+
+export function remembered(id: string): number
+    return cvars:remembered(id)
+end

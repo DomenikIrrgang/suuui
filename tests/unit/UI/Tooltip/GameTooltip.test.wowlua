@@ -1,0 +1,197 @@
+-- UI/Tooltip/GameTooltip: Blizzard's tooltips in SuuUI's look, and the
+-- spell tooltip with SuuUI's lines under it.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import skinTooltip, isTooltipSkinned, spellTooltip from "/UI/Tooltip/GameTooltip"
+import * as tbl from "wowlua:table"
+import internal spellPostCall from "/UI/Tooltip/GameTooltip"
+import expectNoErrors, newParent from "../../../helpers"
+import * as pixel from "/Core/Pixel"
+import tokenOf from "../WindowsHelpers"
+
+local parent: Frame? = nil
+
+@afterEach
+local function cleanup()
+    GameTooltip:Hide()
+    mock.hover(nil)
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    mock.resetSpies()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Blizzard's tooltips
+--------------------------------------------------------------------------------
+
+@test("SuuUI's Tooltips module has GameTooltip skinned, kept through each show")
+local function gameTooltip()
+    expect(isTooltipSkinned(GameTooltip)).toBe(true)
+    expect(skinTooltip(GameTooltip)).toBeNil()
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:AddLine("Line")
+    GameTooltip:Show()
+    -- SharedTooltip_SetBackdropStyle ran on show: the NineSlice hidden again
+    expect((GameTooltip :: GameTooltip & { NineSlice: Frame }).NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("skinTooltip on a new tooltip: glass, an edge, the corner diamond; once")
+local function skinNew()
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltip", UIParent, "GameTooltipTemplate") :: GameTooltip
+        & { NineSlice: Frame }
+    expect(isTooltipSkinned(tip)).toBe(false)
+    local art = skinTooltip(tip)
+    expect(art).never.toBeNil()
+    local a = assert(art)
+    expect(tokenOf(a.bg)).toBe("surface-glass")
+    expect(tokenOf(a.border.top)).toBe("gilt-line")
+    expect(tokenOf(a.ornament)).toBe("gilt")
+    expect(a.ornament).toBeAnchoredTo(tip, "CENTER", "TOPLEFT")
+    expect(isTooltipSkinned(tip)).toBe(true)
+    expect(tip.NineSlice:GetAlpha()).toBe(0)
+    expect(skinTooltip(tip)).toBeNil()
+    -- Blizzard's backdrop style puts its art back: hidden again
+    tip.NineSlice:SetAlpha(1)
+    SharedTooltip_SetBackdropStyle(tip, tbl.field(_G, "GAME_TOOLTIP_BACKDROP_STYLE_DEFAULT") :: table?)
+    expect(tip.NineSlice:GetAlpha()).toBe(0)
+end
+
+@test("a skinned tooltip rescaled: its edge one physical pixel at the new scale (in game its top and right vanished)")
+local function skinRescaled()
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltipScaled", UIParent, "GameTooltipTemplate") :: GameTooltip
+    local a = assert(skinTooltip(tip))
+    -- the tooltips module's scale: SuuUI's root against UIParent (0.533 to 0.64 in game)
+    tip:SetScale(0.533 / 0.64)
+    local px = pixel.size(tip)
+    expect(a.border.top:GetHeight()).toBeCloseTo(px)
+    expect(a.border.right:GetWidth()).toBeCloseTo(px)
+    expect(a.border.top:GetHeight() * tip:GetEffectiveScale()).toBeCloseTo(pixel.perfectScale())
+    tip:SetScale(1)
+    expect(a.border.top:GetHeight()).toBeCloseTo(pixel.size(tip))
+end
+
+@test("skinTooltip(nil) does nothing; a tooltip without a NineSlice is fine")
+local function skinOdd()
+    expect(skinTooltip(nil)).toBeNil()
+    parent = newParent()
+    local plain = CreateFrame("Frame", nil, parent)
+    expect(skinTooltip(plain)).never.toBeNil()
+    -- an unskinned tooltip's style is left alone
+    local tip = CreateFrame("GameTooltip", "SuuUITestTooltip2", UIParent, "GameTooltipTemplate") :: GameTooltip
+        & { NineSlice: Frame }
+    SharedTooltip_SetBackdropStyle(tip, tbl.field(_G, "GAME_TOOLTIP_BACKDROP_STYLE_DEFAULT") :: table?)
+    expect(tip.NineSlice:GetAlpha()).toBe(1)
+end
+
+--------------------------------------------------------------------------------
+-- spellTooltip
+--------------------------------------------------------------------------------
+
+mock.defineSpell(90001, { name = "Test Smite", description = "Smites a foe.", known = true })
+
+local function lineText(i: number): string?
+    return mock.tooltipLines()[i]
+end
+
+local function lastLine(): string?
+    return lineText(GameTooltip:NumLines())
+end
+
+local function countLines(text: string): number
+    local n = 0
+    for _, line in ipairs(mock.tooltipLines()) do
+        if line == text then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+@test("spellTooltip: the spell, then the extra line once, owned and shown")
+@cases({ { "text" }, { "list" } })
+local function spellExtra(kind: string)
+    parent = newParent()
+    local extra: string | string[] = kind == "text" and "Costs 1s" or { "Costs 1s" }
+    spellTooltip(parent, 90001, extra)
+    expect(GameTooltip).toBeShown()
+    expect(GameTooltip:GetOwner()).toBe(parent)
+    expect(lineText(1)).toBe("Test Smite")
+    expect(lastLine()).toBe("Costs 1s")
+    expect(countLines("Costs 1s")).toBe(1)
+end
+
+@test("spellTooltip: several lines, none, and the anchor")
+local function spellLines()
+    parent = newParent()
+    spellTooltip(parent, 90001, { "One", "Two" }, "ANCHOR_LEFT")
+    expect(countLines("One")).toBe(1)
+    expect(lastLine()).toBe("Two")
+    expect(GameTooltip:GetAnchorType()).toBe("ANCHOR_LEFT")
+    spellTooltip(parent, 90001, nil)
+    expect(lastLine()).never.toBe("Two")
+    expect(GameTooltip:GetAnchorType()).toBe("ANCHOR_RIGHT")
+end
+
+@test("the game redrawing the spell keeps the lines (the post-call)")
+local function redraw()
+    parent = newParent()
+    spellTooltip(parent, 90001, "Costs 1s")
+    -- the spell's data arrived: the game sets the tooltip up again
+    GameTooltip:SetSpellByID(90001)
+    expect(lastLine()).toBe("Costs 1s")
+    expect(countLines("Costs 1s")).toBe(1)
+end
+
+@test("hiding GameTooltip forgets the pending lines")
+local function forget()
+    parent = newParent()
+    spellTooltip(parent, 90001, "Costs 1s")
+    GameTooltip:Hide()
+    GameTooltip:SetOwner(parent, "ANCHOR_RIGHT")
+    GameTooltip:SetSpellByID(90001)
+    expect(countLines("Costs 1s")).toBe(0)
+end
+
+@test("the post-call: only GameTooltip, the pending spell and owner, a readable id")
+local function postCall()
+    parent = newParent()
+    local tip = mock.spy()
+    local fakeTip: GameTooltip = mock.partial({
+        AddLine = function(_: GameTooltip, line: string)
+            tip(line)
+        end,
+        GetOwner = function(): Frame?
+            return parent
+        end,
+    })
+    -- nothing pending: nothing
+    spellPostCall(GameTooltip, { id = 90001 })
+    spellTooltip(parent, 90001, "Extra")
+    local before = countLines("Extra")
+    -- another tooltip
+    spellPostCall(fakeTip, { id = 90001 })
+    expect(tip).never.toHaveBeenCalled()
+    -- another spell, no data, a secret id
+    spellPostCall(GameTooltip, { id = 1 })
+    spellPostCall(GameTooltip, nil)
+    spellPostCall(GameTooltip, { id = mock.secret(90001) })
+    expect(countLines("Extra")).toBe(before)
+    -- another owner
+    mock.stub(GameTooltip, "GetOwner", function(): Frame
+        return UIParent
+    end)
+    spellPostCall(GameTooltip, { id = 90001 })
+    expect(countLines("Extra")).toBe(before)
+end
+
+@test("a spell the client has no data for: no post-call, the lines added at once")
+local function spellWithoutData()
+    parent = newParent()
+    spellTooltip(parent, 90999, "Costs 2s")
+    expect(GameTooltip).toBeShown()
+    expect(countLines("Costs 2s")).toBe(1)
+end

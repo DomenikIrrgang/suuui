@@ -1,0 +1,370 @@
+-- UI/Reskin/Menu: the game's menus and Blizzard's dropdown
+-- (WowStyle1DropdownTemplate) in SuuUI's look: the dropdown itself, the menu
+-- it opens, context menus and their parts, all undone when they close.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import reskinDropdown, reskinMenu from "/UI/Reskin/Menu"
+import internal menus, rowMenu from "/UI/Reskin/Menu"
+import internal sameColor from "/UI/Reskin/Pass"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../WindowsHelpers"
+import GLYPHS, host, resetHost, skin, openMenu from "./ReskinHelpers"
+
+@afterEach
+local function cleanup()
+    resetHost()
+    expectNoErrors()
+end
+
+-- The parts of Blizzard's templates these tests reach (their parentKeys and
+-- mixin methods).
+type DropdownParts = Frame
+    & {
+        Arrow: Texture,
+        Background: Texture,
+        Text: FontString,
+        SetupMenu: (self: Frame, generator: (owner: Region, root: RootMenuDescriptionProxy) -> ()) -> (),
+    }
+
+--------------------------------------------------------------------------------
+-- Dropdowns and menus
+--------------------------------------------------------------------------------
+
+local function dropdown(): DropdownParts
+    local d = CreateFrame("DropdownButton", nil, host(), "WowStyle1DropdownTemplate") :: DropdownParts
+    d:SetPoint("CENTER")
+    d:SetWidth(140)
+    local chosen = 1
+    d:SetupMenu(function(_, root)
+        root:CreateTitle("Sort")
+        root:CreateRadio("By name", function()
+            return chosen == 1
+        end, function()
+            chosen = 1
+        end)
+        root:CreateRadio("By level", function()
+            return chosen == 2
+        end, function()
+            chosen = 2
+        end)
+        root:CreateDivider()
+        root:CreateButton("Reset", function() end)
+    end)
+    return d
+end
+
+@test("reskinDropdown: a sunk field, a chevron, label ink; gilt edge on hover")
+local function dropdowns()
+    local d = dropdown()
+    reskinDropdown(d)
+    expect(skin(d).dropdown).toBe(true)
+    expect(d.Arrow:GetAlpha()).toBe(0)
+    expect(d.Background:GetAlpha()).toBe(0)
+    expect(tokenOf(d.Text)).toBe("ink")
+    local chev: Texture?, bg: Texture? = nil, nil
+    for _, t in ipairs(frames.textures(d)) do
+        if t:GetTextureFilePath() == GLYPHS .. "chevronDown.tga" then
+            chev = t
+        end
+        if tokenOf(t) == "surface-sunk" then
+            bg = t
+        end
+    end
+    expect(chev).never.toBeNil()
+    expect(bg).never.toBeNil()
+    mock.hover(d)
+    local edge = 0
+    for _, t in ipairs(frames.textures(d)) do
+        if tokenOf(t) == "gilt" then
+            edge = edge + 1
+        end
+    end
+    expect(edge).toBe(4)
+    mock.hover(nil)
+    reskinDropdown(d)
+    reskinDropdown(nil)
+end
+
+@test("reskinDropdown with a glyph: an icon-only dropdown, its edge on hover")
+local function glyphDropdown()
+    local d = dropdown()
+    reskinDropdown(d, { glyph = "filter" })
+    expect(d.Text:GetAlpha()).toBe(0)
+    local glyph: Texture? = nil
+    for _, t in ipairs(frames.textures(d)) do
+        if t:GetTextureFilePath() == GLYPHS .. "filter.tga" then
+            glyph = t
+        end
+    end
+    expect(glyph).never.toBeNil()
+    expect(tokenOf(glyph)).toBe("ink-muted")
+    mock.hover(d)
+    expect(tokenOf(glyph)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(glyph)).toBe("ink-muted")
+end
+
+-- The rows of the open menu (its buttons), and their texts.
+local function rowMenuOf(row: Frame)
+    return rowMenu[row]
+end
+
+local function menuTexts(menu: Frame): FontString[]
+    local out: FontString[] = {}
+    local function walk(f: Frame)
+        for _, fs in ipairs(frames.fontStrings(f)) do
+            out[#out + 1] = fs
+        end
+        for _, c in ipairs(frames.children(f)) do
+            walk(c)
+        end
+    end
+    walk(menu)
+    return out
+end
+
+@test("a reskinned dropdown's menu opens in SuuUI's look; undone when it closes")
+local function dropdownMenu()
+    local d = dropdown()
+    reskinDropdown(d)
+    mock.click(d)
+    expect(openMenu()).never.toBeNil()
+    local menu = assert(openMenu())
+    mock.advanceFrames(1)
+    local texts = menuTexts(menu)
+    expect(#texts > 0).toBe(true)
+    local anyInk = false
+    for _, fs in ipairs(texts) do
+        local r, g, b = fs:GetTextColor()
+        if sameColor("ink", r, g, b) then
+            anyInk = true
+        end
+    end
+    expect(anyInk).toBe(true)
+    -- the chosen radio: an arcane check
+    local marks = 0
+    for _, c in ipairs(frames.children(menu)) do
+        for _, t in ipairs(frames.textures(c)) do
+            if t:GetTextureFilePath() == GLYPHS .. "check.tga" and t:IsShown() then
+                marks = marks + 1
+            end
+        end
+    end
+    expect(marks).toBe(1)
+    Menu.GetManager():CloseMenus()
+    expect(openMenu()).toBeNil()
+end
+
+@test("reskinMenu: a context menu as glass, rows hovered on arcane-soft, all undone on close")
+local function contextMenus()
+    local owner = host()
+    -- a menu opened and closed before: the game's rows come back from its
+    -- pool with their scripts set again (SuuUI's hover hooks gone: bug,
+    -- fixed; they are hooked again)
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateButton("First", function() end)
+    end)
+    reskinMenu(openMenu())
+    Menu.GetManager():CloseMenus()
+    mock.advanceFrames(1)
+    local clicked = mock.spy()
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+        root:CreateTitle("Tamsin Ashford")
+        root:CreateButton("Whisper", function()
+            clicked()
+        end)
+        root:CreateCheckbox("Ignore", function()
+            return true
+        end, function() end)
+        local sub = root:CreateButton("More")
+        sub:CreateButton("Inner", function() end)
+    end)
+    expect(openMenu()).never.toBeNil()
+    local menu = assert(openMenu())
+    local texts = menuTexts(menu)
+    local before: number[][] = {}
+    for i, fs in ipairs(texts) do
+        before[i] = { fs:GetTextColor() }
+    end
+    reskinMenu(menu)
+    reskinMenu(menu) -- a second pass starts from the game's look again
+    local inked = 0
+    for _, fs in ipairs(texts) do
+        if sameColor("ink", fs:GetTextColor()) then
+            inked = inked + 1
+        end
+    end
+    expect(inked > 0).toBe(true)
+    local rows: Button[] = {}
+    for _, c in ipairs(frames.children(menu)) do
+        if c:GetObjectType() == "Button" then
+            rows[#rows + 1] = c :: Button
+        end
+    end
+    expect(#rows >= 3).toBe(true)
+    -- hovering a row: the arcane-soft band under it, drawn by SuuUI's panel
+    -- (no hooks on the game's rows: in combat they made a raid marker
+    -- "Forbidden: SetRaidTarget()", found in game)
+    local st = assert(menus[menu])
+    mock.hover(rows[1])
+    mock.advanceFrames(1)
+    expect(st.hover).toBeShown()
+    expect(st.hover).toBeAnchoredTo(rows[1], "TOPLEFT", "TOPLEFT")
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(st.hover).never.toBeShown()
+    -- the submenu opened from it: restyled too
+    local more: Button?, whisper: Button? = nil, nil
+    for _, r in ipairs(rows) do
+        for _, fs in ipairs(menuTexts(r)) do
+            if fs:GetText() == "More" then
+                more = r
+            end
+            if fs:GetText() == "Whisper" then
+                whisper = r
+            end
+        end
+    end
+    expect(more).never.toBeNil()
+    -- hovered: the game's menu opens it after a few frames
+    mock.hover(more)
+    mock.advanceFrames(30)
+    local subs = 0
+    for sub, other in pairs(menus) do
+        if sub ~= menu and other.active then
+            subs = subs + 1
+        end
+    end
+    expect(subs).toBe(1)
+    -- a choice that refreshes the menu: marked again a frame later
+    if menu.ReinitializeAll then
+        menu:ReinitializeAll()
+        mock.advanceFrames(1)
+        expect(st.active).toBe(true)
+    end
+    -- clicks stay the game's
+    mock.click(whisper)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    Menu.GetManager():CloseMenus()
+    mock.advanceFrames(2)
+    expect(openMenu()).toBeNil()
+    -- undone: the game's colours back on its shared rows
+    for i, fs in ipairs(texts) do
+        expect({ fs:GetTextColor() }).toEqual(before[i])
+    end
+    reskinMenu(nil)
+end
+
+@test("reskinMenu on a menu's parts: a tick, a submenu arrow, text in a child, a scrolling list, a spacer")
+local function menuParts()
+    -- a stand-in with the parts the game's menu frames have (probed
+    -- 2026-10-14: common-dropdown textures, rows with a radio or check)
+    local menu = CreateFrame("Frame", nil, host()) :: Frame & { ScrollBox: Frame, ReinitializeAll: (self: Frame) -> () }
+    menu:SetSize(160, 200)
+    menu:SetPoint("CENTER")
+    local bg = menu:CreateTexture()
+    bg:SetAtlas("common-dropdown-bg")
+    local function row(p: Frame, y: number, label: string?): Button
+        local r = CreateFrame("Button", nil, p)
+        r:SetSize(150, 20)
+        r:SetPoint("TOPLEFT", 5, y)
+        if label then
+            local fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            fs:SetText(label)
+            fs:SetPoint("LEFT")
+        end
+        return r
+    end
+    local chosen = row(menu, -10, "By name")
+    local tick = chosen:CreateTexture()
+    tick:SetAtlas("common-dropdown-icon-radialtick-yellow")
+    local tickOn = chosen:CreateTexture()
+    tickOn:SetAtlas("common-dropdown-ticksquare")
+    local hl = chosen:CreateTexture(nil, "HIGHLIGHT")
+    local hidden = chosen:CreateTexture()
+    hidden:Hide()
+    local plainTick = row(menu, -30, "Unticked")
+    local off = plainTick:CreateTexture()
+    off:SetAtlas("common-dropdown-icon-checkmark-yellow")
+    off:Hide()
+    local nested = row(menu, -50, nil)
+    local inner = CreateFrame("Frame", nil, nested)
+    inner:SetAllPoints()
+    local innerText = inner:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    innerText:SetText("Text in a child")
+    local sub = row(menu, -70, "More") :: Button & { arrow: Texture }
+    sub.arrow = sub:CreateTexture()
+    sub.arrow:SetPoint("RIGHT")
+    local markless = row(menu, -90, "Plain")
+    local ownTick = markless:CreateTexture()
+    ownTick:SetAtlas("common-dropdown-icon-checkmark-yellow")
+    local spacer = row(menu, -110, nil)
+    -- a scrolling list: its rows in the box's target
+    local box = CreateFrame("Frame", nil, menu) :: Frame & { ScrollTarget: Frame }
+    menu.ScrollBox = box
+    box:SetAllPoints()
+    box.ScrollTarget = CreateFrame("Frame", nil, box)
+    box.ScrollTarget:SetAllPoints()
+    local scrolled = row(box.ScrollTarget, -130, "Scrolled")
+    local reinit = mock.spy()
+    menu.ReinitializeAll = function(_: Frame)
+        reinit()
+    end
+    reskinMenu(menu)
+    local st = assert(menus[menu])
+    expect(st.active).toBe(true)
+    expect(bg:GetAlpha()).toBe(0)
+    expect(tick:GetAlpha()).toBe(0)
+    expect(tickOn:GetAlpha()).toBe(0)
+    expect(hl:GetAlpha()).toBe(0)
+    -- the chosen row's check, SuuUI's, on Blizzard's tick
+    expect(st.nMarks).toBe(2)
+    expect(st.marks[1]).toBeShown()
+    expect(st.marks[1]).toBeAnchoredTo(tickOn, "CENTER", "CENTER")
+    -- the submenu's arrow: SuuUI's chevron
+    expect(sub.arrow:GetAlpha()).toBe(0)
+    expect(st.nChevrons).toBe(1)
+    expect(st.chevrons[1]:GetTextureFilePath()).toBe(GLYPHS .. "chevronRight.tga")
+    -- the scrolled row is a row too
+    expect(rowMenuOf(scrolled)).toBe(st)
+    -- the panel: from the top to the last row with words (the scrolled one),
+    -- as far below it as the first row is below the top
+    expect(st.panel).toBeAnchoredTo(scrolled, "BOTTOM", "BOTTOM")
+    -- refreshed by a choice: again a frame later
+    menu:ReinitializeAll()
+    expect(reinit).toHaveBeenCalledTimes(1)
+    mock.advanceFrames(1)
+    expect(st.active).toBe(true)
+    -- hidden: undone
+    menu:Hide()
+    expect(st.active).toBe(false)
+    expect(bg:GetAlpha()).toBe(1)
+    expect(st.panel).never.toBeShown()
+    expect(st.marks[1]).never.toBeShown()
+    expect(st.chevrons[1]).never.toBeShown()
+    -- refreshed while hidden: nothing
+    menu:ReinitializeAll()
+    mock.advanceFrames(1)
+    expect(st.active).toBe(false)
+    expect(spacer).toBeShown()
+    expect(nested).toBeShown()
+end
+
+@test("reskinMenu: a menu whose last row runs below it covers all of it")
+local function menuOverflow()
+    local menu = CreateFrame("Frame", nil, host())
+    menu:SetSize(160, 40)
+    menu:SetPoint("CENTER")
+    local r = CreateFrame("Button", nil, menu)
+    r:SetSize(150, 20)
+    r:SetPoint("TOPLEFT", 5, -60)
+    local fs = r:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fs:SetText("Below")
+    reskinMenu(menu)
+    local st = assert(menus[menu])
+    expect(st.panel).toBeAnchoredTo(menu, "TOPLEFT", "TOPLEFT")
+    expect(st.panel).toBeAnchoredTo(menu, "BOTTOMRIGHT", "BOTTOMRIGHT")
+    menu:Hide()
+end

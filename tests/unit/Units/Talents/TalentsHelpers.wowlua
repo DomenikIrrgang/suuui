@@ -1,0 +1,256 @@
+-- tests/unit/Units/Talents/TalentsHelpers.wowlua
+-- What the Talents tests share (tests/unit/Units/Talents.test.wowlua and
+-- the tests of its parts in tests/unit/Units/Talents/): the stand-in trees
+-- (TraitWorld): three trees of three talents each, node IDs 11-13 (Arms),
+-- 21-23 (Fury), 31-33 (Protection); 12 needs 11 by an arrow and sits a row
+-- lower. The class is the recorded warrior's (tree 1117); the paladin's
+-- tree (1100) is the other class. A fake page, the module's state reset
+-- per test (setup, teardown), and small readers of what it holds.
+--
+--   local w: world.World
+--   @beforeEach local function before() w = fx.setup() end
+--   @afterEach local function after() fx.teardown() end
+
+import internal M from "/Units/Talents"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as events from "/Core/Events"
+import type PageNode, Collected, BuildTree from "/Units/Talents/Trees"
+import type SavedBuild, Draft from "/Units/Talents/Builds"
+import type PlanNode from "/Units/Talents/Plan"
+import type MismatchDialog, NewBuildDialog, ShareDialog from "/Units/Talents/Share"
+import type TalentTree, TalentData, TalentSpec, TalentBuilds, OrderLineData from "/UI/TalentTree"
+import type TalentNode as BuildTalent from "/UI/TalentBuilds"
+import * as world from "../TraitWorld"
+import type NotificationData, Notification from "/UI/Notification"
+
+export const WARRIOR_TREE = 1117
+export const PALADIN_TREE = 1100
+export const CONFIG = 100
+export const VIEW = Constants.TraitConsts.VIEW_TRAIT_CONFIG_ID
+export const INSPECT = Constants.TraitConsts.INSPECT_TRAIT_CONFIG_ID
+
+export type Step = { node: number, entry?: number }
+
+-- A page as Render and Fill drive it, recording what they set; `page` is
+-- what the module holds.
+export type FakePage = {
+    visible: boolean,
+    specs?: TalentSpec[],
+    specView?: number,
+    builds?: TalentBuilds,
+    order?: OrderLineData[],
+    drawn?: TalentData,
+    page: TalentTree,
+}
+
+export function fakePage(visible: boolean): FakePage
+    local p: FakePage = { visible = visible, page = mock.partial({}) }
+    p.page = mock.partial({
+        IsVisible = function(_: TalentTree): boolean
+            return p.visible
+        end,
+        SetSpecs = function(_: TalentTree, list: TalentSpec[]?, view: number?)
+            p.specs, p.specView = list, view
+        end,
+        SetBuilds = function(_: TalentTree, b: TalentBuilds?)
+            p.builds = b
+        end,
+        SetOrder = function(self: TalentTree, o: OrderLineData[]?)
+            p.order = o
+            self.orderLines = o
+        end,
+        SetData = function(_: TalentTree, d: TalentData?)
+            p.drawn = d
+        end,
+        MarkNode = function(_: TalentTree, _: number?) end,
+    })
+    return p
+end
+
+-- What a fake page drew, the order it was given.
+export function drawn(p: FakePage): TalentData
+    return assert(p.drawn)
+end
+export function order(p: FakePage): OrderLineData[]
+    return assert(p.order)
+end
+export function lineData(p: FakePage): OrderLineData[]
+    return assert(p.page.orderLines)
+end
+
+local w: world.World
+local savedPages: { windowPage?: TalentTree, page?: TalentTree } = {}
+-- the messages heard, by name (emptied for each test)
+export const heard: { [string]: number } = {}
+local listener = {}
+
+export type Store = {
+    builds: { [string]: SavedBuild },
+    active: { [string]: { [number]: string } },
+    reset: { [string]: { [number]: string } },
+    nextID: number,
+}
+export function store(): Store
+    return SuuUI.AccountData("talentbuilds") :: unknown :: Store
+end
+
+export function newWorld(): world.World
+    local a = world.threeTrees(WARRIOR_TREE, { "Arms", "Fury", "Protection" })
+    local p = world.threeTrees(PALADIN_TREE, { "Holy", "Protection", "Retribution" })
+    -- the paladin's node IDs apart from the warrior's
+    for _, n in ipairs(p.nodes) do
+        n.id = n.id + 100
+        for _, e in ipairs(n.edges or {}) do
+            e.targetNode = e.targetNode + 100
+        end
+    end
+    local nw = world.new(CONFIG, { a, p })
+    nw.configs[VIEW] = PALADIN_TREE
+    nw.configs[INSPECT] = WARRIOR_TREE
+    -- the warrior's and the paladin's trees, by their classes' first specs
+    nw.specTrees[GetSpecializationInfoForClassID(1, 1) :: number] = WARRIOR_TREE
+    nw.specTrees[GetSpecializationInfoForClassID(2, 1) :: number] = PALADIN_TREE
+    return nw
+end
+
+export function wt(): world.Tree
+    return assert(w.trees[WARRIOR_TREE])
+end
+export function pt(): world.Tree
+    return assert(w.trees[PALADIN_TREE])
+end
+
+export function nodeIn(data: Collected?, id: number): PageNode
+    for _, t in ipairs(assert(data).trees) do
+        for _, n in ipairs(t.nodes) do
+            if n.id == id then
+                return n
+            end
+        end
+    end
+    error("no node " .. id)
+end
+
+export function steps(...: number): Step[]
+    local out: Step[] = {}
+    for i = 1, select("#", ...) do
+        out[i] = { node = (select(i, ...)) }
+    end
+    return out
+end
+
+-- The module's state that must be there.
+export function draft(): Draft
+    return assert(M.draft)
+end
+export function build(id: string): SavedBuild
+    return assert(M:Builds()[id])
+end
+export function share(): ShareDialog
+    return assert(M.share)
+end
+export function mismatch(): MismatchDialog
+    return assert(M.mismatch)
+end
+export function newBuild(): NewBuildDialog
+    return assert(M.newBuild)
+end
+export function window(): Frame
+    return assert(M.window)
+end
+export function talent(t: BuildTree, id: number): BuildTalent
+    return assert(t.byID[id])
+end
+
+-- The notices asked for, the ones dismissed.
+export function captureNotes(): NotificationData[]
+    local notes: NotificationData[] = {}
+    mock.stub(SuuUI, "Notify", function(def: NotificationData)
+        notes[#notes + 1] = def
+    end)
+    return notes
+end
+export function captureDismissed(): string[]
+    local dismissed: string[] = {}
+    mock.stub(SuuUI, "DismissNotification", function(id: string)
+        dismissed[#dismissed + 1] = id
+    end)
+    return dismissed
+end
+-- A notice's button pressed.
+export function press(n: NotificationData?, i: number)
+    local card: Notification = mock.partial({})
+    assert(assert(assert(n).actions)[i].onClick)(card)
+end
+
+-- A plan node as FillPlan makes it: the talent's place, nothing learned.
+export function planNode(
+    id: number,
+    more: { name?: string, rank?: number, max?: number, entryID?: number, problem?: string }?
+): PlanNode
+    local m = more or {}
+    return {
+        id = id,
+        row = 0,
+        col = 0,
+        max = m.max or 1,
+        rank = m.rank or 0,
+        pending = 0,
+        name = m.name or "",
+        entryID = m.entryID,
+        canSpend = true,
+        locked = false,
+        problem = m.problem,
+    }
+end
+
+-- Each test's start: the stand-in trees installed, no builds, the module's
+-- state back to nothing; the world, for the test to change.
+export function setup(): world.World
+    w = newWorld()
+    world.install(w)
+    local d = store()
+    d.builds, d.active, d.reset, d.nextID = {}, {}, {}, 1
+    M.draft, M.buildView, M.planning, M.viewing = nil, nil, false, nil
+    wipe(M.buildTrees)
+    M.learned, M.learnedFor, M.data, M.classes = {}, nil, nil, nil
+    M.inspectUnit, M.inspectData, M.wipeAt, M.talented, M.unseenStaged = nil, nil, nil, 0, false
+    savedPages.windowPage, savedPages.page = M.windowPage, M.page
+    wipe(heard)
+    local messages: MessageName[] = { "SUUUI_TALENT_BUILD_CHANGED", "SUUUI_TALENTS_SHOWN" }
+    for _, e in ipairs(messages) do
+        events.on(
+            e,
+            function(name: string)
+                heard[name] = (heard[name] or 0) + 1
+            end,
+            listener
+        )
+    end
+    return w
+end
+
+-- Each test's end: the pages put back, the dialogs and the window hidden.
+export function teardown()
+    events.off("SUUUI_TALENT_BUILD_CHANGED", listener)
+    events.off("SUUUI_TALENTS_SHOWN", listener)
+    M.windowPage, M.page = savedPages.windowPage, savedPages.page
+    if M.window and M.window:IsShown() then
+        window():Hide()
+    end
+    if M.mismatch then
+        M.mismatch:Hide()
+    end
+    if M.newBuild then
+        M.newBuild:Hide()
+    end
+    if M.share then
+        M.share:Hide()
+    end
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    -- what a render queued runs with the fakes still in place
+    mock.advanceTime(0.1)
+end

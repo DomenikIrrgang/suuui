@@ -32,25 +32,19 @@
 -- "Aggro" when it has. Solo, everyone reads as a non-tank (a tank has no one
 -- to lose a mob to): "Aggro" on what attacks you.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import gameUnits, curveAmount from "/UI/UnitFrame"
-import type StandInPerson, UnitApi from "/UI/UnitFrame"
-import type Text from "/UI/Text"
-import type StateBadge from "/UI/Controls"
-import type Border, SoftEdge from "/UI/Draw"
-import * as draw from "/UI/Draw"
-import type Crest from "/UI/Crest"
-import type CastBar from "/UI/CastBar"
-import type UnitAuras from "/UI/Auras"
-import type Icon from "/UI/Icon"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, StandInPerson, UnitApi, Text, StateBadge, Border, SoftEdge, Crest, CastBar, UnitAuras, Icon from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
-import * as healthFill from "/UI/HealthFill"
+
+-- (locals: the plates' updates are frequent)
+local gameUnits = SuuUI.UI.GameUnits
+local curveAmount = SuuUI.UI.CurveAmount
+local paintHealth = SuuUI.UI.PaintHealth
+local healthClassToken = SuuUI.UI.HealthClassToken
+local healthReactionToken = SuuUI.UI.HealthReactionToken
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -455,7 +449,7 @@ export class Nameplate extends Frame
         self.health:SetAllPoints()
         UI.SkinBar(self.health, "plate-health-bar")
         self.health:SetFrameLevel(self.ghost:GetFrameLevel() + 1)
-        healthFill.paint(self.health, nil)
+        paintHealth(self.health, nil)
         self.healthLow = CreateFrame("StatusBar", nil, inner)
         self.healthLow:SetAllPoints()
         UI.SkinBar(self.healthLow, "plate-health-bar")
@@ -493,7 +487,7 @@ export class Nameplate extends Frame
     -- Your debuffs on it, above the name (the engine fills them), less what
     -- the aura filters on nameplates leave out.
     function BuildAuras()
-        draw.withPixelUnit(not self.preview and platePixel or nil, function()
+        SuuUI.UI.WithPixelUnit(not self.preview and platePixel or nil, function()
             self:MakeAuras()
         end)
     end
@@ -658,7 +652,7 @@ export class Nameplate extends Frame
         else
             self.ghostValue = amount(cur)
             if not timer then
-                self.ghostTimer = after(GHOST_HOLD, function()
+                self.ghostTimer = M:After(GHOST_HOLD, function()
                     self.ghostTimer = nil
                     self.ghost:SetValue(self.ghostValue, INTERPOLATE)
                 end)
@@ -729,7 +723,7 @@ export class Nameplate extends Frame
         local look: string | false = self.tappedLook and "tapped" or self.fillClass or self.fillReaction or false
         if look ~= self.fillLook then
             self.fillLook = look
-            healthFill.paint(self.health, look)
+            paintHealth(self.health, look)
         end
     end
 
@@ -745,14 +739,14 @@ export class Nameplate extends Frame
         local fillClass: string? = nil
         if okIs and flag(isPlayer) then
             local _, class = A.UnitClass(u)
-            fillClass = healthFill.classToken(class)
+            fillClass = healthClassToken(class)
         end
         self.fillClass = fillClass
         local r = asNumber(A.UnitReaction(u, "player"))
         -- an NPC's reaction, for reaction-coloured health (UNIT_FACTION and a
         -- plate reused come through here)
         local npc = okIs and not isSecret(isPlayer) and not isPlayer
-        self.fillReaction = npc and healthFill.reactionToken(r) or nil
+        self.fillReaction = npc and healthReactionToken(r) or nil
         self:PaintHealth()
         -- the name in plate-name, white in SuuUI's look, a theme's own in
         -- its (asked 2026-11-13: the reaction's red and yellow were hard to
@@ -944,7 +938,7 @@ end
 -- A plate made, its lines in plate pixels.
 local function makePlate(): Nameplate
     local f: Nameplate? = nil
-    draw.withPixelUnit(platePixel, function()
+    SuuUI.UI.WithPixelUnit(platePixel, function()
         f = Nameplate.new(poolHome())
     end)
     local made = assert(f)
@@ -1063,9 +1057,9 @@ local function fill()
                 return
             end
         end
-        after(0, step)
+        M:After(0, step)
     end
-    after(0, step)
+    M:After(0, step)
 end
 
 -- A plate from the pool, or a new one; nil when the pool is empty and a
@@ -1120,12 +1114,22 @@ end
 -- The game's "show friendly players' plates": current clients call it
 -- nameplateShowFriendlyPlayers, older ones nameplateShowFriends. Written to
 -- whichever this client has (an unknown name reads back nil).
+-- (0.47) Every game CVar the module writes goes through M:SetCVar: the
+-- player's own value is remembered (per character, outside profiles) and
+-- given back once the module is off (it turns off only at a reload, so at
+-- the next login with it off). The CVars: the seven of CVARS below,
+-- nameplateShowEnemies, the friendly players' (whichever of these two the
+-- client has) and nameplateShowFriendlyNPCs. Before 0.47 the module wrote
+-- them without remembering the player's: `seedDefault` lets the game's
+-- default stand in for it on a character that played with SuuUI before
+-- (Core/CVars.wowlua).
 local FRIENDLY_CVARS = { "nameplateShowFriendlyPlayers", "nameplateShowFriends" }
+local SEED = { seedDefault = true }
 
 local function showFriendly(on: boolean)
     for _, name in ipairs(FRIENDLY_CVARS) do
         if C_CVar.GetCVar(name) ~= nil then
-            pcall(C_CVar.SetCVar, name, on and "1" or "0")
+            M:SetCVar(name, on and "1" or "0", SEED)
         end
     end
 end
@@ -1540,7 +1544,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             -- look once more
             if not self.recheck[unit] then
                 self.recheck[unit] = true
-                after(0.2, function()
+                self:After(0.2, function()
                     self.recheck[unit] = nil
                     local f = byUnit[unit]
                     if self:IsEnabled() and UnitExists(unit) and flag(UnitCanAttack("player", unit)) and
@@ -1639,7 +1643,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
     end
 
     function NextWaiting()
-        after(0, function()
+        self:After(0, function()
             local unit = table.remove(self.waiting, 1)
             if not unit then
                 return
@@ -1719,7 +1723,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             -- at all matters more than its debuffs)
             if builtThisFrame() or #self.waiting > 0 then
                 f.auraWait = true
-                after(0, function()
+                self:After(0, function()
                     if f.unit == unit and f.auraWait then
                         self:ApplyAuraCount(f)
                     end
@@ -1820,7 +1824,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
     function ApplyGameSettings()
         self:RunOutOfCombat("cvars", function()
             for k, v in pairs(CVARS) do
-                pcall(C_CVar.SetCVar, k, v)
+                self:SetCVar(k, v, SEED)
             end
             errors.try(C_NamePlate.SetNamePlateSize, self:Get("width"), plateH() + 8)
         end)
@@ -1836,7 +1840,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         self:RunOutOfCombat("shown", function()
             local on = self:Get("showPlates")
             if C_CVar.GetCVar("nameplateShowEnemies") ~= nil then
-                pcall(C_CVar.SetCVar, "nameplateShowEnemies", on and "1" or "0")
+                self:SetCVar("nameplateShowEnemies", on and "1" or "0", SEED)
             end
             if on then
                 self:ApplyFriendly(true)
@@ -1859,7 +1863,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 return
             end
             local on = self:Get("showPlates") and self:Get("friendlyNPCs") and not inInstance()
-            pcall(C_CVar.SetCVar, "nameplateShowFriendlyNPCs", on and "1" or "0")
+            self:SetCVar("nameplateShowFriendlyNPCs", on and "1" or "0", SEED)
         end)
     end
 
@@ -1982,7 +1986,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
         self:ApplyFriendlyNPCs()
         -- your level up: the plates' levels change colour
         self:OnGameEvent("PLAYER_LEVEL_UP", function()
-            after(0.5, function()
+            self:After(0.5, function()
                 for _, f in pairs(byUnit) do
                     f:UpdateLevel()
                 end
@@ -2004,7 +2008,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
                 return
             end
             questDirty = true
-            after(0.5, function()
+            self:After(0.5, function()
                 questDirty = false
                 for _, f in pairs(byUnit) do
                     f:UpdateQuest()
@@ -2049,7 +2053,7 @@ class NameplatesModule extends Module<typeof(DEFAULTS)>
             fill()
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            after(REFILL_DELAY, function()
+            self:After(REFILL_DELAY, function()
                 if self:IsEnabled() then
                     fill()
                 end

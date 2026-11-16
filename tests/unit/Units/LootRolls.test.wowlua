@@ -19,10 +19,14 @@ import * as registry from "/SettingsUI/Registry"
 import * as editMode from "/EditMode/EditMode"
 import unregisterCommands from "/Core/Init"
 import expectNoErrors from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import tokenOf from "../UI/PrimitivesHelpers"
 
 import M from "/Units/LootRolls"
-import type LootRollTray, LootRollRow, RollOption from "/UI/LootRollTray"
+import * as lines from "/Units/LootRolls/Lines"
+import type LootRollTray, LootRollRow, RollOption, RollRowData, RollTrayData from "/UI/LootRollTray"
 
 local ITEM_LINK = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
 local OTHER_LINK = "|cff0070dd|Hitem:5199::::::::|h[Ember Pants]|h|r"
@@ -35,6 +39,9 @@ type RollOptions = {
     need?: boolean,
     reason?: number,
     left?: number,
+    -- the name not readable yet (the item's data not in); no link either
+    nameless?: boolean,
+    noLink?: boolean,
 }
 -- the rolls the game knows, by ID (default: Dusk Mantle)
 local known: { [number]: RollOptions } = {}
@@ -44,7 +51,7 @@ local function fakeRolls()
     mock.stub(_G, "GetLootRollItemInfo", function(id: number): ...unknown
         local o = known[id] or {}
         return 135033,
-            o.name or "Dusk Mantle",
+            (not o.nameless) and (o.name or "Dusk Mantle") or nil,
             1,
             o.quality or 2,
             o.bop or false,
@@ -55,8 +62,11 @@ local function fakeRolls()
             0,
             0
     end)
-    mock.stub(_G, "GetLootRollItemLink", function(id: number): string
+    mock.stub(_G, "GetLootRollItemLink", function(id: number): string?
         local o = known[id]
+        if o and o.noLink then
+            return nil
+        end
         return o and o.link or ITEM_LINK
     end)
     -- (Blizzard's own roll frame asks too, every frame: always a number)
@@ -124,6 +134,11 @@ local function line(fmt: string, ...: string | number): string
     return (fmt:format(...))
 end
 
+-- A frame passes: the rows whose votes changed are drawn.
+local function drawn()
+    mock.advanceFrames(1)
+end
+
 local function me(): string
     return assert((SuuUI.FullName("player") :: string):match("^([^%-]+)"))
 end
@@ -138,6 +153,7 @@ local function formats()
     rawset(_G, "LOOT_ROLL_PASSED_AUTO_FEMALE", "|HlootHistory:%d|h[Loot]|h: %3$s (100%%) passed by %2$s")
     M:OnLootLine("|HlootHistory:4|h[Loot]|h: " .. ITEM_LINK .. " (100%) passed by Tamsin")
     rawset(_G, "LOOT_ROLL_PASSED_AUTO_FEMALE", real)
+    lines.reset()
     expect(assert(M.rolls[7]).votes.pass).toEqual({ "Tamsin" })
 end
 
@@ -279,11 +295,13 @@ local function others()
     roll(7)
     M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
     M:OnLootLine(line(LOOT_ROLL_GREED, 12, "Ashford", ITEM_LINK))
+    drawn()
     expect(option(7, "need").badge.label:GetText()).toBe("1")
     expect(option(7, "greed").badge.label:GetText()).toBe("1")
     expect(option(7, "pass").badge.label:GetText()).toBe("0")
     expect(tokenOf(option(7, "pass").badge.label)).toBe("ink-faint")
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", ITEM_LINK)) -- changed their mind
+    drawn()
     expect(option(7, "greed").badge.label:GetText()).toBe("0")
     expect(option(7, "pass").badge.label:GetText()).toBe("1")
     -- who chose what: always under the row, every name on hovering it
@@ -319,6 +337,7 @@ local function stillChoosing()
     roll(7)
     roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
     M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    drawn()
     local who = row(7).whoLine:GetText() :: string
     expect(who:find("Choosing", 1, true) ~= nil).toBe(true)
     expect(who:find("Ashford", 1, true) ~= nil).toBe(true)
@@ -332,6 +351,7 @@ local function stillChoosing()
     expect(tray().meta:GetText()).toBe("waiting on 2 players")
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Tamsin", OTHER_LINK))
     M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Ashford", OTHER_LINK))
+    drawn()
     expect(tray().meta:GetText()).toBe("waiting on 1 player")
     -- (one line: who chose what in place of the bind)
     expect((row(7).sub:GetText() :: string):find("Choosing", 1, true) ~= nil).toBe(true)
@@ -564,7 +584,8 @@ end
 
 @test("the game says rolls are over: every roll of a loot done; one item's drop decided in the loot history")
 local function gameSaysOver()
-    known[21], known[22], known[23] = {}, {}, {}
+    -- (another item: a line about an item ended rolls share could be theirs)
+    known[21], known[22], known[23] = {}, {}, { name = "Ember Pants", link = OTHER_LINK, quality = 3 }
     mock.fireEvent("START_LOOT_ROLL", 21, 60000, 7)
     mock.fireEvent("START_LOOT_ROLL", 22, 60000, 7)
     mock.fireEvent("START_LOOT_ROLL", 23, 60000, 8)
@@ -572,7 +593,7 @@ local function gameSaysOver()
     expect(M.rolls[21]).toBe(nil)
     expect(M.rolls[22]).toBe(nil)
     expect(M.rolls[23] ~= nil).toBe(true)
-    local drop: { [string]: unknown } = { itemHyperlink = ITEM_LINK, allPassed = false }
+    local drop: { [string]: unknown } = { itemHyperlink = OTHER_LINK, allPassed = false }
     mock.fake("C_LootHistory.GetSortedInfoForDrop", function(): unknown
         return drop
     end)
@@ -621,6 +642,7 @@ local function testRolls()
     mock.click(row(helm.id).yes)
     expect(option(helm.id, "need").badge.label:GetText()).toBe("2")
     mock.advanceTime(8.1)
+    mock.advanceFrames(3, 100) -- (drawn; the seconds tick)
     expect(option(helm.id, "greed").badge.label:GetText()).toBe("3")
     -- the pants run out first: amber, then a result
     expect(tokenOf(row(pants.id).time)).toBe("amber")
@@ -715,4 +737,346 @@ local function settingsAndMover()
     local root = SuuUI.Root
     expect(math.floor((t:GetLeft() + t:GetRight()) / 2 + 0.5)).toBe(math.floor(root:GetWidth() / 2 + 0.5))
     expect(math.floor(root:GetTop() - t:GetTop() + 0.5)).toBe(80)
+end
+
+-- (CHAT-23) Two of one drop: two open rolls for the same item.
+@test("two rolls of one item: you answer the second; it is locked, the first stays answerable and its answer reaches its own roll")
+local function sameItemYours()
+    roll(7)
+    roll(8)
+    mock.click(option(8, "pass"))
+    expect(rolled).toEqual({ { 8, LOOT_ROLL_TYPE_PASS or 0 } })
+    -- the game's line about your vote: the roll you answered, not the oldest
+    M:OnLootLine(line(LOOT_ROLL_PASSED_SELF, 12, ITEM_LINK))
+    drawn()
+    local first, second = assert(M.rolls[7]), assert(M.rolls[8])
+    expect(second.choice).toBe("pass")
+    expect(second.votes.pass).toEqual({ me() })
+    expect(first.choice).toBe(nil)
+    expect(first.votes.pass).toEqual({})
+    expect(option(8, "pass").chosen).toBe(true)
+    expect(option(7, "need").chosen).toBe(false)
+    expect(option(7, "need").blocked).toBe(false)
+    -- the first answered after: its own roll ID
+    mock.click(option(7, "need"))
+    expect(rolled).toEqual({ { 8, LOOT_ROLL_TYPE_PASS or 0 }, { 7, LOOT_ROLL_TYPE_NEED or 1 } })
+    M:OnLootLine(line(LOOT_ROLL_NEED_SELF, 12, ITEM_LINK))
+    expect(first.votes.need).toEqual({ me() })
+    expect(second.votes.pass).toEqual({ me() })
+    expect(first.choice).toBe("need")
+    expect(second.choice).toBe("pass")
+end
+
+@test("two rolls of one item, one decided: only its row goes; the other stays, still answerable, and its answer reaches its roll")
+local function sameItemDecided()
+    roll(7)
+    roll(8)
+    mock.click(option(8, "pass"))
+    M:OnLootLine(line(LOOT_ROLL_PASSED_SELF, 12, ITEM_LINK))
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    -- the chat line names only the item: it could be either roll's, so no
+    -- row goes (the result is shown)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(M.rolls[7] ~= nil).toBe(true)
+    expect(M.rolls[8] ~= nil).toBe(true)
+    expect(#M.results).toBe(1)
+    -- the loot history's drop says your vote on it was a pass: the second
+    local drop: { [string]: unknown } = {
+        itemHyperlink = ITEM_LINK,
+        allPassed = false,
+        winner = { playerName = "Tamsin" },
+        playerRollState = 5,
+    }
+    mock.fake("C_LootHistory.GetSortedInfoForDrop", function(): unknown
+        return drop
+    end)
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 2, 9)
+    expect(M.rolls[8]).toBe(nil)
+    expect(M.rolls[7] ~= nil).toBe(true)
+    -- (the same decision twice: one result)
+    expect(#M.results).toBe(1)
+    -- the drop updated again: told once, the first stays
+    mock.fireEvent("LOOT_HISTORY_UPDATE_DROP", 2, 9)
+    expect(M.rolls[7] ~= nil).toBe(true)
+    -- the first still answerable, on its own ID
+    expect(row(7).choices:Option("greed") ~= nil).toBe(true)
+    mock.click(option(7, "greed"))
+    expect(rolled[#rolled]).toEqual({ 7, LOOT_ROLL_TYPE_GREED or 2 })
+    -- its own result: now every roll of the item is decided, it goes
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Ashford", ITEM_LINK))
+    expect(M.rolls[7]).toBe(nil)
+    expect(#M.results).toBe(2)
+end
+
+@test("two rolls of one item, results from chat only: no row goes on the first, both on the second")
+local function sameItemLines()
+    roll(7)
+    roll(8)
+    M:OnLootLine(line(LOOT_ROLL_ALL_PASSED, 12, ITEM_LINK))
+    expect(M.rolls[7] ~= nil).toBe(true)
+    expect(M.rolls[8] ~= nil).toBe(true)
+    -- (both unanswered: Need still there on each)
+    expect(option(7, "need").chosen).toBe(false)
+    expect(option(8, "need").chosen).toBe(false)
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(M.rolls[7]).toBe(nil)
+    expect(M.rolls[8]).toBe(nil)
+    expect(#M.results).toBe(2)
+end
+
+@test("the game ending one roll's ID ends only that row, and the item's result after it goes to it")
+local function sameItemCancelled()
+    roll(7)
+    roll(8)
+    mock.fireEvent("CANCEL_LOOT_ROLL", 7)
+    expect(M.rolls[7]).toBe(nil)
+    expect(M.rolls[8] ~= nil).toBe(true)
+    -- the result line for the ended one: the open one stays
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", ITEM_LINK))
+    expect(M.rolls[8] ~= nil).toBe(true)
+    expect(assert(M.results[1]).roll.id).toBe(7)
+    -- your automatic pass on the ended one at its time: no lock on the open one
+    M:OnLootLine(line(LOOT_ROLL_PASSED_SELF, 12, ITEM_LINK))
+    expect(assert(M.rolls[8]).choice).toBe(nil)
+end
+
+@test("three rolls of one item, votes from several players arriving interleaved: each player's first vote on the first roll, and so on")
+local function sameItemInterleaved()
+    roll(7)
+    roll(8)
+    roll(9)
+    local votes: { [number]: string }[] = {
+        { "Tamsin", LOOT_ROLL_NEED },
+        { "Ashford", LOOT_ROLL_GREED },
+        { "Tamsin", LOOT_ROLL_PASSED },
+        { "Corwen", LOOT_ROLL_NEED },
+        { "Ashford", LOOT_ROLL_PASSED },
+        { "Tamsin", LOOT_ROLL_GREED },
+        { "Ashford", LOOT_ROLL_NEED },
+        { "Corwen", LOOT_ROLL_PASSED },
+        { "Corwen", LOOT_ROLL_GREED },
+    }
+    for _, v in ipairs(votes) do
+        M:OnLootLine(line(assert(v[2]), 12, assert(v[1]), ITEM_LINK))
+    end
+    drawn()
+    local a, b, c = assert(M.rolls[7]), assert(M.rolls[8]), assert(M.rolls[9])
+    expect(a.votes).toEqual({ need = { "Tamsin", "Corwen" }, greed = { "Ashford" }, pass = {} })
+    expect(b.votes).toEqual({ need = {}, greed = {}, pass = { "Tamsin", "Ashford", "Corwen" } })
+    expect(c.votes).toEqual({ need = { "Ashford" }, greed = { "Tamsin", "Corwen" }, pass = {} })
+    -- (counted on each row; nobody's vote answered or locked a row of yours)
+    expect(option(8, "pass").badge.label:GetText()).toBe("3")
+    for _, r in ipairs({ a, b, c }) do
+        expect(r.choice).toBe(nil)
+    end
+    -- a fourth vote of one player: no roll left for it, it goes nowhere
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", ITEM_LINK))
+    expect(#a.votes.need + #b.votes.need + #c.votes.need).toBe(3)
+end
+
+@test("a vote line with nobody to put it on: your own with two rolls of the item unanswered locks neither; one about no roll is ignored")
+local function unattributed()
+    roll(7)
+    roll(8)
+    M:OnLootLine(line(LOOT_ROLL_GREED_SELF, 12, ITEM_LINK))
+    drawn()
+    expect(assert(M.rolls[7]).choice).toBe(nil)
+    expect(assert(M.rolls[8]).choice).toBe(nil)
+    expect(option(7, "greed").blocked).toBe(false)
+    expect(option(8, "greed").blocked).toBe(false)
+    mock.click(option(7, "pass"))
+    mock.click(option(8, "need"))
+    expect(rolled).toEqual({ { 7, LOOT_ROLL_TYPE_PASS or 0 }, { 8, LOOT_ROLL_TYPE_NEED or 1 } })
+    -- another item: nothing
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Tamsin", OTHER_LINK))
+    M:OnLootLine(line(LOOT_ROLL_WON, 12, "Tamsin", OTHER_LINK))
+    expect(#assert(M.rolls[7]).votes.need).toBe(0)
+    expect(#M.results).toBe(0)
+end
+
+@test("another player's automatic pass: under their own name")
+local function automaticPass()
+    roll(7)
+    M:OnLootLine(line(LOOT_ROLL_PASSED_AUTO, "Brannoc", ITEM_LINK))
+    M:OnLootLine(line(LOOT_ROLL_PASSED_AUTO_FEMALE, "Ysolde", ITEM_LINK))
+    expect(assert(M.rolls[7]).votes.pass).toEqual({ "Brannoc", "Ysolde" })
+end
+
+@test("an item whose name can't be read yet: its row stays (the link's name), answerable, named once the game has it")
+local function lateName()
+    roll(7, { nameless = true, name = "Dusk Mantle of the Owl" })
+    local r = assert(M.rolls[7])
+    expect(r.unnamed).toBe(true)
+    expect(row(7).name:GetText()).toBe("Dusk Mantle")
+    mock.click(option(7, "greed"))
+    expect(rolled).toEqual({ { 7, LOOT_ROLL_TYPE_GREED or 2 } })
+    -- the item's data in: named on the next tick
+    assert(known[7]).nameless = false
+    mock.advanceFrames(3, 100)
+    expect(r.unnamed).toBe(nil)
+    expect(row(7).name:GetText()).toBe("Dusk Mantle of the Owl")
+    expect(row(7).chipLabel:GetText()).toBe("Greed") -- (yours: the only roll, answered)
+    -- no link either: the game's placeholder; a secret name: kept too
+    roll(8, { nameless = true, noLink = true })
+    expect(row(8).name:GetText()).toBe(RETRIEVING_ITEM_INFO or "Item")
+    mock.stub(_G, "GetLootRollItemInfo", function(_: number): ...unknown
+        return 135033, mock.secret("Hidden"), 1, 2, false, true, true, false, 0, 0, 0
+    end)
+    roll(9)
+    expect(M.rolls[9] ~= nil).toBe(true)
+end
+
+@test("folded or hidden: vote lines draw nothing; the rows drawn when it shows again")
+local function hiddenTray()
+    roll(7)
+    roll(8, { name = "Ember Pants", link = OTHER_LINK, quality = 3 })
+    -- (the items' data in first: it draws the tray again on its own)
+    mock.advanceFrames(10, 100)
+    local t = tray()
+    local sets, updates = 0, 0
+    local setData = t.SetData
+    mock.stub(t, "SetData", function(self: LootRollTray, d: RollTrayData)
+        sets = sets + 1
+        setData(self, d)
+    end)
+    for _, r in ipairs(t.rows) do
+        local update = r.Update
+        mock.stub(r, "Update", function(self: LootRollRow, d: RollRowData, compact: boolean): boolean
+            updates = updates + 1
+            return update(self, d, compact)
+        end)
+    end
+    mock.click(t.fold)
+    sets = 0
+    for _, name in ipairs({ "Tamsin", "Ashford", "Corwen" }) do
+        M:OnLootLine(line(LOOT_ROLL_NEED, 12, name, ITEM_LINK))
+    end
+    mock.advanceFrames(5, 100)
+    expect(sets).toBe(0)
+    expect(updates).toBe(0)
+    -- open again: drawn, with the votes
+    mock.click(t.tabOpen)
+    expect(sets).toBe(1)
+    expect(option(7, "need").badge.label:GetText()).toBe("3")
+    -- (the tray's own frame hidden: the same, drawn on the frame it shows)
+    t:Hide()
+    sets = 0
+    M:OnLootLine(line(LOOT_ROLL_GREED, 12, "Tamsin", OTHER_LINK))
+    mock.advanceFrames(2, 100)
+    expect(sets).toBe(0)
+    expect(updates).toBe(0)
+    M:Refresh()
+    expect(option(8, "greed").badge.label:GetText()).toBe("1")
+end
+
+-- (late: it makes a raid, left again at its end)
+@test("a 40-player raid with five rolls open: a vote line draws only its roll's row, with no walk over the raid")
+local function raidVotes()
+    mock.group:leave()
+    local classes = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "DRUID" }
+    local raiders: mock.MockUnit[] = {}
+    for i = 1, 39 do
+        local u = mock.spawnUnit({
+            name = "Raider" .. i,
+            player = true,
+            class = assert(classes[i % #classes + 1]),
+            level = 60,
+            reaction = "friendly",
+        })
+        mock.group:add(u, { raid = true })
+        raiders[i] = u
+    end
+    expect(GetNumGroupMembers()).toBe(40)
+    local links: string[] = {}
+    for i = 1, 5 do
+        links[i] = "|cff1eff00|Hitem:" .. (6000 + i) .. "::::::::|h[Raid Drop " .. i .. "]|h|r"
+        roll(40 + i, { name = "Raid Drop " .. i, link = links[i] })
+    end
+    drawn()
+    -- (who's still choosing: the other 39, in class colours)
+    expect(#M.group:Others()).toBe(39)
+    local tip = assert(assert(tray().data.rolls[1]).whoTip)
+    expect((assert(tip.description)):find("Choosing · 39", 1, true) ~= nil).toBe(true)
+    local names, sets = 0, 0
+    local updates: number[] = {}
+    local fullName = SuuUI.FullName
+    mock.stub(SuuUI, "FullName", function(unit: string?): (string | Secret<string>)?
+        names = names + 1
+        return fullName(unit)
+    end)
+    local t = tray()
+    local setData = t.SetData
+    mock.stub(t, "SetData", function(self: LootRollTray, d: RollTrayData)
+        sets = sets + 1
+        setData(self, d)
+    end)
+    for _, r in ipairs(t.rows) do
+        local update = r.Update
+        mock.stub(r, "Update", function(self: LootRollRow, d: RollRowData, compact: boolean): boolean
+            updates[#updates + 1] = d.id
+            return update(self, d, compact)
+        end)
+    end
+    M:OnLootLine(line(LOOT_ROLL_NEED, 12, "Raider7", assert(links[3])))
+    drawn()
+    expect(names).toBe(0)
+    expect(sets).toBe(0)
+    expect(updates).toEqual({ 43 })
+    expect(option(43, "need").badge.label:GetText()).toBe("1")
+    expect(option(42, "need").badge.label:GetText()).toBe("0")
+    -- ten lines in one frame: one draw of the row
+    updates = {}
+    for i = 10, 19 do
+        M:OnLootLine(line(LOOT_ROLL_GREED, 12, "Raider" .. i, assert(links[3])))
+    end
+    drawn()
+    expect(updates).toEqual({ 43 })
+    expect(names).toBe(0)
+    expect(option(43, "greed").badge.label:GetText()).toBe("10")
+    -- the group changing: read again once, at the next look
+    mock.group:remove(assert(raiders[39]))
+    M:OnLootLine(line(LOOT_ROLL_PASSED, 12, "Raider20", assert(links[3])))
+    drawn()
+    expect(names > 0).toBe(true)
+    expect(#M.group:Others()).toBe(38)
+    mock.group:leave()
+end
+
+-- (last: the module off) Loot rolls is reloadToToggle: the registry turns
+-- it off in a session only when its OnEnable fails. Here it toggles live, as
+-- a module that isn't would, so the registry's own disable runs.
+@test("turned off through the registry: the tray gone, Blizzard's roll frames seen again where they were; on again, away with the rolls still running")
+local function turnedOff()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    local f = assert(frames.find("GroupLootContainer"))
+    local home = assert(M.rollsHome)
+    roll(7)
+    expect(tray()).toBeShown()
+    settings.set("lootrolls", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(tray()).never.toBeShown()
+    expect(next(M.rolls)).toBeNil()
+    expect(f:GetAlpha()).toBe(1)
+    expect(f:IsClampedToScreen() and true or false).toBe(home.clamped)
+    -- (where they were: none at login, the game places them with a roll)
+    expect(f:GetNumPoints()).toBe(#home.points)
+    -- the game placing them: they stay there, seen
+    f:ClearAllPoints()
+    f:SetPoint("CENTER")
+    mock.advanceTime(0.01)
+    expect((f:GetPoint(1))).toBe("CENTER")
+    expect(f:GetAlpha()).toBe(1)
+    -- on again: away at once; the roll still running back in the tray
+    mock.stub(_G, "GetActiveLootRollIDs", function(): unknown
+        return { 7 }
+    end)
+    settings.set("lootrolls", "enabled", true)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(f:GetAlpha()).toBe(0)
+    expect((f:GetPoint(1))).toBe("BOTTOMRIGHT")
+    expect(row(7) ~= nil).toBe(true)
+    own.reloadToToggle = true
+    expectNoErrors()
 end

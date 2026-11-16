@@ -156,6 +156,9 @@ export class GroupFinderListed extends Frame
     onUpdate: (() -> ())? = nil
     onChannel: ((value: string) -> ())? = nil
     onText: ((text: string) -> ())? = nil
+    -- the ad's text as last set by code or last reported: a change to
+    -- anything else, while the field has focus, is the player's edit
+    lastText: string = ""
     onRewrite: (() -> ())? = nil
     onPost: ((channel: string?, text: string) -> ())? = nil
 
@@ -260,10 +263,17 @@ export class GroupFinderListed extends Frame
         e:SetScript("OnEditFocusLost", function()
             self:Count()
         end)
-        e:SetScript("OnTextChanged", function(obj, user)
+        -- an edit: any change while the field has focus that isn't the text
+        -- the code set last (the game never flags typing as user input on
+        -- Forever, UIW-1; SetText's own OnTextChanged comes a frame later)
+        e:SetScript("OnTextChanged", function(obj)
             self:Count()
-            if user and self.onText then
-                self.onText(obj:GetText())
+            local t = obj:GetText() or ""
+            if obj:HasFocus() and t ~= self.lastText then
+                self.lastText = t
+                if self.onText then
+                    self.onText(t)
+                end
             end
         end)
         a.field:EnableMouse(true)
@@ -276,6 +286,8 @@ export class GroupFinderListed extends Frame
             icon = "reset",
             tooltip = { title = "From my listing", description = "Write it again from your listing" },
             onClick = function()
+                -- out of the field first: a field with focus keeps its text
+                e:ClearFocus()
                 if self.onRewrite then
                     self.onRewrite()
                 end
@@ -387,7 +399,8 @@ export class GroupFinderListed extends Frame
         a.channel:SetOptions(A.channels or {})
         a.channel:SetValue(A.channel)
         if not a.edit:HasFocus() and a.edit:GetText() ~= (A.text or "") then
-            a.edit:SetText(A.text or "")
+            self.lastText = A.text or "" -- set from code: not an edit
+            a.edit:SetText(self.lastText)
             a.edit:SetCursorPosition(0)
         end
         a.post:SetLabel("Post to " .. (A.channel or "chat"))

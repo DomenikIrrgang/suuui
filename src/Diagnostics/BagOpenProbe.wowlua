@@ -1,0 +1,496 @@
+-- Diagnostics/BagOpenProbe.wowlua
+-- "/suu probe bagopen": why the bags don't open (found in game 2026-11-15:
+-- in dev builds neither B, the bag button nor the module's Toggle showed the
+-- window, with no error in SuuUI's log; release builds open them).
+--
+-- What it records, in SuuUIProbe.bagOpen (a /reload writes it):
+--   * the build (dev or release), whether Lua errors show (scriptErrors),
+--     and the errors wowlua's dev runtime captured this session (those the
+--     game hides with scriptErrors off and SuuUI's log never sees: a /run)
+--   * the Bags module: its state, IsEnabled(), error; the flags the open
+--     path reads (wantOpen, openedBy, syncQueued, burstShown, hooked…);
+--     whether its owned timers start now (a refused timer leaves a "queued"
+--     flag set for good); its timers, listeners and hooks; the combat
+--     queue's waiting work (all of it, and the bags')
+--   * the window and its parents: shown, visible, alpha, scale, strata,
+--     level, size, place on screen, anchor
+--   * then the open path walked step by step, the calls Toggle makes when
+--     the window is closed, in its order (SetOpen(true)'s state, PlaceBags,
+--     Show, UpdatePicker, Refresh), each under xpcall: ok, or the error and
+--     the first lines of its stack; and the window read again, at once and
+--     half a second later (whatever hid it again by then)
+-- Each step has a one-line question and answer; five lines are printed.
+-- No names, GUIDs or links are kept (a character key reads as "you" or
+-- "other"). Read only, apart from the calls opening the bags makes: the
+-- window stays open afterwards, as B would leave it.
+
+import print, version from "/Core/Init"
+import * as DB from "/Core/DB"
+import * as modules from "/Core/Modules"
+import * as timers from "/Core/Timers"
+import * as events from "/Core/Events"
+import * as hooks from "/Core/Hooks"
+import * as combat from "/Core/Combat"
+import type BagsModule from "/Units/Bags"
+import after from "wowlua:timer"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as wf from "wowlua:frames"
+
+type Record = { [string]: unknown }
+
+-- One step of the walk.
+export type Step = { step: string, question: string, answer: string, ok: boolean, error?: string, trace?: string[] }
+
+-- SuuUIProbe.bagOpen
+export type BagOpen = {
+    at: string,
+    build: Record,
+    module: Record,
+    flags: Record,
+    owned: Record,
+    game: Record,
+    before: Record,
+    steps: Step[],
+    after: Record,
+    later?: Record,
+    devErrors: string[],
+    summary: string[],
+}
+
+-- the lines a step keeps of its stack
+const TRACE_LINES = 6
+
+-- Text that may be kept: links and colours out, a character's key never in,
+-- at most `max` characters.
+export function clean(v: unknown, max: number?): string
+    if secret.isSecret(v) then
+        return "secret"
+    end
+    local s = tostring(v)
+    s = s:gsub("|H.-|h(.-)|h", "[link]")
+    s = s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local limit = max or 240
+    if #s > limit then
+        s = s:sub(1, limit) .. "…"
+    end
+    return s
+end
+
+local function num(v: unknown): unknown
+    local n = secret.asNumber(v)
+    if n == nil then
+        return v == nil and "nil" or "secret"
+    end
+    return math.floor(n * 100 + 0.5) / 100
+end
+
+-- A frame's name, or its type (never a player's name: SuuUI's and
+-- Blizzard's frames only come here).
+local function nameOf(v: unknown): string
+    if v == nil then
+        return "nil"
+    end
+    local r = wf.asRegion(v)
+    if not r then
+        return type(v)
+    end
+    local ok, n = pcall(r.GetName, r)
+    local s = ok and secret.asString(n) or nil
+    if s then
+        return s
+    end
+    local okType, t = pcall(r.GetObjectType, r)
+    return "unnamed " .. (okType and tostring(t) or "region")
+end
+
+-- What a window looks like now: shown, visible, alpha, scale, strata, size,
+-- place, anchor, and each parent's shown state and alpha.
+export function frameState(f: Frame?): Record
+    if not f then
+        return { exists = false }
+    end
+    local out: Record = { exists = true, name = nameOf(f) }
+    local function read(key: string, fn: () -> unknown)
+        local ok, v = pcall(fn)
+        out[key] = ok and num(v) or ("error: " .. clean(v, 80))
+    end
+    out.shown = f:IsShown() and true or false
+    out.visible = f:IsVisible() and true or false
+    read("alpha", function(): unknown
+        return f:GetAlpha()
+    end)
+    read("effectiveAlpha", function(): unknown
+        return f:GetEffectiveAlpha()
+    end)
+    read("scale", function(): unknown
+        return f:GetScale()
+    end)
+    read("effectiveScale", function(): unknown
+        return f:GetEffectiveScale()
+    end)
+    read("width", function(): unknown
+        return f:GetWidth()
+    end)
+    read("height", function(): unknown
+        return f:GetHeight()
+    end)
+    read("left", function(): unknown
+        return f:GetLeft()
+    end)
+    read("bottom", function(): unknown
+        return f:GetBottom()
+    end)
+    read("level", function(): unknown
+        return f:GetFrameLevel()
+    end)
+    read("points", function(): unknown
+        return f:GetNumPoints()
+    end)
+    out.strata = clean(f:GetFrameStrata(), 40)
+    local okPoint, point, rel, relPoint, x, y = pcall(f.GetPoint, f, 1)
+    if okPoint and point ~= nil then
+        out.anchor = ("%s to %s %s (%s, %s)"):format(
+            clean(point, 20),
+            nameOf(rel),
+            clean(relPoint, 20),
+            tostring(num(x)),
+            tostring(num(y))
+        )
+    else
+        out.anchor = okPoint and "none" or ("error: " .. clean(point, 80))
+    end
+    local parents: string[] = {}
+    local p = f:GetParent()
+    local depth = 0
+    while p and depth < 8 do
+        depth += 1
+        local region = wf.asFrame(p)
+        if not region then
+            break
+        end
+        local okA, a = pcall(region.GetAlpha, region)
+        parents[#parents + 1] = ("%s shown=%s alpha=%s"):format(
+            nameOf(region),
+            tostring(region:IsShown() and true or false),
+            tostring(okA and num(a) or "?")
+        )
+        p = region:GetParent()
+    end
+    out.parents = parents
+    out.screen = ("%s x %s"):format(tostring(num(GetScreenWidth())), tostring(num(GetScreenHeight())))
+    return out
+end
+
+-- fn() under xpcall: ok, or the error and the first lines of its stack.
+export function walk(name: string, question: string, fn: () -> string): Step
+    local stack: string? = nil
+    local ok, res = xpcall(fn, function(e: unknown): unknown
+        stack = debugstack(2) or ""
+        return e
+    end)
+    local step: Step = { step = name, question = question, ok = ok, answer = "" }
+    if ok then
+        step.answer = clean(res)
+    else
+        step.error = clean(res)
+        step.answer = "error: " .. clean(res, 160)
+        local lines: string[] = {}
+        for line in (stack or ""):gmatch("[^\n]+") do
+            if #lines >= TRACE_LINES then
+                break
+            end
+            lines[#lines + 1] = clean(line, 200)
+        end
+        step.trace = lines
+    end
+    return step
+end
+
+-- The errors wowlua's dev runtime captured this session (newest first; a
+-- release build has no dev runtime: none).
+local function devErrors(): (boolean, string[])
+    local dev = tbl.field(_G, "WOWLUA_DEV", "addons", "SuuUI", "runtime")
+    local list = tbl.field(dev, "errors", "list")
+    local out: string[] = {}
+    if type(list) == "table" then
+        for i, e in ipairs(list :: unknown[]) do
+            if i > 10 then
+                break
+            end
+            out[#out + 1] = ("%s x%s %s"):format(
+                clean(tbl.field(e, "time"), 12),
+                clean(tbl.field(e, "count"), 6),
+                clean(tbl.field(e, "message"), 220)
+            )
+        end
+    end
+    return dev ~= nil, out
+end
+
+-- The flags and fields the open path reads.
+local function flags(m: BagsModule): Record
+    local inv = m.inv
+    local key = m:CharKey()
+    return {
+        wantOpen = m.wantOpen,
+        openedBy = m.openedBy ~= nil and clean(m.openedBy, 60) or "nil",
+        syncQueued = m.syncQueued,
+        burstShown = m.burstShown,
+        burstOpenedBy = m.burstOpenedBy ~= nil and clean(m.burstOpenedBy, 60) or "nil",
+        hooked = m.hooked,
+        bankHooked = m.bankHooked,
+        bankAwayQueued = m.bankAwayQueued,
+        atBank = m.atBank,
+        atMerchant = m.atMerchant,
+        sorting = m.sorting ~= nil,
+        selling = m.selling ~= nil,
+        refreshTimer = m.refreshTimer ~= nil,
+        inv = inv ~= nil,
+        bank = m.bank ~= nil,
+        invIsGlobal = inv ~= nil and tbl.field(_G, "SuuUIBags") == inv,
+        -- (whose bags: yours or another's, never the key itself)
+        who = m.who == nil and "nil" or (m.who == key and "you" or "other"),
+        view = m.view ~= nil and clean(m.view, 20) or "nil",
+        query = m.query ~= nil and m.query ~= "",
+        live = (function(): unknown
+            local ok, v = pcall(m.IsLive, m)
+            return ok and v or ("error: " .. clean(v, 80))
+        end)(),
+        slotButtons = (function(): number
+            local n = 0
+            for _, list in pairs(m.buttons) do
+                n += #list
+            end
+            return n
+        end)(),
+    }
+end
+
+-- Whether one of the module's timers starts now (false: refused, the module
+-- reads as off to its timers).
+local function timerStarts(m: BagsModule): (boolean, string)
+    local handle = m:After(60, function() end)
+    local cancelled = handle:IsCancelled() and true or false
+    handle:Cancel()
+    return not cancelled, cancelled and "refused (already cancelled)" or "started"
+end
+
+-- The game's side: the keys bound to the bags, whether Blizzard's own bags
+-- read open (they open under SuuUI's hidden parent), its combined bag frame.
+export function gameState(): Record
+    local out: Record = {}
+    for _, action in ipairs({ "OPENALLBAGS", "TOGGLEBACKPACK" }) do
+        local ok, key1, key2 = pcall(GetBindingKey, action)
+        out[action] = ok and (clean(key1 or "none", 30) .. (key2 and (", " .. clean(key2, 30)) or "")) or "error"
+    end
+    local isOpen = tbl.field(_G, "IsBagOpen")
+    if type(isOpen) == "function" then
+        local ok, v = pcall(isOpen :: (bag: number) -> unknown, 0)
+        out.blizzardBackpackOpen = ok and clean(v, 20) or "error"
+    end
+    local combined = wf.find("ContainerFrameCombinedBags")
+    out.combinedBags = combined and
+        ("shown=%s parent=%s"):format(tostring(combined:IsShown() and true or false), nameOf(combined:GetParent())) or
+        "missing"
+    out.combinedBagsCVar = clean(GetCVar("combinedBags"), 8)
+    return out
+end
+
+local function bagsModule(): BagsModule?
+    local m = modules.get("bags")
+    if not m or type(tbl.field(m, "windows")) ~= "table" then
+        return nil
+    end
+    return m :: unknown :: BagsModule
+end
+
+local function say(rec: BagOpen, line: string)
+    rec.summary[#rec.summary + 1] = line
+    print("Bag open probe: " .. line)
+end
+
+export function command()
+    local hasDev, errs = devErrors()
+    local rec: BagOpen = {
+        at = date("%Y-%m-%d %H:%M:%S"),
+        build = {
+            version = version,
+            dev = hasDev,
+            scriptErrors = clean(GetCVar("scriptErrors"), 8),
+            combat = InCombatLockdown() and true or false,
+        },
+        module = {},
+        flags = {},
+        owned = {},
+        game = gameState(),
+        before = {},
+        steps = {},
+        after = {},
+        devErrors = errs,
+        summary = {},
+    }
+    DB.probe.bagOpen = rec
+    local m = bagsModule()
+    if not m then
+        rec.module.found = false
+        say(rec, "the Bags module isn't there (not registered, or not the bags).")
+        say(rec, ("%d errors captured by the dev runtime; /reload to save."):format(#errs))
+        return
+    end
+    rec.module = {
+        found = true,
+        state = clean(m.state, 30),
+        enabled = m:IsEnabled(),
+        error = m.error ~= nil and clean(m.error) or "nil",
+        enabledAtLoad = m.enabledAtLoad == true,
+        initialized = m.initialized == true,
+        pendingReload = m.pendingReload == true,
+        builtIn = m.builtIn,
+    }
+    rec.flags = flags(m)
+    local starts, how = timerStarts(m)
+    rec.owned = {
+        timerStarts = starts,
+        timer = how,
+        timers = timers.count(m),
+        listeners = events.bus:count(m),
+        hooksArmed = hooks.armed(m),
+        hooksInstalled = hooks.installed(m),
+        combatWaiting = combat.pendingCount(),
+        combatWaitingBags = combat.pendingCount("m:bags:"),
+    }
+    local inv = m.inv
+    rec.before = frameState(inv)
+    local steps = rec.steps
+    local function add(s: Step)
+        steps[#steps + 1] = s
+    end
+    -- the walk: what Toggle does with the window closed (SetOpen(true), then
+    -- Sync), one call a step
+    add(
+        walk("toggle", "What would Toggle ask for (SetOpen's argument)?", function(): string
+            local open = m.inv
+            local shown = open ~= nil and open:IsShown()
+            return ("SetOpen(%s): the window reads %s"):format(tostring(not shown), shown and "shown" or "hidden")
+        end)
+    )
+    add(
+        walk("setOpen", "SetOpen(true)'s state: openedBy nil, wantOpen true?", function(): string
+            m.openedBy = nil
+            m.wantOpen = true
+            return "wantOpen=" .. tostring(m.wantOpen)
+        end)
+    )
+    add(
+        walk("window", "Does the module have its window (Sync returns at once without one)?", function(): string
+            local open = m.inv
+            if not open then
+                return "no: m.inv is nil, Sync does nothing"
+            end
+            return open:IsShown() and "yes, already shown (Sync would do nothing)" or "yes, hidden"
+        end)
+    )
+    add(
+        walk("placeBags", "Does PlaceBags place it?", function(): string
+            m.windows:PlaceBags()
+            local open = m.inv
+            return open and ("placed: " .. tostring(frameState(open).anchor)) or "no window"
+        end)
+    )
+    add(
+        walk("show", "Does Show show it?", function(): string
+            local open = m.inv
+            if not open then
+                return "no window"
+            end
+            open:Show()
+            return ("shown=%s visible=%s"):format(tostring(open:IsShown()), tostring(open:IsVisible()))
+        end)
+    )
+    add(
+        walk("updatePicker", "Does UpdatePicker run?", function(): string
+            m.savedBags:UpdatePicker()
+            return "ok"
+        end)
+    )
+    add(
+        walk("refresh", "Does Refresh draw the window?", function(): string
+            m:Refresh()
+            local open = m.inv
+            return open and ("shown=%s visible=%s"):format(tostring(open:IsShown()), tostring(open:IsVisible())) or
+                "no window"
+        end)
+    )
+    add(
+        walk("sync", "Does Sync now leave it as wanted (a no-op when shown)?", function(): string
+            m.windows:Sync()
+            local open = m.inv
+            return open and ("shown=%s"):format(tostring(open:IsShown())) or "no window"
+        end)
+    )
+    rec.after = frameState(m.inv)
+    local failed: Step? = nil
+    for _, s in ipairs(steps) do
+        if not s.ok and not failed then
+            failed = s
+        end
+    end
+    -- what hid it again (or not) half a second on
+    after(0.5, function()
+        local later = frameState(m.inv)
+        later.wantOpen = m.wantOpen
+        later.syncQueued = m.syncQueued
+        later.game = gameState()
+        rec.later = later
+        say(
+            rec,
+            ("half a second later: shown=%s visible=%s alpha=%s; /reload to save SuuUIProbe.bagOpen."):format(
+                tostring(later.shown),
+                tostring(later.visible),
+                tostring(later.effectiveAlpha)
+            )
+        )
+    end)
+    say(
+        rec,
+        ("module %s, IsEnabled %s, timers %s, window %s; %s build, scriptErrors %s."):format(
+            tostring(rec.module.state),
+            tostring(rec.module.enabled),
+            how,
+            inv and "made" or "missing",
+            hasDev and "dev" or "release",
+            tostring(rec.build.scriptErrors)
+        )
+    )
+    say(
+        rec,
+        ("before: wantOpen %s, syncQueued %s, shown %s, visible %s, alpha %s at %s."):format(
+            tostring(rec.flags.wantOpen),
+            tostring(rec.flags.syncQueued),
+            tostring(rec.before.shown),
+            tostring(rec.before.visible),
+            tostring(rec.before.effectiveAlpha),
+            tostring(rec.before.anchor)
+        )
+    )
+    local walked = failed
+    say(
+        rec,
+        walked and ("step %s failed: %s"):format(walked.step, tostring(walked.error)) or
+            ("every step ran (%d)."):format(#steps)
+    )
+    say(
+        rec,
+        ("after: shown %s, visible %s, alpha %s, %s x %s at %s, %s; %d dev errors captured."):format(
+            tostring(rec.after.shown),
+            tostring(rec.after.visible),
+            tostring(rec.after.effectiveAlpha),
+            tostring(rec.after.width),
+            tostring(rec.after.height),
+            tostring(rec.after.left),
+            tostring(rec.after.bottom),
+            #errs
+        )
+    )
+end

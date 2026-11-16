@@ -1,0 +1,302 @@
+-- Diagnostics/Watch/Bags.wowlua
+-- Bags, mail, macros and the auction house, all observed during the
+-- player's own use:
+--   MAIL-refusals  which events arrive when the game refuses a take from
+--                  the mailbox (MAIL_FAILED, UI_ERROR_MESSAGE with its
+--                  message number, MAIL_SUCCESS, MAIL_INBOX_UPDATE), in
+--                  which order
+--   BAG-11         what GetMacroInfo gives as the icon of a macro with
+--                  #showtooltip (the question mark, or its spell's icon)
+--   BAG-16         what a commodity purchase charges after the price was
+--                  quoted again (COMMODITY_PRICE_UPDATED more than once): the
+--                  quotes and the money before and after; the probe never
+--                  buys or confirms anything itself
+
+import isSecret, asNumber, asString from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as kit from "./Kit"
+
+type Item = kit.Item
+type Result = kit.Result
+type Watch = kit.Watch
+
+local function samples(r: Result): Result[]
+    local list = r.samples
+    return type(list) == "table" and list :: Result[] or {}
+end
+
+--------------------------------------------------------------------------------
+-- MAIL-refusals
+--------------------------------------------------------------------------------
+
+-- The game's own name for an error text (ERR_INV_FULL, …), never the text
+-- itself; found once per text.
+local errorKeys: { [string]: string } = {}
+local function errorKey(text: string): string
+    local known = errorKeys[text]
+    if known then
+        return known
+    end
+    local found = "not a global string"
+    pcall(function()
+        for k, v in pairs(_G) do
+            if type(v) == "string" and type(k) == "string" and v == text and k:find("^ERR_") then
+                found = k
+                break
+            end
+        end
+    end)
+    errorKeys[text] = found
+    return found
+end
+
+local function armMail(w: Watch)
+    local open = false
+    -- the mail events of the last seconds: { event, t, … }
+    local recent: Result[] = {}
+    local collecting = false
+    local function add(event: string, fields: Result)
+        if not open then
+            return
+        end
+        fields.event = event
+        fields.t = GetTime()
+        recent[#recent + 1] = fields
+        if #recent > 20 then
+            table.remove(recent, 1)
+        end
+    end
+    local function refusal()
+        if collecting then
+            return
+        end
+        collecting = true
+        local t = GetTime()
+        w:after(1.5, function()
+            collecting = false
+            local order: Result[] = {}
+            for _, e in ipairs(recent) do
+                local et = tonumber(e.t) or 0
+                if et >= t - 1 then
+                    local copy: Result = {}
+                    for k, v in pairs(e) do
+                        copy[k] = v
+                    end
+                    copy.t = math.floor((et - t) * 100 + 0.5) / 100
+                    order[#order + 1] = copy
+                end
+            end
+            w:sample({ events = order })
+        end)
+    end
+    w:on("MAIL_SHOW", function()
+        open = true
+        recent = {}
+    end)
+    w:on("MAIL_CLOSED", function()
+        open = false
+    end)
+    w:on("MAIL_INBOX_UPDATE", function()
+        add("MAIL_INBOX_UPDATE", {})
+    end)
+    w:on("MAIL_SUCCESS", function(_, id: unknown)
+        add("MAIL_SUCCESS", { item = id ~= nil and not isSecret(id) })
+    end)
+    w:on("MAIL_FAILED", function(_, id: unknown)
+        if not open then
+            return
+        end
+        add("MAIL_FAILED", { item = id ~= nil and not isSecret(id) })
+        refusal()
+    end)
+    w:on("UI_ERROR_MESSAGE", function(_, errorType: unknown, message: unknown)
+        if not open then
+            return
+        end
+        local text = asString(message)
+        add("UI_ERROR_MESSAGE", { number = kit.show(errorType), message = text and errorKey(text) or kit.show(message) })
+        refusal()
+    end)
+end
+
+local function sumMail(r: Result): string
+    local list = samples(r)
+    local parts: string[] = {}
+    for _, s in ipairs(list) do
+        local names: string[] = {}
+        for _, e in ipairs(tbl.list(s.events)) do
+            local n = tbl.field(e, "number")
+            names[#names + 1] = tostring(tbl.field(e, "event")) .. (n ~= nil and ("(" .. tostring(n) .. ")") or "")
+        end
+        parts[#parts + 1] = table.concat(names, " > ")
+    end
+    return ("%d refusals at the mailbox: %s"):format(#list, table.concat(parts, " | "))
+end
+
+--------------------------------------------------------------------------------
+-- BAG-11
+--------------------------------------------------------------------------------
+
+const QUESTION_MARK = 134400
+
+local function spellIcon(index: number): unknown
+    local okS, spell = pcall(GetMacroSpell, index)
+    local id = okS and asNumber(spell) or nil
+    if not id then
+        return nil
+    end
+    local get = kit.resolve("C_Spell.GetSpellTexture")
+    if type(get) ~= "function" then
+        return nil
+    end
+    local ok, icon = pcall(get :: (id: number) -> unknown, id)
+    return ok and kit.show(icon) or nil
+end
+
+local function readMacros(w: Watch)
+    local okN, account, character = pcall(GetNumMacros)
+    if not okN then
+        return
+    end
+    local rows: Result[] = {}
+    local function scanRange(first: number, n: unknown, kind: string)
+        local count = asNumber(n) or 0
+        for i = first, first + count - 1 do
+            local ok, _name, icon, body = pcall(GetMacroInfo, i)
+            local b = ok and asString(body) or nil
+            if b and b:lower():find("#showtooltip", 1, true) then
+                local spell = spellIcon(i)
+                local ic = kit.show(icon)
+                rows[#rows + 1] = {
+                    kind = kind,
+                    icon = ic,
+                    questionMark = ic == QUESTION_MARK,
+                    spellIcon = spell,
+                    sameAsSpell = spell ~= nil and ic == spell,
+                }
+            end
+        end
+    end
+    scanRange(1, account, "account")
+    scanRange((tonumber(tbl.field(_G, "MAX_ACCOUNT_MACROS")) or 120) + 1, character, "character")
+    if #rows == 0 then
+        return
+    end
+    local q, same = 0, 0
+    for _, row in ipairs(rows) do
+        q += row.questionMark and 1 or 0
+        same += row.sameAsSpell and 1 or 0
+    end
+    local answer
+    if q > 0 then
+        answer = ("GetMacroInfo gives the question mark (134400) for %d #showtooltip macros: it doesn't resolve the icon"):format(q)
+    else
+        answer = ("none of %d #showtooltip macros reads as the question mark; %d give their spell's icon (a \"?\" macro resolves to it, or that icon was chosen: check one made with \"?\")"):format(
+            #rows,
+            same
+        )
+    end
+    w:finish(answer, { macros = rows })
+end
+
+--------------------------------------------------------------------------------
+-- BAG-16
+--------------------------------------------------------------------------------
+
+local function armCommodity(w: Watch)
+    local quotes: unknown[]? = nil
+    local before: number? = nil
+    local function reset()
+        quotes, before = nil, nil
+    end
+    w:on("COMMODITY_PRICE_UPDATED", function(_, unitPrice: unknown, totalPrice: unknown)
+        local q = quotes
+        if not q then
+            q = {}
+            quotes = q
+            before = asNumber(GetMoney())
+        end
+        q[#q + 1] = { unit = kit.show(unitPrice), total = kit.show(totalPrice) }
+    end)
+    w:on("COMMODITY_PURCHASE_SUCCEEDED", function()
+        local q, b = quotes, before
+        reset()
+        if not q then
+            return
+        end
+        w:after(1, function()
+            local afterMoney = asNumber(GetMoney())
+            local spent = (b and afterMoney) and (b - afterMoney) or nil
+            local first = asNumber(tbl.field(q[1], "total"))
+            local last = asNumber(tbl.field(q[#q], "total"))
+            local fields: Result = {
+                quotes = q,
+                spent = spent,
+                chargedFirst = spent ~= nil and spent == first,
+                chargedLast = spent ~= nil and spent == last,
+            }
+            local r = w:result()
+            local list = tbl.listAt(r, "samples")
+            if #list < 5 then
+                fields.at = kit.stamp()
+                list[#list + 1] = fields
+            end
+            -- quoted again: the question is answered
+            if #q >= 2 then
+                w:finish(
+                    ("a purchase quoted %d times (first %s, last %s) charged %s: %s"):format(
+                        #q,
+                        tostring(first),
+                        tostring(last),
+                        tostring(spent),
+                        fields.chargedLast and (fields.chargedFirst and "both quotes were equal" or "the last quote")
+                            or (fields.chargedFirst and "the first quote" or "neither quote")
+                    ),
+                    {}
+                )
+            end
+        end)
+    end)
+    for _, e in ipairs({ "COMMODITY_PURCHASE_FAILED", "COMMODITY_PRICE_UNAVAILABLE", "AUCTION_HOUSE_CLOSED" }) do
+        w:on(e, reset)
+    end
+end
+
+export function items(): Item[]
+    return {
+        {
+            id = "MAIL-refusals",
+            kind = kit.Kind.Armed,
+
+            when = "the mailbox",
+            question = "When the game refuses a take from the mailbox, which of MAIL_FAILED and UI_ERROR_MESSAGE arrive, in which order, with which message number?",
+            todo = "at a mailbox, take something the game refuses (full bags, or a unique item you already carry)",
+            samples = 3,
+            arm = armMail,
+            summarize = sumMail,
+        },
+        {
+            id = "BAG-11",
+            kind = kit.Kind.Armed,
+
+            when = "macros",
+            question = "What does GetMacroInfo give as the icon of a \"?\" macro with #showtooltip: the question mark, or the spell's icon?",
+            todo = "have a macro with the question-mark icon and \"#showtooltip <a spell>\" (the probe reads your macros when armed and when they change)",
+            arm = function(w: Watch)
+                readMacros(w)
+                w:on("UPDATE_MACROS", function()
+                    readMacros(w)
+                end)
+            end,
+        },
+        {
+            id = "BAG-16",
+            kind = kit.Kind.Armed,
+
+            when = "the auction house",
+            question = "After a commodity's price is quoted again (COMMODITY_PRICE_UPDATED twice), what does the purchase charge: the first quote or the last?",
+            todo = "buy a commodity at the auction house when its price changes after the first quote (another buyer took the cheapest); the probe only watches",
+            arm = armCommodity,
+        },
+    }
+end

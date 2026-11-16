@@ -1,0 +1,138 @@
+-- Units/Chat/Recall.wowlua
+-- The input's history (Units/Chat): what you sent and the commands you
+-- ran, taken from Blizzard's edit boxes on Enter (or from your own lines
+-- coming back as chat events), kept for the character and recalled with
+-- Up and Down. The functions take the module (its recall under way);
+-- Units/Chat/Input does the text.
+
+import SuuUI from "/Core/API"
+import type ChatModule from "../Chat"
+import * as chatInput from "./Input"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import hookScript from "wowlua:hooks"
+
+local field, asString = tbl.field, secret.asString
+
+-- The input's recall: the edit box, where in the history, the line shown.
+export type Recall = { eb: EditBox, index: number, shown?: string }
+
+-- What the input holds as a line to keep (Units/Chat/Input reads it).
+local function typedLine(eb: EditBox): string?
+    return chatInput.typedLine(eb:GetText(), function(key: string): unknown
+        return eb:GetAttribute(key)
+    end)
+end
+
+local function chatLockdown(): boolean
+    return errors.try(field(C_ChatInfo, "InChatMessagingLockdown")) == true
+end
+
+--------------------------------------------------------------------------------
+-- History: what you sent and the commands you ran, recalled with Up and
+-- Down, kept for the character across reloads. This client's input has
+-- no recall of its own. Taken on Enter, before Blizzard runs the line (a
+-- message as the command that sends it again: "/p hi", "/w Name hi");
+-- your own lines coming back as chat events fill in if that key never
+-- reaches SuuUI. A recalled line is typed in by SuuUI, so what's sent
+-- with it runs as SuuUI's: in combat Up and Down pass over protected
+-- commands (/cast, /target …: blocked then), and in an encounter's chat
+-- lockdown (messages blocked) they do nothing.
+--------------------------------------------------------------------------------
+
+export function history(self: ChatModule): string[]
+    local data = self:CharData()
+    local list: string[] = {}
+    for _, line in ipairs(tbl.list(data.history)) do
+        local s = asString(line)
+        if s then
+            list[#list + 1] = s
+        end
+    end
+    data.history = list
+    return list
+end
+
+export function addHistory(self: ChatModule, line: string)
+    if not chatInput.push(self:History(), line) then
+        return
+    end
+    self.recall = nil
+end
+
+-- Up: one line further back; Down: one forward, past the newest an empty
+-- input. A recall starts over once the text isn't the recalled line.
+export function recall(self: ChatModule, eb: EditBox, step: number)
+    if not self:Get("recall") or chatLockdown() then
+        return
+    end
+    -- the command palette's list is open: its arrows choose there
+    local palette = SuuUI.GetModule("chatcommands")
+    if palette and palette:IsEnabled() and secret.flag(errors.tryMethod(palette, "TakesArrows", eb)) then
+        return
+    end
+    local list = self:History()
+    if #list == 0 then
+        return
+    end
+    local r = self.recall
+    local text = asString(eb:GetText())
+    if not (r and r.eb == eb and text and text == r.shown) then
+        r = { eb = eb, index = #list + 1 }
+        self.recall = r
+    end
+    -- in combat past protected commands
+    local index = chatInput.recallIndex(list, r.index, step, InCombatLockdown() and true or false)
+    if not index then
+        return
+    end
+    r.index = index
+    eb:SetText(list[index] or "")
+    eb:SetCursorPosition(#(eb:GetText() or ""))
+    -- as the input shows it (Blizzard may turn "/p " into its header)
+    r.shown = asString(eb:GetText())
+end
+
+-- An edit box gets the history: Enter keeps the line, Up and Down recall.
+export function historyFor(self: ChatModule, eb: EditBox)
+    if self.historyBoxes[eb] then
+        return
+    end
+    self.historyBoxes[eb] = true
+    hookScript(eb, "OnKeyDown", function(box: EditBox, key: string)
+        if key ~= "ENTER" and key ~= "NUMPADENTER" then
+            return
+        end
+        local line = typedLine(box)
+        if line then
+            self.keyCapture = true
+            self:AddHistory(line)
+        end
+    end)
+    hookScript(eb, "OnArrowPressed", function(box: EditBox, key: string)
+        if key == "UP" then
+            self:Recall(box, -1)
+        elseif key == "DOWN" then
+            self:Recall(box, 1)
+        end
+    end)
+end
+
+export function watchSent(self: ChatModule)
+    for event in pairs(chatInput.SENT) do
+        self:OnGameEvent(event, function(_, ...: unknown)
+            if self.keyCapture then
+                return
+            end
+            local text, sender, channelNumber, guid = (select(1, ...)),
+                (select(2, ...)),
+                (select(8, ...)),
+                (select(12, ...))
+            local line = chatInput.sentLine(event, text, sender, channelNumber, guid)
+            if line then
+                self:AddHistory(line)
+            end
+        end)
+    end
+end

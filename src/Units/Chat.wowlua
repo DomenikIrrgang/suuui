@@ -20,39 +20,55 @@
 -- scripts, no fields on Blizzard frames, and chat frame geometry is never
 -- read: ChatFrame1 is placed from the panel's own rectangle (SetPointBase,
 -- two corners, no SetSize).
+--
+-- What lives where (beside this file, in Units/Chat/):
+--   Panel       the panel's geometry, the panel and edit mode's hint, the
+--               one-line text box, the links in SuuUI's lines
+--   TabBar      the tab buttons, choosing a tab, the row laid out, the
+--               tabs' order, the glide and dragging a tab
+--   Windows     a window's ID, name and font size; Settings › Chat ›
+--               Windows; closing, naming and opening windows
+--   Mirrors     SuuUI's copy of each window and its lines, names' classes,
+--               the whispers kept this session
+--   Kept        kept chat across logouts, a line drawn dimmed or as the
+--               divider
+--   SearchPage  the Search tab's page and the search run
+--   Recall      the input's history, Up and Down
+--   GlobalTab   the global channels in a tab of their own
+--   Lines, Search, Input, Tabs   the text work, as data (no frames)
+-- This file keeps the module: its settings, the skinning of Blizzard's
+-- windows and ChatFrame1's place, the windows' refresh, the idle fade, a
+-- theme change and the lifecycle. The module's methods the parts provide
+-- forward to them (each part's functions take the module).
 
-import SuuUI from "/Core/API"
-import * as dress from "/UI/Dress"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Position from "/EditMode/EditMode"
-import type Text from "/UI/Text"
-import type Border from "/UI/Draw"
-import isColor from "/UI/Draw"
-import type TabMarker from "/UI/TabMarker"
-import type TextField, Stepper from "/UI/Inputs"
-import type SuuButton from "/UI/Controls"
-import type ScrollArea from "/UI/Panel"
-import Panel from "/UI/Panel"
-import isSecret from "wowlua:secret"
-import * as secret from "wowlua:secret"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position from "/Core/API"
 import * as tbl from "wowlua:table"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
--- the text work (lines, the search, the input's history, the tabs' order)
--- in modules of their own beside this one
-import * as chatLines from "./Chat/Lines"
-import * as chatSearch from "./Chat/Search"
-import * as chatInput from "./Chat/Input"
-import * as chatTabs from "./Chat/Tabs"
 import * as chat from "wowlua:chat"
-import invite as groupInvite from "wowlua:unit"
+-- the frames and the workflows, each in a part of its own beside this one
+-- (the text work, the lines, the search, the input's history and the
+-- tabs' order, in Lines, Search, Input and Tabs)
+import ChatPanel, bodyFont, padX, padTop, padBottom, chatGap, TABS_H, INPUT_H from "./Chat/Panel"
+import tabFace from "./Chat/TabBar"
+import type TabOf, Press, Drag, TabButton from "./Chat/TabBar"
+import WindowsEditor, fontSize, globalFrame from "./Chat/Windows"
+import type Mirror, Whisper, Line, ChatText, Color, Classes, MessageFrame from "./Chat/Mirrors"
+import type SearchPage, SearchRow, KeptEntry, Found from "./Chat/SearchPage"
+import type Recall from "./Chat/Recall"
+import * as chatTabBar from "./Chat/TabBar"
+import * as chatWindows from "./Chat/Windows"
+import * as chatMirrors from "./Chat/Mirrors"
+import * as chatKept from "./Chat/Kept"
+import * as chatSearchPage from "./Chat/SearchPage"
+import * as chatRecall from "./Chat/Recall"
+import * as chatGlobalTab from "./Chat/GlobalTab"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
-local field, asString, asNumber = tbl.field, secret.asString, secret.asNumber
+local field = tbl.field
 
 local DEFAULTS = {
     position = { point = "BOTTOMLEFT", x = 28, y = 28 } :: Position,
@@ -71,124 +87,15 @@ local DEFAULTS = {
 
 local M: ChatModule
 
--- The lines' face: the body text style's (a theme's own; the size is the
--- player's, from the game's chat window settings).
-local function bodyFont(): string
-    return SuuUI.Fonts.File("body")
-end
--- the panel's padding and the gap between its parts: a theme's spacing,
--- read when laid out (ChatPanel:Place, ChatModule:Layout)
-local function padX(): number
-    return S["space-5"]
-end
-local function padTop(): number
-    return S["space-2"]
-end
-local function padBottom(): number
-    return S["space-5"]
-end
-local function chatGap(): number
-    return S["space-3"]
-end
-local TABS_H, INPUT_H = 24, 30
 local TICK = 0.2
 
 -- One of Blizzard's chat windows.
 type Window = chat.Window
--- SuuUI's own message frame (one per window).
-type MessageFrame = ScrollingMessageFrameMixin & Frame
--- Blizzard's text of a line, and a colour part of it: secret in an
--- encounter's chat lockdown.
-type ChatText = string | Secret<string>
-type Color = number | Secret<number>
--- The names' classes in a line, in the order they come (false: none found).
-type Classes = chatLines.Classes
--- A line in a mirror, kept to draw again (with or without the time, in a
--- new theme): `text` the design's (Blizzard's when raw or secret), `src`
--- Blizzard's (readable lines only). A divider has no text of its own.
-type Line = {
-    text: ChatText,
-    src?: string,
-    raw?: boolean,
-    r?: Color,
-    g?: Color,
-    b?: Color,
-    at: number,
-    id?: number,
-    old?: boolean,
-    classes?: Classes,
-    divider?: boolean,
-    plainText?: string,
-}
--- A whisper line kept for a whisper window (and across logouts).
-type Whisper = { who: string, text: string, r?: Color, g?: Color, b?: Color, at: number, old?: boolean, shown?: Line }
--- SuuUI's message frame for a window and the lines it holds: the combat
--- log's raw (as Blizzard writes them), a whisper window's player.
-type Mirror = { frame: MessageFrame, lines: Line[], raw: boolean, drawnWithTime?: boolean, target?: string }
--- A line as saved in the kept chat.
-type Saved = chatLines.Saved
--- A kept line for the search: Blizzard's text, the line as shown, where from.
-type KeptEntry = chatSearch.KeptEntry
-type Found = chatSearch.Found
--- What a tab shows: a window, or the Search tab.
-type TabOf = Window | "search"
-local SEARCH: TabOf = "search"
--- A tab's glide: from (fx, fy) to tx, since `start`.
-type Slide = { fx: number, fy: number, tx: number, start: number }
--- A press on a tab, and the drag it became: the others in their order,
--- its place among them, where it started, where the pointer holds it.
-type Press = { b: TabButton, x0: number }
-type Drag = {
-    b: TabButton,
-    x0: number,
-    others: Window[],
-    index: number,
-    start: number,
-    grab: number,
-    maxX: number,
-    slotX?: number,
-}
--- The input's recall: the edit box, where in the history, the line shown.
-type Recall = { eb: EditBox, index: number, shown?: string }
--- A window's lines as saved at logout.
-type KeptWindow = { name: string, lines: Saved[] }
--- The kept chat as saved.
-type Kept = { at: number, windows: { [number]: KeptWindow }, whispers: Saved[], classes: { [string]: string } }
 
 local hidden = CreateFrame("Frame")
 hidden:Hide()
 
--- A window's ID.
-local function idOf(cf: Window): number
-    return cf:GetID()
-end
-
--- A window's name in Blizzard's settings, when readable.
-local function windowName(cf: Window): string?
-    return asString((GetChatWindowInfo(idOf(cf))))
-end
-
--- A window's font size: Blizzard's setting for it; a whisper window (no
--- saved settings) keeps the one chosen in SuuUI's tab menu.
-local tempSizes: { [Window]: number } = {}
-local function fontSize(cf: Window): number
-    local temp = tempSizes[cf]
-    if temp then
-        return temp
-    end
-    local size = asNumber(select(2, errors.try(field(_G, "FCF_GetChatWindowInfo"), idOf(cf))))
-    if not size or size <= 0 then
-        return 13
-    end
-    return size
-end
-
 local chatFrames = chat.windows
-
--- The value of a game global, when it is a frame.
-local function globalFrame(name: string): Frame?
-    return frames.find(name)
-end
 
 local function alphaOff(f: Region?)
     if not f then
@@ -210,882 +117,6 @@ local function emptyTextures(f: Frame?)
         r:SetTexture("")
         pcall(r.SetAtlas, r, "")
         r:SetAlpha(0)
-    end
-end
-
---------------------------------------------------------------------------------
--- The panel (SuuUI's own frame, the mover)
---------------------------------------------------------------------------------
-
--- Edit mode's hint over the lines.
-class EditHint extends Frame
-    readonly text: Text
-
-    constructor(p: ChatPanel)
-        super(nil, p)
-        self:SetFrameStrata("FULLSCREEN_DIALOG")
-        self:SetPoint("TOPLEFT", p.log, "TOPLEFT", 0, 0)
-        self.text = UI.Text(self, "caption", "ink-faint")
-        self.text:SetShadowed(true)
-        self.text:SetPoint("TOPLEFT")
-        self.text:SetValue("Edit mode · drag a tab by its grip or name")
-        self:SetSize(
-            math.ceil(UI.MeasureText("caption", tostring(self.text.value or ""))) + 2,
-            T.type.caption.lineHeight or 16
-        )
-    end
-end
-
-class ChatPanel extends Frame
-    readonly deco: Frame
-    -- the panel: glass ground and gilt-line edge around the tabs and lines
-    readonly box: Frame
-    readonly ground: Texture
-    readonly border: Border
-    -- the input field below the panel, as wide
-    readonly field: Frame
-    -- the tab bar: SuuUI's own tab buttons, above Blizzard's (invisible) dock
-    readonly tabs: Frame
-    readonly tabButtons: TabButton[] = {}
-    readonly tabFor: { [TabOf]: TabButton } = {}
-    -- the chosen tab's underline and jewel, gliding (UI.TabMarker)
-    readonly marker: TabMarker
-    -- the lines' area: SuuUI's message frames, one per Blizzard window
-    readonly log: Frame
-    slider: Frame? = nil
-    dragger: Frame? = nil
-    editHint: EditHint? = nil
-
-    constructor()
-        super("SuuUIChat", SuuUI.Root)
-        self:SetFrameStrata("BACKGROUND")
-        self:EnableMouse(false)
-        self.deco = CreateFrame("Frame", nil, self)
-        self.deco:SetAllPoints()
-        self.box = CreateFrame("Frame", nil, self.deco)
-        self.box:SetPoint("TOPLEFT")
-        self.ground = UI.Fill(self.box, "surface-glass", "BACKGROUND")
-        self.ground:SetAllPoints()
-        UI.Pattern(self.ground, "surface-pattern")
-        self.border = UI.Border(self.box, "gilt-line", { texture = "border" })
-        -- a theme's dress for the chat (0.40): a vine at its corner
-        dress.register(self.box, "chat")
-        -- surface-sunk, a gilt-line edge (Blizzard's edit box sits on it)
-        self.field = CreateFrame("Frame", nil, self.deco)
-        self.field:SetPoint("BOTTOMLEFT")
-        self.field:SetPoint("BOTTOMRIGHT")
-        self.field:SetHeight(INPUT_H)
-        UI.Fill(self.field, "surface-sunk", "BACKGROUND"):SetAllPoints()
-        UI.Border(self.field, "gilt-line")
-        self.tabs = CreateFrame("Frame", nil, self)
-        self.tabs:SetFrameStrata("MEDIUM")
-        self.tabs:SetHeight(TABS_H)
-        self.marker = UI.TabMarker(self.tabs, { y = 2 })
-        self.log = CreateFrame("Frame", nil, self)
-        self.log:SetFrameStrata("LOW")
-        self:Place()
-    end
-
-    -- The box over the field, the tabs and the lines inside the padding: at
-    -- build, and again when a theme changes the spacing.
-    function Place()
-        self.box:SetPoint("BOTTOMRIGHT", 0, INPUT_H + chatGap())
-        self.tabs:SetPoint("TOPLEFT", padX(), -padTop())
-        self.tabs:SetPoint("TOPRIGHT", -padX(), -padTop())
-        self.log:SetPoint("TOPLEFT", padX(), -(padTop() + TABS_H + chatGap()))
-        self.log:SetPoint("BOTTOMRIGHT", -padX(), INPUT_H + chatGap() + padBottom())
-    end
-end
-
---------------------------------------------------------------------------------
--- A small box with one line of text (copy a name, name a window): Enter
--- gives the text to `onAccept` (if any) and closes, Esc closes.
---------------------------------------------------------------------------------
-
-class TextBox extends Panel
-    readonly field: TextField
-    readonly hint: Text
-    onAccept: ((text: string) -> ())? = nil
-
-    constructor(title: string)
-        super(SuuUI.Root, { title = title, width = 260, solid = true })
-        self.field = UI.TextField(self.body, { width = 260 - S["space-5"] * 2 })
-        self.field:SetPoint("TOPLEFT")
-        self.hint = UI.Text(self.body, "caption", "ink-muted")
-        SuuUI.Layout.Follow(self, function()
-            self.hint:SetPoint("TOPLEFT", self.field, "BOTTOMLEFT", 0, -S["space-2"])
-        end)
-        self.field.edit:SetScript("OnEscapePressed", function()
-            self:Hide()
-        end)
-        self.field.edit:SetScript("OnEnterPressed", function(edit: EditBox)
-            local accept = self.onAccept
-            self:Hide()
-            if accept then
-                accept(strtrim(edit:GetText() or ""))
-            end
-        end)
-        UI.MakeModal(self)
-    end
-end
-
-local textBox: TextBox? = nil
-local function askText(title: string, text: string?, hint: string, onAccept: ((text: string) -> ())?)
-    local box = textBox or TextBox.new(title)
-    textBox = box
-    box:SetTitle(title)
-    -- (the hint's line height read now: a theme can change it)
-    box.body:SetHeight(box.field:GetHeight() + S["space-2"] + (T.type.caption.lineHeight or 16))
-    box.hint:SetValue(hint)
-    box.onAccept = onAccept
-    box:Show()
-    local edit = box.field.edit
-    edit:SetText(text or "")
-    edit:SetFocus()
-    -- a frame later, once the box has its width: from the start, all selected
-    -- (set before that, the text scrolls out of view to the left)
-    after(0, function()
-        edit:SetCursorPosition(0)
-        edit:HighlightText()
-    end)
-end
-
-local function copyName(name: string)
-    askText("Copy name", name, "Ctrl+C to copy · Esc closes")
-end
-
--- Right click on a player's name: SuuUI's own menu (Blizzard's, opened from
--- an addon, runs tainted: copying a name is blocked then). Nothing in it
--- needs a protected action.
-local function playerMenu(owner: Frame, name: string): boolean
-    -- in the tooltip's look (asked for in game)
-    UI.ContextMenuFrom(owner, function(_, root)
-        root:CreateTitle(name)
-        root:CreateButton("Whisper", function()
-            chat.whisper(name, ChatFrame1)
-        end)
-        if field(_G, "FCF_OpenTemporaryWindow") then
-            root:CreateButton("Whisper window", function()
-                M:OpenWhisperWindow(name)
-            end)
-        end
-        root:CreateButton("Invite", function()
-            groupInvite(name)
-        end)
-        root:CreateButton("Copy name", function()
-            copyName(name)
-        end)
-        root:CreateButton("Add friend", function()
-            -- a friend request (Forever's classic friends list is off)
-            if SuuUI.AddFriend(name) then
-                M:Print("Friend request sent to " .. name .. ".")
-            end
-        end)
-        root:CreateButton("Ignore", function()
-            errors.try(field(C_FriendList, "AddIgnore"), name)
-        end)
-    end, "chatPlayer", { name = name })
-    return true
-end
-
--- A link clicked in combat, as the game's SetItemRef opens it but without
--- ShowUIPanel: that refuses addon code in combat ("Interface action failed
--- because of an AddOn", found in game 2026-11-11), and SuuUI's lines are
--- addon code. The link's own handlers first, then ItemRefTooltip, shown
--- directly (it's no protected panel). False when the game lacks a piece.
-local function refInCombat(link: string, text: string, button: string, frame: Frame): boolean
-    local tip = ItemRefTooltip
-    local process = LinkUtil and LinkUtil.ProcessLink
-    if not (tip and tip.ItemRefSetHyperlink and process and LinkProcessorResponse) then
-        return false
-    end
-    local ok, response = pcall(process, link, text, { button = button, frame = frame })
-    if ok and response == LinkProcessorResponse.Handled then
-        return true
-    end
-    local wasShown = tip:IsShown()
-    if not wasShown then
-        tip:SetOwner(UIParent, "ANCHOR_PRESERVE")
-    end
-    pcall(tip.ItemRefSetHyperlink, tip, link)
-    if not wasShown and not tip:IsShown() then
-        tip:Show()
-    end
-    return true
-end
-
-local function linkClick(frame: Frame, link: unknown, text: string, button: string)
-    local l = asString(link)
-    if not l then
-        return
-    end
-    -- a line's class diamond: the whole line to copy
-    local copyID = l:match("^addon:suuui:copy:(%d+)$")
-    if copyID then
-        M:CopyLine(tonumber(copyID))
-        return
-    end
-    local name = l:match("^player:([^:]+)")
-    if button == "RightButton" then
-        if name and name ~= "" and playerMenu(frame, name) then
-            return
-        end
-    elseif name and name ~= "" and not IsModifiedClick("CHATLINK") then
-        -- a left click on a name whispers them, as the game's chat does: the
-        -- game's handler whispers through the clicked frame's edit box, and
-        -- SuuUI's lines have none, so it did nothing (asked 2026-11-10).
-        -- Shift-click still goes to the game (the name into chat or a box).
-        chat.whisper(name, ChatFrame1)
-        return
-    end
-    if InCombatLockdown() and not IsModifiedClick() and refInCombat(l, text, button, frame) then
-        return
-    end
-    pcall(SetItemRef, l, text, button, frame)
-end
-
-local function linkEnter(frame: Frame, link: unknown)
-    local l = asString(link)
-    if not l then
-        return
-    end
-    if l:find("^addon:suuui:copy:") then
-        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
-        GameTooltip:SetText("Click to copy this line")
-        GameTooltip:Show()
-        return
-    end
-    local kind = l:match("^(%a+):")
-    if kind == "item" or kind == "spell" or kind == "achievement" or kind == "quest" or kind == "currency" then
-        GameTooltip:SetOwner(frame, "ANCHOR_CURSOR")
-        pcall(GameTooltip.SetHyperlink, GameTooltip, l)
-        GameTooltip:Show()
-    end
-end
-
--- The links of a frame's lines: they work as in the chat.
-local function links(f: Frame)
-    f:SetHyperlinksEnabled(true)
-    f:SetScript("OnHyperlinkClick", function(_, link: string, text: string, button: string)
-        linkClick(f, link, text, button)
-    end)
-    f:SetScript("OnHyperlinkEnter", function(_, link: string)
-        linkEnter(f, link)
-    end)
-    f:SetScript("OnHyperlinkLeave", function()
-        GameTooltip:Hide()
-    end)
-end
-
---------------------------------------------------------------------------------
--- Tabs: SuuUI's own buttons, one per Blizzard window, in SuuUI's order
---------------------------------------------------------------------------------
-
--- Edit mode's look of a tab (asked 2026-10-19; design board "Chat tabs ·
--- drag to reorder", C).
-local GRIP_W = 10 -- the grip (6 px) and its gap, in edit mode
-local EDIT_PAD = 4 -- edit mode's wider padding (6 px a side, not 4)
-local PLATE_OUT = 4 -- a lifted tab's plate reaches past it on each side
-
--- a tab's name: header's face a px under its size (12 px in the design's;
--- again when a theme changes it)
-local function tabFace(label: Text)
-    label:SetFont(SuuUI.Fonts.File("header"), math.max(8, T.type.header.size - 1), "")
-end
-
--- A dashed outline around `frame` (3 px dashes, 2 px gaps, one physical pixel
--- thick, inside its edge).
-class DashedOutline
-    readonly frame: Frame
-    readonly parts: Texture[] = {}
-    color: string = "gilt-line"
-    w: number? = nil
-    h: number? = nil
-
-    constructor(frame: Frame)
-        self.frame = frame
-    end
-
-    function Layout(w: number, h: number)
-        local px = SuuUI.Pixel.Size(self.frame)
-        local n = 0
-        for _, d in ipairs(chatTabs.dashes(w, h, px)) do
-            n = n + 1
-            local t = self.parts[n]
-            if not t then
-                t = self.frame:CreateTexture(nil, "BORDER")
-                self.parts[n] = t
-            end
-            UI.PaintFill(t, self.color)
-            t:ClearAllPoints()
-            t:SetPoint("TOPLEFT", self.frame, "TOPLEFT", d.x, -d.y)
-            t:SetSize(d.w, d.h)
-            t:Show()
-        end
-        for i = n + 1, #self.parts do
-            self.parts[i]:Hide()
-        end
-        self.w, self.h = w, h
-    end
-
-    function SetColor(token: string)
-        self.color = token
-        for _, t in ipairs(self.parts) do
-            UI.PaintFill(t, token)
-        end
-    end
-
-    function Hide()
-        for _, t in ipairs(self.parts) do
-            t:Hide()
-        end
-        self.w = nil
-    end
-end
-
--- Six 2 px dots, two across and three down (the board's grip).
-local function grip(b: Frame): Frame
-    local g = CreateFrame("Frame", nil, b)
-    g:SetSize(6, 10)
-    g:SetPoint("LEFT", 6, 1)
-    for i = 0, 5 do
-        local t = g:CreateTexture(nil, "ARTWORK")
-        UI.PaintFill(t, "gilt-line")
-        t:SetSize(2, 2)
-        t:SetPoint("TOPLEFT", (i % 2) * 4, -math.floor(i / 2) * 4)
-    end
-    return g
-end
-
-class TabButton extends Button
-    readonly label: Text
-    readonly unread: Texture
-    hover: boolean = false
-    active: boolean = false
-    cf: TabOf? = nil
-    -- where it sits in the row (its marker's span), its glide
-    x: number? = nil
-    y: number? = nil
-    slide: Slide? = nil
-    markWidth: number? = nil
-    markLeft: number? = nil
-    dragged: boolean? = nil
-    -- edit mode's look: "none", "grip" or "fixed" (Search)
-    look: string? = nil
-    grip: Frame? = nil
-    outline: DashedOutline? = nil
-    -- the plate under it while lifted
-    plate: Frame? = nil
-
-    constructor(m: ChatModule, p: ChatPanel)
-        super(nil, p.tabs)
-        self:SetHeight(TABS_H)
-        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        self.label = UI.Text(self, "header", "ink-muted")
-        tabFace(self.label)
-        self.label:SetShadowed(true)
-        -- centred over the underline (it was left of it: measured in header's
-        -- own size, wider than the 12 px name)
-        self.label:SetPoint("CENTER", 0, 1)
-        self.label:SetJustifyH("CENTER")
-        self.label:SetWordWrap(false)
-        self.unread = UI.Diamond(self, 4, "ink")
-        SuuUI.Layout.Follow(self, function()
-            self.unread:SetPoint("LEFT", self.label, "RIGHT", S["space-2"], 1)
-        end)
-        self:SetScript("OnEnter", function()
-            self.hover = true
-            if not self.active then
-                self.label:SetColor("ink")
-            end
-        end)
-        self:SetScript("OnLeave", function()
-            self.hover = false
-            if not self.active then
-                self.label:SetColor("ink-muted")
-            end
-        end)
-        p.marker:Track(self)
-        self:SetScript("OnMouseDown", function(_, button: string)
-            self.dragged = nil
-            if button == "LeftButton" then
-                m:PressTab(self)
-            end
-        end)
-        self:SetScript("OnClick", function(_, button: string)
-            -- the release that ends a drag isn't a click
-            if self.dragged then
-                self.dragged = nil
-                return
-            end
-            if button == "RightButton" then
-                m:TabMenu(self)
-                return
-            end
-            -- in edit mode a press on a tab arranges; it doesn't switch
-            if m:Arranging() then
-                return
-            end
-            local cf = self.cf
-            if cf then
-                m:Select(cf)
-            end
-        end)
-    end
-
-    -- Edit mode's look: a dashed outline and a grip (Search: a fainter
-    -- outline, no grip). Returns the width it adds to the tab.
-    function EditLook(arranging: boolean, fixed: boolean): number
-        local extra = 0
-        if arranging then
-            extra = EDIT_PAD + (fixed and 0 or GRIP_W)
-        end
-        local look = arranging and (fixed and "fixed" or "grip") or "none"
-        if self.look ~= look then
-            self.look = look
-            self.label:ClearAllPoints()
-            self.label:SetPoint("CENTER", look == "grip" and GRIP_W / 2 or 0, 1)
-            if look == "grip" and not self.grip then
-                self.grip = grip(self)
-            end
-            local g = self.grip
-            if g then
-                g:SetShown(look == "grip")
-            end
-            local outline = self.outline
-            if look ~= "none" then
-                outline = outline or DashedOutline.new(self)
-                self.outline = outline
-                outline:SetColor(look == "fixed" and "gilt-faint" or "gilt-line")
-            elseif outline then
-                outline:Hide()
-            end
-        end
-        local outline = self.outline
-        if look ~= "none" and outline then
-            local w = math.floor(self.label:GetWidth() + 8 + extra + 0.5)
-            if outline.w ~= w then
-                outline:Layout(w, TABS_H)
-            end
-        end
-        return extra
-    end
-
-    -- The plate under it when lifted: surface-raised, a gilt edge, the
-    -- panel's shadow; it reaches PLATE_OUT past the tab on each side.
-    function Plate(): Frame
-        local made = self.plate
-        if made then
-            return made
-        end
-        -- beside the tab, not in it (a child would cover its name); it moves
-        -- with the tab
-        local f = CreateFrame("Frame", nil, self:GetParent())
-        f:SetPoint("TOPLEFT", self, "TOPLEFT", -PLATE_OUT, 0)
-        f:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", PLATE_OUT, 0)
-        UI.Fill(f, "surface-raised", "BACKGROUND"):SetAllPoints()
-        UI.Border(f, "gilt")
-        UI.Shadow(f, "shadow-panel")
-        f:Hide()
-        self.plate = f
-        return f
-    end
-
-    function HidePlate()
-        local pl = self.plate
-        if pl then
-            pl:Hide()
-        end
-    end
-end
-
---------------------------------------------------------------------------------
--- The Search tab (option B): the last tab. A field and chips for where to
--- look, then the kept lines that match (every tab and the whispers), grouped
--- by player, newest first: the name in its class colour, how many lines, and
--- a Whisper button that opens the conversation in its whisper window. The
--- match on a faint ink ground, underlined. In the lines' area: the panel
--- keeps its size (the raid frames sit right above it).
---------------------------------------------------------------------------------
-
-local FIELD_H, CHIP_H = 26, 20
-local function searchHeadH(): number
-    return FIELD_H + S["space-3"] + CHIP_H + S["space-2"]
-end
-local GROUP_H, MORE_H, ROW_GAP = 32, 16, 2
-local CHIPS = {
-    { value = "all", label = "All tabs" },
-    { value = "whisper", label = "Whispers" },
-    { value = "party", label = "Party" },
-    { value = "guild", label = "Guild" },
-    { value = "trade", label = "Trade" },
-}
-
--- Widths in the lines' font (texture codes and all).
-local bodyMeasure: FontString? = nil
-local function measureBody(text: string, size: number): number
-    local fs = bodyMeasure or UIParent:CreateFontString(nil, "OVERLAY")
-    if not bodyMeasure then
-        fs:Hide()
-        bodyMeasure = fs
-    end
-    fs:SetFont(bodyFont(), size, "")
-    fs:SetText(text)
-    return fs:GetUnboundedStringWidth()
-end
-
--- the lines' width (the panel's, less its padding)
-local function logWidth(): number
-    return UI.Size("chat-w") - padX() * 2
-end
-
--- Where to look: a chip.
-class SearchChip extends Button
-    readonly bg: Texture
-    readonly edge: Border
-    readonly label: Text
-
-    constructor(s: SearchPage, readonly value: string, label: string)
-        super(nil, s.head)
-        self.bg = UI.Fill(self, "surface-raised")
-        self.bg:SetAllPoints()
-        self.edge = UI.Border(self, "gilt-line")
-        self.label = UI.Text(self, "caption", "ink-muted")
-        self.label:SetPoint("CENTER")
-        self.label:SetValue(label)
-        self:SetScript("OnEnter", function()
-            if s.scope ~= value then
-                self.label:SetColor("ink")
-            end
-        end)
-        self:SetScript("OnLeave", function()
-            if s.scope ~= value then
-                self.label:SetColor("ink-muted")
-            end
-        end)
-        self:SetScript("OnClick", function()
-            s.scope = value
-            M:RunSearch()
-        end)
-    end
-end
-
--- A player's group: a rule, their class jewel, name, how many lines, Whisper.
-class SearchHeader extends Frame
-    readonly rule: Frame
-    readonly jewel: Texture
-    readonly name: Text
-    readonly count: Text
-    readonly whisper: SuuButton
-    who: string? = nil
-
-    constructor(s: SearchPage)
-        super(nil, s.list)
-        self:SetHeight(GROUP_H)
-        self.rule = UI.Hairline(self, "gilt-faint")
-        self.rule:SetPoint("TOPLEFT")
-        self.rule:SetPoint("TOPRIGHT")
-        -- 6 above, 2 below the row's content (its middle 2 below the frame's)
-        self.jewel = UI.Diamond(self, 5, "ink-muted")
-        self.jewel:SetPoint("CENTER", self, "LEFT", 3, -2)
-        self.name = UI.Text(self, "unit-name", "ink")
-        self.count = UI.Text(self, "caption", "ink-muted")
-        SuuUI.Layout.Follow(self, function()
-            self.count:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
-        end)
-        self.whisper = UI.Button(self, {
-            text = "Whisper",
-            icon = "chat",
-            onClick = function()
-                local who = self.who
-                if who then
-                    M:OpenWhisperWindow(who)
-                end
-            end,
-        })
-        self.whisper:SetHeight(24)
-        self.whisper:SetPoint("RIGHT", 0, -2)
-    end
-end
-
--- A matching line: its text, the match on a faint ink ground, underlined.
-class SearchRow extends Frame
-    readonly ground: Texture
-    readonly under: Texture
-    readonly text: FontString
-
-    constructor(s: SearchPage)
-        super(nil, s.list)
-        self.ground = UI.Fill(self, "ink", "BACKGROUND")
-        self.ground:SetAlpha(0.16)
-        self.under = self:CreateTexture(nil, "ARTWORK")
-        self.under:SetColorTexture(1, 1, 1, 1)
-        self.text = self:CreateFontString(nil, "OVERLAY")
-        self.text:SetPoint("LEFT")
-        self.text:SetPoint("RIGHT")
-        self.text:SetJustifyH("LEFT")
-        self.text:SetWordWrap(false)
-        self.text:SetShadowOffset(1, -1)
-        self.text:SetShadowColor(0, 0, 0, 0.8)
-        -- links in it work as in the chat
-        self:EnableMouse(true)
-        links(self)
-    end
-end
-
--- "N more" under a group: opens it.
-class SearchMore extends Button
-    readonly label: Text
-    key: string = ""
-
-    constructor(s: SearchPage)
-        super(nil, s.list)
-        self:SetHeight(MORE_H)
-        self.label = UI.Text(self, "caption", "ink-muted")
-        self.label:SetPoint("LEFT")
-        self:SetScript("OnEnter", function()
-            self.label:SetColor("ink")
-        end)
-        self:SetScript("OnLeave", function()
-            self.label:SetColor("ink-muted")
-        end)
-        self:SetScript("OnClick", function()
-            s.open[self.key] = true
-            M:RunSearch()
-        end)
-    end
-end
-
-class SearchPage extends Frame
-    readonly head: Frame
-    -- the field: the search glyph, what's typed, how many lines match
-    readonly field: TextField
-    readonly glyph: Texture
-    readonly count: Text
-    readonly chips: SearchChip[] = {}
-    readonly scroll: ScrollArea
-    readonly list: Frame
-    readonly note: Text
-    readonly headers: SearchHeader[] = {}
-    readonly rows: SearchRow[] = {}
-    readonly mores: SearchMore[] = {}
-    -- where to look, the groups opened, the last search
-    scope: string = "all"
-    open: { [string]: boolean } = {}
-    lastQuery: string? = nil
-    lastScope: string? = nil
-
-    constructor(parent: Frame)
-        super(nil, parent)
-        self:SetAllPoints()
-        self:Hide()
-        self.head = CreateFrame("Frame", nil, self)
-        self.head:SetPoint("TOPLEFT")
-        self.head:SetPoint("TOPRIGHT")
-        self.head:SetHeight(searchHeadH())
-        local f = UI.TextField(self.head, {
-            placeholder = "A name or a word",
-            onTextChanged = function()
-                M:RunSearch()
-            end,
-            onChange = function()
-                M:RunSearch()
-            end,
-        })
-        f:SetPoint("TOPLEFT")
-        f:SetPoint("TOPRIGHT")
-        f:SetHeight(FIELD_H)
-        local glyph = f:CreateTexture(nil, "ARTWORK")
-        UI.Glyph(glyph, "search")
-        glyph:SetSize(14, 14)
-        UI.Paint(glyph, "ink-muted")
-        self.glyph = glyph
-        self.count = UI.Text(f, "caption", "ink-muted")
-        self.field = f
-        -- where to look: one chip at a time
-        for _, c in ipairs(CHIPS) do
-            self.chips[#self.chips + 1] = SearchChip.new(self, c.value, c.label)
-        end
-        -- the matches
-        self.scroll = UI.ScrollArea(self, 5)
-        self.scroll:SetPoint("BOTTOMRIGHT", -8, 0)
-        self.list = self.scroll.child
-        self.note = UI.Text(self.list, "caption", "ink-muted")
-        self:PlaceChips()
-    end
-
-    -- The head (the field, its glyph and count, the chips) and the matches
-    -- under it, from the spacing: at build, and again when a theme changes
-    -- it or the caption style.
-    function PlaceChips()
-        local f = self.field
-        self.head:SetHeight(searchHeadH())
-        self.glyph:SetPoint("LEFT", S["space-4"], 0)
-        self.count:SetPoint("RIGHT", -S["space-4"], 0)
-        local textX = S["space-4"] + 14 + S["space-4"]
-        f.edit:ClearAllPoints()
-        f.edit:SetPoint("TOPLEFT", textX, 0)
-        f.edit:SetPoint("BOTTOMRIGHT", -(S["space-4"] + 60), 0)
-        f.placeholder:ClearAllPoints()
-        f.placeholder:SetPoint("LEFT", textX, 0)
-        self.scroll:SetPoint("TOPLEFT", 0, -searchHeadH())
-        self.list:SetWidth(logWidth() - 8)
-        self.note:SetPoint("TOPLEFT", 0, -S["space-2"])
-        local x = 0
-        for _, b in ipairs(self.chips) do
-            b:SetSize(math.ceil(UI.MeasureText("caption", tostring(b.label.value or ""))) + S["space-4"] * 2, CHIP_H)
-            b:ClearAllPoints()
-            b:SetPoint("TOPLEFT", self.head, "TOPLEFT", x, -(FIELD_H + S["space-3"]))
-            x = x + b:GetWidth() + S["space-2"]
-        end
-    end
-
-    function Header(i: number): SearchHeader
-        local h = self.headers[i] or SearchHeader.new(self)
-        self.headers[i] = h
-        return h
-    end
-
-    function Row(i: number): SearchRow
-        local r = self.rows[i] or SearchRow.new(self)
-        self.rows[i] = r
-        return r
-    end
-
-    function More(i: number): SearchMore
-        local b = self.mores[i] or SearchMore.new(self)
-        self.mores[i] = b
-        return b
-    end
-end
-
---------------------------------------------------------------------------------
--- Settings › Chat › Windows: each window (whisper windows aside) with its
--- name, font size, Blizzard's chat settings for it and closing; a new one.
---------------------------------------------------------------------------------
-
-local EDIT_W, ROW_H = 520, 38
-
-class WindowRow extends Frame
-    readonly name: TextField
-    readonly size: Stepper
-    readonly config: SuuButton
-    readonly close: Button
-    cf: Window? = nil
-
-    constructor(parent: Frame)
-        super(nil, parent)
-        self:SetSize(EDIT_W - 12, ROW_H)
-        self.name = UI.TextField(self, {
-            width = 200,
-            onChange = function(text: string)
-                local cf = self.cf
-                if cf then
-                    M:RenameWindow(cf, strtrim(text))
-                end
-            end,
-        })
-        self.name:SetPoint("LEFT")
-        self.size = UI.Stepper(self, {
-            min = 8,
-            max = 24,
-            step = 1,
-            unit = "px",
-            onChange = function(v: number)
-                local cf = self.cf
-                if cf then
-                    M:SetFontSize(cf, v)
-                end
-            end,
-        })
-        SuuUI.Layout.Follow(self, function()
-            self.size:SetPoint("LEFT", self.name, "RIGHT", S["space-4"], 0)
-        end)
-        self.config = UI.Button(self, {
-            text = "Chat settings…",
-            onClick = function()
-                local cf = self.cf
-                if cf then
-                    M:OpenChatSettings(cf)
-                end
-            end,
-            tooltip = {
-                title = "Chat settings",
-                description = "Blizzard's settings for this window: which channels and messages it shows.",
-            },
-        })
-        SuuUI.Layout.Follow(self, function()
-            self.config:SetPoint("LEFT", self.size, "RIGHT", S["space-4"], 0)
-        end)
-        self.close = UI.CloseButton(self, function()
-            local cf = self.cf
-            if cf then
-                M:CloseWindow(cf)
-            end
-        end)
-        SuuUI.Layout.Follow(self, function()
-            self.close:SetPoint("RIGHT", -S["space-2"], 0)
-        end)
-    end
-end
-
-class WindowsEditor extends Frame
-    readonly rows: WindowRow[] = {}
-    readonly well: Frame
-    readonly add: SuuButton
-
-    constructor(parent: Frame)
-        super(nil, parent)
-        self:SetSize(EDIT_W, 100)
-        self.well = CreateFrame("Frame", nil, self)
-        UI.Fill(self.well, "surface-sunk"):SetAllPoints()
-        UI.Border(self.well, "gilt-faint")
-        self.well:SetPoint("TOPLEFT")
-        self.add = UI.Button(self, {
-            text = "New window",
-            onClick = function()
-                askText("New window", "", "A name · Enter makes it · Esc cancels", function(name: string)
-                    M:NewWindow(name)
-                end)
-            end,
-        })
-        M.windowsEditor = self
-        self:Refresh()
-        self:HookScript("OnShow", function()
-            self:Refresh()
-        end)
-    end
-
-    function Refresh()
-        for _, r in ipairs(self.rows) do
-            r:Hide()
-        end
-        local y = 6
-        local i = 0
-        for _, cf in ipairs(M:Windows()) do
-            if not chat.isTemporary(cf) then
-                i = i + 1
-                local r = self.rows[i] or WindowRow.new(self.well)
-                self.rows[i] = r
-                r.cf = cf
-                r.name:SetValue(windowName(cf) or "")
-                r.size:SetValue(fontSize(cf))
-                r.config:SetShown(ChatConfigFrame ~= nil)
-                r.close:SetShown(cf ~= ChatFrame1 and cf ~= ChatFrame2 and field(_G, "FCF_Close") ~= nil)
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", 6, -y)
-                r:Show()
-                y = y + ROW_H
-            end
-        end
-        local wellH = y + 6
-        self.well:SetSize(EDIT_W, wellH)
-        local canOpen = field(_G, "FCF_CanOpenNewWindow")
-        local canNew = field(_G, "FCF_OpenNewWindow") ~= nil and (not canOpen or secret.flag(errors.try(canOpen)))
-        self.add:SetShown(canNew)
-        self.add:ClearAllPoints()
-        self.add:SetPoint("TOPLEFT", 0, -(wellH + 10))
-        self:SetHeight(wellH + (canNew and (10 + 30) or 0))
     end
 end
 
@@ -1150,7 +181,7 @@ local SECTION: SettingsSection = {
                     label = "Windows",
                     control = "custom",
                     build = function(p: Frame): Frame
-                        return WindowsEditor.new(p)
+                        return WindowsEditor.new(M, p)
                     end,
                     stacked = true,
                 },
@@ -1255,211 +286,8 @@ local SECTION: SettingsSection = {
     },
 }
 
---------------------------------------------------------------------------------
--- Lines in the design's form: the time (ink-muted, only while the chat is
--- in use), the tag without brackets ("Party", "2. Trade", "From", "Yell"),
--- the class diamond before a name, the name in the line's colour. Taken
--- from Blizzard's finished line (its links stay as they are); a secret line
--- goes in whole. The combat log's lines are left as Blizzard writes them.
---------------------------------------------------------------------------------
-
-local MAX_LINES = 500
-local DIAMOND = chatLines.DIAMOND
-local classByName: { [string]: string } = {}
-
--- what follows the author in Blizzard's line → the tag the design puts first
--- ("" for none)
-local VERBS: chatLines.Verb[]? = nil
-local function verbs(): chatLines.Verb[]
-    if VERBS then
-        return VERBS
-    end
-    local list: chatLines.Verb[] = {}
-    VERBS = list
-    local function add(fmt: unknown, tag: string)
-        local v = chatLines.verb(fmt, tag)
-        if v then
-            list[#list + 1] = v
-        end
-    end
-    add(field(_G, "CHAT_SAY_GET"), "")
-    add(field(_G, "CHAT_YELL_GET"), asString(field(_G, "CHAT_MSG_YELL")) or "Yell")
-    add(field(_G, "CHAT_WHISPER_GET"), "From")
-    add(field(_G, "CHAT_BN_WHISPER_GET"), "From")
-    return list
-end
-
--- A player's class from their GUID, when readable.
-local function classOfGUID(guid: string): string?
-    local _, class = errors.try(GetPlayerInfoByGUID, guid)
-    return asString(class)
-end
-
-local function classOf(name: string?, lineID: string?): string?
-    local id = lineID and tonumber(lineID)
-    local guid = id and asString(errors.try(field(C_ChatInfo, "GetChatLineSenderGUID"), id))
-    local fromGUID = guid and classOfGUID(guid)
-    if fromGUID then
-        return fromGUID
-    end
-    local key = name and name:lower()
-    local known = key and classByName[key]
-    if known then
-        return known
-    end
-    local base = key and key:match("^([^%-]+)")
-    local fromBase = base and base ~= key and classByName[base]
-    if fromBase then
-        return fromBase
-    end
-    local _, class = errors.try(UnitClass, name)
-    return asString(class)
-end
-
--- Blizzard's own timestamp (its option in Social) as a pattern for the
--- start of a line: its date format with the numbers as wildcards.
-local function blizzardStamp(): string?
-    return chatLines.stampPatternOf(errors.try(GetCVar, "showTimestamps"))
-end
-
--- Lines by their ID, for the diamond's copy (gone with their mirror's
--- oldest lines)
-local lineSeq = 0
-local linesByID: { [number]: Line } = tbl.weakValues()
-
-local plainLine = chatLines.plainLine
-
--- Whisper lines (to and from), kept for a whisper window opened later (and,
--- with Kept chat, across logouts).
-local WHISPER_KEEP = 300
-local isWhisperLine = chatLines.isWhisperLine
-
--- What the input holds as a line to keep (Units/Chat/Input reads it).
-local function typedLine(eb: EditBox): string?
-    return chatInput.typedLine(eb:GetText(), function(key: string): unknown
-        return eb:GetAttribute(key)
-    end)
-end
-
-local function chatLockdown(): boolean
-    return errors.try(field(C_ChatInfo, "InChatMessagingLockdown")) == true
-end
-
--- The combat log's filter bar (Blizzard's: My actions, What happened to me?
--- …), shown at the top of the lines while the Combat Log tab is.
-local FILTER_H = 24
-
--- Tab order (asked 2026-10-19; design board "Chat tabs · drag to reorder",
--- B and C, the user's pick): every tab but Search can be dragged along the
--- row (Search stays last). After 6 px the tab lifts onto a gilt-edged plate
--- and moves with the pointer, and the tabs it passes slide aside, so the
--- row always shows the order you'll get (B). Setting "Reorder tabs": by
--- dragging anytime (B), or only in SuuUI's edit mode, where the tabs get
--- dashed outlines and grips and any press-and-move drags (C; also there
--- with B). Esc, a right click or letting go away from the row puts the tab
--- back. The order is kept per character by window ID; a whisper tab by its
--- player, only while it's open (a new one comes in before Search).
-local DRAG_START = 6 -- px along the row before a press becomes a drag
-local LIFT = 4 -- the dragged tab rides this far up on its plate
-local SLIDE = T.duration["dur-fast"]
-local smooth = chatTabs.smooth
-
--- The pointer's x along the row, in the row's units.
-local function cursorX(row: Frame): number
-    local x = GetCursorPosition()
-    return x / row:GetEffectiveScale() - (row:GetLeft() or 0)
-end
-
--- Kept chat: each tab's last lines and the whispers, saved for the
--- character at logout (and on a reload) and shown again on login: dimmed
--- (opacity-ooc) above a divider "Earlier · logged out 2 h ago" (design:
--- Chat history and search, option B). Only readable lines are kept: never a
--- secret one (an encounter's chat lockdown), never one with a Battle.net
--- name (its |K code means nothing next session), never the Combat Log's.
-local KEEP_LINES, KEEP_WHISPERS = 100, 200
-local DIM = T.opacity["opacity-ooc"]
-local hexRGB, keptLine, ago, rule = chatLines.hexRGB, chatLines.keptLine, chatLines.ago, chatLines.rule
-local function dimmed(text: string): string
-    return chatLines.dimmed(text, DIM)
-end
-
--- The search's limits.
-local GROUP_SHOWN = 2 -- a player's lines shown before "N more"
-local MAX_ROWS = 200
-local KIND_LABEL = chatSearch.KIND_LABEL
-local snippet = chatSearch.snippet
--- Where the match sits in a line (Units/Chat/Search), measured in the
--- lines' font at `size`.
-local function matchSpan(
-    text: string,
-    q: string,
-    size: number
-): (number?, number?, string?, number[]?, (number?)[]?, number?)
-    return chatSearch.matchSpan(text, q, function(part: string): number
-        return measureBody(part, size)
-    end)
-end
-
-local function isMe(key: string): boolean
-    local me = asString(SuuUI.FullName("player"))
-    local name = asString(UnitName("player"))
-    return (me ~= nil and me:lower() == key) or (name ~= nil and name:lower() == key)
-end
-
 local function hasFocus(eb: EditBox): boolean
     return errors.try(eb.HasFocus, eb) == true
-end
-
--- Global channels in their own tab (Blizzard's own chat settings, as its
--- tab menu sets them): General keeps everything but the numbered channels;
--- a "Global" tab (a "Guild" tab renamed, else a new one) shows only those.
--- Channels joined later move there too. Out of combat only.
-
--- The channels a window is set to show (joined or not: GetChatWindowChannels
--- lists name, id pairs).
-local function windowChannels(id: number): string[]
-    local out: string[] = {}
-    local list = { GetChatWindowChannels(id) }
-    for i = 1, #list, 2 do
-        local name = asString(list[i])
-        if name then
-            out[#out + 1] = name
-        end
-    end
-    return out
-end
-
--- the numbered channels you're in, by name
-local function joinedChannels(): string[]
-    local out: string[] = {}
-    local list = { GetChannelList() }
-    for i = 1, #list, 3 do
-        local name = asString(list[i + 1])
-        if name then
-            out[#out + 1] = name
-        end
-    end
-    return out
-end
-
--- the window with one of these names (any case), or nil
-local function windowNamed(...: string): Window?
-    local wanted: { [string]: boolean } = {}
-    for _, n in ipairs({ ... }) do
-        wanted[n:lower()] = true
-    end
-    for i = 1, asNumber(field(_G, "NUM_CHAT_WINDOWS")) or 10 do
-        local name = asString((GetChatWindowInfo(i)))
-        if name and wanted[name:lower()] then
-            return chat.window("ChatFrame" .. i)
-        end
-    end
-    return nil
-end
-
--- A channel call on a window (AddChannel, RemoveChannel …), quietly.
-local function channelCall(cf: Window, method: string, ...: unknown)
-    errors.tryMethod(cf, method, ...)
 end
 
 -- chat messages that wake the panel: to you and your group (public chat,
@@ -1478,24 +306,6 @@ local WAKE: EventName[] = {
     "CHAT_MSG_BN_WHISPER_INFORM",
     "CHAT_MSG_INSTANCE_CHAT",
     "CHAT_MSG_INSTANCE_CHAT_LEADER",
-}
--- the chat events that tell a sender's class
-local CLASS_EVENTS: EventName[] = {
-    "CHAT_MSG_SAY",
-    "CHAT_MSG_YELL",
-    "CHAT_MSG_EMOTE",
-    "CHAT_MSG_PARTY",
-    "CHAT_MSG_PARTY_LEADER",
-    "CHAT_MSG_RAID",
-    "CHAT_MSG_RAID_LEADER",
-    "CHAT_MSG_RAID_WARNING",
-    "CHAT_MSG_INSTANCE_CHAT",
-    "CHAT_MSG_INSTANCE_CHAT_LEADER",
-    "CHAT_MSG_GUILD",
-    "CHAT_MSG_OFFICER",
-    "CHAT_MSG_WHISPER",
-    "CHAT_MSG_WHISPER_INFORM",
-    "CHAT_MSG_CHANNEL",
 }
 -- what makes a new window to skin
 local WINDOW_EVENTS: EventName[] = {
@@ -1532,7 +342,7 @@ local CHANNEL_EVENTS: EventName[] = { "CHANNEL_UI_UPDATE", "CHAT_MSG_CHANNEL_NOT
 -- The module
 --------------------------------------------------------------------------------
 
-class ChatModule extends Module<typeof(DEFAULTS)>
+export class ChatModule extends Module<typeof(DEFAULTS)>
     panel: ChatPanel? = nil
     -- SuuUI's message frame per window, the one shown, the tab chosen
     mirrors: { [Window]: Mirror } = {}
@@ -1794,1512 +604,284 @@ class ChatModule extends Module<typeof(DEFAULTS)>
 
     ----------------------------------------------------------------------------
     -- Mirrors: SuuUI's message frame for each Blizzard window
+    -- (Units/Chat/Mirrors)
     ----------------------------------------------------------------------------
 
     function MirrorFrame(): MessageFrame
-        local m = CreateFrame("ScrollingMessageFrame", nil, self:Panel().log)
-        m:SetAllPoints()
-        m:SetJustifyH("LEFT")
-        m:SetFading(false)
-        m:SetMaxLines(MAX_LINES)
-        m:SetIndentedWordWrap(true)
-        m:EnableMouseWheel(true)
-        m:SetScript("OnMouseWheel", function(_, delta: number)
-            if IsShiftKeyDown() then
-                if delta > 0 then
-                    m:ScrollToTop()
-                else
-                    m:ScrollToBottom()
-                end
-            elseif delta > 0 then
-                m:ScrollUp()
-            else
-                m:ScrollDown()
-            end
-        end)
-        links(m)
-        m:Hide()
-        return m
+        return chatMirrors.mirrorFrame(self)
     end
 
-    -- Blizzard's finished line → the design's (without the time). `old`: a
-    -- line kept from an earlier session (its line ids mean nothing now).
-    -- `classes`: the names' classes in the order they come, filled the first
-    -- time and read when the line is formatted again (a theme's new colours),
-    -- so a name keeps the class it was shown with. (Units/Chat/Lines does the
-    -- text; this gives it the settings and the world's answers.)
     function FormatLine(text: string, id: number?, old: boolean?, classes: Classes?): string
-        return chatLines.formatLine(text, id, old, classes, {
-            diamonds = self:Get("classDiamonds"),
-            short = self:Get("shortChannels"),
-            colored = self:Get("classNames"),
-            -- SuuUI shows the time: Blizzard's own goes
-            stamp = self:Get("timestamps") and blizzardStamp() or nil,
-            verbs = verbs(),
-            classOf = classOf,
-        })
+        return chatMirrors.formatLine(self, text, id, old, classes)
     end
 
     function CopyLine(id: number?)
-        local line = id and linesByID[id]
-        if not line then
-            return
-        end
-        askText("Copy line", plainLine(asString(self:Render(line, true)) or ""), "Ctrl+C to copy · Esc closes")
+        chatMirrors.copyLine(self, id)
     end
 
-    -- A line for a mirror: Blizzard's text (`src`, readable lines only) and
-    -- the design's. `at` and `old` for a line kept from an earlier session.
     function NewLine(m: Mirror, text: ChatText, r: Color?, g: Color?, b: Color?, at: number?, old: boolean?): Line
-        lineSeq = lineSeq + 1
-        local readable = asString(text)
-        if m.raw or not readable then
-            return { text = text, raw = true, r = r, g = g, b = b, at = at or time(), id = lineSeq, old = old }
-        end
-        local classes: Classes = {}
-        local line: Line = {
-            src = readable,
-            classes = classes,
-            text = self:FormatLine(readable, lineSeq, old, classes),
-            r = r,
-            g = g,
-            b = b,
-            at = at or time(),
-            id = lineSeq,
-            old = old,
-        }
-        linesByID[lineSeq] = line
-        return line
+        return chatMirrors.newLine(self, m, text, r, g, b, at, old)
     end
 
-    -- One line into a mirror: kept (to show again with or without the time)
-    -- and shown as the chat is now.
     function Put(m: Mirror, text: ChatText, r: Color?, g: Color?, b: Color?, at: number?, old: boolean?): Line
-        local line = self:NewLine(m, text, r, g, b, at, old)
-        self:Append(m, line)
-        return line
+        return chatMirrors.put(self, m, text, r, g, b, at, old)
     end
 
     function Append(m: Mirror, line: Line)
-        local lines = m.lines
-        lines[#lines + 1] = line
-        if #lines > MAX_LINES then
-            table.remove(lines, 1)
-        end
-        local withTime = self:ShowTimes()
-        -- drawn otherwise than its earlier lines: all again when it's next shown
-        if m.drawnWithTime ~= withTime then
-            m.drawnWithTime = nil
-        end
-        self:Draw(m, line, withTime)
+        chatMirrors.append(self, m, line)
     end
 
     function ShowTimes(): boolean
-        return self:Get("timestamps") and self.awake ~= false
+        return chatMirrors.showTimes(self)
     end
 
     function Render(line: Line, withTime: boolean?): ChatText
-        local text = line.text
-        if line.raw or not withTime then
-            return text
-        end
-        return "|cff" .. T.color["ink-muted"].hex .. date("%H:%M", line.at) .. "|r  " .. (asString(text) or "")
+        return chatMirrors.render(self, line, withTime)
     end
 
-    -- The mirror's lines again (the time came or went), where it was scrolled.
     function Redraw(m: Mirror)
-        local withTime = self:ShowTimes()
-        if m.raw or m.drawnWithTime == withTime then
-            return
-        end
-        m.drawnWithTime = withTime
-        local f = m.frame
-        local offset = f:GetScrollOffset()
-        f:Clear()
-        for _, line in ipairs(m.lines) do
-            self:Draw(m, line, withTime)
-        end
-        if offset > 0 then
-            pcall(f.SetScrollOffset, f, offset)
-        end
+        chatMirrors.redraw(self, m)
     end
 
-    -- The shown window now, the others when they're chosen.
     function RedrawShown()
-        local m = self.activeMirror
-        if m then
-            self:Redraw(m)
-        end
+        chatMirrors.redrawShown(self)
     end
 
-    -- Names' classes from the chat events (a line whose sender the client
-    -- can't tell from its line id).
     function WatchClasses()
-        for _, e in ipairs(CLASS_EVENTS) do
-            self:OnGameEvent(e, function(_, ...: unknown)
-                local sender, guid = asString((select(2, ...))), asString((select(12, ...)))
-                local class = sender and guid and classOfGUID(guid)
-                if sender and class then
-                    classByName[sender:lower()] = class
-                end
-            end)
-        end
+        chatMirrors.watchClasses(self)
     end
 
     function KeepWhisper(text: ChatText, r: Color?, g: Color?, b: Color?, event: unknown)
-        local line = asString(text)
-        if not line or not isWhisperLine(r, g, b, event) then
-            return
-        end
-        local who = line:match("|Hplayer:([^:|]+)")
-        if not who then
-            return
-        end
-        local list = self.whispers
-        -- the same line in a second window (General and the whisper window)
-        for i = #list, math.max(1, #list - 4), -1 do
-            if list[i].text == line then
-                return
-            end
-        end
-        list[#list + 1] = { who = who:lower(), text = line, r = r, g = g, b = b, at = time() }
-        if #list > WHISPER_KEEP then
-            table.remove(list, 1)
-        end
+        chatMirrors.keepWhisper(self, text, r, g, b, event)
     end
 
-    -- The kept lines with a player: "Name" matches "Name-Realm" too.
     function WhispersWith(name: string): Whisper[]
-        local out: Whisper[] = {}
-        local want = name:lower()
-        local base = want:match("^([^%-]+)")
-        for _, line in ipairs(self.whispers) do
-            local who = line.who
-            if who == want or who:match("^([^%-]+)") == base then
-                out[#out + 1] = line
-            end
-        end
-        return out
+        return chatMirrors.whispersWith(self, name)
     end
 
-    -- Every line Blizzard adds to the window, copied (a secret one whole), and
-    -- what it already holds.
     function Mirror(cf: Window)
-        local made = self.mirrors[cf]
-        if made then
-            -- a whisper window Blizzard reused for someone else
-            self:WhisperWindowLines(cf, made)
-            return
-        end
-        local m: Mirror = { frame = self:MirrorFrame(), lines = {}, raw = cf == ChatFrame2 }
-        self.mirrors[cf] = m
-        self:ApplyMirrorFont(cf)
-        -- what the tab held at logout, above a divider
-        local temporary = chat.isTemporary(cf)
-        if not m.raw and not temporary then
-            self:RestoreKept(cf, m)
-        end
-        for i = 1, cf:GetNumMessages() do
-            local ok, text, r, g, b = pcall(cf.GetMessageInfo, cf, i)
-            if ok and (isSecret(text) or text ~= nil) then
-                self:Put(m, text, r, g, b)
-                if cf == ChatFrame1 or temporary then
-                    self:KeepWhisper(text, r, g, b)
-                end
-            end
-        end
-        -- a whisper window: the kept whispers with that player before its own
-        self:WhisperWindowLines(cf, m)
-        m.drawnWithTime = self:ShowTimes()
-        -- the combat log clears and refills its window on a filter change
-        hook(cf, "Clear", function()
-            m.frame:Clear()
-            wipe(m.lines)
-            m.target = nil
-        end)
-        hook(cf, "AddMessage", function(_, text: ChatText, r: Color?, g: Color?, b: Color?, ...: unknown)
-            if not isSecret(text) and text == nil then
-                return
-            end
-            self:Put(m, text, r, g, b)
-            -- whisper windows' too (Blizzard may show a whisper only there)
-            self:KeepWhisper(text, r, g, b, (select(4, ...)))
-            if m ~= self.activeMirror and cf ~= ChatFrame2 and not self.unread[cf] then
-                self.unread[cf] = true
-                -- the tab's unread mark
-                self:WindowsChanged()
-            end
-        end)
+        chatMirrors.mirror(self, cf)
     end
 
     function ApplyMirrorFont(cf: Window)
-        local m = self.mirrors[cf]
-        if not m then
-            return
-        end
-        local f = m.frame
-        f:SetFont(bodyFont(), fontSize(cf), "")
-        f:SetShadowOffset(1, -1)
-        f:SetShadowColor(0, 0, 0, 0.8)
-        -- the divider's rules are measured for the font
-        m.drawnWithTime = nil
-        if m == self.activeMirror then
-            self:Redraw(m)
-        end
+        chatMirrors.applyMirrorFont(self, cf)
     end
 
     ----------------------------------------------------------------------------
-    -- History: what you sent and the commands you ran, recalled with Up and
-    -- Down, kept for the character across reloads. This client's input has
-    -- no recall of its own. Taken on Enter, before Blizzard runs the line (a
-    -- message as the command that sends it again: "/p hi", "/w Name hi");
-    -- your own lines coming back as chat events fill in if that key never
-    -- reaches SuuUI. A recalled line is typed in by SuuUI, so what's sent
-    -- with it runs as SuuUI's: in combat Up and Down pass over protected
-    -- commands (/cast, /target …: blocked then), and in an encounter's chat
-    -- lockdown (messages blocked) they do nothing.
+    -- History: what you sent, recalled with Up and Down (Units/Chat/Recall)
     ----------------------------------------------------------------------------
 
     function History(): string[]
-        local data = self:CharData()
-        local list: string[] = {}
-        for _, line in ipairs(tbl.list(data.history)) do
-            local s = asString(line)
-            if s then
-                list[#list + 1] = s
-            end
-        end
-        data.history = list
-        return list
+        return chatRecall.history(self)
     end
 
     function AddHistory(line: string)
-        if not chatInput.push(self:History(), line) then
-            return
-        end
-        self.recall = nil
+        chatRecall.addHistory(self, line)
     end
 
-    -- Up: one line further back; Down: one forward, past the newest an empty
-    -- input. A recall starts over once the text isn't the recalled line.
     function Recall(eb: EditBox, step: number)
-        if not self:Get("recall") or chatLockdown() then
-            return
-        end
-        -- the command palette's list is open: its arrows choose there
-        local palette = SuuUI.GetModule("chatcommands")
-        if palette and palette:IsEnabled() and secret.flag(errors.tryMethod(palette, "TakesArrows", eb)) then
-            return
-        end
-        local list = self:History()
-        if #list == 0 then
-            return
-        end
-        local r = self.recall
-        local text = asString(eb:GetText())
-        if not (r and r.eb == eb and text and text == r.shown) then
-            r = { eb = eb, index = #list + 1 }
-            self.recall = r
-        end
-        -- in combat past protected commands
-        local index = chatInput.recallIndex(list, r.index, step, InCombatLockdown() and true or false)
-        if not index then
-            return
-        end
-        r.index = index
-        eb:SetText(list[index] or "")
-        eb:SetCursorPosition(#(eb:GetText() or ""))
-        -- as the input shows it (Blizzard may turn "/p " into its header)
-        r.shown = asString(eb:GetText())
+        chatRecall.recall(self, eb, step)
     end
 
-    -- An edit box gets the history: Enter keeps the line, Up and Down recall.
     function HistoryFor(eb: EditBox)
-        if self.historyBoxes[eb] then
-            return
-        end
-        self.historyBoxes[eb] = true
-        hookScript(eb, "OnKeyDown", function(box: EditBox, key: string)
-            if key ~= "ENTER" and key ~= "NUMPADENTER" then
-                return
-            end
-            local line = typedLine(box)
-            if line then
-                self.keyCapture = true
-                self:AddHistory(line)
-            end
-        end)
-        hookScript(eb, "OnArrowPressed", function(box: EditBox, key: string)
-            if key == "UP" then
-                self:Recall(box, -1)
-            elseif key == "DOWN" then
-                self:Recall(box, 1)
-            end
-        end)
+        chatRecall.historyFor(self, eb)
     end
 
     function WatchSent()
-        for event in pairs(chatInput.SENT) do
-            self:OnGameEvent(event, function(_, ...: unknown)
-                if self.keyCapture then
-                    return
-                end
-                local text, sender, channelNumber, guid = (select(1, ...)),
-                    (select(2, ...)),
-                    (select(8, ...)),
-                    (select(12, ...))
-                local line = chatInput.sentLine(event, text, sender, channelNumber, guid)
-                if line then
-                    self:AddHistory(line)
-                end
-            end)
-        end
+        chatRecall.watchSent(self)
     end
 
     ----------------------------------------------------------------------------
     -- Tabs: SuuUI's own buttons, one per Blizzard window, in SuuUI's order
+    -- (Units/Chat/TabBar)
     ----------------------------------------------------------------------------
 
-    -- The windows as tabs: docked ones (General first, Global second, the rest
-    -- in the dock's order), then whisper windows.
     function Windows(): Window[]
-        local out: Window[] = {}
-        local seen: { [Window]: boolean } = {}
-        local function add(cf: Window?)
-            if cf and not seen[cf] then
-                seen[cf] = true
-                out[#out + 1] = cf
-            end
-        end
-        local docked = chat.docked()
-        local function named(wanted: string): Window?
-            for _, cf in ipairs(docked) do
-                local name = windowName(cf)
-                if name and name:lower() == wanted then
-                    return cf
-                end
-            end
-            return nil
-        end
-        add(ChatFrame1)
-        add(named("global"))
-        for _, cf in ipairs(docked) do
-            if not chat.isTemporary(cf) then
-                add(cf)
-            end
-        end
-        for _, cf in ipairs(docked) do
-            add(cf)
-        end
-        -- whisper windows Blizzard didn't dock (a closed one is hidden)
-        for _, cf in ipairs(chatFrames()) do
-            if chat.isTemporary(cf) and cf:IsShown() then
-                add(cf)
-            end
-        end
-        return out
+        return chatTabBar.tabWindows(self)
     end
 
-    -- The button showing a window's tab (a free one, or a new one).
     function TabFor(cf: TabOf): TabButton
-        local p = self:Panel()
-        local made = p.tabFor[cf]
-        if made then
-            return made
-        end
-        local b: TabButton? = nil
-        for _, free in ipairs(p.tabButtons) do
-            if not free.cf then
-                b = free
-                break
-            end
-        end
-        local tab = b or TabButton.new(self, p)
-        if not b then
-            p.tabButtons[#p.tabButtons + 1] = tab
-        end
-        -- placed at once where it first shows
-        tab.cf, tab.x, tab.y, tab.slide = cf, nil, nil, nil
-        p.tabFor[cf] = tab
-        return tab
+        return chatTabBar.tabFor(self, cf)
     end
 
-    -- The combat log's filter bar, shown at the top of the lines while the
-    -- Combat Log tab is: Blizzard shows it only while its own dock has the
-    -- combat log selected, which it no longer is. The lines move down to
-    -- make room.
     function CombatFilterBar(show: boolean)
-        local bar = globalFrame("CombatLogQuickButtonFrame_Custom")
-        local mirror = self.mirrors[ChatFrame2]
-        if mirror then
-            local f = mirror.frame
-            f:ClearAllPoints()
-            f:SetPoint("TOPLEFT", 0, (show and bar) and -(FILTER_H + S["space-1"]) or 0)
-            f:SetPoint("BOTTOMRIGHT")
-        end
-        if not bar then
-            return
-        end
-        if show then
-            local log = self:Panel().log
-            -- out of ChatFrame2 (always hidden now: Blizzard's dock stays on
-            -- General) into the lines' area
-            if bar:GetParent() ~= log then
-                bar:SetParent(log)
-            end
-            bar:ClearAllPoints()
-            bar:SetPoint("TOPLEFT", log, "TOPLEFT", 0, 0)
-            bar:SetPoint("TOPRIGHT", log, "TOPRIGHT", 0, 0)
-            bar:SetHeight(FILTER_H)
-            bar:SetFrameStrata("MEDIUM")
-            bar:Show()
-        else
-            bar:Hide()
-        end
+        chatTabBar.combatFilterBar(self, show)
     end
 
-    -- Right click on a tab: Blizzard's chat settings for its window (asked
-    -- 2026-10-18); on a whisper tab, a menu to close it. The windows' font
-    -- size, name, new and closing are in SuuUI's settings, Chat › Windows.
     function TabMenu(b: TabButton)
-        local cf = b.cf
-        if not cf or cf == "search" then
-            return
-        end
-        if not chat.isTemporary(cf) then
-            self:OpenChatSettings(cf)
-            return
-        end
-        if not field(_G, "FCF_Close") then
-            return
-        end
-        UI.ContextMenuFrom(b, function(_, root)
-            root:CreateButton("Close", function()
-                self:CloseWindow(cf)
-            end)
-        end, "chatTab", { chatFrame = cf })
-    end
-
-    function CloseWindow(cf: Window)
-        errors.try(field(_G, "FCF_Close"), cf)
-        if self.selected == cf then
-            self:Select(ChatFrame1)
-        else
-            self:UpdateTabs()
-        end
-        local editor = self.windowsEditor
-        if editor and editor:IsVisible() then
-            editor:Refresh()
-        end
-    end
-
-    -- Sizes and names go through the client's own chat window settings;
-    -- Blizzard's chat settings open on the window.
-    function SetFontSize(cf: Window, size: number)
-        if chat.isTemporary(cf) then
-            tempSizes[cf] = size
-        else
-            errors.try(SetChatWindowSize, idOf(cf), size)
-        end
-        if self:ApplyFont(cf) then
-            self:ApplyMirrorFont(cf)
-        end
-    end
-
-    function RenameWindow(cf: Window, name: string)
-        if name == "" or chat.isTemporary(cf) then
-            return
-        end
-        errors.try(SetChatWindowName, idOf(cf), name)
-        self:UpdateTabs()
-    end
-
-    function OpenChatSettings(cf: Window)
-        local config = ChatConfigFrame
-        if not config then
-            return
-        end
-        -- the window Blizzard's chat settings act on (its tab menu sets it so)
-        CURRENT_CHAT_FRAME_ID = idOf(cf)
-        if config:IsShown() then
-            HideUIPanel(config)
-        end
-        ShowUIPanel(config)
-    end
-
-    function NewWindow(name: string)
-        local open = field(_G, "FCF_OpenNewWindow")
-        if name == "" or not open then
-            return
-        end
-        local cf = chat.asWindow(errors.try(open, name))
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
-            self:SkinAll()
-            if cf and self.mirrors[cf] then
-                self:Select(cf)
-            end
-            local editor = self.windowsEditor
-            if editor and editor:IsVisible() then
-                editor:Refresh()
-            end
-        end)
-    end
-
-    -- A whisper window just opened from SuuUI (a name's menu, the Search
-    -- tab): skinned, the whispers with that player so far put in
-    -- (Blizzard's starts empty), and shown.
-    function OpenedWindow(cf: Window?, name: string?)
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
-            self:SkinAll()
-            local m = cf and self.mirrors[cf]
-            if not (cf and m) then
-                return
-            end
-            if name and m.target ~= name:lower() then
-                self:FillWhispers(m, name)
-            end
-            self:Select(cf)
-        end)
-    end
-
-    -- The whisper window with a player: the open one (its tab chosen), else a
-    -- new one.
-    function OpenWhisperWindow(name: string)
-        local want = name:lower():match("^([^%-]+)")
-        for _, cf in ipairs(self:Windows()) do
-            local kind, target = chat.conversation(cf)
-            if kind == "WHISPER" and target and target:lower():match("^([^%-]+)") == want then
-                self:OpenedWindow(cf, name)
-                return
-            end
-        end
-        local open = field(_G, "FCF_OpenTemporaryWindow")
-        if not open then
-            return
-        end
-        self:OpenedWindow(chat.asWindow(errors.try(open, "WHISPER", name)), name)
+        chatTabBar.tabMenu(self, b)
     end
 
     function Select(cf: TabOf)
-        self.selected = cf
-        self.activeMirror = nil
-        for frame, mirror in pairs(self.mirrors) do
-            mirror.frame:SetShown(frame == cf)
-            if frame == cf then
-                self.activeMirror = mirror
-                self.unread[frame] = nil
-            end
-        end
-        self:ShowSearch(cf == "search")
-        self:RedrawShown()
-        self:CombatFilterBar(cf == ChatFrame2)
-        self:UpdateTabs()
+        chatTabBar.selectTab(self, cf)
     end
 
     function UpdateTabs()
-        local p = self:Panel()
-        local windows = self:OrderedWindows()
-        local selected = self.selected
-        if not selected or (selected ~= "search" and not tContains(windows, selected)) then
-            self.selected = nil
-            self:Select(ChatFrame1)
-            return
-        end
-        -- its mirror may have come after the choice
-        local mirror = selected ~= "search" and self.mirrors[selected] or nil
-        if mirror and not mirror.frame:IsShown() then
-            self:Select(selected)
-            return
-        end
-        -- a drag lays the row out itself until it ends
-        if self.drag then
-            return
-        end
-        -- the Search tab last, after the whispers
-        local tabs: TabOf[] = { unpack(windows) }
-        tabs[#tabs + 1] = SEARCH
-        local arranging = self:Arranging()
-        local glide = self.glideOnce
-        self.glideOnce = nil
-        local x = 0
-        local chosen: TabButton? = nil
-        local used: { [TabButton]: boolean } = {}
-        for _, cf in ipairs(tabs) do
-            local b = self:TabFor(cf)
-            used[b] = true
-            local name: string? = nil
-            if cf == "search" then
-                name = "Search"
-            else
-                name = windowName(cf)
-                local _, target = chat.conversation(cf)
-                if target then
-                    name = target
-                end
-            end
-            b.label:SetText(name or "")
-            b.label.value = nil
-            local w = 60
-            if name then
-                w = math.min(140, math.ceil(b.label:GetUnboundedStringWidth()) + 2)
-            end
-            b.label:SetWidth(w)
-            local active = cf == selected
-            b.active = active
-            -- the hover's ink kept (this runs every tick: it reset it at once)
-            b.label:SetColor(self:TabInk(b, arranging))
-            b.unread:SetShown(not active and cf ~= "search" and self.unread[cf] == true)
-            local tw = w + 8 + b:EditLook(arranging, cf == "search")
-            b:SetWidth(tw)
-            b.markWidth = tw
-            b:Show()
-            self:PlaceTab(b, x, glide)
-            if active then
-                chosen = b
-            end
-            x = x + tw + S["space-5"]
-        end
-        for _, b in ipairs(p.tabButtons) do
-            if not used[b] then
-                local cf = b.cf
-                if cf then
-                    p.tabFor[cf] = nil
-                end
-                b.cf, b.slide = nil, nil
-                b:Hide()
-            end
-        end
-        p.marker:SetChosen(chosen)
+        chatTabBar.updateTabs(self)
     end
 
-    -- A tab's name colour: the chosen one gilt, the hovered one ink; Search
-    -- faint while the tabs are arranged.
     function TabInk(b: TabButton, arranging: boolean): string
-        if b.active then
-            return "gilt-text"
-        end
-        if arranging and b.cf == "search" then
-            return "ink-faint"
-        end
-        local d = self.drag
-        if b.hover or (d and d.b == b) then
-            return "ink"
-        end
-        return "ink-muted"
+        return chatTabBar.tabInk(self, b, arranging)
     end
 
-    -- The windows in this character's order: the kept ones first as kept,
-    -- then the rest in the starting order (a new whisper tab at the end).
     function OrderedWindows(): Window[]
-        local windows = self:Windows()
-        local kept = self:CharData().tabOrder
-        if type(kept) ~= "table" then
-            return windows
-        end
-        -- (a whisper keeps its place only while its tab is open)
-        return chatTabs.ordered(windows, tbl.list(kept), chatTabs.tabKey)
+        return chatTabBar.orderedWindows(self)
     end
 
     function SaveTabOrder(list: Window[])
-        self:CharData().tabOrder = chatTabs.keysOf(list, chatTabs.tabKey)
+        chatTabBar.saveTabOrder(self, list)
     end
 
     function HasTabOrder(): boolean
-        return type(self:CharData().tabOrder) == "table"
+        return chatTabBar.hasTabOrder(self)
     end
 
-    -- Back to the starting order: General and Global, the other windows, whispers.
     function ResetTabOrder()
-        self:CharData().tabOrder = nil
-        if not self.panel then
-            return
-        end
-        self.glideOnce = true
-        self:UpdateTabs()
+        chatTabBar.resetTabOrder(self)
     end
 
-    -- Tabs arranged in edit mode (grips, a press on a tab drags).
     function Arranging(): boolean
-        return SuuUI.EditMode.IsActive() and true or false
+        return chatTabBar.isArranging(self)
     end
 
-    -- Whether a press on a tab may drag it now.
     function CanDrag(): boolean
-        if self:Arranging() then
-            return true
-        end
-        return self:Get("tabReorder") == "drag"
+        return chatTabBar.canDrag(self)
     end
-
-    ----------------------------------------------------------------------------
-    -- Placing and sliding the tabs
-    ----------------------------------------------------------------------------
 
     function SetTab(b: TabButton, x: number, y: number)
-        local p = self:Panel()
-        b:ClearAllPoints()
-        b:SetPoint("BOTTOMLEFT", p.tabs, "BOTTOMLEFT", x, y)
-        b.x, b.y, b.markLeft = x, y, x
-        if b.active then
-            p.marker:Aim()
-        end
+        chatTabBar.setTab(self, b, x, y)
     end
 
-    -- A tab to its place in the row: at once, or gliding there (dur-fast; at
-    -- once with reduced motion). A glide on its way turns to a new place.
     function PlaceTab(b: TabButton, x: number, glide: boolean?)
-        local d = self.drag
-        if d and d.b == b then
-            return
-        end
-        local sl = b.slide
-        if sl then
-            if sl.tx ~= x then
-                b.slide = { fx = b.x or 0, fy = b.y or 0, tx = x, start = GetTime() }
-            end
-            return
-        end
-        if b.x == x and (b.y or 0) == 0 then
-            return
-        end
-        local from = b.x
-        if glide and from and not SuuUI.Motion.Reduced() then
-            b.slide = { fx = from, fy = b.y or 0, tx = x, start = GetTime() }
-            self:RunSlides()
-        else
-            self:SetTab(b, x, 0)
-            b:HidePlate()
-        end
+        chatTabBar.placeTab(self, b, x, glide)
     end
 
     function RunSlides()
-        local p = self:Panel()
-        local slider = p.slider or CreateFrame("Frame", nil, p.tabs)
-        p.slider = slider
-        slider:SetScript("OnUpdate", function()
-            local moving = false
-            for _, b in ipairs(p.tabButtons) do
-                local sl = b.slide
-                if sl then
-                    local t = (GetTime() - sl.start) / SLIDE
-                    if t >= 1 or not b.cf then
-                        b.slide = nil
-                        self:SetTab(b, sl.tx, 0)
-                        -- the plate drops back into the row as it lands
-                        b:HidePlate()
-                        if b.cf then
-                            b.label:SetColor(self:TabInk(b, self:Arranging()))
-                        end
-                    else
-                        local e = smooth(t)
-                        self:SetTab(b, sl.fx + (sl.tx - sl.fx) * e, sl.fy * (1 - e))
-                        moving = true
-                    end
-                end
-            end
-            if not moving then
-                slider:SetScript("OnUpdate", nil)
-            end
-        end)
+        chatTabBar.runSlides(self)
     end
 
-    ----------------------------------------------------------------------------
-    -- Dragging a tab
-    ----------------------------------------------------------------------------
-
     function PressTab(b: TabButton)
-        if b.cf == "search" or self.drag or not self:CanDrag() then
-            return
-        end
-        local p = self:Panel()
-        self.press = { b = b, x0 = cursorX(p.tabs) }
-        local dragger = p.dragger or CreateFrame("Frame", nil, p.tabs)
-        p.dragger = dragger
-        dragger:SetScript("OnUpdate", function()
-            self:DragStep()
-        end)
+        chatTabBar.pressTab(self, b)
     end
 
     function StopDragger()
-        local dragger = self:Panel().dragger
-        self.press = nil
-        if dragger then
-            dragger:SetScript("OnUpdate", nil)
-            dragger:SetScript("OnKeyDown", nil)
-            if not InCombatLockdown() then
-                pcall(dragger.EnableKeyboard, dragger, false)
-            end
-        end
+        chatTabBar.stopDragger(self)
     end
 
     function DragStep()
-        local press = self.press
-        local tabs = self:Panel().tabs
-        if not press or not tabs:IsVisible() then
-            return self:EndDrag(false)
-        end
-        local cx = cursorX(tabs)
-        if not self.drag then
-            -- released before it moved far enough: a click
-            if not IsMouseButtonDown("LeftButton") then
-                return self:StopDragger()
-            end
-            local threshold = self:Arranging() and 2 or DRAG_START
-            if math.abs(cx - press.x0) < threshold then
-                return
-            end
-            self:BeginDrag(press)
-        end
-        if IsMouseButtonDown("RightButton") then
-            return self:EndDrag(false)
-        end
-        if not IsMouseButtonDown("LeftButton") then
-            -- let go on the row: there; away from it: back
-            return self:EndDrag(tabs:IsMouseOver(12, -12, -24, 24) and true or false)
-        end
-        self:MoveDrag(cx)
+        chatTabBar.dragStep(self)
     end
 
     function BeginDrag(press: Press)
-        local p = self:Panel()
-        local b = press.b
-        -- the others in their order, without it; its place among them
-        local others: Window[] = {}
-        local index = 1
-        for _, cf in ipairs(self:OrderedWindows()) do
-            if cf == b.cf then
-                index = #others + 1
-            else
-                others[#others + 1] = cf
-            end
-        end
-        -- it may go as far as the place before Search
-        local span = b:GetWidth()
-        for _, cf in ipairs(others) do
-            local o = p.tabFor[cf]
-            if o then
-                span = span + S["space-5"] + o:GetWidth()
-            end
-        end
-        self.drag = {
-            b = b,
-            x0 = press.x0,
-            others = others,
-            index = index,
-            start = index,
-            grab = press.x0 - (b.x or 0),
-            maxX = span - b:GetWidth(),
-        }
-        b.dragged = true
-        b.slide = nil
-        -- it lifted onto its plate, both over the others as it passes them
-        local base = p.tabs:GetFrameLevel()
-        for _, o in ipairs(p.tabButtons) do
-            o:SetFrameLevel(base + (o == b and 2 or 0))
-        end
-        local pl = b:Plate()
-        pl:SetFrameLevel(base + 1)
-        pl:Show()
-        b.label:SetColor(self:TabInk(b, self:Arranging()))
-        -- Esc puts it back (out of combat: taking keys is refused in it)
-        local f = p.dragger
-        if f and not InCombatLockdown() and pcall(f.EnableKeyboard, f, true) then
-            pcall(f.SetPropagateKeyboardInput, f, true)
-            f:SetScript("OnKeyDown", function(_, key: string)
-                if InCombatLockdown() then
-                    return
-                end
-                local esc = key == "ESCAPE"
-                pcall(f.SetPropagateKeyboardInput, f, not esc)
-                if esc then
-                    self:EndDrag(false)
-                end
-            end)
-        end
+        chatTabBar.beginDrag(self, press)
     end
 
-    -- The row for the dragged tab at `index`: the others slide to their places.
     function LayoutDrag(d: Drag, index: number)
-        local p = self:Panel()
-        local x = 0
-        for i = 1, #d.others + 1 do
-            local b: TabButton? = nil
-            if i == index then
-                b = d.b
-                d.slotX = x
-            else
-                b = p.tabFor[d.others[i < index and i or i - 1]]
-                if b then
-                    self:PlaceTab(b, x, true)
-                end
-            end
-            if b then
-                x = x + b:GetWidth() + S["space-5"]
-            end
-        end
+        chatTabBar.layoutDrag(self, d, index)
     end
 
     function MoveDrag(cx: number)
-        local d = self.drag
-        if not d then
-            return
-        end
-        local p = self:Panel()
-        local b = d.b
-        local x = math.max(0, math.min(d.maxX, cx - d.grab))
-        -- its place: after every other tab whose middle it has passed
-        local centre = x + b:GetWidth() / 2
-        local mids: (number | false)[] = {}
-        for i, cf in ipairs(d.others) do
-            local o = p.tabFor[cf]
-            local sl = o and o.slide
-            mids[i] = o and ((sl and sl.tx or o.x or 0) + o:GetWidth() / 2) or false
-        end
-        local index = chatTabs.dropIndex(mids, centre)
-        if index ~= d.index or not d.slotX then
-            d.index = index
-            self:LayoutDrag(d, index)
-        end
-        self:SetTab(b, x, LIFT)
+        chatTabBar.moveDrag(self, cx)
     end
 
-    -- The drag ends: kept in its new place (and saved), or back where it was.
     function EndDrag(keep: boolean)
-        local d = self.drag
-        local p = self:Panel()
-        self:StopDragger()
-        if not d then
-            return
-        end
-        self.drag = nil
-        for _, o in ipairs(p.tabButtons) do
-            o:SetFrameLevel(p.tabs:GetFrameLevel() + 1)
-        end
-        local b = d.b
-        -- its plate under it again as it drops
-        local pl = b.plate
-        if pl then
-            pl:SetFrameLevel(p.tabs:GetFrameLevel())
-        end
-        local cf = b.cf
-        if keep and d.index ~= d.start and cf and cf ~= "search" then
-            local list: Window[] = {}
-            for _, o in ipairs(d.others) do
-                list[#list + 1] = o
-            end
-            table.insert(list, d.index, cf)
-            self:SaveTabOrder(list)
-        end
-        -- it glides to its place (the new one or its own) as its plate drops
-        self.glideOnce = true
-        self:UpdateTabs()
-        local x, y = b.x or 0, b.y
-        if y and y ~= 0 and not b.slide then
-            if SuuUI.Motion.Reduced() then
-                self:SetTab(b, x, 0)
-                b:HidePlate()
-            else
-                b.slide = { fx = x, fy = y, tx = x, start = GetTime() }
-                self:RunSlides()
-            end
-        end
+        chatTabBar.endDrag(self, keep)
     end
 
-    -- Edit mode in or out: the tabs over the chat's own outline while it shows
-    -- (so they take the press), the hint under them; a drag in play ends.
     function EditModeChanged(on: boolean?)
-        local p = self.panel
-        if not p then
-            return
-        end
-        if self.drag or self.press then
-            self:EndDrag(false)
-        end
-        p.tabs:SetFrameStrata(on and "FULLSCREEN_DIALOG" or "MEDIUM")
-        if on and not p.editHint then
-            p.editHint = EditHint.new(p)
-        end
-        local hint = p.editHint
-        if hint then
-            hint:SetShown(on and true or false)
-        end
-        self:Wake()
-        self:UpdateTabs()
+        chatTabBar.editModeChanged(self, on)
     end
 
     ----------------------------------------------------------------------------
-    -- Kept chat
+    -- The windows: closed, sized, named, made (Units/Chat/Windows)
     ----------------------------------------------------------------------------
 
-    -- "Earlier · logged out 2 h ago" between gilt jewels, the rules filling the
-    -- line either side.
+    function CloseWindow(cf: Window)
+        chatWindows.closeWindow(self, cf)
+    end
+
+    function SetFontSize(cf: Window, size: number)
+        chatWindows.setFontSize(self, cf, size)
+    end
+
+    function RenameWindow(cf: Window, name: string)
+        chatWindows.renameWindow(self, cf, name)
+    end
+
+    function OpenChatSettings(cf: Window)
+        chatWindows.openChatSettings(self, cf)
+    end
+
+    function NewWindow(name: string)
+        chatWindows.newWindow(self, name)
+    end
+
+    function OpenedWindow(cf: Window?, name: string?)
+        chatWindows.openedWindow(self, cf, name)
+    end
+
+    function OpenWhisperWindow(name: string)
+        chatWindows.openWhisperWindow(self, name)
+    end
+
+    ----------------------------------------------------------------------------
+    -- Kept chat (Units/Chat/Kept)
+    ----------------------------------------------------------------------------
+
     function DividerText(m: Mirror, at: number?): string
-        local _, size = m.frame:GetFont()
-        local g = T.color.gilt
-        local jewel = ("|T%s:0:0:0:0:32:32:0:32:0:32:%d:%d:%d|t"):format(
-            DIAMOND,
-            math.floor(g[1] * 255 + 0.5),
-            math.floor(g[2] * 255 + 0.5),
-            math.floor(g[3] * 255 + 0.5)
-        )
-        local label = "|cff" ..
-            T.color["ink-muted"].hex .. "Earlier · logged out " .. ago(time() - (at or time())) .. "|r"
-        local middle = "  " .. jewel .. "  " .. label .. "  " .. jewel .. "  "
-        -- the mirror's own width when it has one, with room to spare: a line
-        -- even a pixel too long wraps its right rule onto a line of its own
-        local width = m.frame:GetWidth()
-        if width <= 0 then
-            width = logWidth()
-        end
-        local side = math.floor((width - 24 - measureBody(middle, size or 13)) / 2)
-        if side < 12 then
-            return middle
-        end
-        return rule(side, true) .. middle .. rule(side, false)
+        return chatKept.dividerText(self, m, at)
     end
 
-    -- A line into its mirror: an earlier one dimmed, the divider measured.
     function Draw(m: Mirror, line: Line, withTime: boolean?)
-        if line.divider then
-            m.frame:AddMessage(self:DividerText(m, line.at), 1, 1, 1)
-            return
-        end
-        local text, r, g, b = self:Render(line, withTime), line.r, line.g, line.b
-        local readable = asString(text)
-        if line.old and readable then
-            m.frame:AddMessage(
-                dimmed(readable),
-                (asNumber(r) or 1) * DIM,
-                (asNumber(g) or 1) * DIM,
-                (asNumber(b) or 1) * DIM
-            )
-            return
-        end
-        m.frame:AddMessage(text, r, g, b)
+        chatKept.draw(self, m, line, withTime)
     end
 
-    -- What was saved at logout, to put back as the windows' mirrors are made.
     function LoadHistory()
-        if self.historyLoaded then
-            return
-        end
-        self.historyLoaded = true
-        local kept = self:CharData().kept
-        if not self:Get("keepHistory") or type(kept) ~= "table" then
-            return
-        end
-        self.loggedOutAt = asNumber(field(kept, "at")) or time()
-        local windows: { [number]: unknown } = {}
-        local saved = field(kept, "windows")
-        if type(saved) == "table" then
-            for id, w in pairs(saved) do
-                if type(id) == "number" then
-                    windows[id] = w
-                end
-            end
-        end
-        self.keptWindows = windows
-        local classes = field(kept, "classes")
-        if type(classes) == "table" then
-            for name, class in pairs(classes) do
-                if type(name) == "string" and type(class) == "string" and not classByName[name] then
-                    classByName[name] = class
-                end
-            end
-        end
-        local list: Whisper[] = {}
-        for _, w in ipairs(tbl.list(field(kept, "whispers"))) do
-            local who, text, at = asString(field(w, "who")), asString(field(w, "text")), asNumber(field(w, "at"))
-            if who and text and at then
-                local r, g, b = hexRGB(field(w, "rgb"))
-                list[#list + 1] = { who = who, text = text, r = r, g = g, b = b, at = at, old = true }
-            end
-        end
-        -- this session's after them
-        for _, w in ipairs(self.whispers) do
-            list[#list + 1] = w
-        end
-        self.whispers = list
+        chatKept.loadHistory(self)
     end
 
-    -- A tab's kept lines (if it's the window they came from: same id, same
-    -- name), then the divider.
     function RestoreKept(cf: Window, m: Mirror)
-        local id = idOf(cf)
-        local kept = self.keptWindows
-        local saved = kept and kept[id]
-        if not (kept and type(saved) == "table") then
-            return
-        end
-        kept[id] = nil
-        local name = windowName(cf)
-        local lines = field(saved, "lines")
-        if not name or name ~= field(saved, "name") or type(lines) ~= "table" then
-            return
-        end
-        local any = false
-        for _, s in ipairs(tbl.list(lines)) do
-            local text, at = asString(field(s, "text")), asNumber(field(s, "at"))
-            if text and at then
-                local r, g, b = hexRGB(field(s, "rgb"))
-                self:Put(m, text, r, g, b, at, true)
-                any = true
-            end
-        end
-        if any then
-            self:Append(m, { divider = true, text = "", at = self.loggedOutAt or time() })
-        end
+        chatKept.restoreKept(self, cf, m)
     end
 
-    -- A whisper window's player: their kept whispers before what it holds.
     function WhisperWindowLines(cf: Window, m: Mirror)
-        local kind, target = chat.conversation(cf)
-        if kind ~= "WHISPER" or not target or target == "" then
-            return
-        end
-        if m.target == target:lower() then
-            return
-        end
-        self:FillWhispers(m, target)
+        chatKept.whisperWindowLines(self, cf, m)
     end
 
-    -- The kept whispers with a player into their window, before its own lines
-    -- (none twice): earlier sessions' dimmed, then the divider.
     function FillWhispers(m: Mirror, name: string)
-        m.target = name:lower()
-        local have: { [string]: boolean } = {}
-        for _, line in ipairs(m.lines) do
-            local src = line.src
-            if src then
-                have[src] = true
-            end
-        end
-        local list: Line[] = {}
-        local lastOld: number? = nil
-        for _, w in ipairs(self:WhispersWith(name)) do
-            if not have[w.text] then
-                list[#list + 1] = self:NewLine(m, w.text, w.r, w.g, w.b, w.at, w.old)
-                if w.old then
-                    lastOld = #list
-                end
-            end
-        end
-        if #list == 0 then
-            return
-        end
-        if lastOld then
-            table.insert(list, lastOld + 1, { divider = true, text = "", at = self.loggedOutAt or time() })
-        end
-        for _, line in ipairs(m.lines) do
-            list[#list + 1] = line
-        end
-        while #list > MAX_LINES do
-            table.remove(list, 1)
-        end
-        m.lines = list
-        m.drawnWithTime = nil
-        self:Redraw(m)
+        chatKept.fillWhispers(self, m, name)
     end
 
-    -- At logout (a reload too): each tab's last lines, the whispers, and the
-    -- classes of the names in them (a line's own sender is gone with its id).
     function SaveHistory()
-        local data = self:CharData()
-        if not self:Get("keepHistory") then
-            data.kept = nil
-            return
-        end
-        local kept: Kept = { at = time(), windows = {}, whispers = {}, classes = {} }
-        local function noteClasses(text: string)
-            for name in text:gmatch("|Hplayer:([^:|]+)") do
-                local key = name:lower()
-                local class = classByName[key] or classByName[key:match("^([^%-]+)") or key]
-                if class then
-                    kept.classes[key] = class
-                end
-            end
-        end
-        -- the newest `keep` of a list, oldest first
-        local function last<I>(list: I[], keep: number, make: (item: I) -> Saved?): Saved[]
-            local out: Saved[] = {}
-            for i = #list, 1, -1 do
-                local saved = make(list[i])
-                if saved then
-                    out[#out + 1] = saved
-                    noteClasses(saved.text)
-                    if #out >= keep then
-                        break
-                    end
-                end
-            end
-            for i = 1, math.floor(#out / 2) do
-                out[i], out[#out + 1 - i] = out[#out + 1 - i], out[i]
-            end
-            return out
-        end
-        for _, cf in ipairs(self:Windows()) do
-            local m = self.mirrors[cf]
-            local name = windowName(cf)
-            if m and not m.raw and not chat.isTemporary(cf) and name then
-                local lines = last(m.lines, KEEP_LINES, function(line: Line): Saved?
-                    local src = line.src
-                    return src and keptLine(src, line.r, line.g, line.b, line.at) or nil
-                end)
-                if #lines > 0 then
-                    kept.windows[idOf(cf)] = { name = name, lines = lines }
-                end
-            end
-        end
-        kept.whispers = last(self.whispers, KEEP_WHISPERS, function(w: Whisper): Saved?
-            local saved = keptLine(w.text, w.r, w.g, w.b, w.at)
-            if saved then
-                saved.who = w.who
-            end
-            return saved
-        end)
-        data.kept = kept
+        chatKept.saveHistory(self)
     end
 
-    -- Settings › Chat › Clear kept chat: the saved lines, the whispers and the
-    -- tabs' lines (or they'd be kept again at logout).
     function ClearHistory()
-        self:CharData().kept = nil
-        self.keptWindows = nil
-        self.whispers = {}
-        for _, m in pairs(self.mirrors) do
-            if not m.raw then
-                m.frame:Clear()
-                wipe(m.lines)
-                m.target = nil
-            end
-        end
-        self:RunSearch()
+        chatKept.clearHistory(self)
     end
 
     ----------------------------------------------------------------------------
-    -- The Search tab
+    -- The Search tab (Units/Chat/SearchPage)
     ----------------------------------------------------------------------------
 
     function ShowSearch(show: boolean)
-        if show and not self.search then
-            self.search = SearchPage.new(self:Panel().log)
-        end
-        local s = self.search
-        if not s then
-            return
-        end
-        s:SetShown(show)
-        local edit = s.field.edit
-        if show then
-            s.head:SetAlpha(1)
-            self:RunSearch()
-            edit:SetFocus()
-        elseif edit:HasFocus() then
-            edit:ClearFocus()
-        end
+        chatSearchPage.showSearch(self, show)
     end
 
-    -- Every kept line once (a whisper in General and in its window is one),
-    -- newest first.
     function KeptLines(): KeptEntry[]
-        local out: KeptEntry[] = {}
-        local seen: { [string]: boolean } = {}
-        local function add(
-            src: string,
-            line: Line,
-            r: unknown,
-            g: unknown,
-            b: unknown,
-            where: string,
-            whisper: boolean?
-        )
-            if seen[src] then
-                return
-            end
-            seen[src] = true
-            out[#out + 1] = {
-                src = src,
-                line = line,
-                r = r,
-                g = g,
-                b = b,
-                where = where,
-                whisper = whisper,
-                n = #out + 1,
-            }
-        end
-        for _, w in ipairs(self.whispers) do
-            local shown = w.shown
-            if not shown then
-                local classes: Classes = {}
-                shown = { text = self:FormatLine(w.text, nil, w.old, classes), at = w.at, classes = classes }
-                w.shown = shown
-            end
-            add(w.text, shown, w.r, w.g, w.b, KIND_LABEL.whisper or "Whispers", true)
-        end
-        for _, cf in ipairs(self:Windows()) do
-            local m = self.mirrors[cf]
-            if m and not m.raw and not chat.isTemporary(cf) then
-                local where = windowName(cf) or "Chat"
-                for _, line in ipairs(m.lines) do
-                    local src = line.src
-                    if src then
-                        add(src, line, line.r, line.g, line.b, where)
-                    end
-                end
-            end
-        end
-        table.sort(out, function(a: KeptEntry, b: KeptEntry): boolean
-            if a.line.at ~= b.line.at then
-                return a.line.at > b.line.at
-            end
-            return a.n > b.n
-        end)
-        return out
+        return chatSearchPage.keptLines(self)
     end
 
-    -- The lines with `q` (lower case) in them, in `scope`, by player, the
-    -- newest player first; and how many lines.
     function FindLines(q: string, scope: string): (Found[], number)
-        return chatSearch.findLines(self:KeptLines(), q, scope)
+        return chatSearchPage.findLines(self, q, scope)
     end
 
-    -- One matching line: its text (cut to show the match if it's long), the
-    -- match on a faint ink ground, underlined in the line's colour.
     function ShowRow(r: SearchRow, e: KeptEntry, q: string, size: number, width: number)
-        local text = asString(self:Render(e.line :: Line, true)) or ""
-        local cr, cg, cb = asNumber(e.r) or 1, asNumber(e.g) or 1, asNumber(e.b) or 1
-        r.text:SetFont(bodyFont(), size, "")
-        r.text:SetTextColor(cr, cg, cb)
-        r.ground:Hide()
-        r.under:Hide()
-        local x1, x2, shown, at, linkStarts, s = matchSpan(text, q, size)
-        if x2 and x2 > width - 2 and shown and at and linkStarts and s then
-            local cut = snippet(text, shown, at, linkStarts, s)
-            if cut then
-                text = cut
-                x1, x2 = matchSpan(text, q, size)
-            end
-        end
-        r.text:SetText(text)
-        if x1 and x2 and x2 <= width then
-            r.ground:ClearAllPoints()
-            r.ground:SetPoint("TOPLEFT", r, "TOPLEFT", x1 - 1, 0)
-            r.ground:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2 + 1, 0)
-            r.ground:Show()
-            r.under:ClearAllPoints()
-            r.under:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", x1, 2)
-            r.under:SetPoint("BOTTOMRIGHT", r, "BOTTOMLEFT", x2, 2)
-            r.under:SetHeight(1)
-            r.under:SetVertexColor(cr, cg, cb)
-            r.under:Show()
-        end
+        chatSearchPage.showRow(self, r, e, q, size, width)
     end
 
-    -- The search again: on typing, a chip, the tab chosen, a group opened.
     function RunSearch()
-        local s = self.search
-        if not (s and s:IsShown()) then
-            return
-        end
-        for _, b in ipairs(s.chips) do
-            local on = b.value == s.scope
-            UI.PaintFill(b.bg, on and "arcane-soft" or "surface-raised")
-            b.edge:SetColor(on and "arcane" or "gilt-line")
-            b.label:SetColor(on and "ink" or "ink-muted")
-        end
-        local query = strtrim(s.field.edit:GetText() or "")
-        local q = query:lower()
-        -- a new search starts at the top, its groups closed
-        if q ~= s.lastQuery or s.scope ~= s.lastScope then
-            s.lastQuery, s.lastScope = q, s.scope
-            wipe(s.open)
-            s.scroll:SetVerticalScroll(0)
-        end
-        for _, h in ipairs(s.headers) do
-            h:Hide()
-        end
-        for _, r in ipairs(s.rows) do
-            r:Hide()
-        end
-        for _, b in ipairs(s.mores) do
-            b:Hide()
-        end
-        local groups: Found[], total = {}, 0
-        if #q >= 2 then
-            groups, total = self:FindLines(q, s.scope)
-        end
-        s.count:SetValue(chatSearch.countText(q, total))
-        s.note:SetValue(chatSearch.noteText(q, total))
-        local width = logWidth() - 8
-        local size = fontSize(ChatFrame1)
-        local rowH = math.ceil(size) + 5
-        local y = 0
-        local nh, nr, nm = 0, 0, 0
-        for gi, group in ipairs(groups) do
-            if nr >= MAX_ROWS then
-                break
-            end
-            if gi > 1 then
-                y = y + S["space-2"]
-            end
-            nh = nh + 1
-            local h = s:Header(nh)
-            h.rule:SetShown(gi > 1)
-            local who = group.who
-            local name = who and who:match("^([^%-]+)")
-            local class = who and classOf(who)
-            local classToken = class and "class-" .. class:lower()
-            local token = classToken and isColor(classToken) and classToken or nil
-            UI.Paint(h.jewel, token or "ink-muted")
-            h.jewel:SetShown(name ~= nil)
-            h.name:ClearAllPoints()
-            h.name:SetPoint("LEFT", h, "LEFT", name and (6 + S["space-3"]) or 0, -2)
-            h.name:SetValue(name or "Other lines")
-            h.name:SetColor(token or (name and "ink" or "gilt-text"))
-            local n = #group.lines
-            h.count:SetValue(chatSearch.groupCount(group))
-            h.who = who
-            h.whisper:SetShown(who ~= nil and not isMe(group.key) and field(_G, "FCF_OpenTemporaryWindow") ~= nil)
-            h:ClearAllPoints()
-            h:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
-            h:SetWidth(width)
-            h:Show()
-            y = y + GROUP_H
-            local shownLines = s.open[group.key] and n or math.min(GROUP_SHOWN, n)
-            for li = 1, shownLines do
-                if nr >= MAX_ROWS then
-                    break
-                end
-                nr = nr + 1
-                local r = s:Row(nr)
-                r:SetSize(width, rowH)
-                r:ClearAllPoints()
-                r:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
-                self:ShowRow(r, group.lines[li], q, size, width)
-                r:Show()
-                y = y + rowH + ROW_GAP
-            end
-            if n > shownLines then
-                nm = nm + 1
-                local b = s:More(nm)
-                b.key = group.key
-                b.label:SetValue((n - shownLines) .. " more")
-                b:SetWidth(math.ceil(UI.MeasureText("caption", tostring(b.label.value or ""))) + 4)
-                b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", s.list, "TOPLEFT", 0, -y)
-                b:Show()
-                y = y + MORE_H
-            end
-        end
-        s.note:SetShown(nh == 0)
-        s.list:SetHeight(math.max(1, y))
+        chatSearchPage.runSearch(self)
     end
 
     ----------------------------------------------------------------------------
@@ -3345,7 +927,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.windowsPending = true
-        after(0, function()
+        self:After(0, function()
             self.windowsPending = nil
             if self:IsEnabled() then
                 self:RefreshWindows()
@@ -3440,68 +1022,11 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
-    -- The Global tab
+    -- The Global tab (Units/Chat/GlobalTab)
     ----------------------------------------------------------------------------
 
-    -- Channels live on the windows on this client: frame:AddChannel(name),
-    -- frame:RemoveChannel(name), frame:RemoveAllMessageGroups() (/suu probe chat).
     function ApplyGlobalTab()
-        if not self:Get("globalTab") or InCombatLockdown() then
-            return
-        end
-        local general = ChatFrame1
-        if not (field(general, "AddChannel") and field(general, "RemoveChannel")) then
-            if not self.warnedGlobal then
-                self.warnedGlobal = true
-                self:Print(
-                    "This client's chat windows have no AddChannel/RemoveChannel: the Global tab can't be set up."
-                )
-            end
-            return
-        end
-        local global = windowNamed("Global")
-        if not global then
-            -- a "Guild" tab becomes Global (its guild messages go back to General), else a new tab
-            local guild = windowNamed("Guild")
-            local rename, open = field(_G, "FCF_SetWindowName"), field(_G, "FCF_OpenNewWindow")
-            if guild and rename then
-                errors.try(rename, guild, "Global")
-                channelCall(guild, "RemoveAllMessageGroups")
-                global = guild
-            elseif open then
-                global = chat.asWindow(errors.try(open, "Global")) or windowNamed("Global")
-                if global then
-                    channelCall(global, "RemoveAllMessageGroups")
-                end
-            end
-        end
-        if not global then
-            return
-        end
-        -- (its place among the tabs is the player's: dragging it, as with any
-        -- tab; moving the dock from addon code upsets whisper windows, and the
-        -- game docks by its own order on load)
-        -- everything General was set to show, and every channel you're in
-        local channels: string[] = {}
-        local seen: { [string]: boolean } = {}
-        for _, list in ipairs({ windowChannels(idOf(general)), joinedChannels() }) do
-            for _, name in ipairs(list) do
-                if not seen[name] then
-                    seen[name] = true
-                    channels[#channels + 1] = name
-                end
-            end
-        end
-        for _, name in ipairs(channels) do
-            -- channels the group finder reads but keeps out of chat
-            -- (LookingForGroup): on no window
-            if SuuUI.LFG.IsHiddenChannel(name) then
-                channelCall(global, "RemoveChannel", name)
-            else
-                channelCall(global, "AddChannel", name)
-            end
-            channelCall(general, "RemoveChannel", name)
-        end
+        chatGlobalTab.applyGlobalTab(self)
     end
 
     ----------------------------------------------------------------------------
@@ -3566,20 +1091,15 @@ class ChatModule extends Module<typeof(DEFAULTS)>
     function Layout()
         local w, h = self:PanelSize()
         self:Panel():SetSize(w, h)
-        after(0, function()
-            if self:IsEnabled() then
-                self:PlaceChat()
-            end
+        self:After(0, function()
+            self:PlaceChat()
         end)
     end
 
     -- Skinned and placed a frame later (never while the chat code is
     -- mid-update).
     function SkinSoon()
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
+        self:After(0, function()
             self:SkinAll()
             self:PlaceChat()
             self:RefreshWindows()
@@ -3594,13 +1114,14 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         end
         local p = self.panel or ChatPanel.new()
         self.panel = p
+        p:Show()
         -- the kept chat, before the first window's mirror is made
         self:LoadHistory()
         self:Layout()
         self:RegisterMover(p, { key = "position", label = "Chat", managedShow = true })
         -- the lines' box (tabs and lines, without the input): the command
         -- palette opens over it
-        SuuUI.PublishAnchor("chat", p.box)
+        SuuUI.PublishAnchor("chat", p.box, self)
         self:RegisterSettings(SECTION)
         self:Wake()
         self:SkinSoon()
@@ -3611,7 +1132,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                 if self.placing or not self:IsEnabled() then
                     return
                 end
-                after(0, function()
+                self:After(0, function()
                     self:PlaceChat()
                 end)
             end)
@@ -3632,11 +1153,9 @@ class ChatModule extends Module<typeof(DEFAULTS)>
         -- a whisper opens a temporary window: skinned a frame later
         for _, e in ipairs(WHISPER_EVENTS) do
             self:OnGameEvent(e, function()
-                after(0, function()
-                    if self:IsEnabled() then
-                        self:SkinAll()
-                        self:RefreshWindows()
-                    end
+                self:After(0, function()
+                    self:SkinAll()
+                    self:RefreshWindows()
                 end)
             end)
         end
@@ -3652,17 +1171,13 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:ApplyGlobalTab()
         end)
         -- the channels settle a moment after login; joins and leaves later
-        after(3, function()
-            if self:IsEnabled() then
-                self:ApplyGlobalTab()
-            end
+        self:After(3, function()
+            self:ApplyGlobalTab()
         end)
         for _, e in ipairs(CHANNEL_EVENTS) do
             self:OnGameEvent(e, function()
-                after(0.5, function()
-                    if self:IsEnabled() then
-                        self:ApplyGlobalTab()
-                    end
+                self:After(0.5, function()
+                    self:ApplyGlobalTab()
                 end)
             end)
         end
@@ -3687,7 +1202,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:ApplyGlobalTab()
         end)
         self:Watch("position", function()
-            after(0, function()
+            self:After(0, function()
                 self:PlaceChat()
             end)
         end)
@@ -3706,7 +1221,7 @@ class ChatModule extends Module<typeof(DEFAULTS)>
             self:EditModeChanged(on)
         end)
         self:On("SUUUI_ROOT_SCALED", function()
-            after(0, function()
+            self:After(0, function()
                 self:PlaceChat()
             end)
         end)
@@ -3727,6 +1242,21 @@ class ChatModule extends Module<typeof(DEFAULTS)>
                     self:Tick()
                 end
             end)
+        end
+        assert(self.driver):Show()
+    end
+
+    -- Only after a failed OnEnable (reloadToToggle; X-11.a7): the panel and
+    -- the driver away. The anchor "chat" goes with the release, and so do
+    -- the timers that would have moved Blizzard's chat into the panel.
+    override function OnDisable()
+        local p = self.panel
+        if p then
+            p:Hide()
+        end
+        local driver = self.driver
+        if driver then
+            driver:Hide()
         end
     end
 end

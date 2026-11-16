@@ -73,10 +73,36 @@ import * as settings from "./Settings"
 import * as events from "./Events"
 import * as vision from "./Vision"
 import * as fonts from "./Fonts"
-import * as draw from "/UI/Draw"
-import * as dress from "/UI/Dress"
 import type Dress, DressPiece from "/UI/Dress"
 import * as secret from "wowlua:secret"
+
+-- The frame kinds a theme's dress dresses (UI/Dress draws it).
+export const DRESS_KINDS: { [string]: boolean } = { window = true, minimap = true, unit = true, chat = true }
+
+-- (SET-7) What draws a theme on SuuUI's frames: UI/Draw (tiled bar art,
+-- the textures, the kept colours, layouts) and UI/Dress (the art on the
+-- frames) hand their parts over as they load; the core imports neither.
+-- Each part does nothing until then.
+export type ThemePainter = {
+    setTiles?: (heights: { [string]: number }) -> (),
+    reskin?: () -> (),
+    dress?: (d: Dress?) -> (),
+    repaint?: (changed: { [string]: boolean }?, texts: boolean?) -> (),
+    relayout?: () -> (),
+}
+local function nothing() end
+local paintTiles: (heights: { [string]: number }) -> () = nothing
+local paintReskin: () -> () = nothing
+local paintDress: (d: Dress?) -> () = nothing
+local paintRepaint: (changed: { [string]: boolean }?, texts: boolean?) -> () = nothing
+local paintRelayout: () -> () = nothing
+export function paintWith(parts: ThemePainter)
+    paintTiles = parts.setTiles or paintTiles
+    paintReskin = parts.reskin or paintReskin
+    paintDress = parts.dress or paintDress
+    paintRepaint = parts.repaint or paintRepaint
+    paintRelayout = parts.relayout or paintRelayout
+end
 
 export type ThemeColors = { [string]: number[] }
 export type ThemeFonts = { [string]: { file?: string, size?: number, lineHeight?: number } }
@@ -362,7 +388,7 @@ local function dressOf(id: string, given: unknown): Dress
     end
     local out: Dress = {}
     for kind, spec in pairs(given :: { [unknown]: unknown }) do
-        if type(kind) ~= "string" or not dress.KINDS[kind] then
+        if type(kind) ~= "string" or not DRESS_KINDS[kind] then
             error(
                 ("SuuUI.RegisterTheme: %s's dress has no frame kind %q (window, minimap, unit, chat)"):format(
                     id,
@@ -664,7 +690,7 @@ export function apply()
             end
         end
     end
-    draw.setTiles(tiles)
+    paintTiles(tiles)
     for name, file in pairs(theme.glyphs) do
         if glyphs[name] then
             glyphs[name] = file
@@ -698,14 +724,14 @@ export function apply()
     local retyped = fonts.refresh()
     -- (files first: a bar's new file may take the bar's colour; repaint
     -- then sets every kept colour)
-    draw.reskin()
+    paintReskin()
     -- (0.40) the dress: art on the frames, header art, motion
-    dress.apply(theme.dress)
-    draw.repaint(changed, retyped)
+    paintDress(theme.dress)
+    paintRepaint(changed, retyped)
     -- (spacing or sizes moved: what keeps its layout is laid out again,
     -- then the modules lay out the rest on the message)
     if geometry() ~= before then
-        draw.relayout()
+        paintRelayout()
     end
     events.emit("SUUUI_THEME_CHANGED", applied)
 end

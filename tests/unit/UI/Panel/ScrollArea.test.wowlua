@@ -1,0 +1,243 @@
+-- UI/Panel/ScrollArea: scrollArea (wheel, scrollbar, dragging, settling),
+-- and the client's OnVerticalScroll checked against the emulator.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import scrollArea, ScrollArea from "/UI/Panel/ScrollArea"
+import expectNoErrors, newParent from "../../../helpers"
+import tokenOf, pointOf from "../PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+@beforeEach
+local function fresh()
+    mock.resetSpies()
+    parent = newParent(800, 600)
+end
+
+@afterEach
+local function cleanup()
+    mock.hover(nil)
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+local function host(): Frame
+    return parent :: Frame
+end
+
+local function y(r: Region?, i: number?): number
+    return assert(pointOf(r, i)).y
+end
+
+--------------------------------------------------------------------------------
+-- scrollArea
+--------------------------------------------------------------------------------
+
+local function area(bar: number?): ScrollArea
+    local s = scrollArea(host(), bar)
+    s:SetPoint("TOPLEFT")
+    s:SetSize(200, 100)
+    return s
+end
+
+@test("the wheel scrolls 48 a notch, within the content")
+local function wheel()
+    local s = area()
+    expect(s:GetScrollChild()).toBe(s.child)
+    expect(s.track).toBeNil()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -1)
+    expect(s:GetVerticalScroll()).toBe(48)
+    mock.wheel(s, -10)
+    expect(s:GetVerticalScroll()).toBe(200)
+    mock.wheel(s, 1)
+    expect(s:GetVerticalScroll()).toBe(152)
+    mock.wheel(s, 10)
+    expect(s:GetVerticalScroll()).toBe(0)
+end
+
+@test("content that got shorter pulls the scroll back a frame later")
+local function settles()
+    local s = area()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -10)
+    s.child:SetHeight(150)
+    expect(s:GetVerticalScroll()).toBe(200)
+    mock.advanceFrames(2)
+    expect(s:GetVerticalScroll()).toBe(50)
+end
+
+@test("a secret scroll range (the game's, in combat): the heights tell it, without errors")
+local function secretRange()
+    local s = area()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -10)
+    mock.stub(s, "GetVerticalScrollRange", function(): unknown
+        return mock.secret(150)
+    end)
+    s.child:SetHeight(150)
+    mock.advanceFrames(2)
+    expect(s:GetVerticalScroll()).toBe(50)
+    expectNoErrors()
+end
+
+@test("the scrollbar shows while the content overflows, its thumb the visible part")
+local function bar()
+    local s = area(6)
+    local track, thumb = s.track :: Texture, s.thumb :: Texture
+    expect(tokenOf(track)).toBe("gilt-faint")
+    expect(tokenOf(thumb)).toBe("ink-muted")
+    expect(pointOf(track)).toEqual({ point = "TOPLEFT", relativeTo = s, relativePoint = "TOPRIGHT", x = 6, y = 0 })
+    expect(track).never.toBeShown()
+    expect(s.grip).never.toBeShown()
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    expect(track).toBeShown()
+    expect(thumb).toBeShown()
+    expect(s.grip).toBeShown()
+    expect(thumb:GetHeight()).toBeCloseTo(math.max(24, 100 * 100 / 400), 3)
+    mock.wheel(s, -10)
+    expect(s:GetVerticalScroll()).toBe(300)
+    -- the client runs OnVerticalScroll from SetVerticalScroll; the VM may
+    -- not (see the probe below), so it is run here as the client would
+    mock.script(s, "OnVerticalScroll", 300)
+    expect(y(thumb)).toBeCloseTo(-(100 - thumb:GetHeight()), 3)
+    -- hover lights the thumb
+    mock.hover(s.grip)
+    expect(tokenOf(thumb)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(thumb)).toBe("ink-muted")
+end
+
+@test("pressing the track jumps the thumb there; dragging follows until release")
+local function drag()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    local track, thumb = s.track :: Texture, s.thumb :: Texture
+    local scale = track:GetEffectiveScale()
+    local top = track:GetTop() :: number
+    local cursorY = (top - 50) * scale
+    mock.fake("GetCursorPosition", function(): (number, number)
+        return 0, cursorY
+    end)
+    local down = true
+    mock.fake("IsMouseButtonDown", function(_b: string?): boolean
+        return down
+    end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.dragging).toBe(true)
+    expect(s.grab).toBe(thumb:GetHeight() / 2)
+    local range = 100 - thumb:GetHeight()
+    expect(s:GetVerticalScroll()).toBeCloseTo(300 * (50 - thumb:GetHeight() / 2) / range, 3)
+    -- the cursor moves down to the bottom: the scroll follows, clamped
+    cursorY = (top - 500) * scale
+    mock.advanceFrames(1)
+    expect(s:GetVerticalScroll()).toBe(300)
+    -- the button let go outside: dragging stops
+    down = false
+    mock.advanceFrames(1)
+    expect(s.dragging).toBe(false)
+    cursorY = top * scale
+    mock.advanceFrames(1)
+    expect(s:GetVerticalScroll()).toBe(300)
+end
+
+@test("pressing on the thumb keeps the spot grabbed; the release ends the drag")
+local function grabThumb()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    local thumb = s.thumb :: Texture
+    local scale = (s.track :: Texture):GetEffectiveScale()
+    local thumbTop = thumb:GetTop() :: number
+    mock.fake("GetCursorPosition", function(): (number, number)
+        return 0, (thumbTop - 5) * scale
+    end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.grab).toBeCloseTo(5, 3)
+    expect(s:GetVerticalScroll()).toBeCloseTo(0, 3)
+    mock.script(s.grip, "OnMouseUp", "LeftButton")
+    expect(s.dragging).toBe(false)
+end
+
+@test("a press with nothing to scroll, or an unplaced thumb, does nothing")
+local function dragNothing()
+    local s = area(6)
+    mock.advanceFrames(1)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s:GetVerticalScroll()).toBe(0)
+    local loose = scrollArea(host(), 4)
+    mock.script(loose.grip, "OnMouseDown", "LeftButton")
+    expect(loose.dragging).toBeNil()
+end
+
+@test("content that no longer overflows, or a view shorter than the thumb, isn't dragged")
+local function dragNoRoom()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    s.child:SetHeight(50) -- the thumb keeps its place, hidden
+    mock.advanceFrames(2)
+    mock.fake("GetCursorPosition", function(): (number, number)
+        return 0, 0
+    end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s:GetVerticalScroll()).toBe(0)
+    local short = area(6)
+    short:SetHeight(20) -- the thumb's 24px minimum fills it
+    short.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    mock.script(short.grip, "OnMouseDown", "LeftButton")
+    expect(short:GetVerticalScroll()).toBe(0)
+end
+
+@test("a press above the thumb grabs its middle")
+local function pressAbove()
+    local s = area(6)
+    s.child:SetSize(200, 400)
+    mock.advanceFrames(1)
+    mock.wheel(s, -10)
+    mock.script(s, "OnVerticalScroll", 300)
+    local thumb = s.thumb :: Texture
+    local scale = (s.track :: Texture):GetEffectiveScale()
+    local top = (s.track :: Texture):GetTop() :: number
+    mock.fake("GetCursorPosition", function(): (number, number)
+        return 0, (top - 2) * scale
+    end)
+    mock.script(s.grip, "OnMouseDown", "LeftButton")
+    expect(s.grab).toBeCloseTo(thumb:GetHeight() / 2, 3)
+    expect(s:GetVerticalScroll()).toBe(0)
+end
+
+@test("several size changes in a frame settle once")
+local function settleOnce()
+    local s = area()
+    s.child:SetSize(200, 300)
+    mock.wheel(s, -10)
+    s.child:SetHeight(150)
+    s:SetHeight(120)
+    mock.advanceFrames(2)
+    expect(s:GetVerticalScroll()).toBe(30)
+end
+
+--------------------------------------------------------------------------------
+-- VM probes (what the client does, checked against the emulator)
+--------------------------------------------------------------------------------
+
+@test("VM probe: SetVerticalScroll runs OnVerticalScroll")
+local function probeVerticalScroll()
+    local s = area()
+    s.child:SetSize(200, 400)
+    local runs = 0
+    s:HookScript("OnVerticalScroll", function()
+        runs += 1
+    end)
+    s:SetVerticalScroll(50)
+    mock.advanceFrames(1)
+    expect(runs).toBe(1)
+end

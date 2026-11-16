@@ -1,0 +1,201 @@
+-- Units/LootRolls/Lines.wowlua
+-- The game's loot lines read (Units/LootRolls): what a CHAT_MSG_LOOT line
+-- about a group roll says. A vote ("X has selected Need for: [Item]",
+-- yours or another's), the number someone rolled, who won, everyone
+-- passed. The patterns come from the client's own format strings. A line
+-- names an item and a player, never the roll: which open roll it is about
+-- is decided by the roll records (LootRolls/Rolls). Pure: the text in, a
+-- reading out.
+
+import * as tbl from "wowlua:table"
+
+export type ChoiceKey = "need" | "greed" | "pass"
+
+-- What a loot line says. `what`: "vote", "rolled", "won" or "allPassed";
+-- `mine`: about you ("You have selected…", "You won…"), `who` empty then;
+-- `who` another player as the line names them; `link` the item; `choice`
+-- the vote or the rolled choice; `value` the number rolled.
+export type Reading = {
+    what: string,
+    mine: boolean,
+    who: string,
+    link: string,
+    choice?: ChoiceKey,
+    value?: number,
+}
+
+-- The game's loot line formats as patterns: the pattern, the order of its
+-- captures and how many of its characters are literal (the more, the more
+-- specific).
+export type Pattern = { pattern: string, order: number[], literal: number }
+-- What a loot line says: the captures, in the format's argument order.
+type Captures = { [number]: string }
+type LineFn = (c: Captures) -> Reading
+type Line = { pattern: Pattern, fn: LineFn, index: number }
+
+-- "%s has selected Need for: %s" → "^(.+) has selected Need for: (.+)$".
+-- `shift`: numbered arguments (%2$s) counted from one later (the loot
+-- history link, the first, taken off).
+export function pattern(fmt: unknown, shift: number?): Pattern?
+    if type(fmt) ~= "string" then
+        return nil
+    end
+    local out: string[], order: number[], auto, i, literal = { "^" }, {}, 0, 1, 0
+    while i <= #fmt do
+        local c = fmt:sub(i, i)
+        if c == "%" then
+            local pos, typed = fmt:match("^%%(%d)%$([sd])", i)
+            local t: string? = typed
+            if pos then
+                order[#order + 1] = (tonumber(pos) or 0) - (shift or 0)
+                out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
+                i = i + 4
+            else
+                t = fmt:match("^%%([sd])", i)
+                if t then
+                    auto = auto + 1
+                    order[#order + 1] = auto
+                    out[#out + 1] = t == "d" and "(%d+)" or "(.+)"
+                else
+                    out[#out + 1] = "%%" -- "%%": a percent sign
+                    literal = literal + 1
+                end
+                i = i + 2
+            end
+        else
+            out[#out + 1] = c:find("[%^%$%(%)%.%[%]%*%+%-%?]") and ("%" .. c) or c
+            literal = literal + 1
+            i = i + 1
+        end
+    end
+    out[#out + 1] = "$"
+    return { pattern = table.concat(out), order = order, literal = literal }
+end
+
+export function match(pat: Pattern?, text: string): Captures?
+    if not pat then
+        return nil
+    end
+    local caps = { text:match(pat.pattern) }
+    if #caps == 0 then
+        return nil
+    end
+    local out: Captures = {}
+    for i, at in ipairs(pat.order) do
+        out[at] = caps[i]
+    end
+    return out
+end
+
+-- This client's loot lines start with a link to the loot history
+-- ("|HlootHistory:%d|h[Loot]|h: %s has selected Need for: %s"): it goes
+-- from the formats and the lines, so the captures are who, the item, the
+-- number (counted from the start, the history's number came first and no
+-- vote, number or winner was ever matched). (The number is the
+-- encounter's, Blizzard's link handler opens the loot history at it: it
+-- names no roll.)
+local HISTORY_FORMAT = "^|HlootHistory:%%[%d%$]*d|h%[.-%]|h:%s*"
+local HISTORY_LINE = "^|HlootHistory:%d+|h%[.-%]|h:%s*"
+
+local function reading(what: string, mine: boolean, who: string?, link: string?, choice: ChoiceKey?, value: number?): Reading
+    return { what = what, mine = mine, who = who or "", link = link or "", choice = choice, value = value }
+end
+
+local LINES: Line[]? = nil
+local function lines(): Line[]
+    local known = LINES
+    if known then
+        return known
+    end
+    local list: Line[] = {}
+    LINES = list
+    local function add(global: string, fn: LineFn)
+        local given = tbl.field(_G, global)
+        -- (without the loot history link: HISTORY_FORMAT)
+        local fmt: unknown, shift = given, 0
+        if type(given) == "string" then
+            fmt, shift = given:gsub(HISTORY_FORMAT, "")
+        end
+        local p = pattern(fmt, shift)
+        if p then
+            list[#list + 1] = { pattern = p, fn = fn, index = #list + 1 }
+        end
+    end
+    -- the end, yours and everyone's
+    add("LOOT_ROLL_ALL_PASSED", function(c: Captures): Reading
+        return reading("allPassed", false, nil, c[1])
+    end)
+    add("LOOT_ROLL_YOU_WON", function(c: Captures): Reading
+        return reading("won", true, nil, c[1])
+    end)
+    -- your votes: (item)
+    add("LOOT_ROLL_NEED_SELF", function(c: Captures): Reading
+        return reading("vote", true, nil, c[1], "need")
+    end)
+    add("LOOT_ROLL_GREED_SELF", function(c: Captures): Reading
+        return reading("vote", true, nil, c[1], "greed")
+    end)
+    add("LOOT_ROLL_PASSED_SELF", function(c: Captures): Reading
+        return reading("vote", true, nil, c[1], "pass")
+    end)
+    add("LOOT_ROLL_PASSED_SELF_AUTO", function(c: Captures): Reading
+        return reading("vote", true, nil, c[1], "pass")
+    end)
+    -- others' votes: (who, item)
+    add("LOOT_ROLL_NEED", function(c: Captures): Reading
+        return reading("vote", false, c[1], c[2], "need")
+    end)
+    add("LOOT_ROLL_GREED", function(c: Captures): Reading
+        return reading("vote", false, c[1], c[2], "greed")
+    end)
+    add("LOOT_ROLL_PASSED_AUTO", function(c: Captures): Reading
+        return reading("vote", false, c[1], c[2], "pass")
+    end)
+    add("LOOT_ROLL_PASSED_AUTO_FEMALE", function(c: Captures): Reading
+        return reading("vote", false, c[1], c[2], "pass")
+    end)
+    add("LOOT_ROLL_PASSED", function(c: Captures): Reading
+        return reading("vote", false, c[1], c[2], "pass")
+    end)
+    -- the numbers: (value, item, who)
+    add("LOOT_ROLL_ROLLED_NEED", function(c: Captures): Reading
+        return reading("rolled", false, c[3], c[2], "need", tonumber(c[1]))
+    end)
+    add("LOOT_ROLL_ROLLED_GREED", function(c: Captures): Reading
+        return reading("rolled", false, c[3], c[2], "greed", tonumber(c[1]))
+    end)
+    -- someone else won
+    add("LOOT_ROLL_WON", function(c: Captures): Reading
+        return reading("won", false, c[1], c[2])
+    end)
+    -- The specific lines before the general ones: "You passed on: X",
+    -- "Everyone passed on: X", "You won: X" and "X automatically passed
+    -- on: Y because he cannot loot that item." fit "%s passed on: %s" and
+    -- "%s won: %s" too, with "You", "Everyone" or "X automatically" as a
+    -- player (review 2026-11-15, CHAT-24). So the line with more of its
+    -- text fixed is tried first (the order above among equals).
+    table.sort(list, function(a: Line, b: Line): boolean
+        if a.pattern.literal ~= b.pattern.literal then
+            return a.pattern.literal > b.pattern.literal
+        end
+        return a.index < b.index
+    end)
+    return list
+end
+
+-- What a loot line says (nil: not a roll's line).
+export function read(text: string): Reading?
+    local plain = text:gsub(HISTORY_LINE, "")
+    for _, line in ipairs(lines()) do
+        local caps = match(line.pattern, plain)
+        if caps then
+            return line.fn(caps)
+        end
+    end
+    return nil
+end
+
+-- The patterns built again from the client's formats (a test changing one).
+export function reset()
+    LINES = nil
+end

@@ -16,14 +16,8 @@
 -- Blizzard's frames are stood down; only a reload brings them back, so this
 -- module turns off or on after a reload.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Position from "/EditMode/EditMode"
-import type UnitFrame, UnitFrameOptions, StandInPerson from "/UI/UnitFrame"
-import type RestedSign from "/UI/RestedSign"
-import type CombatBadge from "/UI/CombatBadge"
-import type Text from "/UI/Text"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position, UnitFrame, UnitFrameOptions, StandInPerson, RestedSign, CombatBadge, Text from "/Core/API"
 import isSecret as isSecretValue from "wowlua:secret"
 import * as secret from "wowlua:secret"
 
@@ -204,15 +198,10 @@ local function standDownBlizzard()
     end
 end
 
--- A curve's answer as an amount: a number (the curves here give numbers),
--- or the secret it is. A colour (never, with these curves) is 0.
-type CurveResult = LuaCurveEvaluatedResult | Secret<LuaCurveEvaluatedResult> | nil
-local function curveAmount(r: CurveResult): number | Secret<number>
-    if isSecret(r) then
-        return r :: Secret<number>
-    end
-    return type(r) == "number" and r or 0
-end
+-- A curve's answer as an amount: a number, or the secret it is (the unit
+-- frames' own, UI.CurveAmount; a local, as the pips and the low-health
+-- glow ask on every update).
+local curveAmount = SuuUI.UI.CurveAmount
 
 --------------------------------------------------------------------------------
 -- Combo points: five diamonds on the target frame's top edge at its left
@@ -1124,11 +1113,12 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         })
         self:Watch("showBoss", SuuUI.EditMode.Refresh)
         -- Published, so other modules (cast bars, auras) and plugins can attach to them.
+        -- (withdrawn by the registry when the module turns off)
         for _, d in ipairs(FRAMES) do
-            SuuUI.PublishAnchor(d.unit, self:FrameOf(d.key))
+            SuuUI.PublishAnchor(d.unit, self:FrameOf(d.key), self)
         end
         for i = 1, BOSSES do
-            SuuUI.PublishAnchor("boss" .. i, self.bosses[i])
+            SuuUI.PublishAnchor("boss" .. i, self.bosses[i], self)
         end
         self:RegisterSettings(SECTION)
         self:UpdateVisibility()
@@ -1146,10 +1136,10 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         end
         for _, d in ipairs(FRAMES) do
             local f = self:FrameOf(d.key)
-            f:HookScript("OnEnter", function()
+            self:HookScript(f, "OnEnter", function()
                 self:UpdateFade()
             end)
-            f:HookScript("OnLeave", function()
+            self:HookScript(f, "OnLeave", function()
                 self:UpdateFade()
             end)
         end
@@ -1202,6 +1192,11 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
             "bossPosition",
         }, function()
             self:UpdateVisibility()
+        end)
+        -- a frame turned on mid-session: Blizzard's own stood down as at
+        -- login (again for the others: suppressing is once per frame)
+        self:WatchAll({ "showToT", "showFocus", "showPet", "showBoss" }, function()
+            self:RunOutOfCombat("standDown", standDownBlizzard)
         end)
         self:WatchAll({ "width", "height" }, function()
             self:ApplySize()
@@ -1278,13 +1273,8 @@ class UnitFramesModule extends Module<typeof(DEFAULTS)>
         -- Only reached when the module errors: the module toggles on reload.
         local frames = self.frames
         if frames then
-            -- Withdraw the anchors, so nothing stays attached to frames that are gone.
-            for _, d in ipairs(FRAMES) do
-                SuuUI.PublishAnchor(d.unit, nil)
-            end
-            for i = 1, BOSSES do
-                SuuUI.PublishAnchor("boss" .. i, nil)
-            end
+            -- (the registry withdraws the anchors, so nothing stays attached
+            -- to frames that are gone)
             local sign = self.restedSign
             if sign then
                 sign:SetLook(nil)

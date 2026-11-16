@@ -1,0 +1,106 @@
+-- Units/Bags/Saved: other characters' saved bags and bank in the picker
+-- (read only, dated, linked), item counts in tooltips, and the Forget row.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Bags"
+import expectNoErrors, newParent from "../../../helpers"
+import hasLine from "../../SettingsUI/UiSettingsHelpers"
+import start as startBags, cleanup as cleanupBags, CLOTH, open, metaText, run, OTHER, others, who, view, savedSlot from "./BagsHelpers"
+
+@beforeEach
+local function start()
+    startBags()
+end
+
+@afterEach
+local function cleanup()
+    cleanupBags()
+end
+
+--------------------------------------------------------------------------------
+-- Other characters, the search
+--------------------------------------------------------------------------------
+
+@test("the picker shows another character's bags or bank, read only, dated")
+local function otherCharacter()
+    others()
+    open()
+    M:UpdatePicker()
+    run(who().onChange, OTHER)
+    expect(M:IsLive()).toBe(false)
+    expect(savedSlot(1)).toBeShown()
+    expect(metaText()).toBe("1 free of 2")
+    mock.hover(savedSlot(1))
+    expect(GameTooltip).toBeShown()
+    mock.hover(nil)
+    local link = mock.stub(_G, "HandleModifiedItemClick", function(_: string) end)
+    mock.stub(_G, "IsModifiedClick", function(_: string?): boolean
+        return true
+    end)
+    mock.click(savedSlot(1))
+    expect(link).toHaveBeenCalledTimes(1)
+    run(view().onChange, "bank")
+    expect(metaText()).toBe("0 free of 1")
+    -- closing goes back to your own bags
+    M:SetOpen(false)
+    open()
+    expect(M:IsLive()).toBe(true)
+end
+
+@test("item counts: which characters have how many, where, and the total")
+local function counts()
+    others()
+    M:SaveMe()
+    local lines: string[] = {}
+    local tip: GameTooltip = mock.partial({
+        AddLine = function(_: unknown, t: string)
+            lines[#lines + 1] = t
+        end,
+        AddDoubleLine = function(_: unknown, l: string, r: string)
+            lines[#lines + 1] = l .. " | " .. r
+        end,
+        Show = function(_: unknown) end,
+    })
+    M:AddCounts(tip, { id = CLOTH })
+    expect(hasLine(lines, "Bags 3")).toBe(true)
+    expect(hasLine(lines, "Bags 4")).toBe(true)
+    expect(hasLine(lines, "Total | ")).toBe(true)
+    lines = {}
+    M:AddCounts(tip, { id = 1 }) -- nobody has it
+    M:AddCounts(tip, { id = mock.secret(CLOTH) })
+    M:Set("itemCounts", false)
+    M:AddCounts(tip, { id = CLOTH })
+    expect(#lines).toBe(0)
+end
+
+@test("Forget a character: chosen, then a second click; the picker loses them")
+local function forget()
+    others()
+    local f = M:ForgetRow(newParent(400, 100))
+    expect(#f.select.options).toBe(1)
+    mock.click(f.button) -- nothing chosen
+    run(f.select.onChange, OTHER)
+    mock.click(f.button)
+    expect(f.button.label:GetText()).toBe("Click again")
+    mock.advanceTime(3.1)
+    expect(f.button.label:GetText()).toBe("Forget")
+    mock.click(f.button)
+    local forgot = mock.stub(M, "ForgetCharData", function(_: unknown, _: string) end)
+    mock.click(f.button)
+    expect(forgot).toHaveBeenCalledWith(M, OTHER)
+    f:Hide()
+    f:Show()
+end
+
+@test("SavedBags: made with the module; the saved characters, you first")
+local function made()
+    expect(M.savedBags.m).toBe(M)
+    others()
+    M:SaveMe()
+    local list = M.savedBags:Characters()
+    expect(#list).toBe(2)
+    expect(list[1].me).toBe(true)
+    expect(list[2].key).toBe(OTHER)
+    expectNoErrors()
+end

@@ -1,0 +1,70 @@
+-- Units/Windows/Trainer: the trainer window in SuuUI's look while SuuUI's
+-- own trainer is off: its rows, headings, price and money.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Windows"
+import internal trainerRows from "/Units/Windows/Trainer"
+import loadWindows, closeWindows, win, part, title from "./WindowsHelpers"
+
+local field = tbl.field
+
+loadWindows()
+
+@afterEach
+local function cleanup()
+    closeWindows()
+end
+
+@test("the trainer window restyled while SuuUI's own trainer is off: its rows, headings, price and money")
+local function trainer()
+    local own = assert(SuuUI.GetModule("trainer"))
+    mock.stub(own, "IsEnabled", function(): boolean
+        return false
+    end)
+    M:SkinTrainer()
+    expect(M.trainer ~= nil).toBe(true)
+    local npc = mock.spawnUnit({ name = "Brannoc Ironhand", level = 30, reaction = "friendly" })
+    mock.defineTrainer(npc, {
+        greeting = "hi",
+        services = {
+            { spell = 90201, name = "Charge", icon = 132337, level = 1, rank = "Rank 1", cost = 100 },
+            { spell = 90202, name = "Thunder Clap", icon = 136105, level = 1, rank = "Rank 1", cost = 99999999 },
+            { spell = 90203, name = "Battle Shout", icon = 132333, level = 1, rank = "Rank 1", cost = 0 },
+        },
+    })
+    mock.defineGossip(npc, {
+        text = "hello",
+        options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } },
+    })
+    npc:setDistance(3)
+    mock.player:interact(npc)
+    mock.advanceTime(1)
+    C_GossipInfo.SelectOption(7)
+    mock.advanceTime(1)
+    mock.advanceFrames(3)
+    local f = win("ClassTrainerFrame")
+    expect(f:IsShown()).toBe(true)
+    expect(title(M.trainer)).toBe("Brannoc Ironhand")
+    -- each row: SuuUI's money, ember while you can't afford it, none when free
+    local prices: { [string]: Frame } = {}
+    local moneyText: { [string]: FontString } = {}
+    for _, b in ipairs(frames.children(part(f, "ScrollBox", "ScrollTarget"))) do
+        local row = trainerRows[b]
+        local name = frames.asFontString(field(b, "name"))
+        local label = name and name:GetText()
+        if row and label then
+            prices[label] = row.money
+            moneyText[label] = row.money.text
+        end
+    end
+    expect(assert(prices["Charge"]):IsShown()).toBe(true)
+    expect(assert(prices["Battle Shout"]):IsShown()).toBe(false)
+    local r, g, bl = assert(moneyText["Thunder Clap"]):GetTextColor()
+    local er, eg, eb = SuuUI.UI.RGBA("ember-text")
+    expect(math.abs(r - er) + math.abs(g - eg) + math.abs(bl - eb) < 0.03).toBe(true)
+    CloseTrainer()
+end

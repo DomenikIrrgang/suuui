@@ -1,0 +1,112 @@
+-- Units/WorldMap/GiverTips: what an NPC should offer you (for /suu probe
+-- givers), the givers' index made over frames, and an NPC's tooltip.
+
+import test, expect, afterEach, beforeEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import SuuUI from "/Core/API"
+import type QuestStarts from "/Data/QuestStarts"
+import internal M from "/Units/WorldMap"
+import expectNoErrors from "../../../helpers"
+import * as world from "./WorldMapHelpers"
+import starts from "./WorldMapHelpers"
+
+@beforeEach
+local function data()
+    world.setup()
+end
+
+@afterEach
+local function cleanup()
+    world.cleanup()
+end
+
+@test("what an NPC should offer you, by the map's checks (for /suu probe givers)")
+local function questsFor()
+    local list, done = M:QuestsFor(101)
+    expect(#list).toBe(2)
+    expect(list[1].id).toBe(9001)
+    expect(list[1].name).toBe("Wolves Across the Border")
+    expect(list[1].state).toBe("available")
+    expect(list[1].onQuest).toBe(false)
+    expect(list[1].done).toBe(false)
+    expect(type(done)).toBe("table")
+    expect(M:QuestsFor(999)).toEqual({})
+end
+
+@test("the givers' index is made a few maps a frame once the data is there; a tooltip before it's whole makes the rest")
+local function giverIndexOverFrames()
+    local data = starts()
+    data.maps[1415] = { { 40, 70, 101, 9001, 9005 } }
+    mock.stub(SuuUI, "QuestStarts", function(): QuestStarts
+        return data
+    end)
+    local function fresh()
+        mock.setField(M, "giverIndex", nil)
+        mock.setField(M, "giverMade", nil)
+        mock.setField(M, "giverAt", nil)
+        mock.setField(M, "giverStarted", false)
+        mock.setField(M, "giverFrom", nil)
+    end
+    -- a map at a time: not whole after one
+    fresh()
+    expect(M:IndexGivers(1)).toBe(false)
+    expect(M.giverIndex).toBeNil()
+    -- a tooltip's ask makes the rest: both of Dughan's places, the same as at once
+    local list = M:QuestsFor(101)
+    expect(#list).toBe(2)
+    local whole = M:GiverPlaces(101)
+    expect(#whole).toBe(4)
+    fresh()
+    expect(M:GiverPlaces(101)).toEqual(whole)
+    -- over the frames, after the data's there
+    fresh()
+    M:IndexGiversSoon()
+    mock.advanceFrames(3)
+    expect(M.giverIndex ~= nil).toBe(true)
+    expect(M:GiverPlaces(101)).toEqual(whole)
+    expect(M:GiverPlaces(999)).toEqual({})
+    expectNoErrors()
+end
+
+@test("an NPC's tooltip: the quests it gives you now, in their difficulty's colour with their level (asked in game)")
+local function questTooltip()
+    local giver = mock.spawnUnit({
+        name = "Marshal Test",
+        level = 25,
+        reaction = "friendly",
+        distance = 5,
+        npcID = 101,
+    })
+    local nobody = mock.spawnUnit({ name = "Quiet Test", level = 25, reaction = "friendly", distance = 5, npcID = 999 })
+    local function shown(): string[]
+        local out: string[] = {}
+        for i = 1, GameTooltip:NumLines() do
+            local l = frames.asFontString(tbl.field(_G, "GameTooltipTextLeft" .. i))
+            out[#out + 1] = l and l:GetText() or ""
+        end
+        return out
+    end
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(giver)
+    GameTooltip:SetUnit("target")
+    local got = shown()
+    local at: number? = nil
+    for i, l in ipairs(got) do
+        if l == "Quests" then
+            at = i
+        end
+    end
+    local i = assert(at, "no Quests line")
+    expect(got[i + 1]:find("^Wolves Across the Border %(%d+%)$") ~= nil).toBe(true)
+    -- one that gives nothing (or the module off): no Quests line
+    GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    mock.player:target(nobody)
+    GameTooltip:SetUnit("target")
+    for _, l in ipairs(shown()) do
+        expect(l).never.toBe("Quests")
+    end
+    GameTooltip:Hide()
+    mock.player:target(nil)
+end

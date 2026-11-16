@@ -1,0 +1,74 @@
+-- Diagnostics/AhBidProbe: "/suu probe ahbid <item>" finds an item's
+-- auctions, tries PlaceBid from SuuUI's code and records what the game did.
+-- (The engine's PlaceBid does nothing and refuses nothing: the refusal and
+-- the house's answer are played here.)
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as DB from "/Core/DB"
+import * as ahBidProbe from "/Diagnostics/AhBidProbe"
+import expectNoErrors from "../../helpers"
+import setUp, tearDown, open from "../Units/AuctionHouse/AuctionHouseHelpers"
+
+local AH = C_AuctionHouse
+
+type Saved = { lines: string[] }
+
+@afterEach
+local function cleanup()
+    tearDown()
+end
+
+local function lines(): string[]
+    local saved = DB.probe.ahBid :: unknown :: Saved?
+    return saved and saved.lines or {}
+end
+
+local function has(text: string): boolean
+    for _, l in ipairs(lines()) do
+        if l:find(text, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+@test("closed house or no name: told, nothing tried")
+local function notReady()
+    setUp()
+    local placed = mock.stub(AH, "PlaceBid", function() end)
+    ahBidProbe.command("blade")
+    open()
+    ahBidProbe.command("")
+    expect(placed).never.toHaveBeenCalled()
+    expectNoErrors()
+end
+
+@test("an item's auctions found; a refused bid, an accepted one with the events after it and the money")
+local function tries()
+    setUp()
+    open()
+    ahBidProbe.command("blade")
+    mock.advanceTime(2)
+    expect(has("auctions read: least 13, buyout 11")).toBe(true)
+    -- refused during the call
+    mock.stub(AH, "PlaceBid", function()
+        mock.fireEvent("ADDON_ACTION_FORBIDDEN", "SuuUI", "PlaceBid()")
+    end)
+    ahBidProbe.try("Bid least", 13, 5000)
+    expect(has("Bid least: PlaceBid(13, 5000): REFUSED during the call")).toBe(true)
+    mock.advanceTime(7)
+    -- taken: the house's answer recorded with its payload, the money after
+    mock.stub(AH, "PlaceBid", function() end)
+    ahBidProbe.try("Bids tab", 11, 21000)
+    expect(has("Bids tab: PlaceBid(11, 21000): not refused")).toBe(true)
+    mock.fireEvent("BID_ADDED", 11)
+    mock.player:setMoney(GetMoney() - 21000)
+    mock.advanceTime(7)
+    expect(has("BID_ADDED 11")).toBe(true)
+    expect(has("(-21000)")).toBe(true)
+    -- nothing to try
+    ahBidProbe.try("Bid buyout", nil, nil)
+    expect(has("Bid buyout: no auction for it")).toBe(true)
+    expectNoErrors()
+end

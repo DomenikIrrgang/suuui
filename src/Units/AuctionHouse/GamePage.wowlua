@@ -1,0 +1,262 @@
+-- Units/AuctionHouse/GamePage.wowlua
+-- The game's own auction house page (Units/AuctionHouse): kept open but
+-- hidden, its rows and buttons are where a single auction's buyout has to
+-- go (Forever takes C_AuctionHouse.PlaceBid for one only from the game's
+-- own code). Secure clicks over SuuUI's result row, auction row, Buy out
+-- and Back click the game's own, and let go when their view isn't shown,
+-- and when combat starts (BAG-33: anchored to the window, a protected
+-- button kept it from closing in combat; the client hides them in combat
+-- besides, as the bags' use button).
+-- The module's methods for them (Over, HideOver, OverResult, DrawBuyOver,
+-- …) call the functions here.
+
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as secure from "wowlua:secure"
+import keyInfo from "./Common"
+import type ResultRow from "./Buy"
+import type OfferRow from "./ItemView"
+import type AuctionHouseModule from "../AuctionHouse"
+
+local tryMethod, field = errors.tryMethod, tbl.field
+
+--------------------------------------------------------------------------------
+-- The game's own auction house page (hidden): its rows and buttons, for the
+-- secure clicks a single auction's buyout needs
+--------------------------------------------------------------------------------
+
+-- The game's page part (`BrowseResultsFrame`, `ItemBuyFrame`), shown.
+local function gamePart(name: string): Frame?
+    local f = frames.asFrame(field(_G, "AuctionHouseFrame", name))
+    return f and f:IsVisible() and f or nil
+end
+
+-- Whether two item keys are the same item.
+local function sameKey(a: unknown, b: ItemKey?): boolean
+    if type(a) ~= "table" or not b then
+        return false
+    end
+    local k = a :: ItemKey
+    return k.itemID == b.itemID and (k.itemLevel or 0) == (b.itemLevel or 0) and
+        (k.itemSuffix or 0) == (b.itemSuffix or 0) and
+        (k.battlePetSpeciesID or 0) == (b.battlePetSpeciesID or 0)
+end
+
+-- One of the game's list rows (only those it shows have one) whose data matches.
+local function gameRow(part: Frame?, match: (data: { [string]: unknown }) -> boolean): Frame?
+    local box = part and frames.asFrame(field(part, "ItemList", "ScrollBox"))
+    if not box then
+        return nil
+    end
+    local found: Frame? = nil
+    tryMethod(box, "ForEachFrame", function(f: Frame)
+        local d = (f :: { rowData?: unknown }).rowData
+        if not found and f:IsVisible() and type(d) == "table" and match(d :: { [string]: unknown }) then
+            found = f
+        end
+    end)
+    return found
+end
+
+-- A secure click over a frame of SuuUI's: on `target` (one of the game's
+-- buttons), then `after`; gone when the mouse leaves a row.
+export function placeOver(self: AuctionHouseModule, kind: string, on: Frame, target: Frame, andThen: () -> (), row: boolean)
+    if InCombatLockdown() then
+        return
+    end
+    local over = self.overs[kind]
+    if not over then
+        over = secure.overlay(on)
+        -- hidden in combat by the client itself, also if it was showing
+        local holder = self.overHolder
+        if not holder then
+            holder = CreateFrame("Frame", nil, UIParent)
+            secure.visibility(holder, "[combat] hide; show")
+            self.overHolder = holder
+        end
+        over.button:SetParent(holder)
+        over.set("type1", "click")
+        local made = over
+        made.button:SetScript("PostClick", function(_: Frame, _button: string, down: boolean?)
+            local fn = self.afterClick[kind]
+            if not down and fn then
+                fn()
+            end
+        end)
+        if row then
+            made.button:HookScript("OnLeave", function()
+                made.hide()
+            end)
+        end
+        self.overs[kind] = over
+    end
+    self.afterClick[kind] = andThen
+    over.set("clickbutton1", target)
+    over.show(on)
+end
+
+export function hideOver(self: AuctionHouseModule, kind: string)
+    local over = self.overs[kind]
+    if over and not InCombatLockdown() then
+        over.hide()
+    end
+end
+
+-- Every secure click let go: combat starting (PLAYER_REGEN_DISABLED comes
+-- before the lockdown), the house closing.
+export function hideOvers(self: AuctionHouseModule)
+    for kind in pairs(self.overs) do
+        self:HideOver(kind)
+    end
+end
+
+-- Combat over: the secure clicks back where their view is shown (none
+-- when the house closed meanwhile; HideOver did nothing in combat).
+export function oversAfterCombat(self: AuctionHouseModule)
+    local window = self.window
+    if self.open and window and window:IsShown() then
+        self:HideOvers()
+        self:Refresh()
+    else
+        self:HideOvers()
+    end
+end
+
+-- The secure clicks of a view that isn't shown let go. They hang off
+-- UIParent above the window, so a hidden button's stays in its place:
+-- an item's Buy out left with an auction chosen (Back before buying, or
+-- before the house answered) sat over a commodity's Buy now, in the same
+-- place, and took its click to the game's hidden Buyout: nothing
+-- happened (reported 2026-11-12, after a few purchases).
+export function hideStaleOvers(self: AuctionHouseModule)
+    local buyShown = self.tab == "buy" and not self.scanning
+    if not (buyShown and self.view == "item") then
+        self:HideOver("buyout")
+        self:HideOver("back")
+        self:HideOver("auction")
+    end
+    if not (buyShown and self.view == "browse") then
+        self:HideOver("result")
+    end
+end
+
+-- A single-auction item's result row: the click opens the game's own page
+-- on it (its result row, while its list shows; else its Back first).
+export function overResult(self: AuctionHouseModule, row: ResultRow)
+    local key = row.key
+    local info = keyInfo(key)
+    if not key or not info or info.isCommodity then
+        self:HideOver("result")
+        return
+    end
+    local browse = gamePart("BrowseResultsFrame")
+    local target = browse and
+        gameRow(browse, function(d: { [string]: unknown }): boolean
+            return sameKey(d.itemKey, key)
+        end)
+    if target then
+        self:Over(
+            "result",
+            row,
+            target,
+            function()
+                self:OpenItem(key, true)
+            end,
+            true
+        )
+        return
+    end
+    local item = gamePart("ItemBuyFrame")
+    local back = item and frames.asFrame(field(item, "BackButton"))
+    if back then
+        -- (the game's page on another item: back to its list, and this one
+        -- opened in SuuUI; opened again, the game's page follows)
+        self:Over(
+            "result",
+            row,
+            back,
+            function()
+                self:OpenItem(key)
+            end,
+            true
+        )
+        return
+    end
+    self:HideOver("result")
+end
+
+-- Whether the game's own page has this item open.
+export function gameOnItem(self: AuctionHouseModule): boolean
+    local item = gamePart("ItemBuyFrame")
+    return item ~= nil and sameKey(field(item, "itemKey"), self.itemKey)
+end
+
+-- Whether the game's page lists a row for this auction (only its first
+-- ones have one).
+export function gameHasAuction(self: AuctionHouseModule, id: number): boolean
+    if not self:GameOnItem() then
+        return false
+    end
+    return gameRow(gamePart("ItemBuyFrame"), function(d: { [string]: unknown }): boolean
+        return d.auctionID == id
+    end) ~= nil
+end
+
+-- An auction row: the click chooses the same auction on the game's page,
+-- and that auction (by its id, as the row showed it at the hover) in SuuUI.
+export function overAuction(self: AuctionHouseModule, row: OfferRow)
+    local id = row.auctionID
+    if not id or not self:GameOnItem() then
+        self:HideOver("auction")
+        return
+    end
+    local target = gameRow(gamePart("ItemBuyFrame"), function(d: { [string]: unknown }): boolean
+        return d.auctionID == id
+    end)
+    if not target then
+        self:HideOver("auction")
+        return
+    end
+    self:Over(
+        "auction",
+        row,
+        target,
+        function()
+            self:ChooseAuction(id)
+        end,
+        true
+    )
+end
+
+-- Buy out: the game's own Buyout once its page has the chosen auction.
+export function drawBuyOver(self: AuctionHouseModule)
+    local buy = self.buy
+    local a = self:ChosenAuction()
+    local item = gamePart("ItemBuyFrame")
+    local button = item and frames.asButton(field(item, "BuyoutFrame", "BuyoutButton"))
+    local ok = buy ~= nil and a ~= nil and item ~= nil and button ~= nil and self:GameOnItem() and
+        field(item, "auctionID") == a.auctionID and
+        button:IsEnabled()
+    if ok and buy and button then
+        self:Over("buyout", buy.itemView.buyout, button, function() end, false)
+    else
+        self:HideOver("buyout")
+    end
+    -- Back: the game's page back to its list too
+    local back = item and frames.asFrame(field(item, "BackButton"))
+    if buy and back and self.view == "item" then
+        self:Over(
+            "back",
+            buy.itemView.back,
+            back,
+            function()
+                self.view = "browse"
+                self:Refresh()
+            end,
+            false
+        )
+    else
+        self:HideOver("back")
+    end
+end

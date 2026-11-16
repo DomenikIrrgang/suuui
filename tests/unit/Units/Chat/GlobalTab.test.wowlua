@@ -1,0 +1,103 @@
+-- Units/Chat/GlobalTab: the Global tab (every channel General had; a
+-- Guild tab renamed or a new window; in combat or off nothing; a client
+-- without AddChannel).
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Chat"
+import expectNoErrors from "../../../helpers"
+import printedSince, printedCount, hasLine from "../../SettingsUI/UiSettingsHelpers"
+import ready, windowOf, resetChat from "./ChatHelpers"
+
+local CF1 = ChatFrame1
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The Global tab
+--------------------------------------------------------------------------------
+
+@test("the Global tab gets every channel General had; General keeps the rest")
+local function globalTab()
+    mock.setChannels({ joined = { { name = "General" }, { name = "Trade" }, { name = "LookingForGroup" } } })
+    mock.fake("GetChatWindowChannels", function(_: number): ...unknown
+        return "General", 1, "Custom", 5
+    end)
+    local global = windowOf("Global")
+    local added: string[], removed: string[] = {}, {}
+    mock.stub(global, "AddChannel", function(_: unknown, name: string)
+        added[#added + 1] = name
+    end)
+    mock.stub(global, "RemoveChannel", function(_: unknown, name: string)
+        removed[#removed + 1] = name
+    end)
+    mock.stub(SuuUI.LFG, "IsHiddenChannel", function(name: string): boolean
+        return name == "LookingForGroup"
+    end)
+    M:ApplyGlobalTab()
+    expect(hasLine(added, "Trade")).toBe(true)
+    expect(hasLine(added, "Custom")).toBe(true)
+    expect(hasLine(removed, "LookingForGroup")).toBe(true)
+    -- in combat, or off: nothing
+    local n = #added
+    mock.player:enterCombat()
+    M:ApplyGlobalTab()
+    M:Set("globalTab", false)
+    mock.player:leaveCombat()
+    M:ApplyGlobalTab()
+    expect(#added).toBe(n)
+end
+
+@test("no Global window: a Guild tab becomes it, else a new one")
+local function globalMade()
+    local global = windowOf("Global")
+    local id = global:GetID()
+    SetChatWindowName(id, "Guild")
+    local renamed = mock.fake("FCF_SetWindowName", function(f: Frame, name: string)
+        SetChatWindowName(f:GetID(), name)
+    end)
+    M:ApplyGlobalTab()
+    expect(renamed).toHaveBeenCalledTimes(1)
+    expect(GetChatWindowInfo(id)).toBe("Global")
+    SetChatWindowName(id, "Elsewhere")
+    -- a new window, as the game makes one
+    local made = CreateFrame("ScrollingMessageFrame")
+    made:SetID(9)
+    for _, name in ipairs({ "RemoveAllMessageGroups", "AddChannel", "RemoveChannel" }) do
+        rawset(made, name, function() end)
+    end
+    local opened = mock.fake("FCF_OpenNewWindow", function(_: string): Frame
+        return made
+    end)
+    M:ApplyGlobalTab()
+    expect(opened).toHaveBeenCalledWith("Global")
+    SetChatWindowName(id, "Global")
+end
+
+@test("a client without AddChannel on its chat windows: said once, the tabs left alone")
+local function noChannels()
+    local add: unknown = rawget(CF1, "AddChannel")
+    rawset(CF1, "AddChannel", nil)
+    local n = printedCount()
+    M.warnedGlobal = nil
+    M:ApplyGlobalTab()
+    M:ApplyGlobalTab()
+    rawset(CF1, "AddChannel", add)
+    local said = 0
+    for _, l in ipairs(printedSince(n)) do
+        if l:find("the Global tab can't be set up", 1, true) then
+            said = said + 1
+        end
+    end
+    expect(said).toBe(1)
+end

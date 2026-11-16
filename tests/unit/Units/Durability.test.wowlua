@@ -4,12 +4,13 @@
 
 import test, cases, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
-import after from "wowlua:timer"
 import SuuUI from "/Core/API"
 import * as events from "/Core/Events"
 import internal M, pieceOf, sortPieces, readPieces, summarize, signature, tooltipLines, coins, piecesText, newlyBroken, figureView, repairReport, guildPays, repairsOff, figureOff, repairOff, gearOff from "/Units/Durability"
 import type Piece from "/Units/Durability"
-import expectNoErrors, newParent from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as settings from "/Core/Settings"
+import expectNoErrors, newParent, cycle, NOTHING from "../../helpers"
 
 local T = SuuUI.Tokens
 local function hex(token: keyof typeof(T.color)): string
@@ -684,16 +685,56 @@ local function preview()
     expectNoErrors()
 end
 
-@test("turned off: the figure hidden, the alert gone, no reading")
+@test("turned off through the registry: the figure hidden, the alert and its timer gone, no reading, nothing held; on again, all back")
 local function disable()
-    local hide = mock.stub(SuuUI, "HideAlert")
-    M.alertTimer = after(10, function() end)
-    mock.slash("/suu disable durability")
+    local show = mock.stub(SuuUI, "ShowAlert")
+    local hides: string[] = {}
+    mock.stub(SuuUI, "HideAlert", function(key: string)
+        -- (Campsite's alert too: only this module's counted)
+        if key == "durability" then
+            hides[#hides + 1] = key
+        end
+    end)
+    local print = mock.stub(M, "Print")
+    M:Set("figure", true)
+    wear({ [5] = { 10, 100 } })
+    M:Update()
+    expect(M.figure).toBeShown()
+    local c = cycle("durability")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    expect(SuuUI.Durability()).toBe(M.data)
+    expect(M.figure).toBeShown()
+    -- an alert showing as it turns off: hidden, its timer gone
+    mock.player:enterCombat()
+    wear({ [5] = { 0, 100 } })
+    M:Update()
+    expect(show).toHaveBeenCalledTimes(1)
+    mock.player:leaveCombat()
+    -- the others hear the service go (and redraw without it)
+    local heard: string[] = {}
+    events.on("SUUUI_SERVICE_CHANGED", function(_: string, name: string)
+        heard[#heard + 1] = name
+    end, "zz durability test")
+    local hidden = #hides
+    settings.set("durability", "enabled", false)
+    events.offAll("zz durability test")
+    expect(heard).toEqual({ "durability" })
     expect(SuuUI.Durability()).toBeNil()
     expect(M.figure).never.toBeShown()
     expect(M.alertTimer).toBeNil()
-    expect(hide).toHaveBeenCalledWith("durability")
-    mock.slash("/suu enable durability")
+    expect(#hides).toBe(hidden + 1)
+    -- (the alert's 4 s timer was cancelled with the module)
+    mock.advanceTime(5)
+    expect(#hides).toBe(hidden + 1)
+    -- the game's figure stays away until a reload: said once a session
+    if M.blizzardDown then
+        expect(print).toHaveBeenCalledTimes(1)
+        expect(print).toHaveBeenCalledWith(M, "The game's own durability figure comes back after a reload.")
+    end
+    settings.set("durability", "enabled", true)
     expect(M:IsEnabled()).toBe(true)
     expect(SuuUI.Durability()).toBe(M.data)
     expectNoErrors()

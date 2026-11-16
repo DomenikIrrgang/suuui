@@ -112,6 +112,13 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V41](#v41) | VM | medium | open | No pet trainer (Beast Training) |
 | [V42](#v42) | VM | medium | open | The auction house's browse ignores categories, levels, filters and sorts |
 | [V43](#v43) | VM | medium | open | `mock.advanceTime` doesn't move animations: a window's fade-in stays at its start (the auction house looked undrawn) |
+| [V50](#v50) | VM | medium | open | `C_AuctionHouse.PlaceBid` is never refused |
+| [V51](#v51) | VM | medium | open | A mail take is never refused, and a COD take charges nothing |
+| [V52](#v52) | VM | low | open | Every bag and item has family 0 |
+| [V53](#v53) | VM | low | open | A zero-delay timer made inside a timer waits for the next advance |
+| [V54](#v54) | VM | medium | open | No group loot |
+| [V55](#v55) | VM | low | as designed | `mock.advanceTime` runs no `OnUpdate`: a fade stands still while the clock moves |
+| [V56](#v56) | VM | low | open (unverified) | `SetText`'s `OnTextChanged` arrives a frame later |
 
 ## Test runner and mock issues
 
@@ -958,6 +965,62 @@ A secure click SuuUI's auction house left over its Buy out (shown, DIALOG strata
 *Status: open (0.13.9).*
 
 `UnitIsTapDenied` is a blank that always answers false, and `mock.spawnUnit` has no field for a mob another player tagged, so a real target frame or nameplate never draws the tagged look. The tests give the frame or plate its own API table with `UnitIsTapDenied` faked (`mock.setField(f, "api", …)`, by the unit's name for a plate that changes units). A `tapDenied` field on a mock unit (with `UNIT_FACTION` when it changes) would let the game's own state drive it. (tapped stripes)
+
+<a id="v50"></a>
+
+### V50. `C_AuctionHouse.PlaceBid` is never refused
+
+*Status: open (0.13.15).*
+
+Besides doing nothing (V48), the engine's `PlaceBid` never refuses an addon's call: no `ADDON_ACTION_FORBIDDEN` or `ADDON_ACTION_BLOCKED`, whatever calls it. In game a single auction's buyout through it was refused ("Blocked"); whether a bid is too is what `/suu probe ahbid` asks. `tests/unit/Diagnostics/AhBidProbe.test.wowlua` plays the refusal with a stub that fires `ADDON_ACTION_FORBIDDEN`; the Bid tests (`Units/AuctionHouse/Auctions`, `ItemView`, `GamePage`) record `PlaceBid` and play the house's answer. (bug fixes 2026-11-15)
+
+<a id="v51"></a>
+
+### V51. A mail take is never refused, and a COD take charges nothing
+
+*Status: open (0.13.15).*
+
+`TakeInboxItem` always succeeds: with no room in the bags the item leaves the mail and is lost (the game refuses with "Inventory is full." and `MAIL_FAILED`); a unique item you already carry is taken too. Taking a COD item pays nothing: the money stays the same. `tests/unit/Units/Mail/Collect.test.wowlua` plays the game's refusal itself (`refusing(item, text)`: the error text, then `MAIL_FAILED` with the item's ID, a round trip later); the COD tests in `Units/Mail.test.wowlua` check which mail `TakeInboxItem` was called for and the items that arrived, not the money. (bug fixes 2026-11-15)
+
+<a id="v52"></a>
+
+### V52. Every bag and item has family 0
+
+*Status: open (0.13.15).*
+
+`C_Container.GetContainerNumFreeSlots` gives family 0 for every bag and `C_Item.GetItemFamily` 0 for every item, so a special bag (a quiver, a soul or herb bag) takes anything. Collect all's room check (`src/Units/Mail/Collect.wowlua`: what fits a special bag) is tested only for the reagent bag (`Mail/Collect.test.wowlua`, "room"); the families themselves need a check in game. A family on `mock.defineItem` and `mock.setBag` would reach it. (bug fixes 2026-11-15)
+
+<a id="v53"></a>
+
+### V53. A zero-delay timer made inside a timer waits for the next advance
+
+*Status: open (0.13.15).*
+
+`C_Timer.After(0, fn)` (or `wowlua:timer`'s `after(0, fn)`) made inside a timer's callback during `mock.advanceTime(1)` doesn't run in that advance, only at the next one (time or frame); in the game it runs a frame later, well inside that second. A test that advances once and checks sees it never ran. Code waits a little instead: Collect all looks again 0.05 s after a failure (`src/Units/Mail/Collect.wowlua`), the NPC dialogue 0.1 s while AutoQuests answers a step (`AwaitAuto`). (bug fixes 2026-11-15)
+
+<a id="v54"></a>
+
+### V54. No group loot
+
+*Status: open (0.13.15).*
+
+The engine starts no roll of its own (`START_LOOT_ROLL`), `GetLootRollItemInfo` is empty and `RollOnLoot` does nothing, so two rolls of the same item, votes and results never come from it. `tests/unit/Units/LootRolls.test.wowlua` and `LootRollsLogin.test.wowlua` stub the roll API (`GetLootRollItemInfo`, `GetLootRollItemLink`, `RollOnLoot`, the loot history) and fire the events and chat lines themselves. (bug fixes 2026-11-15)
+
+<a id="v55"></a>
+
+### V55. `mock.advanceTime` runs no `OnUpdate`: a fade stands still while the clock moves
+
+*Status: as designed (see "Not bugs" below; V43 is the same for animation groups).*
+
+The NPC dialogue fades `UIParent` with `Motion.AlphaTo` (an `OnUpdate`): after `mock.advanceTime(1)` the fade is where it was, while `GetTime` moved past its end, so code that keys on the time (the fade back's `backUntil`, MAP-1) and the alpha disagree as they never do in the game. `tests/unit/Units/NpcDialogue.test.wowlua` moves fades with `mock.advanceFrames` (`fadeEnds`, `offMidFade`). (bug fixes 2026-11-15)
+
+<a id="v56"></a>
+
+### V56. `SetText`'s `OnTextChanged` arrives a frame later
+
+*Status: open (unverified in game).*
+
+Since V3's fix, `EditBox:SetText` runs `OnTextChanged` on the next frame, not inside the call. Code that tells an edit from its own `SetText` by comparing with the text it set last (Forever never passes `userInput` true) must keep that text until the late event. Whether the game runs it at once or a frame later is unrecorded. `tests/unit/UI/GroupFinderListed.test.wowlua` ("an edit on Forever") and `tests/unit/Diagnostics/Probe.test.wowlua` advance a frame before the event and fire `OnTextChanged` with `userInput` false themselves. (bug fixes 2026-11-15)
 
 ## Not bugs (for test writers)
 

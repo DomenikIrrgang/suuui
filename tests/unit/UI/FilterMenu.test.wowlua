@@ -5,8 +5,10 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
+import SuuUI from "/Core/API"
 import filterMenu, FilterMenu, FilterMenuOptions, FilterGroup, FilterOption, FilterValue from "/UI/FilterMenu"
-import internal copyList, has, catcher, buttonWidth, FilterPanel, FilterChip from "/UI/FilterMenu"
+import internal copyList, has, buttonWidth, FilterPanel, FilterChip from "/UI/FilterMenu"
+import internal catcher from "/UI/Dismiss"
 import type Checkbox, Segmented from "/UI/Inputs"
 import type SuuButton from "/UI/Controls"
 import expectNoErrors, newParent from "../../helpers"
@@ -239,6 +241,45 @@ local function combatKeys()
     mock.script(panel(m), "OnKeyDown", "ESCAPE")
     expect(m.panel).toBeShown()
     mock.player:leaveCombat()
+end
+
+@test("opened in a fight after an Esc close: the panel has no keyboard, keys pass on (SET-1)")
+local function combatAfterEsc()
+    local m = make()
+    m:Open()
+    expect(panel(m):GetPropagateKeyboardInput()).toBe(true)
+    mock.pressKey("ESCAPE")
+    expect(m.panel).never.toBeShown()
+    mock.player:enterCombat()
+    m:Open()
+    expect(panel(m):IsKeyboardEnabled()).toBe(false)
+    expect(panel(m):GetPropagateKeyboardInput()).toBe(true)
+    -- a click outside closes it
+    mock.click(catcher)
+    expect(m.panel).never.toBeShown()
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+end
+
+@test("the panel is drawn at SuuUI's scale, as its field (SET-5)")
+local function scale()
+    local m = make()
+    m:Open()
+    expect(panel(m):GetParent()).toBe(SuuUI.Root)
+    expect(panel(m):GetEffectiveScale()).toBeCloseTo(SuuUI.Root:GetEffectiveScale())
+end
+
+@test("a single choice of `false` is shown as chosen (SET-11)")
+local function falseValue()
+    local m = make({
+        groups = {
+            { key = "on", label = "On", kind = "one", options = { { value = true, label = "Yes" }, { value = false, label = "No" } } },
+        },
+        defaults = { on = true },
+        value = { on = false },
+    })
+    m:Open()
+    expect(control(m, 1).value).toBe(false)
 end
 
 @test("hovering the field: a gilt edge, unless it is open")

@@ -15,9 +15,12 @@ import type Attachable, Watched, CountKey, SizeKey, GapKey, VisKey, AttachKey, O
 import migrations as settingMigrations from "/Core/Settings"
 import internal moverList from "/EditMode/EditMode"
 import type Mover from "/EditMode/EditMode"
-import expectNoErrors, layoutThemes, useTheme, COMPACT, ROOMY from "../../helpers"
+import expectNoErrors, layoutThemes, useTheme, holdings, COMPACT, ROOMY from "../../helpers"
+import type Target, SuppressOptions from "/Core/Blizzard"
 import type ConfirmDialog, ConfirmOptions from "/UI/Panel"
 import * as frames from "wowlua:frames"
+import internal ownOf from "/Core/Modules"
+import * as settings from "/Core/Settings"
 
 local UI = SuuUI.UI
 
@@ -134,6 +137,58 @@ local function blizzard()
     expect(main:GetAlpha()).toBe(0)
     expect(game("ActionButton1"):IsMouseEnabled()).toBe(false)
     expect(game("MultiBarBottomLeft"):GetAlpha() == 0 or not game("MultiBarBottomLeft"):IsVisible()).toBe(true)
+end
+
+@test("the XP bar or the totem bar turned on later: Blizzard's stands down then (out of combat), not at the next reload")
+local function standDownLater()
+    local asked: { [string]: number } = {}
+    local real = SuuUI.SuppressBlizzard
+    mock.stub(SuuUI, "SuppressBlizzard", function(target: Target?, opts: SuppressOptions?)
+        if type(target) == "string" then
+            asked[target] = (asked[target] or 0) + 1
+        end
+        real(target, opts)
+    end)
+    -- (Blizzard's totem bar stood down at login already: as if it weren't)
+    local realSuppressed = SuuUI.IsSuppressed
+    mock.stub(SuuUI, "IsSuppressed", function(target: Target?): boolean
+        if target == "MultiCastActionBarFrame" then
+            return false
+        end
+        return realSuppressed(target)
+    end)
+    M:Set("showXP", false)
+    M:Set("showTotem", false)
+    -- (the first Set ran with the totem bar still on)
+    asked = {}
+    M:ApplyOptions()
+    expect(asked.MainMenuExpBar).toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBeNil()
+    -- turned on in a fight: after it
+    mock.player:enterCombat()
+    mock.advanceFrames(1)
+    M:Set("showXP", true)
+    M:Set("showTotem", true)
+    expect(asked.MainMenuExpBar).toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBeNil()
+    mock.player:leaveCombat()
+    mock.advanceFrames(1)
+    expect(asked.MainMenuExpBar).toBe(1)
+    expect(frames.find("MultiCastActionBarFrame")).never.toBeNil()
+    expect(asked.MultiCastActionBarFrame).toBe(1)
+    -- the re-check at each loading screen, whatever showXP was at enable
+    asked = {}
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, false)
+    expect(asked.MainMenuExpBar).toBe(1)
+    M:Set("showXP", false)
+    asked = {}
+    mock.fireEvent("PLAYER_ENTERING_WORLD", false, false)
+    expect(asked.MainMenuExpBar).toBeNil()
+end
+
+@test("the dock's and bars 5-8's visibility are the module's: let go when it turns off")
+local function visibilityOwned()
+    expect(holdings(M).visibility).toBe(5)
 end
 
 @test("the dock: bars 1-4 at its button size; stance and pet at 9/10; out of combat")
@@ -538,5 +593,42 @@ local function themeSpacing()
     useTheme(nil)
     mock.advanceFrames(1)
     expect(look()).toEqual(design)
+    expectNoErrors()
+end
+
+-- (last: the module off and on again; its movers come back only at a reload)
+-- (CD-31) Turned off and on again (the registry's own disable, as after a
+-- failed enable: Action bars is reloadToToggle), the take-over still goes
+-- back to the Options; its rank timers are the module's own.
+@test("off and on again: Quick Keybind still opens SuuUI's mode and goes back to the Options; the rank timers are the module's")
+local function quickKeybindAgain()
+    local own = ownOf(M)
+    own.reloadToToggle = false
+    settings.set("actionbars", "enabled", false)
+    expect(M:IsEnabled()).toBe(false)
+    local quick = assert(frames.find("QuickKeybindFrame"))
+    -- off: the game's own mode
+    quick:Show()
+    expect(quick).toBeShown()
+    expect(SuuUI.KeybindMode.IsActive()).toBe(false)
+    quick:Hide()
+    settings.set("actionbars", "enabled", true)
+    mock.advanceFrames(2)
+    expect(M:IsEnabled()).toBe(true)
+    SettingsPanel:Open()
+    SettingsPanel:Close(true)
+    quick:Show()
+    expect(quick).never.toBeShown()
+    expect(SuuUI.KeybindMode.IsActive()).toBe(true)
+    SuuUI.KeybindMode.Exit()
+    expect(SettingsPanel).toBeShown()
+    SettingsPanel:Close(true)
+    -- the book changed: the read a moment later is one of the module's timers
+    local before = holdings(M).timers
+    mock.fireEvent("SPELLS_CHANGED")
+    expect(holdings(M).timers).toBe(before + 1)
+    mock.advanceTime(1.1)
+    expect(holdings(M).timers).toBe(before)
+    own.reloadToToggle = true
     expectNoErrors()
 end

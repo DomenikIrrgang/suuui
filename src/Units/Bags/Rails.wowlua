@@ -1,0 +1,475 @@
+-- Units/Bags/Rails.wowlua
+-- The Bags module's bag slot rails (see Units/Bags.wowlua): the rail beside
+-- each window, its cells (a bag slot, the backpack, a bank slot) and the
+-- bank's buy cell, and Rails, which lays them out, draws your bags' and the
+-- bank's rail, puts a bag in or takes it off, lights a hovered bag's slots
+-- and places the buy cell's secure click. Rails works on the module it is
+-- made with (its windows, rails and slot buttons).
+
+import SuuUI, ItemSlotClass from "/Core/API"
+import type Text from "/Core/API"
+import type BagsModule from "../Bags"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import * as secure from "wowlua:secure"
+import * as chars from "./Characters"
+import * as containers from "./Containers"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local try, field = errors.try, tbl.field
+local asNumber, flag = secret.asNumber, secret.flag
+
+local QUALITY = chars.QUALITY
+local REAGENT, BANK_FIRST, BANK_TYPE = containers.REAGENT, containers.BANK_FIRST, containers.BANK_TYPE
+local numSlots, freeSlots = containers.numSlots, containers.freeSlots
+
+--------------------------------------------------------------------------------
+-- Bag slots (design "Bags · bag slots", direction B, chosen 2026-10-17): a
+-- slim rail along each window's left side, outside it, so the window keeps
+-- its height. Your bags: the backpack (fixed), four bags and the reagent bag
+-- after a hairline; at a banker the bank's own slots, its bag slots 2-9
+-- (bought with a bag, or bought and empty) and a buy cell with the
+-- next slot's cost. Drag a bag onto a slot (or click with it) to put it in,
+-- drag a slot's bag away to take it off; hovering a slot lights its bag's
+-- slots in the window and fades the rest. Only on what is live: your own
+-- bags, and your bank at a banker.
+-- On Forever the bank's "tabs" are bank bag slots (Enum.BagIndex.
+-- Characterbanktab holds their bags); buying the next is restricted for
+-- addon code, so the buy cell is a secure click on the game's own purchase
+-- button and the game's confirmation asks (/suu probe bankslots, 2026-10-17).
+--------------------------------------------------------------------------------
+
+-- a rail's cell size, padding and gap: the theme's, read when laid out
+local function railSlot(): number
+    return T.size["slot"]
+end
+local RAIL_TOP, RAIL_OFF = 52, 6
+local TAB_BAG = asNumber(field(Enum, "BagIndex", "Characterbanktab"))
+local BACKPACK_ICON = 133633
+
+-- One cell of a rail (a bag slot, the backpack, a bank slot): its bag, the
+-- inventory slot it is (a bag of yours) or the bank slot, whether it can't
+-- change, what's in it.
+export type RailEntry = {
+    kind: string,
+    bag?: number,
+    inv?: number,
+    tab?: number,
+    fixed?: boolean,
+    has: boolean,
+    icon: number | string,
+    size: number,
+    quality?: string,
+}
+export type RailBuy = { off?: boolean, why?: string, done?: boolean, price?: number, next?: number }
+
+local coinText = chars.coinText
+
+-- A rail's cell: a slot with its size bottom right, a faint glyph when empty.
+export class RailCell extends ItemSlotClass
+    readonly glyph: Texture
+    entry: RailEntry? = nil
+
+    constructor(parent: Frame)
+        super(parent, railSlot())
+        self.glyph = self:CreateTexture(nil, "OVERLAY")
+        self.glyph:SetSize(16, 16)
+        self.glyph:SetPoint("CENTER")
+        self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        self:RegisterForDrag("LeftButton")
+    end
+end
+
+-- The bank rail's buy cell: its cost under it, and why it can't buy.
+export class BuyCell extends ItemSlotClass
+    readonly glyph: Texture
+    readonly cost: Text
+    off: boolean = false
+    why: string? = nil
+    price: number? = nil
+    next: number? = nil
+
+    constructor(rail: Frame)
+        super(rail, railSlot())
+        self.glyph = self:CreateTexture(nil, "OVERLAY")
+        self.glyph:SetSize(16, 16)
+        self.glyph:SetPoint("CENTER")
+        UI.Glyph(self.glyph, "plus")
+        self.cost = UI.Text(rail, "micro", "ink-muted")
+        self.cost:SetPoint("TOP", self, "BOTTOM", 0, -2)
+        self:SetScript("OnEnter", function(cell)
+            cell.skin.hover = not cell.off
+            cell.skin:Draw()
+            UI.ShowTooltip(cell, {
+                title = "Buy bank slot",
+                subtitle = cell.next and ("Bank slot " .. cell.next) or nil,
+                description = cell.why or ("Costs " .. coinText(cell.price) .. ". The game asks first."),
+            })
+        end)
+        self:SetScript("OnLeave", function(cell)
+            cell.skin.hover = false
+            cell.skin:Draw()
+            UI.HideTooltip()
+        end)
+    end
+end
+
+-- A rail beside a window.
+export class Rail extends Frame
+    readonly cells: RailCell[] = {}
+    readonly sep: Texture
+    buy: BuyCell? = nil
+
+    constructor(window: Frame)
+        super(nil, window)
+        self:SetPoint("TOPRIGHT", window, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
+        UI.Fill(self, "surface", "BACKGROUND"):SetAllPoints()
+        UI.Border(self, "gilt-faint")
+        self:EnableMouse(true)
+        self.sep = UI.Fill(self, "gilt-line", "ARTWORK")
+        self.sep:SetSize(24, 1)
+    end
+end
+
+-- The rails' work for the Bags module `m`: its bagRail, bankRail and
+-- buyOver, drawn from its windows and bags.
+export class Rails
+    readonly m: BagsModule
+
+    constructor(m: BagsModule)
+        self.m = m
+    end
+
+    -- One cell of a rail.
+    function RailCell(rail: Rail, i: number): RailCell
+        local known = rail.cells[i]
+        if known then
+            return known
+        end
+        local b = RailCell.new(rail)
+        b:SetScript("OnEnter", function(cell)
+            cell.skin.hover = true
+            cell.skin:Draw()
+            self:RailTip(cell)
+            local entry = cell.entry
+            local bag = entry and entry.bag
+            if bag then
+                self:LightBag(bag)
+            end
+        end)
+        b:SetScript("OnLeave", function(cell)
+            cell.skin.hover = false
+            cell.skin:Draw()
+            GameTooltip:Hide()
+            UI.HideTooltip()
+            self:LightBag(nil)
+        end)
+        b:SetScript("OnClick", function(cell)
+            self:RailPut(cell)
+        end)
+        b:SetScript("OnReceiveDrag", function(cell)
+            self:RailPut(cell)
+        end)
+        b:SetScript("OnDragStart", function(cell)
+            self:RailPick(cell)
+        end)
+        rail.cells[i] = b
+        return b
+    end
+
+    -- Put what the cursor holds into the slot (or pick the slot's bag up).
+    function RailPut(cell: RailCell)
+        local e = cell.entry
+        if not e or e.fixed then
+            return
+        end
+        local inv, tab = e.inv, e.tab
+        if inv then
+            if CursorHasItem() then
+                try(PutItemInBag, inv)
+            else
+                try(PickupBagFromSlot, inv)
+            end
+        elseif tab and TAB_BAG then
+            try(C_Container.PickupContainerItem, TAB_BAG, tab)
+        end
+    end
+
+    function RailPick(cell: RailCell)
+        local e = cell.entry
+        if not e or e.fixed then
+            return
+        end
+        local inv, tab = e.inv, e.tab
+        if inv then
+            try(PickupBagFromSlot, inv)
+        elseif tab and TAB_BAG then
+            try(C_Container.PickupContainerItem, TAB_BAG, tab)
+        end
+    end
+
+    function RailTip(cell: RailCell)
+        local e = cell.entry
+        if not e then
+            return
+        end
+        local free = e.bag and freeSlots(e.bag)
+        local sizeLine = e.size > 0 and (e.size .. " slots" .. (free and (" · " .. free .. " free") or "")) or nil
+        if e.fixed then
+            UI.ShowTooltip(cell, {
+                title = e.kind == "bank" and "Bank" or "Backpack",
+                subtitle = sizeLine,
+                description = e.kind == "bank" and "The bank's own slots." or "Always there; it can't be changed.",
+            })
+        elseif not e.has then
+            UI.ShowTooltip(cell, {
+                title = e.tab and ("Bank slot " .. e.tab) or (e.kind == "reagent" and "Reagent bag" or "Bag slot"),
+                subtitle = "Empty",
+                description = e.kind == "reagent" and "Drag a reagent bag here. Only reagent bags fit." or
+                    "Drag a bag here.",
+            })
+        else
+            GameTooltip:SetOwner(cell, "ANCHOR_RIGHT", S["space-4"], 0)
+            local inv, tab = e.inv, e.tab
+            local shown = false
+            if inv then
+                shown = flag(GameTooltip:SetInventoryItem("player", inv))
+            elseif tab and TAB_BAG then
+                shown = flag(GameTooltip:SetBagItem(TAB_BAG, tab))
+            end
+            if not shown then
+                GameTooltip:SetText(tab and ("Bank slot " .. tab) or "Bag")
+            end
+            local r, g, b = UI.RGBA("ink-muted")
+            if sizeLine then
+                GameTooltip:AddLine(sizeLine, r, g, b, true)
+            end
+            GameTooltip:AddLine("Pick it up to take it off, or drop another bag on it to swap.", r, g, b, true)
+            GameTooltip:Show()
+        end
+    end
+
+    -- While a bag slot is hovered: its bag's slots stay, the rest fade.
+    function LightBag(bag: number?)
+        for b2, slots in pairs(self.m.buttons) do
+            local fade = bag ~= nil and b2 ~= bag
+            for _, b in pairs(slots) do
+                if b:IsShown() then
+                    local skin = self.m.skins[b]
+                    local dim = skin and skin.item and skin.item.dim
+                    b:SetAlpha(fade and 0.35 or (dim and T.opacity["opacity-disabled"] or 1))
+                end
+            end
+        end
+    end
+
+    -- The cells top to bottom; `sepBefore` the reagent bag's hairline.
+    function LayoutRail(rail: Rail, entries: RailEntry[], buy: RailBuy?)
+        local RAIL_SLOT, RAIL_PAD, RAIL_GAP = railSlot(), S["space-3"], S["space-2"]
+        rail:SetWidth(RAIL_SLOT + 2 * RAIL_PAD)
+        local y = RAIL_PAD
+        rail.sep:Hide()
+        for i, e in ipairs(entries) do
+            if e.kind == "reagent" and i > 1 then
+                y = y + S["space-2"]
+                rail.sep:ClearAllPoints()
+                rail.sep:SetPoint("TOP", rail, "TOP", 0, -y)
+                rail.sep:Show()
+                y = y + 1 + S["space-2"]
+            end
+            local b = self:RailCell(rail, i)
+            b.entry = e
+            b:SetSize(RAIL_SLOT, RAIL_SLOT)
+            b:ClearAllPoints()
+            b:SetPoint("TOP", rail, "TOP", 0, -y)
+            if not e.has then
+                b.skin:SetItem(nil)
+                UI.Glyph(b.glyph, (e.kind == "reagent" and "leaf" or "bag"))
+                UI.Paint(b.glyph, "ink-faint")
+                b.glyph:Show()
+            else
+                b.glyph:Hide()
+                b.skin:SetItem({ icon = e.icon, count = e.size, quality = e.quality })
+            end
+            b:Show()
+            y = y + RAIL_SLOT + RAIL_GAP
+        end
+        for i = #entries + 1, #rail.cells do
+            rail.cells[i]:Hide()
+        end
+        -- the bank's buy cell last, its cost under it
+        if buy then
+            local c = rail.buy
+            if not c then
+                c = BuyCell.new(rail)
+                rail.buy = c
+            end
+            y = y + S["space-2"]
+            c:SetSize(RAIL_SLOT, RAIL_SLOT)
+            c:ClearAllPoints()
+            c:SetPoint("TOP", rail, "TOP", 0, -y)
+            c.off, c.why, c.price, c.next = buy.off == true, buy.why, buy.price, buy.next
+            UI.Paint(c.glyph, buy.off and "ink-faint" or "gilt-text")
+            c:SetAlpha(buy.off and T.opacity["opacity-disabled"] or 1)
+            local price = buy.price
+            c.cost:SetValue(price and price > 0 and not buy.done and coinText(price) or "")
+            c:Show()
+            c.cost:Show()
+            y = y + RAIL_SLOT + 2 + T.type.micro.lineHeight
+        end
+        rail:SetHeight(y - RAIL_GAP + RAIL_PAD)
+    end
+
+    -- Your bags' rail: only while the window shows your own, live bags.
+    function DrawBagRail()
+        local m = self.m
+        local rail, inv, bank = m.bagRail, m.inv, m.bank
+        if not (rail and inv) then
+            return
+        end
+        if not (inv:IsShown() and m:IsLive() and m:Get("bagSlots")) then
+            rail:Hide()
+            return
+        end
+        -- left of the window; at a banker on its right (the bank is on its left)
+        rail:ClearAllPoints()
+        if bank and bank:IsShown() then
+            rail:SetPoint("TOPLEFT", inv, "TOPRIGHT", RAIL_OFF, -RAIL_TOP)
+        else
+            rail:SetPoint("TOPRIGHT", inv, "TOPLEFT", -RAIL_OFF, -RAIL_TOP)
+        end
+        local entries: RailEntry[] = {
+            { kind = "backpack", bag = 0, fixed = true, has = true, icon = BACKPACK_ICON, size = numSlots(0) },
+        }
+        local bags = { 1, 2, 3, 4 }
+        if m:Get("reagentBag") then
+            bags[#bags + 1] = REAGENT
+        end
+        -- one empty bag slot is enough to drop a bag on: the others stay out
+        -- (asked for in game); the reagent slot always shows
+        local emptyShown = false
+        for _, bag in ipairs(bags) do
+            local slot = errors.tryValue(C_Container.ContainerIDToInventoryID, bag)
+            local icon = slot and asNumber(GetInventoryItemTexture("player", slot))
+            local q = slot and asNumber(GetInventoryItemQuality("player", slot))
+            local reagent = bag == REAGENT
+            if icon or reagent or not emptyShown then
+                if not icon and not reagent then
+                    emptyShown = true
+                end
+                entries[#entries + 1] = {
+                    kind = reagent and "reagent" or "bag",
+                    bag = bag,
+                    inv = slot,
+                    has = icon ~= nil,
+                    icon = icon or BACKPACK_ICON,
+                    size = numSlots(bag),
+                    quality = q and QUALITY[q] or nil,
+                }
+            end
+        end
+        self:LayoutRail(rail, entries)
+        rail:Show()
+    end
+
+    -- The bank's rail and the buy cell (at a banker).
+    function DrawBankRail()
+        local m = self.m
+        local rail, bank = m.bankRail, m.bank
+        if not (rail and bank) then
+            return
+        end
+        if not (bank:IsShown() and TAB_BAG and BANK_TYPE and m:Get("bagSlots")) then
+            rail:Hide()
+            self:PlaceBuy(false)
+            return
+        end
+        local max = errors.tryValue(C_Bank.FetchMaxNumBankTabs, BANK_TYPE) or 9
+        local bought: { [number]: boolean } = {}
+        for _, bag in ipairs(m:BankBags()) do
+            bought[bag - BANK_FIRST + 1] = true
+        end
+        -- the slots you bought, one of them empty at most (as your bags' rail,
+        -- asked for in game); the buy cell stands for the rest
+        local entries: RailEntry[] = {}
+        local emptyShown = false
+        for n = 1, max do
+            local bag = BANK_FIRST + n - 1
+            local info = errors.tryValue(C_Container.GetContainerItemInfo, TAB_BAG, n)
+            local icon = info and asNumber(info.iconFileID)
+            local owned = n == 1 or bought[n]
+            if owned and (n == 1 or icon or not emptyShown) then
+                if n > 1 and not icon then
+                    emptyShown = true
+                end
+                local q = info and asNumber(info.quality)
+                entries[#entries + 1] = {
+                    kind = n == 1 and "bank" or "bankbag",
+                    tab = n,
+                    bag = bag,
+                    fixed = n == 1,
+                    has = icon ~= nil or n == 1,
+                    icon = icon or BACKPACK_ICON,
+                    size = numSlots(bag),
+                    quality = q and QUALITY[q] or nil,
+                }
+            end
+        end
+        local buy: RailBuy = {}
+        local nextTab = errors.tryValue(C_Bank.FetchNextPurchasableBankTabData, BANK_TYPE)
+        local price = nextTab and asNumber(nextTab.tabCost)
+        if errors.tryValue(C_Bank.HasMaxBankTabs, BANK_TYPE) then
+            buy.off, buy.why, buy.done = true, "Every bank slot is bought.", true
+        elseif nextTab and price then
+            buy.price = price
+            buy.next = (errors.tryValue(C_Bank.FetchNumPurchasedBankTabs, BANK_TYPE) or 0) + 1
+            if not nextTab.canAfford then
+                buy.off, buy.why = true, ("You need %s. You have %s."):format(coinText(price), coinText(GetMoney()))
+            end
+        else
+            buy.off, buy.why = true, "The bank doesn't offer another slot right now."
+        end
+        self:LayoutRail(rail, entries, buy)
+        rail:Show()
+        self:PlaceBuy(not buy.off)
+    end
+
+    -- The buy cell's secure button: a click on the game's own purchase button
+    -- (its confirmation asks). Placed out of combat, while the cell can buy.
+    function PlaceBuy(on: boolean)
+        if InCombatLockdown() then
+            return
+        end
+        local m = self.m
+        local rail = m.bankRail
+        local cell = rail and rail.buy
+        local target = frames.asButton(field(_G, "BankFrame", "BankPanel", "PurchaseButton"))
+        local over = m.buyOver
+        if not over then
+            if not (on and target and cell) then
+                return
+            end
+            -- (a layer above the windows: a click raises them, toplevel)
+            over = secure.overlay(cell, { strata = "DIALOG" })
+            over.set("type1", "click")
+            m.buyOver = over
+        end
+        if target then
+            over.set("clickbutton1", target)
+        end
+        if on and target and cell and cell:IsVisible() then
+            over.show()
+        else
+            over.hide()
+        end
+    end
+
+    function DrawRails()
+        self:DrawBagRail()
+        self:DrawBankRail()
+    end
+end

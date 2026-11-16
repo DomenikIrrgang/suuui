@@ -1,0 +1,577 @@
+-- Diagnostics/Watch/Kit.wowlua
+-- What "/suu probe all" (Diagnostics/AllProbe) is made of: an item per open
+-- question about the client, and for an armed item a Watch, which listens
+-- for the situation that answers it and records what it saw.
+--
+-- Rules every watcher keeps (it runs while the owner plays, raids too):
+--   - read only: it listens to events, reads with pcall and observes calls
+--     with secure post-hooks (Core/Hooks); it never changes game state,
+--     never moves, shows or hides a frame that isn't the probe's own, never
+--     writes a field of a Blizzard frame or table, never replaces a global;
+--   - secrets: a value that may be secret is never compared, indexed or
+--     used in arithmetic; it is recorded as "secret";
+--   - identity: no player's name, GUID or link is stored, only roles,
+--     classes, shapes and booleans;
+--   - cost: events and one-shot timers only (no OnUpdate, no ticker), and
+--     everything of an item's goes when it has recorded;
+--   - every body runs under pcall: an error becomes the item's result (its
+--     text) and stops that item alone.
+-- Each watch is an owner on SuuUI's event bus, hook and timer registries
+-- (Core/Events, Core/Hooks, Core/Timers), so stopping it takes all of its
+-- listeners, disarms its hooks (a hook can't be taken off: it stays
+-- installed, doing nothing, until a /reload) and cancels its timers.
+--
+-- The record is SuuUIProbe.all (saved on /reload): results by item ID, each
+-- with its one-line question and an answer in words next to the raw values.
+
+import * as DB from "/Core/DB"
+import * as fault from "/Core/Fault"
+import * as events from "/Core/Events"
+import * as hooks from "/Core/Hooks"
+import * as timers from "/Core/Timers"
+import scan from "/Core/TaintScan"
+import isSecret, readable from "wowlua:secret"
+import * as tbl from "wowlua:table"
+
+-- One record of an item: its question, answer, when, in combat or not, and
+-- the raw values it saw (fields of the item's own).
+export type Result = { [string]: unknown }
+
+export enum Kind {
+    Instant = "instant", -- answered when /suu probe all runs
+    Armed = "armed", -- records by itself when the situation comes
+    Manual = "manual", -- can't be seen without acting on the game
+}
+
+export type Item = {
+    id: string,
+    kind: Kind,
+    question: string,
+    -- (the summary) what it waits for, in a few words: "a fight", "loot"
+    when?: string,
+    -- (status) what the player does for it to record; for a manual item,
+    -- what to do by hand
+    todo: string,
+    -- how many occurrences it records before it is done (default 1)
+    samples?: number,
+    -- the cases it waits for, each recorded once (w:case); done when all are
+    cases?: string[],
+    -- manual: why it isn't watched, and the /suu probe topic that records it
+    reason?: string,
+    topic?: string,
+    -- instant: the record (its `answer` in it)
+    run?: () -> Result,
+    -- armed: listens through the watch
+    arm?: (w: Watch) -> (),
+    -- the answer from what the samples (or cases) recorded
+    summarize?: (r: Result) -> string,
+    -- after it is done or turned off: the probe's own frames hidden, …
+    stop?: () -> (),
+}
+
+-- SuuUIProbe.all
+export type Record = {
+    version: number,
+    started: string,
+    build: string,
+    suuui: string,
+    api: string,
+    character: string,
+    armed: boolean,
+    results: { [string]: Result },
+    waiting: string[],
+    manual: Result[],
+}
+
+export const LAYOUT = 1
+
+export function stamp(): string
+    return date("%Y-%m-%d %H:%M:%S")
+end
+
+export function store(): Record
+    local r = DB.probeData("all", function(): Record
+        return {
+            version = LAYOUT,
+            started = stamp(),
+            build = "",
+            suuui = "",
+            api = "",
+            character = "Player",
+            armed = false,
+            results = {},
+            waiting = {},
+            manual = {},
+        }
+    end)
+    if type(r.results) ~= "table" then
+        r.results = {}
+    end
+    return r
+end
+
+-- Set while the probe arms itself at PLAYER_LOGIN (a login watcher reads
+-- then: the moment the modules enable).
+export const phase = { login = false }
+
+--------------------------------------------------------------------------------
+-- Reading values
+--------------------------------------------------------------------------------
+
+-- "secret", "nil" or "readable": never the value.
+export function state(v: unknown): string
+    if isSecret(v) then
+        return "secret"
+    end
+    if v == nil then
+        return "nil"
+    end
+    return "readable"
+end
+
+-- A value fit to save: "secret" for a secret, a plain string, number or
+-- boolean as it is, anything else as its type.
+export function show(v: unknown): unknown
+    if isSecret(v) then
+        return "secret"
+    end
+    local t = type(v)
+    if t == "string" or t == "number" or t == "boolean" or t == "nil" then
+        return v
+    end
+    return t
+end
+
+-- A dotted path from _G ("C_Spell.GetSpellTexture", "LootFrame.SetPointBase"),
+-- read under pcall (frames answer their methods through their metatable).
+export function resolve(path: string): unknown
+    local v: unknown = _G
+    for part in path:gmatch("[^%.]+") do
+        if not readable(v) or type(v) ~= "table" then
+            return nil
+        end
+        local t = v :: { [string]: unknown }
+        local ok, got = pcall(function(): unknown
+            return t[part]
+        end)
+        if not ok then
+            return nil
+        end
+        v = got
+    end
+    return v
+end
+
+-- A format string of the game's (WHO_NUM_RESULTS, LOOT_ROLL_WON) as a
+-- pattern: its %s and %d match anything, its grammar codes (|4a:b;) too.
+export function pattern(format: unknown): string?
+    if type(format) ~= "string" or format == "" then
+        return nil
+    end
+    -- the parts that match anything first (as \1), then the rest escaped
+    local p = format:gsub("|4[^;]*;", "\1")
+    p = p:gsub("%%%d%$[sd]", "\1")
+    p = p:gsub("%%[sd]", "\1")
+    p = p:gsub("([%(%)%.%+%-%*%?%[%]%^%$%%])", "%%%1")
+    p = p:gsub("\1", ".-")
+    return "^" .. p .. "$"
+end
+
+--------------------------------------------------------------------------------
+-- Blocked actions (shared by every watch while the probe is armed)
+--------------------------------------------------------------------------------
+
+type Blocked = { event: string, func: string, addon: string, at: number, combat: boolean }
+
+local blockedList: Blocked[] = {}
+local blockedOwner = { name = "Probe all: blocked actions" }
+export const blockedCount = { n = 0 }
+
+local function onBlocked(event: string, addon: unknown, func: unknown)
+    blockedCount.n += 1
+    blockedList[#blockedList + 1] = {
+        event = event,
+        func = tostring(func),
+        addon = tostring(addon),
+        at = GetTime(),
+        combat = InCombatLockdown() and true or false,
+    }
+    if #blockedList > 30 then
+        table.remove(blockedList, 1)
+    end
+end
+
+export function listenBlocked(on: boolean)
+    events.offAll(blockedOwner)
+    if on then
+        events.onGame("ADDON_ACTION_BLOCKED", function(_, addon: unknown, func: unknown)
+            onBlocked("ADDON_ACTION_BLOCKED", addon, func)
+        end, blockedOwner)
+        events.onGame("ADDON_ACTION_FORBIDDEN", function(_, addon: unknown, func: unknown)
+            onBlocked("ADDON_ACTION_FORBIDDEN", addon, func)
+        end, blockedOwner)
+    end
+end
+
+-- The blocked actions since GetTime() `t`: "EVENT func (addon)[, in combat]".
+export function blockedSince(t: number): string[]
+    local out: string[] = {}
+    for _, b in ipairs(blockedList) do
+        if b.at >= t then
+            out[#out + 1] = ("%s %s (%s)%s"):format(b.event, b.func, b.addon, b.combat and ", in combat" or "")
+        end
+    end
+    return out
+end
+
+-- A call the game may refuse, made on the probe's own frame: whether it
+-- raised an error, and whether the game refused it (a blocked action during
+-- the call; expected, so SuuUI's error log doesn't report it).
+export function attempt(fn: () -> ()): Result
+    local before = blockedCount.n
+    local ok, refused = pcall(fault.expectRefusal, fn)
+    return {
+        error = not ok and tostring(refused) or nil,
+        refused = (ok and refused == true) or blockedCount.n > before,
+    }
+end
+
+-- An attempt in words: "allowed", "refused" or "an error (…)".
+export function attemptWord(t: Result): string
+    if t.error then
+        return "an error (" .. tostring(t.error) .. ")"
+    end
+    return t.refused and "refused" or "allowed"
+end
+
+--------------------------------------------------------------------------------
+-- Taint at a moment
+--------------------------------------------------------------------------------
+
+-- Whether a value was last written by Blizzard's code ("secure") or by an
+-- addon ("written by X"); `t` nil: a global named `key`.
+export function secureState(t: unknown, key: unknown): string
+    local ok, secure, by
+    if t == nil then
+        ok, secure, by = pcall(issecurevariable, key :: string)
+    else
+        ok, secure, by = pcall(issecurevariable, t :: table, key :: string)
+    end
+    if not ok then
+        return "unreadable"
+    end
+    if secure then
+        return "secure"
+    end
+    return "written by " .. tostring(by)
+end
+
+-- The string fields of a table written by addon code ("field (by X)").
+export function writtenFields(label: string, t: unknown): string[]
+    local out: string[] = {}
+    if not readable(t) or type(t) ~= "table" then
+        return out
+    end
+    for k in pairs(t :: { [unknown]: unknown }) do
+        if type(k) == "string" then
+            local s = secureState(t, k)
+            if s ~= "secure" and s ~= "unreadable" then
+                out[#out + 1] = label .. "." .. k .. " (" .. s .. ")"
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- The last scan's lines (Core/TaintScan), to tell what a moment added.
+local previous: { [string]: boolean }? = nil
+
+local function lines(): string[]
+    local ok, list = pcall(scan)
+    if ok and type(list) == "table" then
+        return list :: string[]
+    end
+    return {}
+end
+
+-- The scan now, as where the next moment starts from (arming, a login).
+export function baseline()
+    local set: { [string]: boolean } = {}
+    for _, l in ipairs(lines()) do
+        set[l] = true
+    end
+    previous = set
+end
+
+-- The taint scan at a named moment: what it lists that the previous scan
+-- didn't (the moment's own), how many it lists, the blocked actions of the
+-- last `window` seconds, and `extra`'s own checks.
+export function moment(name: string, extra: unknown?, window: number?): Result
+    local now = lines()
+    local was = previous or {}
+    local newly: string[] = {}
+    local set: { [string]: boolean } = {}
+    for _, l in ipairs(now) do
+        set[l] = true
+        if not was[l] and #newly < 40 then
+            newly[#newly + 1] = l
+        end
+    end
+    previous = set
+    local r: Result = {
+        moment = name,
+        at = stamp(),
+        combat = InCombatLockdown() and true or false,
+        newlyWritten = newly,
+        written = #now,
+        blocked = blockedSince(GetTime() - (window or 1)),
+    }
+    if extra ~= nil then
+        r.checks = extra
+    end
+    return r
+end
+
+--------------------------------------------------------------------------------
+-- A watch: one armed item's listeners and record
+--------------------------------------------------------------------------------
+
+export class Watch
+    item: Item
+    owner: { name: string }
+    active: boolean = false
+    -- the EventRegistry events it listens to (taken off when it stops)
+    registry: string[] = {}
+    -- AllProbe's: called when the item has recorded
+    onDone: ((w: Watch) -> ())? = nil
+
+    constructor(item: Item)
+        self.item = item
+        self.owner = { name = "Probe all: " .. item.id }
+    end
+
+    -- The item's record in SuuUIProbe.all (made with its question).
+    function result(): Result
+        local results = store().results
+        local r = results[self.item.id]
+        if not r then
+            r = { question = self.item.question, done = false }
+            results[self.item.id] = r
+        end
+        return r
+    end
+
+    function isDone(): boolean
+        return self:result().done == true
+    end
+
+    function live(): boolean
+        return self.active
+    end
+
+    -- fn, run only while armed; an error in it is the item's result.
+    function guard(fn: (...unknown) -> ()): (...unknown) -> ()
+        return function(...: unknown)
+            if not self.active then
+                return
+            end
+            local ok, err = pcall(fn, ...)
+            if not ok then
+                self:fail(err)
+            end
+        end
+    end
+
+    -- A game event (fn gets the event's name first). False: the client
+    -- doesn't know the event.
+    function on(event: string, fn: (...unknown) -> ()): boolean
+        local ok = pcall(events.onGame, event :: any, self:guard(fn) :: any, self.owner)
+        return ok
+    end
+
+    -- No longer listening to `event`.
+    function off(event: string)
+        events.off(event, self.owner)
+    end
+
+    -- A unit event for these units only.
+    function onUnit(event: string, units: string[], fn: (...unknown) -> ()): boolean
+        local ok = pcall(events.onUnit, event :: any, units :: any, self:guard(fn) :: any, self.owner)
+        return ok
+    end
+
+    -- One of Blizzard's EventRegistry events ("WorldMapOnShow",
+    -- "EditMode.Enter", "ChatFrame.OnEditBoxShow"): the game calls each
+    -- listener through secureexecuterange, so a listener's taint stays its
+    -- own (unlike a hook on a frame's script, which runs inside the game's
+    -- call). The watch's own owner, never a Blizzard frame. fn gets the
+    -- event's arguments. False: no registry.
+    function onRegistry(event: string, fn: (...unknown) -> ()): boolean
+        local reg = resolve("EventRegistry")
+        local register = tbl.field(reg, "RegisterCallback")
+        if type(register) ~= "function" then
+            return false
+        end
+        local body = self:guard(fn)
+        local ok = pcall(register :: (r: unknown, e: string, f: function, o: unknown) -> (), reg, event, function(_owner: unknown, ...: unknown)
+            body(...)
+        end, self.owner)
+        if ok then
+            self.registry[#self.registry + 1] = event
+        end
+        return ok
+    end
+
+    -- A secure post-hook: a global function (`method` nil) or a table's
+    -- method; false when it can't be installed (no such function).
+    function hook(target: unknown, method: string?, fn: (...unknown) -> ()): boolean
+        local ok = pcall(hooks.secureHook, self.owner, self.owner.name, function(): boolean
+            return self.active
+        end, target, method, self:guard(fn))
+        return ok
+    end
+
+    -- A frame script's post-hook; false when the frame isn't there.
+    function hookScript(frame: unknown, script: string, fn: (...unknown) -> ()): boolean
+        if frame == nil then
+            return false
+        end
+        local ok = pcall(hooks.hookScript, self.owner, self.owner.name, function(): boolean
+            return self.active
+        end, frame :: any, script, self:guard(fn))
+        return ok
+    end
+
+    -- Once, `sec` seconds from now, while still armed.
+    function after(sec: number, fn: () -> ())
+        local body = self:guard(fn)
+        timers.after(self.owner, self.owner.name, function(): boolean
+            return self.active
+        end, sec, function()
+            body()
+        end)
+    end
+
+    -- One occurrence; done once the item's `samples` are in.
+    function sample(fields: Result): number
+        local r = self:result()
+        local list = tbl.listAt(r, "samples")
+        if fields.at == nil then
+            fields.at = stamp()
+        end
+        if fields.combat == nil then
+            fields.combat = InCombatLockdown() and true or false
+        end
+        list[#list + 1] = fields
+        local needed = self.item.samples or 1
+        r.needed = needed
+        if #list >= needed then
+            self:finish(nil)
+        end
+        return #list
+    end
+
+    -- Whether a case has recorded.
+    function has(key: string): boolean
+        local cases = self:result().cases
+        return type(cases) == "table" and (cases :: { [string]: unknown })[key] ~= nil
+    end
+
+    -- One of the item's cases (the first time only); done once all are in.
+    function case(key: string, fields: Result)
+        local r = self:result()
+        local cases = tbl.recordAt(r, "cases")
+        if cases[key] ~= nil then
+            return
+        end
+        if fields.at == nil then
+            fields.at = stamp()
+        end
+        if fields.combat == nil then
+            fields.combat = InCombatLockdown() and true or false
+        end
+        cases[key] = fields
+        for _, k in ipairs(self.item.cases or {}) do
+            if cases[k] == nil then
+                return
+            end
+        end
+        self:finish(nil)
+    end
+
+    -- Recorded: the answer (or the item's summary of its samples), and
+    -- nothing of it listens any more.
+    function finish(answer: string?, fields: Result?)
+        local r = self:result()
+        if fields then
+            for k, v in pairs(fields) do
+                r[k] = v
+            end
+        end
+        r.at = stamp()
+        if r.combat == nil then
+            r.combat = InCombatLockdown() and true or false
+        end
+        r.done = true
+        if answer then
+            r.answer = answer
+        else
+            local summarize = self.item.summarize
+            if summarize then
+                local ok, text = pcall(summarize, r)
+                r.answer = ok and tostring(text) or ("the summary failed: " .. tostring(text))
+            end
+        end
+        self:stop()
+        local done = self.onDone
+        if done then
+            done(self)
+        end
+    end
+
+    -- The watcher itself failed: its error is its result.
+    function fail(err: unknown)
+        local text = tostring(err)
+        self:finish("the watcher failed: " .. text, { error = text })
+    end
+
+    -- Armed: its listeners, hooks and timers (a body error stops it).
+    function start()
+        if self.active or self:isDone() then
+            return
+        end
+        local arm = self.item.arm
+        if not arm then
+            return
+        end
+        self.active = true
+        local ok, err = pcall(arm, self)
+        if not ok then
+            self:fail(err)
+        end
+    end
+
+    -- Disarmed: every listener off, hooks doing nothing, timers cancelled,
+    -- the probe's own frames put away.
+    function stop()
+        self.active = false
+        events.offAll(self.owner)
+        if #self.registry > 0 then
+            local reg = resolve("EventRegistry")
+            local unregister = tbl.field(reg, "UnregisterCallback")
+            if type(unregister) == "function" then
+                for _, e in ipairs(self.registry) do
+                    pcall(unregister :: (r: unknown, e: string, o: unknown) -> (), reg, e, self.owner)
+                end
+            end
+            self.registry = {}
+        end
+        hooks.release(self.owner)
+        timers.cancelAll(self.owner)
+        local undo = self.item.stop
+        if undo then
+            pcall(undo)
+        end
+    end
+end

@@ -18,15 +18,12 @@
 -- level-up card stays while the mouse is over it: hidden once it leaves; a
 -- click on it takes it away at once.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Alert, AlertTone, FormatArg from "/UI/Alert"
-import type LevelUpCard, LevelUpDef from "/UI/LevelUp"
-import ALERTS from "/Core/ServiceKeys"
-import type Position from "/EditMode/EditMode"
-import after, every from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Alert, AlertTone, FormatArg, LevelUpCard, LevelUpDef, Position from "/Core/API"
+import after from "wowlua:timer"
 import * as secret from "wowlua:secret"
+
+local ALERTS = SuuUI.Services.ALERTS
 
 local UI = SuuUI.UI
 
@@ -208,7 +205,7 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
         if ui and not now and key and key == self.current and ui.card:IsShown() and ui.card:IsHovered() then
             if not self.holding then
                 local away = 0
-                self.holding = every(0.2, function()
+                self.holding = self:Every(0.2, function()
                     if self.current ~= key then
                         return self:StopHolding()
                     end
@@ -243,6 +240,8 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
                 if fading then
                     fading:Cancel()
                 end
+                -- (a plain timer: the fade that turning the module off
+                -- starts must still end with the frame hidden)
                 self.fading = after(d, function()
                     self.fading = nil
                     if not self.current then
@@ -273,18 +272,19 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
             { tone = "warning", title = "You're about to pull", detail = "Lava Surger · over Brannoc's threat" },
             { tone = "info", title = "Pull in 5", detail = "4 of 5 ready" },
         }
+        -- (off: its timers would not start, and `testing` would stay set)
+        if not self:IsEnabled() then
+            return
+        end
         self.testing = true
         for i, s in ipairs(samples) do
-            after((i - 1) * TEST_TIME, function()
-                if not self:IsEnabled() then
-                    return
-                end
+            self:After((i - 1) * TEST_TIME, function()
                 self.testing = true
                 self.current = nil
                 self:Show("test", s.tone, s.title, s.detail)
             end)
         end
-        after(#samples * TEST_TIME, function()
+        self:After(#samples * TEST_TIME, function()
             self.testing = nil
             self:Hide("test")
         end)
@@ -360,7 +360,10 @@ export class AlertsModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- (0.47) The hold ticker and the test's timers go with the module;
+    -- a test cut short no longer counts as running.
     override function OnDisable()
+        self.testing = nil
         self:Hide()
     end
 end

@@ -1,0 +1,100 @@
+-- Units/RaidPlanner/View: the window's data.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/View"
+import cleanup, warrior, mage, raid, setup, slot, slotIn, view from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("the window's data: the setups listed, the groups' cards, open slots, the status, the buttons")
+local function viewData()
+    setup()
+    slot(1, "WARRIOR", 3, "TANK")
+    M:Save()
+    M:Duplicate(1)
+    local v = view()
+    expect(v.meta).toBe("New setup")
+    expect(#v.setups).toBe(2)
+    expect(v.setups[1].loaded).toBe(true)
+    expect((v.setups[1].meta or ""):find("loaded · saved", 1, true)).toBe(1)
+    expect((v.setups[2].meta or ""):sub(1, 24)).toBe("1 slots · 1 tank · 0 h")
+    -- when saved: minutes, hours, days, weeks ago
+    local copy = M:Data().setups[2]
+    for _, e in ipairs({
+        { s = 600, says = "10m ago" },
+        { s = 3 * 3600, says = "3h ago" },
+        { s = 2 * 86400, says = "2d ago" },
+        { s = 21 * 86400, says = "3w ago" },
+    }) do
+        copy.saved = time() - e.s
+        local meta = view().setups[2].meta or ""
+        expect(meta:sub(-#e.says)).toBe(e.says)
+    end
+    expect(v.groups[1].kind).toBe("tanks")
+    expect(v.groups[1].slots[1].state).toBe("open")
+    expect(v.groups[1].slots[1].tip).toBe("Fills with the raid.")
+    expect(v.arrange.enabled).toBe(false)
+    expect(v.arrange.reason).toBe("Not in a raid.")
+    expect(#v.palette).toBe(9)
+    -- an unsaved one is listed first
+    M:New(false)
+    v = view()
+    expect(v.setups[1].meta).toBe("loaded · not saved")
+    expect(v.meta).toBe("New setup 2 · not saved")
+    -- in a raid
+    M:Load(1)
+    raid({ { unit = warrior, g = 2 }, { unit = mage, g = 1 } })
+    slot(1, "PRIEST")
+    local pinnedAway = slotIn(2, "MAGE")
+    pinnedAway.pin = "Raider Somebody"
+    M:Refill()
+    v = view()
+    expect(v.meta).toBe("New setup · changed")
+    local card = v.groups[1].slots[1]
+    expect(card.who).toBe("Raider Warrior")
+    expect(card.state).toBe("provisional")
+    expect(card.spec).toBe("?")
+    expect((card.tip or ""):find("Spec not known yet", 1, true) ~= nil).toBe(true)
+    expect(v.groups[1].slots[2].tip).toBe("Nobody in the raid fits: Priest")
+    expect(v.groups[2].slots[1].state).toBe("away")
+    expect(#v.open).toBe(2)
+    expect(v.open[1].detail).toBe("Fortitude, Magic")
+    expect(v.stats[1].n).toBe(3)
+    expect(v.stats[4].n).toBe(2)
+    expect(v.inspect.shown).toBe(true)
+    expect(v.inspect.label).toBe("Inspect the 2")
+    expect(v.fill.shown).toBe(false)
+    expect(v.note).toBe(("Fills as the raid changes · %d tracked"):format(M:TrackedCount()))
+    -- the mage without a slot, and why
+    local why = v.unplaced[1].detail or ""
+    expect(why:find("no slot asks for a", 1, true) ~= nil or why:find("slot", 1, true) ~= nil).toBe(true)
+    -- in combat: said so, filled after
+    mock.player:enterCombat()
+    v = view()
+    expect(v.note:sub(1, 29)).toBe("In combat: fills when it ends")
+    expect(v.inspect.reason).toBe("Not in combat.")
+    M:Refill()
+    mock.player:leaveCombat()
+end
+
+@test("the texts: what a slot asks for, how long ago, a setup's summary, a group's caption")
+local function texts()
+    expect(part.reqText({ id = 1, g = 1, class = "SHAMAN", spec = 3, label = "Totems" })).toBe("Shaman · Restoration · Totems")
+    expect(part.reqText({ id = 1, g = 1, class = "WARRIOR", role = "TANK" })).toBe("Warrior · Tank")
+    expect(part.reqText({ id = 1, g = 1, role = "HEALER" })).toBe("Any healer")
+    expect(part.reqText({ id = 1, g = 1 })).toBe("Any")
+    expect(part.ago(nil)).toBe("")
+    expect(part.ago(time())).toBe("just now")
+    expect(part.summary({ name = "Main", size = 10, slots = { { id = 1, g = 1, class = "WARRIOR", spec = 3 }, { id = 2, g = 1, role = "HEALER" } } })).toBe(
+        "2 slots · 1 tank · 1 healer"
+    )
+    expect(part.groupKind({})).toBe("")
+    expect(part.groupKind({ { id = 1, g = 1, class = "WARRIOR", role = "TANK" } })).toBe("tanks")
+    local any = { id = 1, g = 1 }
+    expect(part.groupKind({ any, any, any })).toBe("flex")
+end

@@ -30,15 +30,8 @@
 -- merchant is left out.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Position from "/EditMode/EditMode"
-import type DurabilityInfo, DurabilityPiece, DurabilityParts from "/Core/ServiceKeys"
-import type StateBadge from "/UI/Controls"
-import type Text from "/UI/Text"
-import type TooltipData from "/UI/Tooltip"
-import after from "wowlua:timer"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position, DurabilityInfo, DurabilityPiece, DurabilityParts, StateBadge, Text, TooltipData from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
@@ -649,6 +642,7 @@ local SECTION: SettingsSection = {
 class DurabilityModule extends Module<typeof(DEFAULTS)>
     alertTimer: TimerHandle? = nil
     blizzardDown: boolean? = nil
+    toldReload: boolean? = nil
     -- the last reading (SuuUI.Durability())
     data: DurabilityInfo? = nil
     figure: DurabilityFigure? = nil
@@ -706,7 +700,7 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
                 if timer then
                     timer:Cancel()
                 end
-                self.alertTimer = after(4, function()
+                self.alertTimer = self:After(4, function()
                     self.alertTimer = nil
                     SuuUI.HideAlert(ALERT)
                 end)
@@ -840,13 +834,13 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
         end
         pcall(RepairAllItems, guild and true or false)
         -- what it cost and who paid, once the game has answered
-        after(1, function()
+        self:After(1, function()
             local left = repairCost()
             if guild and left > 0 and (GetMoney() or 0) >= left then
                 -- the guild didn't pay after all: your own gold
                 guild = false
                 pcall(RepairAllItems, false)
-                after(1, function()
+                self:After(1, function()
                     self:ReportRepair(cost, money, worn)
                 end)
                 return
@@ -875,7 +869,7 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnEnable()
-        self:Provide("durability", {
+        self:ProvideService(SuuUI.Services.DURABILITY, {
             Get = function()
                 return self.data
             end,
@@ -941,17 +935,24 @@ class DurabilityModule extends Module<typeof(DEFAULTS)>
         end)
     end
 
+    -- (0.47) The registry cancels the alert's and the repair report's
+    -- timers and drops the service (SUUUI_SERVICE_CHANGED: the Character
+    -- button, gear slots, merchant line and the damaged-gear note redraw
+    -- without it).
     override function OnDisable()
-        local f, timer = self.figure, self.alertTimer
+        local f = self.figure
         if f then
             f:Hide()
         end
-        if timer then
-            timer:Cancel()
-            self.alertTimer = nil
-        end
+        self.alertTimer = nil
         SuuUI.HideAlert(ALERT)
         self.data = nil
+        -- the game's own figure can't be brought back before a reload
+        -- (SuppressBlizzard): say so, once per session it was put away
+        if self.blizzardDown and not self.toldReload then
+            self.toldReload = true
+            self:Print("The game's own durability figure comes back after a reload.")
+        end
     end
 end
 

@@ -1,4 +1,4 @@
--- Units/RankUpgrade.wowlua
+-- Units/ActionBars/RankUpgrade.wowlua
 -- A new rank onto your bars (Action bars' "Upgrade spell ranks", asked for
 -- 2026-11-09): when you learn a rank of a spell, every action slot holding
 -- the best rank you had of it before (on any bar, page, stance or form)
@@ -53,6 +53,14 @@ export type DeclinedRanks = { [string]: number }
 -- A slot of the spec just switched to that holds an older rank.
 export type StaleSlot = { slot: number, name: string, from: number, to: number, id: number }
 
+-- What runs fn `sec` seconds later: the module's own timers (M:After,
+-- cancelled when it turns off) in Action bars; a plain timer by default.
+export type Later = (sec: number, fn: () -> ()) -> ()
+
+local function plainLater(sec: number, fn: () -> ())
+    after(sec, fn)
+end
+
 export class RankUpgrader
     -- your best rank of each spell, by name
     best: { [string]: number } = {}
@@ -66,10 +74,13 @@ export class RankUpgrader
     on: () -> boolean
     rereading: boolean = false
     retrying: boolean = false
+    -- the moment-later reads and retries
+    later: Later
 
-    constructor(say: (text: string) -> (), on: () -> boolean)
+    constructor(say: (text: string) -> (), on: () -> boolean, later: Later?)
         self.say = say
         self.on = on
+        self.later = later or plainLater
         self:Read()
     end
 
@@ -169,7 +180,7 @@ export class RankUpgrader
             return
         end
         self.rereading = true
-        after(1, function()
+        self.later(1, function()
             self.rereading = false
             self:Read()
         end)
@@ -205,7 +216,7 @@ export class RankUpgrader
         if GetCursorInfo() ~= nil then
             if not self.retrying then
                 self.retrying = true
-                after(1, function()
+                self.later(1, function()
                     self.retrying = false
                     self:Apply()
                 end)

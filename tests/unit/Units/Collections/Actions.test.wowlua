@@ -1,0 +1,183 @@
+-- Units/Collections/Actions: the stage's action and why it's off, a toy's
+-- Use and when it's ready; Summon on SuuUI's secure button (mounted:
+-- Dismiss; in combat it waits); the favourite star; an entry of yours
+-- dragged onto an action bar.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Collections"
+import actionLabel, readyIn, toyWhy, toyCooldown from "/Units/Collections/Actions"
+import * as frames from "wowlua:frames"
+import start, cleanup, entry, open, ui, cells, captureTooltips, setMounted, toyData, petJournal, cellNamed from "./CollectionsHelpers"
+
+@beforeEach
+local function setUp()
+    start()
+end
+
+@afterEach
+local function tearDown()
+    cleanup()
+end
+
+@test("the stage's action, a toy's Use and when it's ready")
+local function actions()
+    expect({ actionLabel(true, nil) }).toEqual({ "Dismiss" })
+    expect({ actionLabel(false, nil) }).toEqual({ "Summon", "Choose a mount." })
+    expect({ actionLabel(false, entry({ collected = false })) }).toEqual({ "Summon", "You don't have this mount yet." })
+    expect({ actionLabel(false, entry({ collected = true, usable = false })) }).toEqual({
+        "Summon",
+        "You can't ride this mount here.",
+    })
+    expect({ actionLabel(false, entry({ collected = true, usable = true })) }).toEqual({ "Summon" })
+    expect(readyIn(100, 3900, 100)).toBe("Ready in 1 h 5 min")
+    expect(readyIn(100, 2460, 100)).toBe("Ready in 41 min")
+    expect(readyIn(100, 30, 100)).toBe("Ready in 30 s")
+    expect(readyIn(100, 30, 200)).toBe("Ready in 0 s")
+    expect(toyWhy(entry({ collected = false }), 0, 0)).toBe("You don't have this toy yet.")
+    -- (on a whole second: `GetTime() + 60 - GetTime()` came out under 60 at
+    -- 7.612, the clock early in a test file, and the toy read "Ready in 60 s";
+    -- before the split nine tests ran ahead of this one in its file)
+    mock.advanceTime(math.ceil(GetTime()) - GetTime())
+    expect(toyWhy(entry({ collected = true }), GetTime(), 60)).toBe("Ready in 1 min.")
+    expect(toyWhy(entry({ collected = true, usable = false }), 0, 0)).toBe("You can't use this toy here.")
+    expect(toyWhy(entry({ collected = true, usable = true }), 0, 0)).toBe(nil)
+    -- a toy's cooldown: the game's, if it lasts beyond the global cooldown
+    mock.stub(C_Container, "GetItemCooldown", function(id: number): (unknown, unknown)
+        if id == 1 then
+            return 50, 120
+        end
+        if id == 2 then
+            return 50, 1
+        end
+        return mock.secret(1), mock.secret(2)
+    end)
+    expect({ toyCooldown(1) }).toEqual({ 50, 120 })
+    expect({ toyCooldown(2) }).toEqual({ 0, 0 })
+    expect({ toyCooldown(3) }).toEqual({ 0, 0 })
+end
+
+@test("Summon: the mount's spell on SuuUI's secure button; why it's off; mounted, Dismiss; in combat it waits")
+local function summon()
+    open()
+    local act = ui().act
+    expect(act.look.label:GetText()).toBe("Summon")
+    expect(act:GetAttribute("type")).toBe("spell")
+    expect(act:GetAttribute("spell")).toBe(1020)
+    -- not yours
+    M:Choose(M:Mounts()[4])
+    expect(act.why).toBe("You don't have this mount yet.")
+    expect(act:GetAttribute("type")).toBe(nil)
+    local shown = captureTooltips()
+    mock.hover(act)
+    expect(shown().description).toBe("You don't have this mount yet.")
+    mock.hover(nil)
+    -- mounted: Dismiss
+    setMounted(true)
+    mock.fireEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+    expect(act.look.label:GetText()).toBe("Dismiss")
+    expect(act:GetAttribute("macrotext")).toBe("/dismount")
+    -- in combat: the look now, the button after
+    setMounted(false)
+    mock.player:enterCombat()
+    mock.fireEvent("MOUNT_JOURNAL_USABILITY_CHANGED")
+    expect(act.look.label:GetText()).toBe("Summon")
+    expect(act:GetAttribute("macrotext")).toBe("/dismount")
+    mock.player:leaveCombat()
+    mock.advanceTime(0.1)
+    expect(M.actionAfterCombat).toBe(false)
+end
+
+@test("the favourite star: a mount's by its place in the game's list; a toy's; an appearance's")
+local function favourites()
+    open()
+    mock.click(cells()[2])
+    expect(assert(M.chosen).name).toBe("Brown Horse")
+    mock.click(ui().stage.star)
+    expect(select(7, C_MountJournal.GetMountInfoByID(101))).toBe(true)
+    mock.advanceTime(0.2)
+    -- a mount the game takes no favourite for (as its own Mounts tab): the
+    -- star faint, saying why, its click nothing
+    local real = C_MountJournal.GetIsFavorite
+    local refuse = true
+    mock.fake("C_MountJournal.GetIsFavorite", function(i: number): (boolean, boolean)
+        if refuse then
+            return true, false
+        end
+        return real(i)
+    end)
+    M:Refresh()
+    expect(ui().stage.star.why).never.toBeNil()
+    mock.click(ui().stage.star)
+    mock.advanceTime(0.2)
+    expect(select(7, C_MountJournal.GetMountInfoByID(101))).toBe(true)
+    refuse = false
+    M:Refresh()
+    expect(ui().stage.star.why).toBeNil()
+    toyData()
+    M.chosen = entry({ kind = "toy", itemID = 201, favourite = false })
+    M:ToggleFavourite()
+    expect(C_ToyBox.GetIsFavorite(201)).toBe(true)
+    M.chosen = entry({ kind = "appearance", visualID = 11257, favourite = false })
+    M:ToggleFavourite()
+    expect(C_TransmogCollection.GetIsAppearanceFavorite(11257)).toBe(true)
+    -- a mount the game's list doesn't show (not yours), or nothing chosen: nothing
+    M.chosen = entry({ kind = "mount", id = 103 })
+    M:ToggleFavourite()
+    M.chosen = nil
+    M:ToggleFavourite()
+    expect(select(7, C_MountJournal.GetMountInfoByID(103))).toBe(false)
+    mock.advanceTime(0.2)
+    -- the star's tooltip
+    local shown = captureTooltips()
+    M:Refresh()
+    mock.hover(nil)
+    mock.hover(ui().stage.star)
+    expect(shown().title).toBe(ui().stage.star.on and "Remove from favourites" or "Add to favourites")
+    mock.hover(nil)
+end
+
+--------------------------------------------------------------------------------
+-- Onto the action bars
+--------------------------------------------------------------------------------
+
+@test("a mount, a toy and a pet of yours dragged: picked up as the game's journals do; one you haven't got, nothing")
+local function dragToBar()
+    toyData()
+    open()
+    -- (the tests' client puts none of them on the cursor: what's asked)
+    local mounts: (number?)[], toys: number[], pets: string[] = {}, {}, {}
+    mock.fake("C_MountJournal.Pickup", function(i: number)
+        mounts[#mounts + 1] = C_MountJournal.GetDisplayedMountID(i)
+    end)
+    mock.fake("C_ToyBox.PickupToyBoxItem", function(id: number)
+        toys[#toys + 1] = id
+    end)
+    mock.fake("C_PetJournal.PickupPet", function(guid: string)
+        pets[#pets + 1] = guid
+    end)
+    local target = assert(frames.asButton(frames.find("SuuUIActionBar1Button12")))
+    -- a mount: by its place in the game's list
+    mock.dragTo(cellNamed("Brown Horse"), target)
+    expect(mounts).toEqual({ 101 })
+    -- one you haven't got: nothing
+    mock.dragTo(cellNamed("Zebra"), target)
+    expect(mounts).toEqual({ 101 })
+    -- the game's list searched for something else: cleared, then found
+    C_MountJournal.SetSearch("zzz")
+    mock.dragTo(cellNamed("Swift Ram"), target)
+    expect(mounts).toEqual({ 101, 102 })
+    -- a toy; one you haven't got
+    open("toys")
+    local cards = ui().shelf.cards
+    mock.dragTo(cards[2], target)
+    mock.dragTo(cards[3], target)
+    expect(toys).toEqual({ 201 })
+    -- a pet by its GUID; one you haven't got
+    petJournal()
+    open("pets")
+    mock.dragTo(cellNamed("Black Tabby Cat"), target)
+    mock.dragTo(cellNamed("Prairie Dog"), target)
+    expect(pets).toEqual({ "Pet-C" })
+    ClearCursor()
+end

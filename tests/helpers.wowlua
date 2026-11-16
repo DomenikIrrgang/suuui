@@ -19,6 +19,19 @@
 --   recordGradients(t)  each SetGradient on t from now on: its colours
 --   expectRGB(c, r, g, b[, within])  a colour's r, g, b within 1/255 (8 bits
 --                     a channel), or within `within` 255ths
+--   holdings(m)       what a module holds in SuuUI's registries now: its
+--                     listeners, watchers, timers, armed hooks, remembered
+--                     CVars, visibility frames, anchors, combat work,
+--                     settings sections, movers, commands, services,
+--                     extensions (Each/Hook/Override, menu extensions,
+--                     list additions) and addon message handlers: one
+--                     count for each thing the registry's release takes
+--                     away (releaseAll in Core/Modules)
+--   cycle(id)         the module turned off and on again through the
+--                     registry (its "enabled" setting, out of combat): its
+--                     holdings before, while off, and after; its state while
+--                     off and after. For modules that toggle live (a
+--                     reloadToToggle module only notes the wish).
 
 import expect from "wowlua:test"
 import type RowDef from "/SettingsUI/Registry"
@@ -29,6 +42,20 @@ import type MenuDescription from "/UI/ContextMenu"
 import type ConfirmOptions from "/UI/Panel"
 import * as themes from "/Core/Themes"
 import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import * as events from "/Core/Events"
+import * as timers from "/Core/Timers"
+import * as hooks from "/Core/Hooks"
+import * as cvars from "/Core/CVars"
+import * as combat from "/Core/Combat"
+import * as anchors from "/Core/Anchors"
+import * as init from "/Core/Init"
+import * as services from "/Core/Services"
+import * as extend from "/Core/Extend"
+import * as comm from "/Core/Comm"
+import * as visibility from "/UI/Visibility"
+import * as sectionRegistry from "/SettingsUI/Registry"
+import * as editMode from "/EditMode/EditMode"
 
 export function errorsSoFar(): string[]
     local out: string[] = {}
@@ -224,4 +251,96 @@ export function expectRGB(c: number[], r: number, g: number, b: number, within: 
         -- (fails, showing both)
         expect({ c[1], c[2], c[3] }).toEqual({ r, g, b })
     end
+end
+
+-- What a module holds in SuuUI's registries (each a count).
+export type Holdings = {
+    listeners: number,
+    watchers: number,
+    timers: number,
+    hooks: number,
+    cvars: number,
+    visibility: number,
+    anchors: number,
+    combat: number,
+    sections: number,
+    movers: number,
+    commands: number,
+    services: number,
+    extensions: number,
+    comm: number,
+}
+
+export function holdings(m: modules.AnyModule): Holdings
+    local sections = 0
+    for _, s in ipairs(sectionRegistry.list()) do
+        if s.owner == m then
+            sections += 1
+        end
+        for _, merged in ipairs(sectionRegistry.merged(s.id)) do
+            if merged.owner == m then
+                sections += 1
+            end
+        end
+    end
+    local movers = 0
+    for _, mover in ipairs(editMode.movers()) do
+        if mover.namespace == m.id then
+            movers += 1
+        end
+    end
+    return {
+        listeners = events.bus:count(m),
+        watchers = settings.watchCount(m),
+        timers = timers.count(m),
+        hooks = hooks.armed(m),
+        cvars = cvars.remembered(m.id),
+        visibility = visibility.count(m),
+        anchors = anchors.count(m),
+        combat = combat.pendingCount("m:" .. m.id .. ":"),
+        sections = sections,
+        movers = movers,
+        commands = init.countCommands(m),
+        services = services.count(m),
+        extensions = extend.count(m),
+        comm = comm.count(m),
+    }
+end
+
+-- Nothing held: what a module that is off leaves behind.
+export const NOTHING: Holdings = {
+    listeners = 0,
+    watchers = 0,
+    timers = 0,
+    hooks = 0,
+    cvars = 0,
+    visibility = 0,
+    anchors = 0,
+    combat = 0,
+    sections = 0,
+    movers = 0,
+    commands = 0,
+    services = 0,
+    extensions = 0,
+    comm = 0,
+}
+
+export type Cycle = {
+    before: Holdings,
+    off: Holdings,
+    after: Holdings,
+    stateOff: modules.ModuleState,
+    stateOn: modules.ModuleState,
+}
+
+-- Off and on again through the registry: `expect(c.off).toEqual(NOTHING)`
+-- for what it left behind, `expect(c.after).toEqual(c.before)` for nothing
+-- doubled.
+export function cycle(id: string): Cycle
+    local m = assert(modules.get(id), "no module " .. id)
+    local before = holdings(m)
+    settings.set(id, "enabled", false)
+    local off, stateOff = holdings(m), m.state
+    settings.set(id, "enabled", true)
+    return { before = before, off = off, after = holdings(m), stateOff = stateOff, stateOn = m.state }
 end

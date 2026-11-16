@@ -1,0 +1,95 @@
+-- Units/CooldownManager/EditorData: what the settings editor works with,
+-- without frames. A spell's rank, changes to the lists through the host
+-- the editor is given, "Seen recently" in the host's character data and
+-- what "+ Add" offers first, what a picked option becomes, the member a
+-- cooldown shared slot shows.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import type Entry, ListSet from "/Units/CooldownManager/Lists"
+import * as data from "/Units/CooldownManager/EditorData"
+import StandInHost from "./EditorHelpers"
+import expectNoErrors from "../../../helpers"
+
+@test("a row's rank: the highest rank you know, not the highest ID (Consecration's Rank 1 is 26573)")
+local function rankByRank()
+    local ranks: { [number]: string } = {
+        [26573] = "Rank 1",
+        [20116] = "Rank 2",
+        [20922] = "Rank 3",
+        [20923] = "Rank 4",
+        [20924] = "Rank 5",
+    }
+    for id, rank in pairs(ranks) do
+        mock.defineSpell(id, { name = "Consecration", subtext = rank, known = rank ~= "Rank 5" })
+    end
+    local text, id = data.rankText({ name = "Consecration", ids = { 20116, 20922, 20923, 20924, 26573 } })
+    expect(text).toBe("Rank 4")
+    expect(id).toBe(20923)
+end
+
+@test("mutate: the setup the host edits, changed through a copy with every list there")
+local function mutating()
+    local host = StandInHost.new()
+    local before: ListSet = { essential = { { name = "Spell One", ids = { 133 } } } }
+    host.saved[2] = before
+    host.editSpec = 2
+    data.mutate(host, function(l: ListSet)
+        table.insert(assert(l.utility), { name = "Spell Two", ids = { 78 } })
+    end)
+    local after = assert(host.saved[2])
+    expect(after == before).toBe(false)
+    expect(before.utility).toBeNil()
+    expect(assert(after.essential)[1].name).toBe("Spell One")
+    expect(assert(after.utility)[1].name).toBe("Spell Two")
+    expect(after.buffs).toEqual({})
+    expect(host.saved[0]).toBeNil()
+end
+
+@test("Seen recently: in the host's character data, a cast of yours with a cooldown; first in + Add")
+local function remembering()
+    local host = StandInHost.new()
+    expect(data.recent(host, "cooldown")).toEqual({})
+    mock.fake("IsPlayerSpell", function(id: number): boolean
+        return id == 100
+    end)
+    mock.fake("GetSpellBaseCooldown", function(id: number): number
+        return id == 100 and 15000 or 0
+    end)
+    data.rememberCast(host, 100)
+    data.rememberCast(host, 78) -- not known
+    data.rememberCast(host, nil)
+    local seen = data.recent(host, "cooldown")
+    expect(#seen).toBe(1)
+    expect(seen[1].ids).toEqual({ 100 })
+    expect(host.data.recent ~= nil).toBe(true)
+    local opts = data.addOptions(host, "cooldown", "essential", {}, {}, {}, true)
+    expect(opts[1].heading).toBe("Seen recently")
+    expect(opts[2].value).toBe(seen[1].name)
+end
+
+@test("a picked option as an entry: a typed ID, a weapon, a name, a preset's shared slot; the member a slot shows")
+local function entries()
+    expect(data.entryFor(nil, nil, nil)).toBeNil()
+    expect(assert(data.entryFor("id:133", nil, nil)).ids).toEqual({ 133 })
+    local weapon = assert(data.entryFor("enchant:main", nil, nil))
+    expect(weapon.enchant).toBe("main")
+    expect(weapon.uid ~= nil).toBe(true)
+    expect(assert(data.entryFor("Spell One", { ["Spell One"] = { 1, 2 } }, nil)).ids).toEqual({ 1, 2 })
+    local slot: Entry = { name = "Slot", group = true, uid = "a", members = { { name = "One", ids = { 1 } } } }
+    local copied = assert(data.entryFor("group:Slot", nil, { Slot = { entry = slot, key = "debuffs" } }))
+    expect(copied.name).toBe("Slot")
+    expect(copied.uid ~= "a").toBe(true)
+    expect(data.entryFor("nothing", {}, {})).toBeNil()
+    expect(data.spellLookup("x")).toBeNil()
+    expect(assert(data.spellLookup(" 133 "))[1].value).toBe("id:133")
+    -- a cooldown shared slot shows the last member you know
+    mock.defineSpell(26573, { name = "Consecration", subtext = "Rank 1", known = true })
+    mock.defineSpell(20116, { name = "Consecration", subtext = "Rank 2", known = false })
+    local known: Entry = { name = "Known", ids = { 26573 } }
+    local unknown: Entry = { name = "Unknown", ids = { 20116 } }
+    expect(data.knownMember({ group = true, members = { known, unknown } })).toBe(known)
+    expect(data.knownMember({ group = true, members = { unknown } })).toBeNil()
+    expect(data.knownMember(nil)).toBeNil()
+    expectNoErrors()
+end

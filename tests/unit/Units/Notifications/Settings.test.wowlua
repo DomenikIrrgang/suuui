@@ -1,0 +1,74 @@
+-- Units/Notifications/Settings: the settings' preview.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import internal M from "/Units/Notifications"
+import * as notificationSettings from "/Units/Notifications/Settings"
+import expectNoErrors from "../../../helpers"
+
+local function tick(seconds: number?)
+    -- the stack's tick runs on frames, ten a second
+    mock.advanceFrames(math.max(1, math.floor((seconds or 0.2) * 10)), 100)
+end
+
+local function hideAll()
+    for i = 1, 4 do
+        local d = frames.find("StaticPopup" .. i)
+        if d and d:IsShown() then
+            d:Hide()
+        end
+    end
+end
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    M:ResetAll({
+        "requests",
+        "max",
+        "durability",
+        "bagsFull",
+        "talentPoints",
+        "legacyPoints",
+        "presenceBnetOnline",
+        "presenceBnetOffline",
+        "presenceFriendOnline",
+        "presenceFriendOffline",
+        "presenceGuildOnline",
+        "presenceGuildOffline",
+        "presenceHideChat",
+    })
+    hideAll()
+    for id in pairs(M.notes) do
+        M:Dismiss(id)
+    end
+    M.presence = nil
+    mock.group:leave()
+    tick(1)
+    expectNoErrors()
+end
+
+@test("the settings' preview")
+local function preview()
+    local parent = CreateFrame("Frame", nil, UIParent)
+    local view = M:PreviewView(parent)
+    expect(view:GetParent()).toBe(parent)
+    expect(M:PreviewView(UIParent)).toBe(view)
+end
+
+@test("the section: its preview the function given; the module's defaults")
+local function section()
+    local built = CreateFrame("Frame")
+    local s = notificationSettings.section(function(_: Frame): Frame
+        return built
+    end)
+    expect(s.id).toBe("notifications")
+    expect(s.label).toBe("Notifications")
+    expect(assert(s.preview)(UIParent)).toBe(built)
+    expect(#(s.groups or {})).toBe(3)
+    expect(M:Get("max")).toBe(notificationSettings.DEFAULTS.max)
+    expect(M:Get("presenceGuildOffline")).toBe(false)
+end

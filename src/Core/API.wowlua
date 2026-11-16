@@ -7,9 +7,11 @@
 
 import build from "wowlua:meta"
 import * as anchors from "/Core/Anchors"
+import * as comm from "/Core/Comm"
 import * as auraFilters from "/Core/AuraFilters"
 import * as events from "/Core/Events"
 import * as extend from "/Core/Extend"
+import * as fault from "/Core/Fault"
 import * as fonts from "/Core/Fonts"
 import * as modules from "/Core/Modules"
 import * as motion from "/Core/Motion"
@@ -17,9 +19,9 @@ import * as pixel from "/Core/Pixel"
 import * as rolePresets from "/Core/RolePresets"
 import * as roles from "/Core/Roles"
 import * as services from "/Core/Services"
-import ALERTS, TALENTS, PROFESSIONS, COLLECTIONS, BAGS, NOTIFICATIONS, DURABILITY, WELCOME, TalentNext, DurabilityInfo from "/Core/ServiceKeys"
-import type AlertTone, FormatArg from "/UI/Alert"
-import type LevelUpDef from "/UI/LevelUp"
+import ALERTS, TALENTS, PROFESSIONS, COLLECTIONS, BAGS, NOTIFICATIONS, DURABILITY, WELCOME from "/Core/ServiceKeys"
+import * as serviceKeys from "/Core/ServiceKeys"
+import * as ahead from "/Core/Ahead"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
 import * as vision from "/Core/Vision"
@@ -40,6 +42,8 @@ import * as cooldownTracker from "/UI/CooldownTracker"
 import * as crest from "/UI/Crest"
 import * as damageMeter from "/UI/DamageMeter"
 import * as draw from "/UI/Draw"
+import * as dress from "/UI/Dress"
+import * as dismiss from "/UI/Dismiss"
 import * as filterMenu from "/UI/FilterMenu"
 import * as groupFinder from "/UI/GroupFinder"
 import * as groupFinderListed from "/UI/GroupFinderListed"
@@ -47,6 +51,7 @@ import * as groupFinderListing from "/UI/GroupFinderListing"
 import * as groupFinderWho from "/UI/GroupFinderWho"
 import * as guild from "/UI/Guild"
 import * as guildControl from "/UI/GuildControl"
+import * as healthFill from "/UI/HealthFill"
 import * as icon from "/UI/Icon"
 import * as inputs from "/UI/Inputs"
 import * as inventory from "/UI/Inventory"
@@ -84,12 +89,14 @@ import * as threatMeter from "/UI/ThreatMeter"
 import * as timeline from "/UI/Timeline"
 import * as tooltip from "/UI/Tooltip"
 import * as unitFrame from "/UI/UnitFrame"
+import * as virtualList from "/UI/VirtualList"
 import * as visibility from "/UI/Visibility"
 import * as weaponEnchants from "/UI/WeaponEnchants"
 import * as windowSkin from "/UI/WindowSkin"
 import lfg from "foreverlfg"
 import type ForeverLFG from "foreverlfg"
-import tokens as T, Color from "/Core/Tokens"
+import tokens as T from "/Core/Tokens"
+import * as tokenTypes from "/Core/Tokens"
 import type QuestStarts from "/Data/QuestStarts"
 import type MapPlaces from "/Data/MapPlaces"
 import type CollectionSources from "/Data/CollectionSources"
@@ -121,19 +128,64 @@ local API = {}
 API.API_VERSION = API_VERSION
 API.version = version
 
+--------------------------------------------------------------------------------
+-- The classes a module extends (0.47). wowlua extends only a class declared
+-- in a module (not a value, not a type alias, not a field of SuuUI), and
+-- has no re-export of a class, so these are SuuUI's own classes under the
+-- API's name: subclasses that add nothing. A module file imports them from
+-- here (`import SuuUI, Module from "/Core/API"`):
+--
+--   class Mine extends Module<typeof(DEFAULTS)> … end
+--   SuuUI.AddModule(Mine.new({ id = "mine", defaults = DEFAULTS, … }))
+--
+-- (An addon of its own can't extend them: wowlua 0.13 lets another addon
+-- import only types from SuuUI. A plugin uses SuuUI.RegisterModule, whose
+-- definition can carry its own methods. SuuUI.Classes has the same classes
+-- as values, for .new and .adopt.)
+--------------------------------------------------------------------------------
+
+--- A SuuUI module (Core/Modules.wowlua): its settings typed by its defaults.
+export class Module<D extends modules.Settings> extends modules.Module<D>
+end
+--- A titled panel (UI/Panel.wowlua: SuuUI.UI.Panel makes one).
+export class PanelClass extends panel.Panel
+end
+--- An item slot (UI/Inventory.wowlua: SuuUI.UI.ItemSlot makes one).
+export class ItemSlotClass extends inventory.ItemSlot
+end
+--- A unit frame (UI/UnitFrame.wowlua: SuuUI.UI.UnitFrame makes one).
+export class UnitFrameClass extends unitFrame.UnitFrame
+end
+--- A pin on a map (UI/MapPin.wowlua: SuuUI.UI.MapPin makes one).
+export class MapPinClass extends mapPin.MapPin
+end
+--- An action button (UI/ActionButton.wowlua: SuuUI.UI.ActionButton makes one).
+export class ActionButtonClass extends actionButton.ActionButton
+end
+
 -- Modules
 API.RegisterModule = modules.register
 API.APIAtLeast = modules.apiAtLeast
--- 0.19: a module as a class (wowlua): `class Mine extends SuuUI.Module<typeof(DEFAULTS)>`,
--- added with SuuUI.AddModule(Mine.new())
-API.Module = modules.Module
+-- 0.19: a module as a class, added with SuuUI.AddModule(Mine.new(def));
+-- 0.47: SuuUI.Module is the class above (the one module files extend)
+API.Module = Module
 API.AddModule = modules.add
+-- 0.47: the classes above, as values (Module, Panel, ItemSlot, UnitFrame,
+-- MapPin, ActionButton)
+API.Classes = {
+    Module = Module,
+    Panel = PanelClass,
+    ItemSlot = ItemSlotClass,
+    UnitFrame = UnitFrameClass,
+    MapPin = MapPinClass,
+    ActionButton = ActionButtonClass,
+}
 
--- (TRANSITION: the loose view while modules move to classes; each other
--- module's use becomes a typed interface)
-function API.GetModule(id: string): modules.ModuleOf<modules.WithEnabled<modules.Settings>>?
-    local m = modules.get(id)
-    return (m :: unknown) :: modules.ModuleOf<modules.WithEnabled<modules.Settings>>?
+-- Another module by id, or nil. 0.47: typed as any module (its state,
+-- IsEnabled, Setting); what it offers the others is a service
+-- (SuuUI.UseService), not its methods.
+function API.GetModule(id: string): modules.AnyModule?
+    return modules.get(id)
 end
 
 -- 0.17: every /suu subcommand, { { name, help, args } } (Core/Init.lua)
@@ -214,6 +266,32 @@ API.Additions = extend.additions
 API.Service = services.get
 -- 0.19: a built-in service by its key (Core/ServiceKeys), typed (wowlua)
 API.UseService = services.use
+-- 0.47: the built-in services' keys, for SuuUI.UseService and
+-- M:ProvideService (Core/ServiceKeys.wowlua; each key's type says what the
+-- service offers)
+API.Services = {
+    ALERTS = serviceKeys.ALERTS,
+    AUCTION_HOUSE = serviceKeys.AUCTION_HOUSE,
+    AUTO_QUESTS = serviceKeys.AUTO_QUESTS,
+    BAGS = serviceKeys.BAGS,
+    CAMPFIRES = serviceKeys.CAMPFIRES,
+    COLLECTIONS = serviceKeys.COLLECTIONS,
+    CONVERGENCES = serviceKeys.CONVERGENCES,
+    DURABILITY = serviceKeys.DURABILITY,
+    FLIGHT_MAP = serviceKeys.FLIGHT_MAP,
+    MARKS = serviceKeys.MARKS,
+    MOUSE_BINDINGS = serviceKeys.MOUSE_BINDINGS,
+    NOTIFICATIONS = serviceKeys.NOTIFICATIONS,
+    PROFESSIONS = serviceKeys.PROFESSIONS,
+    RAID_PLANNER = serviceKeys.RAID_PLANNER,
+    TALENTS = serviceKeys.TALENTS,
+    WELCOME = serviceKeys.WELCOME,
+    WORLD_MAP = serviceKeys.WORLD_MAP,
+}
+-- 0.47: work built ahead (Core/Ahead.wowlua): step() runs once a frame,
+-- out of combat, after login, until it returns false; a key already queued
+-- is left as it is. What needs the thing sooner builds the rest itself.
+API.BuildAhead = ahead.schedule
 API.Instances = extend.list
 API.InstanceInfo = extend.info
 API.AddInstance = extend.add
@@ -255,6 +333,7 @@ local rawUI = {
     DamageMeter = damageMeter.damageMeter,
     DecodeTalentBuild = talentBuilds.decodeTalentBuild,
     Diamond = draw.diamond,
+    Dismissable = dismiss.dismissable, -- 0.47
     DragonArt = crest.dragonArt,
     DurationTextBinding = auras.durationTextBinding,
     EncodeTalentBuild = talentBuilds.encodeTalentBuild,
@@ -412,6 +491,8 @@ local rawUI = {
     UnitFrameCurveValue = unitFrame.unitFrameCurveValue,
     UnitStandIn = unitFrame.unitStandIn,
     VISIBILITY_OPTIONS = visibility.VISIBILITY_OPTIONS,
+    VirtualList = virtualList.virtualList,
+    VirtualListSame = virtualList.sameFields,
     WINDOW_HEAD_H = windowSkin.WINDOW_HEAD_H,
     WeaponEnchant = weaponEnchants.weaponEnchant,
     WeaponEnchantIcon = weaponEnchants.weaponEnchantIcon,
@@ -419,6 +500,24 @@ local rawUI = {
     WeaponEnchantable = weaponEnchants.weaponEnchantable,
     WindowFrame = panel.windowFrame,
     WriteGameTalentString = talentBuilds.writeGameTalentString,
+    CurveAmount = unitFrame.curveAmount, -- 0.47
+    Dress = dress.register, -- 0.47
+    FilterList = filterMenu.filterList, -- 0.47
+    GameUnits = unitFrame.gameUnits, -- 0.47
+    HealthClassToken = healthFill.classToken, -- 0.47
+    HealthReactionToken = healthFill.reactionToken, -- 0.47
+    Hex = draw.hex, -- 0.47
+    InlineMark = draw.inlineMark, -- 0.47
+    IsColor = draw.isColor, -- 0.47
+    IsOwn = reskin.isOwn, -- 0.47
+    MarkOwn = reskin.markOwn, -- 0.47
+    MoneyText = inventory.moneyText, -- 0.47
+    OpenRoot = reskin.openRoot, -- 0.47
+    PaintHealth = healthFill.paint, -- 0.47
+    ReskinLeave = reskin.leave, -- 0.47
+    ReskinPart = reskin.reskinPart, -- 0.47
+    WindowChrome = windowSkin.chromeOf, -- 0.47
+    WithPixelUnit = draw.withPixelUnit, -- 0.47
     actionButtons = actionButton.actionButtons,
 }
 -- (0.18: SuuUI's code is wowlua modules now: Raw.ns is the addon table,
@@ -533,6 +632,44 @@ API.UI.WINDOW_HEAD_H = windowSkin.WINDOW_HEAD_H -- 0.17: the height of a skinned
 API.UI.SettingRow = settingRow.settingRow
 API.UI.SettingsGroup = settingRow.settingsGroup
 
+-- 0.47: what the built-in modules used from SuuUI's insides, public now.
+-- A colour token as text: its hex ("rrggbb"), whether it names a colour, a
+-- small mark (up, down, check, dot) in a token's colour for a chat line.
+API.UI.Hex = draw.hex
+API.UI.IsColor = draw.isColor
+API.UI.InlineMark = draw.inlineMark
+-- WithPixelUnit(unitFn, body): body() with the pixel lines it makes sized by
+-- unitFn() (a frame drawn at another scale: a nameplate)
+API.UI.WithPixelUnit = draw.withPixelUnit
+-- copper as gold, silver and copper with their icons
+API.UI.MoneyText = inventory.moneyText
+-- a skinned game window's chrome (title, close button, body…), or nil
+API.UI.WindowChrome = windowSkin.chromeOf
+-- a filter choice's values, as a list
+API.UI.FilterList = filterMenu.filterList
+-- the game's unit functions, as the unit frames read them (secret-safe)
+API.UI.GameUnits = unitFrame.gameUnits
+-- a curve's result (UnitHealthPercent with a curve) as a number, secret or not
+API.UI.CurveAmount = unitFrame.curveAmount
+-- a health bar's fill painted: "tapped", a class's or reaction's token (the
+-- two below), or nil (the theme's fill)
+API.UI.PaintHealth = healthFill.paint
+API.UI.HealthClassToken = healthFill.classToken
+API.UI.HealthReactionToken = healthFill.reactionToken
+-- Reskins: a frame marked as SuuUI's own inside a game window (the passes
+-- leave it be), whether one is; what a pass leaves alone on one of the
+-- game's parts ("button", "check", "text"); one part of a skinned window
+-- reskinned at its depth (rows made since its pass); the game's open root
+-- menu, or nil
+API.UI.MarkOwn = reskin.markOwn
+API.UI.IsOwn = reskin.isOwn
+API.UI.ReskinLeave = reskin.leave
+API.UI.ReskinPart = reskin.reskinPart
+API.UI.OpenRoot = reskin.openRoot
+-- Dress(frame, kind[, head][, headPoint][, box]): the theme's dress (art on
+-- the frame, UI/Dress.wowlua) for a kind: "window", "minimap", "unit", "chat"
+API.UI.Dress = dress.register
+
 -- A settings section that is always there (a module uses module:RegisterSettings,
 -- whose section goes away with the module). See SettingsUI/Registry.lua.
 function API.RegisterSettings(def: registry.SectionDef): registry.Section
@@ -605,9 +742,28 @@ API.Motion.Reduced = motion.reduced -- 0.17: whether ui.reducedMotion is on
 
 -- Modules publish their frames under a name (player, target, targettarget,
 -- focus, pet, boss1 ... boss5); others attach to them. Message:
--- SUUUI_ANCHOR_CHANGED (name, frame).
+-- SUUUI_ANCHOR_CHANGED (name, frame). 0.47: PublishAnchor(name, frame,
+-- module): owned by the module, unpublished when it turns off.
 API.PublishAnchor = anchors.publish
 API.GetAnchor = anchors.get
+
+-- 0.47: SuuUI's addon messages (Core/Comm.wowlua; a module's
+-- M:OnAddonMessage and M:SendAddonMessage): the prefix, the group's channel,
+-- whether a sender is you, and the readers that check a payload's fields
+-- (each nil on anything else).
+API.Comm = {
+    PREFIX = comm.PREFIX,
+    MAX_BYTES = comm.MAX_BYTES,
+    GroupChannel = comm.groupChannel, -- "INSTANCE_CHAT", "RAID", "PARTY" or nil
+    GroupAndGuild = comm.groupAndGuild, -- the group's channel and "GUILD", those you're in
+    IsMe = comm.isMe,
+    Int = comm.int, -- Int(s, lo, hi): a whole number written plainly
+    Number = comm.number, -- Number(s, lo, hi): a plain decimal
+    Fraction = comm.fraction, -- 0..1 (a place on a map)
+    Map = comm.map, -- a map ID the client knows
+    Name = comm.name, -- Name(s[, max = 40]): plain text, escapes made spaces
+    OneOf = comm.oneOf, -- OneOf(s, list)
+}
 
 API.UI.CastBar = castBar.castBar
 API.UI.SwingTimer = swingTimer.swingTimer
@@ -633,7 +789,15 @@ API.UI.WeaponEnchantSpell = weaponEnchants.weaponEnchantSpell -- 0.17: WeaponEnc
 API.UI.WeaponEnchantIcon = weaponEnchants.weaponEnchantIcon -- 0.17: WeaponEnchantIcon(parent, size) -> an icon for one weapon's enchant
 API.UI.TrackerSound = cooldownTracker.trackerSound -- "chime", "ping", "proc" or "warning" (anything else plays nothing)
 API.UI.MakeModal = panel.makeModal -- a panel centred over a dimmed screen
+-- 0.47: Dismissable(frame, { close, esc, outside = "catch" | "pass", inside, shade }) -> d (d:Top()):
+-- Esc, a click outside or a shade close it; keys taken out of combat only, the open ones stacked
+API.UI.Dismissable = dismiss.dismissable
 API.UI.ScrollArea = panel.scrollArea -- 0.9: ScrollArea(parent[, bar]) -> a mouse-wheel scroll frame, content in .child, a thin bar `bar` px right of it while it overflows
+-- 0.47: VirtualList(parent, { rowHeight, make, bind, key, same, adopt, kinds, kindOf, bar, overscan }) -> a scrolling
+-- list that makes only the rows in sight: SetItems(items), SetSelected(key), Refresh(), Invalidate(), Rows(kind),
+-- ItemOf(row), IndexOf(row), .scroll, .child; VirtualListSame(a, b): its `same` by fields
+API.UI.VirtualList = virtualList.virtualList
+API.UI.VirtualListSame = virtualList.sameFields
 API.UI.Confirm = panel.confirm -- { title, text, confirm, cancel, onConfirm, onCancel, typeToConfirm }
 -- The Cooldown Manager presets of your class (only your class's data loads):
 -- { { id, name, lists = { essential, utility, buffs, debuffs, procs } }, ... },
@@ -663,7 +827,7 @@ function API.RaidCatalog(): typeof(raidCatalog)
     return raidCatalog
 end
 API.UI.SetActionTextSize = actionButton.setActionTextSize -- px, never below micro (9.5)
-API.UI.SetVisibility = visibility.setVisibility -- "always" | "combat" | "mouseover" | "hidden"
+API.UI.SetVisibility = visibility.setVisibility -- "always" | "combat" | "mouseover" | "hidden"; 0.47: (frame, mode, also, module) let go when the module turns off
 API.UI.VISIBILITY_OPTIONS = visibility.VISIBILITY_OPTIONS -- 0.9: the {value,label} choices "always","combat","mouseover"
 
 -- Keybind mode: hover a button, press a key. Message: SUUUI_KEYBINDMODE_CHANGED (active).
@@ -838,7 +1002,7 @@ API.UI.ItemSlot = inventory.itemSlot -- ItemSlot(parent[, size]) -> a plain slot
 API.UI.Money = inventory.money -- Money(parent) -> m:SetCopper(n)
 API.UI.Inventory = inventory.inventory -- Inventory(parent, { title, columns, name, sortTip, characters }) -> inv:LayoutSlots(buttons), inv:SetMeta(t), inv:SetNote(t), inv:SetMoney(c); inv.search, inv.sort, inv.grid, inv.onClose
 API.UI.LootWindow = loot.lootWindow -- LootWindow(parent, { name }) -> lw:SetSource(t), lw:SetItems(list), lw:FirstSlotOffset(); lw.onClick, lw.onEnter, lw.onLeave, lw.onClose
-API.UI.LootRollTray = lootRollTray.lootRollTray -- 0.32: LootRollTray(parent, { name }) -> t:SetData({ rolls, results, meta, answered, ask }), t:SetRemaining(times), t:SetFolded(b), t:RowFor(id); t.onChoose, onConfirm, onPassAll, onGreedAll, onAsk, onFold, onClose, onItemEnter, onItemLeave, onItemClick, onResultEnter
+API.UI.LootRollTray = lootRollTray.lootRollTray -- 0.32: LootRollTray(parent, { name }) -> t:SetData({ rolls, results, meta, answered, ask }), t:SetRemaining(times), t:SetFolded(b), t:RowFor(id); 0.47: t:SetRow(row) (one roll's row again, only what changed; false: no row for its id), t:SetMeta(text) (the header's line alone); t.onChoose, onConfirm, onPassAll, onGreedAll, onAsk, onFold, onClose, onItemEnter, onItemLeave, onItemClick, onResultEnter
 API.UI.SpellTooltip = tooltip.spellTooltip -- SpellTooltip(owner, spellID, extra[, anchor]): the game's spell tooltip with `extra` line(s) under it, kept through the game's redraws
 API.UI.SkinTooltip = tooltip.skinTooltip -- SkinTooltip(tooltip): SuuUI's art on one of Blizzard's tooltips (its NineSlice hidden)
 API.UI.SkinWindow = windowSkin.skinWindow -- SkinWindow(frame, { title, icon, binding, close, hide, topInset, under }) -> chrome:SetTabs(list), chrome:LayoutTabs(), chrome:UpdateTabs(), chrome:SetTitle(text), chrome:SetBinding(binding)
@@ -892,6 +1056,11 @@ API.UI.PROFESSIONS_H = professions.PROFESSIONS_H
 API.UI.LegacyTrack = legacy.legacyTrack -- LegacyTrack(parent) -> SetTrack({ earned, total, max, next, stops }): the reward track strip
 API.UI.LEGACY_TRACK_H = legacy.LEGACY_TRACK_H
 API.UI.LEGACY_CARD_H = legacy.LEGACY_CARD_H
+-- (the copies follow a theme's caption style: the Legacy window sizes
+-- itself from them)
+events.on("SUUUI_THEME_CHANGED", function()
+    API.UI.LEGACY_CARD_H, API.UI.LEGACY_TRACK_H = legacy.heights()
+end, "API")
 API.UI.LevelUp = levelUp.levelUp -- LevelUp(parent) -> c:SetLevelUp({ title, detail, spells = { { icon, name, rank, isNew, note, text, meta } }, more, cost })
 API.UI.Reskin = reskin.reskin -- Reskin(frame): Blizzard's rows, category bars, bars, check buttons and scrollbars in it in SuuUI's look (again whenever called)
 API.UI.ReskinScrollBox = reskin.reskinScrollBox
@@ -907,6 +1076,10 @@ API.UI.ReskinDialog = reskin.reskinDialog -- ReskinDialog(frame): one of Blizzar
 API.UI.ReskinMenu = reskin.reskinMenu -- ReskinMenu(menu): an open Blizzard menu in the context menu's look until it closes
 API.UI.ReskinPopup = reskin.reskinPopup -- ReskinPopup(dialog): one of the game's shared popups in SuuUI's look until it hides
 API.UI.ReskinCollapseButton = reskin.reskinCollapseButton
+-- 0.47: ExpectRefusal(fn, ...) -> refused, fn's results: a protected call
+-- the game may refuse, made in fn; its refusal (the first blocked action
+-- while fn runs) is no error and no chat line, only the first return
+API.ExpectRefusal = fault.expectRefusal
 -- 0.13: a friend request by a character's whole name. Forever's classic
 -- friends list is off (IsLegacyFriendSystemEnabled false: C_FriendList.AddFriend
 -- does nothing, found in game); its own window sends a title friend invite
@@ -1018,6 +1191,18 @@ end
 -- from QuestieDB by tools/update_quest_starts.sh. Their layouts are in
 -- their files' headers.
 -- (built the first time it's asked for: Core/Data)
+-- 0.47: each one's handle, to build it without a stutter: Ready() (built
+-- already?), Prepare(done?, key?) (a few steps a frame, then done()),
+-- Then(done, key?) (done() once whoever builds it is done), Until(has)
+-- (built only until has(t) holds), Get() (all of it now: the functions below)
+API.Data = {
+    QuestStarts = data.questStarts,
+    MapPlaces = data.mapPlaces,
+    CollectionSources = data.collectionSources,
+    RecipeSources = data.recipeSources,
+    FlightPaths = data.flightPaths,
+    MapOverlays = data.mapOverlays,
+}
 function API.QuestStarts(): QuestStarts
     return data.questStarts:Get()
 end
@@ -1167,6 +1352,328 @@ function API.ShowWelcome()
     end
     return false
 end
+
+--------------------------------------------------------------------------------
+-- 0.47: the types a module names, under the API (each one is SuuUI's own,
+-- by the same name unless noted). A module file imports them from here
+-- (`import type Text, SettingsSection from "/Core/API"`); a plugin from
+-- SuuUI's package (`import type Text from "suuui/Core/API"`). Types make no
+-- code: this list costs nothing at run time.
+--------------------------------------------------------------------------------
+
+-- Core/AuraFilters
+export type Attachments = auraFilters.Attachments
+export type FilterKind = auraFilters.FilterKind
+export type FilterList = auraFilters.FilterList
+export type FilterRef = auraFilters.FilterRef
+export type FilterSet = auraFilters.FilterSet
+export type FilterSpell = auraFilters.FilterSpell
+-- Core/Data
+export type LazyData<T> = data.LazyData<T>
+-- Core/Extend
+export type InstanceInfo = extend.Info
+-- Core/Modules
+export type AnyModule = modules.AnyModule
+export type ModuleState = modules.ModuleState
+export type NotificationKind = modules.NotificationKind
+export type RegisteredModule<D extends modules.Settings> = modules.RegisteredModule<D>
+export type SettingsSection = modules.SettingsSection
+-- Core/ServiceKeys
+export type AlertsService = serviceKeys.AlertsService
+export type AuctionHouseService = serviceKeys.AuctionHouseService
+export type AuctionPrice = serviceKeys.AuctionPrice
+export type AutoQuestsService = serviceKeys.AutoQuestsService
+export type BagsService = serviceKeys.BagsService
+export type BindSpell = serviceKeys.BindSpell
+export type CampfiresService = serviceKeys.CampfiresService
+export type CollectionsService = serviceKeys.CollectionsService
+export type ConvergenceOnMap = serviceKeys.ConvergenceOnMap
+export type ConvergencesService = serviceKeys.ConvergencesService
+export type DurabilityInfo = serviceKeys.DurabilityInfo
+export type DurabilityParts = serviceKeys.DurabilityParts
+export type DurabilityPiece = serviceKeys.DurabilityPiece
+export type DurabilityService = serviceKeys.DurabilityService
+export type FlightMapService = serviceKeys.FlightMapService
+export type FoundFire = serviceKeys.FoundFire
+export type MapMark = serviceKeys.MapMark
+export type MarkFilters = serviceKeys.MarkFilters
+export type MarksService = serviceKeys.MarksService
+export type MouseBind = serviceKeys.MouseBind
+export type MouseBindingsService = serviceKeys.MouseBindingsService
+export type NotificationsService = serviceKeys.NotificationsService
+export type ProfessionsService = serviceKeys.ProfessionsService
+export type RaidPlannerService = serviceKeys.RaidPlannerService
+export type TalentNext = serviceKeys.TalentNext
+export type TalentsService = serviceKeys.TalentsService
+export type WelcomeService = serviceKeys.WelcomeService
+export type WorldMapService = serviceKeys.WorldMapService
+-- Core/Services
+export type ServiceKey<T> = services.ServiceKey<T>
+-- Core/Settings
+export type SettingsValues = settings.Values
+-- Core/Tokens
+export type Color = tokenTypes.Color
+export type ColorToken = tokenTypes.ColorToken
+-- EditMode/EditMode
+export type Position = editMode.Position
+-- SettingsUI/Registry
+export type SettingsGroupDef = registry.GroupDef
+-- UI/ActionBar
+export type ActionBar = actionBar.ActionBar
+-- UI/ActionButton
+export type ActionButton = actionButton.ActionButton
+-- UI/Alert
+export type Alert = alert.Alert
+export type AlertTone = alert.AlertTone
+export type FormatArg = alert.FormatArg
+-- UI/Auras
+export type AuraGroup = auras.AuraGroup
+export type AuraOptions = auras.AuraOptions
+export type AuraPlace = auras.AuraPlace
+export type PreviewItem = auras.PreviewItem
+export type UnitAuras = auras.UnitAuras
+-- UI/Bar
+export type Bar = bar.Bar
+-- UI/CastBar
+export type CastBar = castBar.CastBar
+-- UI/ClassBars
+export type PetBar = classBars.PetBar
+export type StanceBar = classBars.StanceBar
+export type TotemBar = classBars.TotemBar
+-- UI/CombatBadge
+export type CombatBadge = combatBadge.CombatBadge
+-- UI/Controls
+export type StateBadge = controls.StateBadge
+export type SuuButton = controls.SuuButton
+-- UI/CooldownTracker
+export type CooldownTracker = cooldownTracker.CooldownTracker
+export type TrackerCondition = cooldownTracker.TrackerCondition
+export type TrackerEntry = cooldownTracker.TrackerEntry
+export type TrackerLists = cooldownTracker.TrackerLists
+export type TrackerWhen = cooldownTracker.TrackerWhen
+-- UI/Crest
+export type Crest = crest.Crest
+-- UI/DamageMeter
+export type DamageMeter = damageMeter.DamageMeter
+export type MeterApi = damageMeter.MeterApi
+export type MeterSession = damageMeter.MeterSession
+export type MeterView = damageMeter.MeterView
+export type RecapApi = damageMeter.RecapApi
+export type RecapEvent = damageMeter.RecapEvent
+-- UI/Draw
+export type Border = draw.Border
+export type Cross = draw.Cross
+export type SoftEdge = draw.SoftEdge
+-- UI/FilterMenu
+export type FilterChoice = filterMenu.FilterChoice
+export type FilterGroup = filterMenu.FilterGroup
+export type FilterMenu = filterMenu.FilterMenu
+export type FilterOption = filterMenu.FilterOption
+export type FilterValue = filterMenu.FilterValue
+export type FilterValues = filterMenu.FilterValues
+-- UI/GroupFinder
+export type BrowseData = groupFinder.BrowseData
+export type BrowseFilter = groupFinder.BrowseFilter
+export type BrowseRow = groupFinder.BrowseRow
+export type GroupFinderBrowse = groupFinder.GroupFinderBrowse
+-- UI/GroupFinderListed
+export type GroupFinderListed = groupFinderListed.GroupFinderListed
+-- UI/GroupFinderListing
+export type ListingFrame = groupFinderListing.ListingFrame
+-- UI/GroupFinderWho
+export type GroupFinderWho = groupFinderWho.GroupFinderWho
+export type WhoData = groupFinderWho.WhoData
+export type WhoResult = groupFinderWho.WhoResult
+-- UI/Guild
+export type GuildAction = guild.GuildAction
+export type GuildInfo = guild.GuildInfo
+export type GuildLog = guild.GuildLog
+export type GuildLogLine = guild.GuildLogLine
+export type GuildMember = guild.GuildMember
+export type GuildMotdBanner = guild.GuildMotdBanner
+export type GuildRank = guild.GuildRank
+export type GuildRoster = guild.GuildRoster
+export type RosterRow = guild.RosterRow
+-- UI/GuildControl
+export type GuildControl = guildControl.GuildControl
+-- UI/Icon
+export type Icon = icon.Icon
+-- UI/Inputs
+export type Checkbox = inputs.Checkbox
+export type MoneyInput = inputs.MoneyInput
+export type SegmentValue = inputs.SegmentValue
+export type Segmented<V extends inputs.SegmentValue> = inputs.Segmented<V>
+export type SegmentedOption<V extends inputs.SegmentValue> = inputs.SegmentedOption<V>
+export type Stepper = inputs.Stepper
+export type TextField = inputs.TextField
+export type Toggle = inputs.Toggle
+-- UI/Inventory
+export type FoundItem = inventory.FoundItem
+export type Inventory = inventory.Inventory
+export type InventoryCurrency = inventory.InventoryCurrency
+export type ItemSlot = inventory.ItemSlot
+export type ItemSlotSkin = inventory.ItemSlotSkin
+export type Money = inventory.Money
+export type ResultRow = inventory.ResultRow
+export type SlotSection = inventory.SlotSection
+-- UI/Legacy
+export type Challenge = legacy.Challenge
+export type ChallengeCategory = legacy.ChallengeCategory
+export type ChallengeGroup = legacy.ChallengeGroup
+export type ChallengeStep = legacy.ChallengeStep
+export type LegacyChallenges = legacy.LegacyChallenges
+export type LegacyPoints = legacy.LegacyPoints
+export type LegacyTrack = legacy.LegacyTrack
+export type TrackData = legacy.TrackData
+export type TrackStop = legacy.TrackStop
+-- UI/LevelUp
+export type LevelUpCard = levelUp.LevelUpCard
+export type LevelUpDef = levelUp.LevelUpDef
+export type LevelUpSpell = levelUp.LevelUpSpell
+-- UI/LoadingMark
+export type LoadingMark = loadingMark.LoadingMark
+-- UI/Loot
+export type LootItem = loot.LootItem
+export type LootRow = loot.LootRow
+export type LootWindow = loot.LootWindow
+-- UI/LootRollTray
+export type LootRollTray = lootRollTray.LootRollTray
+export type RollChoiceData = lootRollTray.RollChoiceData
+export type RollResultData = lootRollTray.RollResultData
+export type RollRowData = lootRollTray.RollRowData
+export type RollTrayData = lootRollTray.RollTrayData
+-- UI/MapPin
+export type MapPin = mapPin.MapPin
+export type MapPinData = mapPin.MapPinData
+-- UI/MicroMenu
+export type MicroMenu = microMenu.MicroMenu
+export type MicroMenuItem = microMenu.MicroMenuItem
+-- UI/Notification
+export type Notification = notification.Notification
+export type NotificationAction = notification.NotificationAction
+export type NotificationData = notification.NotificationData
+export type NotificationIcon = notification.NotificationIcon
+export type NotificationPerson = notification.NotificationPerson
+export type NotificationStack = notification.NotificationStack
+-- UI/ObjectiveTracker
+export type ObjectiveTracker = objectiveTracker.ObjectiveTracker
+export type QuestRow = objectiveTracker.QuestRow
+export type TrackerObjective = objectiveTracker.TrackerObjective
+export type TrackerQuest = objectiveTracker.TrackerQuest
+-- UI/Panel
+export type ConfirmDialog = panel.ConfirmDialog
+export type KeyChip = panel.KeyChip
+export type Panel = panel.Panel
+export type ScrollArea = panel.ScrollArea
+export type SectionHeader = panel.SectionHeader
+export type WindowFrame = panel.WindowFrame
+-- UI/Pickers
+export type AnchorPicker = pickers.AnchorPicker
+export type ChipOption = pickers.ChipOption
+export type SwatchRow = pickers.SwatchRow
+export type ToggleChips = pickers.ToggleChips
+-- UI/Professions
+export type CraftingData = professions.CraftingData
+export type ProfessionCard = professions.ProfessionCard
+export type ProfessionSpell = professions.ProfessionSpell
+export type ProfessionTab = professions.ProfessionTab
+export type Professions = professions.Professions
+export type RecipeCategory = professions.RecipeCategory
+export type RecipeDetail = professions.RecipeDetail
+export type RecipeEntry = professions.RecipeEntry
+export type RecipeReagent = professions.RecipeReagent
+export type RecipeSourceItem = professions.RecipeSourceItem
+-- UI/RaidPlanner
+export type DragWhat = raidPlanner.DragWhat
+export type DropWhere = raidPlanner.DropWhere
+export type PaletteClass = raidPlanner.PaletteClass
+export type PaletteSpec = raidPlanner.PaletteSpec
+export type PlannerArt = raidPlanner.PlannerArt
+export type PlannerChip = raidPlanner.PlannerChip
+export type PlannerData = raidPlanner.PlannerData
+export type PlannerGroup = raidPlanner.PlannerGroup
+export type PlannerId = raidPlanner.PlannerId
+export type PlannerListItem = raidPlanner.PlannerListItem
+export type PlannerMove = raidPlanner.PlannerMove
+export type PlannerPerson = raidPlanner.PlannerPerson
+export type PlannerSetup = raidPlanner.PlannerSetup
+export type PlannerSlot = raidPlanner.PlannerSlot
+export type PlannerSpec = raidPlanner.PlannerSpec
+export type PlannerStat = raidPlanner.PlannerStat
+export type RaidPlanner = raidPlanner.RaidPlanner
+export type SlotChanges = raidPlanner.SlotChanges
+-- UI/Readiness
+export type ReadinessEntry = readiness.Entry
+export type Readiness = readiness.Readiness
+-- UI/ResourceBar
+export type ResourceBar = resourceBar.ResourceBar
+-- UI/RestedSign
+export type RestedSign = restedSign.RestedSign
+-- UI/Select
+export type Select<V extends selectModule.SelectValue> = selectModule.Select<V>
+export type SelectFootLink = selectModule.SelectFootLink
+export type SelectOption<V extends selectModule.SelectValue> = selectModule.SelectOption<V>
+export type SelectValue = selectModule.SelectValue
+-- UI/SettingsMatrix
+export type MatrixValue = settingsMatrix.MatrixValue
+-- UI/Social
+export type Contacts = social.Contacts
+export type Friend = social.Friend
+export type PeopleAction = social.PeopleAction
+export type PeopleList = social.PeopleList
+export type PeopleRowData = social.PeopleRowData
+export type RaidGroups = social.RaidGroups
+export type RaidMember = social.RaidMember
+-- UI/Spellbook
+export type BookAll = spellbook.BookAll
+export type BookSchool = spellbook.BookSchool
+export type BookSpell = spellbook.BookSpell
+export type SpellCell = spellbook.SpellCell
+export type Spellbook = spellbook.Spellbook
+-- UI/Stage
+export type ModelStage = stage.ModelStage
+-- UI/SwingTimer
+export type SwingTimer = swingTimer.SwingTimer
+-- UI/TabMarker
+export type TabMarker = tabMarker.TabMarker
+-- UI/TalentBuilds
+export type TalentBuildNode = talentBuilds.TalentNode
+export type TalentStep = talentBuilds.TalentStep
+-- UI/TalentTree
+export type BuildButton = talentTree.BuildButton
+export type OrderLineData = talentTree.OrderLineData
+export type TalentBuilds = talentTree.TalentBuilds
+export type TalentNode = talentTree.TalentNode
+export type TalentLink = talentTree.TalentLink
+export type TalentSpec = talentTree.TalentSpec
+export type TalentTree = talentTree.TalentTree
+export type TalentTreeData = talentTree.TalentTreeData
+-- UI/Text
+export type Text = text.Text
+-- UI/ThreatMeter
+export type ThreatEntry = threatMeter.ThreatEntry
+export type ThreatMeter = threatMeter.ThreatMeter
+export type ThreatOptions = threatMeter.ThreatOptions
+-- UI/Timeline
+export type EncounterTimeline = timeline.EncounterTimeline
+export type TimelineEvent = timeline.TimelineEvent
+-- UI/Tooltip
+export type TooltipData = tooltip.TooltipData
+export type TooltipLine = tooltip.TooltipLine
+export type TooltipSource = tooltip.TooltipSource
+-- UI/UnitFrame
+export type GroupDefensives = unitFrame.GroupDefensives
+export type Indicator = unitFrame.Indicator
+export type StandInPerson = unitFrame.StandInPerson
+export type UnitApi = unitFrame.UnitApi
+export type UnitFrame = unitFrame.UnitFrame
+export type UnitFrameOptions = unitFrame.UnitFrameOptions
+-- UI/WeaponEnchants
+export type WeaponEnchantIcon = weaponEnchants.WeaponEnchantIcon
+-- UI/WindowSkin
+export type SkinTab = windowSkin.SkinTab
+export type WindowChrome = windowSkin.WindowChrome
+
 
 @global("SuuUI")
 export const SuuUI = API

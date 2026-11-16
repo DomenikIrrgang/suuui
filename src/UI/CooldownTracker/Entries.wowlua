@@ -1,0 +1,182 @@
+-- UI/CooldownTracker/Entries.wowlua
+-- The tracker's lists as data (saved settings, so read with care; the
+-- tracker's header, UI/CooldownTracker.wowlua, describes them): the entry,
+-- condition and option types, the edge colours an entry chooses from, and
+-- what you know of an entry (the rank you know, the member a cooldown group
+-- shows, its art). No frames: the tracker and its parts read these.
+
+import * as secret from "wowlua:secret"
+
+--------------------------------------------------------------------------------
+-- The lists (see the header): saved settings, so read with care
+--------------------------------------------------------------------------------
+
+-- A condition of a `when`.
+export type TrackerCondition = {
+    type?: string,
+    ["not"]?: boolean,
+    value?: string,
+    classes?: string[],
+    others?: boolean,
+    talents?: unknown[],
+    roles?: string[],
+    stances?: string[],
+    kinds?: string[],
+}
+
+-- "Show only when": all (or any) of its conditions.
+export type TrackerWhen = { match?: string, conditions?: TrackerCondition[] }
+
+-- An entry of a list: a spell (ids, its ranks), a group of members sharing a
+-- slot, a collection of entries, or a weapon enchant; and its behaviour.
+export type TrackerEntry = {
+    name?: string,
+    ids?: number[],
+    mine?: boolean,
+    icon?: number,
+    -- a group
+    group?: boolean,
+    members?: TrackerEntry[],
+    source?: string,
+    max?: number,
+    fixedIcon?: boolean,
+    -- a collection
+    collection?: boolean,
+    uid?: string | number,
+    entries?: TrackerEntry[],
+    hidden?: boolean,
+    when?: TrackerWhen,
+    -- (a group's member shown in a cooldown list: its own `when`)
+    memberWhen?: TrackerWhen,
+    -- a weapon enchant
+    enchant?: string,
+    warnCombat?: boolean,
+    -- behaviour
+    missing?: string,
+    effect?: string,
+    effectIDs?: number[],
+    pop?: boolean,
+    sound?: string,
+    show?: string,
+    onCooldown?: string,
+    unusable?: string,
+    ready?: string,
+    border?: string,
+    glow?: boolean,
+    digits?: boolean,
+    stacks?: boolean,
+    expiring?: number,
+    size?: string,
+    soundAppear?: string,
+    soundStack?: string,
+    soundDrop?: string,
+    -- (the editor's: the effect's name, as the Behaviour panel shows it)
+    effectName?: string,
+    -- (a setting the editor's Behaviour panel reads and writes by its key)
+    [string]: unknown,
+}
+
+-- The lists by name: essential, utility, buffs, debuffs, procs.
+export type TrackerLists = { [string]: TrackerEntry[] }
+
+export type TrackerOptions = {
+    essentialSize?: number,
+    utilityInline?: boolean,
+    readyPop?: boolean,
+    procHighlight?: boolean,
+}
+
+-- Per-entry looks (the Behaviour panel): edge colours and sounds.
+export local EDGE: { [string]: string } = { ink = "ink", gilt = "gilt", muted = "ink-muted" }
+
+--------------------------------------------------------------------------------
+-- What you know of an entry
+--------------------------------------------------------------------------------
+
+-- A spell's rank number from its subtext ("Rank 5"), 0 for none; read once
+-- per spell (a secret or empty answer isn't kept).
+local rankNumbers: { [number]: number } = {}
+local function rankNumber(id: number): number
+    local cached = rankNumbers[id]
+    if cached then
+        return cached
+    end
+    local ok, sub = pcall(C_Spell.GetSpellSubtext, id)
+    if not ok or type(sub) ~= "string" or secret.isSecret(sub) then
+        return 0
+    end
+    local n = tonumber(sub:match("(%d+)")) or 0
+    if n > 0 then
+        rankNumbers[id] = n
+    end
+    return n
+end
+
+-- The rank of an entry you know, or nil: the highest rank number among the
+-- IDs you know, the highest ID on a tie (a spell without ranks). IDs don't
+-- climb with the ranks: Consecration's Rank 1 is 26573, its Ranks 2-5 are
+-- 20116-20924; the highest known ID was Rank 1, and the cell checked its mana
+-- cost and range (found in game, 2026-11-11).
+export function knownRank(entry: TrackerEntry): number?
+    local ids = entry.ids or {}
+    local best: number?, bestRank = nil, -1
+    for i = #ids, 1, -1 do
+        local id = ids[i]
+        if IsPlayerSpell and IsPlayerSpell(id) then
+            local r = rankNumber(id)
+            if r > bestRank then
+                best, bestRank = id, r
+            end
+        end
+    end
+    return best
+end
+
+-- Whether you know an entry's spell: a rank of it, or (a group) of any of
+-- its members. Auras cast by something else than your spell (totem buffs,
+-- Demonic Sacrifice's) read as unknown: they only show while up.
+export function knowsEntry(entry: TrackerEntry): boolean
+    if not entry.group then
+        return knownRank(entry) ~= nil
+    end
+    for _, m in ipairs(entry.members or {}) do
+        if knownRank(m) then
+            return true
+        end
+    end
+    return false
+end
+
+-- A shallow copy of an entry.
+export function copyEntry(entry: TrackerEntry): TrackerEntry
+    local from: { [string]: unknown } = entry
+    local out: { [string]: unknown } = {}
+    for k, v in pairs(from) do
+        out[k] = v
+    end
+    return out :: TrackerEntry
+end
+
+-- A group in a cooldown list is one cell: the last member you know (members
+-- are in order of preference), as an entry with the group's behaviour and
+-- that member's name and spells. Nil when you know none.
+export function cooldownMember(entry: TrackerEntry): TrackerEntry?
+    local members = entry.members or {}
+    for i = #members, 1, -1 do
+        local m = members[i]
+        if m.ids and #m.ids > 0 and knownRank(m) then
+            local e = copyEntry(entry)
+            e.group, e.members, e.icon = nil, nil, nil
+            e.name, e.ids, e.memberWhen = m.name, m.ids, m.when
+            return e
+        end
+    end
+    return nil
+end
+
+-- An entry's art: the rank you know, else its lowest ID (Rank 1, the
+-- player's spell; the highest IDs are often NPC versions with other art).
+export function iconFor(entry: TrackerEntry): number?
+    local id = entry.icon or knownRank(entry) or (entry.ids or {})[1]
+    return id and (C_Spell.GetSpellTexture(id)) or nil
+end

@@ -16,17 +16,20 @@
 --               results = { { name, level, race, class (file), className, guild, zone } } })
 --   w.onSearch(text), w.onFilter(button), w.onAddFriend(row), w.onWhisper(row),
 --   w.onInvite(row), w.onMenu(row)
+-- The results are a VirtualList (0.47): rows only for those in sight; the
+-- chosen player is held by who they are (w.selected their place in results).
 
 import tokens as T from "/Core/Tokens"
 import * as draw from "/UI/Draw"
 import * as uiText from "/UI/Text"
 import * as controls from "/UI/Controls"
 import * as inputs from "/UI/Inputs"
-import * as panel from "/UI/Panel"
+import * as virtualList from "/UI/VirtualList"
 import Text from "/UI/Text"
 import SuuButton from "/UI/Controls"
 import TextField, Glyph from "/UI/Inputs"
 import ScrollArea from "/UI/Panel"
+import VirtualList from "/UI/VirtualList"
 
 -- A player the server found.
 export type WhoResult = {
@@ -131,9 +134,29 @@ export class WhoEmpty extends Frame
     end
 end
 
+-- Whether two column layouts are the same.
+local function sameColumns(a: { [string]: WhoColumn }, b: { [string]: WhoColumn }): boolean
+    for _, key in ipairs(ORDER) do
+        local x, y = a[key], b[key]
+        if not (x and y and x.x == y.x and x.w == y.w) then
+            return false
+        end
+    end
+    return true
+end
+
+-- A row's cell at its column.
+local function placeCell(row: WhoRow, fs: Text, c: WhoColumn)
+    fs:ClearAllPoints()
+    fs:SetPoint("LEFT", row, "LEFT", c.x, 0)
+    fs:SetWidth(c.w)
+end
+
 export class WhoRow extends Button
-    index: number = 0
     data?: WhoResult
+    readonly page: GroupFinderWho
+    -- the columns its cells were placed by
+    laid?: { [string]: WhoColumn }
     selected: Texture
     edge: Texture
     hover: Texture
@@ -147,6 +170,7 @@ export class WhoRow extends Button
 
     constructor(w: GroupFinderWho)
         super(nil, w.list.child)
+        self.page = w
         self:SetHeight(ROW_H)
         self:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         self.selected = draw.fill(self, "arcane-soft", "BACKGROUND")
@@ -182,15 +206,54 @@ export class WhoRow extends Button
                     w.onMenu(data)
                 end
             else
-                w.selected = self.index
+                w.selected = w.view:IndexOf(self)
+                w.chosen = data
                 w:Draw()
             end
         end)
+    end
+
+    -- Draws a player (the VirtualList's bind: nothing made here). The cells
+    -- move only when the page's columns changed.
+    function Bind(row: WhoResult, on: boolean)
+        self.data = row
+        local cols = self.page.cols
+        if self.laid ~= cols then
+            self.laid = cols
+            self.dia:ClearAllPoints()
+            self.dia:SetPoint("CENTER", self, "LEFT", S["space-4"] + 3, 0)
+            placeCell(self, self.name, cols.name :: WhoColumn)
+            placeCell(self, self.level, cols.level :: WhoColumn)
+            placeCell(self, self.race, cols.race :: WhoColumn)
+            placeCell(self, self.class, cols.class :: WhoColumn)
+            placeCell(self, self.guild, cols.guild :: WhoColumn)
+            placeCell(self, self.zone, cols.zone :: WhoColumn)
+        end
+        self.selected:SetShown(on)
+        self.edge:SetShown(on)
+        local token = draw.classColor(row.class, "ink")
+        draw.paint(self.dia, token)
+        self.name:SetValue(row.name or "")
+        self.name:SetColor(token)
+        self.level:SetValue(row.level and tostring(row.level) or "")
+        self.race:SetValue(row.race or "")
+        self.class:SetValue(row.className or "")
+        self.guild:SetValue((row.guild and row.guild ~= "") and ("<" .. row.guild .. ">") or "")
+        self.zone:SetValue(row.zone or "")
     end
 end
 
 local function makeRow(w: GroupFinderWho): WhoRow
     return WhoRow.new(w)
+end
+
+-- the VirtualList's hands: draw, take a new table that shows the same
+local function bindRow(row: Frame, r: WhoResult, on: boolean)
+    (row :: WhoRow):Bind(r, on)
+end
+
+local function adoptRow(row: Frame, r: WhoResult)
+    (row :: WhoRow).data = r
 end
 
 -- What the bar says at the right: "24 players found" ("· showing the first
@@ -213,14 +276,20 @@ export class GroupFinderWho extends Frame
     count: Text
     box: Frame
     headRow: Frame
+    -- the players (only rows in sight) and its scroll area
+    view: VirtualList<WhoResult>
     list: ScrollArea
+    -- the columns now, for the headings and the rows
+    cols: { [string]: WhoColumn }
     empty: WhoEmpty
     addFriend: SuuButton
     invite: SuuButton
     whisper: SuuButton
     data: WhoData? = nil
     lastResults: WhoResult[]? = nil
+    -- the chosen player: their place in the results, and who they are
     selected: number? = nil
+    chosen: WhoResult? = nil
     onSearch: ((text: string) -> ())? = nil
     onFilter: ((button: SuuButton) -> ())? = nil
     onAddFriend: ((row: WhoResult) -> ())? = nil
@@ -230,7 +299,7 @@ export class GroupFinderWho extends Frame
 
     constructor(parent: Frame)
         super(nil, parent)
-        self.rows, self.heads = {}, {}
+        self.heads, self.cols = {}, {}
         -- the bar
         local function search()
             if self.onSearch then
@@ -314,11 +383,22 @@ export class GroupFinderWho extends Frame
             h:SetValue(LABEL[key])
             self.heads[key] = h
         end
-        self.list = panel.scrollArea(self.box, 2)
-        self.list:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT", 0, 0)
+        self.view = virtualList.virtualList(self.box, {
+            rowHeight = ROW_H,
+            bar = 2,
+            make = function(): Frame
+                return makeRow(self)
+            end,
+            bind = bindRow,
+            adopt = adoptRow,
+            same = virtualList.sameFields,
+        })
+        self.view:SetPoint("TOPLEFT", self.headRow, "BOTTOMLEFT", 0, 0)
         draw.layout(self, function()
-            self.list:SetPoint("BOTTOMRIGHT", -S["space-2"], S["space-2"])
+            self.view:SetPoint("BOTTOMRIGHT", -S["space-2"], S["space-2"])
         end)
+        self.list = self.view.scroll
+        self.rows = self.view:Rows() :: unknown :: WhoRow[]
         self.list:HookScript("OnSizeChanged", function()
             self:Draw()
         end)
@@ -374,9 +454,19 @@ export class GroupFinderWho extends Frame
 
     function SetData(d: WhoData)
         self.data = d
-        -- a new search: nothing chosen
+        -- a new search: nothing chosen; the same results (sorted again, say)
+        -- keep who was chosen, wherever they are now
         if d.results ~= self.lastResults then
-            self.selected = nil
+            self.selected, self.chosen = nil, nil
+        elseif self.chosen and d.results then
+            local at: number? = nil
+            for i, r in ipairs(d.results) do
+                if r == self.chosen then
+                    at = i
+                    break
+                end
+            end
+            self.selected = at
         end
         self.lastResults = d.results
         self.count:SetValue(countText(d))
@@ -385,9 +475,12 @@ export class GroupFinderWho extends Frame
 
     function Draw()
         local d: WhoData = self.data or { state = "idle" }
-        local width = math.max(1, self.list:GetWidth())
-        self.list.child:SetWidth(width)
         local cols = columns(self.box:GetWidth())
+        -- new columns (a new width or spacing): every row's cells move
+        local moved = not sameColumns(cols, self.cols)
+        if moved then
+            self.cols = cols
+        end
         for _, key in ipairs(ORDER) do
             local h, c = self.heads[key] :: Text, cols[key] :: WhoColumn
             h:ClearAllPoints()
@@ -395,40 +488,11 @@ export class GroupFinderWho extends Frame
             h:SetWidth(c.w)
         end
         local rows = d.state == "results" and d.results or {}
-        for i, row in ipairs(rows) do
-            local r = self.rows[i] or makeRow(self)
-            self.rows[i] = r
-            r.index, r.data = i, row
-            r:ClearAllPoints()
-            r:SetPoint("TOPLEFT", self.list.child, "TOPLEFT", 0, -(i - 1) * ROW_H)
-            r:SetWidth(width)
-            local on = self.selected == i
-            r.selected:SetShown(on)
-            r.edge:SetShown(on)
-            local token = draw.classColor(row.class, "ink")
-            draw.paint(r.dia, token)
-            r.dia:ClearAllPoints()
-            r.dia:SetPoint("CENTER", r, "LEFT", S["space-4"] + 3, 0)
-            local function place(fs: Text, key: string, text: string?)
-                local c = cols[key] :: WhoColumn
-                fs:ClearAllPoints()
-                fs:SetPoint("LEFT", r, "LEFT", c.x, 0)
-                fs:SetWidth(c.w)
-                fs:SetValue(text or "")
-            end
-            place(r.name, "name", row.name)
-            r.name:SetColor(token)
-            place(r.level, "level", row.level and tostring(row.level) or "")
-            place(r.race, "race", row.race)
-            place(r.class, "class", row.className)
-            place(r.guild, "guild", (row.guild and row.guild ~= "") and ("<" .. row.guild .. ">") or "")
-            place(r.zone, "zone", row.zone)
-            r:Show()
+        self.view:SetSelected(self.selected and rows[self.selected])
+        if moved then
+            self.view:Invalidate()
         end
-        for i = #rows + 1, #self.rows do
-            self.rows[i]:Hide()
-        end
-        self.list.child:SetHeight(math.max(1, #rows * ROW_H))
+        self.view:SetItems(rows)
         -- before a search, or nothing found
         local empty = d.state ~= "results"
         self.empty:SetShown(empty)

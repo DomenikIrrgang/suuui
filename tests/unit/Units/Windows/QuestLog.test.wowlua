@@ -1,0 +1,221 @@
+-- Units/Windows/QuestLog: the world map's quest log in SuuUI's look: rows
+-- measured for SuuUI's fonts, headers in label ink, a tracked quest's eye,
+-- the details' buttons centred and the money reward as SuuUI's money; the
+-- restyle once a frame, the window walked once.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import * as errors from "wowlua:errors"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Windows"
+import internal trackEyes, reskinnedRows from "/Units/Windows/QuestLog"
+import inkFont from "/Units/Windows/QuestLog"
+import moneyText as coinText from "/UI/Inventory"
+import expectNoErrors from "../../../helpers"
+import loadWindows, closeWindows, win, part from "./WindowsHelpers"
+
+local field = tbl.field
+
+loadWindows()
+
+-- A quest to take (placeholder names).
+local WOLVES = 90101
+local giver = mock.spawnUnit({ name = "Quartermaster Hale", level = 30, reaction = "friendly", distance = 3 })
+mock.defineQuest(WOLVES, {
+    title = "Wolves Across the Border",
+    text = "Kill wolves, $N.",
+    objective = "Kill 5 wolves.",
+    giver = giver,
+    level = 5,
+    header = "Elwynn Forest",
+    xp = 2450,
+    money = 2500,
+    objectives = {
+        { text = "Prowler slain, a long objective that wraps onto a second line in the log", required = 5 },
+    },
+})
+
+local function takeQuest()
+    if C_QuestLog.GetLogIndexForQuestID(WOLVES) then
+        return
+    end
+    -- (beside the giver wherever a test moved you: the distance follows the places)
+    giver:setDistance(3)
+    mock.player:interact(giver)
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+    AcceptQuest()
+    mock.advanceTime(0.5)
+    mock.advanceFrames(3)
+end
+
+@afterEach
+local function cleanup()
+    closeWindows()
+end
+
+@test(
+    "the quest log beside the map: rows measured for SuuUI's fonts, headers in label ink, a tracked quest's eye, the details' buttons centred"
+)
+local function questLog()
+    takeQuest()
+    local f = WorldMapFrame
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    -- (the log lists the quests of the map shown)
+    f:SetMapID(1429)
+    errors.tryMethod(f, "SetQuestLogPanelShown", true)
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    mock.advanceFrames(2)
+    local list = win("QuestScrollFrame")
+    -- the search box: its placeholder after the magnifier, not under it
+    -- (they ran into each other: found in game)
+    local sb = part(list, "SearchBox")
+    local icon = assert(frames.asTexture(field(sb, "searchIcon") or field(sb, "SearchIcon")))
+    local hint = assert(frames.asFontString(field(sb, "Instructions")))
+    expect((hint:GetLeft() or 0) >= (icon:GetRight() or 0)).toBe(true)
+    -- its zone header opened, as you'd click it
+    for _, header in ipairs(frames.rows(field(list, "headerFramePool"))) do
+        mock.click(header)
+    end
+    mock.advanceFrames(2)
+    -- each quest's track box: the eye, full while it's tracked, faint while
+    -- not (it was hidden then: nothing to click to track it, found in game)
+    local rows = 0
+    local box: Frame? = nil
+    for _, row in ipairs(frames.rows(field(list, "titleFramePool"))) do
+        rows = rows + 1
+        local cb = part(row, "Checkbox")
+        box = cb
+        local eye = assert(trackEyes[cb])
+        expect(eye:IsShown()).toBe(true)
+        local tracked = assert(frames.asTexture(field(cb, "CheckMark"))):IsShown()
+        expect(math.abs(eye:GetAlpha() - (tracked and 1 or 0.5)) < 0.01).toBe(true)
+    end
+    expect(rows).toBe(1)
+    -- clicked: tracked the other way, the eye still there
+    local cb = assert(box)
+    local before = assert(frames.asTexture(field(cb, "CheckMark"))):IsShown()
+    mock.click(cb)
+    mock.advanceFrames(2)
+    for _, row in ipairs(frames.rows(field(list, "titleFramePool"))) do
+        local c = part(row, "Checkbox")
+        local eye = assert(trackEyes[c])
+        local tracked = assert(frames.asTexture(field(c, "CheckMark"))):IsShown()
+        expect(tracked).toBe(not before)
+        expect(eye:IsShown()).toBe(true)
+        expect(math.abs(eye:GetAlpha() - (tracked and 1 or 0.5)) < 0.01).toBe(true)
+    end
+    for _, row in ipairs(frames.rows(field(list, "headerFramePool"))) do
+        expect(assert(frames.asButton(row)):GetNormalFontObject()).toBe(assert(M.questFont))
+    end
+    -- a header hovered and left: its title in ink still, not the game's
+    -- grey for a header the mouse left (found in game)
+    local ir, ig, ib = SuuUI.UI.RGBA("ink")
+    for _, row in ipairs(frames.rows(field(list, "headerFramePool"))) do
+        mock.hover(row)
+        mock.hover(nil)
+        local text = assert(frames.asFontString(field(row, "ButtonText") or field(row, "Text")))
+        local r, g, b = text:GetTextColor()
+        expect(r).toBeCloseTo(ir)
+        expect(g).toBeCloseTo(ig)
+        expect(b).toBeCloseTo(ib)
+    end
+    -- the details: Abandon, Share and Track in one row of equal widths,
+    -- between the enlarged map and the log's edge (measured in different
+    -- scales they sat over the map: found in game)
+    errors.try(field(_G, "QuestMapFrame_ShowQuestDetails"), WOLVES)
+    mock.advanceFrames(3)
+    local q = win("QuestMapFrame")
+    local d = part(q, "DetailsFrame")
+    if d:IsVisible() then
+        expect(f:GetScale() > 1).toBe(true)
+        local ab, tr = part(d, "AbandonButton"), part(d, "TrackButton")
+        expect(ab:GetWidth()).toBe(tr:GetWidth())
+        local sc = part(f, "ScrollContainer")
+        local function screen(r: Region, v: number?): number
+            return assert(v) * r:GetEffectiveScale()
+        end
+        expect(screen(ab, ab:GetLeft()) > screen(sc, sc:GetRight())).toBe(true)
+        expect(screen(tr, tr:GetRight()) < screen(q, q:GetRight())).toBe(true)
+    end
+    -- the money reward as SuuUI's money, in numeric, level with the XP beside
+    -- it: no coin inline (it stood above the digits' middle in
+    -- SuuUI's font, found in game); again when the quest is shown again
+    local rewards = win("MapQuestInfoRewardsFrame")
+    local money = assert(frames.asFontString(field(rewards, "MoneyFrame", "Name")))
+    local xp = assert(frames.asFontString(field(rewards, "XPFrame", "Name")))
+    for _ = 1, 2 do
+        expect(money:GetText()).toBe(coinText(2500))
+        expect((money:GetText() or ""):find("|T", 1, true)).toBeNil()
+        expect(money:GetFontObject()).toBe(SuuUI.Fonts.Get("numeric"))
+        local _, my = money:GetCenter()
+        local _, xy = xp:GetCenter()
+        expect(assert(my)).toBeCloseTo(assert(xy))
+        -- the details' texts in SuuUI's light ink, not the game's dark
+        -- parchment colours it sets on every display (0.6.30 left them dark:
+        -- the window's pass runs once now; found in game)
+        for _, name in ipairs({ "QuestInfoDescriptionText", "QuestInfoObjectivesText" }) do
+            local fs = frames.asFontString(field(_G, name))
+            if fs and fs:IsVisible() then
+                local r, g, b = fs:GetTextColor()
+                expect((r :: number) + (g :: number) + (b :: number) > 1.5).toBe(true)
+            end
+        end
+        errors.try(field(_G, "QuestMapFrame_ShowQuestDetails"), WOLVES)
+        mock.advanceFrames(3)
+    end
+    M:Emit("SUUUI_THEME_CHANGED", "suuui")
+end
+
+@test("the quest log's restyle: the window walked once, then only the rows made since; once a frame")
+local function questLogOnce()
+    takeQuest()
+    local f = WorldMapFrame
+    mock.moveTo({ mapID = 1429, x = 0.42, y = 0.65 })
+    ShowUIPanel(f)
+    mock.advanceFrames(3)
+    f:SetMapID(1429)
+    errors.tryMethod(f, "SetQuestLogPanelShown", true)
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    mock.advanceFrames(2)
+    -- the window had its walk: laying the list out again doesn't walk it
+    local walks = mock.spy(SuuUI.UI.Reskin)
+    mock.stub(SuuUI.UI, "Reskin", walks)
+    -- three in one frame: one now, one more the next frame
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    expect(M.questRestylePending).toBeFalsy()
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    errors.try(field(_G, "QuestLogQuests_Update"))
+    expect(M.questRestylePending).toBe(true)
+    mock.advanceFrames(1)
+    expect(M.questRestylePending).toBeFalsy()
+    expect(walks).never.toHaveBeenCalled()
+    -- every row the list shows had its pass
+    local list = win("QuestScrollFrame")
+    local rows = 0
+    for _, key in ipairs({ "titleFramePool", "headerFramePool", "objectiveFramePool" }) do
+        for _, row in ipairs(frames.rows(field(list, key))) do
+            rows = rows + 1
+            expect(reskinnedRows[row]).toBe(true)
+        end
+    end
+    expect(rows > 0).toBe(true)
+    expectNoErrors()
+end
+
+@test("a font object's colour in ink (the quest headers' font, again on a theme change)")
+local function inkedFont()
+    local font = CreateFont("SuuUITestWindowsInkFont")
+    font:SetTextColor(0, 0, 0, 1)
+    inkFont(font)
+    local r, g, b = font:GetTextColor()
+    local ir, ig, ib = SuuUI.UI.RGBA("ink")
+    expect(r).toBeCloseTo(ir)
+    expect(g).toBeCloseTo(ig)
+    expect(b).toBeCloseTo(ib)
+    expectNoErrors()
+end

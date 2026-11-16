@@ -7,7 +7,9 @@ import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M from "/Units/QuestAnnounce"
 import internal M as AutoQuests from "/Units/AutoQuests"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, cycle, NOTHING from "../../helpers"
+import * as modules from "/Core/Modules"
+import * as settings from "/Core/Settings"
 
 local friend = mock.spawnUnit({ name = "Brannoc", player = true, class = "WARRIOR", level = 30, reaction = "friendly" })
 
@@ -165,5 +167,28 @@ local function settingsOff()
     PELT, FANG = take(9306, "Quieter Work")
     loot({ { id = PELT, count = 2 }, { id = FANG, count = 1 } })
     expect(#said).toBe(1)
+    expectNoErrors()
+end
+
+-- Quest announcements toggle live: turned off through the registry nothing
+-- of them stays (no listener: nothing is told); on again, they tell again.
+@test("turned off through the registry: nothing held, nothing said; on again, it tells again")
+local function cycled()
+    mock.group:add(friend)
+    settle()
+    local c = cycle("questannounce")
+    expect(c.stateOff).toBe(modules.ModuleState.Disabled)
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(c.stateOn).toBe(modules.ModuleState.Enabled)
+    local PELT, FANG = take(9309, "Quiet Hunt")
+    settings.set("questannounce", "enabled", false)
+    loot({ { id = PELT, count = 2 } })
+    expect(said).toEqual({})
+    settings.set("questannounce", "enabled", true)
+    loot({ { id = FANG, count = 1 } })
+    expect(#said).toBe(2)
+    expect(said[1]:find("1/1 Test Fang", 1, true) ~= nil).toBe(true)
+    expect(said[2]:find("is ready to turn in.", 1, true) ~= nil).toBe(true)
     expectNoErrors()
 end

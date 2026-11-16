@@ -9,7 +9,7 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import expectNoErrors from "../../helpers"
 import tokenOf from "./PrimitivesHelpers"
-import lootRollTray, LootRollTray, RollRowData, RollChoiceData, RollTrayData, TRAY_W, TAB_W from "/UI/LootRollTray"
+import lootRollTray, LootRollTray, LootRollRow, RollRowData, RollChoiceData, RollTrayData, TRAY_W, TAB_W from "/UI/LootRollTray"
 
 local made: LootRollTray[] = {}
 
@@ -272,6 +272,77 @@ local function callbacks()
     mock.click(t.greedAll)
     mock.click(barb.slot)
     expect(got).toEqual({ "choose 1 greed", "confirm 3 false", "confirm 3 true", "pass all", "greed all", "item 1" })
+end
+
+@test("one row again: only its counts and who chose what; laid out again only when its size changes; the head's line alone")
+local function oneRow()
+    local t = tray()
+    local d = data()
+    local cape = assert(d.rolls[3])
+    cape.choice, cape.confirm = nil, nil
+    t:SetData(d)
+    local barb, cutlass = assert(t:RowFor(1)), assert(t:RowFor(2))
+    local layouts, others = 0, 0
+    local layout = t.Layout
+    mock.stub(t, "Layout", function(self: LootRollTray)
+        layouts = layouts + 1
+        layout(self)
+    end)
+    local setData = cutlass.SetData
+    mock.stub(cutlass, "SetData", function(self: LootRollRow, r: RollRowData, compact: boolean)
+        others = others + 1
+        setData(self, r, compact)
+    end)
+    local height = barb:GetHeight()
+    -- another vote on the first roll: its count and its line, nothing else
+    local r = rolls()[1]
+    r.choices = choices(2, 0, 1)
+    r.who = "Need Brannoc, Kaelith"
+    expect(t:SetRow(r)).toBe(true)
+    expect(assert(barb.choices:Option("need")).badge.label:GetText()).toBe("2")
+    expect(barb.whoLine:GetText()).toBe("Need Brannoc, Kaelith")
+    expect(barb:GetHeight()).toBe(height)
+    expect(layouts).toBe(0)
+    expect(others).toBe(0)
+    expect(t.data.rolls[1]).toBe(r)
+    -- the first line of who chose what on a row without one: laid out again
+    local quiet = rolls()[2]
+    quiet.who = nil
+    t:SetRow(quiet)
+    layouts = 0
+    local again = rolls()[2]
+    expect(t:SetRow(again)).toBe(true)
+    expect(layouts).toBe(1)
+    expect(cutlass.whoLine).toBeShown()
+    -- a count wider than before: the choices' column again
+    layouts = 0
+    local wide = rolls()[1]
+    wide.choices = choices(12, 0, 1)
+    t:SetRow(wide)
+    expect(layouts).toBe(1)
+    -- a row it doesn't have
+    local stray = rolls()[1]
+    stray.id = 99
+    expect(t:SetRow(stray)).toBe(false)
+    -- the head's line
+    t:SetMeta("waiting on 3 players")
+    expect(t.meta:GetText()).toBe("waiting on 3 players")
+    expect(t.data.meta).toBe("waiting on 3 players")
+end
+
+@test("one row again once every roll is answered: the line under the name")
+local function oneRowAnswered()
+    local t = tray()
+    local d = data()
+    for _, r in ipairs(d.rolls) do
+        r.choice, r.confirm, r.who = "greed", nil, "Choosing Morrow"
+    end
+    d.answered = true
+    t:SetData(d)
+    local r = rolls()[1]
+    r.choice, r.confirm, r.who = "greed", nil, "Greed Morrow"
+    expect(t:SetRow(r)).toBe(true)
+    expect(assert(t:RowFor(1)).sub:GetText()).toBe("Greed Morrow")
 end
 
 @test(

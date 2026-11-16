@@ -1,0 +1,297 @@
+-- Units/AuctionHouse/Scan.wowlua
+-- Scan all in the auction house (Units/AuctionHouse): every auction asked
+-- once (the game allows it every 15 minutes, per account), read a slice a
+-- frame, the lowest buyout per item kept in the price memory; while it
+-- runs the mark and the progress over the Buy page; the wait until the
+-- next. The module's methods for it (Scan, ReadScan, DrawScan, EndScan,
+-- StopScan, …) call the functions here.
+
+import SuuUI from "/Core/API"
+import * as errors from "wowlua:errors"
+import when from "./Common"
+import type Offer from "./Prices"
+import type AuctionHouseModule, CharStore from "../AuctionHouse"
+
+local T = SuuUI.Tokens
+local tryValue = errors.tryValue
+
+local AH = C_AuctionHouse
+
+-- A scan running.
+export type Scanning = { started: number, reading?: boolean, read?: number, total?: number }
+
+local SCAN_WAIT = 15 * 60
+
+-- 48183 -> "48,183"
+local function thousands(n: number?): string
+    local s = tostring(math.floor(n or 0))
+    return (s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+end
+
+--------------------------------------------------------------------------------
+-- Scan all: every auction once (the game allows it every 15 minutes); the
+-- lowest buyout per item into the memory the sell view and tooltips use
+--------------------------------------------------------------------------------
+
+-- When any of your characters last scanned (the game's wait is per account).
+export function lastScan(self: AuctionHouseModule): number?
+    local last: number? = nil
+    for _, d in ipairs(self:AllSaved()) do
+        local at = d.scanAt
+        if at and (not last or at > last) then
+            last = at
+        end
+    end
+    return last
+end
+
+-- When the game allows the next Scan all: 15 minutes after the last one
+-- asked or done (any character), nil if none is remembered.
+export function nextScanAt(self: AuctionHouseModule): number?
+    local latest: number? = nil
+    for _, d in ipairs(self:AllSaved()) do
+        for _, at in ipairs({ d.scanAt or 0, d.scanAsked or 0 }) do
+            if at > 0 and (not latest or at > latest) then
+                latest = at
+            end
+        end
+    end
+    return latest and (latest + SCAN_WAIT)
+end
+
+-- How long the last scan took and how many it read (any character).
+export function lastScanSize(self: AuctionHouseModule): (number?, number?)
+    local best: CharStore? = nil
+    for _, d in ipairs(self:AllSaved()) do
+        local at = d.scanAt
+        if at and d.scanSeconds and (not best or at > (best.scanAt or 0)) then
+            best = d
+        end
+    end
+    return best and best.scanSeconds, best and best.scanCount
+end
+
+export function drawScan(self: AuctionHouseModule)
+    local buy = self.buy
+    if not buy then
+        return
+    end
+    local last = self:LastScan()
+    local nextAt = self:NextScanAt()
+    local wait = nextAt and (nextAt - time()) or 0
+    if self.scanning then
+        buy.scanButton:SetEnabledState(false)
+        buy.scanWhen:SetValue("Scanning…")
+        buy.scanWhen:SetColor("ink-muted")
+    elseif wait > 0 then
+        local text = ("Again in %d min"):format(math.ceil(wait / 60))
+        buy.scanButton:SetEnabledState(false)
+        buy.scanButton.tooltip = {
+            title = "Scan all",
+            description = "The game allows one full scan every 15 minutes. " .. text .. ".",
+        }
+        buy.scanWhen:SetValue(text)
+        buy.scanWhen:SetColor("amber")
+    else
+        buy.scanButton:SetEnabledState(true)
+        buy.scanButton.tooltip = {
+            title = "Scan all",
+            description = "Read every auction once, for the lowest buyouts in the sell view and tooltips.",
+        }
+        buy.scanWhen:SetValue(last and ("Last scan " .. when(last)) or "Not scanned yet")
+        buy.scanWhen:SetColor("ink-muted")
+    end
+    -- while it runs: the mark and the progress in the results' place; the
+    -- categories and Search wait
+    local on = self.scanning ~= nil
+    buy.scanView:SetShown(on)
+    buy.catList:SetAlpha(on and T.opacity["opacity-disabled"] or 1)
+    buy.catBlock:SetShown(on)
+    buy.searchButton:SetEnabledState(not on)
+    buy.searchButton.tooltip = on and { title = "Search", description = "Scanning: back when the scan is done." } or
+        nil
+    if on then
+        buy.scanCaption:SetValue(self:ScanProgress())
+    end
+end
+
+-- The caption under the mark. Asking: the auctions received so far when the
+-- game counts them as they come, else the seconds against the last scan's;
+-- then reading them.
+export function scanProgress(self: AuctionHouseModule): string
+    local sc = self.scanning
+    if not sc then
+        return ""
+    end
+    if sc.reading then
+        return ("Reading %s of %s…"):format(thousands(sc.read), thousands(sc.total))
+    end
+    local seconds, count = self:LastScanSize()
+    local got = tryValue(AH.GetNumReplicateItems) or 0
+    if got > 0 then
+        return count and ("Received %s of about %s auctions…"):format(thousands(got), thousands(count)) or
+            ("Received %s auctions…"):format(thousands(got))
+    end
+    -- (a millisecond's leeway: on a whole second the difference of two
+    -- clock readings can be 1.999…)
+    local took = math.floor(GetTime() - sc.started + 0.001)
+    if seconds then
+        local left = math.ceil(seconds - (GetTime() - sc.started))
+        return "Asking the house for every auction… " ..
+            (left > 0 and ("about %d s left"):format(left) or "any moment now")
+    end
+    return ("Asking the house for every auction… %d s"):format(took)
+end
+
+export function scan(self: AuctionHouseModule)
+    if self.scanning then
+        return
+    end
+    local sc: Scanning = { started = GetTime() }
+    self.scanning = sc
+    self:Note("")
+    local ok, err = pcall(AH.ReplicateItems)
+    if not ok then
+        self.scanning = nil
+        self:Note("Couldn't scan: " .. tostring(err), "error")
+        self:DrawScan()
+        return
+    end
+    -- (BAG-17) the game's wait starts with the request: kept now, not
+    -- only when a list was read, so the button waits even after a scan
+    -- that timed out or that closing the house stopped
+    self:Saved().scanAsked = time()
+    self.asked = sc.started
+    self:ShowScan(sc)
+    -- no answer in time: the view gives up (a list that comes later
+    -- while the house is open is still read, by ReadScan). A minute, or
+    -- twice what the last scan took if that was longer.
+    local seconds = self:LastScanSize()
+    self:After(math.max(60, 2 * (seconds or 0)), function()
+        if self.scanning == sc and not sc.reading then
+            self:EndScan()
+            self:Note("The scan didn't come back; try again later.", "error")
+        end
+    end)
+end
+
+-- The scan's view: the mark, the progress four times a second, the whole
+-- page (the scan takes the results' place).
+export function showScan(self: AuctionHouseModule, sc: Scanning)
+    self.scanning = sc
+    local buy = self.buy
+    if buy then
+        buy.scanMark:Start()
+    end
+    self.scanTicker = self:Every(0.25, function()
+        if self.scanning then
+            self:DrawScan()
+        end
+    end)
+    self:Refresh()
+end
+
+export function endScan(self: AuctionHouseModule)
+    self.scanning = nil
+    local ticker = self.scanTicker
+    if ticker then
+        ticker:Cancel()
+        self.scanTicker = nil
+    end
+    local reader = self.readTicker
+    if reader then
+        reader:Cancel()
+        self.readTicker = nil
+    end
+    local buy = self.buy
+    if buy then
+        buy.scanMark:Stop()
+    end
+    self:DrawScan()
+    self:QueueRefresh()
+end
+
+-- The house closed: a scan waiting for its list or reading it ends
+-- (X-4.5). What it read so far is dropped: the prices are kept only
+-- when the whole list was read (ReadScan writes them in one go at the
+-- end), so the price memory never holds a half-updated scan that looks
+-- complete. The request still counts for the game's wait (scanAsked).
+export function stopScan(self: AuctionHouseModule)
+    self.asked = nil
+    if self.scanning then
+        self.scanStopped = true
+        self:EndScan()
+    end
+end
+
+-- The list came: read it a slice a frame (tens of thousands of auctions),
+-- the lowest buyout per item (per unit for stacks), then keep them.
+export function readScan(self: AuctionHouseModule)
+    local sc = self.scanning
+    if not sc then
+        -- (BAG-17) the list of a request whose view gave up: still this
+        -- visit's scan, within the game's wait
+        local asked = self.asked
+        if not asked or not self.open or GetTime() - asked > SCAN_WAIT then
+            return
+        end
+        sc = { started = asked }
+        self:ShowScan(sc)
+    end
+    if sc.reading then
+        return
+    end
+    sc.reading = true
+    self.asked = nil
+    local n = tryValue(AH.GetNumReplicateItems) or 0
+    sc.read, sc.total = 0, n
+    local offers: { [number]: Offer[] } = {}
+    local i = 0
+    -- (kept: a scan ended meanwhile stops it, and so does the module
+    -- turning off)
+    self.readTicker = self:Every(0, function(ticker)
+        if self.scanning ~= sc then
+            ticker:Cancel()
+            return
+        end
+        local stop = math.min(n, i + 2500)
+        for k = i, stop - 1 do
+            local ok, _, _, count, _, _, _, _, _, _, buyout, _, _, _, _, _, _, itemID = pcall(
+                AH.GetReplicateItemInfo,
+                k
+            )
+            if ok and itemID and buyout and buyout > 0 then
+                local qty = math.max(1, count or 1)
+                local offered = offers[itemID]
+                if not offered then
+                    offered = {}
+                    offers[itemID] = offered
+                end
+                offered[#offered + 1] = { price = math.floor(buyout / qty), qty = qty }
+            end
+        end
+        i = stop
+        sc.read = i
+        self:DrawScan()
+        if i >= n then
+            ticker:Cancel()
+            self.readTicker = nil
+            local items = 0
+            for itemID, offered in pairs(offers) do
+                self:Seen(itemID, self:Market(offered))
+                items = items + 1
+            end
+            local d = self:Saved()
+            local seconds = GetTime() - sc.started
+            d.scanAt, d.scanSeconds, d.scanCount = time(), math.floor(seconds + 0.5), n
+            self:EndScan()
+            self:Note(
+                ("Scan done: %s auctions, %s items, in %d s."):format(
+                    thousands(n),
+                    thousands(items),
+                    math.floor(seconds + 0.5)
+                )
+            )
+        end
+    end)
+end

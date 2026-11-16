@@ -14,6 +14,7 @@ import * as fault from "/Core/Fault"
 import * as DB from "/Core/DB"
 import internal parse, show, splitPath, bind from "/Core/Settings"
 import FakeReporter, FakeNotifier from "../../fakes"
+import expectNoErrors from "../../helpers"
 import * as tbl from "wowlua:table"
 
 config({ lifecycle = "manual" })
@@ -500,6 +501,20 @@ local function watcherError()
     expect((faultWith("settings-err-watch") :: fault.Entry).source).toBe(W1)
 end
 
+@test("watchCount: the owner's watchers and vetoes")
+local function watchCount()
+    local owner = { name = "Settings Test Count" }
+    expect(settings.watchCount(owner)).toBe(0)
+    settings.watch("zzsa", "num", function() end, owner)
+    settings.watch("zzsa", "text", function() end, owner)
+    settings.veto("zzsa", "num", function(): (boolean?, string?)
+        return true
+    end, owner)
+    expect(settings.watchCount(owner)).toBe(3)
+    settings.unwatch(owner)
+    expect(settings.watchCount(owner)).toBe(0)
+end
+
 @test("unwatch: the owner's watchers and vetoes go, also mid-notification")
 local function unwatch()
     local heard = watcher()
@@ -971,6 +986,16 @@ end
 -- Characters' data and account-wide values
 --------------------------------------------------------------------------------
 
+@test("peekCharData: this character's table for a namespace if it has one; nothing made")
+local function peekCharData()
+    local key = settings.getCharKey() :: string
+    expect(settings.peekCharData("zzsapeek")).toBeNil()
+    expect(field(DB.db, "charData", key, "zzsapeek")).toBeNil()
+    local mine = settings.charData("zzsapeek")
+    expect(settings.peekCharData("zzsapeek") == mine).toBe(true)
+    rawset(assert(savedDB().charData[key]), "zzsapeek", nil)
+end
+
 @test("charData: this character's table per module, the same each time")
 local function charData()
     local key = settings.getCharKey() :: string
@@ -1325,6 +1350,22 @@ local function ownUnbound()
     expect(function()
         store:set("bars", "scale", 2)
     end).toThrow("saved settings have not loaded yet")
+end
+
+@test("charKnownAtLoad: whether the saved data knew this character when it loaded (0.47)")
+local function ownKnown()
+    local fresh = settings.SettingsStore.new(FakeReporter.new(), FakeNotifier.new())
+    expect(fresh:charKnownAtLoad()).toBe(false)
+    fresh:bind({}, "Player - Realm")
+    expect(fresh:charKnownAtLoad()).toBe(false)
+    local known = settings.SettingsStore.new(FakeReporter.new(), FakeNotifier.new())
+    known:bind({ chars = { ["Player - Realm"] = "Player - Realm" }, profiles = {} }, "Player - Realm")
+    expect(known:charKnownAtLoad()).toBe(true)
+    -- another character known, this one not
+    local other = settings.SettingsStore.new(FakeReporter.new(), FakeNotifier.new())
+    other:bind({ chars = { ["Member1 - Realm"] = "Member1 - Realm" }, profiles = {} }, "Player - Realm")
+    expect(other:charKnownAtLoad()).toBe(false)
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------

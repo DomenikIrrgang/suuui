@@ -19,26 +19,14 @@
 -- it out of chat); turning it off stops it.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, SelectOption, SelectValue, BrowseData, BrowseFilter, BrowseRow, GroupFinderBrowse, WhoData, WhoResult, GroupFinderWho, GroupFinderListed, ListingFrame, NotificationData, NotificationAction, NotificationStack, MatrixValue, ChipOption, Text from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
-import after, every from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as logic from "./GroupFinder/Logic"
-import type SelectOption, SelectValue from "/UI/Select"
-import type BrowseData, BrowseFilter, BrowseRow, GroupFinderBrowse from "/UI/GroupFinder"
-import type WhoData, WhoResult, GroupFinderWho from "/UI/GroupFinderWho"
-import type GroupFinderListed from "/UI/GroupFinderListed"
-import type ListingFrame from "/UI/GroupFinderListing"
-import type NotificationData, NotificationAction, NotificationStack from "/UI/Notification"
-import type MatrixValue from "/UI/SettingsMatrix"
-import type ChipOption from "/UI/Pickers"
-import type Text from "/UI/Text"
-
 import type Interest, Listing, LfgEvent, MatchReason from "foreverlfg"
 import * as chatLine from "wowlua:chat"
 import invite as groupInvite from "wowlua:unit"
@@ -325,6 +313,13 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
     -- entries of the rows shown
     search: string? = nil
     searching: boolean? = nil
+    -- the game refused the search on opening: the player's first press in
+    -- the Browse page searches (SearchOnClick); when that press searched
+    -- (GetTime(): the same click's Refresh doesn't search again); the
+    -- page's frames that call it
+    searchOnClick: boolean? = nil
+    clickSearchAt: number? = nil
+    pressHooked: { [Frame]: boolean } = {}
     renderQueued: boolean? = nil
     shown: { [string]: Entry } = {}
     -- Who
@@ -535,6 +530,9 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             return
         end
         b:SetData(self:Data())
+        if self.searchOnClick then
+            self:HookPresses(b)
+        end
     end
 
     function QueueRender()
@@ -542,7 +540,8 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             return
         end
         self.renderQueued = true
-        after(0.2, function()
+        -- (the guard stays: the library's callbacks can ask with the module off)
+        self:After(0.2, function()
             self.renderQueued = nil
             if self:IsEnabled() then
                 self:Render()
@@ -579,9 +578,13 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             end
             self:QueueRender()
         end
-        -- the tool searches on this click (the game's rule)
+        -- the tool searches on this click (the game's rule), unless the
+        -- click's press already did (SearchOnClick)
         b.onRefresh = function()
-            self.searching = LFG.Refresh(self:Category().tool) and true or nil
+            self.searchOnClick = nil
+            if self.clickSearchAt ~= GetTime() then
+                self.searching = LFG.Refresh(self:Category().tool) and true or nil
+            end
             self:Render()
         end
         b.onClear = function()
@@ -856,16 +859,60 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
         end
     end
 
-    -- Opening the window searches the tool for the chosen category (the key
-    -- press or click that opened it allows that: probed 2026-10-15), unless it
-    -- searched in the last minute.
+    -- Opening the window searches the tool for the chosen category, unless it
+    -- searched in the last minute. The game may refuse that search: opened
+    -- with the key binding out of combat, it was refused on 2026-11-10, 11,
+    -- 13 and 15 (a search from the window's OnShow, opened with I, went
+    -- through on 2026-10-15); opened with a click, unconfirmed. Refused is
+    -- expected, no error: the player's first press in the Browse page
+    -- searches instead (SearchOnClick). "/suu probe lfg opens" records how
+    -- each opening went.
     function SearchOnOpen()
+        self.searchOnClick = nil
         local cat = self:Category()
         local age = LFG.ToolAge(cat.tool)
         if age and age < 60 then
             return
         end
+        -- refused: the game's blocked action came during the call (the
+        -- library's pcall returns true either way, and the tool's age only
+        -- moves once results arrive, a round trip later)
+        local refused, started = SuuUI.ExpectRefusal(LFG.Refresh, cat.tool)
+        self.searching = (started and not refused) or nil
+        self.searchOnClick = refused or nil
+    end
+
+    -- The player's first press in the Browse page after a refused search on
+    -- opening: the search, from that press (a hardware event of SuuUI's own,
+    -- as Refresh's click), once, and only while the list is still older than
+    -- a minute. Not again on a timer: the game would refuse that too.
+    function SearchOnClick()
+        if not self.searchOnClick then
+            return
+        end
+        self.searchOnClick = nil
+        local cat = self:Category()
+        local age = LFG.ToolAge(cat.tool)
+        if age and age < 60 then
+            return
+        end
+        self.clickSearchAt = GetTime()
         self.searching = LFG.Refresh(cat.tool) and true or nil
+        self:Render()
+    end
+
+    -- A press on the frame or any frame in it calls SearchOnClick (each
+    -- hooked once; Render hooks the rows made since while one waits).
+    function HookPresses(f: Frame)
+        if not self.pressHooked[f] then
+            self.pressHooked[f] = true
+            hookScript(f, "OnMouseDown", function()
+                self:SearchOnClick()
+            end)
+        end
+        for _, child in ipairs({ f:GetChildren() }) do
+            self:HookPresses(child)
+        end
     end
 
     -- One of SuuUI's pages over the game's window.
@@ -923,6 +970,7 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             self:Follow()
         end)
         hookScript(f, "OnHide", function()
+            self.searchOnClick = nil
             GameTooltip:Hide()
         end)
         for _, name in ipairs({ "LFGBrowseFrame", "LFGListingFrame", "LFGWhoListFrame" }) do
@@ -981,8 +1029,8 @@ class GroupFinderModule extends Module<typeof(DEFAULTS)>
             self.searching = nil
             self:QueueRender()
         end)
-        -- the tool's age moves on
-        every(15, function()
+        -- the tool's age moves on (the module's own: turning it off stops it)
+        self:Every(15, function()
             local b, l = self.browse, self.listed
             if b and b:IsVisible() then
                 self:Render()

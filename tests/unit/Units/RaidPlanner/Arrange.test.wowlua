@@ -1,0 +1,85 @@
+-- Units/RaidPlanner/Arrange: Arrange groups on the engine's raid.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/RaidPlanner"
+import type PlannerMoves from "/UI/RaidPlanner"
+import cleanup, warrior, priest, mage, mage2, hunter, shaman, raid, printed, setup, slot, slotIn, placed, member, window from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("Arrange groups: why it can't, the moves, then the raid moved into the slots' groups")
+local function arrange()
+    setup()
+    expect(select(2, M:CanArrange())).toBe("Not in a raid.")
+    raid({ { unit = warrior, g = 2 }, { unit = priest, g = 2 }, { unit = mage, g = 3 } })
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("The setup has no slots yet.")
+    slot(1, "DRUID")
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("Nobody in the raid fills a slot yet.")
+    slot(2, "PRIEST")
+    M:Refill()
+    expect(select(2, M:CanArrange())).toBe("Everyone is in their slot's group already.")
+    local tank = slotIn(1, "WARRIOR", nil, "TANK")
+    slot(3, "MAGE")
+    M:Refill()
+    expect(M:CanArrange()).toBe(true)
+    local moves = M:Moves()
+    expect(#moves).toBe(1)
+    expect(moves[1].name).toBe("Raider Warrior")
+    expect(moves[1].from).toBe(2)
+    expect(moves[1].to).toBe(1)
+    -- the panel: the moves, run on Move
+    local shownMoves: PlannerMoves? = nil
+    local run: (() -> ())? = nil
+    M:Toggle()
+    mock.stub(window(), "ShowMoves", function(_: unknown, data: PlannerMoves, onConfirm: () -> ())
+        shownMoves, run = data, onConfirm
+    end)
+    M:Arrange()
+    expect(#assert(assert(shownMoves).moves)).toBe(1)
+    assert(run)()
+    mock.advanceTime(2)
+    M:ReadRoster()
+    expect(member("Raider Warrior").group).toBe(1)
+    expect(placed(tank).m.group).toBe(1)
+    expect(#M:Moves()).toBe(0)
+    -- in combat: not now
+    mock.player:enterCombat()
+    M:Arrange()
+    expect(printed[#printed]).toBe("Not in combat.")
+    mock.player:leaveCombat()
+    -- not leading nor assisting: only they can move players
+    mock.fake("UnitIsGroupLeader", function(_: string)
+        return false
+    end)
+    assert(M.me).lead = false
+    expect(select(2, M:CanArrange())).toBe("Only the raid leader or an assistant can move players.")
+end
+
+@test("Arrange groups into a full group: a swap with one who doesn't belong there")
+local function arrangeSwap()
+    setup()
+    local five = { warrior, priest, mage, mage2, hunter }
+    local list = {}
+    for i, u in ipairs(five) do
+        list[i] = { unit = u, g = 1 }
+    end
+    list[#list + 1] = { unit = shaman, g = 2 }
+    raid(list)
+    -- (you: group 2 with the shaman)
+    slot(1, "SHAMAN")
+    slot(2, "HUNTER")
+    M:Refill()
+    expect(#M:Moves()).toBe(2)
+    M:RunMoves(1)
+    mock.advanceTime(2)
+    M:ReadRoster()
+    expect(member("Raider Shaman").group).toBe(1)
+    expect(member("Raider Hunter").group).toBe(2)
+    M:RunMoves(5)
+end

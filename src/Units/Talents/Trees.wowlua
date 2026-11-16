@@ -1,0 +1,497 @@
+-- Units/Talents/Trees.wowlua
+-- The game's talent trees as Units/Talents reads them (C_Traits; see the
+-- header of Units/Talents): a config's nodes laid out as the class's three
+-- trees with their points and arrows (collect: what the page shows), why a
+-- node can't take a point (requires), every class and its tree
+-- (readClasses), and a class's tree as builds need it (readBuildTree).
+-- Read only: what is kept between reads (the learned ranks, the classes,
+-- the build trees) stays on the module, which hands it in.
+
+import type TalentBuildNode as BuildTalent from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local try, field = errors.try, tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+-- (your own class: never secret)
+export const CLASS = asString((select(2, UnitClass("player")))) or ""
+
+local STEP = 600 -- the grid's step in the tree's coordinates
+local TREE_GAP = 1500 -- more than this between columns: another tree
+
+--------------------------------------------------------------------------------
+-- The game's data
+--------------------------------------------------------------------------------
+
+-- A talent on your trees (or an inspected player's): where it is, its
+-- ranks learned and planned, what the game says it can do, its talent, its
+-- place in its tree's grid; drawn with what the page sets on it.
+-- The most points a node's conditions ask be spent (its row's gate; 0: none).
+local function gateOf(configID: number, conditions: number[]): number
+    local gate = 0
+    for _, condID in ipairs(conditions) do
+        local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
+        local need = c and asNumber(c.spentAmountRequired)
+        if need and need > gate then
+            gate = need
+        end
+    end
+    return gate
+end
+
+export type PageNode = {
+    id: number,
+    x: number,
+    y: number,
+    max: number,
+    rank: number,
+    pending: number,
+    canPurchase: boolean,
+    canRefund: boolean,
+    open: boolean,
+    meetsEdges: boolean,
+    conditions: number[],
+    -- the points its tree needs before it opens (its row's gate; 0: none)
+    gate: number,
+    edges: TraitOutEdgeInfo[],
+    name: string,
+    icon?: number | string,
+    spellID?: number,
+    entryID: number,
+    row: number,
+    col: number,
+    tree?: PageTree,
+    requires: PageNode[],
+    locked?: boolean,
+    canSpend?: boolean,
+    next?: boolean,
+}
+-- One of the class's three trees on the page.
+export type PageTree = {
+    name: string,
+    icon?: number,
+    groupID?: number,
+    nodes: PageNode[],
+    links: { from: PageNode, to: PageNode, met: boolean }[],
+    points: number,
+}
+-- What the page shows for a config (Collect).
+export type Collected = {
+    configID: number,
+    treeID: number,
+    trees: PageTree[],
+    available: number,
+    pending: number,
+    staged: boolean,
+}
+
+-- A node's talent: name, icon, spell, entry.
+export type Talent = { entryID: number, spellID?: number, name: string, icon?: number | string }
+
+local function talentOf(configID: number, info: TraitNodeInfo): Talent?
+    local active = info.activeEntry
+    local entryID = active and active.entryID or info.entryIDs[1]
+    if not entryID then
+        return nil
+    end
+    local entry = errors.tryValue(C_Traits.GetEntryInfo, configID, entryID)
+    local definitionID = entry and entry.definitionID
+    local def = definitionID and errors.tryValue(C_Traits.GetDefinitionInfo, definitionID) or nil
+    local spellID = def and def.spellID
+    local name = def and def.overrideName
+    if (not name or name == "") and spellID then
+        name = asString(C_Spell.GetSpellName(spellID))
+    end
+    local icon: number | string | nil = def and def.overrideIcon
+    if (not icon or icon == 0) and spellID then
+        icon = asNumber(C_Spell.GetSpellTexture(spellID))
+    end
+    return { entryID = entryID, spellID = spellID, name = name or "?", icon = icon }
+end
+
+-- The trees: the nodes sorted left to right (then top to bottom), columns
+-- more than TREE_GAP apart starting a new one (as Blizzard draws the group
+-- headers); each { nodes, minX, maxX }.
+export function clusterNodes<N extends { x: number, y: number }>(nodes: N[]): {
+    nodes: N[],
+    minX: number,
+    maxX: number,
+}[]
+    table.sort(nodes, function(a: N, b: N): boolean
+        if a.x ~= b.x then
+            return a.x < b.x
+        end
+        return a.y < b.y
+    end)
+    local clusters: { nodes: N[], minX: number, maxX: number }[] = {}
+    local last: number? = nil
+    for _, n in ipairs(nodes) do
+        if not last or n.x - last > TREE_GAP then
+            clusters[#clusters + 1] = { nodes = {}, minX = n.x, maxX = n.x }
+        end
+        local c = clusters[#clusters]
+        c.nodes[#c.nodes + 1] = n
+        c.minX = math.min(c.minX, n.x)
+        c.maxX = math.max(c.maxX, n.x)
+        last = n.x
+    end
+    return clusters
+end
+
+-- A node's cell in its tree's 4 columns (from the leftmost, or so the
+-- rightmost is column 3) and its row from the top (`minY`).
+export function gridCell(x: number, y: number, minX: number, maxX: number, minY: number): (number, number)
+    local base = math.min(minX, maxX - 3 * STEP)
+    return math.max(0, math.min(3, math.floor((x - base) / STEP + 0.5))),
+        math.max(0, math.floor((y - minY) / STEP + 0.5))
+end
+
+-- The game's spells window showing another player's talents ("View
+-- Talents" on inspect: the same window in inspect mode); their unit, else nil.
+-- Seen in game, 2026-10-17: the page over it showed your own talents there.
+export const INSPECT_CONFIG = asNumber(field(_G, "Constants", "TraitConsts", "INSPECT_TRAIT_CONFIG_ID")) or -1
+
+-- A node the game says is shown and placed.
+local function placedNode(configID: number, nodeID: number): TraitNodeInfo?
+    local ni = errors.tryValue(C_Traits.GetNodeInfo, configID, nodeID)
+    if not (ni and ni.isVisible ~= false and asNumber(ni.posX) and asNumber(ni.posY) and ni.maxRanks > 0) then
+        return nil
+    end
+    return ni
+end
+
+local VIEW_CONFIG = asNumber(field(_G, "Constants", "TraitConsts", "VIEW_TRAIT_CONFIG_ID"))
+local EDGE_VISUAL = asNumber(field(Enum, "TraitEdgeType", "VisualOnly"))
+local EDGE_REQUIRED = asNumber(field(Enum, "TraitEdgeType", "RequiredForAvailability"))
+local SELECTION = asNumber(field(Enum, "TraitNodeType", "Selection"))
+
+-- A class and its tree.
+export type ClassInfo = { classID: number, file: string, name: string, specID: number, treeID: number }
+export type Classes = { byFile: { [string]: ClassInfo }, list: ClassInfo[] }
+
+-- A tree of a build's class as builds need it (UI/TalentBuilds' shape, and
+-- `trees`: the three classic trees, as the page draws them).
+export type BuildCluster = { name: string, nodes: BuildTalent[], links: { from: BuildTalent, to: BuildTalent }[] }
+export type BuildTree = {
+    file: string,
+    classID: number,
+    specID: number,
+    treeID: number,
+    configID: number,
+    order: number[],
+    byID: { [number]: BuildTalent },
+    trees: BuildCluster[],
+}
+
+-- A node of a build's tree with its place, and its arrows (BuildTree).
+export type Placed = { node: BuildTalent, x: number, y: number, edges: TraitOutEdgeInfo[] }
+
+-- What Talents' Collect keeps between reads (the module's own fields):
+-- each node's learned rank (`learned`, read for the config `learnedFor`),
+-- and whether planned changes the counts can't see were found
+-- (`unseenStaged`).
+export interface Baseline
+    learned: { [number]: number }
+    learnedFor: number?
+    unseenStaged: boolean
+end
+
+-- Everything the page shows, for a config (Talents' Collect picks which).
+export function collect(configID: number, baseline: Baseline): Collected?
+    local info = errors.tryValue(C_Traits.GetConfigInfo, configID)
+    local treeID = info and info.treeIDs[1]
+    if not treeID then
+        return nil
+    end
+    -- what is learned: each node's rank while nothing is planned (the
+    -- game's committed rank counts planned ones too on Forever: found in
+    -- game, Apply stayed off and right-click did nothing)
+    local staged = errors.tryValue(C_Traits.ConfigHasStagedChanges, configID) == true
+    if not staged or baseline.learnedFor ~= configID then
+        baseline.learnedFor = configID
+        if not staged then
+            baseline.learned = {}
+        end
+    end
+    local learned = baseline.learned
+    -- the nodes, placed
+    local nodes: PageNode[], byID: { [number]: PageNode } = {}, {}
+    local minY: number? = nil
+    for _, nodeID in ipairs(errors.tryValue(C_Traits.GetTreeNodes, treeID) or {}) do
+        local ni = placedNode(configID, nodeID)
+        local talent = ni and talentOf(configID, ni)
+        if ni and talent then
+            local current = ni.currentRank or ni.activeRank or 0
+            if not staged then
+                learned[nodeID] = current
+            end
+            local base = learned[nodeID]
+            if base == nil then
+                base = math.min(ni.activeRank or 0, current)
+            end
+            base = math.min(base, current)
+            local n: PageNode = {
+                id = nodeID,
+                x = ni.posX,
+                y = ni.posY,
+                max = ni.maxRanks,
+                rank = base,
+                pending = current - base,
+                canPurchase = ni.canPurchaseRank == true,
+                canRefund = ni.canRefundRank == true,
+                open = ni.isAvailable == true and ni.meetsEdgeRequirements == true,
+                meetsEdges = ni.meetsEdgeRequirements == true,
+                conditions = ni.conditionIDs or {},
+                gate = gateOf(configID, ni.conditionIDs or {}),
+                edges = ni.visibleEdges or {},
+                name = talent.name,
+                icon = talent.icon,
+                spellID = talent.spellID,
+                entryID = talent.entryID,
+                row = 0,
+                col = 0,
+                requires = {},
+            }
+            nodes[#nodes + 1] = n
+            byID[nodeID] = n
+            minY = math.min(minY or n.y, n.y)
+        end
+    end
+    if #nodes == 0 or not minY then
+        return nil
+    end
+    local top = minY
+    local clusters = clusterNodes(nodes)
+    -- their names and points: the tree's groups, in order
+    local displays = errors.tryValue(C_Traits.GetGroupDisplayInfoByTreeID, treeID) or {}
+    local groupIDs: number[] = {}
+    for i, d in ipairs(displays) do
+        groupIDs[i] = d.groupID
+    end
+    local spentBy: { [number]: number } = {}
+    if #groupIDs > 0 then
+        for _, g in ipairs(errors.tryValue(C_Traits.GetGroupCurrencyInfo, configID, groupIDs) or {}) do
+            local c = g.currencyInfos[1]
+            local spent = c and asNumber(c.spent)
+            if spent then
+                spentBy[g.traitNodeGroupID] = spent
+            end
+        end
+    end
+    local trees: PageTree[] = {}
+    for i, c in ipairs(clusters) do
+        local display = displays[i]
+        local t: PageTree = {
+            name = display and display.displayName or ("Tree " .. i),
+            icon = display and display.icon,
+            groupID = display and display.groupID,
+            nodes = {},
+            links = {},
+            points = 0,
+        }
+        local points = 0
+        for _, n in ipairs(c.nodes) do
+            n.col, n.row = gridCell(n.x, n.y, c.minX, c.maxX, top)
+            n.tree = t
+            t.nodes[#t.nodes + 1] = n
+            points = points + n.rank + n.pending
+        end
+        -- the game's count when it has one (planned points not in it)
+        local group = t.groupID
+        local spent = group and spentBy[group]
+        t.points = spent and math.max(spent, points) or points
+        trees[i] = t
+    end
+    -- the arrows (and who requires whom)
+    for _, n in ipairs(nodes) do
+        for _, e in ipairs(n.edges) do
+            local to = byID[e.targetNode]
+            local tree = n.tree
+            if to and tree and to.tree == tree then
+                table.insert(tree.links, { from = n, to = to, met = (n.rank + n.pending) >= n.max })
+                table.insert(to.requires, n)
+            end
+        end
+    end
+    -- the points to spend
+    local currency = errors.tryValue(C_Traits.GetTreeCurrencyInfo, configID, treeID, false)
+    local first = currency and currency[1]
+    local available = first and asNumber(first.quantity) or 0
+    local pending = 0
+    for _, n in ipairs(nodes) do
+        pending = pending + n.pending
+    end
+    -- planned changes the counts can't see still make Apply and Undo work
+    if staged and pending == 0 then
+        pending = 1
+        baseline.unseenStaged = true
+    else
+        baseline.unseenStaged = false
+    end
+    return {
+        configID = configID,
+        treeID = treeID,
+        trees = trees,
+        available = available,
+        pending = pending,
+        staged = staged,
+    }
+end
+
+-- Why a node can't take a point: the tree's points, or a talent above it.
+export function requirement(configID: number, n: PageNode): string?
+    for _, condID in ipairs(n.conditions) do
+        local c = errors.tryValue(C_Traits.GetConditionInfo, configID, condID)
+        local need = c and asNumber(c.spentAmountRequired)
+        local tree = n.tree
+        -- (in its own tree: the game's isMet counts every tree's points)
+        local short = c ~= nil and need ~= nil and need > 0 and
+            (c.isMet == false or (tree ~= nil and tree.points < need))
+        if c and short then
+            return ("Requires %d points in %s"):format(need, tree and tree.name or "this tree")
+        end
+    end
+    if not n.meetsEdges then
+        for _, from in ipairs(n.requires) do
+            if from.rank + from.pending < from.max then
+                return ("Requires %d %s in %s"):format(from.max, from.max == 1 and "point" or "points", from.name)
+            end
+        end
+    end
+    return nil
+end
+
+-- The classes and their trees (Talents' Classes keeps them).
+export function readClasses(): Classes
+    local byFile: { [string]: ClassInfo } = {}
+    local list: ClassInfo[] = {}
+    for classID = 1, 13 do
+        local name, file = try(GetClassInfo, classID)
+        local className, classFile = asString(name), asString(file)
+        if className and classFile then
+            local specID = asNumber((try(GetSpecializationInfoForClassID, classID, 1)))
+            local treeID = specID and errors.tryValue(C_ClassTalents.GetTraitTreeForSpec, specID)
+            if specID and treeID then
+                local c: ClassInfo = {
+                    classID = classID,
+                    file = classFile,
+                    name = className,
+                    specID = specID,
+                    treeID = treeID,
+                }
+                byFile[classFile] = c
+                list[#list + 1] = c
+            end
+        end
+    end
+    table.sort(list, function(a: ClassInfo, b: ClassInfo): boolean
+        return a.name < b.name
+    end)
+    local out: Classes = { byFile = byFile, list = list }
+    return out
+end
+
+-- A class's tree as builds need it. Your own from your talents; another
+-- class's through the game's view loadout (else your config answers for
+-- it too: the probe read every class's both ways). Talents' BuildTree
+-- keeps them by class.
+export function readBuildTree(file: string, class: ClassInfo): BuildTree?
+    local configs: number[] = {}
+    local active = asNumber(errors.tryValue(C_ClassTalents.GetActiveConfigID))
+    if file == CLASS then
+        if active then
+            configs[1] = active
+        end
+    elseif VIEW_CONFIG and type(field(C_ClassTalents, "InitializeViewLoadout")) == "function" then
+        try(C_ClassTalents.InitializeViewLoadout, class.specID, 60)
+        try(C_ClassTalents.ViewLoadout, {})
+        configs[1] = VIEW_CONFIG
+        if active then
+            configs[2] = active
+        end
+    end
+    local order = errors.tryValue(C_Traits.GetTreeNodes, class.treeID) or {}
+    -- each node with its place, and its arrows
+    local configID: number? = nil
+    local byID: { [number]: BuildTalent } = {}
+    local placed: Placed[] = {}
+    local minY: number? = nil
+    for _, cfg in ipairs(configs) do
+        byID, placed, minY = {}, {}, nil
+        for _, nodeID in ipairs(order) do
+            local ni = placedNode(cfg, nodeID)
+            local talent = ni and talentOf(cfg, ni)
+            if ni and talent then
+                local n: BuildTalent = {
+                    id = nodeID,
+                    max = ni.maxRanks,
+                    name = talent.name,
+                    icon = talent.icon,
+                    entryID = talent.entryID,
+                    entryIDs = ni.entryIDs or {},
+                    requires = {},
+                    choice = SELECTION ~= nil and ni.type == SELECTION,
+                }
+                placed[#placed + 1] = { node = n, x = ni.posX, y = ni.posY, edges = ni.visibleEdges or {} }
+                byID[nodeID] = n
+                minY = math.min(minY or ni.posY, ni.posY)
+            end
+        end
+        if #placed > 0 then
+            configID = cfg
+            break
+        end
+    end
+    if not (configID and minY) then
+        return nil
+    end
+    local top = minY
+    -- the trees, as Collect splits them
+    local clusters = clusterNodes(placed)
+    local displays = errors.tryValue(C_Traits.GetGroupDisplayInfoByTreeID, class.treeID) or {}
+    local trees: BuildCluster[] = {}
+    for i, c in ipairs(clusters) do
+        local display = displays[i]
+        local t: BuildCluster = { name = display and display.displayName or ("Tree " .. i), nodes = {}, links = {} }
+        for _, p in ipairs(c.nodes) do
+            local col, row = gridCell(p.x, p.y, c.minX, c.maxX, top)
+            p.node.col, p.node.row = col, row
+            p.node.treeIndex, p.node.treeName = i, t.name
+            t.nodes[#t.nodes + 1] = p.node
+        end
+        trees[i] = t
+    end
+    -- the arrows: what each talent needs (any one of "sufficient" arrows,
+    -- every "required" one; drawn-only arrows need nothing)
+    for _, p in ipairs(placed) do
+        local n = p.node
+        for _, e in ipairs(p.edges) do
+            local to = byID[e.targetNode]
+            if to and e.type ~= EDGE_VISUAL then
+                local requires = to.requires or {}
+                to.requires = requires
+                requires[#requires + 1] = n.id
+                if e.type == EDGE_REQUIRED then
+                    to.requiresAll = true
+                end
+                local index = n.treeIndex
+                if index and to.treeIndex == index then
+                    table.insert(trees[index].links, { from = n, to = to })
+                end
+            end
+        end
+    end
+    local tree: BuildTree = {
+        file = file,
+        classID = class.classID,
+        specID = class.specID,
+        treeID = class.treeID,
+        configID = configID,
+        order = order,
+        byID = byID,
+        trees = trees,
+    }
+    return tree
+end

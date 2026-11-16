@@ -16,17 +16,11 @@
 -- wheel zooms (an overlay passes the clicks through). Turned off: a /reload
 -- hands it all back.
 
-import SuuUI from "/Core/API"
-import * as dress from "/UI/Dress"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type Position from "/EditMode/EditMode"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, Position, Text, TooltipData, TooltipLine from "/Core/API"
 import isSecret, isNumber from "wowlua:secret"
 import hook from "wowlua:hooks"
-import after, every from "wowlua:timer"
 import defer from "wowlua:combat"
-import type Text from "/UI/Text"
-import type TooltipData, TooltipLine from "/UI/Tooltip"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 
@@ -138,7 +132,7 @@ export class Ring
         self.over = over
         -- a theme's dress for the minimap (0.40): vines round it, a perched
         -- parrot, fireflies
-        dress.register(over, "minimap")
+        SuuUI.UI.Dress(over, "minimap")
         -- the panel shadow under the disc (round)
         self.shadow = circleTex(disc, "circle-soft", "surface", "BACKGROUND", -8)
         UI.Paint(self.shadow, "shade", 0.45)
@@ -396,7 +390,6 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
     pendingTheme: boolean? = nil
     placing: boolean? = nil
     preview: MapBlock? = nil
-    ticker: TickerHandle? = nil
 
     constructor()
         super({
@@ -563,10 +556,8 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
                 return
             end
             if Minimap:GetParent() ~= block.disc then
-                after(0, function()
-                    if self:IsEnabled() then
-                        self:PlaceMinimap()
-                    end
+                self:After(0, function()
+                    self:PlaceMinimap()
                 end)
             end
         end)
@@ -743,10 +734,7 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         self:RegisterMover(block, { key = "position", label = "Minimap" })
         self:RegisterSettings(SECTION)
         -- one frame later: moving it during a panel opening taints map pins
-        after(0, function()
-            if not self:IsEnabled() then
-                return
-            end
+        self:After(0, function()
             self:PlaceMinimap()
             self:GuardParent()
             if not self.overlay then
@@ -796,13 +784,9 @@ class MinimapModule extends Module<typeof(DEFAULTS)>
         self:OnGameEvent("CVAR_UPDATE", function()
             self:UpdateClock()
         end)
-        if not self.ticker then
-            self.ticker = every(10, function()
-                if self:IsEnabled() then
-                    self:UpdateClock()
-                end
-            end)
-        end
+        self:Every(10, function()
+            self:UpdateClock()
+        end)
         self:WatchAll({ "size", "zone", "clock" }, function()
             self:Relayout()
             local preview = self.preview

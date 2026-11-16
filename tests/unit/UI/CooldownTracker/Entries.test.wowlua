@@ -1,0 +1,112 @@
+-- UI/CooldownTracker/Entries: what you know of an entry (its rank, a
+-- cooldown group's member, its art).
+
+import test, expect, beforeAll from "wowlua:test"
+import * as mock from "wowlua:mock"
+import knownRank, knowsEntry, cooldownMember, iconFor, TrackerEntry, TrackerCondition, TrackerWhen from "/UI/CooldownTracker/Entries"
+import expectNoErrors from "../../../helpers"
+
+-- Test spells: known ones and an unknown one.
+const KNOWN_LOW = 900001
+const KNOWN_HIGH = 900002
+const UNKNOWN = 900003
+const OTHER = 900004
+
+@beforeAll
+local function world()
+    mock.defineSpell(KNOWN_LOW, { name = "Test Strike", iconID = 1001, known = true })
+    mock.defineSpell(KNOWN_HIGH, { name = "Test Strike", iconID = 1002, known = true })
+    mock.defineSpell(UNKNOWN, { name = "Test Unknown", iconID = 1003, known = false })
+    mock.defineSpell(OTHER, { name = "Overpower", iconID = 1004, known = true })
+end
+
+local function cond(c: TrackerCondition, match: string?): TrackerWhen
+    return { match = match, conditions = { c } }
+end
+
+--------------------------------------------------------------------------------
+-- Entries and ranks
+--------------------------------------------------------------------------------
+
+@test("knownRank: the highest rank you know")
+local function ranks()
+    expect(knownRank({ ids = { KNOWN_LOW, KNOWN_HIGH, UNKNOWN } })).toBe(KNOWN_HIGH)
+    expect(knownRank({ ids = { KNOWN_LOW, UNKNOWN } })).toBe(KNOWN_LOW)
+    expect(knownRank({ ids = { UNKNOWN } })).toBeNil()
+    expect(knownRank({ ids = {} })).toBeNil()
+    expectNoErrors()
+end
+
+-- Consecration as the client has it: Rank 1 is the highest ID (the recorded
+-- C_Spell.GetSpellSubtext answers of WoW Forever).
+local CONSECRATION = { 20116, 20922, 20923, 20924, 26573 }
+local CONSECRATION_RANKS: { [number]: string } = {
+    [26573] = "Rank 1",
+    [20116] = "Rank 2",
+    [20922] = "Rank 3",
+    [20923] = "Rank 4",
+    [20924] = "Rank 5",
+}
+local function consecration(knownUpTo: number)
+    for id, rank in pairs(CONSECRATION_RANKS) do
+        local n = assert(tonumber(rank:match("%d+")))
+        mock.defineSpell(id, { name = "Consecration", iconID = 135926, subtext = rank, known = n <= knownUpTo })
+    end
+end
+
+@test("knownRank: by rank, not by ID (Consecration's Rank 1 is its highest ID); a tie, the highest ID")
+local function ranksNotIDs()
+    consecration(5)
+    expect(knownRank({ ids = CONSECRATION })).toBe(20924)
+    consecration(3)
+    expect(knownRank({ ids = CONSECRATION })).toBe(20922)
+    consecration(1)
+    expect(knownRank({ ids = CONSECRATION })).toBe(26573)
+    -- spells without ranks: the highest known ID, as before
+    expect(knownRank({ ids = { KNOWN_LOW, KNOWN_HIGH } })).toBe(KNOWN_HIGH)
+    expectNoErrors()
+end
+
+@test("knowsEntry: a single entry's rank, or any group member's")
+local function knows()
+    expect(knowsEntry({ ids = { KNOWN_LOW } })).toBe(true)
+    expect(knowsEntry({ ids = { UNKNOWN } })).toBe(false)
+    expect(knowsEntry({ group = true, members = { { ids = { UNKNOWN } }, { ids = { KNOWN_LOW } } } })).toBe(true)
+    expect(knowsEntry({ group = true, members = { { ids = { UNKNOWN } } } })).toBe(false)
+    expect(knowsEntry({ group = true })).toBe(false)
+    expectNoErrors()
+end
+
+@test("cooldownMember: the last member you know, with the group's behaviour")
+local function member()
+    local g: TrackerEntry = {
+        group = true,
+        name = "G",
+        icon = 5,
+        show = "ready",
+        effect = "you",
+        members = {
+            { name = "A", ids = { KNOWN_LOW } },
+            { name = "B", ids = { UNKNOWN } },
+            { name = "C", ids = {} },
+            { name = "D", ids = { OTHER }, when = cond({ type = "combat" }) },
+        },
+    }
+    local e = assert(cooldownMember(g))
+    expect(e.name).toBe("D")
+    expect(e.show).toBe("ready")
+    expect(e.group).toBeNil()
+    expect(e.icon).toBeNil()
+    expect(e.memberWhen).toBe(assert(g.members)[4].when)
+    expect(cooldownMember({ group = true, members = { { name = "B", ids = { UNKNOWN } } } })).toBeNil()
+    expect(cooldownMember({ group = true })).toBeNil()
+    expectNoErrors()
+end
+
+@test("iconFor: the entry's icon, the known rank's, else the first ID's")
+local function icons()
+    expect(iconFor({ icon = KNOWN_LOW, ids = { OTHER } })).toBe(1001)
+    expect(iconFor({ ids = { KNOWN_LOW, KNOWN_HIGH } })).toBe(1002)
+    expect(iconFor({ ids = { UNKNOWN } })).toBe(1003)
+    expectNoErrors()
+end

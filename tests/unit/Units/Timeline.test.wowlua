@@ -18,7 +18,9 @@ import * as mock from "wowlua:mock"
 import SuuUI from "/Core/API"
 import internal M, SECTION from "/Units/Timeline"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors from "../../helpers"
+import expectNoErrors, cycle, holdings, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as comm from "/Core/Comm"
 
 import type EncounterTimeline from "/UI/Timeline"
 import * as tbl from "wowlua:table"
@@ -81,8 +83,8 @@ local function alerts(): { [string]: string }
 end
 
 -- An addon message as the game sends it.
-local function addonMessage(prefix: string, text: string, sender: string)
-    mock.fireEvent("CHAT_MSG_ADDON", prefix, text, "PARTY", sender, "", 0, 0, "", 0)
+local function addonMessage(prefix: string, text: string, sender: string, channel: string?)
+    mock.fireEvent("CHAT_MSG_ADDON", prefix, text, channel or "PARTY", sender, "", 0, 0, "", 0)
 end
 
 local function labels(sorted: boolean?): string
@@ -241,7 +243,7 @@ local function fromOthers()
     -- not ours, our own echo, nonsense: nothing
     addonMessage("Other", "PULL\t9", "Brannoc Ironhand-Realm")
     addonMessage("SuuUI", "HELLO", "Brannoc Ironhand-Realm")
-    M:OnMessage("SuuUI", "PULL\t9", "PARTY", SuuUI.FullName("player"))
+    addonMessage("SuuUI", "PULL\t9", tostring(GetUnitName("player", true)))
     expect(M.pullEnds).toBeNil()
     mock.player:enterCombat()
     mock.advanceFrames(1)
@@ -327,6 +329,7 @@ local function dbm()
     expect(#M:SourceOptions()).toBe(2)
     M:Set("source", "dbm")
     expect(options.HideDBMWarnings).toBe(true)
+    expect(M:CharData().dbmWarningsWas).toBe("false")
     fire("DBM_TimerBegin", nil, "t1", "Lava Burst", 12, 135813, nil, nil, 4)
     fire("DBM_TimerBegin", nil, "t2", "Pull in", 10, nil)
     expect(labels()).toBe("Lava Burst")
@@ -448,4 +451,233 @@ local function disabled()
     expect(M.pullEnds).toBeNil()
     expect(tl():IsShown()).toBe(false)
     expect(M.trackerOff).toBeNil()
+end
+
+@test("turned off and on through the registry with DBM's warnings hidden: given back while off, hidden again when on")
+local function dbmWarningsAcrossToggle()
+    local options = { HideDBMWarnings = false }
+    mock.setField(_G, "DBM", { Options = options, RegisterCallback = function() end })
+    M:Set("source", "dbm")
+    expect(options.HideDBMWarnings).toBe(true)
+    expect(M:CharData().dbmWarningsWas).toBe("false")
+    settings.set("timeline", "enabled", false)
+    expect(options.HideDBMWarnings).toBe(false)
+    expect(M:CharData().dbmWarningsWas).toBeNil()
+    -- on again (as at every login): hidden again, the player's value kept
+    settings.set("timeline", "enabled", true)
+    expect(M:IsEnabled()).toBe(true)
+    expect(options.HideDBMWarnings).toBe(true)
+    expect(M:CharData().dbmWarningsWas).toBe("false")
+    M:Set("source", "suui")
+    expect(options.HideDBMWarnings).toBe(false)
+    expectNoErrors()
+end
+
+@test("DBM's warnings across a profile switch: given back in a profile that doesn't hide them, hidden again on the way back")
+local function dbmWarningsAcrossProfiles()
+    local options = { HideDBMWarnings = false }
+    mock.setField(_G, "DBM", { Options = options, RegisterCallback = function() end })
+    -- (a profile with SuuUI as the source, made first)
+    local was = settings.profiles.current()
+    settings.profiles.create("ZZ Timeline")
+    M:Set("source", "dbm")
+    expect(options.HideDBMWarnings).toBe(true)
+    settings.profiles.use("ZZ Timeline")
+    expect(M:Get("source")).toBe("suui")
+    expect(options.HideDBMWarnings).toBe(false)
+    expect(M:CharData().dbmWarningsWas).toBeNil()
+    -- the player's own value, changed meanwhile, is what's kept next time
+    options.HideDBMWarnings = true
+    settings.profiles.use(was)
+    expect(options.HideDBMWarnings).toBe(true)
+    expect(M:CharData().dbmWarningsWas).toBe("true")
+    options.HideDBMWarnings = true
+    M:Set("source", "suui")
+    expect(options.HideDBMWarnings).toBe(true)
+    settings.profiles.delete("ZZ Timeline")
+    expectNoErrors()
+end
+
+@test("DBM's warnings at logout: the player's own value saved, hidden again at the next login; a profile's old value moved")
+local function dbmWarningsAtLogout()
+    local options = { HideDBMWarnings = false }
+    mock.setField(_G, "DBM", { Options = options, RegisterCallback = function() end })
+    M:Set("source", "dbm")
+    expect(options.HideDBMWarnings).toBe(true)
+    mock.fireEvent("PLAYER_LOGOUT")
+    expect(options.HideDBMWarnings).toBe(false)
+    expect(M:CharData().dbmWarningsWas).toBe("false")
+    -- the next login
+    settings.set("timeline", "enabled", false)
+    options.HideDBMWarnings = true
+    M:CharData().dbmWarningsWas = nil
+    -- (what 0.46 left in the profile: the player's value "false")
+    M:Set("dbmWarningsWas", "false")
+    settings.set("timeline", "enabled", true)
+    expect(M:Get("dbmWarningsWas")).toBe("")
+    expect(M:CharData().dbmWarningsWas).toBe("false")
+    expect(options.HideDBMWarnings).toBe(true)
+    M:Set("source", "suui")
+    expect(options.HideDBMWarnings).toBe(false)
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- The pull countdown from other players' SuuUI (GRP-21, TEST-10)
+--------------------------------------------------------------------------------
+
+-- Placeholder group members, made once.
+local member1 = mock.spawnUnit({ name = "Member1", player = true, class = "MAGE", level = 30, reaction = "friendly" })
+local member2 = mock.spawnUnit({ name = "Member2", player = true, class = "PRIEST", level = 30, reaction = "friendly" })
+
+@test("PULL as an older SuuUI sends it: from someone in your party, by its exact text")
+local function pullWire()
+    local shown = alerts()
+    mock.group:add(member1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "PARTY", "Member1-Realm")
+    expect(shown.pull).toBe("Pull in 10 · from Member1")
+    -- 0 cancels, a negative number too (an old SuuUI sends what was typed)
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t0", "PARTY", "Member1-Realm")
+    expect(M.pullEnds).toBeNil()
+    M:StartPull(10)
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t-5", "PARTY", "Member1-Realm")
+    expect(M.pullEnds).toBeNil()
+    -- more than a minute: held to one
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t90", "PARTY", "Member1-Realm")
+    expect(math.floor(assert(M.pullEnds) - GetTime() + 0.5)).toBe(60)
+end
+
+@test("PULL refused: a whisper, a stranger, a raid member who neither leads nor assists, nonsense, combat")
+local function pullRefused()
+    local shown = alerts()
+    -- a whisper from anyone on the realm
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "WHISPER", "Stranger-Realm")
+    expect(M.pullEnds).toBeNil()
+    -- someone the group doesn't hold, on the party's channel
+    mock.group:add(member1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "PARTY", "Stranger-Realm")
+    expect(M.pullEnds).toBeNil()
+    -- nonsense and numbers out of range
+    for _, text in ipairs({ "PULL\t99999999", "PULL\t1e3", "PULL\t", "PULL\t5.5", "PULL\tten", "PULL" }) do
+        mock.receiveAddonMessage("SuuUI", text, "PARTY", "Member1-Realm")
+    end
+    expect(M.pullEnds).toBeNil()
+    -- in a raid: the leader's only (you lead it; Member2 doesn't)
+    mock.group:add(member2, true)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "RAID", "Member2-Realm")
+    expect(M.pullEnds).toBeNil()
+    for i = 1, 3 do
+        local n = UnitName("raid" .. i)
+        if not issecretvalue(n) and n == "Member2" then
+            C_PartyInfo.PromoteToLeader("raid" .. i)
+        end
+    end
+    mock.advanceTime(1)
+    local leader = "Member2-Realm"
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "RAID", leader)
+    expect(M.pullEnds ~= nil).toBe(true)
+    M:CancelPull()
+    -- in combat: ignored, as the game's own countdown
+    mock.player:enterCombat()
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "RAID", leader)
+    expect(M.pullEnds).toBeNil()
+    expect(shown.pull).toBeNil()
+end
+
+@test("PULL flooded: one sender's starts held to two in two seconds")
+local function pullFlood()
+    local starts = 0
+    local start = M.StartPull
+    mock.stub(M, "StartPull", function(self: unknown, given: unknown, from: string?)
+        starts += 1
+        start(M, given, from)
+    end)
+    mock.group:add(member1)
+    for _ = 1, 50 do
+        mock.receiveAddonMessage("SuuUI", "PULL\t10", "PARTY", "Member1-Realm")
+    end
+    expect(starts).toBe(2)
+    mock.advanceTime(2.1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "PARTY", "Member1-Realm")
+    expect(starts).toBe(3)
+    expectNoErrors()
+end
+
+@test("PULL sent as an older SuuUI reads it: to the group's channel, nothing out of a group or in a fight")
+local function pullSent()
+    mock.setField(C_PartyInfo, "DoCountdown", nil)
+    local function pulls(): string[]
+        local out: string[] = {}
+        for _, m in ipairs(mock.sentAddonMessages()) do
+            if m.message:sub(1, 4) == "PULL" then
+                out[#out + 1] = m.message .. " " .. m.chatType
+            end
+        end
+        return out
+    end
+    local before = #pulls()
+    M:Pull(8)
+    expect(#pulls()).toBe(before)
+    M:CancelPull()
+    mock.group:add(member1)
+    M:Pull(8)
+    local sent = pulls()
+    expect(sent[#sent]).toBe("PULL\t8 PARTY")
+    M:CancelPull()
+end
+
+@test("turned off: a boss mod's timer doesn't bring the timeline back, and its anchor is gone")
+local function offStaysOff()
+    local callbacks: { [string]: Callback } = {}
+    mock.setField(_G, "DBM", {
+        Options = {},
+        RegisterCallback = function(_: unknown, event: string, fn: Callback)
+            callbacks[event] = fn
+        end,
+    })
+    M.hooked = nil
+    M:HookSources()
+    M:Set("source", "dbm")
+    expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
+    settings.set("timeline", "enabled", false)
+    expect(SuuUI.GetAnchor("encounterTimeline")).toBeNil()
+    expect(comm.count(M)).toBe(0)
+    assert(callbacks.DBM_TimerBegin)(nil, "t1", "Lava Burst", 12, 135813)
+    assert(callbacks.DBM_TimerUpdate)(nil, "t1", 2, 12)
+    expect(tl():IsShown()).toBe(false)
+    expect(next(M.addonTimers)).toBeNil()
+    -- nor a pull from the group
+    mock.group:add(member1)
+    mock.receiveAddonMessage("SuuUI", "PULL\t10", "PARTY", "Member1-Realm")
+    expect(M.pullEnds).toBeNil()
+    settings.set("timeline", "enabled", true)
+    expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
+    assert(callbacks.DBM_TimerBegin)(nil, "t2", "Lava Burst", 12, 135813)
+    expect(tl():IsShown()).toBe(true)
+    M:Set("source", "suui")
+    M.hooked = nil
+    expectNoErrors()
+end
+
+@test("off and on through the registry: nothing left behind (its addon message handler too), nothing doubled")
+local function leavesNothing()
+    local handlers = comm.count(M)
+    expect(handlers).toBe(1)
+    -- (a refresh timer an earlier test left goes with a first cycle)
+    cycle("timeline")
+    local c = cycle("timeline")
+    expect(c.off).toEqual(NOTHING)
+    expect(c.after).toEqual(c.before)
+    expect(comm.count(M)).toBe(handlers)
+    -- a countdown under way: its timers go with the module
+    M:StartPull(10)
+    settings.set("timeline", "enabled", false)
+    expect(M.pullEnds).toBeNil()
+    expect(holdings(M)).toEqual(NOTHING)
+    settings.set("timeline", "enabled", true)
+    expectNoErrors()
 end

@@ -1,0 +1,457 @@
+-- Units/Bags/Windows.wowlua
+-- The Bags module's two windows (see Units/Bags.wowlua): Windows builds the
+-- bags and bank windows once (the picker, the search across both, the Sort
+-- buttons, the rails, the header's Bags toggle, the sort's driver), opens
+-- and closes the bags as Blizzard's bag calls say (its bag frames kept
+-- under a hidden parent), places them beside the bank, and shows the bank
+-- at a banker with Blizzard's bank frame off screen. Windows works on the
+-- module it is made with (its windows and open state).
+
+import SuuUI from "/Core/API"
+import type Inventory from "/Core/API"
+import type BagsModule from "../Bags"
+import hook, hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+import Rail from "./Rails"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local try, field = errors.try, tbl.field
+local asString = secret.asString
+
+--------------------------------------------------------------------------------
+-- Opening with Blizzard's bags
+--------------------------------------------------------------------------------
+
+local hidden = CreateFrame("Frame")
+hidden:Hide()
+
+-- Open or closed is SuuUI's own state, following Blizzard's open, close and
+-- toggle calls (hooked) but never calling them: Blizzard's bag code run from
+-- SuuUI's code writes its frames' fields as SuuUI's, and Esc, which closes
+-- the bags first, then counted as an addon's in combat and couldn't close
+-- any window ("Interface action failed", found in game with the spells
+-- window: /suu probe taint). Of the calls of one moment the last to return
+-- (the outermost: ToggleAllBags after the CloseBag inside it) decides.
+local OPENS: { [string]: boolean } = { OpenAllBags = true, OpenBag = true, OpenBackpack = true }
+local CLOSES: { [string]: boolean } = { CloseAllBags = true, CloseBag = true, CloseBackpack = true }
+
+local function closeBank()
+    local close = field(C_Bank, "CloseBankFrame")
+    if type(close) ~= "function" then
+        close = field(_G, "CloseBankFrame")
+    end
+    try(close)
+end
+
+-- The window's name for a frame that opened the bags (the mail, a vendor).
+local function nameOfFrame(frame: unknown): string?
+    return asString(errors.tryMethod(frame, "GetName"))
+end
+
+-- The windows of the Bags module `m`: built, opened, closed and placed.
+export class Windows
+    readonly m: BagsModule
+
+    constructor(m: BagsModule)
+        self.m = m
+    end
+
+    -- A Blizzard frame under the hidden parent, kept there (if Blizzard moves it
+    -- again) while keep() says so.
+    function KeepHidden(f: Frame, keep: () -> boolean)
+        local m = self.m
+        if f:GetParent() ~= hidden then
+            f:SetParent(hidden)
+        end
+        if m.parentHooked[f] then
+            return
+        end
+        m.parentHooked[f] = true
+        hook(f, "SetParent", function(_: unknown, parent: unknown)
+            if parent ~= hidden and m:IsEnabled() and keep() then
+                m:After(0, function()
+                    if f:GetParent() ~= hidden and keep() then
+                        f:SetParent(hidden)
+                    end
+                end)
+            end
+        end)
+    end
+
+    -- Blizzard's bank frame opens and closes as always but out of sight: moved
+    -- off screen and see-through, not hidden (its OnShow opens your bags, its
+    -- OnHide ends the visit at the banker, Esc included). The game's panel
+    -- manager places it again whenever panels change: it goes back off screen
+    -- a frame later. With the setting off it returns to where Blizzard put it.
+    function HideBlizzardBank()
+        local m = self.m
+        local f = frames.find("BankFrame")
+        if not f then
+            return
+        end
+        local on = m:IsEnabled() and m:Get("bank")
+        if not m.bankHooked then
+            m.bankHooked = true
+            m.bankClamped = f:IsClampedToScreen() and true or false
+            hook(f, "SetPoint", function(_: unknown, ...: unknown)
+                if m.movingBank then
+                    return
+                end
+                m.bankPoint = { ... } -- where Blizzard put it
+                if m:IsEnabled() and m:Get("bank") then
+                    self:QueueBankAway()
+                end
+            end)
+            hookScript(f, "OnShow", function()
+                if m:IsEnabled() and m:Get("bank") then
+                    self:BankAway()
+                end
+            end)
+        end
+        if on then
+            self:BankAway()
+        else
+            f:SetAlpha(1)
+            f:SetClampedToScreen(m.bankClamped)
+            local point = m.bankPoint
+            if point then
+                m.movingBank = true
+                f:ClearAllPoints()
+                errors.tryMethod(f, "SetPoint", unpack(point))
+                m.movingBank = false
+            end
+        end
+    end
+
+    function BankAway()
+        local f = frames.find("BankFrame")
+        if not f then
+            return
+        end
+        f:SetAlpha(0)
+        f:SetClampedToScreen(false)
+        self.m.movingBank = true
+        f:ClearAllPoints()
+        f:SetPoint("BOTTOMRIGHT", UIParent, "TOPLEFT", -200, 200)
+        self.m.movingBank = false
+    end
+
+    function QueueBankAway()
+        local m = self.m
+        if m.bankAwayQueued then
+            return
+        end
+        m.bankAwayQueued = true
+        local f = frames.find("BankFrame")
+        if f then
+            f:SetAlpha(0)
+        end
+        m:After(0, function()
+            m.bankAwayQueued = false
+            if m:IsEnabled() and m:Get("bank") then
+                self:BankAway()
+            end
+        end)
+    end
+
+    -- Blizzard's bag frames under a hidden parent: they keep opening and
+    -- closing (so every way of opening bags still works), out of sight.
+    function HideBlizzardBags()
+        local names = { "ContainerFrameContainer", "ContainerFrameCombinedBags" }
+        for i = 1, (NUM_CONTAINER_FRAMES or 13) do
+            names[#names + 1] = "ContainerFrame" .. i
+        end
+        local container = frames.find("ContainerFrameContainer")
+        for _, name in ipairs(names) do
+            local f = frames.find(name)
+            -- frames inside Blizzard's container go with it
+            if f and f ~= container and container and f:GetParent() == container then
+                f = nil
+            end
+            if f then
+                self:KeepHidden(f, function(): boolean
+                    return true
+                end)
+            end
+        end
+    end
+
+    function BagCall(name: string, frame: unknown)
+        local m = self.m
+        local inv = m.inv
+        local shown = inv ~= nil and inv:IsShown()
+        -- Blizzard's outer calls make inner ones first (OpenAllBags opens the
+        -- backpack and each bag, CloseAllBags closes them): whether the window
+        -- was open is read at the first call of the moment.
+        if not m.syncQueued then
+            m.burstShown, m.burstOpenedBy = shown, m.openedBy
+        end
+        if OPENS[name] then
+            -- opened for a window (a vendor, the mail): closed with it, unless
+            -- the bags were open before (Blizzard's own rule)
+            if name == "OpenAllBags" then
+                if not m.burstShown then
+                    m.openedBy = nameOfFrame(frame)
+                end
+            end
+            m.wantOpen = true
+        elseif CLOSES[name] then
+            local by = name == "CloseAllBags" and nameOfFrame(frame) or nil
+            if by then
+                -- another window's bags closing: yours stay as they were. (The
+                -- bag-by-bag closes Blizzard made inside this call came in
+                -- too: bags you had opened SuuUI's way, or were open before,
+                -- closed with a vendor or the mail.)
+                if by ~= m.burstOpenedBy then
+                    m.wantOpen, m.openedBy = m.burstShown, m.burstOpenedBy
+                    self:QueueSync()
+                    return
+                end
+            end
+            -- one bag closing (the game closes a bag taken off its slot) leaves
+            -- the window, which shows every bag, open (found in game)
+            if name == "CloseBag" and frame ~= 0 then
+                return
+            end
+            m.openedBy = nil
+            m.wantOpen = false
+        else -- a toggle
+            m.openedBy = nil
+            m.wantOpen = not shown
+        end
+        self:QueueSync()
+    end
+
+    -- SuuUI's own ways (the micro menu, the close button): its window only.
+    function SetOpen(on: boolean)
+        self.m.openedBy = nil
+        self.m.wantOpen = on
+        self:Sync()
+    end
+
+    function Toggle()
+        local inv = self.m.inv
+        self:SetOpen(not (inv and inv:IsShown()))
+    end
+
+    -- The bags at their place, or beside the bank while it is open.
+    function PlaceBags()
+        local m = self.m
+        local inv, bank = m.inv, m.bank
+        if not inv then
+            return
+        end
+        inv:ClearAllPoints()
+        if bank and bank:IsShown() then
+            -- the bags' rail moves to their right side here (asked for in game)
+            inv:SetPoint("TOPLEFT", bank, "TOPRIGHT", S["space-5"], 0)
+        else
+            local pos = m:Get("position")
+            inv:SetPoint(pos.point or "CENTER", SuuUI.Root, pos.point or "CENTER", pos.x or 0, pos.y or 0)
+        end
+    end
+
+    function Sync()
+        local m = self.m
+        local inv = m.inv
+        if not inv then
+            return
+        end
+        local open = m.wantOpen
+        if open and not inv:IsShown() then
+            self:PlaceBags()
+            inv:Show()
+            m.savedBags:UpdatePicker()
+            m:Refresh()
+        elseif not open and inv:IsShown() then
+            inv:Hide()
+        end
+    end
+
+    -- At a banker (BANKFRAME_OPENED) and away again.
+    function ShowBank()
+        local m = self.m
+        local bank = m.bank
+        if not (bank and m:Get("bank")) then
+            return
+        end
+        self:HideBlizzardBank()
+        bank:Show()
+        m:RebuildBank()
+        self:PlaceBags()
+        m.rails:DrawBagRail()
+    end
+
+    function HideBank()
+        local bank = self.m.bank
+        if not bank or not bank:IsShown() then
+            return
+        end
+        bank:Hide()
+        self:PlaceBags()
+        self.m.rails:DrawBagRail()
+    end
+
+    function QueueSync()
+        local m = self.m
+        if m.syncQueued then
+            return
+        end
+        m.syncQueued = true
+        m:After(0, function()
+            m.syncQueued = false
+            if m:IsEnabled() then
+                self:Sync()
+            end
+        end)
+    end
+
+    -- The windows, the rails and the sort's driver, once.
+    function Build()
+        local m = self.m
+        if m.inv then
+            return
+        end
+        local inv = UI.Inventory(SuuUI.Root, {
+            name = "SuuUIBags",
+            title = "Bags",
+            columns = m:Get("columns"),
+            characters = true,
+        })
+        local bank = UI.Inventory(SuuUI.Root, { name = "SuuUIBank", title = "Bank", columns = m:Get("columns") })
+        m.inv, m.bank = inv, bank
+        local who, view, all = inv.who, inv.view, inv.all
+        if who then
+            who.onChange = function(key: string)
+                m:Guard(function()
+                    if m.sorting and key ~= m:CharKey() then
+                        m.sortRun:StopSort("you picked another character's bags")
+                    end
+                    m.who = key
+                    m:Refresh()
+                end)()
+            end
+        end
+        if view then
+            view.onChange = function(v: string)
+                m:Guard(function()
+                    m.view = v
+                    m:Refresh()
+                end)()
+            end
+        end
+        if all then
+            all.onChange = function(on: boolean)
+                m:Guard(function()
+                    inv.search.placeholder:SetValue(on and "Search every character" or "Search")
+                    m:Refresh()
+                end)()
+            end
+        end
+        -- back to your own bags when it closes
+        inv:HookScript("OnHide", function()
+            m.who, m.view, m.query = nil, "bags", ""
+            m.itemUse:HideUse()
+        end)
+        inv:SetFrameStrata("MEDIUM")
+        inv:SetToplevel(true)
+        inv:EnableMouse(true)
+        inv:Hide()
+        inv.onClose = function()
+            self:SetOpen(false)
+        end
+        inv.sort:SetScript("OnClick", function()
+            m:Guard(function()
+                m.sortRun:Sort(false)
+            end)()
+        end)
+        bank:SetFrameStrata("MEDIUM")
+        bank:SetToplevel(true)
+        bank:EnableMouse(true)
+        bank:Hide()
+        bank.onClose = closeBank
+        bank.sort:SetScript("OnClick", function()
+            m:Guard(function()
+                m.sortRun:Sort(true)
+            end)()
+        end)
+        -- a sort stops when its window closes, or another character's bags show
+        inv:HookScript("OnHide", function()
+            local st = m.sorting
+            if st and st.inv == inv then
+                m.sortRun:StopSort("the bags closed")
+            end
+        end)
+        bank:HookScript("OnHide", function()
+            local st = m.sorting
+            if st and st.inv == bank then
+                m.sortRun:StopSort("the bank closed")
+            end
+        end)
+        local driver = CreateFrame("Frame")
+        driver:Hide()
+        driver:SetScript("OnUpdate", function()
+            m:Guard(function()
+                m.sortRun:SortTick()
+            end)()
+        end)
+        m.sortDriver = driver
+        -- one search across both windows; it ends with them
+        local function search(from: Inventory, other: Inventory)
+            from.search.onTextChanged = function(text: string)
+                m:Guard(function()
+                    other.search:SetValue(text or "")
+                    try(field(C_Container, "SetItemSearch"), text or "")
+                    local wasLive = m:IsLive()
+                    m.query = text or ""
+                    if not (wasLive and m:IsLive()) then
+                        m:QueueRefresh()
+                    end
+                end)()
+            end
+            from:HookScript("OnHide", function()
+                if other:IsShown() then
+                    return
+                end
+                if from.search.edit:GetText() ~= "" or other.search.edit:GetText() ~= "" then
+                    from.search:SetValue("")
+                    other.search:SetValue("")
+                    try(field(C_Container, "SetItemSearch"), "")
+                end
+            end)
+        end
+        search(inv, bank)
+        search(bank, inv)
+        -- the bag slot rails (design B), and the header's Bags toggle beside
+        -- All characters (asked for in game)
+        m.bagRail = Rail.new(inv)
+        m.bankRail = Rail.new(bank)
+        local allLabel = inv.allLabel
+        if allLabel then
+            local toggle = UI.Toggle(inv.body, {
+                value = m:Get("bagSlots"),
+                onChange = function(on: boolean)
+                    m:Guard(function()
+                        m:Set("bagSlots", on)
+                    end)()
+                end,
+            })
+            inv.slotsToggle = toggle
+            local slotsLabel = UI.Text(inv.body, "label", "ink-muted")
+            slotsLabel:SetValue("Bags")
+            SuuUI.Layout.Follow(toggle, function()
+                toggle:SetPoint("RIGHT", allLabel, "LEFT", -S["space-6"], 0)
+                slotsLabel:SetPoint("RIGHT", toggle, "LEFT", -S["space-4"], 0)
+            end)
+            inv.slotsLabel = slotsLabel
+        end
+        bank:HookScript("OnHide", function()
+            m.rails:PlaceBuy(false)
+        end)
+    end
+end

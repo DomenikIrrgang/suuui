@@ -1,0 +1,330 @@
+-- Units/RaidPlanner/Coverage.wowlua
+-- The raid planner's coverage (Units/RaidPlanner): who brings a tracked
+-- item (a player, or what a slot asks for), raid-wide counted once with its
+-- detail and tooltip, and party-wide as each group's chips. The module's
+-- People, RaidItem, RaidWide and PartyChips call these.
+
+import type PlannerListItem, PlannerChip, TooltipLine from "/Core/API"
+import type RaidItem from "/Data/RaidPlanner"
+import CLASS, ITEMS, plural, joinAnd, familyOf from "/Units/RaidPlanner/Catalog"
+import roleOf from "/Units/RaidPlanner/Fill"
+import type Slot from "/Units/RaidPlanner/Setups"
+import type RaidPlannerModule from "/Units/RaidPlanner"
+
+local BLESSINGS = 2 -- Kings, Might or Wisdom: one per paladin (no Light or Salvation on Forever)
+
+--------------------------------------------------------------------------------
+-- Coverage
+--------------------------------------------------------------------------------
+
+-- Someone coverage counts: a player, or what a slot asks for (no name).
+export type Person = { name?: string, class: string, tree?: number, role?: string, g?: number, slot?: Slot }
+-- One raid-wide item's count: its number, a warning, who brings it.
+export type ItemCount = { n: number | string, warn?: boolean, detail?: string, lines: TooltipLine[] }
+
+-- Whether someone (a player, or what a slot asks for) brings an item:
+-- "yes", "maybe" (their spec isn't known) or nil.
+export function provides(item: RaidItem, p: { class: string, tree?: number }): string?
+    local maybe = false
+    for _, b in ipairs(item.by) do
+        if b.class == p.class then
+            if not b.tree then
+                return "yes"
+            end
+            if p.tree then
+                if p.tree == b.tree then
+                    return "yes"
+                end
+            else
+                maybe = true
+            end
+        end
+    end
+    return maybe and "maybe" or nil
+end
+
+export function isMelee(p: Person): boolean
+    local c = CLASS[p.class]
+    if not c then
+        return false
+    end
+    if p.tree then
+        return c.melee[p.tree] and true or false
+    end
+    return c.melee[1] and c.melee[2] and c.melee[3] and true or false
+end
+
+export function uses(item: RaidItem, p: Person): boolean
+    if item.users == "melee" then
+        return isMelee(p)
+    end
+    if item.users == "hunter" then
+        return p.class == "HUNTER"
+    end
+    if item.users == "healer" then
+        return (roleOf(p)) == "HEALER"
+    end
+    return false
+end
+
+export function shortSpec(class: string?, tree: number?): string?
+    local c = class and CLASS[class]
+    return c and tree and c.short[tree] or nil
+end
+
+export function names(people: Person[], max: number?): string
+    local out: string[] = {}
+    for i, p in ipairs(people) do
+        if i > (max or 3) then
+            out[#out] = ("%d more"):format(#people - (max or 3) + 1)
+            break
+        end
+        local spec = shortSpec(p.class, p.tree)
+        out[#out + 1] = (p.name or plural(p.class)) .. (spec and (" (" .. spec .. ")") or "")
+    end
+    return joinAnd(out)
+end
+
+export function classesOf(item: RaidItem, people: Person[], word: string?): string
+    local seen: { [string]: boolean } = {}
+    local out: string[] = {}
+    for _, p in ipairs(people) do
+        if not seen[p.class] then
+            seen[p.class] = true
+            out[#out + 1] = plural(p.class)
+        end
+    end
+    if #out == 0 then
+        for _, b in ipairs(item.by) do
+            if not seen[b.class] then
+                seen[b.class] = true
+                out[#out + 1] = plural(b.class)
+            end
+        end
+    end
+    return joinAnd(out, word)
+end
+
+-- Who brings an item, class by class: "druids: Valen and Moonfall"; slots
+-- without a player (a plan out of a raid) as a count: "druids: 2 slots".
+export function byClass(people: Person[]): string
+    local order: string[] = {}
+    local of: { [string]: { names: string[], slots: number } } = {}
+    for _, p in ipairs(people) do
+        local c = of[p.class]
+        if not c then
+            c = { names = {}, slots = 0 }
+            of[p.class] = c
+            order[#order + 1] = p.class
+        end
+        if p.name then
+            c.names[#c.names + 1] = p.name
+        else
+            c.slots = c.slots + 1
+        end
+    end
+    local parts: string[] = {}
+    for _, class in ipairs(order) do
+        local c = assert(of[class])
+        local shown: string[] = {}
+        for i = 1, math.min(#c.names, 3) do
+            shown[i] = c.names[i]
+        end
+        if #c.names > 3 then
+            shown[#shown + 1] = ("%d more"):format(#c.names - 3)
+        end
+        local bits: string[] = {}
+        if #shown > 0 then
+            bits[1] = joinAnd(shown)
+        end
+        if c.slots > 0 then
+            bits[#bits + 1] = ("%d slot%s"):format(c.slots, c.slots == 1 and "" or "s")
+        end
+        parts[#parts + 1] = plural(class) .. ": " .. table.concat(bits, ", ")
+    end
+    return table.concat(parts, "; ")
+end
+
+-- The people coverage counts: everyone in the raid; out of a raid, what
+-- the slots ask for (a plan to look at). And the open slots.
+export function countedPeople(self: RaidPlannerModule): (Person[], Person[], boolean)
+    local people: Person[] = {}
+    local open: Person[] = {}
+    local w = self:Work()
+    local inRaid = self.inRaid
+    local fill = self.fill
+    for _, s in ipairs(w.slots) do
+        local f = fill and fill.slot[s.id]
+        if f then
+            people[#people + 1] = { name = f.m.name, class = f.m.class, tree = f.m.tree, role = f.m.role, g = s.g }
+        elseif s.class then
+            local p: Person = { class = s.class, tree = s.spec, role = s.role, g = s.g, slot = s }
+            if inRaid then
+                open[#open + 1] = p
+            else
+                people[#people + 1] = p
+            end
+        end
+    end
+    if inRaid and fill then
+        for _, m in ipairs(fill.unplaced) do
+            people[#people + 1] = { name = m.name, class = m.class, tree = m.tree, role = m.role }
+        end
+    end
+    return people, open, inRaid
+end
+
+-- One raid-wide item: its count, a warning, its detail and tooltip lines.
+export function raidItem(item: RaidItem, people: Person[], open: Person[]): ItemCount
+    local yes: Person[] = {}
+    local maybe: Person[] = {}
+    local slots: Person[] = {}
+    for _, p in ipairs(people) do
+        local how = provides(item, p)
+        if how == "yes" then
+            yes[#yes + 1] = p
+        elseif how == "maybe" then
+            maybe[#maybe + 1] = p
+        end
+    end
+    for _, p in ipairs(open) do
+        if provides(item, p) then
+            slots[#slots + 1] = p
+        end
+    end
+    local r: ItemCount = { n = 0, lines = {} }
+    if item.ask then
+        r.n, r.detail = "ask", "from books, not trainers: ask your " .. classesOf(item, yes)
+        return r
+    end
+    if item.count == "blessings" then
+        r.n = ("%d of %d"):format(math.min(#yes, BLESSINGS), BLESSINGS)
+        r.warn = #yes == 0 or (#yes < BLESSINGS and #slots > 0)
+    else
+        r.n = #yes
+        r.warn = #yes == 0
+    end
+    local bits: string[] = {}
+    if #yes == 0 then
+        if #maybe > 0 then
+            bits[1] = "if specced: " .. names(maybe)
+        elseif #slots > 0 then
+            local c = CLASS[slots[1].class]
+            bits[1] = "needs the open " .. (c and c.name:lower() or "") .. " slot"
+        else
+            bits[1] = "none: no " .. classesOf(item, {}, "or")
+        end
+    else
+        bits[1] = byClass(yes)
+        if #maybe > 0 then
+            bits[#bits + 1] = ("+%d if specced"):format(#maybe)
+        end
+        if #slots > 0 then
+            bits[#bits + 1] = ("+%d in open slots"):format(#slots)
+        end
+    end
+    r.detail = table.concat(bits, " · ")
+    for _, p in ipairs(yes) do
+        local c = CLASS[p.class]
+        r.lines[#r.lines + 1] = { p.name or "a slot", c and c.name or "" }
+    end
+    return r
+end
+
+-- The raid-wide rows: one per tracked item, each counted on its own (Mark
+-- of the Wild apart from Arcane Intellect). Its tooltip: what it is, then
+-- who brings it.
+export function raidWide(self: RaidPlannerModule, people: Person[], open: Person[]): PlannerListItem[]
+    local out: PlannerListItem[] = {}
+    for _, item in ipairs(ITEMS) do
+        local fam = familyOf(item.family)
+        if fam and fam.scope == "raid" and self:IsTracked(item.key) then
+            local r = self:RaidItem(item, people, open)
+            local about: string[] = {}
+            if item.detail then
+                about[1] = item.detail
+            end
+            if r.detail and r.detail ~= "" then
+                about[#about + 1] = r.detail
+            end
+            out[#out + 1] = {
+                label = item.label,
+                n = tostring(r.n),
+                detail = r.detail,
+                warn = r.warn,
+                tip = { description = table.concat(about, "\n"), lines = r.lines },
+            }
+        end
+    end
+    return out
+end
+
+-- A group's party-wide chips.
+export function partyChips(self: RaidPlannerModule, g: number, people: Person[], open: Person[]): PlannerChip[]
+    local chips: PlannerChip[] = {}
+    local flag = self:Get("flagDoubled")
+    local here: Person[] = {}
+    local slots: Person[] = {}
+    for _, p in ipairs(people) do
+        if p.g == g then
+            here[#here + 1] = p
+        end
+    end
+    for _, p in ipairs(open) do
+        if p.g == g then
+            slots[#slots + 1] = p
+        end
+    end
+    if #here == 0 and #slots == 0 then
+        return chips
+    end
+    for _, item in ipairs(ITEMS) do
+        if item.family == "party" and self:IsTracked(item.key) then
+            local yes: Person[] = {}
+            local maybe: Person[] = {}
+            local users = 0
+            local slot: Person? = nil
+            for _, p in ipairs(here) do
+                local how = provides(item, p)
+                if how == "yes" then
+                    yes[#yes + 1] = p
+                elseif how == "maybe" then
+                    maybe[#maybe + 1] = p
+                end
+                if uses(item, p) then
+                    users = users + 1
+                end
+            end
+            for _, p in ipairs(slots) do
+                if not slot and provides(item, p) then
+                    slot = p
+                end
+            end
+            if #yes >= 2 and item.single and flag then
+                chips[#chips + 1] = {
+                    text = item.short .. " ×" .. #yes .. ": one wasted",
+                    tone = "warn",
+                    tip = names(yes) .. ": one is enough in a group.",
+                }
+            elseif #yes >= 1 then
+                chips[#chips + 1] = { text = item.short, tone = "ok", tip = names(yes) }
+            elseif #maybe >= 1 then
+                chips[#chips + 1] = { text = item.short .. "?", tone = "ok", tip = "If specced: " .. names(maybe) }
+            elseif slot then
+                local c = CLASS[slot.class]
+                chips[#chips + 1] = {
+                    text = item.short .. ": slot open",
+                    tone = "open",
+                    tip = "Its slot is open: " .. (c and c.name or ""),
+                }
+            elseif users > 0 then
+                chips[#chips + 1] = {
+                    text = "No " .. item.short,
+                    tone = "warn",
+                    tip = ("%d in this group use it; no %s here."):format(users, classesOf(item, {}, "or")),
+                }
+            end
+        end
+    end
+    return chips
+end

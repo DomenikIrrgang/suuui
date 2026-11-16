@@ -16,11 +16,14 @@ import print, version from "/Core/Init"
 import * as DB from "/Core/DB"
 import isSecret, asString from "wowlua:secret"
 import * as tbl from "wowlua:table"
+import * as ahBidProbe from "/Diagnostics/AhBidProbe"
+import * as allProbe from "/Diagnostics/AllProbe"
 import * as ahDataProbe from "/Diagnostics/AhDataProbe"
 import * as ahPostProbe from "/Diagnostics/AhPostProbe"
 import * as ahScanProbe from "/Diagnostics/AhScanProbe"
 import * as apiDocs from "/Diagnostics/ApiDocs"
 import * as bagProbe from "/Diagnostics/BagProbe"
+import * as bagOpenProbe from "/Diagnostics/BagOpenProbe"
 import * as bagSortProbe from "/Diagnostics/BagSortProbe"
 import * as bankSlotsProbe from "/Diagnostics/BankSlotsProbe"
 import * as calendarProbe from "/Diagnostics/CalendarProbe"
@@ -79,6 +82,7 @@ import * as spellData from "/Diagnostics/SpellData"
 import * as spellbookProbe from "/Diagnostics/SpellbookProbe"
 import * as supportProbe from "/Diagnostics/SupportProbe"
 import * as taintProbe from "/Diagnostics/TaintProbe"
+import * as cvarProbe from "/Diagnostics/CVarProbe"
 import * as talentBuildProbe from "/Diagnostics/TalentBuildProbe"
 import * as talentProbe from "/Diagnostics/TalentProbe"
 import * as taxiProbe from "/Diagnostics/TaxiProbe"
@@ -1079,9 +1083,11 @@ local function buildWindow(): ReportWindow
     edit:SetScript("OnEscapePressed", function()
         f:Hide()
     end)
-    -- Read-only: typing puts the report back.
-    edit:SetScript("OnTextChanged", function(self, userInput)
-        if userInput then
+    -- Read-only: typing puts the report back. Any text but the report's is
+    -- an edit (the game never flags typing as user input on Forever, UIW-1;
+    -- SetText's own OnTextChanged comes a frame later, with the report).
+    edit:SetScript("OnTextChanged", function(self)
+        if (self:GetText() or "") ~= w.report then
             self:SetText(w.report)
         end
     end)
@@ -1108,6 +1114,8 @@ end
 -- The topics /suu probe takes (the chat's command palette lists them): a
 -- new topic in command below goes here too.
 export const TOPICS: string[] = {
+    "all",
+    "ahbid",
     "ahdata",
     "ahpost",
     "ahscan",
@@ -1120,6 +1128,7 @@ export const TOPICS: string[] = {
     "api",
     "aurasecrecy",
     "bags",
+    "bagopen",
     "bagsort",
     "bankslots",
     "calendar",
@@ -1178,6 +1187,7 @@ export const TOPICS: string[] = {
     "spells",
     "support",
     "taint",
+    "cvars",
     "talentbuilds",
     "talents",
     "taxi",
@@ -1204,6 +1214,9 @@ end
 -- function testing every topic, as before the port, would hold more than
 -- Lua's 60 upvalues: one per probe module.)
 local TOPIC_COMMANDS: { [string]: (rest: string) -> () } = {
+    all = function(rest: string)
+        allProbe.command(rest)
+    end,
     track = function(rest: string)
         trackProbe.command(rest)
     end,
@@ -1239,6 +1252,9 @@ local TOPIC_COMMANDS: { [string]: (rest: string) -> () } = {
     end,
     bagsort = function(rest: string)
         bagSortProbe.command(rest)
+    end,
+    bagopen = function()
+        bagOpenProbe.command()
     end,
     loot = function(rest: string)
         lootProbe.command(rest)
@@ -1411,11 +1427,17 @@ local TOPIC_COMMANDS: { [string]: (rest: string) -> () } = {
     ahdata = function(rest: string)
         ahDataProbe.command(rest)
     end,
+    ahbid = function(rest: string)
+        ahBidProbe.command(rest)
+    end,
     legacy = function(rest: string)
         legacyProbe.command(rest)
     end,
     taint = function()
         taintProbe.command()
+    end,
+    cvars = function(rest: string)
+        cvarProbe.command(rest)
     end,
     hold = function()
         holdProbe.command()

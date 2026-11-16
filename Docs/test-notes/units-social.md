@@ -21,6 +21,15 @@ lockouts: those tests stub the game's calls as the client answers them.
 | Social | `Units/Social.test.wowlua` (new) | 12 | 99.2% |
 | Guild | `Units/Guild.test.wowlua` (new) | 12 | 93.8% |
 
+The Group Finder's search on opening (2026-11-15) runs through the
+library's real `Refresh` (`gameSearch` in its test file): opened by code
+the engine refuses the search, as the game did when opened by key
+binding; opened with `mock.pressBinding("TOGGLEGROUPFINDER")` it allows
+it (the game did not: [port notes V2](../wowlua-port-notes.md#v2)). Each
+refusal is read with `mock.refusals()`, which the runner wants. The game's
+own "Interface action failed because of an AddOn" (once a session) is
+printed in the engine too; SuuUI's tests check only SuuUI's lines.
+
 Not run: the game menu's Edit Mode "Not available right now"; Social's
 class from `GetClassInfo` when `C_CreatureInfo` has none, and Ignore's
 confirmation; Guild's note editing through Blizzard's own member rows

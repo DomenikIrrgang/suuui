@@ -1,0 +1,403 @@
+-- Units/Collections/Shelf.wowlua
+-- The collections window's Toys tab (Units/Collections; design: the toy
+-- shelf): every toy as a card (ToyCard) in four columns in a scroll area
+-- (Shelf), what it does, where it comes from or when it is ready, its star
+-- and Use (each card's own secure button), a gift's present over its icon.
+-- The module's DrawToyCard, LayoutShelf, DrawShelf, DrawShelfCooldowns and
+-- ToggleToyFavourite as functions taking the module (its methods call
+-- them).
+
+import SuuUI from "/Core/API"
+import type ScrollArea, Text, Border, TooltipLine from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry from "./Catalog"
+import GIFT_ICON from "./Catalog"
+import sourceLine, sourceCard from "./Sources"
+import RoundButton, favouriteTip from "./Stage"
+import SecureAction, toyCooldown, readyIn, toyWhy from "./Actions"
+import presentIn, GIFT_SCENE from "./Gifts"
+import TOOLS_H from "./Strip"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local try, field, list = errors.try, tbl.field, tbl.list
+local asString, isSecret = secret.asString, secret.isSecret
+
+--------------------------------------------------------------------------------
+-- Toys (design: A, the toy shelf; asked in game: no toy has a 3D model, so
+-- no stage): every toy as a card in four columns under the tools, what it
+-- does, where it comes from or when it is ready, the star and Use (each
+-- card's own secure button). Hovering a card: all of it.
+--------------------------------------------------------------------------------
+
+-- (taller by 8: two lines of what a toy does ran into its source line in
+-- game, the text taller than measured: found in game)
+local CARD_H, SHELF_COLS = 96, 4
+-- the card's bottom row: its source and Use
+local CARD_FOOT = 6 + 22 + 2
+
+-- What a toy does: the "Use:" line of its tooltip (kept once known).
+local useText: { [number]: string } = {}
+local function toyUse(itemID: number?): string?
+    if not itemID then
+        return nil
+    end
+    local known = useText[itemID]
+    if known then
+        return known
+    end
+    local tip = try(field(C_TooltipInfo, "GetToyByItemID"), itemID)
+    for _, l in ipairs(list(field(tip, "lines"))) do
+        local t = asString(field(l, "leftText"))
+        if t and t:find("^Use:") then
+            local text = (t:gsub("^Use:%s*", ""))
+            useText[itemID] = text
+            return text
+        end
+    end
+    return nil
+end
+
+export class ToyCard extends Frame
+    readonly bg: Texture
+    readonly edge: Border
+    readonly plate: Frame
+    readonly icon: Texture
+    readonly plateEdge: Border
+    readonly cd: Cooldown
+    readonly star: RoundButton
+    readonly name: Text
+    readonly check: Texture
+    readonly use: Text
+    readonly src: Text
+    readonly act: SecureAction
+    -- the game's wrapped present over the icon while the toy is a gift
+    readonly gift: ModelScene
+    unwrapping: boolean = false
+    hover: boolean = false
+    entry: Entry? = nil
+
+    constructor(parent: Frame, i: number, m: CollectionsModule)
+        super(nil, parent)
+        self:SetHeight(CARD_H)
+        self:EnableMouse(true)
+        self.bg = UI.Fill(self, "surface-sunk", "BACKGROUND")
+        self.bg:SetAllPoints()
+        self.edge = UI.Border(self, "gilt-faint")
+        self.plate = CreateFrame("Frame", nil, self)
+        self.plate:SetSize(40, 40)
+        SuuUI.Layout.Follow(self, function()
+            self.plate:SetPoint("TOPLEFT", S["space-4"], -S["space-4"])
+        end)
+        UI.Fill(self.plate, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        self.icon = self.plate:CreateTexture(nil, "ARTWORK")
+        self.icon:SetPoint("TOPLEFT", 1, -1)
+        self.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.plateEdge = UI.Border(self.plate, "gilt-hairline", { layer = "OVERLAY" })
+        self.cd = CreateFrame("Cooldown", nil, self.plate, "CooldownFrameTemplate")
+        self.cd:SetAllPoints(self.icon)
+        self.gift = CreateFrame("ModelScene", nil, self.plate, "NonInteractableWrappedModelSceneTemplate") :: ModelScene
+        self.gift:SetSize(56, 56)
+        self.gift:SetPoint("CENTER")
+        self.gift:Hide()
+        self.star = RoundButton.new(self, "star", favouriteTip, function()
+            m:ToggleToyFavourite(self.entry)
+        end)
+        self.star:SetSize(20, 20)
+        self.star.disc:Hide()
+        SuuUI.Layout.Follow(self, function()
+            self.star:SetPoint("TOPRIGHT", -S["space-3"], -S["space-3"])
+        end)
+        self.name = UI.Text(self, "label", "ink")
+        SuuUI.Layout.Follow(self, function()
+            self.name:SetPoint("TOPLEFT", self.plate, "TOPRIGHT", S["space-4"], 0)
+        end)
+        self.name:SetPoint("RIGHT", self.star, "LEFT", -18, 0)
+        self.name:SetWordWrap(false)
+        self.check = self:CreateTexture(nil, "OVERLAY")
+        UI.Glyph(self.check, "check")
+        self.check:SetSize(11, 11)
+        UI.Paint(self.check, "gilt-text")
+        self.use = UI.Text(self, "caption", "ink-muted")
+        self.use:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -1)
+        -- (down to the bottom row at most: what doesn't fit ends in "…", all
+        -- of it in the card's tooltip)
+        SuuUI.Layout.Follow(self, function()
+            self.use:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -S["space-4"], CARD_FOOT)
+        end)
+        self.use:SetJustifyH("LEFT")
+        self.use:SetJustifyV("TOP")
+        self.use:SetWordWrap(true)
+        self.use:SetMaxLines(2)
+        self.src = UI.Text(self, "caption", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.src:SetPoint("BOTTOMLEFT", S["space-4"], S["space-3"] + 4)
+            self.src:SetPoint("RIGHT", -(S["space-4"] + 64), 0)
+        end)
+        self.src:SetJustifyH("LEFT")
+        self.src:SetWordWrap(false)
+        -- Use: the card's own secure button, the look a small SuuUI button under it
+        self.act = SecureAction.new("SuuUIToyUse" .. i, self, "Use", 56)
+        self.act:SetSize(56, 22)
+        SuuUI.Layout.Follow(self, function()
+            self.act:SetPoint("BOTTOMRIGHT", -S["space-4"], S["space-3"])
+        end)
+        -- a gift: Unwrap, and a click on the card too (as the game's toy box)
+        self.act:HookScript("PostClick", function(_: Frame, _button: string, down: boolean?)
+            local e = self.entry
+            if not down and e and e.wrapped then
+                m:UnwrapToy(self)
+            end
+        end)
+        self:SetScript("OnMouseUp", function()
+            local e = self.entry
+            if e and e.wrapped then
+                m:UnwrapToy(self)
+            end
+        end)
+        -- a toy of yours dragged: onto an action bar (asked 2026-11-10)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            m:Pickup(self.entry)
+        end)
+        self:SetScript("OnEnter", function()
+            self.hover = true
+            self:DrawState()
+            local e = self.entry
+            if not e then
+                return
+            end
+            local lines: TooltipLine[] = {}
+            for _, sec in ipairs(sourceCard(e.source, "toy", nil)) do
+                lines[#lines + 1] = { sec.title }
+                for _, l in ipairs(sec.lines) do
+                    lines[#lines + 1] = { "   " .. l }
+                end
+            end
+            UI.ShowTooltip(self, {
+                title = e.name,
+                subtitle = e.collected and "Collected" or "Not collected",
+                description = toyUse(e.itemID),
+                lines = lines[1] and lines or { { "Source unknown" } },
+            })
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover = false
+            self:DrawState()
+            UI.HideTooltip()
+        end)
+    end
+
+    function DrawState()
+        if not self.entry then
+            return
+        end
+        self.edge:SetColor(self.hover and "gilt" or "gilt-faint")
+        UI.PaintFill(self.bg, self.hover and "surface-raised" or "surface-sunk")
+    end
+
+    -- Its cooldown, its foot line and its Use.
+    function DrawCooldown()
+        local e = self.entry
+        if not e then
+            return
+        end
+        local start, duration = 0, 0
+        local itemID = e.itemID
+        if e.collected and itemID then
+            start, duration = toyCooldown(itemID)
+        end
+        if duration > 0 then
+            self.cd:SetCooldown(start, duration)
+            self.src:SetValue(readyIn(start, duration))
+            self.src:SetColor("arcane")
+        else
+            self.cd:Clear()
+            self.src:SetValue(sourceLine(e.source, "toy", nil))
+            self.src:SetColor(e.collected and "ink-muted" or "ink")
+        end
+        local why = not e.wrapped and toyWhy(e, start, duration) or nil
+        self.act.look:SetEnabledState(why == nil)
+        self.act.why = why
+    end
+end
+
+-- The toy shelf: the cards in a scroll area.
+export class Shelf extends Frame
+    readonly list: ScrollArea
+    readonly cards: ToyCard[] = {}
+    readonly empty: Text
+
+    constructor(body: Frame, m: CollectionsModule)
+        super(nil, body)
+        self:SetAllPoints()
+        self:Hide()
+        local BAR = S["space-3"]
+        self.list = UI.ScrollArea(self, BAR)
+        SuuUI.Layout.Follow(self, function()
+            self.list:SetPoint("TOPLEFT", 0, -(TOOLS_H + S["space-5"]))
+        end)
+        self.list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
+        self.list:HookScript("OnSizeChanged", function(_: Frame, w: number)
+            self.list.child:SetWidth(w)
+            m:LayoutShelf()
+        end)
+        self.empty = UI.Text(self.list.child, "body", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.empty:SetPoint("TOP", 0, -S["space-7"])
+        end)
+        self.empty:SetValue("No toys match.")
+    end
+end
+
+----------------------------------------------------------------------------
+-- Toys
+----------------------------------------------------------------------------
+
+export function drawToyCard(self: CollectionsModule, c: ToyCard)
+    local e = c.entry
+    -- (a card holds its secure Use: shown or hidden out of combat only, the
+    -- game refuses even an unchanged Show in a fight)
+    if not e then
+        if c:IsShown() then
+            if InCombatLockdown() then
+                self.shelfAfterCombat = true
+            else
+                c:Hide()
+            end
+        end
+        return
+    end
+    if not c:IsShown() then
+        if InCombatLockdown() then
+            self.shelfAfterCombat = true
+        else
+            c:Show()
+        end
+    end
+    c.icon:SetTexture(e.wrapped and GIFT_ICON or e.icon)
+    -- a gift: the game's present over the icon where the game has its
+    -- scene, else the gift's icon (left while it unwraps)
+    if e.wrapped and not c.unwrapping then
+        c.gift:SetShown(presentIn(c.gift, GIFT_SCENE))
+    elseif not c.unwrapping then
+        c.gift:Hide()
+    end
+    c.icon:SetShown(not c.gift:IsShown())
+    c.act.look.label:SetValue(e.wrapped and (UNWRAP or "Unwrap") or "Use")
+    c.icon:SetDesaturated(not e.collected)
+    local v = e.collected and 1 or 0.55
+    c.icon:SetVertexColor(v, v, v)
+    c.plateEdge:SetColor(e.collected and "gilt-hairline" or "gilt-faint")
+    c.name:SetValue(e.name)
+    c.name:SetColor(e.collected and "ink" or "ink-muted")
+    c.check:ClearAllPoints()
+    c.check:SetPoint(
+        "LEFT",
+        c.name,
+        "LEFT",
+        math.min(c.name:GetUnboundedStringWidth(), c.name:GetWidth() or 0) + 4,
+        0
+    )
+    c.check:SetShown(e.collected)
+    c.use:SetValue(e.wrapped and "A gift: click to unwrap it" or toyUse(e.itemID) or "")
+    c.use:SetColor(e.collected and "ink-muted" or "ink-faint")
+    c.star.on = e.favourite and true or false
+    c.star:Draw(false)
+    c:DrawState()
+    c:DrawCooldown()
+    -- the secure part: out of combat only
+    if InCombatLockdown() then
+        self.shelfAfterCombat = true
+    elseif e.collected and not e.wrapped then
+        c.act:SetAttribute("type", "toy")
+        c.act:SetAttribute("toy", e.itemID)
+    else
+        c.act:SetAttribute("type", nil)
+    end
+end
+
+export function layoutShelf(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local shelf = ui.shelf
+    -- (the cards hold secure buttons: laid out out of combat only)
+    if InCombatLockdown() then
+        self.shelfAfterCombat = true
+        return
+    end
+    local w = shelf.list.child:GetWidth()
+    if not w or isSecret(w) or w <= 0 then
+        return
+    end
+    local gap = S["space-4"]
+    local cw = (w - (SHELF_COLS - 1) * gap) / SHELF_COLS
+    for i, c in ipairs(shelf.cards) do
+        local col, row = (i - 1) % SHELF_COLS, math.floor((i - 1) / SHELF_COLS)
+        c:ClearAllPoints()
+        c:SetWidth(cw)
+        c:SetPoint("TOPLEFT", col * (cw + gap), -row * (CARD_H + gap))
+    end
+end
+
+export function drawShelf(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local shelf, entries = ui.shelf, self.entries
+    -- in a fight the cards keep their places (they hold secure buttons):
+    -- only what they show changes; new cards and the layout after it
+    local combat = InCombatLockdown()
+    if combat then
+        if #entries > #shelf.cards then
+            self.shelfAfterCombat = true
+        end
+    else
+        for i = #shelf.cards + 1, #entries do
+            shelf.cards[i] = ToyCard.new(shelf.list.child, i, self)
+        end
+    end
+    for i, c in ipairs(shelf.cards) do
+        c.entry = entries[i]
+        self:DrawToyCard(c)
+    end
+    self:LayoutShelf()
+    if not combat then
+        local rows = math.ceil(#entries / SHELF_COLS)
+        shelf.list.child:SetHeight(math.max(1, rows * CARD_H + math.max(0, rows - 1) * S["space-4"]))
+    end
+    -- (no cards made yet in a fight: they come when it ends; said so
+    -- rather than an empty page, found in game)
+    local waiting = combat and #entries > 0 and #shelf.cards == 0
+    shelf.empty:SetValue(waiting and "Your toys show once this fight is over." or "No toys match.")
+    shelf.empty:SetShown(#entries == 0 or waiting)
+end
+
+export function drawShelfCooldowns(self: CollectionsModule)
+    local ui = self.ui
+    if not (ui and ui.shelf:IsShown()) then
+        return
+    end
+    for _, c in ipairs(ui.shelf.cards) do
+        if c:IsShown() then
+            c:DrawCooldown()
+        end
+    end
+end
+
+export function toggleToyFavourite(self: CollectionsModule, e: Entry?)
+    if not (e and e.collected) then
+        return
+    end
+    try(field(C_ToyBox, "SetIsFavorite"), e.itemID, not e.favourite)
+    self:After(0.1, function()
+        self:Refresh()
+    end)
+end

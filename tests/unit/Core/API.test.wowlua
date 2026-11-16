@@ -5,11 +5,19 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as tbl from "wowlua:table"
-import SuuUI from "/Core/API"
+import SuuUI, Module, PanelClass, UnitFrameClass from "/Core/API"
+import * as serviceKeys from "/Core/ServiceKeys"
+import * as ahead from "/Core/Ahead"
+import * as draw from "/UI/Draw"
+import * as dress from "/UI/Dress"
+import * as panel from "/UI/Panel"
+import * as unitFrame from "/UI/UnitFrame"
+import * as windowSkin from "/UI/WindowSkin"
 import tokens as T, Color from "/Core/Tokens"
 import * as services from "/Core/Services"
 import type TalentNext, DurabilityInfo from "/Core/ServiceKeys"
 import * as events from "/Core/Events"
+import * as fault from "/Core/Fault"
 import * as settings from "/Core/Settings"
 import * as themes from "/Core/Themes"
 import * as vision from "/Core/Vision"
@@ -20,6 +28,7 @@ import * as pixel from "/Core/Pixel"
 import * as fonts from "/Core/Fonts"
 import * as motion from "/Core/Motion"
 import * as anchors from "/Core/Anchors"
+import * as comm from "/Core/Comm"
 import * as blizzard from "/Core/Blizzard"
 import * as window from "/SettingsUI/Window"
 import * as registry from "/SettingsUI/Registry"
@@ -53,6 +62,18 @@ const DOCUMENTED: string[] = {
     "Commands",
     "ListModules",
     "AccountData",
+    "Comm",
+    "Comm.PREFIX",
+    "Comm.MAX_BYTES",
+    "Comm.GroupChannel",
+    "Comm.GroupAndGuild",
+    "Comm.IsMe",
+    "Comm.Int",
+    "Comm.Number",
+    "Comm.Fraction",
+    "Comm.Map",
+    "Comm.Name",
+    "Comm.OneOf",
     "AddFriend",
     "AddInstance",
     "Additions",
@@ -70,6 +91,7 @@ const DOCUMENTED: string[] = {
     "DismissNotification",
     "Durability",
     "ExpectRecipe",
+    "ExpectRefusal",
     "FlightPaths",
     "FlightRoutes",
     "FullName",
@@ -130,6 +152,8 @@ const DOCUMENTED: string[] = {
     "EditMode.SetGroupPreview",
     "Fonts.Get",
     "Fonts.Apply",
+    "Fonts.File",
+    "Fonts.Size",
     "KeybindMode.Enter",
     "KeybindMode.Exit",
     "KeybindMode.Toggle",
@@ -166,6 +190,40 @@ const DOCUMENTED: string[] = {
     "LFG.Refresh",
     "LFG.Start",
     "LFG.Whisper",
+    -- 0.47: what the built-in modules use
+    "Module",
+    "AddModule",
+    "Classes.Module",
+    "Classes.Panel",
+    "Classes.ItemSlot",
+    "Classes.UnitFrame",
+    "Classes.MapPin",
+    "Classes.ActionButton",
+    "UseService",
+    "BuildAhead",
+    "Data.QuestStarts",
+    "Data.MapPlaces",
+    "Data.CollectionSources",
+    "Data.RecipeSources",
+    "Data.FlightPaths",
+    "Data.MapOverlays",
+    "Services.ALERTS",
+    "Services.AUCTION_HOUSE",
+    "Services.AUTO_QUESTS",
+    "Services.BAGS",
+    "Services.CAMPFIRES",
+    "Services.COLLECTIONS",
+    "Services.CONVERGENCES",
+    "Services.DURABILITY",
+    "Services.FLIGHT_MAP",
+    "Services.MARKS",
+    "Services.MOUSE_BINDINGS",
+    "Services.NOTIFICATIONS",
+    "Services.PROFESSIONS",
+    "Services.RAID_PLANNER",
+    "Services.TALENTS",
+    "Services.WELCOME",
+    "Services.WORLD_MAP",
 }
 
 const DOCUMENTED_UI: string[] = {
@@ -198,6 +256,7 @@ const DOCUMENTED_UI: string[] = {
     "DEBUFF_TYPES",
     "DecodeTalentBuild",
     "Diamond",
+    "Dismissable",
     "DragonArt",
     "DurationTextBinding",
     "EncodeTalentBuild",
@@ -336,6 +395,8 @@ const DOCUMENTED_UI: string[] = {
     "UnitFrameCurveValue",
     "UnitStandIn",
     "VISIBILITY_OPTIONS",
+    "VirtualList",
+    "VirtualListSame",
     "WeaponEnchant",
     "WeaponEnchantable",
     "WeaponEnchantIcon",
@@ -343,6 +404,25 @@ const DOCUMENTED_UI: string[] = {
     "WINDOW_HEAD_H",
     "WindowFrame",
     "WriteGameTalentString",
+    -- 0.47: what the built-in modules use
+    "CurveAmount",
+    "Dress",
+    "FilterList",
+    "GameUnits",
+    "HealthClassToken",
+    "HealthReactionToken",
+    "Hex",
+    "InlineMark",
+    "IsColor",
+    "IsOwn",
+    "MarkOwn",
+    "MoneyText",
+    "OpenRoot",
+    "PaintHealth",
+    "ReskinLeave",
+    "ReskinPart",
+    "WindowChrome",
+    "WithPixelUnit",
 }
 
 -- Services stood in for, provided by name as a plugin's would be: each
@@ -424,10 +504,56 @@ end
 @test("the version and the API version")
 local function versions()
     expect(SuuUI.API_VERSION).toBe(modules.API_VERSION)
-    expect(SuuUI.API_VERSION).toBe("0.46.0")
+    expect(SuuUI.API_VERSION).toBe("0.47.0")
     expect(SuuUI.version).toBe(version)
     expect(SuuUI.APIAtLeast("0.1")).toBe(true)
     expect(SuuUI.APIAtLeast("0.99")).toBe(false)
+end
+
+@test("0.47: what the built-in modules use is SuuUI's own")
+local function builtInsUse()
+    -- the classes a module extends: SuuUI's, under the API's name
+    expect(SuuUI.Module).toBe(Module)
+    expect(SuuUI.Classes.Module).toBe(Module)
+    expect(rawget(Module :: unknown :: table, "__super")).toBe(modules.Module)
+    expect(rawget(PanelClass :: unknown :: table, "__super")).toBe(panel.Panel)
+    expect(rawget(UnitFrameClass :: unknown :: table, "__super")).toBe(unitFrame.UnitFrame)
+    expect(SuuUI.Classes.Panel).toBe(PanelClass)
+    expect(SuuUI.Classes.UnitFrame).toBe(UnitFrameClass)
+    expect(SuuUI.AddModule).toBe(modules.add)
+    -- the service keys, the work built ahead, the data's handles
+    expect(SuuUI.Services.BAGS).toBe(serviceKeys.BAGS)
+    expect(SuuUI.Services.WORLD_MAP.name).toBe("worldmap")
+    expect(SuuUI.Services.AUTO_QUESTS).toBe(serviceKeys.AUTO_QUESTS)
+    expect(SuuUI.Services.AUTO_QUESTS.name).toBe("autoquests")
+    expect(SuuUI.BuildAhead).toBe(ahead.schedule)
+    expect(SuuUI.Data.QuestStarts).toBe(lazyData.questStarts)
+    expect(SuuUI.Data.CollectionSources).toBe(lazyData.collectionSources)
+    -- the helpers
+    expect(SuuUI.UI.Hex).toBe(draw.hex)
+    expect(SuuUI.UI.InlineMark).toBe(draw.inlineMark)
+    expect(SuuUI.UI.CurveAmount).toBe(unitFrame.curveAmount)
+    expect(SuuUI.UI.Dress).toBe(dress.register)
+    expect(SuuUI.UI.WindowChrome).toBe(windowSkin.chromeOf)
+end
+
+-- A module as the built-in ones are written: a class extending Module.
+class ApiTestModule extends Module<{ size: number }>
+    constructor()
+        super({ id = "apitestclass", defaults = { size = 2 }, enabledByDefault = false })
+    end
+end
+
+@test("0.47: a module made from SuuUI.Module is a module, with SuuUI.AddModule")
+local function classModule()
+    local m = ApiTestModule.new()
+    expect(SuuUI.AddModule(m)).toBe(m)
+    expect(SuuUI.GetModule("apitestclass") :: unknown).toBe(m)
+    mock.nextFrame()
+    expect(m:Get("size")).toBe(2)
+    expect(m:Setting("size")).toBe(2)
+    expect(m:IsEnabled()).toBe(false)
+    expectNoErrors()
 end
 
 @test("the core's parts are the core modules' own")
@@ -977,6 +1103,18 @@ local function addFriendNoApi()
     expect(added).toHaveBeenCalledTimes(2)
 end
 
+@test("ExpectRefusal: Core's, a refusal during fn quiet and returned first")
+local function expectRefusal()
+    expect(SuuUI.ExpectRefusal).toBe(fault.expectRefusal)
+    local refused, v = SuuUI.ExpectRefusal(function(): string
+        mock.fireEvent("ADDON_ACTION_BLOCKED", "SuuUI", "UNKNOWN()")
+        return "v"
+    end)
+    expect(refused).toBe(true)
+    expect(v).toBe("v")
+    expect(#fault.entries()).toBe(0)
+end
+
 @test("AddFriend needs a name")
 local function addFriendNoName()
     expect(SuuUI.AddFriend(nil)).toBe(false)
@@ -1153,4 +1291,19 @@ local function accountData()
     expect(function()
         SuuUI.AccountData(nil :: unknown :: string)
     end).toThrow("SuuUI.AccountData: a namespace is required")
+end
+
+@test("Comm: the addon messages' prefix and field readers are Core/Comm's")
+local function commParts()
+    expect(SuuUI.Comm.PREFIX).toBe("SuuUI")
+    expect(SuuUI.Comm.MAX_BYTES).toBe(255)
+    expect(SuuUI.Comm.GroupChannel).toBe(comm.groupChannel)
+    expect(SuuUI.Comm.GroupAndGuild).toBe(comm.groupAndGuild)
+    expect(SuuUI.Comm.IsMe).toBe(comm.isMe)
+    expect(SuuUI.Comm.Int).toBe(comm.int)
+    expect(SuuUI.Comm.Number).toBe(comm.number)
+    expect(SuuUI.Comm.Fraction).toBe(comm.fraction)
+    expect(SuuUI.Comm.Map).toBe(comm.map)
+    expect(SuuUI.Comm.Name).toBe(comm.name)
+    expect(SuuUI.Comm.OneOf).toBe(comm.oneOf)
 end

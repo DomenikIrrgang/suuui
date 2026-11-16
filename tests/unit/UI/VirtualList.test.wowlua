@@ -1,0 +1,612 @@
+-- UI/VirtualList: a pooled list that makes only the rows in sight, binds by
+-- identity, keeps the scroll and the selection across refreshes.
+
+import test, cases, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import virtualList, sameFields, VirtualList, VirtualListOptions from "/UI/VirtualList"
+import * as uiText from "/UI/Text"
+import Text from "/UI/Text"
+import * as pixel from "/Core/Pixel"
+import tokens as T from "/Core/Tokens"
+import expectNoErrors, newParent, useTheme, layoutThemes, ROOMY from "../../helpers"
+import tokenOf from "./SocialHelpers"
+
+type Entry = { key: string, label: string, heading?: boolean, gap?: boolean }
+
+-- A test row: a button with one text.
+interface EntryRow extends Button
+    text: Text
+    entry: Entry?
+    sel: boolean
+end
+
+local hosts: Frame[] = {}
+
+@afterEach
+local function done()
+    for _, h in ipairs(hosts) do
+        h:Hide()
+    end
+    hosts = {}
+end
+
+local function makeRow(list: VirtualList<Entry>): Frame
+    local r = CreateFrame("Button", nil, list.child) :: EntryRow
+    r:SetHeight(24)
+    r.text = uiText.text(r, "label", "ink")
+    r.text:SetPoint("LEFT")
+    return r
+end
+
+local function bindRow(row: Frame, item: Entry, selected: boolean)
+    local r = row :: EntryRow
+    r.entry, r.sel = item, selected
+    r.text:SetValue(item.label)
+    r.text:SetColor(selected and "arcane" or "ink")
+end
+
+local function entries(n: number, prefix: string?): Entry[]
+    local out: Entry[] = {}
+    for i = 1, n do
+        out[i] = { key = "k" .. i, label = (prefix or "Entry ") .. i }
+    end
+    return out
+end
+
+local function keyOf(e: Entry): unknown
+    return e.key
+end
+
+-- A list 300 x 240 (ten rows of 24 in sight).
+local function list(extra: VirtualListOptions<Entry>?): VirtualList<Entry>
+    local host = newParent(320, 240)
+    hosts[#hosts + 1] = host
+    local opts: VirtualListOptions<Entry> = {
+        rowHeight = 24,
+        make = makeRow,
+        bind = bindRow,
+        key = keyOf,
+        same = sameFields,
+        bar = 2,
+    }
+    for k, v in pairs(extra or {}) do
+        (opts :: { [string]: unknown })[k] = v
+    end
+    local l = virtualList(host, opts)
+    l:SetPoint("TOPLEFT")
+    l:SetSize(300, 240)
+    return l
+end
+
+-- Every frame and region under a frame, itself included.
+local function census(f: Frame): (number, number)
+    local frames, regions = 1, f:GetNumRegions()
+    for _, c in ipairs({ f:GetChildren() }) do
+        local cf, cr = census(c)
+        frames += cf
+        regions += cr
+    end
+    return frames, regions
+end
+
+-- The row showing entry `key`, any kind (nil: none in sight).
+local function rowOf(l: VirtualList<Entry>, key: string): EntryRow?
+    for _, pool in pairs(l.pools) do
+        for _, row in ipairs(pool) do
+            local item = l:ItemOf(row)
+            if item and item.key == key then
+                return row :: EntryRow
+            end
+        end
+    end
+    return nil
+end
+
+local function shownCount(l: VirtualList<Entry>, kind: string?): number
+    local n = 0
+    for _, row in ipairs(l:Rows(kind)) do
+        if row:IsShown() then
+            n += 1
+        end
+    end
+    return n
+end
+
+-- A row's top in the content (snapped to a physical pixel: compare with
+-- toBeCloseTo(want, 0)).
+local function rowTop(_l: VirtualList<Entry>, row: Frame): number
+    local _, _, _, _, y = row:GetPoint(1)
+    return -(y :: number)
+end
+
+@test("sameFields: the same table, or equal fields one level down")
+@cases({
+    { { a = 1, b = "x" }, { a = 1, b = "x" }, true },
+    { { a = 1 }, { a = 1, b = "x" }, false },
+    { { a = 1, b = "x" }, { a = 1 }, false },
+    { { a = 1 }, { a = 2 }, false },
+    { {}, {}, true },
+    { "x", "x", true },
+    { "x", "y", false },
+    { { a = {} }, { a = {} }, false },
+})
+local function same(a: unknown, b: unknown, want: boolean)
+    expect(sameFields(a, b)).toBe(want)
+end
+
+@test("sameFields: a secret value counts as changed")
+local function sameSecret()
+    local s = mock.secret("x")
+    expect(sameFields({ a = s }, { a = s })).toBe(false)
+    expect(sameFields(s, s)).toBe(false)
+    expect(sameFields(s, "x")).toBe(false)
+end
+
+@test("1,000 entries: rows only for what's in sight; the content as tall as all of them")
+local function fewRows()
+    local l = list()
+    l:SetItems(entries(1000))
+    -- ten in sight, one more below: 11 (13 at most: part of one above and
+    -- one below, and one on each side)
+    expect(l.made).toBe(11)
+    expect(#l:Rows()).toBe(11)
+    expect(l.binds).toBe(11)
+    expect(l.child:GetHeight()).toBe(24000)
+    expect(l.child:GetWidth()).toBe(300)
+    local first = rowOf(l, "k1") :: EntryRow
+    expect(first.text).toHaveText("Entry 1")
+    expect(rowTop(l, first)).toBeCloseTo(0, 0)
+    expect(first).toBeAnchoredTo(l.child, "TOPLEFT", "TOPLEFT")
+    expect(first:GetWidth()).toBe(300)
+    expect(rowOf(l, "k11")).never.toBeNil()
+    expect(rowOf(l, "k12")).toBeNil()
+    expectNoErrors()
+end
+
+@test("scrolling top to bottom: the same rows handed on; no frame, region or row made")
+local function scrollThrough()
+    local l = list()
+    l:SetItems(entries(1000))
+    -- a step between two rows: the most there will be (13)
+    l.scroll:SetVerticalScroll(36)
+    mock.script(l.scroll, "OnVerticalScroll", 36)
+    expect(l.made).toBe(13)
+    local frames, regions = census(l)
+    local made = l.made
+    local max = l.child:GetHeight() - l.scroll:GetHeight()
+    local y = 36
+    while y < max do
+        y = math.min(max, y + 37)
+        l.scroll:SetVerticalScroll(y)
+        mock.script(l.scroll, "OnVerticalScroll", y)
+        -- the rows in sight show the entries at their place
+        local firstIn = math.floor(y / 24) + 1
+        local r = rowOf(l, "k" .. firstIn) :: EntryRow
+        expect(r.text).toHaveText("Entry " .. firstIn)
+        expect(rowTop(l, r)).toBeCloseTo((firstIn - 1) * 24, 0)
+    end
+    expect(l.made).toBe(made)
+    local f2, r2 = census(l)
+    expect(f2).toBe(frames)
+    expect(r2).toBe(regions)
+    expect(shownCount(l) <= 13).toBe(true)
+    expect(rowOf(l, "k1000")).never.toBeNil()
+    expect(rowOf(l, "k1")).toBeNil()
+    -- a bind per entry that came into view, not per row per step
+    expect(l.binds <= 1000 + 13).toBe(true)
+    expectNoErrors()
+end
+
+@test("a scroll within the same rows does nothing")
+local function smallScroll()
+    local l = list()
+    l:SetItems(entries(100))
+    l.scroll:SetVerticalScroll(30)
+    mock.script(l.scroll, "OnVerticalScroll", 30)
+    local binds, made = l.binds, l.made
+    local shown = { unpack(l.shown) }
+    for y = 31, 47 do
+        l.scroll:SetVerticalScroll(y)
+        mock.script(l.scroll, "OnVerticalScroll", y)
+    end
+    expect(l.binds).toBe(binds)
+    expect(l.made).toBe(made)
+    expect(l.shown).toEqual(shown)
+    expectNoErrors()
+end
+
+@test("the wheel scrolls the scroll area's step, the bar shows, rows follow")
+local function wheel()
+    local l = list()
+    l:SetItems(entries(100))
+    mock.advanceFrames(1)
+    expect(l.scroll.track).toBeShown()
+    mock.wheel(l.scroll, -2)
+    expect(l.scroll:GetVerticalScroll()).toBe(96)
+    mock.script(l.scroll, "OnVerticalScroll", 96)
+    expect(rowOf(l, "k3")).toBeNil()
+    expect(rowOf(l, "k5")).never.toBeNil()
+    expect(l.made).toBe(12)
+    l.scroll:SetVerticalScroll(100)
+    mock.script(l.scroll, "OnVerticalScroll", 100)
+    expect(l.made).toBe(13)
+    expectNoErrors()
+end
+
+@test("a refresh with the same entries draws nothing again and keeps the scroll")
+local function sameAgain()
+    local l = list()
+    l:SetItems(entries(500))
+    l.scroll:SetVerticalScroll(2400)
+    mock.script(l.scroll, "OnVerticalScroll", 2400)
+    local binds = l.binds
+    local r = rowOf(l, "k101") :: EntryRow
+    -- new tables with the same fields (what the modules build per render)
+    local fresh = entries(500)
+    l:SetItems(fresh)
+    expect(l.binds).toBe(binds)
+    expect(l.scroll:GetVerticalScroll()).toBe(2400)
+    -- the row holds the new table (ItemOf), its own field still the old one
+    expect(l:ItemOf(r)).toBe(fresh[101])
+    expect(rowOf(l, "k101")).toBe(r)
+    -- one entry changed: one row drawn
+    local changed = entries(500)
+    changed[102] = { key = "k102", label = "Renamed" }
+    l:SetItems(changed)
+    expect(l.binds).toBe(binds + 1)
+    expect((rowOf(l, "k102") :: EntryRow).text).toHaveText("Renamed")
+    expectNoErrors()
+end
+
+@test("adopt: a row given a new table that shows the same takes it without drawing")
+local function adopts()
+    local adopted = mock.spy(function(_r: Frame, _i: Entry) end)
+    local l = list({ adopt = adopted })
+    local first = entries(20)
+    l:SetItems(first)
+    local fresh = entries(20)
+    l:SetItems(fresh)
+    expect(adopted).toHaveBeenCalledTimes(11)
+    expect(adopted).toHaveBeenCalledWith(rowOf(l, "k1") :: EntryRow, fresh[1])
+    -- the very same tables: nothing
+    l:SetItems(fresh)
+    expect(adopted).toHaveBeenCalledTimes(11)
+    expectNoErrors()
+end
+
+@test("without same: a new table draws its row again")
+local function noSame()
+    local l = list()
+    l.same = nil
+    l:SetItems(entries(20))
+    local binds = l.binds
+    l:SetItems(entries(20))
+    expect(l.binds).toBe(binds + 11)
+    expectNoErrors()
+end
+
+@test("an entry inserted on top: rows keep their entries, moved, one drawn")
+local function insert()
+    local l = list()
+    local list1 = entries(50)
+    l:SetItems(list1)
+    local r5 = rowOf(l, "k5") :: EntryRow
+    local binds = l.binds
+    local list2: Entry[] = { { key = "new", label = "New" } }
+    for i, e in ipairs(list1) do
+        list2[i + 1] = e
+    end
+    l:SetItems(list2)
+    expect(rowOf(l, "k5")).toBe(r5)
+    expect(rowTop(l, r5)).toBeCloseTo(5 * 24, 0)
+    expect(l:IndexOf(r5)).toBe(6)
+    -- the new one drawn on the row that fell out at the bottom
+    expect(l.binds).toBe(binds + 1)
+    expect((rowOf(l, "new") :: EntryRow).text).toHaveText("New")
+    expect(l.made).toBe(11)
+    expectNoErrors()
+end
+
+@test("the selection: two rows drawn, by key; it follows its entry through a new order")
+local function selection()
+    local l = list()
+    local items = entries(300)
+    l:SetItems(items)
+    local binds = l.binds
+    l:SetSelected("k3")
+    expect(l.binds).toBe(binds + 1)
+    expect((rowOf(l, "k3") :: EntryRow).sel).toBe(true)
+    l:SetSelected("k4")
+    expect(l.binds).toBe(binds + 3)
+    expect((rowOf(l, "k3") :: EntryRow).sel).toBe(false)
+    expect((rowOf(l, "k4") :: EntryRow).sel).toBe(true)
+    -- the same again: nothing
+    l:SetSelected("k4")
+    expect(l.binds).toBe(binds + 3)
+    -- a new order (reversed): the chosen entry is chosen wherever it is,
+    -- never the row at its old index
+    local reversed: Entry[] = {}
+    for i = #items, 1, -1 do
+        reversed[#reversed + 1] = items[i]
+    end
+    l:SetItems(reversed)
+    for _, row in ipairs(l:Rows()) do
+        local r = row :: EntryRow
+        if row:IsShown() then
+            expect(r.sel).toBe(r.entry ~= nil and (r.entry :: Entry).key == "k4")
+        end
+    end
+    l.scroll:SetVerticalScroll(296 * 24 - 240 + 24 * 5)
+    mock.script(l.scroll, "OnVerticalScroll", l.scroll:GetVerticalScroll())
+    local chosen = rowOf(l, "k4") :: EntryRow
+    expect(chosen.sel).toBe(true)
+    expect(tokenOf(chosen.text)).toBe("arcane")
+    -- gone from the list: no row chosen, the key kept for when it's back
+    l:SetItems(entries(3))
+    expect(l.selected).toBe("k4")
+    expectNoErrors()
+end
+
+@test("out of sight: SetItems only marks the list; it binds once shown")
+local function hidden()
+    local l = list()
+    l:Hide()
+    l:SetItems(entries(100))
+    l:SetSelected("k2")
+    expect(l.made).toBe(0)
+    expect(l.binds).toBe(0)
+    expect(l.dirty).toBe(true)
+    l:Show()
+    expect(l.dirty).toBe(false)
+    expect(l.made).toBe(11)
+    expect((rowOf(l, "k2") :: EntryRow).sel).toBe(true)
+    -- hidden by its parent: the same
+    local parent = l:GetParent() :: Frame
+    parent:Hide()
+    local binds = l.binds
+    l:SetItems(entries(100, "Other "))
+    expect(l.binds).toBe(binds)
+    parent:Show()
+    expect((rowOf(l, "k1") :: EntryRow).text).toHaveText("Other 1")
+    expectNoErrors()
+end
+
+@test("no entries: no rows, the content 1 high; fewer entries hide the spare rows")
+local function fewer()
+    local l = list()
+    l:SetItems({})
+    expect(l.made).toBe(0)
+    expect(l.child:GetHeight()).toBe(1)
+    l:SetItems(entries(30))
+    l:SetItems(entries(2))
+    expect(shownCount(l)).toBe(2)
+    expect(l.child:GetHeight()).toBe(48)
+    expect(l:IndexOf(l:Rows()[5])).toBeNil()
+    expect(l:ItemOf(l:Rows()[5])).toBeNil()
+    expectNoErrors()
+end
+
+@test("content that got shorter while scrolled down: the end shows at once")
+local function shrinks()
+    local l = list()
+    l:SetItems(entries(200))
+    l.scroll:SetVerticalScroll(4000)
+    mock.script(l.scroll, "OnVerticalScroll", 4000)
+    l:SetItems(entries(20))
+    -- the scroll area settles a frame later; the rows are there already
+    expect(rowOf(l, "k20")).never.toBeNil()
+    expect(rowOf(l, "k10")).never.toBeNil()
+    mock.advanceFrames(2)
+    expect(l.scroll:GetVerticalScroll()).toBe(20 * 24 - 240)
+    expect(rowOf(l, "k20")).never.toBeNil()
+    expectNoErrors()
+end
+
+@test("a taller area shows more rows; Refresh draws the rows in sight again")
+local function resize()
+    local l = list()
+    l:SetItems(entries(100))
+    l:SetHeight(480)
+    mock.script(l.scroll, "OnSizeChanged", 300, 480)
+    expect(l.made).toBe(21)
+    expect(rowOf(l, "k21")).never.toBeNil()
+    local binds = l.binds
+    l:Refresh()
+    expect(l.binds).toBe(binds + 21)
+    -- Invalidate only marks: the next update draws
+    l:Invalidate()
+    expect(l.binds).toBe(binds + 21)
+    l:SetItems(l.items)
+    expect(l.binds).toBe(binds + 42)
+    expectNoErrors()
+end
+
+@test("kinds: headings and gaps with heights of their own; rows found by their tops")
+local function kinds()
+    local heads = 0
+    local function makeHead(lst: VirtualList<Entry>): Frame
+        heads += 1
+        return makeRow(lst)
+    end
+    local l = list({
+        kinds = {
+            head = { height = 30, make = makeHead, bind = bindRow },
+            gap = { height = 6 },
+        },
+        kindOf = function(e: Entry): string
+            return e.heading and "head" or (e.gap and "gap" or "row")
+        end,
+    })
+    local items: Entry[] = {}
+    for g = 1, 20 do
+        if g > 1 then
+            items[#items + 1] = { key = "gap" .. g, label = "", gap = true }
+        end
+        items[#items + 1] = { key = "head" .. g, label = "Group " .. g, heading = true }
+        for i = 1, 10 do
+            items[#items + 1] = { key = g .. ":" .. i, label = "Member " .. g .. ":" .. i }
+        end
+    end
+    l:SetItems(items)
+    -- 20 headings of 30, 19 gaps of 6, 200 rows of 24
+    expect(l.child:GetHeight()).toBe(20 * 30 + 19 * 6 + 200 * 24)
+    expect(#l:Rows("head")).toBe(1)
+    expect(#l:Rows("gap")).toBe(0)
+    local h1 = rowOf(l, "head1") :: EntryRow
+    expect(l:Rows("head")[1]).toBe(h1)
+    expect(rowTop(l, rowOf(l, "1:1") :: EntryRow)).toBeCloseTo(30, 0)
+    -- the second group: a gap, its heading, its first member
+    l.scroll:SetVerticalScroll(30 + 240)
+    mock.script(l.scroll, "OnVerticalScroll", 270)
+    local h2 = rowOf(l, "head2") :: EntryRow
+    expect(rowTop(l, h2)).toBeCloseTo(30 + 240 + 6, 0)
+    expect(rowTop(l, rowOf(l, "2:1") :: EntryRow)).toBeCloseTo(30 + 240 + 6 + 30, 0)
+    expect(rowOf(l, "1:9")).toBeNil()
+    -- deep down: found by binary search, few rows made
+    local y = 15 * (30 + 240 + 6)
+    l.scroll:SetVerticalScroll(y)
+    mock.script(l.scroll, "OnVerticalScroll", y)
+    expect((rowOf(l, "16:1") :: EntryRow).text).toHaveText("Member 16:1")
+    expect(#l:Rows() + #l:Rows("head") <= 14).toBe(true)
+    expect(heads <= 2).toBe(true)
+    expectNoErrors()
+end
+
+@test("items without a key keep the row at their place")
+local function keyless()
+    local l = list({
+        key = function(_e: Entry): unknown
+            return nil
+        end,
+    })
+    l:SetItems(entries(5))
+    local second = l:Rows()[2]
+    l:SetItems({ { key = "x", label = "X" }, { key = "y", label = "Y" } })
+    expect(l:ItemOf(second)).toEqual({ key = "y", label = "Y" })
+    expect((l:Rows()[1] :: EntryRow).text).toHaveText("X")
+    expect(shownCount(l)).toBe(2)
+    expect(l.selected).toBeNil()
+    l:SetSelected("x")
+    expect((l:Rows()[1] :: EntryRow).sel).toBe(false)
+    expectNoErrors()
+end
+
+@test("a theme change: heights measured again, the rows in sight drawn again")
+local function theme()
+    layoutThemes()
+    local l = list({
+        rowHeight = function(): number
+            return 16 + T.space["space-4"]
+        end,
+    })
+    l:SetItems(entries(100))
+    expect(l.child:GetHeight()).toBe(100 * 24)
+    local binds = l.binds
+    useTheme(ROOMY)
+    expect(l.child:GetHeight()).toBe(100 * 28)
+    expect(l.binds).toBe(binds + shownCount(l))
+    expect(rowTop(l, rowOf(l, "k3") :: EntryRow)).toBeCloseTo(2 * 28, 0)
+    useTheme(nil)
+    expect(l.child:GetHeight()).toBe(100 * 24)
+    expect(rowTop(l, rowOf(l, "k3") :: EntryRow)).toBeCloseTo(2 * 24, 0)
+    -- out of sight: marked, drawn once shown
+    l:Hide()
+    local hiddenBinds = l.binds
+    useTheme(ROOMY)
+    expect(l.binds).toBe(hiddenBinds)
+    l:Show()
+    expect(l.binds > hiddenBinds).toBe(true)
+    useTheme(nil)
+    expectNoErrors()
+end
+
+@test("row tops on whole physical pixels")
+local function snapped()
+    local l = list({ rowHeight = 23.3 })
+    l:SetItems(entries(20))
+    local px = pixel.size(l.child)
+    for _, row in ipairs(l:Rows()) do
+        local top = rowTop(l, row)
+        expect(math.abs(top / px - math.floor(top / px + 0.5)) < 1e-6).toBe(true)
+    end
+    expectNoErrors()
+end
+
+@test("colours painted in bind follow a theme (draw.paint keeps them)")
+local function painted()
+    local l = list()
+    l:SetItems(entries(3))
+    l:SetSelected("k2")
+    expect(tokenOf((rowOf(l, "k2") :: EntryRow).text)).toBe("arcane")
+    expect(tokenOf((rowOf(l, "k1") :: EntryRow).text)).toBe("ink")
+    expectNoErrors()
+end
+
+@test("no key: the item is its own identity; a row made elsewhere is moved onto the content")
+local function defaults()
+    local host = newParent(320, 240)
+    hosts[#hosts + 1] = host
+    local l = virtualList(host, {
+        rowHeight = 24,
+        make = function(_l: VirtualList<Entry>): Frame
+            local r = CreateFrame("Button", nil, UIParent) :: EntryRow
+            r:SetHeight(24)
+            r.text = uiText.text(r, "label", "ink")
+            return r
+        end,
+        bind = bindRow,
+    })
+    l:SetPoint("TOPLEFT")
+    l:SetSize(300, 240)
+    local items = entries(5)
+    l:SetItems(items)
+    local row = l:Rows()[1]
+    expect(row:GetParent()).toBe(l.child)
+    l:SetSelected(items[2])
+    expect((rowOf(l, "k2") :: EntryRow).sel).toBe(true)
+    -- new tables (no `same`): every row drawn again, the choice gone with its table
+    local binds = l.binds
+    l:SetItems(entries(5))
+    expect(l.binds).toBe(binds + 5)
+    expect((rowOf(l, "k2") :: EntryRow).sel).toBe(false)
+    expectNoErrors()
+end
+
+@test("rows 0 high: nothing in sight, nothing made")
+local function zeroHigh()
+    local l = list({ rowHeight = 0 })
+    l:SetItems(entries(50))
+    expect(l.made).toBe(0)
+    expect(l.child:GetHeight()).toBe(1)
+    expectNoErrors()
+end
+
+@test("in combat a row a protected frame hangs on stays put, and is handed on after")
+local function protectedRow()
+    local l = list()
+    l:SetItems(entries(200))
+    local first = rowOf(l, "k1") :: EntryRow
+    -- a secure overlay on the hovered row (the guild roster's, out of combat)
+    local over = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate")
+    over:SetAllPoints(first)
+    if not first:IsProtected() then
+        -- (the emulator doesn't make an anchored frame protected: nothing to check)
+        over:ClearAllPoints()
+        return
+    end
+    local top = rowTop(l, first)
+    mock.player:enterCombat()
+    l.scroll:SetVerticalScroll(2400)
+    mock.script(l.scroll, "OnVerticalScroll", 2400)
+    -- the others moved on; this one waits where it is, with its entry
+    expect(rowTop(l, first)).toBe(top)
+    expect(l:ItemOf(first)).toBe(l.items[1])
+    expect(first).toBeShown()
+    expect(l.dirty).toBe(true)
+    expect(rowOf(l, "k101")).never.toBeNil()
+    mock.player:leaveCombat()
+    over:ClearAllPoints()
+    mock.advanceFrames(2)
+    expect(l:ItemOf(first) == nil or l:IndexOf(first) ~= 1).toBe(true)
+    expectNoErrors()
+end

@@ -8,12 +8,8 @@
 -- (its buttons stay, unseen, for SuuUI's to click); turned off, it's back.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import type SettingsSection from "/Core/Modules"
-import type MicroMenu, MicroMenuItem from "/UI/MicroMenu"
-import type ToggleChips, ChipOption from "/UI/Pickers"
-import type Position from "/EditMode/EditMode"
+import SuuUI, Module from "/Core/API"
+import type SettingsSection, MicroMenu, MicroMenuItem, ToggleChips, ChipOption, Position from "/Core/API"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
@@ -344,13 +340,13 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         local out: Item[] = {}
         for _, item in ipairs(ITEMS) do
             local talents = SuuUI.GetModule("talents")
-            if item.key == "talents" and talents and talents:Get("enabled") then
+            if item.key == "talents" and talents and talents:Setting("enabled") then
                 -- SuuUI's own Talents window (the talents module; its setting is
                 -- known before it is enabled, which is after this module)
                 item = TALENTS_OWN
             end
             local collections = SuuUI.GetModule("collections")
-            if item.key == "collections" and collections and collections:Get("enabled") then
+            if item.key == "collections" and collections and collections:Setting("enabled") then
                 item = COLLECTIONS_OWN
             end
             -- plugins' buttons (0.17) before the game menu's, which stays last
@@ -463,7 +459,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         if not menu then
             return
         end
-        UI.SetVisibility(menu, self:Get("position").hidden and "hidden" or self:Get("shows"))
+        UI.SetVisibility(menu, self:Get("position").hidden and "hidden" or self:Get("shows"), nil, self)
     end
 
     -- Blizzard's micro menu out of sight (its buttons stay, for SuuUI's to click).
@@ -474,7 +470,6 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
     -- click is the game's, SuuUI's button keeps the look and the tooltip.
     -- (The game adds its micro buttons to its micro menu once and lays out
     -- only the ones still there, so this one stays.)
-    menuHooked: boolean = false
     menuHome: Frame? = nil
     -- while the game's button lies over SuuUI's (ReleaseMenuButton: no more)
     menuAdopted: boolean = false
@@ -493,10 +488,9 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         blz:SetAlpha(0)
         blz:Show()
         self.menuAdopted = true
-        if self.menuHooked then
-            return
-        end
-        self.menuHooked = true
+        -- (0.47) the hooks are the module's: armed again at each adopt, and
+        -- silent while it is off; each also waits for the button to be
+        -- adopted (the game's own tooltip and scripts once it's let go)
         local function own(): Frame?
             local m = self.menu
             return m and m.buttons["menu"]
@@ -518,16 +512,19 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
             blz:SetAlpha(0)
             placing = false
         end
-        hook(blz, "SetAlpha", keep)
-        hook(blz, "SetPoint", keep)
+        self:SecureHook(blz, "SetAlpha", keep)
+        self:SecureHook(blz, "SetPoint", keep)
         -- (its own tooltip, the game's latency and frame rate, comes again
         -- each moment while hovered: kept away, SuuUI's shows)
         local function quiet()
-            if GameTooltip:IsOwned(blz) then
+            if self.menuAdopted and GameTooltip:IsOwned(blz) then
                 GameTooltip:Hide()
             end
         end
-        blz:HookScript("OnEnter", function(_, motion)
+        self:HookScript(blz, "OnEnter", function(_: Frame, motion: boolean)
+            if not self.menuAdopted then
+                return
+            end
             quiet()
             local mine = own()
             local fn = mine and mine:GetScript("OnEnter")
@@ -535,15 +532,18 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
                 fn(mine, motion)
             end
         end)
-        blz:HookScript("OnLeave", function(_, motion)
+        self:HookScript(blz, "OnLeave", function(_: Frame, motion: boolean)
+            if not self.menuAdopted then
+                return
+            end
             local mine = own()
             local fn = mine and mine:GetScript("OnLeave")
             if mine and fn then
                 fn(mine, motion)
             end
         end)
-        blz:HookScript("OnUpdate", function()
-            if blz:IsMouseOver() then
+        self:HookScript(blz, "OnUpdate", function()
+            if self.menuAdopted and blz:IsMouseOver() then
                 quiet()
             end
         end)
@@ -766,7 +766,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         self:Layout()
         self:RegisterMover(menu, { key = "position", label = "Micro menu", managedShow = true })
         -- "microMenu": windows open lined up under it
-        SuuUI.PublishAnchor("microMenu", menu)
+        SuuUI.PublishAnchor("microMenu", menu, self)
         self:RegisterSettings(SECTION)
         self:ApplyShows()
         self:Watch("buttons", function()
@@ -843,7 +843,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         for tip in pairs(self.hiddenTips) do
             self:SeeThrough(tip, false)
         end
-        SuuUI.PublishAnchor("microMenu", nil)
+        -- (its anchor is withdrawn by the release: published with self)
         if self.menu then
             self.menu:Hide()
         end

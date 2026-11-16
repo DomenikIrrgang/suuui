@@ -1,0 +1,99 @@
+-- Units/RaidPlanner/Coverage: coverage, raid-wide and per group.
+
+import test, expect, afterEach from "wowlua:test"
+import internal M from "/Units/RaidPlanner"
+import * as part from "/Units/RaidPlanner/Coverage"
+import ITEM from "/Units/RaidPlanner/Catalog"
+import cleanup, priest, mage, hunter, hunter2, shaman, raid, setup, slot, view, row, chip from "./Fixtures"
+
+@afterEach
+local function afterTest()
+    cleanup()
+end
+
+@test("coverage: raid-wide counted once, the blessings per paladin; out of a raid from the slots")
+local function coverage()
+    setup()
+    slot(1, "PRIEST")
+    slot(1, "PALADIN")
+    slot(2, "MAGE", 3)
+    local v = view()
+    expect(v.raidWideMeta).toBe("from the slots")
+    expect(row(v, "Power Word: Fortitude").n).toBe("1")
+    expect(row(v, "Power Word: Fortitude").detail).toBe("priests: 1 slot")
+    expect(row(v, "Blessings").n).toBe("1 of 2")
+    expect(row(v, "Mark of the Wild").warn).toBe(true)
+    expect(row(v, "Mark of the Wild").detail).toBe("none: no druids")
+    expect(v.note).toBe(("Not in a raid: coverage from what the slots ask for · %d tracked"):format(M:TrackedCount()))
+    -- in a raid: who brings it, the open slots besides
+    raid({ { unit = priest, g = 1 }, { unit = mage, g = 2 } })
+    M:Refill()
+    v = view()
+    expect(row(v, "Power Word: Fortitude").detail).toBe("priests: Raider Priest")
+    expect(row(v, "Blessings").detail).toBe("needs the open paladin slot")
+    expect(row(v, "Blessings").warn).toBe(true)
+    expect(assert(assert(row(v, "Arcane Intellect").tip).lines)[1][1]).toBe("Raider Mage")
+    expect(v.raidWideMeta).toBe("tracked only")
+    -- everything tracked: a talent's buff while the spec isn't known, one to ask for
+    M:Set("preset", "all")
+    v = view()
+    expect(row(v, "Power Infusion").detail).toBe("if specced: Raider Priest")
+    expect(row(v, "Tranquilizing Shot").n).toBe("ask")
+end
+
+@test("coverage per group: a doubled Trueshot flagged, a missing one where hunters are, an open slot's")
+local function partyChips()
+    setup()
+    M:Set("preset", "all")
+    raid({ { unit = hunter, g = 1 }, { unit = hunter2, g = 1 }, { unit = shaman, g = 2 } })
+    M:NoteSpec("Raider Hunter", 2, "message")
+    M:NoteSpec("Raider Bowman", 2, "message")
+    slot(1, "HUNTER")
+    slot(1, "HUNTER")
+    slot(2, "SHAMAN")
+    slot(2, "SHAMAN", 3)
+    M:Refill()
+    local v = view()
+    expect(chip(v, 1, "Trueshot Aura").text).toBe("Trueshot Aura ×2: one wasted")
+    expect(chip(v, 1, "Trueshot Aura").tone).toBe("warn")
+    M:Set("flagDoubled", false)
+    v = view()
+    expect(chip(v, 1, "Trueshot Aura").tone).toBe("ok")
+    -- the shaman's tree unknown: maybe; the open Restoration slot
+    expect(chip(v, 2, "Tremor").tone).toBe("ok")
+    expect(chip(v, 2, "Mana Tide").text).toBe("Mana Tide?")
+    expect(v.groups[1].kind).toBe("mixed")
+    -- a group of only an open slot: what it would bring
+    slot(3, "SHAMAN")
+    M:Refill()
+    v = view()
+    expect(chip(v, 3, "Tremor").text).toBe("Tremor: slot open")
+    expect(chip(v, 3, "Tremor").tone).toBe("open")
+    -- a hunter's group without the Marksmanship one: flagged
+    assert(M:Data().specs["Raider Hunter"]).tree = 1
+    assert(M:Data().specs["Raider Bowman"]).tree = 3
+    M:Refill()
+    v = view()
+    expect(chip(v, 1, "No Trueshot Aura").tone).toBe("warn")
+end
+
+@test("who brings an item: a class, a tree's (maybe while it isn't known); the names and classes said")
+local function bringers()
+    local fortitude, trueshot = assert(ITEM.fortitude), assert(ITEM.trueshot)
+    expect(part.provides(fortitude, { class = "PRIEST" })).toBe("yes")
+    expect(part.provides(fortitude, { class = "MAGE" })).toBeNil()
+    expect(part.provides(trueshot, { class = "HUNTER" })).toBe("maybe")
+    expect(part.provides(trueshot, { class = "HUNTER", tree = 2 })).toBe("yes")
+    expect(part.provides(trueshot, { class = "HUNTER", tree = 1 })).toBeNil()
+    expect(part.isMelee({ class = "SHAMAN", tree = 2 })).toBe(true)
+    expect(part.isMelee({ class = "SHAMAN" })).toBe(false)
+    expect(part.uses(trueshot, { class = "HUNTER" })).toBe(true)
+    expect(part.shortSpec("HUNTER", 2)).toBe("MM")
+    expect(part.names({ { name = "Player", class = "HUNTER", tree = 2 }, { class = "PRIEST" } })).toBe(
+        "Player (MM) and priests"
+    )
+    expect(part.byClass({ { name = "Player", class = "PRIEST" }, { class = "PRIEST" }, { name = "Otherplayer", class = "MAGE" } })).toBe(
+        "priests: Player, 1 slot; mages: Otherplayer"
+    )
+    expect(part.classesOf(trueshot, {}, "or")).toBe("hunters")
+end

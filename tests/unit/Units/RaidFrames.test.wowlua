@@ -8,7 +8,10 @@ import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import internal M, powerFor from "/Units/RaidFrames"
 import migrations as settingMigrations from "/Core/Settings"
-import expectNoErrors, expectPingable from "../../helpers"
+import expectNoErrors, expectPingable, holdings, NOTHING from "../../helpers"
+import * as settings from "/Core/Settings"
+import * as modules from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import type RaidButton from "/Units/RaidFrames"
 import * as frames from "wowlua:frames"
 import SuuUI from "/Core/API"
@@ -505,12 +508,42 @@ local function styledLate()
     table.remove(M.buttons)
 end
 
--- (last: the frames stay off for the rest of the file)
-@test("the module stopped by an error: its buttons off")
+-- Raid frames are reloadToToggle: the registry turns them off in a session
+-- only when OnEnable fails. Here they toggle live, as a module that isn't
+-- would, so the registry's own disable and release run. (It ends with them
+-- on again.)
+@test("turned off through the registry: its buttons off, the anchor withdrawn, nothing held; on again, all back")
 local function disabled()
+    local own = ownOf(M)
+    own.reloadToToggle = false
     raid(2)
-    M:OnDisable()
+    -- (the indicators' one-second wait for the raid's size passed: only the
+    -- range poll left)
+    mock.advanceTime(1.1)
+    local before = holdings(M)
+    expect(before.timers).toBe(1)
+    expect(SuuUI.GetAnchor("raid")).toBe(holder())
+    settings.set("raid", "enabled", false)
+    expect(M.state).toBe(modules.ModuleState.Disabled)
+    expect(holdings(M)).toEqual(NOTHING)
+    expect(SuuUI.GetAnchor("raid")).toBeNil()
     expect(myButton().active).toBeFalsy()
+    -- someone joins while it is off: no button comes back on
+    raid(3)
+    for _, f in ipairs(M.buttons) do
+        expect(f.active).toBeFalsy()
+    end
+    -- on again
+    settings.set("raid", "enabled", true)
+    mock.advanceFrames(2)
+    mock.advanceTime(1.1)
+    expect(M.state).toBe(modules.ModuleState.Enabled)
+    expect(holdings(M)).toEqual(before)
+    expect(SuuUI.GetAnchor("raid")).toBe(holder())
+    expect(myButton().active).toBe(true)
+    expect(assert(buttonOf("raid3")).active).toBe(true)
+    own.reloadToToggle = true
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------

@@ -1,0 +1,115 @@
+-- Units/Windows/Shared.wowlua
+-- What the restyled windows of Units/Windows share: a part of one of the
+-- game's frames by its key(s), the window art SkinWindow hides, a part out
+-- of sight, a tab's own label, whether a part shows, a glyph button on
+-- SuuUI's edge and Blizzard's maximise/minimise pair in SuuUI's look.
+
+import SuuUI from "/Core/API"
+import type WindowChrome from "/Core/API"
+import hookScript from "wowlua:hooks"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as frames from "wowlua:frames"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local tryMethod = errors.tryMethod
+local asString, flag, field = secret.asString, secret.flag, tbl.field
+
+-- A part of one of the game's frames, by its key(s).
+export function part(f: unknown, ...: string): Frame?
+    return frames.asFrame(field(f, ...))
+end
+export function button(f: unknown, ...: string): Button?
+    return frames.asButton(field(f, ...))
+end
+
+-- The parts SkinWindow hides: a window's usual art, and more by key.
+export function art(f: Frame, ...: string): unknown[]
+    local out: unknown[] = {}
+    for _, key in ipairs({ "NineSlice", "PortraitContainer", "TitleContainer", "Bg", "TopTileStreaks", ... }) do
+        out[#out + 1] = field(f, key)
+    end
+    return out
+end
+
+-- A list of parts with one of the game's globals added.
+export function withGlobal(list: unknown[], name: string): unknown[]
+    list[#list + 1] = field(_G, name)
+    return list
+end
+
+-- A window's own textures away (SuuUI's glass, its chrome's, stays).
+export function clearArt(f: Frame, chrome: WindowChrome)
+    for _, t in ipairs(frames.textures(f)) do
+        if t ~= chrome.bg then
+            t:SetAlpha(0)
+        end
+    end
+end
+
+-- One of the game's parts out of sight and out of the mouse's way.
+export function quiet(r: Frame?)
+    if not r then
+        return
+    end
+    r:SetAlpha(0)
+    r:EnableMouse(false)
+end
+
+-- A tab button's own label ("Talents").
+export function tabLabel(b: Frame): string?
+    return asString(tryMethod(field(b, "Text") or field(b, "text"), "GetText"))
+end
+
+-- Whether one of the game's parts shows now.
+export function shows(r: unknown): boolean
+    return flag(tryMethod(r, "IsShown"))
+end
+
+-- A button with a glyph on SuuUI's edge: the game's art away, the glyph in
+-- ink-muted, ink with its edge on hover.
+export function glyphOn(b: Button, glyphName: string, size: number)
+    for _, r in ipairs(frames.textures(b)) do
+        r:SetAlpha(0)
+    end
+    for _, t in ipairs(frames.stateTextures(b)) do
+        t:SetAlpha(0)
+    end
+    local glyph = b:CreateTexture(nil, "OVERLAY", nil, 7)
+    UI.Glyph(glyph, glyphName)
+    glyph:SetSize(size, size)
+    glyph:SetPoint("CENTER")
+    UI.Paint(glyph, "ink-muted")
+    local edge = UI.Border(b, "gilt-line")
+    edge:SetShown(false)
+    hookScript(b, "OnEnter", function()
+        edge:SetShown(true)
+        UI.Paint(glyph, "ink")
+    end)
+    hookScript(b, "OnLeave", function()
+        edge:SetShown(false)
+        UI.Paint(glyph, "ink-muted")
+    end)
+    b:SetSize(22, 22)
+end
+
+-- Blizzard's maximise/minimise pair, next to the key chip: a gilt plus or
+-- minus on SuuUI's edge.
+export function skinMaxMin(chrome: WindowChrome, mm: Frame?)
+    if not mm then
+        return
+    end
+    for _, key in ipairs({ "MaximizeButton", "MinimizeButton" }) do
+        local b = button(mm, key)
+        if b then
+            glyphOn(b, key == "MaximizeButton" and "plus" or "minus", 12)
+        end
+    end
+    mm:SetSize(22, 22)
+    mm:ClearAllPoints()
+    local right: Frame = chrome.key or chrome.close or chrome.head
+    mm:SetPoint("RIGHT", right, "LEFT", -S["space-3"], 0)
+    mm:SetFrameLevel(chrome.head:GetFrameLevel() + 3)
+end

@@ -1,0 +1,328 @@
+-- Units/Collections/Strip.wowlua
+-- The collections window's strip (Units/Collections): 40px cells, 2 rows of
+-- 18 a page (Cell; Appearances' tiles in their place, Collections/Wardrobe),
+-- the page arrows (Strip), and the strip's tools above it: the search, the
+-- filters, the count, Appearances' title (Tools). The module's
+-- LayoutCells, Page, DrawCell and DrawStrip as functions taking the module
+-- (its methods call them).
+
+import SuuUI from "/Core/API"
+import type SuuButton, Text, TextField, Segmented, Border from "/Core/API"
+import type CollectionsModule from "/Units/Collections"
+import type Entry from "./Catalog"
+import GIFT_ICON, status, petSourceLines from "./Catalog"
+import sourceLine from "./Sources"
+import Tile, TILES from "./Wardrobe"
+import * as secret from "wowlua:secret"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+local isSecret = secret.isSecret
+
+export local CELL, COLS, ROWS = 40, 18, 2
+
+export local TOOLS_H = 30
+local function STRIP_H(): number
+    return CELL * ROWS + S["space-5"] + 8
+end
+
+--------------------------------------------------------------------------------
+-- The strip: 40px cells, 2 rows of 18 a page
+--------------------------------------------------------------------------------
+
+export class Cell extends Button
+    readonly icon: Texture
+    readonly edge: Border
+    readonly star: Texture
+    readonly fresh: Texture
+    readonly jewel: Texture
+    hover: boolean = false
+    entry: Entry? = nil
+
+    constructor(parent: Frame, m: CollectionsModule)
+        super(nil, parent)
+        self:SetSize(CELL, CELL)
+        UI.Fill(self, "surface-sunk", "BACKGROUND"):SetAllPoints()
+        self.icon = self:CreateTexture(nil, "ARTWORK")
+        self.icon:SetPoint("TOPLEFT", 1, -1)
+        self.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        self.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        self.edge = UI.Border(self, "gilt-hairline", { layer = "OVERLAY" })
+        self.star = self:CreateTexture(nil, "OVERLAY", nil, 2)
+        UI.Glyph(self.star, "star")
+        self.star:SetSize(11, 11)
+        self.star:SetPoint("TOPRIGHT", -1, -1)
+        UI.Paint(self.star, "gilt-text")
+        self.fresh = UI.Diamond(self, 6, "ink", "OVERLAY", 3)
+        self.fresh:SetPoint("CENTER", self, "TOPLEFT", 1, -1)
+        self.jewel = UI.Diamond(self, 5, "gilt", "OVERLAY", 3)
+        self.jewel:SetPoint("CENTER", self, "BOTTOM", 0, -4)
+        self:SetScript("OnEnter", function()
+            self.hover = true
+            m:DrawCell(self)
+            local e = self.entry
+            if not e then
+                return
+            end
+            UI.ShowTooltip(self, {
+                title = e.name,
+                subtitle = e.collected and (status(e)) or nil,
+                description = e.kind == "pet" and (petSourceLines(e.sourceText)[1] or "Source unknown") or
+                    sourceLine(e.source, e.kind == "appearance" and "appearance" or "mount", e.sourceType),
+            })
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover = false
+            m:DrawCell(self)
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", function()
+            local e = self.entry
+            -- a pet shift-clicked: its link in chat (the game's journal's)
+            if e and e.kind == "pet" and IsModifiedClick("CHATLINK") then
+                m:LinkPet(e)
+                return
+            end
+            m:Choose(e)
+        end)
+        -- a mount or pet of yours dragged: onto an action bar (asked 2026-11-10)
+        self:RegisterForDrag("LeftButton")
+        self:SetScript("OnDragStart", function()
+            m:Pickup(self.entry)
+        end)
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            m:Page(-delta)
+        end)
+    end
+end
+
+-- The strip: its cells (Mounts) or tiles (Appearances), the page arrows.
+export class Strip extends Frame
+    readonly prev: SuuButton
+    readonly next: SuuButton
+    readonly pageText: Text
+    readonly grid: Frame
+    readonly cells: Cell[] = {}
+    readonly empty: Text
+    readonly tileGrid: Frame
+    readonly tiles: Tile[] = {}
+
+    constructor(body: Frame, m: CollectionsModule)
+        super(nil, body)
+        self:SetPoint("BOTTOMLEFT")
+        self:SetPoint("BOTTOMRIGHT")
+        self:SetHeight(STRIP_H())
+        self:EnableMouseWheel(true)
+        self:SetScript("OnMouseWheel", function(_: Frame, delta: number)
+            m:Page(-delta)
+        end)
+        self.prev = UI.Button(self, {
+            icon = "chevronLeft",
+            width = 30,
+            onClick = function()
+                m:Page(-1)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.prev:SetPoint("LEFT", 0, S["space-2"])
+        end)
+        self.next = UI.Button(self, {
+            icon = "chevronRight",
+            width = 30,
+            onClick = function()
+                m:Page(1)
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.next:SetPoint("RIGHT", 0, S["space-2"] + 8)
+        end)
+        self.pageText = UI.Text(self, "micro", "ink-muted")
+        SuuUI.Layout.Follow(self, function()
+            self.pageText:SetPoint("TOP", self.next, "BOTTOM", 0, -S["space-2"])
+        end)
+        self.grid = CreateFrame("Frame", nil, self)
+        SuuUI.Layout.Follow(self, function()
+            self.grid:SetPoint("TOPLEFT", self, "TOPLEFT", 30 + S["space-5"], 0)
+            self.grid:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -(30 + S["space-5"]), 0)
+        end)
+        for i = 1, COLS * ROWS do
+            self.cells[i] = Cell.new(self.grid, m)
+        end
+        self.empty = UI.Text(self, "body", "ink-muted")
+        self.empty:SetPoint("CENTER")
+        self.grid:HookScript("OnSizeChanged", function()
+            m:LayoutCells()
+        end)
+        -- the tiles, in the cells' place
+        self.tileGrid = CreateFrame("Frame", nil, self)
+        self.tileGrid:SetPoint("TOPLEFT", self.grid, "TOPLEFT")
+        self.tileGrid:SetPoint("BOTTOMRIGHT", self.grid, "BOTTOMRIGHT")
+        self.tileGrid:Hide()
+        for i = 1, TILES do
+            self.tiles[i] = Tile.new(self.tileGrid, m)
+        end
+        self.tileGrid:HookScript("OnSizeChanged", function()
+            m:LayoutTiles()
+        end)
+        -- (a model loses what it wears while hidden: each dressed again once
+        -- the tiles show, after another tab or the window closed; found in
+        -- game: empty tiles back on Appearances)
+        self.tileGrid:HookScript("OnHide", function()
+            for _, t in ipairs(self.tiles) do
+                t.shownID = nil
+            end
+        end)
+    end
+end
+
+-- The strip's tools: the search, the filters, the count; Appearances' title.
+export class Tools extends Frame
+    readonly search: TextField
+    readonly have: Segmented<string>
+    readonly list: Segmented<string>
+    readonly count: Text
+    readonly track: Texture
+    readonly fill: Texture
+    readonly title: Text
+
+    constructor(body: Frame, strip: Frame, m: CollectionsModule)
+        super(nil, body)
+        self:SetPoint("BOTTOMLEFT", strip, "TOPLEFT", 0, S["space-5"])
+        self:SetPoint("BOTTOMRIGHT", strip, "TOPRIGHT", 0, S["space-5"])
+        self:SetHeight(TOOLS_H)
+        local function changed()
+            m.page = 1
+            m:Refresh()
+        end
+        self.search = UI.TextField(self, {
+            width = 190,
+            placeholder = "Search",
+            onTextChanged = function()
+                changed()
+            end,
+        })
+        self.search:SetPoint("LEFT")
+        self.have = UI.Segmented(self, {
+            value = "all",
+            options = {
+                { value = "all", label = "All" },
+                { value = "have", label = "Collected" },
+                { value = "missing", label = "Not collected" },
+            },
+            onChange = function()
+                changed()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.have:SetPoint("LEFT", self.search, "RIGHT", S["space-4"], 0)
+        end)
+        self.list = UI.Segmented(self, {
+            value = "all",
+            options = {
+                { value = "all", label = "Mounts" },
+                { value = "fav", label = "Favourites" },
+                { value = "recent", label = "Recent" },
+            },
+            onChange = function()
+                changed()
+            end,
+        })
+        SuuUI.Layout.Follow(self, function()
+            self.list:SetPoint("LEFT", self.have, "RIGHT", S["space-4"], 0)
+        end)
+        self.count = UI.Text(self, "numeric", "ink")
+        self.count:SetPoint("RIGHT", -70, 0)
+        self.track = UI.Fill(self, "track", "ARTWORK")
+        self.track:SetSize(60, 2)
+        self.track:SetPoint("RIGHT")
+        self.fill = UI.Fill(self, "gilt", "OVERLAY")
+        self.fill:SetHeight(2)
+        self.fill:SetPoint("LEFT", self.track, "LEFT")
+        -- the title (Appearances: the slot and kind)
+        self.title = UI.Text(self, "header", "gilt-text")
+        self.title:SetPoint("LEFT")
+    end
+end
+
+-- The cells across the grid's width (18 a row, the space shared out between).
+export function layoutCells(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local w = ui.strip.grid:GetWidth()
+    if not w or isSecret(w) or w <= 0 then
+        return
+    end
+    local gap = math.max(2, (w - COLS * CELL) / (COLS - 1))
+    for i, b in ipairs(ui.strip.cells) do
+        local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", col * (CELL + gap), -row * (CELL + S["space-5"]))
+    end
+end
+
+export function page(self: CollectionsModule, step: number)
+    self.page = math.max(1, math.min(self.pages, self.page + step))
+    self:DrawStrip()
+end
+
+export function drawCell(self: CollectionsModule, b: Cell)
+    local e = b.entry
+    if not e then
+        b:Hide()
+        return
+    end
+    b.icon:SetTexture(e.wrapped and GIFT_ICON or e.icon)
+    local missing = not e.collected
+    b.icon:SetDesaturated(missing)
+    local v = missing and (b.hover and 0.8 or 0.55) or 1
+    b.icon:SetVertexColor(v, v, v)
+    local chosen = self.chosen ~= nil and self.chosen.id == e.id
+    b.edge:SetColor((chosen or b.hover) and "gilt" or missing and "gilt-faint" or "gilt-hairline")
+    b.star:SetShown(e.favourite and true or false)
+    local learned = e.learned
+    b.fresh:SetShown(e.wrapped or (learned ~= nil and learned > 0 and time() - learned < 7 * 86400))
+    b.jewel:SetShown(chosen)
+    b:Show()
+end
+
+export function drawStrip(self: CollectionsModule)
+    local ui = self.ui
+    if not ui then
+        return
+    end
+    local strip, entries = ui.strip, self.entries
+    local tiles = self.tab == "wardrobe"
+    strip.grid:SetShown(not tiles)
+    strip.tileGrid:SetShown(tiles)
+    local per = tiles and TILES or COLS * ROWS
+    self.pages = math.max(1, math.ceil(#entries / per))
+    self.page = math.max(1, math.min(self.pages, self.page))
+    local first = (self.page - 1) * per
+    if tiles then
+        for i, b in ipairs(strip.tiles) do
+            b.entry = entries[first + i]
+            self:DrawTile(b)
+        end
+    else
+        for i, b in ipairs(strip.cells) do
+            b.entry = entries[first + i]
+            self:DrawCell(b)
+        end
+    end
+    local paged = self.pages > 1
+    strip.prev:SetShown(paged)
+    strip.next:SetShown(paged)
+    strip.pageText:SetShown(paged)
+    strip.prev:SetEnabledState(self.page > 1)
+    strip.next:SetEnabledState(self.page < self.pages)
+    strip.pageText:SetValue(self.page .. " / " .. self.pages)
+    strip.empty:SetShown(#entries == 0)
+    strip.empty:SetValue(
+        self.tab == "toys" and "No toys match." or tiles and "No appearances match." or
+            self.tab == "pets" and "No pets match." or
+            "No mounts match."
+    )
+end

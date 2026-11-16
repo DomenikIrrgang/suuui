@@ -1,0 +1,610 @@
+-- Units/CooldownManager/EditorData.wowlua
+-- What the Cooldown Manager's settings editor works with, without frames:
+-- the module it edits (EditorHost) and changes to its lists through a copy
+-- (mutate), each list's label and kind, conditions in words for your class,
+-- a class's talents, the rank and art a spell shows, what "+ Add" offers
+-- (your spellbook, every preset, what is on you now, "Seen recently") and
+-- what a picked option becomes. The module (Units/CooldownManager.wowlua)
+-- and the editor's parts (Rows, Behaviour, Editor) call these.
+
+import SuuUI from "/Core/API"
+import type SelectOption from "/Core/API"
+import type CooldownPreset from "/Data/Presets"
+import * as secret from "wowlua:secret"
+import * as errors from "wowlua:errors"
+import * as tbl from "wowlua:table"
+import * as Lists from "./Lists"
+import * as Conditions from "./Conditions"
+
+local UI = SuuUI.UI
+local try, tryValue, field = errors.try, errors.tryValue, tbl.field
+local asNumber, asString = secret.asNumber, secret.asString
+
+type Entry = Lists.Entry
+type ListSet = Lists.ListSet
+type Recent = Lists.Recent
+type Condition = Conditions.Condition
+type When = Conditions.When
+type Choice = Conditions.Choice
+type ClassTalent = Conditions.ClassTalent
+
+-- What "+ Add" offers first ("Seen recently"), newest first, by kind. (0.47:
+-- this character's, in its data; before, by class in the profile.)
+type RecentByKind = { [string]: Recent[] }
+
+local _, classFile = UnitClass("player")
+export const CLASS: string = secret.known(classFile, "")
+
+export function presets(): CooldownPreset[]
+    return SuuUI.CooldownPresets()
+end
+
+export function findPreset(id: string?): CooldownPreset?
+    return Lists.findPreset(presets(), id)
+end
+export function specName(spec: number): string
+    return Lists.specName(presets(), spec)
+end
+local copy = Lists.copy
+
+--------------------------------------------------------------------------------
+-- The module the editor edits: its spec, the setup it edits, the lists of
+-- that setup, and when they change. (The Cooldown Manager module; a test
+-- may hand in its own.)
+--------------------------------------------------------------------------------
+
+export interface EditorHost
+    -- this character's spec and its points per tree
+    readonly spec: number
+    readonly points: number[]
+    -- the spec whose setup the settings edit (nil: the active one)
+    editSpec: number?
+    function EditSpec(): number
+    function Lists(spec: number?): ListSet
+    function SetLists(lists: ListSet, spec: number?)
+    function PresetId(spec: number?): string
+    function Changes(): number
+    function LoadPreset(id: string, spec: number?): boolean
+    function CharData(): { [string]: unknown }
+    function Watch(key: "setups", fn: () -> ())
+    function On(message: "SUUUI_COOLDOWNS_SETUP", fn: () -> ())
+    function Emit(message: "SUUUI_COOLDOWNS_SETUP")
+end
+
+--------------------------------------------------------------------------------
+-- The list editor (step 1.7b-2): every entry of every list, per spell
+--------------------------------------------------------------------------------
+
+local LIST_INFO, TABS = Lists.LIST_INFO, Lists.TABS
+
+-- A list's label, kind and note.
+export function infoOf(key: string): Lists.ListInfo
+    return LIST_INFO[key] or { label = key, kind = "aura", note = "" }
+end
+
+export function kindOf(key: string): string
+    return infoOf(key).kind
+end
+
+-- The lists of a tab ("cooldowns" or "auras").
+export function tabLists(tab: string): string[]
+    return TABS[tab] or {}
+end
+
+-- Change the lists through a copy, so the setting sees a new value.
+export function mutate(host: EditorHost, fn: (lists: ListSet) -> ())
+    local spec = host:EditSpec()
+    local lists = copy(host:Lists(spec))
+    for _, key in ipairs(Lists.LIST_KEYS) do
+        lists[key] = lists[key] or {}
+    end
+    fn(lists)
+    host:SetLists(lists, spec)
+end
+
+export function newUid(): string
+    return tostring(time()) .. math.random(1000, 9999)
+end
+
+local ENCHANT_NAME, ENCHANT_INV = Lists.ENCHANT_NAME, Lists.ENCHANT_INV
+export function enchantArt(enchant: string?): number | string
+    local info = enchant and UI.WeaponEnchant(enchant)
+    return info and info.icon or GetInventoryItemTexture("player", enchant and ENCHANT_INV[enchant] or 16) or 134400
+end
+
+local walk = Lists.walk
+
+--------------------------------------------------------------------------------
+-- Conditions: when an entry shows at all (Conditions.wowlua), for your class
+--------------------------------------------------------------------------------
+
+export function newCondition(kind: string): Condition
+    return Conditions.newCondition(kind, CLASS)
+end
+export function conditionSentence(subject: string?, when: When?): string
+    return Conditions.conditionSentence(subject, when, CLASS)
+end
+export function conditionWords(when: When?): string?
+    return Conditions.conditionWords(when, CLASS)
+end
+-- Choices as a dropdown's options.
+export function choiceOptions(choices: Choice[]): SelectOption<string>[]
+    local out: SelectOption<string>[] = {}
+    for _, c in ipairs(choices) do
+        out[#out + 1] = { value = c.value, label = c.label }
+    end
+    return out
+end
+export function conditionTypes(current: string?): SelectOption<string>[]
+    return choiceOptions(Conditions.conditionTypes(current, CLASS))
+end
+
+-- A class's talents, learned or not, sorted by name: { id = spellID, name,
+-- tree } each. Any class's from the generated list (SuuUI.ClassTalents);
+-- without it, your own class's read live from every node of the active
+-- config's trees (kept once read: the config may not be there yet right
+-- after login).
+local liveTalents: ClassTalent[]? = nil
+local function readLiveTalents(): ClassTalent[]
+    if liveTalents then
+        return liveTalents
+    end
+    local out: ClassTalent[] = {}
+    local seen: { [number]: boolean } = {}
+    pcall(function()
+        local cfg = asNumber(try(field(C_ClassTalents, "GetActiveConfigID")))
+        if not cfg then
+            return
+        end
+        local info = tryValue(C_Traits.GetConfigInfo, cfg)
+        for _, treeID in ipairs(info and info.treeIDs or {}) do
+            for _, nodeID in ipairs(tryValue(C_Traits.GetTreeNodes, treeID) or {}) do
+                local ni = tryValue(C_Traits.GetNodeInfo, cfg, nodeID)
+                for _, entryID in ipairs(ni and ni.entryIDs or {}) do
+                    local ei = tryValue(C_Traits.GetEntryInfo, cfg, entryID)
+                    local definitionID = ei and asNumber(ei.definitionID)
+                    local di = definitionID and tryValue(C_Traits.GetDefinitionInfo, definitionID)
+                    local id = di and (asNumber(di.spellID) or asNumber(di.overriddenSpellID))
+                    local name = id and asString(C_Spell.GetSpellName(id))
+                    if id and name and not seen[id] then
+                        seen[id] = true
+                        out[#out + 1] = { id = id, name = name }
+                    end
+                end
+            end
+        end
+    end)
+    table.sort(out, function(x: ClassTalent, y: ClassTalent): boolean
+        return x.name < y.name
+    end)
+    if #out > 0 then
+        liveTalents = out
+    end
+    return out
+end
+
+export function classTalents(class: string): ClassTalent[]
+    local talents = SuuUI.ClassTalents(class)
+    if talents and #talents > 0 then
+        local out: ClassTalent[] = {}
+        for _, t in ipairs(talents) do
+            out[#out + 1] = {
+                id = t.id,
+                name = t.name or asString(C_Spell.GetSpellName(t.id)) or ("ID " .. t.id),
+                tree = t.tree,
+                spec = t.spec,
+            }
+        end
+        table.sort(out, function(x: ClassTalent, y: ClassTalent): boolean
+            return x.name < y.name
+        end)
+        return out
+    end
+    if class == CLASS then
+        return readLiveTalents()
+    end
+    return {}
+end
+
+-- The rank of an entry you know, as the spellbook names it, and the spell
+-- that shows it.
+export function rankText(entry: Entry): (string, number?)
+    local ids = entry.ids or {}
+    -- the highest rank you know, not the highest ID (Consecration's Rank 1
+    -- is 26573, above its other ranks' IDs); the highest ID on a tie
+    local best: number?, bestSub, bestRank = nil, "Known", -1
+    for i = #ids, 1, -1 do
+        local id = ids[i]
+        if secret.flag(try(field(_G, "IsPlayerSpell"), id)) then
+            local sub = asString(try(field(C_Spell, "GetSpellSubtext"), id))
+            local r = sub and tonumber(sub:match("(%d+)")) or 0
+            if r > bestRank then
+                best, bestRank = id, r
+                bestSub = (sub and sub ~= "") and sub or "Known"
+            end
+        end
+    end
+    if best then
+        return bestSub, best
+    end
+    -- not learned: the preset's chosen art (what most of its ranks show),
+    -- else Rank 1 (the highest IDs are often NPC versions)
+    return "Not learned", entry.icon or ids[1]
+end
+
+-- What "+ Add" offers: cooldowns from your spellbook (and every preset of
+-- your class), auras from the presets and what is on you and your target now.
+local function spellbookByName(): { [string]: number[] }
+    local out: { [string]: number[] } = {}
+    local lines = asNumber(try(field(C_SpellBook, "GetNumSpellBookSkillLines"))) or 0
+    for line = 1, lines do
+        local li = tryValue(C_SpellBook.GetSpellBookSkillLineInfo, line)
+        local offset, count = li and asNumber(li.itemIndexOffset), li and asNumber(li.numSpellBookItems)
+        if offset and count then
+            for i = offset + 1, offset + count do
+                local it = tryValue(C_SpellBook.GetSpellBookItemInfo, i, Enum.SpellBookSpellBank.Player)
+                local spellID, name = it and asNumber(it.spellID), it and asString(it.name)
+                if it and spellID and not it.isPassive and name then
+                    local ids = out[name] or {}
+                    out[name] = ids
+                    table.insert(ids, spellID)
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- A preset's shared slot "+ Add" may copy: the entry and the list it came from.
+export type GroupOffer = { entry: Entry, key: string }
+
+-- Auras other classes' presets track ("+ Add" notes their class): name ->
+-- "Priest", filled by candidates("aura"). And every candidate's chosen art
+-- (the presets' and the catalog's icon: what most of its IDs show), which a
+-- new entry takes along.
+local auraClassNote: { [string]: string } = {}
+local candidateIcon: { [string]: number } = {}
+
+-- Returns spells by name (shared slots' members and what collections hold
+-- included), and the presets' shared slots by name with the list each came
+-- from.
+export function candidates(kind: string): ({ [string]: number[] }, { [string]: GroupOffer })
+    local byName: { [string]: number[] } = {}
+    local groups: { [string]: GroupOffer } = {}
+    local function add(name: string?, ids: number[]?)
+        if not name then
+            return
+        end
+        local mine = byName[name] or {}
+        byName[name] = mine
+        local seen: { [number]: boolean } = {}
+        for _, id in ipairs(mine) do
+            seen[id] = true
+        end
+        for _, id in ipairs(ids or {}) do
+            if not seen[id] then
+                table.insert(mine, id)
+                seen[id] = true
+            end
+        end
+    end
+    local keys = kind == "cooldown" and { "essential", "utility" } or { "buffs", "debuffs", "procs" }
+    for _, p in ipairs(presets()) do
+        for _, key in ipairs(keys) do
+            walk(p.lists[key], key, function(e: Entry)
+                if e.collection or e.enchant then
+                    return
+                end
+                local name = e.name
+                if e.group then
+                    if name then
+                        groups[name] = groups[name] or { entry = e, key = key }
+                    end
+                else
+                    add(name, e.ids)
+                    local icon = e.icon
+                    if name and icon then
+                        candidateIcon[name] = candidateIcon[name] or icon
+                    end
+                end
+            end)
+        end
+    end
+    -- every class's preset auras too (a paladin tracking Power Word: Shield)
+    if kind ~= "cooldown" then
+        for name, a in pairs(SuuUI.AuraCatalog()) do
+            if not byName[name] then
+                add(name, a.ids)
+                auraClassNote[name] = a.classes
+            end
+            local icon = a.icon
+            if icon then
+                candidateIcon[name] = candidateIcon[name] or icon
+            end
+        end
+    end
+    if kind == "cooldown" then
+        for name, ids in pairs(spellbookByName()) do
+            local cd = asNumber(try(field(_G, "GetSpellBaseCooldown"), ids[#ids]))
+            if byName[name] or (cd and cd > 0) then
+                add(name, ids)
+            end
+        end
+    elseif not InCombatLockdown() then
+        for _, unit in ipairs({ "player", "target" }) do
+            for _, filter in ipairs({ "HELPFUL", "HARMFUL" }) do
+                for i = 1, 40 do
+                    local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, unit, i, filter)
+                    if not ok or secret.isSecret(a) or not a then
+                        break
+                    end
+                    local spellId = asNumber(a.spellId)
+                    if not spellId then
+                        break
+                    end
+                    add(asString(a.name), { spellId })
+                end
+            end
+        end
+    end
+    for _, ids in pairs(byName) do
+        table.sort(ids)
+    end
+    return byName, groups
+end
+
+-- "Seen recently": spells you cast and auras on you and your target (out of
+-- combat, when the game shows them), newest first, RECENT_MAX per kind. A
+-- name already near the top isn't written again. (0.47) Kept in this
+-- character's data, not the profile: it isn't a choice, an export
+-- shouldn't carry it, and a cast in combat writes no setting.
+local RECENT_MAX = 12
+
+local function recentKinds(host: EditorHost): RecentByKind
+    local data = host:CharData()
+    local all = data.recent
+    if type(all) ~= "table" then
+        all = {}
+        data.recent = all
+    end
+    return all :: unknown :: RecentByKind
+end
+
+local function remember(host: EditorHost, kind: string, name: string?, id: number?)
+    if not (name and id) then
+        return
+    end
+    local mine = recentKinds(host)
+    local recentList = Lists.pushRecent(mine[kind] or {}, name, id, RECENT_MAX)
+    if recentList then
+        mine[kind] = recentList
+    end
+end
+
+export function recent(host: EditorHost, kind: string): Recent[]
+    return recentKinds(host)[kind] or {}
+end
+
+-- Out of combat: the auras on you (anyone's) and yours on the target. Only
+-- names not yet in the list are added (newest first), in one write per scan.
+export function rememberAuras(host: EditorHost)
+    if InCombatLockdown() then
+        return
+    end
+    local scanned: { name?: string, id: number }[] = {}
+    local scans: { unit: string, filter: string }[] = {
+        { unit = "player", filter = "HELPFUL" },
+        { unit = "target", filter = "HARMFUL|PLAYER" },
+    }
+    for _, scan in ipairs(scans) do
+        for i = 1, 40 do
+            local ok, a = pcall(C_UnitAuras.GetAuraDataByIndex, scan.unit, i, scan.filter)
+            if not ok or secret.isSecret(a) or not a then
+                break
+            end
+            local spellId = asNumber(a.spellId)
+            if not spellId then
+                break
+            end
+            scanned[#scanned + 1] = { name = asString(a.name), id = spellId }
+        end
+    end
+    local fresh = Lists.mergeRecent(recent(host, "aura"), scanned, RECENT_MAX)
+    if fresh then
+        recentKinds(host).aura = fresh
+    end
+end
+
+-- A spell you cast, if it's one of yours with a cooldown (or a preset's).
+export function rememberCast(host: EditorHost, spellR: unknown)
+    local spellID = asNumber(spellR)
+    if not spellID or not secret.flag(try(field(_G, "IsPlayerSpell"), spellID)) then
+        return
+    end
+    local cd = asNumber(try(field(_G, "GetSpellBaseCooldown"), spellID))
+    if cd and cd > 0 then
+        remember(host, "cooldown", asString(C_Spell.GetSpellName(spellID)), spellID)
+    end
+end
+
+-- The art of a list of IDs for a dropdown: the rank you know, else the first.
+local function idsArt(ids: number[]?): (number | string)?
+    if not ids or not ids[1] then
+        return nil
+    end
+    for i = #ids, 1, -1 do
+        if secret.flag(try(field(_G, "IsPlayerSpell"), ids[i])) then
+            return (C_Spell.GetSpellTexture(ids[i]))
+        end
+    end
+    return (C_Spell.GetSpellTexture(ids[1]))
+end
+
+-- What a typed number finds: the spell with that ID, as "Name · ID 123".
+-- Its value is "id:123"; adding it adds exactly that ID.
+export function spellLookup(query: string): SelectOption<string>[]?
+    local id = tonumber((query or ""):match("^%s*(%d+)%s*$"))
+    if not id then
+        return nil
+    end
+    local name = asString(C_Spell.GetSpellName(id))
+    if not name then
+        return nil
+    end
+    return { { value = "id:" .. id, label = ("%s · ID %d"):format(name, id), icon = C_Spell.GetSpellTexture(id) } }
+end
+
+-- An option's value as an entry: a name (every ID it carries), "id:123", or
+-- "group:Name" (a preset's shared slot, a copy with its own uid).
+export function entryFor(value: string?, byName: { [string]: number[] }?, groups: { [string]: GroupOffer }?): Entry?
+    if not value then
+        return nil
+    end
+    local hand = value:match("^enchant:(%a+)$")
+    local enchantName = hand and ENCHANT_NAME[hand]
+    if hand and enchantName then
+        return { enchant = hand, name = enchantName, ids = {}, uid = newUid() }
+    end
+    local id = tonumber(value:match("^id:(%d+)$"))
+    if id then
+        return { name = asString(C_Spell.GetSpellName(id)), ids = { id } }
+    end
+    local gname = value:match("^group:(.+)$")
+    local offer = gname and groups and groups[gname]
+    if offer then
+        local g = copy(offer.entry)
+        g.uid = newUid()
+        return g
+    end
+    local ids = byName and byName[value]
+    if ids then
+        return { name = value, ids = ids, icon = candidateIcon[value] }
+    end
+    return nil
+end
+
+-- A cooldown shared slot shows the last member you know (upgrades last).
+export function knownMember(slot: Entry?): Entry?
+    local members = slot and slot.members or {}
+    for i = #members, 1, -1 do
+        if (rankText(members[i])) ~= "Not learned" then
+            return members[i]
+        end
+    end
+    return nil
+end
+
+-- An entry's icon art: a single spell's rank you know, a shared slot's icon
+-- (a cooldown slot's: the member it shows; an aura slot's, unless its icon
+-- is fixed: the first member you know, else its icon).
+export function artOf(e: Entry, cooldown: boolean): (number | string)?
+    if e.enchant then
+        return enchantArt(e.enchant)
+    end
+    local id: number? = nil
+    if e.group and cooldown then
+        local m = knownMember(e) or (e.members or {})[1]
+        if m then
+            id = select(2, rankText(m))
+        end
+    elseif e.group then
+        if not e.fixedIcon then
+            for _, m in ipairs(e.members or {}) do
+                local rank, known = rankText(m)
+                if rank ~= "Not learned" then
+                    id = known
+                    break
+                end
+            end
+        end
+        id = id or e.icon or (e.ids or {})[1]
+    elseif e.ids then
+        id = select(2, rankText(e))
+    end
+    return id and C_Spell.GetSpellTexture(id) or nil
+end
+
+-- What an "+ Add" offers: what you cast or saw lately first, then
+-- everything by name, and (where shared slots may go) the presets'
+-- shared slots of this list. Nothing the list already has.
+export function addOptions(
+    host: EditorHost,
+    kind: string,
+    key: string,
+    byName: { [string]: number[] },
+    groups: { [string]: GroupOffer },
+    present: { [string]: boolean },
+    slots: boolean?
+): SelectOption<string>[]
+    local top: SelectOption<string>[] = {}
+    local taken: { [string]: boolean } = {}
+    for _, r in ipairs(recent(host, kind)) do
+        if not present[r.name] and not taken[r.name] then
+            taken[r.name] = true
+            if not byName[r.name] then
+                byName[r.name] = copy(r.ids)
+            end
+            top[#top + 1] = { value = r.name, label = r.name, icon = idsArt(r.ids) }
+        end
+    end
+    local options: SelectOption<string>[] = {}
+    for name, ids in pairs(byName) do
+        if not present[name] and not taken[name] then
+            local iconID = candidateIcon[name]
+            options[#options + 1] = {
+                value = name,
+                label = name,
+                icon = iconID and C_Spell.GetSpellTexture(iconID) or idsArt(ids),
+                note = kind ~= "cooldown" and auraClassNote[name] or nil,
+            }
+        end
+    end
+    if slots then
+        for name, g in pairs(groups) do
+            if not present[name] and g.key == key then
+                local e = g.entry
+                options[#options + 1] = {
+                    value = "group:" .. name,
+                    label = name .. " (Shared slot)",
+                    icon = e.icon and C_Spell.GetSpellTexture(e.icon) or idsArt(e.ids),
+                }
+            end
+        end
+    end
+    table.sort(options, function(x: SelectOption<string>, z: SelectOption<string>): boolean
+        return (x.label or "") < (z.label or "")
+    end)
+    if #top > 0 then
+        table.insert(top, 1, { heading = "Seen recently" })
+        top[#top + 1] = { heading = "All" }
+        for _, o in ipairs(options) do
+            top[#top + 1] = o
+        end
+        options = top
+    end
+    -- Buffs on you (not in a shared slot): one entry per weapon, first
+    if key == "buffs" and slots then
+        local weapons: SelectOption<string>[] = {}
+        for _, hand in ipairs({ "main", "off" }) do
+            if not present[ENCHANT_NAME[hand]] then
+                weapons[#weapons + 1] = {
+                    value = "enchant:" .. hand,
+                    label = ENCHANT_NAME[hand],
+                    icon = enchantArt(hand),
+                }
+            end
+        end
+        if #weapons > 0 then
+            table.insert(weapons, 1, { heading = "Weapon enchants" })
+            local first = options[1]
+            if not (first and first.heading) then
+                weapons[#weapons + 1] = { heading = "Auras" }
+            end
+            for _, o in ipairs(options) do
+                weapons[#weapons + 1] = o
+            end
+            options = weapons
+        end
+    end
+    return options
+end

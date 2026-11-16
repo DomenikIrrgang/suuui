@@ -1,0 +1,284 @@
+-- Helpers for the Bags module's tests (the module's and its parts':
+-- Units/Bags, Units/Bags/Windows, Rails, Use, Saved, SortRun).
+--
+--   CLOTH, POTION, RAG, HERB, KEY    test items (defined once, cached)
+--   start(), cleanup()      a test file's @beforeEach and @afterEach: the
+--                           backpack with cloth and potions; a sort stopped,
+--                           the cursor, reagent bag and keyring cleared, the
+--                           windows closed, the settings reset, no errors
+--   inv(), bank(), frame(name), call(name, ...), open(), run(fn, ...)
+--                           the windows, the game's frames and functions
+--   metaText(), shownSlots(), button(bag, slot), itemAt(bag, slot),
+--   shown(bag, slot)        what the bags window shows
+--   bagRail(), bankRail(), entryOf(cell)
+--                           the rails and a cell's entry
+--   atBank(opts)            at a banker (its tabs, the next slot's cost)
+--   OTHER, others(), who(), view(), all(), savedSlot(i)
+--                           another character's saved bags and the header
+--   stacksOf(bag, id), cover(window)
+--                           a sort's result and its loading mark
+
+import * as mock from "wowlua:mock"
+import * as frames from "wowlua:frames"
+import * as tbl from "wowlua:table"
+import type Inventory, SlotItem from "/UI/Inventory"
+import internal M from "/Units/Bags"
+import expectNoErrors from "../../../helpers"
+
+export const CLOTH = 990021
+export const POTION = 990022
+export const RAG = 990023
+export const HERB = 990024
+export const KEY = 990025
+mock.defineItem(KEY, { name = "Test Key", quality = 1, stackCount = 1, icon = 134235, classID = 13 }, { cached = true })
+mock.defineItem(CLOTH, {
+    name = "Test Cloth",
+    quality = 1,
+    stackCount = 20,
+    icon = 132889,
+    classID = 7,
+    sellPrice = 10,
+}, { cached = true })
+mock.defineItem(POTION, {
+    name = "Test Potion",
+    quality = 2,
+    stackCount = 5,
+    icon = 134830,
+    classID = 0,
+    sellPrice = 50,
+}, { cached = true })
+mock.defineItem(RAG, { name = "Grey Rag", quality = 0, stackCount = 20, icon = 133722, classID = 15, sellPrice = 25 }, {
+    cached = true,
+})
+mock.defineItem(HERB, { name = "Test Herb", quality = 1, stackCount = 20, icon = 134187, classID = 7, sellPrice = 5 }, {
+    cached = true,
+})
+
+-- A test file's @beforeEach.
+export function start()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = CLOTH, count = 3 }, [2] = { id = POTION, count = 2 } } })
+end
+
+-- A test file's @afterEach.
+export function cleanup()
+    if M.sorting then
+        M:StopSort("the test ended")
+    end
+    ClearCursor()
+    mock.setBag(5, nil) -- (the reagent bag one test filled)
+    mock.setBag(-1, nil) -- (the keyring one test filled)
+    M:SetOpen(false)
+    mock.advanceTime(0.5)
+    M:ResetAll({
+        "columns",
+        "reagentBag",
+        "keyring",
+        "bank",
+        "itemCounts",
+        "bagSlots",
+        "sortOrder",
+        "sortDirection",
+        "position",
+    })
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+export function inv(): Inventory
+    local i = M.inv
+    assert(i, "no bags window")
+    return i
+end
+export function bank(): Inventory
+    local b = M.bank
+    assert(b, "no bank window")
+    return b
+end
+
+-- One of the game's frames by name.
+export function frame(name: string): Frame
+    local f = frames.find(name)
+    assert(f, "no " .. name)
+    return f
+end
+
+-- One of the game's functions by name, called.
+export function call(name: string, ...: unknown)
+    local fn = tbl.field(_G, name)
+    assert(type(fn) == "function", "no " .. name)
+    ;(fn :: (...unknown) -> ())(...)
+end
+
+export function open()
+    M:SetOpen(true)
+    mock.advanceTime(0.01)
+end
+
+-- The bags window's header meta ("18 free of 80").
+export function metaText(): string
+    local m = inv().meta
+    assert(m, "no header meta")
+    return m:GetText() or ""
+end
+
+export function shownSlots(): Button[]
+    local out: Button[] = {}
+    for _, slots in pairs(M.buttons) do
+        for _, b in ipairs(slots) do
+            if b:IsShown() then
+                out[#out + 1] = b
+            end
+        end
+    end
+    return out
+end
+
+export function button(bag: number, slot: number): Button
+    local list = M.buttons[bag]
+    local b = list and list[slot]
+    assert(b, "no slot " .. bag .. "/" .. slot)
+    return b
+end
+
+-- What a slot shows (nil: empty).
+export function itemAt(bag: number, slot: number): SlotItem?
+    local skin = M.skins[button(bag, slot)]
+    return skin and skin.item
+end
+
+export function shown(bag: number, slot: number): SlotItem
+    local it = itemAt(bag, slot)
+    assert(it, "nothing in " .. bag .. "/" .. slot)
+    return it
+end
+
+export function run<A...>(fn: ((A...) -> ())?, ...: A...)
+    assert(fn, "nothing to run")
+    fn(...)
+end
+
+--------------------------------------------------------------------------------
+-- The rails
+--------------------------------------------------------------------------------
+
+export function bagRail()
+    local r = M.bagRail
+    assert(r, "no bag rail")
+    return r
+end
+export function bankRail()
+    local r = M.bankRail
+    assert(r, "no bank rail")
+    return r
+end
+-- A rail cell's entry.
+export function entryOf<C extends { entry?: E }, E>(cell: C): E
+    local e = cell.entry
+    assert(e, "an empty cell")
+    return e
+end
+
+--------------------------------------------------------------------------------
+-- The bank
+--------------------------------------------------------------------------------
+
+export function atBank(opts: { tabs?: { [string]: unknown }[], cost?: number }?)
+    mock.player:setMoney(1000000)
+    local banker = mock.spawnUnit({ name = "Banker", reaction = "friendly" })
+    local o = opts or {}
+    mock.defineBank(banker, {
+        tabs = o.tabs or { { name = "Tab 1", slots = 28, items = { [1] = { id = CLOTH, count = 7 } } } },
+        nextTabCost = o.cost or 10000,
+    })
+    mock.player:interact(banker)
+    mock.advanceTime(0.5)
+end
+
+--------------------------------------------------------------------------------
+-- Other characters, the search
+--------------------------------------------------------------------------------
+
+export const OTHER = "Otherplayer - Realm"
+
+export function others()
+    local real = M.AllCharData
+    mock.stub(M, "AllCharData", function(_: unknown): { [string]: { [string]: unknown } }
+        local entries: { [string]: { [string]: unknown } } = {}
+        for k, v in pairs(real(M)) do
+            entries[k] = v
+        end
+        entries[OTHER] = {
+            name = "Otherplayer",
+            realm = GetRealmName(),
+            class = "MAGE",
+            level = 50,
+            money = 123456,
+            seen = time() - 3600,
+            bags = {
+                slots = {
+                    { t = 132889, c = 4, q = 1, l = "|cffffffff|Hitem:" .. CLOTH .. "::::::::|h[Test Cloth]|h|r" },
+                    false,
+                },
+                size = 2,
+                free = 1,
+                seen = time() - 3600,
+            },
+            bank = {
+                slots = {
+                    { t = 134830, c = 1, q = 2, l = "|cff1eff00|Hitem:" .. POTION .. "::::::::|h[Test Potion]|h|r" },
+                },
+                size = 1,
+                free = 0,
+                seen = time() - 7200,
+            },
+            equipped = {},
+        }
+        return entries
+    end)
+end
+
+-- The picker, Bags/Bank and All characters.
+export function who()
+    local w = inv().who
+    assert(w, "no picker")
+    return w
+end
+export function view()
+    local v = inv().view
+    assert(v, "no Bags/Bank")
+    return v
+end
+export function all()
+    local a = inv().all
+    assert(a, "no All characters")
+    return a
+end
+
+export function savedSlot(i: number)
+    local s = M.savedSlots[i]
+    assert(s, "no saved slot " .. i)
+    return s
+end
+
+--------------------------------------------------------------------------------
+-- Sorting
+--------------------------------------------------------------------------------
+
+-- Where an item is in a bag: "slot×count" for each stack of it.
+export function stacksOf(bag: number, id: number): string
+    local out: string[] = {}
+    for slot = 1, C_Container.GetContainerNumSlots(bag) do
+        local info = C_Container.GetContainerItemInfo(bag, slot)
+        if info and info.itemID == id then
+            out[#out + 1] = slot .. "×" .. tostring(info.stackCount)
+        end
+    end
+    return table.concat(out, ", ")
+end
+
+export function cover(window: Inventory)
+    return M.covers[window]
+end

@@ -1,0 +1,78 @@
+-- Units/LootRolls/Lines: the game's loot lines read with the client's own
+-- formats. Every kind of line, yours and another's; the loot history link
+-- in front taken off; another player's automatic pass under their own
+-- name (CHAT-24); the specific formats tried before the general ones.
+
+import test, expect from "wowlua:test"
+import expectNoErrors from "../../../helpers"
+import * as lines from "/Units/LootRolls/Lines"
+
+local LINK = "|cff1eff00|Hitem:4704::::::::|h[Dusk Mantle]|h|r"
+
+local function line(fmt: string, ...: string | number): string
+    return (fmt:format(...))
+end
+
+@test("the formats as patterns: arguments in order and numbered, a percent sign, the literal part counted")
+local function patterns()
+    local p = assert(lines.pattern("%s has selected Need for: %s"))
+    expect(p.pattern).toBe("^(.+) has selected Need for: (.+)$")
+    expect(p.order).toEqual({ 1, 2 })
+    expect(p.literal).toBe(#" has selected Need for: ")
+    local q = assert(lines.pattern("%3$s (100%%) by %2$s", 1))
+    expect(q.order).toEqual({ 2, 1 })
+    expect(q.pattern).toBe("^(.+) %(100%%%) by (.+)$")
+    expect(lines.pattern(nil)).toBe(nil)
+    local caps = assert(lines.match(q, "Item (100%) by Tamsin"))
+    expect(caps).toEqual({ "Tamsin", "Item" })
+    expect(lines.match(q, "something else")).toBe(nil)
+    expectNoErrors()
+end
+
+@test("votes: another's and yours, with the loot history link in front or without it")
+local function votes()
+    local r = assert(lines.read(line(LOOT_ROLL_NEED, 12, "Tamsin", LINK)))
+    expect(r).toEqual({ what = "vote", mine = false, who = "Tamsin", link = LINK, choice = "need" })
+    expect(assert(lines.read(line(LOOT_ROLL_GREED, 12, "Tamsin", LINK))).choice).toBe("greed")
+    expect(assert(lines.read(line(LOOT_ROLL_PASSED, 12, "Tamsin", LINK))).choice).toBe("pass")
+    -- yours: no name
+    local mine = assert(lines.read(line(LOOT_ROLL_GREED_SELF, 12, LINK)))
+    expect(mine).toEqual({ what = "vote", mine = true, who = "", link = LINK, choice = "greed" })
+    expect(assert(lines.read(line(LOOT_ROLL_NEED_SELF, 12, LINK))).choice).toBe("need")
+    local passed = assert(lines.read(line(LOOT_ROLL_PASSED_SELF, 12, LINK)))
+    expect(passed.mine).toBe(true)
+    expect(passed.choice).toBe("pass")
+    expect(assert(lines.read(line(LOOT_ROLL_PASSED_SELF_AUTO, 12, LINK))).mine).toBe(true)
+    -- (an older client's line, without the history link)
+    local plain = assert(lines.read("Tamsin has selected Need for: " .. LINK))
+    expect(plain.who).toBe("Tamsin")
+    expect(plain.link).toBe(LINK)
+    expectNoErrors()
+end
+
+@test("another player's automatic pass: their own name, not \"Name automatically\" (CHAT-24)")
+local function automatic()
+    local he = assert(lines.read(line(LOOT_ROLL_PASSED_AUTO, "Brannoc", LINK)))
+    expect(he).toEqual({ what = "vote", mine = false, who = "Brannoc", link = LINK, choice = "pass" })
+    local she = assert(lines.read(line(LOOT_ROLL_PASSED_AUTO_FEMALE, "Ysolde", LINK)))
+    expect(she.who).toBe("Ysolde")
+    expect(she.link).toBe(LINK)
+    expectNoErrors()
+end
+
+@test("the numbers, who won, everyone passed; a line about something else")
+local function results()
+    local n = assert(lines.read(line(LOOT_ROLL_ROLLED_NEED, 12, 91, LINK, "Tamsin")))
+    expect(n).toEqual({ what = "rolled", mine = false, who = "Tamsin", link = LINK, choice = "need", value = 91 })
+    expect(assert(lines.read(line(LOOT_ROLL_ROLLED_GREED, 12, 7, LINK, "Tamsin"))).choice).toBe("greed")
+    local won = assert(lines.read(line(LOOT_ROLL_WON, 12, "Tamsin", LINK)))
+    expect(won).toEqual({ what = "won", mine = false, who = "Tamsin", link = LINK })
+    -- "You won" and "Everyone passed" before "%s won" and "%s passed on"
+    local yours = assert(lines.read(line(LOOT_ROLL_YOU_WON, 12, LINK)))
+    expect(yours).toEqual({ what = "won", mine = true, who = "", link = LINK })
+    local all = assert(lines.read(line(LOOT_ROLL_ALL_PASSED, 12, LINK)))
+    expect(all).toEqual({ what = "allPassed", mine = false, who = "", link = LINK })
+    expect(lines.read("Tamsin receives loot: " .. LINK)).toBe(nil)
+    expect(lines.read("")).toBe(nil)
+    expectNoErrors()
+end

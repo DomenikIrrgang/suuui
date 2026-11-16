@@ -6,6 +6,10 @@
 -- arrow) and be posted to your group: a chat line with the game's own map
 -- pin link, which anyone can click, and the mark itself to group members
 -- with SuuUI, who keep it as a shared mark until they remove it.
+-- Shared marks (0.47) are taken from the group's channels only, checked
+-- (a map the client knows, a place on it, a symbol of the eight, a plain
+-- name of 40 at most), ten a minute and thirty kept at most per sender, and
+-- never at the cost of one of your own marks.
 --
 -- The world map draws the marks (WorldMap), the minimap too; both read
 -- them here and hear SUUUI_MARKS_CHANGED.
@@ -13,20 +17,16 @@
 -- A mark: { id, map (uiMapID), x, y (0-1), name, symbol, from (who shared
 -- it; nil: yours), at (time made) }.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
-import MARKS, WORLD_MAP from "/Core/ServiceKeys"
-import type MapMark, MarkFilters from "/Core/ServiceKeys"
-import type MapPinData from "/UI/MapPin"
-import type Text from "/UI/Text"
-import type TextField, Toggle from "/UI/Inputs"
-import type SuuButton from "/UI/Controls"
+import SuuUI, Module from "/Core/API"
+import type MapMark, MarkFilters, MapPinData, Text, TextField, Toggle, SuuButton from "/Core/API"
 import * as secret from "wowlua:secret"
-import after from "wowlua:timer"
 import hook, hookScript from "wowlua:hooks"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import * as errors from "wowlua:errors"
+
+local MARKS = SuuUI.Services.MARKS
+local WORLD_MAP = SuuUI.Services.WORLD_MAP
 
 local DEFAULTS = {}
 
@@ -45,14 +45,16 @@ for i, s in ipairs(SYMBOLS) do
 end
 
 local MAX_MARKS = 200 -- yours and shared together; the oldest shared go first
-local PREFIX = "SuuUI"
+local MAX_PER_SENDER = 30 -- shared marks kept from one sender
+local NAME_MAX = 40 -- a shared mark's name, in bytes
 
 --------------------------------------------------------------------------------
 -- The marks
 --------------------------------------------------------------------------------
 
--- What a character keeps: the marks, the next one's id, the navigation
--- setting while a mark shows the way (to put back), the mark followed.
+-- What a character keeps: the marks, the next one's id, the mark followed
+-- (before 0.47 also the navigation setting while a mark showed the way:
+-- SuuUI's CVar memory keeps it since).
 type Saved = { marks: Mark[], nextID: number, navWas?: string, following?: number }
 
 local function store(self: MarksModule): Saved
@@ -66,18 +68,23 @@ local function changed(self: MarksModule)
     self:Emit("SUUUI_MARKS_CHANGED")
 end
 
--- (room for one more: the oldest shared mark goes, then the oldest)
-local function makeRoom(list: Mark[])
+-- Room for one more: the oldest shared mark goes, then (for one of yours)
+-- the oldest. A shared one never pushes out one of yours: false then.
+local function makeRoom(list: Mark[], shared: boolean?): boolean
     if #list < MAX_MARKS then
-        return
+        return true
     end
     for i, m in ipairs(list) do
         if m.from then
             table.remove(list, i)
-            return
+            return true
         end
     end
+    if shared then
+        return false
+    end
     table.remove(list, 1)
+    return true
 end
 
 -- A mark's fields from `fields` (an unknown symbol: a star).
@@ -103,20 +110,14 @@ end
 -- The game draws its navigation indicator only with showInGameNavigation
 -- on, and Forever has it off (/suu probe marks nav: the indicator shown at
 -- opacity 0). On while a mark shows the way, your own value back after
--- (kept in the saved data, so a /reload on the way still puts it back).
+-- (M:SetCVar: kept per character, so a /reload on the way still puts it
+-- back, and turning Marks off gives it back, X-11.b1).
 local NAV_CVAR = "showInGameNavigation"
 local function navigation(self: MarksModule, on: boolean)
-    local data = store(self)
     if on then
-        if data.navWas == nil then
-            data.navWas = GetCVar(NAV_CVAR) or "0"
-        end
-        if GetCVar(NAV_CVAR) ~= "1" then
-            pcall(SetCVar, NAV_CVAR, "1")
-        end
-    elseif data.navWas ~= nil then
-        pcall(SetCVar, NAV_CVAR, data.navWas)
-        data.navWas = nil
+        self:SetCVar(NAV_CVAR, "1")
+    else
+        self:RestoreCVar(NAV_CVAR)
     end
 end
 
@@ -147,36 +148,31 @@ local function linkFor(mark: Mark): string?
     return link
 end
 
--- (names and the like can't break the message: no tabs or newlines)
-local function clean(s: string?): string
-    return (tostring(s or ""):gsub("[\t\n\r|]", " "))
+-- (names can't break the message, nor carry the UI's escapes: no tabs,
+-- newlines or "|")
+local function clean(s: string?, max: number): string
+    return SuuUI.Comm.Name(s or "", max) or ""
 end
 
--- The addon message that shares a mark (its name cleaned already):
--- "MARK\t<map>\t<x>\t<y>\t<symbol>\t<name>", x and y to four places.
-local function encodeMark(mark: Mark, name: string): string
-    return ("MARK\t%d\t%.4f\t%.4f\t%s\t%s"):format(mark.map, mark.x, mark.y, mark.symbol, name)
+-- The addon message's payload that shares a mark (its name cleaned
+-- already): "MARK\t<map>\t<x>\t<y>\t<symbol>\t<name>", x and y to four places.
+local function markPayload(mark: Mark, name: string): string
+    return ("%d\t%.4f\t%.4f\t%s\t%s"):format(mark.map, mark.x, mark.y, mark.symbol, name)
 end
 
--- A MARK message's fields (map, x, y, symbol, name); nil when it isn't one
--- or its place is off the map.
+-- A MARK message's fields (map, x, y, symbol, name), checked: a map the
+-- client knows, a place on it, one of the symbols (else a star), a plain
+-- name of NAME_MAX bytes at most; nil when it isn't one.
 export function decodeMark(text: string): (number?, number?, number?, string?, string?)
     local tag, map, x, y, symbol, name = strsplit("\t", text)
     if tag ~= "MARK" then
         return nil, nil, nil, nil, nil
     end
-    local m, mx, my = tonumber(map), tonumber(x), tonumber(y)
-    if not (m and mx and my and mx >= 0 and mx <= 1 and my >= 0 and my <= 1) then
+    local m, mx, my = SuuUI.Comm.Map(map), SuuUI.Comm.Fraction(x), SuuUI.Comm.Fraction(y)
+    if not (m and mx and my) then
         return nil, nil, nil, nil, nil
     end
-    return m, mx, my, symbol, name
-end
-
--- Whether a sender is you: "Name", "Name-Realm" or "Name Realm" (found
--- with /suu probe marks).
-export function isOwnSender(sender: string, name: string, realm: string?): boolean
-    return sender == name or (realm and (sender == name .. "-" .. realm or sender == name .. " " .. realm)) and true or
-        false
+    return m, mx, my, SuuUI.Comm.OneOf(symbol, SYMBOLS) or "star", clean(name, NAME_MAX)
 end
 
 --------------------------------------------------------------------------------
@@ -626,7 +622,7 @@ class MarksModule extends Module<typeof(DEFAULTS)>
 
     function Add(map: number, x: number, y: number, fields: MarkFields?): Mark
         local data = store(self)
-        makeRoom(data.marks)
+        makeRoom(data.marks, false)
         local mark: Mark = { id = data.nextID, map = map, x = x, y = y, name = "", symbol = "star", at = time() }
         apply(mark, fields or {})
         data.nextID = data.nextID + 1
@@ -732,18 +728,18 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         pin:EnableMouse(not hide)
     end
 
+    -- Whether the game's waypoint is on the mark (a waypoint of your own in
+    -- its place isn't).
+    function WaypointOn(mark: Mark?): boolean
+        local wp = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
+        return (mark and wp and wp.uiMapID == mark.map and wp.position and
+            math.abs(wp.position.x - mark.x) < 0.001 and
+            math.abs(wp.position.y - mark.y) < 0.001) and true or false
+    end
+
     -- The group's chat: instance, raid or party; nil when you're not in one.
     function GroupChannel(): ("INSTANCE_CHAT" | "RAID" | "PARTY")?
-        if secret.flag(IsInGroup(LE_PARTY_CATEGORY_INSTANCE)) then
-            return "INSTANCE_CHAT"
-        end
-        if secret.flag(IsInRaid()) then
-            return "RAID"
-        end
-        if secret.flag(IsInGroup()) then
-            return "PARTY"
-        end
-        return nil
+        return SuuUI.Comm.GroupChannel()
     end
 
     -- From a click only: the game sends chat from a click.
@@ -754,16 +750,13 @@ class MarksModule extends Module<typeof(DEFAULTS)>
             return false
         end
         local link = linkFor(mark)
-        local name = clean(mark.name)
+        local name = clean(mark.name, 200)
         local text = (name ~= "" and (name .. " · ") or "") ..
             (link or ("%s %.1f, %.1f"):format(self:MapName(mark.map) or "", mark.x * 100, mark.y * 100))
         local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
         pcall(send, text, channel)
-        -- the mark itself to group members with SuuUI
-        if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-            local msg = encodeMark(mark, name)
-            pcall(C_ChatInfo.SendAddonMessage, PREFIX, msg, channel)
-        end
+        -- the mark itself to group members with SuuUI (its name as they keep it)
+        self:SendAddonMessage("MARK", markPayload(mark, clean(mark.name, NAME_MAX)), channel)
         return true
     end
 
@@ -772,33 +765,32 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         return info and info.name or nil
     end
 
-    -- A shared mark from a group member: kept until you remove it; the same
-    -- one posted again (same place, same sender) only updates its name.
-    function OnMessage(prefix: unknown, text: unknown, _channel: unknown, sender: unknown)
-        if prefix ~= PREFIX or type(text) ~= "string" or type(sender) ~= "string" or secret.isSecret(text) or
-            secret.isSecret(sender) then
-            return
-        end
-        local map, x, y, symbol, name = decodeMark(text)
+    -- A shared mark from a group member (the receiver took it from the
+    -- group's channels only, ten a minute per sender; your own post coming
+    -- back, as "Name Surname" or "Name-Realm", was dropped there): kept until
+    -- you remove it; the same one posted again (same place, same sender) only
+    -- updates its name. Thirty kept per sender, and never one of yours pushed
+    -- out for it (GRP-22).
+    function OnMark(payload: string, sender: string)
+        local map, x, y, symbol, name = decodeMark("MARK\t" .. payload)
         if not (map and x and y) then
             return
         end
-        -- your own post coming back (the sender comes as "Name Surname" or
-        -- "Name-Realm": found with /suu probe marks)
-        -- (your own name and realm are never secret)
-        local fullName, fullRealm = UnitFullName("player")
-        local name0, realm = fullName :: string, fullRealm :: string?
-        if isOwnSender(sender, name0, realm) then
-            return
-        end
-        local who = sender
-        for _, m in ipairs(self:Marks()) do
-            if m.from == who and m.map == map and math.abs(m.x - x) < 0.0005 and math.abs(m.y - y) < 0.0005 then
-                self:Update(m.id, { name = name or "", symbol = symbol })
-                return
+        local list = self:Marks()
+        local theirs = 0
+        for _, m in ipairs(list) do
+            if m.from == sender then
+                if m.map == map and math.abs(m.x - x) < 0.0005 and math.abs(m.y - y) < 0.0005 then
+                    self:Update(m.id, { name = name or "", symbol = symbol })
+                    return
+                end
+                theirs += 1
             end
         end
-        self:Add(map, x, y, { name = name or "", symbol = symbol, from = who })
+        if theirs >= MAX_PER_SENDER or not makeRoom(list, true) then
+            return
+        end
+        self:Add(map, x, y, { name = name or "", symbol = symbol, from = sender })
     end
 
     -- Where each mark goes on the minimap (see MinimapPlace).
@@ -1038,7 +1030,7 @@ class MarksModule extends Module<typeof(DEFAULTS)>
             end
             card:SetClampedToScreen(false)
             -- (inside the map: nudged back when it runs past an edge)
-            after(0, function()
+            self:After(0, function()
                 local l, r, sl, sr = card:GetLeft(), card:GetRight(), scroll:GetLeft(), scroll:GetRight()
                 if l and sl and l < sl then
                     card:AdjustPointsOffset(sl - l + 4, 0)
@@ -1087,7 +1079,7 @@ class MarksModule extends Module<typeof(DEFAULTS)>
             end
             local mark = self:Add(mapID, cx, cy, { symbol = self.lastSymbol or "star" })
             -- its card once its pin is there, the name to type
-            after(0.05, function()
+            self:After(0.05, function()
                 local card = self:OpenCard(mark.id, pinForMark(mark.id))
                 if card then
                     card.name.edit:SetFocus()
@@ -1164,15 +1156,19 @@ class MarksModule extends Module<typeof(DEFAULTS)>
                 self:AnchorCard(anchor)
             end,
         })
-        if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-            C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
-        end
-        self:OnGameEvent("CHAT_MSG_ADDON", function(_, prefix, text, channel, sender)
-            self:OnMessage(prefix, text, channel, sender)
+        self:OnAddonMessage("MARK", { rate = { count = 10, seconds = 60 } }, function(payload, sender)
+            self:OnMark(payload, sender)
         end)
+        local data = store(self)
+        -- (before 0.47 the player's navigation setting was kept here: put back
+        -- first, so SuuUI's CVar memory keeps the player's, not the module's)
+        local navWas = data.navWas
+        if navWas ~= nil then
+            data.navWas = nil
+            pcall(C_CVar.SetCVar, NAV_CVAR, navWas)
+        end
         -- after a /reload: still following while the game kept its waypoint and
         -- the mark is there; else the setting back as it was
-        local data = store(self)
         local kept = data.following and self:Mark(data.following) and C_Map.HasUserWaypoint and
             C_Map.HasUserWaypoint() and
             C_SuperTrack and
@@ -1201,26 +1197,15 @@ class MarksModule extends Module<typeof(DEFAULTS)>
         -- the game's waypoint cleared or replaced: you're no longer following
         self:OnGameEvent("USER_WAYPOINT_UPDATED", function()
             -- (still on the followed mark? a waypoint of your own in its place ends it)
-            local mark = self:Mark(self.following)
-            local wp = C_Map.GetUserWaypoint and C_Map.GetUserWaypoint()
-            local onMark = mark and wp and wp.uiMapID == mark.map and wp.position and
-                math.abs(wp.position.x - mark.x) < 0.001 and
-                math.abs(wp.position.y - mark.y) < 0.001
-            if self.following and not onMark then
+            if self.following and not self:WaypointOn(self:Mark(self.following)) then
                 self.following = nil
                 store(self).following = nil
                 navigation(self, false)
                 changed(self)
             end
         end)
+        -- (the minimap's marks too: the module counts as on here, 0.47)
         changed(self)
-        -- (the minimap's marks on: the module counts as on only once this
-        -- returns, and the change just told drew them as off)
-        local layer = self.mmLayer
-        if layer then
-            layer:Show()
-            self:PlaceMinimapPins()
-        end
     end
 
     override function OnDisable()
@@ -1229,13 +1214,22 @@ class MarksModule extends Module<typeof(DEFAULTS)>
             hint:Hide()
         end
         self:CloseCard()
-        changed(self)
-        -- (last: the module counts as on until this returns, and the change
-        -- just told draws the minimap's marks again)
-        local layer = self.mmLayer
-        if layer then
-            layer:Hide()
+        -- no longer showing the way: the game's waypoint goes if it's still
+        -- the mark's, the navigation setting is the player's again (the
+        -- registry gives it back too), and the game's own pin shows (X-11.b1)
+        local following = self.following
+        if following then
+            local mark = self:Mark(following)
+            self.following = nil
+            store(self).following = nil
+            if self:WaypointOn(mark) and C_Map.ClearUserWaypoint then
+                C_Map.ClearUserWaypoint()
+            end
         end
+        navigation(self, false)
+        self:HideGamePin(self.waypointProvider :: WaypointProvider?)
+        -- (the minimap's marks hidden: the module counts as off here, 0.47)
+        changed(self)
     end
 end
 

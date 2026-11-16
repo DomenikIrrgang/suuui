@@ -1,0 +1,122 @@
+-- Units/Chat/Windows: whisper windows (opened with the kept whispers,
+-- chosen again, closed from their tab), a window's font size and name, a
+-- new window and closing one, Settings › Chat › Windows.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Chat"
+import type WindowsEditor, WindowRow from "/Units/Chat/Windows"
+import expectNoErrors, newParent, captureMenus, choose from "../../../helpers"
+import ready, mirror, frameOf, window, windowOf, findTab, tab, rowOf, focused, whisper, resetChat from "./ChatHelpers"
+
+local CF1 = ChatFrame1
+
+@beforeEach
+local function start()
+    ready()
+end
+
+@afterEach
+local function cleanup()
+    resetChat()
+    expectNoErrors()
+end
+
+--------------------------------------------------------------------------------
+-- Whisper windows
+--------------------------------------------------------------------------------
+
+@test("a whisper window opens with the kept whispers; an open one is chosen again; a right-click closes it")
+local function whisperWindow()
+    M.whispers = {}
+    whisper("|Hplayer:Tamsin|h[Tamsin]|h whispers: before the window")
+    M:OpenWhisperWindow("Tamsin")
+    mock.advanceTime(0.01)
+    local cf = windowOf("Tamsin")
+    expect(M.selected).toBe(cf)
+    local m = mirror(cf)
+    expect(m.lines[1].src).toBe("|Hplayer:Tamsin|h[Tamsin]|h whispers: before the window")
+    M:Select(CF1)
+    M:OpenWhisperWindow("tamsin-Ashford")
+    mock.advanceTime(0.01)
+    expect(M.selected).toBe(cf)
+    local menu = captureMenus()
+    M:UpdateTabs()
+    mock.click(tab("Tamsin"), "RightButton")
+    choose(menu, "Close")
+    expect(M.selected).toBe(CF1)
+end
+
+--------------------------------------------------------------------------------
+-- The windows
+--------------------------------------------------------------------------------
+
+@test("a window's font size, its name, a new window and closing one")
+local function windows()
+    M:SetFontSize(CF1, 16)
+    expect(select(2, frameOf(CF1):GetFont())).toBeCloseTo(16)
+    local global = windowOf("Global")
+    M:RenameWindow(global, "Worldwide")
+    expect(findTab("Worldwide") ~= nil).toBe(true)
+    M:RenameWindow(global, "") -- no name: kept
+    M:RenameWindow(global, "Global")
+    M:SetFontSize(CF1, 14)
+    local before = #M:Windows()
+    M:NewWindow("Extra")
+    M:NewWindow("")
+    mock.advanceTime(0.01)
+    local extra = window("Extra")
+    if extra then
+        expect(#M:Windows()).toBe(before + 1)
+        expect(M.selected).toBe(extra)
+        M:CloseWindow(extra)
+        expect(M.selected).toBe(CF1)
+    end
+end
+
+@test("a whisper window's font size is SuuUI's own")
+local function tempFont()
+    M:OpenWhisperWindow("Otherplayer")
+    mock.advanceTime(0.01)
+    local cf = windowOf("Otherplayer")
+    M:SetFontSize(cf, 18)
+    expect(select(2, frameOf(cf):GetFont())).toBeCloseTo(18)
+    M:RenameWindow(cf, "Never") -- a whisper window keeps its player
+    M:CloseWindow(cf)
+end
+
+--------------------------------------------------------------------------------
+-- Settings › Windows
+--------------------------------------------------------------------------------
+
+@test("Settings › Windows: each window's name, size, chat settings and close; New window asks for a name")
+local function windowsEditor()
+    local built: Frame = rowOf("Windows").build(newParent(600, 400))
+    local f = built :: unknown :: WindowsEditor
+    expect(f.rows[1].name:GetValue()).toBe("General")
+    expect(f.rows[1].close).never.toBeShown()
+    assert(f.rows[1].size.onChange)(15)
+    expect(select(2, frameOf(CF1):GetFont())).toBeCloseTo(15)
+    assert(f.rows[1].size.onChange)(14)
+    local found: WindowRow? = nil
+    for _, r in ipairs(f.rows) do
+        if r.cf == window("Global") then
+            found = r
+        end
+    end
+    local global = assert(found)
+    assert(global.name.onChange)("Global")
+    local open = mock.stub(M, "OpenChatSettings", function(_: unknown, _: unknown) end)
+    mock.click(global.config)
+    expect(open).toHaveBeenCalledTimes(1)
+    local close = mock.stub(M, "CloseWindow", function(_: unknown, _: unknown) end)
+    mock.click(global.close)
+    expect(close).toHaveBeenCalledTimes(1)
+    local new = mock.stub(M, "NewWindow", function(_: unknown, _: string) end)
+    mock.click(f.add)
+    focused():SetText("Raid talk")
+    mock.pressKey("ENTER")
+    expect(new).toHaveBeenCalledWith(M, "Raid talk")
+    f:Hide()
+    f:Show()
+end

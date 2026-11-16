@@ -1,0 +1,88 @@
+-- UI/CooldownTracker/Sounds.wowlua
+-- The tracker's sounds: the interface sounds an entry chooses from
+-- (SOUNDS), trackerSound (a cooldown coming ready, a preview), and the aura
+-- sounds the engine plays itself (addAuraSounds, clearAuraSounds). What is
+-- registered is one list for the whole addon, as before the tracker was
+-- split (trackerAuraSounds reads it for "/suu probe sound play").
+
+import type TrackerEntry from "./Entries"
+
+-- Interface sounds every client has. The engine's aura sounds take files only
+-- (C_UnitAuras.AddAuraSound: unitToken, spellID, soundFileID), and Forever
+-- resolves no file paths, so they are file IDs; the sound kit is the fallback
+-- for cooldowns and previews when a file won't play.
+export type Sound = { file: number, kit: string }
+local SOUNDS: { [string]: Sound } = {
+    chime = { file = 567409, kit = "READY_CHECK" },
+    ping = { file = 567416, kit = "MAP_PING" },
+    proc = { file = 567458, kit = "ALARM_CLOCK_WARNING_2" },
+    warning = { file = 567397, kit = "RAID_WARNING" },
+}
+
+export function trackerSound(key: string)
+    local s = SOUNDS[key]
+    if not s then
+        return
+    end
+    local ok, willPlay = pcall(PlaySoundFile, s.file, "Master")
+    -- (SOUNDKIT is declared as a plain table: kit names to sound kit IDs)
+    local kits = SOUNDKIT and SOUNDKIT :: { [string]: number? }
+    local kit = kits and kits[s.kit]
+    if not (ok and willPlay) and kit then
+        pcall(PlaySound, kit, "Master")
+    end
+end
+
+-- Aura sounds: registered with the engine, which plays them itself when the
+-- aura appears, stacks up or drops (in combat too). Any caster's aura of
+-- those spells counts: the engine takes no filter here.
+local soundIDs: number[] = {}
+local soundWhat: { [number | string]: string } = {}
+
+-- For "/suu probe sound play": the files, and what is registered.
+export function trackerSoundFiles(): { [string]: Sound }
+    return SOUNDS
+end
+export function trackerAuraSounds(): (number[], { [number | string]: string })
+    return soundIDs, soundWhat
+end
+
+export function clearAuraSounds()
+    for _, id in ipairs(soundIDs) do
+        pcall(C_UnitAuras.RemoveAuraSound, id)
+    end
+    soundIDs, soundWhat = {}, {}
+end
+
+export function addAuraSounds(entry: TrackerEntry, unit: string)
+    if not (C_UnitAuras and C_UnitAuras.AddAuraSound and Enum.UnitAuraSoundTrigger) then
+        return
+    end
+    local TRIGGER = Enum.UnitAuraSoundTrigger
+    local fields: { field: string, sound: string?, trigger: UnitAuraSoundTrigger? }[] = {
+        { field = "soundAppear", sound = entry.soundAppear, trigger = TRIGGER.Added },
+        { field = "soundStack", sound = entry.soundStack, trigger = TRIGGER.ApplicationsIncreased },
+        { field = "soundDrop", sound = entry.soundDrop, trigger = TRIGGER.Removed },
+    }
+    for _, f in ipairs(fields) do
+        local sound = f.sound and SOUNDS[f.sound]
+        local file = sound and sound.file
+        local trigger = f.trigger
+        if file and trigger then
+            for _, spellID in ipairs(entry.ids or {}) do
+                local ok, id = pcall(C_UnitAuras.AddAuraSound, trigger, {
+                    unitToken = unit,
+                    spellID = spellID,
+                    soundFileID = file,
+                    outputChannel = "Master",
+                })
+                if ok and id then
+                    soundIDs[#soundIDs + 1] = id
+                    soundWhat[#soundIDs] = ("%s %s %d (%s)"):format(entry.name or "?", f.field, spellID, unit)
+                elseif not ok then
+                    soundWhat.error = tostring(id)
+                end
+            end
+        end
+    end
+end

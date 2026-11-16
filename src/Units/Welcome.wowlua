@@ -12,14 +12,9 @@
 -- again.
 -- A built-in module written against the public API only.
 
-import SuuUI from "/Core/API"
-import Module from "/Core/Modules"
+import SuuUI, Module from "/Core/API"
+import type SuuButton, Border, LoadingMark, Panel, SectionHeader, KeyChip, Text from "/Core/API"
 import after from "wowlua:timer"
-import type SuuButton from "/UI/Controls"
-import type Border from "/UI/Draw"
-import type LoadingMark from "/UI/LoadingMark"
-import type Panel, SectionHeader, KeyChip from "/UI/Panel"
-import type Text from "/UI/Text"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -587,7 +582,8 @@ class WelcomeModule extends Module<typeof(DEFAULTS)>
     end
 
     function Build()
-        -- the dimmed world under it, taking every click
+        -- the dimmed world under it, taking every click (out of a fight: in
+        -- one the world under it takes them)
         local dim = CreateFrame("Frame", nil, SuuUI.Root)
         dim:SetAllPoints(UIParent)
         dim:SetFrameStrata("DIALOG")
@@ -605,19 +601,13 @@ class WelcomeModule extends Module<typeof(DEFAULTS)>
         p:Fit()
         self.panel = p
 
-        -- Esc skips, like Skip; other keys go on to the game
-        p:EnableKeyboard(true)
-        p:SetScript("OnKeyDown", function(frame: Frame, key: string)
-            if InCombatLockdown() then
-                return
-            end
-            if key == "ESCAPE" then
-                frame:SetPropagateKeyboardInput(false)
+        -- Esc skips, like Skip; other keys go on to the game (out of a
+        -- fight; in one, every key: UI.Dismissable)
+        UI.Dismissable(p, {
+            close = function()
                 self:Close()
-            else
-                frame:SetPropagateKeyboardInput(true)
-            end
-        end)
+            end,
+        })
 
         local box = CreateFrame("Frame", nil, p.body)
         box:SetPoint("TOPLEFT", PAD_SIDE, -PAD_TOP)
@@ -731,7 +721,9 @@ class WelcomeModule extends Module<typeof(DEFAULTS)>
         self.role = "keep"
         self.vision = (SuuUI.ColorVision())
         self:DrawChoices()
-        assert(self.dim):Show()
+        local dim = assert(self.dim)
+        dim:EnableMouse(not InCombatLockdown())
+        dim:Show()
         SuuUI.Motion.Enter(assert(self.panel), T.duration["dur-base"])
         self:Go(1)
     end
@@ -774,7 +766,7 @@ class WelcomeModule extends Module<typeof(DEFAULTS)>
     end
 
     override function OnEnable()
-        self:Provide("welcome", {
+        self:ProvideService(SuuUI.Services.WELCOME, {
             Show = function()
                 self:Show()
             end,
@@ -782,13 +774,22 @@ class WelcomeModule extends Module<typeof(DEFAULTS)>
         self:RegisterCommand("welcome", "Show the first-run welcome again: role layout, colour vision, where things are.", function()
             self:Show()
         end)
-        -- Start playing waits for the end of a fight
+        -- Start playing waits for the end of a fight, and the dim lets the
+        -- world have its clicks during it
         self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
+            local dim = self.dim
+            if dim then
+                dim:EnableMouse(false)
+            end
             if self:Shown() then
                 self:DrawStart(true)
             end
         end)
         self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
+            local dim = self.dim
+            if dim then
+                dim:EnableMouse(true)
+            end
             if self:Shown() then
                 self:DrawStart()
             end

@@ -16,12 +16,12 @@
 -- Each has :SetValue(v) and :SetDisabled(disabled) (opacity-disabled, no input).
 
 import tokens as T from "/Core/Tokens"
-import * as events from "/Core/Events"
 import root from "/Core/Root"
 import * as draw from "./Draw"
 import text, Text from "./Text"
 import Panel from "./Panel"
 import showTooltip, hideTooltip, TooltipData from "./Tooltip"
+import dismissable from "./Dismiss"
 
 local S = T.space
 
@@ -153,8 +153,6 @@ export class AnchorPopover extends Panel
     end
 end
 
-local openButtons: { [AnchorButton]: boolean } = setmetatable({}, { __mode = "k" })
-
 export class AnchorButton extends Button
     border: draw.Border
     onChange: ((point: FramePoint) -> ())? = nil
@@ -281,6 +279,16 @@ export class AnchorButton extends Button
             pop.note:SetPoint("TOPLEFT", picker, "BOTTOMLEFT", 0, -S["space-4"])
             pop:SetWidth(w)
             self.pop = pop
+            -- a click outside it and its button closes it, and goes on to
+            -- what it was on (UI/Dismiss; no Esc: it never took keys)
+            dismissable(pop, {
+                close = function()
+                    self:Close()
+                end,
+                esc = false,
+                outside = "pass",
+                inside = { self },
+            })
         end
         local pop, picker = self.pop :: AnchorPopover, self.picker :: AnchorPicker
         pop.note:SetValue(self.note or "")
@@ -292,7 +300,6 @@ export class AnchorButton extends Button
         pop:ClearAllPoints()
         pop:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -S["space-1"])
         pop:Show()
-        openButtons[self] = true
         self.border:SetColor("arcane")
     end
 end
@@ -300,22 +307,6 @@ end
 export function anchorButton(parent: Frame, opts: AnchorButtonOptions?): AnchorButton
     return AnchorButton.new(parent, opts)
 end
-
--- A click outside an open popover and its button closes it.
-events.onGame(
-    "GLOBAL_MOUSE_DOWN",
-    function()
-        for b in pairs(openButtons) do
-            if not b:IsOpen() then
-                openButtons[b] = nil
-            elseif not (b:IsMouseOver() or (b.pop :: AnchorPopover):IsMouseOver()) then
-                b:Close()
-                openButtons[b] = nil
-            end
-        end
-    end,
-    "UI.AnchorButton"
-)
 
 --------------------------------------------------------------------------------
 -- SwatchRow
