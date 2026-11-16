@@ -3,17 +3,22 @@
 -- M:HookScript). A hook on a game function or frame script can never be
 -- taken off again, so each owner gets one per target for the session:
 --
---   secureHook(owner, source, live, name, fn)                  a global function
---   secureHook(owner, source, live, target, method, fn, opts?)  a table's method
---   hookScript(owner, source, live, frame, script, fn)
+--   secureHook(owner, source, gate, name, fn)                  a global function
+--   secureHook(owner, source, gate, target, method, fn, opts?)  a table's method
+--   hookScript(owner, source, gate, frame, script, fn)
 --   release(owner) / armed(owner)
 --
 -- The first call installs the hook (wowlua:hooks); a later one for the same
 -- owner and target re-arms it with the new function instead of installing a
 -- second one. `release` disarms every hook of the owner's, and while a hook
--- is disarmed, or its owner's `live()` says no (a module that is not
--- enabled), its body returns at once. A hook's error is reported under
--- `source` (the module's name), as its events' are.
+-- is disarmed, or its owner's gate is shut (`gate.on` false: a module that
+-- is not enabled), its body returns at once. A hook's error is reported
+-- under `source` (the module's name), as its events' are.
+--
+-- A hook can run every frame (a frame's OnUpdate), so its body does as
+-- little as it can: two field reads (its function, its gate's flag, which
+-- the owner's registry keeps: no call to ask the owner), then the guarded
+-- call (Fault's `run`: one xpcall, the report only on an error).
 --
 -- `opts.addon` (a table's method): installed once that load-on-demand addon
 -- has loaded, as with wowlua:hooks.
@@ -25,13 +30,14 @@
 import hook as stdHook, hookScript as stdHookScript from "wowlua:hooks"
 import type Options from "wowlua:hooks"
 import * as fault from "./Fault"
+import type Gate from "./Util"
 
 -- What a module's SecureHook takes besides its target: `addon`, a
 -- load-on-demand addon the target comes with.
 export type HookOptions = { addon?: string }
 
 -- One installed hook: what it runs while armed, and whether its owner is on.
-type Slot = { fn: ((...unknown) -> ())?, live: () -> boolean }
+type Slot = { fn: ((...unknown) -> ())?, gate: Gate }
 
 -- The part of a hook target that names it besides the table or frame: a
 -- method or script name, "" for a global function.
@@ -71,13 +77,14 @@ export class HookOwners
         end
     end
 
-    -- The function the game calls: the slot's, while armed and live.
+    -- The function the game calls: the slot's, while armed and its owner
+    -- is on.
     private function body(slot: Slot, source: string): (...unknown) -> ()
         local reporter = self.reporter
         return function(...: unknown)
             local fn = slot.fn
-            if fn and slot.live() then
-                reporter:call(source, fn, ...)
+            if fn and slot.gate.on then
+                reporter:run(source, fn, ...)
             end
         end
     end
@@ -87,7 +94,7 @@ export class HookOwners
     private function arm(
         owner: unknown,
         source: string,
-        live: () -> boolean,
+        gate: Gate,
         target: unknown,
         method: string,
         fn: function,
@@ -95,14 +102,15 @@ export class HookOwners
     )
         assert(owner ~= nil, "SuuUI Hooks: an owner is required")
         assert(type(fn) == "function", "SuuUI Hooks: a function is required")
+        assert(type(gate) == "table", "SuuUI Hooks: the owner's gate is required")
         local call = fn :: (...unknown) -> ()
         local slot = self:slotOf(owner, target, method)
         if slot then
             slot.fn = call
-            slot.live = live
+            slot.gate = gate
             return
         end
-        local made: Slot = { fn = call, live = live }
+        local made: Slot = { fn = call, gate = gate }
         self:addSlot(owner, target, method, made)
         local ok, err = pcall(install, self:body(made, source))
         if not ok then
@@ -116,7 +124,7 @@ export class HookOwners
     function secureHook(
         owner: unknown,
         source: string,
-        live: () -> boolean,
+        gate: Gate,
         target: unknown,
         method: string?,
         fn: function,
@@ -125,13 +133,13 @@ export class HookOwners
         if method == nil then
             assert(type(target) == "string", "SuuUI Hooks: a global function's name, or a table and a method")
             local name = target :: string
-            self:arm(owner, source, live, name, "", fn, function(b: (...unknown) -> ())
+            self:arm(owner, source, gate, name, "", fn, function(b: (...unknown) -> ())
                 stdHook(name, b)
             end)
             return
         end
         local options: Options = { addon = opts and opts.addon, owner = owner }
-        self:arm(owner, source, live, target, method, fn, function(b: (...unknown) -> ())
+        self:arm(owner, source, gate, target, method, fn, function(b: (...unknown) -> ())
             stdHook(target, method, b, options)
         end)
     end
@@ -139,12 +147,12 @@ export class HookOwners
     function hookScript(
         owner: unknown,
         source: string,
-        live: () -> boolean,
+        gate: Gate,
         frame: ScriptRegion | string,
         script: string,
         fn: function
     )
-        self:arm(owner, source, live, frame, script, fn, function(b: (...unknown) -> ())
+        self:arm(owner, source, gate, frame, script, fn, function(b: (...unknown) -> ())
             stdHookScript(frame, script, b, { owner = owner })
         end)
     end
@@ -200,24 +208,24 @@ export const hooks = HookOwners.new()
 export function secureHook(
     owner: unknown,
     source: string,
-    live: () -> boolean,
+    gate: Gate,
     target: unknown,
     method: string?,
     fn: function,
     opts: HookOptions?
 )
-    hooks:secureHook(owner, source, live, target, method, fn, opts)
+    hooks:secureHook(owner, source, gate, target, method, fn, opts)
 end
 
 export function hookScript(
     owner: unknown,
     source: string,
-    live: () -> boolean,
+    gate: Gate,
     frame: ScriptRegion | string,
     script: string,
     fn: function
 )
-    hooks:hookScript(owner, source, live, frame, script, fn)
+    hooks:hookScript(owner, source, gate, frame, script, fn)
 end
 
 export function release(owner: unknown)

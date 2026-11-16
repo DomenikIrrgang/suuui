@@ -1,17 +1,18 @@
 -- Core/Hooks: secure hooks kept per owner and target, installed once,
--- re-armed instead of stacked, silent while disarmed or not live.
+-- re-armed instead of stacked, silent while disarmed or their owner's gate
+-- is shut.
 
 import test, expect from "wowlua:test"
 import * as hooks from "/Core/Hooks"
+import type Gate from "/Core/Util"
 import FakeReporter from "../../fakes"
 import expectNoErrors from "../../helpers"
 
 type Target = { Method: (self: Target, n: number) -> () }
 const G = _G :: unknown :: { [string]: unknown }
 
-local function yes(): boolean
-    return true
-end
+-- an owner that is on
+const yes: Gate = { on = true }
 
 @test("a global function: installed once, re-armed with the latest function, disarmed by release")
 local function globalHook()
@@ -38,27 +39,24 @@ local function globalHook()
     expectNoErrors()
 end
 
-@test("a table's method and a frame's script; not live: nothing runs")
+@test("a table's method and a frame's script; the gate shut: nothing runs")
 local function methodAndScript()
     local owner = { name = "Hooks Test Method" }
-    local live = false
-    local function isLive(): boolean
-        return live
-    end
+    local gate: Gate = { on = false }
     local t: Target = { Method = function(_: Target, _n: number) end }
     local f = CreateFrame("Frame")
     local heard: string[] = {}
-    hooks.secureHook(owner, "Test", isLive, t, "Method", function(_: Target, n: number)
+    hooks.secureHook(owner, "Test", gate, t, "Method", function(_: Target, n: number)
         heard[#heard + 1] = "method " .. n
     end)
-    hooks.hookScript(owner, "Test", isLive, f, "OnShow", function()
+    hooks.hookScript(owner, "Test", gate, f, "OnShow", function()
         heard[#heard + 1] = "show"
     end)
     t:Method(1)
     f:Hide()
     f:Show()
     expect(heard).toEqual({})
-    live = true
+    gate.on = true
     t:Method(2)
     f:Hide()
     f:Show()
@@ -94,4 +92,52 @@ local function ownErrors()
     end)
     t:Method(1)
     expect(r.errors).toEqual({ "Hooks Source: hooks-boom" })
+end
+
+@test("the cheap path: a hook asks its owner nothing (its gate's flag) and runs its function through the reporter's run; shut, not even that")
+local function cheapPath()
+    -- (a hook may run every frame: its body reads two fields, then one
+    -- guarded call; Fault's call, which hands results back, isn't used)
+    local r = FakeReporter.new()
+    local own = hooks.HookOwners.new(r)
+    local gate: Gate = { on = true }
+    local t: Target = { Method = function(_: Target, _n: number) end }
+    local heard = 0
+    local owner = { name = "Hooks Test Cheap" }
+    own:secureHook(owner, "Cheap", gate, t, "Method", function(_: Target, n: number)
+        heard += n
+    end)
+    for i = 1, 10 do
+        t:Method(i)
+    end
+    expect(heard).toBe(55)
+    expect(r.runs).toBe(10)
+    expect(r.calls).toBe(0)
+    expect(r.errors).toEqual({})
+    gate.on = false
+    for i = 1, 10 do
+        t:Method(i)
+    end
+    expect(heard).toBe(55)
+    expect(r.runs).toBe(10)
+    -- an error in one call is reported, and the next call runs
+    gate.on = true
+    own:secureHook(owner, "Cheap", gate, t, "Method", function(_: Target, n: number)
+        if n == 1 then
+            error("hooks-cheap-boom")
+        end
+        heard += n
+    end)
+    t:Method(1)
+    t:Method(2)
+    expect(r.errors).toEqual({ "Cheap: hooks-cheap-boom" })
+    expect(heard).toBe(57)
+    expect(own:installed(owner)).toBe(1)
+end
+
+@test("a gate is required")
+local function needsGate()
+    expect(function()
+        hooks.secureHook({ name = "Hooks Test Gate" }, "Test", nil :: any, "CoreHooksTestGlobal", nil, function() end)
+    end).toThrow("gate")
 end

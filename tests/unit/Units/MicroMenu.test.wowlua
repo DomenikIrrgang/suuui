@@ -450,6 +450,43 @@ local function run(f: Frame, script: string)
     end
 end
 
+@test("the game's menu button under the mouse: its own tooltip (latency, frame rate) never shows, also when it refreshes or is turned off and on")
+local function quietTooltip()
+    local blz = MainMenuMicroButton
+    expect(blz:GetParent()).toBe(button("menu"))
+    local function gameTip(): boolean
+        return GameTooltip:IsShown() and GameTooltip:IsOwned(blz)
+    end
+    mock.hover(blz)
+    -- the game refreshes it every second while hovered: frame by frame,
+    -- never seen at a frame's end
+    local seen = 0
+    for _ = 1, 150 do
+        mock.advanceFrames(1)
+        if gameTip() then
+            seen += 1
+        end
+    end
+    expect(seen).toBe(0)
+    -- the game turns it off and on (its menu open, then closed): its name's
+    -- tooltip again, where it has the mouse's focus (which the emulator
+    -- gives no frame under mock.hover: stood in for)
+    mock.stub(blz, "IsMouseMotionFocus", function(): boolean
+        return true
+    end)
+    blz:Disable()
+    expect(gameTip()).toBe(false)
+    blz:Enable()
+    expect(gameTip()).toBe(false)
+    mock.advanceFrames(2)
+    expect(gameTip()).toBe(false)
+    mock.hover(nil)
+    -- nothing of it runs while the mouse is elsewhere: no hook on its
+    -- OnUpdate (it would run every frame)
+    expect(holdings(M).hooks).toBe(6)
+    expectNoErrors()
+end
+
 -- (last: the module off) Micro menu is reloadToToggle: the registry turns
 -- it off in a session only when its OnEnable fails. Here it toggles live, as
 -- a module that isn't would, so the registry's own disable and release run.
@@ -499,8 +536,9 @@ local function disabled()
     expect(blz:GetAlpha()).toBe(0)
     blz:SetAlpha(1)
     expect(blz:GetAlpha()).toBe(0)
-    -- (its five hooks: SetAlpha, SetPoint, OnEnter, OnLeave, OnUpdate)
-    expect(holdings(M).hooks).toBe(5)
+    -- (its six hooks: SetAlpha, SetPoint, OnEnter, OnLeave, the
+    -- performance tooltip, EvaluateTooltipVisibility)
+    expect(holdings(M).hooks).toBe(6)
     own.reloadToToggle = true
     expectNoErrors()
 end

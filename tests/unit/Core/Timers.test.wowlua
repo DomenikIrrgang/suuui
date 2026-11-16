@@ -4,6 +4,7 @@
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as timers from "/Core/Timers"
+import type Gate from "/Core/Util"
 import FakeReporter from "../../fakes"
 import expectNoErrors from "../../helpers"
 
@@ -11,9 +12,7 @@ const A = { name = "Timers Test A" }
 const B = { name = "Timers Test B" }
 
 -- an owner that is on
-local function alive(): boolean
-    return true
-end
+const alive: Gate = { on = true }
 
 @afterEach
 local function cleanup()
@@ -86,10 +85,7 @@ end
 
 @test("an owner that is off: nothing starts, nothing is kept, the handle is already cancelled")
 local function offOwner()
-    local on = false
-    local function live(): boolean
-        return on
-    end
+    local live: Gate = { on = false }
     local ran = 0
     local once = timers.after(A, "A", live, 1, function()
         ran += 1
@@ -101,7 +97,7 @@ local function offOwner()
     expect(ticker:IsCancelled()).toBe(true)
     expect(timers.count(A)).toBe(0)
     -- turned on later: the refused ones stay refused
-    on = true
+    live.on = true
     mock.advanceTime(3)
     expect(ran).toBe(0)
     expectNoErrors()
@@ -109,10 +105,7 @@ end
 
 @test("asked for while on: the release (cancelAll) is what stops it, not the owner's state later")
 local function goesOff()
-    local on = true
-    local function live(): boolean
-        return on
-    end
+    local live: Gate = { on = true }
     local ran: string[] = {}
     timers.after(A, "A", live, 1, function()
         ran[#ran + 1] = "once"
@@ -120,7 +113,7 @@ local function goesOff()
     timers.every(A, "A", live, 1, function()
         ran[#ran + 1] = "tick"
     end, 2)
-    on = false
+    live.on = false
     mock.advanceTime(1.1)
     expect(ran).toEqual({ "once", "tick" })
     timers.cancelAll(A)
@@ -128,4 +121,73 @@ local function goesOff()
     expect(ran).toEqual({ "once", "tick" })
     expect(timers.count(A)).toBe(0)
     expectNoErrors()
+end
+
+@test("the cheap path: each timer runs through the reporter's run; one set per owner, kept while its timers come and go")
+local function cheapPath()
+    local r = FakeReporter.new()
+    local own = timers.TimerOwners.new(r)
+    local sets = (own :: any).byOwner :: { [unknown]: unknown }
+    local ran = 0
+    own:after(A, "A", alive, 0.5, function()
+        ran += 1
+    end)
+    local set = sets[A]
+    expect(set ~= nil).toBe(true)
+    mock.advanceTime(1)
+    expect(ran).toBe(1)
+    expect(own:count(A)).toBe(0)
+    -- (no table made for the next one: the same set)
+    own:after(A, "A", alive, 0.5, function()
+        ran += 1
+    end)
+    own:every(A, "A", alive, 0.5, function()
+        ran += 1
+    end, 2)
+    expect(sets[A]).toBe(set)
+    mock.advanceTime(1.1)
+    expect(ran).toBe(4)
+    expect(r.runs).toBe(4)
+    expect(r.calls).toBe(0)
+    expect(own:count(A)).toBe(0)
+    -- released: the set goes with it
+    own:cancelAll(A)
+    expect(sets[A]).toBe(nil)
+end
+
+@test("handles the owner cancels itself (a debounce) don't pile up: the set stays near what is live")
+local function selfCancelled()
+    local own = timers.TimerOwners.new(FakeReporter.new())
+    local owned = function(): { [unknown]: boolean }
+        return ((own :: any).byOwner[A] :: any).handles
+    end
+    local function size(): number
+        local n = 0
+        for _ in pairs(owned()) do
+            n += 1
+        end
+        return n
+    end
+    local ran = 0
+    -- a long-lived ticker, then a thousand debounces: each cancels the last
+    own:every(A, "A", alive, 1, function() end)
+    local pending: TimerHandle? = nil
+    for _ = 1, 1000 do
+        local was = pending
+        if was then
+            was:Cancel()
+        end
+        pending = own:after(A, "A", alive, 5, function()
+            ran += 1
+        end)
+    end
+    expect(size() <= 2 * 32 + 2).toBe(true)
+    expect(own:count(A)).toBe(2)
+    -- the live ones are still kept: the last debounce runs, the release
+    -- cancels the ticker
+    mock.advanceTime(5.5)
+    expect(ran).toBe(1)
+    expect(own:count(A)).toBe(1)
+    own:cancelAll(A)
+    expect(own:count(A)).toBe(0)
 end

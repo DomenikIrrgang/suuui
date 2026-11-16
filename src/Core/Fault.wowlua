@@ -38,6 +38,10 @@ export interface Reporter
     -- fn(...) guarded: true and its results, or false (the error reported
     -- under `source`)
     function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
+    -- call() for a callback whose results nobody reads (an event's
+    -- listener, a hook, a timer): the same guard and report, nothing handed
+    -- back
+    function run<A...>(source: string, fn: (A...) -> (), ...: A...)
     function report(source: unknown, message: unknown, stack: string?)
 end
 
@@ -210,6 +214,21 @@ export class FaultLog implements Reporter
         self.starts[depth], self.childs[depth] = self.meter:ms(), 0
         self.kbStarts[depth], self.kbChilds[depth] = self.meter:kb(), 0
         return self:finishTimed(source, xpcall(fn, self.handler, ...))
+    end
+
+    -- call() without the results: what runs a listener, a hook or a timer.
+    -- One xpcall and a test of its first value; the report only on an
+    -- error (call's way back, a method call to hand the results on, is
+    -- what this saves, on every event).
+    function run<A...>(source: string, fn: (A...) -> (), ...: A...)
+        if self.timing then
+            self:call(source, fn, ...)
+            return
+        end
+        local ok, err = xpcall(fn, self.handler, ...)
+        if not ok then
+            self:report(source, err, self.lastStack)
+        end
     end
 
     -- Calls fn(...) with the game's refusal of a protected call it makes

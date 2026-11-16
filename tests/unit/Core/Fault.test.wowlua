@@ -145,6 +145,43 @@ local function callError()
     expect(e.count).toBe(2)
 end
 
+@test("run: the call's guard without its results; its arguments passed on, an error reported under the source with a stack")
+local function runs()
+    local got: number? = nil
+    local function f(a: number, b: number)
+        got = a + b
+    end
+    expect(select("#", fault.log:run("Run Test", f, 2, 3))).toBe(0)
+    expect(got).toBe(5)
+    expect(#fault.entries()).toBe(0)
+    local function boom()
+        error("fault-run-err")
+    end
+    fault.log:run("Run Test", boom)
+    fault.log:run("Run Test", boom)
+    local e = last()
+    expect(e.source).toBe("Run Test")
+    expect(e.message:find("fault-run-err", 1, true) ~= nil).toBe(true)
+    expect(type(e.stack)).toBe("string")
+    expect(e.count).toBe(2)
+end
+
+@test("run: with timing on, counted as call is")
+local function runTimed()
+    fault.setTiming(true)
+    fault.log:run("Run Timed", function()
+        mock.spend(4)
+    end)
+    fault.log:run("Run Timed", function()
+        error("fault-run-timed-err")
+    end)
+    local _, spent = fault.timingState()
+    local rec = spent["Run Timed"] :: fault.Spent
+    expect(rec.calls).toBe(2)
+    expect(rec.ms).toBeCloseTo(4, 0)
+    expect(last().source).toBe("Run Timed")
+end
+
 --------------------------------------------------------------------------------
 -- timing
 --------------------------------------------------------------------------------

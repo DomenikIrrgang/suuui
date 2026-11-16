@@ -4,8 +4,11 @@
 -- the group changes. A vote line looks a name up here instead of walking
 -- the group (review 2026-11-15, CHAT-3: a walk per name per row, about
 -- 15,000 name reads a vote line in a 40-player raid with five rolls open).
--- The module marks it stale on GROUP_ROSTER_UPDATE (and a member's name
--- arriving); several of those before the next look are one walk.
+-- The module marks it stale on GROUP_ROSTER_UPDATE; several of those
+-- before the next look are one walk. A member whose name the game hasn't
+-- told yet (UNKNOWNOBJECT, a moment after joining) leaves it stale, so the
+-- next look reads again: the name is there once it is told, without a
+-- listener for every unit's name.
 
 import SuuUI from "/Core/API"
 import * as secret from "wowlua:secret"
@@ -68,6 +71,10 @@ export class GroupNames
             local name = SuuUI.FullName(unit)
             if name and secret.readable(name) then
                 local s = short(name)
+                if s == UNKNOWNOBJECT then
+                    -- (its name not told yet: read again at the next look)
+                    self.stale = true
+                end
                 if s ~= "" and not (raid and secret.flag(UnitIsUnit(unit, "player"))) then
                     others[#others + 1] = s
                     local _, class = UnitClass(unit)

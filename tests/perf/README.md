@@ -60,6 +60,18 @@ numbers say where SuuUI's work and garbage go and whether a change made them
 smaller, not how many milliseconds a frame takes in WoW. For that, record in
 the game with `wowlua dev`'s dev window and `wowlua prof report`.
 
+The scenarios run in the `test` build, as every `wowlua test` does: with
+`runtime-checks: "exports"`, so each exported function and each public
+method of an exported class checks its arguments' types on entry (about
+five instructions a parameter), which release builds don't. A change that
+exports more functions (a file split in two) looks slower here than it is
+in the game, and the counts are higher than a player's by those checks.
+(wowlua 0.13.15 builds `wowlua test` only from the `test` profile of
+`wowlua.json`; `--manifest` with another file doesn't change it, so the
+scenarios can't run without the checks while the unit tests keep them.
+To see a player's numbers once, set `"runtime-checks": "none"` in the
+`test` profile, run, and put it back: never as the baseline.)
+
 ## Compare
 
 `run` compares with `tests/perf/baseline.json` when it is there: each metric,
@@ -70,6 +82,12 @@ the baseline's value, the new one and the change (`better` or `WORSE` past
 $ python3 -I tools/perf.py compare                     # the last run with the baseline
 $ python3 -I tools/perf.py compare old.json new.json   # any two results
 ```
+
+With `--fail` (`run --fail`, `compare --fail`) it ends with the metrics that
+are `WORSE` and exits 1 when there is one: a check a merge can wait on.
+Every scenario also ends with `setup: no errors` (`perf.expectClean()`): an
+error SuuUI caught, the game's, or a protected call the emulated client
+refused fails it, so a handler that broke can't pass as a speed-up.
 
 A run of some scenarios compares only those. The baseline names the wowlua
 version it was made with: another version's emulator or Blizzard UI may
@@ -113,7 +131,8 @@ isn't measured; every other one is a phase. Drive a phase with
 inside each frame, so what it fires lands in that frame. Keep a file's
 measured frames under 600 (the profiler keeps the newest 600), use
 `perf.random(seed)` for choices, and `perf.record(name, { kb = … })` for a
-memory figure. Start with `perf.settle(perf.AFTER_LOGIN)`: five seconds, so
+memory figure. End with a test `setup: no errors` that calls `perf.expectClean()`.
+Start with `perf.settle(perf.AFTER_LOGIN)`: five seconds, so
 what SuuUI builds ahead after a login (the nameplate pool, the bags' buttons,
 the command catalog) is done before the first phase, as it is by the time you
 move in game.
@@ -125,4 +144,5 @@ cast, mount and catch the mouse; `channelLine` says a line in General or
 LookingForGroup; `addonKB` is SuuUI's own memory where wowlua measures it per
 addon (after 0.13.9; the whole client's before). A memory record that grows
 from one point of a scenario to the next (`churn`) is memory SuuUI keeps per
-player it has seen.
+player it has seen, or the emulator keeps for it: in wowlua 0.13.15 every
+timer made stays (`Docs/wowlua-port-notes.md`, V4).

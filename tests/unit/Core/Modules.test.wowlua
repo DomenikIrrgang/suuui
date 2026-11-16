@@ -10,6 +10,7 @@ import test, cases, expect, config, afterEach, beforeAll from "wowlua:test"
 import * as mock from "wowlua:mock"
 import * as modules from "/Core/Modules"
 import ModuleState as State from "/Core/Modules"
+import internal ownOf from "/Core/Modules"
 import FakeReporter, FakeNotifier, FakeCombat, FakeNextFrame from "../../fakes"
 import cycle, NOTHING, expectNoErrors from "../../helpers"
 import * as settings from "/Core/Settings"
@@ -1133,6 +1134,55 @@ local function enabledInCallbacks()
         "disable false disabled",
         "DISABLED false disabled",
     })
+end
+
+@test("a module's gate (what its hooks and timers read) is on exactly while it is enabled: off while OnDisable runs, and when it fails")
+local function gateFollowsState()
+    local target: HookTarget = { Method = function(_: HookTarget, _n: number) end }
+    local heard: string[] = {}
+    local failing = false
+    local m: Module? = nil
+    local function gate(): boolean
+        return ownOf(assert(m) :: table).gate.on
+    end
+    register({
+        id = nextId(),
+        name = "ZZ Gate",
+        OnEnable = function(self: Module)
+            m = self
+            heard[#heard + 1] = "enable " .. tostring(gate())
+            self:SecureHook(target, "Method", function(_: HookTarget, n: number)
+                heard[#heard + 1] = "hook " .. n
+            end)
+            if failing then
+                error("modules-err-gate")
+            end
+        end,
+        OnDisable = function()
+            -- its hooks are still armed here (released after), but silent
+            target:Method(2)
+            heard[#heard + 1] = "disable " .. tostring(gate())
+        end,
+    })
+    local mod = assert(m)
+    expect(mod.state).toBe(State.Enabled)
+    expect(gate()).toBe(true)
+    target:Method(1)
+    mod:Set("enabled", false)
+    expect(gate()).toBe(false)
+    target:Method(3)
+    failing = true
+    mod:Set("enabled", true)
+    expect(mod.state).toBe(State.Errored)
+    expect(gate()).toBe(false)
+    target:Method(4)
+    expect(heard).toEqual({ "enable true", "hook 1", "disable false", "enable true", "disable false" })
+    expect((faultWith("modules-err-gate") :: fault.Entry).source).toBe("ZZ Gate")
+    failing = false
+    mod:Set("enabled", false)
+    mod:Set("enabled", true)
+    expect(gate()).toBe(true)
+    mod:Set("enabled", false)
 end
 
 @test("registered after login: starts on the next frame, with callbacks assigned after the call")

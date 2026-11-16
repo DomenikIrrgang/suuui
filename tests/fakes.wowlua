@@ -3,7 +3,8 @@
 -- part of its own (a bus, a queue, a log…) with nothing global behind it.
 --
 --   FakeReporter     fault.Reporter: runs callbacks under pcall, keeps
---                    what failed (source and first line) in `errors`
+--                    what failed (source and first line) in `errors`, and
+--                    counts how it was asked (`calls`, `runs`)
 --   FakeDispatcher   events.Dispatcher: keeps registrations, delivers
 --                    synchronously (`send`, `deliver`)
 --   FakeSubscription what the dispatcher hands out: cancel() ends it
@@ -21,8 +22,11 @@ import * as extend from "/Core/Extend"
 
 export class FakeReporter implements fault.Reporter
     errors: string[] = {}
+    calls: number = 0
+    runs: number = 0
 
     function call<A..., R...>(source: string, fn: (A...) -> R..., ...: A...): (boolean, R...)
+        self.calls += 1
         local function keep(ok: boolean, ...: R...): (boolean, R...)
             if not ok then
                 self:report(source, (...))
@@ -31,6 +35,14 @@ export class FakeReporter implements fault.Reporter
             return true, ...
         end
         return keep(pcall(fn, ...))
+    end
+
+    function run<A...>(source: string, fn: (A...) -> (), ...: A...)
+        self.runs += 1
+        local ok, err = pcall(fn, ...)
+        if not ok then
+            self:report(source, err)
+        end
     end
 
     function report(source: unknown, message: unknown, stack: string?)

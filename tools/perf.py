@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # tools/perf.py: SuuUI's performance scenarios (tests/perf/README.md).
 #
-#   python3 -I tools/perf.py run [filter ...]   run the scenarios (all, or the
+#   python3 -I tools/perf.py run [filter ...] [--fail]
+#                                               run the scenarios (all, or the
 #                                               files matching a filter), then
 #                                               summarize and compare
 #   python3 -I tools/perf.py summarize          summarize the last run's profiles
-#   python3 -I tools/perf.py compare [A] [B]    compare results A (default: the
+#   python3 -I tools/perf.py compare [A] [B] [--fail]
+#                                               compare results A (default: the
 #                                               last run) with B (default: the
-#                                               baseline)
+#                                               baseline); --fail: exit 1 when a
+#                                               metric is WORSE (past 2 %)
 #   python3 -I tools/perf.py baseline           make the last run the baseline
 #   python3 -I tools/perf.py top <scenario> [phase] [--frame N] [--event NAME]
 #                                               where a phase's (or one frame's)
@@ -55,6 +58,10 @@ COMPARED = [
 ]
 
 HARNESS = ('/std/mock.lua', '/std/test.lua', 'tests/')
+
+# A change past this (in percent) is marked: `better`, or `WORSE` (which
+# `--fail` turns into exit status 1).
+THRESHOLD = 2
 
 
 def load_profile(path):
@@ -314,6 +321,7 @@ def print_results(results):
 
 
 def compare(a_path=RESULTS, b_path=BASELINE):
+    """prints each metric's change; returns how many are WORSE"""
     with open(a_path) as f:
         a = json.load(f)
     with open(b_path) as f:
@@ -323,6 +331,7 @@ def compare(a_path=RESULTS, b_path=BASELINE):
     if a['wowlua'] != b['wowlua']:
         print('note: another wowlua version; the emulator and the game UI it loads may differ')
     print('%-40s %-20s %12s %12s %8s' % ('scenario / phase', 'metric', 'baseline', 'now', 'change'))
+    worse = []
     for name, s in a['scenarios'].items():
         bs = b['scenarios'].get(name)
         if not bs:
@@ -338,7 +347,9 @@ def compare(a_path=RESULTS, b_path=BASELINE):
                 if old is None or new is None:
                     continue
                 ch = ((new - old) / old * 100) if old else (0 if new == old else float('inf'))
-                mark = '' if abs(ch) < 2 else ('  better' if ch < 0 else '  WORSE')
+                mark = '' if abs(ch) < THRESHOLD else ('  better' if ch < 0 else '  WORSE')
+                if ch >= THRESHOLD:
+                    worse.append('%s / %s %s' % (name, phase, label))
                 print('%-40s %-20s %12s %12s %+7.1f%%%s' % (
                     (name + ' / ' + phase)[:40], label, fmt(old), fmt(new), ch, mark))
         for k, v in s.get('memory_kb', {}).items():
@@ -346,6 +357,11 @@ def compare(a_path=RESULTS, b_path=BASELINE):
             if old:
                 print('%-40s %-20s %12s %12s %+7.1f%%' % (
                     name[:40], ('mem ' + k)[:20], fmt(old), fmt(v), (v - old) / old * 100))
+    if worse:
+        print('\n%d metric(s) WORSE than the baseline by %d %% or more:' % (len(worse), THRESHOLD))
+        for w in worse:
+            print('  ' + w)
+    return len(worse)
 
 
 def fmt(v):
@@ -415,7 +431,7 @@ def top(scenario, phase=None, frame=None, k=20, event=None):
             print('  %10.0f instr %9.2f KB  %8.0f calls  %s' % (v[0] / n, v[1] / 1024 / n, v[2] / n, lab[:140]))
 
 
-def run(filters):
+def run(filters, fail=False):
     os.makedirs(PROFILES, exist_ok=True)
     for old in glob.glob(os.path.join(PROFILES, '*.speedscope.json')):
         os.remove(old)
@@ -429,7 +445,8 @@ def run(filters):
     summarize()
     if os.path.exists(BASELINE):
         print()
-        compare()
+        if compare() and fail:
+            sys.exit(1)
 
 
 def main(argv):
@@ -437,12 +454,15 @@ def main(argv):
         print(__doc__ or open(__file__).read().split('\nimport ')[0])
         return
     cmd, rest = argv[0], argv[1:]
+    fail = '--fail' in rest
+    rest = [r for r in rest if r != '--fail']
     if cmd == 'run':
-        run(rest)
+        run(rest, fail)
     elif cmd == 'summarize':
         summarize()
     elif cmd == 'compare':
-        compare(*(rest[:2] or []))
+        if compare(*(rest[:2] or [])) and fail:
+            sys.exit(1)
     elif cmd == 'baseline':
         with open(RESULTS) as f:
             data = f.read()
