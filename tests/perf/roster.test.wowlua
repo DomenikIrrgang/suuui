@@ -1,0 +1,176 @@
+-- Perf scenario: a 40-player raid whose roster keeps changing. The raid
+-- forms (people join in bursts, past 20), then, out of combat and in a
+-- fight, members leave and come back, go offline and online, change raid
+-- group and role: GROUP_ROSTER_UPDATE in bursts of three to five in one
+-- frame, as the game sends them, the secure headers reassigning their
+-- buttons each time. In the fight, damage and heals go on meanwhile.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import * as perf from "./util"
+
+config({ profile = "perf" })
+
+const CLASSES = { "WARRIOR", "PRIEST", "MAGE", "ROGUE", "PALADIN", "HUNTER", "WARLOCK", "DRUID" }
+const ROLES: { [string]: "TANK" | "HEALER" | "DAMAGER" } = {
+    WARRIOR = "TANK",
+    PRIEST = "HEALER",
+    PALADIN = "HEALER",
+    DRUID = "HEALER",
+    MAGE = "DAMAGER",
+    ROGUE = "DAMAGER",
+    HUNTER = "DAMAGER",
+    WARLOCK = "DAMAGER",
+}
+const OTHER_ROLE: { [string]: "TANK" | "HEALER" | "DAMAGER" } = {
+    TANK = "DAMAGER",
+    HEALER = "DAMAGER",
+    DAMAGER = "TANK",
+}
+
+local raid: mock.MockUnit[] = {}
+-- whether each is in the raid now, its raid group, its role, online
+local inRaid: { [number]: boolean } = {}
+local groupOf: { [number]: number } = {}
+local roleOf: { [number]: "TANK" | "HEALER" | "DAMAGER" } = {}
+local online: { [number]: boolean } = {}
+
+local function join(i: number, quiet: boolean?)
+    mock.group:add(raid[i], { raid = true, subgroup = groupOf[i], quiet = quiet })
+    inRaid[i] = true
+end
+
+-- One change to the roster (each a GROUP_ROSTER_UPDATE, as the game's).
+local function change(rnd: (n: number) -> number)
+    local i = rnd(#raid)
+    local u = raid[i]
+    local kind = rnd(5)
+    if not inRaid[i] then
+        join(i)
+    elseif kind == 1 then
+        -- leaves (back later)
+        mock.group:remove(u)
+        inRaid[i] = false
+    elseif kind == 2 then
+        -- another raid group
+        local g = rnd(8)
+        groupOf[i] = g
+        mock.group:remove(u, { quiet = true })
+        mock.group:add(u, { raid = true, subgroup = g })
+    elseif kind == 3 then
+        local now = not online[i]
+        online[i] = now
+        u:setOnline(now)
+    elseif kind == 4 then
+        local r = OTHER_ROLE[roleOf[i]]
+        roleOf[i] = r
+        u:setRole(r)
+    else
+        mock.fireEvent("GROUP_ROSTER_UPDATE")
+    end
+end
+
+-- A burst of three to five changes in this frame.
+local function burst(rnd: (n: number) -> number)
+    for _ = 1, 2 + rnd(3) do
+        change(rnd)
+    end
+end
+
+@if(features.perf)
+@test("setup: login, the first ten of the raid")
+local function setup()
+    for i = 1, 39 do
+        local class = CLASSES[(i - 1) % #CLASSES + 1]
+        local u = mock.spawnUnit({
+            name = "Raider " .. i,
+            player = true,
+            class = class,
+            level = 60,
+            reaction = "friendly",
+            health = 5000,
+            healthMax = 5000,
+            distance = 15,
+        })
+        roleOf[i] = ROLES[class]
+        u:setRole(roleOf[i])
+        groupOf[i] = (i // 5) + 1
+        online[i] = true
+        raid[i] = u
+    end
+    for i = 1, 9 do
+        join(i, i < 9)
+    end
+    mock.enterInstance("raid", { name = "Perf Keep", instanceID = 409, difficultyID = 9, maxPlayers = 40 })
+    perf.settle(perf.AFTER_LOGIN)
+end
+
+@if(features.perf)
+@test("the raid forms: thirty join in bursts")
+local function forming()
+    local nextUp = 10
+    perf.run(120, function(n: number)
+        -- three to four every eight frames
+        if n % 8 == 0 then
+            for _ = 1, 3 + (n // 8) % 2 do
+                if nextUp <= #raid then
+                    join(nextUp)
+                    nextUp += 1
+                end
+            end
+        end
+    end)
+end
+
+@if(features.perf)
+@test("out of combat: people leave, come back, go offline, change group and role")
+local function churn()
+    local rnd = perf.random(7)
+    perf.run(180, function(n: number)
+        if n % 6 == 0 then
+            burst(rnd)
+        end
+    end)
+end
+
+@if(features.perf)
+@test("in a fight: the same, with damage and heals")
+local function fight()
+    local boss = mock.spawnUnit({
+        name = "Perf Raid Boss",
+        level = 63,
+        reaction = "hostile",
+        health = 2000000,
+        healthMax = 2000000,
+        classification = "worldboss",
+        distance = 5,
+    })
+    local rnd = perf.random(11)
+    perf.run(180, function(n: number)
+        if n == 1 then
+            mock.player:enterCombat()
+            boss:setThreat(100, raid[1])
+            return
+        end
+        if n % 6 == 0 then
+            burst(rnd)
+        end
+        local i = rnd(#raid)
+        if inRaid[i] then
+            raid[i]:damage(200 + rnd(300))
+        end
+        if n % 3 == 0 then
+            local j = rnd(#raid)
+            if inRaid[j] then
+                raid[j]:heal(300)
+            end
+        end
+    end)
+end
+
+@if(features.perf)
+@test("setup: no errors")
+local function clean()
+    perf.expectClean()
+end

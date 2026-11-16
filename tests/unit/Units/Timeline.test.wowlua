@@ -130,11 +130,77 @@ local function timeline()
     expect(SuuUI.GetAnchor("encounterTimeline")).toBeNil()
     M:Set("variant", "track")
     expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
-    -- Shield Wall's 4 seconds run out: it leaves
+    -- Shield Wall's 4 seconds run out: it leaves (on the next frame:
+    -- advanceTime runs timers, no frames)
     mock.advanceTime(4.2)
+    mock.advanceFrames(1)
     expect(labels()).toBe("Frost Nova, Rain of Fire, Death Coil, Whirlwind")
     M:Set("position", { point = "TOP", x = 0, y = -28, hidden = true })
     expect(tl():IsShown()).toBe(false)
+end
+
+@test("in a fight: laid out when the game's timeline changes, never per frame; nothing per frame once it's empty")
+local function perFrame()
+    M:Test()
+    local t = tl()
+    expect(t:IsShown()).toBe(true)
+    expect(t:GetScript("OnUpdate") ~= nil).toBe(true)
+    -- (each refresh sets the same variant again: not laid out for it)
+    local layouts = t.layouts
+    mock.advanceFrames(60)
+    expect(t.layouts).toBe(layouts)
+    expect(t.evs[1].name).toHaveText("Shield Wall")
+    -- a timer added: laid out for it (the game's event, one refresh on the
+    -- next frame)
+    ET.AddScriptEvent({ spellID = 122, iconFileID = 1, duration = 7, overrideName = "Nova" })
+    mock.advanceFrames(1)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(labels(true)).toBe("Death Coil, Frost Nova, Nova, Rain of Fire, Shield Wall, Whirlwind")
+    -- all gone: hidden, no OnUpdate
+    ET.CancelAllScriptEvents()
+    M:Refresh()
+    expect(t:IsShown()).toBe(false)
+    expect(t:GetScript("OnUpdate")).toBeNil()
+    expectNoErrors()
+end
+
+@test("one refresh a frame: a cancel, a natural expiry and a pull's cancel each lay it out once")
+local function oncePerChange()
+    M:Test()
+    local t = tl()
+    local id = ET.AddScriptEvent({ spellID = 122, iconFileID = 1, duration = 20, overrideName = "Nova" })
+    mock.advanceFrames(1)
+    expect(labels(true)).toBe("Death Coil, Frost Nova, Nova, Rain of Fire, Shield Wall, Whirlwind")
+    -- cancelled (the game's events for it: one refresh, on the next frame)
+    local layouts = t.layouts
+    ET.CancelScriptEvent(id)
+    mock.advanceFrames(2)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(labels(true)).toBe("Death Coil, Frost Nova, Rain of Fire, Shield Wall, Whirlwind")
+    -- Shield Wall's 4 seconds run out, frame by frame (the game's events and
+    -- the module's own timer: one refresh)
+    layouts = t.layouts
+    mock.advanceFrames(4.3 * 60)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(labels()).toBe("Frost Nova, Rain of Fire, Death Coil, Whirlwind")
+    -- the pull cancelled: its game event and the module's own refresh, once
+    M:StartPull(10)
+    mock.advanceFrames(1)
+    layouts = t.layouts
+    M:CancelPull()
+    mock.advanceFrames(2)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(labels()).toBe("Frost Nova, Rain of Fire, Death Coil, Whirlwind")
+    -- a burst of the game's events in one frame: one refresh
+    layouts = t.layouts
+    for i = 1, 4 do
+        ET.AddScriptEvent({ spellID = 122, iconFileID = 1, duration = 20 + i, overrideName = "Nova" .. i })
+    end
+    expect(t.layouts).toBe(layouts)
+    mock.advanceFrames(1)
+    expect(t.layouts).toBe(layouts + 1)
+    expect(#assert(t.events)).toBe(8)
+    expectNoErrors()
 end
 
 @test("an ability's danger badge from its icons; a secret name or time left out; a paused one")
@@ -304,8 +370,10 @@ end
 )
 local function dbm()
     local callbacks: { [string]: Callback } = {}
+    -- (its callbacks refresh the timeline on the next frame)
     local function fire(event: string, ...: unknown)
         assert(callbacks[event])(...)
+        mock.advanceFrames(1)
     end
     local dbmBars: Bar[] = {}
     local options = { HideDBMWarnings = false }
@@ -358,6 +426,7 @@ local function bigwigs()
     local messages: { [string]: Callback } = {}
     local function send(msg: string, ...: unknown)
         assert(messages[msg])(...)
+        mock.advanceFrames(1)
     end
     mock.setField(_G, "BigWigsLoader", {
         RegisterMessage = function(_: unknown, msg: string, fn: Callback)
@@ -648,6 +717,7 @@ local function offStaysOff()
     expect(comm.count(M)).toBe(0)
     assert(callbacks.DBM_TimerBegin)(nil, "t1", "Lava Burst", 12, 135813)
     assert(callbacks.DBM_TimerUpdate)(nil, "t1", 2, 12)
+    mock.advanceFrames(1)
     expect(tl():IsShown()).toBe(false)
     expect(next(M.addonTimers)).toBeNil()
     -- nor a pull from the group
@@ -657,6 +727,7 @@ local function offStaysOff()
     settings.set("timeline", "enabled", true)
     expect(SuuUI.GetAnchor("encounterTimeline")).toBe(M.timeline)
     assert(callbacks.DBM_TimerBegin)(nil, "t2", "Lava Burst", 12, 135813)
+    mock.advanceFrames(1)
     expect(tl():IsShown()).toBe(true)
     M:Set("source", "suui")
     M.hooked = nil

@@ -15,6 +15,9 @@
 ### Changed
 
 - Long lists (the guild roster, your friends, the Who results) scroll and refresh without rebuilding every row: only the rows on screen exist, and a roster update or a click on a member draws again only what changed, so a large guild no longer makes the window hitch.
+- The encounter timeline costs far less during boss fights: it no longer rebuilds itself every frame; each ability only moves, and its time only changes, when what you see changes.
+- Raid and party frames draw health at most once per frame instead of once per event: a heal no longer redraws a frame three times, and unchanged text, fonts and colours are left alone.
+- Raid roster changes (people joining, leaving, going offline, changing group or role) are handled once per burst, on the next frame, and only frames showing someone new are redrawn and have their auras re-scanned. Party frames stay idle while you are in a raid.
 - For plugin authors (API 0.47): `M:IsEnabled()` is now already true while `OnEnable` runs and already false while `OnDisable` runs (it was the other way round), so code both call knows which way things are going. A module registered after login (a plugin that loads on demand) now starts on the next frame, so a `function M:OnEnable()` written after `RegisterModule`, as the plugin guide shows, runs.
 - Cooldown Manager: "Seen recently" in "+ Add" is now kept per character instead of in the profile, so an exported profile no longer carries your cast history (your class's list moves over once).
 - Action bars: the "Stance and form bar" setting now says what off does: no stance bar at all (Blizzard's stays hidden).
@@ -81,6 +84,7 @@
 - Notifications: a card used again for a new note no longer shows a button of the note before it; clicking that could run the old note's action, such as accepting an invite that was gone.
 - Notifications: a friend's online card no longer shows an icon left over from an earlier note on its Whisper or Invite button.
 - Notifications: after "+N more" was opened, the stack is capped at five again once the notes fit.
+- The game's windows that SuuUI restyles keep their text styles when they redraw: titles stay in the header face and theme colour, numbers stay tabular, and small text stays small after the first refresh, a scroll or a theme change.
 
 ## 0.17.0 (2026-11-14)
 

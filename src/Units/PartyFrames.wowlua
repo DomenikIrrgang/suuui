@@ -269,6 +269,8 @@ export class PartyFrame extends UnitFrameClass
             growth = { "RIGHT", "DOWN" },
             groups = groups,
             lazy = true,
+            -- (re-scanned by the roster pass, for someone else on its token)
+            roster = false,
         })
         self.auras = auras
         if auras then
@@ -438,6 +440,8 @@ local function build(self: PartyFramesModule): Frame
             power = false,
             textOnSmall = true,
             healthText = "none",
+            -- (redrawn by the roster pass, once a burst)
+            rosterRefresh = false,
         })
         SuuUI.TagInstance(f, { module = M.id, role = "partyPet" })
         f:Hide()
@@ -460,9 +464,18 @@ local function build(self: PartyFramesModule): Frame
             name = "SuuUIParty" .. (i == 1 and "Player" or (i - 1)) .. "Frame",
             youWhenPlayer = false,
             powerFor = powerFor,
+            -- (redrawn by the roster pass, once a burst)
+            rosterRefresh = false,
         })
         SuuUI.TagInstance(f, { module = M.id, role = "party" })
         f:BuildAuras()
+        -- shown as its member comes (its unit watch) after a pass that
+        -- skipped it: drawn for them
+        f:HookScript("OnShow", function()
+            if f.active and f.occupant == nil then
+                self:QueueRoster()
+            end
+        end)
         self.frames[i] = f
     end
     return holder
@@ -784,6 +797,8 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     holder: Frame? = nil
     indicatorTier: string? = nil
     indicatorTimer: TimerHandle? = nil
+    -- the roster pass waiting for the next frame
+    rosterTimer: TimerHandle? = nil
     previewSet: PreviewSet? = nil
     previewView: Frame? = nil
     -- edit mode's group preview
@@ -1310,6 +1325,62 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         end
     end
 
+    -- One roster pass on the next frame for a burst of roster and role
+    -- changes, while the frames show (hidden, in a raid, they wait: the
+    -- holder showing again queues one).
+    function QueueRoster()
+        local holder = self.holder
+        if self.rosterTimer or not (holder and holder:IsVisible()) then
+            return
+        end
+        self.rosterTimer = self:After(0, function()
+            self.rosterTimer = nil
+            self:RosterPass()
+        end)
+    end
+
+    -- The roster pass: each shown frame whose token now shows someone else is
+    -- drawn anew and its auras re-scanned; the others only follow a role or
+    -- raid group change (UnitFrame's RosterUpdate). A hidden one (no one on
+    -- its token yet) is drawn when it shows.
+    function RosterPass()
+        local holder = self.holder
+        if not (holder and holder:IsVisible()) then
+            return
+        end
+        for _, f in ipairs(self.frames) do
+            if f.unit and f.active then
+                if f:IsVisible() then
+                    if f:RosterUpdate() then
+                        local auras = f.auras
+                        if auras then
+                            auras:Refresh()
+                        end
+                    end
+                else
+                    f.occupant = nil
+                end
+            end
+        end
+        for _, p in ipairs(self.pets) do
+            if p.unit and p.active then
+                if p:IsVisible() then
+                    p:RosterUpdate()
+                else
+                    p.occupant = nil
+                end
+            end
+        end
+        self:UpdateStates()
+        self:UpdateSelected()
+        self:UpdateRange()
+        self:UpdateOffline()
+        -- indicators limited to some group sizes
+        if UI.GroupTier() ~= self.indicatorTier then
+            self:QueueIndicators()
+        end
+    end
+
     -- The frames listen and draw only while their holder shows: in a raid
     -- (its state driver hides it), solo, or with SuuUI's UI hidden they
     -- stand still, and are drawn afresh when it shows. (Activate and
@@ -1328,15 +1399,28 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
     override function OnEnable()
         standDownBlizzard()
         local holder = self.holder or build(self)
+        -- (on again after an error turned it off: its timers went with it)
+        self.rosterTimer = nil
+        -- (what a hidden holder skips: none of its handlers below do anything)
+        local function shown(): boolean
+            return holder:IsVisible()
+        end
         self:HookScript(holder, "OnShow", function()
             self:SetFramesActive(true)
+            -- (who is on each token now, their auras: on the next frame)
+            self:QueueRoster()
         end)
         self:HookScript(holder, "OnHide", function()
             self:SetFramesActive(false)
         end)
         self:SetFramesActive(holder:IsVisible())
         -- its state driver shows it, not edit mode (and each frame its unit watch)
-        self:RegisterMover(holder, { key = "position", label = "Party frames", managedShow = true, apartFrom = "raid.position" })
+        self:RegisterMover(holder, {
+            key = "position",
+            label = "Party frames",
+            managedShow = true,
+            apartFrom = "raid.position",
+        })
         SuuUI.PublishAnchor("party", holder, self)
         self:RegisterSettings(SECTION)
         self:RunOutOfCombat("layout", function()
@@ -1406,10 +1490,15 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
             end)
         end)
         self:OnGameEvent("UNIT_CONNECTION", function()
-            self:UpdateOffline()
+            if shown() then
+                self:UpdateOffline()
+            end
         end)
         -- a pet called, dismissed or another one: the pets' frames drawn again
         self:OnGameEvent("UNIT_PET", function()
+            if not shown() then
+                return
+            end
             for _, p in ipairs(self.pets) do
                 if p.active and p:IsShown() then
                     p:Refresh()
@@ -1451,36 +1540,27 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         end)
 
         self:OnGameEvent("PLAYER_TARGET_CHANGED", function()
-            self:UpdateSelected()
+            if shown() then
+                self:UpdateSelected()
+            end
         end)
+        -- someone joined, left or moved, or a role chosen or changed (the
+        -- markers, power lines and indicators limited to roles): one pass on
+        -- the next frame for the burst, while the frames show
         self:OnGameEvent("GROUP_ROSTER_UPDATE", function()
-            self:UpdateStates()
-            self:UpdateSelected()
-            self:UpdateRange()
-            self:UpdateOffline()
-            -- someone changed raid group or role: "my group" and role-limited
-            -- indicators follow
-            for _, f in ipairs(self.frames) do
-                f:UpdateIndicatorPresence()
-            end
-            -- indicators limited to some group sizes
-            if UI.GroupTier() ~= self.indicatorTier then
-                self:QueueIndicators()
-            end
+            self:QueueRoster()
         end)
-
-        -- a role chosen or changed: indicators limited to roles follow, on
-        -- the frames whose person's role changed
         local function rolesChanged()
-            for _, f in ipairs(self.frames) do
-                f:UpdateIndicatorRole()
-            end
+            self:QueueRoster()
         end
         self:OnGameEvent("PLAYER_ROLES_ASSIGNED", rolesChanged)
         self:OnGameEvent("ROLE_CHANGED_INFORM", rolesChanged)
 
         -- the game event: a unit event registers at most two units
         self:OnGameEvent("UNIT_THREAT_SITUATION_UPDATE", function(_, unit)
+            if not shown() then
+                return
+            end
             for _, f in ipairs(self.frames) do
                 if f.unit == unit then
                     self:UpdateState(f)
@@ -1489,6 +1569,9 @@ export class PartyFramesModule extends Module<typeof(DEFAULTS)>
         end)
         -- "while missing" indicators: read out of combat, hidden in combat
         local function presence(unit: string?)
+            if not shown() then
+                return
+            end
             for _, f in ipairs(self.frames) do
                 if not unit or f.unit == unit then
                     f:UpdateIndicatorPresence()

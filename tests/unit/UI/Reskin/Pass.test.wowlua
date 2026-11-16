@@ -5,15 +5,24 @@
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
 import tokens as T from "/Core/Tokens"
+import * as fonts from "/Core/Fonts"
+import * as themes from "/Core/Themes"
 import * as draw from "/UI/Draw"
 import reskin, reskinScrollBox, reskinDialog from "/UI/Reskin/Pass"
 import internal matchesAny, textColor, sameColor, isPanelButton from "/UI/Reskin/Pass"
-import expectNoErrors from "../../../helpers"
+import expectNoErrors, expectRGB, useTheme from "../../../helpers"
 import tokenOf from "../WindowsHelpers"
 import WHITE, host, resetHost, skin from "./ReskinHelpers"
 
+-- (a test that switched the theme: SuuUI's again after it)
+local themed = false
+
 @afterEach
 local function cleanup()
+    if themed then
+        themed = false
+        useTheme(nil)
+    end
     resetHost()
     expectNoErrors()
 end
@@ -159,6 +168,138 @@ local function passTextures()
     reskin(nil)
 end
 
+-- A title, a number and a small grey text, in the game's own fonts.
+local function roleTexts(): (Frame, FontString, FontString, FontString)
+    local f = CreateFrame("Frame", nil, host())
+    f:SetSize(200, 100)
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetText("Title")
+    local number = f:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    number:SetText("42")
+    local small = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    small:SetTextColor(0.5, 0.5, 0.5)
+    small:SetText("small grey")
+    return f, title, number, small
+end
+
+-- The font and colour setters called on a text from now on (the game's
+-- and SuuUI's alike).
+local FONT_SETTERS = { "SetFontObject", "SetFont", "SetTextColor", "SetShadowOffset" }
+local function countSetters(texts: FontString[]): { n: number }
+    local count = { n = 0 }
+    for _, fs in ipairs(texts) do
+        for _, setter in ipairs(FONT_SETTERS) do
+            hooksecurefunc(fs, setter, function()
+                count.n += 1
+            end)
+        end
+    end
+    return count
+end
+
+local function expectRoles(title: FontString, number: FontString, small: FontString)
+    expect(title:GetFontObject()).toBe(fonts.get("header"))
+    expect(number:GetFontObject()).toBe(fonts.get("numeric"))
+    expect(small:GetFontObject()).toBe(fonts.get("caption"))
+    expect(tokenOf(title)).toBe("gilt-text")
+    expect(tokenOf(number)).toBe("ink")
+    expect(tokenOf(small)).toBe("ink-muted")
+end
+
+-- a theme with other sizes for the three styles and another gilt-text
+const TEXT_THEME = "test-reskin-text"
+local function textTheme()
+    if not themes.get(TEXT_THEME) then
+        themes.register({
+            id = TEXT_THEME,
+            fonts = { header = { size = 16 }, numeric = { size = 15 }, caption = { size = 9 } },
+            colors = { ["gilt-text"] = { 0.2, 0.6, 0.9 } },
+        })
+    end
+    themed = true
+    useTheme(TEXT_THEME)
+end
+
+@test("reskin: a title, a number and a small text keep their style over three passes; nothing set again")
+local function textStyleKept()
+    local f, title, number, small = roleTexts()
+    reskin(f)
+    expectRoles(title, number, small)
+    local count = countSetters({ title, number, small })
+    reskin(f)
+    expectRoles(title, number, small)
+    reskin(f)
+    expectRoles(title, number, small)
+    -- (unchanged texts: no font, colour or shadow set again)
+    expect(count.n).toBe(0)
+    -- the title's colour still the theme's: it follows a theme change
+    local r, g, b = draw.rgba("gilt-text")
+    expectRGB({ title:GetTextColor() }, r, g, b)
+    textTheme()
+    expect(tokenOf(title)).toBe("gilt-text")
+    expectRGB({ title:GetTextColor() }, 0.2, 0.6, 0.9)
+end
+
+@test("reskin: a theme change restyles the texts in the theme's fonts, the same roles")
+local function textStyleThemed()
+    local f, title, number, small = roleTexts()
+    reskin(f)
+    reskin(f)
+    textTheme()
+    -- (as the windows do on the theme's message)
+    reskin(f)
+    expectRoles(title, number, small)
+    expect(select(2, title:GetFont())).toBeCloseTo(16, 2)
+    expect(select(2, number:GetFont())).toBeCloseTo(15, 2)
+    expect(select(2, small:GetFont())).toBeCloseTo(9, 2)
+    expectRGB({ title:GetTextColor() }, 0.2, 0.6, 0.9)
+    reskin(f)
+    expectRoles(title, number, small)
+end
+
+@test("reskin: a text the game gives another font is styled from it again, once")
+local function textStyleReused()
+    local f, title, number, small = roleTexts()
+    reskin(f)
+    reskin(f)
+    -- the game reuses the title for small text (its font, colour and text)
+    title:SetFontObject("GameFontNormalSmall")
+    title:SetTextColor(1, 0.82, 0)
+    title:SetText("now small")
+    local count = { n = 0 }
+    hooksecurefunc(title, "SetFontObject", function()
+        count.n += 1
+    end)
+    reskin(f)
+    expect(title:GetFontObject()).toBe(fonts.get("caption"))
+    expect(tokenOf(title)).toBe("ink")
+    expect(count.n).toBe(1)
+    reskin(f)
+    expect(title:GetFontObject()).toBe(fonts.get("caption"))
+    expect(count.n).toBe(1)
+    -- a size of its own on SuuUI's font: small, so a caption
+    number:SetFont(fonts.file("numeric"), 9, "")
+    reskin(f)
+    expect(number:GetFontObject()).toBe(fonts.get("caption"))
+    -- the rest as they were
+    expect(small:GetFontObject()).toBe(fonts.get("caption"))
+end
+
+@test("reskin: a text that grows long becomes body, from the game's font")
+local function textStyleLong()
+    local f = CreateFrame("Frame", nil, host())
+    local s = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    s:SetText("short")
+    reskin(f)
+    expect(s:GetFontObject()).toBe(fonts.get("label"))
+    s:SetText(string.rep("long text ", 6))
+    reskin(f)
+    expect(s:GetFontObject()).toBe(fonts.get("body"))
+    s:SetText("short")
+    reskin(f)
+    expect(s:GetFontObject()).toBe(fonts.get("label"))
+end
+
 @test("reskin: a text with a secret value is not measured")
 local function passSecret()
     local f = CreateFrame("Frame", nil, host())
@@ -293,6 +434,44 @@ local function scrollBox()
     reskinScrollBox(nil)
 end
 
+@test("reskinScrollBox: an update over unchanged rows sets no font or colour")
+local function scrollBoxUnchanged()
+    local p = host()
+    local box = CreateFrame("Frame", nil, p, "WowScrollBoxList") :: ScrollBoxList
+    box:SetSize(200, 200)
+    box:SetPoint("CENTER")
+    local bar = CreateFrame("EventFrame", nil, p, "MinimalScrollBar")
+    local view = linearView()
+    view:SetElementExtent(20)
+    local inits = 0
+    view:SetElementInitializer("Button", function(row: ListRow, data: { name: string })
+        inits += 1
+        local label = row.label or row:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        row.label = label
+        label:SetAllPoints()
+        label:SetText(data.name)
+    end)
+    scrollUtil.InitScrollBoxListWithScrollBar(box, bar, view)
+    box:SetDataProvider(CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } }))
+    reskinScrollBox(box)
+    local labels: FontString[] = {}
+    box:ForEachFrame(function(row)
+        labels[#labels + 1] = row.label :: FontString
+    end)
+    expect(#labels).toBe(2)
+    local initsBefore = inits
+    local count = countSetters(labels)
+    box:Update()
+    box:Update()
+    mock.advanceFrames(3)
+    expect(inits).toBe(initsBefore)
+    expect(count.n).toBe(0)
+    for _, label in ipairs(labels) do
+        expect(label:GetFontObject()).toBe(fonts.get("header"))
+        expect(tokenOf(label)).toBe("gilt-text")
+    end
+end
+
 @test("reskinScrollBox: updates restyle once a frame, and nothing while the box is hidden")
 local function scrollBoxQuiet()
     local p = host()
@@ -315,10 +494,10 @@ local function scrollBoxQuiet()
     local provider = CreateDataProvider({ { name = "Alpha" }, { name = "Beta" } })
     box:SetDataProvider(provider)
     reskinScrollBox(box)
+    -- (a pass reads each text's font; an unchanged text sets nothing)
     local passes = 0
     box:ForEachFrame(function(row)
-        local label = row.label
-        mock.stub(label, "SetTextColor", function(...: any)
+        hooksecurefunc(row.label :: FontString, "GetFontObject", function()
             passes += 1
         end)
     end)

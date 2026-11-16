@@ -5,7 +5,8 @@
 -- unit in the world and over a unit frame, a click on a frame, friends and
 -- enemies apart, combat waiting; each tree's own bindings; the unit frames'
 -- Target and Menu clicks moved, swapped, per tree, also for a spell; a Cmd
--- click on a unit frame; turned off and on.
+-- click on a unit frame; turned off and on; a raid's buttons after a roster
+-- change.
 --
 -- The spellbook is the engine's (the default character: a level 1 Human
 -- warrior).
@@ -654,4 +655,34 @@ local function offLeavesNothing()
     mob:despawn()
     friend:despawn()
     expectNoErrors()
+end
+
+-- The raid frames draw a roster change on the next frame (one pass a burst);
+-- the bindings' apply, 0.2 s after the change, finds the buttons the change
+-- brought with their units (the header gives them, not the pass).
+@test("a raid formed: its buttons get the frames' clicks after the roster change, with their units")
+local function raidButtons()
+    local name, id = known()
+    M:Add(bind("SHIFT-BUTTON1", name, id), nil)
+    local mates: mock.MockUnit[] = {}
+    for i = 1, 3 do
+        mates[i] = mock.spawnUnit({ name = "Raider " .. i, player = true, level = 60, reaction = "friendly" })
+        mock.group:add(mates[i], { raid = true, subgroup = 1, quiet = i < 3 })
+    end
+    mock.advanceFrames(2)
+    mock.advanceTime(0.3)
+    local units: string[] = {}
+    for _, f in ipairs(M:UnitFrames()) do
+        local unit = f:GetAttribute("unit")
+        if type(unit) == "string" and unit:find("^raid%d+$") and f:IsVisible() then
+            units[#units + 1] = unit
+            expect(f:GetAttribute("shift-type1")).toBe("spell")
+        end
+    end
+    table.sort(units)
+    expect(units).toEqual({ "raid1", "raid2", "raid3", "raid4" })
+    -- (the apply the leave brings, within the test)
+    mock.group:leave()
+    mock.advanceFrames(2)
+    mock.advanceTime(0.3)
 end

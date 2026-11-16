@@ -154,3 +154,48 @@ emulator can't answer for the game in several places
     `/suu probe lfg opens off`, `/reload`: `SuuUIProbe.lfg.opens` says, per
     opening, how it was opened and whether the search on opening was
     refused.
+
+## Performance fixes of 2026-11-16
+
+The `high-perf` branch (the restyled windows' text styles, the encounter
+timeline, health and roster changes on the unit frames) was checked with
+`wowlua check`, the whole test suite and the perf scenarios; none of it was
+run in the game.
+
+34. **Restyled windows keep their text styles.** Open the character
+    window's reputation pane and scroll it top to bottom and back; switch to
+    the skills pane and back; open the guild roster and scroll it. Then
+    change the theme (Settings › General › Appearance › Theme) with each
+    open. Titles and category heads stay in the header face and the theme's
+    colour (they follow the theme change), numbers stay in the tabular face
+    and line up in their columns, and small text stays small: after the
+    first redraw, after a scroll, after a pane switch and after the theme
+    change alike.
+35. **The encounter timeline.** Start its test mode (Settings › Insights ›
+    Timeline, "Show a test timeline") or `/suu pull 15`. The abilities ride
+    smoothly toward now, without jumps; under 10 seconds the time shows
+    tenths, under 5 it turns amber; one that runs out leaves at once and
+    the others close up. Switch Timeline › Show to List while it
+    runs: the same order and times. Change the theme while it runs: the
+    colours follow, nothing stutters. Cancel the pull (`/suu pull 0`): it
+    leaves the timeline at once, which hides when nothing is left on it.
+36. **Raid frames: health.** In a raid (or the raid frames' test mode),
+    watch frames take damage and heals: the health bar, the heal-prediction
+    and absorb overlays (also a shield past full health), and the ghost bar
+    that trails a hit by a moment and then eases down. Health text and
+    colours stay right through death, a resurrect and someone going offline
+    and back.
+37. **Raid frames: roster changes, out of combat and in a fight.** People
+    join and leave, someone goes offline and comes back, people are moved
+    between raid groups, a role changes: each frame shows the right person,
+    class colour, role marker, power line, auras and buff indicators after
+    each change, also when several come at once (a raid forming), and also
+    in a fight (the layout itself waits for the fight's end as before).
+    Leave the raid into a party: the party frames are right again at once
+    (names, health, auras, roles).
+38. **Probe still owed: `UnitGUID` of raid members in combat.** Whether
+    `UnitGUID("raidN")` is a secret value in combat on Forever. If it is,
+    a roster change in a fight redraws every visible raid frame (once per
+    burst), instead of only the ones showing someone new; the frames stay
+    right, it only costs more. A probe (`/suu probe`) that reads it for a
+    raid member in and out of combat settles it.

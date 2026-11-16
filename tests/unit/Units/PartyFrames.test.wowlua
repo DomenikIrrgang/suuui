@@ -15,7 +15,7 @@ import * as modules from "/Core/Modules"
 import internal ownOf from "/Core/Modules"
 import migrations as settingMigrations from "/Core/Settings"
 import SuuUI from "/Core/API"
-import type Indicator from "/UI/UnitFrame"
+import type Indicator, UnitFrame from "/UI/UnitFrame"
 
 -- Placeholder party members.
 local function member(name: string, class: string, role: ("TANK" | "HEALER" | "DAMAGER")?): mock.MockUnit
@@ -373,17 +373,21 @@ local function indicatorRoles()
     expect(indicatorsShown("party1")).toEqual({ true, false, true }) -- the tank
     expect(indicatorsShown("party2")).toEqual({ false, true, true }) -- damage
     expect(indicatorsShown("party3")).toEqual({ false, true, true }) -- no role: damage
-    -- a role change (the roster update) moves them
+    -- a role change (the roster update) moves them, on the roster pass (the
+    -- next frame: one for the burst)
     tank:setRole("DAMAGER")
     dps:setRole("TANK")
+    mock.nextFrame()
     expect(indicatorsShown("party1")).toEqual({ false, true, true })
     expect(indicatorsShown("party2")).toEqual({ true, false, true })
     -- no role (the game answers "NONE") is Damage
     dps:setRole(nil)
+    mock.nextFrame()
     expect(indicatorsShown("party2")).toEqual({ false, true, true })
     -- in combat the live ones keep the last answer; after it they follow
     mock.player:enterCombat()
     dps:setRole("TANK")
+    mock.nextFrame()
     expect(indicatorsShown("party2")).toEqual({ false, true, true })
     mock.player:leaveCombat()
     expect(indicatorsShown("party2")).toEqual({ true, false, true })
@@ -394,14 +398,81 @@ local function indicatorRoles()
     mock.stub(frame("party1"), "UpdateIndicatorPresence", first)
     mock.stub(frame("party2"), "UpdateIndicatorPresence", second)
     mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    mock.nextFrame()
     expect(first).toHaveBeenCalledTimes(1)
     expect(second).toHaveBeenCalledTimes(0)
     mock.fireEvent("ROLE_CHANGED_INFORM", "Brannoc Ironhand", "Kaelith Dawnmere", "HEALER", "DAMAGER")
+    mock.nextFrame()
     expect(first).toHaveBeenCalledTimes(1)
     expect(second).toHaveBeenCalledTimes(0)
     tank:setRole("TANK")
     SuuUI.UI.SetGroupIndicators(before)
     mock.advanceTime(1.1)
+end
+
+@test(
+    "a burst of roster changes: one pass the frame after; only a frame with someone new on its token drawn and re-scanned"
+)
+local function rosterBurst()
+    mock.group:add(tank)
+    mock.group:add(healer)
+    settle()
+    local real = M.RosterPass
+    local passes = 0
+    mock.stub(M, "RosterPass", function(self: unknown)
+        passes += 1
+        real(M)
+    end)
+    type Count = { refresh: number, rescan: number }
+    local function counter(f: PartyFrame): Count
+        local c: Count = { refresh = 0, rescan = 0 }
+        mock.stub(f, "Refresh", function()
+            c.refresh += 1
+        end)
+        mock.stub(assert(f.auras), "Refresh", function()
+            c.rescan += 1
+        end)
+        return c
+    end
+    local first, second = counter(frame("party1")), counter(frame("party2"))
+    -- the tank leaves: the healer is party1 now; three more updates
+    mock.group:remove(tank)
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    expect(passes).toBe(0)
+    mock.nextFrame()
+    expect(passes).toBe(1)
+    expect(first).toEqual({ refresh = 1, rescan = 1 })
+    -- (party2: no one now, hidden by its unit watch: nothing)
+    expect(second).toEqual({ refresh = 0, rescan = 0 })
+    -- a role change only: no redraw, no re-scan
+    healer:setRole("DAMAGER")
+    mock.nextFrame()
+    expect(passes).toBe(2)
+    expect(first).toEqual({ refresh = 1, rescan = 1 })
+    healer:setRole("HEALER")
+    expectNoErrors()
+end
+
+@test("in a raid the party frames do nothing on a roster change")
+local function quietInRaid()
+    mock.group:add(tank, true)
+    mock.group:add(healer, true)
+    settle()
+    expect(partyHolder()).never.toBeShown()
+    local passes = mock.stub(M, "RosterPass")
+    local redraws = mock.stub(frame("party1"), "Refresh")
+    local rescans = mock.stub(assert(frame("party1").auras), "Refresh")
+    healer:setRole("DAMAGER")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.fireEvent("PLAYER_ROLES_ASSIGNED")
+    settle()
+    expect(passes).toHaveBeenCalledTimes(0)
+    expect(redraws).toHaveBeenCalledTimes(0)
+    expect(rescans).toHaveBeenCalledTimes(0)
+    healer:setRole("HEALER")
+    expectNoErrors()
 end
 
 @test("your target in combat: ringed by the engine from a secret answer")
@@ -442,13 +513,28 @@ local function petOf(owner: mock.MockUnit, name: string): mock.MockUnit
     return p
 end
 
+-- Whether a frame hears its unit's events and draws them (a health event,
+-- drawn on the next frame). (Its unit's events are on a watch of its own,
+-- not on the bus.)
+local function hears(f: UnitFrame): boolean
+    local heard = false
+    local was = f.onHealth
+    f.onHealth = function(_: UnitFrame)
+        heard = true
+    end
+    mock.fireUnitEvent("UNIT_HEALTH", assert(f.unit))
+    mock.nextFrame()
+    f.onHealth = was
+    return heard
+end
+
 @test("in a raid the hidden frames stand still; back in a party they listen and draw again")
 local function standStillInRaid()
     mock.group:add(tank)
     settle()
     local f = frame("party1")
     expect(f.active).toBe(true)
-    expect(events.bus:count(f) > 0).toBe(true)
+    expect(hears(f)).toBe(true)
     -- a raid: the holder hidden by its state driver, every frame off
     mock.group:leave()
     mock.group:add(tank, true)
@@ -458,6 +544,7 @@ local function standStillInRaid()
         expect(each.active == true).toBe(false)
         expect(events.bus:count(each)).toBe(0)
     end
+    expect(hears(f)).toBe(false)
     -- a party again: listening, and drawn afresh
     mock.group:leave()
     mock.group:add(tank)
@@ -465,7 +552,7 @@ local function standStillInRaid()
     expect(partyHolder()).toBeShown()
     f = frame("party1")
     expect(f.active).toBe(true)
-    expect(events.bus:count(f) > 0).toBe(true)
+    expect(hears(f)).toBe(true)
     expect(f.name).toHaveText("Brannoc Ironhand")
     -- the same in a fight: the driver hides and shows the holder in combat
     mock.player:enterCombat()
@@ -487,7 +574,9 @@ end
 -- only when OnEnable fails. Here they toggle live, as a module that isn't
 -- would, so the registry's own disable and release run. (It ends with them
 -- on again.)
-@test("turned off through the registry: frames and pets off and hidden, the anchor withdrawn, nothing held; on again, all back")
+@test(
+    "turned off through the registry: frames and pets off and hidden, the anchor withdrawn, nothing held; on again, all back"
+)
 local function registryCycle()
     local own = ownOf(M)
     own.reloadToToggle = false
@@ -527,7 +616,9 @@ local function registryCycle()
     expectNoErrors()
 end
 
-@test("pets: a member's pet on their row, beside them in a column past their auras, under them in a row; only while there is one")
+@test(
+    "pets: a member's pet on their row, beside them in a column past their auras, under them in a row; only while there is one"
+)
 local function pets()
     mock.group:add(tank)
     mock.group:add(healer)
@@ -588,7 +679,9 @@ local function pets()
     M:ResetAll({ "petWidth", "petHeight", "showPets" })
 end
 
-@test("pets: the player's pet beside you; clickable and healed by mouseover (the mouse over it makes it the mouseover unit)")
+@test(
+    "pets: the player's pet beside you; clickable and healed by mouseover (the mouse over it makes it the mouseover unit)"
+)
 local function petsClick()
     mock.group:add(tank)
     local imp = mock.spawnUnit({ name = "Imp", reaction = "friendly", distance = 5 })

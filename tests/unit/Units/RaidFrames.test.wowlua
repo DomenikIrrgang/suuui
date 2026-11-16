@@ -37,7 +37,7 @@ local ROLES: { [string]: ("TANK" | "HEALER" | "DAMAGER")? } = {
 
 -- Placeholder raiders, made once (the engine keeps them).
 local raiders: mock.MockUnit[] = {}
-for i = 1, 24 do
+for i = 1, 40 do
     local class = CLASSES[(i - 1) % #CLASSES + 1]
     local u = mock.spawnUnit({
         name = "Raider " .. i,
@@ -192,7 +192,9 @@ local function layout()
     expect(myButton():GetWidth()).toBe(90)
 end
 
-@test("groups growing up: the bands in use on the bottom edge, a smaller raid on what's under it; the pets on top follow")
+@test(
+    "groups growing up: the bands in use on the bottom edge, a smaller raid on what's under it; the pets on top follow"
+)
 local function growUp()
     local function top(g: number): number
         local _, _, _, _, y = header(g):GetPoint(1)
@@ -300,8 +302,15 @@ local function rangeAndOffline()
         end
     end
     expect(f ~= nil).toBe(true)
-    -- (set from the range answer, a secret: it reads back secret for good)
-    expect(myButton():GetAlpha() :: unknown).toBe(mock.secret(1))
+    -- your own: never faded (a button set from a secret range answer
+    -- before reads back secret for good: the earlier tests' buttons were
+    -- faded while the raid was left; hidden ones aren't any more)
+    local mine: unknown = myButton():GetAlpha()
+    if issecretvalue(mine) then
+        expect(mine).toBe(mock.secret(1))
+    else
+        expect(mine).toBe(1)
+    end
     raiders[1]:setOnline(false)
     raiders[2]:setOnline(false)
     local off = 0
@@ -446,8 +455,10 @@ local function indicatorRoles()
     local tanks, others = check()
     expect(tanks).toBe(1) -- Raider 1, a warrior
     expect(others).toBe(5) -- healers, damage and you (no role: Damage)
-    -- a role change (the roster update) moves it
+    -- a role change (the roster update) moves it, on the roster pass (the
+    -- next frame)
     assert(raiders[3]):setRole("TANK")
+    mock.nextFrame()
     tanks, others = check()
     expect(tanks).toBe(2)
     expect(others).toBe(4)
@@ -475,6 +486,105 @@ local function presence()
     mock.advanceFrames(1)
     mock.player:leaveCombat()
     expect(read).toHaveBeenCalledTimes(3)
+end
+
+-- Counts, per shown button with a unit, its redraws and its auras' re-scans
+-- and re-pointings, from now on.
+type Counts = { refresh: number, rescan: number, repoint: number }
+local function countButtons(): { [RaidButton]: Counts }
+    local out: { [RaidButton]: Counts } = {}
+    for _, f in ipairs(M.buttons) do
+        local auras = f.auras
+        if f:IsShown() and f.unit and auras then
+            local c: Counts = { refresh = 0, rescan = 0, repoint = 0 }
+            out[f] = c
+            mock.stub(f, "Refresh", function()
+                c.refresh += 1
+            end)
+            mock.stub(auras, "Refresh", function()
+                c.rescan += 1
+            end)
+            mock.stub(auras, "SetUnit", function()
+                c.repoint += 1
+            end)
+        end
+    end
+    return out
+end
+
+@test("a burst of roster changes in a raid of 40: one pass, the frame after; only someone new is drawn and re-scanned")
+local function rosterBurst()
+    raid(39)
+    local real = M.RosterPass
+    local passes = 0
+    mock.stub(M, "RosterPass", function(self: unknown)
+        passes += 1
+        real(M)
+    end)
+    local counts = countButtons()
+    -- the last member leaves and someone new takes the token; three more
+    -- roster updates: five in one frame
+    local last = assert(raiders[39])
+    local token = assert(last:token())
+    local newcomer = assert(raiders[40])
+    mock.group:remove(last)
+    mock.group:add(newcomer, { raid = true, subgroup = 8 })
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    expect(passes).toBe(0)
+    mock.nextFrame()
+    expect(passes).toBe(1)
+    mock.nextFrame()
+    expect(passes).toBe(1)
+    local redrawn: string[] = {}
+    local same = 0
+    for f, c in pairs(counts) do
+        if c.refresh > 0 then
+            -- (its container let go of the token that left and took it again)
+            redrawn[#redrawn + 1] = f.unit or "?"
+            expect(c.refresh).toBe(1)
+            expect(c.rescan + c.repoint >= 1).toBe(true)
+        else
+            same += 1
+            expect(c.rescan).toBe(0)
+            expect(c.repoint).toBe(0)
+        end
+    end
+    expect(redrawn).toEqual({ token })
+    expect(same).toBe(39)
+    mock.group:remove(newcomer)
+    expectNoErrors()
+end
+
+@test("a roster burst in combat: no secure frame touched; the frames right after the fight")
+local function rosterInCombat()
+    raid(10)
+    local refused = #mock.refusals()
+    mock.player:enterCombat()
+    -- one leaves, one joins, one changes raid group: in one frame
+    local mover = assert(raiders[7])
+    mock.group:remove(assert(raiders[3]))
+    mock.group:add(assert(raiders[12]), { raid = true, subgroup = 1 })
+    mock.group:remove(mover, { quiet = true })
+    mock.group:add(mover, { raid = true, subgroup = 3 })
+    mock.advanceFrames(2)
+    expect(#mock.refusals()).toBe(refused)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(#mock.refusals()).toBe(refused)
+    -- every shown button: its unit's name, and you on yours
+    local shown = 0
+    for _, f in ipairs(M.buttons) do
+        local unit = f.unit
+        if f:IsShown() and unit then
+            shown += 1
+            expect(f.name).toHaveText(UnitName(unit) :: string)
+            expect(f.isMe).toBe(UnitIsUnit(unit, "player") :: boolean)
+        end
+    end
+    expect(shown).toBe(11)
+    expectNoErrors()
 end
 
 @test("earlier settings carried over: one aura count split, badges renamed")
@@ -571,7 +681,9 @@ local function petOf(owner: mock.MockUnit, name: string): mock.MockUnit
     return p
 end
 
-@test("pets: the game's pet header, its forty buttons made out of combat; a raider's pet shown as large as the raid frames")
+@test(
+    "pets: the game's pet header, its forty buttons made out of combat; a raider's pet shown as large as the raid frames"
+)
 local function raidPets()
     expect(#M.petButtons).toBe(40)
     raid(6)
@@ -597,7 +709,9 @@ local function raidPets()
     wolf:despawn()
 end
 
-@test("pets: below the last group with someone in it, or a place of their own (edit mode's Raid pets); another from 21 players")
+@test(
+    "pets: below the last group with someone in it, or a place of their own (edit mode's Raid pets); another from 21 players"
+)
 local function raidPetPlaces()
     raid(6) -- groups 1 and 2
     petOf(raiders[2], "Wolf")
@@ -668,4 +782,28 @@ local function raidPetUse()
     expect(petButton("raidpet3") ~= nil).toBe(true)
     mock.player:target(nil)
     mock.setPet(nil, { owner = raiders[2] })
+end
+
+@test("raid pets off: their hidden buttons do nothing on a roster change")
+local function petsOffQuiet()
+    raid(6)
+    petOf(assert(raiders[2]), "Wolf")
+    mock.advanceFrames(2)
+    M:Set("showPets", false)
+    mock.advanceFrames(2)
+    local redraws: ((...any) -> ...any)[] = {}
+    for _, f in ipairs(M.petButtons) do
+        if f.unit then
+            redraws[#redraws + 1] = mock.stub(f, "Refresh")
+        end
+    end
+    mock.fireEvent("GROUP_ROSTER_UPDATE")
+    mock.advanceFrames(2)
+    for _, s in ipairs(redraws) do
+        expect(s).toHaveBeenCalledTimes(0)
+    end
+    M:Reset("showPets")
+    mock.advanceFrames(2)
+    mock.setPet(nil, { owner = assert(raiders[2]) })
+    expectNoErrors()
 end

@@ -14,6 +14,17 @@
 -- ("then Inferno in 52s · +1 more").
 -- list: the older glass panel, soonest first, each row with a draining line.
 -- The positions move every frame while something is on it.
+--
+-- What changes per event and what per frame (X-2.1): `Layout` (SetEvents,
+-- a variant switch, a theme change, a resize) sorts the events once: the
+-- running ones by when they end, the paused ones by their frozen time, and
+-- (list) places the rows and the panel. Per frame only what moves: the two
+-- sorted lists merged by the time left into arrays kept on the timeline (so
+-- one passing a paused one changes places on the frame it does), and per
+-- shown event its pixel, its time text and its colours, each set only when
+-- it changed (the text when its second, or its tenth under ten seconds,
+-- changes). No tables, closures or strings per frame. The OnUpdate runs
+-- while something still runs toward now; paused or ended ones don't move.
 
 import tokens as T from "/Core/Tokens"
 import * as events from "/Core/Events"
@@ -34,8 +45,6 @@ export type TimelineEvent = {
     badge?: { tone: string, text: string },
 }
 type Event = TimelineEvent
--- an event and the seconds left until it
-type Timed = { e: Event, r: number }
 
 --- What encounterTimeline makes.
 
@@ -54,11 +63,48 @@ local function fmtTime(left: number): string
     return ("%ds"):format(math.floor(s))
 end
 
+-- What fmtTime shows, as a number that changes when the text does: whole
+-- seconds from 10 s up (m:ss is made of them too), tenths below (negative,
+-- so the two never meet). Compared per frame; the text is made only when it
+-- changes.
+local function timeKey(left: number): number
+    local s = math.max(0, left)
+    if s >= 10 then
+        return math.floor(s)
+    end
+    return -1 - math.floor(s * 10 + 0.5)
+end
+
 local function remainingOf(e: Event, now: number): number
     if e.paused then
         return e.paused
     end
     return math.max(0, (e.endsAt or now) - now)
+end
+
+--------------------------------------------------------------------------------
+-- The order: per event, the running ones by their end and the paused ones (or
+-- any without an end: 0 left) by their time left, ties in the order given;
+-- per frame, the two merged by the time left.
+--------------------------------------------------------------------------------
+
+-- each event's place in the list given (for ties), while sorting
+local given: { [Event]: number } = setmetatable({}, { __mode = "k" })
+
+local function byEnd(a: Event, b: Event): boolean
+    local x, y = a.endsAt or 0, b.endsAt or 0
+    if x ~= y then
+        return x < y
+    end
+    return (given[a] or 0) < (given[b] or 0)
+end
+
+local function byHeld(a: Event, b: Event): boolean
+    local x, y = a.paused or 0, b.paused or 0
+    if x ~= y then
+        return x < y
+    end
+    return (given[a] or 0) < (given[b] or 0)
 end
 
 --------------------------------------------------------------------------------
@@ -74,6 +120,12 @@ export class TrackEvent extends Frame
     badge: controls.StateBadge
     align: string?
     id: (number | string)? = nil
+    -- what was last set (per frame only what changed): shown, the pixel
+    -- along the line, the time text's key (timeKey), amber or not
+    on: boolean = false
+    px: number? = nil
+    timeKey: number? = nil
+    soon: boolean? = nil
 
     constructor(t: EncounterTimeline)
         super(nil, t.track)
@@ -116,74 +168,104 @@ local function alignEvent(f: TrackEvent, align: string)
     f.badge:SetPoint(point, f.name, below, 0, -2)
 end
 
-local function layoutTrack(t: EncounterTimeline, now: number)
-    local win, soonAt = t.window, t.soonAt
-    local w = (t.track :: Frame):GetWidth()
-    local inWin: Timed[], later: Timed[] = {}, {}
-    for _, e in ipairs(t.events) do
-        local r = remainingOf(e, now)
-        if r <= win then
-            inWin[#inWin + 1] = { e = e, r = r }
-        else
-            later[#later + 1] = { e = e, r = r }
+-- the frame for the i-th soonest, made once and kept
+local function poolEvent(t: EncounterTimeline, i: number): TrackEvent
+    local f = trackEvent(t)
+    -- always centred under its icon (near now too: held inside the line,
+    -- the label looked pushed aside)
+    alignEvent(f, "mid")
+    f.align = "mid"
+    t.evs[i] = f
+    return f
+end
+
+-- Per frame: each event in the window at its share of the line, the rest
+-- named right of it. Only what changed is set.
+local function tickTrack(t: EncounterTimeline)
+    local order, left, n = t.order, t.left, t.count
+    local win, soonAt, w = t.window, t.soonAt, t.trackW
+    local evs = t.evs
+    local k = 0
+    for i = 1, n do
+        local r = left[i]
+        if r > win then
+            break
         end
-    end
-    table.sort(inWin, function(a: Timed, b: Timed): boolean
-        return a.r < b.r
-    end)
-    table.sort(later, function(a: Timed, b: Timed): boolean
-        return a.r < b.r
-    end)
-    for i, x in ipairs(inWin) do
-        local f = t.evs[i] or trackEvent(t)
-        t.evs[i] = f
-        local frac = x.r / win
-        -- always centred under its icon (near now too: held inside the line,
-        -- the label looked pushed aside)
-        local align = "mid"
-        if f.align ~= align then
-            alignEvent(f, align)
-            f.align = align
+        k = i
+        local e = order[i]
+        local f = evs[i] or poolEvent(t, i)
+        if not f.on then
+            f.on = true
+            f:Show()
         end
-        local px = math.floor(frac * w + 0.5)
-        f:ClearAllPoints()
-        f:SetPoint("TOP", t.track, "TOPLEFT", px, 0)
-        if f.id ~= x.e.id then
-            f.id = x.e.id
-            f.icon:SetArt(x.e.icon or 134400)
-            f.name:SetValue(x.e.label or "")
-            f.badge:SetShown(x.e.badge ~= nil)
-            if x.e.badge then
-                f.badge:SetState(x.e.badge.tone, x.e.badge.text)
+        local px = math.floor(r / win * w + 0.5)
+        if f.px ~= px then
+            f.px = px
+            f:ClearAllPoints()
+            f:SetPoint("TOP", t.track, "TOPLEFT", px, 0)
+        end
+        if f.id ~= e.id then
+            f.id = e.id
+            f.icon:SetArt(e.icon or 134400)
+            f.name:SetValue(e.label or "")
+            f.badge:SetShown(e.badge ~= nil)
+            local badge = e.badge
+            if badge then
+                f.badge:SetState(badge.tone, badge.text)
             end
         end
-        local soon = x.r <= soonAt
-        f.time:SetValue(fmtTime(x.r))
-        f.time:SetColor(soon and "amber" or "ink")
-        f.name:SetColor(soon and "ink" or "ink-muted")
-        if soon then
-            f.ring:SetColor("amber")
-        else
-            f.ring:SetColor(0, 0, 0, 0.7)
+        local key = timeKey(r)
+        if f.timeKey ~= key then
+            f.timeKey = key
+            f.time:SetValue(fmtTime(r))
         end
-        f:Show()
+        local soon = r <= soonAt
+        if f.soon ~= soon then
+            f.soon = soon
+            f.time:SetColor(soon and "amber" or "ink")
+            f.name:SetColor(soon and "ink" or "ink-muted")
+            if soon then
+                f.ring:SetColor("amber")
+            else
+                f.ring:SetColor(0, 0, 0, 0.7)
+            end
+        end
     end
-    for i = #inWin + 1, #t.evs do
-        t.evs[i]:Hide()
-        t.evs[i].id = nil
+    for i = k + 1, t.shownEvs do
+        local f = evs[i]
+        f:Hide()
+        f.on = false
+        f.id = nil
     end
+    t.shownEvs = k
     local laterText = t.later
     if not laterText then
         return
     end
-    if #later > 0 then
-        local first = later[1]
-        local more = #later > 1 and (" · +%d more"):format(#later - 1) or ""
-        laterText:SetValue(("then %s in %s%s"):format(first.e.label or "?", fmtTime(first.r), more))
-        laterText:SetVisible(true)
-    else
+    local more = n - k
+    if more > 0 then
+        local first, r = order[k + 1], left[k + 1]
+        local key = timeKey(r)
+        if first ~= t.laterEv or key ~= t.laterKey or more ~= t.laterCount then
+            if t.laterCount <= 0 then
+                laterText:SetVisible(true)
+            end
+            t.laterEv, t.laterKey, t.laterCount = first, key, more
+            local extra = more > 1 and (" · +%d more"):format(more - 1) or ""
+            laterText:SetValue(("then %s in %s%s"):format(first.label or "?", fmtTime(r), extra))
+        end
+    elseif t.laterCount ~= 0 then
         laterText:SetVisible(false)
+        t.laterEv, t.laterKey, t.laterCount = nil, nil, 0
     end
+end
+
+-- Per event: the frames' last values forgotten, so the next tick sets them.
+local function layoutTrack(t: EncounterTimeline)
+    for _, f in ipairs(t.evs) do
+        f.px, f.timeKey, f.soon = nil, nil, nil
+    end
+    t.laterEv, t.laterKey, t.laterCount = nil, nil, -1
 end
 
 local function buildTrack(t: EncounterTimeline)
@@ -217,6 +299,16 @@ local function buildTrack(t: EncounterTimeline)
     t.later:SetPoint("TOPLEFT", track, "TOPRIGHT", S["space-4"], -4)
     t.later:SetVisible(false)
     t.evs = {}
+    t.trackW = track:GetWidth()
+    -- (resized: the places along it again)
+    track:SetScript("OnSizeChanged", function(_: Frame, width: number)
+        if width ~= t.trackW then
+            t.trackW = width
+            if t.variant == "track" then
+                t:Layout()
+            end
+        end
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -233,6 +325,12 @@ export class ListRow extends Frame
     badge: controls.StateBadge
     track: Texture
     drain: Texture
+    -- what was last set: the event shown, the time text's key, amber or
+    -- not, the drain's pixel
+    ev: TimelineEvent? = nil
+    timeKey: number? = nil
+    soon: boolean? = nil
+    drainPx: number? = nil
 
     constructor(t: EncounterTimeline, i: number)
         super(nil, t.list)
@@ -268,37 +366,64 @@ local function listRow(t: EncounterTimeline, i: number): ListRow
     return ListRow.new(t, i)
 end
 
-local function layoutList(t: EncounterTimeline, now: number)
-    local list: Timed[] = {}
-    for _, e in ipairs(t.events) do
-        list[#list + 1] = { e = e, r = remainingOf(e, now) }
+local INNER_W = LIST_W - S["space-5"] * 2
+
+-- Per frame: each row's event (when the order changed), time and drain.
+local function tickList(t: EncounterTimeline)
+    local order, left, rows = t.order, t.left, t.rows
+    local win, soonAt = t.window, t.soonAt
+    for i = 1, t.count do
+        local row = rows[i]
+        local e, r = order[i], left[i]
+        if row.ev ~= e then
+            row.ev = e
+            row.icon:SetArt(e.icon or 134400)
+            row.name:SetValue(e.label or "")
+            local badge = e.badge
+            row.badge:SetShown(badge ~= nil)
+            if badge then
+                row.badge:SetState(badge.tone, badge.text)
+            end
+            row.name:SetPoint("RIGHT", badge and row.badge or row.time, "LEFT", -S["space-4"], 0)
+        end
+        local key = timeKey(r)
+        if row.timeKey ~= key then
+            row.timeKey = key
+            row.time:SetValue(fmtTime(r))
+        end
+        local soon = r <= soonAt
+        if row.soon ~= soon then
+            row.soon = soon
+            row.time:SetColor(soon and "amber" or "ink")
+            draw.paintFill(row.drain, soon and "amber" or "ink-muted")
+        end
+        -- (set again when it crosses a pixel: within one of the exact width)
+        local width = math.max(1, math.min(1, r / win) * INNER_W)
+        local px = math.floor(width + 0.5)
+        if row.drainPx ~= px then
+            row.drainPx = px
+            row.drain:SetWidth(width)
+        end
     end
-    table.sort(list, function(a: Timed, b: Timed): boolean
-        return a.r < b.r
-    end)
+end
+
+-- Per event: a row per event, one under another, the panel's height; the
+-- rows' last values forgotten, so the next tick sets them.
+local function layoutList(t: EncounterTimeline)
     local y = t.listTop
-    local innerW = LIST_W - S["space-5"] * 2
-    for i, x in ipairs(list) do
+    local n = t.count
+    for i = 1, n do
         local r = t.rows[i] or listRow(t, i)
+        r.ev, r.timeKey, r.soon, r.drainPx = nil, nil, nil, nil
         r:ClearAllPoints()
         r:SetPoint("TOPLEFT", S["space-5"], -y)
-        r.icon:SetArt(x.e.icon or 134400)
-        r.name:SetValue(x.e.label or "")
-        r.badge:SetShown(x.e.badge ~= nil)
-        if x.e.badge then
-            r.badge:SetState(x.e.badge.tone, x.e.badge.text)
-        end
-        r.name:SetPoint("RIGHT", x.e.badge and r.badge or r.time, "LEFT", -S["space-4"], 0)
-        local soon = x.r <= t.soonAt
-        r.time:SetValue(fmtTime(x.r))
-        r.time:SetColor(soon and "amber" or "ink")
-        draw.paintFill(r.drain, soon and "amber" or "ink-muted")
-        r.drain:SetWidth(math.max(1, math.min(1, x.r / t.window) * innerW))
         r:Show()
         y = y + ROW_H + S["space-3"]
     end
-    for i = #list + 1, #t.rows do
-        t.rows[i]:Hide()
+    for i = n + 1, #t.rows do
+        local r = t.rows[i]
+        r.ev = nil
+        r:Hide()
     end
     local panel = t.list :: TimelineList
     panel:SetHeight(math.max(t.listTop + S["space-5"], y - S["space-3"] + S["space-5"]))
@@ -307,7 +432,7 @@ end
 
 -- the rule under the title, and the rows under it, by the header's line
 -- height (again when a theme changes it)
-local lists: { [EncounterTimeline]: boolean } = setmetatable({}, { __mode = "k" })
+local timelines: { [EncounterTimeline]: boolean } = setmetatable({}, { __mode = "k" })
 local function placeRule(t: EncounterTimeline)
     local y = S["space-4"] * 2 + T.type.header.lineHeight
     local rule = (t.list :: TimelineList).rule
@@ -320,11 +445,11 @@ end
 events.on(
     "SUUUI_THEME_CHANGED",
     function()
-        for t in pairs(lists) do
-            placeRule(t)
-            if t.variant == "list" then
-                t:Layout()
+        for t in pairs(timelines) do
+            if t.list then
+                placeRule(t)
             end
+            t:Layout()
         end
     end,
     "Timeline"
@@ -366,7 +491,6 @@ local function buildList(t: EncounterTimeline)
     t.list = TimelineList.new(t)
     t.rows = {}
     placeRule(t)
-    lists[t] = true
 end
 
 --------------------------------------------------------------------------------
@@ -380,43 +504,132 @@ export class EncounterTimeline extends Frame
     variant: string = "track"
     -- the track's parts (the "track" variant)
     track: Frame?
+    trackW: number = 0
     ticks: Texture[] = {}
     endLabel: Text? = nil
     later: Text? = nil
     evs: TrackEvent[] = {}
+    -- (the frames shown, the "later" line's event, text key and count last set)
+    shownEvs: number = 0
+    laterEv: TimelineEvent? = nil
+    laterKey: number? = nil
+    laterCount: number = -1
     -- the list's (the "list" variant)
     list: TimelineList?
     rows: ListRow[] = {}
     listTop: number = 0
+    -- per event (Layout): the running ones by their end, the paused ones by
+    -- their time left
+    running: TimelineEvent[] = {}
+    held: TimelineEvent[] = {}
+    -- per frame (reused): the events soonest first and their seconds left
+    order: TimelineEvent[] = {}
+    left: number[] = {}
+    count: number = 0
+    -- something still runs toward now (the OnUpdate runs while it does)
+    moving: boolean = false
+    ticking: boolean = false
+    -- how often it was laid out (per event, not per frame: the tests count it)
+    layouts: number = 0
+    step: (frame: Frame, elapsed: number) -> ()
 
     constructor(parent: Frame, options: { variant?: string, window?: number, soonAt?: number }?)
         local opts = options or {}
         super(nil, parent)
         self.window, self.soonAt = opts.window or 30, opts.soonAt or 5
         self.events = {}
+        self.step = function()
+            self:Tick()
+        end
+        timelines[self] = true
         self:SetVariant(opts.variant or "track")
     end
 
+    -- What changes per event: the order's two sorted lists, the list's rows
+    -- and panel; then a tick. (SetEvents, a variant switch, a theme change,
+    -- a resize.)
     function Layout()
-        local now = GetTime()
+        self.layouts += 1
+        local running, held = self.running, self.held
+        local nRun, nHeld = 0, 0
+        for i, e in ipairs(self.events) do
+            given[e] = i
+            if not e.paused and e.endsAt then
+                nRun += 1
+                running[nRun] = e
+            else
+                nHeld += 1
+                held[nHeld] = e
+            end
+        end
+        while #running > nRun do
+            table.remove(running)
+        end
+        while #held > nHeld do
+            table.remove(held)
+        end
+        table.sort(running, byEnd)
+        table.sort(held, byHeld)
+        local n = nRun + nHeld
+        local order, left = self.order, self.left
+        for i = 1, n do
+            order[i], left[i] = (running[i] or held[i - nRun]), 0
+        end
+        while #order > n do
+            table.remove(order)
+            table.remove(left)
+        end
+        self.count = n
         if self.variant == "list" then
-            layoutList(self, now)
+            layoutList(self)
         else
-            layoutTrack(self, now)
+            layoutTrack(self)
+        end
+        self:Tick()
+    end
+
+    -- What changes per frame: the order by the time left now, then what
+    -- moved. Stops the OnUpdate once nothing runs toward now.
+    function Tick()
+        local now = GetTime()
+        local running, held, order, left = self.running, self.held, self.order, self.left
+        -- (the two sorted lists merged: a running one passes a paused one on
+        -- the frame its time left drops below the paused one's)
+        local i, j = 1, 1
+        local a: TimelineEvent? = running[1]
+        local h: TimelineEvent? = held[1]
+        local ra = a and math.max(0, (a.endsAt or now) - now) or 0
+        local rh = h and (h.paused or 0) or 0
+        for n = 1, self.count do
+            if a and (not h or ra <= rh) then
+                order[n], left[n] = a, ra
+                i += 1
+                a = running[i]
+                ra = a and math.max(0, (a.endsAt or now) - now) or 0
+            elseif h then
+                order[n], left[n] = h, rh
+                j += 1
+                h = held[j]
+                rh = h and (h.paused or 0) or 0
+            end
+        end
+        if self.variant == "list" then
+            tickList(self)
+        else
+            tickTrack(self)
+        end
+        local last = running[#running]
+        local moving = last ~= nil and (last.endsAt or 0) > now
+        self.moving = moving
+        if moving ~= self.ticking then
+            self.ticking = moving
+            self:SetScript("OnUpdate", moving and self.step or nil)
         end
     end
 
     function SetEvents(list: TimelineEvent[]?)
         self.events = list or {}
         self:Layout()
-        self:SetScript(
-            "OnUpdate",
-            #self.events > 0 and
-                function()
-                    self:Layout()
-                end or
-                nil
-        )
     end
 
     function SetMeta(meta: string?)
@@ -426,25 +639,31 @@ export class EncounterTimeline extends Frame
     end
 
     function SetVariant(variant: string?)
-        self.variant = variant == "list" and "list" or "track"
-        if self.variant == "list" and not self.list then
+        local v = variant == "list" and "list" or "track"
+        -- (laid out again only when it changes or is new: the module sets
+        -- its variant at every refresh)
+        local changed = v ~= self.variant or (v == "list" and not self.list) or (v == "track" and not self.track)
+        self.variant = v
+        if v == "list" and not self.list then
             buildList(self)
         end
-        if self.variant == "track" and not self.track then
+        if v == "track" and not self.track then
             buildTrack(self)
         end
         if self.track then
-            self.track:SetShown(self.variant == "track")
+            self.track:SetShown(v == "track")
         end
         if self.list then
-            self.list:SetShown(self.variant == "list")
+            self.list:SetShown(v == "list")
         end
-        if self.variant == "track" then
+        if v == "track" then
             self:SetSize(draw.size("timeline-w"), TRACK_H)
         else
             self:SetWidth(LIST_W)
         end
-        self:Layout()
+        if changed then
+            self:Layout()
+        end
     end
 end
 
