@@ -6,6 +6,9 @@
 -- the requested item's lowest and the two together, cheapest first; a
 -- requested item that wasn't on the house is "Not listed" (asked
 -- 2026-11-16; the quest's reward is random coin, so no profit is shown).
+-- A click searches the requested item's name: the writ ("Craftsman's Writ:
+-- <item>") and the item both among the results, bought as any other (a
+-- single auction only through the game's own page; asked 2026-11-16).
 
 import SuuUI from "/Core/API"
 import type ItemSlot, Money, Text from "/Core/API"
@@ -26,6 +29,7 @@ export const WRIT_PREFIX = "Craftsman's Writ: "
 -- The tiers, lowest first (as their tooltips name them).
 export const TIERS: string[] = { "Journeyman", "Expert", "Artisan" }
 local IS_TIER: { [string]: boolean } = { Journeyman = true, Expert = true, Artisan = true }
+local TIER_RANK: { [string]: number } = { Journeyman = 1, Expert = 2, Artisan = 3 }
 
 -- A writ the last Scan all found: the item it asks for (its name, and its
 -- itemID when that item was on the house too); its tier once read.
@@ -59,13 +63,58 @@ export function fromScan(
     return out
 end
 
--- A writ's tier from its tooltip's line under the name; nil while the game
+-- A tooltip line's text as words: colour codes off, trimmed.
+local function plainText(v: unknown): string?
+    local text = asString(v)
+    if not text then
+        return nil
+    end
+    text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    return (text:match("^%s*(.-)%s*$"))
+end
+
+-- A hidden tooltip read line by line where the game has no C_TooltipInfo.
+local scanTip: GameTooltip? = nil
+local function tipLines(itemID: number): string[]
+    local out: string[] = {}
+    local info = C_TooltipInfo and C_TooltipInfo.GetItemByID
+    if info then
+        for _, line in ipairs(list(field(tryValue(info, itemID), "lines"))) do
+            local text = plainText(field(line, "leftText"))
+            if text then
+                out[#out + 1] = text
+            end
+        end
+        return out
+    end
+    local tip = scanTip
+    if not tip then
+        tip = CreateFrame("GameTooltip", "SuuUIWritTip", nil, "GameTooltipTemplate") :: GameTooltip
+        tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+        scanTip = tip
+    end
+    tip:ClearLines()
+    errors.try(tip.SetItemByID, tip, itemID)
+    for i = 1, tip:NumLines() do
+        local fs = _G["SuuUIWritTipTextLeft" .. i] :: FontString?
+        local text = fs and plainText(fs:GetText())
+        if text then
+            out[#out + 1] = text
+        end
+    end
+    return out
+end
+
+-- A writ's tier from its tooltip (a line names it, under the name in game;
+-- any line read, the game's order not counted on); nil while the game
 -- hasn't loaded the item.
 export function tierOf(itemID: number): string?
-    local data = tryValue(C_TooltipInfo and C_TooltipInfo.GetItemByID, itemID)
-    local line = list(field(data, "lines"))[2]
-    local text = asString(field(line, "leftText"))
-    return text and IS_TIER[text] and text or nil
+    for _, text in ipairs(tipLines(itemID)) do
+        if IS_TIER[text] then
+            return text
+        end
+    end
+    return nil
 end
 
 -- A row's figures: the writ, the requested item, the two together (nil:
@@ -96,17 +145,35 @@ export function writLines(self: AuctionHouseModule, tier: string): WritLine[]
             }
         end
     end
+    -- (not listed: last, whatever the order)
+    local key, reverse = self.writSortKey, self.writSortReverse
+    local function value(l: WritLine): number
+        if key == "tier" then
+            return TIER_RANK[l.entry.tier or ""] or 0
+        elseif key == "writ" then
+            return l.writ or 0
+        elseif key == "item" then
+            return l.item or 0
+        end
+        return l.total or l.writ or 0
+    end
     table.sort(out, function(a: WritLine, b: WritLine): boolean
-        local at, bt = a.total, b.total
-        if (at ~= nil) ~= (bt ~= nil) then
-            return at ~= nil
+        local la, lb = a.total ~= nil, b.total ~= nil
+        if la ~= lb then
+            return la
         end
-        if at and bt and at ~= bt then
-            return at < bt
+        if key == "name" and a.entry.target ~= b.entry.target then
+            if reverse then
+                return a.entry.target > b.entry.target
+            end
+            return a.entry.target < b.entry.target
         end
-        local aw, bw = a.writ or math.huge, b.writ or math.huge
-        if aw ~= bw then
-            return aw < bw
+        local va, vb = value(a), value(b)
+        if va ~= vb then
+            if reverse then
+                return va > vb
+            end
+            return va < vb
         end
         return a.id < b.id
     end)
@@ -152,6 +219,7 @@ export function drawWrits(self: AuctionHouseModule)
     end
     local t = buy.writs
     buy.tierBar:SetValue(self.writTier)
+    t:ShowSort(self.writSortKey, self.writSortReverse)
     local lines = writLines(self, self.writTier)
     local n = 0
     for i, w in ipairs(lines) do
@@ -190,9 +258,10 @@ export function drawWrits(self: AuctionHouseModule)
         row.onEnter = function()
             keyTooltip(row, key)
         end
-        -- the writ's auctions, to buy it
+        -- the requested item's name searched: the writ and the item both
+        -- among the results
         row:SetScript("OnClick", function()
-            self:SearchItem(w.id)
+            self:Search(w.entry.target)
         end)
         row:Show()
     end

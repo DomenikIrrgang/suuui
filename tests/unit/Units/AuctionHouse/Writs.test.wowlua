@@ -9,7 +9,7 @@ import * as mock from "wowlua:mock"
 import internal M from "/Units/AuctionHouse"
 import * as writs from "/Units/AuctionHouse/Writs"
 import type WritRow from "/Units/AuctionHouse/Writs"
-import buy, setUp, tearDown, open, shown from "./AuctionHouseHelpers"
+import buy, setUp, tearDown, open, shown, recordQueries from "./AuctionHouseHelpers"
 
 local AH = C_AuctionHouse
 
@@ -129,14 +129,58 @@ local function listed()
     expect(r[3].item).never.toBeShown()
     expect(r[3].total).never.toBeShown()
     expect(r[3].none).toBeShown()
-    -- a click: the writ's auctions, to buy it
-    local searched: (number | string)? = nil
-    mock.stub(M, "SearchItem", function(_: unknown, item: number | string): boolean
-        searched = item
-        return true
-    end)
+    -- a click: the requested item's name searched (the writ and the item
+    -- both among the results), the Writs left
+    local sent = recordQueries()
     mock.click(r[1])
-    expect(searched).toBe(BELT_WRIT)
+    expect(sent[#sent].searchString).toBe("Earthen Silk Belt")
+    expect(M.view).toBe("browse")
+    expect(buy().writs).never.toBeShown()
+    -- back to the Writs: as they were, nothing asked of the house
+    local before = #sent
+    mock.click(writsButton())
+    expect(#rows()).toBe(3)
+    expect(#sent).toBe(before)
+end
+
+@test("the columns sort: a header orders by it, again reversed; Not listed stays last")
+local function sorting()
+    open()
+    scan()
+    mock.click(writsButton())
+    -- by the writ's price (the helm's writ is the cheapest, but its item
+    -- isn't listed: last)
+    M.writSortKey, M.writSortReverse = "writ", false
+    M:Refresh()
+    local r = rows()
+    expect(r[1].name:GetText()).toBe("Ghostweave Vest")
+    expect(r[2].name:GetText()).toBe("Earthen Silk Belt")
+    expect(r[3].name:GetText()).toBe("Heavy Scorpid Helm")
+    M.writSortReverse = true
+    M:Refresh()
+    r = rows()
+    expect(r[1].name:GetText()).toBe("Earthen Silk Belt")
+    expect(r[3].name:GetText()).toBe("Heavy Scorpid Helm")
+    -- by name
+    M.writSortKey, M.writSortReverse = "name", false
+    M:Refresh()
+    r = rows()
+    expect(r[1].name:GetText()).toBe("Earthen Silk Belt")
+    expect(r[2].name:GetText()).toBe("Ghostweave Vest")
+end
+
+@test("a writ's tier from any of its tooltip's lines, colour codes off")
+local function tierLine()
+    mock.fake("C_TooltipInfo.GetItemByID", function(_: number): unknown
+        return {
+            lines = {
+                { leftText = "Craftsman's Writ: Ghostweave Vest" },
+                { leftText = "This Item Begins a Quest" },
+                { leftText = "|cffffd100Artisan|r " },
+            },
+        }
+    end)
+    expect(writs.tierOf(VEST_WRIT)).toBe("Artisan")
 end
 
 @test("the tier above the table: only that tier's writs; none of it said so; a search back to the results")
