@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Party and raid pets: a pet could show your theme's bar colour instead of green until a /reload, when the game didn't yet know how it stands to you as it came; its frame now turns green with the next update the game sends about that pet. The same goes for any NPC frame.
 - Deleting a blue or better item (the confirmation where you type DELETE) no longer crashes the game when you press Yes or No, and the box you type into now has SuuUI's look instead of the game's gold frame.
 - Group Finder: opening it with its key no longer shows an error in chat. When the game refuses the search on opening, the list refreshes on your first click in the window instead (Refresh still searches at once).
 - Group Finder: your edits to the ad are kept; it is no longer written again from your listing every 15 seconds. "From my listing" still writes it again.

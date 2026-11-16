@@ -1142,6 +1142,11 @@ local UNIT_EVENTS: string[] = {
     "UNIT_CLASSIFICATION_CHANGED",
     -- going offline or coming back: the bar, the text, the name and the power line
     "UNIT_CONNECTION",
+    -- a reaction the client didn't know yet (seen in game: a party pet's
+    -- frame kept the theme's bar until a /reload, no UNIT_FACTION telling
+    -- when it was known): asked again on the unit's UNIT_FLAGS, which comes
+    -- often (probed on a party member), only while unknown
+    "UNIT_FLAGS",
 }
 
 --------------------------------------------------------------------------------
@@ -1438,6 +1443,9 @@ export class UnitFrame extends Button
     edgeBadges: Frame[] = {}
     active: boolean? = nil
     ticker: TickerHandle? = nil
+    -- the client didn't know the unit's reaction yet: asked again on its
+    -- next UNIT_FLAGS
+    reactionUnknown: boolean = false
     -- 0.17: adds lines to the frame's tooltip after the unit's
     onTooltip: ((f: UnitFrame, tooltip: GameTooltip) -> ())? = nil
     -- after each health update
@@ -1987,10 +1995,15 @@ export class UnitFrame extends Button
         -- unit come through here)
         self.fillClass = classColor
         local reaction: string? = nil
+        local unknown = false
         if not isPlayer then
-            reaction = healthFill.reactionToken(A.UnitReaction(u, "player"))
+            local r = A.UnitReaction(u, "player")
+            reaction = healthFill.reactionToken(r)
+            -- (none yet, not a secret one)
+            unknown = r == nil
         end
         self.fillReaction = reaction
+        self.reactionUnknown = unknown
         self:PaintHealth()
         self.role:Hide()
         self.classDot:Hide()
@@ -2674,6 +2687,10 @@ export class UnitFrame extends Button
             end
         elseif name == "UNIT_CONNECTION" then
             self:Refresh()
+        elseif name == "UNIT_FLAGS" then
+            if self.reactionUnknown then
+                self:UpdateIdentity()
+            end
         end
     end
 
