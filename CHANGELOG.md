@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Deleting a blue or better item (the confirmation where you type DELETE) no longer crashes the game when you press Yes or No, and the box you type into now has SuuUI's look instead of the game's gold frame.
 - Group Finder: opening it with its key no longer shows an error in chat. When the game refuses the search on opening, the list refreshes on your first click in the window instead (Refresh still searches at once).
 - Group Finder: your edits to the ad are kept; it is no longer written again from your listing every 15 seconds. "From my listing" still writes it again.
 - Turning Mouseover bindings off now takes your bindings off at once: keys and clicks stop casting on the unit under the mouse, a Target or Menu click you moved goes back to the game's own, an open binding box closes (it no longer holds your keys in the next fight) and its mouseover watch stops; the Mac's Cmd-click setting you turned off with "Turn it off" comes back too. Turning it on again puts them all back. A character that logs in with the module off (on another profile) gets the game's own Target and Menu clicks back.
