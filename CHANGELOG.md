@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### New
+
+- Buff indicators: each indicator has a Units choice in its Edit window: Both, Players or Pets. Choose Players to keep a missing buff off pets, which can't take most buffs in Forever.
+
 ### Fixed
 
 - Mouseover bindings: a key bound on unit frames no longer stays stuck casting on a frame you already left (the game sometimes skips telling SuuUI the mouse left). Pressed away from the frame it now casts nothing and gives the key back to its normal job right away.

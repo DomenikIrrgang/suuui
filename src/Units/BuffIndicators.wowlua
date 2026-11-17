@@ -113,6 +113,13 @@ local ROLE_OPTIONS: ChipOption[] = {
     { value = "DAMAGER", label = "Damage" },
 }
 
+-- Whom an indicator shows on (UI.INDICATOR_UNITS; nil: both).
+local UNIT_OPTIONS: { value: string, label: string }[] = {
+    { value = "both", label = "Both" },
+    { value = "players", label = "Players" },
+    { value = "pets", label = "Pets" },
+}
+
 local MISSING_COLORS: ChipOption[] = {
     { value = "ember", label = "Red" },
     { value = "amber", label = "Amber" },
@@ -150,6 +157,7 @@ local function copyIndicator(e: Indicator): Indicator
         missingOn = e.missingOn,
         sizes = copySet(e.sizes),
         roles = copySet(e.roles),
+        units = e.units,
     }
 end
 local function copyList(list: Indicator[]): Indicator[]
@@ -396,6 +404,11 @@ local function summary(e: Indicator): string
             parts[#parts + 1] = table.concat(on, ", ")
         end
     end
+    if e.units == "pets" then
+        parts[#parts + 1] = "Pets"
+    elseif e.units == "players" then
+        parts[#parts + 1] = "Players"
+    end
     return table.concat(parts, " · ")
 end
 
@@ -472,11 +485,12 @@ export class IndicatorEditPanel extends PanelClass
     readonly on: Field<Segmented<string>>
     readonly sizes: Field<ToggleChips>
     readonly roles: Field<ToggleChips>
+    readonly units: Field<Segmented<string>>
     readonly reset: SuuButton
     readonly done: SuuButton
 
     constructor(owner: BuffIndicatorsModule)
-        super(SuuUI.Root, { title = "Edit indicator", width = EP_W, height = 712, solid = true })
+        super(SuuUI.Root, { title = "Edit indicator", width = EP_W, height = 788, solid = true })
         UI.MakeModal(self)
         local body = self.body
         local function edit(fn: (e: Indicator) -> ())
@@ -689,7 +703,7 @@ export class IndicatorEditPanel extends PanelClass
                 end)
             end,
         })
-        self.roles = (field(
+        self.roles, y = field(
             right,
             y + 12, -- (under the sizes' two-line note)
             "Roles",
@@ -698,8 +712,20 @@ export class IndicatorEditPanel extends PanelClass
                 roles:SetDisabled(off)
             end,
             26
-        ))
+        )
         self.roles.note = "All on: everyone. Someone without a role counts as Damage."
+        local units: Segmented<string> = UI.Segmented(right, {
+            options = UNIT_OPTIONS,
+            onChange = function(v: string)
+                edit(function(e: Indicator)
+                    e.units = v ~= "both" and v or nil
+                end)
+            end,
+        })
+        self.units = (field(right, y, "Units", units, function(off: boolean)
+            units:SetDisabled(off)
+        end))
+        self.units.note = "Pets can't take most buffs in Forever: Players leaves them out."
 
         -- foot
         self.reset = UI.Button(body, {
@@ -709,7 +735,7 @@ export class IndicatorEditPanel extends PanelClass
                 edit(function(e: Indicator)
                     e.kind, e.point, e.size, e.color, e.source = "icon", "TOPRIGHT", 12, "fel", "mine"
                     e.show, e.missingColor, e.missingOn, e.on, e.sizes = nil, nil, nil, nil, nil
-                    e.roles = nil
+                    e.roles, e.units = nil, nil
                 end)
             end,
         })
@@ -1264,6 +1290,8 @@ class BuffIndicatorsModule extends Module<typeof(DEFAULTS)>
         end
         p.roles.control:SetValue(roles)
         setApplies(p.roles, true)
+        p.units.control:SetValue(e.units or "both")
+        setApplies(p.units, true)
     end
 
     function OpenEdit(index: number)
