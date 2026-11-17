@@ -206,6 +206,7 @@ export function openItem(self: AuctionHouseModule, key: ItemKey?)
     -- (a commodity's purchase still asked about is another item's: dropped)
     self:DropPurchase()
     self.itemKey, self.chosen, self.chosenSeen, self.offers, self.auctions = key, nil, nil, {}, {}
+    disarmBuyOut(self)
     local buy = self.buy
     if buy then
         buy.itemView.qty:SetValue("1")
@@ -419,6 +420,9 @@ export function chooseAuction(self: AuctionHouseModule, id: number)
     if self.chosen ~= id then
         v.bid:Clear()
     end
+    if self.chosen ~= id then
+        disarmBuyOut(self)
+    end
     self.chosen, self.chosenSeen = id, seenOf(a)
     local least = leastBid(a)
     if least and (v.bid:GetCopper() or 0) < least then
@@ -498,68 +502,75 @@ local function itemName(self: AuctionHouseModule): string
     return info and info.itemName or "this item"
 end
 
--- Buy out (asked 2026-11-17): SuuUI places the buyout itself, within the
--- click on the question's Buy out, as Auctionator and TSM do; probed in
--- game, Forever takes it (/suu probe ahbid: the purchase completed). It
--- went through the game's hidden page before (a single auction's buyout was
--- once refused, "Blocked"), where anything that tainted that page made
--- every buyout fail until a /reload. The chosen auction is found again by
--- its id and checked against what the player saw when choosing it (gone or
--- changed: nothing bought, the player told); asked first, as the game asks;
--- checked again at the answer; then placed (AuctionHouse/Bidding: counted
--- once the house says so).
+-- Buy out (asked 2026-11-17): SuuUI places the buyout itself, as
+-- Auctionator and TSM do; probed in game, Forever takes it from SuuUI's own
+-- button's click (/suu probe ahbid: the purchase completed) but refused it
+-- placed from the confirm dialog's OK (seen in game: "Interface action
+-- failed"), so the question is the button itself: a first click arms it
+-- (Confirm, the price said), a second within ARM_SECONDS buys, within that
+-- click. It went through the game's hidden page before (a single auction's
+-- buyout was once refused, "Blocked"), where anything that tainted that
+-- page made every buyout fail until a /reload. The chosen auction is found
+-- again by its id and checked against what the player saw when choosing it
+-- (gone or changed: nothing bought, the player told); then placed
+-- (AuctionHouse/Bidding: counted once the house says so).
+export const ARM_SECONDS = 5
+
+-- Buy out back to itself: not armed.
+export function disarmBuyOut(self: AuctionHouseModule)
+    self.buyArmed = nil
+    local buy = self.buy
+    if buy then
+        buy.itemView.buyout:SetLabel("Buy out")
+    end
+end
+
 export function buyOut(self: AuctionHouseModule)
     local buy, seen = self.buy, self.chosenSeen
     if not (buy and seen and self.chosen == seen.auctionID) then
         return
     end
     local name = itemName(self)
-    -- the auction now, else why not
-    local function current(): ItemSearchResultInfo?
-        local a, why = recheck(self.auctions, seen)
-        if why then
-            self:Note(recheckNote(why, a, "bought"), "error")
-            if a then
-                self.chosenSeen = seenOf(a)
-            else
-                self.chosen, self.chosenSeen = nil, nil
-            end
-            self:DrawItemView()
-            return nil
+    local a, why = recheck(self.auctions, seen)
+    if why then
+        disarmBuyOut(self)
+        self:Note(recheckNote(why, a, "bought"), "error")
+        if a then
+            self.chosenSeen = seenOf(a)
+        else
+            self.chosen, self.chosenSeen = nil, nil
         end
-        return a
+        self:DrawItemView()
+        return
     end
-    local a = current()
     local buyout = a and a.buyoutAmount
     if not (a and buyout and buyout > 0) then
         return
     end
     if (GetMoney() or 0) < buyout then
+        disarmBuyOut(self)
         self:Note("Not enough money: nothing was bought.", "error")
         return
     end
     local id = a.auctionID
-    UI.Confirm({
-        title = "Buy out " .. name .. "?",
-        text = ("For %s."):format(coins(buyout)),
-        confirm = "Buy out",
-        onConfirm = function()
-            -- the same auction, as it was asked about, and the money still there
-            if self.chosen ~= id then
-                self:Note("You chose another auction meanwhile: nothing was bought.", "error")
-                return
-            end
-            local now = current()
-            if not now or now.buyoutAmount ~= buyout then
-                return
-            end
-            if (GetMoney() or 0) < buyout then
-                self:Note("Not enough money: nothing was bought.", "error")
-                return
-            end
-            self:PlaceBid(id, buyout, name, true)
-        end,
-    })
+    local armed = self.buyArmed
+    if armed and armed.id == id and armed.buyout == buyout and GetTime() - armed.at <= ARM_SECONDS then
+        -- the second click: bought within it
+        disarmBuyOut(self)
+        self:PlaceBid(id, buyout, name, true)
+        return
+    end
+    local at = GetTime()
+    self.buyArmed = { id = id, buyout = buyout, at = at }
+    buy.itemView.buyout:SetLabel("Confirm")
+    self:Note(("Click Confirm to buy %s for %s."):format(name, coins(buyout)))
+    self:After(ARM_SECONDS, function()
+        local now = self.buyArmed
+        if now and now.at == at then
+            disarmBuyOut(self)
+            self:Note("")
+        end
+    end)
 end
 
 -- Bid: the chosen auction found again by its id and checked against what
