@@ -5,6 +5,7 @@
 ### Fixed
 
 - Auction house: Buy out on a single item now buys it directly, the way Auctionator and TSM do: click Buy out, then Confirm (it shows the price) within a few seconds. It no longer goes through the game's own hidden auction page, which could make every buyout fail until a /reload.
+- Dressing room: Ctrl-clicking an item to preview it no longer shows an error ("attempt to call a nil value" from the game's dressing room).
 
 ## 0.20.0 (2026-11-16)
 
