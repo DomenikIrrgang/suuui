@@ -214,6 +214,46 @@ local function hiddenUnderMouse()
     expectNoErrors()
 end
 
+-- Found in game (2026-11-17): party1's keys stayed on with the mouse over
+-- the world (state-frame "help", state-mo "off"): its leave never came.
+-- Whatever the game skipped, a key casts only while the frame is under the
+-- mouse; pressed away from it, nothing is cast and the key is given back.
+@test("a frame's leave that never came: its key casts nothing away from it and gives the key back, in and out of combat")
+local function missedLeave()
+    local name, id = known()
+    watchCasts()
+    M:Add(bind("SHIFT-G", name, id, { reach = "frames" }), nil)
+    local player = assert(frames.find("SuuUIPlayerFrame"))
+    for _, fight in ipairs({ false, true }) do
+        if fight then
+            mock.player:enterCombat()
+        end
+        mock.hover(player)
+        mock.advanceFrames(1)
+        expect(frameBound()).toBe(true)
+        -- the mouse away from every frame, no leave
+        mock.setCursorPosition(1, 1)
+        local before = #casts
+        mock.pressKey("SHIFT-G")
+        expect(#casts).toBe(before)
+        expect(ours("SHIFT-G")).toBe(false)
+        mock.hover(nil)
+        mock.advanceFrames(1)
+        -- a working enter still binds and casts on the frame's unit
+        mock.hover(player)
+        mock.advanceFrames(1)
+        mock.pressKey("SHIFT-G")
+        expect(casts[#casts] and casts[#casts].unit).toBe("player")
+        mock.hover(nil)
+        mock.advanceFrames(1)
+        if fight then
+            mock.player:leaveCombat()
+        end
+    end
+    expect(#mock.refusals()).toBe(0)
+    expectNoErrors()
+end
+
 @test("the frame state counts only while its frame shows and its unit exists (the snippet itself)")
 local function staleFrameState()
     local name, id = known()
