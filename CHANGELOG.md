@@ -9,6 +9,7 @@
 ### Fixed
 
 - Mouseover bindings: a key bound on unit frames no longer stays stuck casting on a frame you already left (the game sometimes skips telling SuuUI the mouse left). Pressed away from the frame it now casts nothing and gives the key back to its normal job right away.
+- Hunters: Train in the Beast Training window now teaches your pet the ability you chose. Before, it often did nothing (the game never took up the choice). When the game can't train your choice yet, Train is greyed out and its tooltip says why. Double-clicking an ability no longer trains it there; click it, then Train.
 
 ## 0.20.1 (2026-11-17)
 

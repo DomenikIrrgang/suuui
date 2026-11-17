@@ -10,17 +10,28 @@
 -- A hunter's Beast Training is the same window for the pet (training points):
 -- there the game refuses BuyTrainerService from SuuUI's code ("Forbidden",
 -- reported in game), so Train is a secure click on the game's own Train
--- button, which trains what the game has chosen: SuuUI's choice, told with
--- SelectTrainerService (the game's frame takes it up in its own event,
--- TRAINER_DESCRIPTION_UPDATE). No Train all there (asked 2026-11-05).
--- The game enables its Train button only from its own list's row of the
--- choice, and that list builds rows only for what it scrolls into sight: a
--- choice further down left its Train disabled, and the click did nothing
--- (reported 2026-11-10: "half the time nothing happens"). So SuuUI enables
--- it once the game has a choice SuuUI can learn, and tells the game again
--- (a change of its selection, which is what its frame takes up) when its
--- frame lost the choice. The choice is kept by name and rank, not by its
--- place in the list, which moves when something is learned.
+-- button, which trains its frame's choice (ClassTrainerFrame.selectedService).
+-- No Train all there (asked 2026-11-05). That choice must be made by the
+-- game's own code: written by SuuUI's, the Train click reads a tainted value
+-- and the game refuses the purchase.
+-- Before, SuuUI told the game with SelectTrainerService and waited for its
+-- frame to take it up in TRAINER_DESCRIPTION_UPDATE. Found in game on
+-- 2026-11-17: that event never comes after SelectTrainerService (from a row,
+-- from a /run), so the game's selection was SuuUI's while its frame kept the
+-- first row's, its Train stayed disabled and Train did nothing, silently.
+-- Now a choice is a click on the game's own row of the service: while the
+-- mouse is over a row of SuuUI's list, a secure button over it clicks that
+-- row in the game's list (the game's frame chooses it and enables its Train
+-- from its own code), and the release chooses it in SuuUI's list. The game's
+-- list builds rows only for what fits its scroll box (7), so at a pet
+-- trainer SuuUI raises that box's height to the whole list right after the
+-- game sizes it, before the game fills it: the game's own code then builds
+-- and fills a row for every service. Train is the secure click on the
+-- game's Train only while the game's frame has SuuUI's choice and its Train
+-- is enabled; otherwise SuuUI's Train is disabled and its tooltip says why
+-- (in combat, the game's list without the row, the choice not taken). The
+-- choice is kept by name and rank, not by its place in the list, which
+-- moves when something is learned.
 -- What the pet already knows comes as learnable with no cost (reported
 -- 2026-11-10: known pet abilities in the list): SuuUI asks the pet's
 -- spellbook and counts those as known (Used), as the game's filter would.
@@ -34,6 +45,8 @@ import * as secret from "wowlua:secret"
 import * as frames from "wowlua:frames"
 import * as secure from "wowlua:secure"
 import type Overlay from "wowlua:secure"
+import * as tbl from "wowlua:table"
+import onAddonLoaded from "wowlua:lifecycle"
 
 local filterList = SuuUI.UI.FilterList
 
@@ -49,6 +62,8 @@ local M: TrainerModule
 
 local WIDTH, HEIGHT = 380, 560
 local ROW_H, HEAD_H = 47, 28
+-- The game's list: its rows' height and its own height (CLASS_TRAINER_*)
+local GAME_ROW_H, GAME_LIST_H = 47, 330
 local TYPES: FilterOption[] = {
     { value = "available", label = "Available" },
     { value = "unavailable", label = "Unavailable" },
@@ -373,24 +388,31 @@ class TrainerRow extends Button
         end)
         self.sub:SetWordWrap(false)
         self:SetScript("OnEnter", function()
-            self.hover:Show()
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetTrainerService(self.index)
-            GameTooltip:Show()
+            self:SetHover(true)
+            owner:RowOver(self)
         end)
         self:SetScript("OnLeave", function()
-            self.hover:Hide()
-            GameTooltip:Hide()
+            self:SetHover(false)
         end)
         self:SetScript("OnClick", function()
-            owner:Choose(self.index)
-            errors.try(SelectTrainerService, self.index)
-            owner:Refresh()
+            owner:RowClick(self)
         end)
         self:SetScript("OnDoubleClick", function()
             owner:Choose(self.index)
             owner:Train()
         end)
+    end
+
+    -- The hover: the row lit, the game's tooltip of the service.
+    function SetHover(on: boolean)
+        self.hover:SetShown(on)
+        if on then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetTrainerService(self.index)
+            GameTooltip:Show()
+        else
+            GameTooltip:Hide()
+        end
     end
 end
 
@@ -507,14 +529,21 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
     -- which it is found again when the list changes
     selected: number? = nil
     selectedKey: string? = nil
-    -- Beast Training: the choice told to the game (SelectTrainerService)
-    -- since its list last changed
-    told: number? = nil
     tools: Frame? = nil
     train: SuuButton? = nil
     trainAll: SuuButton? = nil
     -- Beast Training: the secure click on the game's Train over SuuUI's
     trainOver: Overlay? = nil
+    -- Beast Training: the secure click on the game's row over the hovered
+    -- row, the row it is over, and the part of that row in sight
+    rowOver: Overlay? = nil
+    rowOverRow: TrainerRow? = nil
+    rowHit: Frame? = nil
+    -- the secure buttons' parent, hidden by the client in combat
+    overHolder: Frame? = nil
+    -- the game's list's SetHeight hooked; SuuUI sizing it
+    listHooked: boolean? = nil
+    sizingList: boolean? = nil
     window: WindowFrame? = nil
 
     constructor()
@@ -533,7 +562,6 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local e = index and service(index) or nil
         self.selected = e and e.index or nil
         self.selectedKey = e and keyOf(e) or nil
-        self.told = nil
     end
 
     -- The chosen service, read again: where it is now (by its name and
@@ -556,19 +584,18 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             local other = service(i, book)
             if other and keyOf(other) == key then
                 self.selected = i
-                self.told = nil
                 return other
             end
         end
-        self.selected, self.selectedKey, self.told = nil, nil, nil
+        self.selected, self.selectedKey = nil, nil
         return nil
     end
 
-    -- Forgets the choice and what the game was told (each trainer opened
-    -- starts from nothing chosen).
+    -- Forgets the choice (each trainer opened starts from nothing chosen).
     function ResetChoice()
-        self.selected, self.selectedKey, self.told = nil, nil, nil
+        self.selected, self.selectedKey = nil, nil
         self:HideTrainOver()
+        self:HideRowOver()
     end
 
     function HideTrainOver()
@@ -576,6 +603,26 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         if over and not InCombatLockdown() then
             over.hide()
         end
+    end
+
+    function HideRowOver()
+        local over = self.rowOver
+        if over and not InCombatLockdown() then
+            over.hide()
+            self.rowOverRow = nil
+        end
+    end
+
+    -- A click on a row of SuuUI's list (Beast Training: only where no secure
+    -- button lies over it, in combat or without the game's row): chooses it.
+    function RowClick(row: TrainerRow)
+        self:Choose(row.index)
+        -- (Beast Training: the game's frame takes a choice only from a click
+        -- on its own row; its selection alone would differ from its frame's)
+        if not self:ChoosesInGameList() then
+            errors.try(SelectTrainerService, row.index)
+        end
+        self:Refresh()
     end
 
     function Train()
@@ -740,6 +787,10 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         list:SetPoint("BOTTOMRIGHT", -(BAR + 3), 0)
         list:HookScript("OnSizeChanged", function(_: Frame, width: number)
             list.child:SetWidth(width)
+        end)
+        -- (Beast Training: the rows move under the secure button over one)
+        list:HookScript("OnVerticalScroll", function()
+            self:HideRowOver()
         end)
         self.heads, self.rows, self.collapsed = {}, {}, {}
         local empty = UI.Text(list.child, "body", "ink-muted")
@@ -916,9 +967,22 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         empty:SetShown(nr == 0 and nh == 0)
         empty:SetValue("Nothing to show with these filters.")
         c:SetHeight(math.max(1, y))
+        -- the secure button over a row: that row may show another service now
+        local over, overRow = self.rowOver, self.rowOverRow
+        if over and overRow and over.button:IsShown() and not InCombatLockdown() then
+            local game = self:ChoosesInGameList() and overRow:IsShown() and self:GameRow(overRow.index) or nil
+            if game then
+                over.set("clickbutton1", game)
+            else
+                self:HideRowOver()
+            end
+        end
         -- the foot
         money:SetCopper(GetMoney() or 0)
         local ok, why = learnable(self:Selected(book))
+        if ok and pet then
+            ok, why = self:PetTrainable()
+        end
         train:SetEnabledState(ok)
         train.tooltip = (not ok) and
             { title = "Train", description = self.selected and why or "Choose what to learn." } or
@@ -926,7 +990,6 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         local all = self:TrainAllList()
         trainAll:SetEnabledState(#all > 0)
         trainAll.tooltip = { title = "Train all", description = trainAllText(all) }
-        local pet = isPetTrainer()
         if not InCombatLockdown() then
             trainAll:SetShown(not pet)
         end
@@ -953,55 +1016,212 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         return skill == sel
     end
 
-    -- Tells the game SuuUI's choice, once until its list changes: a change
-    -- of its selection is what its frame takes up (TRAINER_DESCRIPTION_UPDATE),
-    -- so when the game's selection is this one already (its frame lost it
-    -- when its list changed) it is set past the end first, as the game's own
-    -- code clears it.
-    function TellGame(sel: number)
-        if self.told == sel then
+    -- Beast Training: whether Train can train SuuUI's choice now (it is
+    -- learnable), and why not: the game's frame has to have it and its Train
+    -- be on. Never an enabled Train that does nothing.
+    function PetTrainable(): (boolean, string?)
+        if InCombatLockdown() then
+            return false, "Not in combat: train your pet once the fight is over."
+        end
+        local sel = self.selected
+        if not sel then
+            return false, nil
+        end
+        if not self:GameHasChoice() then
+            if not self:GameRow(sel) then
+                return false, "The trainer's own list has no row for this yet. Close the trainer and talk to it again."
+            end
+            return false, "Click it in the list once more: the trainer hasn't taken your choice."
+        end
+        local blizz = frames.asButton(frames.find("ClassTrainerTrainButton"))
+        if not (blizz and blizz:IsEnabled()) then
+            return false, "The trainer won't train this right now."
+        end
+        return true, nil
+    end
+
+    -- Whether a choice is made on the game's own list too (Beast Training:
+    -- its Train trains only what its frame chose itself).
+    function ChoosesInGameList(): boolean
+        return isPetTrainer()
+    end
+
+    -- Beast Training: the game's own row of a service in its list (the row
+    -- whose click chooses it there: its display index is the service).
+    function GameRow(skill: number): Button?
+        local f = frames.find("ClassTrainerFrame")
+        local map = tbl.field(f, "displayIndexToSkillIndex")
+        for _, row in ipairs(frames.rows(tbl.field(f, "ScrollBox"))) do
+            local display = secret.asNumber(tbl.field(row, "displayIndex"))
+            local mapped = display
+            if display and type(map) == "table" then
+                mapped = secret.asNumber((map :: { [number]: unknown })[display]) or display
+            end
+            local b = frames.asButton(row)
+            if b and mapped == skill and b:IsShown() then
+                return b
+            end
+        end
+        return nil
+    end
+
+    -- The secure buttons' parent: hidden by the client itself in combat,
+    -- where they can't move or change.
+    function OverHolder(): Frame
+        local holder = self.overHolder
+        if not holder then
+            holder = CreateFrame("Frame", nil, UIParent)
+            secure.visibility(holder, "[combat] hide; show")
+            self.overHolder = holder
+        end
+        return holder
+    end
+
+    -- The part of a row of SuuUI's list in sight (the list scrolls and cuts
+    -- its rows; the secure button over it must not reach past the list),
+    -- or nil out of sight.
+    function RowHit(row: TrainerRow): Frame?
+        local list = self.list
+        if not list then
+            return nil
+        end
+        local top, bottom, listTop, listBottom = row:GetTop(), row:GetBottom(), list:GetTop(), list:GetBottom()
+        if not (top and bottom and listTop and listBottom) then
+            return nil
+        end
+        local cutTop, cutBottom = math.max(0, top - listTop), math.max(0, listBottom - bottom)
+        if top - cutTop <= bottom + cutBottom then
+            return nil
+        end
+        local hit = self.rowHit
+        if not hit then
+            hit = CreateFrame("Frame", nil, list)
+            -- (the secure button passes its hover on to this frame)
+            hit:SetScript("OnEnter", function()
+                local r = self.rowOverRow
+                if r then
+                    r:SetHover(true)
+                end
+            end)
+            hit:SetScript("OnLeave", function()
+                local r = self.rowOverRow
+                self:HideRowOver()
+                if r then
+                    r:SetHover(false)
+                end
+            end)
+            self.rowHit = hit
+        end
+        hit:ClearAllPoints()
+        hit:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -cutTop)
+        hit:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, cutBottom)
+        return hit
+    end
+
+    -- Beast Training: while the mouse is over a row of SuuUI's list, a secure
+    -- button over it that clicks the game's own row of the service (the
+    -- game's frame chooses it and turns its Train on, from its own code);
+    -- its release chooses it in SuuUI's list too. Out of combat; without the
+    -- game's row the click goes to SuuUI's row (chosen there only, and
+    -- Train says why it can't).
+    function RowOver(row: TrainerRow)
+        if InCombatLockdown() or not (self.open and self:ChoosesInGameList()) then
             return
         end
-        self.told = sel
-        if secret.asNumber(errors.try(GetTrainerSelectionIndex)) == sel then
-            errors.try(SelectTrainerService, (secret.asNumber(errors.try(GetNumTrainerServices)) or 0) + 1)
+        local over = self.rowOver
+        if over and over.button:IsShown() and self.rowOverRow == row then
+            return
         end
-        errors.try(SelectTrainerService, sel)
+        local game = self:GameRow(row.index)
+        local hit = game and self:RowHit(row) or nil
+        if not (game and hit) then
+            self:HideRowOver()
+            return
+        end
+        if not over then
+            local made = secure.overlay(row)
+            made.button:SetParent(self:OverHolder())
+            made.set("type1", "click")
+            made.button:HookScript("PostClick", function(_: Button, button: string, down: boolean?)
+                -- (the release: the game's row has been clicked)
+                if down or button ~= "LeftButton" then
+                    return
+                end
+                local r = self.rowOverRow
+                if r then
+                    self:Choose(r.index)
+                    self:Refresh()
+                end
+            end)
+            self.rowOver = made
+            over = made
+        end
+        over.set("clickbutton1", game)
+        self.rowOverRow = row
+        over.show(hit)
     end
 
     -- Beast Training: Train is the secure click on the game's own Train
-    -- button while the game has SuuUI's choice; else the choice is told to
-    -- the game (it answers with TRAINER_DESCRIPTION_UPDATE) and Train waits.
-    -- The game's Train is enabled for it: the game does that only from its
-    -- list's row of the choice, which exists only while scrolled into sight
-    -- (SuuUI enables it only for what it found learnable, as the game would).
+    -- button, shown only while Train can train (`PetTrainable`: the game's
+    -- frame has SuuUI's choice, chosen there by its own row's click, and its
+    -- Train is on; never turned on by SuuUI). Out of combat.
     function DrawPetTrain(on: boolean)
         if InCombatLockdown() then
             return
         end
         local over = self.trainOver
-        local blizz = frames.find("ClassTrainerTrainButton") :: Button?
+        local blizz = frames.find("ClassTrainerTrainButton")
         local train = self.train
-        local sel = self.selected
-        if not (on and blizz and train and sel) then
+        if not (on and blizz and train) then
             self:HideTrainOver()
             return
-        end
-        if not self:GameHasChoice() then
-            self:HideTrainOver()
-            self:TellGame(sel)
-            return
-        end
-        if not blizz:IsEnabled() then
-            blizz:Enable()
         end
         if not over then
             over = secure.overlay(train)
+            over.button:SetParent(self:OverHolder())
             over.set("type1", "click")
             self.trainOver = over
         end
         over.set("clickbutton1", blizz)
         over.show()
+    end
+
+    -- Beast Training: the game's list as tall as all its services, so the
+    -- game builds a row for each (it builds only what fits). Raised right
+    -- after the game sizes it in its own update and before it fills it, so
+    -- the game's own code builds and fills those rows (SuuUI never runs the
+    -- list's update: its rows' fields would be SuuUI's, and the click on
+    -- them tainted).
+    function TallList(box: Frame)
+        if self.sizingList or not (self:IsEnabled() and self:ChoosesInGameList()) then
+            return
+        end
+        local n = secret.asNumber(errors.try(GetNumTrainerServices)) or 0
+        self.sizingList = true
+        pcall(box.SetHeight, box, math.max(GAME_LIST_H, (n + 1) * GAME_ROW_H + 2))
+        self.sizingList = false
+    end
+
+    -- The game's list: its height raised whenever the game sizes it (it does
+    -- in every update of its list, before it fills it).
+    function HookGameList()
+        local box = frames.asFrame(tbl.field(frames.find("ClassTrainerFrame"), "ScrollBox"))
+        if self.listHooked or not box then
+            return
+        end
+        self.listHooked = true
+        hook(box, "SetHeight", function()
+            self:TallList(box)
+        end)
+    end
+
+    -- The game's list changed (something learned, a filter, names): its rows
+    -- may stand for other services now, so both secure buttons go until the
+    -- choice is found again.
+    function GameListChanged()
+        self:HideTrainOver()
+        self:HideRowOver()
+        self:QueueRefresh()
     end
 
     function QueueRefresh()
@@ -1101,11 +1321,22 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
         if not self.window then
             self:Build()
         end
+        onAddonLoaded("Blizzard_TrainerUI", function()
+            self:HookGameList()
+        end)
         self:OnGameEvent("TRAINER_SHOW", function()
             self.open = true
             self:ResetChoice()
             self:After(0, function()
-                self:Away(frames.find("ClassTrainerFrame"))
+                local frame = frames.find("ClassTrainerFrame")
+                self:Away(frame)
+                -- (the game's list filled before the hook: raised now, and
+                -- the game's own update builds the rest when it sees the size)
+                self:HookGameList()
+                local box = frames.asFrame(tbl.field(frame, "ScrollBox"))
+                if box then
+                    self:TallList(box)
+                end
             end)
             assert(self.window):Show()
             assert(self.list):SetVerticalScroll(0)
@@ -1116,23 +1347,29 @@ class TrainerModule extends Module<typeof(DEFAULTS)>
             assert(self.window):Hide()
             self:ResetChoice()
         end)
-        -- The list changed (something learned, a filter): the game's Train
-        -- may now stand for another service, so the secure click waits for
-        -- the choice to be found again and the game told once more.
-        self:OnGameEvent("TRAINER_UPDATE", function()
-            self.told = nil
+        -- The list changed (something learned, a filter, names): the game
+        -- built its list again (`GameListChanged`).
+        for _, e in ipairs({ "TRAINER_UPDATE", "TRAINER_SERVICE_INFO_NAME_UPDATE" }) do
+            self:OnGameEvent(e, function()
+                self:GameListChanged()
+            end)
+        end
+        -- A fight: both secure buttons away while they still may move, and
+        -- let go of SuuUI's row and Train (in combat a frame a protected one
+        -- is anchored to may not move); Train off till it ends.
+        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
             self:HideTrainOver()
+            self:HideRowOver()
             self:QueueRefresh()
         end)
         for _, e in ipairs({
-            "TRAINER_SERVICE_INFO_NAME_UPDATE",
             "PLAYER_MONEY",
             "UNIT_PET_TRAINING_POINTS",
             "SKILL_LINES_CHANGED",
             -- (the pet's spellbook: what it knows)
             "SPELLS_CHANGED",
-            -- (the game's frame has taken up a choice: Beast Training's Train)
-            "TRAINER_DESCRIPTION_UPDATE",
+            -- (Beast Training: Train on again after a fight)
+            "PLAYER_REGEN_ENABLED",
         }) do
             self:OnGameEvent(e, function()
                 self:QueueRefresh()
