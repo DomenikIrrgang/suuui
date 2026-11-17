@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Auction house: Buy out on a single item now buys it straight away after its question, the way Auctionator and TSM do. It no longer goes through the game's own hidden auction page, which could make every buyout fail until a /reload.
+
 ## 0.20.0 (2026-11-16)
 
 ### New
