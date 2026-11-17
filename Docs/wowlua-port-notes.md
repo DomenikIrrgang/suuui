@@ -158,6 +158,28 @@ Repro: `C_Timer.NewTimer(0.05, function() end)` 10,000 times, frames between,
 then `collectgarbage("collect")`: `collectgarbage("count")` is about 1.7 MB
 higher.
 
+<a id="v5"></a>
+
+### V5. `SelectTrainerService` sends `TRAINER_DESCRIPTION_UPDATE` in the VM, never in the game
+
+In `wowlua test` (0.13.15), `SelectTrainerService(i)` at an open trainer
+fires `TRAINER_DESCRIPTION_UPDATE` at once when the selection changes (none
+when it stays), and Blizzard's trainer frame then takes the selection up
+(`ClassTrainer_SetSelection`). In the game (WoW Forever, 2026-11-17, at a
+hunter's pet trainer) the event never came after `SelectTrainerService`:
+not from SuuUI's row, not from SuuUI's clear-and-reselect, not from a
+plain `/run SelectTrainerService(50)` / `(51)`. `GetTrainerSelectionIndex()`
+read the new index, while `ClassTrainerFrame.selectedService` kept the row
+the frame chose on its OnShow, and its Train button stayed disabled.
+
+So SuuUI's trainer no longer waits for the event (Units/Trainer: a choice
+at a pet trainer is a secure click on the game's own row). Its tests fake
+`SelectTrainerService` without the event at a pet trainer, and check that
+Beast Training never needs it.
+
+Repro: open a trainer, `SelectTrainerService(2)` with a frame registered
+for `TRAINER_DESCRIPTION_UPDATE`: it fires in the VM, not in the game.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not

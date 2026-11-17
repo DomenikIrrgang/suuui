@@ -9,6 +9,7 @@ import type ConfirmOptions from "/UI/Panel"
 import type SuuButton from "/UI/Controls"
 import internal M, Service, service, learnable, coins, pickAffordable, arrange, trainAllText, yourProfessions, npcTitle, isPetTrainer, canCategorize from "/Units/Trainer"
 import * as frames from "wowlua:frames"
+import type Overlay from "wowlua:secure"
 
 const T = SuuUI.Tokens
 const PET = Enum.TrainerType.Pet
@@ -29,6 +30,33 @@ local function tipOf(b: SuuButton): string?
         return tip.description
     end
     return nil
+end
+
+-- A row of SuuUI's list by its service's name.
+local function rowOf(name: string)
+    for _, r in ipairs(M.rows) do
+        if r:IsShown() and r.name:GetText() == name then
+            return r
+        end
+    end
+    error("no row " .. name)
+end
+
+-- SuuUI's list scrolled so the row is in sight.
+local function inSight(row: Frame)
+    local list = assert(M.list)
+    local offset = (list.child:GetTop() or 0) - (row:GetTop() or 0)
+    list:SetVerticalScroll(math.max(0, math.min(offset, list:GetVerticalScrollRange())))
+end
+
+-- The game's own rows in its list.
+local function gameRows(): Frame[]
+    return frames.rows((game() :: Frame & { ScrollBox: unknown }).ScrollBox)
+end
+
+-- Whether a secure button is shown where the mouse can click it.
+local function clickable(over: Overlay?): boolean
+    return over ~= nil and over.button:IsVisible()
 end
 
 -- A class trainer with `services` (the engine's), opened through its gossip.
@@ -342,6 +370,53 @@ end
 --------------------------------------------------------------------------------
 -- Train and Train all
 --------------------------------------------------------------------------------
+
+@test("choosing in the game's own list: its rows and its choice stay the game's own (not tainted)")
+local function gameListSecure()
+    -- (the first test to open the game's trainer frame: the tests after it
+    -- fake the game's trainer API, and Blizzard's list then runs tainted by
+    -- the test for the rest of the file)
+    -- (the emulator's taint, as far as it goes: a pet trainer is faked here
+    -- through the game's API, which taints the game's list by itself, so
+    -- this is the engine's class trainer with SuuUI choosing in the game's
+    -- list as at a pet trainer)
+    mock.stub(M, "ChoosesInGameList", function()
+        return true
+    end)
+    local services: TrainerService[] = {}
+    nextSpell = nextSpell + 20
+    for i = 1, 12 do
+        services[i] = { spell = nextSpell + i, name = "Skill " .. i, icon = 132337, level = 1, rank = "Rank 1", cost = 1 }
+    end
+    openTrainer(services)
+    mock.advanceFrames(2)
+    local f = game() :: Frame & { ScrollBox: Frame }
+    local rows = gameRows()
+    -- a row for each, filled by the game's own update
+    expect(#rows).toBe(12)
+    expect(f.ScrollBox).toBeSecure("updateLock")
+    expect(f).toBeSecure("displayIndexToSkillIndex")
+    for _, r in ipairs(rows) do
+        expect(r).toBeSecure("displayIndex")
+    end
+    -- the secure click on the game's row: the game's own code chose it
+    local row = rowOf("Skill 5")
+    mock.hover(row)
+    mock.click(assert(M.rowOver).button)
+    expect((f :: Frame & { selectedService?: number }).selectedService).toBe(5)
+    expect(f).toBeSecure("selectedService")
+    expect(M.selected).toBe(5)
+    expect(M:GameHasChoice()).toBe(true)
+    -- the list built again by the game (after something learned)
+    mock.fireEvent("TRAINER_UPDATE")
+    mock.advanceFrames(2)
+    expect(#gameRows()).toBe(12)
+    expect(f.ScrollBox).toBeSecure("updateLock")
+    for _, r in ipairs(gameRows()) do
+        expect(r).toBeSecure("displayIndex")
+    end
+    expectNoErrors()
+end
 
 @test("Train: nothing chosen or not learnable does nothing; else buys")
 local function train()
@@ -713,72 +788,20 @@ local function petWindow()
     expect(M.points).toHaveText("Training points: 0")
 end
 
-@test("Beast Training: Train is the secure click on the game's Train once it has the choice; no Train all")
-local function petTrain()
-    -- (the game refuses BuyTrainerService from SuuUI's code there: reported in game)
-    openTrainer()
-    petTrainer(10, 0)
-    fakeServices({ { name = "Bite", kind = "available", cost = 3 }, { name = "Dash", kind = "available", cost = 5 } })
-    local buy = mock.fake("BuyTrainerService", function() end)
-    local told: number[] = {}
-    local gameChoice: number? = nil
-    mock.fake("SelectTrainerService", function(i: number)
-        told[#told + 1] = i
-    end)
-    mock.fake("GetTrainerSelectionIndex", function(): number?
-        return gameChoice
-    end)
-    local frame = assert(frames.find("ClassTrainerFrame")) :: Frame
-        & { selectedService?: number, displayIndexToSkillIndex?: {} }
-    frame.displayIndexToSkillIndex = nil
-    -- chosen in SuuUI's list: the game told; Train waits for it to take it up
-    M:Choose(2)
-    M:Refresh()
-    expect(told[#told]).toBe(2)
-    local over = M.trainOver
-    expect(over == nil or not over.button:IsShown()).toBe(true)
-    expect(M.trainAll).never.toBeShown()
-    -- the game has it (its frame's own choice too): the secure click on its Train
-    gameChoice = 2
-    frame.selectedService = 2
-    M:Refresh()
-    local b = assert(M.trainOver).button
-    expect(b).toBeShown()
-    expect(b:GetAttribute("type1")).toBe("click")
-    expect(b:GetAttribute("clickbutton1")).toBe(frames.find("ClassTrainerTrainButton"))
-    -- SuuUI's own buy never (a double click, Enter, Train all)
-    M:Train()
-    M:TrainAll()
-    expect(buy).never.toHaveBeenCalled()
-    -- an NPC trainer again: Train all back, no secure click
-    mock.fake("C_Trainer.GetTrainerType", function()
-        return Enum.TrainerType.Class or 0
-    end)
-    M:Refresh()
-    expect(M.trainAll).toBeShown()
-    expect(b).never.toBeShown()
-    frame.selectedService = nil
-end
-
 -- A Beast Training list for the game's own frame too: `list` (faked), the
--- game's selection kept as the game keeps it (SelectTrainerService tells
--- its frame, TRAINER_DESCRIPTION_UPDATE at once), BuyTrainerService teaching
--- the service (it leaves the list, as the game's Used filter hides it, so
--- the ones after it move up; TRAINER_UPDATE), as the game's Train button
--- does it: nothing while that button is disabled (the game's Click on a
--- disabled button does nothing; the engine's runs it, so the fake checks).
--- What was bought, by name, in order.
+-- game's selection kept as the game keeps it (SelectTrainerService sets it;
+-- no TRAINER_DESCRIPTION_UPDATE, as in the game: found 2026-11-17),
+-- BuyTrainerService teaching the service (it leaves the list, as the game's
+-- Used filter hides it, so the ones after it move up; TRAINER_UPDATE), as
+-- the game's Train button does it: nothing while that button is disabled
+-- (the game's Click on a disabled button does nothing; the engine's runs
+-- it, so the fake checks). What was bought, by name, in order.
 local function beastTraining(list: FakeService[], points: number): string[]
     petTrainer(points, 0)
     fakeServices(list)
     local gameChoice: number? = nil
     mock.fake("SelectTrainerService", function(i: number)
-        local was = gameChoice
         gameChoice = (i >= 1 and i <= #list) and i or nil
-        -- (only a change: the game's own handler selects again)
-        if gameChoice ~= was then
-            mock.fireEvent("TRAINER_DESCRIPTION_UPDATE")
-        end
     end)
     mock.fake("GetTrainerSelectionIndex", function(): number?
         return gameChoice
@@ -809,28 +832,141 @@ local function petAbilities(): FakeService[]
     return list
 end
 
--- A row of SuuUI's list by its service's name.
-local function rowOf(name: string)
-    for _, r in ipairs(M.rows) do
-        if r:IsShown() and r.name:GetText() == name then
-            return r
-        end
+-- Chooses `name` at a pet trainer as the user does: the mouse onto its row
+-- (in sight), a click on the secure button over it (it clicks the game's
+-- row).
+local function petChoose(name: string)
+    local row = rowOf(name)
+    inSight(row)
+    mock.hover(nil)
+    mock.hover(row)
+    local over = M.rowOver
+    if clickable(over) then
+        mock.click(assert(over).button)
+    else
+        mock.click(row)
     end
-    error("no row " .. name)
+    mock.advanceTime(0.1)
 end
 
--- Train at a pet trainer: chooses `name` in SuuUI's list, then clicks Train
--- (the secure click on the game's Train while it has the choice).
+-- Train at a pet trainer: chooses `name`, then clicks Train (the secure
+-- click on the game's Train while it has the choice).
 local function petTrainClick(name: string)
-    mock.click(rowOf(name))
-    mock.advanceTime(0.1)
+    petChoose(name)
     local over = M.trainOver
-    if over and over.button:IsShown() then
-        mock.click(over.button)
+    if clickable(over) then
+        mock.click(assert(over).button)
     else
         mock.click(M.train)
     end
     mock.advanceTime(0.1)
+end
+
+@test("Beast Training: no TRAINER_DESCRIPTION_UPDATE needed, as on Forever (it never comes there)")
+local function noDescriptionEvent()
+    -- (found in game 2026-11-17: after SelectTrainerService the event never
+    -- fires. The emulator's sends it on a change, so the game's selection is
+    -- faked here without it, and SuuUI must not need it)
+    openTrainer()
+    local fired = 0
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("TRAINER_DESCRIPTION_UPDATE")
+    f:SetScript("OnEvent", function()
+        fired = fired + 1
+    end)
+    local bought = beastTraining(petAbilities(), 30)
+    petTrainClick("Ability 3")
+    expect(bought).toEqual({ "Ability 3" })
+    expect(fired).toBe(0)
+    f:UnregisterAllEvents()
+    expectNoErrors()
+end
+
+@test("Beast Training: a choice is a click on the game's own row; Train is the secure click on the game's Train; no Train all")
+local function petTrain()
+    -- (the game refuses BuyTrainerService from SuuUI's code there: reported in game)
+    openTrainer()
+    local bought = beastTraining({
+        { name = "Bite", kind = "available", rank = "Rank 1", cost = 3 },
+        { name = "Dash", kind = "available", rank = "Rank 1", cost = 5 },
+    }, 10)
+    local f = game() :: Frame & { selectedService?: number }
+    -- the mouse over a row: the secure button over it clicks the game's row
+    local row = rowOf("Dash")
+    mock.hover(row)
+    local over = assert(M.rowOver)
+    expect(clickable(over)).toBe(true)
+    expect(over.button:GetAttribute("type1")).toBe("click")
+    local gameRow = frames.asButton(over.button:GetAttribute("clickbutton1"))
+    expect(gameRow ~= nil).toBe(true)
+    expect(assert(gameRow):GetID()).toBe(2)
+    -- (hovering it is hovering the row)
+    expect(row.hover).toBeShown()
+    expect(M.trainOver == nil or not clickable(M.trainOver)).toBe(true)
+    -- the click: the game's frame chose it (its own code), and SuuUI too
+    mock.click(over.button)
+    expect(f.selectedService).toBe(2)
+    expect(GetTrainerSelectionIndex()).toBe(2)
+    expect(M.selected).toBe(2)
+    expect(row.sel).toBeShown()
+    expect(M:GameHasChoice()).toBe(true)
+    -- the game's Train turned on by the game, not by SuuUI
+    expect(assert(frames.find("ClassTrainerTrainButton")):IsEnabled()).toBe(true)
+    local b = assert(M.trainOver).button
+    expect(b:IsVisible()).toBe(true)
+    expect(b:GetAttribute("type1")).toBe("click")
+    expect(b:GetAttribute("clickbutton1")).toBe(frames.find("ClassTrainerTrainButton"))
+    expect(assert(M.train):IsEnabled()).toBe(true)
+    expect(M.trainAll).never.toBeShown()
+    -- SuuUI's own buy never (a double click, Enter, Train all)
+    M:Train()
+    M:TrainAll()
+    expect(#bought).toBe(0)
+    mock.click(b)
+    expect(bought).toEqual({ "Dash" })
+    -- an NPC trainer again: Train all back, no secure clicks
+    mock.hover(rowOf("Bite"))
+    expect(clickable(M.rowOver)).toBe(true)
+    mock.fake("C_Trainer.GetTrainerType", function()
+        return Enum.TrainerType.Class or 0
+    end)
+    M:Refresh()
+    expect(M.trainAll).toBeShown()
+    expect(b).never.toBeShown()
+    expect(clickable(M.rowOver)).toBe(false)
+    expectNoErrors()
+end
+
+@test("Beast Training: the game's list has a row for every service; a choice below its seventh row trains")
+local function petEveryRow()
+    openTrainer()
+    local bought = beastTraining(petAbilities(), 30)
+    -- (the game's list builds only the rows that fit it: kept tall enough)
+    expect(#gameRows()).toBe(15)
+    expect(M:GameRow(14) ~= nil).toBe(true)
+    petTrainClick("Ability 14")
+    expect(bought).toEqual({ "Ability 14" })
+    -- one row fewer after it: still one for each
+    expect(#gameRows()).toBe(14)
+    petTrainClick("Ability 12")
+    expect(bought).toEqual({ "Ability 14", "Ability 12" })
+    expectNoErrors()
+end
+
+@test("Beast Training: a free ability with no training points trains")
+local function petFree()
+    -- (reported 2026-11-17: Growl, cost 0, the pet at 0 of 0 points)
+    openTrainer()
+    local bought = beastTraining({
+        { name = "Bite", kind = "available", rank = "Rank 1", cost = 1 },
+        { name = "Growl", kind = "available", rank = "Rank 1", cost = 0 },
+    }, 0)
+    petChoose("Bite")
+    expect(tipOf(assert(M.train))).toBe("Your pet doesn't have the training points.")
+    expect(clickable(M.trainOver)).toBe(false)
+    petTrainClick("Growl")
+    expect(bought).toEqual({ "Growl" })
+    expectNoErrors()
 end
 
 @test("Beast Training: Train trains every time, wherever the choice sits in the list")
@@ -847,8 +983,7 @@ local function petTrainTwice()
     -- after looking at the one it can't pay for, then one the list moved up
     petTrainClick("Ability 1")
     expect(bought).toEqual({ "Ability 1" })
-    mock.click(rowOf("Ability 2"))
-    mock.advanceTime(0.1)
+    petChoose("Ability 2")
     expect(assert(M.train):IsEnabled()).toBe(false)
     petTrainClick("Ability 14")
     expect(bought).toEqual({ "Ability 1", "Ability 14" })
@@ -873,7 +1008,9 @@ local function petTrainTwice()
     end)
     openTrainer()
     expect(M.trainAll).toBeShown()
-    expect(M.trainOver == nil or not assert(M.trainOver).button:IsShown()).toBe(true)
+    expect(clickable(M.trainOver)).toBe(false)
+    -- (the game's list at its own height there)
+    expect(#gameRows() <= 7).toBe(true)
     CloseTrainer()
     mock.advanceTime(0.5)
     openTrainer()
@@ -885,34 +1022,110 @@ local function petTrainTwice()
     expectNoErrors()
 end
 
-@test("Beast Training: the game's selection already the choice but its frame lost it: told again")
-local function petTellAgain()
+@test("Beast Training: Train off with the reason whenever the game's frame hasn't the choice")
+local function petTrainWhy()
     openTrainer()
-    beastTraining(petAbilities(), 30)
-    local told: number[] = {}
-    hooksecurefunc("SelectTrainerService", function(i: number)
-        told[#told + 1] = i
-    end)
-    mock.click(rowOf("Ability 4"))
+    local list = petAbilities()
+    local bought = beastTraining(list, 30)
+    local train = assert(M.train)
+    -- chosen on SuuUI's row alone (no secure button over it): not taken
+    M:Choose(4)
+    M:Refresh()
+    expect(train:IsEnabled()).toBe(false)
+    expect(tipOf(train)).toBe("Click it in the list once more: the trainer hasn't taken your choice.")
+    expect(clickable(M.trainOver)).toBe(false)
+    mock.click(train)
+    expect(#bought).toBe(0)
+    -- clicked in the list: taken
+    petChoose("Ability 4")
+    expect(train:IsEnabled()).toBe(true)
+    expect(clickable(M.trainOver)).toBe(true)
+    -- the game's list changed (one gone): the game's frame stands for
+    -- another one now, so Train waits for the click again
+    table.remove(list, 1)
+    mock.fireEvent("TRAINER_UPDATE")
+    expect(clickable(M.trainOver)).toBe(false)
+    expect(clickable(M.rowOver)).toBe(false)
     mock.advanceTime(0.1)
-    expect(M:GameHasChoice()).toBe(true)
-    -- the game's frame forgets it (its list rebuilt), its selection stays
-    local frame = game() :: Frame & { selectedService?: number }
-    frame.selectedService = nil
-    told = {}
+    expect(M.selected).toBe(3)
+    expect(tipOf(train)).toBe("Click it in the list once more: the trainer hasn't taken your choice.")
+    petTrainClick("Ability 4")
+    expect(bought).toEqual({ "Ability 4" })
+    -- a service the game's list has no row for (it hasn't listed it yet)
+    list[#list + 1] = { name = "Ability 16", kind = "available", rank = "Rank 1", cost = 1 }
+    M:Choose(#list)
+    M:Refresh()
+    expect(tipOf(train)).toBe("The trainer's own list has no row for this yet. Close the trainer and talk to it again.")
+    -- (no secure button over its row: the click stays SuuUI's)
+    local unlisted = rowOf("Ability 16")
+    inSight(unlisted)
+    mock.hover(unlisted)
+    expect(clickable(M.rowOver)).toBe(false)
+    -- the game's frame has it, but its Train is off
     mock.fireEvent("TRAINER_UPDATE")
     mock.advanceTime(0.1)
-    -- past the end, then the choice: a change the game's frame takes up
-    -- (the game's own handler selects too)
-    expect(told[1]).toBe(16)
-    expect(told[#told]).toBe(4)
-    expect(M:GameHasChoice()).toBe(true)
-    expect(assert(M.trainOver).button).toBeShown()
-    -- told once until the list changes again (no loop)
-    told = {}
+    petChoose("Ability 16")
+    expect(train:IsEnabled()).toBe(true)
+    assert(frames.find("ClassTrainerTrainButton")):Disable()
     M:Refresh()
+    expect(train:IsEnabled()).toBe(false)
+    expect(tipOf(train)).toBe("The trainer won't train this right now.")
+    expect(clickable(M.trainOver)).toBe(false)
+    -- in combat: no secure buttons; Train off, and says so
+    petChoose("Ability 16")
+    expect(clickable(M.trainOver)).toBe(true)
+    local rowButton = assert(M.rowOver).button
+    mock.hover(rowOf("Ability 16"))
+    expect(rowButton:GetNumPoints() > 0).toBe(true)
+    mock.player:enterCombat()
+    -- (let go of SuuUI's row and Train before the lockdown)
+    expect(rowButton:GetNumPoints()).toBe(0)
+    expect(assert(M.trainOver).button:GetNumPoints()).toBe(0)
+    mock.advanceTime(0.1)
+    mock.advanceFrames(3)
+    expect(train:IsEnabled()).toBe(false)
+    expect(tipOf(train)).toBe("Not in combat: train your pet once the fight is over.")
+    local row = rowOf("Ability 5")
+    mock.hover(row)
+    expect(clickable(M.rowOver)).toBe(false)
+    mock.click(row)
+    expect(M.selected).toBe(rowOf("Ability 5").index)
+    expect(tipOf(train)).toBe("Not in combat: train your pet once the fight is over.")
+    -- (the list moves its rows in the fight: nothing refused)
+    assert(M.list):SetVerticalScroll(30)
     M:Refresh()
-    expect(#told).toBe(0)
+    expect(#mock.refusals()).toBe(0)
+    mock.player:leaveCombat()
+    mock.advanceTime(0.1)
+    mock.advanceFrames(3)
+    -- after it: chosen on SuuUI's row only, so a click in the list again
+    expect(tipOf(train)).toBe("Click it in the list once more: the trainer hasn't taken your choice.")
+    petTrainClick("Ability 5")
+    expect(bought).toEqual({ "Ability 4", "Ability 5" })
+    expectNoErrors()
+end
+
+@test("Beast Training: the secure button over a row stays inside the list and goes when it scrolls")
+local function petRowOverInside()
+    openTrainer()
+    beastTraining(petAbilities(), 30)
+    local list = assert(M.list)
+    -- the first row cut by the list's top edge: the button over its part in sight
+    list:SetVerticalScroll(20)
+    local row = rowOf("Ability 1")
+    mock.hover(row)
+    local b = assert(M.rowOver).button
+    expect(b:IsVisible()).toBe(true)
+    expect(b:GetTop()).toBeCloseTo(list:GetTop() or 0)
+    expect(b:GetBottom()).toBeCloseTo(row:GetBottom() or 0)
+    expect((row:GetTop() or 0) > (list:GetTop() or 0)).toBe(true)
+    -- the list scrolled: the button goes (the rows move under it)
+    list:SetVerticalScroll(40)
+    expect(b:IsShown()).toBe(false)
+    -- the mouse off it: gone, the row's hover too
+    mock.hover(rowOf("Ability 1"))
+    mock.hover(nil)
+    expect(rowOf("Ability 1").hover).never.toBeShown()
     expectNoErrors()
 end
 
