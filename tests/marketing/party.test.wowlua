@@ -1,0 +1,105 @@
+-- Marketing scene: party frames in the healer layout. Aubrielle, a level 60
+-- priest, keeps her party alive against a Doomguard Commander in the
+-- Blasted Lands: the party between her frame and her target's, her Renews
+-- and shields as indicators, a curse to remove, incoming heals, a Greater
+-- Heal on the cast bar.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as scene from "./scene"
+import * as priest from "./priest"
+
+config({ profile = "marketing-priest" })
+
+const PARTY: scene.Member[] = {
+    { name = "Thornvald", class = "WARRIOR", race = "Dwarf", role = "TANK" },
+    { name = "Caldren", class = "PALADIN", race = "Human", role = "DAMAGER" },
+    { name = "Elowyn", class = "MAGE", race = "Human", role = "DAMAGER", sex = 3 },
+    { name = "Morvaine", class = "WARLOCK", race = "Gnome", role = "DAMAGER", sex = 3 },
+}
+const PLACES = { { 14, 0 }, { 13, 4 }, { 4, 6 }, { 3, -7 } }
+-- health left, of 5200
+const HEALTH = { 2650, 4300, 3480, 1920 }
+
+local party: mock.MockUnit[] = {}
+
+@if(features.marketing)
+@test("party healer")
+local function partyHealer()
+    SuuUI.ApplyRolePreset("HEALER", true)
+    scene.begin()
+    priest.dress()
+    for i, m in ipairs(PARTY) do
+        local at = PLACES[i]
+        party[i] = scene.joinGroup(m, { quiet = i < #PARTY, ahead = at[1], left = at[2] })
+    end
+    scene.seconds(1)
+    local boss = mock.spawnUnit({
+        name = "Doomguard Commander",
+        displayID = 12449,
+        level = 62,
+        reaction = "hostile",
+        classification = "elite",
+        creatureType = "Demon",
+        health = 61800,
+        healthMax = 98000,
+        world = scene.spot(25, 0),
+    })
+    boss:showNameplate()
+    mock.player:enterCombat()
+    for _, u in ipairs(party) do
+        u:enterCombat()
+    end
+    boss:enterCombat()
+    mock.player:target(boss)
+    boss:setThreat(14800, party[1])
+    boss:setThreat(3100)
+    boss:setThreat(8800, party[2])
+    boss:setThreat(10400, party[3])
+    boss:setThreat(9900, party[4])
+    -- the fight so far: the party's damage, the boss's hits
+    for round = 1, 6 do
+        party[1]:hit(boss, 820 + round * 13, { spell = 11567 })
+        party[2]:hit(boss, 1240 + round * 17, { spell = 20271 })
+        party[3]:hit(boss, 2310 + round * 29, { spell = 25304, school = 16 })
+        party[4]:hit(boss, 1980 + round * 23, { spell = 25307, school = 32 })
+        mock.player:hit(party[1], 2100 + round * 31, { spell = 25314, kind = "HEAL", school = 2 })
+        scene.seconds(2)
+    end
+    for i, u in ipairs(party) do
+        u:update({ health = HEALTH[i] })
+    end
+    -- buffs on everyone, Aubrielle's heals over time and shields
+    local everyone = { mock.player, party[1], party[2], party[3], party[4] }
+    for _, u in ipairs(everyone) do
+        scene.aura(u, 10938, { source = "player" }) -- Power Word: Fortitude
+        scene.aura(u, 27841, { source = "player" }) -- Divine Spirit
+        scene.aura(u, 25898, { source = "party2" }) -- Greater Blessing of Kings
+    end
+    scene.aura(party[1], 25315, { duration = 15, source = "player" }) -- Renew
+    scene.aura(party[1], 10901, { duration = 30, source = "player" }) -- Power Word: Shield
+    party[1]:setAbsorb(1200)
+    scene.aura(party[1], 6788, { duration = 15, harmful = true }) -- Weakened Soul
+    scene.aura(party[3], 25315, { duration = 15, source = "player" })
+    scene.aura(party[4], 25315, { duration = 15, source = "player" })
+    scene.aura(party[4], 18266, { duration = 30, harmful = true, dispelName = "Curse" }) -- Curse of Agony
+    scene.aura(party[2], 11962, { duration = 18, harmful = true, dispelName = "Magic" }) -- Immolate
+    scene.aura(mock.player, 10952, { duration = 600, source = "player" }) -- Inner Fire
+    party[1]:setIncomingHeal(2400)
+    party[4]:setIncomingHeal(1300, party[2])
+    scene.say("CHAT_MSG_GUILD", "Seldra", "anyone have a spare Arcanite Bar?")
+    scene.say("CHAT_MSG_GUILD", "Quillon", "I can make you one later")
+    scene.say("CHAT_MSG_WHISPER", "Liraleth", "can you heal MC on saturday?")
+    scene.say("CHAT_MSG_PARTY_LEADER", "Thornvald", "commander first, then the imps")
+    scene.say("CHAT_MSG_PARTY", "Morvaine", "curse on me, decurse pls")
+    scene.say("CHAT_MSG_PARTY", "Caldren", "on it")
+    scene.say("CHAT_MSG_GUILD", "Odrik", "BWL tonight at 8, signups in the calendar")
+    -- a Greater Heal on the tank, half cast
+    scene.spell(25314, "Greater Heal", 135913, 2.5)
+    mock.player:castSpell(25314, { castTime = 2.5 })
+    scene.frames(80)
+    scene.tidy()
+    mock.screenshot("party-healer")
+end

@@ -1,0 +1,176 @@
+-- Marketing scene: a 40-player raid in the healer layout. Aubrielle heals
+-- the raid against Ysondre in the Hinterlands: eight groups of five, her
+-- Renews and shields as indicators, the dragon's debuffs to dispel, the
+-- tanks taking the hits, two raiders down, Prayer of Healing on the cast
+-- bar.
+
+import test, config from "wowlua:test"
+import features from "wowlua:meta"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import * as scene from "./scene"
+import * as priest from "./priest"
+
+config({ profile = "marketing-priest" })
+
+-- Everyone but Aubrielle (group 1's first), in raid order: five a group.
+const RAID: scene.Member[] = {
+    { name = "Thornvald", class = "WARRIOR", race = "Dwarf", role = "TANK" },
+    { name = "Liraleth", class = "PRIEST", race = "NightElf", role = "HEALER", sex = 3 },
+    { name = "Brannoc", class = "ROGUE", race = "Human", role = "DAMAGER" },
+    { name = "Elowyn", class = "MAGE", race = "Human", role = "DAMAGER", sex = 3 },
+    { name = "Gorrim", class = "WARRIOR", race = "Dwarf", role = "TANK" },
+    { name = "Caldren", class = "PALADIN", race = "Human", role = "HEALER" },
+    { name = "Vexley", class = "ROGUE", race = "Gnome", role = "DAMAGER" },
+    { name = "Quillon", class = "MAGE", race = "Gnome", role = "DAMAGER" },
+    { name = "Kestria", class = "HUNTER", race = "NightElf", role = "DAMAGER", sex = 3 },
+    { name = "Brakka", class = "WARRIOR", race = "Human", role = "TANK" },
+    { name = "Merisande", class = "PALADIN", race = "Human", role = "HEALER", sex = 3 },
+    { name = "Corwen", class = "ROGUE", race = "Human", role = "DAMAGER" },
+    { name = "Morvaine", class = "WARLOCK", race = "Gnome", role = "DAMAGER", sex = 3 },
+    { name = "Rowanne", class = "HUNTER", race = "Dwarf", role = "DAMAGER", sex = 3 },
+    { name = "Halvard", class = "WARRIOR", race = "Human", role = "TANK" },
+    { name = "Sennia", class = "PRIEST", race = "Human", role = "HEALER", sex = 3 },
+    { name = "Shadeth", class = "ROGUE", race = "NightElf", role = "DAMAGER" },
+    { name = "Myrrhen", class = "MAGE", race = "Human", role = "DAMAGER", sex = 3 },
+    { name = "Grisk", class = "WARLOCK", race = "Human", role = "DAMAGER" },
+    { name = "Fennick", class = "DRUID", race = "NightElf", role = "HEALER" },
+    { name = "Odrik", class = "WARRIOR", race = "Dwarf", role = "DAMAGER" },
+    { name = "Nimbra", class = "ROGUE", race = "Gnome", role = "DAMAGER", sex = 3 },
+    { name = "Selvara", class = "MAGE", race = "NightElf", role = "DAMAGER", sex = 3 },
+    { name = "Velmora", class = "WARLOCK", race = "Human", role = "DAMAGER", sex = 3 },
+    { name = "Tobric", class = "PALADIN", race = "Dwarf", role = "HEALER" },
+    { name = "Bryndle", class = "HUNTER", race = "Dwarf", role = "DAMAGER" },
+    { name = "Torvik", class = "WARRIOR", race = "Human", role = "DAMAGER" },
+    { name = "Tarquil", class = "ROGUE", race = "Human", role = "DAMAGER" },
+    { name = "Dorrin", class = "MAGE", race = "Gnome", role = "DAMAGER" },
+    { name = "Oswin", class = "PRIEST", race = "Dwarf", role = "HEALER" },
+    { name = "Ashkar", class = "WARLOCK", race = "Gnome", role = "DAMAGER" },
+    { name = "Harrow", class = "HUNTER", race = "Human", role = "DAMAGER" },
+    { name = "Elandra", class = "PALADIN", race = "Human", role = "HEALER", sex = 3 },
+    { name = "Garthen", class = "WARRIOR", race = "Dwarf", role = "DAMAGER" },
+    { name = "Faelith", class = "MAGE", race = "NightElf", role = "DAMAGER", sex = 3 },
+    { name = "Thessaly", class = "WARLOCK", race = "Human", role = "DAMAGER", sex = 3 },
+    { name = "Lyssa", class = "HUNTER", race = "NightElf", role = "DAMAGER", sex = 3 },
+    { name = "Ysmere", class = "DRUID", race = "NightElf", role = "HEALER", sex = 3 },
+    { name = "Brunvar", class = "WARRIOR", race = "Dwarf", role = "DAMAGER" },
+}
+
+local raid: mock.MockUnit[] = {}
+
+-- A fixed spread of numbers (the same picture every run).
+local seed = 7
+local function roll(n: number): number
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % n + 1
+end
+
+@if(features.marketing)
+@test("raid healer")
+local function raidHealer()
+    SuuUI.ApplyRolePreset("HEALER", true)
+    scene.begin()
+    mock.moveTo({ mapID = 1425, zone = "The Hinterlands", x = 0.55, y = 0.50, facing = 1.5708 })
+    priest.dress()
+    for i, m in ipairs(RAID) do
+        -- standing in a wide arc before the dragon, the tanks nearest
+        local row = (i - 1) // 10
+        local col = (i - 1) % 10
+        local ahead = m.role == "TANK" and 21 or (6 + row * 3)
+        local left = m.role == "TANK" and ((i % 3) * 3 - 3) or ((col - 4.5) * 3.2)
+        raid[i] = scene.joinGroup(m, {
+            raid = true,
+            subgroup = i // 5 + 1,
+            quiet = i < #RAID,
+            ahead = ahead,
+            left = left,
+        })
+    end
+    scene.seconds(1)
+    scene.noFriendlyPlates(false)
+    scene.frames(2)
+    local dragon = mock.spawnUnit({
+        name = "Ysondre",
+        displayID = 15364,
+        level = -1,
+        reaction = "hostile",
+        classification = "worldboss",
+        creatureType = "Dragonkin",
+        health = 512000,
+        healthMax = 832000,
+        world = scene.spot(52, 0),
+    })
+    dragon:showNameplate()
+    mock.player:enterCombat()
+    for _, u in ipairs(raid) do
+        u:enterCombat()
+    end
+    dragon:enterCombat()
+    mock.startEncounter({ id = 6001, name = "Ysondre", difficultyID = 9, groupSize = 40, bosses = { dragon } })
+    mock.player:target(dragon)
+    dragon:setThreat(52000, raid[1])
+    dragon:setThreat(4100)
+    -- buffs on everyone
+    local everyone: mock.MockUnit[] = { mock.player }
+    for _, u in ipairs(raid) do
+        everyone[#everyone + 1] = u
+    end
+    for _, u in ipairs(everyone) do
+        scene.aura(u, 21564, { source = "player" }) -- Prayer of Fortitude
+        scene.aura(u, 21850, { source = "raid20" }) -- Gift of the Wild
+        scene.aura(u, 25898, { source = "raid6" }) -- Greater Blessing of Kings
+    end
+    -- the fight: damage around the raid, the tanks lower
+    for i, u in ipairs(raid) do
+        local lost = RAID[i].role == "TANK" and (2600 + roll(1600)) or (roll(10) <= 4 and roll(3600) or roll(900))
+        u:damage(lost)
+    end
+    raid[15]:heal(5200)
+    raid[15]:damage(1900)
+    raid[27]:kill({ by = dragon })
+    raid[33]:kill({ by = dragon })
+    -- Aubrielle's Renews and shields (her indicators), others' heals over time
+    for _, i in ipairs({ 1, 5, 10, 3, 8, 12, 19, 22, 31, 36 }) do
+        scene.aura(raid[i], 25315, { duration = 15, source = "player" })
+    end
+    for _, i in ipairs({ 1, 5, 10, 15, 13, 24 }) do
+        scene.aura(raid[i], 10901, { duration = 30, source = "player" })
+        raid[i]:setAbsorb(900)
+    end
+    for _, i in ipairs({ 2, 6, 17, 28, 34 }) do
+        scene.aura(raid[i], 25299, { duration = 12, source = "raid20" }) -- Rejuvenation
+    end
+    -- the dragon's debuffs: Noxious Breath on the tanks, a Sleep to dispel,
+    -- Mark of Nature
+    for _, i in ipairs({ 1, 5, 10 }) do
+        scene.aura(raid[i], 24818, { duration = 30, harmful = true, applications = 3 })
+    end
+    scene.aura(raid[18], 20989, { duration = 6, harmful = true, dispelName = "Magic" }) -- Sleep
+    scene.aura(raid[23], 20989, { duration = 6, harmful = true, dispelName = "Magic" })
+    scene.aura(raid[9], 24818, { duration = 30, harmful = true, applications = 1 })
+    scene.aura(raid[29], 25040, { duration = 900, harmful = true }) -- Mark of Nature
+    raid[1]:setIncomingHeal(3200)
+    raid[5]:setIncomingHeal(1800, raid[6])
+    -- the damage meter
+    for round = 1, 5 do
+        for i, u in ipairs(raid) do
+            if RAID[i].role == "DAMAGER" then
+                u:hit(dragon, 400 + roll(900), { spell = 1 })
+            end
+        end
+        mock.player:hit(raid[1], 2400 + round * 40, { spell = 25314, kind = "HEAL", school = 2 })
+        scene.seconds(2)
+    end
+    scene.say("CHAT_MSG_GUILD", "Maevria", "who has the Ysondre kill on the guild calendar?")
+    scene.say("CHAT_MSG_GUILD", "Seldra", "good luck on the dragon!")
+    scene.say("CHAT_MSG_RAID", "Thornvald", "taunt on 3, Gorrim next")
+    scene.say("CHAT_MSG_RAID_LEADER", "Odrik", "tanks rotate on 3 stacks of breath")
+    scene.say("CHAT_MSG_RAID", "Liraleth", "dispelling sleeps, group 4 and 5")
+    scene.say("CHAT_MSG_RAID_WARNING", "Odrik", "SPIRITS AT 75% - SPREAD OUT")
+    -- Prayer of Healing, half cast
+    scene.spell(25316, "Prayer of Healing", 135943, 3)
+    mock.player:castSpell(25316, { castTime = 3 })
+    scene.frames(95)
+    scene.tidy()
+    mock.screenshot("raid-healer")
+end

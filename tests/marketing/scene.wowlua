@@ -1,0 +1,316 @@
+-- tests/marketing/scene.wowlua
+-- The marketing scenes' helpers (tests/marketing/README.md): a quiet start
+-- (no welcome, no talent note), frames advanced, chat lines with every
+-- argument the client sends, and the made-up people the scenes show.
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+
+export const FRAME_MS = 1000 / 60
+
+--- Runs `frames` game frames (60 a second).
+export function frames(n: number)
+    mock.advanceFrames(n, FRAME_MS)
+end
+
+--- Runs `sec` seconds of game frames.
+export function seconds(sec: number)
+    frames(math.floor(sec * 60 + 0.5))
+end
+
+--- The start every scene shares: the welcome marked seen (the profile's
+--- saved variables say so too), the talent-points note off, the login's
+--- warm-ups done.
+export function begin()
+    SuuUI.AccountData("welcome").seen = true
+    local notes = SuuUI.GetModule("notifications")
+    if notes then
+        notes:Set("talentPoints", false)
+        notes:Set("legacyPoints", false)
+    end
+    seconds(3)
+    -- the group's plates off in the open world (the game's setting): their
+    -- names float over them
+    C_CVar.SetCVar("nameplateShowFriendlyPlayers", "0")
+    C_CVar.SetCVar("nameplateShowFriends", "0")
+end
+
+-- A message that isn't from Discord (the chat event's last argument).
+local NO_DISCORD = {
+    userID = 0,
+    globalName = "",
+    lastOnlineGUID = "",
+    lastOnlineName = "",
+    hasAttachment = false,
+    hasPoll = false,
+    hasEmbed = false,
+    hasSticker = false,
+    hasEmoji = false,
+    hasError = false,
+    hasForwardedMessage = false,
+    forwardedMessage = "",
+    fromDiscord = false,
+}
+
+local lineID = 1000
+
+--- A chat line: `event` (`CHAT_MSG_GUILD`, …) said by `sender`; for a
+--- channel, its number and name ("Trade - City").
+export function say(event: string, sender: string, text: string, channel: { index: number, name: string }?)
+    lineID += 1
+    local index = channel and channel.index or 0
+    local base = channel and channel.name or ""
+    local label = channel and
+        (`{index}. {base}`) or
+        ""
+    mock.fireEvent(
+        event,
+        text,
+        sender,
+        "",
+        label,
+        sender,
+        "",
+        0,
+        index,
+        base,
+        0,
+        lineID,
+        "",
+        0,
+        false,
+        false,
+        false,
+        false,
+        NO_DISCORD
+    )
+end
+
+export type Gear = { slot: number, id: number, name: string, ilvl: number, quality?: number }
+
+--- Puts on the gear: each item defined with its name and level, its slot
+--- and icon read from the game's data (`--game-data`).
+export function wear(gear: Gear[])
+    for _, g in ipairs(gear) do
+        local _, _, _, equipLoc, icon = C_Item.GetItemInfoInstant(g.id)
+        mock.defineItem(g.id, {
+            name = g.name,
+            quality = g.quality or 4,
+            itemLevel = g.ilvl,
+            minLevel = 60,
+            equipLoc = equipLoc,
+            icon = icon,
+            stackCount = 1,
+            bindType = 1,
+        })
+        mock.player:equip(g.slot, g.id)
+    end
+end
+
+export type Stack = { id: number, name: string, quality?: number, count?: number, stack?: number, ilvl?: number }
+
+--- Fills the backpack and four 16-slot bags in order (nil: an empty slot),
+--- each item defined with its name and quality, its icon from the game's
+--- data.
+export function fillBags(stacks: (Stack | false)[])
+    local bags: { [number]: { [number]: number | mock.HeldItem } } = {
+        [0] = {},
+        [1] = {},
+        [2] = {},
+        [3] = {},
+        [4] = {},
+    }
+    for i, s in ipairs(stacks) do
+        if s then
+            local _, _, _, equipLoc, icon = C_Item.GetItemInfoInstant(s.id)
+            mock.defineItem(s.id, {
+                name = s.name,
+                quality = s.quality or 1,
+                itemLevel = s.ilvl or 1,
+                equipLoc = equipLoc,
+                icon = icon,
+                stackCount = s.stack or (s.count and 20 or 1),
+            })
+            local bag = (i - 1) // 16
+            local slot = (i - 1) % 16 + 1
+            bags[bag][slot] = { id = s.id, count = s.count or 1 }
+        end
+    end
+    for bag = 0, 4 do
+        mock.setBag(bag, { slots = 16, items = bags[bag] })
+    end
+end
+
+export type School = { name: string, icon: number, spells: number[] }
+
+--- The player's spellbook, as the client answers it (the engine reads a
+--- recorded one: the snapshot's): a skill line per school with its spells,
+--- each spell's name, rank and icon from the game's data, and each one
+--- known.
+export function spellbook(schools: School[], class: { name: string, icon: number })
+    local lines: { [number]: unknown } = {}
+    local items: { [number]: unknown } = {}
+    local slot = 0
+    for i, school in ipairs(schools) do
+        lines[i] = {
+            name = school.name,
+            iconID = school.icon,
+            itemIndexOffset = slot,
+            numSpellBookItems = #school.spells,
+            isGuild = false,
+            shouldHide = false,
+            skillLineID = 1000 + i,
+        }
+        for _, id in ipairs(school.spells) do
+            slot += 1
+            local info = C_Spell.GetSpellInfo(id)
+            local name = info and info.name or ""
+            local icon = info and info.iconID or 134400
+            local sub = C_Spell.GetSpellSubtext(id) or ""
+            mock.defineSpell(id, { name = name, icon = icon, iconID = icon, known = true, subtext = sub })
+            items[slot] = {
+                actionID = id,
+                spellID = id,
+                itemType = Enum.SpellBookItemType.Spell,
+                name = name,
+                subName = sub,
+                iconID = icon,
+                isPassive = false,
+                isOffSpec = false,
+                skillLineIndex = i,
+            }
+        end
+    end
+    mock.player:setStats(
+        ({
+            spellBookSkillLines = #schools,
+            classSkillLine = { name = class.name, iconID = class.icon },
+            spellBookSkillLine = lines,
+            spellBookItem = items,
+        } :: unknown) :: mock.PlayerStats
+    )
+end
+
+export type Action = { spell?: number, item?: number, count?: string }
+
+--- The action bars: spells and items by action slot (bar 1 is 1-12, bar 2
+--- 61-72, bar 3 49-60, bar 4 25-36), their icons from the game's data.
+export function bars(actions: { [number]: Action })
+    for slot, a in pairs(actions) do
+        if a.spell then
+            mock.setAction(slot, { type = "spell", id = a.spell, texture = C_Spell.GetSpellTexture(a.spell) })
+        elseif a.item then
+            mock.setAction(slot, {
+                type = "item",
+                id = a.item,
+                texture = C_Item.GetItemIconByID(a.item),
+                count = a.count,
+            })
+        end
+    end
+end
+
+--- Where a unit stands: `ahead` yards in front of the player and `left`
+--- yards to the left, as the player faces (world y is north, x west).
+export function spot(ahead: number, left: number): { y: number, x: number, z: number }
+    local py, px, pz = UnitPosition("player")
+    local a = GetPlayerFacing() or 0
+    local c, s = math.cos(a), math.sin(a)
+    return { y = (py or 0) + ahead * c - left * s, x = (px or 0) + ahead * s + left * c, z = pz or 0 }
+end
+
+--- The way a unit at `ahead`/`left` faces to look at the player.
+export function facingPlayer(ahead: number, left: number): number
+    return (GetPlayerFacing() or 0) + math.atan2(-left, -ahead)
+end
+
+export type Member = { name: string, class: string, race: string, role: "TANK" | "HEALER" | "DAMAGER", sex?: number }
+
+-- A body for each class in the 3D world: the Northshire trainers' (wowlua's
+-- northshire profile), so the group stands there in its armour.
+const BODY: { [string]: number } = {
+    WARRIOR = 1289,
+    PALADIN = 1290,
+    HUNTER = 1543,
+    ROGUE = 1291,
+    PRIEST = 1295,
+    SHAMAN = 1832,
+    MAGE = 1296,
+    WARLOCK = 1527,
+    DRUID = 1890,
+}
+
+--- A spell's name, icon and cast time (its cast bar, its tooltips).
+export function spell(id: number, name: string, icon: number, castTime: number?)
+    mock.defineSpell(id, { name = name, icon = icon, iconID = icon, castTime = castTime, known = true })
+end
+
+export type AuraOpts = {
+    duration?: number,
+    harmful?: boolean,
+    dispelName?: string,
+    applications?: number,
+    source?: string,
+}
+
+--- An aura on `u`, its name and icon from the game's data.
+export function aura(u: mock.MockUnit, spellId: number, opts: AuraOpts?): number
+    local o = opts or {}
+    local info = C_Spell.GetSpellInfo(spellId)
+    return u:applyAura({
+        spellId = spellId,
+        name = info and info.name or "",
+        icon = info and info.iconID or 134400,
+        duration = o.duration or 1800,
+        harmful = o.harmful,
+        dispelName = o.dispelName,
+        applications = o.applications,
+        source = o.source,
+    })
+end
+
+--- Before the picture: Blizzard's raid manager tab (the left edge's
+--- collapsed panel, which the emulator shows in any group) out of sight.
+export function tidy()
+    local manager = _G["CompactRaidFrameManager"] :: Frame?
+    if manager then
+        manager:SetAlpha(0)
+    end
+end
+
+--- The group's nameplates off (the game's setting, which SuuUI turns on in
+--- the open world): their names float over them instead, or nothing with
+--- `names = false`.
+export function noFriendlyPlates(names: boolean?)
+    C_CVar.SetCVar("nameplateShowFriendlyPlayers", "0")
+    C_CVar.SetCVar("nameplateShowFriends", "0")
+    if names == false then
+        C_CVar.SetCVar("UnitNameFriendlyPlayerName", "0")
+    end
+end
+
+--- Spawns a made-up player who joins the group.
+export function joinGroup(
+    m: Member,
+    opts: { raid?: boolean, subgroup?: number, quiet?: boolean, health?: number, ahead?: number, left?: number }?
+): mock.MockUnit
+    local o = opts or {}
+    local u = mock.spawnUnit({
+        world = spot(o.ahead or -3, o.left or 0),
+        -- looking where the player looks: at the fight
+        facing = GetPlayerFacing() or 0,
+        name = m.name,
+        displayID = BODY[m.class],
+        player = true,
+        class = m.class,
+        race = m.race,
+        sex = m.sex or 2,
+        level = 60,
+        reaction = "friendly",
+        health = o.health or 5200,
+        healthMax = 5200,
+    })
+    u:setRole(m.role)
+    mock.group:add(u, { raid = o.raid, subgroup = o.subgroup, quiet = o.quiet })
+    return u
+end
