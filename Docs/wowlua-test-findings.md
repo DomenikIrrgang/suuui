@@ -1040,6 +1040,14 @@ Since V3's fix, `EditBox:SetText` runs `OnTextChanged` on the next frame, not in
 
 In the game, `FontString:SetFontObject(font)` gives the string the font object's colour (and shadow) as well as its face and size: a text coloured with `SetTextColor` before reads the font object's colour after. The emulator's keeps the colour set before: a `GameFontNormal` string set to red with `SetTextColor(1, 0, 0)`, then `SetFontObject("GameFontHighlightSmall")` (white), still reads `1, 0, 0` (wowlua 0.13.15). Code that reads a text's colour to decide its style must read it before it puts a font object on (`src/UI/Reskin/Pass.wowlua`, `reskinText`), and a test of the game reusing a text in another role sets the game's colour itself after `SetFontObject` (`tests/unit/UI/Reskin/Pass.test.wowlua`, "a text the game gives another font is styled from it again, once": `title:SetTextColor(1, 0.82, 0)` after `SetFontObject("GameFontNormalSmall")`). (reskin text styles 2026-11-16)
 
+<a id="v58"></a>
+
+### V58. `mock.wheel` reaches only the frame it is given
+
+*Status: open (unverified in game).*
+
+`mock.wheel(child, delta)` over a child without the wheel enabled (a mouse-enabled button) runs nothing: the wheel never goes on to a parent that has it enabled (wowlua 0.13.15). In the game the wheel over such a child is taken to be the parent's (the Spellbook page's wheel over its spells' secure buttons relies on it, as the Macros icon picker's grid over its cells). The Spellbook tests turn the page itself (`mock.wheel(book.main, …)`) and check that the cells leave the wheel. (spellbook wheel 2026-11-17)
+
 ## Not bugs (for test writers)
 
 These match the game; the tests follow them:

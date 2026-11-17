@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- Spellbook: scroll the mouse wheel over the spells to turn the pages (down for the next page, up for the previous one), in combat too.
+
 ## 0.21.0 (2026-11-17)
 
 ### New

@@ -31,6 +31,9 @@ local function cleanup()
         parent:Hide()
     end
     parent = nil
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
     expectNoErrors()
 end
 
@@ -207,6 +210,121 @@ local function pager()
     b:SetPage(1, 3)
     mock.click(assert(b.prevSecure))
     expect(paged).toHaveBeenCalledTimes(2)
+end
+
+-- A book of `n` learned spells in one school (cast 1001 …), on page 1, its
+-- owner turning the look as the module does; the pages turned, as onPage had them.
+local function paged(n: number): (Spellbook, number[])
+    local b = make()
+    local ids: (number | string | false)[] = {}
+    for i = 1, n do
+        ids[i] = 1000 + i
+    end
+    local perPage = b.rows * 2
+    local pages = math.max(1, math.ceil(n / perPage))
+    b:SetSpells(spells(math.min(n, perPage)))
+    b:SetCasts({ ids }, perPage)
+    b:SetCastPage(1, 1)
+    b:SetPage(1, pages)
+    local page = 1
+    local steps: number[] = {}
+    b.onPage = function(d: number)
+        steps[#steps + 1] = d
+        page = page + d
+        b:SetPage(page, pages)
+    end
+    return b, steps
+end
+
+@test("the wheel over the page: down a page on, up a page back, as far as they go; the buttons cast that page")
+local function wheel()
+    local b, steps = paged(30) -- 12 a page: 3 pages
+    local cell = b.cells[1].button
+    -- the page takes the wheel its children leave: a spell's secure button
+    -- takes clicks and drags, not the wheel (the game hands the wheel over
+    -- a child to the page; the emulator's wheel goes to the frame named
+    -- only, so the page is turned here)
+    expect(b.main:IsMouseWheelEnabled()).toBe(true)
+    expect(cell:IsMouseWheelEnabled()).toBe(false)
+    expect(cell:IsMouseEnabled()).toBe(true)
+    expect(b.grid:IsMouseWheelEnabled()).toBe(false)
+    expect(b.foot:IsMouseWheelEnabled()).toBe(false)
+    mock.wheel(b.main, -1)
+    expect(steps).toEqual({ 1 })
+    expect(b.pageText).toHaveText("Page 2 of 3")
+    expect(b.router:GetAttribute("page")).toBe(2)
+    expect(cell:GetAttribute("spell")).toBe(1013)
+    mock.wheel(b.main, -1)
+    expect(b.pageText).toHaveText("Page 3 of 3")
+    expect(cell:GetAttribute("spell")).toBe(1025)
+    -- the last page: no further
+    mock.wheel(b.main, -1)
+    expect(steps).toEqual({ 1, 1 })
+    expect(b.router:GetAttribute("page")).toBe(3)
+    mock.wheel(b.main, 1)
+    mock.wheel(b.main, 1)
+    expect(b.pageText).toHaveText("Page 1 of 3")
+    expect(cell:GetAttribute("spell")).toBe(1001)
+    -- the first page: no further back
+    mock.wheel(b.main, 1)
+    expect(steps).toEqual({ 1, 1, -1, -1 })
+    expect(b.router:GetAttribute("page")).toBe(1)
+    -- the schools' column keeps its own (nothing)
+    expect(b.tabColumn:IsMouseWheelEnabled()).toBe(false)
+    expectNoErrors()
+end
+
+@test("the wheel with a single page: nothing")
+local function wheelOnePage()
+    local b, steps = paged(5)
+    mock.wheel(b.main, -1)
+    mock.wheel(b.main, 1)
+    expect(steps).toEqual({})
+    expect(b.pageText).toHaveText("Page 1 of 1")
+    expect(b.router:GetAttribute("page")).toBe(1)
+    expect(b.cells[1].button:GetAttribute("spell")).toBe(1001)
+    expectNoErrors()
+end
+
+@test("the wheel in combat: the page and what its buttons cast turn together (the page's secure wheel handler)")
+local function wheelInCombat()
+    local b, steps = paged(30)
+    local cell = b.cells[1].button
+    -- (the page a secure wheel handler: the game runs its snippet in combat)
+    local _, explicit = b.main:IsProtected()
+    expect(explicit).toBe(true)
+    mock.player:enterCombat()
+    mock.wheel(b.main, -1)
+    expect(steps).toEqual({ 1 })
+    expect(b.router:GetAttribute("page")).toBe(2)
+    expect(cell:GetAttribute("spell")).toBe(1013)
+    mock.wheel(b.main, 1)
+    mock.wheel(b.main, 1)
+    expect(steps).toEqual({ 1, -1 })
+    expect(b.router:GetAttribute("page")).toBe(1)
+    expect(cell:GetAttribute("spell")).toBe(1001)
+    mock.player:leaveCombat()
+    expectNoErrors()
+end
+
+@test("the wheel over bind mode's covers binds, over the bindings list it does nothing: the page stays")
+local function wheelCovered()
+    local b, steps = paged(30)
+    local inputs: string[] = {}
+    b.onCover = function(_i: number, input: string)
+        inputs[#inputs + 1] = input
+    end
+    b:SetCovers(true, { true })
+    mock.wheel(assert(b.cells[1].cover), -1)
+    expect(inputs).toEqual({ "MOUSEWHEELDOWN" })
+    expect(steps).toEqual({})
+    b:SetCovers(false, {})
+    b:ShowView(true)
+    mock.wheel(b.view, -1)
+    expect(steps).toEqual({})
+    expect(b.router:GetAttribute("page")).toBe(1)
+    b:ShowView(false)
+    expectNoErrors()
 end
 
 --------------------------------------------------------------------------------
