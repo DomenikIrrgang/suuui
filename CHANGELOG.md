@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Dressing room: Ctrl-clicking an item to preview it no longer shows an error ("attempt to call a nil value" from the game's dressing room).
+
 ## 0.20.0 (2026-11-16)
 
 ### New
