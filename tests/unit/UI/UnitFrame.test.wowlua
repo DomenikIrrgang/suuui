@@ -1287,6 +1287,37 @@ local function missingLooks()
     mock.player:removeAura(id2)
 end
 
+-- Asked 2026-11-17: Forever's pets can't take buffs, so a missing Mark of
+-- the Wild showed on every pet. An indicator shows on players (default),
+-- pets or both.
+@test("whom an indicator shows on: players by default, pets or both; a pet's frame shows only theirs")
+local function indicatorUnits()
+    mock.defineSpell(1126, { name = "Mark of the Wild", iconID = 136078 })
+    local wolf = mock.spawnUnit({ name = "Wolf", level = 1, reaction = "friendly" })
+    mock.setPet(wolf, { hunter = true })
+    local you = keep(uf.unitFrame(parent, "player", {}))
+    local pet = keep(uf.unitFrame(parent, "pet", {}))
+    expect(uf.isPetUnit("pet")).toBe(true)
+    expect(uf.isPetUnit("partypet2")).toBe(true)
+    expect(uf.isPetUnit("raidpet7")).toBe(true)
+    expect(uf.isPetUnit("party2")).toBe(false)
+    local function shown(f: uf.UnitFrame, units: string?): boolean
+        f:SetIndicators({ { kind = "square", ids = { 1126 }, show = "missing", units = units } })
+        f:UpdateIndicatorPresence()
+        return f.missingLooks[1].look:IsShown()
+    end
+    -- players (nil): yours, not the pet's
+    expect(shown(you, nil)).toBe(true)
+    expect(shown(pet, nil)).toBe(false)
+    expect(shown(you, "pets")).toBe(false)
+    expect(shown(pet, "pets")).toBe(true)
+    expect(shown(you, "both")).toBe(true)
+    expect(shown(pet, "both")).toBe(true)
+    mock.setPet(nil)
+    wolf:despawn()
+    expectNoErrors()
+end
+
 @test("SetPreviewIndicators: the looks drawn as if the auras were up")
 local function previewIndicators()
     mock.defineSpell(139, { name = "Renew", iconID = 135953 })

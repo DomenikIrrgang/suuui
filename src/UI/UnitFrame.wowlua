@@ -603,6 +603,10 @@ export type Indicator = {
     -- 0.30: the roles it shows on ("TANK", "HEALER", "DAMAGER"; none, or
     -- all three: every role). Someone without a role counts as Damage.
     roles?: { [string]: boolean },
+    -- 0.21: whom it shows on: players (nil), "pets" or "both" (asked
+    -- 2026-11-17: Forever's pets can't take buffs, so a missing Mark of the
+    -- Wild showed on every pet)
+    units?: string,
 }
 
 export const INDICATOR_POINTS: FramePoint[] = {
@@ -793,6 +797,20 @@ end
 export function indicatorShowsOn(ind: Indicator, role: string): boolean
     local roles = ind.roles
     return not roles or next(roles) == nil or roles[role] == true
+end
+
+-- Whom an indicator can show on (ind.units; nil: players).
+export const INDICATOR_UNITS: string[] = { "players", "pets", "both" }
+
+-- Whether unit token `unit` is a pet's ("pet", "partypet2", "raidpet7").
+export function isPetUnit(unit: string): boolean
+    return unit:find("pet", 1, true) ~= nil
+end
+
+-- Whether indicator `ind` shows on unit `unit` (a pet's or a player's).
+export function indicatorShowsOnUnit(ind: Indicator, unit: string): boolean
+    local units = ind.units or "players"
+    return units == "both" or (units == "pets") == isPetUnit(unit)
 end
 
 -- Whether any indicator of `list` is limited to some roles.
@@ -2398,6 +2416,9 @@ export class UnitFrame extends Button
         local function inScope(ind: Indicator): boolean
             if not (u and exists) then
                 return true
+            end
+            if not indicatorShowsOnUnit(ind, u) then
+                return false
             end
             local roles = ind.roles
             if roles and next(roles) ~= nil then
