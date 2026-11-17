@@ -4,7 +4,7 @@
 
 ### New
 
-- Buff indicators: each indicator has a Units choice in its Edit window: Players, Pets or Both. It starts on Players, so a missing buff no longer shows on pets, which can't be buffed in Forever.
+- Buff indicators: each indicator has a Units choice in its Edit window: Both, Players or Pets. Choose Players to keep a missing buff off pets, which can't take most buffs in Forever.
 
 ## 0.20.1 (2026-11-17)
 
