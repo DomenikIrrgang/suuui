@@ -8,13 +8,13 @@
 -- categories, results, an item's auctions, a commodity's offers and its
 -- purchase), Sell (post, the price filled in, Scan all) and Auctions (yours
 -- with Cancel, your bids with Bid and Buy out).
--- A single auction's buyout (C_AuctionHouse.PlaceBid) Forever takes only from
--- the game's own code (found in game: "Blocked", also typed in chat), so it
--- goes through the game's hidden page: opening such an item is a secure click
--- on the game's own result row (its item page opens and searches by itself),
--- choosing an auction one on its row for that auction, Buy out one on its
--- Buyout button, and the game's own popup asks (asked 2026-11-05: SuuUI's
--- window kept). Commodities buy through SuuUI as before.
+-- A single auction's buyout is SuuUI's own C_AuctionHouse.PlaceBid within
+-- the click on its question's Buy out, as Auctionator and TSM do (asked
+-- 2026-11-17; /suu probe ahbid: Forever takes it from an addon's click, not
+-- from /run or /script). It went through the game's hidden page before
+-- (secure clicks on its rows and its Buyout button), where anything that
+-- tainted that page made every buyout fail until a /reload. Commodities
+-- buy through SuuUI as before.
 -- Shift-click on an item while the window is open (asked 2026-11-08: a
 -- chat link, a bag item, the Professions window's): its name searched on
 -- Buy, unless another edit box is being typed in (the chat line: the link
@@ -37,7 +37,7 @@
 -- table widget), Buy (search, categories, results, Shift-click), History
 -- (your searches), ItemView (an item's auctions, a commodity's offers),
 -- Bidding (a bid or buyout SuuUI places: checked, and counted once the
--- house says so), GamePage (the secure clicks on the game's own page), Prices (the price
+-- house says so), Prices (the price
 -- memory, a cheap few, the tooltip lines), Scan (Scan all), Sell and
 -- Auctions (their pages).
 
@@ -47,7 +47,6 @@ import hook from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
 import * as frames from "wowlua:frames"
-import type Overlay from "wowlua:secure"
 import type LoadHandle from "wowlua:item"
 -- the pages and what the module's methods do on them, in modules of their
 -- own beside this one
@@ -55,12 +54,11 @@ import sorts from "./AuctionHouse/Common"
 import type AuctionTable, Cell from "./AuctionHouse/Tables"
 import * as ahBuy from "./AuctionHouse/Buy"
 import BuyPage from "./AuctionHouse/Buy"
-import type Category, ResultRow from "./AuctionHouse/Buy"
+import type Category from "./AuctionHouse/Buy"
 import * as ahHistory from "./AuctionHouse/History"
 import type HistoryEntry from "./AuctionHouse/History"
-import * as ahGamePage from "./AuctionHouse/GamePage"
 import * as ahItemView from "./AuctionHouse/ItemView"
-import type OfferRow, Buying from "./AuctionHouse/ItemView"
+import type Buying from "./AuctionHouse/ItemView"
 import * as ahBidding from "./AuctionHouse/Bidding"
 import type Seen, PendingBid from "./AuctionHouse/Bidding"
 import * as ahPrices from "./AuctionHouse/Prices"
@@ -245,6 +243,8 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     itemKey: ItemKey? = nil
     chosen: number? = nil
     chosenSeen: Seen? = nil
+    -- Buy out's first click: the auction and price it arms, when (ItemView)
+    buyArmed: { id: number, buyout: number, at: number }? = nil
     offers: CommoditySearchResultInfo[] = {}
     auctions: ItemSearchResultInfo[] = {}
     buying: Buying? = nil
@@ -262,12 +262,6 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- a scan the house's closing stopped: told on the next open
     scanStopped: boolean = false
     waitTicker: TickerHandle? = nil
-    -- the secure clicks on the game's page: over a result row, an auction
-    -- row, Buy out and Back; what each does after its click
-    overs: { [string]: Overlay } = {}
-    afterClick: { [string]: () -> () } = {}
-    -- their parent: hidden in combat by the client
-    overHolder: Frame? = nil
     -- a note for what the house is asked, cleared when its results come
     waiting: boolean = false
     refreshPending: boolean = false
@@ -443,55 +437,11 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
-    -- The secure clicks on the game's own page (AuctionHouse/GamePage)
-    ----------------------------------------------------------------------------
-
-    function Over(kind: string, on: Frame, target: Frame, andThen: () -> (), row: boolean)
-        ahGamePage.placeOver(self, kind, on, target, andThen, row)
-    end
-
-    function HideOver(kind: string)
-        ahGamePage.hideOver(self, kind)
-    end
-
-    function HideStaleOvers()
-        ahGamePage.hideStaleOvers(self)
-    end
-
-    function HideOvers()
-        ahGamePage.hideOvers(self)
-    end
-
-    function OversAfterCombat()
-        ahGamePage.oversAfterCombat(self)
-    end
-
-    function GameHasAuction(id: number): boolean
-        return ahGamePage.gameHasAuction(self, id)
-    end
-
-    function OverResult(row: ResultRow)
-        ahGamePage.overResult(self, row)
-    end
-
-    function GameOnItem(): boolean
-        return ahGamePage.gameOnItem(self)
-    end
-
-    function OverAuction(row: OfferRow)
-        ahGamePage.overAuction(self, row)
-    end
-
-    function DrawBuyOver()
-        ahGamePage.drawBuyOver(self)
-    end
-
-    ----------------------------------------------------------------------------
     -- An item's auctions, and a commodity's offers (AuctionHouse/ItemView)
     ----------------------------------------------------------------------------
 
-    function OpenItem(key: ItemKey?, gameOpened: boolean?)
-        ahItemView.openItem(self, key, gameOpened)
+    function OpenItem(key: ItemKey?)
+        ahItemView.openItem(self, key)
     end
 
     function DrawItemView()
@@ -786,7 +736,6 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         if not (window and buy and window:IsShown() and self.open) then
             return
         end
-        self:HideStaleOvers()
         local money = self.money
         if money then
             money:SetCopper(GetMoney() or 0)
@@ -911,15 +860,6 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
             self:DropBid()
             self:DropPurchase()
             window:Hide()
-            self:HideOvers()
-        end)
-        -- combat: the secure clicks let go before the lockdown (BAG-33);
-        -- after it, back where their view is shown
-        self:OnGameEvent("PLAYER_REGEN_DISABLED", function()
-            self:HideOvers()
-        end)
-        self:OnGameEvent("PLAYER_REGEN_ENABLED", function()
-            self:OversAfterCombat()
         end)
         local function results(isResults: boolean)
             if isResults and self.waiting then

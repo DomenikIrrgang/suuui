@@ -982,7 +982,7 @@ A secure click SuuUI's auction house left over its Buy out (shown, DIALOG strata
 
 *Status: open (0.13.15).*
 
-Besides doing nothing (V48), the engine's `PlaceBid` never refuses an addon's call: no `ADDON_ACTION_FORBIDDEN` or `ADDON_ACTION_BLOCKED`, whatever calls it. In game a single auction's buyout through it was refused ("Blocked"); whether a bid is too is what `/suu probe ahbid` asks. `tests/unit/Diagnostics/AhBidProbe.test.wowlua` plays the refusal with a stub that fires `ADDON_ACTION_FORBIDDEN`; the Bid tests (`Units/AuctionHouse/Auctions`, `ItemView`, `GamePage`) record `PlaceBid` and play the house's answer. (bug fixes 2026-11-15)
+Besides doing nothing (V48), the engine's `PlaceBid` never refuses an addon's call: no `ADDON_ACTION_FORBIDDEN` or `ADDON_ACTION_BLOCKED`, whatever calls it. In game (2026-11-17) it is refused from `/run` ("Interface action failed"; the wiki: protected when called from a macro script since 9.1.5) and taken from an addon's own click: `/suu probe ahbid`'s Bid buyout bought a single auction (`AUCTION_HOUSE_PURCHASE_COMPLETED`, the money gone). An earlier "Blocked" for a single auction's buyout was not seen again; Buy out now places it itself. `tests/unit/Diagnostics/AhBidProbe.test.wowlua` plays a refusal with a stub that fires `ADDON_ACTION_FORBIDDEN`; the Bid and Buy out tests (`Units/AuctionHouse/Auctions`, `ItemView`) record `PlaceBid` and play the house's answer. (bug fixes 2026-11-15; probed 2026-11-17)
 
 <a id="v51"></a>
 

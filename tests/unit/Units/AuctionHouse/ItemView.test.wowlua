@@ -549,15 +549,53 @@ local function bidRefused()
     expectNoErrors()
 end
 
-@test("Buy out without the game's page on the item says what to do")
-local function buyOutAdvice()
+@test("Buy out: a first click arms it (Confirm, the price said), a second buys within that click (SuuUI's own PlaceBid); counted once the house says so")
+local function buyOutDirect()
     openBlade()
     local v = buy().itemView
     local placed = recordBids()
     mock.click(offers()[1])
     mock.click(v.buyout)
-    expect(note():find("^Buy out goes through the game's own page") ~= nil).toBe(true)
     expect(#placed).toBe(0)
+    expect(v.buyout.label:GetText()).toBe("Confirm")
+    expect(plain(note())).toBe("Click Confirm to buy Test Blade for 5g.")
+    mock.click(v.buyout)
+    expect(placed).toEqual({ { 11, 50000 } })
+    expect(v.buyout.label:GetText()).toBe("Buy out")
+    expect(plain(note())).toBe("Buying out Test Blade…")
+    mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", 11)
+    expect(note()).toBe("Bought.")
+    expect(M.chosen).toBeNil()
+    expectNoErrors()
+end
+
+@test("Buy out armed: too late, another auction chosen or the auction changed buys nothing")
+local function buyOutArmed()
+    openBlade()
+    local v = buy().itemView
+    local placed = recordBids()
+    local list: ItemSearchResultInfo[] = { auction(11, 21000, 50000), auction(12, nil, 60000) }
+    listed(list)
+    -- too late: armed again, not bought
+    mock.click(offers()[2])
+    mock.click(v.buyout)
+    mock.advanceTime(6)
+    expect(v.buyout.label:GetText()).toBe("Buy out")
+    mock.click(v.buyout)
+    expect(#placed).toBe(0)
+    expect(v.buyout.label:GetText()).toBe("Confirm")
+    -- another auction chosen: not armed any more
+    mock.click(offers()[1])
+    expect(v.buyout.label:GetText()).toBe("Buy out")
+    -- its buyout went up after arming: nothing bought, said so
+    mock.click(offers()[2])
+    mock.click(v.buyout)
+    list[2] = auction(12, nil, 70000)
+    M:DrawItemView()
+    mock.click(v.buyout)
+    expect(#placed).toBe(0)
+    expect(note():find("changed since you chose it: nothing was bought", 1, true) ~= nil).toBe(true)
+    expectNoErrors()
 end
 
 @test("the item's slot shows its tooltip: the game's item key tooltip, or the item's")
