@@ -2,12 +2,13 @@
 -- The Buy page of the auction house (Units/AuctionHouse): the search bar
 -- (favourites, the search and your searches under it, Filter, Search, Scan
 -- all), the game's categories down the left, the results (sorted by the
--- house or here), and a Shift-clicked item searched. The module's methods
+-- house or here; 0.48: a deal marked beside its name, from the Ledger's
+-- prices), and a Shift-clicked item searched. The module's methods
 -- for them (Search, SortBy, DrawCategories, DrawResults, SearchItem, …)
 -- call the functions here; an item's view is AuctionHouse/ItemView.
 
 import SuuUI from "/Core/API"
-import type ScrollArea, Panel, SuuButton, Text, TextField, ItemSlot, Money, FilterMenu, FilterValues, FilterChoice, FilterValue, LoadingMark, Border, Segmented from "/Core/API"
+import type ScrollArea, Panel, SuuButton, Text, TextField, ItemSlot, Money, FilterMenu, FilterValues, FilterChoice, FilterValue, LoadingMark, Border, Segmented, DealMark from "/Core/API"
 import hook from "wowlua:hooks"
 import * as secret from "wowlua:secret"
 import * as errors from "wowlua:errors"
@@ -163,11 +164,15 @@ export class FavButton extends Button
     end
 end
 
--- A result: the item (slot, name, Yours), item level, how many, the lowest price.
+-- A result: the item (slot, name, Yours, its deal marks), item level, how
+-- many, the lowest price.
 export class ResultRow extends TableRow
     readonly slot: ItemSlot
     readonly name: Text
     readonly mine: Text
+    -- (0.48) "26% under", "Under vendor": the Ledger's marks
+    readonly under: DealMark
+    readonly vendor: DealMark
     readonly ilvl: Text
     readonly qty: Text
     readonly price: Money
@@ -180,6 +185,10 @@ export class ResultRow extends TableRow
         self.name = UI.Text(self, "label", "ink")
         self.name:SetWordWrap(false)
         self.mine = UI.Text(self, "micro", "arcane")
+        self.under = UI.DealMark(self, "")
+        self.under:Hide()
+        self.vendor = UI.DealMark(self, "Under vendor")
+        self.vendor:Hide()
         self.ilvl = UI.Text(self, "numeric", "ink-muted")
         self.ilvl:SetJustifyH("RIGHT")
         self.qty = UI.Text(self, "numeric", "ink")
@@ -810,20 +819,49 @@ export function drawResults(self: AuctionHouseModule)
         row.name:SetValue(info and info.itemName or "…")
         row.name:SetColor(qualityToken(quality))
         row.mine:SetValue(r.containsOwnerItem and "Yours" or "")
+        local itemID = r.itemKey.itemID
         local level = r.itemKey.itemLevel
         row.ilvl:SetValue(info and info.isEquipment and level and tostring(level) or "")
         row.qty:SetValue(tostring(r.totalQuantity or ""))
         row.price:SetCopper(r.minPrice or 0)
-        self:Seen(r.itemKey.itemID, r.minPrice, r.totalQuantity)
-        -- the name cell: the slot, the name, Yours
+        self:Seen(itemID, r.minPrice, r.totalQuantity)
+        -- (0.48) the Ledger's marks: far under its usual price, under what
+        -- a vendor pays (after the look just told, which counts)
+        local under, underVendor = self:DealOf(itemID, r.minPrice)
+        if under then
+            row.under:SetValue(("%d%% under"):format(math.floor(under + 0.5)))
+        end
+        row.under:SetShown(under ~= nil)
+        row.vendor:SetShown(underVendor)
+        -- the name cell: the slot, the name, then right after it Yours and
+        -- the marks (the name cut short to leave them room)
         local places = t:Places(t.list:GetWidth())
+        local gap = S["space-2"]
+        local after = 0
+        if r.containsOwnerItem then
+            after = after + gap + row.mine:GetUnboundedStringWidth()
+        end
+        for _, mark in ipairs({ row.under, row.vendor }) do
+            if mark:IsShown() then
+                after = after + gap + mark:GetWidth()
+            end
+        end
         row.slot:ClearAllPoints()
         row.slot:SetPoint("LEFT", places[1].x, 0)
         row.name:ClearAllPoints()
         row.name:SetPoint("LEFT", row.slot, "RIGHT", S["space-3"], 0)
-        row.name:SetWidth(math.max(20, places[1].w - 24 - S["space-3"] - (r.containsOwnerItem and 40 or 0)))
+        local room = places[1].w - 24 - S["space-3"] - after
+        row.name:SetWidth(math.max(20, math.min(room, math.ceil(row.name:GetUnboundedStringWidth()) + 1)))
         row.mine:ClearAllPoints()
-        row.mine:SetPoint("LEFT", row.name, "RIGHT", S["space-2"], 0)
+        row.mine:SetPoint("LEFT", row.name, "RIGHT", gap, 0)
+        local prev: Region = r.containsOwnerItem and row.mine or row.name
+        for _, mark in ipairs({ row.under, row.vendor }) do
+            mark:ClearAllPoints()
+            if mark:IsShown() then
+                mark:SetPoint("LEFT", prev, "RIGHT", gap, 0)
+                prev = mark
+            end
+        end
         t:PlaceCells(row, { false, row.ilvl, row.qty, row.price })
         row.key = r.itemKey
         row.onEnter = function()
@@ -833,7 +871,12 @@ export function drawResults(self: AuctionHouseModule)
             end
         end
         row:SetScript("OnClick", function()
-            self:OpenItem(row.key)
+            local key = row.key
+            -- (0.48) Alt-click: its price page in the Ledger
+            if key and self:AltClickItem(key.itemID) then
+                return
+            end
+            self:OpenItem(key)
         end)
         row:Show()
     end

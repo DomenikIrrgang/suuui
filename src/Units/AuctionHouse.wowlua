@@ -21,6 +21,12 @@
 -- goes there, as the game does). Chat links and bag items reach the game's
 -- ChatFrameUtil.InsertLink, post-hooked; the Professions window asks the
 -- auctionhouse service.
+-- The Ledger (0.48, while that module is on): its button at the right of
+-- the tab row opens it beside this window; Browse marks a result far under
+-- its usual price ("26% under") or under what a vendor pays ("Under
+-- vendor", with the Ledger's "Mark deals at the auction house"); after Scan
+-- all the foot says how many deals it found; Alt-click on a row's item
+-- opens its price page.
 -- Your searches (asked 2026-11-12): clicking into the search box shows the
 -- last five you ran (Enter or Search) that found something, newest first,
 -- each with the icon of the first item it found; kept per character. A
@@ -42,7 +48,7 @@
 -- Auctions (their pages).
 
 import SuuUI, Module from "/Core/API"
-import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues from "/Core/API"
+import type AuctionPrice, SettingsSection, WindowFrame, Text, Money, FilterValues, SuuButton, LedgerOpenOptions from "/Core/API"
 import hook from "wowlua:hooks"
 import * as errors from "wowlua:errors"
 import * as tbl from "wowlua:table"
@@ -75,6 +81,7 @@ import AuctionsPage from "./AuctionHouse/Auctions"
 import type AuctionRow, Listed from "./AuctionHouse/Auctions"
 
 local AUCTION_HOUSE = SuuUI.Services.AUCTION_HOUSE
+local LEDGER = SuuUI.Services.LEDGER
 
 local UI = SuuUI.UI
 local try, field = errors.try, tbl.field
@@ -223,7 +230,11 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     sell: SellPage? = nil
     mine: AuctionsPage? = nil
     note: Text? = nil
+    -- the foot's note as last set (Note)
+    noteText: string = ""
     money: Money? = nil
+    -- (0.48) the Ledger's button, right of the tabs
+    ledgerButton: SuuButton? = nil
     -- the house: open; the tab; the Buy page's view and what it searched
     open: boolean = false
     tab: string = "buy"
@@ -328,6 +339,7 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     -- its results come; any other stays until the next note.
     function Note(text: string?, tone: string?, waiting: boolean?)
         self.waiting = waiting or false
+        self.noteText = text or ""
         local note = self.note
         if not note then
             return
@@ -696,6 +708,87 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
+    -- The Ledger (0.48): its button, Alt-click, the marks and the scan's deals
+    ----------------------------------------------------------------------------
+
+    -- The Ledger opened (at `view`, its own default when nil) beside this
+    -- window, never over it; whether it could (the Ledger off: no).
+    function OpenLedger(view: string?, opts: LedgerOpenOptions?): boolean
+        local svc = SuuUI.UseService(LEDGER)
+        local open = svc and svc.Open
+        if not open then
+            return false
+        end
+        local o: LedgerOpenOptions = opts or {}
+        o.beside = self.window
+        open(view, o)
+        return true
+    end
+
+    -- A row's item Alt-clicked: its price page in the Ledger; whether it
+    -- was one the Ledger took (else the row's own click goes on).
+    function AltClickItem(itemID: number?): boolean
+        if not (itemID and IsAltKeyDown()) or IsShiftKeyDown() or IsControlKeyDown() then
+            return false
+        end
+        return self:OpenLedger("item", { itemID = itemID })
+    end
+
+    -- Its button shown while the Ledger is on.
+    function DrawLedgerButton()
+        local b = self.ledgerButton
+        if b then
+            local svc = SuuUI.UseService(LEDGER)
+            b:SetShown(svc ~= nil and svc.Open ~= nil)
+        end
+    end
+
+    -- Whether Browse marks deals: the Ledger on, its setting on.
+    function MarksDeals(): boolean
+        local ledger = SuuUI.GetModule("ledger")
+        return ledger ~= nil and ledger:IsEnabled() and ledger:Setting("markDeals") ~= false and
+            SuuUI.UseService(LEDGER) ~= nil
+    end
+
+    -- A result's marks: how far under its usual price it is offered when
+    -- that counts as a deal, and whether it is under what a vendor pays.
+    -- Nothing without a usual price (an item seen too rarely), the Ledger
+    -- off or its marks.
+    function DealOf(itemID: number?, price: number?): (number?, boolean)
+        if not (itemID and price and price > 0 and self:MarksDeals()) then
+            return nil, false
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local usual, deal = svc and svc.UsualPrice, svc and svc.Deal
+        if not (usual and deal and usual(itemID)) then
+            return nil, false
+        end
+        return deal(itemID, price)
+    end
+
+    -- After Scan all, once the Ledger read it: the foot's "Scan done" note
+    -- says its deals instead (only while it still shows that note, and
+    -- only when it found some).
+    function ScanDeals()
+        if not self.noteText:find("^Scan done:") then
+            return
+        end
+        local svc = SuuUI.UseService(LEDGER)
+        local last = svc and svc.LastScan
+        local s = last and last()
+        if not s then
+            return
+        end
+        -- (none: the house's own note stays, how many auctions and items)
+        if s.deals == 0 then
+            return
+        end
+        self:Note(
+            ("Scan done: %d %s, %d under vendor price."):format(s.deals, s.deals == 1 and "deal" or "deals", s.underVendor)
+        )
+    end
+
+    ----------------------------------------------------------------------------
     -- The window
     ----------------------------------------------------------------------------
 
@@ -736,6 +829,23 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         w.scroll:Hide()
         self.window = w
+        -- (0.48) the Ledger, at the tab row's right: a quiet button
+        local tabRow = w.tabRow
+        if tabRow then
+            local ledger = UI.Button(tabRow, {
+                text = "Ledger",
+                icon = "coin",
+                onClick = function()
+                    self:OpenLedger()
+                end,
+                tooltip = {
+                    title = "Ledger",
+                    description = "Prices of this ruleset's house over 60 days, deals, your gold. Opens beside this window.",
+                },
+            })
+            ledger:SetPoint("RIGHT", tabRow, "RIGHT", 0, 0)
+            self.ledgerButton = ledger
+        end
         local buy, sell, mine = BuyPage.new(w.body, self), SellPage.new(w.body, self), AuctionsPage.new(w.body, self)
         self.buy, self.sell, self.mine = buy, sell, mine
         self.pages.buy, self.pages.sell, self.pages.auctions = buy, sell, mine
@@ -866,6 +976,7 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
                     end)
                 end
             end)
+            self:DrawLedgerButton()
             window:Show()
             window:SetTab("buy")
             self:Note("")
@@ -982,6 +1093,27 @@ export class AuctionHouseModule extends Module<typeof(DEFAULTS)>
         end)
         self:OnGameEvent("REPLICATE_ITEM_LIST_UPDATE", function()
             self:ReadScan()
+        end)
+        -- (0.48) the Ledger: its button, the marks, the scan's deals
+        self:DrawLedgerButton()
+        self:On("SUUUI_SERVICE_CHANGED", function(_, name)
+            if name == "ledger" then
+                self:DrawLedgerButton()
+                self:QueueRefresh()
+            end
+        end)
+        self:On("SUUUI_LEDGER_CHANGED", function(_, what)
+            if what == "scan" then
+                self:ScanDeals()
+            end
+            if (what == "scan" or what == "prices") and self.tab == "buy" and self.view == "browse" then
+                self:QueueRefresh()
+            end
+        end)
+        self:On("SUUUI_SETTING_CHANGED", function(_, namespace, key)
+            if namespace == "ledger" and (key == "markDeals" or key == "enabled") then
+                self:QueueRefresh()
+            end
         end)
         self:HookTooltips()
         self:HookLinks()

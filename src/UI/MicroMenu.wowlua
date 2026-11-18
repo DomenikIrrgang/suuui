@@ -30,12 +30,18 @@ import hook from "wowlua:hooks"
 local S = T.space
 
 
--- The tooltip: the item's label, and the key from Blizzard's own tooltip.
-local function keyOf(blizzard: string?): string?
+-- The tooltip: the item's label, and the key from Blizzard's own tooltip;
+-- (0.48) for a button of SuuUI's own, the first key of its binding (none
+-- bound: none shown).
+local function keyOf(blizzard: string?, bind: string?): string?
     local b = blizzard and blizzardFrames.frame(blizzard)
     local tip = b and (b :: { tooltipText?: unknown }).tooltipText
     if type(tip) ~= "string" then
-        return nil
+        local bound = bind and GetBindingKey(bind)
+        if type(bound) ~= "string" or bound == "" then
+            return nil
+        end
+        return GetBindingText(bound)
     end
     local key = tip:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):match("%(([^%)]+)%)%s*$")
     return key
@@ -89,7 +95,16 @@ end
 
 -- A button of the menu: its key, label and glyph; a Blizzard micro button
 -- it clicks (secure), or what a click calls.
-export type MicroMenuItem = { key: string, label: string, glyph: string, click?: string, onClick?: () -> () }
+-- (0.48) `bind`: the binding whose key its tooltip shows (a button of
+-- SuuUI's own; one that clicks a Blizzard button shows that one's key).
+export type MicroMenuItem = {
+    key: string,
+    label: string,
+    glyph: string,
+    click?: string,
+    onClick?: () -> (),
+    bind?: string,
+}
 
 -- One button: a secure one clicking a Blizzard micro button (`item.click`),
 -- else a plain one calling `item.onClick`.
@@ -175,7 +190,7 @@ export class MenuButton extends Button
     function entered()
         self.hover:Show()
         self.edge:SetShown(true)
-        local key = keyOf(self.item.click)
+        local key = keyOf(self.item.click, self.item.bind)
         showTooltip(self, {
             title = self.item.label,
             subtitle = key and ("Key: " .. key) or nil,

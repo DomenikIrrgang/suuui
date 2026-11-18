@@ -3,7 +3,9 @@
 -- Blizzard's micro button, or SuuUI's own window), lit while it's open; the
 -- alerts (talent points, spells to train, Legacy points), the bags' free
 -- slots and the gear's wear; the Buttons setting (in combat after the
--- fight); a plugin's buttons; the settings and the preview; stopped.
+-- fight); a plugin's buttons; the Ledger's button (its window toggled, a
+-- watched item under your price, gone with its module, added to a saved
+-- list of buttons); the settings and the preview; stopped.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -18,6 +20,8 @@ import * as modules from "/Core/Modules"
 import internal ownOf from "/Core/Modules"
 import * as visibility from "/UI/Visibility"
 import * as frames from "wowlua:frames"
+import internal M as Ledger from "/Units/Ledger"
+import migrations as settingMigrations from "/Core/Settings"
 
 local function button(key: string): MenuButton
     return assert(assert(M.menu).buttons[key])
@@ -298,6 +302,136 @@ local function plugins()
     local row = assert(SECTION.groups)[1].rows[1]
     local chips: unknown = assert(row.build)(CreateFrame("Frame", nil, UIParent), function(_: unknown) end, row)
     expect(chips ~= nil).toBe(true)
+end
+
+const LEDGER_DUST = 990501
+mock.defineItem(LEDGER_DUST, { name = "Test Dust", quality = 1, stackCount = 20, sellPrice = 5 })
+const LEDGER_SHARD = 990502
+mock.defineItem(LEDGER_SHARD, { name = "Test Shard", quality = 2, stackCount = 20, sellPrice = 5 })
+
+-- The Ledger's window as the ledger service will give it (its window isn't
+-- in this build): Toggle and IsShown on the real service, put back after.
+local function ledgerWindow(): ({ toggled: number, shown: boolean }, () -> ())
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local toggle, shown = svc.Toggle, svc.IsShown
+    local state = { toggled = 0, shown = false }
+    svc.Toggle = function()
+        state.toggled += 1
+        state.shown = not state.shown
+    end
+    svc.IsShown = function(): boolean
+        return state.shown
+    end
+    return state, function()
+        svc.Toggle, svc.IsShown = toggle, shown
+    end
+end
+
+@test("the Ledger's button: after Bags, before the game menu; a click toggles its window, lit while it's open")
+local function ledgerButton()
+    local list = keys()
+    expect(list[#list]).toBe("menu")
+    expect(list[#list - 1]).toBe("ledger")
+    expect(list[#list - 2]).toBe("bags")
+    local b = button("ledger")
+    expect(b.item.glyph).toBe("coin")
+    expect(b.item.label).toBe("Ledger")
+    -- its own key binding, unbound by default
+    expect(b.item.bind).toBe("SUUUI_LEDGER")
+    expect(GetBindingKey("SUUUI_LEDGER")).toBeNil()
+    local state, restore = ledgerWindow()
+    mock.click(b)
+    expect(state.toggled).toBe(1)
+    tick()
+    expect(b.active).toBe(true)
+    mock.click(b)
+    tick()
+    expect(state.toggled).toBe(2)
+    expect(b.active).toBe(false)
+    restore()
+    -- no window: a click does nothing
+    mock.click(b)
+    expectNoErrors()
+end
+
+@test("the Ledger's alert: the arcane diamond while a watched item is under your price, its tooltip naming it")
+local function ledgerAlert()
+    local b = button("ledger")
+    expect(b.alertText).toBeNil()
+    Ledger:RecordLook(LEDGER_DUST, 900, 0, 5, 1, time() - 86400)
+    Ledger:WatchItem(LEDGER_DUST, 800)
+    mock.advanceTime(0.01)
+    expect(b.alertText).toBeNil()
+    -- a search finds 2 at 7s 50c
+    Ledger:RecordLook(LEDGER_DUST, 750, 0, 2, 1)
+    mock.advanceTime(0.01)
+    expect(b.alertText).toBe("A watched item is under your price: Test Dust, 2 at " .. SuuUI.UI.MoneyText(750))
+    expect(b.alert).toBeShown()
+    -- two: the furthest under first
+    Ledger:WatchItem(LEDGER_SHARD, 1000)
+    Ledger:RecordLook(LEDGER_SHARD, 400, 0, 3, 1)
+    mock.advanceTime(0.01)
+    expect(b.alertText).toBe(
+        "2 watched items are under your price: Test Shard, 3 at " ..
+            SuuUI.UI.MoneyText(400) ..
+            "; Test Dust, 2 at " ..
+            SuuUI.UI.MoneyText(750)
+    )
+    -- no longer watched: gone
+    Ledger:UnwatchItem(LEDGER_DUST)
+    Ledger:UnwatchItem(LEDGER_SHARD)
+    mock.advanceTime(0.01)
+    expect(b.alertText).toBeNil()
+    expect(b.alert).never.toBeShown()
+    local d = Ledger:Data()
+    d.prices, d.watches = nil, nil
+    Ledger.cache = {}
+end
+
+@test("the Ledger's button gone while its module is off (from the settings' chips too); back with it")
+local function ledgerOff()
+    settings.set("ledger", "enabled", false)
+    mock.advanceFrames(2)
+    local has: { [string]: boolean } = {}
+    for _, k in ipairs(keys()) do
+        has[k] = true
+    end
+    expect(has.ledger).toBeNil()
+    expect(assert(M.menu).buttons.ledger).never.toBeShown()
+    -- the settings' preview leaves it out too
+    local parent = CreateFrame("Frame", nil, UIParent)
+    M:PreviewView(parent)
+    local shownLedger = assert(M.preview).buttons.ledger
+    expect(shownLedger == nil or not shownLedger:IsShown()).toBe(true)
+    settings.set("ledger", "enabled", true)
+    mock.advanceFrames(2)
+    expect(button("ledger")).toBeShown()
+end
+
+@test("a saved list of buttons from before the Ledger gets its button; one that has it is left alone")
+local function ledgerMigration()
+    local function run(values: { [string]: unknown })
+        local ran = false
+        for _, m in ipairs(settingMigrations()) do
+            if m.namespace == "micromenu" and m.id == "ledgerButton" then
+                m.fn(values)
+                ran = true
+            end
+        end
+        expect(ran).toBe(true)
+    end
+    local old: { [string]: unknown } = { buttons = { "character", "bags", "menu" } }
+    run(old)
+    expect(old.buttons).toEqual({ "character", "bags", "menu", "ledger" })
+    local has: { [string]: unknown } = { buttons = { "ledger", "menu" } }
+    run(has)
+    expect(has.buttons).toEqual({ "ledger", "menu" })
+    local none: { [string]: unknown } = { shows = "always" }
+    run(none)
+    expect(none.buttons).toBeNil()
+    -- (the order is the menu's own: after Bags)
+    M:Set("buttons", { "character", "bags", "menu", "ledger" })
+    expect(keys()).toEqual({ "character", "bags", "ledger", "menu" })
 end
 
 @test("SuuUI's own Talents and Collections windows when those modules are on")

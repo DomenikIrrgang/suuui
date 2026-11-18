@@ -1,7 +1,8 @@
 -- Units/AuctionHouse/Buy: the Buy page: the game's categories, a search,
 -- its filters and level range, favourites, the results, their sort and more
--- results, a result's tooltip; Shift-click on an item searched; a theme's
--- spacing.
+-- results, a result's tooltip; Shift-click on an item searched; the
+-- Ledger's deal marks beside a result's name and Alt-click on a row; a
+-- theme's spacing.
 
 import test, expect, beforeEach, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -18,6 +19,10 @@ import ORE, BLADE, GEM, state, buy, setUp, tearDown, open, win, note, search, sh
 import FavButton from "/Units/AuctionHouse/Buy"
 import type AuctionHouseModule from "/Units/AuctionHouse"
 import newParent from "../../../helpers"
+import internal M as Ledger from "/Units/Ledger"
+import type LedgerOpenOptions from "/Core/API"
+import * as settings from "/Core/Settings"
+import house, key from "./AuctionHouseHelpers"
 
 local AH = C_AuctionHouse
 
@@ -717,4 +722,122 @@ local function givenModule()
     mock.click(FavButton.new(parent, fake))
     expect(favorites).toHaveBeenCalled()
     parent:Hide()
+end
+
+--------------------------------------------------------------------------------
+-- The Ledger (0.48): deal marks in the results, Alt-click on a row
+--------------------------------------------------------------------------------
+
+local NUGGET = 990291
+mock.defineItem(NUGGET, { name = "Test Nugget", quality = 1, stackCount = 20, classID = 7, icon = 134400, sellPrice = 4000 })
+
+-- The Ledger's looks of an item on days before today: lows[k] k days ago.
+local function ledgerHistory(itemID: number, lows: number[])
+    for k = #lows, 1, -1 do
+        Ledger:RecordLook(itemID, lows[k], 0, 10, 2, time() - k * 86400)
+    end
+end
+
+local function forgetLedger()
+    local d = Ledger:Data()
+    d.prices, d.scans, d.watches = nil, nil, nil
+    Ledger.cache, Ledger.vendor = {}, {}
+    Ledger:Reset("markDeals")
+end
+
+-- The house with the nugget too: 3,500 each, a vendor pays 4,000.
+local function nuggetHouse()
+    local h = house()
+    h.browse[#h.browse + 1] = { itemKey = key(NUGGET), minPrice = 3500, totalQuantity = 7, containsOwnerItem = false }
+    return h
+end
+
+@test("the Ledger's marks: far under the usual price, under vendor price, beside the name; none without a deal")
+local function dealMarks()
+    ledgerHistory(GEM, { 1500, 1500, 1500 })
+    ledgerHistory(NUGGET, { 5000, 5000, 5000 })
+    open(nuggetHouse())
+    search("")
+    -- the gem: a third under its usual 15s
+    local gem = resultNamed("Test Gem")
+    expect(gem.under).toBeShown()
+    expect(gem.under.label:GetText()).toBe("33% under")
+    expect(gem.vendor).never.toBeShown()
+    -- right after the name
+    local _, rel = gem.under:GetPoint(1)
+    expect(rel).toBe(gem.name)
+    expect(gem.name:GetWidth() <= gem.name:GetUnboundedStringWidth() + 1).toBe(true)
+    -- the nugget: 30 % under and under what a vendor pays, in that order
+    local nugget = resultNamed("Test Nugget")
+    expect(nugget.under.label:GetText()).toBe("30% under")
+    expect(nugget.vendor).toBeShown()
+    expect(nugget.vendor.label:GetText()).toBe("Under vendor")
+    local _, after = nugget.vendor:GetPoint(1)
+    expect(after).toBe(nugget.under)
+    -- the ore (yours): its usual is today's, no deal; the marks after Yours
+    local ore = resultNamed("Test Ore")
+    expect(ore.under).never.toBeShown()
+    expect(ore.vendor).never.toBeShown()
+    -- the look: arcane on arcane-soft, an arcane edge
+    expect(tokenOf(gem.under.label)).toBe("arcane")
+    -- the setting off: none; on again, back
+    Ledger:Set("markDeals", false)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).never.toBeShown()
+    Ledger:Set("markDeals", true)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).toBeShown()
+    -- the Ledger off: none
+    settings.set("ledger", "enabled", false)
+    mock.advanceTime(0.1)
+    expect(resultNamed("Test Gem").under).never.toBeShown()
+    expect(resultNamed("Test Nugget").vendor).never.toBeShown()
+    settings.set("ledger", "enabled", true)
+    mock.advanceTime(0.1)
+    forgetLedger()
+end
+
+@test("Alt-click on a result or an item's auction: its price page in the Ledger, beside the window; a plain click as always")
+local function altClickRows()
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local had = svc.Open
+    local asked: { view?: string, opts?: LedgerOpenOptions }[] = {}
+    svc.Open = function(view: string?, opts: LedgerOpenOptions?)
+        asked[#asked + 1] = { view = view, opts = opts }
+    end
+    open()
+    search("")
+    mock.setModifiers({ alt = true })
+    mock.click(resultNamed("Test Gem"))
+    mock.setModifiers({})
+    expect(#asked).toBe(1)
+    expect(asked[1].view).toBe("item")
+    expect(assert(asked[1].opts).itemID).toBe(GEM)
+    expect(assert(asked[1].opts).beside).toBe(M.window)
+    -- not opened here
+    expect(M.view).toBe("browse")
+    -- Shift-Alt: the row's own click
+    mock.setModifiers({ alt = true, shift = true })
+    mock.click(resultNamed("Test Gem"))
+    mock.setModifiers({})
+    expect(#asked).toBe(1)
+    expect(M.view).never.toBe("browse")
+    -- in an item's view: its auctions' rows too
+    search("blade")
+    mock.click(resultNamed("Test Blade"))
+    mock.advanceTime(1)
+    local rows = shown(buy().itemView.table)
+    expect(#rows > 0).toBe(true)
+    mock.setModifiers({ alt = true })
+    mock.click(rows[1])
+    mock.setModifiers({})
+    expect(#asked).toBe(2)
+    expect(assert(asked[2].opts).itemID).toBe(BLADE)
+    -- the Ledger off: the row's own click
+    svc.Open = had
+    settings.set("ledger", "enabled", false)
+    mock.advanceTime(0.1)
+    expect(M:AltClickItem(GEM)).toBe(false)
+    settings.set("ledger", "enabled", true)
+    mock.advanceTime(0.1)
 end
