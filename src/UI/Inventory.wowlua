@@ -12,6 +12,7 @@
 --   inv:SetMeta(text), inv:SetMoney(copper) (none shown until then), inv:SetNote(text)
 --   inv:SetAction({ text, onClick, tooltip }) or nil: a quiet button in the foot, before the note
 --   inv:SetCurrencies({ { icon, count, tooltip, onClick } }) or nil: currencies by the money (0.33)
+--   inv:SetMoneyClick(onClick, tip) or nil: a click on the money, its tooltip (0.48)
 --   inv.search (a TextField), inv.sort (a button), inv.onClose
 --   inv.sort.tip = { title, description }: its tooltip, changed any time (0.17)
 --
@@ -645,6 +646,10 @@ export class Inventory extends Panel
     currencyTexts: Text[] = {}
     showResults: boolean? = nil
     heads: SectionHead[]? = nil
+    -- (0.48) a click on the money and its tooltip (SetMoneyClick)
+    moneyClick: (() -> ())? = nil
+    moneyTip: tooltip.TooltipSource? = nil
+    moneyHooked: boolean = false
     -- the buttons LayoutSlots last laid out (whoever laid them out knows
     -- whether its layout still shows)
     laidOut: Region[]? = nil
@@ -829,6 +834,35 @@ export class Inventory extends Panel
 
     function SetNote(text: string?)
         self.note:SetValue(text or "")
+    end
+
+    -- (0.48) A click on the money, and its tooltip while hovered (the
+    -- Ledger at Gold); nil: neither, the money as text only.
+    function SetMoneyClick(onClick: (() -> ())?, tip: tooltip.TooltipSource?)
+        self.moneyClick, self.moneyTip = onClick, tip
+        local m = self.money
+        m:EnableMouse(onClick ~= nil)
+        if onClick and not self.moneyHooked then
+            self.moneyHooked = true
+            m:SetScript("OnMouseUp", function(_: Frame, button: string)
+                local fn = self.moneyClick
+                if fn and button == "LeftButton" and m:IsMouseOver() then
+                    fn()
+                end
+            end)
+            m:SetScript("OnEnter", function()
+                local t = self.moneyTip
+                if t and self.moneyClick then
+                    tooltip.showTooltip(m, t)
+                end
+            end)
+            m:SetScript("OnLeave", function()
+                tooltip.hideTooltip()
+            end)
+        end
+        if not onClick and m:IsMouseOver() then
+            tooltip.hideTooltip()
+        end
     end
 
     -- Currencies left of the money, in order (the game's "Show on Backpack"

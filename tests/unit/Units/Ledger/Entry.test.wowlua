@@ -1,0 +1,231 @@
+-- Units/Ledger/Entry: the Ledger's ways in: Alt-click on an item (a bag
+-- slot, a chat link) opens its price page, the game's own clicks left as
+-- they were; the key binding, /ledger and /suu ledger toggle the window,
+-- or say why not; the watched items under your price with how many were
+-- offered.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type LedgerOpenOptions from "/Core/API"
+import internal M from "/Units/Ledger"
+import internal M as Bags from "/Units/Bags"
+import * as settings from "/Core/Settings"
+import * as entry from "/Units/Ledger/Entry"
+import expectNoErrors from "../../../helpers"
+
+const DUST = 990601
+const SHARD = 990602
+mock.defineItem(DUST, { name = "Test Dust", quality = 1, stackCount = 20, sellPrice = 5, icon = 134400 })
+mock.defineItem(SHARD, { name = "Test Shard", quality = 2, stackCount = 20, sellPrice = 5, icon = 134071 })
+
+-- What the Ledger's window was asked (its window isn't in this build: Open
+-- and Toggle on the real service, put back after each test).
+type Opened = { view?: string, opts?: LedgerOpenOptions }
+local opened: Opened[] = {}
+local toggled = 0
+local restore: (() -> ())? = nil
+
+local function fakeWindow()
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local open, toggle = svc.Open, svc.Toggle
+    svc.Open = function(view: string?, opts: LedgerOpenOptions?)
+        opened[#opened + 1] = { view = view, opts = opts }
+    end
+    svc.Toggle = function()
+        toggled += 1
+    end
+    restore = function()
+        svc.Open, svc.Toggle = open, toggle
+    end
+end
+
+@afterEach
+local function cleanup()
+    mock.setModifiers({})
+    if restore then
+        restore()
+        restore = nil
+    end
+    opened, toggled = {}, 0
+    if not M:IsEnabled() then
+        settings.set("ledger", "enabled", true)
+    end
+    local d = M:Data()
+    d.prices, d.scans, d.watches = nil, nil, nil
+    M.cache = {}
+    ClearCursor()
+    mock.advanceFrames(2)
+    expectNoErrors()
+end
+
+-- A bag slot clicked in SuuUI's bags (on its secure button over the slot,
+-- which passes the left click on to the game's slot; else the slot).
+local function clickBag(bag: number, slot: number, button: string?)
+    Bags:SetOpen(true)
+    mock.advanceTime(0.01)
+    local b = assert(assert(Bags.buttons[bag])[slot])
+    mock.hover(b)
+    local over = Bags.useOver
+    if over and over.button:IsShown() and Bags.useSlot == b then
+        mock.click(over.button, button)
+    else
+        mock.click(b, button)
+    end
+    mock.hover(nil)
+end
+
+local function chatLink(id: number, name: string): string
+    return "|cffffffff|Hitem:" .. id .. "::::::::1:::::::|h[" .. name .. "]|h|r"
+end
+
+local function clickLink(id: number, name: string, button: string?)
+    SetItemRef("item:" .. id .. "::::::::1:::::::", chatLink(id, name), button or "LeftButton", ChatFrame1)
+end
+
+@test("an item link's ID: a chat link, a plain item string; anything else nil")
+local function links()
+    expect(entry.linkItemID(chatLink(DUST, "Test Dust"))).toBe(DUST)
+    expect(entry.linkItemID("item:" .. SHARD .. ":0:0")).toBe(SHARD)
+    expect(entry.linkItemID("|cff71d5ff|Hspell:133|h[Test Bolt]|h|r")).toBeNil()
+    expect(entry.linkItemID(nil)).toBeNil()
+    expect(entry.linkItemID(42)).toBeNil()
+end
+
+@test("Alt-click on a bag item: its price page; the game's own clicks stay as they were")
+local function bagItem()
+    fakeWindow()
+    mock.setBag(0, { slots = 16, items = { [1] = { id = DUST, count = 12 }, [2] = { id = SHARD, count = 3 } } })
+    mock.advanceFrames(2)
+    mock.setModifiers({ alt = true })
+    clickBag(0, 1)
+    expect(opened).toEqual({ { view = "item", opts = { itemID = DUST } } })
+    -- nothing else happened: not picked up, no stack split
+    expect(CursorHasItem()).toBe(false)
+    expect(StackSplitFrame).never.toBeShown()
+    -- Alt-right-click: the game's (nothing opens). (The emulator's
+    -- GetMouseButtonClicked answers nil inside a click: told the button
+    -- here, as the game does.)
+    mock.stub(_G, "GetMouseButtonClicked", function(): string
+        return "RightButton"
+    end)
+    clickBag(0, 2, "RightButton")
+    expect(#opened).toBe(1)
+    mock.stub(_G, "GetMouseButtonClicked", function(): string
+        return "LeftButton"
+    end)
+    clickBag(0, 2)
+    expect(#opened).toBe(2)
+    expect(opened[2]).toEqual({ view = "item", opts = { itemID = SHARD } })
+    -- with Shift or Ctrl too: the game's own (a link, dressing up)
+    mock.setModifiers({ alt = true, shift = true })
+    clickBag(0, 2)
+    mock.setModifiers({ alt = true, ctrl = true })
+    clickBag(0, 2)
+    expect(#opened).toBe(2)
+    -- a plain click picks it up, as always
+    mock.setModifiers({})
+    clickBag(0, 2)
+    expect(CursorHasItem()).toBe(true)
+    expect(#opened).toBe(2)
+    ClearCursor()
+    Bags:SetOpen(false)
+end
+
+@test("Alt-click on an item link in chat: its price page, no item tooltip; a plain click shows the tooltip")
+local function chatItem()
+    fakeWindow()
+    mock.setModifiers({ alt = true })
+    clickLink(SHARD, "Test Shard")
+    expect(opened).toEqual({ { view = "item", opts = { itemID = SHARD } } })
+    expect(ItemRefTooltip).never.toBeShown()
+    -- (the same click reaching the game's code twice opens it once)
+    mock.advanceFrames(1)
+    entry.altClicked(chatLink(SHARD, "Test Shard"))
+    entry.altClicked(chatLink(SHARD, "Test Shard"))
+    expect(#opened).toBe(2)
+    mock.advanceFrames(1)
+    entry.altClicked(chatLink(SHARD, "Test Shard"))
+    expect(#opened).toBe(3)
+    -- not an item: nothing
+    expect(entry.altClicked("|Hspell:133|h[Test Bolt]|h")).toBe(false)
+    mock.setModifiers({})
+    clickLink(SHARD, "Test Shard")
+    expect(#opened).toBe(3)
+    expect(ItemRefTooltip).toBeShown()
+    ItemRefTooltip:Hide()
+end
+
+@test("the Ledger off: an Alt-click does nothing (the hook is its own and quiet); on again, it opens")
+local function off()
+    fakeWindow()
+    settings.set("ledger", "enabled", false)
+    mock.advanceFrames(1)
+    mock.setModifiers({ alt = true })
+    clickLink(DUST, "Test Dust")
+    expect(opened).toEqual({})
+    expect(entry.openItem(DUST)).toBe(false)
+    settings.set("ledger", "enabled", true)
+    mock.advanceFrames(1)
+    fakeWindow()
+    clickLink(DUST, "Test Dust")
+    expect(#opened).toBe(1)
+end
+
+@test("the key binding, /ledger and /suu ledger toggle the window; without one, they say why")
+local function toggles()
+    -- Key Bindings › SuuUI › Ledger, unbound by default
+    expect(GetBindingKey("SUUUI_LEDGER")).toBeNil()
+    expect(_G["BINDING_NAME_SUUUI_LEDGER"]).toBe("Ledger")
+    expect(_G["BINDING_HEADER_SUUUI"]).toBe("SuuUI")
+    fakeWindow()
+    mock.pressBinding("SUUUI_LEDGER")
+    mock.slash("/ledger")
+    mock.slash("/suu ledger")
+    expect(toggled).toBe(3)
+    -- no window yet (the service without Open or Toggle): said so
+    assert(restore)()
+    restore = nil
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    if not (svc.Toggle or svc.Open) then
+        mock.slash("/ledger")
+        local printed = table.concat(mock.printed(), "\n")
+        expect(printed:find("The Ledger's window isn't there.", 1, true) ~= nil).toBe(true)
+    end
+    -- the Ledger off: said so
+    settings.set("ledger", "enabled", false)
+    mock.advanceFrames(1)
+    mock.slash("/ledger")
+    local printed = table.concat(mock.printed(), "\n")
+    expect(printed:find("The Ledger is off", 1, true) ~= nil).toBe(true)
+    expect(toggled).toBe(3)
+end
+
+@test("the watched items under your price, with how many the look that found them offered")
+local function watched()
+    M:RecordLook(DUST, 900, 0, 5, 1, time() - 86400)
+    M:WatchItem(DUST, 800)
+    M:WatchItem(SHARD, 100)
+    expect(entry.watchedUnder(M)).toEqual({})
+    M:RecordLook(DUST, 750, 0, 2, 1)
+    local under = entry.watchedUnder(M)
+    expect(#under).toBe(1)
+    expect(under[1].itemID).toBe(DUST)
+    expect(under[1].qty).toBe(2)
+    expect(under[1].target).toBe(800)
+    -- the same through the service
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    expect(assert(svc.WatchedUnder)()).toEqual(under)
+    -- a dearer look later in the same period: the watch has that look's
+    -- price, the period keeps the lowest, so how many is not known
+    M:RecordLook(DUST, 780, 0, 9, 1)
+    expect(entry.watchedUnder(M)[1].low).toBe(780)
+    expect(entry.watchedUnder(M)[1].qty).toBe(0)
+    -- the last scan, through the service
+    expect(assert(svc.LastScan)()).toBeNil()
+    M:Emit("SUUUI_AUCTION_SCANNED", { SHARD, 90, 0, 1, 1 }, 1)
+    local s = assert(assert(svc.LastScan)())
+    expect(s.items).toBe(1)
+    M:UnwatchItem(DUST)
+    M:UnwatchItem(SHARD)
+end

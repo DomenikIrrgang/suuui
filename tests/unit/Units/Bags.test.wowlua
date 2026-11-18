@@ -4,7 +4,8 @@
 -- in SortRun and Sort, the game's bags read in Containers, the characters'
 -- data in Characters). Which bags show; the slots (items, free counts, the
 -- reagent bag, keyring and special bag sections, updates, cooldowns, quest
--- marks, slot buttons made ahead); the backpack's currencies in the foot;
+-- marks, slot buttons made ahead); the backpack's currencies and the
+-- money (a way into the Ledger) in the foot;
 -- the search across both windows and all characters; selling junk; the
 -- settings rows, the preview, a theme; saving and turning off; the bank's
 -- tabs, its cooldowns and its close.
@@ -19,6 +20,8 @@ import internal M, SECTION, familyName, isSpecialBag from "/Units/Bags"
 import * as containers from "/Units/Bags/Containers"
 import * as ahead from "/Core/Ahead"
 import expectNoErrors, newParent from "../../helpers"
+import SuuUI from "/Core/API"
+import * as settings from "/Core/Settings"
 import themeChanged from "../SettingsUI/UiSettingsHelpers"
 import start as startBags, cleanup as cleanupBags, CLOTH, POTION, RAG, HERB, KEY, inv, bank, open, metaText, shownSlots, button, itemAt, shown, run, bankRail, atBank, OTHER, others, who, all from "./Bags/BagsHelpers"
 
@@ -187,6 +190,40 @@ local function backpackCurrencies()
     watched = {}
     mock.fireEvent("CURRENCY_DISPLAY_UPDATE")
     expect(inv().currencies[1]).never.toBeShown()
+end
+
+@test("the money in the foot: a click opens the Ledger at Gold, while the Ledger has a window; its tooltip says so")
+local function ledgerMoney()
+    open()
+    -- (the Ledger's window as its service gives it: not in this build)
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local had = svc.Open
+    expect(inv().moneyClick == nil).toBe(had == nil)
+    local asked: (string?)[] = {}
+    svc.Open = function(view: string?)
+        asked[#asked + 1] = view
+    end
+    M:LedgerMoney()
+    expect(inv().money:IsMouseEnabled()).toBe(true)
+    expect(inv().moneyTip).toEqual({ title = "Money", meta = "Click: the Ledger" })
+    mock.click(inv().money)
+    expect(asked).toEqual({ "gold" })
+    -- the Ledger off: plain money again; on, a way in once more
+    settings.set("ledger", "enabled", false)
+    mock.advanceFrames(1)
+    expect(inv().moneyClick).toBeNil()
+    expect(inv().money:IsMouseEnabled()).toBe(false)
+    settings.set("ledger", "enabled", true)
+    mock.advanceFrames(1)
+    svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    svc.Open = function(view: string?)
+        asked[#asked + 1] = view
+    end
+    M:LedgerMoney()
+    mock.click(inv().money)
+    expect(asked).toEqual({ "gold", "gold" })
+    svc.Open = had
+    M:LedgerMoney()
 end
 
 @test("a quiver, a soul or profession bag: a section of its own after your bags, not in the free count")

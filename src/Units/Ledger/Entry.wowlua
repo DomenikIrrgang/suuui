@@ -1,0 +1,151 @@
+-- Units/Ledger/Entry.wowlua
+-- The Ledger's ways in (spec "Opening it"), besides its micro menu button,
+-- the bags' money and the auction house's button (those modules' own):
+--   - a key binding, Key Bindings › SuuUI › Ledger, unbound by default;
+--   - /ledger and /suu ledger;
+--   - Alt-click on an item anywhere opens its price page. The game hands
+--     every modified click on an item to HandleModifiedItemClick: its bag
+--     slots (SuuUI's bags use them), chat links (SetItemRef, SuuUI's chat
+--     too) and SuuUI's windows that pass their item clicks on (loot, mail,
+--     the merchant, inspect…). A post-hook there, so nothing of the game's
+--     is changed or tainted. On Forever Alt alone is none of the game's
+--     own item clicks (Shift links, Ctrl dresses up, Shift-right-click
+--     sockets; Alt is self-cast and, on hover, the paper doll's flyout), so
+--     an Alt-click on an item did nothing before. Only the left button: an
+--     Alt-right-click stays the game's.
+-- Each asks the ledger service for the window (Open, Toggle), so nothing
+-- happens while the Ledger is off. Also the service's WatchedUnder: the
+-- module's, with how many were offered at that price.
+
+import SuuUI from "/Core/API"
+import type LedgerOpenOptions, LedgerUnder from "/Core/API"
+import binding, header from "wowlua:bindings"
+import slash from "wowlua:slash"
+import * as secret from "wowlua:secret"
+import * as tbl from "wowlua:table"
+import type LedgerModule from "../Ledger"
+
+local LEDGER = SuuUI.Services.LEDGER
+
+-- Opens the Ledger at `view` (its window's own default: nil); whether it
+-- could (the Ledger off, or no window to open).
+export function open(view: string?, opts: LedgerOpenOptions?): boolean
+    local svc = SuuUI.UseService(LEDGER)
+    local fn = svc and svc.Open
+    if not fn then
+        return false
+    end
+    fn(view, opts)
+    return true
+end
+
+-- An item's price page.
+export function openItem(itemID: number): boolean
+    return open("item", { itemID = itemID })
+end
+
+-- The window open or closed; whether it could.
+export function toggle(): boolean
+    local svc = SuuUI.UseService(LEDGER)
+    local fn = svc and svc.Toggle
+    if fn then
+        fn()
+        return true
+    end
+    return open()
+end
+
+-- Toggled, or told why not (the binding, /ledger, /suu ledger).
+export function toggleOrSay()
+    if toggle() then
+        return
+    end
+    -- (as a module's Print: its name, then the text)
+    local m = SuuUI.GetModule("ledger")
+    local why = (m and m:IsEnabled()) and "The Ledger's window isn't there." or
+        "The Ledger is off: turn it on in Settings › Modules."
+    print("|cffa39b8bLedger:|r", why)
+end
+
+-- The item of a link ("|Hitem:19019:…|h", or "item:19019"), or nil.
+export function linkItemID(link: unknown): number?
+    local s = secret.asString(link)
+    local id = s and (s:match("|Hitem:(%d+)") or s:match("^item:(%d+)"))
+    return id and tonumber(id) or nil
+end
+
+-- Whether the click being handled is an Alt-click: Alt alone, the left
+-- button (the button isn't known: taken as the left).
+export function isAltClick(): boolean
+    if not IsAltKeyDown() or IsShiftKeyDown() or IsControlKeyDown() then
+        return false
+    end
+    local which = tbl.field(_G, "GetMouseButtonClicked")
+    local clicked = type(which) == "function" and secret.asString((which :: () -> unknown)()) or nil
+    return clicked == nil or clicked == "" or clicked == "LeftButton"
+end
+
+-- the last Alt-clicked item, when (one click can reach the game's code twice)
+local lastID: number? = nil
+local lastAt: number? = nil
+
+-- An item's link Alt-clicked: its price page; whether it opened.
+export function altClicked(link: unknown): boolean
+    if not isAltClick() then
+        return false
+    end
+    local id = linkItemID(link)
+    if not id then
+        return false
+    end
+    local now = GetTime()
+    if id == lastID and now == lastAt then
+        return true
+    end
+    lastID, lastAt = id, now
+    return openItem(id)
+end
+
+-- The watched items under your price (the module's WatchedUnder), with how
+-- many were offered in the look that found them (0: not known).
+export function watchedUnder(m: LedgerModule): LedgerUnder[]
+    local out: LedgerUnder[] = {}
+    for i, e in ipairs(m:WatchedUnder()) do
+        local look = m:Latest(e.itemID)
+        out[i] = {
+            itemID = e.itemID,
+            low = e.low,
+            target = e.target,
+            at = e.at,
+            qty = look and look.low == e.low and look.qty or 0,
+        }
+    end
+    return out
+end
+
+-- The module's part: Alt-click and /suu ledger (both go with it).
+export function enable(m: LedgerModule)
+    m:SecureHook("HandleModifiedItemClick", function(link: unknown)
+        altClicked(link)
+    end)
+    m:RegisterCommand("ledger", "The Ledger: prices and deals of your ruleset's auction house, your gold.", function()
+        toggleOrSay()
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- The key binding and /ledger (the game's own, made when SuuUI loads; they
+-- do nothing but say so while the Ledger is off)
+--------------------------------------------------------------------------------
+
+header("SUUUI", "SuuUI")
+
+@binding("SUUUI_LEDGER", { label = "Ledger", header = "SUUUI" })
+local function ledgerKey()
+    toggleOrSay()
+end
+
+@slash("/ledger")
+local function ledgerSlash(_msg: string)
+    toggleOrSay()
+end

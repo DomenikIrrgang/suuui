@@ -1,6 +1,7 @@
 -- Units/AuctionHouse: SuuUI's auction house window over the game's (kept
 -- open, out of sight). Opening and closing with the auctioneer; the foot's
--- note; the settings; the service's Price; turned off through the registry.
+-- note; the Ledger's button; the settings; the service's Price; turned off
+-- through the registry.
 -- Each page's tests are beside this file, in AuctionHouse/ (the parts'
 -- test files), on the shared AuctionHouse/AuctionHouseHelpers.
 
@@ -14,6 +15,7 @@ import * as modules from "/Core/Modules"
 import internal ownOf from "/Core/Modules"
 import internal M, SECTION from "/Units/AuctionHouse"
 import AUCTION_HOUSE from "/Core/ServiceKeys"
+import type LedgerOpenOptions from "/Core/API"
 import CHARM, buy, setUp, tearDown, open, win, gameFrame, note, replicate from "./AuctionHouse/AuctionHouseHelpers"
 
 local AH = C_AuctionHouse
@@ -62,6 +64,43 @@ local function opening()
     gameFrame():SetPoint("CENTER")
     mock.advanceTime(0.01)
     expect(gameFrame():GetAlpha()).toBe(0)
+end
+
+@test("the Ledger's button at the tab row's right opens it beside the window; there while the Ledger has a window")
+local function ledgerButton()
+    -- (the Ledger's window as its service gives it: not in this build)
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local had = svc.Open
+    local asked: { view?: string, opts?: LedgerOpenOptions }[] = {}
+    svc.Open = function(view: string?, opts: LedgerOpenOptions?)
+        asked[#asked + 1] = { view = view, opts = opts }
+    end
+    open()
+    local b = assert(M.ledgerButton)
+    local row = assert(win().tabRow)
+    expect(b).toBeShown()
+    expect(b:GetParent()).toBe(row)
+    local point, rel, relPoint = b:GetPoint(1)
+    expect({ point, relPoint }).toEqual({ "RIGHT", "RIGHT" })
+    expect(rel).toBe(row)
+    expect(b.label:GetText()).toBe("Ledger")
+    mock.click(b)
+    expect(#asked).toBe(1)
+    expect(asked[1].view).toBeNil()
+    expect(assert(asked[1].opts).beside).toBe(win())
+    -- the Ledger off: no button
+    coreSettings.set("ledger", "enabled", false)
+    mock.advanceTime(0.1)
+    expect(b).never.toBeShown()
+    coreSettings.set("ledger", "enabled", true)
+    mock.advanceTime(0.1)
+    -- no window to open: none either
+    local again = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    again.Open = nil
+    M:DrawLedgerButton()
+    expect(b).never.toBeShown()
+    again.Open = had
+    M:DrawLedgerButton()
 end
 
 @test("the game's errors, a failed search and money changes show in the foot")

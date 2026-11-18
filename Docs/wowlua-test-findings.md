@@ -415,6 +415,14 @@ The engine has no group loot: nothing starts a roll (`START_LOOT_ROLL`), `GetLoo
 
 With `"monitor": true` in the profile `wowlua test` builds from (SuuUI's `test` profile since `b9348dff`), every `SetScript`, `HookScript` and timer the addon makes runs inside the monitor's timing wrapper (`wowlua/runtime.lua`, `mon.setScript`: a table lookup, `perf.begin`, `perf.finish`, about 50 instructions a call). The wrapper is a file of the addon's own folder, so in a `--profile-out` profile it is the outermost frame of the addon's on every wrapped script, and whatever runs below it counts as the addon's: the test files' own scripts too (they are built with the monitor as well), and through them the game's handlers for the events they fire. The perf scenarios drive each frame from an `OnUpdate` in `tests/perf/util.wowlua`; with the monitor on, everything that driver fires, Blizzard's UI included, was SuuUI's. `python3 -I tools/perf.py run idle` on `fa15e335`, SuuUI's instructions a frame: 977 with the monitor and runtime checks, 931 with the monitor only, 455 with the checks only, 409 with neither (and a phase driven by events far more: the raid boss fight 9,640 under the `test` profile, 2,064 with neither). Wanted: the wrapper and the code under a test file's scripts kept apart in the profile (the wrapper as wowlua's own, not the addon's), or a way to choose the profile per run (wowlua#266); until then `tools/perf.py run` rewrites the `test` profile for the run (`tests/perf/README.md`). (perf scenarios 2026-11-16)
 
+<a id="r26"></a>
+
+### R26. `GetMouseButtonClicked()` answers nil inside a click
+
+*Status: open (0.13.15; found 2026-11-18, the Ledger's Alt-click).*
+
+Inside a button's `OnClick` that `mock.click(button, "RightButton")` runs, `GetMouseButtonClicked()` answers nil (the handler gets `"RightButton"` as its argument). In the game it names the button that clicked, in any script the click runs (as documented; still to be checked in game on Forever) (the game's `HandleModifiedItemClick`, called from a bag slot's click, has no button argument; SuuUI's Alt-click reads it there to leave Alt-right-click to the game). The Ledger's test (`tests/unit/Units/Ledger/Entry.test.wowlua`) stubs it for the right-click case. Wanted: `mock.click` setting what `GetMouseButtonClicked` answers while the click's scripts run. (units-trade)
+
 ## Compiler and checker issues
 
 <a id="k1"></a>

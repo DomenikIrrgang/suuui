@@ -1,7 +1,7 @@
 -- UI/Inventory: the item slot's skin (on a plain button and on a template's,
 -- empty, by quality, dimmed and locked, hover), money and its text, the
 -- inventory panel (search, sort, the grid and its sections, the foot's
--- note, money and action), the characters view (picker, Bags/Bank, All
+-- note, money and action; a click on the money), the characters view (picker, Bags/Bank, All
 -- characters, the banner, found items), columns and a theme change.
 
 import test, expect, afterEach, cases from "wowlua:test"
@@ -373,6 +373,31 @@ local function foot()
     expect(inv.note).toBeAnchoredTo(inv.rule, "TOPLEFT", "BOTTOMLEFT")
     -- none ever: nothing to hide
     make():SetAction(nil)
+end
+
+@test("a click on the money (0.48): its call and tooltip; nil makes it plain text again")
+local function moneyClick()
+    local inv = make()
+    inv:SetMoney(10000)
+    expect(inv.money:IsMouseEnabled()).toBe(false)
+    local clicked = mock.spy()
+    local show = mock.stub(tooltipModule, "showTooltip", function(_o: Region, _d: tooltipModule.TooltipSource) end)
+    mock.stub(tooltipModule, "hideTooltip", function() end)
+    inv:SetMoneyClick(clicked, { title = "Money", meta = "Click: the Ledger" })
+    expect(inv.money:IsMouseEnabled()).toBe(true)
+    mock.hover(inv.money)
+    expect(show).toHaveBeenCalledWith(inv.money, { title = "Money", meta = "Click: the Ledger" })
+    mock.click(inv.money)
+    expect(clicked).toHaveBeenCalledTimes(1)
+    -- the right button: nothing
+    mock.click(inv.money, "RightButton")
+    expect(clicked).toHaveBeenCalledTimes(1)
+    mock.hover(nil)
+    -- off: no click, no tooltip
+    inv:SetMoneyClick(nil)
+    expect(inv.money:IsMouseEnabled()).toBe(false)
+    mock.click(inv.money)
+    expect(clicked).toHaveBeenCalledTimes(1)
 end
 
 @test("close: onClose when set, else hidden")

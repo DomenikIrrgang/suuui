@@ -1,0 +1,174 @@
+-- Units/Ledger/Notes: the Ledger's timed notes: after Scan all its deals
+-- (the setting, off by default; none without deals; Show deals opens
+-- Prices at Deals), and a watched item a scan or a search finds under your
+-- price (once per item per scan; a new watch is no find), in SuuUI's money.
+
+import test, expect, afterEach, cases from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import type LedgerOpenOptions from "/Core/API"
+import internal M from "/Units/Ledger"
+import * as notes from "/Units/Ledger/Notes"
+import expectNoErrors from "../../../helpers"
+
+const DUST = 990701
+const SHARD = 990702
+const HIDE = 990703
+mock.defineItem(DUST, { name = "Test Dust", quality = 1, stackCount = 20, sellPrice = 50, icon = 134400 })
+mock.defineItem(SHARD, { name = "Test Shard", quality = 2, stackCount = 20, sellPrice = 100, icon = 134071 })
+mock.defineItem(HIDE, { name = "Test Hide", quality = 1, stackCount = 20, sellPrice = 500, icon = 134122 })
+
+const DAY_SECONDS = 86400
+local money = SuuUI.UI.MoneyText
+
+local said: { [string]: unknown }[] = {}
+
+@afterEach
+local function cleanup()
+    said = {}
+    local d = M:Data()
+    d.prices, d.scans, d.watches = nil, nil, nil
+    M.cache, M.vendor = {}, {}
+    M:Reset("scanNote")
+    mock.advanceTime(1)
+    expectNoErrors()
+end
+
+local function listen()
+    mock.stub(SuuUI, "Notify", function(def: { [string]: unknown }): string?
+        said[#said + 1] = def
+        return nil
+    end)
+end
+
+-- An item's looks on days before today: lows[k] k days ago.
+local function history(itemID: number, lows: number[])
+    for k = #lows, 1, -1 do
+        M:RecordLook(itemID, lows[k], 0, 10, 2, time() - k * DAY_SECONDS)
+    end
+end
+
+-- A Scan all of these looks ({ itemID, low, qty }), read and told.
+local function scan(list: { number }[])
+    local looks: number[] = {}
+    for _, l in ipairs(list) do
+        for _, v in ipairs({ l[1], l[2], 0, l[3] or 1, 1 }) do
+            looks[#looks + 1] = v
+        end
+    end
+    M:Emit("SUUUI_AUCTION_SCANNED", looks, #list)
+    mock.advanceTime(0.01)
+    mock.advanceTime(0.01)
+end
+
+@test("the scan note's words: one or many deals, the best two, how many more, under vendor price")
+@cases({
+    { { "Test Shard 31% under" }, 1, 0, "Test Shard 31% under." },
+    { { "Test Shard 31% under", "Test Dust 29% under" }, 2, 0, "Test Shard 31% under and Test Dust 29% under." },
+    {
+        { "Test Shard 31% under", "Test Dust 29% under" },
+        14,
+        2,
+        "Test Shard 31% under, Test Dust 29% under and 12 more; 2 under vendor price.",
+    },
+    { { "Test Hide under vendor price" }, 1, 1, "Test Hide under vendor price; 1 under vendor price." },
+})
+local function scanWords(best: string[], deals: number, underVendor: number, want: string)
+    expect(notes.scanBody(best, deals, underVendor)).toBe(want)
+end
+
+@test("the scan note's title and a deal's words")
+local function titles()
+    expect(notes.scanTitle(1)).toBe("The scan found 1 deal")
+    expect(notes.scanTitle(14)).toBe("The scan found 14 deals")
+    expect(notes.dealText("Test Shard", 30.6)).toBe("Test Shard 31% under")
+    expect(notes.dealText("Test Hide", nil)).toBe("Test Hide under vendor price")
+end
+
+@test("a watched item's words: the scan or a search, how many, your price, the usual one")
+local function watchWords()
+    expect(notes.watchTitle("Test Dust", 400000)).toBe("Test Dust under " .. money(400000))
+    expect(notes.watchBody(true, 2, 385178, 400000, 542500)).toBe(
+        ("The scan found 2 at %s (your price: %s). Usual: %s."):format(money(385178), money(400000), money(542500))
+    )
+    expect(notes.watchBody(false, 0, 750, 800, nil)).toBe(
+        ("A search found it at %s (your price: %s)."):format(money(750), money(800))
+    )
+end
+
+@test("after Scan all: no note unless asked; asked, its deals, the furthest under first; Show deals opens them")
+local function scanNote()
+    listen()
+    history(SHARD, { 1000, 1000, 1000 })
+    history(DUST, { 1000, 1000, 1000 })
+    history(HIDE, { 600, 600, 600 })
+    mock.advanceTime(0.01)
+    -- off by default
+    expect(M:Get("scanNote")).toBe(false)
+    scan({ { SHARD, 690 }, { DUST, 710 }, { HIDE, 450 } })
+    expect(#said).toBe(0)
+    M:Set("scanNote", true)
+    scan({ { SHARD, 690 }, { DUST, 710 }, { HIDE, 450 } })
+    expect(#said).toBe(1)
+    local note = said[1]
+    expect(note.kind).toBe("timed")
+    expect(note.category).toBe("Deals")
+    expect(note.title).toBe("The scan found 3 deals")
+    expect(note.body).toBe("Test Shard 31% under, Test Dust 29% under and 1 more; 1 under vendor price.")
+    -- Show deals: Prices at Deals (through the Ledger's window, when there)
+    local svc = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    local had = svc.Open
+    local asked: { view?: string, opts?: LedgerOpenOptions }[] = {}
+    svc.Open = function(view: string?, opts: LedgerOpenOptions?)
+        asked[#asked + 1] = { view = view, opts = opts }
+    end
+    local actions = note.actions :: { { label: string, variant?: string, onClick: () -> () } }
+    expect(actions[1].label).toBe("Show deals")
+    expect(actions[1].variant).toBe("primary")
+    actions[1].onClick()
+    expect(asked).toEqual({ { view = "prices", opts = { show = "deals" } } })
+    svc.Open = had
+    -- a scan without deals: no note
+    scan({ { SHARD, 1000 }, { DUST, 1000 }, { HIDE, 900 } })
+    expect(#said).toBe(1)
+end
+
+@test("a watched item under your price: told once per item per scan, by a search or a scan; a new watch is no find")
+local function watchNote()
+    listen()
+    history(DUST, { 1000, 1000, 1000 })
+    mock.advanceTime(0.01)
+    -- a watch on an item already under: nothing yet
+    M:WatchItem(DUST, 1200)
+    mock.advanceTime(0.01)
+    expect(#said).toBe(0)
+    -- a search finds it under
+    M:RecordLook(DUST, 750, 0, 2, 1)
+    mock.advanceTime(0.01)
+    expect(#said).toBe(1)
+    local note = said[1]
+    expect(note.kind).toBe("timed")
+    expect(note.category).toBe("Watched item")
+    expect(note.title).toBe("Test Dust under " .. money(1200))
+    expect(note.body).toBe(
+        ("A search found 2 at %s (your price: %s). Usual: %s."):format(money(750), money(1200), money(1000))
+    )
+    expect((note.icon :: { texture: unknown }).texture).toBe(134400)
+    -- searched again: not told again before the next scan
+    mock.advanceTime(5)
+    M:RecordLook(DUST, 740, 0, 3, 1)
+    mock.advanceTime(0.01)
+    expect(#said).toBe(1)
+    -- a scan finds it under: told again, as the scan's
+    mock.advanceTime(5)
+    scan({ { DUST, 730, 4 } })
+    expect(#said).toBe(2)
+    expect(said[2].body).toBe(
+        ("The scan found 4 at %s (your price: %s). Usual: %s."):format(money(730), money(1200), money(1000))
+    )
+    -- a scan that finds it over your price: nothing
+    mock.advanceTime(5)
+    scan({ { DUST, 1300 } })
+    expect(#said).toBe(2)
+    M:UnwatchItem(DUST)
+end

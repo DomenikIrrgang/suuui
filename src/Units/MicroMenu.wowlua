@@ -4,7 +4,8 @@
 -- through a secure button, so the game's own rules for each window apply,
 -- in combat too), plus the design's World map and Bags. Which ones show is
 -- a setting. An arcane diamond marks a button with something to act on
--- (unspent talent points). Blizzard's micro menu is hidden while this runs
+-- (unspent talent points). The Ledger's button (0.48) while that module is
+-- on. Blizzard's micro menu is hidden while this runs
 -- (its buttons stay, unseen, for SuuUI's to click); turned off, it's back.
 -- A built-in module written against the public API only.
 
@@ -15,8 +16,10 @@ import * as errors from "wowlua:errors"
 import * as frames from "wowlua:frames"
 import * as tbl from "wowlua:table"
 import hook from "wowlua:hooks"
+import * as itemData from "wowlua:item"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
+local LEDGER = SuuUI.Services.LEDGER
 
 local DEFAULTS = {
     position = { point = "TOPLEFT", x = 28, y = -28 } :: Position,
@@ -35,6 +38,7 @@ local DEFAULTS = {
         "collections",
         "worldmap",
         "bags",
+        "ledger",
         "menu",
     },
     -- plugins' buttons seen so far (0.17): a new one starts shown, and
@@ -146,6 +150,27 @@ local ITEMS: Item[] = {
             return false
         end,
     },
+    -- the Ledger (0.48, design board "Ledger"): its own window, through the
+    -- ledger service, while that module is on; no key by default (Key
+    -- Bindings › SuuUI › Ledger)
+    {
+        key = "ledger",
+        glyph = "coin",
+        label = "Ledger",
+        bind = "SUUUI_LEDGER",
+        onClick = function()
+            local svc = SuuUI.UseService(LEDGER)
+            local toggle = svc and (svc.Toggle or svc.Open)
+            if toggle then
+                toggle()
+            end
+        end,
+        open = function()
+            local svc = SuuUI.UseService(LEDGER)
+            local shown = svc and svc.IsShown
+            return shown ~= nil and shown()
+        end,
+    },
     -- the game menu's Blizzard button doesn't answer a secure click on
     -- Forever (it acts only with the mouse over it), so the frame is toggled;
     -- and the game's own button lies unseen over this one (AdoptMenuButton),
@@ -250,6 +275,55 @@ local function legacyToSpend(): number
     return q
 end
 
+-- Whether the Ledger module is on (its setting: known before it is
+-- enabled, which may be after this module).
+local function ledgerOn(): boolean
+    local ledger = SuuUI.GetModule("ledger")
+    return ledger ~= nil and ledger:Setting("enabled") ~= false
+end
+
+-- A button this client and SuuUI have: its Blizzard button there, the
+-- Ledger's module on.
+local function available(item: Item): boolean
+    if item.key == "ledger" then
+        return ledgerOn()
+    end
+    return not item.click or blizzardFrame(item.click) ~= nil
+end
+
+-- The Ledger's alert (design: "A watched item is under your price: Black
+-- Lotus, 2 at 38g 51s 78c"): the watched items the last look found under
+-- your price, the furthest under first, three named. An item the game
+-- doesn't know yet is asked for, and `again` runs once it came.
+local asked: { [number]: boolean } = {}
+local function ledgerAlert(again: () -> ()): string?
+    local svc = SuuUI.UseService(LEDGER)
+    local fn = svc and svc.WatchedUnder
+    local list = fn and fn() or {}
+    if #list == 0 then
+        return nil
+    end
+    local parts: string[] = {}
+    for i = 1, math.min(3, #list) do
+        local e = list[i]
+        local data = itemData.get(e.itemID)
+        if not data and not asked[e.itemID] then
+            asked[e.itemID] = true
+            itemData.load(e.itemID, function(loaded: itemData.ItemData?)
+                if loaded then
+                    again()
+                end
+            end)
+        end
+        local name = data and data.name or ("Item " .. e.itemID)
+        parts[i] = ("%s, %s%s"):format(name, e.qty > 0 and (e.qty .. " at ") or "at ", UI.MoneyText(e.low))
+    end
+    local head = #list == 1 and "A watched item is under your price: " or
+        ("%d watched items are under your price: "):format(#list)
+    local more = #list > 3 and ("; %d more"):format(#list - 3) or ""
+    return head .. table.concat(parts, "; ") .. more
+end
+
 --------------------------------------------------------------------------------
 -- Settings
 --------------------------------------------------------------------------------
@@ -262,7 +336,7 @@ local function buttonChips(parent: Frame, onChange: (values: string[]) -> ()): T
                 opts[#opts + 1] = { value = extra.key, label = extra.label or extra.key }
             end
         end
-        if not item.click or _G[item.click] then
+        if available(item) then
             opts[#opts + 1] = { value = item.key, label = item.label }
         end
     end
@@ -357,8 +431,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
                     end
                 end
             end
-            local click = item.click
-            if chosen[item.key] and (not click or blizzardFrame(click)) then
+            if chosen[item.key] and available(item) then
                 out[#out + 1] = item
             end
         end
@@ -451,6 +524,12 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         menu:SetAlert(
             "legacy",
             legacy > 0 and ((legacy == 1 and "1 Legacy point" or (legacy .. " Legacy points")) .. " to spend") or nil
+        )
+        menu:SetAlert(
+            "ledger",
+            ledgerAlert(function()
+                self:UpdateAlerts()
+            end)
         )
     end
 
@@ -595,7 +674,7 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
         end
         local list: MicroMenuItem[] = {}
         for _, item in ipairs(self.previewItems or {}) do
-            if chosen[item.key] then
+            if chosen[item.key] and (item.key ~= "ledger" or ledgerOn()) then
                 list[#list + 1] = item
             end
         end
@@ -806,6 +885,10 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
             if name == "durability" then
                 self:UpdateDurability()
             end
+            -- (the Ledger turned on or off: its button there, or gone)
+            if name == "ledger" then
+                self:Layout()
+            end
             -- (its toggle there now, or gone)
             if name == "collections" then
                 self:Layout()
@@ -823,6 +906,16 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
             if self.pendingLayout then
                 self:Layout()
             end
+        end)
+        -- a watched item under your price, or no longer
+        self:On("SUUUI_LEDGER_CHANGED", function(_, what)
+            if what == "watches" or what == "scan" then
+                self:UpdateAlerts()
+            end
+        end)
+        -- (the Ledger's alert carries the coins' colours)
+        self:On("SUUUI_THEME_CHANGED", function()
+            self:UpdateAlerts()
         end)
         self:On("SUUUI_SPELLS_TO_TRAIN", function(_, n, cost)
             self.spellsToTrain = tonumber(n) or 0
@@ -857,3 +950,19 @@ class MicroMenuModule extends Module<typeof(DEFAULTS)>
 end
 
 M = SuuUI.AddModule(MicroMenuModule.new())
+
+-- 0.48: the Ledger's button, after Bags, in the buttons of a profile that
+-- chose its own before it came (a new profile has it by default)
+M:Migrate("ledgerButton", function(values)
+    local chosen = values.buttons
+    if type(chosen) ~= "table" then
+        return
+    end
+    local list = chosen :: unknown[]
+    for _, k in ipairs(list) do
+        if k == "ledger" then
+            return
+        end
+    end
+    list[#list + 1] = "ledger"
+end)
