@@ -180,6 +180,30 @@ Beast Training never needs it.
 Repro: open a trainer, `SelectTrainerService(2)` with a frame registered
 for `TRAINER_DESCRIPTION_UPDATE`: it fires in the VM, not in the game.
 
+<a id="v6"></a>
+
+### V6. A direct call of a group header's update function: later updates refused in combat in the game, never in the VM
+
+Found in game 2026-11-18, fix not yet confirmed in game. SuuUI's raid frames
+called `SecureGroupHeader_Update(header)` and `SecureGroupPetHeader_Update(header)`
+themselves after a layout. Run from addon code, the update writes tainted
+entries into the file-local tables of `SecureGroupHeaders.lua`
+(`sortingTable`, `tokenTable`), which every group header in the game shares.
+A later update by the header's own events (`GROUP_ROSTER_UPDATE`, `UNIT_PET`)
+that lists fewer units (a pet gone, a member left) reads one of those slots
+(`#unitTable` in `configureChildren`): its execution turns tainted, and in
+combat every protected call after it was refused ("Blocked in combat:
+SuuUIRaidPetsUnitButton1:Hide()" hundreds of times, a stutter). So drive a
+group header only through its own scripts: `SetAttribute` (its
+`OnAttributeChanged` updates it when it is visible and `_ignore` is unset;
+Units/RaidFrames sets an attribute of its own, `suu-layout`, to a new value
+for each layout) and `Show` (`OnShow`); never call the game's update or event
+functions on it.
+
+In `wowlua test` (0.13.15) the direct call leaves no trace: a raid with two
+pets laid out by the direct call, then one pet gone (or a member left) in
+combat, gives no refusals.
+
 ## 2. Compiler and tooling issues
 
 C1–C3 are the original entries. Entries marked *pattern* are by the spec, not
