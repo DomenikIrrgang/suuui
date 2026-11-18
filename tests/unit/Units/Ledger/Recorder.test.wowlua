@@ -1,0 +1,478 @@
+-- Units/Ledger/Recorder: each source of money booked as the probe found it
+-- comes (the call, then the change a moment later, several on their way at
+-- once): vendors (sales, a purchase, buyback, repairs, not the guild's),
+-- the mail (an auction sale with its invoice, a player's money, a COD paid,
+-- an expired auction, money sent with the postage; the money waiting),
+-- trade, looted coin (one row per zone and session with its corpses),
+-- quests, training, travel, the auction house (a post's deposit, a
+-- commodity bought, a buyout named by its notice, a bid, a cancel), and
+-- Other (nothing explains it; consecutive ones merged); the global formats
+-- read.
+
+import test, expect, beforeEach, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import internal M from "/Units/Ledger"
+import type Tx from "/Units/Ledger/Books"
+import patternOf, coinsOf, lootOf, placeOf from "/Units/Ledger/Recorder"
+import type Recorder from "/Units/Ledger/Recorder"
+import expectNoErrors from "../../../helpers"
+import * as ah from "../AuctionHouse/AuctionHouseHelpers"
+
+local HERB, BLADE_X, WATER, TOME = 990701, 990702, 990703, 990704
+mock.defineItem(HERB, { name = "Test Dreamfoil", quality = 1, sellPrice = 1658, classID = 7, stackCount = 20 })
+mock.defineItem(BLADE_X, { name = "Test Rusty Blade", quality = 0, sellPrice = 900, classID = 2 })
+mock.defineItem(WATER, { name = "Test Spring Water", quality = 1, sellPrice = 1, classID = 0, stackCount = 20 })
+mock.defineItem(TOME, { name = "Test Old Tome", quality = 2, sellPrice = 100, classID = 9 })
+
+local function rec(): Recorder
+    return assert(M.recorder)
+end
+
+-- This character's transactions, the newest first.
+local function rows(): Tx[]
+    return M:Transactions({ char = assert(M:CharKey()) }, nil)
+end
+
+local function money(delta: number)
+    mock.player:setMoney(GetMoney() + delta)
+end
+
+-- The game's CHAT_MSG_MONEY with a line.
+local function moneyLine(line: string)
+    mock.fireEvent("CHAT_MSG_MONEY", line, "", "", "", "", "", 0, 0, "", 0, 1, "", 0, false, false, false, false, {
+        userID = 0,
+        globalName = "",
+        lastOnlineGUID = "",
+        lastOnlineName = "",
+        hasAttachment = false,
+        hasPoll = false,
+        hasEmbed = false,
+        hasSticker = false,
+        hasEmoji = false,
+        hasError = false,
+        hasForwardedMessage = false,
+        forwardedMessage = "",
+        fromDiscord = false,
+    })
+end
+
+@beforeEach
+local function start()
+    mock.player:setMoney(1000000)
+    mock.advanceTime(2)
+    M:Data().books, M:Data().mail = nil, nil
+    M:Store().decoded = {}
+    rec().merged, rec().lastKind = {}, nil
+end
+
+@afterEach
+local function cleanup()
+    mock.advanceTime(3)
+    rec().matcher:Clear()
+    M:Data().books, M:Data().mail = nil, nil
+    M:Store().decoded = {}
+    expectNoErrors()
+end
+
+@test("the game's formats read: a subject's item, coins, a loot line, a flight's place")
+local function formats()
+    expect(("Auction successful: Test Dreamfoil"):match(assert(patternOf(AUCTION_SOLD_MAIL_SUBJECT)))).toBe("Test Dreamfoil")
+    expect(patternOf(nil)).toBeNil()
+    local coins = GOLD_AMOUNT:format(2) .. ", " .. SILVER_AMOUNT:format(5) .. ", " .. COPPER_AMOUNT:format(56)
+    expect(coinsOf(coins)).toBe(20556)
+    expect(lootOf(YOU_LOOT_MONEY:format(coins))).toBe(20556)
+    expect(lootOf(LOOT_MONEY_SPLIT:format(SILVER_AMOUNT:format(2) .. ", " .. COPPER_AMOUNT:format(56)))).toBe(256)
+    expect(lootOf("You receive item: Test Dreamfoil.")).toBeNil()
+    expect(placeOf("Marshal's Refuge, Un'Goro Crater")).toBe("Marshal's Refuge")
+    expect(placeOf("Orgrimmar")).toBe("Orgrimmar")
+end
+
+--------------------------------------------------------------------------------
+-- Vendors
+--------------------------------------------------------------------------------
+
+@test("vendors: two sales on their way at once, a purchase, buyback, repairs (not the guild's)")
+local function vendors()
+    mock.setBag(0, { slots = 8, items = { [1] = { id = HERB, count = 2 }, [2] = { id = BLADE_X, count = 1 } } })
+    mock.openMerchant({
+        name = "Quartermaster",
+        items = { { id = WATER, price = 25, stack = 5 } },
+        canRepair = true,
+        repairCost = 12345,
+        damaged = 2,
+    })
+    mock.advanceTime(0.1)
+    -- the right-clicks: the game's secure code runs C_Container.UseContainerItem
+    -- (its hook here: the engine's /use of a bag slot sells nothing), the
+    -- server's answers a moment later
+    rec():OnUseContainerItem(0, 1)
+    mock.sell(0, 1)
+    rec():OnUseContainerItem(0, 2)
+    mock.sell(0, 2)
+    mock.advanceTime(1)
+    local r = rows()
+    expect(#r).toBe(2)
+    local byItem: { [number]: Tx } = {}
+    for _, t in ipairs(r) do
+        byItem[assert(t.item)] = t
+    end
+    local herb = assert(byItem[HERB])
+    expect(herb).toEqual({ at = herb.at, kind = "vendor", amount = 3316, item = HERB, qty = 2, char = M:CharKey() })
+    expect(assert(byItem[BLADE_X]).amount).toBe(900)
+    -- a purchase: 5 water for 25
+    BuyMerchantItem(1, 5)
+    mock.advanceTime(1)
+    expect(rows()[1]).toEqual({ at = rows()[1].at, kind = "vendor", amount = -25, item = WATER, qty = 5, char = M:CharKey() })
+    -- buying the blade back
+    BuybackItem(GetNumBuybackItems())
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("buyback")
+    expect(rows()[1].amount).toBe(-900)
+    expect(rows()[1].item).toBe(BLADE_X)
+    -- repairs, with the vendor's name; the guild's money isn't yours
+    RepairAllItems(false)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("repair")
+    expect(rows()[1].amount).toBe(-12345)
+    expect(rows()[1].text).toBe("Quartermaster")
+    local n = #rows()
+    rec():OnRepairAll(true)
+    mock.advanceTime(1)
+    expect(#rows()).toBe(n)
+    mock.closeMerchant()
+end
+
+--------------------------------------------------------------------------------
+-- The mail
+--------------------------------------------------------------------------------
+
+local box: mock.MockUnit? = nil
+
+local function openMailbox(letters: { [string]: unknown }[])
+    local mailbox = box or mock.spawnUnit({ name = "Mailbox", reaction = "neutral" })
+    box = mailbox
+    mock.defineMailbox(mailbox, { letters = letters })
+    mock.player:interact(mailbox)
+    mock.advanceTime(1.5)
+end
+
+@test("the mail: a sale with its invoice, a player's money, a COD paid, an expired auction; the money waiting")
+local function mail()
+    mock.setBag(0, { slots = 8, items = {} })
+    openMailbox({
+        {
+            sender = "Horde Auction House",
+            subject = AUCTION_SOLD_MAIL_SUBJECT:format("Test Dreamfoil"),
+            money = 1366,
+            daysLeft = 29,
+            wasRead = true,
+            invoice = { "seller", "Test Dreamfoil", nil, 1432, 0, 5, 71, 0, 0, 0, 1 },
+        },
+        { sender = "Brannoc", subject = "For you", money = 500000, daysLeft = 30, wasRead = true },
+        { sender = "Tamsin", subject = "Pay up", cod = 20000, items = { { id = TOME, count = 1 } }, daysLeft = 3, wasRead = true },
+        {
+            sender = "Horde Auction House",
+            subject = AUCTION_EXPIRED_MAIL_SUBJECT:format("Test Spring Water"),
+            items = { { id = WATER, count = 20 } },
+            daysLeft = 30,
+            wasRead = true,
+        },
+    })
+    -- what waits: all the money, one sale
+    local waiting, sales, known = M:MailWaiting({ char = assert(M:CharKey()) })
+    expect(waiting).toBe(501366)
+    expect(sales).toBe(1)
+    expect(known).toBe(true)
+    -- the sale: its price, the house's cut, the deposit back
+    TakeInboxMoney(1)
+    mock.advanceTime(1)
+    local sold = rows()[1]
+    expect(sold.kind).toBe("sold")
+    expect(sold.amount).toBe(1366)
+    expect(sold.item).toBe(HERB)
+    expect(sold.gross).toBe(1432)
+    expect(sold.cut).toBe(71)
+    expect(sold.qty).toBe(1)
+    -- a player's money (the sale's letter gone: Brannoc's is first now)
+    local brannoc = 1
+    for i = 1, GetInboxNumItems() do
+        if select(3, GetInboxHeaderInfo(i)) == "Brannoc" then
+            brannoc = i
+        end
+    end
+    TakeInboxMoney(brannoc)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("mail")
+    expect(rows()[1].amount).toBe(500000)
+    expect(rows()[1].text).toBe("Brannoc")
+    expect(rows()[1].who).toBe(true)
+    -- the COD (the engine doesn't take its money: the server's change here)
+    local function indexOf(sender: string): number
+        for i = 1, GetInboxNumItems() do
+            if select(3, GetInboxHeaderInfo(i)) == sender then
+                return i
+            end
+        end
+        error("no letter from " .. sender)
+    end
+    TakeInboxItem(indexOf("Tamsin"), 1)
+    mock.advanceTime(0.3)
+    money(-20000)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("cod")
+    expect(rows()[1].amount).toBe(-20000)
+    expect(rows()[1].item).toBe(TOME)
+    -- the expired auction: its item back, no money
+    local expired = 0
+    for i = 1, GetInboxNumItems() do
+        if select(4, GetInboxHeaderInfo(i)) == AUCTION_EXPIRED_MAIL_SUBJECT:format("Test Spring Water") then
+            expired = i
+        end
+    end
+    TakeInboxItem(expired, 1)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("expired")
+    expect(rows()[1].amount).toBe(0)
+    expect(rows()[1].item).toBe(WATER)
+    expect(rows()[1].qty).toBe(20)
+    -- what waits now
+    expect((M:MailWaiting(nil))).toBe(0)
+    CloseMail()
+end
+
+@test("money sent by mail with the postage, to whom")
+local function sending()
+    openMailbox({})
+    SetSendMailMoney(10000)
+    SendMail("Brannoc", "Gold", "")
+    mock.advanceTime(1.5)
+    local t = rows()[1]
+    expect(t.kind).toBe("mail")
+    expect(t.amount < -10000).toBe(true)
+    expect(t.text).toBe("Brannoc")
+    expect(t.who).toBe(true)
+    CloseMail()
+end
+
+--------------------------------------------------------------------------------
+-- Trade, looted coin, quests, Other
+--------------------------------------------------------------------------------
+
+@test("trade: theirs less yours on \"Trade complete.\", with the partner's name")
+local function trading()
+    -- (the engine's trade has no money: what each side puts in as the game
+    -- tells it)
+    local mine, theirs = 100, 25000
+    mock.stub(_G, "GetPlayerTradeMoney", function(): number
+        return mine
+    end)
+    mock.stub(_G, "GetTargetTradeMoney", function(): number
+        return theirs
+    end)
+    -- the other side accepts: the engine's trade window
+    local other = mock.spawnUnit({ name = "Brannoc", reaction = "friendly", class = "WARRIOR" })
+    other:setDistance(3)
+    other:openTrade()
+    mock.advanceTime(0.5)
+    mock.fireEvent("TRADE_MONEY_CHANGED")
+    mock.fireEvent("TRADE_ACCEPT_UPDATE", 1, 1)
+    CloseTrade()
+    mine, theirs = 0, 0
+    mock.fireEvent("UI_INFO_MESSAGE", 251, ERR_TRADE_COMPLETE)
+    mock.advanceTime(0.26)
+    money(24900)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("trade")
+    expect(rows()[1].amount).toBe(24900)
+    expect(rows()[1].text).toBe("Brannoc")
+    expect(rows()[1].who).toBe(true)
+end
+
+@test("looted coin: one row per zone and session with how many corpses; the line before or after the money")
+local function looting()
+    local function loot(c: number, before: boolean)
+        local line = YOU_LOOT_MONEY:format(SILVER_AMOUNT:format(math.floor(c / 100)) .. ", " .. COPPER_AMOUNT:format(c % 100))
+        if before then
+            moneyLine(line)
+            money(c)
+        else
+            money(c)
+            moneyLine(line)
+        end
+        mock.advanceTime(0.5)
+    end
+    loot(256, true)
+    loot(1203, false)
+    loot(77, true)
+    mock.advanceTime(2)
+    local r = rows()
+    expect(#r).toBe(1)
+    expect(r[1].kind).toBe("loot")
+    expect(r[1].amount).toBe(256 + 1203 + 77)
+    expect(r[1].n).toBe(3)
+    expect(r[1].text).toBe(GetRealZoneText() ~= "" and GetRealZoneText() or nil)
+end
+
+@test("a quest's money; what nothing explains is Other, the same way in a row merged")
+local function questAndOther()
+    mock.fireEvent("QUEST_TURNED_IN", 990001, 1200, 3500)
+    money(3500)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("quest")
+    expect(rows()[1].amount).toBe(3500)
+    money(-700)
+    mock.advanceTime(2)
+    money(-300)
+    mock.advanceTime(2)
+    local r = rows()
+    expect(r[1].kind).toBe("other")
+    expect(r[1].amount).toBe(-1000)
+    expect(r[1].n).toBe(2)
+    -- money in isn't merged into money out
+    money(50)
+    mock.advanceTime(2)
+    expect(rows()[1].amount).toBe(50)
+    expect(#rows()).toBe(3)
+end
+
+@test("training: what a service costs, its name")
+local function training()
+    local npc = mock.spawnUnit({ name = "Trainer Bob", level = 30, reaction = "friendly" })
+    mock.defineTrainer(npc, {
+        greeting = "hi",
+        services = { { spell = 990777, name = "Test Strike", icon = 132337, level = 1, rank = "Rank 1", cost = 300 } },
+    })
+    mock.defineGossip(npc, { text = "hello", options = { { name = "Train me", icon = 132058, gossipOptionID = 7, opens = "trainer" } } })
+    npc:setDistance(3)
+    mock.player:interact(npc)
+    mock.advanceTime(1)
+    C_GossipInfo.SelectOption(7)
+    mock.advanceTime(1)
+    local index = 0
+    for i = 1, GetNumTrainerServices() do
+        if GetTrainerServiceInfo(i) == "Test Strike" then
+            index = i
+        end
+    end
+    BuyTrainerService(index)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("train")
+    expect(rows()[1].amount).toBe(-300)
+    expect(rows()[1].text).toBe("Test Strike (Rank 1)")
+    CloseTrainer()
+end
+
+@test("travel: a flight's cost, from where you are to where it goes")
+local function travel()
+    local master = mock.spawnUnit({ name = "Test Flight Master", level = 55, reaction = "friendly" })
+    mock.defineGossip(master, {
+        text = "Where to?",
+        options = { { name = "I need a ride.", icon = 132057, gossipOptionID = 98541, opens = "taxi" } },
+    })
+    mock.defineTaxi(master, {
+        mapID = 1464,
+        nodes = {
+            { name = "Orgrimmar, Durotar", nodeID = 23, x = 0.628, y = 0.443, state = 0, cost = 0, routes = 0 },
+            {
+                name = "Crossroads, The Barrens",
+                nodeID = 25,
+                x = 0.516,
+                y = 0.555,
+                state = 1,
+                cost = 1890,
+                routes = 1,
+                hops = { 1, 2 },
+                flightTime = 60,
+            },
+        },
+    })
+    master:setDistance(3)
+    mock.player:interact(master)
+    mock.advanceTime(1)
+    C_GossipInfo.SelectOption(98541)
+    mock.advanceTime(1)
+    local to = 0
+    for i = 1, NumTaxiNodes() do
+        if TaxiNodeName(i) == "Crossroads, The Barrens" then
+            to = i
+        end
+    end
+    TakeTaxiNode(to)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("travel")
+    expect(rows()[1].amount).toBe(-1890)
+    expect(rows()[1].text).toBe("Orgrimmar to Crossroads")
+    mock.advanceTime(70)
+end
+
+--------------------------------------------------------------------------------
+-- The auction house
+--------------------------------------------------------------------------------
+
+@test("the auction house: a post's deposit, a commodity bought, a buyout named by its notice, a bid, a cancel")
+local function auctions()
+    ah.setUp()
+    ah.open()
+    -- a post: its deposit the next money out
+    C_AuctionHouse.PostItem(ah.at(2), 1, 1, nil, 48000)
+    mock.advanceTime(1)
+    local post = rows()[1]
+    expect(post.kind).toBe("posted")
+    expect(post.item).toBe(ah.BLADE)
+    expect(post.qty).toBe(1)
+    expect(post.price).toBe(48000)
+    expect(post.amount < 0).toBe(true)
+    -- a commodity bought at the game's quote
+    C_AuctionHouse.StartCommoditiesPurchase(ah.ORE, 10)
+    mock.advanceTime(1)
+    C_AuctionHouse.ConfirmCommoditiesPurchase(ah.ORE, 10)
+    mock.advanceTime(2)
+    local bought = rows()[1]
+    expect(bought.kind).toBe("bought")
+    expect(bought.item).toBe(ah.ORE)
+    expect(bought.qty).toBe(10)
+    expect(bought.amount < 0).toBe(true)
+    -- a buyout (the engine has no bids: the call's hook, the house's notice
+    -- and the money as the probe saw them)
+    rec():OnPlaceBid(4242, 50000)
+    mock.fireEvent("AUCTION_HOUSE_PURCHASE_COMPLETED", 4242)
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", 2, "Test Rusty Blade", 4242)
+    mock.advanceTime(0.6)
+    money(-50000)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("bought")
+    expect(rows()[1].amount).toBe(-50000)
+    expect(rows()[1].item).toBe(BLADE_X)
+    -- a bid: the money first, BID_ADDED after
+    rec():OnPlaceBid(4243, 1200)
+    money(-1200)
+    mock.fireEvent("BID_ADDED", 4243)
+    mock.advanceTime(1)
+    expect(rows()[1].kind).toBe("bid")
+    -- a cancel without a cost: booked at once, no money
+    rec():OnCancel(99999)
+    expect(rows()[1].kind).toBe("cancelled")
+    expect(rows()[1].amount).toBe(0)
+    ah.tearDown()
+end
+
+@test("a post the game asks to confirm counts once; two posts of the same at once count twice")
+local function confirmPost()
+    local n = #rows()
+    -- asked to confirm: PostCommodity, then ConfirmPostCommodity
+    rec():OnPost(nil, 1, 20, 150, true, false)
+    rec():OnPost(nil, 1, 20, 150, true, true)
+    money(-30)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 1)
+    expect(rows()[1].kind).toBe("posted")
+    -- two stacks posted at once: two deposits
+    rec():OnPost(nil, 1, 20, 150, true, false)
+    rec():OnPost(nil, 1, 20, 150, true, false)
+    money(-30)
+    money(-30)
+    mock.advanceTime(3)
+    expect(#rows()).toBe(n + 3)
+    expect(rows()[1].kind).toBe("posted")
+    expect(rows()[2].kind).toBe("posted")
+end

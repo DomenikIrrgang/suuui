@@ -1,7 +1,9 @@
 -- Units/Ledger/Notes: the Ledger's timed notes: after Scan all its deals
 -- (the setting, off by default; none without deals; Show deals opens
 -- Prices at Deals), and a watched item a scan or a search finds under your
--- price (once per item per scan; a new watch is no find), in SuuUI's money.
+-- price (once per item per scan; a new watch is no find), in SuuUI's money;
+-- an auction sold (the game's notice with the item's name, or without one;
+-- the price this character posted it at; the setting).
 
 import test, expect, afterEach, cases from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -30,6 +32,9 @@ local function cleanup()
     d.prices, d.scans, d.watches = nil, nil, nil
     M.cache, M.vendor = {}, {}
     M:Reset("scanNote")
+    M:Reset("soldNote")
+    d.books = nil
+    M:Store().decoded = {}
     mock.advanceTime(1)
     expectNoErrors()
 end
@@ -171,4 +176,39 @@ local function watchNote()
     scan({ { DUST, 1300 } })
     expect(#said).toBe(2)
     M:UnwatchItem(DUST)
+end
+
+
+@test("an auction sold: the item and how many, about what it brings after the cut; without a post or a name")
+local function sold()
+    listen()
+    -- posted as one auction of 20 at 15s each
+    M:BookTx({ at = time() - 3600, kind = "posted", amount = -60, item = DUST, qty = 20, price = 1500 })
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", notes.SOLD, "Test Dust", nil)
+    mock.advanceTime(0.5)
+    expect(#said).toBe(1)
+    local n = said[1]
+    expect(n.category).toBe("Sold")
+    expect(n.kind).toBe("timed")
+    expect(n.title).toBe("Test Dust \195\15120")
+    expect(n.body).toBe("For about " .. money(30000 - 1500) .. ", after the house\226\128\153s cut. It waits in the mail.")
+    expect((n.icon :: { texture?: unknown }).texture).toBe(134400)
+    -- a commodity's post (it may sell in part): no price
+    M:BookTx({ at = time() - 60, kind = "posted", amount = -6, item = SHARD, qty = 200, price = 90, commodity = true })
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", notes.SOLD, "Test Shard", nil)
+    expect(said[2].title).toBe("Test Shard")
+    expect(said[2].body).toBe("A buyer was found. The money waits in the mail, the house\226\128\153s cut taken.")
+    -- without its name (the plain notice: Blizzard's own handler would
+    -- fail on it without one, so the game always names it; kept in case)
+    notes.soldNote(M, nil)
+    expect(said[3].title).toBe("An auction sold")
+    -- other notices (won, a bid placed): none
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", 2, "Test Hide", 77)
+    mock.fireEvent("AUCTION_HOUSE_SHOW_NOTIFICATION", 0)
+    mock.advanceTime(0.5)
+    expect(#said).toBe(3)
+    -- the setting off
+    M:Set("soldNote", false)
+    mock.fireEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", notes.SOLD, "Test Dust", nil)
+    expect(#said).toBe(3)
 end

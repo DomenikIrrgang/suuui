@@ -1,0 +1,208 @@
+-- Units/Ledger/TransactionsPage: the chosen characters' transactions by
+-- day (a heading with the day's net, a row each: when, what, the item or
+-- where from, the character, the amount in or out), the totals of what is
+-- shown; the time (Today · 7 days · 30 days · All), Kinds and Money (in,
+-- out), the search (item, player, kind); the characters chosen; a row's
+-- item page and tooltip; thousands of rows drawn only in sight; nothing
+-- recorded yet.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type TransactionsPage, TxRow, Line from "/Units/Ledger/TransactionsPage"
+import textOf from "/Units/Ledger/TransactionsPage"
+import expectNoErrors from "../../../helpers"
+import seed, seedBooks, openLedger, wipe, KINGSBLOOD, ORE from "./LedgerHelpers"
+
+@afterEach
+local function cleanup()
+    wipe()
+    expectNoErrors()
+end
+
+local function page(): TransactionsPage
+    return openLedger("transactions").transactions
+end
+
+-- The lines: "day" headings and the kinds of the rows, in order.
+local function kinds(p: TransactionsPage): string[]
+    local out: string[] = {}
+    for _, l in ipairs(p.list.items) do
+        local line = l :: Line
+        out[#out + 1] = line.tx and line.tx.kind or "day"
+    end
+    return out
+end
+
+-- The rows in sight, in order.
+local function rows(p: TransactionsPage): TxRow[]
+    local out: { i: number, row: TxRow }[] = {}
+    for _, r in ipairs(p.list:Rows()) do
+        local i = p.list:IndexOf(r)
+        if i and r:IsShown() then
+            out[#out + 1] = { i = i, row = r :: TxRow }
+        end
+    end
+    table.sort(out, function(a: { i: number }, b: { i: number }): boolean
+        return a.i < b.i
+    end)
+    local list: TxRow[] = {}
+    for k, e in ipairs(out) do
+        list[k] = e.row
+    end
+    return list
+end
+
+local function choose(p: TransactionsPage, key: string, value: unknown)
+    local v = p.filter:GetValue() :: { [string]: unknown }
+    v[key] = value
+    p.filter:SetValue(v :: any)
+    p.filter:Changed()
+end
+
+@test("by day: a heading with the day's net, then each transaction; the totals of what is shown")
+local function byDay()
+    seed()
+    seedBooks()
+    local p = page()
+    expect(kinds(p)).toEqual({ "day", "mail", "repair", "loot", "vendor", "sold", "posted", "day", "quest", "travel", "day", "train" })
+    local today = (p.list.items[1] :: Line)
+    expect(today.net).toBe(500000 - 14210 + 81900 + 8500 + 29640 - 2400)
+    expect(p.countText:GetText()).toBe("9 transactions")
+    -- the totals
+    expect(p.inMoney.copper).toBe(500000 + 81900 + 8500 + 29640 + 100000)
+    expect(p.outMoney.copper).toBe(14210 + 2400 + 3900 + 200000)
+    expect(p.netMoney.sign).toBe(1)
+    -- a row: when, what, the item or where from, the character, the amount
+    local r = rows(p)
+    expect(r[1].what:GetText()).toBe("Mail")
+    expect(r[1].name:GetText()).toBe("From Brannoc")
+    expect(r[1].well).toBeShown()
+    expect(r[1].slot).never.toBeShown()
+    expect(r[1].amount.copper).toBe(500000)
+    expect(r[1].amount.sign).toBe(1)
+    expect(r[1].when:GetText()).toBe(date("%H:%M", time() - 600))
+    expect(r[1].char:GetText()).toBe((UnitName("player") :: string))
+    local sold = r[5]
+    expect(sold.what:GetText()).toBe("Sold")
+    expect(sold.name:GetText()).toBe("Test Kingsblood")
+    expect(sold.qty:GetText()).toBe("\195\15120")
+    expect(sold.slot).toBeShown()
+    expect(r[2].amount.sign).toBe(-1)
+    -- Kaelith's in her class's colour
+    local quest = r[7]
+    expect(quest.char:GetText()).toBe("Kaelith")
+    expect(quest.name:GetText()).toBe("A Test Quest")
+end
+
+@test("the time: Today, 7 days, 30 days, All")
+local function range()
+    seed()
+    seedBooks()
+    M:BookTx({ at = time() - 20 * 86400, kind = "quest", amount = 5 })
+    M:BookTx({ at = time() - 200 * 86400, kind = "quest", amount = 7 })
+    local p = page()
+    expect(#p:Shown()).toBe(9)
+    mock.click(p.range.buttons[1])
+    expect(#p:Shown()).toBe(6)
+    mock.click(p.range.buttons[3])
+    expect(#p:Shown()).toBe(10)
+    mock.click(p.range.buttons[4])
+    expect(#p:Shown()).toBe(11)
+end
+
+@test("Kinds and Money: the sources chosen, in or out; the search: an item, a player, a kind")
+local function narrowing()
+    seed()
+    seedBooks()
+    local p = page()
+    choose(p, "kind", { "ah" })
+    expect(kinds(p)).toEqual({ "day", "sold", "posted" })
+    choose(p, "kind", { "ah", "loot" })
+    expect(kinds(p)).toEqual({ "day", "loot", "sold", "posted" })
+    choose(p, "kind", {})
+    choose(p, "dir", "out")
+    expect(kinds(p)).toEqual({ "day", "repair", "posted", "day", "travel", "day", "train" })
+    expect(p.inMoney.copper).toBe(0)
+    choose(p, "dir", "in")
+    expect(p.outMoney.copper).toBe(0)
+    choose(p, "dir", "both")
+    mock.typeText(p.search.edit, "kings")
+    expect(kinds(p)).toEqual({ "day", "sold", "posted" })
+    p.search:SetValue("")
+    p:SetQuery("brannoc")
+    expect(kinds(p)).toEqual({ "day", "mail" })
+    p:SetQuery("kaelith")
+    expect(kinds(p)).toEqual({ "day", "quest", "travel" })
+    p:SetQuery("training")
+    expect(kinds(p)).toEqual({ "day", "train" })
+    p:SetQuery("nothing like it")
+    expect(p.empty).toBeShown()
+    expect(p.empty:GetText()).toBe("Nothing matches.")
+    p:SetQuery("")
+end
+
+@test("the characters chosen: all on a ruleset, one")
+local function characters()
+    seed()
+    seedBooks()
+    local p = page()
+    p.w.scope = "c:Kaelith - " .. SuuUI.Ruleset()
+    p.w:Refresh()
+    expect(kinds(p)).toEqual({ "day", "quest", "travel" })
+    p.w.scope = "rs:Roleplay"
+    p.w:Refresh()
+    expect(#p.list.items).toBe(0)
+    expect(p.empty:GetText()).toContain("Nothing recorded yet")
+    p.w.scope = "all"
+    p.w:Refresh()
+end
+
+@test("a row with an item: its tooltip with a sale's figures; a click opens its page")
+local function itemRow()
+    seed()
+    seedBooks()
+    local p = page()
+    local sold = rows(p)[5]
+    mock.hover(sold)
+    expect(GameTooltip:IsShown()).toBe(true)
+    local text = table.concat(mock.tooltipLines(GameTooltip), "\n")
+    expect(text).toContain("The house's cut")
+    mock.hover(nil)
+    mock.click(sold)
+    expect(p.w.view).toBe("item")
+    expect(p.w.item.itemID).toBe(KINGSBLOOD)
+    -- a row without one stays
+    p.w:Go("transactions")
+    mock.click(rows(p)[1])
+    expect(p.w.view).toBe("transactions")
+end
+
+@test("what a row says without an item: from or to a player, a zone's corpses, Other's changes")
+local function texts()
+    expect(textOf({ at = 0, kind = "mail", amount = 5, text = "Brannoc", who = true })).toBe("From Brannoc")
+    expect(textOf({ at = 0, kind = "mail", amount = -5, text = "Brannoc", who = true })).toBe("To Brannoc")
+    expect(textOf({ at = 0, kind = "loot", amount = 5, text = "Elwynn Forest", n = 1 })).toBe("Elwynn Forest \194\183 1 corpse")
+    expect(textOf({ at = 0, kind = "other", amount = 5, n = 3 })).toBe("Not explained \194\183 3 changes")
+    expect(textOf({ at = 0, kind = "other", amount = 5 })).toBe("Not explained")
+    expect(textOf({ at = 0, kind = "repair", amount = -5 })).toBe("Repairs")
+    expect(textOf({ at = 0, kind = "trade", amount = 5, text = "Tamsin", who = true })).toBe("Tamsin")
+    expectNoErrors()
+end
+
+@test("thousands of rows: only those in sight are made; new ones show while it's open")
+local function many()
+    seed()
+    local now = time()
+    for i = 1, 2000 do
+        M:BookTx({ at = now - i * 30, kind = "vendor", amount = i, item = ORE, qty = 1 })
+    end
+    local p = page()
+    mock.click(p.range.buttons[4])
+    expect(#p:Shown()).toBe(2000)
+    expect(#p.list:Rows() < 40).toBe(true)
+    M:BookTx({ at = now + 1, kind = "quest", amount = 77 })
+    mock.advanceFrames(2)
+    expect(assert((p.list.items[2] :: Line).tx).kind).toBe("quest")
+end

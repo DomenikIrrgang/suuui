@@ -21,6 +21,14 @@
 --   watches  per ruleset, per item: your price, and the last look's.
 --   gold     per character: name, class, ruleset, last seen, and its money
 --            at the end of each day it played.
+--   books    per character, its transactions of the last year (Ledger/Books:
+--            one short string a day; kept by Ledger/BookStore), recorded
+--            by Ledger/Recorder: what
+--            each change of its money was (auction house, vendors,
+--            repairs, mail, trade, looted coin, quests, training, travel,
+--            Other).
+--   mail     per character, the money waiting in its inbox when it last
+--            looked, and how many auction sales of it.
 --
 -- For the window (step 3) and the notes (step 4), the module's methods.
 -- `ruleset` is optional everywhere (nil: this character's); a day is a day
@@ -58,8 +66,13 @@
 --       account's savings goal (one)
 --   Session() -> money in or out since this character logged in (or the
 --       module turned on), and for how many seconds
+--   Transactions(scope, fromDay, limit) -> Tx[] of the chosen characters
+--       (scope as GoldSeries'), the newest first, each with its `char`;
+--       ItemTransactions(itemID, ruleset) -> those of an item on a ruleset;
+--       SoldItems(ruleset) -> { [itemID] = true }
+--   MailWaiting(scope) -> money, sales, known (any of them looked)
 -- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
--- "watches", "gold" or "goal".
+-- "watches", "gold", "goal", "books" (a transaction) or "mail".
 --
 -- The window (step 3, Ledger/Window and its pages: Overview, Prices with an
 -- item's page, Gold; Transactions after the probe): Open(view, opts) and
@@ -86,8 +99,12 @@ import * as gold from "./Ledger/Gold"
 import type GoldMap, GoldScope from "./Ledger/Gold"
 import * as entry from "./Ledger/Entry"
 import * as notes from "./Ledger/Notes"
+import type Tx, BookMap from "./Ledger/Books"
+import BookStore from "./Ledger/BookStore"
+import type BookData, MailInfo from "./Ledger/BookStore"
+import Recorder from "./Ledger/Recorder"
 
-local DEFAULTS = { dealPercent = 25, dealVendor = true, markDeals = true, scanNote = false, tipUsual = true }
+local DEFAULTS = { dealPercent = 25, dealVendor = true, markDeals = true, scanNote = false, tipUsual = true, soldNote = true }
 
 -- Scan all's looks read a slice a frame (about 6,400 items in all for a
 -- big house), and the kept prices pruned the same way once a day.
@@ -135,6 +152,17 @@ export const SECTION: SettingsSection = {
             },
         },
         {
+            title = "Transactions",
+            rows = {
+                {
+                    key = "soldNote",
+                    label = "A note when an auction sells",
+                    control = "toggle",
+                    description = "Which item found a buyer, wherever you are; the money waits in the mail.",
+                },
+            },
+        },
+        {
             title = "Item tooltips",
             rows = {
                 {
@@ -169,6 +197,9 @@ export type LedgerData = {
     gold?: GoldMap,
     pruned?: { [string]: number },
     goal?: Goal,
+    books?: BookMap,
+    booksPruned?: number,
+    mail?: { [string]: MailInfo },
 }
 -- How the window opens: on an item's page (its ID), or Prices showing
 -- "deals", "vendor", "watched", "sold", "bags" or "all".
@@ -218,6 +249,9 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     -- this session: when it started and this character's money then
     sessionAt: number = 0
     sessionMoney: number? = nil
+    -- the transactions' recorder and store
+    recorder: Recorder? = nil
+    bookStore: BookStore? = nil
 
     constructor()
         super({
@@ -757,6 +791,82 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
+    -- Transactions (Ledger/BookStore over Ledger/Books; Ledger/Recorder books them)
+    ----------------------------------------------------------------------------
+
+    -- The books and the mail waiting, made on first use.
+    function Store(): BookStore
+        local s = self.bookStore
+        if not s then
+            s = BookStore.new({
+                data = function(): BookData
+                    return self:Data()
+                end,
+                chosen = function(scope: GoldScope?): string[]
+                    return gold.chosen(self:GoldMap(), scope)
+                end,
+                me = function(): string?
+                    return self:CharKey()
+                end,
+                ruleset = function(): string
+                    return SuuUI.Ruleset()
+                end,
+                changed = function(what: string)
+                    self:Changed(what)
+                end,
+            })
+            self.bookStore = s
+        end
+        return s
+    end
+
+    function BookMap(): BookMap
+        return self:Store():Map()
+    end
+
+    -- A transaction of this character's kept.
+    function BookTx(t: Tx)
+        self:Store():Add(t)
+    end
+
+    -- This character's row of `kind` at `at` changed. -> whether it was there.
+    function UpdateTx(at: number, kind: string, fn: (t: Tx) -> ()): boolean
+        return self:Store():Update(at, kind, fn)
+    end
+
+    function Transactions(scope: GoldScope?, fromDay: number?, limit: number?): Tx[]
+        return self:Store():Transactions(scope, fromDay, limit)
+    end
+
+    function ItemTransactions(itemID: number, ruleset: string?): Tx[]
+        return self:Store():ItemTransactions(itemID, ruleset)
+    end
+
+    function SoldItems(ruleset: string?): { [number]: boolean }
+        return self:Store():SoldItems(ruleset)
+    end
+
+    function ItemByName(name: string): number?
+        return self:Store():ItemByName(name)
+    end
+
+    function LastPost(itemID: number?, name: string?): Tx?
+        return self:Store():LastPost(itemID, name)
+    end
+
+    function PruneBooks()
+        self:Store():Prune()
+    end
+
+    function SetMailWaiting(money: number, sales: number)
+        self:Store():SetMail(money, sales)
+    end
+
+    function MailWaiting(scope: GoldScope?): (number, number, boolean)
+        return self:Store():MailWaiting(scope)
+    end
+
+    ----------------------------------------------------------------------------
     -- The window (Ledger/Window)
     ----------------------------------------------------------------------------
 
@@ -918,12 +1028,19 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
                 return self:LastScan()
             end,
         })
+        local rec = self.recorder or Recorder.new(self)
+        self.recorder = rec
+        rec:Enable()
         entry.enable(self)
         notes.enable(self)
         -- (after login's rush)
-        if self:NeedsPrune() then
+        local prices = self:NeedsPrune()
+        if prices or self:Store():NeedsPrune() then
             self:After(10, function()
-                self:Prune()
+                if prices then
+                    self:Prune()
+                end
+                self:PruneBooks()
             end)
         end
     end
@@ -932,6 +1049,11 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     override function OnDisable()
         self.scanTicker, self.pruneTicker = nil, nil
         self.cache, self.pendingChanges = {}, {}
+        self:Store().decoded = {}
+        local rec = self.recorder
+        if rec then
+            rec:Disable()
+        end
         local w = self.window
         if w then
             w.frame:Hide()

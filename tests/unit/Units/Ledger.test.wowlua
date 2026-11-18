@@ -13,6 +13,7 @@ import * as events from "/Core/Events"
 import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
 import * as days from "/Units/Ledger/Days"
+import * as books from "/Units/Ledger/Books"
 import * as secret from "wowlua:secret"
 import expectNoErrors, cycle, NOTHING from "../../helpers"
 
@@ -362,7 +363,7 @@ local function prune()
     expect(M.pruneTicker).toBeNil()
 end
 
-@test("settings: Deals and Item tooltips; the tooltip row waits for the auction house's tooltips")
+@test("settings: Deals, Transactions and Item tooltips; the tooltip row waits for the auction house's tooltips")
 local function settingsSection()
     expect(SECTION.id).toBe("ledger")
     local groups = assert(SECTION.groups)
@@ -373,13 +374,15 @@ local function settingsSection()
             keys[#keys + 1] = r.key or ""
         end
     end
-    expect(keys).toEqual({ "dealPercent", "dealVendor", "markDeals", "scanNote", "tipUsual" })
+    expect(keys).toEqual({ "dealPercent", "dealVendor", "markDeals", "scanNote", "soldNote", "tipUsual" })
+    expect(groups[2].title).toBe("Transactions")
+    expect(M:Get("soldNote")).toBe(true)
     expect(M:Get("dealPercent")).toBe(25)
     expect(M:Get("dealVendor")).toBe(true)
     expect(M:Get("markDeals")).toBe(true)
     expect(M:Get("scanNote")).toBe(false)
     expect(M:Get("tipUsual")).toBe(true)
-    local row = groups[2].rows[1]
+    local row = groups[3].rows[1]
     local disabled = assert(row.disabled)
     expect((disabled())).toBe(false)
     AH:Set("tipShow", false)
@@ -459,4 +462,82 @@ local function serviceWindow()
     mock.player:leaveCombat()
     mock.fireEvent("AUCTION_HOUSE_CLOSED")
     expect(M.atHouse).toBe(false)
+end
+
+@test("transactions: kept per character, told as 'books'; the chosen characters', newest first, a limit; an item's; sold items; pruned after a year")
+local function transactions()
+    local d = M:Data()
+    d.books, d.booksPruned = nil, nil
+    M:Store().decoded = {}
+    local told = heard()
+    local me = assert(M:CharKey())
+    local now = time()
+    M:BookTx({ at = now - DAY_SECONDS, kind = "posted", amount = -60, item = DUST, qty = 20, price = 110 })
+    M:BookTx({ at = now - 60, kind = "sold", amount = 2150, item = DUST, qty = 20, gross = 2200, cut = 110 })
+    M:BookTx({ at = now, kind = "repair", amount = -900, text = "Smith" })
+    mock.advanceFrames(1)
+    expect(told).toEqual({ "books" })
+    -- another character on another ruleset
+    local other = "Lum - Roleplay"
+    local gm = M:GoldMap()
+    gm[other] = { name = "Lum", ruleset = "Roleplay", seen = now, days = { [days.dayOf()] = 5 } }
+    local map = M:BookMap()
+    map[other] = {}
+    M:Store().decoded[other] = nil
+    books.add(assert(map[other]), { at = now - 30, kind = "quest", amount = 400 })
+    local all = M:Transactions(nil, nil)
+    expect(#all).toBe(4)
+    expect(all[1].kind).toBe("repair")
+    expect(all[1].char).toBe(me)
+    expect(all[2].char).toBe(other)
+    expect(#M:Transactions({ char = me }, nil)).toBe(3)
+    expect(#M:Transactions({ ruleset = "Roleplay" }, nil)).toBe(1)
+    expect(#M:Transactions(nil, days.dayOf())).toBe(3)
+    expect(#M:Transactions(nil, nil, 2)).toBe(2)
+    -- an item's on this ruleset; what was sold
+    local item = M:ItemTransactions(DUST)
+    expect(#item).toBe(2)
+    expect(item[1].kind).toBe("sold")
+    expect(M:SoldItems()).toEqual({ [DUST] = true })
+    -- a row changed in place
+    expect(M:UpdateTx(now, "repair", function(t)
+        t.amount = -1000
+    end)).toBe(true)
+    expect(M:Transactions({ char = me }, nil)[1].amount).toBe(-1000)
+    -- by name: the game's cache; the latest post
+    expect(M:ItemByName("Test Dust")).toBe(DUST)
+    expect(assert(M:LastPost(DUST)).price).toBe(110)
+    expect(assert(M:LastPost(nil, "Test Dust")).qty).toBe(20)
+    expect(M:LastPost(SHARD)).toBeNil()
+    -- a year kept, once a day
+    M:BookTx({ at = now - 400 * DAY_SECONDS, kind = "quest", amount = 1 })
+    expect(#M:Transactions({ char = me }, nil)).toBe(4)
+    M:PruneBooks()
+    expect(#M:Transactions({ char = me }, nil)).toBe(3)
+    M:BookTx({ at = now - 400 * DAY_SECONDS, kind = "quest", amount = 1 })
+    M:PruneBooks()
+    expect(#M:Transactions({ char = me }, nil)).toBe(4)
+    gm[other] = nil
+    d.books, d.booksPruned = nil, nil
+    M:Store().decoded = {}
+end
+
+@test("the mail waiting: per character as its inbox was read, told as 'mail' when it changes; the chosen characters'")
+local function mailWaiting()
+    local d = M:Data()
+    d.mail = nil
+    local told = heard()
+    local money, sales, known = M:MailWaiting(nil)
+    expect({ money, sales, known }).toEqual({ 0, 0, false })
+    M:SetMailWaiting(431860, 3)
+    mock.advanceFrames(1)
+    expect(told).toEqual({ "mail" })
+    M:SetMailWaiting(431860, 3)
+    mock.advanceFrames(1)
+    expect(#told).toBe(1)
+    money, sales, known = M:MailWaiting({ char = assert(M:CharKey()) })
+    expect({ money, sales, known }).toEqual({ 431860, 3, true })
+    money, sales, known = M:MailWaiting({ ruleset = "Nowhere" })
+    expect(known).toBe(false)
+    d.mail = nil
 end

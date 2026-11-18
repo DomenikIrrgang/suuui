@@ -4,7 +4,9 @@
 -- sentence, the two charts, their tooltips, the note while a row has too
 -- few looks), Watch (asks a price, "Watching" in arcane, a new price or
 -- Stop watching), Search the house (only at an auctioneer, out of a
--- fight), Back; an item never seen; a name that arrives later.
+-- fight), Back; your sales on the ruleset and its transactions, the sales
+-- as diamonds on the price history; an item never seen; a name that
+-- arrives later.
 
 import test, expect, afterEach from "wowlua:test"
 import * as mock from "wowlua:mock"
@@ -15,7 +17,7 @@ import * as parts from "/Units/Ledger/Parts"
 import * as events from "/Core/Events"
 import expectNoErrors from "../../../helpers"
 import tokenOf from "../../UI/WindowsHelpers"
-import seed, openLedger, wipe, LOTUS, AXE, ORE from "./LedgerHelpers"
+import seed, seedBooks, openLedger, wipe, LOTUS, AXE, ORE, KINGSBLOOD from "./LedgerHelpers"
 
 @afterEach
 local function cleanup()
@@ -196,6 +198,45 @@ local function back()
     mock.click(w.item.back)
     expect(w.view).toBe("prices")
     expect(w.frame.tab).toBe("prices")
+end
+
+@test("your sales on this ruleset and its transactions; the sales as diamonds on the price history")
+local function sales()
+    seed()
+    local p = item(LOTUS)
+    expect(p.salesNote).toBeShown()
+    expect(p.soldRow).never.toBeShown()
+    expect(p.txNote).toBeShown()
+    expect(p.keys[3]).never.toBeShown()
+    expect(#(assert(p.chart.data).marks or {})).toBe(0)
+    seedBooks()
+    -- an expired auction too, and a second post
+    M:BookTx({ at = time() - 5400, kind = "expired", amount = 0, item = KINGSBLOOD, qty = 20 })
+    M:BookTx({ at = time() - 5000, kind = "posted", amount = -240, item = KINGSBLOOD, qty = 20, price = 1600 })
+    p = item(KINGSBLOOD)
+    expect(p.salesNote).never.toBeShown()
+    expect(p.sales.meta:GetText()).toBe("your characters on " .. SuuUI.RulesetName(SuuUI.Ruleset()))
+    expect(p.soldText:GetText()).toBe("20 of 220 posted \194\183 9%")
+    expect(p.avgRow.money.copper).toBe(1560)
+    expect(p.depositRow.money.copper).toBe(2640)
+    expect(p.depositNote:GetText()).toBe("on 1 expired")
+    expect(p.earnedRow.money.copper).toBe(29640)
+    expect(p.earnedRow.money.sign).toBe(1)
+    -- its transactions, the newest first
+    expect(p.txRows[1].what:GetText()).toBe("Sold")
+    expect(p.txRows[1].when:GetText()).toBe("today")
+    expect(p.txRows[1].qty:GetText()).toBe("\195\15120")
+    expect(p.txRows[1].amount.sign).toBe(1)
+    expect(p.txRows[2].what:GetText()).toBe("Posted")
+    expect(p.txRows[3].what:GetText()).toBe("Expired")
+    expect(p.txRows[4].what:GetText()).toBe("Posted")
+    expect(p.txRows[5]).never.toBeShown()
+    expect(p.txNote).never.toBeShown()
+    -- the sale on the price history: today, at its price each
+    local marks = assert(assert(p.chart.data).marks)
+    expect(#marks).toBe(1)
+    expect(marks[1]).toEqual({ i = 30, value = 1560, label = "You sold 20 at" })
+    expect(p.keys[3]).toBeShown()
 end
 
 @test("a name that arrives later: the page drawn again with it")

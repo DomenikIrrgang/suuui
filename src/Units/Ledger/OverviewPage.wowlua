@@ -1,17 +1,23 @@
 -- Units/Ledger/OverviewPage.wowlua
 -- The Overview (design board "Ledger"): four figures (the chosen
 -- characters' gold, with how many on how many rulesets and who has most;
--- this week, from the gold kept day by day; waiting in the mail, which
--- comes with the transactions; this session, this character's money since
--- it logged in), then where money came from and went (after the probe),
--- the account's goal, the last scan's deals (the top three with both marks;
--- "All 14 deals" opens Prices at Deals) and the latest transactions (after
--- the probe).
+-- this week, from the gold kept day by day; waiting in the mail, as their
+-- inboxes were when they last looked, with how many auction sales; this
+-- session, this character's money since it logged in), then where money
+-- came from and went this week (a row per source, the biggest first: its
+-- name, a bar against the biggest, green in and red out, how many, the
+-- amount), the account's goal, the last scan's deals (the top three with
+-- both marks; "All 14 deals" opens Prices at Deals) and the latest three
+-- transactions ("All transactions" opens them).
 
 import SuuUI from "/Core/API"
 import type DealMark, Text, ItemSlot, Money, SuuButton, Bar from "/Core/API"
+import * as days from "./Days"
 import type DealEntry from "../Ledger"
+import * as books from "./Books"
+import type Tx, SourceRow from "./Books"
 import * as parts from "./Parts"
+import textOf from "./TransactionsPage"
 import type LedgerWindow from "./Window"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
@@ -20,6 +26,118 @@ local S = T.space
 local DEAL_H = 30
 local GOAL_H = 76
 local TOP_DEALS = 3
+local SOURCE_H = 24
+local SOURCES = 6
+local LATEST = 3
+local LATEST_H = 26
+
+-- A source's row: its name, a bar against the biggest (fel in, ember-text
+-- out), how many, the amount.
+class SourceLine extends Frame
+    readonly label: Text
+    readonly track: Texture
+    readonly fill: Texture
+    readonly count: Text
+    readonly amount: Money
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(SOURCE_H)
+        self.label = UI.Text(self, "body", "ink")
+        self.label:SetPoint("LEFT")
+        self.label:SetWidth(108)
+        self.label:SetJustifyH("LEFT")
+        self.label:SetWordWrap(false)
+        self.amount = UI.Money(self)
+        self.amount:SetPoint("RIGHT")
+        self.count = UI.Text(self, "caption", "ink-muted")
+        self.count:SetPoint("RIGHT", -96, 0)
+        self.count:SetJustifyH("RIGHT")
+        self.track = UI.Fill(self, "track", "BACKGROUND")
+        self.track:SetHeight(6)
+        self.track:SetPoint("LEFT", 108 + S["space-3"], 0)
+        self.track:SetPoint("RIGHT", -(96 + 44 + S["space-3"]), 0)
+        self.fill = UI.Fill(self, "fel", "ARTWORK")
+        self.fill:SetHeight(6)
+        self.fill:SetPoint("LEFT", self.track, "LEFT")
+    end
+
+    function Set(r: SourceRow, max: number, out: boolean)
+        self.label:SetValue(r.label)
+        UI.PaintFill(self.fill, out and "ember-text" or "fel")
+        local w = math.max(1, self.track:GetWidth())
+        self.fill:SetWidth(math.max(1, w * r.amount / math.max(1, max)))
+        self.count:SetValue(parts.count(r.count) .. "\195\151")
+        self.amount:SetSigned(out and -r.amount or r.amount)
+        self:Show()
+    end
+end
+
+-- One of the latest: when, what, the item or where from, the amount.
+class LatestLine extends Button
+    readonly hover: Texture
+    readonly when: Text
+    readonly what: Text
+    readonly name: Text
+    readonly amount: Money
+    tx?: Tx
+
+    constructor(parent: Frame, open: (t: Tx) -> ())
+        super(nil, parent)
+        self:SetHeight(LATEST_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.when = UI.Text(self, "caption", "ink-muted")
+        self.when:SetPoint("LEFT", S["space-3"], 0)
+        self.when:SetWidth(64)
+        self.when:SetJustifyH("LEFT")
+        self.what = UI.Text(self, "caption", "ink")
+        self.what:SetPoint("LEFT", 64 + S["space-3"] * 2, 0)
+        self.what:SetWidth(80)
+        self.what:SetJustifyH("LEFT")
+        self.amount = UI.Money(self)
+        self.amount:SetPoint("RIGHT", -S["space-3"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", 64 + 80 + S["space-3"] * 3, 0)
+        self.name:SetPoint("RIGHT", -(S["space-3"] + 110), 0)
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local t = self.tx
+            if t then
+                open(t)
+            end
+        end)
+    end
+
+    function Set(t: Tx, today: number)
+        self.tx = t
+        local day = days.dayOf(t.at)
+        self.when:SetValue(day == today and date("%H:%M", t.at) or parts.ago(day, today))
+        self.what:SetValue(books.kindOf(t.kind).label)
+        local id = t.item
+        if id then
+            local name, quality = parts.cachedInfo(id)
+            if not name then
+                C_Item.RequestLoadItemDataByID(id)
+            end
+            self.name:SetValue(name or t.text or ("Item " .. id))
+            self.name:SetColor(name and parts.qualityToken(quality) or "ink-muted")
+        else
+            self.name:SetValue(textOf(t))
+            self.name:SetColor("ink")
+        end
+        self.amount:SetSigned(t.amount)
+        self:Show()
+    end
+end
 
 -- A deal in the list: the item, its lowest buyout, both marks.
 class DealRow extends Button
@@ -103,8 +221,10 @@ export class OverviewPage extends Frame
     readonly right: Frame
     readonly came: parts.Section
     readonly cameNote: Text
+    readonly cameRows: SourceLine[] = {}
     readonly went: parts.Section
     readonly wentNote: Text
+    readonly wentRows: SourceLine[] = {}
     readonly goal: parts.Section
     readonly goalButton: SuuButton
     readonly goalBox: Frame
@@ -120,7 +240,9 @@ export class OverviewPage extends Frame
     readonly dealRows: DealRow[] = {}
     readonly dealsNone: Text
     readonly latest: parts.Section
+    readonly allTx: parts.Link
     readonly latestNote: Text
+    readonly latestRows: LatestLine[] = {}
     -- the deals shown, by item (a name that arrives draws them again)
     dealIDs: { [number]: boolean } = {}
 
@@ -144,15 +266,26 @@ export class OverviewPage extends Frame
         self.right = CreateFrame("Frame", nil, self)
         self.right:SetPoint("TOPRIGHT", 0, top)
         self.right:SetPoint("BOTTOMRIGHT")
-        -- where it came from and went (after the probe)
+        -- where it came from and went this week
         self.came = parts.Section.new(self.left, "Where it came from", "this week")
         self.came:SetPoint("TOPLEFT")
         self.came:SetPoint("TOPRIGHT")
-        self.cameNote = self:Note(self.left, self.came, "Not recorded yet: auction sales, vendors, looted coin and quests come with the transactions, in a later version.")
+        self.cameNote = self:Note(self.left, self.came, "Nothing came in this week.")
         self.went = parts.Section.new(self.left, "Where it went", "this week")
-        self.went:SetPoint("TOPLEFT", self.cameNote, "BOTTOMLEFT", 0, -S["space-6"])
         self.went:SetPoint("RIGHT", self.left, "RIGHT")
-        self.wentNote = self:Note(self.left, self.went, "Not recorded yet: auction buys, training, repairs and travel come with the transactions.")
+        self.wentNote = self:Note(self.left, self.went, "Nothing went out this week.")
+        for i = 1, SOURCES do
+            local a = SourceLine.new(self.left)
+            a:SetPoint("TOPLEFT", self.came, "BOTTOMLEFT", 0, -(S["space-2"] + (i - 1) * SOURCE_H))
+            a:SetPoint("RIGHT", self.left, "RIGHT")
+            a:Hide()
+            self.cameRows[i] = a
+            local b = SourceLine.new(self.left)
+            b:SetPoint("TOPLEFT", self.went, "BOTTOMLEFT", 0, -(S["space-2"] + (i - 1) * SOURCE_H))
+            b:SetPoint("RIGHT", self.left, "RIGHT")
+            b:Hide()
+            self.wentRows[i] = b
+        end
         -- the goal
         self.goal = parts.Section.new(self.right, "Goal")
         self.goal:SetPoint("TOPLEFT")
@@ -215,11 +348,33 @@ export class OverviewPage extends Frame
         self.dealsNone:SetPoint("RIGHT", self.right, "RIGHT")
         self.dealsNone:SetJustifyH("LEFT")
         self.dealsNone:SetWordWrap(true)
-        -- the latest transactions (after the probe)
+        -- the latest transactions
         self.latest = parts.Section.new(self.right, "Latest")
+        self.allTx = parts.Link.new(self.latest, "All transactions", function()
+            self.w:Go("transactions")
+        end)
+        self.latest:SetAside(self.allTx)
         self.latestNote = UI.Text(self.right, "caption", "ink-muted")
         self.latestNote:SetPoint("TOPLEFT", self.latest, "BOTTOMLEFT", 0, -S["space-3"])
-        self.latestNote:SetValue("Nothing recorded yet.")
+        self.latestNote:SetPoint("RIGHT", self.right, "RIGHT")
+        self.latestNote:SetJustifyH("LEFT")
+        self.latestNote:SetWordWrap(true)
+        self.latestNote:SetValue("Nothing recorded yet: what you earn and spend shows here from now on.")
+        for i = 1, LATEST do
+            local row = LatestLine.new(self.right, function(t: Tx)
+                local id = t.item
+                if id then
+                    self.w.item:SetItem(id)
+                    self.w:Go("item")
+                else
+                    self.w:Go("transactions")
+                end
+            end)
+            row:SetPoint("TOPLEFT", self.latest, "BOTTOMLEFT", 0, -(S["space-2"] + (i - 1) * LATEST_H))
+            row:SetPoint("RIGHT", self.right, "RIGHT")
+            row:Hide()
+            self.latestRows[i] = row
+        end
         self:SetScript("OnSizeChanged", function()
             self:Layout()
         end)
@@ -284,6 +439,13 @@ export class OverviewPage extends Frame
         if self.dealIDs[itemID] and self:IsVisible() then
             self:DrawDeals()
         end
+        for _, row in ipairs(self.latestRows) do
+            local t = row.tx
+            if row:IsShown() and t and t.item == itemID then
+                self:DrawLatest()
+                return
+            end
+        end
     end
 
     function Draw()
@@ -342,9 +504,19 @@ export class OverviewPage extends Frame
             self.week:SetWord("\226\128\148")
             self.week:SetSub(nil)
         end
-        -- waiting in the mail (comes with the transactions)
-        self.mail:SetWord("\226\128\148")
-        self.mail:SetSub("Not recorded yet")
+        -- waiting in the mail, as the inboxes were last seen
+        local waiting, sales, known = m:MailWaiting(scope)
+        if known then
+            self.mail:SetMoney(waiting)
+            if sales > 0 then
+                self.mail:SetSub(sales .. (sales == 1 and " sale" or " sales") .. ", the house\226\128\153s cut taken")
+            else
+                self.mail:SetSub(waiting > 0 and "from players and refunds" or "Nothing waiting")
+            end
+        else
+            self.mail:SetWord("\226\128\148")
+            self.mail:SetSub("Open a mailbox to see")
+        end
         -- this session: this character's
         local net, seconds = m:Session()
         if net then
@@ -361,6 +533,51 @@ export class OverviewPage extends Frame
         end
         self:DrawGoal()
         self:DrawDeals()
+        self:DrawSources()
+        self:DrawLatest()
+    end
+
+    -- Where it came from and went, this week (the last 7 days).
+    function DrawSources()
+        local m = self.w.m
+        local today = m:Today()
+        local list = m:Transactions(self.w:Scope(), today - 6)
+        local income, spending = books.sources(list)
+        local function fill(rows: SourceLine[], data: SourceRow[], note: Text, out: boolean): Region
+            local max = data[1] and data[1].amount or 1
+            local n = math.min(#rows, #data)
+            for i, row in ipairs(rows) do
+                local r = data[i]
+                if r and i <= n then
+                    row:Set(r, max, out)
+                else
+                    row:Hide()
+                end
+            end
+            note:SetShown(n == 0)
+            return n > 0 and rows[n] or note
+        end
+        local lastIn = fill(self.cameRows, income, self.cameNote, false)
+        self.went:ClearAllPoints()
+        self.went:SetPoint("TOPLEFT", lastIn, "BOTTOMLEFT", 0, -S["space-6"])
+        self.went:SetPoint("RIGHT", self.left, "RIGHT")
+        fill(self.wentRows, spending, self.wentNote, true)
+    end
+
+    -- The last three transactions of the chosen characters.
+    function DrawLatest()
+        local m = self.w.m
+        local today = m:Today()
+        local list = m:Transactions(self.w:Scope(), nil, LATEST)
+        for i, row in ipairs(self.latestRows) do
+            local t = list[i]
+            if t then
+                row:Set(t, today)
+            else
+                row:Hide()
+            end
+        end
+        self.latestNote:SetShown(list[1] == nil)
     end
 
     function DrawGoal()

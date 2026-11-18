@@ -1,0 +1,145 @@
+-- Units/Ledger/BookStore: the books as the module keeps them, on a store
+-- of its own: this character's rows kept and changed (each told), the
+-- chosen characters' newest first with a limit, a day read once until it
+-- changes, an item's, what was sold on a ruleset, the latest post of an
+-- item by ID or name, an item's ID by name, a year kept (once a day); the
+-- mail waiting per character.
+
+import test, expect from "wowlua:test"
+import * as mock from "wowlua:mock"
+import BookStore from "/Units/Ledger/BookStore"
+import type BookData from "/Units/Ledger/BookStore"
+import type GoldScope from "/Units/Ledger/Gold"
+import * as days from "/Units/Ledger/Days"
+import * as books from "/Units/Ledger/Books"
+import expectNoErrors from "../../../helpers"
+
+const DUST = 990801
+const SHARD = 990802
+mock.defineItem(DUST, { name = "Test Store Dust", quality = 1, stackCount = 20, sellPrice = 50 })
+mock.defineItem(SHARD, { name = "Test Store Shard", quality = 2, stackCount = 20, sellPrice = 100 })
+
+const DAY = 86400
+
+-- Two characters on Normal, one on Roleplay; "Me" is this one.
+local RULESETS: { [string]: string } = { Me = "Normal", Alt = "Normal", Far = "Roleplay" }
+
+local function store(): (BookStore, BookData, string[])
+    local data: BookData = {}
+    local told: string[] = {}
+    local s = BookStore.new({
+        data = function(): BookData
+            return data
+        end,
+        chosen = function(scope: GoldScope?): string[]
+            local out: string[] = {}
+            for _, k in ipairs({ "Alt", "Far", "Me" }) do
+                if not scope or (scope.char == nil and scope.ruleset == nil) or scope.char == k or
+                    (scope.ruleset ~= nil and RULESETS[k] == scope.ruleset) then
+                    out[#out + 1] = k
+                end
+            end
+            return out
+        end,
+        me = function(): string?
+            return "Me"
+        end,
+        ruleset = function(): string
+            return "Normal"
+        end,
+        changed = function(what: string)
+            told[#told + 1] = what
+        end,
+    })
+    return s, data, told
+end
+
+@test("rows kept and changed, each told; the chosen characters', newest first; a limit; a day read once")
+local function keeping()
+    local s, _, told = store()
+    local now = time()
+    s:Add({ at = now - DAY, kind = "posted", amount = -60, item = DUST, qty = 20, price = 110 })
+    s:Add({ at = now - 60, kind = "sold", amount = 2150, item = DUST, qty = 20, gross = 2200, cut = 110 })
+    s:Add({ at = now, kind = "repair", amount = -900, text = "Smith" })
+    expect(told).toEqual({ "books", "books", "books" })
+    local far = assert(s:BookOf("Far"))
+    local map = s:Map()
+    -- another character's, straight into its book
+    books.add(far, { at = now - 30, kind = "quest", amount = 400 })
+    s:Forget("Far", days.dayOf(now - 30))
+    local all = s:Transactions(nil, nil)
+    expect(#all).toBe(4)
+    expect(all[1].kind).toBe("repair")
+    expect(all[1].char).toBe("Me")
+    expect(all[2].char).toBe("Far")
+    expect(#s:Transactions({ char = "Me" }, nil)).toBe(3)
+    expect(#s:Transactions({ ruleset = "Roleplay" }, nil)).toBe(1)
+    expect(#s:Transactions(nil, nil, 2)).toBe(2)
+    -- read once: the same rows until a change
+    local day = days.dayOf(now)
+    local mine = assert(map.Me)
+    local first = s:DayRows("Me", mine, day)
+    expect(s:DayRows("Me", mine, day)).toBe(first)
+    expect(s:Update(now, "repair", function(t)
+        t.amount = -1000
+    end)).toBe(true)
+    expect(s:Update(now, "quest", function(_) end)).toBe(false)
+    expect(s:DayRows("Me", mine, day) ~= first).toBe(true)
+    expect(s:Transactions({ char = "Me" }, nil)[1].amount).toBe(-1000)
+    expectNoErrors()
+end
+
+@test("an item's on a ruleset; what was sold; the latest post by ID or name; an item's ID by name")
+local function items()
+    local s = store()
+    local now = time()
+    s:Add({ at = now - DAY, kind = "posted", amount = -60, item = DUST, qty = 20, price = 110 })
+    s:Add({ at = now - 60, kind = "sold", amount = 2150, item = DUST, qty = 20, gross = 2200, cut = 110 })
+    s:Add({ at = now - 5 * DAY, kind = "posted", amount = -6, item = SHARD, qty = 1, price = 900 })
+    local item = s:ItemTransactions(DUST)
+    expect(#item).toBe(2)
+    expect(item[1].kind).toBe("sold")
+    expect(#s:ItemTransactions(DUST, "Roleplay")).toBe(0)
+    expect(s:SoldItems()).toEqual({ [DUST] = true })
+    expect(assert(s:LastPost(DUST)).price).toBe(110)
+    expect(assert(s:LastPost(nil, "Test Store Dust")).qty).toBe(20)
+    -- (five days ago: not the latest post any more)
+    expect(s:LastPost(SHARD)).toBeNil()
+    expect(s:ItemByName("Test Store Shard")).toBe(SHARD)
+    expect(s:ItemByName("No Such Thing")).toBeNil()
+    expectNoErrors()
+end
+
+@test("a year kept, pruned once a day")
+local function pruning()
+    local s, data, told = store()
+    local now = time()
+    s:Add({ at = now, kind = "quest", amount = 1 })
+    s:Add({ at = now - 400 * DAY, kind = "quest", amount = 2 })
+    expect(s:NeedsPrune()).toBe(true)
+    s:Prune()
+    expect(#s:Transactions(nil, nil)).toBe(1)
+    expect(data.booksPruned).toBe(days.dayOf())
+    expect(s:NeedsPrune()).toBe(false)
+    s:Add({ at = now - 400 * DAY, kind = "quest", amount = 2 })
+    local n = #told
+    s:Prune()
+    expect(#told).toBe(n)
+    expect(#s:Transactions(nil, nil)).toBe(2)
+    expectNoErrors()
+end
+
+@test("the mail waiting: per character as its inbox was read, told when it changes; the chosen characters'")
+local function mail()
+    local s, _, told = store()
+    local money, sales, known = s:MailWaiting(nil)
+    expect({ money, sales, known }).toEqual({ 0, 0, false })
+    s:SetMail(431860, 3)
+    s:SetMail(431860, 3)
+    expect(told).toEqual({ "mail" })
+    money, sales, known = s:MailWaiting({ char = "Me" })
+    expect({ money, sales, known }).toEqual({ 431860, 3, true })
+    money, sales, known = s:MailWaiting({ ruleset = "Roleplay" })
+    expect(known).toBe(false)
+    expectNoErrors()
+end

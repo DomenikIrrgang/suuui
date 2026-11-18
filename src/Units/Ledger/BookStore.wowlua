@@ -1,0 +1,266 @@
+-- Units/Ledger/BookStore.wowlua
+-- The Ledger's transactions as the module keeps them (Units/Ledger): each
+-- character's book in SuuUILedger.books (Ledger/Books: one string a day),
+-- each day read once until it changes, what the pages ask of them (the
+-- chosen characters' rows, an item's, what was sold, this character's
+-- latest post of an item, an item's ID by its name), a year kept; and the
+-- money waiting in each character's inbox (SuuUILedger.mail). The module
+-- hands it its saved table, which characters a scope chooses, this
+-- character's key and how to tell a change.
+
+import * as books from "./Books"
+import type Tx, Book, BookMap from "./Books"
+import * as days from "./Days"
+import * as secret from "wowlua:secret"
+import type GoldScope from "./Gold"
+
+-- A character's inbox when it last looked: the money waiting, how many
+-- auction sales, when.
+export type MailInfo = { money: number, sales: number, at: number }
+
+-- What it keeps in SuuUILedger.
+export type BookData = { books?: BookMap, booksPruned?: number, mail?: { [string]: MailInfo } }
+
+export type BookStoreOptions = {
+    data: () -> BookData,
+    chosen: (scope: GoldScope?) -> string[],
+    me: () -> string?,
+    ruleset: () -> string,
+    changed: (what: string) -> (),
+}
+
+-- An item's name while the client has it cached.
+local function cachedName(itemID: number): string?
+    if not C_Item.IsItemDataCachedByID(itemID) then
+        return nil
+    end
+    return secret.asString((C_Item.GetItemInfo(itemID)))
+end
+
+export class BookStore
+    readonly o: BookStoreOptions
+    -- each character's days as read (until they change)
+    decoded: { [string]: { [number]: Tx[] } } = {}
+
+    constructor(o: BookStoreOptions)
+        self.o = o
+    end
+
+    function Map(): BookMap
+        local d = self.o.data()
+        local map = d.books or {}
+        d.books = map
+        return map
+    end
+
+    -- A character's book (nil: this one's), made on first use.
+    function BookOf(char: string?): Book?
+        local key = char or self.o.me()
+        if not key then
+            return nil
+        end
+        local map = self:Map()
+        local b = map[key]
+        if not b then
+            b = {}
+            map[key] = b
+        end
+        return b
+    end
+
+    -- A day of a character's read again next time.
+    function Forget(char: string, day: number)
+        local cached = self.decoded[char]
+        if cached then
+            cached[day] = nil
+        end
+    end
+
+    -- A transaction of this character's kept.
+    function Add(t: Tx)
+        local key = self.o.me()
+        local b = self:BookOf(key)
+        if not (key and b) then
+            return
+        end
+        self:Forget(key, books.add(b, t))
+        self.o.changed("books")
+    end
+
+    -- This character's row of `kind` at `at` changed. -> whether it was there.
+    function Update(at: number, kind: string, fn: (t: Tx) -> ()): boolean
+        local key = self.o.me()
+        local b = self:BookOf(key)
+        if not (key and b) or not books.update(b, at, kind, fn) then
+            return false
+        end
+        self:Forget(key, days.dayOf(at))
+        self.o.changed("books")
+        return true
+    end
+
+    -- A character's rows of one day, read once until they change.
+    function DayRows(char: string, book: Book, day: number): Tx[]
+        local cached = self.decoded[char]
+        if not cached then
+            cached = {}
+            self.decoded[char] = cached
+        end
+        local rows = cached[day]
+        if not rows then
+            rows = books.decodeDay(book[day], nil, char)
+            cached[day] = rows
+        end
+        return rows
+    end
+
+    -- The chosen characters' transactions from `fromDay` on (nil: all
+    -- kept), the newest first; with `limit`, only that many.
+    function Transactions(scope: GoldScope?, fromDay: number?, limit: number?): Tx[]
+        local map = self:Map()
+        local lists: Tx[][] = {}
+        for _, char in ipairs(self.o.chosen(scope)) do
+            local b = map[char]
+            if b then
+                local got = 0
+                for _, day in ipairs(books.daysOf(b, fromDay)) do
+                    local rows = self:DayRows(char, b, day)
+                    lists[#lists + 1] = rows
+                    got += #rows
+                    if limit and got >= limit then
+                        break
+                    end
+                end
+            end
+        end
+        local all = books.merge(lists)
+        if limit and #all > limit then
+            local cut: Tx[] = {}
+            for i = 1, limit do
+                cut[i] = all[i]
+            end
+            return cut
+        end
+        return all
+    end
+
+    -- An item's transactions by your characters on a ruleset (nil: this
+    -- one's), the newest first.
+    function ItemTransactions(itemID: number, ruleset: string?): Tx[]
+        local out: Tx[] = {}
+        for _, t in ipairs(self:Transactions({ ruleset = ruleset or self.o.ruleset() }, nil)) do
+            if t.item == itemID then
+                out[#out + 1] = t
+            end
+        end
+        return out
+    end
+
+    -- The items your characters on a ruleset sold at the auction house.
+    function SoldItems(ruleset: string?): { [number]: boolean }
+        local out: { [number]: boolean } = {}
+        for _, t in ipairs(self:Transactions({ ruleset = ruleset or self.o.ruleset() }, nil)) do
+            if t.kind == "sold" and t.item then
+                out[t.item] = true
+            end
+        end
+        return out
+    end
+
+    -- This character's posts of the last `back` days, the newest first,
+    -- until `fn` says stop (returns true). -> the post it stopped at.
+    function Posts(back: number, fn: (t: Tx) -> boolean): Tx?
+        local key = self.o.me()
+        local b = key and self:Map()[key]
+        if not (key and b) then
+            return nil
+        end
+        for _, day in ipairs(books.daysOf(b, days.dayOf() - back)) do
+            for _, t in ipairs(self:DayRows(key, b, day)) do
+                if t.kind == "posted" and t.item and fn(t) then
+                    return t
+                end
+            end
+        end
+        return nil
+    end
+
+    -- An item's ID from its name: the game's cache, else an item this
+    -- character posted in the last 60 days (nil: not known).
+    function ItemByName(name: string): number?
+        local ok, id = pcall(C_Item.GetItemInfoInstant, name)
+        local found = ok and secret.asNumber(id) or nil
+        if found then
+            return found
+        end
+        local post = self:Posts(60, function(t: Tx): boolean
+            return cachedName(t.item or 0) == name
+        end)
+        return post and post.item
+    end
+
+    -- This character's latest post of an item (by ID or name) in the last
+    -- two days (nil: none).
+    function LastPost(itemID: number?, name: string?): Tx?
+        return self:Posts(2, function(t: Tx): boolean
+            return t.item == itemID or (name ~= nil and cachedName(t.item or 0) == name)
+        end)
+    end
+
+    -- Rows older than a year dropped, once a day.
+    function Prune()
+        local d = self.o.data()
+        local today = days.dayOf()
+        if d.booksPruned == today then
+            return
+        end
+        d.booksPruned = today
+        local gone = 0
+        for _, b in pairs(d.books or {}) do
+            gone += books.prune(b, today - books.KEEP_DAYS + 1)
+        end
+        if gone > 0 then
+            self.decoded = {}
+            self.o.changed("books")
+        end
+    end
+
+    -- Whether the books weren't pruned today yet.
+    function NeedsPrune(): boolean
+        return self.o.data().booksPruned ~= days.dayOf()
+    end
+
+    -- This character's inbox as it was just read.
+    function SetMail(money: number, sales: number)
+        local key = self.o.me()
+        if not key then
+            return
+        end
+        local d = self.o.data()
+        local all = d.mail or {}
+        d.mail = all
+        local was = all[key]
+        if was and was.money == money and was.sales == sales then
+            was.at = time()
+            return
+        end
+        all[key] = { money = money, sales = sales, at = time() }
+        self.o.changed("mail")
+    end
+
+    -- The chosen characters' money waiting in the mail, how many sales,
+    -- and whether any of them looked.
+    function MailWaiting(scope: GoldScope?): (number, number, boolean)
+        local all = self.o.data().mail or {}
+        local money, sales, known = 0, 0, false
+        for _, char in ipairs(self.o.chosen(scope)) do
+            local m = all[char]
+            if m then
+                money += m.money
+                sales += m.sales
+                known = true
+            end
+        end
+        return money, sales, known
+    end
+end

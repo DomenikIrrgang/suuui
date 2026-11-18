@@ -9,11 +9,25 @@
 --     category Watched item: "Black Lotus under 40g" / "The scan found 2 at
 --     38g 51s 78c (your price: 40g). Usual: 54g 25s." Once per item per
 --     scan; a new watch (or a new price) is no find, the next look is.
+--   - an auction of yours sold (setting "A note when an auction sells", on
+--     by default), category Sold: "Kingsblood ×20" / "For about 2g 96s
+--     40c, after the house's cut. It waits in the mail." From the game's
+--     AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION (AuctionSold, 4, with the
+--     item's name; Blizzard_Game routes it to the chat line wherever you
+--     are, so it should come away from the house too: to be checked in
+--     game), or AUCTION_HOUSE_SHOW_NOTIFICATION (4, no name) when no
+--     formatted one follows. CHAT_MSG_SYSTEM is secret on Forever: the
+--     chat's "A buyer has been found" can't be read. The price is the one
+--     this character posted the item at in the last two days (an item's
+--     auction sells whole; a commodity's may sell in part: no price then);
+--     the cut is 5% (the probe's invoice: 71 of 1432).
 -- Money in SuuUI's one way (UI.MoneyText).
 
 import SuuUI from "/Core/API"
+import * as secret from "wowlua:secret"
 import * as itemData from "wowlua:item"
 import type ItemData from "wowlua:item"
+import type NotificationIcon from "/Core/API"
 import type LedgerModule from "../Ledger"
 import * as entry from "./Entry"
 
@@ -145,6 +159,65 @@ export function watchNote(m: LedgerModule, itemID: number, low: number, target: 
     end)
 end
 
+-- The house's cut of a sale, as the probe's invoice had it (71 of 1432).
+export const CUT = 0.05
+
+-- Enum.AuctionHouseNotification.AuctionSold
+export const SOLD = 4
+
+-- "Kingsblood ×20", "Kingsblood", "An auction sold".
+export function soldTitle(name: string?, qty: number?): string
+    if not name then
+        return "An auction sold"
+    end
+    if qty and qty > 1 then
+        return name .. " \195\151" .. qty
+    end
+    return name
+end
+
+-- With the post's buyout per unit and how many (an item's whole auction):
+-- "For about 2g 96s 40c, after the house's cut. It waits in the mail."
+export function soldBody(price: number?, qty: number?): string
+    if price and price > 0 and qty and qty > 0 then
+        local total = price * qty
+        return "For about " .. UI.MoneyText(total - math.floor(total * CUT)) ..
+            ", after the house\226\128\153s cut. It waits in the mail."
+    end
+    return "A buyer was found. The money waits in the mail, the house\226\128\153s cut taken."
+end
+
+-- An auction sold: the note (`name` nil: the game didn't say which).
+export function soldNote(m: LedgerModule, name: string?)
+    if not m:Get("soldNote") then
+        return
+    end
+    local itemID = name and m:ItemByName(name) or nil
+    local post = m:LastPost(itemID, name)
+    local whole = post ~= nil and not post.commodity
+    local qty = whole and post and post.qty or nil
+    local price = whole and post and post.price or nil
+    local icon: NotificationIcon = { glyph = "gavel", color = "fel" }
+    if itemID then
+        icon = {
+            texture = C_Item.GetItemIconByID(itemID),
+            tooltip = function(owner: Frame)
+                GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+                GameTooltip:SetItemByID(itemID)
+                GameTooltip:Show()
+            end,
+        }
+    end
+    SuuUI.Notify({
+        id = "suu:ledger:sold:" .. (name or "?") .. ":" .. time(),
+        kind = "timed",
+        category = "Sold",
+        icon = icon,
+        title = soldTitle(name, qty),
+        body = soldBody(price, qty),
+    })
+end
+
 -- The watches' last looks (item → when), to tell a find from a new watch.
 local function looksOf(m: LedgerModule): { [number]: number }
     local out: { [number]: number } = {}
@@ -160,6 +233,26 @@ export function enable(m: LedgerModule)
     -- for (once per item per scan)
     local seen = looksOf(m)
     local told: { [number]: number } = {}
+    -- an auction sold: the named notice; the plain one only when no named
+    -- one comes with it
+    local namedAt = -1
+    m:OnGameEvent("AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION", function(_, kind, text)
+        if secret.asNumber(kind) == SOLD then
+            namedAt = GetTime()
+            soldNote(m, secret.asString(text))
+        end
+    end)
+    m:OnGameEvent("AUCTION_HOUSE_SHOW_NOTIFICATION", function(_, kind)
+        if secret.asNumber(kind) ~= SOLD then
+            return
+        end
+        local at = GetTime()
+        m:After(0.3, function()
+            if math.abs(namedAt - at) > 0.5 then
+                soldNote(m, nil)
+            end
+        end)
+    end)
     m:On("SUUUI_LEDGER_CHANGED", function(_, what)
         if what == "scan" then
             scanNote(m)

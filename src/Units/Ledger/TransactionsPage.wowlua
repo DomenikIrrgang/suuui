@@ -1,0 +1,628 @@
+-- Units/Ledger/TransactionsPage.wowlua
+-- Transactions (design board "Ledger"): the chosen characters' money in and
+-- out, as Ledger/Recorder booked it. A toolbar (26px): the search (item,
+-- player or kind; it matches as you type), the time (Today · 7 days · 30
+-- days · All), Kinds (a FilterMenu: the sources, and Money: In and out ·
+-- In · Out). Then the rows by day: a day's heading (Today, Yesterday,
+-- Tue 3 Nov) with its net at the right, a row per transaction: when, what
+-- (Sold, Bought, Posted, Vendor, Repairs, Mail, Looted coin, …), the item
+-- (its slot, name, ×20) or what it was ("Brannoc", "Ironforge to Light's
+-- Hope", "Eastern Plaguelands · 118 corpses", a well with the source's
+-- glyph), the character, the amount (in green with +, out red with −). It
+-- is a VirtualList: thousands of rows draw only those in sight. At the
+-- foot the totals of what the filters keep. A row with an item opens its
+-- page.
+
+import SuuUI from "/Core/API"
+import type Text, TextField, FilterMenu, FilterValues, FilterValue, VirtualList, ItemSlot, Money, Segmented from "/Core/API"
+import * as books from "./Books"
+import type Tx from "./Books"
+import * as days from "./Days"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+export const ROW_H = 32
+export const DAY_H = 34
+local TOOL_H = 26
+local HEAD_H = 20
+local FOOT_H = 24
+
+-- The ranges: how many days back (nil: everything kept).
+export const RANGES: { [string]: number? } = { today = 1, week = 7, month = 30, all = nil }
+
+-- A line of the list: a day's heading or a transaction.
+export type Line = { day?: number, net?: number, tx?: Tx }
+
+export type Col = { key: string, label: string, w?: number, right?: boolean }
+export const COLS: Col[] = {
+    { key = "when", label = "When", w = 64 },
+    { key = "what", label = "What", w = 96 },
+    { key = "item", label = "Item or from whom" },
+    { key = "char", label = "Character", w = 110 },
+    { key = "amount", label = "Amount", w = 120, right = true },
+}
+type Place = { x: number, w: number }
+
+local function placesFor(w: number): Place[]
+    local fixed = 0
+    for _, c in ipairs(COLS) do
+        fixed += (c.w or 0) + S["space-4"]
+    end
+    local x = S["space-3"]
+    local out: Place[] = {}
+    for i, c in ipairs(COLS) do
+        local cw = c.w or math.max(80, w - fixed - S["space-3"] * 2)
+        out[i] = { x = x, w = cw }
+        x += cw + S["space-4"]
+    end
+    return out
+end
+
+-- What a row says of where it came from, without an item: "Brannoc",
+-- "Eastern Plaguelands · 118 corpses", "Other · 3 changes".
+export function textOf(t: Tx): string
+    local text = t.text
+    local k = t.kind
+    if k == "loot" then
+        local n = t.n or 1
+        return (text or "Somewhere") .. " \194\183 " .. n .. (n == 1 and " corpse" or " corpses")
+    elseif k == "other" then
+        local n = t.n or 1
+        return n > 1 and ("Not explained \194\183 " .. n .. " changes") or "Not explained"
+    elseif k == "mail" or k == "cod" then
+        if text and t.who then
+            return (t.amount < 0 and "To " or "From ") .. text
+        end
+    elseif k == "sold" or k == "bought" or k == "bid" then
+        return text or "An item"
+    end
+    return text or books.kindOf(k).label
+end
+
+-- A day's heading: the day in gilt-text, its net at the right.
+class DayRow extends Frame
+    readonly label: Text
+    readonly net: Money
+    readonly rule: Texture
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(DAY_H)
+        self.label = UI.Text(self, "header", "gilt-text")
+        self.label:SetPoint("BOTTOMLEFT", S["space-3"], S["space-2"])
+        self.net = UI.Money(self)
+        self.net:SetPoint("BOTTOMRIGHT", -S["space-3"], S["space-2"])
+        self.rule = UI.Fill(self, "gilt-line", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+    end
+
+    function Bind(l: Line, today: number)
+        self.label:SetValue(parts.dayLabel(l.day or today, today))
+        self.net:SetSigned(l.net or 0)
+    end
+end
+
+-- A transaction's row.
+export class TxRow extends Button
+    readonly page: TransactionsPage
+    tx?: Tx
+    laid?: Place[]
+    readonly hover: Texture
+    readonly rule: Texture
+    readonly when: Text
+    readonly what: Text
+    readonly slot: ItemSlot
+    readonly well: Frame
+    readonly glyph: Texture
+    readonly name: Text
+    readonly qty: Text
+    readonly char: Text
+    readonly amount: Money
+
+    constructor(page: TransactionsPage, parent: Frame)
+        super(nil, parent)
+        self.page = page
+        self:SetHeight(ROW_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.when = UI.Text(self, "caption", "ink-muted")
+        self.what = UI.Text(self, "caption", "ink")
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        -- without an item: a quiet well with the source's glyph
+        local well = CreateFrame("Frame", nil, self)
+        well:SetSize(24, 24)
+        UI.Fill(well, "surface-sunk"):SetAllPoints()
+        UI.Border(well, "gilt-faint")
+        self.well = well
+        self.glyph = well:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(12, 12)
+        self.glyph:SetPoint("CENTER")
+        UI.Paint(self.glyph, "ink-muted")
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetJustifyH("LEFT")
+        self.name:SetWordWrap(false)
+        self.qty = UI.Text(self, "caption", "ink-muted")
+        self.char = UI.Text(self, "caption", "ink")
+        self.char:SetJustifyH("LEFT")
+        self.char:SetWordWrap(false)
+        self.amount = UI.Money(self)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+            self:Tip()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+            GameTooltip:Hide()
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", function()
+            local t = self.tx
+            local id = t and t.item
+            if id and not parts.modifiedClick(id) then
+                self.page.w.item:SetItem(id)
+                self.page.w:Go("item")
+            end
+        end)
+    end
+
+    -- The item's tooltip, with a sale's figures under it.
+    function Tip()
+        local t = self.tx
+        if not t then
+            return
+        end
+        local id = t.item
+        if id then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetItemByID(id)
+            if t.kind == "sold" and t.gross then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddDoubleLine("Sold for", UI.MoneyText(t.gross), 1, 1, 1, 1, 1, 1)
+                GameTooltip:AddDoubleLine("The house's cut", UI.MoneyText(t.cut or 0), 1, 1, 1, 1, 1, 1)
+                local back = books.depositBack(t)
+                if back > 0 then
+                    GameTooltip:AddDoubleLine("Deposit back", UI.MoneyText(back), 1, 1, 1, 1, 1, 1)
+                end
+            elseif t.kind == "posted" and t.price then
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddDoubleLine("Buyout each", UI.MoneyText(t.price), 1, 1, 1, 1, 1, 1)
+            end
+            GameTooltip:Show()
+        end
+    end
+
+    function Lay(places: Place[])
+        if self.laid == places then
+            return
+        end
+        self.laid = places
+        local function left(r: Region, i: number)
+            r:ClearAllPoints()
+            r:SetPoint("LEFT", self, "LEFT", places[i].x, 0)
+        end
+        left(self.when, 1)
+        left(self.what, 2)
+        self.what:SetWidth(places[2].w)
+        self.what:SetJustifyH("LEFT")
+        left(self.slot, 3)
+        left(self.well, 3)
+        self.name:ClearAllPoints()
+        self.name:SetPoint("LEFT", self, "LEFT", places[3].x + 24 + S["space-3"], 0)
+        left(self.char, 4)
+        self.char:SetWidth(places[4].w)
+        self.amount:ClearAllPoints()
+        self.amount:SetPoint("RIGHT", self, "LEFT", places[5].x + places[5].w, 0)
+    end
+
+    function Bind(t: Tx)
+        self.tx = t
+        local page = self.page
+        self:Lay(page.places)
+        self.when:SetValue(date("%H:%M", t.at))
+        self.what:SetValue(books.kindOf(t.kind).label)
+        local id = t.item
+        local room = page.places[3].w - 24 - S["space-3"]
+        if id then
+            local name, quality = parts.cachedInfo(id)
+            if not name then
+                page:Ask(id)
+            end
+            local icon = parts.instantInfo(id)
+            self.slot.skin:SetItem({ icon = icon, quality = parts.QUALITY[quality or 1] or "common" })
+            self.slot:Show()
+            self.well:Hide()
+            self.name:SetStyle("label")
+            self.name:SetValue(name or t.text or ("Item " .. id))
+            self.name:SetColor(name and parts.qualityToken(quality) or "ink-muted")
+        else
+            self.slot:Hide()
+            self.well:Show()
+            UI.Glyph(self.glyph, books.kindOf(t.kind).glyph)
+            self.name:SetStyle("body")
+            self.name:SetValue(textOf(t))
+            self.name:SetColor("ink")
+        end
+        local q = t.qty
+        local qtyText = (id and q and q > 1) and ("\195\151" .. parts.count(q)) or ""
+        self.qty:SetValue(qtyText)
+        local qtyW = qtyText ~= "" and (math.ceil(self.qty:GetUnboundedStringWidth()) + S["space-2"]) or 0
+        self.name:SetWidth(math.min(math.ceil(self.name:GetUnboundedStringWidth()) + 1, math.max(20, room - qtyW)))
+        self.qty:ClearAllPoints()
+        self.qty:SetPoint("LEFT", self.name, "RIGHT", S["space-2"], 0)
+        local c = page:CharOf(t.char)
+        self.char:SetValue(c and c.name or "")
+        local token = c and c.class and ("class-" .. c.class:lower()) or nil
+        self.char:SetColor(token and UI.IsColor(token) and token or "ink")
+        self.amount:SetSigned(t.amount)
+    end
+end
+
+class HeadCell extends Frame
+    readonly label: Text
+
+    constructor(parent: Frame, col: Col)
+        super(nil, parent)
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetValue(col.label)
+        self.label:SetPoint(col.right and "RIGHT" or "LEFT")
+    end
+end
+
+export class TransactionsPage extends Frame
+    readonly w: LedgerWindow
+    readonly search: TextField
+    readonly range: Segmented<string>
+    readonly filter: FilterMenu
+    readonly countText: Text
+    readonly head: Frame
+    readonly heads: HeadCell[] = {}
+    readonly list: VirtualList<Line>
+    readonly empty: Text
+    readonly foot: Frame
+    readonly inText: Text
+    readonly inMoney: Money
+    readonly outText: Text
+    readonly outMoney: Money
+    readonly netText: Text
+    readonly netMoney: Money
+    -- what it shows
+    rangeKey: string = "week"
+    filters: FilterValues = {}
+    query: string = ""
+    -- whether the kinds, the direction or the search leave anything out
+    narrowed: boolean = false
+    places: Place[] = {}
+    today: number = 0
+    -- the lines drawn, and the characters by key
+    lines: Line[] = {}
+    chars: { [string]: { name: string, class?: string } } = {}
+    -- the names asked for; names arrived (drawn again shortly)
+    asked: { [number]: boolean } = {}
+    namesPending: boolean = false
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        local bar = CreateFrame("Frame", nil, self)
+        bar:SetPoint("TOPLEFT")
+        bar:SetPoint("TOPRIGHT")
+        bar:SetHeight(TOOL_H)
+        self.search = UI.TextField(bar, {
+            width = 260,
+            placeholder = "Search item, player or kind",
+            onTextChanged = function(text: string)
+                self:SetQuery(text)
+            end,
+            onChange = function(text: string)
+                self:SetQuery(text)
+            end,
+        })
+        self.search:SetHeight(TOOL_H)
+        self.search:SetPoint("LEFT")
+        self.range = UI.Segmented(bar, {
+            options = {
+                { value = "today", label = "Today" },
+                { value = "week", label = "7 days" },
+                { value = "month", label = "30 days" },
+                { value = "all", label = "All" },
+            },
+            value = "week",
+            onChange = function(v: string)
+                self.rangeKey = v
+                self:DrawList()
+            end,
+        })
+        self.range:SetHeight(TOOL_H)
+        self.range:SetPoint("LEFT", self.search, "RIGHT", S["space-3"], 0)
+        local kinds: { value: FilterValue, label: string }[] = {}
+        for _, g in ipairs(books.GROUPS) do
+            kinds[#kinds + 1] = { value = g.value, label = g.label }
+        end
+        self.filter = UI.FilterMenu(bar, {
+            groups = {
+                { key = "kind", label = "Kinds", kind = "many", options = kinds },
+                {
+                    key = "dir",
+                    label = "Money",
+                    kind = "one",
+                    options = {
+                        { value = "both", label = "In and out" },
+                        { value = "in", label = "In" },
+                        { value = "out", label = "Out" },
+                    },
+                },
+            },
+            defaults = { kind = {}, dir = "both" },
+            placeholder = "Kinds",
+            width = 110,
+            height = TOOL_H,
+            onChange = function(v: FilterValues)
+                self.filters = v
+                self:DrawList()
+            end,
+        })
+        self.filter:SetPoint("LEFT", self.range, "RIGHT", S["space-3"], 0)
+        self.countText = UI.Text(bar, "caption", "ink-muted")
+        self.countText:SetPoint("RIGHT")
+        -- the header
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT", 0, -(TOOL_H + S["space-4"]))
+        self.head:SetPoint("TOPRIGHT", -(S["space-3"] + 3), -(TOOL_H + S["space-4"]))
+        self.head:SetHeight(HEAD_H)
+        for i, c in ipairs(COLS) do
+            local h = HeadCell.new(self.head, c)
+            h:SetHeight(HEAD_H)
+            self.heads[i] = h
+        end
+        -- the foot: the totals of what the filters keep
+        local foot = CreateFrame("Frame", nil, self)
+        foot:SetPoint("BOTTOMLEFT")
+        foot:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+        foot:SetHeight(FOOT_H)
+        local rule = UI.Fill(foot, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT")
+        rule:SetPoint("TOPRIGHT")
+        self.foot = foot
+        self.netMoney = UI.Money(foot)
+        self.netMoney:SetPoint("RIGHT", -S["space-3"], -1)
+        self.netText = UI.Text(foot, "caption", "ink-muted")
+        self.netText:SetValue("\194\183  net")
+        self.netText:SetPoint("RIGHT", self.netMoney, "LEFT", -S["space-2"], 0)
+        self.outMoney = UI.Money(foot)
+        self.outMoney:SetPoint("RIGHT", self.netText, "LEFT", -S["space-3"], 0)
+        self.outText = UI.Text(foot, "caption", "ink-muted")
+        self.outText:SetValue("\194\183  out")
+        self.outText:SetPoint("RIGHT", self.outMoney, "LEFT", -S["space-2"], 0)
+        self.inMoney = UI.Money(foot)
+        self.inMoney:SetPoint("RIGHT", self.outText, "LEFT", -S["space-3"], 0)
+        self.inText = UI.Text(foot, "caption", "ink-muted")
+        self.inText:SetValue("In")
+        self.inText:SetPoint("RIGHT", self.inMoney, "LEFT", -S["space-2"], 0)
+        -- the rows
+        self.list = UI.VirtualList(self, {
+            rowHeight = ROW_H,
+            bar = S["space-3"],
+            make = function(): Frame
+                return TxRow.new(self, self.list.child)
+            end,
+            bind = function(row: Frame, l: Line)
+                (row :: TxRow):Bind(assert(l.tx))
+            end,
+            kinds = {
+                day = {
+                    height = DAY_H,
+                    make = function(): Frame
+                        return DayRow.new(self.list.child)
+                    end,
+                    bind = function(row: Frame, l: Line)
+                        (row :: DayRow):Bind(l, self.today)
+                    end,
+                },
+            },
+            kindOf = function(l: Line): string
+                return l.tx and "row" or "day"
+            end,
+            key = function(l: Line): unknown
+                return l.tx or ("d" .. tostring(l.day))
+            end,
+        })
+        self.list:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -1)
+        self.list:SetPoint("BOTTOMRIGHT", foot, "TOPRIGHT", 0, S["space-2"])
+        self.list.scroll:HookScript("OnSizeChanged", function()
+            self:Layout()
+        end)
+        self.empty = UI.Text(self, "body", "ink-muted")
+        self.empty:SetPoint("TOP", self.list, "TOP", 0, -60)
+        self.empty:SetWidth(520)
+        self.empty:SetWordWrap(true)
+        self.empty:Hide()
+    end
+
+    function SetQuery(text: string)
+        local q = (text:match("^%s*(.-)%s*$") or ""):lower()
+        if q == self.query then
+            return
+        end
+        self.query = q
+        if self:IsVisible() then
+            self:DrawList()
+        end
+    end
+
+    -- A character by key: its name and class.
+    function CharOf(key: string?): { name: string, class?: string }?
+        return key and self.chars[key] or nil
+    end
+
+    -- An item's name asked for (once).
+    function Ask(itemID: number)
+        if self.asked[itemID] then
+            return
+        end
+        self.asked[itemID] = true
+        C_Item.RequestLoadItemDataByID(itemID)
+    end
+
+    -- A name arrived: the rows in sight drawn again shortly (once for many).
+    function ItemInfo(itemID: number)
+        if not self.asked[itemID] or self.namesPending or not self:IsVisible() then
+            return
+        end
+        self.namesPending = true
+        self.w.m:After(0.2, function()
+            self.namesPending = false
+            if self:IsVisible() then
+                self.list:Invalidate()
+                self.list:Refresh()
+            end
+        end)
+    end
+
+    -- Whether a transaction is what the search asks for: its item's name,
+    -- its text, its kind's word or group, its character's name.
+    function Matches(t: Tx, q: string): boolean
+        local kind = books.kindOf(t.kind)
+        if kind.label:lower():find(q, 1, true) or kind.group:find(q, 1, true) then
+            return true
+        end
+        if t.text and t.text:lower():find(q, 1, true) then
+            return true
+        end
+        local id = t.item
+        if id then
+            local name = parts.cachedInfo(id)
+            if name and name:lower():find(q, 1, true) then
+                return true
+            end
+        end
+        local c = self:CharOf(t.char)
+        return c ~= nil and c.name:lower():find(q, 1, true) ~= nil
+    end
+
+    -- The transactions the range, the kinds, the direction and the search
+    -- keep, the newest first.
+    function Shown(): Tx[]
+        local back = RANGES[self.rangeKey]
+        local from = back and (self.today - back + 1) or nil
+        local all = self.w.m:Transactions(self.w:Scope(), from)
+        local f = self.filters
+        local groups: { [string]: boolean } = {}
+        local anyGroup = false
+        for _, g in ipairs(UI.FilterList(f.kind)) do
+            groups[tostring(g)] = true
+            anyGroup = true
+        end
+        local dir = type(f.dir) == "string" and f.dir :: string or "both"
+        local q = self.query
+        self.narrowed = anyGroup or dir ~= "both" or q ~= ""
+        local out: Tx[] = {}
+        for _, t in ipairs(all) do
+            local keep = true
+            if anyGroup then
+                keep = groups[books.kindOf(t.kind).group] == true
+            end
+            if keep and dir == "in" then
+                keep = t.amount > 0
+            elseif keep and dir == "out" then
+                keep = t.amount < 0
+            end
+            if keep and q ~= "" then
+                keep = self:Matches(t, q)
+            end
+            if keep then
+                out[#out + 1] = t
+            end
+        end
+        return out
+    end
+
+    function Layout()
+        local width = self.list.scroll:GetWidth()
+        if width <= 1 then
+            return
+        end
+        self.places = placesFor(width)
+        self:DrawHead()
+        self.list:Invalidate()
+        self.list:Refresh()
+    end
+
+    function DrawHead()
+        for i, h in ipairs(self.heads) do
+            local p = self.places[i]
+            if p then
+                h:ClearAllPoints()
+                h:SetPoint("LEFT", self.head, "LEFT", p.x, 0)
+                h:SetWidth(p.w)
+            end
+        end
+    end
+
+    -- Everything drawn again (a refresh of the window).
+    function Draw()
+        self.today = days.dayOf()
+        local chars: { [string]: { name: string, class?: string } } = {}
+        for _, c in ipairs(self.w.m:Characters()) do
+            chars[c.key] = { name = c.name, class = c.class }
+        end
+        self.chars = chars
+        if #self.places == 0 then
+            self.places = placesFor(math.max(400, self.list.scroll:GetWidth()))
+        end
+        self:DrawList()
+    end
+
+    -- The lines (days and rows), the count, the totals, the empty state.
+    function DrawList()
+        self:DrawHead()
+        local shown = self:Shown()
+        local lines: Line[] = {}
+        local heads: { [number]: Line } = {}
+        for _, t in ipairs(shown) do
+            local day = days.dayOf(t.at)
+            local h = heads[day]
+            if not h then
+                h = { day = day, net = 0 }
+                heads[day] = h
+                lines[#lines + 1] = h
+            end
+            h.net = (h.net or 0) + t.amount
+            lines[#lines + 1] = { tx = t }
+        end
+        self.lines = lines
+        self.list:SetItems(lines)
+        local n = #shown
+        self.countText:SetValue(n == 1 and "1 transaction" or (parts.count(n) .. " transactions"))
+        local i, o, net = books.totals(shown)
+        self.inMoney:SetCopper(i)
+        self.outMoney:SetCopper(o)
+        self.netMoney:SetSigned(net)
+        local empty: string? = nil
+        if n == 0 then
+            if #self.w.m:Transactions(self.w:Scope(), nil) == 0 then
+                empty = "Nothing recorded yet: what your characters earn and spend shows here from now on, wherever it comes from."
+            elseif self.narrowed then
+                empty = "Nothing matches."
+            else
+                empty = "No transactions in these days."
+            end
+        end
+        self.empty:SetShown(empty ~= nil)
+        self.empty:SetValue(empty or "")
+        self.empty:SetJustifyH("CENTER")
+    end
+end

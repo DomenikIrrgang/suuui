@@ -2,7 +2,7 @@
 -- The Ledger window (design board "Ledger"; spec 2026-11-18): a
 -- WindowFrame 880 x 600, the coin, "Ledger", whose prices it shows ("Prices:
 -- Normal Ruleset"); the tabs Overview · Prices · Transactions · Gold (an
--- item's page under Prices; Transactions come after the probe); at the tab
+-- item's page under Prices); at the tab
 -- row's right a bare Select of characters (all, all on a ruleset, one); the
 -- foot: what the prices come from at the left, the chosen characters' money
 -- at the right. It opens centred (beside the auction house while that is
@@ -19,6 +19,7 @@ import OverviewPage from "./OverviewPage"
 import PricesPage from "./PricesPage"
 import ItemPage from "./ItemPage"
 import GoldPage from "./GoldPage"
+import TransactionsPage from "./TransactionsPage"
 
 local UI, T = SuuUI.UI, SuuUI.Tokens
 local S = T.space
@@ -45,8 +46,9 @@ export class LedgerWindow
     readonly prices: PricesPage
     readonly item: ItemPage
     readonly gold: GoldPage
+    readonly transactions: TransactionsPage
     readonly pages: { [string]: Frame } = {}
-    -- the view shown: "overview", "prices", "item", "gold"
+    -- the view shown: "overview", "prices", "item", "transactions", "gold"
     view: string = "overview"
     -- the characters chosen: "all", "rs:<ruleset>" or "c:<character key>"
     scope: string = "all"
@@ -74,12 +76,7 @@ export class LedgerWindow
             tabs = {
                 { key = "overview", label = "Overview" },
                 { key = "prices", label = "Prices" },
-                {
-                    key = "transactions",
-                    label = "Transactions",
-                    disabled = true,
-                    reason = "Not recorded yet: they come in a later version.",
-                },
+                { key = "transactions", label = "Transactions" },
                 { key = "gold", label = "Gold" },
             },
             onTab = function(key: string)
@@ -123,8 +120,9 @@ export class LedgerWindow
         self.prices = PricesPage.new(w.body, self)
         self.item = ItemPage.new(w.body, self)
         self.gold = GoldPage.new(w.body, self)
-        self.pages.overview, self.pages.prices, self.pages.item, self.pages.gold =
-            self.overview, self.prices, self.item, self.gold
+        self.transactions = TransactionsPage.new(w.body, self)
+        self.pages.overview, self.pages.prices, self.pages.item, self.pages.gold, self.pages.transactions =
+            self.overview, self.prices, self.item, self.gold, self.transactions
         w:SetTab("overview")
     end
 
@@ -181,7 +179,7 @@ export class LedgerWindow
             self.view = "prices"
         elseif view == "item" and not self.item.itemID then
             self.view = "prices"
-        elseif view and TAB_OF[view] and view ~= "transactions" then
+        elseif view and TAB_OF[view] then
             self.view = view
         end
         self.dirty = true
@@ -214,12 +212,8 @@ export class LedgerWindow
         f:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
     end
 
-    -- Shows a view: "overview", "prices", "item", "transactions" (not yet:
-    -- the overview), "gold".
+    -- Shows a view: "overview", "prices", "item", "transactions", "gold".
     function Go(view: string)
-        if view == "transactions" then
-            view = "overview"
-        end
         self.view = view
         for key, page in pairs(self.pages) do
             page:SetShown(key == view)
@@ -259,6 +253,7 @@ export class LedgerWindow
     -- An item's name came from the server: the pages that wait for it.
     function ItemInfo(itemID: number)
         self.prices:ItemInfo(itemID)
+        self.transactions:ItemInfo(itemID)
         if self.frame:IsShown() then
             if self.view == "item" and self.item.itemID == itemID then
                 self.item:Draw()
@@ -334,6 +329,8 @@ export class LedgerWindow
             self.prices:Draw()
         elseif view == "item" then
             self.item:Draw()
+        elseif view == "transactions" then
+            self.transactions:Draw()
         elseif view == "gold" then
             self.gold:Draw()
         end

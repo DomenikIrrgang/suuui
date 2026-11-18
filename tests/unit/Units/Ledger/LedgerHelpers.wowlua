@@ -4,6 +4,7 @@
 -- with gold day by day, the window opened, and a clean slate after.
 --
 --   seed()           the looks, the scan and the characters
+--   seedBooks()      transactions of this week (yours and Kaelith's)
 --   openLedger(view?, opts?)   the window opened (through the service)
 --   wipe()           the Ledger's data and the window's state cleared
 
@@ -14,6 +15,7 @@ import type LedgerWindow from "/Units/Ledger/Window"
 import type LedgerOpenOptions from "/Core/API"
 import * as gold from "/Units/Ledger/Gold"
 import * as days from "/Units/Ledger/Days"
+import * as books from "/Units/Ledger/Books"
 
 export const LOTUS = 990601
 export const KINGSBLOOD = 990602
@@ -113,6 +115,28 @@ export function seed()
     mock.advanceTime(0.05)
 end
 
+-- Transactions: yours today (a sale of Kingsblood, a post, vendor, looted
+-- coin, repairs, money from Brannoc) and two days ago (training), and
+-- Kaelith's yesterday (a quest, a flight). Run after seed().
+export function seedBooks()
+    local now = time()
+    M:BookTx({ at = now - 7200, kind = "posted", amount = -2400, item = KINGSBLOOD, qty = 200, price = 1520, commodity = true })
+    M:BookTx({ at = now - 3600, kind = "sold", amount = 29640, item = KINGSBLOOD, qty = 20, gross = 31200, cut = 1560 })
+    M:BookTx({ at = now - 3000, kind = "vendor", amount = 8500, item = ORE, qty = 34 })
+    M:BookTx({ at = now - 2400, kind = "loot", amount = 81900, text = "Eastern Plaguelands", n = 118 })
+    M:BookTx({ at = now - 1800, kind = "repair", amount = -14210, text = "Gearcutter Cogspinner" })
+    M:BookTx({ at = now - 600, kind = "mail", amount = 500000, text = "Brannoc", who = true })
+    M:BookTx({ at = now - 2 * DAY, kind = "train", amount = -200000, text = "Expert Riding" })
+    local key = "Kaelith - " .. SuuUI.Ruleset()
+    local map = M:BookMap()
+    local b = map[key] or {}
+    map[key] = b
+    books.add(b, { at = now - DAY, kind = "quest", amount = 100000, text = "A Test Quest" })
+    books.add(b, { at = now - DAY - 60, kind = "travel", amount = -3900, text = "Ironforge to Light\226\128\153s Hope" })
+    M:Store().decoded[key] = nil
+    mock.advanceTime(0.05)
+end
+
 export function window(): LedgerWindow
     return M:Window()
 end
@@ -142,10 +166,20 @@ export function wipe()
         p:Forget()
         w.item.days = 30
         w.gold.days = 30
+        local t = w.transactions
+        t.filter:SetValue(nil)
+        t.filters = t.filter:GetValue()
+        t.search.edit:ClearFocus()
+        t.search:SetValue("")
+        t:SetQuery("")
+        t.range:SetValue("week")
+        t.rangeKey = "week"
     end
     local d = M:Data()
     d.prices, d.scans, d.watches, d.pruned, d.gold, d.goal = nil, nil, nil, nil, nil, nil
+    d.books, d.mail, d.booksPruned = nil, nil, nil
     M.cache, M.vendor = {}, {}
+    M:Store().decoded = {}
     M.atHouse = false
     mock.advanceTime(0.05)
 end

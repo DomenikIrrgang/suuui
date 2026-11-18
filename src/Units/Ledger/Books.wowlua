@@ -1,0 +1,519 @@
+-- Units/Ledger/Books.wowlua
+-- The Ledger's transactions (Units/Ledger; spec "Transactions", design
+-- board "Ledger"): what each money change of a character was, kept per
+-- character for a year in SuuUILedger.books, and what the window reads of
+-- them. Pure over the tables it is given; Ledger/Recorder decides what a
+-- change was, the module keeps them.
+--
+-- A transaction: { at (time()), kind, amount (copper, in above 0, out
+-- under), item?, qty?, text?, who? (text is a player's name), n? (looted
+-- coin: how many corpses; Other: how many changes merged), gross?, cut?
+-- (an auction sale: its price and the house's cut; the letter's money is
+-- gross - cut + the deposit back), price? (a post: the buyout per unit),
+-- commodity? (a post of a commodity) }.
+--
+-- Kept per character as one short string a day (Pack's characters: what a
+-- SavedVariables file keeps as they are), the newest first: a row is its
+-- head (kind * 16 + flags), its time (the first row's since 1 January
+-- 2020, each after it how many seconds before the one before it, zig-zag
+-- for one that isn't), the amount (zig-zag), then what the flags say is
+-- there: the item, the quantity, the kind's numbers (a sale: gross, cut; a
+-- post: price * 2 + commodity; looted coin and Other: n), the text (its
+-- length, then the text). A year of a busy character (about 20,000 rows)
+-- stays a few hundred kilobytes (the size test measures it).
+
+import * as pack from "./Pack"
+import * as days from "./Days"
+
+-- How long transactions are kept, in days.
+export const KEEP_DAYS = 365
+
+-- The times are kept from here (1 January 2020, 00:00 UTC).
+const BASE = 1577836800
+
+-- A transaction (see the top).
+export type Tx = {
+    at: number,
+    kind: string,
+    amount: number,
+    item?: number,
+    qty?: number,
+    text?: string,
+    who?: boolean,
+    n?: number,
+    gross?: number,
+    cut?: number,
+    price?: number,
+    commodity?: boolean,
+    -- the window's: whose it is (the character's key), not kept
+    char?: string,
+}
+
+-- A character's transactions: { [day number] = packed string }.
+export type Book = { [number]: string }
+-- Every character's by key.
+export type BookMap = { [string]: Book }
+
+-- A kind: its word in the What column, the group (the Kinds filter, the
+-- source), its glyph where there's no item.
+export type KindInfo = { key: string, label: string, group: string, glyph: string }
+
+-- The kinds, in the order their numbers are kept (never reorder: append).
+export const KINDS: KindInfo[] = {
+    { key = "other", label = "Other", group = "other", glyph = "coin" },
+    { key = "sold", label = "Sold", group = "ah", glyph = "gavel" },
+    { key = "bought", label = "Bought", group = "ah", glyph = "gavel" },
+    { key = "bid", label = "Bid", group = "ah", glyph = "gavel" },
+    { key = "posted", label = "Posted", group = "ah", glyph = "gavel" },
+    { key = "expired", label = "Expired", group = "ah", glyph = "gavel" },
+    { key = "cancelled", label = "Cancelled", group = "ah", glyph = "gavel" },
+    { key = "vendor", label = "Vendor", group = "vendor", glyph = "bag" },
+    { key = "buyback", label = "Buyback", group = "vendor", glyph = "bag" },
+    { key = "repair", label = "Repairs", group = "repair", glyph = "anvil" },
+    { key = "mail", label = "Mail", group = "mail", glyph = "mail" },
+    { key = "cod", label = "COD", group = "mail", glyph = "mail" },
+    { key = "trade", label = "Trade", group = "trade", glyph = "people" },
+    { key = "loot", label = "Looted coin", group = "loot", glyph = "coin" },
+    { key = "quest", label = "Quest", group = "quest", glyph = "scroll" },
+    { key = "train", label = "Training", group = "train", glyph = "book" },
+    { key = "travel", label = "Travel", group = "travel", glyph = "wing" },
+}
+export const KIND: { [string]: KindInfo } = {}
+local KIND_NUM: { [string]: number } = {}
+for i, k in ipairs(KINDS) do
+    KIND[k.key] = k
+    KIND_NUM[k.key] = i - 1
+end
+
+-- A kind by its key (Other for one not known).
+export function kindOf(key: string): KindInfo
+    return KIND[key] or KINDS[1]
+end
+
+-- The groups: the Kinds filter's options, in the board's order.
+export const GROUPS: { value: string, label: string }[] = {
+    { value = "ah", label = "Auction house" },
+    { value = "vendor", label = "Vendors" },
+    { value = "repair", label = "Repairs" },
+    { value = "mail", label = "Mail" },
+    { value = "trade", label = "Trade" },
+    { value = "loot", label = "Loot" },
+    { value = "quest", label = "Quests" },
+    { value = "train", label = "Training" },
+    { value = "travel", label = "Travel" },
+    { value = "other", label = "Other" },
+}
+
+--------------------------------------------------------------------------------
+-- Packing
+--------------------------------------------------------------------------------
+
+local enc, num = pack.encodeNumber, pack.readNumber
+local sub = string.sub
+
+local F_ITEM, F_QTY, F_EXTRA, F_TEXT = 1, 2, 4, 8
+-- a text that names a player: its own bit, above every kind's
+local WHO = 1024
+
+local function zig(v: number): number
+    v = math.floor(v)
+    return v >= 0 and v * 2 or (-v) * 2 - 1
+end
+
+local function unzig(z: number): number
+    if z % 2 == 0 then
+        return z / 2
+    end
+    return -(z + 1) / 2
+end
+
+local function hasExtra(t: Tx): boolean
+    local k = t.kind
+    if k == "sold" then
+        return t.gross ~= nil
+    elseif k == "posted" then
+        return t.price ~= nil
+    end
+    return (t.n or 0) > 1
+end
+
+-- One row; `prev` the time of the row before it (nil: the first).
+local function row(t: Tx, prev: number?): string
+    local flags = 0
+    if t.item then
+        flags += F_ITEM
+    end
+    if t.qty then
+        flags += F_QTY
+    end
+    local extra = hasExtra(t)
+    if extra then
+        flags += F_EXTRA
+    end
+    local text = t.text
+    if text and text ~= "" then
+        flags += F_TEXT
+    else
+        text = nil
+    end
+    local head = (KIND_NUM[t.kind] or 0) * 16 + flags + (t.who and text and WHO or 0)
+    local at = math.floor(t.at)
+    local out = enc(head) .. enc(prev and zig(prev - at) or math.max(0, at - BASE)) .. enc(zig(t.amount))
+    if t.item then
+        out = out .. enc(t.item)
+    end
+    if t.qty then
+        out = out .. enc(math.max(0, t.qty))
+    end
+    if extra then
+        local k = t.kind
+        if k == "sold" then
+            out = out .. enc(t.gross or 0) .. enc(t.cut or 0)
+        elseif k == "posted" then
+            out = out .. enc((t.price or 0) * 2 + (t.commodity and 1 or 0))
+        else
+            out = out .. enc(t.n or 1)
+        end
+    end
+    if text then
+        out = out .. enc(#text) .. text
+    end
+    return out
+end
+
+-- Rows sorted newest first, keeping the order they have within a second.
+local function sortNewest(list: Tx[])
+    local rank: { [Tx]: number } = {}
+    for i, t in ipairs(list) do
+        rank[t] = i
+    end
+    table.sort(list, function(a: Tx, b: Tx): boolean
+        local fa, fb = math.floor(a.at), math.floor(b.at)
+        if fa ~= fb then
+            return fa > fb
+        end
+        return (rank[a] or 0) < (rank[b] or 0)
+    end)
+end
+
+-- A day's rows as one string (they are sorted newest first here).
+export function encodeDay(list: Tx[]): string?
+    if #list == 0 then
+        return nil
+    end
+    sortNewest(list)
+    local parts: string[] = {}
+    local prev: number? = nil
+    for i, t in ipairs(list) do
+        parts[i] = row(t, prev)
+        prev = math.floor(t.at)
+    end
+    return table.concat(parts)
+end
+
+-- A day's rows (appended to `out`, each with `char` when given), the
+-- newest first.
+export function decodeDay(s: string?, out: Tx[]?, char: string?): Tx[]
+    local list: Tx[] = out or {}
+    if not s then
+        return list
+    end
+    local len = #s
+    local i = 1
+    local prev: number? = nil
+    while i <= len do
+        local head: number, rawAt: number, z: number
+        head, i = num(s, i)
+        rawAt, i = num(s, i)
+        z, i = num(s, i)
+        local who = head >= WHO
+        if who then
+            head -= WHO
+        end
+        local flags = head % 16
+        local kind = KINDS[(head - flags) / 16 + 1]
+        local at = prev and (prev - unzig(rawAt)) or (rawAt + BASE)
+        local t: Tx = { at = at, kind = kind and kind.key or "other", amount = unzig(z), char = char }
+        if flags % 2 == 1 then
+            t.item, i = num(s, i)
+        end
+        if math.floor(flags / F_QTY) % 2 == 1 then
+            t.qty, i = num(s, i)
+        end
+        if math.floor(flags / F_EXTRA) % 2 == 1 then
+            local k = t.kind
+            if k == "sold" then
+                t.gross, i = num(s, i)
+                t.cut, i = num(s, i)
+            elseif k == "posted" then
+                local v: number
+                v, i = num(s, i)
+                t.commodity = v % 2 == 1
+                t.price = math.floor(v / 2)
+            else
+                t.n, i = num(s, i)
+            end
+        end
+        if flags >= F_TEXT then
+            local n: number
+            n, i = num(s, i)
+            t.text = sub(s, i, i + n - 1)
+            t.who = who or nil
+            i += n
+        end
+        list[#list + 1] = t
+        prev = at
+    end
+    return list
+end
+
+--------------------------------------------------------------------------------
+-- Keeping
+--------------------------------------------------------------------------------
+
+-- A transaction added to a character's book (in its day, by its time).
+-- -> its day.
+export function add(book: Book, t: Tx): number
+    local day = days.dayOf(t.at)
+    local list = decodeDay(book[day])
+    local copy: Tx = {
+        at = t.at,
+        kind = t.kind,
+        amount = t.amount,
+        item = t.item,
+        qty = t.qty,
+        text = t.text,
+        who = t.who,
+        n = t.n,
+        gross = t.gross,
+        cut = t.cut,
+        price = t.price,
+        commodity = t.commodity,
+    }
+    -- (in front: the newest of its second)
+    table.insert(list, 1, copy)
+    book[day] = encodeDay(list) :: string
+    return day
+end
+
+-- The row of `kind` at `at` changed by `fn` (looted coin, Other merged
+-- into). -> whether it was there.
+export function update(book: Book, at: number, kind: string, fn: (t: Tx) -> ()): boolean
+    local day = days.dayOf(at)
+    local list = decodeDay(book[day])
+    for _, t in ipairs(list) do
+        if t.at == math.floor(at) and t.kind == kind then
+            fn(t)
+            book[day] = encodeDay(list) :: string
+            return true
+        end
+    end
+    return false
+end
+
+-- The newest row of a book (nil: none in the last two days).
+export function newest(book: Book, today: number): Tx?
+    for d = today, today - 1, -1 do
+        local list = decodeDay(book[d])
+        if list[1] then
+            return list[1]
+        end
+    end
+    return nil
+end
+
+-- The days before `oldest` dropped. -> how many.
+export function prune(book: Book, oldest: number): number
+    local gone: number[] = {}
+    for day in pairs(book) do
+        if day < oldest then
+            gone[#gone + 1] = day
+        end
+    end
+    for _, day in ipairs(gone) do
+        book[day] = nil
+    end
+    return #gone
+end
+
+-- The days of a book, the newest first, from `fromDay` on (nil: all).
+export function daysOf(book: Book, fromDay: number?): number[]
+    local out: number[] = {}
+    for day in pairs(book) do
+        if not fromDay or day >= fromDay then
+            out[#out + 1] = day
+        end
+    end
+    table.sort(out, function(a: number, b: number): boolean
+        return a > b
+    end)
+    return out
+end
+
+--------------------------------------------------------------------------------
+-- Reading
+--------------------------------------------------------------------------------
+
+-- Several lists of rows (each newest first) as one, the newest first.
+export function merge(lists: Tx[][]): Tx[]
+    local out: Tx[] = {}
+    local rank: { [Tx]: number } = {}
+    for _, l in ipairs(lists) do
+        for i, t in ipairs(l) do
+            out[#out + 1] = t
+            rank[t] = i
+        end
+    end
+    table.sort(out, function(a: Tx, b: Tx): boolean
+        if a.at ~= b.at then
+            return a.at > b.at
+        end
+        local ca, cb = a.char or "", b.char or ""
+        if ca ~= cb then
+            return ca < cb
+        end
+        return (rank[a] or 0) < (rank[b] or 0)
+    end)
+    return out
+end
+
+-- In and out of a list: the sums (out as a positive number) and the net.
+export function totals(list: Tx[]): (number, number, number)
+    local inSum, outSum = 0, 0
+    for _, t in ipairs(list) do
+        if t.amount > 0 then
+            inSum += t.amount
+        else
+            outSum -= t.amount
+        end
+    end
+    return inSum, outSum, inSum - outSum
+end
+
+-- What an auction sale's letter gave back of its deposit.
+export function depositBack(t: Tx): number
+    if t.kind ~= "sold" or t.gross == nil then
+        return 0
+    end
+    return math.max(0, t.amount - (t.gross - (t.cut or 0)))
+end
+
+-- A source's row in Where it came from / Where it went.
+export type SourceRow = { key: string, label: string, amount: number, count: number }
+
+-- The sources' words; each kind's source (a vendor's sales and buys are
+-- Vendors; a sale's deposit back goes against the deposits).
+const SOURCE_IN: { [string]: string } = {
+    sold = "Auction sales",
+    bought = "Auction buys",
+    bid = "Auction bids",
+    posted = "Deposits lost",
+    cancelled = "Cancelled auctions",
+    expired = "Auction house",
+    vendor = "Vendors",
+    buyback = "Vendors",
+    repair = "Repairs",
+    mail = "Mail",
+    cod = "COD",
+    trade = "Trade",
+    loot = "Looted coin",
+    quest = "Quests",
+    train = "Training",
+    travel = "Travel",
+    other = "Other",
+}
+
+-- Where money came from and went in a list: a row per source, the
+-- biggest first (`income`: positive amounts; `spending`: positive too, the
+-- money out). An auction sale counts its price after the cut; the
+-- deposits it gave back count against the deposits paid (Deposits lost);
+-- looted coin counts corpses.
+export function sources(list: Tx[]): (SourceRow[], SourceRow[])
+    local inBy: { [string]: SourceRow } = {}
+    local outBy: { [string]: SourceRow } = {}
+    local back = 0
+    local function put(by: { [string]: SourceRow }, label: string, amount: number, count: number)
+        local r = by[label]
+        if not r then
+            r = { key = label, label = label, amount = 0, count = 0 }
+            by[label] = r
+        end
+        r.amount += amount
+        r.count += count
+    end
+    for _, t in ipairs(list) do
+        local label = SOURCE_IN[t.kind] or "Other"
+        local count = (t.kind == "loot" or t.kind == "other") and (t.n or 1) or 1
+        if t.kind == "sold" then
+            local b = depositBack(t)
+            back += b
+            put(inBy, label, t.amount - b, count)
+        elseif t.amount > 0 then
+            put(inBy, label, t.amount, count)
+        elseif t.amount < 0 then
+            put(outBy, label, -t.amount, count)
+        end
+    end
+    local lost = outBy["Deposits lost"]
+    if lost then
+        lost.amount = math.max(0, lost.amount - back)
+    end
+    local function sorted(by: { [string]: SourceRow }): SourceRow[]
+        local out: SourceRow[] = {}
+        for _, r in pairs(by) do
+            if r.amount > 0 then
+                out[#out + 1] = r
+            end
+        end
+        table.sort(out, function(a: SourceRow, b: SourceRow): boolean
+            if a.amount ~= b.amount then
+                return a.amount > b.amount
+            end
+            return a.label < b.label
+        end)
+        return out
+    end
+    return sorted(inBy), sorted(outBy)
+end
+
+-- An item's sales (its rows, any order): how many were posted and sold,
+-- the price after the cut per unit on average, the deposits lost and on
+-- how many expired auctions, what it earned after the cut.
+export type ItemSales = {
+    posted: number,
+    sold: number,
+    sales: number,
+    avg?: number,
+    expired: number,
+    deposits: number,
+    earned: number,
+}
+
+export function itemSales(list: Tx[]): ItemSales
+    local s: ItemSales = { posted = 0, sold = 0, sales = 0, expired = 0, deposits = 0, earned = 0 }
+    local gross, units, paid, back = 0, 0, 0, 0
+    for _, t in ipairs(list) do
+        local k = t.kind
+        if k == "posted" then
+            s.posted += t.qty or 0
+            paid -= t.amount
+        elseif k == "sold" then
+            s.sales += 1
+            s.sold += t.qty or 0
+            local b = depositBack(t)
+            back += b
+            s.earned += t.amount - b
+            if t.gross and (t.qty or 0) > 0 then
+                gross += t.gross
+                units += t.qty or 0
+            end
+        elseif k == "expired" then
+            s.expired += 1
+        end
+    end
+    s.deposits = math.max(0, paid - back)
+    if units > 0 then
+        s.avg = math.floor(gross / units + 0.5)
+    end
+    return s
+end

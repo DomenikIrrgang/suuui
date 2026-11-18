@@ -8,11 +8,18 @@
 -- lowest, what most sell it for dashed, a day without a look a gap, the
 -- crosshair and its tooltip) beside When it's cheapest (a sentence, the
 -- days of the week and the times of day against their week). Then your
--- sales and its transactions, which come with the transactions.
+-- sales on that ruleset (your characters there: sold of posted, the price
+-- after the cut on average, the deposits lost on expired auctions, what it
+-- earned after the cut; "Took to sell" is left out: a sale is known when
+-- its money is collected from the mail, not when it sold) and its last
+-- transactions; your sales are diamonds on the price history.
 
 import SuuUI from "/Core/API"
-import type DealMark, Text, ItemSlot, SuuButton, Segmented, LineChart, BarChart, ScrollArea, ChartValue, TooltipData, TooltipLine from "/Core/API"
+import type DealMark, Text, ItemSlot, SuuButton, Segmented, LineChart, BarChart, ScrollArea, ChartValue, TooltipData, TooltipLine, Money from "/Core/API"
 import type When from "./Stats"
+import * as books from "./Books"
+import type Tx from "./Books"
+import * as days from "./Days"
 import * as parts from "./Parts"
 import type LedgerWindow from "./Window"
 
@@ -24,6 +31,58 @@ local CHART_H = 200
 local DAYS_H, TIMES_H = 96, 86
 local SENTENCE_H = 30
 local HEAD_ROW_H = 40
+local TX_ROWS = 6
+local TX_H = 24
+
+-- One of its transactions: when, what, how many, the character, the amount.
+class ItemTxLine extends Frame
+    readonly when: Text
+    readonly what: Text
+    readonly qty: Text
+    readonly char: Text
+    readonly amount: Money
+
+    constructor(parent: Frame)
+        super(nil, parent)
+        self:SetHeight(TX_H)
+        self.when = UI.Text(self, "caption", "ink-muted")
+        self.when:SetPoint("LEFT")
+        self.when:SetWidth(56)
+        self.when:SetJustifyH("LEFT")
+        self.what = UI.Text(self, "caption", "ink")
+        self.what:SetPoint("LEFT", 56 + S["space-3"], 0)
+        self.what:SetWidth(70)
+        self.what:SetJustifyH("LEFT")
+        self.qty = UI.Text(self, "caption", "ink-muted")
+        self.qty:SetPoint("LEFT", 56 + 70 + S["space-3"] * 2, 0)
+        self.qty:SetWidth(48)
+        self.qty:SetJustifyH("LEFT")
+        self.amount = UI.Money(self)
+        self.amount:SetPoint("RIGHT")
+        self.char = UI.Text(self, "caption", "ink")
+        self.char:SetPoint("LEFT", 56 + 70 + 48 + S["space-3"] * 3, 0)
+        self.char:SetPoint("RIGHT", -110, 0)
+        self.char:SetJustifyH("LEFT")
+        self.char:SetWordWrap(false)
+        local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("BOTTOMLEFT")
+        rule:SetPoint("BOTTOMRIGHT")
+    end
+
+    function Set(t: Tx, today: number, char: { name: string, class?: string }?)
+        local day = days.dayOf(t.at)
+        self.when:SetValue(day == today and "today" or parts.shortDate(day))
+        self.what:SetValue(books.kindOf(t.kind).label)
+        local q = t.qty
+        self.qty:SetValue(q and q > 0 and ("\195\151" .. parts.count(q)) or "")
+        self.char:SetValue(char and char.name or "")
+        local token = char and char.class and ("class-" .. char.class:lower()) or nil
+        self.char:SetColor(token and UI.IsColor(token) and token or "ink")
+        self.amount:SetSigned(t.amount)
+        self:Show()
+    end
+end
 
 -- the price history's ranges
 local RANGES = { { value = 7, label = "7 days" }, { value = 30, label = "30 days" }, { value = 60, label = "60 days" } }
@@ -107,8 +166,17 @@ export class ItemPage extends Frame
     readonly times: WhenBlock
     readonly sales: parts.Section
     readonly salesNote: Text
+    readonly soldRow: parts.DefRow
+    readonly soldText: Text
+    readonly avgRow: parts.DefRow
+    readonly depositRow: parts.DefRow
+    readonly depositNote: Text
+    readonly earnedRow: parts.DefRow
     readonly tx: parts.Section
     readonly txNote: Text
+    readonly txRows: ItemTxLine[] = {}
+    -- the item's transactions on the ruleset (the chart's marks read them)
+    itemTx: Tx[] = {}
     itemID: number? = nil
     days: number = 30
     -- what the charts' tooltips read: the usual price, the rows
@@ -257,13 +325,37 @@ export class ItemPage extends Frame
         self.sales:SetPoint("TOPLEFT", 0, below)
         self.salesNote = UI.Text(c, "caption", "ink-muted")
         self.salesNote:SetPoint("TOPLEFT", self.sales, "BOTTOMLEFT", 0, -S["space-3"])
-        self.salesNote:SetValue("Not recorded yet: your sales come with the transactions, in a later version.")
+        self.salesNote:SetValue("No sales of it yet: one shows here once you collect its money from the mail.")
+        self.soldRow = parts.DefRow.new(c, "Sold")
+        self.soldRow:SetPoint("TOPLEFT", self.sales, "BOTTOMLEFT", 0, -S["space-2"])
+        self.soldRow:SetPoint("RIGHT", self.sales, "RIGHT")
+        self.soldRow.money:Hide()
+        self.soldText = UI.Text(self.soldRow, "numeric", "ink")
+        self.soldText:SetPoint("RIGHT")
+        self.avgRow = parts.DefRow.new(c, "Sold for, on average, each")
+        self.avgRow:SetPoint("TOPLEFT", self.soldRow, "BOTTOMLEFT")
+        self.avgRow:SetPoint("RIGHT", self.sales, "RIGHT")
+        self.depositRow = parts.DefRow.new(c, "Deposits lost")
+        self.depositRow:SetPoint("TOPLEFT", self.avgRow, "BOTTOMLEFT")
+        self.depositRow:SetPoint("RIGHT", self.sales, "RIGHT")
+        self.depositNote = UI.Text(self.depositRow, "caption", "ink-muted")
+        self.depositNote:SetPoint("LEFT", self.depositRow.label, "RIGHT", S["space-2"], 0)
+        self.earnedRow = parts.DefRow.new(c, "Earned, after the cut")
+        self.earnedRow:SetPoint("TOPLEFT", self.depositRow, "BOTTOMLEFT")
+        self.earnedRow:SetPoint("RIGHT", self.sales, "RIGHT")
         self.tx = parts.Section.new(c, "Its transactions")
         self.tx:SetPoint("TOPRIGHT", c, "TOPRIGHT", 0, below)
         self.txNote = UI.Text(c, "caption", "ink-muted")
         self.txNote:SetPoint("TOPLEFT", self.tx, "BOTTOMLEFT", 0, -S["space-3"])
-        self.txNote:SetValue("Nothing recorded yet.")
-        c:SetHeight(-below + parts.HEAD_H + S["space-3"] + T.type.caption.lineHeight + S["space-5"])
+        self.txNote:SetValue("Nothing recorded for it yet.")
+        for i = 1, TX_ROWS do
+            local row = ItemTxLine.new(c)
+            row:SetPoint("TOPLEFT", self.tx, "BOTTOMLEFT", 0, -(S["space-2"] + (i - 1) * TX_H))
+            row:SetPoint("RIGHT", self.tx, "RIGHT")
+            row:Hide()
+            self.txRows[i] = row
+        end
+        c:SetHeight(-below + parts.HEAD_H + S["space-2"] + math.max(4 * parts.DL_H, TX_ROWS * TX_H) + S["space-5"])
         scroll:HookScript("OnSizeChanged", function(_: Frame, width: number)
             self:Layout(width)
         end)
@@ -285,6 +377,8 @@ export class ItemPage extends Frame
         self.tx:SetWidth(half)
         self.salesNote:SetWidth(half)
         self.txNote:SetWidth(half)
+        self.txNote:SetWordWrap(true)
+        self.txNote:SetJustifyH("LEFT")
         self.salesNote:SetWordWrap(true)
         self.salesNote:SetJustifyH("LEFT")
     end
@@ -438,8 +532,50 @@ export class ItemPage extends Frame
             sub:SetPoint("RIGHT", self.vendor, "RIGHT")
             self.vendor:SetSub(look and vendor and look.low < vendor * 1.05 and "The house barely beats it." or nil)
         end
+        self.itemTx = m:ItemTransactions(id, ruleset)
         self:DrawHistory()
         self:DrawWhen()
+        self:DrawSales()
+    end
+
+    -- Your sales of it on the ruleset, and its last transactions.
+    function DrawSales()
+        local m = self.w.m
+        local list = self.itemTx
+        local s = books.itemSales(list)
+        local any = s.posted > 0 or s.sales > 0 or s.expired > 0
+        self.salesNote:SetShown(not any)
+        for _, r in ipairs({ self.soldRow, self.avgRow, self.depositRow, self.earnedRow }) do
+            r:SetShown(any)
+        end
+        local rs = SuuUI.RulesetName(self.w:Ruleset())
+        self.sales:SetLabel("Your sales", "your characters on " .. rs)
+        if any then
+            local pct = s.posted > 0 and (" \194\183 " .. math.floor(math.min(s.sold, s.posted) / s.posted * 100 + 0.5) .. "%") or ""
+            self.soldText:SetValue(parts.count(s.sold) .. " of " .. parts.count(s.posted) .. " posted" .. pct)
+            if s.avg then
+                self.avgRow.money:SetCopper(s.avg)
+            else
+                self.avgRow.money:SetSigned(0)
+            end
+            self.depositRow.money:SetCopper(s.deposits)
+            self.depositNote:SetValue("on " .. s.expired .. " expired")
+            self.earnedRow.money:SetSigned(s.earned)
+        end
+        local chars: { [string]: { name: string, class?: string } } = {}
+        for _, c in ipairs(m:Characters()) do
+            chars[c.key] = { name = c.name, class = c.class }
+        end
+        local today = m:Today()
+        for i, row in ipairs(self.txRows) do
+            local t = list[i]
+            if t then
+                row:Set(t, today, t.char and chars[t.char] or nil)
+            else
+                row:Hide()
+            end
+        end
+        self.txNote:SetShown(list[1] == nil)
     end
 
     -- The price history over the chosen range.
@@ -462,6 +598,18 @@ export class ItemPage extends Frame
             low[i] = lows[i] > 0 and lows[i] or false
             most[i] = mosts[i] > 0 and mosts[i] or false
         end
+        -- your sales: a diamond on their day at the price each, before the cut
+        local marks: { i: number, value: number, label?: string }[] = {}
+        for _, t in ipairs(self.itemTx) do
+            local q = t.qty or 0
+            if t.kind == "sold" and q > 0 then
+                local i = days.dayOf(t.at) - first + 1
+                if i >= 1 and i <= n then
+                    marks[#marks + 1] = { i = i, value = math.floor((t.gross or t.amount) / q + 0.5), label = "You sold " .. parts.count(q) .. " at" }
+                end
+            end
+        end
+        self.keys[3]:SetShown(#marks > 0)
         self.chart:SetData({
             labels = labels,
             tipLabels = tips,
@@ -469,6 +617,7 @@ export class ItemPage extends Frame
                 { label = "Lowest buyout", values = low },
                 { label = "What most sell it for", values = most, dashed = true },
             },
+            marks = marks,
         })
     end
 
