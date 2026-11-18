@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Raid frames: when a pet disappears or someone leaves the raid during a fight, the raid frames no longer throw a burst of "Blocked in combat" errors with a stutter. They now follow such changes during the fight.
+
 ## 0.21.0 (2026-11-17)
 
 ### New

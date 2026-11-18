@@ -467,20 +467,27 @@ end
 -- header only adds points to the buttons it shows (it clears the hidden
 -- ones'): a pet kept the TOP of "Below" and stretched up the screen once "Own
 -- place" gave it a BOTTOM. So: no layout while the attributes change, then the
--- buttons' points cleared and one layout.
+-- buttons' points cleared and one layout. That layout is the header's own:
+-- an attribute it doesn't read, changed each time, so its OnAttributeChanged
+-- updates it (when shown). Never a direct call of the game's update function
+-- (SecureGroupHeader_Update): run by us, it leaves tainted entries in its
+-- tables, which every group header shares; the header's own update on an
+-- event, listing fewer units (a pet or a member gone), then read one, and in
+-- combat each of its protected calls was refused (seen in game).
 local function beginHeaderLayout(header: Frame)
     header:SetAttribute("_ignore", true)
 end
 
-local function endHeaderLayout(header: Frame, update: (self: Frame) -> ())
+local layoutPass = 0
+
+local function endHeaderLayout(header: Frame)
     -- (its children are its buttons)
     for _, b in ipairs({ header:GetChildren() }) do
         b:ClearAllPoints()
     end
     header:SetAttribute("_ignore", nil)
-    if header:IsVisible() then
-        update(header)
-    end
+    layoutPass += 1
+    header:SetAttribute("suu-layout", layoutPass)
 end
 
 -- The layout's numbers: frame width and height, the gap between frames and
@@ -1365,7 +1372,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         -- raid while it is used (after the layout: hidden, the header wouldn't
         -- let go of the pets it showed)
         ph:SetAttribute("showRaid", self:Get("showPets"))
-        endHeaderLayout(ph, SecureGroupPetHeader_Update)
+        endHeaderLayout(ph)
         local used = self:Get("showPets") and (self:Get("petPlace") == "own" or self:Get("petPlaceLarge") == "own")
         RegisterStateDriver(own, "visibility", used and "[group:raid] show; hide" or "hide")
     end
@@ -1418,7 +1425,7 @@ class RaidFramesModule extends Module<typeof(DEFAULTS)>
         end
         -- (rows and columns anchor the buttons by LEFT or TOP)
         for _, hd in ipairs(self.headers) do
-            endHeaderLayout(hd, SecureGroupHeader_Update)
+            endHeaderLayout(hd)
         end
         -- rows: as tall as eight groups of a full raid (heightLarge) whatever
         -- the raid's size: the rows hang from its top, so the top edge stays put

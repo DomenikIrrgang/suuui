@@ -784,6 +784,71 @@ local function raidPetUse()
     mock.setPet(nil, { owner = raiders[2] })
 end
 
+-- The shown buttons of a header, each with its points (none: not laid out).
+local function shownPoints(hd: Frame): { number }
+    local points: { number } = {}
+    for _, b in ipairs({ hd:GetChildren() }) do
+        if b:IsShown() then
+            points[#points + 1] = b:GetNumPoints()
+        end
+    end
+    return points
+end
+
+@test("a layout pass: each header lays itself out through its own attribute script, its buttons placed again")
+local function layoutThroughAttribute()
+    raid(6)
+    local pet = petOf(assert(raiders[2]), "Wolf")
+    mock.advanceFrames(2)
+    local hd, ph = header(1), petHeader()
+    local before, petBefore = hd:GetAttribute("suu-layout"), ph:GetAttribute("suu-layout")
+    M:Layout()
+    -- (an attribute the game's code doesn't read, new each pass: the header's
+    -- OnAttributeChanged lays it out; nothing calls the game's update itself)
+    expect(hd:GetAttribute("suu-layout")).never.toBe(before)
+    expect(ph:GetAttribute("suu-layout")).never.toBe(petBefore)
+    -- the points cleared before it: placed again by the header's own update
+    local points = shownPoints(hd)
+    expect(#points).toBe(5)
+    for _, n in ipairs(points) do
+        expect(n).toBe(1)
+    end
+    expect(shownPoints(ph)).toEqual({ 1 })
+    mock.setPet(nil, { owner = assert(raiders[2]) })
+    pet:despawn()
+    expectNoErrors()
+end
+
+-- Seen in game: after SuuUI ran the game's update itself, the header's own
+-- update in a fight was refused from its first Hide once a pet was gone.
+-- (The emulator doesn't show that taint: this passes with the direct call
+-- too. It checks that the header follows a pet gone in a fight.)
+@test("pets: one gone in a fight after a layout pass: the pet header follows, nothing refused")
+local function petGoneInCombat()
+    raid(6)
+    local wolf = petOf(assert(raiders[2]), "Wolf")
+    local cat = petOf(assert(raiders[4]), "Cat")
+    mock.advanceFrames(2)
+    M:Layout()
+    mock.advanceFrames(2)
+    expect(petButton("raidpet3") ~= nil).toBe(true)
+    expect(petButton("raidpet5") ~= nil).toBe(true)
+    local refused = #mock.refusals()
+    mock.player:enterCombat()
+    mock.setPet(nil, { owner = assert(raiders[2]) })
+    mock.advanceFrames(2)
+    expect(#mock.refusals()).toBe(refused)
+    -- the header's own update in the fight: the gone pet's button freed
+    expect(#shownPoints(petHeader())).toBe(1)
+    expect(UnitName("raidpet5")).toBe("Cat")
+    mock.player:leaveCombat()
+    mock.setPet(nil, { owner = assert(raiders[4]) })
+    mock.advanceFrames(2)
+    wolf:despawn()
+    cat:despawn()
+    expectNoErrors()
+end
+
 @test("raid pets off: their hidden buttons do nothing on a roster change")
 local function petsOffQuiet()
     raid(6)
