@@ -184,7 +184,7 @@ for `TRAINER_DESCRIPTION_UPDATE`: it fires in the VM, not in the game.
 
 ### V6. A direct call of a group header's update function: later updates refused in combat in the game, never in the VM
 
-Found in game 2026-11-18, fix not yet confirmed in game. SuuUI's raid frames
+Found in game 2026-11-18; the fix confirmed in game the same day (a member removed in combat: no refusals, the frame gone at once). SuuUI's raid frames
 called `SecureGroupHeader_Update(header)` and `SecureGroupPetHeader_Update(header)`
 themselves after a layout. Run from addon code, the update writes tainted
 entries into the file-local tables of `SecureGroupHeaders.lua`
