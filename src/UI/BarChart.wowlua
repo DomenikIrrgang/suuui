@@ -1,0 +1,298 @@
+-- UI/BarChart.wowlua
+-- BarChart (0.48; design board "Ledger", "When it's cheapest"): bars up
+-- and down from a middle line (an item's price on each day of the week
+-- against its week, in percent). Neutral bars (ink-muted, faint), the one
+-- chosen as the best in ink; the values written only on the best and the
+-- worst; a line above and under with their values and the middle's own
+-- label ("week"); a label under each bar, the best's in ink. The pointer
+-- over a bar lights it and shows a tooltip panel beside it.
+--
+--   local chart = barChart(parent, {
+--       zero = "week",                       -- the middle line's label
+--       format = function(v) return "−11%" end,  -- values and the axis
+--       tip = function(i) return data end,   -- a bar's tooltip
+--   })
+--   chart:SetData({ labels = { "Mon", … }, values = { -3, -11, … },
+--       best = 2, worst = 6 })            -- 0 or nil: none stands out
+--   chart:SetHover(i)                     -- the pointer sets it too
+--
+-- Drawn again only when the data or the size changes. Colours by token.
+
+import tokens as T from "/Core/Tokens"
+import * as draw from "./Draw"
+import text, Text from "./Text"
+import tooltipFrame, TooltipFrame from "./Tooltip"
+import type TooltipData from "./Tooltip"
+
+local S = T.space
+
+-- the plot inside the frame: the axis' labels at the left, the bars' labels
+-- under it
+local L, R, TOP, B = 36, 4, 8, 18
+local REST_ALPHA, HOVER_ALPHA = 0.45, 0.8
+
+-- A chart's tooltip beside x: right of it when it fits inside the chart,
+-- else left of it when that fits, else on the side with more room on the
+-- screen (a narrow chart's tooltip reaches over what is beside it).
+export function placeTip(tip: Frame, chart: Frame, x: number, gap: number, y: number)
+    local w, tw = chart:GetWidth(), tip:GetWidth()
+    local right: boolean
+    if x + gap + tw <= w then
+        right = true
+    elseif x - gap - tw >= 0 then
+        right = false
+    else
+        local left = chart:GetLeft() or 0
+        local screen = UIParent:GetWidth()
+        right = (screen - left - x) >= (left + x)
+    end
+    tip:ClearAllPoints()
+    if right then
+        tip:SetPoint("TOPLEFT", chart, "TOPLEFT", x + gap, -y)
+    else
+        tip:SetPoint("TOPRIGHT", chart, "TOPLEFT", x - gap, -y)
+    end
+    tip:Show()
+end
+
+export type BarChartData = { labels: string[], values: number[], best?: number, worst?: number }
+export type BarChartOptions = {
+    zero?: string,
+    format?: (v: number) -> string,
+    tip?: (i: number) -> TooltipData?,
+}
+
+-- A percentage with its sign: "+4%", "−11%", "0%".
+export function signedPercent(v: number): string
+    local r = math.floor(math.abs(v) + 0.5)
+    if r == 0 then
+        return "0%"
+    end
+    return (v < 0 and "\226\136\146" or "+") .. r .. "%"
+end
+
+export class BarChart extends Frame
+    readonly opts: BarChartOptions
+    data: BarChartData? = nil
+    -- the axis' reach either way (the values' furthest, with room)
+    reach: number = 10
+    hover: number? = nil
+    dirty: boolean = false
+    -- the size it was drawn at
+    drawnW: number = 0
+    drawnH: number = 0
+    readonly bars: Texture[] = {}
+    readonly labels: Text[] = {}
+    readonly values: Text[] = {}
+    readonly rules: Texture[] = {}
+    readonly ticks: Text[] = {}
+    readonly tip: TooltipFrame
+
+    constructor(parent: Frame, opts: BarChartOptions?)
+        super(nil, parent)
+        self.opts = opts or {}
+        self:SetSize(236, 100)
+        for k = 1, 3 do
+            local rule = draw.fill(self, k == 2 and "gilt-line" or "gilt-faint", "BORDER")
+            rule:SetHeight(1)
+            self.rules[k] = rule
+            local t = text(self, "caption", "ink-muted")
+            t:SetJustifyH("RIGHT")
+            self.ticks[k] = t
+        end
+        self.tip = tooltipFrame(self)
+        self.tip:SetFrameLevel(self:GetFrameLevel() + 10)
+        self.tip:Hide()
+        self:EnableMouse(true)
+        self:SetScript("OnSizeChanged", function()
+            -- (only a new size: the regions it places don't count)
+            local w, h = self:GetWidth(), self:GetHeight()
+            if w ~= self.drawnW or h ~= self.drawnH then
+                self:Redraw()
+            end
+        end)
+        self:SetScript("OnShow", function()
+            if self.dirty then
+                self:Redraw()
+            end
+        end)
+        self:SetScript("OnEnter", function()
+            self:SetScript("OnUpdate", function()
+                self:Follow()
+            end)
+        end)
+        self:SetScript("OnLeave", function()
+            self:SetScript("OnUpdate", nil)
+            self:SetHover(nil)
+        end)
+    end
+
+    function SetData(d: BarChartData?)
+        self.data = d
+        self.hover = nil
+        self:Redraw()
+    end
+
+    function Format(v: number): string
+        local f = self.opts.format
+        return f and f(v) or signedPercent(v)
+    end
+
+    -- a value's height from the top
+    function Y(v: number): number
+        local h = self:GetHeight()
+        return TOP + (h - TOP - B) * (0.5 - v / (2 * self.reach))
+    end
+
+    function Slot(): number
+        local n = self.data and #self.data.values or 0
+        return (self:GetWidth() - L - R) / math.max(1, n)
+    end
+
+    function Redraw()
+        -- (asked first: a size the client tells now draws it inside this)
+        self:GetWidth()
+        local d = self.data
+        local n = d and #d.values or 0
+        for i = n + 1, #self.bars do
+            self.bars[i]:Hide()
+            self.labels[i]:Hide()
+            self.values[i]:Hide()
+        end
+        if not d or n == 0 then
+            for k = 1, 3 do
+                self.rules[k]:Hide()
+                self.ticks[k]:Hide()
+            end
+            self:ShowHover()
+            return
+        end
+        if self:GetWidth() <= 1 or not self:IsVisible() then
+            self.dirty = true
+            return
+        end
+        self.dirty = false
+        self.drawnW, self.drawnH = self:GetWidth(), self:GetHeight()
+        -- the reach: the furthest value and a third more, in steps of 5
+        local far = 0
+        for _, v in ipairs(d.values) do
+            far = math.max(far, math.abs(v))
+        end
+        self.reach = math.max(10, math.ceil(far * 1.3 / 5) * 5)
+        local w = self:GetWidth()
+        for k, v in ipairs({ self.reach, 0, -self.reach }) do
+            local y = math.floor(self:Y(v) + 0.5)
+            local rule = self.rules[k]
+            rule:ClearAllPoints()
+            rule:SetPoint("TOPLEFT", self, "TOPLEFT", L, -y)
+            rule:SetPoint("TOPRIGHT", self, "TOPLEFT", w - R, -y)
+            rule:Show()
+            local t = self.ticks[k]
+            t:SetValue(v == 0 and (self.opts.zero or "0") or self:Format(v))
+            t:ClearAllPoints()
+            t:SetPoint("RIGHT", self, "TOPLEFT", L - S["space-3"], -y)
+            t:Show()
+        end
+        local slot = self:Slot()
+        local bw = math.min(28, math.max(6, slot - 8))
+        local zero = self:Y(0)
+        for i, v in ipairs(d.values) do
+            local bar, label, value = self.bars[i], self.labels[i], self.values[i]
+            if not bar then
+                bar = self:CreateTexture(nil, "ARTWORK")
+                bar:SetColorTexture(1, 1, 1, 1)
+                label = text(self, "caption", "ink-muted")
+                value = text(self, "caption", "ink")
+                self.bars[i], self.labels[i], self.values[i] = bar, label, value
+            end
+            local cx = L + (i - 0.5) * slot
+            local y = self:Y(v)
+            local top, bottom = math.min(y, zero), math.max(y, zero)
+            if bottom - top < 1 then
+                top, bottom = v < 0 and zero or zero - 1, v < 0 and zero + 1 or zero
+            end
+            bar:ClearAllPoints()
+            bar:SetPoint("TOPLEFT", self, "TOPLEFT", cx - bw / 2, -top)
+            bar:SetSize(bw, bottom - top)
+            bar:Show()
+            label:SetValue(d.labels[i] or "")
+            label:ClearAllPoints()
+            label:SetPoint("BOTTOM", self, "BOTTOMLEFT", cx, 2)
+            label:SetColor(i == d.best and "ink" or "ink-muted")
+            label:Show()
+            -- the values on the best and the worst only
+            local shown = (d.best ~= nil and d.best ~= 0 and i == d.best) or (d.worst ~= nil and d.worst ~= 0 and i == d.worst)
+            value:SetShown(shown)
+            if shown then
+                value:SetValue(self:Format(v))
+                value:ClearAllPoints()
+                if v < 0 then
+                    value:SetPoint("TOP", self, "TOPLEFT", cx, -(bottom + 1))
+                else
+                    value:SetPoint("BOTTOM", self, "TOPLEFT", cx, -(top - 1))
+                end
+            end
+        end
+        self:Paint()
+        self:ShowHover()
+    end
+
+    -- the bars' colours: the best in ink, the rest ink-muted and faint, the
+    -- hovered one less faint
+    function Paint()
+        local d = self.data
+        if not d then
+            return
+        end
+        for i in ipairs(d.values) do
+            local bar = self.bars[i]
+            if bar then
+                if i == d.best then
+                    draw.paint(bar, "ink")
+                else
+                    draw.paint(bar, "ink-muted", i == self.hover and HOVER_ALPHA or REST_ALPHA)
+                end
+            end
+        end
+    end
+
+    function Follow()
+        local x = GetCursorPosition()
+        local left = self:GetLeft()
+        local d = self.data
+        if not (left and d) then
+            return
+        end
+        local px = x / self:GetEffectiveScale() - left
+        if px < L then
+            self:SetHover(nil)
+            return
+        end
+        local i = math.floor((px - L) / self:Slot()) + 1
+        self:SetHover(math.max(1, math.min(#d.values, i)))
+    end
+
+    function SetHover(i: number?)
+        if i == self.hover then
+            return
+        end
+        self.hover = i
+        self:Paint()
+        self:ShowHover()
+    end
+
+    function ShowHover()
+        local i, d, own = self.hover, self.data, self.opts.tip
+        local tipData = i and d and own and not self.dirty and own(i) or nil
+        if not (i and tipData) then
+            self.tip:Hide()
+            return
+        end
+        self.tip:SetContent(tipData)
+        placeTip(self.tip, self, L + (i - 0.5) * self:Slot(), S["space-5"], 0)
+    end
+end
+
+export function barChart(parent: Frame, opts: BarChartOptions?): BarChart
+    return BarChart.new(parent, opts)
+end

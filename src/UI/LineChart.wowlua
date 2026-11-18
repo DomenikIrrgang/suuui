@@ -1,0 +1,551 @@
+-- UI/LineChart.wowlua
+-- LineChart (0.48; design board "Ledger", the price history and the gold):
+-- values over time on one axis. The first series is the main line (2px,
+-- ink), the others thinner or dashed (ink-muted); a value of `false` is a
+-- gap (a day without a look), never filled in. Marks are diamonds on the
+-- main line (your own sales). A few gridlines in gilt-faint with the axis'
+-- labels at the left, a few of the x labels under it (the first, the last,
+-- about six in all). The pointer over it shows a crosshair, a dot on each
+-- line and a tooltip panel beside the crosshair.
+--
+--   local chart = lineChart(parent, {
+--       axis = function(v, step) return "12g" end,  -- the axis' labels, `step`
+--                                               -- apart (default: money, as
+--                                               -- short as the step allows:
+--                                               -- 1,240g · 85g 80s · 85s · 40c)
+--       value = function(v) return "…" end,    -- a value in the tooltip (default:
+--                                               -- money: 14s 82c)
+--       tip = function(i) return data end,     -- the whole tooltip instead
+--       empty = "Nothing seen yet.",           -- shown without two points
+--   })
+--   chart:SetData({ labels = { "20 Oct", … }, tipLabels = { "Yesterday", … },
+--       series = { { label = "Lowest", values = { 1520, false, … } },
+--                  { label = "Most sell it for", values = …, dashed = true } },
+--       marks = { { i = 31, value = 1400, label = "You sold 20 at" } } })
+--   chart:SetHover(i)   the crosshair at point i (nil: none; the pointer
+--                       sets it while over the chart)
+--
+-- Drawn from pooled lines and textures, again only when the data or the
+-- size changes (a hover moves the crosshair, the dots and the tooltip).
+-- Colours by token (they follow a theme).
+--
+--   sparkline(parent[, width = 64, height = 18])   the shape only (ink-muted,
+--       no axis): :SetValues(values), a value <= 0 left out
+
+import tokens as T from "/Core/Tokens"
+import * as draw from "./Draw"
+import text, Text from "./Text"
+import moneyText from "./Inventory"
+import tooltipFrame, TooltipFrame from "./Tooltip"
+import placeTip from "./BarChart"
+import type TooltipData, TooltipLine from "./Tooltip"
+
+local S = T.space
+
+-- the plot inside the frame: room for the axis' labels at the left and the
+-- x labels under it
+local L, R, TOP, B = 46, 12, 12, 22
+local TICKS = 4
+local DASH, GAP = 5, 4
+
+export type ChartValue = number | false
+export type ChartSeries = {
+    values: ChartValue[],
+    label?: string,
+    dashed?: boolean,
+    color?: string,
+    width?: number,
+}
+export type ChartMark = { i: number, value: number, label?: string }
+export type LineChartData = {
+    labels: string[],
+    tipLabels?: string[],
+    series: ChartSeries[],
+    marks?: ChartMark[],
+}
+export type LineChartOptions = {
+    axis?: (v: number, step: number) -> string,
+    value?: (v: number) -> string,
+    tip?: (i: number) -> TooltipData?,
+    empty?: string,
+}
+
+-- Money short, for an axis: "1,240g", "85s", "40c".
+export function shortMoney(copper: number): string
+    local c = math.floor(copper + 0.5)
+    if c >= 10000 then
+        local g = tostring(math.floor(c / 10000 + 0.5))
+        local k: number
+        repeat
+            g, k = g:gsub("^(%d+)(%d%d%d)", "%1,%2")
+        until k == 0
+        return g .. "g"
+    elseif c >= 100 then
+        return math.floor(c / 100 + 0.5) .. "s"
+    end
+    return c .. "c"
+end
+
+-- Money for an axis whose labels are `step` apart: whole gold when they
+-- are a gold or more apart ("1,240g"), else gold and silver ("85g 80s"),
+-- else as short as the amount ("85s", "40c").
+export function axisMoney(copper: number, step: number): string
+    local c = math.floor(copper + 0.5)
+    if c < 10000 or step >= 10000 then
+        return shortMoney(c)
+    end
+    local s = math.floor(c / 100 + 0.5) % 100
+    local g = shortMoney(math.floor(c / 10000) * 10000)
+    return s > 0 and (g .. " " .. s .. "s") or g
+end
+
+-- The axis' bottom and top for the values and marks (12 % of room above
+-- and under, never under 0) and how many values there are.
+local function scaleOf(d: LineChartData): (number, number, number)
+    local lo, hi, n = math.huge, -math.huge, 0
+    for _, s in ipairs(d.series) do
+        for _, v in ipairs(s.values) do
+            if v ~= false then
+                lo, hi = math.min(lo, v), math.max(hi, v)
+                n += 1
+            end
+        end
+    end
+    for _, m in ipairs(d.marks or {}) do
+        lo, hi = math.min(lo, m.value), math.max(hi, m.value)
+    end
+    if n == 0 then
+        return 0, 1, 0
+    end
+    local pad = (hi - lo) * 0.12
+    if pad <= 0 then
+        pad = math.abs(hi) * 0.1
+    end
+    if pad <= 0 then
+        pad = 1
+    end
+    return math.max(0, lo - pad), hi + pad, n
+end
+
+export class LineChart extends Frame
+    readonly opts: LineChartOptions
+    data: LineChartData? = nil
+    -- the scale and the number of points drawn
+    lo: number = 0
+    hi: number = 1
+    count: number = 0
+    hover: number? = nil
+    -- whether it waits for a size to draw
+    dirty: boolean = false
+    -- the size it was drawn at
+    drawnW: number = 0
+    drawnH: number = 0
+    readonly lines: Line[] = {}
+    lineN: number = 0
+    readonly grids: Texture[] = {}
+    readonly ticks: Text[] = {}
+    readonly xTexts: Text[] = {}
+    readonly markOuter: Texture[] = {}
+    readonly markInner: Texture[] = {}
+    readonly dots: Texture[] = {}
+    readonly rings: Texture[] = {}
+    readonly cross: Texture
+    readonly empty: Frame
+    readonly emptyText: Text
+    readonly tip: TooltipFrame
+
+    constructor(parent: Frame, opts: LineChartOptions?)
+        super(nil, parent)
+        self.opts = opts or {}
+        self:SetSize(400, 180)
+        self.cross = draw.fill(self, "ink-faint", "OVERLAY", 1)
+        self.cross:SetWidth(1)
+        self.cross:Hide()
+        self.empty = CreateFrame("Frame", nil, self)
+        self.empty:SetAllPoints()
+        draw.fill(self.empty, "surface-sunk"):SetAllPoints()
+        self.emptyText = text(self.empty, "caption", "ink-muted")
+        self.emptyText:SetPoint("CENTER")
+        self.emptyText:SetValue(self.opts.empty or "Nothing seen yet.")
+        self.empty:Hide()
+        self.tip = tooltipFrame(self)
+        self.tip:SetFrameLevel(self:GetFrameLevel() + 10)
+        self.tip:Hide()
+        self:EnableMouse(true)
+        self:SetScript("OnSizeChanged", function()
+            -- (only a new size: the regions it places don't count)
+            local w, h = self:GetWidth(), self:GetHeight()
+            if w ~= self.drawnW or h ~= self.drawnH then
+                self:Redraw()
+            end
+        end)
+        self:SetScript("OnShow", function()
+            if self.dirty then
+                self:Redraw()
+            end
+        end)
+        self:SetScript("OnEnter", function()
+            self:SetScript("OnUpdate", function()
+                self:Follow()
+            end)
+        end)
+        self:SetScript("OnLeave", function()
+            self:SetScript("OnUpdate", nil)
+            self:SetHover(nil)
+        end)
+    end
+
+    function SetData(d: LineChartData?)
+        self.data = d
+        self.hover = nil
+        self:Redraw()
+    end
+
+    -- the plot's corners in the frame (x from the left, y from the top)
+    function Plot(): (number, number, number, number)
+        local w, h = self:GetWidth(), self:GetHeight()
+        return L, TOP, math.max(L + 1, w - R), math.max(TOP + 1, h - B)
+    end
+
+    function X(i: number): number
+        local x0, _, x1 = self:Plot()
+        local n = self.count
+        if n <= 1 then
+            return x0
+        end
+        return x0 + (i - 1) / (n - 1) * (x1 - x0)
+    end
+
+    function Y(v: number): number
+        local _, y0, _, y1 = self:Plot()
+        local span = self.hi - self.lo
+        return y0 + (1 - (v - self.lo) / (span > 0 and span or 1)) * (y1 - y0)
+    end
+
+    private function Seg(x1: number, y1: number, x2: number, y2: number, thickness: number, token: string)
+        local n = self.lineN + 1
+        self.lineN = n
+        local line = self.lines[n]
+        if not line then
+            line = self:CreateLine(nil, "ARTWORK")
+            self.lines[n] = line
+        end
+        line:SetThickness(thickness)
+        draw.paintFill(line, token)
+        line:SetStartPoint("TOPLEFT", self, x1, -y1)
+        line:SetEndPoint("TOPLEFT", self, x2, -y2)
+        line:Show()
+    end
+
+    -- dashes from (x1, y1) to (x2, y2), the pattern carried on from `at`
+    -- (px into the pattern); returns where it ends
+    private function Dashes(x1: number, y1: number, x2: number, y2: number, at: number, thickness: number, token: string): number
+        local len = math.sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
+        if len <= 0 then
+            return at
+        end
+        local period = DASH + GAP
+        local pos = 0
+        local phase = at % period
+        while pos < len do
+            local seg: number
+            if phase < DASH then
+                seg = math.min(DASH - phase, len - pos)
+                local a, b = pos / len, (pos + seg) / len
+                self:Seg(x1 + (x2 - x1) * a, y1 + (y2 - y1) * a, x1 + (x2 - x1) * b, y1 + (y2 - y1) * b, thickness, token)
+            else
+                seg = math.min(period - phase, len - pos)
+            end
+            pos += seg
+            phase = (phase + seg) % period
+        end
+        return at + len
+    end
+
+    private function Label(list: Text[], i: number, style: string): Text
+        local t = list[i]
+        if not t then
+            t = text(self, style, "ink-muted")
+            list[i] = t
+        end
+        t:Show()
+        return t
+    end
+
+    -- Everything drawn again (data or size changed).
+    function Redraw()
+        -- (asked first: the client may lay the frame out now and tell a new
+        -- size, which draws it once inside this; then it is drawn again
+        -- from a clean slate below)
+        self:GetWidth()
+        for i = 1, self.lineN do
+            self.lines[i]:Hide()
+        end
+        self.lineN = 0
+        for _, list in ipairs({ self.grids, self.markOuter, self.markInner } :: Texture[][]) do
+            for _, t in ipairs(list) do
+                t:Hide()
+            end
+        end
+        for _, list in ipairs({ self.ticks, self.xTexts }) do
+            for _, t in ipairs(list) do
+                t:Hide()
+            end
+        end
+        local d = self.data
+        local n = d and #d.labels or 0
+        local lo, hi, points = 0, 1, 0
+        if d then
+            lo, hi, points = scaleOf(d)
+        end
+        self.count = n
+        self.empty:SetShown(d ~= nil and (n < 2 or points == 0))
+        if not d or n < 2 or points == 0 then
+            self:ShowHover()
+            return
+        end
+        if self:GetWidth() <= 1 or not self:IsVisible() then
+            self.dirty = true
+            return
+        end
+        self.dirty = false
+        self.drawnW, self.drawnH = self:GetWidth(), self:GetHeight()
+        self.lo, self.hi = lo, hi
+        local x0, _, x1 = self:Plot()
+        local axis = self.opts.axis or axisMoney
+        local step = (hi - lo) / (TICKS - 1)
+        -- the gridlines and the axis' labels
+        for k = 1, TICKS do
+            local v = lo + (hi - lo) * (k - 1) / (TICKS - 1)
+            local g = self.grids[k]
+            if not g then
+                g = draw.fill(self, "gilt-faint", "BORDER")
+                g:SetHeight(1)
+                self.grids[k] = g
+            end
+            local y = math.floor(self:Y(v) + 0.5)
+            g:ClearAllPoints()
+            g:SetPoint("TOPLEFT", self, "TOPLEFT", x0, -y)
+            g:SetPoint("TOPRIGHT", self, "TOPLEFT", x1, -y)
+            g:Show()
+            local t = self:Label(self.ticks, k, "caption")
+            t:SetValue(axis(v, step))
+            t:SetJustifyH("RIGHT")
+            t:ClearAllPoints()
+            t:SetPoint("RIGHT", self, "TOPLEFT", x0 - S["space-3"], -y)
+        end
+        -- the x labels: about six, the first and the last among them
+        local every = math.max(1, math.ceil(n / 6))
+        local k = 0
+        for i = 1, n do
+            if (i - 1) % every == 0 or i == n then
+                -- (the one before the last left out when they'd touch)
+                if not (i ~= n and n - i < every / 2) then
+                    k += 1
+                    local t = self:Label(self.xTexts, k, "caption")
+                    t:SetValue(d.labels[i])
+                    t:ClearAllPoints()
+                    local point: "BOTTOMLEFT" | "BOTTOMRIGHT" | "BOTTOM" = i == 1 and "BOTTOMLEFT" or i == n and "BOTTOMRIGHT" or "BOTTOM"
+                    t:SetPoint(point, self, "BOTTOMLEFT", self:X(i), 2)
+                end
+            end
+        end
+        -- the lines: the others first, the main one over them
+        for si = #d.series, 1, -1 do
+            local s = d.series[si]
+            local token = s.color or (si == 1 and "ink" or "ink-muted")
+            local width = s.width or (si == 1 and 2 or 1.5)
+            local at = 0
+            for i = 2, n do
+                local a, b = s.values[i - 1], s.values[i]
+                if a ~= nil and a ~= false and b ~= nil and b ~= false then
+                    local ax, ay, bx, by = self:X(i - 1), self:Y(a), self:X(i), self:Y(b)
+                    if s.dashed then
+                        at = self:Dashes(ax, ay, bx, by, at, width, token)
+                    else
+                        self:Seg(ax, ay, bx, by, width, token)
+                    end
+                else
+                    at = 0
+                end
+            end
+        end
+        -- the marks: diamonds, ink edged, surface inside
+        for mi, m in ipairs(d.marks or {}) do
+            local outer, inner = self.markOuter[mi], self.markInner[mi]
+            if not outer or not inner then
+                outer = draw.diamond(self, 9, "ink", "OVERLAY", 2)
+                inner = draw.diamond(self, 5, "surface", "OVERLAY", 3)
+                self.markOuter[mi], self.markInner[mi] = outer, inner
+            end
+            local x, y = self:X(m.i), self:Y(m.value)
+            for _, t in ipairs({ outer, inner }) do
+                t:ClearAllPoints()
+                t:SetPoint("CENTER", self, "TOPLEFT", x, -y)
+                t:Show()
+            end
+        end
+        self:ShowHover()
+    end
+
+    -- The point under the pointer.
+    function Follow()
+        local x = GetCursorPosition()
+        local scale = self:GetEffectiveScale()
+        local left = self:GetLeft()
+        if not left or self.count < 2 then
+            return
+        end
+        local x0, _, x1 = self:Plot()
+        local px = x / scale - left
+        local i = math.floor((px - x0) / (x1 - x0) * (self.count - 1) + 0.5) + 1
+        self:SetHover(math.max(1, math.min(self.count, i)))
+    end
+
+    function SetHover(i: number?)
+        if i == self.hover then
+            return
+        end
+        self.hover = i
+        self:ShowHover()
+    end
+
+    -- The crosshair, a dot on each line and the tooltip at `hover`.
+    function ShowHover()
+        local i, d = self.hover, self.data
+        for _, t in ipairs(self.dots) do
+            t:Hide()
+        end
+        for _, t in ipairs(self.rings) do
+            t:Hide()
+        end
+        if not (i and d and self.count >= 2 and not self.dirty and not self.empty:IsShown()) then
+            self.cross:Hide()
+            self.tip:Hide()
+            return
+        end
+        local _, y0, _, y1 = self:Plot()
+        local x = self:X(i)
+        self.cross:ClearAllPoints()
+        self.cross:SetPoint("TOP", self, "TOPLEFT", x, -y0)
+        self.cross:SetHeight(y1 - y0)
+        self.cross:Show()
+        for si, s in ipairs(d.series) do
+            local v = s.values[i]
+            if v ~= nil and v ~= false then
+                local ring, dot = self.rings[si], self.dots[si]
+                if not ring or not dot then
+                    ring = self:CreateTexture(nil, "OVERLAY", nil, 4)
+                    draw.skin(ring, "circle-fill")
+                    draw.paint(ring, "surface")
+                    ring:SetSize(10, 10)
+                    dot = self:CreateTexture(nil, "OVERLAY", nil, 5)
+                    draw.skin(dot, "circle-fill")
+                    dot:SetSize(7, 7)
+                    self.rings[si], self.dots[si] = ring, dot
+                end
+                draw.paint(dot, s.color or (si == 1 and "ink" or "ink-muted"))
+                for _, t in ipairs({ ring, dot }) do
+                    t:ClearAllPoints()
+                    t:SetPoint("CENTER", self, "TOPLEFT", x, -self:Y(v))
+                    t:Show()
+                end
+            end
+        end
+        local tipData = self:TipData(i)
+        if not tipData then
+            self.tip:Hide()
+            return
+        end
+        self.tip:SetContent(tipData)
+        placeTip(self.tip, self, x, S["space-4"], S["space-2"])
+    end
+
+    -- The tooltip at point i: the caller's, or the label and each series'
+    -- value ("not seen" for a gap) and the marks there.
+    function TipData(i: number): TooltipData?
+        local own = self.opts.tip
+        if own then
+            return own(i)
+        end
+        local d = self.data
+        if not d then
+            return nil
+        end
+        local value = self.opts.value or moneyText
+        local lines: TooltipLine[] = {}
+        for si, s in ipairs(d.series) do
+            local v = s.values[i]
+            lines[#lines + 1] = { s.label or ("Series " .. si), (v ~= nil and v ~= false) and value(v) or "not seen" }
+        end
+        for _, m in ipairs(d.marks or {}) do
+            if m.i == i then
+                lines[#lines + 1] = { m.label or "Mark", value(m.value) }
+            end
+        end
+        return { title = (d.tipLabels and d.tipLabels[i]) or d.labels[i], lines = lines }
+    end
+end
+
+export function lineChart(parent: Frame, opts: LineChartOptions?): LineChart
+    return LineChart.new(parent, opts)
+end
+
+--------------------------------------------------------------------------------
+-- Sparkline: the shape only, ink-muted, no axis
+--------------------------------------------------------------------------------
+
+export class Sparkline extends Frame
+    readonly lines: Line[] = {}
+    values: number[] = {}
+
+    constructor(parent: Frame, width: number?, height: number?)
+        super(nil, parent)
+        self:SetSize(width or 64, height or 18)
+    end
+
+    -- The values (a value <= 0 left out: the line joins the ones around it).
+    function SetValues(values: number[])
+        self.values = values
+        local lo, hi, n = math.huge, -math.huge, 0
+        for _, v in ipairs(values) do
+            if v > 0 then
+                lo, hi, n = math.min(lo, v), math.max(hi, v), n + 1
+            end
+        end
+        local used = 0
+        if n >= 2 then
+            local w, h = self:GetWidth(), self:GetHeight()
+            local count = #values
+            local px: number? = nil
+            local py = 0
+            for i, v in ipairs(values) do
+                if v > 0 then
+                    local x = 1 + (i - 1) / math.max(1, count - 1) * (w - 2)
+                    local y = hi == lo and h / 2 or 1 + (h - 2) * (1 - (v - lo) / (hi - lo))
+                    if px then
+                        used += 1
+                        local line = self.lines[used]
+                        if not line then
+                            line = self:CreateLine(nil, "ARTWORK")
+                            line:SetThickness(1.5)
+                            draw.paintFill(line, "ink-muted")
+                            self.lines[used] = line
+                        end
+                        line:SetStartPoint("TOPLEFT", self, px, -py)
+                        line:SetEndPoint("TOPLEFT", self, x, -y)
+                        line:Show()
+                    end
+                    px, py = x, y
+                end
+            end
+        end
+        for i = used + 1, #self.lines do
+            self.lines[i]:Hide()
+        end
+    end
+end
+
+export function sparkline(parent: Frame, width: number?, height: number?): Sparkline
+    return Sparkline.new(parent, width, height)
+end

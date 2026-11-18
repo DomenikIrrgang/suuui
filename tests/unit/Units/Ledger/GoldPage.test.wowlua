@@ -1,0 +1,124 @@
+-- Units/Ledger/GoldPage: the chosen characters' gold day by day (7, 30,
+-- 90 days, All; never before the first day kept; the crosshair's tooltip;
+-- too little kept yet), the characters by ruleset (the class colour,
+-- "you", their gold, the change over the range signed, when last seen; a
+-- click chooses one), what it's worth (the gold, for now).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type GoldPage from "/Units/Ledger/GoldPage"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import seed, openLedger, wipe from "./LedgerHelpers"
+
+@afterEach
+local function cleanup()
+    wipe()
+    expectNoErrors()
+end
+
+local function page(): GoldPage
+    return openLedger("gold").gold
+end
+
+@test("the line: the chosen characters' gold at each day's end, never before the first day kept; the ranges")
+local function line()
+    seed()
+    local p = page()
+    local today = M:Today()
+    -- 20 days kept: 30 days shows those 21 (20 back and today)
+    expect(p.chart.count).toBe(21)
+    local d = assert(p.chart.data)
+    expect(d.series[1].label).toBe("Gold")
+    expect(d.series[1].values[21]).toBe(M:GoldTotal(nil))
+    expect(d.tipLabels and d.tipLabels[21]).toBe("Today")
+    mock.click(p.range.buttons[1])
+    expect(p.days).toBe(7)
+    expect(p.chart.count).toBe(7)
+    expect(p.headChange:GetText()).toBe("7 days")
+    mock.click(p.range.buttons[4])
+    expect(p.days).toBe(0)
+    expect(p.chart.count).toBe(today - assert(M:GoldFirstDay(nil)) + 1)
+    expect(p.headChange:GetText()).toBe("All")
+    p.chart:SetHover(1)
+    expect(assert(assert(p.chart.tip.content).lines)[1][1]).toBe("Gold")
+end
+
+@test("only today kept: the line waits for tomorrow")
+local function first()
+    M:RecordMoney(true)
+    local p = page()
+    expect(p.chart.empty).toBeShown()
+    expect(p.chart.emptyText:GetText()).toContain("tomorrow")
+end
+
+@test("the characters by ruleset: headings, the class colour, you, the change signed; a click chooses one")
+local function characters()
+    seed()
+    local p = page()
+    local headings: string[], names: string[] = {}, {}
+    for _, r in ipairs(p.rows) do
+        if r:IsShown() then
+            if r.key then
+                names[#names + 1] = r.name:GetText() or ""
+            else
+                headings[#headings + 1] = r.heading:GetText() or ""
+            end
+        end
+    end
+    expect(headings).toEqual({ SuuUI.RulesetName(), "Roleplay Ruleset" })
+    expect(#names).toBe(#M:Characters())
+    local kaelith: unknown, me: unknown = nil, nil
+    for _, r in ipairs(p.rows) do
+        if r.key == "Kaelith - " .. SuuUI.Ruleset() then
+            kaelith = r
+            expect(tokenOf(r.name)).toBe("class-mage")
+            expect(tokenOf(r.diamond)).toBe("class-mage")
+            expect(r.you).never.toBeShown()
+            expect(r.seen:GetText()).toBe("yesterday")
+            -- 20 days of a thousand more each day
+            expect(r.change.sign).toBe(1)
+            expect(r.change.copper).toBe(19000)
+        elseif r.key == M:CharKey() then
+            me = r
+            expect(r.you).toBeShown()
+            expect(r.seen:GetText()).toBe("now")
+        end
+    end
+    expect(kaelith).toBeTruthy()
+    expect(me).toBeTruthy()
+    -- a click chooses it: the line and the foot follow, the row lit
+    for _, r in ipairs(p.rows) do
+        if r.key == "Kaelith - " .. SuuUI.Ruleset() then
+            mock.hover(r)
+            expect(r.hover).toBeShown()
+            mock.hover(nil)
+            mock.click(r)
+            expect(p.w.scope).toBe("c:Kaelith - " .. SuuUI.Ruleset())
+            expect(r.sel).toBeShown()
+        end
+    end
+    expect(p.section.title:GetText()).toBe("Gold, Kaelith")
+    expect(p.w.money.copper).toBe(639000)
+    -- a heading isn't a choice
+    for _, r in ipairs(p.rows) do
+        if not r.key and r:IsShown() then
+            mock.click(r)
+        end
+    end
+    expect(p.w.scope).toBe("c:Kaelith - " .. SuuUI.Ruleset())
+end
+
+@test("what it's worth: the chosen characters' gold, all of it; what's left out said")
+local function worth()
+    seed()
+    local p = page()
+    expect(p.worthGold.money.copper).toBe(M:GoldTotal(nil))
+    expect(p.worthAll.money.copper).toBe(M:GoldTotal(nil))
+    expect(p.worthNote:GetText()).toContain("later version")
+    p.w.scope = "rs:Roleplay"
+    p.w:Refresh()
+    expect(p.worthGold.money.copper).toBe(41000)
+end

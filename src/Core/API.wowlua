@@ -34,9 +34,11 @@ import * as actionButton from "/UI/ActionButton"
 import * as alert from "/UI/Alert"
 import * as auras from "/UI/Auras"
 import * as bar from "/UI/Bar"
+import * as barChart from "/UI/BarChart"
 import * as castBar from "/UI/CastBar"
 import * as classBars from "/UI/ClassBars"
 import * as combatBadge from "/UI/CombatBadge"
+import * as dealMark from "/UI/DealMark"
 import * as contextMenu from "/UI/ContextMenu"
 import * as controls from "/UI/Controls"
 import * as cooldownTracker from "/UI/CooldownTracker"
@@ -60,6 +62,7 @@ import * as keybindMode from "/UI/KeybindMode"
 import * as layout from "/UI/Layout"
 import * as legacy from "/UI/Legacy"
 import * as levelUp from "/UI/LevelUp"
+import * as lineChart from "/UI/LineChart"
 import * as loadingMark from "/UI/LoadingMark"
 import * as loot from "/UI/Loot"
 import * as lootRollTray from "/UI/LootRollTray"
@@ -311,6 +314,7 @@ local rawUI = {
     AnchorPicker = pickers.anchorPicker,
     AttachTooltip = tooltip.attachTooltip,
     AuraContainer = auras.auraContainer,
+    BarChart = barChart.barChart, -- 0.48
     Bind = draw.bind,
     Border = draw.border,
     Button = controls.button,
@@ -322,6 +326,7 @@ local rawUI = {
     CloseButton = panel.closeButton,
     CloseContextMenu = contextMenu.closeContextMenu,
     CombatBadge = combatBadge.combatBadge, -- 0.34
+    DealMark = dealMark.dealMark, -- 0.48
     Confirm = panel.confirm,
     Contacts = social.contacts,
     ContextMenu = contextMenu.contextMenu,
@@ -375,6 +380,7 @@ local rawUI = {
     LegacyTrack = legacy.legacyTrack,
     LevelColor = unitFrame.levelColor,
     LevelUp = levelUp.levelUp,
+    LineChart = lineChart.lineChart, -- 0.48
     LoadingMark = loadingMark.loadingMark,
     LootRollTray = lootRollTray.lootRollTray,
     LootWindow = loot.lootWindow,
@@ -445,7 +451,9 @@ local rawUI = {
     Shadow = draw.shadow,
     ShortKey = actionButton.shortKey,
     ShowRaidMarker = unitFrame.showRaidMarker,
+    ShortMoney = lineChart.shortMoney, -- 0.48
     ShowTooltip = tooltip.showTooltip,
+    SignedPercent = barChart.signedPercent, -- 0.48
     Size = draw.size,
     Skin = draw.skin,
     SkinBar = draw.skinBar,
@@ -456,6 +464,7 @@ local rawUI = {
     SkinWindow = windowSkin.skinWindow,
     Slider = inputs.slider,
     SoftEdge = draw.softEdge,
+    Sparkline = lineChart.sparkline, -- 0.48
     SpellTooltip = tooltip.spellTooltip,
     Spellbook = spellbook.spellbook,
     StanceBar = classBars.stanceBar,
@@ -645,6 +654,9 @@ API.UI.InlineMark = draw.inlineMark
 API.UI.WithPixelUnit = draw.withPixelUnit
 -- copper as gold, silver and copper with their icons
 API.UI.MoneyText = inventory.moneyText
+-- 0.48: a deal's mark ("26% under", "Under vendor"): micro arcane text
+-- on arcane-soft with an arcane edge, sized to its text; :SetValue(text)
+API.UI.DealMark = dealMark.dealMark
 -- a skinned game window's chrome (title, close button, body…), or nil
 API.UI.WindowChrome = windowSkin.chromeOf
 -- a filter choice's values, as a list
@@ -671,6 +683,16 @@ API.UI.OpenRoot = reskin.openRoot
 -- Dress(frame, kind[, head][, headPoint][, box]): the theme's dress (art on
 -- the frame, UI/Dress.wowlua) for a kind: "window", "minimap", "unit", "chat"
 API.UI.Dress = dress.register
+
+-- 0.48: charts (the Ledger's price history, gold and "When it's cheapest"):
+-- values over time on one axis with gaps, marks, a crosshair and its
+-- tooltip; a sparkline; bars up and down from a middle line. Money short
+-- for an axis ("1,240g"), a percentage with its sign ("−11%").
+API.UI.LineChart = lineChart.lineChart
+API.UI.Sparkline = lineChart.sparkline
+API.UI.BarChart = barChart.barChart
+API.UI.ShortMoney = lineChart.shortMoney
+API.UI.SignedPercent = barChart.signedPercent
 
 -- A settings section that is always there (a module uses module:RegisterSettings,
 -- whose section goes away with the module). See SettingsUI/Registry.lua.
@@ -1420,6 +1442,9 @@ export type DurabilityService = serviceKeys.DurabilityService
 export type FlightMapService = serviceKeys.FlightMapService
 export type FoundFire = serviceKeys.FoundFire
 export type LedgerService = serviceKeys.LedgerService
+export type LedgerOpenOptions = serviceKeys.LedgerOpenOptions
+export type LedgerUnder = serviceKeys.LedgerUnder
+export type LedgerScan = serviceKeys.LedgerScan
 export type MapMark = serviceKeys.MapMark
 export type MarkFilters = serviceKeys.MarkFilters
 export type MarksService = serviceKeys.MarksService
@@ -1459,6 +1484,10 @@ export type PreviewItem = auras.PreviewItem
 export type UnitAuras = auras.UnitAuras
 -- UI/Bar
 export type Bar = bar.Bar
+-- UI/BarChart (0.48)
+export type BarChart = barChart.BarChart
+export type BarChartData = barChart.BarChartData
+export type BarChartOptions = barChart.BarChartOptions
 -- UI/CastBar
 export type CastBar = castBar.CastBar
 -- UI/ClassBars
@@ -1467,6 +1496,8 @@ export type StanceBar = classBars.StanceBar
 export type TotemBar = classBars.TotemBar
 -- UI/CombatBadge
 export type CombatBadge = combatBadge.CombatBadge
+-- UI/DealMark
+export type DealMark = dealMark.DealMark
 -- UI/Controls
 export type StateBadge = controls.StateBadge
 export type SuuButton = controls.SuuButton
@@ -1555,6 +1586,14 @@ export type TrackStop = legacy.TrackStop
 export type LevelUpCard = levelUp.LevelUpCard
 export type LevelUpDef = levelUp.LevelUpDef
 export type LevelUpSpell = levelUp.LevelUpSpell
+-- UI/LineChart (0.48)
+export type ChartMark = lineChart.ChartMark
+export type ChartSeries = lineChart.ChartSeries
+export type ChartValue = lineChart.ChartValue
+export type LineChart = lineChart.LineChart
+export type LineChartData = lineChart.LineChartData
+export type LineChartOptions = lineChart.LineChartOptions
+export type Sparkline = lineChart.Sparkline
 -- UI/LoadingMark
 export type LoadingMark = loadingMark.LoadingMark
 -- UI/Loot
@@ -1693,6 +1732,8 @@ export type StandInPerson = unitFrame.StandInPerson
 export type UnitApi = unitFrame.UnitApi
 export type UnitFrame = unitFrame.UnitFrame
 export type UnitFrameOptions = unitFrame.UnitFrameOptions
+-- UI/VirtualList (0.48)
+export type VirtualList<T> = virtualList.VirtualList<T>
 -- UI/WeaponEnchants
 export type WeaponEnchantIcon = weaponEnchants.WeaponEnchantIcon
 -- UI/WindowSkin

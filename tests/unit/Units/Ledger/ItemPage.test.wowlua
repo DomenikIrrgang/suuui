@@ -1,0 +1,212 @@
+-- Units/Ledger/ItemPage: an item's page: its head, the figures (Lowest
+-- now, Usual, 30 days, A vendor pays with Under vendor), the price
+-- history's ranges and its crosshair's tooltip, When it's cheapest (the
+-- sentence, the two charts, their tooltips, the note while a row has too
+-- few looks), Watch (asks a price, "Watching" in arcane, a new price or
+-- Stop watching), Search the house (only at an auctioneer, out of a
+-- fight), Back; an item never seen; a name that arrives later.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type ItemPage from "/Units/Ledger/ItemPage"
+import * as parts from "/Units/Ledger/Parts"
+import * as events from "/Core/Events"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import seed, openLedger, wipe, LOTUS, AXE, ORE from "./LedgerHelpers"
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    local d = parts.askDialog()
+    if d then
+        d.panel:Hide()
+    end
+    wipe()
+    expectNoErrors()
+end
+
+local function item(itemID: number): ItemPage
+    return openLedger(nil, { itemID = itemID }).item
+end
+
+@test("the head and the figures: Lowest now, Usual, the 30 days' range, what a vendor pays")
+local function figures()
+    seed()
+    local p = item(LOTUS)
+    expect(p.name:GetText()).toBe("Test Lotus")
+    expect(tokenOf(p.name)).toBe("quality-uncommon")
+    expect(p.kind:GetText()).toContain("seen today")
+    expect(p.low.money.copper).toBe(284000)
+    expect(p.low.sub:GetText()).toBe("3 in 2 auctions")
+    expect(p.usual.money.copper).toBe(assert(M:Usual(LOTUS)))
+    expect(p.usual.sub:GetText()).toContain("14 days")
+    expect(p.month.word:GetText()).toContain("to")
+    expect(p.month.sub:GetText()).toBe("lowest to highest")
+    expect(p.vendor.money.copper).toBe(100)
+    expect(p.vendorMark).never.toBeShown()
+    -- the axe: under what a vendor pays, by how much
+    p = item(AXE)
+    expect(p.vendorMark).toBeShown()
+    expect(p.vendorMark.label:GetText()).toBe("Under vendor")
+    expect(p.vendor.sub:GetText()).toBe("30s 86c more each")
+end
+
+@test("an item never seen here: none offered, no usual price, no history, too few looks")
+local function never()
+    seed()
+    local p = item(12345)
+    expect(p.kind:GetText()).toContain("never seen on " .. SuuUI.RulesetName())
+    expect(p.low.word:GetText()).toBe("none offered")
+    expect(p.usual.word:GetText()).toBe("\226\128\148")
+    expect(p.month.sub:GetText()).toBe("no look in 30 days")
+    expect(p.chart.empty).toBeShown()
+    expect(p.weekdays.note).toBeShown()
+    expect(p.weekdays.chart).never.toBeShown()
+    expect(p.sentence:GetText()).toContain("Scan on more days")
+end
+
+@test("the price history: 7, 30 or 60 days; gaps for days without a look; the crosshair's tooltip")
+local function history()
+    seed()
+    local p = item(LOTUS)
+    expect(p.chart.count).toBe(30)
+    local d = assert(p.chart.data)
+    expect(d.series[1].label).toBe("Lowest buyout")
+    expect(d.series[2].dashed).toBe(true)
+    expect(d.tipLabels and d.tipLabels[30]).toBe("Today")
+    mock.click(p.range.buttons[1])
+    expect(p.days).toBe(7)
+    expect(p.chart.count).toBe(7)
+    mock.click(p.range.buttons[3])
+    expect(p.chart.count).toBe(60)
+    -- looks only from 40 days ago: the days before are gaps
+    expect(assert(p.chart.data).series[1].values[1]).toBe(false)
+    p.chart:SetHover(60)
+    local tip = assert(p.chart.tip.content)
+    expect(tip.title).toBe("Today")
+    expect(assert(tip.lines)[1][1]).toBe("Lowest buyout")
+    p.chart:SetHover(1)
+    expect(assert(assert(p.chart.tip.content).lines)[1][2]).toBe("not seen")
+end
+
+@test("when it's cheapest: the sentence, the days and times against their week, a bar's tooltip")
+local function cheapest()
+    seed()
+    local p = item(LOTUS)
+    expect(p.sentence:GetText()).toContain("Cheapest on Tuesdays")
+    expect(p.sentence:GetText()).toContain("at night")
+    expect(p.weekdays.chart).toBeShown()
+    local wd = assert(p.weekdays.chart.data)
+    expect(wd.labels[1]).toBe("Mon")
+    expect(wd.best).toBe(2)
+    local tm = assert(p.times.chart.data)
+    expect(tm.labels).toEqual({ "Morning", "Noon", "Evening", "Night" })
+    expect(tm.best).toBe(4)
+    p.weekdays.chart:SetHover(2)
+    local tip = assert(p.weekdays.chart.tip.content)
+    expect(tip.title).toBe("Tuesdays")
+    local lines = assert(tip.lines)
+    expect(lines[1][1]).toContain("under its week")
+    expect(lines[2][1]).toContain("looks in 60 days")
+    expect(lines[3][1]).toContain("at its usual")
+    p.times.chart:SetHover(4)
+    expect(assert(p.times.chart.tip.content).title).toBe("Nights (0\226\128\1476)")
+    -- three days of looks: the days want more, the times are enough
+    p = item(ORE)
+    expect(p.weekdays.note).toBeShown()
+    expect(p.weekdays.note:GetText()).toContain("each needs 3")
+    expect(p.times.chart).toBeShown()
+end
+
+@test("Watch: your price asked for; Watching in arcane; a new price, or Stop watching")
+local function watch()
+    seed()
+    local p = item(LOTUS)
+    expect(p.watch.label:GetText()).toBe("Watch")
+    mock.click(p.watch)
+    local d = assert(parts.askDialog())
+    expect(d.panel).toBeShown()
+    expect(d.panel.title).toHaveText("Watch Test Lotus")
+    expect(d.amount:GetCopper()).toBe(assert(M:Usual(LOTUS)))
+    expect(d.other).never.toBeShown()
+    d.amount:SetCopper(300000)
+    mock.click(d.ok)
+    mock.advanceFrames(3)
+    expect(assert(M:WatchOf(LOTUS)).target).toBe(300000)
+    expect(p.watch.label:GetText()).toBe("Watching")
+    expect(tokenOf(p.watch.label)).toBe("arcane")
+    expect(tokenOf(p.watch.border.top)).toBe("arcane")
+    -- a hover leaves it arcane
+    mock.hover(p.watch)
+    mock.hover(nil)
+    expect(tokenOf(p.watch.border.top)).toBe("arcane")
+    -- again: the price now, and Stop watching
+    mock.click(p.watch)
+    expect(d.amount:GetCopper()).toBe(300000)
+    expect(d.other).toBeShown()
+    mock.click(d.other)
+    mock.advanceFrames(3)
+    expect(M:WatchOf(LOTUS)).toBeNil()
+    expect(p.watch.label:GetText()).toBe("Watch")
+    expect(tokenOf(p.watch.label)).toBe("ink")
+end
+
+@test("Search the house: only at an auctioneer and out of a fight; it searches through the auction house")
+local function house()
+    seed()
+    local p = item(LOTUS)
+    expect(p.house:IsEnabled()).toBe(false)
+    expect(assert(p.house.tooltip :: { description: string? }).description).toContain("auctioneer")
+    mock.fireEvent("AUCTION_HOUSE_SHOW")
+    mock.advanceFrames(2)
+    expect(p.house:IsEnabled()).toBe(true)
+    local ah = assert(SuuUI.UseService(SuuUI.Services.AUCTION_HOUSE))
+    local searched = mock.spy(function(_: number | string): boolean
+        return true
+    end)
+    mock.stub(ah, "SearchItem", searched)
+    mock.click(p.house)
+    expect(searched).toHaveBeenCalledWith(LOTUS)
+    mock.player:enterCombat()
+    mock.advanceFrames(2)
+    expect(p.house:IsEnabled()).toBe(false)
+    expect(M:SearchHouse(LOTUS)).toBe(false)
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+    expect(p.house:IsEnabled()).toBe(true)
+    mock.fireEvent("AUCTION_HOUSE_CLOSED")
+    mock.advanceFrames(2)
+    expect(p.house:IsEnabled()).toBe(false)
+end
+
+@test("Back: the prices; the slot's tooltip; a theme change draws it again")
+local function back()
+    seed()
+    local w = openLedger(nil, { itemID = LOTUS })
+    mock.hover(w.item.slot)
+    expect(GameTooltip:IsShown()).toBe(true)
+    mock.hover(nil)
+    events.emit("SUUUI_THEME_CHANGED", "test")
+    mock.advanceFrames(2)
+    mock.click(w.item.back)
+    expect(w.view).toBe("prices")
+    expect(w.frame.tab).toBe("prices")
+end
+
+@test("a name that arrives later: the page drawn again with it")
+local function lateName()
+    seed()
+    mock.defineItem(990621, { name = "Test Slow Root", quality = 2 }, { cached = false, delay = 0.2 })
+    M:RecordLook(990621, 70, 0, 1, 1)
+    mock.advanceFrames(2)
+    local p = item(990621)
+    expect(p.name:GetText()).toBe("Item 990621")
+    mock.advanceTime(0.4)
+    mock.fireEvent("GET_ITEM_INFO_RECEIVED", 990621, true)
+    expect(p.name:GetText()).toBe("Test Slow Root")
+end

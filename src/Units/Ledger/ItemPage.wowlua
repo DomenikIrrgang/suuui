@@ -1,0 +1,563 @@
+-- Units/Ledger/ItemPage.wowlua
+-- An item's page under Prices (design board "Ledger"): Back, the item,
+-- its kind and when it was seen; Watch (a star: asks for your price, then
+-- "Watching" in arcane) and Search the house (only at an auctioneer, out of
+-- a fight). The figures: Lowest now · Usual · 30 days (lowest to highest) ·
+-- A vendor pays (with "Under vendor · 3s 21c more each" when the house
+-- sells it for less). The price history (7 · 30 · 60 days: the day's
+-- lowest, what most sell it for dashed, a day without a look a gap, the
+-- crosshair and its tooltip) beside When it's cheapest (a sentence, the
+-- days of the week and the times of day against their week). Then your
+-- sales and its transactions, which come with the transactions.
+
+import SuuUI from "/Core/API"
+import type DealMark, Text, ItemSlot, SuuButton, Segmented, LineChart, BarChart, ScrollArea, ChartValue, TooltipData, TooltipLine from "/Core/API"
+import type When from "./Stats"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local WHEN_W = 236
+local CHART_H = 200
+local DAYS_H, TIMES_H = 96, 86
+local SENTENCE_H = 30
+local HEAD_ROW_H = 40
+
+-- the price history's ranges
+local RANGES = { { value = 7, label = "7 days" }, { value = 30, label = "30 days" }, { value = 60, label = "60 days" } }
+
+-- A legend's key: a line (solid or dashed) or a diamond, and its words.
+class LegendKey extends Frame
+    readonly label: Text
+
+    constructor(parent: Frame, label: string, kind: string)
+        super(nil, parent)
+        self:SetHeight(T.type.caption.lineHeight)
+        if kind == "diamond" then
+            local outer = UI.Diamond(self, 8, "ink", "ARTWORK", 1)
+            outer:SetPoint("CENTER", self, "LEFT", 7, 0)
+            local inner = UI.Diamond(self, 4, "surface", "ARTWORK", 2)
+            inner:SetPoint("CENTER", outer, "CENTER")
+        elseif kind == "dashed" then
+            for k = 0, 1 do
+                local d = UI.Fill(self, "ink-muted", "ARTWORK")
+                d:SetSize(5, 2)
+                d:SetPoint("LEFT", k * 9, 0)
+            end
+        else
+            local l = UI.Fill(self, "ink", "ARTWORK")
+            l:SetSize(14, 2)
+            l:SetPoint("LEFT")
+        end
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("LEFT", 14 + S["space-3"], 0)
+        self.label:SetValue(label)
+        self:SetWidth(14 + S["space-3"] + math.ceil(self.label:GetUnboundedStringWidth()))
+    end
+end
+
+-- One of When it's cheapest's two charts, or its note while a row has too
+-- few looks.
+class WhenBlock extends Frame
+    readonly caption: Text
+    readonly chart: BarChart
+    readonly note: Text
+
+    constructor(parent: Frame, caption: string, height: number, tip: (i: number) -> TooltipData?)
+        super(nil, parent)
+        self:SetSize(WHEN_W, T.type.caption.lineHeight + S["space-2"] + height)
+        self.caption = UI.Text(self, "caption", "ink-muted")
+        self.caption:SetPoint("TOPLEFT")
+        self.caption:SetValue(caption)
+        self.chart = UI.BarChart(self, { zero = "week", tip = tip })
+        self.chart:SetPoint("TOPLEFT", 0, -(T.type.caption.lineHeight + S["space-2"]))
+        self.chart:SetSize(WHEN_W, height)
+        self.note = UI.Text(self, "caption", "ink-muted")
+        self.note:SetPoint("TOPLEFT", self.chart, "TOPLEFT", 0, -S["space-4"])
+        self.note:SetWidth(WHEN_W)
+        self.note:SetWordWrap(true)
+        self.note:SetJustifyH("LEFT")
+    end
+end
+
+export class ItemPage extends Frame
+    readonly w: LedgerWindow
+    readonly scroll: ScrollArea
+    readonly back: parts.IconButton
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly kind: Text
+    readonly watch: SuuButton
+    readonly house: SuuButton
+    readonly low: parts.Figure
+    readonly usual: parts.Figure
+    readonly month: parts.Figure
+    readonly vendor: parts.Figure
+    readonly vendorMark: DealMark
+    readonly figRule: Texture
+    readonly history: parts.Section
+    readonly range: Segmented<number>
+    readonly keys: LegendKey[] = {}
+    readonly chart: LineChart
+    readonly cheap: parts.Section
+    readonly sentence: Text
+    readonly weekdays: WhenBlock
+    readonly times: WhenBlock
+    readonly sales: parts.Section
+    readonly salesNote: Text
+    readonly tx: parts.Section
+    readonly txNote: Text
+    itemID: number? = nil
+    days: number = 30
+    -- what the charts' tooltips read: the usual price, the rows
+    usualPrice: number? = nil
+    when?: When
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        local scroll = UI.ScrollArea(self, S["space-3"])
+        scroll:SetPoint("TOPLEFT")
+        scroll:SetPoint("BOTTOMRIGHT", -(S["space-3"] + 3), 0)
+        self.scroll = scroll
+        local c = scroll.child
+        -- the head
+        self.back = parts.IconButton.new(c, "chevronLeft", "Back to prices", function()
+            w:Go("prices")
+        end)
+        self.back:SetPoint("TOPLEFT", 0, -5)
+        self.slot = UI.ItemSlot(c, 36)
+        self.slot:SetPoint("TOPLEFT", 30 + S["space-4"], -2)
+        self.slot:SetScript("OnEnter", function()
+            local id = self.itemID
+            if id then
+                GameTooltip:SetOwner(self.slot, "ANCHOR_RIGHT")
+                GameTooltip:SetItemByID(id)
+                GameTooltip:Show()
+            end
+        end)
+        self.slot:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+        self.slot:SetScript("OnClick", function()
+            local id = self.itemID
+            if id then
+                parts.modifiedClick(id)
+            end
+        end)
+        self.name = UI.Text(c, "unit-name-lg", "ink")
+        self.name:SetPoint("TOPLEFT", self.slot, "TOPRIGHT", S["space-4"], 0)
+        self.kind = UI.Text(c, "caption", "ink-muted")
+        self.kind:SetPoint("TOPLEFT", self.name, "BOTTOMLEFT", 0, -S["space-1"])
+        self.house = UI.Button(c, {
+            text = "Search the house",
+            icon = "search",
+            onClick = function()
+                local id = self.itemID
+                if id then
+                    self.w.m:SearchHouse(id)
+                end
+            end,
+        })
+        self.house:SetPoint("TOPRIGHT", 0, -5)
+        self.watch = UI.Button(c, {
+            text = "Watch",
+            icon = "star",
+            onClick = function()
+                self:AskWatch()
+            end,
+        })
+        self.watch:SetPoint("RIGHT", self.house, "LEFT", -S["space-3"], 0)
+        self.watch:HookScript("OnLeave", function()
+            self:DrawWatch()
+        end)
+        -- the figures
+        local y = -(HEAD_ROW_H + S["space-5"])
+        self.low = parts.Figure.new(c, "Lowest now")
+        self.usual = parts.Figure.new(c, "Usual")
+        self.month = parts.Figure.new(c, "30 days")
+        self.vendor = parts.Figure.new(c, "A vendor pays")
+        self.vendorMark = parts.dealMark(self.vendor)
+        self.vendorMark:SetPoint("TOPLEFT", self.vendor, "TOPLEFT", 0, -parts.FIGURE_SUB_Y)
+        self.figRule = UI.Fill(c, "gilt-faint", "ARTWORK")
+        self.figRule:SetHeight(1)
+        for i, f in ipairs({ self.low, self.usual, self.month, self.vendor }) do
+            f:SetPoint("TOPLEFT", 0, y)
+            f:SetWidth(100 + i)
+        end
+        y -= parts.FIGURE_H + S["space-4"]
+        self.figRule:SetPoint("TOPLEFT", 0, y)
+        self.figRule:SetPoint("RIGHT", c, "RIGHT")
+        y -= S["space-5"]
+        -- the price history, and when it's cheapest beside it
+        self.history = parts.Section.new(c, "Price history")
+        self.history:SetPoint("TOPLEFT", 0, y)
+        local options: { value: number, label: string }[] = {}
+        for _, r in ipairs(RANGES) do
+            options[#options + 1] = { value = r.value, label = r.label }
+        end
+        self.range = UI.Segmented(self.history, {
+            options = options,
+            value = 30,
+            onChange = function(v: number)
+                self.days = v
+                self:DrawHistory()
+            end,
+        })
+        self.range:SetHeight(26)
+        for _, b in ipairs(self.range.buttons) do
+            b:SetHeight(20)
+        end
+        self.history:SetAside(self.range)
+        for i, def in ipairs({
+            { "Lowest buyout", "line" },
+            { "What most sell it for", "dashed" },
+            { "Your sales", "diamond" },
+        }) do
+            local key = LegendKey.new(c, def[1], def[2])
+            if i == 1 then
+                key:SetPoint("TOPLEFT", self.history, "BOTTOMLEFT", 0, -S["space-3"])
+            else
+                key:SetPoint("LEFT", self.keys[i - 1], "RIGHT", S["space-5"], 0)
+            end
+            self.keys[i] = key
+        end
+        self.keys[3]:Hide()
+        self.chart = UI.LineChart(c, { empty = "No look on any of these days." })
+        self.chart:SetPoint("TOPLEFT", self.keys[1], "BOTTOMLEFT", 0, -S["space-3"])
+        self.chart:SetHeight(CHART_H)
+        self.cheap = parts.Section.new(c, "When it\226\128\153s cheapest")
+        self.cheap:SetPoint("TOPRIGHT", c, "TOPRIGHT", 0, y)
+        self.cheap:SetWidth(WHEN_W)
+        self.sentence = UI.Text(c, "caption", "ink-muted")
+        self.sentence:SetPoint("TOPLEFT", self.cheap, "BOTTOMLEFT", 0, -S["space-3"])
+        self.sentence:SetWidth(WHEN_W)
+        self.sentence:SetWordWrap(true)
+        self.sentence:SetJustifyH("LEFT")
+        self.weekdays = WhenBlock.new(c, "Day of the week", DAYS_H, function(i: number): TooltipData?
+            return self:WhenTip(i, false)
+        end)
+        self.weekdays:SetPoint("TOPLEFT", self.sentence, "TOPLEFT", 0, -(SENTENCE_H + S["space-3"]))
+        self.times = WhenBlock.new(c, "Time of day", TIMES_H, function(i: number): TooltipData?
+            return self:WhenTip(i, true)
+        end)
+        self.times:SetPoint("TOPLEFT", self.weekdays, "BOTTOMLEFT", 0, -S["space-4"])
+        self.history:SetPoint("RIGHT", self.cheap, "LEFT", -S["space-6"], 0)
+        self.chart:SetPoint("RIGHT", self.cheap, "LEFT", -S["space-6"], 0)
+        -- your sales and its transactions (after the probe)
+        local left = parts.HEAD_H + S["space-3"] + T.type.caption.lineHeight + S["space-3"] + CHART_H
+        local right = parts.HEAD_H + S["space-3"] + SENTENCE_H + S["space-3"] + self.weekdays:GetHeight() + S["space-4"] +
+            self.times:GetHeight()
+        local below = y - math.max(left, right) - S["space-6"]
+        self.sales = parts.Section.new(c, "Your sales")
+        self.sales:SetPoint("TOPLEFT", 0, below)
+        self.salesNote = UI.Text(c, "caption", "ink-muted")
+        self.salesNote:SetPoint("TOPLEFT", self.sales, "BOTTOMLEFT", 0, -S["space-3"])
+        self.salesNote:SetValue("Not recorded yet: your sales come with the transactions, in a later version.")
+        self.tx = parts.Section.new(c, "Its transactions")
+        self.tx:SetPoint("TOPRIGHT", c, "TOPRIGHT", 0, below)
+        self.txNote = UI.Text(c, "caption", "ink-muted")
+        self.txNote:SetPoint("TOPLEFT", self.tx, "BOTTOMLEFT", 0, -S["space-3"])
+        self.txNote:SetValue("Nothing recorded yet.")
+        c:SetHeight(-below + parts.HEAD_H + S["space-3"] + T.type.caption.lineHeight + S["space-5"])
+        scroll:HookScript("OnSizeChanged", function(_: Frame, width: number)
+            self:Layout(width)
+        end)
+    end
+
+    -- The columns from the width.
+    function Layout(width: number)
+        local c = self.scroll.child
+        c:SetWidth(width)
+        local gap = S["space-5"]
+        local fw = (width - gap * 3) / 4
+        for i, f in ipairs({ self.low, self.usual, self.month, self.vendor }) do
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", (i - 1) * (fw + gap), -(HEAD_ROW_H + S["space-5"]))
+            f:SetWidth(fw)
+        end
+        local half = (width - S["space-6"]) / 2
+        self.sales:SetWidth(half)
+        self.tx:SetWidth(half)
+        self.salesNote:SetWidth(half)
+        self.txNote:SetWidth(half)
+        self.salesNote:SetWordWrap(true)
+        self.salesNote:SetJustifyH("LEFT")
+    end
+
+    function SetItem(itemID: number)
+        if itemID ~= self.itemID then
+            self.scroll:SetVerticalScroll(0)
+        end
+        self.itemID = itemID
+    end
+
+    -- Watch: your price asked for (filled in with the usual price, else
+    -- the lowest); while watched, a new price or Stop watching.
+    function AskWatch()
+        local id = self.itemID
+        if not id then
+            return
+        end
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local watched = m:WatchOf(id, ruleset)
+        local look = m:Latest(id, ruleset)
+        local name = parts.cachedInfo(id) or ("Item " .. id)
+        parts.ask({
+            title = "Watch " .. name,
+            text = "Tell me when a scan or a search on " .. SuuUI.RulesetName(ruleset) ..
+                " finds it under this price, for one:",
+            amount = watched and watched.target or m:Usual(id, ruleset) or (look and look.low) or 0,
+            confirm = watched and "Change" or "Watch",
+            onConfirm = function(copper: number)
+                m:WatchItem(id, copper, ruleset)
+            end,
+            other = watched and "Stop watching" or nil,
+            onOther = function()
+                m:UnwatchItem(id, ruleset)
+            end,
+        })
+    end
+
+    -- Watch's look: "Watching" in arcane while on.
+    function DrawWatch()
+        local id = self.itemID
+        local watched = id and self.w.m:WatchOf(id, self.w:Ruleset())
+        local b = self.watch
+        if watched then
+            b:SetLabel("Watching")
+            b.label:SetColor("arcane")
+            b.border:SetColor("arcane")
+            UI.Paint(assert(b.icon), "arcane")
+            b.tooltip = {
+                title = "Watching",
+                description = "Tells you when a scan or a search finds it under " .. parts.moneyWords(watched.target) .. ". Click to change it or stop.",
+                maxWidth = 260,
+            }
+        else
+            b:SetLabel("Watch")
+            b.label:SetColor("ink")
+            b.border:SetColor("gilt-line")
+            UI.Paint(assert(b.icon), "ink-muted")
+            b.tooltip = {
+                title = "Watch",
+                description = "Tell me when a scan or a search finds it under a price.",
+                maxWidth = 260,
+            }
+        end
+    end
+
+    -- Search the house: only at an auctioneer, out of a fight.
+    function DrawButtons()
+        local can, why = self.w.m:CanSearchHouse()
+        self.house:SetEnabledState(can)
+        self.house.tooltip = can and { title = "Search for it in the auction house" } or { title = "Search the house", description = why, maxWidth = 260 }
+    end
+
+    function Draw()
+        local id = self.itemID
+        if not id then
+            return
+        end
+        local width = self.scroll:GetWidth()
+        if width > 1 then
+            self:Layout(width)
+        end
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local name, quality = parts.cachedInfo(id)
+        if not name then
+            C_Item.RequestLoadItemDataByID(id)
+        end
+        local icon, _, kind = parts.instantInfo(id)
+        self.slot.skin:SetItem({ icon = icon, quality = parts.QUALITY[quality or 1] or "common" })
+        self.name:SetValue(name or ("Item " .. id))
+        self.name:SetColor(parts.qualityToken(quality))
+        local look = m:Latest(id, ruleset)
+        local today = m:Today()
+        local seen = look and ("seen " .. parts.ago(look.day, today)) or ("never seen on " .. SuuUI.RulesetName(ruleset))
+        self.kind:SetValue(kind and (kind .. " \194\183 " .. seen) or seen)
+        self:DrawWatch()
+        self:DrawButtons()
+        -- the figures
+        if look then
+            self.low:SetMoney(look.low)
+            self.low:SetSub(look.n > 0 and (parts.count(look.qty) .. " in " .. parts.count(look.n) .. " auctions") or (parts.count(look.qty) .. " offered"))
+        else
+            self.low:SetWord("none offered")
+            self.low:SetSub(nil)
+        end
+        local usual = m:Usual(id, ruleset)
+        self.usualPrice = usual
+        if usual then
+            self.usual:SetMoney(usual)
+            self.usual:SetSub("the middle of 14 days\226\128\153 lowest")
+        else
+            self.usual:SetWord("\226\128\148")
+            self.usual:SetSub("not seen enough yet")
+        end
+        local lows = m:DailyLows(id, 30, ruleset)
+        local lo, hi = math.huge, 0
+        for _, v in ipairs(lows) do
+            if v > 0 then
+                lo, hi = math.min(lo, v), math.max(hi, v)
+            end
+        end
+        if hi > 0 then
+            self.month.word:SetStyle("numeric")
+            self.month.word:SetColor("ink")
+            self.month:SetWord(UI.MoneyText(lo) .. "|cff" .. UI.Hex("ink-muted") .. "  to  |r" .. UI.MoneyText(hi))
+            self.month:SetSub("lowest to highest")
+        else
+            self.month.word:SetStyle("body")
+            self.month.word:SetColor("ink-muted")
+            self.month:SetWord("\226\128\148")
+            self.month:SetSub("no look in 30 days")
+        end
+        local vendor = m:VendorPrice(id)
+        if vendor then
+            self.vendor:SetMoney(vendor)
+        else
+            self.vendor:SetWord("nothing")
+        end
+        local flip = look and vendor and look.low < vendor and (vendor - look.low) or nil
+        parts.setMark(self.vendorMark, flip and "Under vendor" or nil)
+        local sub = self.vendor.sub
+        sub:ClearAllPoints()
+        if flip then
+            sub:SetPoint("TOPLEFT", self.vendorMark, "TOPRIGHT", S["space-2"], 0)
+            sub:SetPoint("RIGHT", self.vendor, "RIGHT")
+            self.vendor:SetSub(parts.moneyWords(flip) .. " more each")
+        else
+            sub:SetPoint("TOPLEFT", 0, -parts.FIGURE_SUB_Y)
+            sub:SetPoint("RIGHT", self.vendor, "RIGHT")
+            self.vendor:SetSub(look and vendor and look.low < vendor * 1.05 and "The house barely beats it." or nil)
+        end
+        self:DrawHistory()
+        self:DrawWhen()
+    end
+
+    -- The price history over the chosen range.
+    function DrawHistory()
+        local id = self.itemID
+        if not id then
+            return
+        end
+        local m = self.w.m
+        local n = self.days
+        local lows, mosts = m:DailyLows(id, n, self.w:Ruleset())
+        local today = m:Today()
+        local first = today - n + 1
+        local labels: string[], tips: string[] = {}, {}
+        local low: ChartValue[], most: ChartValue[] = {}, {}
+        for i = 1, n do
+            local day = first + i - 1
+            labels[i] = parts.shortDate(day)
+            tips[i] = parts.dayLabel(day, today)
+            low[i] = lows[i] > 0 and lows[i] or false
+            most[i] = mosts[i] > 0 and mosts[i] or false
+        end
+        self.chart:SetData({
+            labels = labels,
+            tipLabels = tips,
+            series = {
+                { label = "Lowest buyout", values = low },
+                { label = "What most sell it for", values = most, dashed = true },
+            },
+        })
+    end
+
+    -- When it's cheapest: the sentence and the two charts (or their notes).
+    function DrawWhen()
+        local id = self.itemID
+        if not id then
+            return
+        end
+        local w = self.w.m:WhenCheapest(id, self.w:Ruleset())
+        self.when = w
+        self.sentence:SetValue(parts.cheapestLine(w))
+        -- the days: Monday first
+        local dayLabels: string[], dayValues: number[] = {}, {}
+        for i, r in ipairs(w.weekdays) do
+            dayLabels[i], dayValues[i] = parts.WEEKDAY_WORDS[i].short, r.pct
+        end
+        self:DrawBlock(self.weekdays, w.days.enough, dayLabels, dayValues, w.days.best, w.days.worst, parts.WEEKDAY_WORDS, w.weekdays)
+        -- the times: Morning, Noon, Evening, Night
+        local timeLabels: string[], timeValues: number[] = {}, {}
+        local best, worst = 0, 0
+        for k, p in ipairs(parts.TIME_ORDER) do
+            timeLabels[k], timeValues[k] = parts.TIME_WORDS[p].short, w.times[p].pct
+            if p == w.periods.best then
+                best = k
+            end
+            if p == w.periods.worst then
+                worst = k
+            end
+        end
+        local ordered: { pct: number, looks: number }[] = {}
+        local words: parts.WhenWords[] = {}
+        for k, p in ipairs(parts.TIME_ORDER) do
+            ordered[k], words[k] = w.times[p], parts.TIME_WORDS[p]
+        end
+        self:DrawBlock(self.times, w.periods.enough, timeLabels, timeValues, best, worst, words, ordered)
+    end
+
+    function DrawBlock(
+        block: WhenBlock,
+        enough: boolean,
+        labels: string[],
+        values: number[],
+        best: number,
+        worst: number,
+        words: parts.WhenWords[],
+        rows: { pct: number, looks: number }[]
+    )
+        block.chart:SetShown(enough)
+        block.note:SetShown(not enough)
+        if enough then
+            block.chart:SetData({ labels = labels, values = values, best = best, worst = worst })
+            return
+        end
+        -- which rows still want looks: the first two
+        local short: string[] = {}
+        for i, r in ipairs(rows) do
+            if r.looks < 3 and #short < 2 then
+                short[#short + 1] = words[i].plural .. " " .. r.looks
+            end
+        end
+        block.note:SetValue("Not enough looks yet: each needs 3." .. (#short > 0 and ("\n" .. table.concat(short, ", ") .. " \226\128\166") or ""))
+    end
+
+    -- A bar's tooltip: "Tuesdays / 11% under its week / 9 looks in 60 days /
+    -- About 14s 93c at its usual".
+    function WhenTip(i: number, times: boolean): TooltipData?
+        local w = self.when
+        if not w then
+            return nil
+        end
+        local row, words
+        if times then
+            local p = parts.TIME_ORDER[i]
+            row, words = w.times[p], parts.TIME_WORDS[p]
+        else
+            row, words = w.weekdays[i], parts.WEEKDAY_WORDS[i]
+        end
+        if not (row and words) then
+            return nil
+        end
+        local lines: TooltipLine[] = {
+            { parts.weekWords(row.pct) },
+            { row.looks .. " looks in 60 days" },
+        }
+        local usual = self.usualPrice
+        if usual then
+            lines[#lines + 1] = { "About " .. UI.MoneyText(usual * (1 + row.pct / 100)) .. " at its usual" }
+        end
+        return { title = words.name, lines = lines }
+    end
+end

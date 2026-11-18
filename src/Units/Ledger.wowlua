@@ -54,8 +54,19 @@
 --   GoldSeries(scope, fromDay, toDay) -> copper[] (scope: nil all, {
 --       ruleset = key }, { char = key }); GoldFirstDay(scope),
 --       GoldTotal(scope)
+--   Goal() -> { name, amount }? / SetGoal(name, amount) / ClearGoal(): the
+--       account's savings goal (one)
+--   Session() -> money in or out since this character logged in (or the
+--       module turned on), and for how many seconds
 -- SUUUI_LEDGER_CHANGED(what) tells when to draw again: "prices", "scan",
--- "watches" or "gold".
+-- "watches", "gold" or "goal".
+--
+-- The window (step 3, Ledger/Window and its pages: Overview, Prices with an
+-- item's page, Gold; Transactions after the probe): Open(view, opts) and
+-- Toggle(), also on the service for the micro menu, Alt-click, /ledger, the
+-- bags' money and the auction house's button. It only reads what is kept,
+-- so it opens in a fight too; it never opens by itself.
+-- The service opens it too (Open, Toggle, IsShown).
 --
 -- The ledger service (SuuUI.Services.LEDGER) gives other modules the usual
 -- price (the auction house's tooltip line) and what an offer is (Deal).
@@ -67,6 +78,8 @@ import * as secret from "wowlua:secret"
 import * as days from "./Ledger/Days"
 import * as store from "./Ledger/Store"
 import type Look, PriceMap from "./Ledger/Store"
+import LedgerWindow from "./Ledger/Window"
+import type LedgerOpenOptions from "/Core/API"
 import * as stats from "./Ledger/Stats"
 import type When from "./Ledger/Stats"
 import * as gold from "./Ledger/Gold"
@@ -144,6 +157,8 @@ export const SECTION: SettingsSection = {
 export type ScanInfo = { at: number, items: number, deals: number, underVendor: number }
 -- A watched item: your price, and its last look's lowest buyout and when.
 export type Watch = { target: number, low?: number, at?: number }
+-- The account's savings goal: what for, and how much (copper).
+export type Goal = { name: string, amount: number }
 -- What SuuUILedger holds (see the top).
 export type LedgerData = {
     prices?: { [string]: PriceMap },
@@ -151,7 +166,11 @@ export type LedgerData = {
     watches?: { [string]: { [number]: Watch } },
     gold?: GoldMap,
     pruned?: { [string]: number },
+    goal?: Goal,
 }
+-- How the window opens: on an item's page (its ID), or Prices showing
+-- "deals", "vendor", "watched", "sold", "bags" or "all".
+export type OpenOptions = LedgerOpenOptions
 
 -- An item's latest look and what it makes of it (cached for the day).
 export type ItemSummary = { itemID: number, look: Look, usual?: number, change?: number }
@@ -188,6 +207,15 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     -- Scan all's looks being read, and a prune running
     scanTicker: TickerHandle? = nil
     pruneTicker: TickerHandle? = nil
+    -- the window, made when it first opens
+    window: LedgerWindow? = nil
+    -- at an auctioneer now, in a fight (the window's Search the house; the
+    -- fight from PLAYER_REGEN_DISABLED, which comes before the lockdown)
+    atHouse: boolean = false
+    fighting: boolean = false
+    -- this session: when it started and this character's money then
+    sessionAt: number = 0
+    sessionMoney: number? = nil
 
     constructor()
         super({
@@ -698,6 +726,142 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     end
 
     ----------------------------------------------------------------------------
+    -- The goal and this session
+    ----------------------------------------------------------------------------
+
+    function Goal(): Goal?
+        return self:Data().goal
+    end
+
+    function SetGoal(name: string, amount: number)
+        self:Data().goal = { name = name, amount = math.max(1, math.floor(amount)) }
+        self:Changed("goal")
+    end
+
+    function ClearGoal()
+        self:Data().goal = nil
+        self:Changed("goal")
+    end
+
+    -- This character's money in (above 0) or out since the session began,
+    -- and for how many seconds (nil: its money isn't known).
+    function Session(): (number?, number)
+        local start = self.sessionMoney
+        local now = secret.asNumber(GetMoney())
+        if not (start and now) then
+            return nil, 0
+        end
+        return now - start, time() - self.sessionAt
+    end
+
+    ----------------------------------------------------------------------------
+    -- The window (Ledger/Window)
+    ----------------------------------------------------------------------------
+
+    function Window(): LedgerWindow
+        local w = self.window
+        if not w then
+            w = LedgerWindow.new(self)
+            self.window = w
+        end
+        return w
+    end
+
+    function Shown(): boolean
+        local w = self.window
+        return w ~= nil and w.frame:IsShown()
+    end
+
+    -- Opens it (`view`: "overview", "prices", "transactions", "gold"; nil:
+    -- the last), on an item's page or Prices at a Show.
+    function Open(view: string?, opts: OpenOptions?)
+        if not self:IsEnabled() then
+            return
+        end
+        self:Window():Open(view, opts)
+    end
+
+    function Toggle()
+        if self:Shown() then
+            self:Window().frame:Hide()
+            return
+        end
+        self:Open()
+    end
+
+    -- Whether "Search the house" can search now, and why not.
+    function CanSearchHouse(): (boolean, string?)
+        if not self.atHouse then
+            return false, "At an auctioneer: search for it in the auction house."
+        end
+        if self.fighting or InCombatLockdown() then
+            return false, "After the fight."
+        end
+        local ah = SuuUI.UseService(SuuUI.Services.AUCTION_HOUSE)
+        if not (ah and ah.SearchItem) then
+            return false, "The auction house module is off."
+        end
+        return true, nil
+    end
+
+    -- An item searched on the auction house window's Buy tab.
+    function SearchHouse(itemID: number): boolean
+        if not self:CanSearchHouse() then
+            return false
+        end
+        local ah = SuuUI.UseService(SuuUI.Services.AUCTION_HOUSE)
+        local search = ah and ah.SearchItem
+        return search ~= nil and search(itemID)
+    end
+
+    -- The window drawn again while it shows when something it reads
+    -- changed (else when it next opens); at an auctioneer, in a fight.
+    function ListenForWindow()
+        self:On("SUUUI_LEDGER_CHANGED", function(_, what)
+            local w = self.window
+            if w then
+                w:Changed(what)
+            end
+        end)
+        self:On("SUUUI_THEME_CHANGED", function()
+            local w = self.window
+            if w then
+                w:Changed("theme")
+            end
+        end)
+        self:OnGameEvent("GET_ITEM_INFO_RECEIVED", function(_, itemID)
+            local w = self.window
+            if w and type(itemID) == "number" then
+                w:ItemInfo(itemID)
+            end
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_SHOW", function()
+            self.atHouse = true
+            local w = self.window
+            if w then
+                w:Changed("house")
+            end
+        end)
+        self:OnGameEvent("AUCTION_HOUSE_CLOSED", function()
+            self.atHouse = false
+            local w = self.window
+            if w then
+                w:Changed("house")
+            end
+        end)
+        self.fighting = InCombatLockdown()
+        for _, e in ipairs({ "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }) do
+            self:OnGameEvent(e, function()
+                self.fighting = e == "PLAYER_REGEN_DISABLED"
+                local w = self.window
+                if w then
+                    w:Changed("house")
+                end
+            end)
+        end
+    end
+
+    ----------------------------------------------------------------------------
     -- On and off
     ----------------------------------------------------------------------------
 
@@ -714,13 +878,25 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
             self:Changed("prices")
         end)
         self:RecordMoney(true)
+        self.sessionAt, self.sessionMoney = time(), secret.asNumber(GetMoney())
         self:OnGameEvent("PLAYER_MONEY", function()
             self:RecordMoney()
         end)
         self:OnGameEvent("PLAYER_LOGOUT", function()
             self:RecordMoney()
         end)
+        self:ListenForWindow()
         self:ProvideService(SuuUI.Services.LEDGER, {
+            -- the window (Ledger/Window)
+            Open = function(view: string?, opts: OpenOptions?)
+                self:Open(view, opts)
+            end,
+            Toggle = function()
+                self:Toggle()
+            end,
+            IsShown = function(): boolean
+                return self:Shown()
+            end,
             UsualPrice = function(itemID: number): number?
                 return self:Usual(itemID)
             end,
@@ -746,6 +922,10 @@ export class LedgerModule extends Module<typeof(DEFAULTS)>
     override function OnDisable()
         self.scanTicker, self.pruneTicker = nil, nil
         self.cache, self.pendingChanges = {}, {}
+        local w = self.window
+        if w then
+            w.frame:Hide()
+        end
     end
 end
 

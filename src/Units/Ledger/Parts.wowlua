@@ -1,0 +1,596 @@
+-- Units/Ledger/Parts.wowlua
+-- What the Ledger window's pages share (Units/Ledger; design board
+-- "Ledger"): words for days and times, an item's name and kind from the
+-- client's cache, a section's head (its title in gilt-text, a caption after
+-- it, a rule fading out, something at the right), a figure (a caption, a
+-- value large, a line under it), a deal's mark (arcane: you can act on it),
+-- a row of a definition list, a quiet link, an icon button and the small
+-- dialog that asks for a price (Watch) or a goal.
+
+import SuuUI from "/Core/API"
+import type Text, Money, SuuButton, MoneyInput, TextField, Panel, Border, DealMark from "/Core/API"
+import * as secret from "wowlua:secret"
+import * as days from "./Days"
+import WHEN_SPREAD from "./Stats"
+import type When, WhenRow from "./Stats"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+-- the game's item qualities by number
+export const QUALITY: { [number]: string } = {
+    [0] = "poor",
+    "common",
+    "uncommon",
+    "rare",
+    "epic",
+    "legendary",
+    "legendary",
+    "legendary",
+}
+
+-- A quality's colour for an item's name (a common item in ink).
+export function qualityToken(quality: number?): string
+    if quality == nil or quality == 1 then
+        return "ink"
+    end
+    return "quality-" .. (QUALITY[quality] or "common")
+end
+
+-- 6412 -> "6,412"
+export function count(n: number): string
+    local s = tostring(math.floor(n))
+    local k: number
+    repeat
+        s, k = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+    until k == 0
+    return s
+end
+
+local MONTHS: string[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+local SHORT_DAYS: string[] = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" }
+
+-- A day (Days) as "3 Nov".
+export function shortDate(day: number): string
+    local _, m, d = days.dateOf(day)
+    return d .. " " .. MONTHS[m]
+end
+
+-- A day for a tooltip: "Today", "Yesterday", "Tue 3 Nov".
+export function dayLabel(day: number, today: number): string
+    if day == today then
+        return "Today"
+    elseif day == today - 1 then
+        return "Yesterday"
+    end
+    return SHORT_DAYS[days.weekday(day)] .. " " .. shortDate(day)
+end
+
+-- How long ago a day was: "today", "yesterday", "3 days ago".
+export function ago(day: number, today: number): string
+    local n = today - day
+    if n <= 0 then
+        return "today"
+    elseif n == 1 then
+        return "yesterday"
+    end
+    return n .. " days ago"
+end
+
+-- A time (time()) as "today 18:40", "yesterday", "3 days ago".
+export function when(at: number): string
+    local today = days.dayOf()
+    local day = days.dayOf(at)
+    if day == today then
+        return "today " .. date("%H:%M", at)
+    end
+    return ago(day, today)
+end
+
+-- Seconds as "2 h 14 min", "38 min".
+export function duration(seconds: number): string
+    local m = math.floor(seconds / 60)
+    if m < 60 then
+        return m .. " min"
+    end
+    return math.floor(m / 60) .. " h " .. (m % 60) .. " min"
+end
+
+-- Money in words, without colour: "3s 21c", "40g" (for sentences).
+export function moneyWords(copper: number): string
+    local c0 = math.max(0, math.floor(copper + 0.5))
+    local g, s, c = math.floor(c0 / 10000), math.floor(c0 / 100) % 100, c0 % 100
+    local parts: string[] = {}
+    if g > 0 then
+        parts[#parts + 1] = count(g) .. "g"
+    end
+    if s > 0 then
+        parts[#parts + 1] = s .. "s"
+    end
+    if c > 0 or #parts == 0 then
+        parts[#parts + 1] = c .. "c"
+    end
+    return table.concat(parts, " ")
+end
+
+--------------------------------------------------------------------------------
+-- When it's cheapest: the words for its rows (Stats.When: weekdays 1
+-- Monday … 7 Sunday, times by Days' periods 1 Night … 4 Evening)
+--------------------------------------------------------------------------------
+
+export type WhenWords = { short: string, name: string, plural: string, at: string }
+
+export const WEEKDAY_WORDS: WhenWords[] = {
+    { short = "Mon", name = "Mondays", plural = "Mondays", at = "on Mondays" },
+    { short = "Tue", name = "Tuesdays", plural = "Tuesdays", at = "on Tuesdays" },
+    { short = "Wed", name = "Wednesdays", plural = "Wednesdays", at = "on Wednesdays" },
+    { short = "Thu", name = "Thursdays", plural = "Thursdays", at = "on Thursdays" },
+    { short = "Fri", name = "Fridays", plural = "Fridays", at = "on Fridays" },
+    { short = "Sat", name = "Saturdays", plural = "Saturdays", at = "on Saturdays" },
+    { short = "Sun", name = "Sundays", plural = "Sundays", at = "on Sundays" },
+}
+export const TIME_WORDS: WhenWords[] = {
+    { short = "Night", name = "Nights (0\226\128\1476)", plural = "Nights", at = "at night" },
+    { short = "Morning", name = "Mornings (6\226\128\14710)", plural = "Mornings", at = "in the morning" },
+    { short = "Noon", name = "Noon (10\226\128\14716)", plural = "Noon", at = "at noon" },
+    { short = "Evening", name = "Evenings (16\226\128\14724)", plural = "Evenings", at = "in the evening" },
+}
+-- the times of day as the charts show them: Morning, Noon, Evening, Night
+export const TIME_ORDER: number[] = { 2, 3, 4, 1 }
+
+local function underOf(row: WhenRow): string
+    return math.floor(math.abs(row.pct) + 0.5) .. "% under"
+end
+
+-- A row against its week: "11% under its week", "the same as its week".
+export function weekWords(pct: number): string
+    local r = math.floor(math.abs(pct) + 0.5)
+    if r == 0 then
+        return "the same as its week"
+    end
+    return r .. "% " .. (pct < 0 and "under" or "over") .. " its week"
+end
+
+-- The Prices column: "Tue \194\183 night", "Tue", "Nights", "any time", or
+-- "\226\128\148" while there are too few looks.
+export function cheapestShort(w: When): string
+    local a, b = w.days, w.periods
+    if not a.enough and not b.enough then
+        return "\226\128\148"
+    end
+    local day = a.out and a.best > 0 and WEEKDAY_WORDS[a.best] or nil
+    local time = b.out and b.best > 0 and TIME_WORDS[b.best] or nil
+    if day and time then
+        return day.short .. " \194\183 " .. time.short:lower()
+    elseif day then
+        return day.short
+    elseif time then
+        return time.plural
+    end
+    return "any time"
+end
+
+-- The item page's sentence: "Cheapest on Tuesdays (11% under its week) and
+-- at night (5% under)."
+export function cheapestLine(w: When): string
+    local a, b = w.days, w.periods
+    if not a.enough and not b.enough then
+        return "Scan on more days and at other times to see when it\226\128\153s cheapest."
+    end
+    local dayRow = a.out and a.best > 0 and w.weekdays[a.best] or nil
+    local timeRow = b.out and b.best > 0 and w.times[b.best] or nil
+    if dayRow and timeRow then
+        return "Cheapest " .. WEEKDAY_WORDS[a.best].at .. " (" .. underOf(dayRow) .. " its week) and " ..
+            TIME_WORDS[b.best].at .. " (" .. underOf(timeRow) .. ")."
+    elseif dayRow then
+        return "Cheapest " .. WEEKDAY_WORDS[a.best].at .. ", " .. underOf(dayRow) .. " its week; " ..
+            (b.enough and "the time of day makes no difference." or "too few looks for the time of day yet.")
+    elseif timeRow then
+        return "Cheapest " .. TIME_WORDS[b.best].at .. ", " .. underOf(timeRow) .. " its week; " ..
+            (a.enough and "the day makes no difference." or "too few looks for the days yet.")
+    end
+    return "No day or time stands out: all within " .. WHEN_SPREAD .. "% of their week."
+end
+
+--------------------------------------------------------------------------------
+-- Items: what the client knows of them, never asked for here
+--------------------------------------------------------------------------------
+
+-- An item's name and quality while the client has it cached (nil, nil:
+-- not yet; asking for it is the caller's: one at a time, never thousands).
+export function cachedInfo(itemID: number): (string?, number?)
+    if not C_Item.IsItemDataCachedByID(itemID) then
+        return nil, nil
+    end
+    local name, _, quality = C_Item.GetItemInfo(itemID)
+    return secret.asString(name), secret.asNumber(quality)
+end
+
+-- What the client knows at once: the icon, the class and the kind ("Trade
+-- Goods · Herb").
+export function instantInfo(itemID: number): (number?, number?, string?)
+    local _, itemType, subType, _, icon, classID = C_Item.GetItemInfoInstant(itemID)
+    local kind = secret.asString(itemType)
+    local sub = secret.asString(subType)
+    if kind and sub and sub ~= "" and sub ~= kind then
+        kind = kind .. " \194\183 " .. sub
+    end
+    return secret.asNumber(icon), secret.asNumber(classID), kind
+end
+
+-- A click with a modifier on an item (Shift: its link in the chat line,
+-- Ctrl: the dressing room, Alt: its price page) handed to the game's own
+-- handler, as a bag slot does; whether it took it.
+export function modifiedClick(itemID: number): boolean
+    if not IsModifiedClick() then
+        return false
+    end
+    local _, link = C_Item.GetItemInfo(itemID)
+    local l = secret.asString(link)
+    if not l then
+        return false
+    end
+    return HandleModifiedItemClick(l) and true or false
+end
+
+--------------------------------------------------------------------------------
+-- A section: its head, then what the page puts under it
+--------------------------------------------------------------------------------
+
+export const HEAD_H = 24
+
+export class Section extends Frame
+    readonly title: Text
+    readonly meta: Text
+    readonly rule: Frame
+    aside?: Region
+
+    constructor(parent: Frame, title: string, meta: string?)
+        super(nil, parent)
+        self:SetHeight(HEAD_H)
+        self.title = UI.Text(self, "header", "gilt-text")
+        self.title:SetPoint("LEFT")
+        self.meta = UI.Text(self, "caption", "ink-muted")
+        self.meta:SetPoint("LEFT", self.title, "RIGHT", S["space-4"], 0)
+        self.rule = UI.Hairline(self, "gilt-line", "out")
+        self:SetLabel(title, meta)
+    end
+
+    function SetLabel(title: string, meta: string?)
+        self.title:SetValue(title)
+        self.meta:SetValue(meta or "")
+        self:PlaceRule()
+    end
+
+    -- Something at the head's right (a Segmented, a link): the rule ends before it.
+    function SetAside(region: Region)
+        self.aside = region
+        region:ClearAllPoints()
+        region:SetPoint("RIGHT", self, "RIGHT")
+        self:PlaceRule()
+    end
+
+    function PlaceRule()
+        local after = (self.meta.value ~= nil and self.meta.value ~= "") and self.meta or self.title
+        self.rule:ClearAllPoints()
+        self.rule:SetPoint("LEFT", after, "RIGHT", S["space-4"], 0)
+        local aside = self.aside
+        if aside then
+            self.rule:SetPoint("RIGHT", aside, "LEFT", -S["space-4"], 0)
+        else
+            self.rule:SetPoint("RIGHT", self, "RIGHT")
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A figure: the label, the value large, a line under it
+--------------------------------------------------------------------------------
+
+export const FIGURE_H = 60
+-- where a figure's line under it starts, from its top
+export const FIGURE_SUB_Y = T.type.caption.lineHeight + S["space-2"] + 22 + S["space-2"]
+
+export class Figure extends Frame
+    readonly label: Text
+    -- the value: money (plain or signed), or a word
+    readonly money: Money
+    readonly word: Text
+    readonly sub: Text
+
+    constructor(parent: Frame, label: string)
+        super(nil, parent)
+        self:SetHeight(FIGURE_H)
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("TOPLEFT")
+        self.label:SetValue(label)
+        self.money = UI.Money(self)
+        self.money:SetFontSize(16)
+        self.money:ClearAllPoints()
+        self.money:SetPoint("TOPLEFT", 0, -(T.type.caption.lineHeight + S["space-2"]))
+        self.money.text:ClearAllPoints()
+        self.money.text:SetPoint("LEFT")
+        self.word = UI.Text(self, "body", "ink-muted")
+        self.word:SetPoint("LEFT", self.money, "LEFT")
+        self.word:Hide()
+        self.sub = UI.Text(self, "caption", "ink-muted")
+        self.sub:SetPoint("TOPLEFT", 0, -FIGURE_SUB_Y)
+        self.sub:SetPoint("RIGHT")
+        self.sub:SetJustifyH("LEFT")
+    end
+
+    function SetMoney(copper: number, signed: boolean?)
+        if signed then
+            self.money:SetSigned(copper)
+        else
+            self.money:SetCopper(copper)
+        end
+        self.money:Show()
+        self.word:Hide()
+    end
+
+    function SetWord(word: string)
+        self.word:SetValue(word)
+        self.word:Show()
+        self.money:Hide()
+    end
+
+    function SetSub(text: string?)
+        self.sub:SetValue(text or "")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A deal's mark: UI.DealMark ("31% under", "Under vendor", "Deal"), shown
+-- with a word and hidden without one
+--------------------------------------------------------------------------------
+
+export function dealMark(parent: Frame): DealMark
+    local m = UI.DealMark(parent)
+    m:Hide()
+    return m
+end
+
+-- The mark's word (nil: hidden).
+export function setMark(m: DealMark, word: string?)
+    if word then
+        m:SetValue(word)
+    end
+    m:SetShown(word ~= nil)
+end
+
+-- How far under its usual price, for a mark: "31% under".
+export function underWord(under: number): string
+    return math.floor(under + 0.5) .. "% under"
+end
+
+--------------------------------------------------------------------------------
+-- A definition list's row: a caption at the left, a value at the right,
+-- a gilt-faint rule under it
+--------------------------------------------------------------------------------
+
+export const DL_H = 26
+
+export class DefRow extends Frame
+    readonly label: Text
+    readonly money: Money
+    readonly rule: Texture
+
+    constructor(parent: Frame, label: string, total: boolean?)
+        super(nil, parent)
+        self:SetHeight(DL_H)
+        self.label = UI.Text(self, total and "label" or "caption", total and "ink" or "ink-muted")
+        self.label:SetPoint("LEFT")
+        self.label:SetValue(label)
+        self.money = UI.Money(self)
+        self.money:SetPoint("RIGHT")
+        self.rule = UI.Fill(self, total and "gilt-line" or "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        if total then
+            self.rule:SetPoint("TOPLEFT")
+            self.rule:SetPoint("TOPRIGHT")
+        else
+            self.rule:SetPoint("BOTTOMLEFT")
+            self.rule:SetPoint("BOTTOMRIGHT")
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- A quiet link (a caption that underlines on hover) and an icon button
+--------------------------------------------------------------------------------
+
+export class Link extends Button
+    readonly label: Text
+    readonly line: Texture
+
+    constructor(parent: Frame, label: string, onClick: () -> ())
+        super(nil, parent)
+        self.label = UI.Text(self, "caption", "ink-muted")
+        self.label:SetPoint("RIGHT")
+        self.line = UI.Fill(self, "ink", "ARTWORK")
+        self.line:SetHeight(1)
+        self.line:SetPoint("TOPLEFT", self.label, "BOTTOMLEFT", 0, 0)
+        self.line:SetPoint("TOPRIGHT", self.label, "BOTTOMRIGHT", 0, 0)
+        self.line:Hide()
+        self:SetLabel(label)
+        self:SetScript("OnEnter", function()
+            self.label:SetColor("ink")
+            self.line:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.label:SetColor("ink-muted")
+            self.line:Hide()
+        end)
+        self:SetScript("OnClick", onClick)
+    end
+
+    function SetLabel(label: string)
+        self.label:SetValue(label)
+        self:SetSize(math.max(1, math.ceil(self.label:GetUnboundedStringWidth())), T.type.caption.lineHeight + 4)
+    end
+end
+
+-- A square button with a glyph (Back): a gilt-line edge, gilt on hover.
+export class IconButton extends Button
+    readonly edge: Border
+    readonly glyph: Texture
+
+    constructor(parent: Frame, glyph: string, tip: string, onClick: () -> ())
+        super(nil, parent)
+        self:SetSize(30, 30)
+        UI.Fill(self, "surface-raised"):SetAllPoints()
+        self.edge = UI.Border(self, "gilt-line")
+        self.glyph = self:CreateTexture(nil, "ARTWORK")
+        self.glyph:SetSize(14, 14)
+        self.glyph:SetPoint("CENTER")
+        UI.Glyph(self.glyph, glyph)
+        UI.Paint(self.glyph, "ink-muted")
+        self:SetScript("OnEnter", function()
+            self.edge:SetColor("gilt")
+            UI.Paint(self.glyph, "ink")
+            UI.ShowTooltip(self, { title = tip })
+        end)
+        self:SetScript("OnLeave", function()
+            self.edge:SetColor("gilt-line")
+            UI.Paint(self.glyph, "ink-muted")
+            UI.HideTooltip()
+        end)
+        self:SetScript("OnClick", onClick)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- The small dialog: a title, a line, a name (the goal's) and an amount,
+-- the main button, maybe a second one, Cancel
+--------------------------------------------------------------------------------
+
+export type AskOptions = {
+    title: string,
+    text: string,
+    -- a name to enter too (the goal's), with its value now
+    name?: string,
+    namePlaceholder?: string,
+    amount?: number,
+    confirm: string,
+    onConfirm: (amount: number, name: string?) -> (),
+    -- a second action (Stop watching, Clear the goal)
+    other?: string,
+    onOther?: () -> (),
+}
+
+export class AskDialog
+    readonly panel: Panel
+    readonly text: Text
+    readonly name: TextField
+    readonly amount: MoneyInput
+    readonly ok: SuuButton
+    readonly other: SuuButton
+    readonly cancel: SuuButton
+    opts?: AskOptions
+
+    constructor()
+        local p = UI.Panel(SuuUI.Root, { title = " ", width = 360, height = 200, solid = true, closable = true })
+        UI.MakeModal(p)
+        self.panel = p
+        local body = p.body
+        self.text = UI.Text(body, "body", "ink")
+        self.text:SetPoint("TOPLEFT")
+        self.text:SetPoint("TOPRIGHT")
+        self.text:SetWordWrap(true)
+        self.text:SetJustifyH("LEFT")
+        self.name = UI.TextField(body, { width = 330, placeholder = "What you save for" })
+        self.amount = UI.MoneyInput(body, {})
+        self.ok = UI.Button(body, {
+            text = "OK",
+            variant = "primary",
+            onClick = function()
+                self:Confirm()
+            end,
+        })
+        self.ok:SetPoint("BOTTOMRIGHT")
+        self.cancel = UI.Button(body, {
+            text = "Cancel",
+            onClick = function()
+                p:Hide()
+            end,
+        })
+        self.cancel:SetPoint("RIGHT", self.ok, "LEFT", -S["space-3"], 0)
+        self.other = UI.Button(body, {
+            text = "",
+            onClick = function()
+                local o = self.opts
+                p:Hide()
+                if o and o.onOther then
+                    o.onOther()
+                end
+            end,
+        })
+        self.other:SetPoint("BOTTOMLEFT")
+        for _, f in ipairs(self.amount.fields) do
+            f.edit:HookScript("OnEnterPressed", function()
+                self:Confirm()
+            end)
+        end
+        self.name.edit:HookScript("OnEnterPressed", function()
+            self:Confirm()
+        end)
+    end
+
+    function Open(o: AskOptions)
+        self.opts = o
+        self.panel:SetTitle(o.title)
+        self.text:SetValue(o.text)
+        local y = -(math.ceil(self.text:GetStringHeight()) + S["space-4"])
+        local withName = o.name ~= nil
+        self.name:SetShown(withName)
+        if withName then
+            self.name:ClearAllPoints()
+            self.name:SetPoint("TOPLEFT", 0, y)
+            self.name:SetValue(o.name or "")
+            y = y - 30 - S["space-4"]
+        end
+        self.amount:ClearAllPoints()
+        self.amount:SetPoint("TOPLEFT", 0, y)
+        self.amount:SetCopper(o.amount or 0)
+        self.ok:SetLabel(o.confirm)
+        self.other:SetShown(o.other ~= nil)
+        if o.other then
+            self.other:SetLabel(o.other)
+        end
+        local h = -y + 30 + S["space-5"] + 30
+        self.panel:SetHeight(self.panel:BodyTop() + h + S["space-5"])
+        self.panel:Show()
+        local first = withName and self.name.edit or self.amount.fields[1].edit
+        first:SetFocus()
+    end
+
+    function Confirm()
+        local o = self.opts
+        if not o then
+            return
+        end
+        local copper = self.amount:GetCopper()
+        if copper <= 0 then
+            return
+        end
+        local name = o.name ~= nil and self.name:GetValue() or nil
+        self.panel:Hide()
+        o.onConfirm(copper, name)
+    end
+end
+
+local dialog: AskDialog? = nil
+
+-- The dialog (nil until it first opens).
+export function askDialog(): AskDialog?
+    return dialog
+end
+
+-- The dialog, made on first use.
+export function ask(o: AskOptions): AskDialog
+    local d = dialog or AskDialog.new()
+    dialog = d
+    d:Open(o)
+    return d
+end

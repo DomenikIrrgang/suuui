@@ -13,6 +13,7 @@ import * as events from "/Core/Events"
 import * as modules from "/Core/Modules"
 import * as settings from "/Core/Settings"
 import * as days from "/Units/Ledger/Days"
+import * as secret from "wowlua:secret"
 import expectNoErrors, cycle, NOTHING from "../../helpers"
 
 const DUST = 990401
@@ -409,4 +410,53 @@ local function offAndOn()
     expect(M:Latest(DUST)).toBeNil()
     settings.set("ledger", "enabled", true)
     expect(SuuUI.UseService(SuuUI.Services.LEDGER)).toBeTruthy()
+end
+
+@test("the goal: one per account, set and cleared, told as 'goal'")
+local function goal()
+    local told = heard()
+    expect(M:Goal()).toBeNil()
+    M:SetGoal("Swift Frostsaber", 20000000.7)
+    expect(M:Goal()).toEqual({ name = "Swift Frostsaber", amount = 20000000 })
+    mock.advanceTime(0.01)
+    expect(told).toEqual({ "goal" })
+    M:ClearGoal()
+    expect(M:Goal()).toBeNil()
+    M:Data().goal = nil
+end
+
+@test("this session: this character's money since it began, and for how long")
+local function session()
+    local was, at = M.sessionMoney, M.sessionAt
+    M.sessionMoney, M.sessionAt = (secret.asNumber(GetMoney()) or 0) - 500, time() - 90
+    local net, seconds = M:Session()
+    expect(net).toBe(500)
+    expect(seconds).toBe(90)
+    M.sessionMoney = nil
+    expect((M:Session())).toBeNil()
+    M.sessionMoney, M.sessionAt = was, at
+end
+
+@test("the service opens the window and toggles it; Search the house only at an auctioneer, out of a fight")
+local function serviceWindow()
+    local ledger = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    assert(ledger.Open)("gold")
+    mock.advanceFrames(1)
+    expect(M:Shown()).toBe(true)
+    expect(assert(M.window).view).toBe("gold")
+    assert(ledger.Toggle)()
+    expect(M:Shown()).toBe(false)
+    local can, why = M:CanSearchHouse()
+    expect(can).toBe(false)
+    expect(why).toContain("auctioneer")
+    expect(M:SearchHouse(DUST)).toBe(false)
+    mock.fireEvent("AUCTION_HOUSE_SHOW")
+    expect((M:CanSearchHouse())).toBe(true)
+    mock.player:enterCombat()
+    can, why = M:CanSearchHouse()
+    expect(can).toBe(false)
+    expect(why).toBe("After the fight.")
+    mock.player:leaveCombat()
+    mock.fireEvent("AUCTION_HOUSE_CLOSED")
+    expect(M.atHouse).toBe(false)
 end

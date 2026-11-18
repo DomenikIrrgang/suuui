@@ -1,0 +1,156 @@
+-- UI/BarChart: bars up and down from the middle line, the best in ink and
+-- the rest faint, values on the best and the worst only, the axis' three
+-- lines and the middle's label, the labels under the bars; the hover (a
+-- lighter bar, the caller's tooltip) from SetHover and from the pointer;
+-- where a chart's tooltip goes; a percentage with its sign.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import barChart, signedPercent, placeTip, BarChart from "/UI/BarChart"
+import type TooltipData from "/UI/Tooltip"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, paintOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(tip: ((i: number) -> TooltipData?)?): BarChart
+    parent = newParent(400, 200)
+    local c = barChart(parent :: Frame, { zero = "week", tip = tip })
+    c:SetPoint("TOPLEFT")
+    c:SetSize(236, 96)
+    return c
+end
+
+@afterEach
+local function cleanup()
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+local LABELS = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" }
+local VALUES = { 1, -11, -6, 3, 2, 4, 7 }
+
+@test("the bars: up and down from the middle; the best in ink, the rest faint; values on the best and the worst")
+local function bars()
+    local c = make()
+    c:SetData({ labels = LABELS, values = VALUES, best = 2, worst = 7 })
+    for i = 1, 7 do
+        expect(c.bars[i]).toBeShown()
+        expect(c.labels[i]:GetText()).toBe(LABELS[i])
+    end
+    expect(tokenOf(c.bars[2])).toBe("ink")
+    expect(tokenOf(c.bars[1])).toBe("ink-muted")
+    expect(assert(paintOf(c.bars[1])).alpha).toBe(0.45)
+    -- the best's label in ink
+    expect(tokenOf(c.labels[2])).toBe("ink")
+    expect(tokenOf(c.labels[1])).toBe("ink-muted")
+    -- values on the best and the worst only
+    expect(c.values[2]).toBeShown()
+    expect(c.values[2]:GetText()).toBe("\226\136\14611%")
+    expect(c.values[7]).toBeShown()
+    expect(c.values[7]:GetText()).toBe("+7%")
+    expect(c.values[1]).never.toBeShown()
+    -- the axis: the reach a third past the furthest, in steps of 5
+    expect(c.reach).toBe(15)
+    expect(c.ticks[1]:GetText()).toBe("+15%")
+    expect(c.ticks[2]:GetText()).toBe("week")
+    expect(c.ticks[3]:GetText()).toBe("\226\136\14615%")
+    expect(tokenOf(c.rules[2])).toBe("gilt-line")
+    -- a bar under the middle hangs from it, one over stands on it
+    local _, _, _, _, yDown = c.bars[2]:GetPoint(1)
+    local _, _, _, _, yUp = c.bars[7]:GetPoint(1)
+    expect(-yDown < -yUp).toBe(false)
+    -- none stands out: no values, no ink bar
+    c:SetData({ labels = { "A", "B" }, values = { 1, 2 } })
+    expect(c.values[1]).never.toBeShown()
+    expect(c.values[2]).never.toBeShown()
+    expect(tokenOf(c.bars[1])).toBe("ink-muted")
+    expect(c.bars[3]).never.toBeShown()
+end
+
+@test("the hover: the bar lighter, the caller's tooltip; none without one")
+local function hover()
+    local c = make(function(i: number): TooltipData?
+        return i ~= 4 and { title = LABELS[i], lines = { { "11% under its week" } } } or nil
+    end)
+    c:SetData({ labels = LABELS, values = VALUES, best = 2, worst = 7 })
+    c:SetHover(1)
+    expect(assert(paintOf(c.bars[1])).alpha).toBe(0.8)
+    expect(c.tip).toBeShown()
+    expect(assert(c.tip.content).title).toBe("Mon")
+    -- the best stays ink
+    c:SetHover(2)
+    expect(tokenOf(c.bars[2])).toBe("ink")
+    expect(assert(paintOf(c.bars[1])).alpha).toBe(0.45)
+    c:SetHover(4)
+    expect(c.tip).never.toBeShown()
+    c:SetHover(nil)
+    expect(c.tip).never.toBeShown()
+    -- without a tip function: never a tooltip
+    local d = make()
+    d:SetData({ labels = LABELS, values = VALUES })
+    d:SetHover(3)
+    expect(d.tip).never.toBeShown()
+end
+
+@test("the pointer: the bar under it; left of the bars, none")
+local function pointer()
+    local c = make(function(i: number): TooltipData?
+        return { title = LABELS[i] }
+    end)
+    c:SetData({ labels = LABELS, values = VALUES, best = 2, worst = 7 })
+    local s = c:GetEffectiveScale()
+    local _, y = c:GetCenter()
+    local left = assert(c:GetLeft())
+    mock.setCursorPosition((left + 36 + c:Slot() * 4.5) * s, y * s)
+    mock.hover(c)
+    mock.advanceFrames(2)
+    expect(c.hover).toBe(5)
+    mock.setCursorPosition((left + 10) * s, y * s)
+    mock.advanceFrames(2)
+    expect(c.hover).toBeNil()
+    mock.hover(nil)
+    mock.advanceFrames(1)
+end
+
+@test("a chart's tooltip: right of x when it fits, else left, else the side with more room")
+local function tipSides()
+    parent = newParent(400, 200)
+    local chart = CreateFrame("Frame", nil, parent)
+    chart:SetPoint("TOPLEFT")
+    chart:SetSize(300, 100)
+    local tip = CreateFrame("Frame", nil, chart)
+    tip:SetSize(100, 40)
+    placeTip(tip, chart, 50, 10, 0)
+    expect((tip:GetPoint(1))).toBe("TOPLEFT")
+    placeTip(tip, chart, 250, 10, 0)
+    expect((tip:GetPoint(1))).toBe("TOPRIGHT")
+    tip:SetWidth(280)
+    placeTip(tip, chart, 150, 10, 0)
+    expect(tip).toBeShown()
+end
+
+@test("a percentage with its sign: +4%, −11%, 0%")
+local function percent()
+    expect(signedPercent(4.2)).toBe("+4%")
+    expect(signedPercent(-10.6)).toBe("\226\136\14611%")
+    expect(signedPercent(0.3)).toBe("0%")
+end
+
+@test("drawn when it shows; again on a new size")
+local function sized()
+    local c = make()
+    assert(parent):Hide()
+    c:SetData({ labels = LABELS, values = VALUES, best = 2, worst = 7 })
+    expect(c.dirty).toBe(true)
+    assert(parent):Show()
+    mock.advanceFrames(1)
+    expect(c.dirty).toBe(false)
+    local w = c.bars[1]:GetWidth()
+    c:SetSize(120, 96)
+    mock.advanceFrames(1)
+    expect(c.bars[1]:GetWidth() < w).toBe(true)
+end

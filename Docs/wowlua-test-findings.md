@@ -121,6 +121,8 @@ frames built step by step; SuuUI's test profile uses "exports").
 | [V55](#v55) | VM | low | as designed | `mock.advanceTime` runs no `OnUpdate`: a fade stands still while the clock moves |
 | [V56](#v56) | VM | low | open (unverified) | `SetText`'s `OnTextChanged` arrives a frame later |
 | [V57](#v57) | VM | low | open | `SetFontObject` keeps a font string's colour; the game's sets the font object's |
+| [V58](#v58) | VM | low | open | `wowlua screenshot` draws no `Line` regions |
+| [V59](#v59) | VM | low | open | A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes |
 
 ## Test runner and mock issues
 
@@ -1039,6 +1041,22 @@ Since V3's fix, `EditBox:SetText` runs `OnTextChanged` on the next frame, not in
 *Status: open.*
 
 In the game, `FontString:SetFontObject(font)` gives the string the font object's colour (and shadow) as well as its face and size: a text coloured with `SetTextColor` before reads the font object's colour after. The emulator's keeps the colour set before: a `GameFontNormal` string set to red with `SetTextColor(1, 0, 0)`, then `SetFontObject("GameFontHighlightSmall")` (white), still reads `1, 0, 0` (wowlua 0.13.15). Code that reads a text's colour to decide its style must read it before it puts a font object on (`src/UI/Reskin/Pass.wowlua`, `reskinText`), and a test of the game reusing a text in another role sets the game's colour itself after `SetFontObject` (`tests/unit/UI/Reskin/Pass.test.wowlua`, "a text the game gives another font is styled from it again, once": `title:SetTextColor(1, 0.82, 0)` after `SetFontObject("GameFontNormalSmall")`). (reskin text styles 2026-11-16)
+
+<a id="v58"></a>
+
+### V58. `wowlua screenshot` draws no `Line` regions
+
+*Status: open (0.13.15).*
+
+A `Line` (`frame:CreateLine`, `SetStartPoint`/`SetEndPoint`, `SetThickness`, a colour texture) is kept and answers its points, but the screenshot renderer leaves it out: a 6px red line over a blue square renders as the square alone. The Ledger's charts (`src/UI/LineChart.wowlua`: the price history, the gold line, the sparklines) show their gridlines, labels, marks, crosshair and dots in a screenshot but no lines; their tests check the lines' count, points and tokens instead (`tests/unit/UI/LineChart.test.wowlua`). (the Ledger window 2026-11-18)
+
+<a id="v59"></a>
+
+### V59. A requested item loads but `GET_ITEM_INFO_RECEIVED` never comes
+
+*Status: open (0.13.15).*
+
+An item defined with `{ cached = false, delay = d }` is cached `d` seconds after `C_Item.RequestLoadItemDataByID`, but the engine sends no `GET_ITEM_INFO_RECEIVED` (the game does). Code that fills names in as they arrive (the Ledger's Prices and item page) is tested by firing the event after the delay (`tests/unit/Units/Ledger/PricesPage.test.wowlua`, `ItemPage.test.wowlua`). (the Ledger window 2026-11-18)
 
 ## Not bugs (for test writers)
 

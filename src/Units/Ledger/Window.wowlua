@@ -1,0 +1,341 @@
+-- Units/Ledger/Window.wowlua
+-- The Ledger window (design board "Ledger"; spec 2026-11-18): a
+-- WindowFrame 880 x 600, the coin, "Ledger", whose prices it shows ("Prices:
+-- Normal Ruleset"); the tabs Overview · Prices · Transactions · Gold (an
+-- item's page under Prices; Transactions come after the probe); at the tab
+-- row's right a bare Select of characters (all, all on a ruleset, one); the
+-- foot: what the prices come from at the left, the chosen characters' money
+-- at the right. It opens centred (beside the auction house while that is
+-- open, never over it), never by itself. It reads only what the module
+-- keeps, so it works in a fight; it draws again when that changes while it
+-- shows (SUUUI_LEDGER_CHANGED), else when it next opens.
+
+import SuuUI from "/Core/API"
+import type WindowFrame, Select, Text, Money, SelectOption from "/Core/API"
+import type GoldScope from "./Gold"
+import type LedgerModule, OpenOptions from "../Ledger"
+import * as parts from "./Parts"
+import OverviewPage from "./OverviewPage"
+import PricesPage from "./PricesPage"
+import ItemPage from "./ItemPage"
+import GoldPage from "./GoldPage"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+export const WIDTH = 880
+export const HEIGHT = 600
+
+-- the tab each view is under
+local TAB_OF: { [string]: string } = {
+    overview = "overview",
+    prices = "prices",
+    item = "prices",
+    transactions = "transactions",
+    gold = "gold",
+}
+
+export class LedgerWindow
+    readonly m: LedgerModule
+    readonly frame: WindowFrame
+    readonly chars: Select<string>
+    readonly note: Text
+    readonly money: Money
+    readonly overview: OverviewPage
+    readonly prices: PricesPage
+    readonly item: ItemPage
+    readonly gold: GoldPage
+    readonly pages: { [string]: Frame } = {}
+    -- the view shown: "overview", "prices", "item", "gold"
+    view: string = "overview"
+    -- the characters chosen: "all", "rs:<ruleset>" or "c:<character key>"
+    scope: string = "all"
+    -- whose prices Prices shows (nil: this character's ruleset)
+    ruleset: string? = nil
+    -- something it reads changed while it was hidden, or a redraw waits
+    dirty: boolean = true
+    queued: boolean = false
+    -- (SetTab from Go: the tab's own onTab leaves the view alone)
+    going: boolean = false
+
+    constructor(m: LedgerModule)
+        self.m = m
+        local w = UI.WindowFrame(SuuUI.Root, {
+            name = "SuuUILedgerWindow",
+            title = "Ledger",
+            glyph = "coin",
+            meta = "",
+            width = WIDTH,
+            height = HEIGHT,
+            footer = true,
+            onClose = function(win: Frame)
+                win:Hide()
+            end,
+            tabs = {
+                { key = "overview", label = "Overview" },
+                { key = "prices", label = "Prices" },
+                {
+                    key = "transactions",
+                    label = "Transactions",
+                    disabled = true,
+                    reason = "Not recorded yet: they come in a later version.",
+                },
+                { key = "gold", label = "Gold" },
+            },
+            onTab = function(key: string)
+                if not self.going then
+                    self:Go(key)
+                end
+            end,
+        })
+        self.frame = w
+        w:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
+        w:Hide()
+        w.scroll:Hide()
+        w:HookScript("OnShow", function()
+            if self.dirty then
+                self:Refresh()
+            end
+        end)
+        -- the characters, at the tab row's right
+        self.chars = UI.Select(assert(w.tabRow), {
+            bare = true,
+            width = 260,
+            textStyle = "label",
+            textColor = "ink",
+            options = {},
+            onChange = function(v: string)
+                self.scope = v
+                self:Refresh()
+            end,
+        })
+        self.chars:SetPoint("RIGHT", assert(w.tabRow), "RIGHT", 0, 0)
+        -- the foot: where the prices come from, the chosen characters' money
+        local footer = assert(w.footer)
+        self.note = UI.Text(footer, "caption", "ink-muted")
+        self.note:SetPoint("LEFT")
+        self.note:SetPoint("RIGHT", -200, 0)
+        self.note:SetJustifyH("LEFT")
+        self.money = UI.Money(footer)
+        self.money:SetPoint("RIGHT")
+        -- the pages
+        self.overview = OverviewPage.new(w.body, self)
+        self.prices = PricesPage.new(w.body, self)
+        self.item = ItemPage.new(w.body, self)
+        self.gold = GoldPage.new(w.body, self)
+        self.pages.overview, self.pages.prices, self.pages.item, self.pages.gold =
+            self.overview, self.prices, self.item, self.gold
+        w:SetTab("overview")
+    end
+
+    -- The prices' ruleset (the chosen one, else this character's).
+    function Ruleset(): string
+        return self.ruleset or self.m:Ruleset()
+    end
+
+    -- The chosen characters as the gold store's scope (nil: all).
+    function Scope(): GoldScope?
+        local s = self.scope
+        local rs = s:match("^rs:(.+)$")
+        if rs then
+            return { ruleset = rs }
+        end
+        local char = s:match("^c:(.+)$")
+        if char then
+            return { char = char }
+        end
+        return nil
+    end
+
+    -- The chosen characters in words: "all characters", "Normal Ruleset",
+    -- "Veyra".
+    function ScopeName(): string
+        local s = self.scope
+        local rs = s:match("^rs:(.+)$")
+        if rs then
+            return SuuUI.RulesetName(rs)
+        end
+        local char = s:match("^c:(.+)$")
+        if char then
+            for _, c in ipairs(self.m:Characters()) do
+                if c.key == char then
+                    return c.name
+                end
+            end
+        end
+        return "all characters"
+    end
+
+    -- Opens it: on `view` (nil: the last), an item's page, Prices at a Show.
+    function Open(view: string?, opts: OpenOptions?)
+        local f = self.frame
+        local o: OpenOptions = opts or {}
+        if not f:IsShown() or o.beside then
+            self:Place(o.beside)
+        end
+        if o.itemID then
+            self.item:SetItem(o.itemID)
+            self.view = "item"
+        elseif o.show then
+            self.prices:SetShow(o.show)
+            self.view = "prices"
+        elseif view == "item" and not self.item.itemID then
+            self.view = "prices"
+        elseif view and TAB_OF[view] and view ~= "transactions" then
+            self.view = view
+        end
+        self.dirty = true
+        f:Show()
+        f:Raise()
+        self:Go(self.view)
+    end
+
+    -- Centred, or beside a window (`beside`, the auction house's when it
+    -- opens the Ledger; else the auction house's while it is open), never
+    -- over it: right of it, or left when there's no room.
+    function Place(beside: Frame?)
+        local f = self.frame
+        f:ClearAllPoints()
+        local house = beside or (self.m.atHouse and SuuUI.BlizzardFrame("SuuUIAuctionHouseWindow")) or nil
+        if house and house:IsShown() then
+            local right = house:GetRight()
+            local left = house:GetLeft()
+            local screen = UIParent:GetWidth()
+            if right and left then
+                if right + S["space-4"] + WIDTH <= screen then
+                    f:SetPoint("TOPLEFT", house, "TOPRIGHT", S["space-4"], 0)
+                    return
+                elseif left - S["space-4"] - WIDTH >= 0 then
+                    f:SetPoint("TOPRIGHT", house, "TOPLEFT", -S["space-4"], 0)
+                    return
+                end
+            end
+        end
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, 30)
+    end
+
+    -- Shows a view: "overview", "prices", "item", "transactions" (not yet:
+    -- the overview), "gold".
+    function Go(view: string)
+        if view == "transactions" then
+            view = "overview"
+        end
+        self.view = view
+        for key, page in pairs(self.pages) do
+            page:SetShown(key == view)
+        end
+        local tab = TAB_OF[view] or "overview"
+        if self.frame.tab ~= tab then
+            self.going = true
+            self.frame:SetTab(tab)
+            self.going = false
+        end
+        self:Refresh()
+    end
+
+    -- Something it reads changed: drawn again now (next frame, once) while
+    -- it shows, else when it opens.
+    function Changed(what: string?)
+        self.dirty = true
+        if what == "house" and self.frame:IsShown() then
+            self.item:DrawButtons()
+            return
+        end
+        if what == "prices" or what == "scan" or what == "watches" then
+            self.prices:Forget()
+        end
+        if not self.frame:IsShown() or self.queued then
+            return
+        end
+        self.queued = true
+        self.m:After(0, function()
+            self.queued = false
+            if self.frame:IsShown() and self.dirty then
+                self:Refresh()
+            end
+        end)
+    end
+
+    -- An item's name came from the server: the pages that wait for it.
+    function ItemInfo(itemID: number)
+        self.prices:ItemInfo(itemID)
+        if self.frame:IsShown() then
+            if self.view == "item" and self.item.itemID == itemID then
+                self.item:Draw()
+            elseif self.view == "overview" then
+                self.overview:ItemInfo(itemID)
+            end
+        end
+    end
+
+    -- The characters' options: all, all on each ruleset, each one.
+    function CharOptions(): SelectOption<string>[]
+        local chars = self.m:Characters()
+        local out: SelectOption<string>[] = { { value = "all", label = "All characters" } }
+        local seen: { [string]: boolean } = {}
+        local rulesets: string[] = {}
+        for _, c in ipairs(chars) do
+            if not seen[c.ruleset] then
+                seen[c.ruleset] = true
+                rulesets[#rulesets + 1] = c.ruleset
+            end
+        end
+        if #rulesets > 1 then
+            for _, rs in ipairs(rulesets) do
+                out[#out + 1] = { value = "rs:" .. rs, label = "All on " .. SuuUI.RulesetName(rs) }
+            end
+        end
+        for _, c in ipairs(chars) do
+            local token = c.class and ("class-" .. c.class:lower()) or nil
+            out[#out + 1] = {
+                value = "c:" .. c.key,
+                label = c.name .. " \194\183 " .. SuuUI.RulesetName(c.ruleset),
+                summary = c.name,
+                diamond = token and UI.IsColor(token) and token or nil,
+            }
+        end
+        return out
+    end
+
+    -- The head, the foot and the page shown, drawn again.
+    function Refresh()
+        self.dirty = false
+        local m = self.m
+        local ruleset = self:Ruleset()
+        self.frame:SetTitle("Ledger", "Prices: " .. SuuUI.RulesetName(ruleset))
+        -- (a character chosen that's gone: all of them)
+        local options = self:CharOptions()
+        local known = false
+        for _, o in ipairs(options) do
+            known = known or o.value == self.scope
+        end
+        if not known then
+            self.scope = "all"
+        end
+        self.chars:SetOptions(options)
+        self.chars:SetValue(self.scope)
+        -- the foot
+        local scan = m:LastScan(ruleset)
+        local items = #m:Items(ruleset)
+        local note = SuuUI.RulesetName(ruleset) .. ": "
+        if scan then
+            note = note .. "last scan " .. parts.when(scan.at) .. " \194\183 " .. parts.count(items) .. " items"
+        elseif items > 0 then
+            note = note .. "no Scan all yet \194\183 " .. parts.count(items) .. " items seen"
+        else
+            note = note .. "nothing seen at the auction house yet"
+        end
+        self.note:SetValue(note)
+        self.money:SetCopper(m:GoldTotal(self:Scope()))
+        local view = self.view
+        if view == "overview" then
+            self.overview:Draw()
+        elseif view == "prices" then
+            self.prices:Draw()
+        elseif view == "item" then
+            self.item:Draw()
+        elseif view == "gold" then
+            self.gold:Draw()
+        end
+    end
+end

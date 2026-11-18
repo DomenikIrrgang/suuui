@@ -1,0 +1,441 @@
+-- Units/Ledger/OverviewPage.wowlua
+-- The Overview (design board "Ledger"): four figures (the chosen
+-- characters' gold, with how many on how many rulesets and who has most;
+-- this week, from the gold kept day by day; waiting in the mail, which
+-- comes with the transactions; this session, this character's money since
+-- it logged in), then where money came from and went (after the probe),
+-- the account's goal, the last scan's deals (the top three with both marks;
+-- "All 14 deals" opens Prices at Deals) and the latest transactions (after
+-- the probe).
+
+import SuuUI from "/Core/API"
+import type DealMark, Text, ItemSlot, Money, SuuButton, Bar from "/Core/API"
+import type DealEntry from "../Ledger"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local DEAL_H = 30
+local GOAL_H = 76
+local TOP_DEALS = 3
+
+-- A deal in the list: the item, its lowest buyout, both marks.
+class DealRow extends Button
+    readonly hover: Texture
+    readonly slot: ItemSlot
+    readonly name: Text
+    readonly price: Money
+    readonly under: DealMark
+    readonly vendor: DealMark
+    itemID: number? = nil
+
+    constructor(parent: Frame, open: (itemID: number) -> ())
+        super(nil, parent)
+        self:SetHeight(DEAL_H)
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND")
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.slot = UI.ItemSlot(self, 24)
+        self.slot:EnableMouse(false)
+        self.slot:SetPoint("LEFT", S["space-3"], 0)
+        self.name = UI.Text(self, "label", "ink")
+        self.name:SetPoint("LEFT", self.slot, "RIGHT", S["space-4"], 0)
+        self.vendor = parts.dealMark(self)
+        self.vendor:SetPoint("RIGHT", -S["space-3"], 0)
+        self.under = parts.dealMark(self)
+        self.price = UI.Money(self)
+        self:SetScript("OnEnter", function()
+            self.hover:Show()
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local id = self.itemID
+            if id and not parts.modifiedClick(id) then
+                open(id)
+            end
+        end)
+    end
+
+    function Set(d: DealEntry)
+        self.itemID = d.itemID
+        local name, quality = parts.cachedInfo(d.itemID)
+        if not name then
+            C_Item.RequestLoadItemDataByID(d.itemID)
+        end
+        local icon = parts.instantInfo(d.itemID)
+        self.slot.skin:SetItem({ icon = icon, quality = parts.QUALITY[quality or 1] or "common" })
+        self.name:SetValue(name or ("Item " .. d.itemID))
+        self.name:SetColor(name and parts.qualityToken(quality) or "ink-muted")
+        self.price:SetCopper(d.low)
+        parts.setMark(self.vendor, d.underVendor and "Under vendor" or nil)
+        parts.setMark(self.under, d.under and parts.underWord(d.under) or nil)
+        self.under:ClearAllPoints()
+        if d.underVendor then
+            self.under:SetPoint("RIGHT", self.vendor, "LEFT", -S["space-2"], 0)
+        else
+            self.under:SetPoint("RIGHT", -S["space-3"], 0)
+        end
+        local last: Region = (d.under and self.under) or (d.underVendor and self.vendor) or self
+        self.price:ClearAllPoints()
+        if last == self then
+            self.price:SetPoint("RIGHT", -S["space-3"], 0)
+        else
+            self.price:SetPoint("RIGHT", last, "LEFT", -S["space-4"], 0)
+        end
+        self.name:SetPoint("RIGHT", self.price, "LEFT", -S["space-4"], 0)
+        self.name:SetJustifyH("LEFT")
+        self:Show()
+    end
+end
+
+export class OverviewPage extends Frame
+    readonly w: LedgerWindow
+    readonly gold: parts.Figure
+    readonly week: parts.Figure
+    readonly mail: parts.Figure
+    readonly session: parts.Figure
+    readonly figRule: Texture
+    readonly left: Frame
+    readonly right: Frame
+    readonly came: parts.Section
+    readonly cameNote: Text
+    readonly went: parts.Section
+    readonly wentNote: Text
+    readonly goal: parts.Section
+    readonly goalButton: SuuButton
+    readonly goalBox: Frame
+    readonly goalName: Text
+    readonly goalBar: Bar
+    readonly goalHave: Money
+    readonly goalOf: Text
+    readonly goalNeed: Money
+    readonly goalEta: Text
+    readonly goalNone: Text
+    readonly deals: parts.Section
+    readonly allDeals: parts.Link
+    readonly dealRows: DealRow[] = {}
+    readonly dealsNone: Text
+    readonly latest: parts.Section
+    readonly latestNote: Text
+    -- the deals shown, by item (a name that arrives draws them again)
+    dealIDs: { [number]: boolean } = {}
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        self.gold = parts.Figure.new(self, "Gold, all characters")
+        self.week = parts.Figure.new(self, "This week")
+        self.mail = parts.Figure.new(self, "Waiting in the mail")
+        self.session = parts.Figure.new(self, "This session")
+        self.figRule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.figRule:SetHeight(1)
+        self.figRule:SetPoint("TOPLEFT", 0, -(parts.FIGURE_H + S["space-4"]))
+        self.figRule:SetPoint("TOPRIGHT", 0, -(parts.FIGURE_H + S["space-4"]))
+        local top = -(parts.FIGURE_H + S["space-4"] + 1 + S["space-5"])
+        self.left = CreateFrame("Frame", nil, self)
+        self.left:SetPoint("TOPLEFT", 0, top)
+        self.left:SetPoint("BOTTOMLEFT")
+        self.right = CreateFrame("Frame", nil, self)
+        self.right:SetPoint("TOPRIGHT", 0, top)
+        self.right:SetPoint("BOTTOMRIGHT")
+        -- where it came from and went (after the probe)
+        self.came = parts.Section.new(self.left, "Where it came from", "this week")
+        self.came:SetPoint("TOPLEFT")
+        self.came:SetPoint("TOPRIGHT")
+        self.cameNote = self:Note(self.left, self.came, "Not recorded yet: auction sales, vendors, looted coin and quests come with the transactions, in a later version.")
+        self.went = parts.Section.new(self.left, "Where it went", "this week")
+        self.went:SetPoint("TOPLEFT", self.cameNote, "BOTTOMLEFT", 0, -S["space-6"])
+        self.went:SetPoint("RIGHT", self.left, "RIGHT")
+        self.wentNote = self:Note(self.left, self.went, "Not recorded yet: auction buys, training, repairs and travel come with the transactions.")
+        -- the goal
+        self.goal = parts.Section.new(self.right, "Goal")
+        self.goal:SetPoint("TOPLEFT")
+        self.goal:SetPoint("TOPRIGHT")
+        self.goalButton = UI.Button(self.goal, {
+            text = "Change",
+            onClick = function()
+                self:AskGoal()
+            end,
+        })
+        self.goalButton:SetHeight(22)
+        self.goal:SetAside(self.goalButton)
+        local box = CreateFrame("Frame", nil, self.right)
+        box:SetPoint("TOPLEFT", self.goal, "BOTTOMLEFT", 0, -S["space-4"])
+        box:SetPoint("RIGHT", self.right, "RIGHT")
+        box:SetHeight(GOAL_H)
+        UI.Fill(box, "surface-sunk"):SetAllPoints()
+        UI.Border(box, "gilt-faint")
+        self.goalBox = box
+        self.goalName = UI.Text(box, "body", "ink")
+        self.goalName:SetPoint("TOPLEFT", S["space-5"], -S["space-4"])
+        self.goalName:SetPoint("RIGHT", -S["space-5"], 0)
+        self.goalName:SetJustifyH("LEFT")
+        self.goalHave = UI.Money(box)
+        self.goalHave:ClearAllPoints()
+        self.goalHave:SetPoint("TOPLEFT", S["space-5"], -(S["space-4"] + T.type.body.lineHeight + S["space-2"]))
+        self.goalHave.text:ClearAllPoints()
+        self.goalHave.text:SetPoint("LEFT")
+        self.goalNeed = UI.Money(box)
+        self.goalNeed:SetPoint("TOPRIGHT", -S["space-5"], -(S["space-4"] + T.type.body.lineHeight + S["space-2"]))
+        self.goalOf = UI.Text(box, "caption", "ink-muted")
+        self.goalOf:SetValue("of")
+        self.goalOf:SetPoint("RIGHT", self.goalNeed, "LEFT", -S["space-2"], 0)
+        self.goalBar = UI.StatusBar(box, { height = 6, fill = "progress-fill", track = "track", border = false })
+        self.goalBar:SetPoint("TOPLEFT", self.goalHave, "BOTTOMLEFT", 0, -S["space-2"])
+        self.goalBar:SetPoint("RIGHT", box, "RIGHT", -S["space-5"], 0)
+        self.goalEta = UI.Text(box, "caption", "ink-muted")
+        self.goalEta:SetPoint("TOPLEFT", self.goalBar, "BOTTOMLEFT", 0, -S["space-3"])
+        self.goalNone = UI.Text(self.right, "caption", "ink-muted")
+        self.goalNone:SetPoint("TOPLEFT", self.goal, "BOTTOMLEFT", 0, -S["space-3"])
+        self.goalNone:SetValue("No goal yet: set one and see how close your gold is.")
+        -- the last scan's deals
+        self.deals = parts.Section.new(self.right, "Deals in the last scan")
+        self.allDeals = parts.Link.new(self.deals, "All deals", function()
+            self:AllDeals()
+        end)
+        self.deals:SetAside(self.allDeals)
+        for i = 1, TOP_DEALS do
+            local row = DealRow.new(self.right, function(itemID: number)
+                self.w.item:SetItem(itemID)
+                self.w:Go("item")
+            end)
+            row:SetPoint("TOPLEFT", self.deals, "BOTTOMLEFT", 0, -(S["space-2"] + (i - 1) * DEAL_H))
+            row:SetPoint("RIGHT", self.right, "RIGHT")
+            row:Hide()
+            self.dealRows[i] = row
+        end
+        self.dealsNone = UI.Text(self.right, "caption", "ink-muted")
+        self.dealsNone:SetPoint("TOPLEFT", self.deals, "BOTTOMLEFT", 0, -S["space-3"])
+        self.dealsNone:SetPoint("RIGHT", self.right, "RIGHT")
+        self.dealsNone:SetJustifyH("LEFT")
+        self.dealsNone:SetWordWrap(true)
+        -- the latest transactions (after the probe)
+        self.latest = parts.Section.new(self.right, "Latest")
+        self.latestNote = UI.Text(self.right, "caption", "ink-muted")
+        self.latestNote:SetPoint("TOPLEFT", self.latest, "BOTTOMLEFT", 0, -S["space-3"])
+        self.latestNote:SetValue("Nothing recorded yet.")
+        self:SetScript("OnSizeChanged", function()
+            self:Layout()
+        end)
+    end
+
+    -- A quiet note under a section, wrapping.
+    function Note(parent: Frame, under: Frame, text: string): Text
+        local t = UI.Text(parent, "caption", "ink-muted")
+        t:SetPoint("TOPLEFT", under, "BOTTOMLEFT", 0, -S["space-3"])
+        t:SetPoint("RIGHT", parent, "RIGHT")
+        t:SetJustifyH("LEFT")
+        t:SetWordWrap(true)
+        t:SetValue(text)
+        return t
+    end
+
+    function Layout()
+        local width = self:GetWidth()
+        if width <= 1 then
+            return
+        end
+        local gap = S["space-5"]
+        local fw = (width - gap * 3) / 4
+        for i, f in ipairs({ self.gold, self.week, self.mail, self.session }) do
+            f:ClearAllPoints()
+            f:SetPoint("TOPLEFT", (i - 1) * (fw + gap), 0)
+            f:SetWidth(fw)
+        end
+        local half = (width - S["space-6"]) / 2
+        self.left:SetWidth(half)
+        self.right:SetWidth(half)
+        self.goalBar:SetWidth(half - S["space-5"] * 2)
+    end
+
+    function AskGoal()
+        local m = self.w.m
+        local goal = m:Goal()
+        parts.ask({
+            title = goal and "Change the goal" or "Set a goal",
+            text = "What you save for, and how much gold it takes (all your characters together):",
+            name = goal and goal.name or "",
+            amount = goal and goal.amount or 0,
+            confirm = "Save",
+            onConfirm = function(copper: number, name: string?)
+                local n = name and name:match("^%s*(.-)%s*$") or ""
+                m:SetGoal(n ~= "" and n or "Savings", copper)
+            end,
+            other = goal and "Clear the goal" or nil,
+            onOther = function()
+                m:ClearGoal()
+            end,
+        })
+    end
+
+    function AllDeals()
+        self.w.prices:SetShow(#self.w.m:Deals(self.w:Ruleset()) > 0 and "deals" or "all")
+        self.w:Go("prices")
+    end
+
+    -- A name arrived: the deals drawn again when it's one of them.
+    function ItemInfo(itemID: number)
+        if self.dealIDs[itemID] and self:IsVisible() then
+            self:DrawDeals()
+        end
+    end
+
+    function Draw()
+        self:Layout()
+        local m = self.w.m
+        local scope = self.w:Scope()
+        -- the gold of the chosen characters, and who they are
+        local total = m:GoldTotal(scope)
+        local s = self.w.scope
+        self.gold.label:SetValue(s == "all" and "Gold, all characters" or s:match("^rs:") and ("Gold, " .. self.w:ScopeName()) or "Gold")
+        self.gold:SetMoney(total)
+        local chars = m:Characters()
+        local chosen = 0
+        local rulesets: { [string]: boolean } = {}
+        local nRulesets = 0
+        local most, mostMoney = nil :: string?, -1
+        for _, c in ipairs(chars) do
+            local inScope = s == "all" or s == "rs:" .. c.ruleset or s == "c:" .. c.key
+            if inScope then
+                chosen += 1
+                if not rulesets[c.ruleset] then
+                    rulesets[c.ruleset] = true
+                    nRulesets += 1
+                end
+                if c.money > mostMoney then
+                    most, mostMoney = c.name, c.money
+                end
+            end
+        end
+        if chosen == 1 then
+            local c: { name: string, ruleset: string }? = nil
+            for _, x in ipairs(chars) do
+                if s == "all" or s == "rs:" .. x.ruleset or s == "c:" .. x.key then
+                    c = x
+                end
+            end
+            self.gold:SetSub(c and (c.name .. " \194\183 " .. SuuUI.RulesetName(c.ruleset)) or nil)
+        elseif chosen > 1 then
+            local share = total > 0 and math.floor(mostMoney / total * 100 + 0.5) or 0
+            self.gold:SetSub(chosen .. " characters on " .. nRulesets .. (nRulesets == 1 and " ruleset" or " rulesets") ..
+                (most and total > 0 and (" \194\183 " .. most .. " has " .. share .. "%") or ""))
+        else
+            self.gold:SetSub(nil)
+        end
+        -- this week: the gold now against the end of the day a week ago
+        local today = m:Today()
+        local series = m:GoldSeries(scope, today - 7, today)
+        local first = m:GoldFirstDay(scope)
+        if first and first <= today - 7 then
+            self.week:SetMoney(series[#series] - series[1], true)
+            self.week:SetSub("against a week ago")
+        elseif first then
+            self.week:SetMoney(series[#series] - m:GoldSeries(scope, first, first)[1], true)
+            self.week:SetSub("since " .. parts.shortDate(first) .. ", when the Ledger began")
+        else
+            self.week:SetWord("\226\128\148")
+            self.week:SetSub(nil)
+        end
+        -- waiting in the mail (comes with the transactions)
+        self.mail:SetWord("\226\128\148")
+        self.mail:SetSub("Not recorded yet")
+        -- this session: this character's
+        local net, seconds = m:Session()
+        if net then
+            self.session:SetMoney(net, true)
+            local text = parts.duration(seconds)
+            if seconds >= 600 and net ~= 0 then
+                local rate = net / seconds * 3600
+                text = text .. " \194\183 " .. (rate < 0 and "\226\136\146" or "") .. UI.ShortMoney(math.abs(rate)) .. " an hour"
+            end
+            self.session:SetSub(text)
+        else
+            self.session:SetWord("\226\128\148")
+            self.session:SetSub(nil)
+        end
+        self:DrawGoal()
+        self:DrawDeals()
+    end
+
+    function DrawGoal()
+        local m = self.w.m
+        local goal = m:Goal()
+        self.goalBox:SetShown(goal ~= nil)
+        self.goalNone:SetShown(goal == nil)
+        self.goalButton:SetLabel(goal and "Change" or "Set a goal")
+        local below: Region = self.goalNone
+        if goal then
+            below = self.goalBox
+            local have = m:GoldTotal(nil)
+            self.goalName:SetValue(goal.name)
+            self.goalHave:SetCopper(have)
+            self.goalNeed:SetCopper(goal.amount)
+            self.goalBar.bar:SetMinMaxValues(0, goal.amount)
+            self.goalBar.bar:SetValue(math.min(have, goal.amount))
+            local today = m:Today()
+            local weekAgo = m:GoldSeries(nil, today - 7, today - 7)[1] or 0
+            local gain = have - weekAgo
+            local first = m:GoldFirstDay(nil)
+            local eta: string
+            if have >= goal.amount then
+                eta = "You have it."
+            elseif not first or first > today - 7 then
+                eta = "How soon at your pace shows after a week."
+            elseif gain <= 0 then
+                eta = "No closer than a week ago."
+            else
+                local weeks = (goal.amount - have) / gain
+                if weeks < 1 then
+                    local d = math.max(1, math.ceil(weeks * 7))
+                    eta = "At this week\226\128\153s pace, in about " .. d .. (d == 1 and " day." or " days.")
+                else
+                    local n = math.ceil(weeks)
+                    eta = "At this week\226\128\153s pace, in about " .. n .. (n == 1 and " week." or " weeks.")
+                end
+            end
+            self.goalEta:SetValue(eta)
+        end
+        self.deals:ClearAllPoints()
+        self.deals:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -S["space-5"])
+        self.deals:SetPoint("RIGHT", self.right, "RIGHT")
+    end
+
+    function DrawDeals()
+        local m = self.w.m
+        local ruleset = self.w:Ruleset()
+        local deals = m:Deals(ruleset)
+        local scan = m:LastScan(ruleset)
+        self.deals:SetLabel("Deals in the last scan", scan and parts.when(scan.at) or nil)
+        self.allDeals:SetLabel(#deals > 0 and ("All " .. #deals .. (#deals == 1 and " deal" or " deals")) or "All prices")
+        self.deals:SetAside(self.allDeals)
+        self.dealIDs = {}
+        local n = math.min(TOP_DEALS, #deals)
+        for i, row in ipairs(self.dealRows) do
+            local d = deals[i]
+            if d and i <= n then
+                row:Set(d)
+                self.dealIDs[d.itemID] = true
+            else
+                row:Hide()
+            end
+        end
+        self.dealsNone:SetShown(n == 0)
+        if n == 0 then
+            self.dealsNone:SetValue(scan and "No item in the last scan is far under its usual price." or
+                "Scan all at the auction house: the deals it finds show here.")
+        end
+        local below: Region = n > 0 and self.dealRows[n] or self.dealsNone
+        self.latest:ClearAllPoints()
+        self.latest:SetPoint("TOPLEFT", below, "BOTTOMLEFT", 0, -S["space-5"])
+        self.latest:SetPoint("RIGHT", self.right, "RIGHT")
+        if n > 0 then
+            self.latest:SetPoint("TOPLEFT", self.deals, "BOTTOMLEFT", 0, -(S["space-2"] + n * DEAL_H + S["space-5"]))
+        end
+    end
+end

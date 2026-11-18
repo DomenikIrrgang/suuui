@@ -1,0 +1,241 @@
+-- Units/Ledger/Parts: the words for days, times, money and when an item is
+-- cheapest; an item's name from the cache and its kind; a section's head
+-- and its rule, a figure, a deal's mark, a definition row, a link, the icon
+-- button; the small dialog (a price, a goal's name and amount, a second
+-- action, Cancel).
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import * as parts from "/Units/Ledger/Parts"
+import * as days from "/Units/Ledger/Days"
+import type When, WhenRow from "/Units/Ledger/Stats"
+import whenInfo from "/Units/Ledger/Stats"
+import expectNoErrors, newParent from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import LOTUS, LATE from "./LedgerHelpers"
+
+local parent: Frame? = nil
+
+local function host(): Frame
+    local p = parent or newParent(600, 300)
+    parent = p
+    return p
+end
+
+@afterEach
+local function cleanup()
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+@test("words: counts, dates, how long ago, durations, money without colour, qualities")
+local function words()
+    expect(parts.count(6412)).toBe("6,412")
+    expect(parts.count(1234567)).toBe("1,234,567")
+    expect(parts.count(12)).toBe("12")
+    local d = days.dayNumber(2026, 11, 3)
+    expect(parts.shortDate(d)).toBe("3 Nov")
+    expect(parts.dayLabel(d, d)).toBe("Today")
+    expect(parts.dayLabel(d - 1, d)).toBe("Yesterday")
+    expect(parts.dayLabel(d, d + 5)).toBe("Tue 3 Nov")
+    expect(parts.ago(d, d)).toBe("today")
+    expect(parts.ago(d - 1, d)).toBe("yesterday")
+    expect(parts.ago(d - 12, d)).toBe("12 days ago")
+    expect(parts.when(time())).toBe("today " .. date("%H:%M"))
+    expect(parts.when(time() - 3 * 86400)).toBe("3 days ago")
+    expect(parts.duration(38 * 60)).toBe("38 min")
+    expect(parts.duration(134 * 60)).toBe("2 h 14 min")
+    expect(parts.moneyWords(321)).toBe("3s 21c")
+    expect(parts.moneyWords(400000)).toBe("40g")
+    expect(parts.moneyWords(0)).toBe("0c")
+    expect(parts.moneyWords(123450000)).toBe("12,345g")
+    expect(parts.qualityToken(1)).toBe("ink")
+    expect(parts.qualityToken(nil)).toBe("ink")
+    expect(parts.qualityToken(3)).toBe("quality-rare")
+    expect(parts.qualityToken(0)).toBe("quality-poor")
+    expect(parts.underWord(30.6)).toBe("31% under")
+    expect(parts.weekWords(-11.2)).toBe("11% under its week")
+    expect(parts.weekWords(4)).toBe("4% over its week")
+    expect(parts.weekWords(0.2)).toBe("the same as its week")
+end
+
+-- A When from day and time rows: pct and looks each.
+local function when(weekdays: number[], times: number[], looks: number?): When
+    local wd: WhenRow[], tm: WhenRow[] = {}, {}
+    for i, v in ipairs(weekdays) do
+        wd[i] = { pct = v, looks = looks or 5 }
+    end
+    for i, v in ipairs(times) do
+        tm[i] = { pct = v, looks = looks or 5 }
+    end
+    return { weekdays = wd, times = tm, days = whenInfo(wd), periods = whenInfo(tm) }
+end
+
+@test("when it's cheapest: the Prices column and the item page's sentence")
+local function cheapest()
+    -- Tuesdays and nights (Days' period 1)
+    local both = when({ 1, -11, 0, 2, 1, 3, 2 }, { -5, 0, 1, 2 })
+    expect(parts.cheapestShort(both)).toBe("Tue \194\183 night")
+    expect(parts.cheapestLine(both)).toBe("Cheapest on Tuesdays (11% under its week) and at night (5% under).")
+    -- the day only
+    local day = when({ 1, -11, 0, 2, 1, 3, 2 }, { 0, 1, 0, 1 })
+    expect(parts.cheapestShort(day)).toBe("Tue")
+    expect(parts.cheapestLine(day)).toBe("Cheapest on Tuesdays, 11% under its week; the time of day makes no difference.")
+    -- the time only
+    local time = when({ 0, 1, 0, 1, 0, 1, 0 }, { 0, 0, -6, 1 })
+    expect(parts.cheapestShort(time)).toBe("Noon")
+    expect(parts.cheapestLine(time)).toBe("Cheapest at noon, 6% under its week; the day makes no difference.")
+    -- none stands out
+    local none = when({ 0, 1, 0, 1, 0, 1, 0 }, { 0, 1, 0, 1 })
+    expect(parts.cheapestShort(none)).toBe("any time")
+    expect(parts.cheapestLine(none)).toBe("No day or time stands out: all within 4% of their week.")
+    -- too few looks
+    local few = when({ 0, -9, 0, 1, 0, 1, 0 }, { 0, 1, 0, 1 }, 1)
+    expect(parts.cheapestShort(few)).toBe("\226\128\148")
+    expect(parts.cheapestLine(few)).toBe("Scan on more days and at other times to see when it\226\128\153s cheapest.")
+    -- the charts' order of the times: Morning, Noon, Evening, Night
+    local order: string[] = {}
+    for _, p in ipairs(parts.TIME_ORDER) do
+        order[#order + 1] = parts.TIME_WORDS[p].short
+    end
+    expect(order).toEqual({ "Morning", "Noon", "Evening", "Night" })
+    expect(parts.TIME_WORDS[days.NIGHT].name).toBe("Nights (0\226\128\1476)")
+end
+
+@test("items: the name only from the cache (never asked for here); the icon, class and kind at once")
+local function items()
+    local name, quality = parts.cachedInfo(LOTUS)
+    expect(name).toBe("Test Lotus")
+    expect(quality).toBe(2)
+    expect((parts.cachedInfo(LATE))).toBeNil()
+    local _, classID = parts.instantInfo(LOTUS)
+    expect(classID).toBe(7)
+end
+
+@test("a section: the title in gilt-text, its caption, the rule up to what's at the right")
+local function section()
+    local s = parts.Section.new(host(), "Goal", "this week")
+    s:SetPoint("TOPLEFT")
+    s:SetWidth(400)
+    expect(s.title:GetText()).toBe("Goal")
+    expect(tokenOf(s.title)).toBe("gilt-text")
+    expect(s.meta:GetText()).toBe("this week")
+    expect(s.rule).toBeAnchoredTo(s.meta, "LEFT", "RIGHT")
+    local b = CreateFrame("Button", nil, s)
+    b:SetSize(40, 20)
+    s:SetAside(b)
+    expect(s.rule).toBeAnchoredTo(b, "RIGHT", "LEFT")
+    s:SetLabel("Latest")
+    expect(s.rule).toBeAnchoredTo(s.title, "LEFT", "RIGHT")
+end
+
+@test("a figure: money (plain or signed) or a word, the line under it; a mark; a definition row")
+local function figure()
+    local f = parts.Figure.new(host(), "This week")
+    f:SetMoney(-1200, true)
+    expect(f.money).toBeShown()
+    expect(f.money.sign).toBe(-1)
+    expect(f.word).never.toBeShown()
+    f:SetWord("\226\128\148")
+    expect(f.money).never.toBeShown()
+    expect(f.word).toBeShown()
+    f:SetSub("against a week ago")
+    expect(f.sub:GetText()).toBe("against a week ago")
+    f:SetMoney(5)
+    expect(f.money.sign).toBeNil()
+    local m = parts.dealMark(host())
+    expect(m).never.toBeShown()
+    parts.setMark(m, "Under vendor")
+    expect(m).toBeShown()
+    expect(m.label:GetText()).toBe("Under vendor")
+    expect(tokenOf(m.label)).toBe("arcane")
+    parts.setMark(m, nil)
+    expect(m).never.toBeShown()
+    local row = parts.DefRow.new(host(), "All of it", true)
+    expect(tokenOf(row.label)).toBe("ink")
+    expect(tokenOf(row.rule)).toBe("gilt-line")
+    expect(tokenOf(parts.DefRow.new(host(), "Gold").rule)).toBe("gilt-faint")
+end
+
+@test("a link: ink and underlined on hover, its click; the icon button: gilt edge, its tooltip, its click")
+local function links()
+    local clicked = 0
+    local l = parts.Link.new(host(), "All 5 deals", function()
+        clicked += 1
+    end)
+    mock.hover(l)
+    expect(tokenOf(l.label)).toBe("ink")
+    expect(l.line).toBeShown()
+    mock.hover(nil)
+    expect(tokenOf(l.label)).toBe("ink-muted")
+    mock.click(l)
+    expect(clicked).toBe(1)
+    l:SetLabel("All prices")
+    expect(l:GetWidth()).toBe(math.max(1, math.ceil(l.label:GetUnboundedStringWidth())))
+    local b = parts.IconButton.new(host(), "chevronLeft", "Back to prices", function()
+        clicked += 1
+    end)
+    mock.hover(b)
+    expect(tokenOf(b.glyph)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(b.glyph)).toBe("ink-muted")
+    mock.click(b)
+    expect(clicked).toBe(2)
+end
+
+@test("the dialog: an amount (and a name), OK only with an amount; the second action; Cancel")
+local function dialog()
+    local got: { amount: number, name: string? }? = nil
+    local other = 0
+    local d = parts.ask({
+        title = "Watch Test Lotus",
+        text = "Tell me when a scan finds it under:",
+        amount = 400000,
+        confirm = "Watch",
+        onConfirm = function(amount: number, name: string?)
+            got = { amount = amount, name = name }
+        end,
+        other = "Stop watching",
+        onOther = function()
+            other += 1
+        end,
+    })
+    expect(d.panel).toBeShown()
+    expect(d.panel.title).toHaveText("Watch Test Lotus")
+    expect(d.name).never.toBeShown()
+    expect(d.amount:GetCopper()).toBe(400000)
+    expect(d.other).toBeShown()
+    mock.click(d.ok)
+    expect(assert(got).amount).toBe(400000)
+    expect(assert(got).name).toBeNil()
+    expect(d.panel).never.toBeShown()
+    -- nothing entered: OK does nothing
+    got = nil
+    parts.ask({ title = "Set a goal", text = "?", name = "", amount = 0, confirm = "Save", onConfirm = function(amount: number, name: string?)
+        got = { amount = amount, name = name }
+    end })
+    expect(d.name).toBeShown()
+    expect(d.other).never.toBeShown()
+    mock.click(d.ok)
+    expect(got).toBeNil()
+    expect(d.panel).toBeShown()
+    d.name:SetValue("Swift Frostsaber")
+    d.amount:SetCopper(20000000)
+    mock.click(d.ok)
+    expect(got).toEqual({ amount = 20000000, name = "Swift Frostsaber" })
+    -- the second action, and Cancel
+    parts.ask({ title = "t", text = "x", amount = 1, confirm = "OK", onConfirm = function() end, other = "Clear", onOther = function()
+        other += 1
+    end })
+    mock.click(d.other)
+    expect(other).toBe(1)
+    expect(d.panel).never.toBeShown()
+    parts.ask({ title = "t", text = "x", amount = 1, confirm = "OK", onConfirm = function()
+        error("not confirmed")
+    end })
+    mock.click(d.cancel)
+    expect(d.panel).never.toBeShown()
+end

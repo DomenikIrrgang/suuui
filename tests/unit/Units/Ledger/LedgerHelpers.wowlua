@@ -1,0 +1,151 @@
+-- tests/unit/Units/Ledger/LedgerHelpers.wowlua
+-- Shared by the Ledger window's tests (Window, Parts, the pages): test
+-- items, 40 days of looks at every time of day, a Scan all, characters
+-- with gold day by day, the window opened, and a clean slate after.
+--
+--   seed()           the looks, the scan and the characters
+--   openLedger(view?, opts?)   the window opened (through the service)
+--   wipe()           the Ledger's data and the window's state cleared
+
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type LedgerWindow from "/Units/Ledger/Window"
+import type LedgerOpenOptions from "/Core/API"
+import * as gold from "/Units/Ledger/Gold"
+import * as days from "/Units/Ledger/Days"
+
+export const LOTUS = 990601
+export const KINGSBLOOD = 990602
+export const AXE = 990603
+export const ESSENCE = 990604
+export const ORE = 990605
+export const LATE = 990606
+
+mock.defineItem(LOTUS, { name = "Test Lotus", quality = 2, sellPrice = 100, classID = 7, stackCount = 20 })
+mock.defineItem(KINGSBLOOD, { name = "Test Kingsblood", quality = 1, sellPrice = 50, classID = 7, stackCount = 20 })
+mock.defineItem(AXE, { name = "Test Axe", quality = 2, sellPrice = 15000, classID = 2 })
+mock.defineItem(ESSENCE, { name = "Test Essence", quality = 3, sellPrice = 0, classID = 7, stackCount = 10 })
+mock.defineItem(ORE, { name = "Test Ore", quality = 1, sellPrice = 25, classID = 7, stackCount = 20 })
+mock.defineItem(LATE, { name = "Test Late Herb", quality = 1, sellPrice = 10, classID = 7 }, { cached = false, delay = 0.3 })
+
+const DAY = 86400
+
+-- The start of the day `k` days ago, at `hour`.
+local function at(k: number, hour: number): number
+    local t = date("*t", time() - k * DAY) :: { year: number, month: number, day: number }
+    return time({ year = t.year, month = t.month, day = t.day, hour = hour, min = 5 })
+end
+
+-- An item's looks: each of the last `n` days, four times a day, around
+-- `price` (Tuesdays and nights cheaper), what most sell it for a little
+-- dearer.
+local function looks(itemID: number, price: number, n: number)
+    for k = n, 1, -1 do
+        local d = days.dayOf(at(k, 12))
+        local wd = days.weekday(d)
+        for _, hour in ipairs({ 2, 8, 12, 20 }) do
+            local p = price * (1 + ((k * 7) % 5 - 2) / 100)
+            if wd == 2 then
+                p = p * 0.88
+            end
+            if hour == 2 then
+                p = p * 0.93
+            end
+            M:RecordLook(itemID, math.floor(p), math.floor(p * 1.15), 40, 6, at(k, hour))
+        end
+    end
+end
+
+-- The characters: you (today's money as the game has it), two more on
+-- this ruleset, one on another.
+local function characters()
+    local map = M:GoldMap()
+    local today = days.dayOf()
+    local here = SuuUI.Ruleset()
+    for k = 20, 1, -1 do
+        gold.record(map, "Kaelith - " .. here, "Kaelith", "MAGE", here, today - k, 640000 - k * 1000, time() - k * DAY)
+        gold.record(map, "Brannoc - " .. here, "Brannoc", "WARRIOR", here, today - k, 180000 + k * 500, time() - k * DAY)
+        gold.record(map, "Lum - Roleplay", "Lum", "PRIEST", "Roleplay", today - k, 41000, time() - k * DAY)
+    end
+    M:RecordMoney(true)
+end
+
+-- Looks of 40 days on four items, today's deals, a Scan all, the
+-- characters.
+export function seed()
+    looks(LOTUS, 400000, 40)
+    looks(KINGSBLOOD, 1500, 40)
+    looks(AXE, 16000, 12)
+    looks(ESSENCE, 84000, 30)
+    looks(LATE, 900, 5)
+    looks(ORE, 2000, 3)
+    -- the scan: the lotus 29 % under, the axe under vendor price, the rest
+    -- as usual
+    M:RecordScan({
+        LOTUS,
+        284000,
+        320000,
+        3,
+        2,
+        KINGSBLOOD,
+        1480,
+        1700,
+        412,
+        37,
+        AXE,
+        11914,
+        0,
+        4,
+        4,
+        ESSENCE,
+        58000,
+        70000,
+        5,
+        3,
+        LATE,
+        880,
+        0,
+        12,
+        2,
+    }, 5)
+    characters()
+    mock.advanceTime(0.05)
+end
+
+export function window(): LedgerWindow
+    return M:Window()
+end
+
+-- Opened as another module would: through the service.
+export function openLedger(view: string?, opts: LedgerOpenOptions?): LedgerWindow
+    local service = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    assert(service.Open)(view, opts)
+    mock.advanceFrames(2)
+    return M:Window()
+end
+
+export function wipe()
+    local w = M.window
+    if w then
+        w.frame:Hide()
+        w.scope, w.ruleset, w.view = "all", nil, "overview"
+        local p = w.prices
+        p.filter:SetValue(nil)
+        p:SetFilters(p.filter:GetValue())
+        p.sortKey, p.sortReverse = "change", false
+        p.search.edit:ClearFocus()
+        p.search:SetValue("")
+        p:SetQuery("")
+        p:StopAsking()
+        p.asked = {}
+        p:Forget()
+        w.item.days = 30
+        w.gold.days = 30
+    end
+    local d = M:Data()
+    d.prices, d.scans, d.watches, d.pruned, d.gold, d.goal = nil, nil, nil, nil, nil, nil
+    M.cache, M.vendor = {}, {}
+    M.atHouse = false
+    mock.advanceTime(0.05)
+end

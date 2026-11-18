@@ -318,6 +318,11 @@ end
 export class Money extends Frame
     text: Text
     copper: number? = nil
+    -- 0.48: an amount in or out (SetSigned): its sign, -1, 0 or 1; nil: a
+    -- plain amount (SetCopper)
+    sign: number? = nil
+    -- 0.48: a size of its own in the numeric face (SetFontSize)
+    px: number? = nil
 
     constructor(parent: Frame)
         super(nil, parent)
@@ -329,9 +334,45 @@ export class Money extends Frame
 
     function SetCopper(given: unknown)
         local total = math.max(0, math.floor(tonumber(given) or 0))
-        self.copper = total
-        self.text:SetText(moneyText(total))
-        self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), T.type.numeric.lineHeight)
+        self.copper, self.sign = total, nil
+        self:Redraw()
+    end
+
+    -- 0.48: money in or out: in (above 0) in fel with "+", out (below 0) in
+    -- ember-text with "−", exactly 0 in ink without a sign; the coin letters
+    -- keep their colours.
+    function SetSigned(given: unknown)
+        local v = math.floor(tonumber(given) or 0)
+        self.copper, self.sign = math.abs(v), v > 0 and 1 or v < 0 and -1 or 0
+        self:Redraw()
+    end
+
+    -- 0.48: the amount at `px` in the numeric face (a figure: 16), growing
+    -- and shrinking with the theme's numeric size; nil: the style's own.
+    function SetFontSize(px: number?)
+        if px == self.px then
+            return
+        end
+        self.px = px
+        if not px then
+            self.text:SetStyle("numeric")
+        end
+        self:Redraw()
+    end
+
+    -- (again when a theme changes the coin colours or the numeric face)
+    function Redraw()
+        local total = self.copper or 0
+        local px = self.px
+        if px then
+            self.text:SetFont(T.type.numeric.file, fonts.size("numeric", px), "")
+        end
+        local sign = self.sign
+        local prefix = sign == 1 and "+" or sign == -1 and "\226\136\146" or ""
+        self.text:SetColor(sign == 1 and "fel" or sign == -1 and "ember-text" or "ink")
+        self.text:SetText(prefix .. moneyText(total))
+        local h = px and math.ceil(fonts.size("numeric", px) * 1.3) or T.type.numeric.lineHeight
+        self:SetSize(math.max(1, self.text:GetUnboundedStringWidth()), h)
     end
 end
 
@@ -1023,7 +1064,7 @@ events.on(
         for f, kind in pairs(live) do
             if kind == "money" then
                 local m = f :: Money
-                m:SetCopper(m.copper)
+                m:Redraw()
             else
                 -- (the widths from the slot size and gap, then the body)
                 local inv = f :: Inventory

@@ -1,0 +1,311 @@
+-- Units/Ledger/GoldPage.wowlua
+-- Gold (design board "Ledger"): one line of the chosen characters' gold at
+-- the end of each day (a balance: no area, no zero line; 7 · 30 · 90 days
+-- · All; the crosshair and its tooltip); your characters by ruleset ("Normal
+-- Ruleset" headings; the class diamond and colour, "you", their gold, its
+-- change over the range in fel or ember-text, when last seen; a click
+-- chooses the character); what it's worth (for now the gold: what's in
+-- bags, the bank, the auction house and the mail at usual prices comes
+-- later).
+
+import SuuUI from "/Core/API"
+import type Text, Money, Segmented, LineChart, ScrollArea, ChartValue from "/Core/API"
+import type CharacterInfo from "../Ledger"
+import * as parts from "./Parts"
+import type LedgerWindow from "./Window"
+
+local UI, T = SuuUI.UI, SuuUI.Tokens
+local S = T.space
+
+local CHART_H = 150
+local ROW_H = 28
+local GROUP_H = 30
+local HEAD_H = 20
+-- the columns right of the name: gold, the change, last seen
+local CHANGE_W, SEEN_W = 96, 80
+
+local RANGES: { value: number, label: string }[] = {
+    { value = 7, label = "7 days" },
+    { value = 30, label = "30 days" },
+    { value = 90, label = "90 days" },
+    { value = 0, label = "All" },
+}
+
+-- A row: a character, or a ruleset's heading.
+class CharRow extends Button
+    readonly hover: Texture
+    readonly sel: Texture
+    readonly rule: Texture
+    readonly diamond: Texture
+    readonly name: Text
+    readonly you: Text
+    readonly money: Money
+    readonly change: Money
+    readonly seen: Text
+    readonly heading: Text
+    readonly headRule: Texture
+    key: string? = nil
+
+    constructor(parent: Frame, choose: (key: string) -> ())
+        super(nil, parent)
+        self.sel = UI.Fill(self, "arcane-soft", "BACKGROUND")
+        self.sel:SetAllPoints()
+        self.sel:Hide()
+        self.hover = UI.Fill(self, "surface-raised", "BACKGROUND", 1)
+        self.hover:SetAllPoints()
+        self.hover:Hide()
+        self.rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.rule:SetHeight(1)
+        self.rule:SetPoint("BOTTOMLEFT")
+        self.rule:SetPoint("BOTTOMRIGHT")
+        self.diamond = UI.Diamond(self, 6, "ink", "ARTWORK")
+        self.diamond:SetPoint("CENTER", self, "LEFT", S["space-3"] + 4, 0)
+        self.name = UI.Text(self, "body", "ink")
+        self.name:SetPoint("LEFT", S["space-3"] + 8 + S["space-3"], 0)
+        self.you = UI.Text(self, "micro", "ink-muted")
+        self.you:SetPoint("LEFT", self.name, "RIGHT", S["space-3"], 0)
+        self.you:SetValue("you")
+        self.seen = UI.Text(self, "caption", "ink-muted")
+        self.seen:SetPoint("RIGHT", -S["space-3"], 0)
+        self.seen:SetJustifyH("RIGHT")
+        self.change = UI.Money(self)
+        self.change:SetPoint("RIGHT", -(S["space-3"] + SEEN_W + S["space-4"]), 0)
+        self.money = UI.Money(self)
+        self.money:SetPoint("RIGHT", -(S["space-3"] + SEEN_W + S["space-4"] + CHANGE_W + S["space-4"]), 0)
+        self.heading = UI.Text(self, "header", "gilt-text")
+        self.heading:SetPoint("BOTTOMLEFT", S["space-3"], S["space-2"])
+        self.headRule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        self.headRule:SetHeight(1)
+        self.headRule:SetPoint("LEFT", self.heading, "RIGHT", S["space-4"], 0)
+        self.headRule:SetPoint("RIGHT", -S["space-3"], 0)
+        self:SetScript("OnEnter", function()
+            if self.key then
+                self.hover:Show()
+            end
+        end)
+        self:SetScript("OnLeave", function()
+            self.hover:Hide()
+        end)
+        self:SetScript("OnClick", function()
+            local key = self.key
+            if key then
+                choose(key)
+            end
+        end)
+    end
+
+    function SetHeading(text: string)
+        self.key = nil
+        self:SetHeight(GROUP_H)
+        self.heading:SetValue(text)
+        for _, r in ipairs({ self.heading, self.headRule } :: Region[]) do
+            r:Show()
+        end
+        for _, r in ipairs({ self.diamond, self.name, self.you, self.money, self.change, self.seen, self.rule, self.sel } :: Region[]) do
+            r:Hide()
+        end
+        self:Show()
+    end
+
+    function SetCharacter(c: CharacterInfo, change: number, chosen: boolean)
+        self.key = c.key
+        self:SetHeight(ROW_H)
+        self.heading:Hide()
+        self.headRule:Hide()
+        local token = c.class and ("class-" .. c.class:lower()) or "ink"
+        if not UI.IsColor(token) then
+            token = "ink"
+        end
+        UI.Paint(self.diamond, token)
+        self.name:SetValue(c.name)
+        self.name:SetColor(token)
+        self.you:SetShown(c.you)
+        self.money:SetCopper(c.money)
+        self.change:SetSigned(change)
+        self.seen:SetValue(c.you and "now" or parts.when(c.seen))
+        self.sel:SetShown(chosen)
+        for _, r in ipairs({ self.diamond, self.name, self.money, self.change, self.seen, self.rule } :: Region[]) do
+            r:Show()
+        end
+        self:Show()
+    end
+end
+
+export class GoldPage extends Frame
+    readonly w: LedgerWindow
+    readonly section: parts.Section
+    readonly range: Segmented<number>
+    readonly chart: LineChart
+    readonly chars: parts.Section
+    readonly head: Frame
+    readonly headChange: Text
+    readonly list: ScrollArea
+    readonly rows: CharRow[] = {}
+    readonly worth: parts.Section
+    readonly worthGold: parts.DefRow
+    readonly worthAll: parts.DefRow
+    readonly worthNote: Text
+    days: number = 30
+
+    constructor(parent: Frame, w: LedgerWindow)
+        super(nil, parent)
+        self.w = w
+        self:SetAllPoints()
+        self:Hide()
+        self.section = parts.Section.new(self, "Gold, all characters")
+        self.section:SetPoint("TOPLEFT")
+        self.section:SetPoint("TOPRIGHT")
+        self.range = UI.Segmented(self.section, {
+            options = RANGES,
+            value = 30,
+            onChange = function(v: number)
+                self.days = v
+                self:Draw()
+            end,
+        })
+        self.range:SetHeight(26)
+        for _, b in ipairs(self.range.buttons) do
+            b:SetHeight(20)
+        end
+        self.section:SetAside(self.range)
+        self.chart = UI.LineChart(self, { empty = "Your gold is kept at the end of each day you play: the line starts tomorrow." })
+        self.chart:SetPoint("TOPLEFT", self.section, "BOTTOMLEFT", 0, -S["space-4"])
+        self.chart:SetPoint("RIGHT", self, "RIGHT")
+        self.chart:SetHeight(CHART_H)
+        local top = -(parts.HEAD_H + S["space-4"] + CHART_H + S["space-5"])
+        -- the characters
+        self.chars = parts.Section.new(self, "Characters")
+        self.chars:SetPoint("TOPLEFT", 0, top)
+        self.head = CreateFrame("Frame", nil, self)
+        self.head:SetPoint("TOPLEFT", self.chars, "BOTTOMLEFT", 0, -S["space-3"])
+        self.head:SetPoint("RIGHT", self.chars, "RIGHT")
+        self.head:SetHeight(HEAD_H)
+        local function caption(label: string, right: number?): Text
+            local t = UI.Text(self.head, "caption", "ink-muted")
+            t:SetValue(label)
+            if right then
+                t:SetPoint("RIGHT", -right, 0)
+                t:SetJustifyH("RIGHT")
+            else
+                t:SetPoint("LEFT", S["space-3"], 0)
+            end
+            return t
+        end
+        caption("Character")
+        caption("Last seen", S["space-3"])
+        self.headChange = caption("30 days", S["space-3"] + SEEN_W + S["space-4"])
+        caption("Gold", S["space-3"] + SEEN_W + S["space-4"] + CHANGE_W + S["space-4"])
+        local rule = UI.Fill(self, "gilt-faint", "ARTWORK")
+        rule:SetHeight(1)
+        rule:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT")
+        rule:SetPoint("TOPRIGHT", self.head, "BOTTOMRIGHT")
+        self.list = UI.ScrollArea(self, S["space-2"])
+        self.list:SetPoint("TOPLEFT", self.head, "BOTTOMLEFT", 0, -1)
+        self.list:SetPoint("BOTTOM", self, "BOTTOM")
+        self.list:SetPoint("RIGHT", self.chars, "RIGHT")
+        -- what it's worth
+        self.worth = parts.Section.new(self, "What it\226\128\153s worth", "at usual prices")
+        self.worth:SetPoint("TOPRIGHT", 0, top)
+        self.worthGold = parts.DefRow.new(self, "Gold")
+        self.worthGold:SetPoint("TOPLEFT", self.worth, "BOTTOMLEFT", 0, -S["space-3"])
+        self.worthGold:SetPoint("RIGHT", self.worth, "RIGHT")
+        self.worthAll = parts.DefRow.new(self, "All of it", true)
+        self.worthAll:SetPoint("TOPLEFT", self.worthGold, "BOTTOMLEFT", 0, -S["space-2"])
+        self.worthAll:SetPoint("RIGHT", self.worth, "RIGHT")
+        self.worthNote = UI.Text(self, "caption", "ink-muted")
+        self.worthNote:SetPoint("TOPLEFT", self.worthAll, "BOTTOMLEFT", 0, -S["space-4"])
+        self.worthNote:SetJustifyH("LEFT")
+        self.worthNote:SetWordWrap(true)
+        self.worthNote:SetValue("Gold only, for now: what\226\128\153s in your bags, the bank, your auctions and the mail, at each ruleset\226\128\153s usual prices, comes in a later version.")
+        self:SetScript("OnSizeChanged", function()
+            self:Layout()
+        end)
+    end
+
+    function Layout()
+        local width = self:GetWidth()
+        if width <= 1 then
+            return
+        end
+        local half = (width - S["space-6"]) / 2
+        self.chars:SetWidth(half)
+        self.worth:SetWidth(half)
+        self.list.child:SetWidth(half - S["space-2"] - 3)
+        self.worthNote:SetWidth(half)
+    end
+
+    -- The first day the range shows for a scope (never before its first
+    -- day: a character added later doesn't rise from nothing).
+    function FromDay(first: number?, today: number): number
+        local n = self.days
+        local from = n > 0 and (today - n + 1) or (first or today)
+        if first and first > from then
+            from = first
+        end
+        return from
+    end
+
+    function Draw()
+        self:Layout()
+        local m = self.w.m
+        local scope = self.w:Scope()
+        local today = m:Today()
+        local range = self.days
+        local s = self.w.scope
+        self.section:SetLabel(s == "all" and "Gold, all characters" or ("Gold, " .. self.w:ScopeName()))
+        self.headChange:SetValue(range > 0 and (range .. " days") or "All")
+        -- the line
+        local from = self:FromDay(m:GoldFirstDay(scope), today)
+        local values = m:GoldSeries(scope, from, today)
+        local labels: string[], tips: string[] = {}, {}
+        local points: ChartValue[] = {}
+        for i = 1, #values do
+            local day = from + i - 1
+            labels[i] = parts.shortDate(day)
+            tips[i] = parts.dayLabel(day, today)
+            points[i] = values[i]
+        end
+        self.chart:SetData({ labels = labels, tipLabels = tips, series = { { label = "Gold", values = points } } })
+        -- the characters by ruleset
+        local y = 0
+        local k = 0
+        local last: string? = nil
+        local c = self.list.child
+        local function row(): CharRow
+            k += 1
+            local r = self.rows[k]
+            if not r then
+                r = CharRow.new(c, function(key: string)
+                    self.w.scope = "c:" .. key
+                    self.w:Refresh()
+                end)
+                self.rows[k] = r
+            end
+            r:ClearAllPoints()
+            r:SetPoint("TOPLEFT", 0, -y)
+            r:SetPoint("RIGHT", c, "RIGHT")
+            return r
+        end
+        for _, ch in ipairs(m:Characters()) do
+            if ch.ruleset ~= last then
+                last = ch.ruleset
+                row():SetHeading(SuuUI.RulesetName(ch.ruleset))
+                y += GROUP_H
+            end
+            local one = { char = ch.key }
+            local cfrom = self:FromDay(m:GoldFirstDay(one), today)
+            local series = m:GoldSeries(one, cfrom, today)
+            local change = #series > 0 and (series[#series] - series[1]) or 0
+            row():SetCharacter(ch, change, s == "c:" .. ch.key)
+            y += ROW_H
+        end
+        for i = k + 1, #self.rows do
+            self.rows[i]:Hide()
+        end
+        c:SetHeight(math.max(1, y))
+        -- what it's worth
+        local total = m:GoldTotal(scope)
+        self.worthGold.money:SetCopper(total)
+        self.worthAll.money:SetCopper(total)
+    end
+end

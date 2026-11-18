@@ -1,0 +1,347 @@
+-- Units/Ledger/PricesPage: every item seen on the ruleset, Change first
+-- (the furthest under first); a row's cells (the quality's colour, the
+-- star, one mark, the prices, the sparkline, Change, Cheapest, Offered,
+-- Seen); sorting by a column; the search as you type; Filters (Show, Seen,
+-- Category, Quality) and the count; names that arrive later; the ruleset;
+-- thousands of items with only the rows in sight; a row opens the item.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import type PricesPage, PriceRow, PriceEntry from "/Units/Ledger/PricesPage"
+import expectNoErrors from "../../../helpers"
+import tokenOf from "../../UI/WindowsHelpers"
+import seed, openLedger, wipe, LOTUS, KINGSBLOOD, AXE, ESSENCE, ORE, LATE from "./LedgerHelpers"
+
+@afterEach
+local function cleanup()
+    wipe()
+    mock.setBag(0, { slots = 16, items = {} })
+    expectNoErrors()
+end
+
+local function page(): PricesPage
+    return openLedger("prices").prices
+end
+
+-- The rows in sight, in order.
+local function rows(p: PricesPage): PriceRow[]
+    local out: { i: number, row: PriceRow }[] = {}
+    for _, r in ipairs(p.list:Rows()) do
+        local i = p.list:IndexOf(r)
+        if i and r:IsShown() then
+            out[#out + 1] = { i = i, row = r :: PriceRow }
+        end
+    end
+    table.sort(out, function(a: { i: number }, b: { i: number }): boolean
+        return a.i < b.i
+    end)
+    local list: PriceRow[] = {}
+    for k, e in ipairs(out) do
+        list[k] = e.row
+    end
+    return list
+end
+
+local function ids(p: PricesPage): number[]
+    local out: number[] = {}
+    for _, e in ipairs(p.list.items) do
+        out[#out + 1] = (e :: PriceEntry).itemID
+    end
+    return out
+end
+
+local function rowOf(p: PricesPage, itemID: number): PriceRow
+    for _, r in ipairs(rows(p)) do
+        local e = r.entry
+        if e and e.itemID == itemID then
+            return r
+        end
+    end
+    error("no row for " .. itemID)
+end
+
+-- Filters chosen as the menu does.
+local function choose(p: PricesPage, key: string, value: unknown)
+    local v = p.filter:GetValue() :: { [string]: unknown }
+    v[key] = value
+    p.filter:SetValue(v :: any)
+    p.filter:Changed()
+end
+
+@test("every item seen, Change first (the furthest under first); the count")
+local function list()
+    seed()
+    local p = page()
+    expect(#p.list.items).toBe(6)
+    expect(p.countText:GetText()).toBe("6 items")
+    local order = ids(p)
+    expect(order[1]).toBe(ESSENCE)
+    -- Change ascending, each under the one before
+    local last = -math.huge
+    for _, e in ipairs(p.list.items) do
+        local c = (e :: PriceEntry).change
+        if c then
+            expect(c >= last).toBe(true)
+            last = c
+        end
+    end
+    -- only the rows in sight were made
+    expect(#p.list:Rows() <= 20).toBe(true)
+end
+
+@test("a row: the name in its quality's colour, one mark, the star, the prices, Change, Cheapest, Offered, Seen")
+local function cells()
+    seed()
+    M:WatchItem(LOTUS, 300000)
+    mock.advanceFrames(2)
+    local p = page()
+    local essence = rowOf(p, ESSENCE)
+    expect(essence.name:GetText()).toBe("Test Essence")
+    expect(tokenOf(essence.name)).toBe("quality-rare")
+    expect(essence.mark).toBeShown()
+    expect(essence.mark.label:GetText()).toBe("Deal")
+    expect(essence.star).never.toBeShown()
+    expect(essence.low.copper).toBe(58000)
+    expect(essence.usual).toBeShown()
+    expect(essence.change:GetText()).toBe("\226\136\146" .. math.floor(-assert(assert(essence.entry).change) + 0.5) .. "%")
+    expect(essence.offered:GetText()).toBe("5")
+    expect(essence.seen:GetText()).toBe("today")
+    -- the axe: under vendor price, that mark before Deal
+    local axe = rowOf(p, AXE)
+    expect(axe.mark.label:GetText()).toBe("Under vendor")
+    -- the lotus: watched
+    local lotus = rowOf(p, LOTUS)
+    expect(lotus.star).toBeShown()
+    expect(lotus.cheapest:GetText()).toBe("Tue \194\183 night")
+    expect(#lotus.spark.lines > 0).toBe(true)
+    -- the ore: no usual price yet would show a dash; seen yesterday
+    local ore = rowOf(p, ORE)
+    expect(ore.seen:GetText()).toBe("yesterday")
+    expect(ore.mark).never.toBeShown()
+    -- three days: enough looks for the times of day, not for the days
+    expect(ore.cheapest:GetText()).toBe("Nights")
+    expect(tokenOf(ore.cheapest)).toBe("ink")
+    -- the kingsblood: offered in hundreds
+    expect(rowOf(p, KINGSBLOOD).offered:GetText()).toBe("412")
+end
+
+@test("sorting: a column's header, again reversed; its caption lit, the arrow by it")
+local function sorting()
+    seed()
+    local p = page()
+    mock.click(p.heads[2])
+    expect(p.sortKey).toBe("low")
+    expect(ids(p)[1]).toBe(LATE)
+    expect(tokenOf(p.heads[2].label)).toBe("ink")
+    expect(p.heads[2].arrow).toBeShown()
+    expect(p.heads[5].arrow).never.toBeShown()
+    mock.click(p.heads[2])
+    expect(p.sortReverse).toBe(true)
+    expect(ids(p)[1]).toBe(LOTUS)
+    -- by name; the sparkline isn't sortable
+    mock.click(p.heads[1])
+    expect(ids(p)[1]).toBe(AXE)
+    expect(p.heads[4]:IsMouseEnabled()).toBe(false)
+    -- by when seen: the newest first
+    mock.click(p.heads[8])
+    expect(ids(p)[#ids(p)]).toBe(ORE)
+    -- hover lights a caption; leaving puts it back
+    mock.hover(p.heads[3])
+    expect(tokenOf(p.heads[3].label)).toBe("ink")
+    mock.hover(nil)
+    expect(tokenOf(p.heads[3].label)).toBe("ink-muted")
+end
+
+@test("the search: matches as you type, any case; nothing matches")
+local function search()
+    seed()
+    local p = page()
+    mock.typeText(p.search.edit, "LOT")
+    expect(ids(p)).toEqual({ LOTUS })
+    expect(p.countText:GetText()).toBe("1 item")
+    p.search.edit:SetText("")
+    mock.typeText(p.search.edit, "zzz")
+    expect(ids(p)).toEqual({})
+    expect(p.empty).toBeShown()
+    expect(p.empty:GetText()).toBe("Nothing matches.")
+    p.search.edit:ClearFocus()
+    p.search:SetValue("")
+    p:SetQuery("")
+    expect(#ids(p)).toBe(6)
+    expect(p.empty).never.toBeShown()
+end
+
+@test("Show: deals, under vendor price, watched, you sold, in your bags; the count says which")
+local function shows()
+    seed()
+    local p = page()
+    choose(p, "show", "deals")
+    expect(p.sortKey).toBe("deal")
+    local deals = ids(p)
+    expect(#deals).toBe(#M:Deals())
+    expect(p.countText:GetText()).toBe(#deals .. " deals in the last scan")
+    choose(p, "show", "vendor")
+    expect(ids(p)).toEqual({ AXE })
+    expect(p.countText:GetText()).toBe("1 under vendor price")
+    choose(p, "show", "watched")
+    expect(ids(p)).toEqual({})
+    expect(p.empty:GetText()).toContain("Watch")
+    M:WatchItem(KINGSBLOOD, 1000)
+    mock.advanceFrames(3)
+    expect(ids(p)).toEqual({ KINGSBLOOD })
+    expect(p.countText:GetText()).toBe("1 watched")
+    choose(p, "show", "sold")
+    expect(ids(p)).toEqual({})
+    expect(p.empty:GetText()).toContain("later version")
+    mock.setBag(0, { slots = 16, items = { [1] = { id = ORE, count = 3 }, [2] = { id = 12345, count = 1 } } })
+    choose(p, "show", "bags")
+    expect(ids(p)).toEqual({ ORE })
+    choose(p, "show", "all")
+    expect(p.sortKey).toBe("change")
+    expect(#ids(p)).toBe(6)
+end
+
+@test("Seen, Category, Quality")
+local function filters()
+    seed()
+    local p = page()
+    choose(p, "seen", "scan")
+    local scanned = ids(p)
+    expect(#scanned).toBe(5)
+    expect(table.concat(scanned, ","):find(tostring(ORE), 1, true)).toBeNil()
+    choose(p, "seen", "week")
+    expect(#ids(p)).toBe(6)
+    choose(p, "seen", "any")
+    choose(p, "cat", { "w" })
+    expect(ids(p)).toEqual({ AXE })
+    choose(p, "cat", { "w", "t" })
+    expect(#ids(p)).toBe(6)
+    choose(p, "cat", {})
+    choose(p, "q", { "rare" })
+    expect(ids(p)).toEqual({ ESSENCE })
+end
+
+@test("a name the client hasn't got: asked for when its row shows, filled in when it arrives")
+local function lateName()
+    seed()
+    mock.defineItem(990611, { name = "Test Slow Moss", quality = 1 }, { cached = false, delay = 0.3 })
+    M:RecordLook(990611, 50, 0, 1, 1)
+    mock.advanceFrames(2)
+    local p = page()
+    local late = rowOf(p, 990611)
+    expect(late.name:GetText()).toBe("Item 990611")
+    expect(tokenOf(late.name)).toBe("ink-muted")
+    expect(p.asked[990611]).toBe(true)
+    -- (the emulator loads it but doesn't tell: the game's event, as it sends it)
+    mock.advanceTime(0.5)
+    mock.fireEvent("GET_ITEM_INFO_RECEIVED", 990611, true)
+    mock.advanceTime(0.3)
+    expect(rowOf(p, 990611).name:GetText()).toBe("Test Slow Moss")
+    expect(LATE).toBe(990606)
+end
+
+@test("a search asks for the names still missing, a few at a time; they match once they arrive")
+local function searchAsks()
+    seed()
+    mock.defineItem(990612, { name = "Test Slow Fern", quality = 1 }, { cached = false, delay = 0.3 })
+    M:RecordLook(990612, 50, 0, 1, 1)
+    mock.advanceFrames(2)
+    local p = page()
+    -- (its row out of sight: a search that hides it before it's drawn)
+    mock.typeText(p.search.edit, "fern")
+    expect(ids(p)).toEqual({})
+    expect(p.askTicker).toBeTruthy()
+    for _ = 1, 6 do
+        mock.advanceTime(0.3)
+    end
+    expect(p.askTicker).toBeNil()
+    mock.fireEvent("GET_ITEM_INFO_RECEIVED", 990612, true)
+    mock.advanceTime(0.3)
+    expect(ids(p)).toEqual({ 990612 })
+    p.search.edit:ClearFocus()
+end
+
+@test("the ruleset: those with prices; another one's prices, its name in the head")
+local function rulesets()
+    seed()
+    assert(M:PriceMap("Roleplay", true))[ORE] = assert(M:PriceMap())[ORE]
+    local w = openLedger("prices")
+    local p = w.prices
+    expect(#p.rulesets.options).toBe(2)
+    p.rulesets:SetValue("Roleplay")
+    w.ruleset = "Roleplay"
+    p:Forget()
+    w:Refresh()
+    expect(ids(p)).toEqual({ ORE })
+    expect(assert(w.frame.meta):GetText()).toBe("Prices: Roleplay Ruleset")
+    expect(w.note:GetText()).toContain("Roleplay Ruleset: no Scan all yet")
+end
+
+@test("thousands of items: only the rows in sight are made; scrolling shows the others")
+local function thousands()
+    local looks: number[] = {}
+    for i = 1, 3000 do
+        for _, v in ipairs({ 3000000 + i, 100 + i, 0, 1, 1 }) do
+            looks[#looks + 1] = v
+        end
+    end
+    M:RecordScan(looks, 3000)
+    for _ = 1, 6 do
+        mock.advanceTime(0.01)
+    end
+    local p = page()
+    expect(#p.list.items).toBe(3000)
+    expect(p.countText:GetText()).toBe("3,000 items")
+    expect(#p.list:Rows() <= 20).toBe(true)
+    -- names asked for only for the rows in sight
+    local asked = 0
+    for _ in pairs(p.asked) do
+        asked += 1
+    end
+    expect(asked <= 20).toBe(true)
+    p.list.scroll:SetVerticalScroll(32 * 1500)
+    mock.advanceFrames(2)
+    local first = rows(p)[1]
+    expect(assert(p.list:IndexOf(first)) > 1000).toBe(true)
+end
+
+@test("a row: the item's tooltip on hover; a click opens its page")
+local function open()
+    seed()
+    local w = openLedger("prices")
+    local row = rowOf(w.prices, LOTUS)
+    mock.hover(row)
+    expect(row.hover).toBeShown()
+    expect(GameTooltip:IsShown()).toBe(true)
+    mock.hover(nil)
+    expect(row.hover).never.toBeShown()
+    mock.click(row)
+    expect(w.view).toBe("item")
+    expect(w.item.itemID).toBe(LOTUS)
+end
+
+@test("nothing seen yet: says how to fill it")
+local function nothing()
+    local p = page()
+    expect(#p.list.items).toBe(0)
+    expect(p.empty).toBeShown()
+    expect(p.empty:GetText()).toContain("Scan all")
+    expect(SuuUI.RulesetName()).toContain("Ruleset")
+end
+
+@test("a click with a modifier goes to the game's own handler (a link, the price page), not the item's page")
+local function modified()
+    seed()
+    local w = openLedger("prices")
+    local handled = mock.spy(function(_: string): boolean
+        return true
+    end)
+    mock.fake("HandleModifiedItemClick", handled)
+    mock.setModifiers({ shift = true })
+    mock.click(rowOf(w.prices, LOTUS))
+    mock.setModifiers({})
+    expect(handled).toHaveBeenCalledTimes(1)
+    expect(w.view).toBe("prices")
+end

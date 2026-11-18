@@ -1,0 +1,258 @@
+-- UI/LineChart: the chart's lines (gaps break them, dashes for a second
+-- series), its axis and gridlines, the x labels, the marks, the empty
+-- state; the crosshair, the dots and the tooltip from SetHover and from the
+-- pointer; drawn again on a size change; money for an axis; the sparkline.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import lineChart, sparkline, shortMoney, axisMoney, LineChart, LineChartData from "/UI/LineChart"
+import expectNoErrors, newParent from "../../helpers"
+import tokenOf, paintOf from "./PrimitivesHelpers"
+
+local parent: Frame? = nil
+
+local function make(): LineChart
+    parent = newParent(600, 300)
+    local c = lineChart(parent :: Frame, { empty = "Nothing here." })
+    c:SetPoint("TOPLEFT")
+    c:SetSize(560, 200)
+    return c
+end
+
+@afterEach
+local function cleanup()
+    if parent then
+        parent:Hide()
+    end
+    parent = nil
+    expectNoErrors()
+end
+
+local function data(): LineChartData
+    return {
+        labels = { "1 Nov", "2 Nov", "3 Nov", "4 Nov", "5 Nov" },
+        tipLabels = { "Sat 1 Nov", "Sun 2 Nov", "Mon 3 Nov", "Yesterday", "Today" },
+        series = {
+            { label = "Lowest", values = { 1000, 1200, false, 1100, 900 } },
+            { label = "Most", values = { 1300, false, false, 1400, 1350 }, dashed = true },
+        },
+        marks = { { i = 2, value = 1200, label = "You sold 20 at" } },
+    }
+end
+
+-- the lines shown now
+local function shownLines(c: LineChart): number
+    local n = 0
+    for i = 1, c.lineN do
+        if c.lines[i]:IsShown() then
+            n += 1
+        end
+    end
+    return n
+end
+
+@test("the lines: a gap breaks the main one; the second dashed; ink and ink-muted; the marks")
+local function lines()
+    local c = make()
+    c:SetData(data())
+    expect(c.count).toBe(5)
+    expect(c.empty).never.toBeShown()
+    -- the main line: 1-2 and 4-5 (3 is a gap); the dashed one's 4-5 in dashes
+    local solid, dashed = 0, 0
+    for i = 1, c.lineN do
+        local t = tokenOf(c.lines[i])
+        if t == "ink" then
+            solid += 1
+        elseif t == "ink-muted" then
+            dashed += 1
+        end
+    end
+    expect(solid).toBe(2)
+    expect(dashed > 2).toBe(true)
+    expect(assert(paintOf(c.lines[1])).kind).toBe("fill")
+    -- the mark: an ink diamond, surface inside
+    expect(c.markOuter[1]).toBeShown()
+    expect(tokenOf(c.markOuter[1])).toBe("ink")
+    expect(tokenOf(c.markInner[1])).toBe("surface")
+    -- the scale: 12 % of room above and under the values and marks
+    expect(c.lo < 900).toBe(true)
+    expect(c.hi > 1400).toBe(true)
+    -- four gridlines in gilt-faint, their labels
+    expect(#c.grids).toBe(4)
+    expect(tokenOf(c.grids[1])).toBe("gilt-faint")
+    expect(c.ticks[1]:GetText()).toBe(axisMoney(c.lo, (c.hi - c.lo) / 3))
+    -- the x labels: all five here (the first and the last among them)
+    expect(c.xTexts[1]:GetText()).toBe("1 Nov")
+    local last: string? = nil
+    for _, t in ipairs(c.xTexts) do
+        if t:IsShown() then
+            last = t:GetText()
+        end
+    end
+    expect(last).toBe("5 Nov")
+    -- new data: the old lines and marks go
+    c:SetData({ labels = { "a", "b" }, series = { { values = { 5, 6 } } } })
+    expect(shownLines(c)).toBe(1)
+    expect(c.markOuter[1]).never.toBeShown()
+end
+
+@test("many points: about six x labels; drawn again on a new size")
+local function labels()
+    local c = make()
+    local labels: string[], values: (number | false)[] = {}, {}
+    for i = 1, 60 do
+        labels[i] = "d" .. i
+        values[i] = 1000 + i
+    end
+    c:SetData({ labels = labels, series = { { values = values } } })
+    local shown = 0
+    for _, t in ipairs(c.xTexts) do
+        if t:IsShown() then
+            shown += 1
+        end
+    end
+    expect(shown >= 5 and shown <= 7).toBe(true)
+    expect(shownLines(c)).toBe(59)
+    local x = select(3, c.lines[59]:GetEndPoint())
+    c:SetSize(300, 200)
+    mock.advanceFrames(1)
+    expect(shownLines(c)).toBe(59)
+    expect(select(3, c.lines[59]:GetEndPoint()) < x).toBe(true)
+end
+
+@test("empty: fewer than two points, or no value at all")
+local function empty()
+    local c = make()
+    c:SetData({ labels = { "a" }, series = { { values = { 1 } } } })
+    expect(c.empty).toBeShown()
+    expect(c.emptyText:GetText()).toBe("Nothing here.")
+    c:SetData({ labels = { "a", "b" }, series = { { values = { false, false } } } })
+    expect(c.empty).toBeShown()
+    expect(shownLines(c)).toBe(0)
+    c:SetHover(1)
+    expect(c.cross).never.toBeShown()
+    expect(c.tip).never.toBeShown()
+    c:SetData({ labels = { "a", "b" }, series = { { values = { 1, 2 } } } })
+    expect(c.empty).never.toBeShown()
+end
+
+@test("the hover: the crosshair, a dot on each line with a value, the tooltip ('not seen' for a gap)")
+local function hover()
+    local c = make()
+    c:SetData(data())
+    c:SetHover(2)
+    expect(c.cross).toBeShown()
+    expect(c.dots[1]).toBeShown()
+    expect(tokenOf(c.dots[1])).toBe("ink")
+    -- the second series has no value at 2
+    expect(c.dots[2] == nil or not c.dots[2]:IsShown()).toBe(true)
+    expect(c.tip).toBeShown()
+    local content = assert(c.tip.content)
+    expect(content.title).toBe("Sun 2 Nov")
+    local lines = assert(content.lines)
+    expect(lines[1][1]).toBe("Lowest")
+    expect(lines[2]).toEqual({ "Most", "not seen" })
+    expect(lines[3][1]).toBe("You sold 20 at")
+    -- at the right end: the tooltip left of the crosshair
+    c:SetHover(5)
+    local point = c.tip:GetPoint(1)
+    expect(point).toBe("TOPRIGHT")
+    c:SetHover(nil)
+    expect(c.cross).never.toBeShown()
+    expect(c.tip).never.toBeShown()
+end
+
+@test("the pointer: the nearest point under it; leaving hides it")
+local function pointer()
+    local c = make()
+    c:SetData(data())
+    local s = c:GetEffectiveScale()
+    local _, y = c:GetCenter()
+    mock.setCursorPosition((assert(c:GetLeft()) + c:X(4)) * s, y * s)
+    mock.hover(c)
+    mock.advanceFrames(2)
+    expect(c.hover).toBe(4)
+    mock.hover(nil)
+    mock.advanceFrames(1)
+    expect(c.hover).toBeNil()
+    expect(c.tip).never.toBeShown()
+end
+
+@test("a tooltip of the caller's; values in the caller's words")
+local function own()
+    parent = newParent(600, 300)
+    local c = lineChart(parent :: Frame, {
+        value = function(v: number): string
+            return v .. " pts"
+        end,
+        axis = function(v: number): string
+            return "#" .. math.floor(v)
+        end,
+    })
+    c:SetPoint("TOPLEFT")
+    c:SetSize(400, 150)
+    c:SetData({ labels = { "a", "b" }, series = { { label = "Score", values = { 10, 20 } } } })
+    c:SetHover(1)
+    expect(assert(assert(c.tip.content).lines)[1]).toEqual({ "Score", "10 pts" })
+    expect(assert(c.ticks[1]:GetText()):sub(1, 1)).toBe("#")
+    local d = lineChart(parent :: Frame, {
+        tip = function(i: number)
+            return i == 1 and { title = "First" } or nil
+        end,
+    })
+    d:SetPoint("TOPLEFT")
+    d:SetSize(400, 150)
+    d:SetData({ labels = { "a", "b" }, series = { { values = { 10, 20 } } } })
+    d:SetHover(1)
+    expect(assert(d.tip.content).title).toBe("First")
+    d:SetHover(2)
+    expect(d.tip).never.toBeShown()
+end
+
+@test("drawn when it shows: data set while hidden waits for a size")
+local function hidden()
+    local c = make()
+    assert(parent):Hide()
+    c:SetData(data())
+    expect(c.dirty).toBe(true)
+    expect(c.lineN).toBe(0)
+    assert(parent):Show()
+    mock.advanceFrames(1)
+    expect(c.dirty).toBe(false)
+    expect(c.lineN > 0).toBe(true)
+end
+
+@test("money for an axis: whole gold, gold and silver when the steps are small, silver, copper")
+local function money()
+    expect(shortMoney(12400000)).toBe("1,240g")
+    expect(shortMoney(8500)).toBe("85s")
+    expect(shortMoney(40)).toBe("40c")
+    expect(axisMoney(858000, 3000)).toBe("85g 80s")
+    expect(axisMoney(850000, 3000)).toBe("85g")
+    expect(axisMoney(858000, 20000)).toBe("86g")
+    expect(axisMoney(8500, 10)).toBe("85s")
+end
+
+@test("the sparkline: the positive values joined, in ink-muted; extra lines hidden")
+local function spark()
+    parent = newParent(200, 100)
+    local s = sparkline(parent :: Frame)
+    s:SetPoint("TOPLEFT")
+    expect(s:GetWidth()).toBe(64)
+    s:SetValues({ 10, 0, 12, 11, 0, 15 })
+    local shown = 0
+    for _, l in ipairs(s.lines) do
+        if l:IsShown() then
+            shown += 1
+        end
+    end
+    expect(shown).toBe(3)
+    expect(tokenOf(s.lines[1])).toBe("ink-muted")
+    s:SetValues({ 5 })
+    for _, l in ipairs(s.lines) do
+        expect(l).never.toBeShown()
+    end
+    -- all the same: a flat line in the middle
+    s:SetValues({ 5, 5 })
+    expect(s.lines[1]).toBeShown()
+end

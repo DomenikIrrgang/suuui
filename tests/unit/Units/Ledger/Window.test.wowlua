@@ -1,0 +1,218 @@
+-- Units/Ledger/Window: the Ledger window: opened through the service (a
+-- view, an item's page, Prices at a Show), centred or beside the auction
+-- house, toggled; its head (whose prices), the tabs (Transactions waits),
+-- the characters' Select and what it chooses, the foot; drawn again on a
+-- change only while it shows; in a fight; with the module off.
+
+import test, expect, afterEach from "wowlua:test"
+import * as mock from "wowlua:mock"
+import SuuUI from "/Core/API"
+import internal M from "/Units/Ledger"
+import * as events from "/Core/Events"
+import * as settings from "/Core/Settings"
+import expectNoErrors from "../../../helpers"
+import seed, openLedger, wipe, LOTUS from "./LedgerHelpers"
+
+@afterEach
+local function cleanup()
+    if InCombatLockdown() then
+        mock.player:leaveCombat()
+    end
+    wipe()
+    expectNoErrors()
+end
+
+@test("opened through the service: 880 x 600, centred, the coin and whose prices; Toggle closes it")
+local function opens()
+    seed()
+    local w = openLedger()
+    local f = w.frame
+    expect(f).toBeShown()
+    expect(f).toHaveSize(880, 600)
+    expect(assert(f.titleGlyph)).toBeShown()
+    expect(assert(f.title):GetText()).toBe("Ledger")
+    expect(assert(f.meta):GetText()).toBe("Prices: " .. SuuUI.RulesetName())
+    local point, rel, relPoint = f:GetPoint(1)
+    expect({ point, rel, relPoint }).toEqual({ "CENTER", UIParent, "CENTER" })
+    expect(w.view).toBe("overview")
+    expect(w.overview).toBeShown()
+    -- the foot: the scan, how many items; the characters' gold
+    expect(w.note:GetText()).toContain(SuuUI.RulesetName() .. ": last scan today ")
+    expect(w.note:GetText()).toContain("6 items")
+    expect(w.money.copper).toBe(M:GoldTotal(nil))
+    -- Toggle: closed, and open again on the view it showed
+    assert(assert(SuuUI.UseService(SuuUI.Services.LEDGER)).Toggle)()
+    expect(f).never.toBeShown()
+    M:Toggle()
+    expect(f).toBeShown()
+    -- Escape closes it (a named window)
+    expect(f:GetName()).toBe("SuuUILedgerWindow")
+end
+
+@test("the tabs: Overview, Prices, Gold; Transactions waits for the probe and says why")
+local function tabs()
+    seed()
+    local w = openLedger()
+    w.frame:SetTab("prices")
+    expect(w.view).toBe("prices")
+    expect(w.prices).toBeShown()
+    expect(w.overview).never.toBeShown()
+    w.frame:SetTab("gold")
+    expect(w.gold).toBeShown()
+    local tx = assert(w.frame.tabButtons)[3]
+    expect(tx.key).toBe("transactions")
+    expect(tx.def.disabled).toBe(true)
+    expect(tx.def.reason).toContain("later version")
+    -- (asked for anyway: the overview)
+    w:Go("transactions")
+    expect(w.view).toBe("overview")
+    expect(w.frame.tab).toBe("overview")
+end
+
+@test("an item's page and Prices at a Show, from the service; the Prices tab goes back to the list")
+local function openOptions()
+    seed()
+    local w = openLedger(nil, { itemID = LOTUS })
+    expect(w.view).toBe("item")
+    expect(w.frame.tab).toBe("prices")
+    expect(w.item).toBeShown()
+    expect(w.item.itemID).toBe(LOTUS)
+    w.frame:SetTab("prices")
+    expect(w.view).toBe("prices")
+    expect(w.item).never.toBeShown()
+    w = openLedger(nil, { show = "deals" })
+    expect(w.prices.show).toBe("deals")
+    expect(w.prices.countText:GetText()).toBe("2 deals in the last scan")
+    -- an unknown Show: all of them
+    w.prices:SetShow("nonsense")
+    expect(w.prices.show).toBe("all")
+    -- a view by name
+    w = openLedger("gold")
+    expect(w.view).toBe("gold")
+end
+
+@test("beside the auction house while it's open, never over it")
+local function besideHouse()
+    seed()
+    local house = CreateFrame("Frame", "SuuUIAuctionHouseWindow", UIParent)
+    house:SetSize(840, 580)
+    house:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 16, -116)
+    house:Show()
+    mock.fireEvent("AUCTION_HOUSE_SHOW")
+    local w = openLedger("prices")
+    local point, rel, relPoint = w.frame:GetPoint(1)
+    expect({ point, rel, relPoint }).toEqual({ "TOPLEFT", house, "TOPRIGHT" })
+    expect(w.frame:GetLeft() >= assert(house:GetRight())).toBe(true)
+    w.frame:Hide()
+    -- the house closed: centred again
+    mock.fireEvent("AUCTION_HOUSE_CLOSED")
+    house:Hide()
+    w = openLedger()
+    local p2 = w.frame:GetPoint(1)
+    expect(p2).toBe("CENTER")
+end
+
+@test("beside the window it's given (the auction house's button), even while open; IsShown on the service")
+local function besideGiven()
+    seed()
+    local service = assert(SuuUI.UseService(SuuUI.Services.LEDGER))
+    expect(assert(service.IsShown)()).toBe(false)
+    local w = openLedger()
+    expect(assert(service.IsShown)()).toBe(true)
+    local other = CreateFrame("Frame", nil, UIParent)
+    other:SetSize(400, 300)
+    other:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 10, -100)
+    other:Show()
+    w = openLedger("prices", { beside = other })
+    local point, rel = w.frame:GetPoint(1)
+    expect({ point, rel }).toEqual({ "TOPLEFT", other })
+    -- "item" without an item: Prices
+    w.item.itemID = nil
+    w = openLedger("item")
+    expect(w.view).toBe("prices")
+    w.frame:Hide()
+    expect(assert(service.IsShown)()).toBe(false)
+end
+
+@test("the characters: all, all on a ruleset, one; the foot's money and the Gold tab follow")
+local function characters()
+    seed()
+    local w = openLedger("gold")
+    local values: string[] = {}
+    for _, o in ipairs(w:CharOptions()) do
+        values[#values + 1] = tostring(o.value)
+    end
+    expect(values[1]).toBe("all")
+    expect(values[2]).toBe("rs:" .. SuuUI.Ruleset())
+    expect(values[3]).toBe("rs:Roleplay")
+    expect(#values).toBe(3 + #M:Characters())
+    local lum = w:CharOptions()[#values]
+    expect(lum.label).toBe("Lum \194\183 Roleplay Ruleset")
+    expect(lum.diamond).toBe("class-priest")
+    -- one ruleset
+    w.chars:SetValue("rs:Roleplay")
+    w.scope = "rs:Roleplay"
+    w:Refresh()
+    expect(w.money.copper).toBe(41000)
+    expect(w:ScopeName()).toBe("Roleplay Ruleset")
+    expect(w.gold.section.title:GetText()).toBe("Gold, Roleplay Ruleset")
+    -- one character
+    w.scope = "c:Lum - Roleplay"
+    w:Refresh()
+    expect(w:ScopeName()).toBe("Lum")
+    expect(w.money.copper).toBe(41000)
+    -- one that's gone: all again
+    w.scope = "c:Nobody"
+    w:Refresh()
+    expect(w.scope).toBe("all")
+end
+
+@test("drawn again on a change only while it shows; when it opens after one")
+local function refresh()
+    seed()
+    local w = openLedger("prices")
+    local draws = mock.spy(w.prices.Draw)
+    mock.stub(w.prices, "Draw", draws)
+    M:RecordLook(LOTUS, 100000, 0, 1, 1)
+    mock.advanceFrames(3)
+    expect(draws).toHaveBeenCalledTimes(1)
+    w.frame:Hide()
+    M:RecordLook(LOTUS, 90000, 0, 1, 1)
+    mock.advanceFrames(3)
+    expect(draws).toHaveBeenCalledTimes(1)
+    expect(w.dirty).toBe(true)
+    w.frame:Show()
+    mock.advanceFrames(1)
+    expect(draws).toHaveBeenCalledTimes(2)
+    -- a theme change draws it again too
+    events.emit("SUUUI_THEME_CHANGED", "test")
+    mock.advanceFrames(2)
+    expect(draws).toHaveBeenCalledTimes(3)
+end
+
+@test("in a fight: it opens and draws (it only reads what is kept)")
+local function inCombat()
+    seed()
+    mock.player:enterCombat()
+    local w = openLedger(nil, { itemID = LOTUS })
+    expect(w.frame).toBeShown()
+    expect(w.item.house:IsEnabled()).toBe(false)
+    w.frame:SetTab("gold")
+    w.frame:SetTab("prices")
+    mock.player:leaveCombat()
+    mock.advanceFrames(2)
+end
+
+@test("the module off: the window closes and doesn't open")
+local function off()
+    seed()
+    local w = openLedger()
+    settings.set("ledger", "enabled", false)
+    expect(w.frame).never.toBeShown()
+    M:Open()
+    expect(w.frame).never.toBeShown()
+    settings.set("ledger", "enabled", true)
+    mock.advanceFrames(2)
+    M:Open("prices")
+    expect(w.frame).toBeShown()
+end
